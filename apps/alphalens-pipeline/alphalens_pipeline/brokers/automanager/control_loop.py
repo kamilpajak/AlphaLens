@@ -21,7 +21,7 @@ from collections import deque
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.contract import (
@@ -51,6 +51,14 @@ from alphalens_pipeline.brokers.automanager import (
     entry_trail_watcher,
     entry_trails,
     state_paths,
+)
+from alphalens_pipeline.brokers.automanager.costs import (
+    COMMISSION_RATE,
+    EXIT_EDGE_MIN_BPS,
+    FX_ROUND_TRIP_RATE,
+    MIN_COMMISSION_USD,
+    round_trip_fee_bps,
+    single_full_position_tranche_violation,
 )
 from alphalens_pipeline.brokers.automanager.labels import (
     entry_label_from_crid,
@@ -2340,25 +2348,228 @@ class _EntryArmAbortError(Exception):
     — never escapes to the tick loop."""
 
 
-def _find_working_entry_order(broker: Broker, external_reference: str) -> str | None:
+class _EntryOrderLookup(NamedTuple):
+    """The result of the G3 adopt read. ``read_ok`` is False when the book could
+    not be read at all, which is NOT the same fact as "no order rests": a caller
+    that terminates the watch must only do so on a read that actually
+    succeeded (issue #1112)."""
+
+    order_id: str | None
+    read_ok: bool
+
+
+def _find_working_entry_order(broker: Broker, external_reference: str) -> _EntryOrderLookup:
     """The order id of a WORKING order whose ``ExternalReference`` matches
     (idempotent re-arm, memo §3 G3): a crash between the POST and the id-journal
     leaves a native order at Saxo the journal recorded only with a null id — on
     the next TOUCHED tick, adopt it rather than resting a second trail. A
-    ``BrokerError`` reading the book returns ``None`` (treat as not-found): the
-    deterministic ``request_id`` + Saxo's 15 s dedup still guard the short
-    re-POST window."""
+    ``BrokerError`` reading the book returns ``(None, read_ok=False)`` — the
+    re-POST path treats that as not-found (the deterministic ``request_id`` +
+    Saxo's 15 s dedup still guard the short re-POST window), while any path that
+    would TERMINATE the watch must stand down until the book is readable."""
     try:
         for state in broker.list_open_orders():
             if state.external_reference == external_reference:
-                return str(state.order_id)
+                return _EntryOrderLookup(str(state.order_id), True)
     except BrokerError as exc:
         logger.warning(
             "entry-trail arm: list_open_orders failed for dedup check (%s) — "
             "relying on request-id dedup",
             exc,
         )
-    return None
+        return _EntryOrderLookup(None, False)
+    return _EntryOrderLookup(None, True)
+
+
+def _stamped_exit_target(record: Mapping[str, Any]) -> float | None:
+    """The exit target already stamped on this watch's ``watch_open`` line, or
+    ``None`` when there is none to compare against (issue #1112 step 1).
+
+    Reads ONLY data already in scope — the ``geometry`` blob
+    :func:`_geometry_shadow_stamp` wrote at routing time, whose ``geometry_tp``
+    is the very number :func:`_geometry_tranche_ladder` turns into the single
+    tranche the live exit engine fires on. No policy is resolved and no
+    environment is read here (that would reintroduce the per-tick resolve the
+    ExitPolicy refactor removed).
+
+    ``None`` (fail open, arm as before) when: the line carries no stamp, the
+    stamp is not a mapping, ``applied`` is falsey (the placed exit is the
+    brief's own ladder, not this target), or ``geometry_tp`` is absent /
+    unparseable / non-finite / non-positive.
+    """
+    stamp = record.get("geometry")
+    if not isinstance(stamp, Mapping) or not stamp.get("applied"):
+        return None
+    raw = stamp.get("geometry_tp")
+    try:
+        target = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(target) or target <= 0.0:
+        return None
+    return target
+
+
+def _inside_exit_region_note(
+    record: Mapping[str, Any], d_bps: int, reference: float, trough: float, qty: float
+) -> str | None:
+    """A one-line operator note when this tier's own exit target cannot pay for
+    the position its realistic fill would open, else ``None`` (issue #1112
+    step 1: refuse unless ``exit_target > fill_estimate + round_trip_cost +
+    E_min``).
+
+    LIVE 2026-08-24 (SMG): the top tier's limit 59.786017 sat above the exit
+    target 59.6277 the policy derived from the alloc-weighted PLANNED blend of
+    the whole ladder, so the fill at 59.9261 was already past its take-profit
+    and the exit engine sold it 62 seconds later for about -380 bps net.
+
+    The fill estimate comes from :func:`entry_trail_geometry.entry_fill_estimate`
+    — the armed order's own broker-enforced ceiling — NOT from the tier limit:
+    the live fill printed 23 bps ABOVE its limit, so a check on the nominal
+    limit would have seen nothing wrong. Pinned end to end by
+    ``test_entry_watch_wiring.py::
+    test_the_gate_uses_the_realistic_fill_estimate_not_the_nominal_tier_limit``.
+
+    Fails OPEN (``None``, arm as before) on any unusable input — no stamp, a
+    degenerate geometry, a non-positive qty.
+    """
+    target = _stamped_exit_target(record)
+    estimate = entry_trail_geometry.entry_fill_estimate(
+        reference=reference, trough=trough, d_bps=d_bps
+    )
+    if not entry_trail_geometry.arms_inside_exit_region(
+        fill_estimate=estimate, exit_target=target, qty=qty
+    ):
+        return None
+    if estimate is None or target is None:
+        return None  # unreachable: the gate above returns False on either being None
+    return (
+        f"tier would fill inside the exit region: fill estimate {estimate:.4f}, "
+        f"exit target {target:.4f} does not clear round-trip cost + E_min "
+        f"{EXIT_EDGE_MIN_BPS:.0f} bps"
+    )
+
+
+_ARM_REFUSAL_INSIDE_EXIT_REGION = "inside-exit-region"
+_ARM_REFUSAL_EXIT_PLAN_SHAPE = "exit-plan-shape"
+
+
+class _ArmRefusal(NamedTuple):
+    """One reason a tier must not arm. ``terminal`` False means "we do not know
+    yet" — the tier neither arms nor ends, and settles on a later tick."""
+
+    note: str
+    reason: str
+    terminal: bool
+
+
+def _exit_plan_shape_refusal(record: Mapping[str, Any], position_qty: float) -> _ArmRefusal | None:
+    """Why this tier must not arm on the exit plan governing its uic, else
+    ``None`` (issue #1112 round 2, point 2).
+
+    :func:`_inside_exit_region_note` charges the round trip at the quantity of
+    the position the arm would OPEN. The exit engine charges it at the quantity
+    of the tranche it SELLS, and the per-fill USD minimum makes the smaller of
+    the two draw the higher bar. Whole-position pricing at arm time is therefore
+    conservative only while the exit plan is one tranche selling everything —
+    which is what the geometry policy produces today
+    (:func:`_geometry_tranche_ladder`), and what all three LIVE ``tranche_plan``
+    records carried on 2026-08-25. This turns that into a checked contract.
+
+    FAILS CLOSED, unlike the exit-region note: a uic with no governing plan on
+    record is refused too. The router journals the ``tranche_plan`` BEFORE the
+    ``watch_open`` lines, so a missing plan means the exit shape this gate
+    depends on is unknown — arming into that would open a position whose
+    take-profit the rail cannot describe.
+
+    Scoped to the arm gate's own reach: ``None`` when no applied geometry target
+    is stamped, because there the arm gate does not price anything.
+
+    A journal READ failure is the one case that refuses NON-terminally. It is
+    not evidence about the plan, and this runs inside ``_run_entry_watch_pass``,
+    which has no per-watch exception boundary — letting an OSError out would
+    abort the tick for every other watch too.
+    """
+    if _stamped_exit_target(record) is None:
+        return None
+    uic = _coerce(record, "uic", int)
+    if uic is None:
+        return _ArmRefusal(
+            "entry watch carries no uic — the exit plan cannot be resolved",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=True,
+        )
+    try:
+        plan = fold_tranche_plans(_iter_standalone_stop_journal()).get(uic)
+    # Broad on purpose, mirroring _retract_stale_tranche_plans' sweep: a journal
+    # read failure degrades to "unknown", never to an aborted pass.
+    except Exception:
+        logger.warning(
+            "entry-trail arm: exit-plan read failed for uic %d — deferring the check",
+            uic,
+            exc_info=True,
+        )
+        return _ArmRefusal(
+            f"exit plan for uic {uic} could not be read",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=False,
+        )
+    if plan is None:
+        return _ArmRefusal(
+            f"no exit plan on record for uic {uic}",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=True,
+        )
+    tranches, reference_qty, _stop = plan
+    violation = single_full_position_tranche_violation(
+        # Exactly how live_exit_engine.plan_tranche_exits sizes each tranche.
+        tranche_quantities=[round(reference_qty * t.tranche_pct) for t in tranches],
+        position_qty=reference_qty,
+    )
+    if violation is None:
+        return None
+    return _ArmRefusal(
+        f"{violation} (arm gate priced {position_qty:g} share(s))",
+        _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+        terminal=True,
+    )
+
+
+def _terminal_refuse_arm(
+    deps: LoopDeps,
+    crid: str,
+    record: Mapping[str, Any],
+    runtime: _EntryWatchRuntime,
+    d_bps: int,
+    note: str,
+    report: TickReport,
+    *,
+    reason: str,
+) -> None:
+    """Terminal-refuse this tier (``KIND_CANCELLED`` + ``watcher.cancel()``),
+    mirroring the G7 insufficient-funds refuse in :func:`_handle_arm_failure` —
+    both refusal conditions are properties of the pick's own journaled state, so
+    retrying them every 45 s tick would only spam. ``reason`` keys the alert
+    throttle so the two refusals never suppress each other.
+
+    The caller must have a SUCCESSFUL open-order read in hand: this terminal is
+    outside ``_RESTING_BEARING_TERMINALS``, so nothing would cancel-then-verify
+    an order that turned out to be resting after all.
+    """
+    entry_trails.append_entry_trail_line(
+        {
+            "kind": entry_trails.KIND_CANCELLED,
+            "crid": crid,
+            "note": note,
+            "measurement": _entry_measurement_blob(record, runtime, d_bps),
+        }
+    )
+    runtime.watcher.cancel()
+    if deps.alert_throttled(
+        f"entry-trail {entry_label_from_crid(crid)}: {note} — tier refused",
+        f"entry-trail:{reason}:{crid}",
+    ):
+        report.alerts += 1
 
 
 def _arm_native_trail(
@@ -2409,10 +2620,41 @@ def _arm_native_trail(
         return
     fire_rid = _entry_fire_request_id(crid)
 
-    existing = _find_working_entry_order(broker, fire_rid)
-    if existing is not None:
-        _journal_trail_armed(crid, order_id=existing, trigger=geo.order_price)
+    lookup = _find_working_entry_order(broker, fire_rid)
+    if lookup.order_id is not None:
+        _journal_trail_armed(crid, order_id=lookup.order_id, trigger=geo.order_price)
         runtime.watcher.mark_armed()
+        return
+
+    # AFTER the adopt (issue #1112 step 1): refusing before it would terminate
+    # the watch while a real buy order still rests at the broker, and
+    # KIND_CANCELLED is outside _RESTING_BEARING_TERMINALS so nothing would
+    # cancel-then-verify it. Only a FRESH arm is refused.
+    region_note = _inside_exit_region_note(record, d_bps, reference, trough, qty)
+    refusal = (
+        _ArmRefusal(region_note, _ARM_REFUSAL_INSIDE_EXIT_REGION, terminal=True)
+        if region_note is not None
+        # The whole-position pricing the gate above just did is only
+        # conservative while the exit side sells the whole position in one
+        # tranche. Checked, never assumed (issue #1112 round 2, point 2).
+        else _exit_plan_shape_refusal(record, qty)
+    )
+    if refusal is not None:
+        if lookup.read_ok and refusal.terminal:
+            _terminal_refuse_arm(
+                deps, crid, record, runtime, d_bps, refusal.note, report, reason=refusal.reason
+            )
+        else:
+            # Either the book read FAILED — so "no order rests" is a fact we do
+            # not have, a prior tick's POST could be resting, and this terminal
+            # does no cancel-then-verify — or the refusal itself is not a
+            # verdict yet. Neither terminate nor arm a tier we cannot clear:
+            # stay TOUCHED and settle on a tick that can read what it needs.
+            logger.warning(
+                "entry-trail %s: %s — deferring the refusal",
+                entry_label_from_crid(crid),
+                refusal.note,
+            )
         return
 
     try:
@@ -2488,9 +2730,17 @@ def _handle_arm_failure(
 # The engine terminals that can strand a resting native order at the broker: a
 # tier that hit a G9 deep-decline (SUSPENDED) or its TTL window (EXPIRED) while
 # still arm-in-progress (a G3 null-id write-ahead whose POST rested at the broker
-# but whose id-journal was lost). WOULD_FIRE never occurs in native mode and
-# CANCELLED is only reached through the KILL / insufficient-funds paths, which do
-# their own broker cancel — so neither needs the cancel-then-verify here.
+# but whose id-journal was lost). WOULD_FIRE never occurs in native mode.
+#
+# CANCELLED has three producers, none of which needs the cancel-then-verify here:
+# the KILL and insufficient-funds paths do their own broker cancel, and the
+# #1112 inside-the-exit-region refuse runs only AFTER _find_working_entry_order
+# came back empty, so there is no order of ours to cancel. That third path rests
+# on the open-order read being complete: a broker read that fails SOFT (returns
+# an empty book instead of raising) while a crashed prior tick's POST is resting
+# would terminal-refuse and leave that order untracked. _find_working_entry_order
+# raises on a BrokerError rather than returning None, which is what keeps the
+# assumption true today.
 _RESTING_BEARING_TERMINALS = frozenset(
     {entry_trail_watcher.WatchState.SUSPENDED, entry_trail_watcher.WatchState.EXPIRED}
 )
@@ -2549,7 +2799,7 @@ def _finalize_entry_terminal_vs_broker(
     if not isinstance(broker, SupportsTrailingStop):
         return result  # a non-trailing broker never armed — nothing can rest
     fire_rid = _entry_fire_request_id(crid)
-    existing = _find_working_entry_order(broker, fire_rid)
+    existing = _find_working_entry_order(broker, fire_rid).order_id
     if existing is None:
         return result  # nothing resting — the terminal stands as the engine set it
     # Cancel FIRST, then re-read (memo §3 G6 cancel-then-verify).
@@ -4854,45 +5104,11 @@ def _resolve_and_size(
 
 # --- Fee floor (design memo §4 round-trip fee equation) ----------------------
 #
-# Saxo LIVE PL: commission 0.08% per fill, $1 minimum, applied on BOTH the
-# entry and the exit fill (round trip); a PLN account additionally converts
-# on BOTH legs of a cross-currency trade (0.25% x 2 = 0.50%). Names cite the
-# memo equation so a future edit stays traceable to it rather than a bare
-# magic number:
+# The model itself lives in ``alphalens_pipeline.brokers.automanager.costs`` (extracted for #1112 so
+# the placement fee floor and the exit-time cost gate share ONE model):
 #
-#   fee_rt(N) = 2 x max(_FEE_FLOOR_MIN_COMMISSION_USD,
-#                        _FEE_FLOOR_COMMISSION_RATE x N)
-#               + (_FEE_FLOOR_FX_ROUND_TRIP_RATE x N if an FX conversion applies else 0)
-_FEE_FLOOR_MIN_COMMISSION_USD = 1.0
-_FEE_FLOOR_COMMISSION_RATE = 0.0008
-_FEE_FLOOR_FX_ROUND_TRIP_RATE = 0.0050
-
-
-def _round_trip_fee_bps(
-    notional: float, *, fx_applies: bool, min_commission_applies: bool = True
-) -> float:
-    """The estimated round-trip fee for ``notional`` (instrument currency),
-    expressed in bps of that notional — design memo §4. ``fx_applies`` is
-    ``True`` iff the pick's ``fx`` conversion is not ``None`` (account
-    currency != instrument currency), which adds the FX round-trip leg.
-    ``min_commission_applies`` gates the $1-per-fill clamp: that figure is
-    denominated in USD, so it is only meaningful when ``notional`` is too —
-    a non-USD instrument gets the ad-valorem rate alone (the memo §4
-    equation is calibrated for the first-cohort US venue).
-
-    A non-positive ``notional`` (an unplannable/zero-tier pick) returns
-    ``0.0`` — the caller's cap comparison then stays inert rather than
-    dividing by zero; the zero-tiers check downstream already refuses such a
-    pick on its own terms."""
-    if notional <= 0:
-        return 0.0
-    ad_valorem = _FEE_FLOOR_COMMISSION_RATE * notional
-    per_fill = (
-        max(_FEE_FLOOR_MIN_COMMISSION_USD, ad_valorem) if min_commission_applies else ad_valorem
-    )
-    commission_round_trip = 2.0 * per_fill
-    fx_round_trip = _FEE_FLOOR_FX_ROUND_TRIP_RATE * notional if fx_applies else 0.0
-    return (commission_round_trip + fx_round_trip) / notional * 10000.0
+#   fee_rt(N) = 2 x max(MIN_COMMISSION_USD, COMMISSION_RATE x N)
+#               + (FX_ROUND_TRIP_RATE x N if an FX conversion applies else 0)
 
 
 def _check_fee_floor(
@@ -4928,7 +5144,7 @@ def _check_fee_floor(
     from broker_contract.sizing import setup_plan_gross_notional
 
     notional = setup_plan_gross_notional(plan)
-    fee_bps = _round_trip_fee_bps(
+    fee_bps = round_trip_fee_bps(
         notional,
         fx_applies=fx is not None,
         min_commission_applies=instrument_currency == "USD",
@@ -4954,7 +5170,7 @@ def _estimate_round_trip_fee_bps(
       ``max($1, 0.08% x qty x limit)`` — zero-qty tiers are never POSTed
       (``_ZERO_QTY_TIER_POLICY``), so they pay nothing. The $1 minimum is a
       USD figure, gated on ``instrument_currency`` exactly like
-      ``_round_trip_fee_bps``.
+      ``round_trip_fee_bps``.
     - ``exit_fees``: the same shape over the TP tranches, with tranche qtys
       derived at placement as ``tranche_pct/100 x total entry qty``
       (``TpTrancheSpec`` doctrine: tranche_pct is a PERCENTAGE 0-100, copied
@@ -4968,7 +5184,7 @@ def _estimate_round_trip_fee_bps(
 
     ``None`` (an honest "not estimable", journaled as a real null) when there
     is no sized plan / no tiers / zero gross — mirrors the inert stance of
-    ``_round_trip_fee_bps`` on a non-positive notional."""
+    ``round_trip_fee_bps`` on a non-positive notional."""
     entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
     if not entry_tiers:
         return None
@@ -4981,9 +5197,9 @@ def _estimate_round_trip_fee_bps(
     min_commission_applies = instrument_currency == "USD"
 
     def _fill_fee(qty: float, price: float) -> float:
-        ad_valorem = _FEE_FLOOR_COMMISSION_RATE * qty * price
+        ad_valorem = COMMISSION_RATE * qty * price
         if min_commission_applies:
-            return max(_FEE_FLOOR_MIN_COMMISSION_USD, ad_valorem)
+            return max(MIN_COMMISSION_USD, ad_valorem)
         return ad_valorem
 
     entry_fees = sum(_fill_fee(t.qty, t.limit_price) for t in entry_tiers if t.qty > 0)
@@ -4995,7 +5211,7 @@ def _estimate_round_trip_fee_bps(
         )
     else:
         exit_fees = entry_fees
-    fx_cost = _FEE_FLOOR_FX_ROUND_TRIP_RATE * gross if fx is not None else 0.0
+    fx_cost = FX_ROUND_TRIP_RATE * gross if fx is not None else 0.0
     return (entry_fees + exit_fees + fx_cost) / gross * 10000.0
 
 
@@ -5986,6 +6202,44 @@ def _day1_gap_gate_defers(
     return True
 
 
+_GEOMETRY_WITHOUT_TRAIL_ALERT_PREFIX = "geometry-without-entry-trail"
+
+
+def _geometry_without_entry_trail_note(
+    exit_policy: ExitPolicy | None, exit_spec: Any
+) -> str | None:
+    """Why a NEW entry must not be armed right now, or ``None`` when it may be
+    (issue #1112 round 2, point 4).
+
+    The #1112 exit-region arm gate (:func:`_inside_exit_region_note`) and the
+    single-tranche contract (:func:`_exit_plan_shape_refusal`) exist ONLY on the
+    trailing-entry path. With ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` at 0 a pick
+    falls through to the classic ``_place_tiers`` bracket path, which has
+    neither — so the exact defect #1112 fixed (an entry filling inside its own
+    exit region) is reachable again. 0 is what this repo's own systemd unit
+    sets; production only runs the gated path because of an untracked drop-in
+    (issue #1121), which is a config fact no test can see.
+
+    Deliberately scoped to ARMING. Refusing at daemon startup instead would
+    leave every already-open LIVE position unmanaged — no take-profit pass, no
+    stop re-anchor — which is far worse than the defect being prevented. The
+    live-exits and protection passes are untouched by this.
+
+    ``None`` when the geometry exit is not active: under the static policy the
+    placed exit IS the brief's own ladder, and the arm gate never priced
+    anything, so the classic path is no worse than it has always been.
+    """
+    if exit_policy is None or not exit_policy.applies_geometry or exit_spec is None:
+        return None
+    if entry_trails.entry_trail_bps() > 0:
+        return None
+    return (
+        f"exit geometry is active but the entry trail is off "
+        f"({entry_trails.ENTRY_TRAIL_BPS_ENV}=0) — the classic bracket path has no "
+        f"exit-region gate, so a new entry could fill inside its own exit region"
+    )
+
+
 def _entry_trail_intercept(
     broker: Broker,
     intent: Any,
@@ -6267,6 +6521,22 @@ def _place_pick(
     )
     if intercepted is not None:
         return intercepted
+
+    # The pick is about to take the CLASSIC bracket path, which carries neither
+    # #1112 arm gate. Refuse a new entry while the geometry exit is active and
+    # the trail is off (issue #1112 round 2, point 4). NOT terminal: this is a
+    # configuration rail like KILL / ALLOW_ORDERS, so the pick stays armed and
+    # places itself once the trail is on — a terminal refusal would destroy the
+    # armed queue over an operator setting.
+    no_trail_note = _geometry_without_entry_trail_note(exit_policy, exit_spec)
+    if no_trail_note is not None:
+        logger.warning("place_pick %s: refused — %s", ticker, no_trail_note)
+        if alert_throttled is not None:
+            alert_throttled(
+                f"place_pick {ticker}: {no_trail_note}",
+                f"{_GEOMETRY_WITHOUT_TRAIL_ALERT_PREFIX}:{ticker}",
+            )
+        return False
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:

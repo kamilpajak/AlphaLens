@@ -13,6 +13,7 @@ owned so the position can never flip short.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -21,6 +22,13 @@ from broker_contract.contract import Broker, OrderState
 from broker_contract.price_feed import PriceFeed, PricePoint
 from broker_contract.sizing import TpTranchePlan
 
+from alphalens_pipeline.brokers.automanager.costs import (
+    COST_GATE_FX_APPLIES,
+    COST_GATE_MIN_COMMISSION_APPLIES,
+    min_profitable_exit_price,
+    round_trip_fee_bps,
+)
+from alphalens_pipeline.brokers.automanager.costs import EXIT_EDGE_MIN_BPS as _EXIT_EDGE_MIN_BPS
 from alphalens_pipeline.brokers.automanager.labels import tp_label_from_tag
 from alphalens_pipeline.brokers.automanager.position_manager import _sole_standalone_stop
 
@@ -28,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 _PRICE_EPS = 1e-9  # a long tranche fires when price >= target (within eps)
 _QTY_EPS = 0.5  # share-qty tolerance (mirrors broker_contract.contract._QTY_EPS)
+_BPS_PER_UNIT = 10_000.0
+
+EXIT_EDGE_MIN_BPS = _EXIT_EDGE_MIN_BPS
+"""Re-exported from :mod:`alphalens_pipeline.brokers.automanager.costs` — the declared ``E_min``
+buffer, shared with the arm-time gate so the two cannot drift apart."""
 
 
 def tranche_tag(index: int) -> str:
@@ -53,6 +66,78 @@ class TrancheExitResult:
     sell_order_id: str | None
 
 
+def _is_decidable_price(price: Any) -> bool:
+    """Whether ``price`` is a quote an exit decision may be taken on: a real,
+    finite, strictly positive number.
+
+    Kept separate from the cost gate on purpose — the cost gate is a judgement
+    about EDGE and fails open on missing data, while this is a judgement about
+    whether there is a price at all, and fails closed.
+    """
+    if isinstance(price, bool) or not isinstance(price, (int, float)):
+        return False
+    return math.isfinite(price) and price > 0.0
+
+
+def _exit_clears_cost(
+    *, price: float, target_price: float, qty: int, realised_entry: float | None, tag: str
+) -> bool:
+    """Whether selling ``qty`` shares at ``price`` clears round-trip cost plus
+    the declared :data:`EXIT_EDGE_MIN_BPS` buffer, measured from the REALISED
+    entry (issue #1112 step 2).
+
+    The threshold is :func:`~alphalens_pipeline.brokers.automanager.costs.min_profitable_exit_price`,
+    evaluated at THIS TRANCHE's quantity.
+
+    READING RULE — the arm-time gate calls the same function, but at the
+    quantity of the position it opens, so the two bars differ whenever the two
+    quantities do: a smaller exit quantity pays proportionally more of the
+    per-fill USD minimum and therefore needs a HIGHER price. An armed tier is
+    not automatically an exit this gate will fire. They coincide only while the
+    exit plan is one tranche selling the whole position, which
+    :func:`~alphalens_pipeline.brokers.automanager.costs.single_full_position_tranche_violation`
+    enforces at arm time.
+
+    FAILS OPEN — an unknown realised entry (``None``, the SIM ``NoAccess``
+    non-positive sentinel, or a NaN) returns ``True`` and logs. This is the
+    OPPOSITE of ``position_manager._maybe_reanchor``'s fail-closed stance on the
+    same field, deliberately: refusing to re-anchor a stop leaves the brief's
+    own stop in place, whereas refusing an exit strands a live position with no
+    take-profit path. The disaster stop is a separate resting broker order this
+    engine never touches, so it still guards the downside either way.
+    """
+    if realised_entry is None or not math.isfinite(realised_entry) or realised_entry <= 0.0:
+        logger.warning(
+            "tranche %s: realised entry unknown (%r) — cost gate skipped, firing as before",
+            tp_label_from_tag(tag),
+            realised_entry,
+        )
+        return True
+    required_price = min_profitable_exit_price(entry_price=realised_entry, qty=qty)
+    if required_price is None or price >= required_price:
+        return True
+    # Refused. Restate the same threshold in bps, which is the shape an operator
+    # reads the journal in (the decision above is the price comparison).
+    cost_bps = round_trip_fee_bps(
+        qty * realised_entry,
+        fx_applies=COST_GATE_FX_APPLIES,
+        min_commission_applies=COST_GATE_MIN_COMMISSION_APPLIES,
+    )
+    edge_bps = (price / realised_entry - 1.0) * _BPS_PER_UNIT
+    logger.warning(
+        "tranche %s refused (inside cost): realised entry %.4f, target %.4f, bid %.4f, "
+        "edge %.1f bps < round-trip cost %.1f bps + E_min %.1f bps",
+        tp_label_from_tag(tag),
+        realised_entry,
+        target_price,
+        price,
+        edge_bps,
+        cost_bps,
+        EXIT_EDGE_MIN_BPS,
+    )
+    return False
+
+
 def plan_tranche_exits(
     *,
     price: float,
@@ -60,13 +145,33 @@ def plan_tranche_exits(
     reference_qty: float,
     owned: float,
     already_fired: frozenset[str],
+    realised_entry: float | None = None,
 ) -> list[TrancheExit]:
     """Which not-yet-fired tranches a LONG at ``price`` should realize now.
 
     ``reference_qty`` is the tranche-sizing base (the intended/peak filled
     position); tranche qty = round(reference_qty * tranche_pct), cumulatively
     clamped so the batch never exceeds live ``owned``. Order preserved.
+
+    ``realised_entry`` is the position's realised average entry price
+    (``Position.avg_price``). When supplied, a tranche whose distance from it is
+    inside round-trip cost plus :data:`EXIT_EDGE_MIN_BPS` is refused and logged
+    rather than fired — issue #1112, the 2026-08-24 SMG round trip that took
+    -380 bps net on a flat gross P&L. Defaulted so the pure-decision callers
+    that have no position in hand keep their existing behaviour; the live
+    caller (:func:`run_live_exits`) always passes it.
+
+    A non-finite or non-positive ``price`` plans NOTHING. That is about a wrong
+    ACTION, not a crash: ``price >= target`` is true for infinity, so before this
+    guard an infinite bid touched EVERY tranche at once and the cost gate passed
+    them all. A NaN bid did the same whenever the realised entry was unknown,
+    which is exactly the branch :func:`_exit_clears_cost` fails open on.
+    Defence in depth — the production feeds already withhold such a quote (see
+    :func:`run_live_exits`), so no live caller reaches this today.
     """
+    if not _is_decidable_price(price):
+        logger.warning("live exits: price %r is not decidable — no tranche planned", price)
+        return []
     available = round(owned)
     out: list[TrancheExit] = []
     for i, t in enumerate(tp_tranches):
@@ -78,6 +183,20 @@ def plan_tranche_exits(
         qty = min(round(reference_qty * t.tranche_pct), available)
         if qty <= 0:
             continue
+        if realised_entry is not None and not _exit_clears_cost(
+            price=price,
+            target_price=t.target_price,
+            qty=qty,
+            realised_entry=realised_entry,
+            tag=tag,
+        ):
+            # STOP the batch, never skip to the deeper tranche. The threshold
+            # scales with the tranche's own notional (the per-fill USD minimum
+            # weighs more on a small tranche), so a deeper LARGER tranche at a
+            # HIGHER target can clear while this one does not. Firing it would
+            # advance already_fired and the stop-shrink accounting past an
+            # unfired shallower tranche, exiting the ladder out of order.
+            break
         out.append(TrancheExit(tag=tag, qty=qty, target_price=t.target_price))
         available -= qty
     return out
@@ -235,6 +354,18 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
     ``control_loop.py`` already uses at two call sites -- an
     ``AttributeError`` here would escape the ``except BrokerError`` boundary
     and kill the whole tick.
+
+    A point whose BID is not a finite positive number vetoes the uic, BEFORE any
+    comparison or ladder activation. The motivating case is a wrong action, not
+    a crash: an infinite bid satisfies ``price >= target`` for every tranche, so
+    the engine used to sell the whole ladder in one pass.
+
+    Defence in depth, not a reachable live defect today: both production feeds
+    already withhold such a quote, by different mechanisms —
+    ``yfinance_price_feed`` checks ``isfinite`` / ``> 0`` before it builds the
+    point, ``saxo_live_price_feed`` builds the point and then returns it only if
+    ``price_feed.is_fresh`` passes, which vetoes a non-finite, non-positive or
+    crossed side. Neither is a rule this engine owns, so it states its own.
     """
     fired = 0
     list_sells = getattr(broker, "list_working_sell_orders", None)
@@ -242,6 +373,13 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
         point = feed.latest(m.uic)
         if point is None:
             continue  # stream-health veto
+        if not _is_decidable_price(point.bid):
+            logger.warning(
+                "uic %s: bid %r is not a decidable price — skipping live exits this pass",
+                m.uic,
+                point.bid,
+            )
+            continue
         if list_sells is None:
             logger.warning(
                 "uic %s: broker has no list_working_sell_orders - skipping live exits this pass",
@@ -261,6 +399,9 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
             reference_qty=m.reference_qty,
             owned=live.quantity,
             already_fired=m.already_fired,
+            # The realised entry the #1112 cost gate measures from — already in
+            # hand from the position read above, so no extra broker I/O.
+            realised_entry=live.avg_price,
         )
         for ex in exits:
             result = execute_tranche_exit(

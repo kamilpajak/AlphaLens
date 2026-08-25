@@ -22,6 +22,16 @@ from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, planned_bl
 from broker_contract.exit_geometry.registry import resolve_policy
 from broker_contract.trade_intent.schema import ExitGeometrySpec, ReanchorOnFill
 
+from tests.incident_1112_fixture import (
+    SMG_ATR,
+    SMG_GEOMETRY_STOP,
+    SMG_GEOMETRY_TP,
+    SMG_PLANNED_BLEND,
+    SMG_TIERS,
+    SMG_TP_TRANCHES,
+    smg_brief_trade_setup,
+)
+
 
 def _bar(t: int, low: float, high: float, close: float) -> dict:
     return {"t": t, "l": low, "h": high, "c": close}
@@ -146,7 +156,7 @@ class TestBuildExitGeometrySpec(unittest.TestCase):
         self.assertIsNotNone(ceiling)
         self.assertAlmostEqual(spec_capped.initial_levels.tp, min(103.0, ceiling))
 
-    def test_multi_tier_blend_matches_replay_when_every_tier_fills(self) -> None:
+    def test_multi_tier_blend_and_stop_match_replay_but_the_take_profit_does_not(self) -> None:
         # Mirrors TestAtrBracketWhatIf.test_multi_tier_fills_anchor_bracket_at_blended_entry:
         # both tiers fill on bar 1 -> blend 99, bracket stop 96, TP 102 (rally hits it).
         setup = _setup(
@@ -159,7 +169,14 @@ class TestBuildExitGeometrySpec(unittest.TestCase):
         spec = build_exit_geometry_spec(setup)
         assert spec is not None
         self.assertAlmostEqual(spec.initial_levels.stop, 96.0)
-        self.assertAlmostEqual(spec.initial_levels.tp, 102.0)
+        # DIVERGENCE, deliberate (issue #1112 step 3): live and the /edge replay
+        # lens no longer agree on the TAKE-PROFIT. The unclamped ATR target here
+        # is 102.0, which the replay still uses; live now clamps it up to the
+        # brief's own first tranche (120.0). ``ladder_replay`` is NOT given the
+        # same clamp on purpose — retro-fitting it would rewrite the historical
+        # what-if series that issues #1114 / #1115 depend on. The STOP and the
+        # anchor blend (asserted above) still match.
+        self.assertAlmostEqual(spec.initial_levels.tp, 120.0)
 
     def test_none_when_no_entry_tiers(self) -> None:
         setup = _setup(entries=[], atr=2.0)
@@ -192,6 +209,96 @@ class TestBuildExitGeometrySpec(unittest.TestCase):
     def test_none_on_non_dict_input(self) -> None:
         self.assertIsNone(build_exit_geometry_spec(object()))  # type: ignore[arg-type]
         self.assertIsNone(build_exit_geometry_spec(None))  # type: ignore[arg-type]
+
+
+class TestIncidentAnchorsReconcile(unittest.TestCase):
+    """Anchor check for issue #1112: the constants in
+    ``tests/incident_1112_fixture.py`` are the numbers the REAL builder produces
+    for the SMG setup. If this breaks, the anchor arithmetic changed and every
+    other #1112 test is measuring something else."""
+
+    def test_the_smg_blend_and_stop_are_reproduced_to_1e_9(self) -> None:
+        setup = smg_brief_trade_setup()
+        self.assertAlmostEqual(planned_blended_entry(setup), SMG_PLANNED_BLEND, places=9)
+        spec = build_exit_geometry_spec(setup)
+        assert spec is not None
+        self.assertAlmostEqual(spec.initial_levels.stop, SMG_GEOMETRY_STOP, places=9)
+
+    def test_the_unclamped_atr_target_sits_below_the_top_entry_tier(self) -> None:
+        # The defect itself, stated as arithmetic: blend + 1.5*ATR = 59.6277 is
+        # BELOW the top tier limit 59.786017, so a fill on that tier is already
+        # past its own take-profit.
+        self.assertLess(SMG_GEOMETRY_TP, SMG_TIERS[0][0])
+
+
+class TestTargetNeverBelowFirstBriefTranche(unittest.TestCase):
+    """Issue #1112 step 3: the policy may not place the take-profit below the
+    brief's own FIRST take-profit tranche — the take-profit-side mirror of the
+    never-below-brief-floor rule ``clamp_reanchor_target`` already enforces on
+    the stop side."""
+
+    def test_the_smg_target_is_clamped_up_to_the_first_brief_tranche(self) -> None:
+        spec = build_exit_geometry_spec(smg_brief_trade_setup())
+        assert spec is not None
+        self.assertAlmostEqual(spec.initial_levels.tp, SMG_TP_TRANCHES[0])
+
+    def test_the_clamp_touches_the_take_profit_only(self) -> None:
+        # Step 4 (the take-profit half of the PR-6b re-anchor) is explicitly NOT
+        # in this change: the stop and the ReanchorOnFill reaction plan must come
+        # out exactly as before.
+        spec = build_exit_geometry_spec(smg_brief_trade_setup())
+        assert spec is not None
+        self.assertAlmostEqual(spec.initial_levels.stop, SMG_GEOMETRY_STOP, places=9)
+        self.assertEqual(len(spec.reaction_plan), 1)
+        reanchor = spec.reaction_plan[0]
+        self.assertIsInstance(reanchor, ReanchorOnFill)
+        self.assertAlmostEqual(reanchor.k_atr, 1.5)
+        self.assertAlmostEqual(reanchor.atr, SMG_ATR)
+
+    def test_a_first_tranche_below_the_atr_target_leaves_it_unchanged(self) -> None:
+        # max() semantics: the clamp is a FLOOR, never a cap. Pinned fixture:
+        # blended 100, atr 2 -> tp 103; first tranche 101 -> still 103.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(101.0, 100.0)], stop=90.0, atr=2.0)
+        spec = build_exit_geometry_spec(setup)
+        assert spec is not None
+        self.assertAlmostEqual(spec.initial_levels.tp, 103.0)
+
+    def test_no_tranches_leaves_the_target_unchanged(self) -> None:
+        setup = _setup(entries=[(100.0, 100.0)], tps=[], atr=2.0)
+        spec = build_exit_geometry_spec(setup)
+        assert spec is not None
+        self.assertAlmostEqual(spec.initial_levels.tp, 103.0)
+
+    def test_a_degenerate_first_tranche_leaves_the_target_unchanged(self) -> None:
+        for label, tranches in (
+            ("zero", [{"target": 0.0}]),
+            ("negative", [{"target": -5.0}]),
+            ("nan", [{"target": float("nan")}]),
+            ("missing key", [{"tranche_pct": 100.0}]),
+            ("not a mapping", ["120.0"]),
+        ):
+            with self.subTest(case=label):
+                setup = _setup(entries=[(100.0, 100.0)], atr=2.0)
+                setup["tp_tranches"] = tranches
+                spec = build_exit_geometry_spec(setup)
+                assert spec is not None
+                self.assertAlmostEqual(spec.initial_levels.tp, 103.0)
+
+    def test_the_clamp_wins_over_the_52w_ceiling(self) -> None:
+        # DECIDED, not incidental: the brief tranche is a research level the
+        # strategy committed to, the 52w ceiling is a do-not-chase heuristic. A
+        # target below the brief's own first tranche is the defect this issue
+        # exists to close, so the floor outranks the cap. Fixture: blended 100,
+        # atr 2, asof_close 100, pct_off -2 -> ceiling 102.0408; first tranche
+        # 120 -> 120, above the ceiling.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(120.0, 100.0)], stop=90.0, atr=2.0)
+        setup["asof_close"] = 100.0
+        spec = build_exit_geometry_spec(setup, pct_off_52w_high=-2.0)
+        assert spec is not None
+        ceiling = spec.reaction_plan[0].ceiling_price
+        assert ceiling is not None
+        self.assertGreater(120.0, ceiling)
+        self.assertAlmostEqual(spec.initial_levels.tp, 120.0)
 
 
 if __name__ == "__main__":

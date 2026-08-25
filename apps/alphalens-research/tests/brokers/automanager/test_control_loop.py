@@ -21,6 +21,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
+from alphalens_pipeline.brokers.automanager.costs import round_trip_fee_bps
 from alphalens_pipeline.brokers.automanager.live_rails import (
     MAX_FEE_BPS_ENV,
     SIZING_EQUITY_ENV,
@@ -1115,32 +1116,32 @@ def _fee_plan(notional: float) -> SetupPlan:
 
 
 class TestRoundTripFeeBps(unittest.TestCase):
-    """``_round_trip_fee_bps`` — design memo §4:
+    """``alphalens_pipeline.brokers.automanager.costs.round_trip_fee_bps`` — design memo §4:
     ``fee_rt(N) = 2 x max($1, 0.08% x N) + (0.50% x N if FX applies else 0)``,
     reported as bps of ``N``."""
 
     def test_ad_valorem_commission_dominates_above_the_min_fee_crossover(self) -> None:
         # 0.0008 x 10_000 = $8 > $1 floor -> commission = 2 x $8 = $16 -> 16 bps.
-        self.assertAlmostEqual(cl._round_trip_fee_bps(10_000.0, fx_applies=False), 16.0)
+        self.assertAlmostEqual(round_trip_fee_bps(10_000.0, fx_applies=False), 16.0)
 
     def test_min_fee_floor_dominates_below_the_crossover(self) -> None:
         # 0.0008 x 100 = $0.08 < $1 floor -> commission = 2 x $1 = $2 -> 200 bps.
-        self.assertAlmostEqual(cl._round_trip_fee_bps(100.0, fx_applies=False), 200.0)
+        self.assertAlmostEqual(round_trip_fee_bps(100.0, fx_applies=False), 200.0)
 
     def test_fx_round_trip_adds_fifty_bps(self) -> None:
         # N=1000: commission = 2 x max(1, 0.8) = $2 -> 20 bps; + 0.005*1000 = $5 -> +50 bps.
-        no_fx = cl._round_trip_fee_bps(1000.0, fx_applies=False)
-        with_fx = cl._round_trip_fee_bps(1000.0, fx_applies=True)
+        no_fx = round_trip_fee_bps(1000.0, fx_applies=False)
+        with_fx = round_trip_fee_bps(1000.0, fx_applies=True)
         self.assertAlmostEqual(no_fx, 20.0)
         self.assertAlmostEqual(with_fx, 70.0)
 
     def test_zero_notional_returns_zero_never_divides(self) -> None:
-        self.assertEqual(cl._round_trip_fee_bps(0.0, fx_applies=False), 0.0)
+        self.assertEqual(round_trip_fee_bps(0.0, fx_applies=False), 0.0)
 
 
 class TestCheckFeeFloor(unittest.TestCase):
     """``_check_fee_floor`` — the env gate + refusal-message assembly around
-    ``_round_trip_fee_bps``."""
+    ``round_trip_fee_bps``."""
 
     def test_env_unset_returns_none_even_at_tiny_notional(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
@@ -2548,7 +2549,7 @@ class TestEstimateRoundTripFeeBps(unittest.TestCase):
         self.assertAlmostEqual(estimate, 70.0)
 
     def test_non_usd_instrument_skips_the_min_commission_clamp(self) -> None:
-        # The $1 clamp is a USD figure (mirrors _round_trip_fee_bps): a
+        # The $1 clamp is a USD figure (mirrors round_trip_fee_bps): a
         # 1000-unit non-USD notional pays ad-valorem only.
         plan = _tiered_plan(
             tiers=(TierPlan(tier_index=0, limit_price=10.0, qty=100, alloc_pct=100.0, tag="T1"),),

@@ -670,5 +670,40 @@ class TestLiveExitsRunsBeforeProtection(unittest.TestCase):
         self.assertEqual(order, ["live_exits", "protection"])
 
 
+class TestOpenPositionsStayManagedWhenTheTrailIsDisabled(_JournalCase):
+    """#1116 round 2, point 4, the safety half.
+
+    With the exit geometry active and ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` at 0,
+    the daemon refuses to ARM a new entry (pinned in ``test_entry_watch_wiring``).
+    It must NOT stop managing what is already open — a refusal that reached this
+    pass would strand live positions with no take-profit path, which is worse
+    than the un-gated entry the refusal exists to prevent.
+    """
+
+    _ENTRY_TRAIL_ENV = "ALPHALENS_BROKER_ENTRY_TRAIL_BPS"
+
+    def test_a_touched_tranche_still_fires_with_the_entry_trail_off(self) -> None:
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 16.0, 1.0),), reference_qty=100.0, stop_price=13.0
+        )
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+        )
+        with mock.patch.dict(
+            os.environ,
+            {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1", self._ENTRY_TRAIL_ENV: "0"},
+        ):
+            report = cl.TickReport()
+            cl._run_live_exits_pass(deps, report)
+        self.assertEqual(report.exits_placed, 1)
+        self.assertEqual(broker.get_positions_by_uic(uic).quantity, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
