@@ -91,7 +91,10 @@ class TestStoreRowExclusion(unittest.TestCase):
             _row(terminal=False, ladder_classification="OPEN"),
         ]
         reasons = {fp.store_row_exclusion(r) for r in rows}
-        self.assertEqual(reasons, set(fp.EXCLUSION_REASONS))
+        # Every reason a ROW's own columns can carry. The ladder-shape bucket is
+        # decided by the report from the filled-tier set, not by these columns.
+        self.assertEqual(reasons, set(fp.EXCLUSION_REASONS) - {fp.EXCLUDE_UNDECLARED_LADDER})
+        self.assertIn(fp.EXCLUDE_UNDECLARED_LADDER, fp.EXCLUSION_REASONS)
 
 
 class TestStoreFillTierIds(unittest.TestCase):

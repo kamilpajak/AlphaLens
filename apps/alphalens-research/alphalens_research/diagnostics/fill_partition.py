@@ -464,12 +464,19 @@ EXCLUDE_SPLIT_INVALIDATED = "split_invalidated"
 EXCLUDE_BAD_GEOMETRY = "bad_geometry"
 """Stop at or above the blended entry -- R units are undefined for the row."""
 
+EXCLUDE_UNDECLARED_LADDER = "undeclared_ladder"
+"""A filled tier outside :data:`TIER_IDS` (a four-tier brief, or a stray token in
+the stored sequence). The partition is defined over a THREE-tier ladder, so such
+a row has no cell -- but it is a fact about the data, not a reason to end the
+run, which is what raising out of :func:`partition_report` used to do."""
+
 EXCLUSION_REASONS: tuple[str, ...] = (
     EXCLUDE_NOT_PLANNABLE,
     EXCLUDE_NOT_DECIDED,
     EXCLUDE_NO_REPLAY,
     EXCLUDE_SPLIT_INVALIDATED,
     EXCLUDE_BAD_GEOMETRY,
+    EXCLUDE_UNDECLARED_LADDER,
 )
 
 
@@ -666,7 +673,13 @@ def partition_report(
     kept: list[Opportunity] = []
     for opp in opportunities:
         if opp.excluded_reason is None:
-            kept.append(opp)
+            # A ladder outside the declared three tiers has no cell. Bucket it --
+            # the row's OWN exclusion still wins, so a merely-ongoing row is
+            # reported as such rather than as a ladder-shape problem.
+            if frozenset(opp.filled_tiers) - frozenset(TIER_IDS):
+                excluded[EXCLUDE_UNDECLARED_LADDER] += 1
+            else:
+                kept.append(opp)
             continue
         if opp.excluded_reason not in excluded:
             raise ValueError(
