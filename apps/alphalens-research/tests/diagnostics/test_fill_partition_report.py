@@ -157,6 +157,46 @@ class TestExclusionBuckets(unittest.TestCase):
             _report([_opp("AAA", excluded_reason="because")])
 
 
+class TestALadderDeeperThanTheDeclaredTiers(unittest.TestCase):
+    """A ladder outside the declared three tiers is REPORTED, never fatal.
+
+    ``store_fill_tier_ids`` deliberately keeps a stray ``E4`` so a disagreement
+    stays visible, and ``entry_tiers_from_setup`` mints one from a four-tier
+    brief. Raising out of ``partition_report`` would kill the whole store run on
+    the first such row -- the opposite of the counter it was built for.
+    """
+
+    def test_an_undeclared_tier_is_bucketed_rather_than_ending_the_run(self) -> None:
+        report = _report([_opp("AAA", filled=("E1", "E4")), _opp("BBB", filled=("E1",))])
+        self.assertEqual(report.excluded[fp.EXCLUDE_UNDECLARED_LADDER], 1)
+        self.assertEqual(report.n_opportunities, 1)
+        self.assertEqual(
+            report.n_store_rows, report.n_opportunities + sum(report.excluded.values())
+        )
+
+    def test_the_bucketed_row_never_enters_a_conditional_denominator(self) -> None:
+        report = _report([_opp("AAA", filled=("E1", "E4"), fill_ts=(1_000, 2_000))])
+        rec = next(r for r in report.conditional_fills if r.given_tier == "E1")
+        self.assertEqual(rec.n_given, 0)
+
+    def test_a_rows_own_exclusion_still_wins_over_the_ladder_shape(self) -> None:
+        report = _report([_opp("AAA", filled=("E1", "E4"), excluded_reason=fp.EXCLUDE_NOT_DECIDED)])
+        self.assertEqual(report.excluded[fp.EXCLUDE_NOT_DECIDED], 1)
+        self.assertEqual(report.excluded[fp.EXCLUDE_UNDECLARED_LADDER], 0)
+
+    def test_partition_of_itself_stays_strict(self) -> None:
+        # The guard still exists; the report just stops letting it end the run.
+        with self.assertRaises(ValueError):
+            fp.partition_of({"E1", "E4"})
+
+    def test_a_four_tier_brief_is_where_the_undeclared_tier_comes_from(self) -> None:
+        tiers = fp.entry_tiers_from_setup(
+            {"entry_tiers": [{"limit": lim} for lim in (100.0, 98.0, 96.0, 94.0)]}
+        )
+        self.assertEqual([t.tier_id for t in tiers][-1], "E4")
+        self.assertNotIn("E4", fp.TIER_IDS)
+
+
 class TestPartitionCellHonesty(unittest.TestCase):
     def test_the_deep_only_cell_carries_its_structural_zero_reason(self) -> None:
         report = _report([_opp("AAA", filled=("E1",))])
