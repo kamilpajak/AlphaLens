@@ -121,6 +121,44 @@ class TestFoldTranchePlans(unittest.TestCase):
         out = fold_tranche_plans([bad])
         self.assertEqual(out, {})
 
+    def test_a_legacy_line_carrying_a_percentage_is_skipped_not_mis_sized(self) -> None:
+        # The legacy key is read as a FRACTION, which is right for every line
+        # the live rail actually wrote (all three carry the literal 1.0 from
+        # the geometry producer, meaning the whole position). The open question
+        # is what happens to a line that is NOT one of those — a hand-edited
+        # journal, or a future writer that emits a real percentage.
+        #
+        # Measured: nothing silently mis-sizes. The `[0, 1]` guard on
+        # TpTranchePlan raises TradeSetupNotPlannableError, which subclasses
+        # ValueError, so the fold's existing except skips the line entirely and
+        # the uic keeps no governing ladder. Pinned here because that safety
+        # depends on TWO things staying true — the guard's exception type and
+        # the breadth of the fold's except — and neither is obvious at either site.
+        def _line(key: str, value: float) -> dict:
+            return {
+                "kind": "tranche_plan",
+                "uic": 486,
+                "reference_qty": 100.0,
+                "stop_price": 13.0,
+                "tp_tranches": [
+                    {
+                        "tranche_index": 0,
+                        "target_price": 16.0,
+                        key: value,
+                        "r_multiple": 1.5,
+                        "tag": "tp1",
+                    }
+                ],
+            }
+
+        for value in (50.0, 100.0, -1.0):
+            with self.subTest(tranche_pct=value):
+                self.assertEqual(fold_tranche_plans([_line("tranche_pct", value)]), {})
+        # Guard against a fix that refuses everything: the real legacy value
+        # still folds, and still means the WHOLE position rather than 1%.
+        out = fold_tranche_plans([_line("tranche_pct", 1.0)])
+        self.assertEqual(out[486][0][0].tranche_frac, 1.0)
+
     def test_a_retraction_removes_the_uic_from_the_fold(self) -> None:
         # 2026-08-19 adjudication finding 3: a watch that ends unfired retracts
         # its plan — the fold must stop governing the uic.
