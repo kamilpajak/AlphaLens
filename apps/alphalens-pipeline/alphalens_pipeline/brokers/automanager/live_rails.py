@@ -25,10 +25,18 @@ against the exit-policy registry HERE, at boot — a copy-paste unit with a
 typo'd policy name must never reach the per-tick protection pass, where a
 ``ValueError`` would starve every position that tick.
 
-The four numeric bounds (MAX_OPEN <= 2, PORTFOLIO_GROSS_FRAC <= 0.5,
-DAILY_LOSS_LIMIT_R <= 2.0, and the strictly-positive SIZING_EQUITY /
-MAX_FEE_BPS floors) are the operator-decided §8 caps for the soak — NOT a
+The numeric bounds (MAX_OPEN <= 2, PORTFOLIO_GROSS_FRAC <= 0.5,
+DAILY_LOSS_LIMIT_R <= 2.0, SIZING_EQUITY <= 15000, MAX_FEE_BPS <= 1000, and
+ENTRY_TRAIL_BPS <= 150) are the operator-decided §8 caps for the soak — NOT a
 mechanism for widening risk later without also widening this assert.
+
+SIZING_EQUITY and MAX_FEE_BPS carried a floor but no CEILING until issue
+#1121, which is the one shape this assert was blind to: the declared frame is
+the direct multiplier on position size, so a typo of 150000 for 15000 passed
+every check and would have traded ten times the intended size. Both ceilings
+are the values the LIVE unit already ran on the day they were added, so
+nothing changed at deploy time; what changed is that widening either one is
+now a reviewed code edit instead of a silent host edit.
 
 Env-var NAMES are imported from their owning modules (``safety.py`` for the
 three portfolio rails already used by ``safety.check``,
@@ -41,7 +49,6 @@ consumer reads sizing equity or the fee floor yet — PR-B wires them).
 
 from __future__ import annotations
 
-import math
 import os
 
 from broker_contract.contract import BrokerCapabilityError
@@ -79,6 +86,15 @@ _MAX_OPEN_LOWER = 1
 _MAX_OPEN_UPPER = 2
 _PORTFOLIO_GROSS_FRAC_UPPER = 0.5
 _DAILY_LOSS_LIMIT_R_UPPER = 2.0
+
+# These two were checked for POSITIVITY only until issue #1121, which left the
+# declared frame — the direct multiplier on position size — unbounded above: a
+# typo of 150000 for 15000 booted clean and would have traded ten times the
+# intended size. Each ceiling is the value the LIVE unit already runs, so
+# bounding them changed nothing on the day it shipped; the point is that every
+# future widening is now a reviewed code change rather than a silent host edit.
+_SIZING_EQUITY_UPPER = 15_000.0
+_MAX_FEE_BPS_UPPER = 1_000.0
 
 
 def _missing_or_blank(raw: str | None) -> bool:
@@ -123,22 +139,6 @@ def _check_float_bounded(var: str, *, exclusive_lo: float, inclusive_hi: float) 
         return f"{var}: must be a number, got {raw!r}"
     if not exclusive_lo < value <= inclusive_hi:
         return f"{var}: must be in ({exclusive_lo}, {inclusive_hi}] for the live soak, got {value}"
-    return None
-
-
-def _check_float_positive(var: str) -> str | None:
-    """``None`` if ``var`` is set to a strictly-positive float, else a violation."""
-    raw = os.environ.get(var)
-    if _missing_or_blank(raw):
-        return f"{var}: must be explicitly set (unset — the code default is permissive)"
-    try:
-        value = float(raw)  # type: ignore[arg-type]  # raw is non-None past the blank check
-    except ValueError:
-        return f"{var}: must be a number, got {raw!r}"
-    # math.isfinite: inf > 0 and nan fails every comparison, so a bare
-    # `<= 0` check would boot a live daemon with an unbounded frame/floor.
-    if not math.isfinite(value) or value <= 0:
-        return f"{var}: must be a finite number > 0, got {value}"
     return None
 
 
@@ -201,10 +201,14 @@ def assert_live_rails() -> None:
                 exclusive_lo=0.0,
                 inclusive_hi=_DAILY_LOSS_LIMIT_R_UPPER,
             ),
-            _check_float_positive(SIZING_EQUITY_ENV),
+            _check_float_bounded(
+                SIZING_EQUITY_ENV, exclusive_lo=0.0, inclusive_hi=_SIZING_EQUITY_UPPER
+            ),
             _check_sizing_mode(SIZING_EQUITY_MODE_ENV),
             _check_exit_policy(EXIT_POLICY_ENV),
-            _check_float_positive(MAX_FEE_BPS_ENV),
+            _check_float_bounded(
+                MAX_FEE_BPS_ENV, exclusive_lo=0.0, inclusive_hi=_MAX_FEE_BPS_UPPER
+            ),
             # Entry-trailing distance (memo §6): [0, 150] — the bound and the
             # env-var name are OWNED by entry_trails.py; explicit "0" (feature
             # off) is valid, unset fails like every other pin. Custom unset

@@ -9,12 +9,19 @@
 # -> place in-band subset + standalone disaster stop -> reconcile -> manage
 # each base position to terminal.
 #
-# DEPLOY INERT FIRST (design memo §7 step 1): install with
-# ALPHALENS_BROKER_ALLOW_ORDERS=0 below. Inert boot still constructs the
-# LIVE Saxo client, keeps the LIVE OAuth chain alive, reads the account,
-# and reconciles/journals under ~/.alphalens/broker_orders/live/ — it places
-# NOTHING. Only flip ALLOW_ORDERS to 1 (in this unit, then restart) after
-# the §7 fire drills pass, operator PRESENT (§7 step 3).
+# THIS FILE IS THE CONSERVATIVE BASELINE, NOT WHAT PRODUCTION RUNS. Placement
+# is disarmed, one open position, quarter gross, the tightest fee floor, entry
+# trailing off. The deliberate production overrides live in the tracked
+# directory alphalens-broker-manager-live.service.d/ next to this file — read
+# both to know what the live rail actually does. (Until 2026-08-25 they lived
+# only on the VPS and this file contradicted them: issue #1121.)
+#
+# DEPLOY INERT FIRST (design memo §7 step 1): install this unit WITHOUT the
+# drop-in directory. Inert boot still constructs the LIVE Saxo client, keeps
+# the LIVE OAuth chain alive, reads the account, and reconciles/journals under
+# ~/.alphalens/broker_orders/live/ — it places NOTHING. Arm by installing
+# alphalens-broker-manager-live.service.d/10-allow-orders.conf, after the §7
+# fire drills pass, operator PRESENT (§7 step 3).
 #
 # Install as a user unit:
 #   cp deploy/systemd/alphalens-broker-manager-live.service ~/.config/systemd/user/
@@ -23,6 +30,11 @@
 #   # without them.
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now alphalens-broker-manager-live.service
+#
+# Then, to run what production runs (see that directory's README):
+#   cp -r deploy/systemd/alphalens-broker-manager-live.service.d ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user restart alphalens-broker-manager-live.service
 #
 # Layered KILL (ADR 0016 D3):
 #   GLOBAL — halts placement in EVERY instance on this host (SIM and LIVE):
@@ -100,10 +112,12 @@ Environment=ALPHALENS_BROKER_ENVIRONMENT=live
 # --- Placement arm (design memo §7 rollout) ---------------------------------
 # 0 = inert at first deploy: constructs the LIVE client, keeps the chain
 # alive, reads the account, reconciles, journals under
-# ~/.alphalens/broker_orders/live/ — places NOTHING. Flip to 1 IN THIS UNIT
-# (never in /etc/alphalens/env) + restart, operator PRESENT, only after the
+# ~/.alphalens/broker_orders/live/ — places NOTHING. Arm by installing the
+# tracked drop-in .d/10-allow-orders.conf (never by editing this line, and
+# never in /etc/alphalens/env) + restart, operator PRESENT, only after the
 # §7 fire drills pass (chain-loss, both KILL layers, manual-flatten
-# rehearsal, fee-floor rejection visible).
+# rehearsal, fee-floor rejection visible). Production has been armed since
+# 2026-08-11 — this 0 is the template's fail-safe, not a claim about the VPS.
 Environment=ALPHALENS_BROKER_ALLOW_ORDERS=0
 
 # --- LIVE boot-assert rails (design memo §3 table) --------------------------
@@ -125,7 +139,11 @@ Environment=ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared
 Environment=ALPHALENS_BROKER_EXIT_POLICY=trailing_atr
 Environment=ALPHALENS_BROKER_MAX_FEE_BPS=100
 # 8th pin (entry-trailing memo §6): trail distance in bps, 0 = feature OFF
-# (today's limit-at-touch entries). Bound [0, 150]; widen only per memo.
+# (limit-at-touch entries). Bound [0, 150]; widen only per memo. Production
+# runs 50 via .d/40-entry-trail.conf. Note this pin also selects which arm
+# gates run: at 0, with the geometry exit policy active, the daemon REFUSES
+# to arm new entries and alerts rather than taking the classic bracket path,
+# which carries neither #1112 gate.
 Environment=ALPHALENS_BROKER_ENTRY_TRAIL_BPS=0
 
 # --- Streaming + price-feed topology (design memo §6) -----------------------

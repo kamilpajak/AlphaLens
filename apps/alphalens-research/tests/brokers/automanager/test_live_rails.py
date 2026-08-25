@@ -251,6 +251,56 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
                 assert_live_rails()
         self.assertIn(MAX_FEE_BPS_ENV, str(captured.exception))
 
+    def test_sizing_equity_above_cap_rejected(self):
+        # The declared frame is the DIRECT multiplier on position size, and it
+        # was the one rail the assert checked only for positivity: an operator
+        # typo of 150000 for 15000 booted clean and traded ten times the
+        # intended size (issue #1121). The cap is the value production already
+        # runs, so this is inert today and any future widening is a code change
+        # that leaves a trace — the regime _MAX_OPEN_UPPER has always had.
+        env = dict(_VALID_ENV, **{SIZING_EQUITY_ENV: "150000"})
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        self.assertIn(SIZING_EQUITY_ENV, str(captured.exception))
+
+    def test_sizing_equity_at_the_deployed_frame_passes(self):
+        # 15000 is what the LIVE unit runs (declared frame, 1% = 150). The cap
+        # is inclusive, so bounding the rail must not refuse production.
+        env = dict(_VALID_ENV, **{SIZING_EQUITY_ENV: "15000"})
+        with mock.patch.dict("os.environ", env, clear=True):
+            assert_live_rails()
+
+    def test_max_fee_bps_above_cap_rejected(self):
+        # Same hole, opposite direction: a looser fee floor admits trades the
+        # cost gate should refuse. Production widened 100 -> 1000 after the
+        # NVAX refusal at 1037 bps; past that, nothing bounded it at all.
+        env = dict(_VALID_ENV, **{MAX_FEE_BPS_ENV: "5000"})
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        self.assertIn(MAX_FEE_BPS_ENV, str(captured.exception))
+
+    def test_max_fee_bps_at_the_deployed_floor_passes(self):
+        env = dict(_VALID_ENV, **{MAX_FEE_BPS_ENV: "1000"})
+        with mock.patch.dict("os.environ", env, clear=True):
+            assert_live_rails()
+
+    def test_non_finite_frame_and_fee_floor_are_still_refused(self):
+        # The deleted _check_float_positive carried an explicit math.isfinite
+        # guard, because `inf > 0` is True and every comparison against `nan` is
+        # False. Moving these two rails onto the bounded checker must not lose
+        # it: `inf` fails `<= hi`, and `nan` fails the whole chain. Pinned here
+        # rather than assumed — this passed before the move and must after.
+        for var in (SIZING_EQUITY_ENV, MAX_FEE_BPS_ENV):
+            for raw in ("inf", "-inf", "nan"):
+                with self.subTest(var=var, value=raw):
+                    env = dict(_VALID_ENV, **{var: raw})
+                    with mock.patch.dict("os.environ", env, clear=True):
+                        with self.assertRaises(BrokerCapabilityError) as captured:
+                            assert_live_rails()
+                    self.assertIn(var, str(captured.exception))
+
     def test_unknown_sizing_mode_rejected_and_error_names_valid_values(self):
         env = dict(_VALID_ENV, **{SIZING_EQUITY_MODE_ENV: "snapshot"})
         with mock.patch.dict("os.environ", env, clear=True):

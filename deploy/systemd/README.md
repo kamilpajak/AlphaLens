@@ -16,7 +16,7 @@ hosts where launchd is unavailable.
 | `alphalens-form4-incremental.{service,timer}` | daily 02:30 UTC | Form-4 daily incremental ingest — keeps `~/.alphalens/form4_parquet/` fresh after the seed froze. Self-sizing lookback (min 3 days, auto-extends to the store's newest filing, capped at `--max-catchup-days`) via the SEC daily form index; overlap dedups on `accession_number`. Needs `SEC_EDGAR_USER_AGENT`. **First run auto-catches-up the seed→today gap — no manual step** (see section below). |
 | `alphalens-grouped-daily-topup.{service,timer}` | daily 01:30 UTC | Appends the latest missing session(s) to the split-adjusted (`adjusted=true`) whole-market grouped-daily store that feeds the O'Neil **R** (relative-strength) term at the thematic `score` stage. Self-sizing catch-up; the free-tier entitlement cliff (`NOT_AUTHORIZED` past ~21–24 mo) stops cleanly. Distinct from the population-monitor's `adjusted=false` cache. Needs `POLYGON_API_KEY`. |
 | `alphalens-broker-manager.service` | long-running daemon (poll 45 s) | SIM Saxo auto-manager (ADR 0014) — drains armed picks → places brackets + standalone disaster stops → reconciles live broker state → manages ladder exits / protective stops to terminal. `Type=simple` + `Restart=on-failure`. **Trades SIM only** — this is the SIM instance of the two-instance model (ADR 0016); the real-money twin is `alphalens-broker-manager-live.service` (§9, ADR 0017). Placement still needs `ALPHALENS_BROKER_ALLOW_ORDERS=1`. See the "Saxo auto-manager (SIM)" runbook below. |
-| `alphalens-broker-manager-live.service` | long-running daemon (poll 45 s) | LIVE twin of the auto-manager — places **REAL-MONEY** orders on Saxo LIVE under the ADR 0017 standing account-bound grant; `ALPHALENS_BROKER_ENVIRONMENT=live` pinned in-unit; ships INERT (`ALLOW_ORDERS=0`). Runbook: §9. |
+| `alphalens-broker-manager-live.service` | long-running daemon (poll 45 s) | LIVE twin of the auto-manager — places **REAL-MONEY** orders on Saxo LIVE under the ADR 0017 standing account-bound grant; `ALPHALENS_BROKER_ENVIRONMENT=live` pinned in-unit; the unit itself ships INERT (`ALLOW_ORDERS=0`) and conservative — what production runs comes from the tracked drop-in directory `alphalens-broker-manager-live.service.d/`, read both. Runbook: §9. |
 | `alphalens-saxo-refresh.{service,timer}` | ~every 20 min | Saxo OAuth idle keep-alive (`broker auth --refresh`) — refreshes the SIM token inside its 40 min window so the broker-manager daemon never loses auth. **Re-added 2026-07 under ADR 0014** (the identically-named paper-chain unit was decommissioned 2026-06-03 — see the note below). Keeps only the SIM chain alive — the LIVE daemon's chain is kept by `alphalens-saxo-marketdata-refresh.timer` (§9.0). |
 | `alphalens-saxo-marketdata-refresh.{service,timer}` | ~every 20 min | Keep-alive for the LIVE `saxo_auth_live` OAuth chain (app `bracket-keeper`) — feeds the LIVE price stream AND, since ADR 0017, the LIVE order rail's tokens. See "Saxo LIVE market data" §3. |
 | `alphalens-edge-mirror.{service,timer}` | hourly at `:05` UTC | Self-heal for the `/edge` dashboard — rebuilds the ladder-outcome Postgres cache from the population-ladder parquets, independent of the nightly `feedback-shadow-returns` compute (so `/edge` never lags a failed/late compute run). See "Edge mirror (decoupled)" below. |
@@ -1441,6 +1441,30 @@ systemctl --user daemon-reload
 systemctl --user enable --now alphalens-broker-manager-live.service
 ```
 
+The base unit is the CONSERVATIVE baseline: placement disarmed, one open
+position, quarter gross, tightest fee floor, entry trailing off. The values
+production actually runs live in a tracked drop-in directory beside it, one
+file per decision, each recording what was widened and when:
+
+```bash
+cp -r deploy/systemd/alphalens-broker-manager-live.service.d ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user restart alphalens-broker-manager-live.service
+```
+
+Install the directory WITHOUT `10-allow-orders.conf` during the inert phase
+(§9.2) — everything else is exposure and topology, and only that one file
+starts real-money placement. See
+`deploy/systemd/alphalens-broker-manager-live.service.d/README.md`.
+
+Whatever you install, verify the COMPOSED result rather than the files, and
+compare it against the repo — `deploy/` is the answer to "what should be
+running", never the installed copy:
+
+```bash
+systemctl --user show alphalens-broker-manager-live.service -p Environment
+```
+
 **Deploy coupling — entry-trailing 8th pin (PR-T0).** A build containing
 the entry-trailing scaffolding extends the LIVE boot-assert from seven to
 EIGHT pins. Before restarting the daemon onto such a build, add the new
@@ -1542,10 +1566,17 @@ discover a gap.
 Operator present, one liquid US name, `MAX_OPEN=1`:
 
 ```bash
-$EDITOR ~/.config/systemd/user/alphalens-broker-manager-live.service
-# flip: Environment=ALPHALENS_BROKER_ALLOW_ORDERS=1
+# Arm by installing the tracked drop-in — NEVER by editing the installed
+# unit. A hand edit leaves no trace anywhere and is what produced the
+# 2026-08-25 drift (issue #1121): five values in this repo disagreed with
+# what the daemon was actually running.
+cp deploy/systemd/alphalens-broker-manager-live.service.d/10-allow-orders.conf \
+   ~/.config/systemd/user/alphalens-broker-manager-live.service.d/
 systemctl --user daemon-reload
 systemctl --user restart alphalens-broker-manager-live.service
+
+# Confirm what actually took effect — the composed environment, not the files:
+systemctl --user show alphalens-broker-manager-live.service -p Environment
 
 .venv/bin/alphalens broker arm TICKER --date YYYY-MM-DD --env live
 journalctl --user -u alphalens-broker-manager-live.service -f
@@ -1570,15 +1601,17 @@ upward past where you already are.
    stop. Reconcile and protection (disaster-stop management) keep running.
 2. **`touch ~/.alphalens/broker_orders/KILL`** — global kill, halts every
    instance on the host (SIM too). Same continue-reconciling guarantee.
-3. **Disarm placement, keep protection:** flip
-   `ALPHALENS_BROKER_ALLOW_ORDERS=0` in the unit + restart. The daemon
-   returns to the INERT shape from §9.2 — reads, reconciles, manages
-   exits, places nothing.
+3. **Disarm placement, keep protection:** remove the arming drop-in +
+   restart. The base unit ships `ALLOW_ORDERS=0`, so deleting the override
+   returns the daemon to the INERT shape from §9.2 — reads, reconciles,
+   manages exits, places nothing. Removing a file is safer under pressure
+   than editing one, and it leaves the remaining overrides untouched.
    ```bash
-   $EDITOR ~/.config/systemd/user/alphalens-broker-manager-live.service
-   # Environment=ALPHALENS_BROKER_ALLOW_ORDERS=0
+   rm ~/.config/systemd/user/alphalens-broker-manager-live.service.d/10-allow-orders.conf
    systemctl --user daemon-reload
    systemctl --user restart alphalens-broker-manager-live.service
+   systemctl --user show alphalens-broker-manager-live.service -p Environment \
+     | tr ' ' '\n' | grep ALLOW_ORDERS   # expect 0
    ```
 4. **Manual flatten — CANCEL the resting stop/OCO orders FIRST, then
    market-sell, then cancel entry buys.** Selling with a live stop still
