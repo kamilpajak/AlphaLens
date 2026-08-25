@@ -882,8 +882,12 @@ def opportunity_from_store_row(
     """
     terminal = bool(row.get("terminal"))
     stop_distance_pct = finite_or_none(row.get("stop_distance_pct"))
-    holding = row.get("holding_days_elapsed")
-    holding_days = None if finite_or_none(holding) is None else int(float(holding))
+    # Read the cell ONCE through the missing-value guard and keep its result: a
+    # second bare float() on the raw cell would be a NaN/text path the guard has
+    # already ruled out, and it is the only reason the store run could die on a
+    # single malformed row.
+    holding = finite_or_none(row.get("holding_days_elapsed"))
+    holding_days = None if holding is None else int(holding)
     return Opportunity(
         brief_date=str(row.get("brief_date")),
         ticker=str(row.get("ticker")),
