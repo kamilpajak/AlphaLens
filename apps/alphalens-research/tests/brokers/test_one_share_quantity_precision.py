@@ -23,22 +23,36 @@ point is that a name may be re-bound as long as the VALUE comes from one place.
 from __future__ import annotations
 
 import ast
+import tempfile
 import unittest
 from pathlib import Path
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 PIPELINE = WORKSPACE_ROOT / "alphalens-pipeline" / "alphalens_pipeline"
+BROKER_CONTRACT = WORKSPACE_ROOT / "alphalens-broker-contract" / "broker_contract"
+# Both production trees are scanned. The contract layer is not exempt just
+# because it OWNS the constant — a second numeric copy there would be the
+# same defect one layer up.
+SCAN_ROOTS = (PIPELINE, BROKER_CONTRACT)
 CANONICAL = WORKSPACE_ROOT / "alphalens-broker-contract" / "broker_contract" / "constants.py"
+ALIAS_SITE = WORKSPACE_ROOT / "alphalens-broker-contract" / "broker_contract" / "contract.py"
 
 # The names that carry the share-quantity precision on this rail.
 PRECISION_NAMES = frozenset({"QTY_PRECISION", "_QTY_EPS"})
 
 
-def _literal_definitions(path: Path) -> set[str]:
-    """Module-level bindings of a precision name to a NUMERIC LITERAL.
+def _value_declarations(path: Path) -> set[str]:
+    """Module-level bindings of a precision name that DECLARE a value.
 
-    A binding to another name (``_QTY_EPS = QTY_PRECISION``) is an alias, not a
-    definition, and is deliberately not reported.
+    The rule is stated as an exemption rather than a match, because the ways to
+    write ``0.5`` are unbounded while the ways to point at an existing value are
+    not. A binding whose right-hand side is a plain name (``_QTY_EPS =
+    QTY_PRECISION``) or an attribute (``= constants.QTY_PRECISION``) is an
+    ALIAS: the value still comes from one place. Anything else declares one,
+    including the forms a narrower literal check would miss:
+
+        _QTY_EPS = 0.5            _QTY_EPS = float("0.5")
+        _QTY_EPS = 1.0 / 2.0      _QTY_EPS = 0.25 * 2
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found: set[str] = set()
@@ -50,9 +64,8 @@ def _literal_definitions(path: Path) -> set[str]:
             targets = [node.target]
         else:
             continue
-        value = node.value
-        if not isinstance(value, ast.Constant) or not isinstance(value.value, (int, float)):
-            continue
+        if node.value is None or isinstance(node.value, (ast.Name, ast.Attribute)):
+            continue  # an alias, not a declaration
         for target in targets:
             if isinstance(target, ast.Name) and target.id in PRECISION_NAMES:
                 found.add(target.id)
@@ -66,20 +79,85 @@ class TestOneShareQuantityPrecision(unittest.TestCase):
         self.assertTrue(CANONICAL.is_file(), f"missing {CANONICAL}")
         self.assertIn(
             "QTY_PRECISION",
-            _literal_definitions(CANONICAL),
+            _value_declarations(CANONICAL),
             "the canonical share precision should be a numeric literal here",
         )
 
-    def test_no_pipeline_module_defines_its_own_share_precision(self) -> None:
-        self.assertTrue(PIPELINE.is_dir(), f"missing {PIPELINE}")
+    def test_scanner_ignores_an_alias(self) -> None:
+        # NEGATIVE CONTROL, and the subtlest part of the rule. `contract.py`
+        # binds `_QTY_EPS = QTY_PRECISION` — a re-binding of the NAME, which is
+        # exactly what the rail is allowed to do. Only re-declaring the VALUE
+        # is a defect. Without this, a future "simplification" of the scanner
+        # into a plain name check would still pass the two tests above while
+        # flagging every legitimate alias.
+        self.assertTrue(ALIAS_SITE.is_file(), f"missing {ALIAS_SITE}")
+        source = ALIAS_SITE.read_text(encoding="utf-8")
+        self.assertIn("_QTY_EPS = QTY_PRECISION", source, "the alias under test moved")
+        self.assertEqual(
+            _value_declarations(ALIAS_SITE),
+            set(),
+            "an alias is not a definition and must never be reported",
+        )
+
+    def test_the_rule_holds_on_every_way_of_writing_it(self) -> None:
+        # The detector's contract, pinned on synthetic sources rather than on
+        # whatever the tree happens to contain today. A clean tree is only half
+        # the evidence — the other half is knowing which shapes it LACKS, kept
+        # here as counterexamples that would break a narrower check.
+        declarations = (
+            "_QTY_EPS = 0.5",
+            "_QTY_EPS = float('0.5')",  # a literal check misses this
+            "_QTY_EPS = 1.0 / 2.0",  # and this
+            "_QTY_EPS = 0.25 * 2",  # and this
+            "_QTY_EPS: float = 0.5",
+            "QTY_PRECISION = 0.5",
+        )
+        aliases_and_noise = (
+            "_QTY_EPS = QTY_PRECISION",  # the legal re-binding
+            "_QTY_EPS = constants.QTY_PRECISION",  # also legal
+            "EPS = 0.5",  # not one of the names we police
+            '"""prose mentioning _QTY_EPS = 0.5"""',  # parsed, so not a match
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / "probe.py"
+            for source in declarations:
+                probe.write_text(source + "\n", encoding="utf-8")
+                self.assertTrue(
+                    _value_declarations(probe), f"should be reported as a declaration: {source}"
+                )
+            for source in aliases_and_noise:
+                probe.write_text(source + "\n", encoding="utf-8")
+                self.assertEqual(
+                    _value_declarations(probe), set(), f"should NOT be reported: {source}"
+                )
+
+    def test_the_scan_actually_visits_the_module_that_regressed(self) -> None:
+        # The positive control proves the PARSER works; this proves the WALK
+        # does. A path recompute that left a root existing but empty would let
+        # the assertion below pass over nothing at all and report success
+        # forever — the same rot the positive control exists to prevent, one
+        # level up.
+        scanned = {p.relative_to(WORKSPACE_ROOT) for root in SCAN_ROOTS for p in root.rglob("*.py")}
+        for expected in (
+            Path("alphalens-pipeline/alphalens_pipeline/brokers/automanager/live_exit_engine.py"),
+            Path("alphalens-broker-contract/broker_contract/constants.py"),
+        ):
+            self.assertIn(expected, scanned, f"{expected} is not being scanned")
+
+    def test_no_module_declares_its_own_share_precision(self) -> None:
+        for root in SCAN_ROOTS:
+            self.assertTrue(root.is_dir(), f"missing {root}")
         offenders: list[str] = []
-        for path in sorted(PIPELINE.rglob("*.py")):
-            for name in sorted(_literal_definitions(path)):
-                offenders.append(f"{path.relative_to(WORKSPACE_ROOT)}: {name}")
+        for root in SCAN_ROOTS:
+            for path in sorted(root.rglob("*.py")):
+                if path == CANONICAL:
+                    continue  # the one place the value is allowed to be declared
+                for name in sorted(_value_declarations(path)):
+                    offenders.append(f"{path.relative_to(WORKSPACE_ROOT)}: {name}")
         self.assertEqual(
             offenders,
             [],
-            "a rail module defines its own share-quantity precision instead of "
+            "a module declares its own share-quantity precision instead of "
             "importing the shared one (issue #1125) — nothing keeps the copies equal",
         )
 

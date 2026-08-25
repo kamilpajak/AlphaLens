@@ -78,6 +78,26 @@ def _is_decidable_price(price: Any) -> bool:
     return math.isfinite(price) and price > 0.0
 
 
+def _is_real_quantity(qty: Any) -> bool:
+    """Whether ``qty`` is an owned-share count this rail may do arithmetic on.
+
+    The quantity sibling of :func:`_is_decidable_price`, and it exists for the
+    same reason that one does: ``round()`` is a sharp edge. ``round(nan)``
+    raises ``ValueError``, ``round(inf)`` raises ``OverflowError`` and ``None``
+    has no ``__round__`` — and none of those is a ``BrokerError``, so they
+    escape ``_run_live_exits_pass``'s only ``except`` clause. The statement
+    immediately after it in the tick is the protection pass, the never-naked
+    backstop that re-asserts SL == owned, so an escaping exception does not
+    just lose one exit: it starves protection for that tick.
+
+    Non-positive is not an error, just nothing to sell — the callers already
+    treat it that way, and folding it in here keeps one predicate.
+    """
+    if isinstance(qty, bool) or not isinstance(qty, (int, float)):
+        return False
+    return math.isfinite(qty) and qty > 0.0
+
+
 def _exit_clears_cost(
     *, price: float, target_price: float, qty: int, realised_entry: float | None, tag: str
 ) -> bool:
@@ -171,6 +191,9 @@ def plan_tranche_exits(
     if not _is_decidable_price(price):
         logger.warning("live exits: price %r is not decidable — no tranche planned", price)
         return []
+    if not _is_real_quantity(owned):
+        logger.warning("live exits: owned %r is not a real quantity — no tranche planned", owned)
+        return []
     available = round(owned)
     out: list[TrancheExit] = []
     for i, t in enumerate(tp_tranches):
@@ -225,6 +248,17 @@ def execute_tranche_exit(
     reconcile pass re-covers it next tick (the wired caller's backstop).
     """
     live = broker.get_positions_by_uic(uic)
+    if not _is_real_quantity(live.quantity):
+        # Same stance as the planner: a live read that degrades to None / nan /
+        # inf must end this tranche, never raise past the pass boundary and
+        # starve the protection pass that follows it in the tick.
+        logger.warning(
+            "tranche %s uic %s: live quantity %r is not a real quantity — no sell",
+            tp_label_from_tag(exit.tag),
+            uic,
+            live.quantity,
+        )
+        return TrancheExitResult(sold=False, sell_order_id=None)
     owned = max(live.quantity, 0.0)
     qty = min(exit.qty, round(owned))
     if qty <= 0:
