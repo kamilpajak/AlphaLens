@@ -24,8 +24,8 @@ def _opp(
     fill_ts: tuple[int, ...] = (),
     excluded_reason: str | None = None,
     filled_fraction: float = 0.0,
-    realised_return: float | None = None,
-    forgone_return: float | None = None,
+    realised_r: float | None = None,
+    forgone_excess_return: float | None = None,
     holding_days: int | None = None,
     mae_r: float | None = None,
     brief_date: str = "2026-08-01",
@@ -37,8 +37,8 @@ def _opp(
         filled_tiers=filled,
         fill_bar_ts_ms=fill_ts or tuple(range(len(filled))),
         filled_fraction=filled_fraction,
-        realised_return=realised_return,
-        forgone_return=forgone_return,
+        realised_r=realised_r,
+        forgone_excess_return=forgone_excess_return,
         holding_days=holding_days,
         mae_r=mae_r,
     )
@@ -58,8 +58,8 @@ class TestOpportunityDenominator(unittest.TestCase):
     def test_a_never_filled_pick_is_reported_not_dropped(self) -> None:
         report = _report(
             [
-                _opp("AAA", forgone_return=0.05),  # NO_FILL -- nothing deployed
-                _opp("BBB", filled=("E1",), filled_fraction=0.21, realised_return=0.03),
+                _opp("AAA", forgone_excess_return=0.05),  # NO_FILL -- nothing deployed
+                _opp("BBB", filled=("E1",), filled_fraction=0.21, realised_r=0.03),
                 _opp("CCC", excluded_reason=fp.EXCLUDE_NOT_PLANNABLE),
             ]
         )
@@ -83,16 +83,18 @@ class TestOpportunityDenominator(unittest.TestCase):
         self.assertAlmostEqual(sum(p.share_of_opportunities for p in report.partitions), 1.0)
 
     def test_a_no_fill_opportunity_carries_a_non_null_opportunity_cost(self) -> None:
-        report = _report([_opp("AAA", forgone_return=0.07)])
+        report = _report([_opp("AAA", forgone_excess_return=0.07)])
         unfilled = _stats(report, fp.PARTITION_UNFILLED)
         self.assertEqual(unfilled.n, 1)
-        self.assertAlmostEqual(unfilled.forgone_return_mean, 0.07)
+        self.assertAlmostEqual(unfilled.forgone_excess_return_mean, 0.07)
         self.assertEqual(unfilled.n_missing_forgone, 0)
 
     def test_an_unfilled_opportunity_is_never_counted_as_a_zero_realised_return(self) -> None:
-        report = _report([_opp("AAA", forgone_return=0.07), _opp("BBB", forgone_return=-0.02)])
+        report = _report(
+            [_opp("AAA", forgone_excess_return=0.07), _opp("BBB", forgone_excess_return=-0.02)]
+        )
         unfilled = _stats(report, fp.PARTITION_UNFILLED)
-        self.assertIsNone(unfilled.realised_return_mean)
+        self.assertIsNone(unfilled.realised_r_mean)
         self.assertEqual(unfilled.n_realised, 0)
         # The zero is structural (no capital was deployed), not a data gap, and the
         # stats row says so rather than leaving the reader to guess.
@@ -100,18 +102,20 @@ class TestOpportunityDenominator(unittest.TestCase):
         self.assertFalse(_stats(report, fp.PARTITION_FIRST_ONLY).no_capital_deployed)
 
     def test_a_missing_opportunity_cost_is_counted_not_zeroed(self) -> None:
-        report = _report([_opp("AAA", forgone_return=0.10), _opp("BBB", forgone_return=None)])
+        report = _report(
+            [_opp("AAA", forgone_excess_return=0.10), _opp("BBB", forgone_excess_return=None)]
+        )
         unfilled = _stats(report, fp.PARTITION_UNFILLED)
         self.assertEqual(unfilled.n, 2)
         self.assertEqual(unfilled.n_missing_forgone, 1)
-        self.assertAlmostEqual(unfilled.forgone_return_mean, 0.10)  # not 0.05
+        self.assertAlmostEqual(unfilled.forgone_excess_return_mean, 0.10)  # not 0.05
 
     def test_the_win_rate_is_taken_over_the_realised_numbers_only(self) -> None:
         report = _report(
             [
-                _opp("AAA", filled=("E1",), realised_return=0.10),
-                _opp("BBB", filled=("E1",), realised_return=-0.10),
-                _opp("CCC", filled=("E1",), realised_return=None),
+                _opp("AAA", filled=("E1",), realised_r=0.10),
+                _opp("BBB", filled=("E1",), realised_r=-0.10),
+                _opp("CCC", filled=("E1",), realised_r=None),
             ]
         )
         first = _stats(report, fp.PARTITION_FIRST_ONLY)
@@ -120,10 +124,10 @@ class TestOpportunityDenominator(unittest.TestCase):
         self.assertAlmostEqual(first.win_rate, 0.5)
 
     def test_a_partition_with_no_realised_number_reports_none_not_zero(self) -> None:
-        report = _report([_opp("AAA", filled=("E1",), realised_return=None)])
+        report = _report([_opp("AAA", filled=("E1",), realised_r=None)])
         first = _stats(report, fp.PARTITION_FIRST_ONLY)
         self.assertIsNone(first.win_rate)
-        self.assertIsNone(first.realised_return_median)
+        self.assertIsNone(first.realised_r_median)
 
 
 class TestExclusionBuckets(unittest.TestCase):
@@ -401,27 +405,27 @@ class TestConditionalFillRate(unittest.TestCase):
     def test_what_happened_next_is_reported_for_the_deeper_fill_cohort(self) -> None:
         report = _report(
             [
-                _opp("AAA", filled=("E1",), realised_return=0.20),
-                _opp("BBB", filled=("E1", "E2"), fill_ts=(1_000, 2_000), realised_return=-0.10),
-                _opp("CCC", filled=("E1", "E2"), fill_ts=(1_000, 2_000), realised_return=-0.30),
+                _opp("AAA", filled=("E1",), realised_r=0.20),
+                _opp("BBB", filled=("E1", "E2"), fill_ts=(1_000, 2_000), realised_r=-0.10),
+                _opp("CCC", filled=("E1", "E2"), fill_ts=(1_000, 2_000), realised_r=-0.30),
             ]
         )
         rec = next(r for r in report.conditional_fills if r.given_tier == "E1")
         self.assertEqual(rec.n_then, 2)
-        self.assertAlmostEqual(rec.then_realised_return_median, -0.20)
+        self.assertAlmostEqual(rec.then_realised_r_median, -0.20)
         self.assertEqual(rec.n_missing_then_realised, 0)
 
     def test_a_missing_next_outcome_is_counted_not_zeroed(self) -> None:
         report = _report(
             [
-                _opp("AAA", filled=("E1", "E2"), fill_ts=(1_000, 2_000), realised_return=-0.10),
-                _opp("BBB", filled=("E1", "E2"), fill_ts=(1_000, 2_000), realised_return=None),
+                _opp("AAA", filled=("E1", "E2"), fill_ts=(1_000, 2_000), realised_r=-0.10),
+                _opp("BBB", filled=("E1", "E2"), fill_ts=(1_000, 2_000), realised_r=None),
             ]
         )
         rec = next(r for r in report.conditional_fills if r.given_tier == "E1")
         self.assertEqual(rec.n_then, 2)
         self.assertEqual(rec.n_missing_then_realised, 1)
-        self.assertAlmostEqual(rec.then_realised_return_median, -0.10)
+        self.assertAlmostEqual(rec.then_realised_r_median, -0.10)
 
 
 class TestWhyTheInstrumentReReplaysInsteadOfReadingTheColumn(unittest.TestCase):

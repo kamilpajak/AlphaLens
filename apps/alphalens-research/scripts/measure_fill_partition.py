@@ -83,9 +83,11 @@ PAYLOAD_NOTES = (
     " fill sets can occur. The live rail CAN produce a deep-only set, because"
     " issue #1112 refuses to arm a shallow tier whose own take-profit target sits"
     " at or below a realistic fill.",
-    "The unfilled partition has no realised return because no capital was"
-    " deployed. Read it against forgone_return, which is the market-excess move"
-    " over the same window.",
+    "The unfilled partition has no realised R because no capital was deployed."
+    " The forgone_excess_return beside it is the market-excess move over the same"
+    " window and is a plain return fraction, so the two are NOT comparable: they"
+    " are different measures on different scales and never add up to one"
+    " per-opportunity number. See the units block.",
     "The overshoot arm rests on a single live round trip (SMG, 2026-08-24). Run"
     " the limit and ceiling arms beside it before reading any level as settled.",
     "Both re-anchored numbers are withheld on a non-terminal row, where the"
@@ -143,8 +145,8 @@ def _unreplayable(row: dict, coverage: dict[str, int], key: str) -> fp.Opportuni
         filled_tiers=(),
         fill_bar_ts_ms=(),
         filled_fraction=0.0,
-        realised_return=None,
-        forgone_return=fp.finite_or_none(row.get("market_excess_return")),
+        realised_r=None,
+        forgone_excess_return=fp.finite_or_none(row.get("market_excess_return")),
         holding_days=None,
         mae_r=None,
     )
@@ -254,6 +256,7 @@ def report_payload(
             "n_opportunities": report.n_opportunities,
             "excluded": dict(report.excluded),
         },
+        "units": dict(fp.MEASURE_UNITS),
         "coverage": dict(coverage),
         "partitions": [asdict(p) for p in report.partitions],
         "conditional_fills": [{**asdict(r), "rate": r.rate} for r in report.conditional_fills],
@@ -280,9 +283,12 @@ def _render_human(payload: dict) -> str:
     for cell in payload["partitions"]:
         flag = " [unreachable offline]" if cell["offline_unreachable"] else ""
         lines.append(f"  {cell['partition']:<12} n={cell['n']:<5}{flag}")
+        # Both columns carry their unit here: one is in R, the other is a plain
+        # return fraction, and an unlabelled pair invites reading them as one.
         lines.append(
-            f"      realised n={cell['n_realised']} missing={cell['n_missing_realised']}"
-            f" | forgone n={cell['n_forgone']} missing={cell['n_missing_forgone']}"
+            f"      realised R n={cell['n_realised']} missing={cell['n_missing_realised']}"
+            f" | forgone excess return n={cell['n_forgone']}"
+            f" missing={cell['n_missing_forgone']}"
         )
     lines.append("")
     for rec in payload["conditional_fills"]:

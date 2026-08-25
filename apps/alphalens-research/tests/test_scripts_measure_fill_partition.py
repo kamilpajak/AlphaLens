@@ -174,8 +174,8 @@ class TestDriverEnvelope(MeasureFillPartitionTestCase):
         cells = {p["partition"]: p for p in payload["partitions"]}
         self.assertEqual(cells[fp.PARTITION_UNFILLED]["n"], 1)
         self.assertEqual(cells[fp.PARTITION_FIRST_ONLY]["n"], 1)
-        self.assertIsNone(cells[fp.PARTITION_UNFILLED]["realised_return_mean"])
-        self.assertAlmostEqual(cells[fp.PARTITION_UNFILLED]["forgone_return_mean"], 0.01)
+        self.assertIsNone(cells[fp.PARTITION_UNFILLED]["realised_r_mean"])
+        self.assertAlmostEqual(cells[fp.PARTITION_UNFILLED]["forgone_excess_return_mean"], 0.01)
 
     def test_the_deep_only_cell_is_zero_and_says_it_is_unreachable_offline(self) -> None:
         cells = {p["partition"]: p for p in self._payload()["partitions"]}

@@ -191,7 +191,7 @@ class TestOpportunityFromStoreRow(unittest.TestCase):
             overshoot_bps=MEASURED_BPS,
         )
         self.assertAlmostEqual(
-            opp.realised_return,
+            opp.realised_r,
             fp.realized_r_at_fill(
                 realized_r=1.5, stop_distance_pct=STOP_DISTANCE_PCT, overshoot_bps=MEASURED_BPS
             ),
@@ -211,7 +211,7 @@ class TestOpportunityFromStoreRow(unittest.TestCase):
             tiers=(fp.EntryTier("E1", 100.0, 100.0),),
             overshoot_bps=MEASURED_BPS,
         )
-        self.assertAlmostEqual(opp.forgone_return, 0.031)
+        self.assertAlmostEqual(opp.forgone_excess_return, 0.031)
 
     def test_an_unfilled_row_carries_no_realised_return_and_no_holding_time(self) -> None:
         opp = fp.opportunity_from_store_row(
@@ -221,7 +221,7 @@ class TestOpportunityFromStoreRow(unittest.TestCase):
             overshoot_bps=MEASURED_BPS,
         )
         self.assertEqual(opp.filled_tiers, ())
-        self.assertIsNone(opp.realised_return)
+        self.assertIsNone(opp.realised_r)
         self.assertIsNone(opp.holding_days)
         self.assertEqual(opp.filled_fraction, 0.0)
 
@@ -235,7 +235,7 @@ class TestOpportunityFromStoreRow(unittest.TestCase):
             overshoot_bps=MEASURED_BPS,
         )
         self.assertIsNone(opp.mae_r)
-        self.assertIsNone(opp.realised_return)
+        self.assertIsNone(opp.realised_r)
         self.assertEqual(opp.excluded_reason, fp.EXCLUDE_NOT_DECIDED)
 
     def test_the_exclusion_reason_travels_with_the_opportunity(self) -> None:
@@ -256,9 +256,9 @@ class TestOpportunityFromStoreRow(unittest.TestCase):
             tiers=(fp.EntryTier("E1", 100.0, 100.0),),
             overshoot_bps=MEASURED_BPS,
         )
-        self.assertIsNone(opp.realised_return)
+        self.assertIsNone(opp.realised_r)
         self.assertIsNone(opp.mae_r)
-        self.assertIsNone(opp.forgone_return)
+        self.assertIsNone(opp.forgone_excess_return)
 
 
 if __name__ == "__main__":

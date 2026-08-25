@@ -480,15 +480,41 @@ EXCLUSION_REASONS: tuple[str, ...] = (
 )
 
 
+MEASURE_UNITS: dict[str, str] = {
+    "realised_r": (
+        "R -- risk units, denominated by the row's own stop distance measured "
+        "from the overshoot fill"
+    ),
+    "forgone_excess_return": (
+        "decimal fraction -- the store's market_excess_return "
+        "(forward_return - benchmark_window_return)"
+    ),
+    "mae_r": "R -- same risk unit as realised_r",
+    "holding_days": "calendar days elapsed, as the store recorded them",
+    "filled_fraction": "fraction of the intended position in [0, 1], alloc-weighted",
+}
+"""The unit of every measure the report carries.
+
+Two of them are NOT comparable and used to sit unlabelled in the same row:
+``realised_r`` is risk-normalised, ``forgone_excess_return`` is a plain return
+fraction. Subtracting one from the other, or reading an unfilled cell's forgone
+number as if it were the filled cells' R, is the misreading this map exists to
+prevent -- it cannot be repaired downstream, because the two scales carry no
+conversion.
+"""
+
+
 @dataclass(frozen=True)
 class Opportunity:
     """One brief pick, filled or not. The unit of the denominator.
 
-    ``realised_return`` is the return on the capital that was actually deployed
+    ``realised_r`` is the outcome on the capital that was actually deployed, in R,
     and is ``None`` when nothing filled -- deliberately NOT 0.0, because a zero
     would fold an unfilled pick in as a costless miss, which is exactly the
-    reading issue #1113 forbids. ``forgone_return`` is the market move over the
-    same window and is the opportunity cost that makes the unfilled row readable.
+    reading issue #1113 forbids. ``forgone_excess_return`` is the market-excess
+    move over the same window, a decimal fraction, and is the opportunity cost
+    that makes the unfilled row readable. See :data:`MEASURE_UNITS`: the two are
+    on different scales and never combine into one per-opportunity number.
     """
 
     brief_date: str
@@ -497,8 +523,8 @@ class Opportunity:
     filled_tiers: tuple[str, ...]
     fill_bar_ts_ms: tuple[int, ...]
     filled_fraction: float
-    realised_return: float | None
-    forgone_return: float | None
+    realised_r: float | None
+    forgone_excess_return: float | None
     holding_days: int | None
     mae_r: float | None
 
@@ -512,13 +538,13 @@ class PartitionStats:
     share_of_opportunities: float
     n_realised: int
     n_missing_realised: int
-    realised_return_mean: float | None
-    realised_return_median: float | None
+    realised_r_mean: float | None
+    realised_r_median: float | None
     win_rate: float | None
     n_forgone: int
     n_missing_forgone: int
-    forgone_return_mean: float | None
-    forgone_return_median: float | None
+    forgone_excess_return_mean: float | None
+    forgone_excess_return_median: float | None
     holding_days_median: float | None
     n_missing_holding: int
     mae_r_median: float | None
@@ -536,9 +562,9 @@ class ConditionalFill:
     (offline unreachable) one where the deeper tier's bar precedes the shallower
     one, falls into ``n_then_same_bar``. The two always sum to ``n_then``.
 
-    ``then_realised_return_median`` is the "what happened next" half: the median
-    realised return of the rows where the deeper tier also filled. It is taken
-    over the rows that HAVE one, with the rest counted in
+    ``then_realised_r_median`` is the "what happened next" half: the median
+    realised outcome, in R, of the rows where the deeper tier also filled. It is
+    taken over the rows that HAVE one, with the rest counted in
     ``n_missing_then_realised`` rather than folded in as zero.
     """
 
@@ -548,7 +574,7 @@ class ConditionalFill:
     n_then: int
     n_then_same_bar: int
     n_then_later: int
-    then_realised_return_median: float | None
+    then_realised_r_median: float | None
     n_missing_then_realised: int
 
     @property
@@ -592,8 +618,8 @@ def _present(values: Iterable[float | None]) -> list[float]:
 def _partition_stats(
     partition: str, members: Sequence[Opportunity], n_opportunities: int
 ) -> PartitionStats:
-    realised = _present(o.realised_return for o in members)
-    forgone = _present(o.forgone_return for o in members)
+    realised = _present(o.realised_r for o in members)
+    forgone = _present(o.forgone_excess_return for o in members)
     holding = _present(o.holding_days for o in members)
     mae = _present(o.mae_r for o in members)
     return PartitionStats(
@@ -602,13 +628,13 @@ def _partition_stats(
         share_of_opportunities=(len(members) / n_opportunities) if n_opportunities else 0.0,
         n_realised=len(realised),
         n_missing_realised=len(members) - len(realised),
-        realised_return_mean=_mean(realised),
-        realised_return_median=_median(realised),
+        realised_r_mean=_mean(realised),
+        realised_r_median=_median(realised),
         win_rate=(sum(1 for r in realised if r > 0) / len(realised)) if realised else None,
         n_forgone=len(forgone),
         n_missing_forgone=len(members) - len(forgone),
-        forgone_return_mean=_mean(forgone),
-        forgone_return_median=_median(forgone),
+        forgone_excess_return_mean=_mean(forgone),
+        forgone_excess_return_median=_median(forgone),
         holding_days_median=_median(holding),
         n_missing_holding=len(members) - len(holding),
         mae_r_median=_median(mae),
@@ -635,7 +661,7 @@ def _conditional_fill(
         if then not in ts_by_tier:
             continue
         n_then += 1
-        then_returns.append(opp.realised_return)
+        then_returns.append(opp.realised_r)
         if ts_by_tier[then] > ts_by_tier[given]:
             later += 1
         else:
@@ -648,7 +674,7 @@ def _conditional_fill(
         n_then=n_then,
         n_then_same_bar=same_bar,
         n_then_later=later,
-        then_realised_return_median=_median(present),
+        then_realised_r_median=_median(present),
         n_missing_then_realised=len(then_returns) - len(present),
     )
 
@@ -877,7 +903,7 @@ def opportunity_from_store_row(
         filled_tiers=tuple(f.tier_id for f in fills),
         fill_bar_ts_ms=tuple(f.bar_ts_ms for f in fills),
         filled_fraction=filled_fraction(tiers, (f.tier_id for f in fills)),
-        realised_return=(
+        realised_r=(
             realized_r_at_fill(
                 realized_r=finite_or_none(row.get("realized_r")),
                 stop_distance_pct=stop_distance_pct,
@@ -886,7 +912,7 @@ def opportunity_from_store_row(
             if terminal
             else None
         ),
-        forgone_return=finite_or_none(row.get("market_excess_return")),
+        forgone_excess_return=finite_or_none(row.get("market_excess_return")),
         holding_days=holding_days,
         mae_r=(
             mae_r_at_fill(
