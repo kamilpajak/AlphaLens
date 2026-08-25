@@ -18,7 +18,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from broker_contract.contract import Broker, OrderState
+from broker_contract.contract import _QTY_EPS, Broker, OrderState
 from broker_contract.price_feed import PriceFeed, PricePoint
 from broker_contract.sizing import TpTranchePlan
 
@@ -35,7 +35,6 @@ from alphalens_pipeline.brokers.automanager.position_manager import _sole_standa
 logger = logging.getLogger(__name__)
 
 _PRICE_EPS = 1e-9  # a long tranche fires when price >= target (within eps)
-_QTY_EPS = 0.5  # share-qty tolerance (mirrors broker_contract.contract._QTY_EPS)
 _BPS_PER_UNIT = 10_000.0
 
 EXIT_EDGE_MIN_BPS = _EXIT_EDGE_MIN_BPS

@@ -58,4 +58,23 @@ GROSS_SAFETY_FRAC = 1.0
 # asked against it rather than a local float epsilon — one number, one meaning.
 # Re-exported as ``broker_contract.contract._QTY_EPS`` for the protection
 # comparisons that already read it under that name.
+#
+# "One number, one meaning" is ENFORCED since #1125, not merely asserted:
+# ``live_exit_engine`` carried its own ``_QTY_EPS = 0.5`` under a comment
+# claiming it mirrored this one, and that copy decided whether a filled
+# position kept its standalone disaster stop.
+# ``tests/brokers/test_one_share_quantity_precision.py`` now fails when any
+# pipeline module binds a precision name to a numeric literal instead of
+# importing it. Re-binding the NAME is fine; re-declaring the VALUE is not.
+#
+# WHAT THIS VALUE ACTUALLY ENCODES: half a share is "not a real quantity" only
+# where the venue trades whole shares. Saxo does — live-probed on our own
+# cohort: ``MinimumTradeSize 1``, ``IncrementSize 1``,
+# ``FractionalOrderEnabled false`` (fractional cash equities are Singapore-only).
+# Under fractional quantities this constant would classify a genuine 0.3-share
+# tranche as not real, and every "is this quantity real" answer on the rail
+# would be wrong without raising. The name says precision; the value says whole
+# shares. The durable fix is an adapter-reported quantity increment (the
+# capability seam sketched in #1122), deliberately NOT built for a single
+# adapter — see #1125 for why that decision was left open rather than forced.
 QTY_PRECISION = 0.5
