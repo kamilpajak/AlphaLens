@@ -544,7 +544,8 @@ already carry (`atr_bracket_1p5`, 2026-07-16; `atr_bracket_1p5_planned`, 2026-08
 two rows charge for the lenses existing and being read; this row charges for the A-vs-B
 contrast, which is a different question asked of the same store.
 
-Row to be appended verbatim to §4.1, in the first implementation PR, before any look:
+Row to be appended verbatim to the §4.1 annex of `edge_hypothesis_budget_2026_07.md`, in the
+first implementation PR, before any look:
 
 ```
 | 2026-08-24 | Exit-policy head-to-head: brief tranche ladder (arm A) vs the live operational ATR-bracket policy (arm B, planned anchor + #1112 step-3 clamp + declared fallback); pre-registered `exit_policy_comparison_prereg_2026_08_24.md` | net USD P&L per candidate at a common notional, horizon H=42 sessions, forward cohort only | PENDING — one two-sided look, no interim peeks; floor is >= 10 non-overlapping 42-session blocks, not a pair count | 1 policy look -> Sep exit walk-forward (ADR 0013 R4) | Additional to the two lens registrations above: those charge for the lenses, this charges for the contrast. Primary is NOT computable from the stamped columns (the lenses omit the live take-profit clamp and the two stamped R columns have different denominators) |
