@@ -284,6 +284,35 @@ class TestHoldingTimeAndAdverseExcursion(unittest.TestCase):
         self.assertIsNone(unfilled.holding_days_median)
         self.assertEqual(unfilled.n_missing_holding, 1)
 
+    def test_a_missing_realised_number_is_counted_not_dropped(self) -> None:
+        # The fourth honesty counter. Without it a regression that zeroed
+        # n_missing_realised would ship silently -- exactly the class of failure
+        # this instrument exists to prevent.
+        report = _report(
+            [
+                _opp("AAA", filled=("E1",), realised_r=1.0),
+                _opp("BBB", filled=("E1",), realised_r=None),
+                _opp("CCC", filled=("E1",), realised_r=None),
+            ]
+        )
+        first = _stats(report, fp.PARTITION_FIRST_ONLY)
+        self.assertEqual(first.n, 3)
+        self.assertEqual(first.n_realised, 1)
+        self.assertEqual(first.n_missing_realised, 2)
+
+    def test_every_cell_accounts_for_all_four_measures_it_reports(self) -> None:
+        report = _report(
+            [
+                _opp("AAA", filled=("E1",), realised_r=1.0, holding_days=3, mae_r=-0.5),
+                _opp("BBB", filled=("E1", "E2"), forgone_excess_return=0.01),
+                _opp("CCC"),
+            ]
+        )
+        for cell in report.partitions:
+            with self.subTest(partition=cell.partition):
+                self.assertEqual(cell.n_realised + cell.n_missing_realised, cell.n)
+                self.assertEqual(cell.n_forgone + cell.n_missing_forgone, cell.n)
+
     def test_a_missing_mae_is_counted_not_dropped_from_the_denominator(self) -> None:
         report = _report(
             [
