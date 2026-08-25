@@ -54,9 +54,17 @@ PAYLOAD_SCHEMA = "fill_partition/1"
 DEFAULT_STORE_DIR = Path.home() / ".alphalens" / "population_ladders"
 DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
 
-# Sub-causes behind the ``no_replay`` exclusion bucket. Reported separately so a
-# reader can tell a missing brief from a missing bar cache; both still land in
-# ONE bucket so the denominator identity holds.
+# Sub-causes behind the ``no_replay`` exclusion bucket, plus the walk-vs-store
+# agreement check. Reported separately so a reader can tell a missing brief from
+# a missing bar cache; both still land in ONE bucket so the denominator identity
+# holds.
+#
+# ``rows_walk_disagrees_with_store`` is the honesty counter. This instrument
+# re-derives the filled-tier set from the cached bars, but reads the realised
+# return from the store's ``realized_r``, which the monitor computed against ITS
+# fill set. Under the default touch model and the same entry TTL the two should
+# agree; under ``--fill-model through`` they are expected to differ. Either way
+# the size of the gap is reported rather than assumed.
 COVERAGE_KEYS = (
     "dates_total",
     "dates_without_a_brief",
@@ -64,6 +72,7 @@ COVERAGE_KEYS = (
     "rows_without_entry_tiers",
     "rows_without_cached_bars",
     "rows_with_empty_bars_after_rth",
+    "rows_walk_disagrees_with_store",
 )
 
 # Statements a reader needs in order not to misread a cell. Kept as data so the
@@ -118,12 +127,19 @@ def _bars_for(store_dir: Path, ticker: str, date: dt.date, setup: dict) -> tuple
 
 
 def _unreplayable(row: dict, coverage: dict[str, int], key: str) -> fp.Opportunity:
-    """An opportunity we could not re-replay: counted, never dropped."""
+    """An opportunity we could not re-replay: counted, never dropped.
+
+    The row's OWN exclusion wins when it has one. A non-plannable candidate has no
+    trade setup, so it can never be re-replayed -- filing it under ``no_replay``
+    would hide the real population split (never planned) behind a technical one
+    (we could not price it), and empty the ``not_plannable`` bucket entirely. The
+    ``coverage`` sub-cause is still counted either way.
+    """
     coverage[key] += 1
     return fp.Opportunity(
         brief_date=str(row.get("brief_date")),
         ticker=str(row.get("ticker")),
-        excluded_reason=fp.EXCLUDE_NO_REPLAY,
+        excluded_reason=fp.store_row_exclusion(row) or fp.EXCLUDE_NO_REPLAY,
         filled_tiers=(),
         fill_bar_ts_ms=(),
         filled_fraction=0.0,
@@ -208,6 +224,8 @@ def _opportunity_for_row(
         overshoot_bps=overshoot_bps,
         entry_expiry_ms=entry_expiry_ms,
     )
+    if {f.tier_id for f in fills} != set(fp.store_fill_tier_ids(row)):
+        coverage["rows_walk_disagrees_with_store"] += 1
     return fp.opportunity_from_store_row(row, fills=fills, tiers=tiers, overshoot_bps=overshoot_bps)
 
 

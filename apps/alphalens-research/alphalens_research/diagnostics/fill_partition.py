@@ -672,6 +672,39 @@ def finite_or_none(value: Any) -> float | None:
     return as_float if math.isfinite(as_float) else None
 
 
+_SEQUENCE_SEPARATOR = "->"
+_ENTRY_TOKEN_PREFIX = "E"
+
+
+def store_fill_tier_ids(row: Mapping[str, Any]) -> tuple[str, ...]:
+    """Entry tiers the STORE recorded as filled, parsed from ``sequence_str``.
+
+    Order-only: the column drops each crossing's timestamp, which is exactly why
+    the instrument re-derives the fill set from the cached bars instead of reading
+    this. It is parsed anyway so the two views can be COMPARED -- a walk that
+    disagrees with the store is a fact worth counting, not a number to quietly
+    prefer.
+
+    A token outside the declared ladder (a future ``E4``) is returned rather than
+    filtered out: dropping it would make a real disagreement look like agreement.
+    ``TIME_STOP`` is not an entry despite sorting near one alphabetically, so the
+    match is on ``E`` followed by digits.
+    """
+    raw = row.get("sequence_str")
+    if not isinstance(raw, str) or not raw:
+        return ()
+    seen: list[str] = []
+    for raw_token in raw.split(_SEQUENCE_SEPARATOR):
+        token = raw_token.strip()
+        if not token.startswith(_ENTRY_TOKEN_PREFIX):
+            continue
+        if not token[len(_ENTRY_TOKEN_PREFIX) :].isdigit():
+            continue
+        if token not in seen:
+            seen.append(token)
+    return tuple(seen)
+
+
 def store_row_exclusion(row: Mapping[str, Any]) -> str | None:
     """Which exclusion bucket a store row falls in, or ``None`` when it counts.
 

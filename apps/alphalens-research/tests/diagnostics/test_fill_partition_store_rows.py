@@ -94,6 +94,35 @@ class TestStoreRowExclusion(unittest.TestCase):
         self.assertEqual(reasons, set(fp.EXCLUSION_REASONS))
 
 
+class TestStoreFillTierIds(unittest.TestCase):
+    """The store's own view of which tiers filled, for COMPARISON only.
+
+    The instrument re-derives the fill set from bars because this column drops the
+    crossing timestamps. Parsing it anyway lets the driver count how often the two
+    disagree instead of quietly preferring one.
+    """
+
+    def test_the_entry_tokens_are_pulled_out_of_the_crossing_sequence(self) -> None:
+        self.assertEqual(fp.store_fill_tier_ids(_row(sequence_str="E1->E2->TP1->SL")), ("E1", "E2"))
+
+    def test_a_sequence_without_an_entry_yields_nothing(self) -> None:
+        for value in (None, "", "TP1->SL", float("nan")):
+            with self.subTest(sequence_str=value):
+                self.assertEqual(fp.store_fill_tier_ids(_row(sequence_str=value)), ())
+
+    def test_a_repeated_token_is_recorded_once_in_first_crossing_order(self) -> None:
+        self.assertEqual(fp.store_fill_tier_ids(_row(sequence_str="E2->E1->E2")), ("E2", "E1"))
+
+    def test_a_tier_outside_the_declared_ladder_is_returned_not_swallowed(self) -> None:
+        # A four-tier ladder would write E4. Returning it means the mismatch is
+        # visible; dropping it here would make a real disagreement look like
+        # agreement.
+        self.assertEqual(fp.store_fill_tier_ids(_row(sequence_str="E1->E4")), ("E1", "E4"))
+
+    def test_the_time_stop_marker_is_not_read_as_an_entry(self) -> None:
+        self.assertEqual(fp.store_fill_tier_ids(_row(sequence_str="E1->TIME_STOP")), ("E1",))
+
+
 class TestRealizedRReAnchoredToTheOvershootFill(unittest.TestCase):
     def test_the_zero_bps_arm_returns_the_stored_number_unchanged(self) -> None:
         self.assertAlmostEqual(

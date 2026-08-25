@@ -239,6 +239,51 @@ class TestDriverCoverage(MeasureFillPartitionTestCase):
         self.assertEqual(payload["denominator"]["n_store_rows"], 0)
         self.assertEqual(len(payload["partitions"]), len(fp.PARTITIONS))
 
+    def test_a_non_plannable_row_keeps_its_own_bucket_when_it_cannot_be_replayed(self) -> None:
+        # A non-plannable candidate has no trade setup, so it can never be
+        # re-replayed. Labelling it "no_replay" would hide the real population
+        # split behind a technical one.
+        _write_brief(self.fx.briefs, [])
+        _write_store(
+            self.fx.store,
+            [_store_row("AAA", plannable=False, terminal=False, ladder_classification=None)],
+        )
+        payload = self._payload()
+        self.assertEqual(payload["denominator"]["excluded"][fp.EXCLUDE_NOT_PLANNABLE], 1)
+        self.assertEqual(payload["denominator"]["excluded"][fp.EXCLUDE_NO_REPLAY], 0)
+        self.assertEqual(payload["coverage"]["rows_without_a_brief_row"], 1)
+
+    def test_a_walk_that_disagrees_with_the_stored_sequence_is_counted(self) -> None:
+        # The stored row says E1 and E2 filled; the cached bars only ever reach E1.
+        # The instrument keeps its own answer AND records that the two differ,
+        # because the realised return it reads still came from the store's set.
+        _write_brief(self.fx.briefs, ["AAA"])
+        _write_store(self.fx.store, [_store_row("AAA", sequence_str="E1->E2->TP1")])
+        _write_bars(self.fx.store, "AAA", [99.0])
+        payload = self._payload()
+        self.assertEqual(payload["coverage"]["rows_walk_disagrees_with_store"], 1)
+
+    def test_an_agreeing_walk_is_not_counted_as_a_disagreement(self) -> None:
+        _write_brief(self.fx.briefs, ["AAA"])
+        _write_store(self.fx.store, [_store_row("AAA", sequence_str="E1->TP1")])
+        _write_bars(self.fx.store, "AAA", [99.0])
+        payload = self._payload()
+        self.assertEqual(payload["coverage"]["rows_walk_disagrees_with_store"], 0)
+
+    def test_the_through_model_disagreeing_with_the_store_is_counted_not_hidden(self) -> None:
+        # A stricter fill model is EXPECTED to diverge; the point is that the size
+        # of the divergence is reported rather than assumed away.
+        _write_brief(self.fx.briefs, ["AAA"])
+        _write_store(self.fx.store, [_store_row("AAA", sequence_str="E1->TP1")])
+        _write_bars(self.fx.store, "AAA", [100.0])  # low EXACTLY at E1
+        _, coverage = collect_opportunities(
+            store_dir=self.fx.store,
+            briefs_dir=self.fx.briefs,
+            fill_model=fp.FILL_MODEL_THROUGH,
+            overshoot_arm=fp.OVERSHOOT_ARM_MEASURED,
+        )
+        self.assertEqual(coverage["rows_walk_disagrees_with_store"], 1)
+
 
 class TestDriverIsOfflineOnly(MeasureFillPartitionTestCase):
     def test_the_driver_makes_no_polygon_call(self) -> None:
