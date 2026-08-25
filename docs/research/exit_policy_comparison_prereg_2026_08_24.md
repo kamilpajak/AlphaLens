@@ -159,11 +159,20 @@ The measurement is frozen by four tokens that must be constant across the accrua
 | `setup_builder_config_version` | the entry ladder and the brief's tranche levels — arm A's entire geometry, and arm B's floor |
 | `ladder_config_version` | the replay's entry TTL and fill conventions, shared by both arms |
 | the bezpazery v1 parameters (`bezpazery_lens_design_2026_07_16.md` §2) | `stop_atr_mult` 1.5, `tp_atr_mult` 1.5, `tp_floor_frac` 0.006, the 52-week ceiling |
-| the cost constants in `broker_contract/costs.py` | `MIN_COMMISSION_USD`, `COMMISSION_RATE`, `FX_ROUND_TRIP_RATE`, `EXIT_EDGE_MIN_BPS` |
+| the cost constants in `alphalens_pipeline/brokers/automanager/costs.py` | `MIN_COMMISSION_USD` = 1.0, `COMMISSION_RATE` = 0.0008, `FX_ROUND_TRIP_RATE` = 0.0050, `EXIT_EDGE_MIN_BPS` = 50.0 |
 
 A change to any of them ends the accrual window and starts a new cohort, on the same terms
 `channel_feature_forward_prereg_2026_08_19.md` §3 sets for its own tokens. A mid-window change
 is an amendment committed **before** the change deploys.
+
+The cost constants MOVED between drafting and locking: PR #1122 (2026-08-25) took the broker
+fee schedule out of the shared `broker_contract` package — a vendor's economics must not sit in
+the contract every adapter implements — and it now lives pipeline-side at the path above. The
+four VALUES are unchanged, verified by reading them on `main` after the move, so this is a path
+correction and **not** a token change: it does not end an accrual window. The values are pinned
+inline here precisely so the next reader can check them without having to find the file, which
+is the failure this correction exists to prevent — a stale path answers "nothing changed" by
+finding nothing.
 
 ### 3.4 The historical span is not in the sample
 
@@ -312,7 +321,9 @@ two different units.
   `ALPHALENS_BROKER_MAX_OPEN`) as pinned at cohort open, recorded as one fixed USD number in
   the cohort-open amendment (§13 item 2) and used unchanged for every candidate. It is fixed, not
   time-varying: the measurement must not import an equity path.
-* **Commission and FX.** Charged per fill through `broker_contract.costs.round_trip_fee_bps`
+* **Commission and FX.** Charged per fill through
+  `alphalens_pipeline.brokers.automanager.costs.round_trip_fee_bps` (moved out of
+  `broker_contract` by PR #1122, values unchanged — §3.3)
   with `fx_applies=True` and `min_commission_applies=True`, the declared constants the live
   gates already use. The per-fill USD minimum is charged **per fill**, so arm A's staged
   tranches pay it up to three times on the sell side and arm B pays it once. That asymmetry is
@@ -566,7 +577,7 @@ different notional. A second question needs a second slot.
 
 A research-side module that, for one candidate, replays both arms over the same cached minute
 path and returns net USD at `N0` and horizon H, including per-fill commission through
-`broker_contract.costs`, the FX leg, and the declared slippage. It must:
+`alphalens_pipeline.brokers.automanager.costs`, the FX leg, and the declared slippage. It must:
 
 * take the arm as an explicit, defaultless argument, the same discipline #1114 imposed on the
   anchor;
