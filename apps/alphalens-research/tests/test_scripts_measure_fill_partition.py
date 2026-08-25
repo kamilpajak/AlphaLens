@@ -350,6 +350,14 @@ class TestTheEnvelopeDeclaresItsUnits(MeasureFillPartitionTestCase):
     def test_the_payload_carries_the_unit_of_every_reported_measure(self) -> None:
         self.assertEqual(self._payload()["units"], dict(fp.MEASURE_UNITS))
 
+    def test_the_deep_only_note_says_what_it_would_take_to_fill_that_cell(self) -> None:
+        # The empty cell is the one the comparison in #1115 asks about, so the
+        # note must not stop at "empty by construction": it has to say the offline
+        # replay cannot produce it at all, and why.
+        notes = " ".join(self._payload()["notes"]).lower()
+        self.assertIn("share count", notes)
+        self.assertIn("live rail", notes)
+
     def test_the_notes_do_not_invite_reading_r_against_a_return_fraction(self) -> None:
         # The unfilled cell has no realised R, and the forgone number beside it is
         # a plain return fraction, so the two are not two halves of one measure.
