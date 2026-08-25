@@ -5,7 +5,11 @@ import unittest
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
-from alphalens_pipeline.brokers.automanager.live_exit_engine import ManagedExit, run_live_exits
+from alphalens_pipeline.brokers.automanager.live_exit_engine import (
+    ManagedExit,
+    plan_tranche_exits,
+    run_live_exits,
+)
 from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import TpTranchePlan
 
@@ -236,6 +240,107 @@ class TestRunLiveExitsCostGate(unittest.TestCase):
             n = run_live_exits(b, feed, managed)
         self.assertEqual(n, 1)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 0.0)
+
+
+class TestDegeneratePriceFiresNothing(unittest.TestCase):
+    """#1116 round 2, point 3: a non-finite or non-positive price must decide
+    NOTHING.
+
+    The motivating case is not a crash, it is a WRONG ACTION. Measured on this
+    branch before the guard:
+
+        price=inf, realised entry known   -> fires tp1, tp2, tp3
+        price=inf, realised entry unknown -> fires tp1, tp2, tp3
+        price=NaN, realised entry unknown -> fires tp1, tp2, tp3
+        price=NaN, realised entry known   -> fires nothing
+
+    ``price >= target`` is true for infinity, so every tranche is touched at
+    once and the cost gate lets them all through. The NaN case only came out
+    safe because ``_exit_clears_cost`` happened to refuse it, and that gate
+    fails OPEN whenever the realised entry is unknown.
+
+    This is defence in depth, NOT a reachable live defect today. Both
+    production feeds already withhold such a quote, by different mechanisms:
+    ``yfinance_price_feed`` checks ``isfinite`` / ``> 0`` before building the
+    point, ``saxo_live_price_feed`` returns its point only when
+    ``price_feed.is_fresh`` passes, which vetoes a non-finite, non-positive or
+    crossed side. Neither rule belongs to the exit engine, so it states its own.
+    """
+
+    _DEGENERATE_BIDS = (float("inf"), float("-inf"), float("nan"), 0.0, -1.0)
+
+    def _managed(self, uic: int) -> list[ManagedExit]:
+        return [
+            ManagedExit(
+                uic=uic,
+                tp_tranches=(_tr(0, 16.0, 0.5), _tr(1, 18.0, 0.3)),
+                reference_qty=100,
+                stop_price=13.0,
+                already_fired=frozenset(),
+            )
+        ]
+
+    def _run(self, bid: float, *, avg_price: float) -> tuple[int, float]:
+        b = FakeBroker()
+        uic = b.uic_of("KO")
+        b.set_position("KO", 100, avg_price=avg_price)
+        b.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        feed = _FakeFeed({uic: 16.5}, bid=bid, ask=16.5)
+        with mock.patch.object(cl, "_append_standalone_stop_journal"):
+            fired = run_live_exits(b, feed, self._managed(uic))
+        return fired, b.get_positions_by_uic(uic).quantity
+
+    def test_no_degenerate_bid_fires_a_tranche(self) -> None:
+        for bid in self._DEGENERATE_BIDS:
+            with self.subTest(bid=bid):
+                fired, owned = self._run(bid, avg_price=15.0)
+                self.assertEqual(fired, 0)
+                self.assertEqual(owned, 100.0, "nothing may be sold on a degenerate price")
+
+    def test_no_degenerate_bid_fires_when_the_realised_entry_is_unknown(self) -> None:
+        # The cost gate fails open on an unknown realised entry, so it cannot be
+        # what protects this path.
+        for bid in self._DEGENERATE_BIDS:
+            with self.subTest(bid=bid):
+                fired, owned = self._run(bid, avg_price=0.0)
+                self.assertEqual(fired, 0)
+                self.assertEqual(owned, 100.0)
+
+    def test_a_finite_positive_bid_still_fires(self) -> None:
+        fired, owned = self._run(16.5, avg_price=15.0)
+        self.assertEqual(fired, 1)
+        self.assertEqual(owned, 50.0)
+
+
+class TestPlanTrancheExitsRejectsDegeneratePrices(unittest.TestCase):
+    """The same guard at the pure-decision seam, so a future caller that does not
+    go through :func:`run_live_exits` cannot reintroduce it."""
+
+    _TRANCHES = (_tr(0, 16.0, 0.5), _tr(1, 18.0, 0.3))
+
+    def test_degenerate_prices_plan_no_exit(self) -> None:
+        for price in (float("inf"), float("-inf"), float("nan"), 0.0, -1.0):
+            with self.subTest(price=price):
+                self.assertEqual(
+                    plan_tranche_exits(
+                        price=price,
+                        tp_tranches=self._TRANCHES,
+                        reference_qty=100,
+                        owned=100,
+                        already_fired=frozenset(),
+                    ),
+                    [],
+                )
+
+    def test_a_finite_positive_price_still_plans(self) -> None:
+        planned = plan_tranche_exits(
+            price=18.5,
+            tp_tranches=self._TRANCHES,
+            reference_qty=100,
+            owned=100,
+            already_fired=frozenset(),
+        )
+        self.assertEqual([e.tag for e in planned], ["tp1", "tp2"])
 
 
 if __name__ == "__main__":

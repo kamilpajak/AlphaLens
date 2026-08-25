@@ -66,6 +66,19 @@ class TrancheExitResult:
     sell_order_id: str | None
 
 
+def _is_decidable_price(price: Any) -> bool:
+    """Whether ``price`` is a quote an exit decision may be taken on: a real,
+    finite, strictly positive number.
+
+    Kept separate from the cost gate on purpose — the cost gate is a judgement
+    about EDGE and fails open on missing data, while this is a judgement about
+    whether there is a price at all, and fails closed.
+    """
+    if isinstance(price, bool) or not isinstance(price, (int, float)):
+        return False
+    return math.isfinite(price) and price > 0.0
+
+
 def _exit_clears_cost(
     *, price: float, target_price: float, qty: int, realised_entry: float | None, tag: str
 ) -> bool:
@@ -147,7 +160,18 @@ def plan_tranche_exits(
     -380 bps net on a flat gross P&L. Defaulted so the pure-decision callers
     that have no position in hand keep their existing behaviour; the live
     caller (:func:`run_live_exits`) always passes it.
+
+    A non-finite or non-positive ``price`` plans NOTHING. That is about a wrong
+    ACTION, not a crash: ``price >= target`` is true for infinity, so before this
+    guard an infinite bid touched EVERY tranche at once and the cost gate passed
+    them all. A NaN bid did the same whenever the realised entry was unknown,
+    which is exactly the branch :func:`_exit_clears_cost` fails open on.
+    Defence in depth — the production feeds already withhold such a quote (see
+    :func:`run_live_exits`), so no live caller reaches this today.
     """
+    if not _is_decidable_price(price):
+        logger.warning("live exits: price %r is not decidable — no tranche planned", price)
+        return []
     available = round(owned)
     out: list[TrancheExit] = []
     for i, t in enumerate(tp_tranches):
@@ -330,6 +354,18 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
     ``control_loop.py`` already uses at two call sites -- an
     ``AttributeError`` here would escape the ``except BrokerError`` boundary
     and kill the whole tick.
+
+    A point whose BID is not a finite positive number vetoes the uic, BEFORE any
+    comparison or ladder activation. The motivating case is a wrong action, not
+    a crash: an infinite bid satisfies ``price >= target`` for every tranche, so
+    the engine used to sell the whole ladder in one pass.
+
+    Defence in depth, not a reachable live defect today: both production feeds
+    already withhold such a quote, by different mechanisms —
+    ``yfinance_price_feed`` checks ``isfinite`` / ``> 0`` before it builds the
+    point, ``saxo_live_price_feed`` builds the point and then returns it only if
+    ``price_feed.is_fresh`` passes, which vetoes a non-finite, non-positive or
+    crossed side. Neither is a rule this engine owns, so it states its own.
     """
     fired = 0
     list_sells = getattr(broker, "list_working_sell_orders", None)
@@ -337,6 +373,13 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
         point = feed.latest(m.uic)
         if point is None:
             continue  # stream-health veto
+        if not _is_decidable_price(point.bid):
+            logger.warning(
+                "uic %s: bid %r is not a decidable price — skipping live exits this pass",
+                m.uic,
+                point.bid,
+            )
+            continue
         if list_sells is None:
             logger.warning(
                 "uic %s: broker has no list_working_sell_orders - skipping live exits this pass",
