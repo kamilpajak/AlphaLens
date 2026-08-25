@@ -1447,10 +1447,17 @@ production actually runs live in a tracked drop-in directory beside it, one
 file per decision, each recording what was widened and when:
 
 ```bash
-cp -r deploy/systemd/alphalens-broker-manager-live.service.d ~/.config/systemd/user/
+mkdir -p ~/.config/systemd/user/alphalens-broker-manager-live.service.d
+cp deploy/systemd/alphalens-broker-manager-live.service.d/*.conf \
+   ~/.config/systemd/user/alphalens-broker-manager-live.service.d/
 systemctl --user daemon-reload
 systemctl --user restart alphalens-broker-manager-live.service
 ```
+
+Copy the FILES, not the directory. `cp -r <dir> <dest>/` when `<dest>/<dir>`
+already exists copies the source INTO it, leaving a nested
+`...service.d/...service.d/` that systemd never reads — the install reports
+success and changes nothing.
 
 Install the directory WITHOUT `10-allow-orders.conf` during the inert phase
 (§9.2) — everything else is exposure and topology, and only that one file
