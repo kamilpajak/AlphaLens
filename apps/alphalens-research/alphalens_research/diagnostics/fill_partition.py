@@ -770,11 +770,24 @@ def realized_r_at_fill(
         realized_r' = (realized_r * stop_distance_pct - overshoot)
                       / (overshoot + stop_distance_pct)
 
-    Two properties worth knowing before reading any number out of it: a stop-out
-    stays exactly -1.0 R (you lose one risk unit whatever the anchor is), and
-    every non-stop outcome moves DOWN, because the fill is worse than the blend
-    and the risk unit is wider. Terminal rows only, for the same reason as
-    :func:`mae_r_at_fill`.
+    The direction is NOT uniform, and -1 R is the turning point. The difference
+    is ``r' - r = -overshoot * (1 + r) / (overshoot + stop_distance_pct)``, so:
+
+    * ``r > -1`` -- moves DOWN. The fill is worse than the blend, so the gain
+      shrinks and the loss grows.
+    * ``r == -1`` -- does not move. Losing exactly one risk unit is one risk
+      unit under either anchor.
+    * ``r < -1`` -- moves UP, i.e. LESS negative. A gap THROUGH the disaster
+      stop, filled below it, widens the risk unit faster than it widens the
+      loss. Same asymmetry :func:`mae_r_at_fill` documents for an excursion past
+      the stop, and for the same reason.
+
+    Today's replay prices a stop-out AT the stop, so ``r < -1`` does not occur
+    (0 of the 393 terminal rows in the local store on 2026-08-25); it becomes
+    reachable as soon as a stop-out is priced at a real fill. Pinned by
+    ``TestRealizedRReAnchoringChangesSignAtMinusOneR``.
+
+    Terminal rows only, for the same reason as :func:`mae_r_at_fill`.
     """
     if realized_r is None or stop_distance_pct is None or stop_distance_pct <= 0.0:
         return None
