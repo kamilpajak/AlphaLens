@@ -52,12 +52,28 @@ class TestTheResolutionLimitThatRemains(unittest.TestCase):
         self.broker = FakeBroker()
         self.uic = self.broker.uic_of("XYZ")
 
+    def _owned(self) -> float:
+        """What the harness will SAY it holds, read the way the manager reads it.
+
+        `get_positions_by_uic` rather than `get_long_positions`: the latter
+        filters by the epsilon, so it answers `[]` both for a holding that was
+        dropped and for one that is merely too small to list. This one reports
+        `0.0` only when there is genuinely nothing stored, which is the
+        distinction every test below turns on.
+
+        Deliberately a public read. These tests outlive the migration that
+        changes the precision, and a test coupled to `_positions` would keep
+        passing against storage that no longer means what it used to.
+        """
+        return self.broker.get_positions_by_uic(self.uic).quantity
+
     def test_a_position_at_or_below_the_epsilon_cannot_be_expressed(self) -> None:
         for shares in (0.3, 0.5):
             with self.subTest(shares=shares):
                 self.broker.set_position("XYZ", shares, avg_price=50.0)
-                self.assertIsNone(
-                    self.broker._positions.get(self.uic),
+                self.assertEqual(
+                    self._owned(),
+                    0.0,
                     "the harness cannot hold a position this small — a scenario "
                     "written at this size silently tests nothing",
                 )
@@ -68,9 +84,7 @@ class TestTheResolutionLimitThatRemains(unittest.TestCase):
         for shares in (0.51, 0.669, 1.4):
             with self.subTest(shares=shares):
                 self.broker.set_position("XYZ", shares, avg_price=50.0)
-                held = self.broker._positions.get(self.uic)
-                assert held is not None, f"{shares} should be expressible"
-                self.assertAlmostEqual(held.quantity, shares, places=9)
+                self.assertAlmostEqual(self._owned(), shares, places=9)
 
     def test_a_sell_that_leaves_a_sub_epsilon_remainder_reads_as_a_clean_close(self) -> None:
         # THE false green, pinned. 1.0 - 0.6 = 0.4 shares still held, and the
@@ -78,7 +92,7 @@ class TestTheResolutionLimitThatRemains(unittest.TestCase):
         # unobservable here, so no acceptance test may claim to cover it.
         self.broker.set_position("XYZ", 1.0, avg_price=50.0)
         self.broker.place_market_order(self.uic, "SELL", 0.6)
-        self.assertIsNone(self.broker._positions.get(self.uic))
+        self.assertEqual(self._owned(), 0.0)
         self.assertEqual(self.broker.get_long_positions(), [])
 
     def test_the_limit_is_acceptable_only_because_the_venue_step_is_one_share(self) -> None:

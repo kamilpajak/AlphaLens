@@ -73,8 +73,16 @@ def _value_declarations(path: Path) -> set[str]:
 
     The breadth is safe because the RULE is narrow: only two specific names are
     policed, and neither should ever be bound to a computed value anywhere, at
-    any depth. A test that genuinely needs a different tolerance states it
-    under its own name, or builds a ``QuantityLattice``.
+    any depth. THE CONVENTION THAT MAKES THAT WORKABLE: a test that genuinely
+    needs a different tolerance — proving a lattice migration behaves, say —
+    binds it under its OWN name or builds a ``QuantityLattice``. The shared
+    name must always resolve to the shared value. Verified against the one such
+    test that exists today (the P5a lattice suite): it is not flagged, because
+    it never binds either policed name.
+
+    STILL NOT CAUGHT, and deliberately: monkeypatching the source
+    (``constants.QTY_PRECISION = 0.25``). That is a test changing the RAIL
+    rather than declaring a private copy — a different act, and a legal one.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found: set[str] = set()
