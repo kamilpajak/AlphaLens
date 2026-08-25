@@ -25,6 +25,8 @@ import enum
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
+from broker_contract.constants import QTY_PRECISION
+
 # --------------------------------------------------------------------------
 # Error taxonomy — each broker adapter translates its vendor errors at the
 # boundary; vendor exceptions never escape the adapter package.
@@ -74,7 +76,11 @@ class BrokerCapabilityError(BrokerError):
 # floats can flicker (e.g. ``45.9999999`` vs ``46.0``). Every protection
 # comparison on a quantity uses this epsilon instead of a bare operator so the
 # reconciler never places/cancels on a phantom sub-share difference.
-_QTY_EPS = 0.5
+#
+# Aliased to the shared ``broker_contract.constants.QTY_PRECISION`` so the
+# #1112 cost gates resolve "is this tranche real" against the SAME number the
+# protection pass compares quantities with, rather than a second float epsilon.
+_QTY_EPS = QTY_PRECISION
 
 
 def _is_sell_orders_already_exist(e: BrokerError) -> bool:

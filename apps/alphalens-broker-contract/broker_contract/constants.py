@@ -50,3 +50,12 @@ EXPECTED_AVG_HOLD_DAYS = 30
 # belt-and-suspenders layer that catches realised-lambda spikes the
 # scale factor under-projects for.
 GROSS_SAFETY_FRAC = 1.0
+
+# Broker share-quantity precision. Owned quantities are whole numbers on the
+# wire but arrive as floats, so a bare ``>=`` on two of them can flicker (e.g.
+# ``45.9999999`` vs ``46.0``). Every quantity comparison in the rail uses this
+# instead of a bare operator, and every "is this quantity real" question is
+# asked against it rather than a local float epsilon — one number, one meaning.
+# Re-exported as ``broker_contract.contract._QTY_EPS`` for the protection
+# comparisons that already read it under that name.
+QTY_PRECISION = 0.5

@@ -45,6 +45,7 @@ from broker_contract.costs import (
     FX_ROUND_TRIP_RATE,
     MIN_COMMISSION_USD,
     round_trip_fee_bps,
+    single_full_position_tranche_violation,
 )
 from broker_contract.exit_geometry import (
     ExitPolicy,
@@ -2449,7 +2450,53 @@ def _inside_exit_region_note(
     )
 
 
-def _terminal_refuse_arm_inside_exit_region(
+_ARM_REFUSAL_INSIDE_EXIT_REGION = "inside-exit-region"
+_ARM_REFUSAL_EXIT_PLAN_SHAPE = "exit-plan-shape"
+
+
+def _exit_plan_shape_note(record: Mapping[str, Any], position_qty: float) -> str | None:
+    """A one-line operator note when the exit plan governing this tier's uic is
+    not the single whole-position tranche the arm gate prices against, else
+    ``None`` (issue #1112 round 2, point 2).
+
+    :func:`_inside_exit_region_note` charges the round trip at the quantity of
+    the position the arm would OPEN. The exit engine charges it at the quantity
+    of the tranche it SELLS, and the per-fill USD minimum makes the smaller of
+    the two draw the higher bar. Whole-position pricing at arm time is therefore
+    conservative only while the exit plan is one tranche selling everything —
+    which is what the geometry policy produces today
+    (:func:`_geometry_tranche_ladder`), and what all three LIVE ``tranche_plan``
+    records carried on 2026-08-25. This turns that into a checked contract.
+
+    FAILS CLOSED, unlike the exit-region note: a uic with no governing plan on
+    record is refused too. The router journals the ``tranche_plan`` BEFORE the
+    ``watch_open`` lines, so a missing plan means the exit shape this gate
+    depends on is unknown — arming into that would open a position whose
+    take-profit the rail cannot describe.
+
+    Scoped to the arm gate's own reach: ``None`` when no applied geometry target
+    is stamped, because there the arm gate does not price anything.
+    """
+    if _stamped_exit_target(record) is None:
+        return None
+    uic = _coerce(record, "uic", int)
+    if uic is None:
+        return "entry watch carries no uic — the exit plan cannot be resolved"
+    plan = fold_tranche_plans(_iter_standalone_stop_journal()).get(uic)
+    if plan is None:
+        return f"no exit plan on record for uic {uic}"
+    tranches, reference_qty, _stop = plan
+    violation = single_full_position_tranche_violation(
+        # Exactly how live_exit_engine.plan_tranche_exits sizes each tranche.
+        tranche_quantities=[round(reference_qty * t.tranche_pct) for t in tranches],
+        position_qty=reference_qty,
+    )
+    if violation is None:
+        return None
+    return f"{violation} (arm gate priced {position_qty:g} share(s))"
+
+
+def _terminal_refuse_arm(
     deps: LoopDeps,
     crid: str,
     record: Mapping[str, Any],
@@ -2457,11 +2504,14 @@ def _terminal_refuse_arm_inside_exit_region(
     d_bps: int,
     note: str,
     report: TickReport,
+    *,
+    reason: str,
 ) -> None:
     """Terminal-refuse this tier (``KIND_CANCELLED`` + ``watcher.cancel()``),
     mirroring the G7 insufficient-funds refuse in :func:`_handle_arm_failure` —
-    the condition is a property of the ladder's own geometry, so retrying it
-    every 45 s tick would only spam.
+    both refusal conditions are properties of the pick's own journaled state, so
+    retrying them every 45 s tick would only spam. ``reason`` keys the alert
+    throttle so the two refusals never suppress each other.
 
     The caller must have a SUCCESSFUL open-order read in hand: this terminal is
     outside ``_RESTING_BEARING_TERMINALS``, so nothing would cancel-then-verify
@@ -2478,7 +2528,7 @@ def _terminal_refuse_arm_inside_exit_region(
     runtime.watcher.cancel()
     if deps.alert_throttled(
         f"entry-trail {entry_label_from_crid(crid)}: {note} — tier refused",
-        f"entry-trail:inside-exit-region:{crid}",
+        f"entry-trail:{reason}:{crid}",
     ):
         report.alerts += 1
 
@@ -2542,11 +2592,16 @@ def _arm_native_trail(
     # KIND_CANCELLED is outside _RESTING_BEARING_TERMINALS so nothing would
     # cancel-then-verify it. Only a FRESH arm is refused.
     note = _inside_exit_region_note(record, d_bps, reference, trough, qty)
+    reason = _ARM_REFUSAL_INSIDE_EXIT_REGION
+    if note is None:
+        # The whole-position pricing the gate above just did is only
+        # conservative while the exit side sells the whole position in one
+        # tranche. Checked, never assumed (issue #1112 round 2, point 2).
+        note = _exit_plan_shape_note(record, qty)
+        reason = _ARM_REFUSAL_EXIT_PLAN_SHAPE
     if note is not None:
         if lookup.read_ok:
-            _terminal_refuse_arm_inside_exit_region(
-                deps, crid, record, runtime, d_bps, note, report
-            )
+            _terminal_refuse_arm(deps, crid, record, runtime, d_bps, note, report, reason=reason)
         else:
             # The book read FAILED, so "no order rests" is a fact we do not have.
             # Neither terminate (a prior tick's POST could be resting, and this

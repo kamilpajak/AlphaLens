@@ -19,6 +19,9 @@ share at about $60 pays roughly 384 bps round trip, which is what turned the
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
+
+from broker_contract.constants import QTY_PRECISION
 
 MIN_COMMISSION_USD = 1.0
 """Per-fill commission minimum. A USD figure — only meaningful when the notional
@@ -132,6 +135,52 @@ def min_profitable_exit_price(
     return entry_price * (1.0 + (cost_bps + EXIT_EDGE_MIN_BPS) / _BPS_PER_UNIT)
 
 
+def single_full_position_tranche_violation(
+    *, tranche_quantities: Sequence[float], position_qty: float
+) -> str | None:
+    """Why this exit plan breaks the contract the #1112 arm gate depends on, or
+    ``None`` when it holds.
+
+    The contract: an exit plan must be exactly ONE active tranche that sells the
+    WHOLE position. The arm gate prices the round trip at the quantity of the
+    position it opens; the exit gate prices it at the quantity of the tranche it
+    sells. Those two bars only coincide while the two quantities do (see
+    :func:`min_profitable_exit_price`).
+
+    Measured 2026-08-25: every ``tranche_plan`` record on the LIVE rail
+    (SMG 2026-08-19, uic 23474, ETSY 2026-08-18) carries one ``geometry``
+    tranche at ``tranche_pct`` 1.0, so the contract holds today. It is checked
+    here rather than assumed because restoring multi-tranche take-profits would
+    silently make the arm gate's pricing optimistic.
+
+    A tranche counts as ACTIVE when its quantity exceeds
+    :data:`~broker_contract.constants.QTY_PRECISION` — the broker's own share
+    precision, not a local float epsilon. A zero-sized or sub-precision tranche
+    is something the broker could never sell, so it is not counted.
+
+    Returns a human-readable reason, never raises. The caller decides what
+    loudly means (this rail refuses the arm and alerts); it must NOT silently
+    fall back to a smaller pricing quantity, merge the tranches, or keep
+    whole-position pricing.
+    """
+    if not math.isfinite(position_qty) or position_qty <= 0.0:
+        return f"position quantity is not usable ({position_qty!r})"
+    if any(not math.isfinite(q) for q in tranche_quantities):
+        return f"exit plan carries a non-finite tranche quantity ({list(tranche_quantities)!r})"
+    active = [q for q in tranche_quantities if q > QTY_PRECISION]
+    if len(active) != 1:
+        return (
+            f"exit plan has {len(active)} active tranche(s), the arm gate prices "
+            f"exactly 1 selling the whole position"
+        )
+    if abs(active[0] - position_qty) > QTY_PRECISION:
+        return (
+            f"exit plan's only tranche ({active[0]:g}) does not sell the whole position "
+            f"({position_qty:g})"
+        )
+    return None
+
+
 __all__ = [
     "COMMISSION_RATE",
     "COST_GATE_FX_APPLIES",
@@ -139,6 +188,8 @@ __all__ = [
     "EXIT_EDGE_MIN_BPS",
     "FX_ROUND_TRIP_RATE",
     "MIN_COMMISSION_USD",
+    "QTY_PRECISION",
     "min_profitable_exit_price",
     "round_trip_fee_bps",
+    "single_full_position_tranche_violation",
 ]
