@@ -41,9 +41,16 @@ exact situation this directory exists to end.
     ls ~/.config/systemd/user/alphalens-broker-manager-live.service.d/
     # anything not named NN-*.conf is untracked: remove it
 
-    cp -r deploy/systemd/alphalens-broker-manager-live.service.d ~/.config/systemd/user/
+    mkdir -p ~/.config/systemd/user/alphalens-broker-manager-live.service.d
+    cp deploy/systemd/alphalens-broker-manager-live.service.d/*.conf \
+       ~/.config/systemd/user/alphalens-broker-manager-live.service.d/
     systemctl --user daemon-reload
     systemctl --user restart alphalens-broker-manager-live.service
+
+Copy the FILES, not the directory. `cp -r <dir> <dest>/` when `<dest>/<dir>`
+already exists copies the source INTO it, leaving a nested
+`...service.d/...service.d/` that systemd never reads — so the install looks
+like it worked and changes nothing.
 
 Verify what actually took effect — the composed environment, not the files:
 

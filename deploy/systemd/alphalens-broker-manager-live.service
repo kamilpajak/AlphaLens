@@ -34,9 +34,13 @@
 # Then, to run what production runs (see that directory's README — it also
 # tells you to delete any UNTRACKED drop-in first, because an unprefixed
 # filename sorts after every numbered one and silently wins):
-#   cp -r deploy/systemd/alphalens-broker-manager-live.service.d ~/.config/systemd/user/
+#   mkdir -p ~/.config/systemd/user/alphalens-broker-manager-live.service.d
+#   cp deploy/systemd/alphalens-broker-manager-live.service.d/*.conf \
+#      ~/.config/systemd/user/alphalens-broker-manager-live.service.d/
 #   systemctl --user daemon-reload
 #   systemctl --user restart alphalens-broker-manager-live.service
+# Copy the FILES: `cp -r` onto an existing directory nests it one level deeper
+# and systemd silently reads nothing.
 #
 # After ANY unit or drop-in change, verify the EFFECTIVE environment rather
 # than the files — that is the only view that reflects what systemd composed:
