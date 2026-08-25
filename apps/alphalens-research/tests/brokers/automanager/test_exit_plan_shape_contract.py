@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import unittest
 
+from alphalens_pipeline.brokers.automanager import control_loop as cl
 from broker_contract import costs
 from broker_contract.constants import QTY_PRECISION
 from broker_contract.contract import _QTY_EPS
@@ -114,6 +115,36 @@ class TestSingleFullPositionTrancheContract(unittest.TestCase):
                         tranche_quantities=(bad,), position_qty=_LIVE_POSITION_QTY
                     )
                 )
+
+
+class TestArmGateResolvesThePlanFromTheWatchRecord(unittest.TestCase):
+    """``control_loop._exit_plan_shape_refusal`` at the unit level, for the two
+    record shapes the end-to-end pass cannot produce."""
+
+    def _record(self, **overrides: object) -> dict[str, object]:
+        record: dict[str, object] = {
+            "uic": 307,
+            "geometry": {"applied": True, "geometry_tp": 90.0},
+        }
+        record.update(overrides)
+        return record
+
+    def test_a_record_without_a_uic_refuses_terminally(self) -> None:
+        # Unreachable through _run_entry_watch_pass (a record with no uic never
+        # gets a price feed), so it is pinned here rather than end to end.
+        refusal = cl._exit_plan_shape_refusal(self._record(uic=None), _LIVE_POSITION_QTY)
+        self.assertIsNotNone(refusal)
+        assert refusal is not None
+        self.assertTrue(refusal.terminal)
+        self.assertIn("no uic", refusal.note)
+
+    def test_no_applied_geometry_target_is_not_gated(self) -> None:
+        self.assertIsNone(
+            cl._exit_plan_shape_refusal(
+                self._record(geometry={"applied": False, "geometry_tp": 90.0}),
+                _LIVE_POSITION_QTY,
+            )
+        )
 
 
 if __name__ == "__main__":
