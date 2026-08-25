@@ -28,11 +28,11 @@ from alphalens_pipeline.brokers.automanager.live_exit_engine import (
 from broker_contract.sizing import TpTranchePlan
 
 
-def _tr(index: int, target: float, pct: float) -> TpTranchePlan:
+def _tr(index: int, target: float, frac: float) -> TpTranchePlan:
     return TpTranchePlan(
         tranche_index=index,
         target_price=target,
-        tranche_pct=pct,
+        tranche_frac=frac,
         r_multiple=1.0,
         tag=tranche_tag(index),
     )
