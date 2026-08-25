@@ -424,7 +424,17 @@ class PartitionStats:
 
 @dataclass(frozen=True)
 class ConditionalFill:
-    """Given tier k filled, how often did tier k+1 fill, and what happened next."""
+    """Given tier k filled, how often did tier k+1 fill, and what happened next.
+
+    ``n_then_later`` counts a STRICTLY later bar; every other case, including the
+    (offline unreachable) one where the deeper tier's bar precedes the shallower
+    one, falls into ``n_then_same_bar``. The two always sum to ``n_then``.
+
+    ``then_realised_return_median`` is the "what happened next" half: the median
+    realised return of the rows where the deeper tier also filled. It is taken
+    over the rows that HAVE one, with the rest counted in
+    ``n_missing_then_realised`` rather than folded in as zero.
+    """
 
     given_tier: str
     then_tier: str
