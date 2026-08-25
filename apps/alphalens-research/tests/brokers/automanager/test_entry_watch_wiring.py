@@ -1095,6 +1095,44 @@ class TestEntryArmSingleTrancheContract(unittest.TestCase):
             len([ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_CANCELLED]), 1
         )
 
+    def test_an_unreadable_plan_journal_defers_instead_of_terminating(self) -> None:
+        # The shape check reads the standalone-stop journal, and it runs inside
+        # _run_entry_watch_pass, which has no per-watch exception boundary. An
+        # OSError there must not abort the pass for every other watch, and must
+        # not terminate this tier either — a transient read failure is not
+        # evidence about the exit plan. Stay TOUCHED and settle on a later tick.
+        path = _journal(self)
+        _planned_journal(self)
+        _seed_tranche_plan(uic=307, tranche_pcts=(1.0,), reference_qty=self._POSITION_QTY)
+        _seed_watch(
+            path,
+            crid="KO-2026-07-20-entry-t0",
+            limit=SMG_TIERS[0][0],
+            next_tier_limit=None,
+            geometry={**smg_geometry_stamp(), "geometry_tp": self._HEALTHY_TARGET},
+            qty=self._POSITION_QTY,
+        )
+        prices: dict[int, float | None] = {}
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        prices[307] = SMG_TOUCH_BID
+
+        def _boom():
+            raise OSError("journal unreadable")
+
+        with (
+            mock.patch.dict("os.environ", _ALLOW, clear=True),
+            mock.patch.object(cl, "_iter_standalone_stop_journal", _boom),
+        ):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+
+        self.assertEqual(broker.trailing_orders, [], "must not arm on an unverified plan")
+        self.assertEqual(
+            [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_CANCELLED],
+            [],
+            "a transient read failure is not evidence the plan is wrong",
+        )
+
     def test_a_watch_without_an_applied_geometry_target_is_not_gated(self) -> None:
         # The contract exists to protect the arm gate's pricing. Where the arm
         # gate does not price (no applied geometry target), it must not refuse.

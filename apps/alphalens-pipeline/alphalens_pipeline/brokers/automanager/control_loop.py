@@ -2454,9 +2454,17 @@ _ARM_REFUSAL_INSIDE_EXIT_REGION = "inside-exit-region"
 _ARM_REFUSAL_EXIT_PLAN_SHAPE = "exit-plan-shape"
 
 
-def _exit_plan_shape_note(record: Mapping[str, Any], position_qty: float) -> str | None:
-    """A one-line operator note when the exit plan governing this tier's uic is
-    not the single whole-position tranche the arm gate prices against, else
+class _ArmRefusal(NamedTuple):
+    """One reason a tier must not arm. ``terminal`` False means "we do not know
+    yet" — the tier neither arms nor ends, and settles on a later tick."""
+
+    note: str
+    reason: str
+    terminal: bool
+
+
+def _exit_plan_shape_refusal(record: Mapping[str, Any], position_qty: float) -> _ArmRefusal | None:
+    """Why this tier must not arm on the exit plan governing its uic, else
     ``None`` (issue #1112 round 2, point 2).
 
     :func:`_inside_exit_region_note` charges the round trip at the quantity of
@@ -2476,15 +2484,42 @@ def _exit_plan_shape_note(record: Mapping[str, Any], position_qty: float) -> str
 
     Scoped to the arm gate's own reach: ``None`` when no applied geometry target
     is stamped, because there the arm gate does not price anything.
+
+    A journal READ failure is the one case that refuses NON-terminally. It is
+    not evidence about the plan, and this runs inside ``_run_entry_watch_pass``,
+    which has no per-watch exception boundary — letting an OSError out would
+    abort the tick for every other watch too.
     """
     if _stamped_exit_target(record) is None:
         return None
     uic = _coerce(record, "uic", int)
     if uic is None:
-        return "entry watch carries no uic — the exit plan cannot be resolved"
-    plan = fold_tranche_plans(_iter_standalone_stop_journal()).get(uic)
+        return _ArmRefusal(
+            "entry watch carries no uic — the exit plan cannot be resolved",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=True,
+        )
+    try:
+        plan = fold_tranche_plans(_iter_standalone_stop_journal()).get(uic)
+    # Broad on purpose, mirroring _retract_stale_tranche_plans' sweep: a journal
+    # read failure degrades to "unknown", never to an aborted pass.
+    except Exception:
+        logger.warning(
+            "entry-trail arm: exit-plan read failed for uic %d — deferring the check",
+            uic,
+            exc_info=True,
+        )
+        return _ArmRefusal(
+            f"exit plan for uic {uic} could not be read",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=False,
+        )
     if plan is None:
-        return f"no exit plan on record for uic {uic}"
+        return _ArmRefusal(
+            f"no exit plan on record for uic {uic}",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=True,
+        )
     tranches, reference_qty, _stop = plan
     violation = single_full_position_tranche_violation(
         # Exactly how live_exit_engine.plan_tranche_exits sizes each tranche.
@@ -2493,7 +2528,11 @@ def _exit_plan_shape_note(record: Mapping[str, Any], position_qty: float) -> str
     )
     if violation is None:
         return None
-    return f"{violation} (arm gate priced {position_qty:g} share(s))"
+    return _ArmRefusal(
+        f"{violation} (arm gate priced {position_qty:g} share(s))",
+        _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+        terminal=True,
+    )
 
 
 def _terminal_refuse_arm(
@@ -2591,26 +2630,30 @@ def _arm_native_trail(
     # the watch while a real buy order still rests at the broker, and
     # KIND_CANCELLED is outside _RESTING_BEARING_TERMINALS so nothing would
     # cancel-then-verify it. Only a FRESH arm is refused.
-    note = _inside_exit_region_note(record, d_bps, reference, trough, qty)
-    reason = _ARM_REFUSAL_INSIDE_EXIT_REGION
-    if note is None:
+    region_note = _inside_exit_region_note(record, d_bps, reference, trough, qty)
+    refusal = (
+        _ArmRefusal(region_note, _ARM_REFUSAL_INSIDE_EXIT_REGION, terminal=True)
+        if region_note is not None
         # The whole-position pricing the gate above just did is only
         # conservative while the exit side sells the whole position in one
         # tranche. Checked, never assumed (issue #1112 round 2, point 2).
-        note = _exit_plan_shape_note(record, qty)
-        reason = _ARM_REFUSAL_EXIT_PLAN_SHAPE
-    if note is not None:
-        if lookup.read_ok:
-            _terminal_refuse_arm(deps, crid, record, runtime, d_bps, note, report, reason=reason)
+        else _exit_plan_shape_refusal(record, qty)
+    )
+    if refusal is not None:
+        if lookup.read_ok and refusal.terminal:
+            _terminal_refuse_arm(
+                deps, crid, record, runtime, d_bps, refusal.note, report, reason=refusal.reason
+            )
         else:
-            # The book read FAILED, so "no order rests" is a fact we do not have.
-            # Neither terminate (a prior tick's POST could be resting, and this
-            # terminal does no cancel-then-verify) nor arm a tier we know is bad:
-            # stay TOUCHED and settle it on a tick that can read the book.
+            # Either the book read FAILED — so "no order rests" is a fact we do
+            # not have, a prior tick's POST could be resting, and this terminal
+            # does no cancel-then-verify — or the refusal itself is not a
+            # verdict yet. Neither terminate nor arm a tier we cannot clear:
+            # stay TOUCHED and settle on a tick that can read what it needs.
             logger.warning(
-                "entry-trail %s: %s — open-order read failed, deferring the refusal",
+                "entry-trail %s: %s — deferring the refusal",
                 entry_label_from_crid(crid),
-                note,
+                refusal.note,
             )
         return
 
