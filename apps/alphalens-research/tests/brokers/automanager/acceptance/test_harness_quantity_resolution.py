@@ -81,13 +81,18 @@ class TestTheResolutionLimitThatRemains(unittest.TestCase):
         self.assertIsNone(self.broker._positions.get(self.uic))
         self.assertEqual(self.broker.get_long_positions(), [])
 
-    def test_the_same_sell_on_a_whole_share_venue_is_not_expressible_at_all(self) -> None:
-        # And the reason the limit is acceptable: a 0.6-share sell is not an
-        # order any connected venue would accept, so the shape the harness
-        # cannot observe is also a shape the rail cannot produce. That stops
-        # being true the day a fractional venue is added — which is when
-        # QTY_PRECISION must already be lattice-derived.
-        self.assertEqual(QTY_PRECISION, 0.5, "half of a one-share step")
+    def test_the_limit_is_acceptable_only_because_the_venue_step_is_one_share(self) -> None:
+        # WHY the limit above is tolerable, stated as the derivation rather
+        # than as the number. A 0.6-share sell is not an order any connected
+        # venue would accept, so the shape the harness cannot observe is also a
+        # shape the rail cannot produce.
+        #
+        # Written against WHOLE_SHARE_STEP so it fails for the right reason:
+        # not "the constant changed" but "the precision is no longer half of
+        # this venue's step". When a fractional venue arrives, that is the
+        # signal to revisit this file rather than to edit the number here.
+        whole_share_step = 1.0
+        self.assertEqual(QTY_PRECISION, whole_share_step / 2.0)
 
 
 if __name__ == "__main__":

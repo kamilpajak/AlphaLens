@@ -52,7 +52,7 @@ PRECISION_NAMES = frozenset({"QTY_PRECISION", "_QTY_EPS"})
 
 
 def _value_declarations(path: Path) -> set[str]:
-    """Module-level bindings of a precision name that DECLARE a value.
+    """Bindings of a precision name that DECLARE a value, at ANY nesting depth.
 
     The rule is stated as an exemption rather than a match, because the ways to
     write ``0.5`` are unbounded while the ways to point at an existing value are
@@ -63,10 +63,22 @@ def _value_declarations(path: Path) -> set[str]:
 
         _QTY_EPS = 0.5            _QTY_EPS = float("0.5")
         _QTY_EPS = 1.0 / 2.0      _QTY_EPS = 0.25 * 2
+
+    WHY THE WALK IS NOT MODULE-LEVEL-ONLY. It was, and that was adequate while
+    only production trees were scanned: a constant there sits at module level
+    and nowhere else. Inside the test tree the missed shapes are ordinary — a
+    class attribute, a ``setUp`` assignment, a local in one test — so keeping
+    the narrow scope would have claimed a coverage the scan does not have.
+    Measured before widening, six such shapes passed undetected.
+
+    The breadth is safe because the RULE is narrow: only two specific names are
+    policed, and neither should ever be bound to a computed value anywhere, at
+    any depth. A test that genuinely needs a different tolerance states it
+    under its own name, or builds a ``QuantityLattice``.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found: set[str] = set()
-    for node in tree.body:
+    for node in ast.walk(tree):
         targets: list[ast.expr] = []
         if isinstance(node, ast.Assign):
             targets = list(node.targets)
@@ -76,9 +88,12 @@ def _value_declarations(path: Path) -> set[str]:
             continue
         if node.value is None or isinstance(node.value, (ast.Name, ast.Attribute)):
             continue  # an alias, not a declaration
+        # A tuple target (`_QTY_EPS, OTHER = 0.5, 1`) hides the name from a
+        # check that only looks at the top-level target node.
         for target in targets:
-            if isinstance(target, ast.Name) and target.id in PRECISION_NAMES:
-                found.add(target.id)
+            for leaf in ast.walk(target):
+                if isinstance(leaf, ast.Name) and leaf.id in PRECISION_NAMES:
+                    found.add(leaf.id)
     return found
 
 
@@ -121,6 +136,18 @@ class TestOneShareQuantityPrecision(unittest.TestCase):
             "_QTY_EPS = 0.25 * 2",  # and this
             "_QTY_EPS: float = 0.5",
             "QTY_PRECISION = 0.5",
+            # The shapes that a MODULE-LEVEL-ONLY walk misses. They are exotic
+            # in production, where constants sit at module level and nowhere
+            # else — which is why the original scope was adequate. They are
+            # ordinary in TEST code, so extending the scan to the test tree
+            # without extending the walk would have claimed a coverage the
+            # scan does not have. All six were measured slipping through.
+            "class T:\n    _QTY_EPS = 0.5",
+            "class T:\n    def setUp(self):\n        self._QTY_EPS = 0.5\n        _QTY_EPS = 0.5",
+            "def f():\n    _QTY_EPS = 0.5",
+            "if True:\n    _QTY_EPS = 0.5",
+            "try:\n    _QTY_EPS = 0.5\nexcept Exception:\n    pass",
+            "_QTY_EPS, OTHER = 0.5, 1",
         )
         aliases_and_noise = (
             "_QTY_EPS = QTY_PRECISION",  # the legal re-binding
