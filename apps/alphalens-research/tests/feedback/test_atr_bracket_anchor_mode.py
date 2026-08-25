@@ -250,6 +250,59 @@ class TestBothModesShareTheNoFillGate(unittest.TestCase):
         self.assertIsNone(replay_ladder_atr_bracket(setup, above_every_tier, anchor="realised"))
 
 
+class TestANonFiniteTierLimitIsRefusedUnderBothAnchors(unittest.TestCase):
+    """An infinite tier limit is ``None``, not a ``NaN`` stamped into the map.
+
+    This is a REAL behaviour change to the historical ``realised`` lens, not
+    only to the new planned one, and it was found by hand-building the shape a
+    20 000-case randomized differential against ``main`` could not produce.
+
+    Mechanism: ``_LadderWalk.step`` fills a tier when ``bar_low <= tier.limit``,
+    and ``95 <= inf`` is True, so an infinite tier ENTERS the fill set and drags
+    the realised blend to non-finite. Before the ``math.isfinite`` guard that
+    blend went straight into ``atr_bracket_levels`` and the lens stamped a bare
+    ``NaN`` into the JSON map, which is not valid JSON for a strict reader.
+
+    A ``NaN`` limit is the opposite case and is included as the control: ``low
+    <= nan`` is False, so a NaN tier never fills and never reaches the blend.
+    """
+
+    @staticmethod
+    def _setup(limit: float) -> dict:
+        return {
+            "status": "OK",
+            "disaster_stop": 90.0,
+            "atr": 2.0,
+            "entry_tiers": [{"limit": limit, "alloc_pct": 100.0}],
+            "tp_tranches": [{"target": 120.0, "tranche_pct": 100.0}],
+        }
+
+    _BARS = [_bar(1, 95.0, 105.0, 100.0), _bar(2, 92.0, 130.0, 128.0)]
+
+    def test_an_infinite_tier_limit_yields_no_value_under_either_anchor(self):
+        setup = self._setup(float("inf"))
+        for anchor in ("planned", "realised"):
+            with self.subTest(anchor=anchor):
+                self.assertIsNone(atr_bracket_anchor(setup, self._BARS, anchor=anchor))
+                self.assertIsNone(replay_ladder_atr_bracket(setup, self._BARS, anchor=anchor))
+
+    def test_a_nan_tier_limit_never_fills_so_it_is_the_no_fill_gate(self):
+        setup = self._setup(float("nan"))
+        for anchor in ("planned", "realised"):
+            with self.subTest(anchor=anchor):
+                self.assertIsNone(atr_bracket_anchor(setup, self._BARS, anchor=anchor))
+                self.assertIsNone(replay_ladder_atr_bracket(setup, self._BARS, anchor=anchor))
+
+    def test_a_finite_tier_of_the_same_shape_still_reports(self):
+        # Positive control: without it the two assertions above would also pass
+        # if the fixture were simply unreplayable for an unrelated reason.
+        setup = self._setup(100.0)
+        for anchor in ("planned", "realised"):
+            with self.subTest(anchor=anchor):
+                self.assertIsNotNone(atr_bracket_anchor(setup, self._BARS, anchor=anchor))
+                self.assertIsNotNone(replay_ladder_atr_bracket(setup, self._BARS, anchor=anchor))
+
+
 class TestTheAnchorAlsoMovesTheCohort(unittest.TestCase):
     """The anchor changes WHICH ROWS the lens can report, not only the bracket.
 
