@@ -5120,11 +5120,25 @@ def _check_fee_floor(
     ticker, the estimated fee, and the cap (design memo §4) — never feeds
     back into selection (R2), just a fee fact reported to the operator.
 
-    Reads the TOTAL planned notional in instrument currency off
-    ``setup_plan_gross_notional`` (the gross a planner would commit if every
-    tier filled) — the same figure the existing gross-guard uses, so the fee
-    floor and the safety gross guard never disagree on what "the notional"
-    means."""
+    Prices the plan with ``_estimate_round_trip_fee_bps`` — the SAME per-tier
+    model already journaled as ``est_round_trip_fee_bps`` on every placement,
+    so the gate and the journal can never disagree about the cost of one plan
+    (#1123). Every commission minimum below roughly $1,250 per order is a flat
+    $1, so at our notionals the estimate is a COUNT of chargeable orders; the
+    older aggregate model counted exactly two however deep the ladder was, and
+    understated a real 3-tier SMG ladder by 120 bps (110.2 vs 230.7 journaled).
+
+    Falls back to the aggregate ``round_trip_fee_bps`` over
+    ``setup_plan_gross_notional`` when the per-tier model returns an honest
+    ``None`` (no sized plan / no tiers / zero gross) — the floor must always
+    answer, never crash the tick on a degenerate plan. The refusal message
+    names which model produced the number so the operator is never guessing.
+
+    NOTE (#1123): the per-tier model assumes ONE chargeable order per tier.
+    Saxo charges the minimum per order per EXECUTION DAY, so a tier resting as
+    GTD and filling across two days pays twice — neither model expresses that.
+    The mirrored exit is likewise an assumption, not a derivation: a
+    geometry-policy pick currently places a single 100% tranche."""
     from alphalens_pipeline.brokers.automanager.live_rails import MAX_FEE_BPS_ENV
 
     max_fee_bps_raw = os.environ.get(MAX_FEE_BPS_ENV)
@@ -5144,16 +5158,20 @@ def _check_fee_floor(
     from broker_contract.sizing import setup_plan_gross_notional
 
     notional = setup_plan_gross_notional(plan)
-    fee_bps = round_trip_fee_bps(
-        notional,
-        fx_applies=fx is not None,
-        min_commission_applies=instrument_currency == "USD",
-    )
+    fee_bps = _estimate_round_trip_fee_bps(plan, fx, instrument_currency=instrument_currency)
+    model = "per-tier"
+    if fee_bps is None:
+        model = "aggregate"
+        fee_bps = round_trip_fee_bps(
+            notional,
+            fx_applies=fx is not None,
+            min_commission_applies=instrument_currency == "USD",
+        )
     if fee_bps <= max_fee_bps:
         return None
     return (
         f"fee floor: {ticker} round-trip {fee_bps:.1f} bps > cap {max_fee_bps:.1f} bps "
-        f"(notional {notional:,.2f}) — pick refused"
+        f"({model} model, notional {notional:,.2f}) — pick refused"
     )
 
 
@@ -5162,9 +5180,11 @@ def _estimate_round_trip_fee_bps(
 ) -> float | None:
     """The HONEST per-tier round-trip fee estimate in bps of the plan's gross
     (broker sizing memo §4.5, amended by operator decision §7.3) — journaled
-    on every placement as the calibration series for path B's 150 bps target.
-    The fee FLOOR check (``_check_fee_floor``) is deliberately UNCHANGED: the
-    cap stays a degenerate-class backstop on the aggregate model.
+    on every placement as the calibration series for path B's 150 bps target,
+    and since #1123 also the number the fee FLOOR (``_check_fee_floor``) gates
+    on, so the gate and the journal price one plan the same way. The aggregate
+    ``round_trip_fee_bps`` survives only as the floor's fallback for when this
+    returns ``None``.
 
     - ``entry_fees``: each non-zero tier pays its own commission
       ``max($1, 0.08% x qty x limit)`` — zero-qty tiers are never POSTed
