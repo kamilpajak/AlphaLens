@@ -923,6 +923,95 @@ class TestEntryArmInsideExitRegion(unittest.TestCase):
                 self.assertEqual(len(broker.trailing_orders), 1, f"{label} must fail open")
 
 
+class TestGeometryActiveWithTheTrailDisabled(unittest.TestCase):
+    """#1116 round 2, point 4: the #1112 exit-region arm gate lives ONLY on the
+    trailing-entry path. With ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` at 0 a pick
+    falls through to the classic ``_place_tiers`` bracket path, which has no such
+    gate — and 0 is what the repo's own systemd unit sets (issue #1121).
+
+    Fail closed on ARMING A NEW ENTRY, never on the daemon as a whole: refusing
+    to start would leave live positions unmanaged, which is far worse than the
+    defect. Positions already open keep being managed — pinned in
+    ``test_live_exits_pass.py``.
+    """
+
+    _TIER_LIMIT = 10.0
+    _GEOMETRY_STOP = 8.0
+    _GEOMETRY_TP = 12.0
+
+    def _geometry_pick(self) -> Any:
+        """A pick carrying a buildable ``exit`` spec, which is the second half of
+        ``use_geometry`` (the first is the policy's ``applies_geometry``)."""
+        pick = _pick()
+        pick.spec = type(
+            "Spec",
+            (),
+            {
+                "entry_tiers": (
+                    type("T", (), {"limit_price": self._TIER_LIMIT, "alloc_pct": 100.0})(),
+                )
+            },
+        )()
+        pick.exit = type(
+            "ExitSpec",
+            (),
+            {
+                "initial_levels": type(
+                    "L", (), {"stop": self._GEOMETRY_STOP, "tp": self._GEOMETRY_TP}
+                )(),
+                "reaction_plan": (),
+            },
+        )()
+        return pick
+
+    def _place(
+        self, *, trail_bps: str | None, geometry: bool
+    ) -> tuple[_RecordingBroker, bool, list[tuple[str, str]]]:
+        from broker_contract.exit_geometry.registry import resolve_exit_policy
+
+        _journal(self)
+        broker = _RecordingBroker()
+        _placer(self, broker, _plan((0, self._TIER_LIMIT, 100)))
+        alerts: list[tuple[str, str]] = []
+
+        def _throttled(message: str, reason: str) -> bool:
+            alerts.append((message, reason))
+            return True
+
+        placer = cl._make_place_pick(
+            broker,
+            resolve_exit_policy("atr_bracket_1p5" if geometry else "setup_static"),
+            alert_throttled=_throttled,
+        )
+        env = {} if trail_bps is None else {_ENV: trail_bps}
+        with mock.patch.dict("os.environ", env, clear=True):
+            placed = placer(self._geometry_pick())
+        return broker, placed, alerts
+
+    def test_geometry_active_and_the_trail_off_refuses_the_new_entry(self) -> None:
+        broker, placed, alerts = self._place(trail_bps=None, geometry=True)
+        self.assertFalse(placed)
+        self.assertEqual(broker.brackets, [], "no un-gated bracket may be placed")
+        self.assertEqual(broker.stops, [])
+        self.assertTrue(any("entry trail" in msg for msg, _key in alerts), alerts)
+
+    def test_an_explicit_zero_is_the_same_as_unset(self) -> None:
+        broker, placed, _alerts = self._place(trail_bps="0", geometry=True)
+        self.assertFalse(placed)
+        self.assertEqual(broker.brackets, [])
+
+    def test_the_classic_path_is_untouched_when_geometry_is_not_active(self) -> None:
+        broker, placed, alerts = self._place(trail_bps=None, geometry=False)
+        self.assertTrue(placed)
+        self.assertEqual(len(broker.brackets), 1, "the static-exit bracket path is unchanged")
+        self.assertEqual(alerts, [])
+
+    def test_geometry_active_with_the_trail_on_still_routes_to_a_watch(self) -> None:
+        broker, placed, _alerts = self._place(trail_bps="50", geometry=True)
+        self.assertTrue(placed)
+        self.assertEqual(broker.brackets, [], "the gated trailing path places no bracket")
+
+
 class TestEntryArmSingleTrancheContract(unittest.TestCase):
     """#1116 round 2, point 2: the arm gate prices the round trip at the whole
     position it opens. That is only safe while the exit side sells that whole

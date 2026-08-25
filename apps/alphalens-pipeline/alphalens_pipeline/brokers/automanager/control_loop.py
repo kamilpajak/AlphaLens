@@ -6159,6 +6159,44 @@ def _day1_gap_gate_defers(
     return True
 
 
+_GEOMETRY_WITHOUT_TRAIL_ALERT_PREFIX = "geometry-without-entry-trail"
+
+
+def _geometry_without_entry_trail_note(
+    exit_policy: ExitPolicy | None, exit_spec: Any
+) -> str | None:
+    """Why a NEW entry must not be armed right now, or ``None`` when it may be
+    (issue #1112 round 2, point 4).
+
+    The #1112 exit-region arm gate (:func:`_inside_exit_region_note`) and the
+    single-tranche contract (:func:`_exit_plan_shape_note`) exist ONLY on the
+    trailing-entry path. With ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` at 0 a pick
+    falls through to the classic ``_place_tiers`` bracket path, which has
+    neither — so the exact defect #1112 fixed (an entry filling inside its own
+    exit region) is reachable again. 0 is what this repo's own systemd unit
+    sets; production only runs the gated path because of an untracked drop-in
+    (issue #1121), which is a config fact no test can see.
+
+    Deliberately scoped to ARMING. Refusing at daemon startup instead would
+    leave every already-open LIVE position unmanaged — no take-profit pass, no
+    stop re-anchor — which is far worse than the defect being prevented. The
+    live-exits and protection passes are untouched by this.
+
+    ``None`` when the geometry exit is not active: under the static policy the
+    placed exit IS the brief's own ladder, and the arm gate never priced
+    anything, so the classic path is no worse than it has always been.
+    """
+    if exit_policy is None or not exit_policy.applies_geometry or exit_spec is None:
+        return None
+    if entry_trails.entry_trail_bps() > 0:
+        return None
+    return (
+        f"exit geometry is active but the entry trail is off "
+        f"({entry_trails.ENTRY_TRAIL_BPS_ENV}=0) — the classic bracket path has no "
+        f"exit-region gate, so a new entry could fill inside its own exit region"
+    )
+
+
 def _entry_trail_intercept(
     broker: Broker,
     intent: Any,
@@ -6440,6 +6478,22 @@ def _place_pick(
     )
     if intercepted is not None:
         return intercepted
+
+    # The pick is about to take the CLASSIC bracket path, which carries neither
+    # #1112 arm gate. Refuse a new entry while the geometry exit is active and
+    # the trail is off (issue #1112 round 2, point 4). NOT terminal: this is a
+    # configuration rail like KILL / ALLOW_ORDERS, so the pick stays armed and
+    # places itself once the trail is on — a terminal refusal would destroy the
+    # armed queue over an operator setting.
+    no_trail_note = _geometry_without_entry_trail_note(exit_policy, exit_spec)
+    if no_trail_note is not None:
+        logger.warning("place_pick %s: refused — %s", ticker, no_trail_note)
+        if alert_throttled is not None:
+            alert_throttled(
+                f"place_pick {ticker}: {no_trail_note}",
+                f"{_GEOMETRY_WITHOUT_TRAIL_ALERT_PREFIX}:{ticker}",
+            )
+        return False
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:
