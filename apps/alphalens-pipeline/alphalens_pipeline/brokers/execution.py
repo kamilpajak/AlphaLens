@@ -334,17 +334,33 @@ def assert_rail_lattice(lattice: QuantityLattice) -> None:
     the safe direction — measured: at 0.669 owned the sizer sells nothing while
     protection keeps the stop.
 
-    A lattice FINER than the epsilon inverts that: the sizer could sell a
-    quantity protection does not consider a real position, leaving it uncovered.
-    No such venue is connected, and this refuses to let one arrive quietly before
-    the epsilon sites migrate.
+    BOTH directions are refused, because both end in a naked position — the
+    first version of this guard only caught one, and the other was measured
+    reaching the broker:
+
+    - FINER than the epsilon: the sizer could sell a quantity protection does
+      not consider a live position, leaving it uncovered.
+    - COARSER than one share: ``quantize_down`` UNDER-counts the holding, so the
+      residual is invisible to the stop arithmetic. Measured on a 100-share
+      round lot at 150 owned — ``max(quantize_down(150) - 100, 0) == 0`` reads
+      as a full close and CANCELS the disaster stop while 50 shares are still
+      held. Same naked position as the incident this exists to fix, reached
+      from the opposite side.
+
+    So the admissible set is exactly one lattice: the whole shares the epsilon
+    was derived for (``QTY_PRECISION`` IS ``step / 2`` at ``step == 1``). Any
+    other granularity needs the epsilon comparison sites migrated first, which
+    is what makes that migration the prerequisite for CONNECTING such a venue
+    rather than for fixing the rounding.
     """
-    if lattice.step / 2.0 < QTY_PRECISION:
+    if lattice.step / 2.0 != QTY_PRECISION:
         raise NotImplementedError(
-            f"lattice step {lattice.step!r} is finer than the protection epsilon "
-            f"{QTY_PRECISION!r}: the exit sizer would be able to sell a quantity the "
-            f"protection pass does not treat as a live position. Migrate the epsilon "
-            f"comparison sites before connecting a venue with this granularity."
+            f"lattice step {lattice.step!r} is not the whole-share step the protection "
+            f"epsilon {QTY_PRECISION!r} was derived for. Finer, and the exit sizer could "
+            f"sell a quantity the protection pass does not treat as a live position; "
+            f"coarser, and it under-counts the holding and cancels the stop over a "
+            f"residual it cannot see. Migrate the epsilon comparison sites before "
+            f"connecting a venue with this granularity."
         )
 
 

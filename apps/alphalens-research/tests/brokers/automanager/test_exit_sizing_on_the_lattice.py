@@ -19,18 +19,29 @@ the only one connected — the disagreement is entirely in the SAFE direction:
     0.51    available 0    real         nothing sold, stop kept
     1.4     available 1    real         consistent
 
-The dangerous shape (sell a quantity protection does not consider real) needs a
-lattice FINER than the epsilon, i.e. a fractional venue. None exists, and
-`_assert_rail_lattice` refuses to run on one until the epsilon sites migrate —
-so it is unreachable by construction rather than by luck.
+The dangerous shapes need a lattice that is not whole shares, and there are TWO
+of them — the first version of this guard only caught one:
+
+- FINER than the epsilon (a fractional venue): the sizer could sell a quantity
+  the protection pass does not treat as a live position.
+- COARSER than one share (a round-lot venue): `quantize_down` under-counts the
+  holding, so at 150 owned with a 100-share step `max(100 - 100, 0) == 0` reads
+  as a full close and CANCELS the disaster stop over 50 shares it cannot see.
+
+Neither is connected, and `assert_rail_lattice` refuses both at all three
+entry points, so they are unreachable by construction rather than by luck.
 """
 
 from __future__ import annotations
 
 import unittest
+from dataclasses import dataclass
 
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
+    TrancheExit,
+    execute_tranche_exit,
     plan_tranche_exits,
+    run_live_exits,
     tranche_tag,
 )
 from alphalens_pipeline.brokers.execution import RAIL_LATTICE, assert_rail_lattice
@@ -49,6 +60,26 @@ def _tr(index: int, target: float, frac: float) -> TpTranchePlan:
 
 
 _WHOLE_POSITION = (_tr(0, 16.0, 1.0),)
+
+
+@dataclass
+class _Leg:
+    """The standalone disaster stop the executor would amend or cancel."""
+
+    order_id: str = "sl-1"
+    side: str = "SELL"
+    order_type: str = "StopIfTraded"
+    amount: float = 150.0
+
+
+class _NeverCalled:
+    """Fails loudly if the guard lets execution reach the broker at all."""
+
+    def __getattr__(self, name: str):
+        def _boom(*args: object, **kwargs: object) -> None:
+            raise AssertionError(f"broker.{name} was called past the lattice guard")
+
+        return _boom
 
 
 class TestTheIncidentQuantity(unittest.TestCase):
@@ -99,8 +130,50 @@ class TestTheRailLatticeGuard(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             assert_rail_lattice(QuantityLattice(step=0.001, min_qty=0.001, precision=3))
 
+    def test_a_lattice_COARSER_than_one_share_is_refused_too(self) -> None:
+        # The other side, and the one a "finer than the epsilon" guard misses.
+        # A round-lot venue (step 100) is dangerous in the opposite direction:
+        # `quantize_down` UNDER-counts the holding, so the residual becomes
+        # invisible to the stop arithmetic. Measured on this code before the
+        # guard was tightened, at owned=150 with a 100-share step:
+        #
+        #     quantize_down(150) -> 100
+        #     new_sl_qty = max(100 - 100, 0) = 0  ->  CANCEL the disaster stop
+        #
+        # while 50 shares were still held. Same naked position as the incident
+        # this PR fixes, reached from the other direction.
+        for step in (10.0, 100.0):
+            with self.subTest(step=step), self.assertRaises(NotImplementedError):
+                assert_rail_lattice(QuantityLattice(step=step, min_qty=step, precision=0))
+
     def test_the_whole_share_lattice_passes_the_guard(self) -> None:
         assert_rail_lattice(RAIL_LATTICE)
+
+    def test_the_guard_cannot_be_stepped_around_by_call_order(self) -> None:
+        # A guard that only fires on ONE entry point is a guard you can walk
+        # past. `execute_tranche_exit` is module-level and mutates broker state
+        # (it cancels and amends stops), so it must refuse a lattice it cannot
+        # reason about on its own, not trust that a planner ran first.
+        # Demonstrated: calling it directly with a coarse lattice used to run
+        # happily and cancel the stop.
+        coarse = QuantityLattice(step=100.0, min_qty=100.0, precision=0)
+        with self.assertRaises(NotImplementedError):
+            execute_tranche_exit(
+                broker=_NeverCalled(),
+                uic=1,
+                exit=TrancheExit(tag=tranche_tag(0), qty=100, target_price=16.0),
+                sl_leg=_Leg(),
+                stop_price=10.0,
+                request_ref="r",
+                lattice=coarse,
+            )
+
+    def test_run_live_exits_refuses_the_pass_before_touching_a_position(self) -> None:
+        # The production entry point refuses once per pass, so a bad lattice
+        # never reaches per-position work at all.
+        coarse = QuantityLattice(step=100.0, min_qty=100.0, precision=0)
+        with self.assertRaises(NotImplementedError):
+            run_live_exits(_NeverCalled(), _NeverCalled(), (), lattice=coarse)
 
 
 if __name__ == "__main__":
