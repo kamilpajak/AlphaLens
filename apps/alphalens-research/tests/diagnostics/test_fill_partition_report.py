@@ -386,6 +386,52 @@ class TestMaeReAnchoredToTheOvershootFill(unittest.TestCase):
         )
 
 
+class TestRealizedRReAnchoringChangesSignAtMinusOneR(unittest.TestCase):
+    """Re-anchoring does NOT move every outcome the same way, and the turning
+    point is exactly -1 R.
+
+    The difference is ``r' - r = -o(1 + r) / (o + s)``, so it is negative only
+    while ``r > -1``. A loss that already exceeded one R -- a gap THROUGH the
+    disaster stop, filled below it -- gets LESS negative, because the fill anchor
+    widens the risk unit faster than it widens the loss.
+
+    Not reachable in today's replay, which prices a stop-out at the stop level:
+    0 of the 393 terminal rows in the local store on 2026-08-25 sit below -1 R,
+    and 80 sit exactly at -1. It becomes reachable the moment a stop-out is
+    priced at a real fill, which is the comparison this instrument exists for --
+    so the turning point is pinned before, not after, that data arrives.
+    """
+
+    STOP_DISTANCE_PCT = 0.10
+
+    def _reanchor(self, r: float, bps: float = MEASURED_BPS) -> float:
+        value = fp.realized_r_at_fill(
+            realized_r=r, stop_distance_pct=self.STOP_DISTANCE_PCT, overshoot_bps=bps
+        )
+        assert value is not None
+        return value
+
+    def test_above_minus_one_r_the_re_anchored_value_is_worse(self) -> None:
+        for r in (2.0, 1.0, 0.0, -0.5, -0.99):
+            with self.subTest(realized_r=r):
+                self.assertLess(self._reanchor(r), r)
+
+    def test_at_exactly_minus_one_r_it_does_not_move(self) -> None:
+        self.assertAlmostEqual(self._reanchor(-1.0), -1.0, places=12)
+
+    def test_below_minus_one_r_the_re_anchored_value_is_LESS_negative(self) -> None:
+        for r in (-1.01, -1.2, -1.5, -3.0):
+            with self.subTest(realized_r=r):
+                self.assertGreater(self._reanchor(r), r)
+
+    def test_a_zero_overshoot_moves_nothing_anywhere(self) -> None:
+        # Control: the whole effect is the overshoot, so the "limit" arm must be
+        # the identity on both sides of the turning point.
+        for r in (2.0, -1.0, -1.5):
+            with self.subTest(realized_r=r):
+                self.assertAlmostEqual(self._reanchor(r, bps=0.0), r, places=12)
+
+
 class TestConditionalFillRate(unittest.TestCase):
     def test_a_deeper_tier_filling_in_a_later_bar_is_recorded_as_later(self) -> None:
         report = _report([_opp("AAA", filled=("E1", "E2"), fill_ts=(1_000, 2_000))])
