@@ -79,7 +79,7 @@ class TierPlanFrozenTests(unittest.TestCase):
     def test_tptrancheplan_is_frozen(self):
         # Kills @dataclass(frozen=True)->frozen=False on TpTranchePlan (L62).
         with self.assertRaises(dataclasses.FrozenInstanceError):
-            TpTranchePlan(0, 110.0, 50.0, 1.0, "t").target_price = 9.0
+            TpTranchePlan(0, 110.0, 0.5, 1.0, "t").target_price = 9.0
 
 
 class ValidateTradeSetupHardeningTests(unittest.TestCase):
@@ -257,10 +257,11 @@ class TpTrancheHardeningTests(unittest.TestCase):
         self.assertEqual(len(plan.tp_tranches), 1)
 
     def test_missing_tranche_defaults_are_zero(self):
-        # A tranche with no tranche_pct / r_multiple defaults both to 0.0;
+        # A tranche with no tranche_pct / r_multiple defaults both to 0.0
+        # (0 percent converts to 0 fraction, so the plan side reads 0.0 too);
         # NumberReplacers on those defaults (->1.0/-1.0) change them (L306/L307).
         plan = self._plan([{"target": 110.0}])
-        self.assertEqual(plan.tp_tranches[0].tranche_pct, 0.0)
+        self.assertEqual(plan.tp_tranches[0].tranche_frac, 0.0)
         self.assertEqual(plan.tp_tranches[0].r_multiple, 0.0)
 
 

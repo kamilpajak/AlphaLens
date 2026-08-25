@@ -484,9 +484,9 @@ def _seed_watch(
     entry_trails.append_entry_trail_line(line)
 
 
-def _seed_tranche_plan(*, uic: int, tranche_pcts: tuple[float, ...], reference_qty: float) -> None:
+def _seed_tranche_plan(*, uic: int, tranche_fracs: tuple[float, ...], reference_qty: float) -> None:
     """Journal one ``tranche_plan`` line for ``uic``, the shape the router writes
-    before it opens the watches. ``tranche_pcts`` is the exit split: ``(1.0,)``
+    before it opens the watches. ``tranche_fracs`` is the exit split: ``(1.0,)``
     is the single whole-position tranche the geometry policy produces today."""
     from broker_contract.sizing import TpTranchePlan
 
@@ -497,11 +497,11 @@ def _seed_tranche_plan(*, uic: int, tranche_pcts: tuple[float, ...], reference_q
                 TpTranchePlan(
                     tranche_index=i,
                     target_price=100.0 + i,
-                    tranche_pct=pct,
+                    tranche_frac=pct,
                     r_multiple=0.0,
-                    tag="geometry" if len(tranche_pcts) == 1 else f"tp{i + 1}",
+                    tag="geometry" if len(tranche_fracs) == 1 else f"tp{i + 1}",
                 )
-                for i, pct in enumerate(tranche_pcts)
+                for i, pct in enumerate(tranche_fracs)
             ),
             reference_qty=reference_qty,
             stop_price=8.0,
@@ -721,14 +721,14 @@ class TestEntryArmInsideExitRegion(unittest.TestCase):
         limit: float,
         geometry: dict[str, Any] | None,
         qty: float = 100.0,
-        tranche_pcts: tuple[float, ...] = (1.0,),
+        tranche_fracs: tuple[float, ...] = (1.0,),
     ) -> None:
         # Production journals the uic's tranche_plan BEFORE the watch_open lines
         # (control_loop._route_pick_to_entry_watch), so every seeded watch gets
-        # one too. ``tranche_pcts`` defaults to the single 100% geometry tranche
+        # one too. ``tranche_fracs`` defaults to the single 100% geometry tranche
         # the live rail writes; a test that wants the multi-tranche shape passes
         # its own split.
-        _seed_tranche_plan(uic=307, tranche_pcts=tranche_pcts, reference_qty=qty)
+        _seed_tranche_plan(uic=307, tranche_fracs=tranche_fracs, reference_qty=qty)
         _seed_watch(
             path,
             crid="KO-2026-07-20-entry-t0",
@@ -1030,11 +1030,11 @@ class TestEntryArmSingleTrancheContract(unittest.TestCase):
     """The live 27-share position (uic 23474)."""
 
     def _run_touch(
-        self, *, tranche_pcts: tuple[float, ...]
+        self, *, tranche_fracs: tuple[float, ...]
     ) -> tuple[_RecordingBroker, list[dict[str, Any]], list[tuple[str, str]]]:
         path = _journal(self)
         _planned_journal(self)
-        _seed_tranche_plan(uic=307, tranche_pcts=tranche_pcts, reference_qty=self._POSITION_QTY)
+        _seed_tranche_plan(uic=307, tranche_fracs=tranche_fracs, reference_qty=self._POSITION_QTY)
         _seed_watch(
             path,
             crid="KO-2026-07-20-entry-t0",
@@ -1053,13 +1053,13 @@ class TestEntryArmSingleTrancheContract(unittest.TestCase):
         return broker, _lines(path), alerts
 
     def test_todays_single_full_position_tranche_arms_normally(self) -> None:
-        broker, lines, alerts = self._run_touch(tranche_pcts=(1.0,))
+        broker, lines, alerts = self._run_touch(tranche_fracs=(1.0,))
         self.assertEqual(len(broker.trailing_orders), 1)
         self.assertEqual([ln for ln in lines if ln["kind"] == entry_trails.KIND_CANCELLED], [])
         self.assertEqual(alerts, [])
 
     def test_a_restored_three_tranche_plan_refuses_the_arm_and_alerts(self) -> None:
-        broker, lines, alerts = self._run_touch(tranche_pcts=(0.33, 0.33, 0.34))
+        broker, lines, alerts = self._run_touch(tranche_fracs=(0.33, 0.33, 0.34))
         self.assertEqual(broker.trailing_orders, [], "no order may be placed on an unchecked plan")
         cancelled = [ln for ln in lines if ln["kind"] == entry_trails.KIND_CANCELLED]
         self.assertEqual(len(cancelled), 1)
@@ -1067,7 +1067,7 @@ class TestEntryArmSingleTrancheContract(unittest.TestCase):
         self.assertTrue(any("exit plan" in msg for msg, _key in alerts), alerts)
 
     def test_a_tranche_that_sells_only_part_of_the_position_refuses_the_arm(self) -> None:
-        broker, lines, _alerts = self._run_touch(tranche_pcts=(0.5,))
+        broker, lines, _alerts = self._run_touch(tranche_fracs=(0.5,))
         self.assertEqual(broker.trailing_orders, [])
         self.assertEqual(len([ln for ln in lines if ln["kind"] == entry_trails.KIND_CANCELLED]), 1)
 
@@ -1103,7 +1103,7 @@ class TestEntryArmSingleTrancheContract(unittest.TestCase):
         # evidence about the exit plan. Stay TOUCHED and settle on a later tick.
         path = _journal(self)
         _planned_journal(self)
-        _seed_tranche_plan(uic=307, tranche_pcts=(1.0,), reference_qty=self._POSITION_QTY)
+        _seed_tranche_plan(uic=307, tranche_fracs=(1.0,), reference_qty=self._POSITION_QTY)
         _seed_watch(
             path,
             crid="KO-2026-07-20-entry-t0",
@@ -1138,7 +1138,7 @@ class TestEntryArmSingleTrancheContract(unittest.TestCase):
         # gate does not price (no applied geometry target), it must not refuse.
         path = _journal(self)
         _planned_journal(self)
-        _seed_tranche_plan(uic=307, tranche_pcts=(0.33, 0.33, 0.34), reference_qty=100.0)
+        _seed_tranche_plan(uic=307, tranche_fracs=(0.33, 0.33, 0.34), reference_qty=100.0)
         _seed_watch(
             path,
             crid="KO-2026-07-20-entry-t0",
@@ -1457,7 +1457,7 @@ def _tranche(index: int, target: float, pct: float, *, r: float = 1.5) -> Any:
     from broker_contract.sizing import TpTranchePlan
 
     return TpTranchePlan(
-        tranche_index=index, target_price=target, tranche_pct=pct, r_multiple=r, tag=f"tp{index}"
+        tranche_index=index, target_price=target, tranche_frac=pct, r_multiple=r, tag=f"tp{index}"
     )
 
 
@@ -1543,7 +1543,7 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         # A zero-qty tier opens NO watch — reference_qty counts only the tiers
         # that actually watch (the fill base the live-exit engine scales from).
         plan = _plan_with_tranches(
-            ((0, 10.0, 100), (1, 9.0, 0)), (_tranche(0, 14.0, 60.0), _tranche(1, 16.0, 40.0))
+            ((0, 10.0, 100), (1, 9.0, 0)), (_tranche(0, 14.0, 0.6), _tranche(1, 16.0, 0.4))
         )
         ok, tranche_lines, _trails, _stops = self._route(plan)
         self.assertTrue(ok)
@@ -1555,7 +1555,7 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         self.assertEqual([t["target_price"] for t in line["tp_tranches"]], [14.0, 16.0])
 
     def test_geometry_policy_journals_the_single_geometry_tranche(self) -> None:
-        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 1.0),))
         intent = _pick()
         intent.exit = _exit_spec(stop=9.1, tp=13.5)
         intent.spec = _blend_spec()
@@ -1572,7 +1572,7 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
                 {
                     "tranche_index": 0,
                     "target_price": 13.5,
-                    "tranche_pct": 1.0,
+                    "tranche_frac": 1.0,
                     "r_multiple": 0.0,
                     "tag": "geometry",
                 }
@@ -1580,7 +1580,7 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         )
 
     def test_unusable_geometry_levels_skip_the_ladder_and_warn_but_still_watch(self) -> None:
-        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 1.0),))
         intent = _pick()
         intent.exit = _exit_spec(stop=None, tp=13.5)
         intent.spec = _blend_spec()
@@ -1598,7 +1598,7 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         # 2026-08-19 adjudication finding 4: the watch path stamps pick_key so
         # the fired-tranche fold treats a re-drive's re-append as the SAME
         # trade (no fired-set reset).
-        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 1.0),))
         ok, tranche_lines, _trails, _stops = self._route(plan)
         self.assertTrue(ok)
         self.assertEqual(tranche_lines[0]["pick_key"], "KO:2026-07-20")
@@ -1622,7 +1622,7 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
                 entry_trails, "append_entry_trail_line", lambda line: events.append(line["kind"])
             )
         )
-        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 1.0),))
         ok, _tranche_lines, _trails, _stops = self._route(plan)
         self.assertTrue(ok)
         self.assertIn("tranche_plan", events)
@@ -2318,7 +2318,7 @@ class TestStaleTranchePlanRetraction(unittest.TestCase):
                 {
                     "tranche_index": 0,
                     "target_price": 14.0,
-                    "tranche_pct": 1.0,
+                    "tranche_frac": 1.0,
                     "r_multiple": 0.0,
                     "tag": "geometry",
                 }

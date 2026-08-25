@@ -31,7 +31,7 @@ def _tr(index: int, target: float, pct: float) -> TpTranchePlan:
     return TpTranchePlan(
         tranche_index=index,
         target_price=target,
-        tranche_pct=pct,
+        tranche_frac=pct,
         r_multiple=1.0,
         tag=f"tp{index + 1}",
     )

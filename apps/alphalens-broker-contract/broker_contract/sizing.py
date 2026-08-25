@@ -71,13 +71,46 @@ class TierPlan:
 
 @dataclass(frozen=True)
 class TpTranchePlan:
-    """One take-profit tranche kept as a reference for the exit reconciler."""
+    """One take-profit tranche kept as a reference for the exit reconciler.
+
+    ``tranche_frac`` is a FRACTION of the position (0-1), deliberately NOT the
+    same unit as the brief-shaped
+    :class:`~broker_contract.trade_intent.schema.TpTrancheSpec.tranche_pct`,
+    which is a PERCENTAGE (0-100). The two names differ because the units do;
+    sharing one name is what let a live sizer and a fee estimator read the same
+    number 100x apart. The single conversion happens in
+    :func:`_build_tp_tranches`, exactly where ``alloc_pct`` is already divided
+    by 100 for the entry side.
+    """
 
     tranche_index: int
     target_price: float
-    tranche_pct: float
+    tranche_frac: float
     r_multiple: float
     tag: str
+
+    def __post_init__(self) -> None:
+        # A fraction outside [0, 1] is not a small mistake, it is the wrong
+        # UNIT — and the unit is exactly what was ambiguous here. Refusing at
+        # construction is what makes the 100x class unrepresentable rather than
+        # merely fixed: a percentage-shaped 33.3 can no longer become a plan.
+        #
+        # The exception TYPE is load-bearing, and reachable: a brief's
+        # ``tranche_pct`` is LLM-authored and range-checked nowhere (``paper.
+        # sizing`` parses a bare ``float(raw.get("tranche_pct", 0.0))``), so an
+        # over-100 weight arrives from real data. ``TradeSetupNotPlannableError``
+        # is what the rail already expects for a malformed setup:
+        # ``control_loop._resolve_and_size`` catches it and refuses the pick,
+        # and because it subclasses ``ValueError`` the journal fold skips a
+        # corrupt line instead of dying on it. A bare ``ValueError`` would sail
+        # past the first and take the tick down — and on this rail a dead tick
+        # means the never-naked protection pass never runs.
+        if not 0.0 <= self.tranche_frac <= 1.0:
+            raise TradeSetupNotPlannableError(
+                f"tranche_frac must be a FRACTION of the position in [0, 1], got "
+                f"{self.tranche_frac!r} — a percentage (0-100) belongs on "
+                f"TpTrancheSpec.tranche_pct and is converted once by compute_setup_plan"
+            )
 
 
 @dataclass(frozen=True)
@@ -185,7 +218,11 @@ def _build_tp_tranches(tp_tranches: Iterable[TpTrancheSpec]) -> list[TpTranchePl
             TpTranchePlan(
                 tranche_index=idx,
                 target_price=t.price,
-                tranche_pct=t.tranche_pct,
+                # THE conversion, percent -> fraction, in exactly one place.
+                # Its absence was the defect: the entry side divides alloc_pct
+                # by 100 below, while this copied the brief's percentage
+                # verbatim into a field the live exit sizer multiplies by.
+                tranche_frac=t.tranche_pct / 100.0,
                 r_multiple=t.r_multiple,
                 tag=t.tag,
             )

@@ -2448,10 +2448,10 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
     def test_journals_one_tranche_plan_line_with_the_full_ladder(self) -> None:
         tranches = (
             TpTranchePlan(
-                tranche_index=0, target_price=11.0, tranche_pct=0.5, r_multiple=1.0, tag="tp1"
+                tranche_index=0, target_price=11.0, tranche_frac=0.5, r_multiple=1.0, tag="tp1"
             ),
             TpTranchePlan(
-                tranche_index=1, target_price=12.0, tranche_pct=0.5, r_multiple=2.0, tag="tp2"
+                tranche_index=1, target_price=12.0, tranche_frac=0.5, r_multiple=2.0, tag="tp2"
             ),
         )
         journaled = self._run(plan=self._plan(tp_tranches=tranches))
@@ -2476,7 +2476,7 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
         # today's always-reset fold semantics.
         tranches = (
             TpTranchePlan(
-                tranche_index=0, target_price=11.0, tranche_pct=1.0, r_multiple=1.0, tag="tp1"
+                tranche_index=0, target_price=11.0, tranche_frac=1.0, r_multiple=1.0, tag="tp1"
             ),
         )
         journaled = self._run(plan=self._plan(tp_tranches=tranches))
@@ -2508,7 +2508,7 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
         self.assertAlmostEqual(line["stop_price"], 8.5)  # exit_spec.initial_levels.stop
         self.assertEqual(len(line["tp_tranches"]), 1)
         self.assertAlmostEqual(line["tp_tranches"][0]["target_price"], 13.0)
-        self.assertAlmostEqual(line["tp_tranches"][0]["tranche_pct"], 1.0)
+        self.assertAlmostEqual(line["tp_tranches"][0]["tranche_frac"], 1.0)
 
     def test_a_non_finite_geometry_level_journals_no_tranche_plan_line(self) -> None:
         # _build_tranche_plan_line writes both levels verbatim (float(...)), so a
@@ -2544,7 +2544,7 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
         # falling back would arm the engine on a ladder the policy never placed.
         tranches = (
             TpTranchePlan(
-                tranche_index=0, target_price=11.0, tranche_pct=1.0, r_multiple=1.0, tag="tp1"
+                tranche_index=0, target_price=11.0, tranche_frac=1.0, r_multiple=1.0, tag="tp1"
             ),
         )
         journaled = self._run(
@@ -2636,10 +2636,10 @@ class TestEstimateRoundTripFeeBps(unittest.TestCase):
             ),
             tp_tranches=(
                 TpTranchePlan(
-                    tranche_index=0, target_price=12.0, tranche_pct=50.0, r_multiple=1.0, tag="tp1"
+                    tranche_index=0, target_price=12.0, tranche_frac=0.5, r_multiple=1.0, tag="tp1"
                 ),
                 TpTranchePlan(
-                    tranche_index=1, target_price=14.0, tranche_pct=50.0, r_multiple=2.0, tag="tp2"
+                    tranche_index=1, target_price=14.0, tranche_frac=0.5, r_multiple=2.0, tag="tp2"
                 ),
             ),
         )
@@ -5755,7 +5755,7 @@ def _tranche_plan_line(
             TpTranchePlan(
                 tranche_index=0,
                 target_price=target_price,
-                tranche_pct=0.5,
+                tranche_frac=0.5,
                 r_multiple=1.0,
                 tag="tp1",
             ),

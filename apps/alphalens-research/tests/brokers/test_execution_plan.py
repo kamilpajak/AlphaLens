@@ -38,7 +38,7 @@ def _tier(index: int, limit: float, qty: int) -> TierPlan:
 
 def _tranche(index: int, target: float) -> TpTranchePlan:
     return TpTranchePlan(
-        tranche_index=index, target_price=target, tranche_pct=50.0, r_multiple=1.5, tag=f"tp{index}"
+        tranche_index=index, target_price=target, tranche_frac=0.5, r_multiple=1.5, tag=f"tp{index}"
     )
 
 

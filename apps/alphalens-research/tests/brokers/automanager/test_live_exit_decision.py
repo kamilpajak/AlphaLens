@@ -30,7 +30,7 @@ def _tr(index, target, pct):
     return TpTranchePlan(
         tranche_index=index,
         target_price=target,
-        tranche_pct=pct,
+        tranche_frac=pct,
         r_multiple=1.0,
         tag=tranche_tag(index),
     )
@@ -84,7 +84,7 @@ def _geometry_tranche(target):
     """The single 100%-of-position tranche the geometry policy places (the shape
     ``control_loop._geometry_tranche_ladder`` journals)."""
     return TpTranchePlan(
-        tranche_index=0, target_price=target, tranche_pct=1.0, r_multiple=0.0, tag="geometry"
+        tranche_index=0, target_price=target, tranche_frac=1.0, r_multiple=0.0, tag="geometry"
     )
 
 
