@@ -1,4 +1,6 @@
-"""The ONE round-trip transaction-cost model, as a pure stdlib-only leaf.
+"""The ONE round-trip transaction-cost model, as a pure leaf (stdlib plus the
+sibling stdlib-only ``broker_contract.constants``, for the shared share-quantity
+precision).
 
 Extracted from ``alphalens_pipeline.brokers.automanager.control_loop`` (issue
 #1112) so the placement-time fee floor and the exit-time cost gate cannot drift
@@ -158,10 +160,11 @@ def single_full_position_tranche_violation(
     precision, not a local float epsilon. A zero-sized or sub-precision tranche
     is something the broker could never sell, so it is not counted.
 
-    Returns a human-readable reason, never raises. The caller decides what
-    loudly means (this rail refuses the arm and alerts); it must NOT silently
-    fall back to a smaller pricing quantity, merge the tranches, or keep
-    whole-position pricing.
+    Returns a human-readable reason; on numeric input it never raises (a
+    non-numeric quantity is a programming error and is left to raise). The
+    caller decides what loudly means — this rail refuses the arm and alerts. It
+    must NOT silently fall back to a smaller pricing quantity, merge the
+    tranches, or keep whole-position pricing.
     """
     if not math.isfinite(position_qty) or position_qty <= 0.0:
         return f"position quantity is not usable ({position_qty!r})"
