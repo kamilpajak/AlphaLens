@@ -94,8 +94,19 @@ class TpTranchePlan:
         # UNIT — and the unit is exactly what was ambiguous here. Refusing at
         # construction is what makes the 100x class unrepresentable rather than
         # merely fixed: a percentage-shaped 33.3 can no longer become a plan.
+        #
+        # The exception TYPE is load-bearing, and reachable: a brief's
+        # ``tranche_pct`` is LLM-authored and range-checked nowhere (``paper.
+        # sizing`` parses a bare ``float(raw.get("tranche_pct", 0.0))``), so an
+        # over-100 weight arrives from real data. ``TradeSetupNotPlannableError``
+        # is what the rail already expects for a malformed setup:
+        # ``control_loop._resolve_and_size`` catches it and refuses the pick,
+        # and because it subclasses ``ValueError`` the journal fold skips a
+        # corrupt line instead of dying on it. A bare ``ValueError`` would sail
+        # past the first and take the tick down — and on this rail a dead tick
+        # means the never-naked protection pass never runs.
         if not 0.0 <= self.tranche_frac <= 1.0:
-            raise ValueError(
+            raise TradeSetupNotPlannableError(
                 f"tranche_frac must be a FRACTION of the position in [0, 1], got "
                 f"{self.tranche_frac!r} — a percentage (0-100) belongs on "
                 f"TpTrancheSpec.tranche_pct and is converted once by compute_setup_plan"

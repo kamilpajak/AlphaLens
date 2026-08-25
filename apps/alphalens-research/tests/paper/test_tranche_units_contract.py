@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import unittest
 
-from broker_contract.sizing import compute_setup_plan
+from broker_contract.sizing import TradeSetupNotPlannableError, compute_setup_plan
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     TpTrancheSpec,
@@ -86,6 +86,59 @@ class TestTrancheWeightUnits(unittest.TestCase):
         # names. Collapsing them to one name is what allowed the ambiguity.
         spec = _spec()
         self.assertAlmostEqual(spec.tp_tranches[0].tranche_pct, _BRIEF_TRANCHE_PCT, places=9)
+
+
+class TestOutOfRangeWeightIsUnplannableNotACrash(unittest.TestCase):
+    """A brief's tranche weight is LLM-authored and range-checked nowhere:
+    `paper.sizing` parses it with a bare `float(raw.get("tranche_pct", 0.0))`.
+
+    So an over-100 weight is reachable from production data, and the daemon
+    must treat it the way it treats every other malformed setup — as
+    unplannable. `control_loop._resolve_and_size` catches exactly
+    `(BrokerError, TradeSetupNotPlannableError)`; anything else escapes the
+    pass and takes the tick down, which on this rail means the protection pass
+    never runs.
+    """
+
+    def _spec_with(self, pct: float) -> TradeSpec:
+        return TradeSpec(
+            entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=100.0, tag="E1"),),
+            disaster_stop=90.0,
+            tp_tranches=(TpTrancheSpec(price=110.0, tranche_pct=pct, r_multiple=1.0, tag="TP1"),),
+            suggested_size_pct=10.0,
+        )
+
+    def test_over_one_hundred_percent_is_refused_as_unplannable(self) -> None:
+        with self.assertRaises(TradeSetupNotPlannableError):
+            compute_setup_plan(self._spec_with(150.0), paper_equity=100_000.0, scale_factor=1.0)
+
+    def test_negative_weight_is_refused_as_unplannable(self) -> None:
+        with self.assertRaises(TradeSetupNotPlannableError):
+            compute_setup_plan(self._spec_with(-5.0), paper_equity=100_000.0, scale_factor=1.0)
+
+    def test_the_refusal_is_not_a_bare_value_error(self) -> None:
+        # The distinction that matters: a ValueError would sail past the
+        # daemon's except clause. Pin the type, not just "it raises".
+        with self.assertRaises(TradeSetupNotPlannableError):
+            compute_setup_plan(self._spec_with(150.0), paper_equity=100_000.0, scale_factor=1.0)
+        try:
+            compute_setup_plan(self._spec_with(150.0), paper_equity=100_000.0, scale_factor=1.0)
+        except TradeSetupNotPlannableError as exc:
+            # The message names the converted FRACTION (1.5), which is all the
+            # plan type honestly knows — it never saw the brief's 150. It then
+            # points at the field that does carry percentages, so an operator
+            # reading the log knows which number to go and look at.
+            self.assertIn("1.5", str(exc))
+            self.assertIn("tranche_pct", str(exc))
+
+    def test_the_boundaries_themselves_are_plannable(self) -> None:
+        # Guard against a fix that refuses everything: 0 and 100 percent are
+        # both legitimate weights.
+        for pct in (0.0, 100.0):
+            plan = compute_setup_plan(
+                self._spec_with(pct), paper_equity=100_000.0, scale_factor=1.0
+            )
+            self.assertAlmostEqual(plan.tp_tranches[0].tranche_frac, pct / 100.0, places=9)
 
 
 if __name__ == "__main__":
