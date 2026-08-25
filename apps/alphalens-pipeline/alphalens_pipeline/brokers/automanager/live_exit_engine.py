@@ -73,9 +73,17 @@ def _exit_clears_cost(
     the declared :data:`EXIT_EDGE_MIN_BPS` buffer, measured from the REALISED
     entry (issue #1112 step 2).
 
-    The threshold is :func:`~broker_contract.costs.min_profitable_exit_price` —
-    the same one the arm-time gate compares a tier's exit target against, so a
-    tier can never be armed on a target this gate would refuse to fire.
+    The threshold is :func:`~broker_contract.costs.min_profitable_exit_price`,
+    evaluated at THIS TRANCHE's quantity.
+
+    READING RULE — the arm-time gate calls the same function, but at the
+    quantity of the position it opens, so the two bars differ whenever the two
+    quantities do: a smaller exit quantity pays proportionally more of the
+    per-fill USD minimum and therefore needs a HIGHER price. An armed tier is
+    not automatically an exit this gate will fire. They coincide only while the
+    exit plan is one tranche selling the whole position, which
+    :func:`~broker_contract.costs.single_full_position_tranche_violation`
+    enforces at arm time.
 
     FAILS OPEN — an unknown realised entry (``None``, the SIM ``NoAccess``
     non-positive sentinel, or a NaN) returns ``True`` and logs. This is the

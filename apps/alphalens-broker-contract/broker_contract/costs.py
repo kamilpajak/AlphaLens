@@ -98,22 +98,28 @@ def min_profitable_exit_price(
 ) -> float | None:
     """The lowest exit price that clears round-trip cost plus
     :data:`EXIT_EDGE_MIN_BPS` on a position of ``qty`` shares bought at
-    ``entry_price`` — the ONE threshold both #1112 gates compare against.
+    ``entry_price``.
 
-    Shared on purpose: the arm-time gate
+    READING RULE — this is ONE cost function, NOT one threshold. Both #1112
+    gates call it, but at DIFFERENT quantities: the arm-time gate
     (:func:`~alphalens_pipeline.brokers.automanager.entry_trail_geometry.arms_inside_exit_region`)
-    and the exit-time gate
-    (``live_exit_engine._exit_clears_cost``) must draw the same line, or the rail
-    submits an entry whose own take-profit it will later refuse to fire.
+    prices the position it is about to open, the exit-time gate
+    (``live_exit_engine._exit_clears_cost``) prices the tranche it is about to
+    sell. The per-fill USD minimum makes the required move depend on the priced
+    quantity, so the two bars only coincide when the two quantities do.
+    Measured at an entry of 60.00: 60.8000 at 10 shares, 61.2667 at 3 shares,
+    62.6000 at 1 share. The smaller the exit quantity, the HIGHER the exit-time
+    bar — so an armed tier is not automatically an exit the gate will fire.
+
+    What keeps that safe today is :func:`single_full_position_tranche_violation`,
+    which refuses to arm unless the exit plan is exactly one tranche selling the
+    whole position. Remove that guard and the arm gate's whole-position pricing
+    stops being conservative.
 
     ``None`` (never raises) on any degenerate input — a non-finite or
     non-positive ``entry_price`` / ``qty``. Callers fail OPEN on ``None``: a
     gate that silently refuses on unusable data would stop the rail, which is
     worse than the defect it prevents.
-
-    NOTE the threshold depends on ``qty`` through the per-fill USD minimum: a
-    smaller notional pays proportionally more, so a small tranche needs a wider
-    move than a large one at the same entry.
     """
     for value in (entry_price, qty):
         if not math.isfinite(value) or value <= 0.0:

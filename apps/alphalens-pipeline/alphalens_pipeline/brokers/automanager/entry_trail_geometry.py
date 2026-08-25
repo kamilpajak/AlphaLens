@@ -118,13 +118,20 @@ def arms_inside_exit_region(
         refuse unless   exit_target > fill_estimate + round_trip_cost + E_min
 
     so a target that sits above the fill but inside the round trip is refused
-    too. Both #1112 gates measure that threshold with the SAME
-    :func:`~broker_contract.costs.min_profitable_exit_price`, so a tier can
-    never be armed on a target the exit gate would later refuse to fire.
+    too.
 
-    ``qty`` is the tier's share count — the cost model's per-fill USD minimum
-    makes the required move depend on it (one share at about $60 pays roughly
-    382 bps round trip).
+    ``qty`` is the share count this gate prices — the cost model's per-fill USD
+    minimum makes the required move depend on it (one share at about $60 pays
+    roughly 382 bps round trip).
+
+    READING RULE — clearing this gate does NOT mean the exit gate
+    (``live_exit_engine._exit_clears_cost``) will fire the same target. Both
+    call the same :func:`~broker_contract.costs.min_profitable_exit_price`, but
+    at different quantities, and a SMALLER exit quantity draws a HIGHER bar. The
+    two only coincide while the exit plan is one tranche selling the whole
+    position, which
+    :func:`~broker_contract.costs.single_full_position_tranche_violation`
+    enforces at arm time rather than assuming.
 
     FAILS OPEN by design: a missing, non-finite or non-positive input returns
     ``False`` (arm as before). A gate that silently refuses every arm on
