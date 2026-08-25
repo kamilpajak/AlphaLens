@@ -372,33 +372,6 @@ class TestPartialFillWeighting(unittest.TestCase):
         flat = _tiers(("E1", 100.0, 0.0), ("E2", 97.0, 0.0), ("E3", 95.0, 0.0))
         self.assertAlmostEqual(fp.filled_fraction(flat, ("E1",)), 1 / 3, places=12)
 
-    def test_blended_fill_price_is_alloc_weighted_over_the_overshoot_prices(self) -> None:
-        fills = fp.walk_entry_fills(
-            self.SMG,
-            [_bar(1_000, SMG_TIERS[1][0])],
-            fill_model=fp.FILL_MODEL_TOUCH,
-            overshoot_bps=fp.ENTRY_TRAIL_OVERSHOOT_BPS,
-            exit_levels=fp.NO_EXIT,
-        )
-        self.assertEqual(tuple(f.tier_id for f in fills), ("E1", "E2"))
-        w1, w2 = SMG_TIERS[0][1], SMG_TIERS[1][1]
-        expected = (fills[0].fill_price * w1 + fills[1].fill_price * w2) / (w1 + w2)
-        self.assertAlmostEqual(fp.blended_fill_price(fills), expected, places=12)
-
-    def test_blended_fill_price_of_nothing_is_none(self) -> None:
-        self.assertIsNone(fp.blended_fill_price(()))
-
-    def test_blended_fill_price_falls_back_to_equal_weight_without_allocs(self) -> None:
-        flat = _tiers(("E1", 100.0, 0.0), ("E2", 90.0, 0.0))
-        fills = fp.walk_entry_fills(
-            flat,
-            [_bar(1_000, 89.0)],
-            fill_model=fp.FILL_MODEL_TOUCH,
-            overshoot_bps=0.0,
-            exit_levels=fp.NO_EXIT,
-        )
-        self.assertAlmostEqual(fp.blended_fill_price(fills), 95.0, places=12)
-
 
 class TestEntryTiersFromSetup(unittest.TestCase):
     def test_the_tiers_are_read_in_brief_order_and_labelled_e1_first(self) -> None:

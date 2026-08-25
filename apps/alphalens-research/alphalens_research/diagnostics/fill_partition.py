@@ -22,7 +22,12 @@ Three things this module refuses to do, each because the issue names it:
   set with timestamps, and the alloc-weighted :func:`filled_fraction` is the
   weight, never the tier count.
 * It does not price a fill at the tier limit -- see
-  :data:`ENTRY_TRAIL_OVERSHOOT_BPS`.
+  :data:`ENTRY_TRAIL_OVERSHOOT_BPS`. Two paths carry that overshoot, and only one
+  of them reaches a reported number: the walk prices each :class:`TierFill` for a
+  caller that wants the per-tier detail, while the cells themselves come from
+  :func:`realized_r_at_fill` / :func:`mae_r_at_fill`, which re-anchor the store's
+  own columns algebraically from the same bps scalar. Do not read a cell as an
+  aggregate of the walk's prices.
 
 Bracket anchors (issue #1114): this instrument does NOT replay ATR brackets, so
 it needs no ``AnchorMode``. It measures the ENTRY ladder exactly as the brief
@@ -425,22 +430,6 @@ def filled_fraction(tiers: Sequence[EntryTier], filled_ids: Iterable[str]) -> fl
     return min(max(frac, 0.0), 1.0)
 
 
-def blended_fill_price(fills: Sequence[TierFill]) -> float | None:
-    """Alloc-weighted blend over the OVERSHOOT-adjusted fill prices.
-
-    ``None`` when nothing filled. Mirrors ``ladder_replay._blended_entry``
-    (alloc weights, equal-weight fallback when they are absent or zero) but over
-    the overshoot-adjusted prices rather than the tier limits -- which is the
-    whole point: the limit blend is the number the store already carries.
-    """
-    if not fills:
-        return None
-    wsum = sum(f.alloc_pct for f in fills)
-    if wsum > 0:
-        return sum(f.fill_price * f.alloc_pct for f in fills) / wsum
-    return sum(f.fill_price for f in fills) / len(fills)
-
-
 # --------------------------------------------------------------------------
 # The DENOMINATOR: one report row per OPPORTUNITY, not per taken trade.
 # --------------------------------------------------------------------------
@@ -797,7 +786,6 @@ def realized_r_at_fill(
 # Store rows -> opportunities.
 # --------------------------------------------------------------------------
 
-CLASSIFICATION_NO_FILL = "NO_FILL"
 CLASSIFICATION_BAD_GEOMETRY = "BAD_GEOMETRY"
 CLASSIFICATION_SPLIT_INVALIDATED = "SPLIT_INVALIDATED"
 """Mirrors ``corporate_actions.SPLIT_INVALIDATED_CLASSIFICATION``; kept as a local

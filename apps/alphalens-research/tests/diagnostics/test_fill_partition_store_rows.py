@@ -204,6 +204,32 @@ class TestOpportunityFromStoreRow(unittest.TestCase):
         )
         self.assertAlmostEqual(opp.filled_fraction, 0.5)
 
+    def test_the_overshoot_reaches_the_number_through_the_re_anchor_not_the_walk_price(
+        self,
+    ) -> None:
+        # Two independent paths carry the overshoot: the walk PRICES each fill,
+        # and the re-anchor recomputes R from the store's own columns. Only the
+        # second reaches a reported number, so a fill priced AT the limit still
+        # produces the re-anchored R. Pinned because the module docstring's "does
+        # not price a fill at the tier limit" is otherwise easy to read as "the
+        # reported cells were computed from the walk's prices".
+        at_limit = fp.TierFill(
+            tier_id="E1", limit=100.0, alloc_pct=50.0, fill_price=100.0, bar_ts_ms=1_000
+        )
+        opp = fp.opportunity_from_store_row(
+            _row(),
+            fills=(at_limit,),
+            tiers=(fp.EntryTier("E1", 100.0, 50.0), fp.EntryTier("E2", 97.0, 50.0)),
+            overshoot_bps=MEASURED_BPS,
+        )
+        self.assertAlmostEqual(
+            opp.realised_r,
+            fp.realized_r_at_fill(
+                realized_r=1.5, stop_distance_pct=STOP_DISTANCE_PCT, overshoot_bps=MEASURED_BPS
+            ),
+        )
+        self.assertNotAlmostEqual(opp.realised_r, 1.5, places=6)
+
     def test_the_opportunity_cost_is_the_market_excess_move(self) -> None:
         opp = fp.opportunity_from_store_row(
             _row(market_excess_return=0.031),
