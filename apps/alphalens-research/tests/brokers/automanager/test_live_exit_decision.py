@@ -208,10 +208,21 @@ class TestCostGateKeepsTheLadderInOrder(unittest.TestCase):
 
 
 class TestArmGateAndExitGateAgree(unittest.TestCase):
-    """The two #1112 gates must draw the SAME line. If the arm gate admits a
-    tier the exit gate would later refuse, the rail submits an entry and then
-    has no take-profit path for it until the disaster stop — a worse state than
-    the defect either gate was added to prevent.
+    """The two #1112 gates must agree AT THE SAME QUANTITY. If the arm gate
+    admits a tier the exit gate would later refuse, the rail submits an entry
+    and then has no take-profit path for it until the disaster stop — a worse
+    state than the defect either gate was added to prevent.
+
+    Read the scope precisely: this table holds ``qty`` at 1 on both sides, and
+    that is the only condition under which agreement is a property of the code.
+    The two gates evaluate the same cost function at DIFFERENT quantities in
+    general — the arm gate at the position it opens, the exit gate at the
+    tranche it sells — and a smaller exit quantity draws a higher bar (at an
+    entry of 60.00: 60.8000 at 10 shares, 62.6000 at 1). What makes the
+    quantities equal on the live rail is
+    :func:`broker_contract.costs.single_full_position_tranche_violation`,
+    which refuses to arm unless the exit plan is one tranche selling the whole
+    position.
     """
 
     def _fires(self, *, target, realised_entry):
