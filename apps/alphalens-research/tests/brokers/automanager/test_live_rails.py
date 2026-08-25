@@ -89,11 +89,14 @@ class TestValidEnvPasses(unittest.TestCase):
                     assert_live_rails()  # must not raise
 
     def test_bound_edges_pass(self):
-        """The bounds are inclusive at the documented edges."""
+        """The bounds are inclusive at the documented edges — EVERY bounded
+        rail, so the name does not promise more coverage than it delivers."""
         edge_env = dict(_VALID_ENV)
         edge_env[MAX_OPEN_ENV] = "2"
         edge_env[PORTFOLIO_GROSS_FRAC_ENV] = "0.5"
         edge_env[DAILY_LOSS_LIMIT_R_ENV] = "2.0"
+        edge_env[SIZING_EQUITY_ENV] = "15000"
+        edge_env[MAX_FEE_BPS_ENV] = "1000"
         with mock.patch.dict("os.environ", edge_env, clear=True):
             assert_live_rails()  # must not raise
 

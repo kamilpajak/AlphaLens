@@ -87,6 +87,11 @@ _MAX_OPEN_UPPER = 2
 _PORTFOLIO_GROSS_FRAC_UPPER = 0.5
 _DAILY_LOSS_LIMIT_R_UPPER = 2.0
 
+# Operator-locked §8 soak bounds exactly like the three above — PRESCRIPTIVE,
+# not a snapshot of what the host happens to run. They are equal to the running
+# values because that is the point: the ceiling is the last deliberate decision,
+# so widening one is a design-memo decision here, never a silent host edit.
+#
 # These two were checked for POSITIVITY only until issue #1121, which left the
 # declared frame — the direct multiplier on position size — unbounded above: a
 # typo of 150000 for 15000 booted clean and would have traded ten times the

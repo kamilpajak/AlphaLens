@@ -55,6 +55,34 @@ def _environment_assignments(text: str) -> dict[str, str]:
     return values
 
 
+def _unreadable_reason(assignments: str) -> str | None:
+    """Why :func:`_environment_assignments` cannot honestly read this
+    ``Environment=`` payload, or ``None`` when it can.
+
+    The contract is refusal, not best effort: systemd understands quoting,
+    line continuations, C-style escapes and a bare ``Environment=`` reset, and
+    this parser understands none of them. Anything it would MISREAD has to be
+    rejected outright, because a quietly wrong composition is the one failure
+    this whole file exists to prevent.
+
+    Hence the blanket ban on backslashes rather than a rule per escape. A
+    trailing one continues the line and an escaped space hides a value
+    boundary; both slip past a narrower check, and neither is worth supporting
+    for files that have never needed either.
+    """
+    if "\\" in assignments:
+        return "backslash: continuation and C-style escapes are not parsed"
+    if '"' in assignments or "'" in assignments:
+        return "quoted value is not parsed"
+    tokens = assignments.split()
+    if not tokens:
+        return "bare Environment= reset is not parsed"
+    for token in tokens:
+        if "=" not in token:
+            return f"{token!r} is not an assignment"
+    return None
+
+
 def _dropin_files() -> list[Path]:
     # systemd applies drop-ins in lexical filename order, so sorted() is the
     # composition order, not merely a tidy one.
@@ -106,25 +134,40 @@ class TestTheTemplateIsDisarmed(unittest.TestCase):
         arming = [p.name for p in _dropin_files() if _ALLOW_ORDERS in p.read_text()]
         self.assertEqual(arming, ["10-allow-orders.conf"])
 
+    def test_the_composed_config_says_production_is_armed(self):
+        # The point of tracking these files is that the repository states what
+        # production does, and production has been placing real orders since
+        # 2026-08-11. Without this, deleting the arming drop-in would leave
+        # every other test green: the base unit alone still boots, and the
+        # composed config would simply describe a daemon that trades nothing.
+        self.assertEqual(_composed_environment()[_ALLOW_ORDERS], "1")
+
 
 class TestTheDropInsAreReadableTheWayTheyAreApplied(unittest.TestCase):
     def test_every_environment_line_is_the_simple_form(self):
-        # Guards the narrow parser above. systemd supports quoting, escaped
-        # newlines and a bare `Environment=` reset; none of them appear in
-        # these files today, and the parser would misread all three.
         for path in [_UNIT, *_dropin_files()]:
             for line in path.read_text().splitlines():
                 stripped = line.strip()
                 if not stripped.startswith("Environment="):
                     continue
-                assignments = stripped[len("Environment=") :]
                 with self.subTest(file=path.name, line=stripped):
-                    self.assertNotIn('"', assignments, "quoted value is not parsed")
-                    self.assertNotIn("'", assignments, "quoted value is not parsed")
-                    self.assertFalse(assignments.endswith("\\"), "continuation is not parsed")
-                    self.assertTrue(assignments.split(), "bare Environment= reset is not parsed")
-                    for token in assignments.split():
-                        self.assertIn("=", token, f"{token!r} is not an assignment")
+                    self.assertIsNone(_unreadable_reason(stripped[len("Environment=") :]))
+
+    def test_the_guard_refuses_every_form_the_parser_would_misread(self):
+        # A guard that has never been shown to refuse anything is not a guard.
+        # Each of these is a legal systemd line that this parser reads WRONG,
+        # so the file must refuse it rather than go green on a composition
+        # systemd does not produce.
+        for assignments, why in (
+            ('"FOO=1 BAR=2"', "quoted"),
+            ("FOO='a b'", "quoted"),
+            ("FOO=1 \\", "line continuation"),
+            ("FOO=15000\\ mode=clamped", "backslash-escaped space inside a value"),
+            ("", "bare Environment= reset"),
+            ("JUSTANAME", "not an assignment"),
+        ):
+            with self.subTest(form=why):
+                self.assertIsNotNone(_unreadable_reason(assignments), why)
 
     def test_several_assignments_on_one_line_are_read_as_several(self):
         # systemd's Environment= takes a space-separated LIST of assignments,

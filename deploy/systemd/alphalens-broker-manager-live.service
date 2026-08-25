@@ -31,10 +31,16 @@
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now alphalens-broker-manager-live.service
 #
-# Then, to run what production runs (see that directory's README):
+# Then, to run what production runs (see that directory's README — it also
+# tells you to delete any UNTRACKED drop-in first, because an unprefixed
+# filename sorts after every numbered one and silently wins):
 #   cp -r deploy/systemd/alphalens-broker-manager-live.service.d ~/.config/systemd/user/
 #   systemctl --user daemon-reload
 #   systemctl --user restart alphalens-broker-manager-live.service
+#
+# After ANY unit or drop-in change, verify the EFFECTIVE environment rather
+# than the files — that is the only view that reflects what systemd composed:
+#   systemctl --user show alphalens-broker-manager-live.service -p Environment
 #
 # Layered KILL (ADR 0016 D3):
 #   GLOBAL — halts placement in EVERY instance on this host (SIM and LIVE):
