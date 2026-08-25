@@ -1738,6 +1738,13 @@ class SaxoBroker:
         """
 
         def _finite(value: Any) -> float | None:
+            # A bool is an int in Python, so `IncrementSize: true` would arrive
+            # as a step of 1.0 and `MinimumTradeSize: false` as a minimum of
+            # 0.0 — a venue fact invented out of a flag. The leaf's
+            # `is_finite_quantity` excludes bool for the same reason; the
+            # adapter has to agree or the exclusion is decorative.
+            if isinstance(value, bool):
+                return None
             # `_opt_float` raises on a non-numeric string; here that is just
             # another way for the vendor to have said nothing usable. Reporting
             # None keeps the refusal (with a reason) one layer up, where policy

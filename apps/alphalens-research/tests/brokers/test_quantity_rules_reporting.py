@@ -66,6 +66,18 @@ class TestAdapterReportsVerbatim(unittest.TestCase):
         self.assertEqual(rules.quantity_step, 0.001)
         self.assertIs(rules.fractional_enabled, True)
 
+    def test_a_bool_is_not_a_quantity(self) -> None:
+        # A bool is an int in Python, so `IncrementSize: true` would arrive as a
+        # step of 1.0 and `MinimumTradeSize: false` as a minimum of 0.0 — a
+        # venue fact invented out of a flag. The neighbouring
+        # `FractionalOrderEnabled` IS a bool, so a field mix-up is not exotic.
+        rules = SaxoBroker._quantity_rules_from_details(
+            {"Uic": 3, "IncrementSize": True, "MinimumTradeSize": False, "AmountDecimals": True}
+        )
+        self.assertIsNone(rules.quantity_step)
+        self.assertIsNone(rules.min_quantity)
+        self.assertIsNone(rules.quantity_precision)
+
     def test_hostile_values_do_not_raise_in_the_adapter(self) -> None:
         # The adapter reports; it does not judge. A garbage value becomes an
         # honest None here and is refused by policy one layer up, where the
