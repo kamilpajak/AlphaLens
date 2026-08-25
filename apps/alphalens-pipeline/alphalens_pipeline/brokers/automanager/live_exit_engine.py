@@ -19,16 +19,16 @@ from dataclasses import dataclass
 from typing import Any
 
 from broker_contract.contract import Broker, OrderState
-from broker_contract.costs import (
+from broker_contract.price_feed import PriceFeed, PricePoint
+from broker_contract.sizing import TpTranchePlan
+
+from alphalens_pipeline.brokers.automanager.costs import (
     COST_GATE_FX_APPLIES,
     COST_GATE_MIN_COMMISSION_APPLIES,
     min_profitable_exit_price,
     round_trip_fee_bps,
 )
-from broker_contract.costs import EXIT_EDGE_MIN_BPS as _EXIT_EDGE_MIN_BPS
-from broker_contract.price_feed import PriceFeed, PricePoint
-from broker_contract.sizing import TpTranchePlan
-
+from alphalens_pipeline.brokers.automanager.costs import EXIT_EDGE_MIN_BPS as _EXIT_EDGE_MIN_BPS
 from alphalens_pipeline.brokers.automanager.labels import tp_label_from_tag
 from alphalens_pipeline.brokers.automanager.position_manager import _sole_standalone_stop
 
@@ -39,7 +39,7 @@ _QTY_EPS = 0.5  # share-qty tolerance (mirrors broker_contract.contract._QTY_EPS
 _BPS_PER_UNIT = 10_000.0
 
 EXIT_EDGE_MIN_BPS = _EXIT_EDGE_MIN_BPS
-"""Re-exported from :mod:`broker_contract.costs` — the declared ``E_min``
+"""Re-exported from :mod:`alphalens_pipeline.brokers.automanager.costs` — the declared ``E_min``
 buffer, shared with the arm-time gate so the two cannot drift apart."""
 
 
@@ -86,7 +86,7 @@ def _exit_clears_cost(
     the declared :data:`EXIT_EDGE_MIN_BPS` buffer, measured from the REALISED
     entry (issue #1112 step 2).
 
-    The threshold is :func:`~broker_contract.costs.min_profitable_exit_price`,
+    The threshold is :func:`~alphalens_pipeline.brokers.automanager.costs.min_profitable_exit_price`,
     evaluated at THIS TRANCHE's quantity.
 
     READING RULE — the arm-time gate calls the same function, but at the
@@ -95,7 +95,7 @@ def _exit_clears_cost(
     per-fill USD minimum and therefore needs a HIGHER price. An armed tier is
     not automatically an exit this gate will fire. They coincide only while the
     exit plan is one tranche selling the whole position, which
-    :func:`~broker_contract.costs.single_full_position_tranche_violation`
+    :func:`~alphalens_pipeline.brokers.automanager.costs.single_full_position_tranche_violation`
     enforces at arm time.
 
     FAILS OPEN — an unknown realised entry (``None``, the SIM ``NoAccess``

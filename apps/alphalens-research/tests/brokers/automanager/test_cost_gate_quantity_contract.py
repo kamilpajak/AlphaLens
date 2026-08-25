@@ -3,16 +3,15 @@
 The arm gate and the exit gate share the same cost FUNCTION but call it with
 DIFFERENT quantities, so they do not draw the same threshold. Three docstrings
 claimed the opposite; the claim is refuted by
-:func:`broker_contract.costs.min_profitable_exit_price` itself.
+:func:`alphalens_pipeline.brokers.automanager.costs.min_profitable_exit_price` itself.
 """
 
 from __future__ import annotations
 
 import unittest
 
-from alphalens_pipeline.brokers.automanager import entry_trail_geometry, live_exit_engine
-from broker_contract import costs
-from broker_contract.costs import min_profitable_exit_price
+from alphalens_pipeline.brokers.automanager import costs, entry_trail_geometry, live_exit_engine
+from alphalens_pipeline.brokers.automanager.costs import min_profitable_exit_price
 
 _REFUTED_DOCSTRING_CLAIMS: tuple[str, ...] = (
     "draw the same line",

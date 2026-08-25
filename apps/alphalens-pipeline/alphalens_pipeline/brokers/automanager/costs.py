@@ -1,11 +1,21 @@
-"""The ONE round-trip transaction-cost model, as a pure leaf (stdlib plus the
-sibling stdlib-only ``broker_contract.constants``, for the shared share-quantity
-precision).
+"""The ONE round-trip transaction-cost model for THIS rail, as a pure leaf
+(stdlib plus the stdlib-only ``broker_contract.constants``, for the shared
+share-quantity precision).
 
-Extracted from ``alphalens_pipeline.brokers.automanager.control_loop`` (issue
-#1112) so the placement-time fee floor and the exit-time cost gate cannot drift
-apart: one fee model, two consumers. Nothing here reads the environment, the
-clock or a broker.
+Extracted from ``control_loop`` (issue #1112) so the placement-time fee floor
+and the exit-time cost gate cannot drift apart: one fee model, several
+consumers. Nothing here reads the environment, the clock or a broker.
+
+WHY THIS LIVES PIPELINE-SIDE (issue #1122, decided 2026-08-25). An earlier
+revision of #1116 put this module in ``broker_contract``. That package states
+its own rule in ``fx.py`` — "the ADAPTER reports, never the contract decides" —
+and the numbers below are Saxo's, not the system's. Measured before deciding:
+NOTHING inside ``broker_contract`` imported this module; every real consumer
+(``control_loop``, ``entry_trail_geometry``, ``live_exit_engine``) sits in THIS
+package, so the shared layer was never needed to hold it. A second adapter with
+a different schedule now inherits nothing from here by accident. The capability
+seam sketched in #1122 stays available if one ever arrives; it is deliberately
+not built for a single adapter.
 
 The model (broker sizing design memo §4), calibrated on the Saxo LIVE Polish
 schedule for a US venue:
@@ -16,6 +26,19 @@ schedule for a US venue:
 expressed in bps of ``N``. The per-fill minimum dominates small notionals: one
 share at about $60 pays roughly 384 bps round trip, which is what turned the
 2026-08-24 SMG round trip into a -380 bps loss on a flat gross P&L.
+
+Read the module in three parts, because they are three DIFFERENT kinds of fact
+and only the first two are about Saxo:
+
+1. vendor economics — ``MIN_COMMISSION_USD`` / ``COMMISSION_RATE`` /
+   ``FX_ROUND_TRIP_RATE``, and the two ``COST_GATE_*`` declarations that stand
+   in for a currency the gates cannot see;
+2. pure arithmetic — ``round_trip_fee_bps``, ``min_profitable_exit_price``,
+   ``single_full_position_tranche_violation``; these hold for any schedule;
+3. one declared STRATEGY parameter — ``EXIT_EDGE_MIN_BPS``. It is not a broker
+   fact and not derivable from one. It is kept beside the cost model because
+   the two only ever appear together, in one formula; changing it is a strategy
+   change (see its own docstring), not a fee correction.
 """
 
 from __future__ import annotations

@@ -14,9 +14,6 @@ Sub-packages / modules:
         ``Broker`` Protocol, and the ``SupportsAmendStop``/``SupportsOcoExit``/
         ``SupportsStandaloneStop``/``SupportsMarketOrders``/
         ``SupportsTrailingStop`` capability Protocols)
-    broker_contract.costs — the ONE round-trip transaction-cost model
-        (``round_trip_fee_bps`` + its three rate constants), shared by the
-        placement-time fee floor and the exit-time cost gate (issue #1112)
     broker_contract.exit_geometry — pure ATR-bracket exit-geometry leaf (§4)
     broker_contract.fx — pure FX data types (``FxRateQuote``, ``FxConversion``)
     broker_contract.price_feed — the live-market price feed seam (``PricePoint``,

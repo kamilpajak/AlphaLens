@@ -15,6 +15,7 @@ import itertools
 import math
 import unittest
 
+from alphalens_pipeline.brokers.automanager.costs import min_profitable_exit_price
 from alphalens_pipeline.brokers.automanager.entry_trail_geometry import (
     CEILING_EPS_FRAC,
     TRAILING_STEP_FRACTION,
@@ -23,7 +24,6 @@ from alphalens_pipeline.brokers.automanager.entry_trail_geometry import (
     entry_fill_estimate,
 )
 from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, planned_blended_entry
-from broker_contract.costs import min_profitable_exit_price
 from broker_contract.exit_geometry import resolve_exit_policy
 
 from tests.incident_1112_fixture import (

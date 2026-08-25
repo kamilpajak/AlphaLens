@@ -34,7 +34,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from broker_contract.costs import min_profitable_exit_price
+from alphalens_pipeline.brokers.automanager.costs import min_profitable_exit_price
 
 _BPS_DENOMINATOR = 10_000
 """``d = d_bps / 10_000`` (50 bps -> 0.005) — mirrors ``entry_trail_watcher``."""
@@ -126,11 +126,11 @@ def arms_inside_exit_region(
 
     READING RULE — clearing this gate does NOT mean the exit gate
     (``live_exit_engine._exit_clears_cost``) will fire the same target. Both
-    call the same :func:`~broker_contract.costs.min_profitable_exit_price`, but
+    call the same :func:`~alphalens_pipeline.brokers.automanager.costs.min_profitable_exit_price`, but
     at different quantities, and a SMALLER exit quantity draws a HIGHER bar. The
     two only coincide while the exit plan is one tranche selling the whole
     position, which
-    :func:`~broker_contract.costs.single_full_position_tranche_violation`
+    :func:`~alphalens_pipeline.brokers.automanager.costs.single_full_position_tranche_violation`
     enforces at arm time rather than assuming.
 
     FAILS OPEN by design: a missing, non-finite or non-positive input returns

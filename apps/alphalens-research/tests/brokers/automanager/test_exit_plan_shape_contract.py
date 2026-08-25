@@ -15,7 +15,7 @@ from __future__ import annotations
 import unittest
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
-from broker_contract import costs
+from alphalens_pipeline.brokers.automanager import costs
 from broker_contract.constants import QTY_PRECISION
 from broker_contract.contract import _QTY_EPS
 

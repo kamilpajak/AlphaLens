@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from alphalens_pipeline.brokers.automanager.costs import round_trip_fee_bps
 from alphalens_pipeline.brokers.automanager.entry_trail_geometry import (
     arms_inside_exit_region,
     entry_fill_estimate,
@@ -12,7 +13,6 @@ from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     plan_tranche_exits,
     tranche_tag,
 )
-from broker_contract.costs import round_trip_fee_bps
 from broker_contract.sizing import TpTranchePlan
 
 from tests.incident_1112_fixture import (
@@ -220,7 +220,7 @@ class TestArmGateAndExitGateAgree(unittest.TestCase):
     tranche it sells — and a smaller exit quantity draws a higher bar (at an
     entry of 60.00: 60.8000 at 10 shares, 62.6000 at 1). What makes the
     quantities equal on the live rail is
-    :func:`broker_contract.costs.single_full_position_tranche_violation`,
+    :func:`alphalens_pipeline.brokers.automanager.costs.single_full_position_tranche_violation`,
     which refuses to arm unless the exit plan is one tranche selling the whole
     position.
     """

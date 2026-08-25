@@ -39,14 +39,6 @@ from broker_contract.contract import (
     _is_sell_orders_already_exist,
     _is_too_far_from_market,
 )
-from broker_contract.costs import (
-    COMMISSION_RATE,
-    EXIT_EDGE_MIN_BPS,
-    FX_ROUND_TRIP_RATE,
-    MIN_COMMISSION_USD,
-    round_trip_fee_bps,
-    single_full_position_tranche_violation,
-)
 from broker_contract.exit_geometry import (
     ExitPolicy,
     SetupStaticPolicy,
@@ -59,6 +51,14 @@ from alphalens_pipeline.brokers.automanager import (
     entry_trail_watcher,
     entry_trails,
     state_paths,
+)
+from alphalens_pipeline.brokers.automanager.costs import (
+    COMMISSION_RATE,
+    EXIT_EDGE_MIN_BPS,
+    FX_ROUND_TRIP_RATE,
+    MIN_COMMISSION_USD,
+    round_trip_fee_bps,
+    single_full_position_tranche_violation,
 )
 from alphalens_pipeline.brokers.automanager.labels import (
     entry_label_from_crid,
@@ -5104,7 +5104,7 @@ def _resolve_and_size(
 
 # --- Fee floor (design memo §4 round-trip fee equation) ----------------------
 #
-# The model itself lives in ``broker_contract.costs`` (extracted for #1112 so
+# The model itself lives in ``alphalens_pipeline.brokers.automanager.costs`` (extracted for #1112 so
 # the placement fee floor and the exit-time cost gate share ONE model):
 #
 #   fee_rt(N) = 2 x max(MIN_COMMISSION_USD, COMMISSION_RATE x N)

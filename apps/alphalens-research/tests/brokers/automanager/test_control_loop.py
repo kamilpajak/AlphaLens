@@ -21,6 +21,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
+from alphalens_pipeline.brokers.automanager.costs import round_trip_fee_bps
 from alphalens_pipeline.brokers.automanager.live_rails import (
     MAX_FEE_BPS_ENV,
     SIZING_EQUITY_ENV,
@@ -54,7 +55,6 @@ from broker_contract.contract import (
     PlacedOrder,
     Position,
 )
-from broker_contract.costs import round_trip_fee_bps
 from broker_contract.exit_geometry import (
     SetupStaticPolicy,
     resolve_exit_policy,
@@ -1116,7 +1116,7 @@ def _fee_plan(notional: float) -> SetupPlan:
 
 
 class TestRoundTripFeeBps(unittest.TestCase):
-    """``broker_contract.costs.round_trip_fee_bps`` — design memo §4:
+    """``alphalens_pipeline.brokers.automanager.costs.round_trip_fee_bps`` — design memo §4:
     ``fee_rt(N) = 2 x max($1, 0.08% x N) + (0.50% x N if FX applies else 0)``,
     reported as bps of ``N``."""
 
