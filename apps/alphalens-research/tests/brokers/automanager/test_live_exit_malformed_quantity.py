@@ -25,6 +25,7 @@ from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     plan_tranche_exits,
     tranche_tag,
 )
+from alphalens_pipeline.brokers.execution import RAIL_LATTICE
 from broker_contract.sizing import TpTranchePlan
 
 
@@ -52,6 +53,7 @@ class TestPlanTrancheExitsMalformedOwned(unittest.TestCase):
             reference_qty=100,
             owned=owned,  # type: ignore[arg-type]
             already_fired=frozenset(),
+            lattice=RAIL_LATTICE,
         )
 
     def test_healthy_owned_still_fires(self) -> None:

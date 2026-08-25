@@ -20,6 +20,7 @@ from typing import Any
 
 from broker_contract.contract import _QTY_EPS, Broker, OrderState
 from broker_contract.price_feed import PriceFeed, PricePoint
+from broker_contract.quantity import QuantityLattice, quantize_down
 from broker_contract.sizing import TpTranchePlan
 
 from alphalens_pipeline.brokers.automanager.costs import (
@@ -31,6 +32,7 @@ from alphalens_pipeline.brokers.automanager.costs import (
 from alphalens_pipeline.brokers.automanager.costs import EXIT_EDGE_MIN_BPS as _EXIT_EDGE_MIN_BPS
 from alphalens_pipeline.brokers.automanager.labels import tp_label_from_tag
 from alphalens_pipeline.brokers.automanager.position_manager import _sole_standalone_stop
+from alphalens_pipeline.brokers.execution import assert_rail_lattice
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +51,15 @@ def tranche_tag(index: int) -> str:
 @dataclass(frozen=True)
 class TrancheExit:
     tag: str
-    qty: int
+    # FLOAT, and the annotation is the part that changed rather than the value.
+    # `qty` is `min(planned, available)`, and `available` now comes from
+    # `quantize_down`, which returns the venue's own float. The old `int` was a
+    # lie the moment the cap applied: `min(10, 6.0)` is `6.0`. Float is also the
+    # contract type everywhere else on this rail (`Broker.place_market_order`,
+    # `Position.quantity`, `OrderState.filled_quantity`), and the LIVE journal
+    # already records float quantities Saxo accepted (`qty: 1.0`, `qty: 8.0`),
+    # so this is the existing payload class, not a new one.
+    qty: float
     target_price: float
 
 
@@ -99,7 +109,7 @@ def _is_real_quantity(qty: Any) -> bool:
 
 
 def _exit_clears_cost(
-    *, price: float, target_price: float, qty: int, realised_entry: float | None, tag: str
+    *, price: float, target_price: float, qty: float, realised_entry: float | None, tag: str
 ) -> bool:
     """Whether selling ``qty`` shares at ``price`` clears round-trip cost plus
     the declared :data:`EXIT_EDGE_MIN_BPS` buffer, measured from the REALISED
@@ -164,6 +174,7 @@ def plan_tranche_exits(
     reference_qty: float,
     owned: float,
     already_fired: frozenset[str],
+    lattice: QuantityLattice,
     realised_entry: float | None = None,
 ) -> list[TrancheExit]:
     """Which not-yet-fired tranches a LONG at ``price`` should realize now.
@@ -188,13 +199,32 @@ def plan_tranche_exits(
     Defence in depth — the production feeds already withhold such a quote (see
     :func:`run_live_exits`), so no live caller reaches this today.
     """
+    # BEFORE the input guards, deliberately. Those return `[]` for a malformed
+    # price or quantity, which would skip the assertion for that position and
+    # leave the lattice unchecked exactly when something is already wrong.
+    assert_rail_lattice(lattice)
     if not _is_decidable_price(price):
         logger.warning("live exits: price %r is not decidable — no tranche planned", price)
         return []
     if not _is_real_quantity(owned):
         logger.warning("live exits: owned %r is not a real quantity — no tranche planned", owned)
         return []
-    available = round(owned)
+    if not _is_real_quantity(reference_qty):
+        # `owned` was guarded in #1126; this is its sibling in the same
+        # expression, and the one that comes off DISK. `fold_tranche_plans`
+        # parses a journal line's reference_qty with a bare `float()`, and JSON
+        # spells non-finite values `NaN` / `Infinity`, so both survive the fold.
+        # `round(nan)` raises ValueError and `round(inf)` OverflowError —
+        # neither is a BrokerError, so neither is caught by
+        # `_run_live_exits_pass`, and the statement after it in the tick is the
+        # never-naked protection pass. One malformed line would starve
+        # protection for EVERY position, not just the one it describes.
+        logger.warning(
+            "live exits: reference_qty %r is not a real quantity — no tranche planned",
+            reference_qty,
+        )
+        return []
+    available = quantize_down(owned, lattice)
     out: list[TrancheExit] = []
     for i, t in enumerate(tp_tranches):
         tag = tranche_tag(i)
@@ -232,6 +262,7 @@ def execute_tranche_exit(
     sl_leg: OrderState,
     stop_price: float,
     request_ref: str,
+    lattice: QuantityLattice,
 ) -> TrancheExitResult:
     """Realize ONE tranche: free the tranche from the standalone SL, THEN market
     sell it. Re-snapshots live owned first (never sell more than owned → cannot
@@ -247,6 +278,11 @@ def execute_tranche_exit(
     shrunk/cancelled, the position is briefly under-covered — the never-naked
     reconcile pass re-covers it next tick (the wired caller's backstop).
     """
+    # This function CANCELS and AMENDS stops, so it refuses a lattice it cannot
+    # reason about on its own rather than trusting that a planner ran first. It
+    # is module-level and callable directly; a guard that fires on one entry
+    # point only is a guard that can be walked past.
+    assert_rail_lattice(lattice)
     live = broker.get_positions_by_uic(uic)
     if not _is_real_quantity(live.quantity):
         # Same stance as the planner: a live read that degrades to None / nan /
@@ -260,7 +296,11 @@ def execute_tranche_exit(
         )
         return TrancheExitResult(sold=False, sell_order_id=None)
     owned = max(live.quantity, 0.0)
-    qty = min(exit.qty, round(owned))
+    # Quantized ONCE. Computing it twice invites the two uses to drift apart,
+    # and the second one decides whether the disaster stop is amended or
+    # cancelled — the exact arithmetic this change exists to make trustworthy.
+    sellable = quantize_down(owned, lattice)
+    qty = min(exit.qty, sellable)
     if qty <= 0:
         logger.info(
             "tranche %s uic %s: position gone (owned=%.2f) — no sell",
@@ -269,7 +309,7 @@ def execute_tranche_exit(
             owned,
         )
         return TrancheExitResult(sold=False, sell_order_id=None)
-    new_sl_qty = max(round(owned) - qty, 0.0)
+    new_sl_qty = max(sellable - qty, 0.0)
     # 1) free the tranche from the SL FIRST (a sell while the SL commits full
     #    owned is rejected SellOrdersAlreadyExistForOwnedContracts).
     if new_sl_qty <= _QTY_EPS:
@@ -377,7 +417,13 @@ class ManagedExit:
     already_fired: frozenset[str]
 
 
-def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) -> int:
+def run_live_exits(
+    broker: Broker,
+    feed: PriceFeed,
+    managed: list[ManagedExit],
+    *,
+    lattice: QuantityLattice,
+) -> int:
     """One live-exit pass over managed positions. Stale/absent price -> veto (skip).
     INERT: no daemon caller yet. Returns the number of tranches fired.
 
@@ -400,6 +446,9 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
     ``price_feed.is_fresh`` passes, which vetoes a non-finite, non-positive or
     crossed side. Neither is a rule this engine owns, so it states its own.
     """
+    # Once per pass, before any per-position work: a lattice the rail cannot
+    # reason about ends the pass rather than being re-checked per position.
+    assert_rail_lattice(lattice)
     fired = 0
     list_sells = getattr(broker, "list_working_sell_orders", None)
     for m in managed:
@@ -432,6 +481,7 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
             reference_qty=m.reference_qty,
             owned=live.quantity,
             already_fired=m.already_fired,
+            lattice=lattice,
             # The realised entry the #1112 cost gate measures from — already in
             # hand from the position read above, so no extra broker I/O.
             realised_entry=live.avg_price,
@@ -444,6 +494,7 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
                 sl_leg=sl,
                 stop_price=m.stop_price,
                 request_ref=f"u{m.uic}",
+                lattice=lattice,
             )
             if result.sold:
                 telemetry = _fire_telemetry(point, ex, sell_order_id=result.sell_order_id)

@@ -6,6 +6,7 @@ from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     TrancheExit,
     execute_tranche_exit,
 )
+from alphalens_pipeline.brokers.execution import RAIL_LATTICE
 
 from tests.brokers.automanager.acceptance.fake_broker import FakeBroker
 
@@ -28,6 +29,7 @@ class TestExecuteTrancheExit(unittest.TestCase):
             sl_leg=sl,
             stop_price=13.0,
             request_ref="KO-g0",
+            lattice=RAIL_LATTICE,
         )
         self.assertTrue(result.sold)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 60.0)  # 100 - 40 sold
@@ -46,6 +48,7 @@ class TestExecuteTrancheExit(unittest.TestCase):
             sl_leg=sl,
             stop_price=13.0,
             request_ref="KO-g0",
+            lattice=RAIL_LATTICE,
         )
         self.assertTrue(result.sold)
         self.assertEqual(result.sell_order_id, "mkt-2")  # resting-1 (SL) then mkt-2 (sell)
@@ -59,6 +62,7 @@ class TestExecuteTrancheExit(unittest.TestCase):
             sl_leg=sl,
             stop_price=13.0,
             request_ref="KO-g0",
+            lattice=RAIL_LATTICE,
         )
         self.assertTrue(result.sold)
         self.assertEqual(
@@ -75,6 +79,7 @@ class TestExecuteTrancheExit(unittest.TestCase):
             sl_leg=sl,
             stop_price=13.0,
             request_ref="KO-g0",
+            lattice=RAIL_LATTICE,
         )
         self.assertFalse(result.sold)
         self.assertIsNone(result.sell_order_id)  # (test b) no sell -> no order id
@@ -90,6 +95,7 @@ class TestExecuteTrancheExit(unittest.TestCase):
             sl_leg=sl,
             stop_price=13.0,
             request_ref="KO-g0",
+            lattice=RAIL_LATTICE,
         )
         self.assertTrue(result.sold)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 0.0)  # flat

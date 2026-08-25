@@ -41,8 +41,8 @@ import math
 import uuid
 from typing import Literal
 
-from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
-from broker_contract.contract import BracketOrderRequest, InstrumentRef
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS, QTY_PRECISION
+from broker_contract.contract import BracketOrderRequest, BrokerCapabilityError, InstrumentRef
 from broker_contract.fx import FxConversion, FxRateQuote
 from broker_contract.quantity import InstrumentQuantityRules, QuantityLattice
 from broker_contract.sizing import SetupPlan, TradeSetupNotPlannableError
@@ -228,6 +228,14 @@ def execution_config_version() -> str:
         "fx_conversion_point": _FX_CONVERSION_POINT,
         "fx_precheck_rate_divergence_max_pct": _FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT,
         "fx_sizing_buffer_pct": _FX_SIZING_BUFFER_PCT,
+        # The exit sizer's arithmetic, not just its policy strings. The sweep
+        # test walks _UPPER_CASE names, and RAIL_LATTICE is an OBJECT, so it
+        # would otherwise sit in the namespace without reaching the token —
+        # meaning the lattice could change and fills executed under different
+        # size arithmetic would pool. Its VALUES go in; the object is not JSON.
+        "rail_lattice_step": RAIL_LATTICE.step,
+        "rail_lattice_min_qty": RAIL_LATTICE.min_qty,
+        "rail_lattice_precision": RAIL_LATTICE.precision,
     }
     canon = json.dumps(config, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
@@ -308,6 +316,76 @@ class QuantityLatticeUnavailableError(TradeSetupNotPlannableError):
     venue whose own numbers disagree is exactly the payload that needed
     verifying. One catch for both would silently disable it.
     """
+
+
+RAIL_LATTICE = QuantityLattice(
+    step=1.0, min_qty=1.0, precision=0, source="rail-declared-whole-shares"
+)
+"""The lattice the exit sizer runs on until the adapter reports one per instrument.
+
+DECLARED, not assumed — which is the whole difference from what it replaces. The
+old ``round(owned)`` encoded the same whole-share fact invisibly, in the pipeline,
+under a name that said nothing. This says it out loud, in the policy layer, with a
+guard beside it.
+
+Every venue on the rail today reports ``IncrementSize 1`` (live-probed on our own
+cohort), so this is currently the truth rather than an approximation. It goes away
+when the per-instrument rules reach the sizer.
+"""
+
+
+def assert_rail_lattice(lattice: QuantityLattice) -> None:
+    """Refuse a lattice the protection pass cannot yet reason about.
+
+    The exit sizer runs on a lattice; the protection pass still runs on the bare
+    ``QTY_PRECISION`` epsilon. On a whole-share venue those two disagree only in
+    the safe direction — measured: at 0.669 owned the sizer sells nothing while
+    protection keeps the stop.
+
+    BOTH directions are refused, because both end in a naked position — the
+    first version of this guard only caught one, and the other was measured
+    reaching the broker:
+
+    - FINER than the epsilon: the sizer could sell a quantity protection does
+      not consider a live position, leaving it uncovered.
+    - COARSER than one share: ``quantize_down`` UNDER-counts the holding, so the
+      residual is invisible to the stop arithmetic. Measured on a 100-share
+      round lot at 150 owned — ``max(quantize_down(150) - 100, 0) == 0`` reads
+      as a full close and CANCELS the disaster stop while 50 shares are still
+      held. Same naked position as the incident this exists to fix, reached
+      from the opposite side.
+
+    So the admissible set is exactly one lattice: the whole shares the epsilon
+    was derived for (``QTY_PRECISION`` IS ``step / 2`` at ``step == 1``). Any
+    other granularity needs the epsilon comparison sites migrated first, which
+    is what makes that migration the prerequisite for CONNECTING such a venue
+    rather than for fixing the rounding.
+
+    RAISES ``BrokerCapabilityError``, which is a ``BrokerError``, and that is
+    load-bearing rather than cosmetic: ``_run_live_exits_pass`` catches
+    ``BrokerError`` and nothing else, and the statement after it in the tick is
+    the never-naked protection pass. A refusal outside that boundary would kill
+    the tick and take the backstop with it — the guard would cause the class of
+    harm it exists to prevent.
+
+    All THREE arithmetic fields are pinned, not just the step. A lattice with
+    the right step but a 100-share minimum is a different policy than the one
+    the rail declared, and a ``step / 2`` comparison alone would admit it.
+    """
+    if (
+        lattice.step != RAIL_LATTICE.step
+        or lattice.min_qty != RAIL_LATTICE.min_qty
+        or lattice.precision != RAIL_LATTICE.precision
+    ):
+        raise BrokerCapabilityError(
+            f"quantity lattice {lattice.step!r}/{lattice.min_qty!r}/{lattice.precision!r} is "
+            f"not the rail lattice {RAIL_LATTICE.step!r}/{RAIL_LATTICE.min_qty!r}/"
+            f"{RAIL_LATTICE.precision!r} the protection epsilon {QTY_PRECISION!r} was derived "
+            f"for. Finer, and the exit sizer could sell a quantity the protection pass does "
+            f"not treat as a live position; coarser, and it under-counts the holding and "
+            f"cancels the stop over a residual it cannot see. Migrate the epsilon comparison "
+            f"sites before connecting a venue with this granularity."
+        )
 
 
 def build_quantity_lattice(rules: InstrumentQuantityRules) -> QuantityLattice:

@@ -1144,8 +1144,12 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     feed = _build_live_exits_feed(deps, uic_to_instrument, report)
     if not managed:
         return
+    # Lazy, per the module's convention (see the CLI import note): the rail
+    # lattice is policy, and policy lives in `execution`.
+    from alphalens_pipeline.brokers.execution import RAIL_LATTICE
+
     try:
-        fired_count = run_live_exits(deps.broker, feed, managed)
+        fired_count = run_live_exits(deps.broker, feed, managed, lattice=RAIL_LATTICE)
     except BrokerError as exc:
         if deps.alert_throttled(
             f"live-exits: pass failed (broker error) — skipped: {exc}",
@@ -4252,6 +4256,16 @@ def fold_tranche_plans(
             uic = int(raw_uic)
             reference_qty = float(line["reference_qty"])
             stop_price = float(line["stop_price"])
+            # `float()` happily parses JSON's `NaN` / `Infinity`, so a malformed
+            # or hand-edited line could otherwise become a GOVERNING ladder
+            # carrying a non-finite size. Refused at the SOURCE as well as at
+            # the sizer, because a bad line should contribute nothing rather
+            # than be caught later by whichever consumer happens to look first.
+            if not math.isfinite(reference_qty) or not math.isfinite(stop_price):
+                raise ValueError(
+                    f"non-finite tranche_plan scalars for uic {uic}: "
+                    f"reference_qty={reference_qty!r} stop_price={stop_price!r}"
+                )
             tranches = tuple(
                 TpTranchePlan(
                     tranche_index=int(t["tranche_index"]),
