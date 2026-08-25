@@ -13,6 +13,7 @@ from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     plan_tranche_exits,
     tranche_tag,
 )
+from alphalens_pipeline.brokers.execution import RAIL_LATTICE
 from broker_contract.sizing import TpTranchePlan
 
 from tests.incident_1112_fixture import (
@@ -42,19 +43,34 @@ _LADDER = (_tr(0, 16.0, 0.5), _tr(1, 18.0, 0.3), _tr(2, 20.0, 0.2))  # TP1/TP2/T
 class TestPlanTrancheExits(unittest.TestCase):
     def test_no_touch_no_exits(self):
         out = plan_tranche_exits(
-            price=15.0, tp_tranches=_LADDER, reference_qty=100, owned=100, already_fired=frozenset()
+            lattice=RAIL_LATTICE,
+            price=15.0,
+            tp_tranches=_LADDER,
+            reference_qty=100,
+            owned=100,
+            already_fired=frozenset(),
         )
         self.assertEqual(out, [])
 
     def test_first_target_touched_fires_tp1_only(self):
         out = plan_tranche_exits(
-            price=16.5, tp_tranches=_LADDER, reference_qty=100, owned=100, already_fired=frozenset()
+            lattice=RAIL_LATTICE,
+            price=16.5,
+            tp_tranches=_LADDER,
+            reference_qty=100,
+            owned=100,
+            already_fired=frozenset(),
         )
         self.assertEqual(out, [TrancheExit(tag="tp1", qty=50, target_price=16.0)])
 
     def test_gap_through_two_targets_fires_both_within_owned(self):
         out = plan_tranche_exits(
-            price=18.5, tp_tranches=_LADDER, reference_qty=100, owned=100, already_fired=frozenset()
+            lattice=RAIL_LATTICE,
+            price=18.5,
+            tp_tranches=_LADDER,
+            reference_qty=100,
+            owned=100,
+            already_fired=frozenset(),
         )
         self.assertEqual([e.tag for e in out], ["tp1", "tp2"])
         self.assertEqual([e.qty for e in out], [50, 30])
@@ -66,13 +82,19 @@ class TestPlanTrancheExits(unittest.TestCase):
             reference_qty=100,
             owned=50,
             already_fired=frozenset({"tp1"}),
+            lattice=RAIL_LATTICE,
         )
         self.assertEqual(out, [TrancheExit(tag="tp2", qty=30, target_price=18.0)])
 
     def test_qty_clamped_to_available_owned(self):
         # owned only 20 left but tp1(50)+tp2(30) both triggered -> fire tp1=20, tp2=0(skip)
         out = plan_tranche_exits(
-            price=18.5, tp_tranches=_LADDER, reference_qty=100, owned=20, already_fired=frozenset()
+            lattice=RAIL_LATTICE,
+            price=18.5,
+            tp_tranches=_LADDER,
+            reference_qty=100,
+            owned=20,
+            already_fired=frozenset(),
         )
         self.assertEqual(out, [TrancheExit(tag="tp1", qty=20, target_price=16.0)])
 
@@ -104,6 +126,7 @@ class TestExitCostGate(unittest.TestCase):
             reference_qty=reference_qty,
             owned=owned,
             already_fired=frozenset(),
+            lattice=RAIL_LATTICE,
             realised_entry=realised_entry,
         )
 
@@ -167,7 +190,12 @@ class TestExitCostGate(unittest.TestCase):
         # The six pre-existing callers pass no realised_entry; their behaviour
         # must be byte-identical.
         out = plan_tranche_exits(
-            price=16.5, tp_tranches=_LADDER, reference_qty=100, owned=100, already_fired=frozenset()
+            lattice=RAIL_LATTICE,
+            price=16.5,
+            tp_tranches=_LADDER,
+            reference_qty=100,
+            owned=100,
+            already_fired=frozenset(),
         )
         self.assertEqual(out, [TrancheExit(tag="tp1", qty=50, target_price=16.0)])
 
@@ -189,6 +217,7 @@ class TestCostGateKeepsTheLadderInOrder(unittest.TestCase):
             reference_qty=100,
             owned=100,
             already_fired=frozenset(),
+            lattice=RAIL_LATTICE,
             realised_entry=realised_entry,
         )
 
@@ -233,6 +262,7 @@ class TestArmGateAndExitGateAgree(unittest.TestCase):
                 reference_qty=1,
                 owned=1,
                 already_fired=frozenset(),
+                lattice=RAIL_LATTICE,
                 realised_entry=realised_entry,
             )
         )

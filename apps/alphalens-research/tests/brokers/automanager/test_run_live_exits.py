@@ -10,6 +10,7 @@ from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     plan_tranche_exits,
     run_live_exits,
 )
+from alphalens_pipeline.brokers.execution import RAIL_LATTICE
 from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import TpTranchePlan
 
@@ -75,13 +76,13 @@ class TestRunLiveExits(unittest.TestCase):
 
     def test_touch_fires_tranche_and_shrinks_sl(self):
         b, uic, feed, managed = self._mk(price=16.5)
-        n = run_live_exits(b, feed, managed)
+        n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(n, 1)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 50.0)
 
     def test_stale_price_vetoes_all_fires(self):
         b, uic, feed, managed = self._mk(price=None)  # feed.latest -> None
-        n = run_live_exits(b, feed, managed)
+        n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(n, 0)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 100.0)
 
@@ -92,7 +93,7 @@ class TestRunLiveExits(unittest.TestCase):
         b, uic, feed, managed = self._mk(price=18.5)
         records: list[dict] = []
         with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
-            n = run_live_exits(b, feed, managed)
+            n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(n, 2)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 20.0)  # sold 50 + 30
         sl_now = next(o for o in b.list_working_sell_orders() if o.order_type == "StopIfTraded")
@@ -126,7 +127,7 @@ class TestRunLiveExits(unittest.TestCase):
         ]
         records: list[dict] = []
         with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
-            n = run_live_exits(b, feed, managed)
+            n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(n, 1)
         fired = [r for r in records if r.get("kind") == "tranche_fired"]
         self.assertEqual(len(fired), 1)
@@ -168,7 +169,7 @@ class TestRunLiveExits(unittest.TestCase):
         with self.assertLogs(
             "alphalens_pipeline.brokers.automanager.live_exit_engine", level="WARNING"
         ) as cm:
-            n = run_live_exits(no_cap, feed, managed)
+            n = run_live_exits(no_cap, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(n, 0)
         self.assertEqual(no_cap.get_positions_by_uic(uic).quantity, 100.0)  # nothing sold
         self.assertTrue(any(str(uic) in line for line in cm.output), cm.output)
@@ -208,7 +209,7 @@ class TestRunLiveExitsCostGate(unittest.TestCase):
         b, uic, feed, managed = self._mk_smg()
         records: list[dict] = []
         with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
-            n = run_live_exits(b, feed, managed)
+            n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(n, 0)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 1.0, "position untouched")
         sl_now = next(o for o in b.list_working_sell_orders() if o.order_type == "StopIfTraded")
@@ -237,7 +238,7 @@ class TestRunLiveExitsCostGate(unittest.TestCase):
         ]
         feed = _FakeFeed({uic: SMG_TP_TRANCHES[0] + 0.05})
         with mock.patch.object(cl, "_append_standalone_stop_journal"):
-            n = run_live_exits(b, feed, managed)
+            n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(n, 1)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 0.0)
 
@@ -287,7 +288,7 @@ class TestDegeneratePriceFiresNothing(unittest.TestCase):
         b.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
         feed = _FakeFeed({uic: 16.5}, bid=bid, ask=16.5)
         with mock.patch.object(cl, "_append_standalone_stop_journal"):
-            fired = run_live_exits(b, feed, self._managed(uic))
+            fired = run_live_exits(b, feed, self._managed(uic), lattice=RAIL_LATTICE)
         return fired, b.get_positions_by_uic(uic).quantity
 
     def test_no_degenerate_bid_fires_a_tranche(self) -> None:
@@ -328,6 +329,7 @@ class TestPlanTrancheExitsRejectsDegeneratePrices(unittest.TestCase):
                         reference_qty=100,
                         owned=100,
                         already_fired=frozenset(),
+                        lattice=RAIL_LATTICE,
                     ),
                     [],
                 )
@@ -339,6 +341,7 @@ class TestPlanTrancheExitsRejectsDegeneratePrices(unittest.TestCase):
             reference_qty=100,
             owned=100,
             already_fired=frozenset(),
+            lattice=RAIL_LATTICE,
         )
         self.assertEqual([e.tag for e in planned], ["tp1", "tp2"])
 

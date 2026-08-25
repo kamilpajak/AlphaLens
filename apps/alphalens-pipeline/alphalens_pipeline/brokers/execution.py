@@ -41,7 +41,7 @@ import math
 import uuid
 from typing import Literal
 
-from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS, QTY_PRECISION
 from broker_contract.contract import BracketOrderRequest, InstrumentRef
 from broker_contract.fx import FxConversion, FxRateQuote
 from broker_contract.quantity import InstrumentQuantityRules, QuantityLattice
@@ -295,6 +295,44 @@ def decompose_setup_plan(
             )
         )
     return brackets
+
+
+RAIL_LATTICE = QuantityLattice(
+    step=1.0, min_qty=1.0, precision=0, source="rail-declared-whole-shares"
+)
+"""The lattice the exit sizer runs on until the adapter reports one per instrument.
+
+DECLARED, not assumed — which is the whole difference from what it replaces. The
+old ``round(owned)`` encoded the same whole-share fact invisibly, in the pipeline,
+under a name that said nothing. This says it out loud, in the policy layer, with a
+guard beside it.
+
+Every venue on the rail today reports ``IncrementSize 1`` (live-probed on our own
+cohort), so this is currently the truth rather than an approximation. It goes away
+when the per-instrument rules reach the sizer.
+"""
+
+
+def assert_rail_lattice(lattice: QuantityLattice) -> None:
+    """Refuse a lattice the protection pass cannot yet reason about.
+
+    The exit sizer runs on a lattice; the protection pass still runs on the bare
+    ``QTY_PRECISION`` epsilon. On a whole-share venue those two disagree only in
+    the safe direction — measured: at 0.669 owned the sizer sells nothing while
+    protection keeps the stop.
+
+    A lattice FINER than the epsilon inverts that: the sizer could sell a
+    quantity protection does not consider a real position, leaving it uncovered.
+    No such venue is connected, and this refuses to let one arrive quietly before
+    the epsilon sites migrate.
+    """
+    if lattice.step / 2.0 < QTY_PRECISION:
+        raise NotImplementedError(
+            f"lattice step {lattice.step!r} is finer than the protection epsilon "
+            f"{QTY_PRECISION!r}: the exit sizer would be able to sell a quantity the "
+            f"protection pass does not treat as a live position. Migrate the epsilon "
+            f"comparison sites before connecting a venue with this granularity."
+        )
 
 
 def build_quantity_lattice(rules: InstrumentQuantityRules) -> QuantityLattice:

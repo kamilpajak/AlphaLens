@@ -1144,8 +1144,12 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     feed = _build_live_exits_feed(deps, uic_to_instrument, report)
     if not managed:
         return
+    # Lazy, per the module's convention (see the CLI import note): the rail
+    # lattice is policy, and policy lives in `execution`.
+    from alphalens_pipeline.brokers.execution import RAIL_LATTICE
+
     try:
-        fired_count = run_live_exits(deps.broker, feed, managed)
+        fired_count = run_live_exits(deps.broker, feed, managed, lattice=RAIL_LATTICE)
     except BrokerError as exc:
         if deps.alert_throttled(
             f"live-exits: pass failed (broker error) — skipped: {exc}",
