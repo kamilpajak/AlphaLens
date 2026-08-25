@@ -114,16 +114,16 @@ def _setups_by_ticker(briefs_dir: Path, date: dt.date) -> dict[str, dict | None]
     return {c.ticker.upper(): c.trade_setup for c in candidates}
 
 
-def _bars_for(store_dir: Path, ticker: str, date: dt.date, setup: dict) -> tuple[list, int]:
-    """RTH-filtered cached bars plus the entry-expiry cutoff. Never fetches."""
+def _bars_for(store_dir: Path, ticker: str, date: dt.date, setup: dict) -> tuple[list, int, int]:
+    """RTH-filtered cached bars plus both engine cutoffs. Never fetches."""
     cutoffs = _engine_cutoffs(date, setup, EXCHANGE)
-    arrival, _entry_expiry_session, position_expiry_session = cutoffs[0], cutoffs[1], cutoffs[2]
-    entry_expiry_ms = cutoffs[5]
+    arrival, position_expiry_session = cutoffs[0], cutoffs[2]
+    entry_expiry_ms, position_expiry_ms = cutoffs[5], cutoffs[6]
     raw = _read_cached_bars(store_dir, ticker, arrival)
     if not raw:
-        return [], entry_expiry_ms
+        return [], entry_expiry_ms, position_expiry_ms
     bars = _filter_bars_to_rth(raw, arrival, position_expiry_session, EXCHANGE)
-    return bars, entry_expiry_ms
+    return bars, entry_expiry_ms, position_expiry_ms
 
 
 def _unreplayable(row: dict, coverage: dict[str, int], key: str) -> fp.Opportunity:
@@ -209,7 +209,7 @@ def _opportunity_for_row(
     tiers = fp.entry_tiers_from_setup(setup)
     if not tiers or setup is None:
         return _unreplayable(row, coverage, "rows_without_entry_tiers")
-    bars, entry_expiry_ms = _bars_for(store_dir, ticker, date, setup)
+    bars, entry_expiry_ms, position_expiry_ms = _bars_for(store_dir, ticker, date, setup)
     if not bars:
         key = (
             "rows_without_cached_bars"
@@ -222,6 +222,7 @@ def _opportunity_for_row(
         bars,
         fill_model=fill_model,
         overshoot_bps=overshoot_bps,
+        exit_levels=fp.exit_levels_from_setup(setup, position_expiry_ms=position_expiry_ms),
         entry_expiry_ms=entry_expiry_ms,
     )
     if {f.tier_id for f in fills} != set(fp.store_fill_tier_ids(row)):

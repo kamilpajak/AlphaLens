@@ -240,6 +240,45 @@ class TierFill:
     bar_ts_ms: int
 
 
+@dataclass(frozen=True)
+class ExitLevels:
+    """The exits that CLOSE the position, so a later dip cannot fill a tier.
+
+    ``ladder_replay._LadderWalk.step`` returns early once the as-specified exit
+    has fired, because "a post-exit dip must NOT fill an unused deeper tier and
+    retroactively change blended entry / filled_frac / realized_r". The instrument
+    reads the store's ``realized_r``, which the engine computed against ITS fill
+    set, so a walk without these levels files that realised number under the wrong
+    partition and inflates every conditional fill rate.
+    """
+
+    disaster_stop: float | None
+    tp_targets: tuple[float, ...]
+    position_expiry_ms: int | None
+
+
+NO_EXIT = ExitLevels(disaster_stop=None, tp_targets=(), position_expiry_ms=None)
+"""Explicit "exits are not modelled": the walk runs to the entry TTL.
+
+Named rather than defaulted, because it is exactly the reading that produced the
+defect above. It is correct only when the caller knows no exit can fire -- a unit
+test of the entry mechanics, never a run over the store.
+"""
+
+
+def _finite_float(value: Any) -> float | None:
+    """Read a level as a float, treating a malformed one as absent (never raising).
+
+    Mirrors ``ladder_replay.parse_ladder``'s guard on ``disaster_stop``: a
+    non-numeric level must not take down a whole-store run.
+    """
+    try:
+        as_float = float(value)
+    except (TypeError, ValueError):
+        return None
+    return as_float if math.isfinite(as_float) else None
+
+
 def entry_tiers_from_setup(trade_setup: Mapping[str, Any] | None) -> tuple[EntryTier, ...]:
     """Pull the entry tiers out of a ``brief_trade_setup``, in brief order.
 
@@ -258,12 +297,35 @@ def entry_tiers_from_setup(trade_setup: Mapping[str, Any] | None) -> tuple[Entry
     )
 
 
+def exit_levels_from_setup(
+    trade_setup: Mapping[str, Any] | None, *, position_expiry_ms: int | None
+) -> ExitLevels:
+    """Pull the exits out of a ``brief_trade_setup``, in the engine's own shape.
+
+    Level keys mirror ``ladder_replay.parse_ladder`` exactly (``disaster_stop``
+    and ``tp_tranches[].target``); a malformed level reads as absent rather than
+    raising, so one bad brief row cannot end a whole-store run.
+    """
+    setup = trade_setup or {}
+    targets = tuple(
+        t
+        for t in (_finite_float((tp or {}).get("target")) for tp in setup.get("tp_tranches") or [])
+        if t is not None
+    )
+    return ExitLevels(
+        disaster_stop=_finite_float(setup.get("disaster_stop")),
+        tp_targets=targets,
+        position_expiry_ms=position_expiry_ms,
+    )
+
+
 def walk_entry_fills(
     tiers: Sequence[EntryTier],
     bars: Sequence[Mapping[str, Any]],
     *,
     fill_model: str,
     overshoot_bps: float,
+    exit_levels: ExitLevels,
     entry_expiry_ms: int | None = None,
     tick: float = TICK_USD,
 ) -> tuple[TierFill, ...]:
@@ -273,8 +335,15 @@ def walk_entry_fills(
     independently on every bar, so a path that reaches E1 and stops leaves E2/E3
     unfilled. Several tiers CAN fill inside one bar (a gap down through them all),
     and they then share that bar's timestamp -- which is how
-    :func:`conditional_fill_records` separates "deeper tier filled later" from
-    "deeper tier filled in the same minute".
+    :func:`_conditional_fill` separates "deeper tier filled later" from "deeper
+    tier filled in the same minute".
+
+    ``exit_levels`` is required, with no default: once the position has exited,
+    a later dip must NOT fill an unused deeper tier (see :class:`ExitLevels`).
+    Pass :data:`NO_EXIT` to say so explicitly. The per-bar order mirrors
+    ``_LadderWalk.step``: entries first (a tier reached on the exit bar itself
+    still fills), then the stop, then the take-profit scale-out, then the
+    synthetic time stop.
 
     ``entry_expiry_ms`` mirrors the engine's entry TTL: a limit reached at or
     after the cutoff is stale and does not fill. Bars are sorted by ``t``
@@ -284,6 +353,7 @@ def walk_entry_fills(
         raise ValueError(f"unknown fill_model {fill_model!r}; expected one of {FILL_MODELS}")
     fills: list[TierFill] = []
     filled_ids: set[str] = set()
+    hit_tp_indices: set[int] = set()
     for bar in sorted(bars, key=lambda b: int(b["t"])):
         ts = int(bar["t"])
         if entry_expiry_ms is not None and ts >= entry_expiry_ms:
@@ -304,7 +374,36 @@ def walk_entry_fills(
                     bar_ts_ms=ts,
                 )
             )
+        if not filled_ids:
+            continue  # no position yet -> no exit can fire
+        if _position_exited(bar, ts, low, exit_levels, hit_tp_indices):
+            break
     return tuple(fills)
+
+
+def _position_exited(
+    bar: Mapping[str, Any],
+    ts: int,
+    low: float,
+    exit_levels: ExitLevels,
+    hit_tp_indices: set[int],
+) -> bool:
+    """Did the as-specified exit fire on this bar? Mirrors ``_LadderWalk``'s order.
+
+    Stop first (the engine resolves a pierce before anything else), then the TP
+    scale-out (only a FULL scale-out closes the position), then the synthetic
+    time stop, which a real SL/TP on the same bar beats.
+    """
+    if exit_levels.disaster_stop is not None and low <= exit_levels.disaster_stop:
+        return True
+    if exit_levels.tp_targets:
+        high = float(bar["h"])
+        for i, target in enumerate(exit_levels.tp_targets):
+            if high >= target:
+                hit_tp_indices.add(i)
+        if len(hit_tp_indices) == len(exit_levels.tp_targets):
+            return True
+    return exit_levels.position_expiry_ms is not None and ts >= exit_levels.position_expiry_ms
 
 
 def filled_fraction(tiers: Sequence[EntryTier], filled_ids: Iterable[str]) -> float:

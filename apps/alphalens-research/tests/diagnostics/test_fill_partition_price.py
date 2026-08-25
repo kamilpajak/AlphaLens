@@ -118,7 +118,11 @@ class TestTouchVersusThroughFillModel(unittest.TestCase):
             with self.subTest(low=low):
                 engine = replay_ladder(setup, [_bar(0, low)]).entries_filled
                 walked = fp.walk_entry_fills(
-                    tiers, [_bar(0, low)], fill_model=fp.FILL_MODEL_TOUCH, overshoot_bps=0.0
+                    tiers,
+                    [_bar(0, low)],
+                    fill_model=fp.FILL_MODEL_TOUCH,
+                    overshoot_bps=0.0,
+                    exit_levels=fp.NO_EXIT,
                 )
                 self.assertEqual(tuple(f.tier_id for f in walked), engine)
 
@@ -136,6 +140,7 @@ class TestEntryFillWalk(unittest.TestCase):
             [_bar(1_000, 94.0)],
             fill_model=fp.FILL_MODEL_TOUCH,
             overshoot_bps=fp.ENTRY_TRAIL_OVERSHOOT_BPS,
+            exit_levels=fp.NO_EXIT,
         )
         self.assertEqual(tuple(f.tier_id for f in fills), ("E1", "E2", "E3"))
         self.assertEqual({f.bar_ts_ms for f in fills}, {1_000})
@@ -146,6 +151,7 @@ class TestEntryFillWalk(unittest.TestCase):
             [_bar(1_000, 99.0), _bar(2_000, 96.0)],
             fill_model=fp.FILL_MODEL_TOUCH,
             overshoot_bps=0.0,
+            exit_levels=fp.NO_EXIT,
         )
         self.assertEqual(tuple(f.tier_id for f in fills), ("E1", "E2"))
         self.assertEqual([f.bar_ts_ms for f in fills], [1_000, 2_000])
@@ -156,6 +162,7 @@ class TestEntryFillWalk(unittest.TestCase):
             [_bar(1_000, 99.0), _bar(2_000, 96.0)],
             fill_model=fp.FILL_MODEL_TOUCH,
             overshoot_bps=0.0,
+            exit_levels=fp.NO_EXIT,
             entry_expiry_ms=2_000,
         )
         self.assertEqual(tuple(f.tier_id for f in fills), ("E1",))
@@ -166,6 +173,7 @@ class TestEntryFillWalk(unittest.TestCase):
             [_bar(1_000, 94.0)],
             fill_model=fp.FILL_MODEL_TOUCH,
             overshoot_bps=fp.ENTRY_TRAIL_OVERSHOOT_BPS,
+            exit_levels=fp.NO_EXIT,
         )
         for f in fills:
             with self.subTest(tier=f.tier_id):
@@ -177,6 +185,7 @@ class TestEntryFillWalk(unittest.TestCase):
             [_bar(2_000, 96.0), _bar(1_000, 99.0)],
             fill_model=fp.FILL_MODEL_TOUCH,
             overshoot_bps=0.0,
+            exit_levels=fp.NO_EXIT,
         )
         self.assertEqual([f.bar_ts_ms for f in fills], [1_000, 2_000])
 
@@ -369,6 +378,7 @@ class TestPartialFillWeighting(unittest.TestCase):
             [_bar(1_000, SMG_TIERS[1][0])],
             fill_model=fp.FILL_MODEL_TOUCH,
             overshoot_bps=fp.ENTRY_TRAIL_OVERSHOOT_BPS,
+            exit_levels=fp.NO_EXIT,
         )
         self.assertEqual(tuple(f.tier_id for f in fills), ("E1", "E2"))
         w1, w2 = SMG_TIERS[0][1], SMG_TIERS[1][1]
@@ -381,7 +391,11 @@ class TestPartialFillWeighting(unittest.TestCase):
     def test_blended_fill_price_falls_back_to_equal_weight_without_allocs(self) -> None:
         flat = _tiers(("E1", 100.0, 0.0), ("E2", 90.0, 0.0))
         fills = fp.walk_entry_fills(
-            flat, [_bar(1_000, 89.0)], fill_model=fp.FILL_MODEL_TOUCH, overshoot_bps=0.0
+            flat,
+            [_bar(1_000, 89.0)],
+            fill_model=fp.FILL_MODEL_TOUCH,
+            overshoot_bps=0.0,
+            exit_levels=fp.NO_EXIT,
         )
         self.assertAlmostEqual(fp.blended_fill_price(fills), 95.0, places=12)
 
