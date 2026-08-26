@@ -162,17 +162,29 @@ class TestRunLiveExits(unittest.TestCase):
         the runtime check genuinely discriminates (negative control)."""
         self.assertIsInstance(FakeBroker(), LiveExitBroker)
 
-        class _NoListSells:
-            # Every LiveExitBroker member EXCEPT list_working_sell_orders.
-            name = "nolistsells"
-
-            def amend_stop_amount(self, *a: object, **k: object) -> None: ...
-            def place_market_order(self, *a: object, **k: object) -> None: ...
-            def get_long_positions(self) -> list: ...
-            def get_positions_by_uic(self, uic: int) -> None: ...
-            def cancel_order(self, order_id: str) -> None: ...
-
-        self.assertNotIsInstance(_NoListSells(), LiveExitBroker)
+        # Negative control per MEMBER: the combined runtime check must reject a
+        # broker missing ANY of the six, not merely the one a single hand-built
+        # stub happens to omit — this pins the union semantics of the composed
+        # protocol as executable fact.
+        members = (
+            "amend_stop_amount",
+            "place_market_order",
+            "get_long_positions",
+            "get_positions_by_uic",
+            "cancel_order",
+            "list_working_sell_orders",
+        )
+        for missing in members:
+            with self.subTest(missing=missing):
+                stub = type(
+                    "_AlmostCapable",
+                    (),
+                    {
+                        "name": "almost",
+                        **{m: (lambda self, *a, **k: None) for m in members if m != missing},
+                    },
+                )()
+                self.assertNotIsInstance(stub, LiveExitBroker)
 
 
 class TestRunLiveExitsCostGate(unittest.TestCase):

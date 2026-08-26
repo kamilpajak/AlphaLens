@@ -433,10 +433,10 @@ class TestFakeBrokerProtectionReads(unittest.TestCase):
 
     def test_fake_broker_satisfies_the_netted_reads_protocol(self):
         # #1141: the reads are now a declared capability
-        # (reconcile.SupportsNettedPositionReads) that build_default_deps gates
+        # (contract.SupportsNettedPositionReads) that build_default_deps gates
         # on unconditionally — the conformance fake must satisfy it, and the
         # runtime check must genuinely discriminate (negative control).
-        from alphalens_pipeline.brokers.reconcile import SupportsNettedPositionReads
+        from broker_contract.contract import SupportsNettedPositionReads
 
         self.assertIsInstance(FakeBroker(), SupportsNettedPositionReads)
 

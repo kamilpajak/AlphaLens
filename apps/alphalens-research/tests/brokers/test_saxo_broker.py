@@ -296,7 +296,7 @@ class TestSaxoBrokerCapabilityConformance(unittest.TestCase):
         # these — a real SaxoBroker instance must pass both, or the daemon
         # cannot boot in production.
         from alphalens_pipeline.brokers.automanager.live_exit_engine import LiveExitBroker
-        from alphalens_pipeline.brokers.reconcile import SupportsNettedPositionReads
+        from broker_contract.contract import SupportsNettedPositionReads
 
         broker = _make_broker()
         self.assertIsInstance(broker, SupportsNettedPositionReads)

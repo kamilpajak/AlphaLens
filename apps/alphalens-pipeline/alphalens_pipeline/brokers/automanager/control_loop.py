@@ -32,6 +32,7 @@ from broker_contract.contract import (
     PlacedOrder,
     Position,
     SupportsAmendStop,
+    SupportsNettedPositionReads,
     SupportsOcoExit,
     SupportsStandaloneStop,
     SupportsTrailingStop,
@@ -95,7 +96,6 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
 from alphalens_pipeline.brokers.reconcile import (
     VERDICT_AUDIT_DEFERRED,
     OutcomeAuditBudget,
-    SupportsNettedPositionReads,
     SupportsOrderResolution,
     SupportsOutcomeCachePeek,
 )
@@ -1208,7 +1208,13 @@ def _fetch_protection_peaks(
         # An EXPLICIT refusal, not the except-Exception path below: an absent
         # capability is a composition defect that holds on EVERY tick, and the
         # generic "peak fetch failed" message reads as a transient feed error —
-        # the operator would wait out an outage that is not one.
+        # the operator would wait out an outage that is not one. logger.error,
+        # not logger.exception: there is no active exception here, and a
+        # fabricated "NoneType: None" traceback would only mislead.
+        logger.error(
+            "trailing: broker %r lacks netted position reads — trailing dark",
+            getattr(broker, "name", "?"),
+        )
         if deps.alert_throttled(
             f"trailing: broker {getattr(broker, 'name', '?')!r} lacks netted "
             "position reads (SupportsNettedPositionReads) — trailing dark",
@@ -3713,6 +3719,9 @@ def build_default_deps(
     # historical getattr fallback substituted the UN-NETTED get_positions()
     # result — a stop sized to one lot with the rest of the position naked. A
     # broker that cannot read netted positions must not boot the manager.
+    # ORDERING is deliberate: this gate sits BEFORE the amend / exit-policy
+    # gates so their capability errors stay attributable — the amend-gate tests'
+    # _StopOnlyBroker stubs carry the reads for exactly that reason.
     if not isinstance(broker, SupportsNettedPositionReads):
         raise BrokerCapabilityError(
             f"broker {broker.name!r} does not implement get_long_positions / "

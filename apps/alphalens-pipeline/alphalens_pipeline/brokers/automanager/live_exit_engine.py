@@ -24,6 +24,7 @@ from broker_contract.contract import (
     OrderState,
     SupportsAmendStop,
     SupportsMarketOrders,
+    SupportsNettedPositionReads,
 )
 from broker_contract.price_feed import PriceFeed, PricePoint
 from broker_contract.quantity import QuantityLattice, quantize_down
@@ -39,7 +40,6 @@ from alphalens_pipeline.brokers.automanager.costs import EXIT_EDGE_MIN_BPS as _E
 from alphalens_pipeline.brokers.automanager.labels import tp_label_from_tag
 from alphalens_pipeline.brokers.automanager.position_manager import _sole_standalone_stop
 from alphalens_pipeline.brokers.execution import assert_rail_lattice
-from alphalens_pipeline.brokers.reconcile import SupportsNettedPositionReads
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +54,21 @@ class LiveExitBroker(
     ``ALPHALENS_LIVE_MARKET_EXITS=1``.
 
     Deliberately NOT the full frozen :class:`~broker_contract.contract.Broker`:
-    the engine touches exactly these six methods, and demanding
-    ``place_bracket_order`` etc. would make the pass-level ``isinstance`` refuse
-    a broker for abilities the engine never uses. Composition over a blanket
-    base is the same capability-protocol pattern the parents follow.
+    the pass + engine together touch exactly these six methods (the engine
+    itself calls five; ``get_long_positions`` is the pass's position read), and
+    demanding ``place_bracket_order`` etc. would make the pass-level
+    ``isinstance`` refuse a broker for abilities the engine never uses.
+    Composition over a blanket base is the same capability-protocol pattern the
+    parents follow.
+
+    CPython runtime-checkable notes, both load-bearing: (1) ``isinstance`` uses
+    ``inspect.getattr_static``, so a mock/fake must set every capability method
+    EXPLICITLY — attributes a bare ``Mock.__getattr__`` fabricates on first
+    access are invisible to the check (this bit the LIVE-composition stub in
+    this very PR); (2) ``runtime_checkable`` re-derives the check from the
+    COMBINED member set rather than composing the parents' checks, which is
+    equivalent only while every parent stays method-only — keep data members
+    out of the parent capabilities.
     """
 
     def cancel_order(self, order_id: str) -> None: ...
