@@ -30,6 +30,7 @@ from unittest import mock
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_trails
 from alphalens_pipeline.brokers.automanager import safety as _safety
+from broker_contract.exit_geometry.registry import resolve_exit_policy
 from broker_contract.sizing import SetupPlan, TierPlan
 
 from tests.incident_1112_fixture import (
@@ -1488,7 +1489,12 @@ def _blend_spec() -> Any:
     return type("Spec", (), {"entry_tiers": (tier,)})()
 
 
-_GEOMETRY_POLICY = type("GeoPolicy", (), {"applies_geometry": True})()
+# A real registry policy, not a one-attribute duck type. The stamp reads
+# ``exit_policy.name`` (#1138) and the watch-open path degrades to "pick stays
+# armed" on ANY exception, so a stub missing a protocol attribute turns a
+# behaviour test into a silent False. `atr_bracket_1p5` is the non-trailing
+# bracket, which is what this suite exercised all along.
+_GEOMETRY_POLICY = resolve_exit_policy("atr_bracket_1p5")
 
 
 def _route_watch(
@@ -1726,7 +1732,9 @@ class TestWatchGeometryStampThroughToPlannedLine(unittest.TestCase):
         intent = _pick()
         intent.exit = _exit_spec(stop=9.1, tp=13.5)
         intent.spec = _blend_spec()
-        expected = cl._geometry_shadow_stamp(intent.exit, intent.spec, use_geometry=True)
+        expected = cl._geometry_shadow_stamp(
+            intent.exit, intent.spec, use_geometry=True, exit_policy=_GEOMETRY_POLICY
+        )
         ok, _tranche_lines, trails_path, _stops = _route_watch(
             self, plan, intent=intent, exit_policy=_GEOMETRY_POLICY
         )
