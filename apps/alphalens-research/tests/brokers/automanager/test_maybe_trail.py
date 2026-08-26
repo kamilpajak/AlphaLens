@@ -313,6 +313,18 @@ class TestMaybeTrailDark(unittest.TestCase):
             action = _maybe_trail(_UIC, pos, plan, legs, view)
         self.assertIsNone(action)
         self.assertTrue(any("below brief floor" in message for message in cm.output))
+        # ...and it must NAME the policy that refused (#1138/#1139). This is the
+        # ONE log line in the file reachable only from the trailing pass, so it
+        # is the one that printed "policy=atr_bracket_1p5" — the name of the
+        # non-trailing policy — while LIVE ran trailing_atr. The sibling lines in
+        # _maybe_reanchor cannot be reached under a trailing policy at all: it is
+        # called without `peak`, and TrailingAtrPolicy.decide_reanchor returns
+        # None without one. Substring-only assertions are what let the mislabel
+        # survive, so assert the value.
+        self.assertTrue(
+            any("policy=trailing_atr" in message for message in cm.output),
+            f"the refusal must name the trailing policy, got: {cm.output}",
+        )
 
     def test_amend_recently_failed_is_veto(self) -> None:
         pos = _pos()
