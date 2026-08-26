@@ -248,5 +248,98 @@ class TestArtifactGuard(unittest.TestCase):
             epm.ensure_artifact_dir(Path.home() / ".alphalens" / "population_ladders")
 
 
+class TestDriverEndToEnd(unittest.TestCase):
+    """classify_span + main over a synthetic three-row store in a tmp dir —
+    covers the join, the classification wiring, the payload assembly and the
+    --write artifact path without touching any real store."""
+
+    def _build_store(self, root):
+        import json as _json
+        from pathlib import Path
+
+        store = Path(root) / "population_ladders"
+        (store / "bars").mkdir(parents=True)
+        briefs = Path(root) / "thematic_briefs"
+        briefs.mkdir()
+        day = "2026-06-02"
+        pd.DataFrame(
+            {
+                "ticker": ["AAA", "BBB", "CCC"],
+                "plannable": [False, True, True],
+                "terminal": [False, True, True],
+                "realized_r": [None, None, 0.5],
+                "ladder_classification": [None, "NO_FILL", "TP_FULL"],
+                "breakeven_realized_r_json": [None, None, _json.dumps({"atr_bracket_1p5": 0.4})],
+            }
+        ).to_parquet(store / f"{day}.parquet", index=False)
+        setup = _setup()
+        pd.DataFrame(
+            {
+                "ticker": ["BBB", "CCC"],
+                "brief_trade_setup": [_json.dumps(setup), _json.dumps(setup)],
+                "technical_pct_off_52w_high": [None, None],
+            }
+        ).to_parquet(briefs / f"{day}.parquet", index=False)
+        pd.DataFrame(_TOUCHING_BARS).to_parquet(store / "bars" / f"CCC_{day}.parquet", index=False)
+        return store, briefs, day
+
+    def test_classify_span_and_main_write(self):
+        import io
+        import json as _json
+        import tempfile
+        from contextlib import redirect_stdout
+        from pathlib import Path
+        from unittest import mock
+
+        from scripts import exit_policy_missingness as script
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, briefs, day = self._build_store(tmp)
+            artifact = Path(tmp) / "artifact"
+            with (
+                mock.patch.object(script, "STORE_DIR", store),
+                mock.patch.object(script, "BRIEFS_DIR", briefs),
+                mock.patch.object(script, "ARTIFACT_DIR", artifact),
+                mock.patch.object(
+                    script.sys,
+                    "argv",
+                    ["x", "--span-start", day, "--span-end", day, "--write", "--json"],
+                ),
+            ):
+                frame = script.classify_span(day, day)
+                self.assertEqual(len(frame), 3)
+                ccc = frame[frame["ticker"] == "CCC"].iloc[0]
+                self.assertIsNone(ccc["arm_b_reason"])  # constructible, fills
+                self.assertTrue(ccc["mirror_agrees_with_lens"])
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    code = script.main()
+            self.assertEqual(code, 0)
+            payload = _json.loads(out.getvalue())
+            counts = dict(map(tuple, payload["flow_table"]))
+            self.assertEqual(counts["all rows in span"], 3)
+            self.assertEqual(counts["terminal: NO_FILL (no arm A value)"], 1)
+            self.assertEqual(counts["terminal: both arms present"], 1)
+            self.assertEqual(payload["mirror_vs_lens_agreement"]["rows_disagreeing"], 0)
+            written = list(artifact.iterdir())
+            self.assertEqual(sorted(p.suffix for p in written), [".json", ".parquet"])
+
+    def test_main_returns_one_on_an_empty_span(self):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        from scripts import exit_policy_missingness as script
+
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = Path(tmp) / "population_ladders"
+            (empty / "bars").mkdir(parents=True)
+            with (
+                mock.patch.object(script, "STORE_DIR", empty),
+                mock.patch.object(script.sys, "argv", ["x"]),
+            ):
+                self.assertEqual(script.main(), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
