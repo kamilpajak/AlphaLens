@@ -210,16 +210,16 @@ class TestBriefAbsentPath(unittest.TestCase):
 class TestMalformedBarsFile(unittest.TestCase):
     def test_wrong_columns_classify_as_no_bars(self):
         import tempfile
-        from pathlib import Path as _P
+        from pathlib import Path
 
         from scripts import exit_policy_missingness as script
 
         with tempfile.TemporaryDirectory() as tmp:
-            bars_dir = _P(tmp) / "bars"
+            bars_dir = Path(tmp) / "bars"
             bars_dir.mkdir()
             pd.DataFrame({"x": [1]}).to_parquet(bars_dir / "TST_2026-08-20.parquet")
             original = script.STORE_DIR
-            script.STORE_DIR = _P(tmp)
+            script.STORE_DIR = Path(tmp)
             try:
                 self.assertEqual(script._bars_for("TST", "2026-08-20"), [])
             finally:
