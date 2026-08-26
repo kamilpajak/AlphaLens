@@ -41,6 +41,7 @@ import math
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import TypeIs
 
 from broker_contract.contract import (
     _QTY_EPS,
@@ -581,11 +582,16 @@ def _sole_standalone_stop(legs: tuple[OrderState, ...]) -> OrderState | None:
     return stop
 
 
-def _finite_positive(value: float | None) -> bool:
+def _finite_positive(value: float | None) -> TypeIs[float]:
     """Shared amend-arm guard: a usable price/ATR/peak — present, finite, > 0.
 
     ``None``, NaN, ±inf and the SIM NoAccess ``<= 0`` sentinel all read as
-    "veto" (the caller returns ``None`` and the resting stop stays put)."""
+    "veto" (the caller returns ``None`` and the resting stop stays put).
+
+    Returns ``TypeIs[float]`` rather than plain ``bool`` so the "present" half
+    of the guard is visible to the type checker: every caller writes
+    ``if not _finite_positive(x): return None`` and then uses ``x`` as a real
+    price, which only reads as correct once this narrows."""
     return value is not None and math.isfinite(value) and value > 0
 
 

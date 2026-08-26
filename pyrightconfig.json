@@ -7,6 +7,14 @@
   // strict to anything underneath those paths regardless of executionEnvironments.
   // executionEnvironments below only set 'extraPaths' so cross-package imports
   // resolve (research imports from pipeline.{data, core, scorers} per CLAUDE.md DAG).
+  // extraPaths is the ONLY thing that makes a workspace member resolvable:
+  // uv installs all five members as setuptools "editable finder" .pth hooks,
+  // which are dynamic Python and invisible to a static checker. A member that
+  // is missing here is Unknown at every consumer even though it imports fine
+  // at runtime — that was issue #1140, where 84 broker_contract imports across
+  // 28 files silently type-checked as nothing. Every member listed under
+  // [tool.uv.workspace] in pyproject.toml must appear in 'include' AND in each
+  // extraPaths below; enforced by tests/test_ci_gate_workspace_parity.py.
   // Why scorers/backtest/attribution: these are the load-bearing surfaces.
   // Wrong dtype in attribution -> wrong α t-stat -> bad verdict.
   // Wrong scorer signature -> wrong stock picks. Strict here pays for itself.
@@ -20,6 +28,8 @@
   // basic-mode errors don't block the global gate.
 
   "include": [
+    "apps/alphalens-broker-contract/broker_contract",
+    "apps/alphalens-feedback/alphalens_feedback",
     "apps/alphalens-pipeline/alphalens_pipeline",
     "apps/alphalens-pipeline/alphalens_cli",
     "apps/alphalens-research/alphalens_research",
@@ -56,13 +66,22 @@
     "apps/alphalens-pipeline/alphalens_pipeline/scorers/cohen_malloy_classifier.py",
     "apps/alphalens-pipeline/alphalens_pipeline/scorers/fcff_yield.py"
   ],
-  "reportMissingImports": "warning",
+  // ERROR, not warning: an unresolved import silently turns every symbol it
+  // names into Unknown, so the checker keeps reporting green while checking
+  // nothing. That is how 84 broker_contract imports across 28 files went
+  // unnoticed (#1140). As an error, a workspace member that stops resolving —
+  // one added without an extraPaths entry, a moved package, a broken editable
+  // install — fails CI instead of adding a warning nobody reads. The repo-wide
+  // count is 0; keep it there rather than downgrading this back.
+  "reportMissingImports": "error",
   "reportMissingTypeStubs": "none",
 
   "executionEnvironments": [
     {
       "root": "apps/alphalens-research/alphalens_research",
       "extraPaths": [
+        "apps/alphalens-broker-contract",
+        "apps/alphalens-feedback",
         "apps/alphalens-pipeline",
         "apps/alphalens-research"
       ]
@@ -70,12 +89,16 @@
     {
       "root": "apps/alphalens-pipeline/alphalens_pipeline",
       "extraPaths": [
+        "apps/alphalens-broker-contract",
+        "apps/alphalens-feedback",
         "apps/alphalens-pipeline"
       ]
     },
     {
       "root": ".",
       "extraPaths": [
+        "apps/alphalens-broker-contract",
+        "apps/alphalens-feedback",
         "apps/alphalens-pipeline",
         "apps/alphalens-research"
       ]

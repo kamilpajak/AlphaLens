@@ -283,7 +283,13 @@ def execute_tranche_exit(
     # is module-level and callable directly; a guard that fires on one entry
     # point only is a guard that can be walked past.
     assert_rail_lattice(lattice)
-    live = broker.get_positions_by_uic(uic)
+    # Three undeclared abilities in this function: get_positions_by_uic is a
+    # SaxoBroker method no protocol names, while amend_stop_amount and
+    # place_market_order DO have protocols (SupportsAmendStop /
+    # SupportsMarketOrders) that this call path never narrows to. Tracked at
+    # #1141 — the fix adds a runtime refusal, which does not belong in the PR
+    # that merely pointed the type checker at this package.
+    live = broker.get_positions_by_uic(uic)  # pyright: ignore[reportAttributeAccessIssue]
     if not _is_real_quantity(live.quantity):
         # Same stance as the planner: a live read that degrades to None / nan /
         # inf must end this tranche, never raise past the pass boundary and
@@ -315,7 +321,7 @@ def execute_tranche_exit(
     if new_sl_qty <= _QTY_EPS:
         broker.cancel_order(sl_leg.order_id)  # full close — cancel, don't amend-to-zero
     else:
-        broker.amend_stop_amount(
+        broker.amend_stop_amount(  # pyright: ignore[reportAttributeAccessIssue]
             uic=uic,
             order_id=sl_leg.order_id,
             side=sl_leg.side or "SELL",
@@ -325,7 +331,7 @@ def execute_tranche_exit(
             request_id=f"{request_ref}-{exit.tag}-amend",
         )
     # 2) market-sell the freed tranche.
-    placed = broker.place_market_order(
+    placed = broker.place_market_order(  # pyright: ignore[reportAttributeAccessIssue]
         uic, "SELL", qty, request_id=f"{request_ref}-{exit.tag}-sell"
     )
     sell_order_id = placed.entry_order_id or None
@@ -468,7 +474,10 @@ def run_live_exits(
                 m.uic,
             )
             continue
-        live = broker.get_positions_by_uic(m.uic)
+        # The line above checks list_working_sell_orders and skips the pass when
+        # the broker lacks it; this read is the SAME kind of ability with no such
+        # check and no protocol behind it (#1141).
+        live = broker.get_positions_by_uic(m.uic)  # pyright: ignore[reportAttributeAccessIssue]
         legs = tuple(list_sells())
         legs = tuple(leg for leg in legs if leg.uic == m.uic)
         sl = _sole_standalone_stop(legs)

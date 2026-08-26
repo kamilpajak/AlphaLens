@@ -53,17 +53,17 @@ jobs:
         # actually writing to disk.
         run: uv lock --check
 
-      - name: Ruff lint (pipeline + research)
+      - name: Ruff lint (pipeline + research + shared leaves)
         # Blocking. Pre-existing warnings cleaned up in the foundation-
         # cleanup PR (chore/ci-foundation-cleanup); future violations must
         # be fixed in the PR that introduces them. Per-file-ignores +
         # project-wide `ignore = [...]` in pyproject.toml encode the
         # research-code posture (PLR0911 verdict ladders, capital-X math
         # notation in screeners, Polish-language docstrings, etc).
-        run: uv run ruff check apps/alphalens-pipeline/ apps/alphalens-research/
+        run: uv run ruff check apps/alphalens-broker-contract/ apps/alphalens-feedback/ apps/alphalens-pipeline/ apps/alphalens-research/
 
-      - name: Ruff format check (pipeline + research)
-        run: uv run ruff format --check apps/alphalens-pipeline/ apps/alphalens-research/
+      - name: Ruff format check (pipeline + research + shared leaves)
+        run: uv run ruff format --check apps/alphalens-broker-contract/ apps/alphalens-feedback/ apps/alphalens-pipeline/ apps/alphalens-research/
 
       - name: Bandit security scan
         # Gate: low-and-above severity (-ll). XML parsing on untrusted SEC
@@ -72,7 +72,7 @@ jobs:
         # alphavantage_client, polygon_client). The single
         # urllib.request.urlopen call to GDELT is # nosec B310 — URL built
         # from a constant base + querystring, file:// not reachable.
-        run: uv run bandit -r apps/alphalens-pipeline/alphalens_pipeline/ apps/alphalens-pipeline/alphalens_cli/ apps/alphalens-research/alphalens_research/ -ll -q
+        run: uv run bandit -r apps/alphalens-broker-contract/broker_contract/ apps/alphalens-feedback/alphalens_feedback/ apps/alphalens-pipeline/alphalens_pipeline/ apps/alphalens-pipeline/alphalens_cli/ apps/alphalens-research/alphalens_research/ -ll -q
 
       - name: pip-audit (CVE scan against uv.lock)
         # uv export --no-emit-workspace strips editable installs of the
@@ -210,6 +210,15 @@ jobs:
 
       - name: Ruff lint (django)
         run: uv run ruff check apps/alphalens-django/
+
+      - name: Ruff format check (django)
+        # The Django app is the one workspace member the format gate never
+        # covered; it was already clean, so this step starts green (#1140).
+        run: uv run ruff format --check apps/alphalens-django/
+
+      - name: Bandit security scan (django)
+        # Same gap, same gate posture as the pipeline job: low-and-above (-ll).
+        run: uv run bandit -r apps/alphalens-django/ -ll -q
 
       - name: Missing-migration gate (makemigrations --check)
         working-directory: apps/alphalens-django
