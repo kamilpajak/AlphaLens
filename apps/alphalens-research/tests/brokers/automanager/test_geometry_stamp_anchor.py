@@ -18,7 +18,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager.control_loop import _geometry_shadow_stamp
 from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, parse_brief_to_spec
-from broker_contract.exit_geometry.registry import resolve_policy
+from broker_contract.exit_geometry.registry import resolve_exit_policy, resolve_policy
 
 from tests.incident_1112_fixture import SMG_PLANNED_BLEND, smg_brief_trade_setup
 
@@ -35,8 +35,13 @@ class TestGeometryStampNamesItsAnchor(unittest.TestCase):
         assert self.exit_spec is not None
         self.spec = parse_brief_to_spec(setup)
 
-    def _stamp(self) -> dict:
-        stamp = _geometry_shadow_stamp(self.exit_spec, self.spec, use_geometry=True)
+    def _stamp(self, exit_policy_key: str = "atr_bracket_1p5") -> dict:
+        stamp = _geometry_shadow_stamp(
+            self.exit_spec,
+            self.spec,
+            use_geometry=True,
+            exit_policy=resolve_exit_policy(exit_policy_key),
+        )
         assert stamp is not None
         return stamp
 
@@ -69,11 +74,22 @@ class TestGeometryStampNamesItsAnchor(unittest.TestCase):
         # raises ValueError on an unknown name, so the lookup belongs at import
         # time, not per tick. Making the registry lookup explode proves the hot
         # path no longer performs one.
+        #
+        # The behavioural policy is resolved BEFORE the patch on purpose: that
+        # mirrors production, where build_default_deps resolves it once at
+        # startup and the drain only reads the cached instance (#1138). Doing it
+        # inside the patch would test the test helper, not the stamp.
+        policy = resolve_exit_policy("trailing_atr")
         with mock.patch(
             "broker_contract.exit_geometry.registry.resolve_policy",
             side_effect=AssertionError("resolved a policy inside the drain"),
         ):
-            self.assertEqual(self._stamp()["tp_floor_frac"], _EXPECTED_TP_FLOOR_FRAC)
+            stamp = _geometry_shadow_stamp(
+                self.exit_spec, self.spec, use_geometry=True, exit_policy=policy
+            )
+        assert stamp is not None
+        self.assertEqual(stamp["tp_floor_frac"], _EXPECTED_TP_FLOOR_FRAC)
+        self.assertEqual(stamp["exit_policy_name"], "trailing_atr")
 
     def test_the_two_new_keys_are_additive_and_the_old_ones_are_unchanged(self):
         # Every existing reader uses .get(), so adding keys is safe -- but the
@@ -97,5 +113,56 @@ class TestGeometryStampNamesItsAnchor(unittest.TestCase):
                 "applied",
                 "anchor_mode",
                 "tp_floor_frac",
+                "exit_policy_name",
             },
         )
+
+
+class TestTheStampNamesTheBehaviouralPolicy(unittest.TestCase):
+    """Which policy RAN is a different fact from which geometry it placed.
+
+    ``policy_name`` has always meant the geometry, and every row stamped so far
+    uses it that way, so it keeps that meaning. What was missing is the
+    behavioural policy -- the thing ``ALPHALENS_BROKER_EXIT_POLICY`` selects.
+    The LIVE unit pins ``trailing_atr``; before #1138 both policies reported
+    ``atr_bracket_1p5``, so stamping the resolved policy's name would have
+    written the same literal and changed nothing (issue #1112 asked which
+    policy governed a real trade and the record could not answer).
+    """
+
+    def setUp(self) -> None:
+        setup = smg_brief_trade_setup()
+        self.exit_spec = build_exit_geometry_spec(setup)
+        assert self.exit_spec is not None
+        self.spec = parse_brief_to_spec(setup)
+
+    def _stamp(self, key: str) -> dict:
+        stamp = _geometry_shadow_stamp(
+            self.exit_spec,
+            self.spec,
+            use_geometry=True,
+            exit_policy=resolve_exit_policy(key),
+        )
+        assert stamp is not None
+        return stamp
+
+    def test_the_trailing_policy_is_named_as_itself(self):
+        # What LIVE actually runs.
+        self.assertEqual(self._stamp("trailing_atr")["exit_policy_name"], "trailing_atr")
+
+    def test_the_two_policies_produce_different_stamps(self):
+        # The whole point: two rows written under different policies must be
+        # distinguishable. This is what would have answered #1112.
+        trailing = self._stamp("trailing_atr")
+        static = self._stamp("atr_bracket_1p5")
+        self.assertNotEqual(trailing["exit_policy_name"], static["exit_policy_name"])
+        # ...while the geometry they placed against is the SAME, and the field
+        # that has always meant the geometry keeps saying so on both.
+        self.assertEqual(trailing["policy_name"], static["policy_name"])
+        self.assertEqual(trailing["policy_name"], _POLICY_NAME)
+
+    def test_a_policy_that_places_no_geometry_still_names_itself(self):
+        # setup_static never reaches this stamp in production (the caller gates
+        # on applies_geometry), but the field must not become a place where a
+        # None quietly appears if that ever changes.
+        self.assertEqual(self._stamp("setup_static")["exit_policy_name"], "setup_static")

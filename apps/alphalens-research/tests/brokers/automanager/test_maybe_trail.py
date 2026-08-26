@@ -42,7 +42,9 @@ _UIC = 43070
 # raw ``peak - k*atr`` and the assertions read cleanly. atr_bracket_1p5 sets
 # stop_atr_mult=1.5, so risk = 1.5*atr and activation fires at
 # ``peak >= avg_price + 0.5*1.5*atr``.
-_TRAIL = TrailingAtrPolicy(resolve_policy("atr_bracket_1p5"), activation_r=0.5, k_atr=2.0)
+_TRAIL = TrailingAtrPolicy(
+    resolve_policy("atr_bracket_1p5"), name="trailing_atr", activation_r=0.5, k_atr=2.0
+)
 _ATR_BRACKET = resolve_exit_policy("atr_bracket_1p5")  # trails=False sibling
 
 
@@ -311,6 +313,18 @@ class TestMaybeTrailDark(unittest.TestCase):
             action = _maybe_trail(_UIC, pos, plan, legs, view)
         self.assertIsNone(action)
         self.assertTrue(any("below brief floor" in message for message in cm.output))
+        # ...and it must NAME the policy that refused (#1138/#1139). This is the
+        # ONE log line in the file reachable only from the trailing pass, so it
+        # is the one that printed "policy=atr_bracket_1p5" — the name of the
+        # non-trailing policy — while LIVE ran trailing_atr. The sibling lines in
+        # _maybe_reanchor cannot be reached under a trailing policy at all: it is
+        # called without `peak`, and TrailingAtrPolicy.decide_reanchor returns
+        # None without one. Substring-only assertions are what let the mislabel
+        # survive, so assert the value.
+        self.assertTrue(
+            any("policy=trailing_atr" in message for message in cm.output),
+            f"the refusal must name the trailing policy, got: {cm.output}",
+        )
 
     def test_amend_recently_failed_is_veto(self) -> None:
         pos = _pos()

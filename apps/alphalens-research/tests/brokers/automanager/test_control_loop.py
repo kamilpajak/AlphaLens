@@ -2342,6 +2342,21 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
         self.assertAlmostEqual(stamp["ceiling_price"], 20.0)
         self.assertFalse(stamp["applied"])
 
+    def test_the_journaled_stamp_names_the_policy_THIS_CALL_SITE_was_given(self) -> None:
+        # The bracket path is the REAL-ORDER one, and it was the untested half of
+        # the pair (#1139 adversarial review): the new stamp tests pinned the
+        # FUNCTION, and its entry-trail sibling is pinned by a whole-dict
+        # equality, but nothing read exit_policy_name off a line journaled HERE.
+        # A hardcoded inert policy at this call site therefore survived the whole
+        # broker suite. Asserting the value per policy is what closes it.
+        spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
+        for key in ("trailing_atr", "atr_bracket_1p5", "setup_static"):
+            with self.subTest(exit_policy=key):
+                _count, journaled = self._run(exit_spec=spec, exit_policy=resolve_exit_policy(key))
+                self.assertEqual(journaled[0]["geometry"]["exit_policy_name"], key)
+                # ...while the geometry stays the geometry on every one of them.
+                self.assertEqual(journaled[0]["geometry"]["policy_name"], "atr_bracket_1p5")
+
     def test_geometry_policy_overrides_the_journaled_prices(self) -> None:
         spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
         _count, journaled = self._run(
@@ -5462,7 +5477,11 @@ class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
         self.assertIsNotNone(deps)
         # The policy is resolved ONCE at startup and cached on the deps so the hot
         # protection path never re-resolves the env string (adversarial-review P0).
+        # Correct as-is: this path resolves the non-trailing bracket, whose own
+        # name IS "atr_bracket_1p5". Kept to pin that #1138 did not rename the
+        # policy that was always named honestly.
         self.assertEqual(deps.exit_policy.name, "atr_bracket_1p5")
+        self.assertFalse(deps.exit_policy.trails)
         self.assertTrue(deps.exit_policy.requires_amend_stop)
 
     def test_fail_fasts_when_flag_flipped_but_broker_cannot_amend(self) -> None:

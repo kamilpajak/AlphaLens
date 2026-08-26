@@ -34,12 +34,16 @@ class TestChandelierTarget(unittest.TestCase):
 
 class TestTrailingAtrPolicy(unittest.TestCase):
     def _policy(self):
-        return TrailingAtrPolicy(resolve_policy("atr_bracket_1p5"), activation_r=0.5, k_atr=0.6)
+        return TrailingAtrPolicy(
+            resolve_policy("atr_bracket_1p5"), name="trailing_atr", activation_r=0.5, k_atr=0.6
+        )
 
     def test_trails_flag_true_here_false_elsewhere(self):
         self.assertTrue(self._policy().trails)
         self.assertFalse(SetupStaticPolicy().trails)
-        self.assertFalse(AtrBracketPolicy(resolve_policy("atr_bracket_1p5")).trails)
+        self.assertFalse(
+            AtrBracketPolicy(resolve_policy("atr_bracket_1p5"), name="atr_bracket_1p5").trails
+        )
 
     def test_dark_before_activation(self):
         # risk = stop_atr_mult(1.5)*atr(2)=3; activation 0.5R => need peak >= avg+1.5
@@ -53,7 +57,7 @@ class TestTrailingAtrPolicy(unittest.TestCase):
         self.assertIsNone(self._policy().decide_reanchor(100.0, 2.0))
 
     def test_existing_policies_ignore_peak_bytewise(self):
-        atr = AtrBracketPolicy(resolve_policy("atr_bracket_1p5"))
+        atr = AtrBracketPolicy(resolve_policy("atr_bracket_1p5"), name="atr_bracket_1p5")
         self.assertEqual(
             atr.decide_reanchor(100.0, 2.0, peak=999.0),
             atr.decide_reanchor(100.0, 2.0),
@@ -64,7 +68,11 @@ class TestTrailingAtrPolicy(unittest.TestCase):
         pol = resolve_exit_policy("trailing_atr")
         self.assertTrue(pol.trails)
         self.assertTrue(pol.requires_amend_stop)
-        self.assertEqual(pol.name, "atr_bracket_1p5")  # geom name (mirror AtrBracketPolicy.name)
+        # The policy names ITSELF, and the geometry it wraps stays a separate
+        # fact (issue #1138). This assertion used to read the other way round,
+        # with a comment explaining that the name was the geometry's.
+        self.assertEqual(pol.name, "trailing_atr")
+        self.assertEqual(pol.geometry_name, "atr_bracket_1p5")
 
 
 if __name__ == "__main__":
