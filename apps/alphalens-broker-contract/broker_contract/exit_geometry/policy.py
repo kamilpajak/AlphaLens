@@ -32,6 +32,15 @@ class ExitPolicy(Protocol):
     # saw it because this package sat outside the type gate (issue #1140).
     # Read-only also makes the member types covariant, which is what lets a
     # policy that always has a geometry narrow ``geometry_name`` to ``str``.
+    #
+    # The implementations below are NOT expected to mirror this shape: a plain
+    # frozen-dataclass FIELD satisfies a read-only property member, because
+    # read-only asks only that the attribute be readable. So ``SetupStaticPolicy``
+    # declaring ``name`` as a field and ``AtrBracketPolicy`` declaring
+    # ``geometry_name`` as a property are BOTH valid, and neither needs changing
+    # to match the other. ``isinstance`` is unaffected either way — a
+    # runtime_checkable Protocol checks that the attribute is PRESENT, not that
+    # it is a descriptor.
 
     # The BEHAVIORAL identity — the key ALPHALENS_BROKER_EXIT_POLICY selects and
     # the one an operator reads in a log line. It must never be derived from a
