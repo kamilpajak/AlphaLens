@@ -48,7 +48,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4.37.3
+        uses: github/codeql-action/init@v4.37.8
         with:
           languages: ${{ matrix.language }}
           # `security-extended` adds quality queries that catch supply-chain
@@ -60,9 +60,9 @@ jobs:
         # Python + JS/TS are interpreted languages; CodeQL builds the
         # extraction database via static analysis. Autobuild is sufficient;
         # no manual `python setup.py build` needed.
-        uses: github/codeql-action/autobuild@v4.37.3
+        uses: github/codeql-action/autobuild@v4.37.8
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v4.37.3
+        uses: github/codeql-action/analyze@v4.37.8
         with:
           category: "/language:${{ matrix.language }}"
