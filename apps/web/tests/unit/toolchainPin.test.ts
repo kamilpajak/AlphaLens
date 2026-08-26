@@ -68,7 +68,10 @@ describe('build toolchain pins (CI ↔ Cloudflare Pages parity)', () => {
 	});
 
 	it('pins pnpm via the packageManager field so corepack ignores the registry latest tag', () => {
-		expect(packageManagerField()).toMatch(/^pnpm@\d+\.\d+\.\d+/);
+		// The hash must be the hex sha512 digest of the tarball: corepack parses
+		// everything after `pnpm@` as a semver, and base64 hashes (with +/=)
+		// fail that parse with "expected a semver version", killing the build.
+		expect(packageManagerField()).toMatch(/^pnpm@\d+\.\d+\.\d+(\+sha512\.[0-9a-f]{128})?$/);
 	});
 
 	it('finds engines.node ranges in the lockfile (parser vacuity guard)', () => {
