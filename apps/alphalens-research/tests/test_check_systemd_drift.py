@@ -9,7 +9,12 @@ and is verified live during the deploy cutover, not mocked here.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from scripts import check_systemd_drift as drift
 
@@ -244,6 +249,137 @@ class TestMetricsRendering(unittest.TestCase):
             text,
         )
         self.assertTrue(text.endswith("\n"))
+
+
+class TestMetricsWriting(unittest.TestCase):
+    def test_writes_atomically_into_the_textfile_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"ALPHALENS_TEXTFILE_DIR": tmp}):
+                drift._write_metrics("metric 1\n")
+            target = Path(tmp) / drift.METRICS_BASENAME
+            self.assertEqual(target.read_text(), "metric 1\n")
+            self.assertEqual([p.name for p in Path(tmp).iterdir()], [target.name])
+
+    def test_skips_quietly_when_the_textfile_dir_is_unset(self):
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_TEXTFILE_DIR"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            drift._write_metrics("metric 1\n")  # must not raise
+
+
+class TestLiveEnvironmentParsing(unittest.TestCase):
+    def test_parses_the_property_payload(self):
+        with mock.patch.object(drift, "_run", return_value="Environment=A=1 B=2\n"):
+            self.assertEqual(drift._live_environment("u"), {"A": "1", "B": "2"})
+
+    def test_empty_property_is_an_empty_environment(self):
+        with mock.patch.object(drift, "_run", return_value="Environment=\n"):
+            self.assertEqual(drift._live_environment("u"), {})
+
+    def test_unreadable_property_returns_none(self):
+        with mock.patch.object(drift, "_run", return_value='Environment=A="x y"\n'):
+            self.assertIsNone(drift._live_environment("u"))
+
+
+class TestHostFileReading(unittest.TestCase):
+    def test_reads_base_unit_and_every_regular_dropin_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp)
+            (host / "u.service").write_text("base")
+            d = host / "u.service.d"
+            d.mkdir()
+            (d / "10-a.conf").write_text("a")
+            (d / "stale.disabled").write_text("s")
+            (d / "sub").mkdir()  # directories are not files; skipped
+            with mock.patch.object(drift, "HOST_UNIT_DIR", host):
+                files = drift._host_files("u.service")
+        self.assertEqual(
+            files,
+            {"u.service": "base", "10-a.conf": "a", "stale.disabled": "s"},
+        )
+
+    def test_missing_base_and_dropin_dir_yield_no_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(drift, "HOST_UNIT_DIR", Path(tmp)):
+                self.assertEqual(drift._host_files("u.service"), {})
+
+
+class TestRepoFileReading(unittest.TestCase):
+    def test_reads_the_base_blob_and_every_listed_dropin_blob(self):
+        def fake_run(argv, timeout=120):
+            if argv[1] == "ls-tree":
+                return "10-a.conf\nREADME.md\n"
+            return f"blob:{argv[-1]}"
+
+        with mock.patch.object(drift, "_run", side_effect=fake_run):
+            files = drift._repo_files("u.service")
+        self.assertEqual(
+            files,
+            {
+                "u.service": "blob:origin/main:deploy/systemd/u.service",
+                "10-a.conf": "blob:origin/main:deploy/systemd/u.service.d/10-a.conf",
+                "README.md": "blob:origin/main:deploy/systemd/u.service.d/README.md",
+            },
+        )
+
+
+class TestMainExitSemantics(unittest.TestCase):
+    """Drift is a measurement (exit 0); only an inability to MEASURE is a
+    job failure (exit 1)."""
+
+    def _run_main(self, fetch_raises=False, repo_raises=False, drifted=False):
+        base = "[Service]\nEnvironment=ALPHALENS_BROKER_ENVIRONMENT=sim\n"
+
+        def fake_host_files(base_name):
+            files = {base_name: base}
+            if drifted and base_name == "alphalens-broker-manager.service":
+                files["extra.conf"] = "[Service]\nEnvironment=X=1\n"
+            return files
+
+        def fake_run(argv, timeout=120):
+            if argv[1] == "fetch":
+                if fetch_raises:
+                    raise subprocess.SubprocessError("fetch down")
+                return ""
+            if repo_raises:
+                raise subprocess.SubprocessError("git down")
+            if argv[1] == "ls-tree":
+                return ""
+            if argv[1] == "show":
+                return base
+            if argv[0] == "systemctl":
+                return "Environment=ALPHALENS_BROKER_ENVIRONMENT=sim\n"
+            raise AssertionError(f"unexpected argv {argv}")
+
+        written: dict[str, str] = {}
+        with (
+            mock.patch.object(drift, "_run", side_effect=fake_run),
+            mock.patch.object(drift, "_host_files", side_effect=fake_host_files),
+            mock.patch.object(
+                drift, "_write_metrics", side_effect=lambda text: written.update(metrics=text)
+            ),
+        ):
+            code = drift.main()
+        return code, written.get("metrics", "")
+
+    def test_converged_host_exits_zero_with_zero_gauges(self):
+        code, metrics = self._run_main()
+        self.assertEqual(code, 0)
+        for unit, _base in drift.UNITS:
+            self.assertIn(f'alphalens_systemd_drift_findings{{unit="{unit}"}} 0', metrics)
+
+    def test_drift_still_exits_zero_and_the_gauge_carries_the_count(self):
+        code, metrics = self._run_main(drifted=True)
+        self.assertEqual(code, 0)
+        self.assertIn('unit="alphalens-broker-manager"} 1', metrics)
+
+    def test_fetch_failure_exits_one_and_writes_no_metrics(self):
+        code, metrics = self._run_main(fetch_raises=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(metrics, "")
+
+    def test_repo_read_failure_exits_one(self):
+        code, _metrics = self._run_main(repo_raises=True)
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":
