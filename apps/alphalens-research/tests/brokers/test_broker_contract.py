@@ -431,6 +431,20 @@ class TestFakeBrokerProtectionReads(unittest.TestCase):
     ``get_positions_by_uic``. ``FakeBroker`` implements them so it is a complete
     protection-capable fake, exactly like a real adapter."""
 
+    def test_fake_broker_satisfies_the_netted_reads_protocol(self):
+        # #1141: the reads are now a declared capability
+        # (reconcile.SupportsNettedPositionReads) that build_default_deps gates
+        # on unconditionally — the conformance fake must satisfy it, and the
+        # runtime check must genuinely discriminate (negative control).
+        from alphalens_pipeline.brokers.reconcile import SupportsNettedPositionReads
+
+        self.assertIsInstance(FakeBroker(), SupportsNettedPositionReads)
+
+        class _NoReads:
+            name = "noreads"
+
+        self.assertNotIsInstance(_NoReads(), SupportsNettedPositionReads)
+
     def test_get_long_positions_returns_only_longs(self):
         longs = FakeBroker().get_long_positions()
         self.assertIsInstance(longs, list)

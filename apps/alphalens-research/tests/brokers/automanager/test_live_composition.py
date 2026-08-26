@@ -86,7 +86,8 @@ def _live_broker_stub() -> mock.Mock:
     """A mock satisfying every runtime_checkable Broker capability Protocol
     the composition root probes (SupportsStandaloneStop / SupportsOcoExit /
     SupportsAmendStop — the last is required because ``_VALID_RAIL_ENV``
-    pins ``EXIT_POLICY_ENV=trailing_atr``, which needs the AmendStop rail).
+    pins ``EXIT_POLICY_ENV=trailing_atr``, which needs the AmendStop rail —
+    plus SupportsNettedPositionReads, the unconditional #1141 boot gate).
 
     Each capability method is set EXPLICITLY (not left to Mock's
     ``__getattr__`` auto-creation): CPython 3.12+'s runtime-checkable
@@ -98,6 +99,8 @@ def _live_broker_stub() -> mock.Mock:
     broker.place_standalone_stop = mock.Mock(name="place_standalone_stop")
     broker.place_oco_exit = mock.Mock(name="place_oco_exit")
     broker.amend_stop_amount = mock.Mock(name="amend_stop_amount")
+    broker.get_long_positions = mock.Mock(name="get_long_positions")
+    broker.get_positions_by_uic = mock.Mock(name="get_positions_by_uic")
     return broker
 
 
@@ -269,9 +272,11 @@ class TestSimBranchByteIdenticalUnderLiveComposition(unittest.TestCase):
     mean the LIVE branch leaked into the SIM path."""
 
     def test_sim_still_uses_get_default_broker_and_default_oauth_provider(self) -> None:
-        from broker_contract.contract import PlacedOrder
+        from broker_contract.contract import PlacedOrder, Position
 
         class _StopOnlyBroker:
+            # Carries the mandatory netted position reads (#1141) so the
+            # unconditional boot gate is not what this SIM-branch test trips on.
             name = "stoponly"
 
             def place_standalone_stop(
@@ -283,6 +288,12 @@ class TestSimBranchByteIdenticalUnderLiveComposition(unittest.TestCase):
                 request_id: str | None = None,
             ) -> PlacedOrder:
                 return PlacedOrder(entry_order_id="S-1", exit_order_ids=())
+
+            def get_long_positions(self) -> list[Position]:
+                return []
+
+            def get_positions_by_uic(self, uic: int) -> Position:
+                raise AssertionError("never read in this test")
 
         env = {k: v for k, v in os.environ.items() if not k.startswith("ALPHALENS_BROKER_")}
         with (

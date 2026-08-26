@@ -122,6 +122,34 @@ class SupportsPositionNetting(Protocol):
 
 
 @runtime_checkable
+class SupportsNettedPositionReads(Protocol):
+    """Extension capability: the netted per-uic position reads the auto-manager's
+    exit sizing depends on (#1141).
+
+    The netting IS the contract, not an implementation detail — a venue can
+    report one position as several same-uic lots (seen live on Saxo SIM), and a
+    stop sized to one lot leaves the rest of the position naked:
+
+    - ``get_long_positions`` returns strictly-long positions, ONE netted
+      ``Position`` per uic — same-uic lots summed, ``avg_price`` the
+      quantity-weighted blend; flat and short dropped.
+    - ``get_positions_by_uic`` returns the netted ``Position`` for one uic and a
+      **zero-quantity sentinel when the uic carries no live lot — never None**,
+      so callers branch on the quantity, not on presence.
+
+    Declared pipeline-side per the graduation path in the module docstring; the
+    auto-manager REFUSES a broker without it at boot (``build_default_deps``),
+    because the protection view's netting and the execute-time owned re-checks
+    are never-naked critical and their historical getattr fallback substituted
+    exactly the un-netted read the netting exists to prevent.
+    """
+
+    def get_long_positions(self) -> list[Position]: ...
+
+    def get_positions_by_uic(self, uic: int) -> Position: ...
+
+
+@runtime_checkable
 class SupportsOutcomeCachePeek(Protocol):
     """Extension capability: whether ``resolve_order_outcome`` would answer from
     a terminal memo (no audit HTTP read). Lets the audit budget cap only REAL
@@ -924,6 +952,7 @@ __all__ = [
     "OutcomeAuditBudget",
     "ReconcileVerdict",
     "SupportsFillCrossCheck",
+    "SupportsNettedPositionReads",
     "SupportsOrderResolution",
     "SupportsOutcomeCachePeek",
     "SupportsPositionNetting",

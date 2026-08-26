@@ -5425,7 +5425,11 @@ class TestAmendSeqMonotonicJournalBacked(unittest.TestCase):
 
 
 class _StopOnlyBroker:
-    """SupportsStandaloneStop but NOT SupportsAmendStop (no amend_stop_amount)."""
+    """SupportsStandaloneStop but NOT SupportsAmendStop (no amend_stop_amount).
+
+    Carries the mandatory netted position reads (#1141) so it clears the
+    unconditional boot gate — every test that reaches for this stub is about
+    the AMEND capability, not the reads."""
 
     name = "stoponly"
 
@@ -5433,6 +5437,120 @@ class _StopOnlyBroker:
         self, uic: int, side: str, qty: float, stop_price: float, request_id: str | None = None
     ) -> PlacedOrder:
         return PlacedOrder(entry_order_id="S-1", exit_order_ids=())
+
+    def get_long_positions(self) -> list[Position]:
+        return []
+
+    def get_positions_by_uic(self, uic: int) -> Position:
+        return _pos(0.0, uic)
+
+
+class _NoPositionReadsBroker:
+    """SupportsStandaloneStop but NO netted position reads — the pre-#1141
+    silent shape. build_default_deps must refuse it at boot: the protection
+    view's netting and the execute-time owned re-checks depend on the reads,
+    and their getattr fallback is the documented naked-stop case."""
+
+    name = "noreads"
+
+    def place_standalone_stop(
+        self, uic: int, side: str, qty: float, stop_price: float, request_id: str | None = None
+    ) -> PlacedOrder:
+        return PlacedOrder(entry_order_id="S-1", exit_order_ids=())
+
+
+class _LiveExitCapableBroker(_ProtBroker):
+    """_ProtBroker + place_market_order: the full LiveExitBroker requirement set."""
+
+    name = "liveexitcapable"
+
+    def place_market_order(
+        self, uic: int, side: str, qty: float, request_id: str | None = None
+    ) -> PlacedOrder:
+        return PlacedOrder(entry_order_id="M-1", exit_order_ids=())
+
+
+class TestBuildDefaultDepsPositionReadsGate(unittest.TestCase):
+    """#1141 boot gates. The netted position reads are UNCONDITIONALLY required
+    (the protection pass is unconditional and its netting is never-naked
+    critical); the full live-exit capability set is required only when
+    ALPHALENS_LIVE_MARKET_EXITS=1 — mirroring the _amend_enabled() gate."""
+
+    def test_refuses_a_broker_without_netted_position_reads(self) -> None:
+        with (
+            _isolated_home(),
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_NoPositionReadsBroker(),
+            ),
+        ):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
+        self.assertIn("get_long_positions", str(captured.exception))
+
+    def test_a_broker_with_the_reads_boots(self) -> None:
+        # _StopOnlyBroker carries the reads; the default env skips every
+        # conditional gate — this doubles as the positive control proving the
+        # unconditional gate does not over-block.
+        with (
+            _isolated_home(),
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_StopOnlyBroker(),
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+        ):
+            deps = cl.build_default_deps(
+                notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
+            )
+        self.assertIsNotNone(deps)
+
+    def test_live_exits_flag_requires_the_full_capability_set(self) -> None:
+        # _ProtBroker has the reads + amend + cancel + list_working_sell_orders
+        # but NO place_market_order — with the flag on, boot must refuse and the
+        # message must name the env var that demanded the capability.
+        with (
+            _isolated_home(),
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_ProtBroker(),
+            ),
+            mock.patch.dict(os.environ, {"ALPHALENS_LIVE_MARKET_EXITS": "1"}),
+        ):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
+        self.assertIn("ALPHALENS_LIVE_MARKET_EXITS", str(captured.exception))
+
+    def test_live_exits_flag_off_does_not_demand_market_orders(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_LIVE_MARKET_EXITS"}
+        with (
+            _isolated_home(),
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_ProtBroker(),
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+            mock.patch.dict(os.environ, env, clear=True),
+        ):
+            deps = cl.build_default_deps(
+                notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
+            )
+        self.assertIsNotNone(deps)
+
+    def test_live_exits_flag_passes_with_a_capable_broker(self) -> None:
+        with (
+            _isolated_home(),
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_LiveExitCapableBroker(),
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+            mock.patch.dict(os.environ, {"ALPHALENS_LIVE_MARKET_EXITS": "1"}),
+        ):
+            deps = cl.build_default_deps(
+                notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
+            )
+        self.assertIsNotNone(deps)
 
 
 class TestBuildDefaultDepsAmendFailFast(unittest.TestCase):

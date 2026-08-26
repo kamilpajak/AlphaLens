@@ -424,5 +424,35 @@ class TestCarryover2FeedFailureLeavesNeverNakedIntact(unittest.TestCase):
         )
 
 
+class TestPeakFetchCapabilityGuard(unittest.TestCase):
+    """#1141: a broker without the netted position reads is refused EXPLICITLY
+    before the peak fetch — a distinct alert, not the generic except-Exception
+    "peak fetch failed" path. Production cannot reach this (the boot gate
+    refuses such a broker), so this pins the defensive stance for direct /
+    test-composed deps."""
+
+    def test_broker_without_reads_goes_dark_with_a_distinct_alert(self) -> None:
+        class _NoReadsBroker:
+            name = "noreads"
+
+            def amend_stop_amount(self, *args: object, **kwargs: object) -> None:
+                raise AssertionError("never called")
+
+        sink: list[str] = []
+        deps = _deps(
+            _NoReadsBroker(),  # type: ignore[arg-type]
+            exit_policy=_TRAIL,
+            feed_factory=_ScriptedFeedFactory([]),
+            sink=sink,
+        )
+        report = cl.TickReport()
+        peaks, last = cl._fetch_protection_peaks(deps, report)
+        self.assertEqual((peaks, last), ({}, {}))
+        self.assertTrue(
+            any("lacks netted position reads" in msg for msg in sink),
+            f"expected the capability alert, got: {sink}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
