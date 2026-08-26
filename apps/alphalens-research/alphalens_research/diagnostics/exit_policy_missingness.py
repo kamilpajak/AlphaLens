@@ -165,11 +165,13 @@ def flow_table(rows: pd.DataFrame) -> list[tuple[str, int]]:
     never absorbed.
     """
     total = len(rows)
-    not_plannable = int((~rows["plannable"].astype(bool)).sum())
-    plannable = rows[rows["plannable"].astype(bool)]
-    not_terminal = int((~plannable["terminal"].astype(bool)).sum())
-    terminal = plannable[plannable["terminal"].astype(bool)]
-    no_arm_a = terminal[~terminal["arm_a_present"].astype(bool)]
+    plannable_flag = rows["plannable"].fillna(False).astype(bool)
+    not_plannable = int((~plannable_flag).sum())
+    plannable = rows[plannable_flag]
+    terminal_flag = plannable["terminal"].fillna(False).astype(bool)
+    not_terminal = int((~terminal_flag).sum())
+    terminal = plannable[terminal_flag]
+    no_arm_a = terminal[~terminal["arm_a_present"].fillna(False).astype(bool)]
     # The store legitimately holds terminal NO_FILL rows with no realized_r
     # (16 in the historical span); anything ELSE terminal without an arm-A
     # value is a genuine contract violation and the table refuses it.
@@ -178,7 +180,7 @@ def flow_table(rows: pd.DataFrame) -> list[tuple[str, int]]:
             "terminal non-NO_FILL rows without an arm-A value violate the "
             "store contract; refusing to build a flow table that would not balance"
         )
-    with_arm_a = terminal[terminal["arm_a_present"].astype(bool)]
+    with_arm_a = terminal[terminal["arm_a_present"].fillna(False).astype(bool)]
     table: list[tuple[str, int]] = [
         ("all rows in span", total),
         ("dropped: plannable = False / NO_STRUCTURE", not_plannable),

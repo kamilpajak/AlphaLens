@@ -70,15 +70,29 @@ def _setup_from_brief(brief: pd.DataFrame, ticker: str) -> tuple[dict | None, fl
 
 
 def _bars_for(ticker: str, brief_date: str) -> list[dict]:
-    candidates = sorted((STORE_DIR / "bars").glob(f"{ticker}_{brief_date}*.parquet")) or sorted(
-        (STORE_DIR / "bars").glob(f"{ticker}_*.parquet")
-    )
-    if not candidates:
-        return []
-    frame = pd.read_parquet(candidates[-1])
-    if not {"t", "l", "h", "c"}.issubset(frame.columns):
-        return []
-    return frame[["t", "l", "h", "c"]].to_dict("records")
+    """The cached bar path for THIS row's arrival.
+
+    Bars files are keyed ``TICKER_<arrival-date>``, and the arrival lags the
+    brief date by 0-3 calendar days (weekends/holidays) — measured on the real
+    cache: 249 exact, 56 at +1, 48 at +2..3. The search window is
+    [brief_date, brief_date+5], EARLIEST match wins. Deliberately no fallback
+    to other dates: bars from a different brief of the same ticker would walk
+    a foreign window and misclassify this row — a missing cache entry is an
+    honest ``no_bars``.
+    """
+    from datetime import date, timedelta
+
+    start = date.fromisoformat(brief_date)
+    for offset in range(6):
+        candidate = (
+            STORE_DIR / "bars"
+        ) / f"{ticker}_{(start + timedelta(days=offset)).isoformat()}.parquet"
+        if candidate.exists():
+            frame = pd.read_parquet(candidate)
+            if {"t", "l", "h", "c"}.issubset(frame.columns):
+                return frame[["t", "l", "h", "c"]].to_dict("records")
+            return []
+    return []
 
 
 def classify_span(span_start: str, span_end: str) -> pd.DataFrame:
@@ -104,15 +118,16 @@ def classify_span(span_start: str, span_end: str) -> pd.DataFrame:
                 "mirror_agrees_with_lens": None,
             }
             if record["plannable"] and record["terminal"] and record["arm_a_present"]:
-                if brief.empty:
-                    record["arm_b_reason"] = "no_bars"  # no brief -> nothing to walk
-                    record["mirror_agrees_with_lens"] = False
-                else:
-                    setup, pct = _setup_from_brief(brief, row["ticker"])
-                    bars = _bars_for(row["ticker"], brief_date)
-                    verdict = classify_and_verify(setup, bars, pct_off_52w_high=pct)
-                    record["arm_b_reason"] = verdict.reason
-                    record["mirror_agrees_with_lens"] = verdict.agrees
+                # A missing brief file leaves setup=None and classifies
+                # honestly (setup_not_ok...) through the SAME verified path —
+                # no hand-set reasons.
+                setup, pct = (
+                    _setup_from_brief(brief, row["ticker"]) if not brief.empty else (None, None)
+                )
+                bars = _bars_for(row["ticker"], brief_date)
+                verdict = classify_and_verify(setup, bars, pct_off_52w_high=pct)
+                record["arm_b_reason"] = verdict.reason
+                record["mirror_agrees_with_lens"] = verdict.agrees
             rows.append(record)
     return pd.DataFrame(rows)
 
@@ -165,6 +180,11 @@ def main() -> int:
         "mirror_vs_lens_agreement": agreement,
         "missingness_vs_outcome": diagnostic,
         "note": "descriptive only; no verdict words; never the A-vs-B contrast (memo section 3.4/7)",
+        "stored_null_caveat": (
+            "stored nulls conflate 'lens not yet registered' (before its 2026-07-16 deploy; "
+            "forward-only stamping) with 'bracket unconstructible' — the re-run reasons above "
+            "describe today's constructibility, the section 7.2 indicator uses the stored series"
+        ),
     }
 
     if args.write:
