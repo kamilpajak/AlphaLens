@@ -277,6 +277,83 @@ class TestArmBGeometry(unittest.TestCase):
             )  # type: ignore[call-arg]
 
 
+class TestArmBSensitivityVariants(unittest.TestCase):
+    """§8.3 items 2-3: the analysis script's pre-specified arm-B variants.
+    Defaults reproduce the LIVE policy; the variants exist ONLY for the
+    sensitivities and are exercised here so they cannot rot until 2028."""
+
+    def _partial_fill_setup(self) -> dict:
+        return _setup(
+            entries=[(100.0, 50.0), (80.0, 50.0)],
+            tps=[(150.0, 100.0)],
+            stop=70.0,
+            atr=4.0,
+        )
+
+    def test_realised_anchor_variant_re_anchors_the_bracket_on_touched_tiers(self):
+        # Only E1 (100) touches -> realised blend 100 vs planned 90. The
+        # variant's TP = max(100 + 6, 150) = 150 (clamp still applies), but
+        # its INITIAL stop is 100 - 6 = 94, vs planned 90 - 6 = 84.
+        setup = self._partial_fill_setup()
+        bars = _bars((100.0, 100.0, 100.0), (93.0, 100.0, 95.0))
+        planned = epr.replay_arm(
+            setup,
+            bars,
+            arm=epr.ARM_B,
+            notional=10_000.0,
+            slippage_bps=0.0,
+            position_expiry_ms=10 * _MIN,
+            arm_b_reanchor=False,
+        )
+        realised = epr.replay_arm(
+            setup,
+            bars,
+            arm=epr.ARM_B,
+            notional=10_000.0,
+            slippage_bps=0.0,
+            position_expiry_ms=10 * _MIN,
+            arm_b_anchor="realised",
+            arm_b_reanchor=False,
+        )
+        self.assertAlmostEqual(planned.exit_levels.stop, 84.0, places=9)
+        self.assertAlmostEqual(realised.exit_levels.stop, 94.0, places=9)
+        self.assertEqual(realised.classification, "SL_HIT")  # low 93 pierces 94
+        self.assertEqual(planned.classification, "OPEN")  # no exit before bars end
+
+    def test_unclamped_static_variant_matches_the_registered_lens_geometry(self):
+        # §8.3 item 3: clamp OFF + reanchor OFF = the atr_bracket_1p5_planned
+        # lens geometry (bracket tp, static stop).
+        setup = self._partial_fill_setup()
+        bars = _bars((100.0, 100.0, 100.0), (95.0, 97.0, 96.0))
+        out = epr.replay_arm(
+            setup,
+            bars,
+            arm=epr.ARM_B,
+            notional=10_000.0,
+            slippage_bps=0.0,
+            position_expiry_ms=10 * _MIN,
+            arm_b_apply_clamp=False,
+            arm_b_reanchor=False,
+        )
+        # planned blend 90, atr 4: tp = 90 + 6 = 96 (no clamp to 150).
+        self.assertAlmostEqual(out.exit_levels.tp, 96.0, places=9)
+
+    def test_defaults_reproduce_the_live_policy(self):
+        # No variant kwargs = the §5.2 arm B: clamped tp + reanchor on fill.
+        setup = self._partial_fill_setup()
+        bars = _bars((100.0, 100.0, 100.0), (95.0, 97.0, 96.0))
+        out = epr.replay_arm(
+            setup,
+            bars,
+            arm=epr.ARM_B,
+            notional=10_000.0,
+            slippage_bps=0.0,
+            position_expiry_ms=10 * _MIN,
+        )
+        self.assertAlmostEqual(out.exit_levels.tp, 150.0, places=9)
+        self.assertAlmostEqual(out.exit_levels.stop, 94.0, places=9)  # reanchored to E1
+
+
 class TestArmBFallback(unittest.TestCase):
     """Memo §5.3: when atr_bracket_levels returns None, arm B is the classic
     per-tier bracket on the brief's own tranche levels and disaster stop —
@@ -480,3 +557,97 @@ class TestNetCashIsFinite(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEntryCostAndCeilingFlag(unittest.TestCase):
+    """§8.1 items 4 and 6 need two per-row facts the payload derives here:
+    the USD entry cost (absolute-MAE basis) and whether the 52w-high ceiling
+    changed the placed arm-B target."""
+
+    def test_entry_cost_equals_notional_on_full_fill_both_arms(self):
+        setup = _simple_setup()
+        bars = _bars((99.0, 100.5, 100.0), (99.5, 111.0, 110.5))
+        for arm in (epr.ARM_A, epr.ARM_B):
+            with self.subTest(arm=arm):
+                out = epr.replay_arm(
+                    setup,
+                    bars,
+                    arm=arm,
+                    notional=10_000.0,
+                    slippage_bps=0.0,
+                    position_expiry_ms=10 * _MIN,
+                )
+                self.assertAlmostEqual(out.entry_cost, 10_000.0, places=6)
+
+    def test_entry_cost_zero_when_nothing_fills(self):
+        setup = _simple_setup()
+        bars = _bars((101.0, 102.0, 101.5))  # never touches the 100 limit
+        out = epr.replay_arm(
+            setup,
+            bars,
+            arm=epr.ARM_A,
+            notional=10_000.0,
+            slippage_bps=0.0,
+            position_expiry_ms=10 * _MIN,
+        )
+        self.assertEqual(out.entry_cost, 0.0)
+
+    def test_fallback_entry_cost_equals_notional(self):
+        # ATR so wide the bracket stop goes non-positive -> §5.3 fallback.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(103.0, 100.0)], stop=90.0, atr=80.0)
+        bars = _bars((99.0, 100.5, 100.0), (99.5, 104.0, 103.5))
+        out = epr.replay_arm(
+            setup,
+            bars,
+            arm=epr.ARM_B,
+            notional=10_000.0,
+            slippage_bps=0.0,
+            position_expiry_ms=10 * _MIN,
+        )
+        self.assertTrue(out.used_fallback)
+        self.assertAlmostEqual(out.entry_cost, 10_000.0, places=6)
+
+    def test_ceiling_capped_flag_set_when_ceiling_lowers_the_final_tp(self):
+        # entry 100, ATR 4 -> raw tp 106; first brief tp 103 keeps the clamp
+        # below the raw tp; asof_close 100 at pct -2 -> peak ~102.04 caps the
+        # bracket, and the clamp floor raises it back only to 103 (< 106).
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(103.0, 100.0)], stop=90.0, atr=4.0)
+        setup["asof_close"] = 100.0
+        bars = _bars((99.0, 100.5, 100.0), (99.5, 104.0, 103.5))
+        capped = epr.replay_arm(
+            setup,
+            bars,
+            arm=epr.ARM_B,
+            notional=10_000.0,
+            slippage_bps=0.0,
+            position_expiry_ms=10 * _MIN,
+            pct_off_52w_high=-2.0,
+        )
+        uncapped = epr.replay_arm(
+            setup,
+            bars,
+            arm=epr.ARM_B,
+            notional=10_000.0,
+            slippage_bps=0.0,
+            position_expiry_ms=10 * _MIN,
+            pct_off_52w_high=None,
+        )
+        self.assertTrue(capped.ceiling_capped)
+        self.assertFalse(uncapped.ceiling_capped)
+
+    def test_ceiling_present_but_not_binding_is_not_capped(self):
+        # Ceiling far above the bracket tp: present, but the placed target is
+        # identical with and without it.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(103.0, 100.0)], stop=90.0, atr=4.0)
+        setup["asof_close"] = 100.0
+        bars = _bars((99.0, 100.5, 100.0), (99.5, 107.0, 106.5))
+        out = epr.replay_arm(
+            setup,
+            bars,
+            arm=epr.ARM_B,
+            notional=10_000.0,
+            slippage_bps=0.0,
+            position_expiry_ms=10 * _MIN,
+            pct_off_52w_high=-50.0,  # peak 200 — nowhere near the 106 target
+        )
+        self.assertFalse(out.ceiling_capped)

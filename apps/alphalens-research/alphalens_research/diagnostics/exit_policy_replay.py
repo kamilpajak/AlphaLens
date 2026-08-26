@@ -90,6 +90,10 @@ _BPS = 10_000.0
 class Levels:
     stop: float
     tp: float
+    # Placement-time fact for §8.1 item 6: True when the 52w-high ceiling made
+    # the FINAL tp (after the step-3 clamp) lower than it would have been with
+    # no ceiling. A present-but-not-binding ceiling is False.
+    ceiling_capped: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,6 +110,11 @@ class ArmOutcome:
     first_fill_ts_ms: int | None = None
     exit_ts_ms: int | None = None
     mae_pct: float | None = None
+    # USD paid on entry fills (slipped) — the absolute-MAE basis of §8.1
+    # item 4: mae_usd = mae_pct * entry_cost. Full fill == the notional under
+    # the share-proportional sizing.
+    entry_cost: float = 0.0
+    ceiling_capped: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -199,7 +208,11 @@ def _per_fill_fee(fill_notional: float) -> float:
 
 
 def arm_b_initial_levels(
-    trade_setup: Mapping[str, Any], *, pct_off_52w_high: float | None
+    trade_setup: Mapping[str, Any],
+    *,
+    pct_off_52w_high: float | None,
+    anchor_blend: float | None = None,
+    apply_clamp: bool = True,
 ) -> Levels | None:
     """The placement-time (stop, tp) of the live policy, WITH the step-3 clamp.
 
@@ -208,8 +221,8 @@ def arm_b_initial_levels(
     parity test): bracket levels off the planned blend, then
     ``tp = max(tp, first_brief_tp_target)`` — the floor outranks the ceiling.
     """
-    blended = planned_blended_entry(trade_setup)
-    if blended is None:
+    blended = anchor_blend if anchor_blend is not None else planned_blended_entry(trade_setup)
+    if blended is None or not math.isfinite(blended) or blended <= 0:
         return None
     ladder = parse_ladder(trade_setup)
     atr = ladder.atr
@@ -220,10 +233,14 @@ def arm_b_initial_levels(
     if levels is None:
         return None
     stop, tp = levels
-    first_target = first_brief_tp_target(trade_setup)
-    if first_target is not None:
-        tp = max(tp, first_target)
-    return Levels(stop=stop, tp=tp)
+    uncapped = _LIVE_POLICY.decide_placement_geometry(blended, atr, ceiling_price=None)
+    tp_uncapped = uncapped[1] if uncapped is not None else tp
+    if apply_clamp:
+        first_target = first_brief_tp_target(trade_setup)
+        if first_target is not None:
+            tp = max(tp, first_target)
+            tp_uncapped = max(tp_uncapped, first_target)
+    return Levels(stop=stop, tp=tp, ceiling_capped=tp < tp_uncapped)
 
 
 def arm_b_reanchored_stop(
@@ -307,6 +324,7 @@ def _cash_from_engine_outcome(
     gross = 0.0
     fees = 0.0
     fills = 0
+    entry_cost = 0.0
     first_fill_ts: int | None = None
     exit_ts: int | None = None
 
@@ -319,6 +337,7 @@ def _cash_from_engine_outcome(
                 continue  # execution.py skips zero-qty tiers; no phantom $1 minimum
             price = lvl.price * (1.0 + slip)
             gross -= qty * price
+            entry_cost += qty * price
             fees += _per_fill_fee(qty * price)
             fills += 1
             if first_fill_ts is None:
@@ -364,6 +383,7 @@ def _cash_from_engine_outcome(
         first_fill_ts_ms=first_fill_ts,
         exit_ts_ms=exit_ts,
         mae_pct=outcome.mae_pct,
+        entry_cost=entry_cost,
     )
 
 
@@ -401,6 +421,7 @@ def _arm_b_bracket_walk(
     charge_fees: bool,
     entry_expiry_ms: int | None,
     position_expiry_ms: int | None,
+    reanchor: bool = True,
 ) -> ArmOutcome:
     slip = slippage_bps / _BPS
     ladder = parse_ladder(trade_setup)
@@ -414,6 +435,7 @@ def _arm_b_bracket_walk(
     gross = 0.0
     fees = 0.0
     fills = 0
+    entry_cost = 0.0
     first_fill_ts: int | None = None
     exit_ts: int | None = None
     classification = "NO_FILL"
@@ -437,6 +459,7 @@ def _arm_b_bracket_walk(
                 if qty > 0:  # execution.py skips zero-qty tiers
                     price = lvl.price * (1.0 + slip)
                     gross -= qty * price
+                    entry_cost += qty * price
                     fees += _per_fill_fee(qty * price)
                     fills += 1
                 newly_filled = True
@@ -446,7 +469,7 @@ def _arm_b_bracket_walk(
         if not filled:
             continue
 
-        if newly_filled:
+        if newly_filled and reanchor:
             # ReanchorOnFill (§5.2): the realised average fill in the replay is
             # the alloc-weighted blend of the tier LIMITS that filled, plus the
             # declared entry slippage. Re-fires on every NEW blend, mirroring
@@ -491,6 +514,18 @@ def _arm_b_bracket_walk(
             classification = "TIME_STOP"
             exit_ts = ts
             break
+    else:
+        if filled and classification == "NO_FILL":
+            # Bars ended before any exit event: the position is OPEN and the
+            # remainder is MARKED at the last close (engine semantics; the
+            # driver's §5.1 rule 4 makes this unreachable in the primary, but
+            # the variant paths and ad-hoc calls must not report NO_FILL cash
+            # while holding shares).
+            held = filled_shares(trade_setup, tuple(filled_ids), notional=notional)
+            last_close = _last_close(ordered)
+            if held > 0 and last_close is not None:
+                gross += held * last_close
+            classification = "OPEN"
 
     mae_pct: float | None = None
     if fill_blend_slipped is not None and in_trade_low is not None and fill_blend_slipped > 0:
@@ -503,10 +538,12 @@ def _arm_b_bracket_walk(
         total_fees=(fees if charge_fees else 0.0) if filled else 0.0,
         chargeable_fills=fills,
         classification=classification,
-        exit_levels=Levels(stop=stop, tp=tp),
+        exit_levels=Levels(stop=stop, tp=tp, ceiling_capped=levels.ceiling_capped),
         first_fill_ts_ms=first_fill_ts,
         exit_ts_ms=exit_ts,
         mae_pct=mae_pct,
+        entry_cost=entry_cost if filled else 0.0,
+        ceiling_capped=levels.ceiling_capped,
     )
 
 
@@ -532,6 +569,7 @@ def _arm_b_fallback(
     gross = 0.0
     fees = 0.0
     fills = 0
+    entry_cost = 0.0
     first_fill_ts: int | None = None
     exit_ts: int | None = None
     classifications: list[str] = []
@@ -561,6 +599,7 @@ def _arm_b_fallback(
         gross += sub.gross_cash
         fees += sub.total_fees
         fills += sub.chargeable_fills
+        entry_cost += sub.entry_cost
         classifications.append(sub.classification)
         if sub.first_fill_ts_ms is not None:
             first_fill_ts = (
@@ -585,6 +624,7 @@ def _arm_b_fallback(
         used_fallback=True,
         first_fill_ts_ms=first_fill_ts,
         exit_ts_ms=exit_ts,
+        entry_cost=entry_cost,
     )
 
 
@@ -604,6 +644,9 @@ def replay_arm(
     entry_expiry_ms: int | None = None,
     pct_off_52w_high: float | None = None,
     charge_fees: bool = True,
+    arm_b_anchor: Literal["planned", "realised"] = "planned",
+    arm_b_apply_clamp: bool = True,
+    arm_b_reanchor: bool = True,
 ) -> ArmOutcome:
     """Replay ONE candidate under ONE policy arm, in net USD (memo §10.1).
 
@@ -633,7 +676,36 @@ def replay_arm(
             last_close=_last_close(bars),
         )
 
-    levels = arm_b_initial_levels(trade_setup, pct_off_52w_high=pct_off_52w_high)
+    # §8.3 variants (analysis-script sensitivities ONLY — the §5.2 live arm B
+    # is the default): "realised" anchors the bracket on the blend of the
+    # tiers that TOUCH in a pre-walk (the lens's two-walk trick, under the
+    # same cutoffs); apply_clamp=False drops the step-3 tp floor;
+    # reanchor=False freezes the stop at placement (the registered
+    # atr_bracket_1p5_planned lens geometry when both are off).
+    anchor_blend: float | None = None
+    if arm_b_anchor == "realised":
+        pre_walk = replay_ladder(
+            trade_setup,
+            bars,
+            entry_expiry_ms=entry_expiry_ms,
+            position_expiry_ms=position_expiry_ms,
+        )
+        if not pre_walk.entries_filled or pre_walk.blended_entry is None:
+            return ArmOutcome(
+                net_cash=0.0,
+                gross_cash=0.0,
+                total_fees=0.0,
+                chargeable_fills=0,
+                classification="NO_FILL",
+            )
+        anchor_blend = pre_walk.blended_entry
+
+    levels = arm_b_initial_levels(
+        trade_setup,
+        pct_off_52w_high=pct_off_52w_high,
+        anchor_blend=anchor_blend,
+        apply_clamp=arm_b_apply_clamp,
+    )
     if levels is None:
         return _arm_b_fallback(
             trade_setup,
@@ -653,4 +725,5 @@ def replay_arm(
         charge_fees=charge_fees,
         entry_expiry_ms=entry_expiry_ms,
         position_expiry_ms=position_expiry_ms,
+        reanchor=arm_b_reanchor,
     )
