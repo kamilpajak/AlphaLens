@@ -1,0 +1,45 @@
+# Detect host-side systemd drift for the broker-manager units (#1135).
+#
+# The repo states what the two broker daemons run (base units + tracked
+# drop-ins, #1134/#1136) and CI pins that statement — against itself. The
+# #1121 drift (values typed into the installed LIVE unit) ran ~2 weeks and
+# was found by hand. This job runs ON the host and answers "did it happen
+# again" on its own: it fetches origin/main, compares the blobs and the
+# repo-composed environment against the installed files and what systemd
+# actually LOADED, and writes a per-unit findings gauge.
+#
+# DETECT, NEVER AUTO-APPLY. The rules/Grafana syncs converge the host to
+# origin/main; that is right for them and wrong here — auto-applying would
+# let a merge change live trading behaviour and would fight an operator's
+# deliberate host-side setting. The remedy for a finding is a human reading
+# `journalctl --user -u alphalens-systemd-drift-check` and deciding which
+# side is wrong.
+#
+# Exit codes: 0 = the CHECK COMPLETED (with or without findings — drift is a
+# measurement, carried by the gauge, alerted by AlphalensSystemdUnitDrift);
+# 1 = the check itself could not run (fetch/systemctl failure), which holds
+# the last-success clock and pages via the staleness pair. The account-bound
+# grant lines (ADR 0017) are excluded from the comparison, and finding text
+# never embeds their values.
+[Unit]
+Description=AlphaLens systemd drift check (broker-manager units)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+EnvironmentFile=/etc/alphalens/env
+ExecStart=%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/check_systemd_drift.py
+
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics systemd-drift-check
+StandardOutput=journal
+StandardError=journal
+MemoryMax=128M
+TasksMax=16
+# One git fetch (180s cap in-script) plus local reads; 5min bounds a hung
+# fetch with room to spare.
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=default.target

@@ -24,6 +24,12 @@ from unittest import mock
 import yaml
 from alphalens_pipeline.brokers.automanager.live_rails import assert_live_rails
 from broker_contract.contract import BrokerCapabilityError
+from scripts.check_systemd_drift import (
+    environment_assignments as _environment_assignments,
+)
+from scripts.check_systemd_drift import (
+    unreadable_reason as _unreadable_reason,
+)
 
 # Test file lives at apps/alphalens-research/tests/<name>.py; the repo root
 # is three parents up. deploy/ stays at the repo root, not under the app.
@@ -1900,8 +1906,11 @@ class TestPriceStreamStaleSessionGateGuard(unittest.TestCase):
 # real `assert_live_rails()` over the result — so the repository cannot declare
 # a LIVE configuration that would refuse to boot.
 #
-# What they cannot do: see the VPS. A hand edit on the host is still invisible
-# here; that needs a host-side drift check.
+# What they cannot do: see the VPS. A hand edit on the host is invisible
+# here; that is the job of the HOST-side drift check
+# (scripts/check_systemd_drift.py + alphalens-systemd-drift-check.timer,
+# #1135), which compares the installed units and the systemd-loaded
+# environment against the origin/main blobs every hour.
 # --------------------------------------------------------------------------
 
 _LIVE_DROPIN_DIR = REPO_ROOT / "deploy" / "systemd" / "alphalens-broker-manager-live.service.d"
@@ -1910,58 +1919,11 @@ _ALLOW_ORDERS = "ALPHALENS_BROKER_ALLOW_ORDERS"
 _SIZING_EQUITY = "ALPHALENS_BROKER_SIZING_EQUITY"
 
 
-def _environment_assignments(text: str) -> dict[str, str]:
-    """The ``Environment=`` assignments in one unit or drop-in file.
-
-    systemd's ``Environment=`` takes a space-separated LIST of assignments, so
-    one line may carry several; this splits on whitespace rather than reading
-    the line as a single pair. That is only sound because a value containing a
-    space would have to be QUOTED, and
-    :func:`test_every_environment_line_is_the_simple_form` refuses quoting.
-
-    Still deliberately narrow: no quoting, no line continuations, no bare
-    ``Environment=`` reset. Anything this parser cannot read honestly, that
-    same test refuses outright rather than letting it be misread quietly.
-    """
-    values: dict[str, str] = {}
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("Environment="):
-            continue
-        for assignment in stripped[len("Environment=") :].split():
-            key, _, value = assignment.partition("=")
-            values[key.strip()] = value.strip()
-    return values
-
-
-def _unreadable_reason(assignments: str) -> str | None:
-    """Why :func:`_environment_assignments` cannot honestly read this
-    ``Environment=`` payload, or ``None`` when it can.
-
-    The contract is refusal, not best effort: systemd understands quoting,
-    line continuations, C-style escapes and a bare ``Environment=`` reset, and
-    this parser understands none of them. Anything it would MISREAD has to be
-    rejected outright, because a quietly wrong composition is the one failure
-    this whole file exists to prevent.
-
-    Hence the blanket ban on backslashes rather than a rule per escape. A
-    trailing one continues the line and an escaped space hides a value
-    boundary; both slip past a narrower check, and neither is worth supporting
-    for files that have never needed either.
-    """
-    if "\\" in assignments:
-        return "backslash: continuation and C-style escapes are not parsed"
-    if '"' in assignments or "'" in assignments:
-        return "quoted value is not parsed"
-    tokens = assignments.split()
-    if not tokens:
-        return "bare Environment= reset is not parsed"
-    for token in tokens:
-        if "=" not in token:
-            return f"{token!r} is not an assignment"
-    return None
-
-
+# The Environment= parser and its refusal guard were PROMOTED to
+# scripts/check_systemd_drift.py (#1135) so the host-side drift check and
+# these repo-side tests read unit files with the SAME code — one parser, two
+# consumers, no second copy to rot. The guard tests below now pin the
+# promoted functions.
 def _dropin_files() -> list[Path]:
     # systemd applies drop-ins in lexical filename order, so sorted() is the
     # composition order, not merely a tidy one.
@@ -2079,7 +2041,7 @@ class TestTheDropInsAreReadableTheWayTheyAreApplied(unittest.TestCase):
 # so "SIM validated this" is reproducible from the repo.
 #
 # Same limitation as the LIVE section above: a hand edit on the host is
-# invisible here — that is #1135.
+# invisible here — the hourly host-side drift check (#1135) covers that.
 # --------------------------------------------------------------------------
 
 _SIM_DROPIN_DIR = REPO_ROOT / "deploy" / "systemd" / "alphalens-broker-manager.service.d"
@@ -2095,6 +2057,73 @@ def _sim_composed_environment() -> dict[str, str]:
     for path in _sim_dropin_files():
         composed.update(_environment_assignments(path.read_text()))
     return composed
+
+
+class TestSystemdDriftCheckUnit(unittest.TestCase):
+    """Hourly host-side drift check oneshot (#1135).
+
+    Pins the host-venv invocation of check_systemd_drift.py, the fail-loud
+    EnvironmentFile (the run needs ALPHALENS_TEXTFILE_DIR for the findings
+    gauge), the ExecStopPost job name the staleness alerts key on, and the
+    hourly :50 UTC slot that stays clear of every other alphalens timer.
+    """
+
+    SERVICE = SYSTEMD_DIR / "alphalens-systemd-drift-check.service"
+    TIMER = SYSTEMD_DIR / "alphalens-systemd-drift-check.timer"
+
+    def test_service_is_oneshot_running_the_check_script(self) -> None:
+        text = self.SERVICE.read_text()
+        self.assertIn("Type=oneshot", text)
+        self.assertRegex(
+            text,
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/python\s+"
+                r"apps/alphalens-research/scripts/check_systemd_drift\.py\s*$",
+                re.MULTILINE,
+            ),
+        )
+
+    def test_service_env_fail_loud_and_working_dir(self) -> None:
+        text = self.SERVICE.read_text()
+        self.assertRegex(text, re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE))
+        self.assertIn("WorkingDirectory=%h/AlphaLens", text)
+
+    def test_service_emits_the_job_metrics_the_alerts_key_on(self) -> None:
+        # The staleness pair in the Prometheus rules queries
+        # job="systemd-drift-check"; the emit hook derives that label from
+        # this argument.
+        self.assertRegex(
+            self.SERVICE.read_text(),
+            re.compile(
+                r"^ExecStopPost=%h/AlphaLens/deploy/systemd/bin/"
+                r"alphalens-emit-job-metrics systemd-drift-check\s*$",
+                re.MULTILINE,
+            ),
+        )
+
+    def test_service_documents_detect_never_auto_apply(self) -> None:
+        # The one design rule that must survive every future edit: this unit
+        # reads and reports; it must never converge the host to the repo.
+        self.assertIn("DETECT, NEVER AUTO-APPLY", self.SERVICE.read_text())
+
+    def test_timer_fires_hourly_at_50_with_persistent_catchup(self) -> None:
+        text = self.TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^OnCalendar=\*-\*-\* \*:50:00 UTC\s*$", re.MULTILINE))
+        self.assertIn("Persistent=true", text)
+        self.assertIn("Unit=alphalens-systemd-drift-check.service", text)
+
+    def test_drift_alert_reads_the_gauge_the_script_writes(self) -> None:
+        # Cross-file pin: the alert must query the exact metric name the
+        # script renders, or a rename on either side silently kills paging.
+        rules = (
+            REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
+        ).read_text()
+        from scripts.check_systemd_drift import render_metrics
+
+        metric_line = render_metrics({"x": 0}).splitlines()[-1]
+        metric_name = metric_line.split("{")[0]
+        self.assertIn(f"expr: {metric_name} > 0", rules)
+        self.assertIn('job="systemd-drift-check"', rules)
 
 
 class TestSimBrokerManagerDropIns(unittest.TestCase):

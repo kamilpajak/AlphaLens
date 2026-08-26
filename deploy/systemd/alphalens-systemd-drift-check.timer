@@ -1,0 +1,22 @@
+# Trigger the systemd drift check hourly at :50 UTC. Minute chosen against
+# the same VPS timer census as the Grafana sync (2026-08-24): :05 edge-mirror,
+# :27 rules-sync, :30 daily jobs + thematic slots, :37 grafana-sync, and the
+# EDGAR detector walking the :00/:15/:30/:45 grid. :50 contends with nothing.
+#
+# Hourly because the #1121 drift ran two weeks unnoticed and the check is a
+# read-only git fetch plus local comparisons — cheap enough that a tighter
+# clock costs nothing and bounds the window a hand edit can run unobserved.
+#
+# Persistent=true so a missed fire runs on next boot: the job is read-only
+# and idempotent, so catching up costs latency, never correctness.
+[Unit]
+Description=Trigger AlphaLens systemd drift check
+After=network-online.target
+
+[Timer]
+OnCalendar=*-*-* *:50:00 UTC
+Persistent=true
+Unit=alphalens-systemd-drift-check.service
+
+[Install]
+WantedBy=timers.target
