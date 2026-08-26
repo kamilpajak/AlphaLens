@@ -180,7 +180,7 @@ def drift_findings(
     repo_files: dict[str, str],
     host_files: dict[str, str],
     repo_env: dict[str, str],
-    live_env: dict[str, str],
+    live_env: dict[str, str] | None,
     host_only_vars: frozenset[str],
 ) -> list[Finding]:
     """Compare one unit's repo statement against its host reality.
@@ -188,7 +188,17 @@ def drift_findings(
     ``repo_files`` / ``host_files`` map filename -> text for the base unit
     plus every file in the drop-in directory (the base unit's name is the one
     ending in ``.service``). ``repo_env`` / ``live_env`` are the composed and
-    the systemd-loaded environments respectively.
+    the systemd-loaded environments respectively. ``live_env=None`` means the
+    loaded environment could not be HONESTLY read (systemctl rendered a form
+    the narrow parser refuses, e.g. a quoted value): that is one finding, not
+    a license to fabricate per-variable diffs from a shredded parse.
+
+    A host file that is BOTH unreadable and byte-different reports both
+    findings deliberately. The grant-line strip is conservative on an
+    unreadable line (garbage-parsed keys are never all host-only, so the line
+    is kept and the raw bytes compare), and suppressing content_drift there
+    would hide a real byte change behind the weirdness; the co-emitted
+    unreadable_file finding is what marks the file untrusted.
     """
     findings: list[Finding] = []
 
@@ -210,6 +220,17 @@ def drift_findings(
         reason = file_unreadable_reason(host_text)
         if reason is not None:
             findings.append(Finding(unit, "unreadable_file", name, reason))
+
+    if live_env is None:
+        findings.append(
+            Finding(
+                unit,
+                "unreadable_file",
+                "systemd:Environment",
+                "the loaded Environment property uses a form the parser refuses",
+            )
+        )
+        return findings
 
     repo_cmp = {k: v for k, v in repo_env.items() if k not in host_only_vars}
     live_cmp = {k: v for k, v in live_env.items() if k not in host_only_vars}
@@ -277,10 +298,17 @@ def _host_files(base_name: str) -> dict[str, str]:
     return files
 
 
-def _live_environment(unit: str) -> dict[str, str]:
+def _live_environment(unit: str) -> dict[str, str] | None:
+    """The systemd-loaded environment, or ``None`` when systemctl renders a
+    form (quoting, escapes) the narrow parser would shred into phantom
+    variables — reported upstream as one unreadable finding."""
     out = _run(["systemctl", "--user", "show", unit, "-p", "Environment"])
     payload = out.strip().removeprefix("Environment=")
-    return environment_assignments(f"Environment={payload}") if payload else {}
+    if not payload:
+        return {}
+    if unreadable_reason(payload) is not None:
+        return None
+    return environment_assignments(f"Environment={payload}")
 
 
 def _write_metrics(text: str) -> None:

@@ -204,6 +204,18 @@ class TestDriftFindings(unittest.TestCase):
             {("content_drift", "10-a.conf"), ("unreadable_file", "10-a.conf")},
         )
 
+    def test_unreadable_loaded_environment_is_a_finding_and_skips_env_comparison(self):
+        # systemctl renders a value containing spaces QUOTED; the narrow
+        # parser would shred it into phantom variables and then report
+        # garbage env_drift (embedding value fragments). live_env=None means
+        # "the loaded environment could not be honestly read": one finding,
+        # no fabricated per-variable diffs.
+        findings = self._findings(live_env=None)
+        self.assertEqual(
+            [(f.kind, f.subject) for f in findings],
+            [("unreadable_file", "systemd:Environment")],
+        )
+
     def test_findings_never_carry_host_only_values(self):
         # The grant values are opaque account identifiers; no finding text may
         # embed them even when the base unit ALSO has real drift.
