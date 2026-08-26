@@ -66,11 +66,16 @@ BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
 
 
 def enforce_span(span_start: str, span_end: str) -> None:
-    """Refuse any span reaching past the memo's historical ceiling."""
+    """Refuse any span outside the memo's frozen historical window."""
     if span_end > SPAN_END:
         raise SystemExit(
             f"span end {span_end} is past the historical ceiling {SPAN_END}; "
             "cohort rows must never enter the planning read (memo section 3.4)"
+        )
+    if span_start < SPAN_START:
+        raise SystemExit(
+            f"span start {span_start} predates the historical span {SPAN_START}; "
+            "the planning read covers the memo's span, not pre-history"
         )
     if span_start > span_end:
         raise SystemExit("span start is after span end")
@@ -207,6 +212,14 @@ def main() -> int:
         n0=PLANNING_N0_USD,
         slippage_bps=PLANNING_SLIPPAGE_BPS,
     )
+    if len(diffs) < 2:
+        # The section 6.4 floor needs a defined sd; an ambiguous null in the
+        # cohort-open amendment would be a planning-time forfeit.
+        print(
+            f"only {len(diffs)} feasible pair(s) — sd_d undefined; refusing to emit",
+            file=sys.stderr,
+        )
+        return 1
     print(
         json.dumps(
             build_payload(

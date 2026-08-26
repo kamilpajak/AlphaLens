@@ -17,8 +17,6 @@ from pathlib import Path
 import pandas as pd
 from scripts import exit_policy_planning_sd as psd
 
-_MIN = 60_000
-
 
 def _setup() -> dict:
     return {
@@ -29,10 +27,6 @@ def _setup() -> dict:
         "atr": 4.0,
         "order_ttl_days": 7,
     }
-
-
-def _bars(n: int, low: float, high: float, close: float) -> pd.DataFrame:
-    return pd.DataFrame([{"t": i * _MIN, "l": low, "h": high, "c": close} for i in range(n)])
 
 
 class TestPayloadShapeGuard(unittest.TestCase):
@@ -118,6 +112,10 @@ class TestSpanEnforcement(unittest.TestCase):
         with self.assertRaises(SystemExit):
             psd.enforce_span("2026-05-19", "2026-08-24")
 
+    def test_refuses_a_span_start_before_the_window(self):
+        with self.assertRaises(SystemExit):
+            psd.enforce_span("2026-05-18", "2026-08-23")
+
     def test_accepts_the_frozen_span(self):
         psd.enforce_span("2026-05-19", "2026-08-23")  # must not raise
 
@@ -136,21 +134,35 @@ class TestDriverEndToEnd(unittest.TestCase):
             briefs = root / "thematic_briefs"
             briefs.mkdir()
             day = "2026-06-02"
-            pd.DataFrame({"ticker": ["AAA"], "plannable": [True]}).to_parquet(
+            pd.DataFrame({"ticker": ["AAA", "BBB"], "plannable": [True, True]}).to_parquet(
                 store / f"{day}.parquet", index=False
             )
             pd.DataFrame(
                 {
-                    "ticker": ["AAA"],
-                    "brief_trade_setup": [json.dumps(_setup())],
-                    "technical_pct_off_52w_high": [None],
+                    "ticker": ["AAA", "BBB"],
+                    "brief_trade_setup": [json.dumps(_setup()), json.dumps(_setup())],
+                    "technical_pct_off_52w_high": [None, None],
                 }
             ).to_parquet(briefs / f"{day}.parquet", index=False)
-            # A generous bar path covering the whole horizon: fills at 100,
-            # rises through both arms' targets.
-            _bars(60, 99.0, 106.5, 105.0).to_parquet(
-                store / "bars" / f"AAA_{day}.parquet", index=False
+            # Generous bar paths covering the whole horizon: fills at 100,
+            # rises through both arms' targets. Timestamps must be REAL 2026
+            # epochs reaching past the position-expiry cutoff — an epoch-1970
+            # path classifies as bars_missing and silently skips the replay
+            # (the exact blind spot the n_pairs assertion below exists for).
+            import datetime as dt
+
+            from alphalens_pipeline.feedback.population_ladder_monitor import _engine_cutoffs
+
+            *_rest, position_expiry_ms = _engine_cutoffs(
+                dt.date.fromisoformat(day), _setup(), "XNYS"
             )
+            day_ms = 24 * 3600 * 1000
+            start_ms = position_expiry_ms - 70 * day_ms
+            bars = pd.DataFrame(
+                [{"t": start_ms + i * day_ms, "l": 99.0, "h": 106.5, "c": 105.0} for i in range(75)]
+            )
+            for ticker in ("AAA", "BBB"):
+                bars.to_parquet(store / "bars" / f"{ticker}_{day}.parquet", index=False)
             with (
                 mock.patch.object(psd, "STORE_DIR", store),
                 mock.patch.object(psd, "BRIEFS_DIR", briefs),
@@ -161,9 +173,12 @@ class TestDriverEndToEnd(unittest.TestCase):
                     code = psd.main()
         self.assertEqual(code, 0)
         payload = json.loads(out.getvalue())
-        self.assertIn("sd_d_usd", payload)
+        # Both candidates must have gone through the REPLAY path — an
+        # exclusion-only run (e.g. a wrong bars path) cannot satisfy this.
+        self.assertEqual(payload["n_pairs"], 2)
+        self.assertEqual(payload["excluded_by_reason"], {})
+        self.assertIsNotNone(payload["sd_d_usd"])
         self.assertNotIn("mean", json.dumps(sorted(payload)))
-        self.assertEqual(payload["n_pairs"] + sum(payload["excluded_by_reason"].values()), 1)
 
 
 if __name__ == "__main__":
