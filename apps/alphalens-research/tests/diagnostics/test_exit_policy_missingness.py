@@ -183,6 +183,49 @@ class TestDayClusterMeanDiff(unittest.TestCase):
         self.assertNotIn("ARM_B", src)
 
 
+class TestUnknownReasonRefused(unittest.TestCase):
+    def test_flow_table_refuses_a_reason_outside_the_catalog(self):
+        # A future leaf arm produces the sentinel; the table must refuse
+        # loudly rather than let the row vanish from every level.
+        rows = pd.DataFrame(
+            {
+                "plannable": [True],
+                "terminal": [True],
+                "arm_a_present": [True],
+                "ladder_classification": [None],
+                "arm_b_reason": ["leaf_rejected_for_unknown_reason"],
+            }
+        )
+        with self.assertRaises(ValueError):
+            epm.flow_table(rows)
+
+
+class TestBriefAbsentPath(unittest.TestCase):
+    def test_missing_setup_classifies_with_true_agreement(self):
+        verdict = epm.classify_and_verify(None, _TOUCHING_BARS, pct_off_52w_high=None)
+        self.assertEqual(verdict.reason, "setup_not_ok_or_missing_stop")
+        self.assertTrue(verdict.agrees)
+
+
+class TestMalformedBarsFile(unittest.TestCase):
+    def test_wrong_columns_classify_as_no_bars(self):
+        import tempfile
+        from pathlib import Path as _P
+
+        from scripts import exit_policy_missingness as script
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bars_dir = _P(tmp) / "bars"
+            bars_dir.mkdir()
+            pd.DataFrame({"x": [1]}).to_parquet(bars_dir / "TST_2026-08-20.parquet")
+            original = script.STORE_DIR
+            script.STORE_DIR = _P(tmp)
+            try:
+                self.assertEqual(script._bars_for("TST", "2026-08-20"), [])
+            finally:
+                script.STORE_DIR = original
+
+
 class TestStoredBracketNull(unittest.TestCase):
     def test_reads_the_stamped_lens_nullness(self):
         cases = (

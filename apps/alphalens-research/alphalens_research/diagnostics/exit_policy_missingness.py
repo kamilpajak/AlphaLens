@@ -54,12 +54,15 @@ TP_FLOOR_FRAC = 0.006
 
 # §7.1 reason keys, in the order the flow table reports them. Classification
 # PRIORITY is the code path's order (see arm_b_null_reason), not this list.
+# ``risk_nonpositive`` is deliberately NOT here: with the frozen
+# STOP_ATR_MULT = 1.5 that branch is statically unreachable, and advertising a
+# reason the table can never count would mislead the reader. The guard stays
+# in ``arm_b_null_reason`` for mirror fidelity.
 REASONS: tuple[str, ...] = (
     "setup_not_ok_or_missing_stop",
     "no_bars",
     "atr_missing_or_nonpositive",
     "no_fill_walk1",
-    "risk_nonpositive",
     "ceiling_at_or_below_cost_floor",
     "bracket_stop_nonpositive",
 )
@@ -112,7 +115,10 @@ def arm_b_null_reason(
         ceiling_price=ceiling,
     )
     if levels is None:
-        return "bracket_stop_nonpositive"  # unreachable unless the leaf grew a new arm
+        # Unreachable unless atr_bracket_levels grew a NEW rejection arm this
+        # mirror does not know. A distinct sentinel — outside REASONS — so the
+        # flow table REFUSES the row instead of misattributing it.
+        return "leaf_rejected_for_unknown_reason"
     return None
 
 
@@ -189,6 +195,12 @@ def flow_table(rows: pd.DataFrame) -> list[tuple[str, int]]:
         ("terminal: arm A value present", len(with_arm_a)),
     ]
     reasons = with_arm_a["arm_b_reason"]
+    unknown = reasons.dropna()[~reasons.dropna().isin(REASONS)]
+    if len(unknown):
+        raise ValueError(
+            f"reason(s) outside the section 7.1 catalog: {sorted(set(unknown))} — "
+            "the classifier mirror no longer matches the leaf; refusing an unbalanced table"
+        )
     for reason in REASONS:
         table.append((f"terminal, arm B null: {reason}", int((reasons == reason).sum())))
     table.append(("terminal: both arms present", int(reasons.isna().sum())))
