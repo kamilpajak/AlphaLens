@@ -1112,7 +1112,10 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         _release_feed_scope(deps, _FEED_SCOPE_EXITS)
         return
     try:
-        long_positions = deps.broker.get_long_positions()
+        # get_long_positions is a SaxoBroker method that no protocol declares
+        # (#1141). The checker is right; the fix is a runtime decision — refuse
+        # at boot, or skip the pass — so it is tracked, not made here.
+        long_positions = deps.broker.get_long_positions()  # pyright: ignore[reportAttributeAccessIssue]
     except BrokerError as exc:
         if deps.alert_throttled(
             f"live-exits: position read failed (broker error) — skipped: {exc}",
@@ -1185,7 +1188,8 @@ def _fetch_protection_peaks(
     empty maps, so trailing simply goes dark this tick while never-naked holds. The
     failure is surfaced via the shared throttled-alert sink the pass already uses."""
     try:
-        long_positions = deps.broker.get_long_positions()
+        # Undeclared SaxoBroker method — see the note at the live-exits pass (#1141).
+        long_positions = deps.broker.get_long_positions()  # pyright: ignore[reportAttributeAccessIssue]
         return _update_peaks(deps, long_positions)
     # Broad on purpose (mirrors _build_live_exits_feed): a feed/network/auth error
     # must not propagate into the protection pass. Trailing goes dark, protection
@@ -2945,7 +2949,11 @@ def _reconcile_one_armed_tier(
     # audit below, never a fabricated terminal.
     if not _acquire_outcome_audit_budget(deps, broker, order_id):
         return
-    outcome = _resolve_entry_order_outcome(broker, order_id)
+    # The SupportsOrderResolution narrowing lives in the ONLY caller
+    # (_run_entry_trail_reconcile_pass) and is lost re-reading deps.broker here,
+    # so this helper's guarantee rests on one call site. Passing the narrowed
+    # broker down is the fix; it is tracked at #1141 with the other three.
+    outcome = _resolve_entry_order_outcome(broker, order_id)  # pyright: ignore[reportArgumentType]
     filled_qty = _entry_order_filled_qty(outcome)
     if filled_qty is None:
         # A GONE-but-UNFILLED order: the DayOrder cancelled at the session close.
@@ -5252,7 +5260,13 @@ def _estimate_round_trip_fee_bps(
     ``None`` (an honest "not estimable", journaled as a real null) when there
     is no sized plan / no tiers / zero gross — mirrors the inert stance of
     ``round_trip_fee_bps`` on a non-positive notional."""
-    entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
+    # Two separate refusals, not one compound expression: a reader (and a type
+    # checker) can then see that everything below this point has a real plan.
+    # The compound form left ``plan`` optional for the whole body while the
+    # ``gross`` call below requires one.
+    if plan is None:
+        return None
+    entry_tiers = getattr(plan, "entry_tiers", None)
     if not entry_tiers:
         return None
 

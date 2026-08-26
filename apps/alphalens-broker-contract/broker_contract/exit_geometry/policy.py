@@ -22,19 +22,52 @@ from broker_contract.exit_geometry.registry import ExitGeometryPolicy
 
 @runtime_checkable
 class ExitPolicy(Protocol):
+    # Every member below is READ-ONLY (a property, not a bare annotation)
+    # because these are the policy's IDENTITY, never its state — nothing
+    # writes to them. The distinction is not cosmetic: a bare annotation
+    # declares a WRITABLE member, which demands an assignable attribute of
+    # exactly that type, while every implementation is a frozen dataclass whose
+    # fields are read-only. So no implementation actually satisfied this
+    # protocol, and the registry could not be typed as returning one. Nobody
+    # saw it because this package sat outside the type gate (issue #1140).
+    # Read-only also makes the member types covariant, which is what lets a
+    # policy that always has a geometry narrow ``geometry_name`` to ``str``.
+    #
+    # The implementations below are NOT expected to mirror this shape: a plain
+    # frozen-dataclass FIELD satisfies a read-only property member, because
+    # read-only asks only that the attribute be readable. So ``SetupStaticPolicy``
+    # declaring ``name`` as a field and ``AtrBracketPolicy`` declaring
+    # ``geometry_name`` as a property are BOTH valid, and neither needs changing
+    # to match the other. ``isinstance`` is unaffected either way — a
+    # runtime_checkable Protocol checks that the attribute is PRESENT, not that
+    # it is a descriptor.
+
     # The BEHAVIORAL identity — the key ALPHALENS_BROKER_EXIT_POLICY selects and
     # the one an operator reads in a log line. It must never be derived from a
     # wrapped geometry: two policies can share a geometry and differ in whether
     # they trail, which is the defect issue #1138 records.
-    name: str
+    @property
+    def name(self) -> str: ...
+
     # The geometry the policy places against, or None when it places none.
     # A separate, equally real fact — a reader needs both.
-    geometry_name: str | None
-    version: int
-    applies_geometry: bool
-    requires_amend_stop: bool
-    min_stop_distance_frac: float
-    trails: bool
+    @property
+    def geometry_name(self) -> str | None: ...
+
+    @property
+    def version(self) -> int: ...
+
+    @property
+    def applies_geometry(self) -> bool: ...
+
+    @property
+    def requires_amend_stop(self) -> bool: ...
+
+    @property
+    def min_stop_distance_frac(self) -> float: ...
+
+    @property
+    def trails(self) -> bool: ...
 
     def decide_placement_geometry(
         self, blended: float, atr: float, *, ceiling_price: float | None

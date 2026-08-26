@@ -68,13 +68,24 @@ class TestPyrightConfig(unittest.TestCase):
                 f"strict directory missing from top-level 'strict' array: {expected}",
             )
 
-    def test_includes_cover_all_three_apps(self):
+    # Coverage of `include` is NOT asserted here any more. The old check
+    # hard-coded three apps and matched by substring, so it could not notice
+    # that two workspace members were outside the gate entirely (#1140). It is
+    # replaced by test_ci_gate_workspace_parity.py, which derives the expected
+    # set from [tool.uv.workspace] members and so cannot go stale by counting.
+
+    def test_missing_imports_is_an_error(self):
+        # The load-bearing severity. As a warning, an unresolved import turns
+        # every symbol it names into Unknown while the run still reports green
+        # — the exact shape of #1140, where 84 unresolved broker_contract
+        # imports across 28 files type-checked as nothing at all.
         cfg = _load_config()
-        include = cfg.get("include", [])
-        joined = " ".join(include)
-        self.assertIn("alphalens_pipeline", joined)
-        self.assertIn("alphalens_research", joined)
-        self.assertIn("alphalens-django", joined)
+        self.assertEqual(
+            cfg.get("reportMissingImports"),
+            "error",
+            "reportMissingImports must stay an error: as a warning it lets a "
+            "package silently drop out of the type gate while CI stays green.",
+        )
 
 
 if __name__ == "__main__":
