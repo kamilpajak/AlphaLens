@@ -214,3 +214,10 @@ never came.
   chart design.
 - `deploy/systemd/README.md` — operator runbook for the nightly compute and
   the hourly edge mirror.
+- `alphalens_research/diagnostics/fill_partition.py` plus its driver
+  `apps/alphalens-research/scripts/measure_fill_partition.py` — a read-only,
+  offline instrument that partitions this store's outcomes by WHICH entry tiers
+  filled (first-tier only / mixed / deep-only), reports them per OPPORTUNITY
+  rather than per taken trade, and prices fills at the measured trailing
+  overshoot rather than the tier limit. It writes nothing back and makes no
+  Polygon call. Issue #1113.
