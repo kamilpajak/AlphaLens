@@ -390,6 +390,30 @@ class TestWriteGuard(unittest.TestCase):
             self.assertNotIn(token, src.replace("population_ladders/`` is", ""))
 
 
+class TestZeroQuantityFills(unittest.TestCase):
+    def test_a_zero_alloc_tier_charges_no_fee_and_counts_no_fill(self):
+        # execution.py skips zero-qty tiers outright; a zero-share "fill" must
+        # not collect the $1 per-fill minimum out of thin air.
+        setup = _setup(
+            entries=[(100.0, 100.0), (95.0, 0.0)],
+            tps=[(110.0, 100.0)],
+            stop=90.0,
+            atr=4.0,
+        )
+        bars = _bars((100.0, 100.0, 100.0), (94.0, 100.0, 96.0), (95.0, 111.0, 110.0))
+        for arm in (epr.ARM_A, epr.ARM_B):
+            with self.subTest(arm=arm):
+                out = epr.replay_arm(
+                    setup,
+                    bars,
+                    arm=arm,
+                    notional=10_000.0,
+                    slippage_bps=0.0,
+                    position_expiry_ms=10 * _MIN,
+                )
+                self.assertEqual(out.chargeable_fills, 2)  # E1 buy + one sell
+
+
 class TestFeeDecomposition(unittest.TestCase):
     def test_buy_plus_equal_notional_sell_equals_round_trip_fee_bps(self):
         # §5.4: fees are charged per fill "through round_trip_fee_bps" — the

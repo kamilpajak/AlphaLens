@@ -313,6 +313,8 @@ def _cash_from_engine_outcome(
         if crossing.kind == "ENTRY" and crossing.level_id in outcome.entries_filled:
             lvl = by_id[crossing.level_id]
             qty = quantities.get(lvl.level_id, 0.0)
+            if qty <= 0:
+                continue  # execution.py skips zero-qty tiers; no phantom $1 minimum
             price = lvl.price * (1.0 + slip)
             gross -= qty * price
             fees += _per_fill_fee(qty * price)
@@ -327,6 +329,8 @@ def _cash_from_engine_outcome(
     sold, residual = _tranche_sold_shares(ladder.tps, set(outcome.tps_hit), filled_frac)
     for _tp_id, price, share in sold:
         qty = share * shares
+        if qty <= 0:
+            continue
         eff = price * (1.0 - slip)
         gross += qty * eff
         fees += _per_fill_fee(qty * eff)
@@ -428,10 +432,11 @@ def _arm_b_bracket_walk(
                 filled.append(lvl)
                 filled_ids.add(lvl.level_id)
                 qty = quantities.get(lvl.level_id, 0.0)
-                price = lvl.price * (1.0 + slip)
-                gross -= qty * price
-                fees += _per_fill_fee(qty * price)
-                fills += 1
+                if qty > 0:  # execution.py skips zero-qty tiers
+                    price = lvl.price * (1.0 + slip)
+                    gross -= qty * price
+                    fees += _per_fill_fee(qty * price)
+                    fills += 1
                 newly_filled = True
                 if first_fill_ts is None:
                     first_fill_ts = ts
@@ -460,6 +465,8 @@ def _arm_b_bracket_walk(
         in_trade_low = low if in_trade_low is None else min(in_trade_low, low)
 
         held = filled_shares(trade_setup, tuple(filled_ids), notional=notional)
+        if held <= 0:
+            continue
         if low <= stop:
             # SL-first on the same-bar ambiguity, as at the engine.
             eff = stop * (1.0 - slip)
