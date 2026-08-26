@@ -28,10 +28,12 @@ Scope decisions (why this is parity, not equality):
     workflow, because the Django app is linted in its own CI job with its own
     ``uv sync``. Requiring one command line to name every member would force a
     layout the workflow does not have.
-  - Coverage and SonarCloud have the same blind spot on broker-contract and are
-    deliberately NOT asserted here — widening either moves the coverage
-    denominator and so the quality gate, which needs its own measurement. They
-    are tracked separately.
+  - SonarCloud joined as the fourth gate in #1142 (``sonar.sources`` — a
+    member outside it is invisible to analysis entirely). Coverage needs NO
+    parity list: the CI coverage run is repo-root-cwd and deliberately
+    UNSCOPED (no [tool.coverage] anywhere), so it measures every executed
+    first-party file with no source list that could drift — see the comment
+    on the ci.yml coverage step.
 
 Positive control:
   ``test_positive_control_ghost_member_would_fail`` drives the same pure helper
@@ -54,6 +56,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 PYRIGHT_CONFIG = REPO_ROOT / "pyrightconfig.json"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+SONAR_PROPERTIES = REPO_ROOT / "sonar-project.properties"
 
 # A fabricated member used only by the positive control. Kept module-level so
 # the "is this name actually free?" assertion and the control read the same one.
@@ -108,6 +111,45 @@ def _ci_gate_paths(gate: str) -> list[str]:
             f"update _GATE_COMMAND_RE in this test."
         )
     return [token for line in matches for token in line.split() if token.startswith("apps/")]
+
+
+def _sonar_sources() -> list[str]:
+    """The ``sonar.sources`` path list from sonar-project.properties.
+
+    A member outside this list is invisible to SonarCloud entirely — no bugs,
+    no smells, no hotspots, no coverage display — which was the one claim of
+    issue #1142 that survived being executed (the coverage.xml and diff-cover
+    claims did not: the CI coverage run is repo-root-cwd and unscoped, so it
+    already measures every executed first-party file).
+    """
+    value: str | None = None
+    for raw in SONAR_PROPERTIES.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^\s*sonar\.sources\s*[:=]\s*(.*)$", raw)
+        if match is None:
+            continue
+        if raw.rstrip().endswith("\\"):
+            # .properties supports trailing-backslash line continuations. A
+            # continued list would parse WRONG-BUT-NONEMPTY here (only the
+            # first physical line), sliding past the vacuity guard — refuse
+            # the shape outright instead of mis-parsing it.
+            raise AssertionError(
+                "sonar.sources uses a line continuation — keep it on ONE "
+                "physical line, or teach _sonar_sources to join continuations."
+            )
+        if value is not None:
+            # In .properties the LAST occurrence wins, so a duplicate key is
+            # the dangerous shape: an earlier full list would satisfy the
+            # parity while SonarCloud reads a later partial one.
+            raise AssertionError(
+                f"Duplicate sonar.sources property in {SONAR_PROPERTIES.name} — keep exactly one."
+            )
+        value = match.group(1)
+    if value is None:
+        raise AssertionError(
+            f"Could not find a `sonar.sources` property in {SONAR_PROPERTIES.name} — "
+            "the property moved or was renamed; update _sonar_sources in this test."
+        )
+    return [tok.strip() for tok in value.split(",") if tok.strip()]
 
 
 def _members_missing_from(members: Iterable[str], gate_paths: Iterable[str]) -> set[str]:
@@ -174,6 +216,24 @@ class TestCiGateWorkspaceParity(unittest.TestCase):
                     f"Current paths: {paths}.",
                 )
 
+    def test_sonar_sources_parse_to_a_nonempty_list(self) -> None:
+        # Same vacuity guard as the CI gates: a moved/renamed property must
+        # fail loudly here, never make the parity below vacuously pass.
+        self.assertGreater(len(_sonar_sources()), 0)
+
+    def test_every_member_is_inside_sonar_sources(self) -> None:
+        members = _workspace_members()
+        sources = _sonar_sources()
+        missing = _members_missing_from(members, sources)
+        self.assertEqual(
+            missing,
+            set(),
+            f"Workspace member(s) invisible to SonarCloud: {sorted(missing)}. "
+            f"Add them to `sonar.sources` in sonar-project.properties — a member "
+            f"outside it gets no analysis and no coverage display at all. "
+            f"Current sources: {sources}.",
+        )
+
     def test_positive_control_ghost_member_would_fail(self) -> None:
         # MANDATORY positive control: a member no gate names MUST come back as
         # missing. If this ever passes, the helper has rotted into a no-op and
@@ -194,6 +254,7 @@ class TestCiGateWorkspaceParity(unittest.TestCase):
                     "fabricated member missing from the gate.",
                 )
         self.assertEqual(_members_missing_from({GHOST_MEMBER}, include), {GHOST_MEMBER})
+        self.assertEqual(_members_missing_from({GHOST_MEMBER}, _sonar_sources()), {GHOST_MEMBER})
 
 
 if __name__ == "__main__":

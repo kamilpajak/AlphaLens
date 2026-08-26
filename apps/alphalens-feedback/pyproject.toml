@@ -17,17 +17,3 @@ dependencies = []
 
 [tool.setuptools.packages.find]
 include = ["alphalens_feedback*"]
-
-[tool.coverage.run]
-source = ["alphalens_feedback"]
-omit = [
-    "*/tests/*",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "if __name__ == .__main__.:",
-    "raise NotImplementedError",
-    "if TYPE_CHECKING:",
-]
