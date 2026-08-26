@@ -9,7 +9,9 @@ off default). Every file here is one deliberate decision that shapes the soak;
 (`TestSimBrokerManagerDropIns`) pins the composed environment of this
 directory to the exact set measured on the VPS on 2026-08-26, so a variable
 added, dropped, or changed on the repo side turns CI red. A hand edit on the
-HOST is still invisible from here — that is #1135.
+HOST is caught by the hourly `alphalens-systemd-drift-check` timer (#1135),
+which compares the installed files and the systemd-loaded environment
+against origin/main.
 
 ## Why this directory exists (#1136)
 

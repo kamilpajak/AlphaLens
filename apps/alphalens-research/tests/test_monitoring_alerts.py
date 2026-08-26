@@ -97,6 +97,12 @@ ACTIVE_JOBS = (
     # exactly how the 2026-08-24 incident survived two months: the live
     # datasource declared no `uid: prometheus` while every panel asked for it.
     "grafana-provisioning-sync",
+    # Hourly host-side systemd drift check (#1135). Detect-never-auto-apply:
+    # a dead check quietly re-opens the #1121 blindness (a hand edit to the
+    # broker units running unobserved for weeks), so it carries the standard
+    # staleness pair; the drift itself pages separately via
+    # AlphalensSystemdUnitDrift on the findings gauge.
+    "systemd-drift-check",
 )
 
 

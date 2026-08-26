@@ -453,6 +453,53 @@ groups:
           description: "alphalens_grafana_sync_outcome reported no in_sync/synced run in the 150m lookback — in practice roughly three consecutive hourly runs without success, because a prior success's gauge sample persists ~60m until overwritten. git fetch, the in-process validation gate, the container restart, or the grafana.db verification is failing, and merged dashboard/datasource changes are NOT reaching the live provisioning tree. Check `journalctl --user -u alphalens-grafana-provisioning-sync.service` for which stage failed. While it stays broken, the emergency override is copying the repo files under deploy/monitoring/grafana/ over ~/monitoring/grafana/provisioning/ by hand + `docker restart grafana`."
 
       # ---------------------------------------------------------------
+      # Host-side systemd drift check (alphalens-systemd-drift-check, #1135).
+      # Hourly, read-only, DETECT-never-auto-apply: compares the installed
+      # broker-manager units + drop-ins and the systemd-LOADED environment
+      # against the origin/main blobs. The #1121 drift (values typed into the
+      # installed LIVE unit) ran ~2 weeks and was found by hand; this pair of
+      # clocks bounds that window to hours.
+      # ---------------------------------------------------------------
+      #
+      # Drift IS the signal, not a job failure: the check exits 0 whenever it
+      # completed, and the per-unit findings gauge carries the count (a zero
+      # sample is written per unit every run, so absence means broken
+      # emitter, never "no drift"). 30m of debounce = two consecutive hourly
+      # runs agreeing, so a single fetch race or an in-flight deploy cutover
+      # does not page.
+      - alert: AlphalensSystemdUnitDrift
+        expr: alphalens_systemd_drift_findings > 0
+        for: 30m
+        labels:
+          severity: warning
+          route: telegram
+        annotations:
+          summary: "systemd drift on {{ $labels.unit }}: {{ $value }} finding(s) vs origin/main"
+          description: "The installed {{ $labels.unit }} unit diverges from what the repository declares ({{ $value }} finding(s): untracked/missing drop-in, content drift, or a loaded-environment mismatch). This is the #1121 failure class — a hand edit on the host that no repo gate can see. Read `journalctl --user -u alphalens-systemd-drift-check.service` for the named findings, then either land the host's value in deploy/systemd/ or reinstall the tracked files; NEVER let the two stay different silently."
+
+      - alert: AlphalensJobStale
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="systemd-drift-check"} > 7200
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: systemd-drift-check
+        annotations:
+          summary: "systemd-drift-check stale > 2h (expected hourly cadence)"
+          description: "Last successful run was {{ $value | humanizeDuration }} ago. The drift check has stopped running (or keeps failing before completion), so a hand edit to the broker units would once again go unobserved — the exact blindness #1135 exists to close."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="systemd-drift-check"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: systemd-drift-check
+        annotations:
+          summary: "systemd-drift-check success metric missing"
+          description: "No success metric for systemd-drift-check. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Clears after the first successful run."
+
+      # ---------------------------------------------------------------
       # VIX regime-cache freshness (Track A v2 PR-2 follow-up).
       # ---------------------------------------------------------------
       #
