@@ -1,5 +1,13 @@
 # Virtual workspace root — owns shared tooling config; no top-level package.
 #
+# Deliberately NO [tool.coverage] section (#1142): the CI coverage run has its
+# cwd here, and the absence of config makes the measurement UNSCOPED — every
+# executed first-party file is measured, so diff-cover and SonarCloud cover
+# every workspace member with no source list to keep in sync. The per-app
+# [tool.coverage.run] sections that used to exist were read by NOTHING
+# (coverage resolves config from the cwd only) and were removed after twice
+# producing false written claims about what CI measures.
+#
 # Members:
 #   - apps/alphalens-broker-contract (shared, dependency-free broker-contract leaf: exit_geometry today, contract/intent/sizing/fx/constants/calendar later)
 #   - apps/alphalens-pipeline   (live infrastructure + thematic + watchdog + literature_review + alphalens CLI binary)

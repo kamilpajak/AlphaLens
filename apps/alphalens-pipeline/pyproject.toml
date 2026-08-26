@@ -84,17 +84,3 @@ alphalens-broker-contract = { workspace = true }
 
 [tool.setuptools.packages.find]
 include = ["alphalens_pipeline*", "alphalens_cli*"]
-
-[tool.coverage.run]
-source = ["alphalens_pipeline", "alphalens_cli"]
-omit = [
-    "*/tests/*",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "if __name__ == .__main__.:",
-    "raise NotImplementedError",
-    "if TYPE_CHECKING:",
-]

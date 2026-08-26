@@ -124,6 +124,19 @@ jobs:
         run: uv run pyright
 
       - name: Run tests with coverage
+        # NO coverage config applies to this run, deliberately (#1142). The
+        # cwd is the repo root, whose pyproject.toml carries no [tool.coverage]
+        # section, and coverage reads config from the cwd ONLY — so the
+        # measurement is UNSCOPED: every executed non-stdlib file is measured,
+        # which is exactly what lets the diff-cover gate below and SonarCloud
+        # see every first-party package (research, pipeline, broker-contract,
+        # feedback, the tests themselves) without a source list to keep in
+        # sync. Do NOT add per-app [tool.coverage.run] sections back: they are
+        # never read from here, and dead scoping config twice produced false
+        # written claims about what CI measures. Corollary: coverage's report
+        # excludes are the DEFAULTS only — `# pragma: no cover` works, but
+        # if-__main__ / NotImplementedError / TYPE_CHECKING lines count as
+        # uncovered.
         run: |
           uv run coverage run -m unittest discover \
               -s apps/alphalens-research/tests \
