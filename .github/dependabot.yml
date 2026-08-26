@@ -65,6 +65,12 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      # The @types/node major must track the RUNTIME Node major pinned in
+      # apps/web/.node-version (#1146), not the newest Node. A newer types
+      # major lets TypeScript accept APIs that do not exist at runtime.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   # ---------------------------------------------------------------------
   # GitHub Actions — version pins for action steps in workflows.
