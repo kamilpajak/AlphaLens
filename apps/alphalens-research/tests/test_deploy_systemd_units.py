@@ -2069,5 +2069,84 @@ class TestTheDropInsAreReadableTheWayTheyAreApplied(unittest.TestCase):
                 seen[key] = path.name
 
 
+# --------------------------------------------------------------------------
+# SIM broker-manager drop-ins (#1136). Until 2026-08-26 the SIM unit ran on
+# ELEVEN untracked drop-ins on the VPS, two of which set the same variable to
+# opposite values (`oco-enable.conf` vs `zz-oco-disable.conf`, the latter
+# prefixed only to win lexical ordering). Every soak conclusion was drawn
+# under a configuration the repository did not state. These tests pin the
+# tracked replacement to the environment MEASURED on the VPS on 2026-08-26,
+# so "SIM validated this" is reproducible from the repo.
+#
+# Same limitation as the LIVE section above: a hand edit on the host is
+# invisible here — that is #1135.
+# --------------------------------------------------------------------------
+
+_SIM_DROPIN_DIR = REPO_ROOT / "deploy" / "systemd" / "alphalens-broker-manager.service.d"
+
+
+def _sim_dropin_files() -> list[Path]:
+    # Lexical order is systemd's composition order, as above.
+    return sorted(_SIM_DROPIN_DIR.glob("*.conf"))
+
+
+def _sim_composed_environment() -> dict[str, str]:
+    composed = _environment_assignments(BROKER_MANAGER_SERVICE.read_text())
+    for path in _sim_dropin_files():
+        composed.update(_environment_assignments(path.read_text()))
+    return composed
+
+
+class TestSimBrokerManagerDropIns(unittest.TestCase):
+    def test_composed_sim_environment_is_exactly_the_soak_config(self):
+        # The full composed environment, equal to the one measured on the VPS
+        # (`systemctl --user show alphalens-broker-manager -p Environment`,
+        # 2026-08-26) — not a subset check, so a variable added, dropped, or
+        # changed on either side turns this red.
+        self.assertEqual(
+            _sim_composed_environment(),
+            {
+                "ALPHALENS_BROKER_ENVIRONMENT": "sim",
+                "ALPHALENS_TEXTFILE_DIR": "/var/lib/node_exporter/textfile",
+                "ALPHALENS_BROKER_ALLOW_ORDERS": "1",
+                "ALPHALENS_BROKER_AMEND_ENABLED": "1",
+                "ALPHALENS_BROKER_ENTRY_TRAIL_BPS": "50",
+                "ALPHALENS_LIVE_MARKET_EXITS": "1",
+                "ALPHALENS_BROKER_MAX_OPEN": "10",
+                "ALPHALENS_BROKER_OCO_ENABLED": "0",
+                "ALPHALENS_BROKER_SIZING_EQUITY": "100000",
+                "ALPHALENS_BROKER_SIZING_EQUITY_MODE": "declared",
+                "ALPHALENS_BROKER_STREAMING_ENABLED": "1",
+                "ALPHALENS_BROKER_EXIT_POLICY": "trailing_atr",
+            },
+        )
+
+    def test_every_sim_environment_line_is_the_simple_form(self):
+        for path in [BROKER_MANAGER_SERVICE, *_sim_dropin_files()]:
+            for line in path.read_text().splitlines():
+                stripped = line.strip()
+                if not stripped.startswith("Environment="):
+                    continue
+                with self.subTest(file=path.name, line=stripped):
+                    self.assertIsNone(_unreadable_reason(stripped[len("Environment=") :]))
+
+    def test_no_variable_is_set_by_two_sim_drop_ins(self):
+        # The property whose loss produced `zz-oco-disable.conf`: once two
+        # files set one variable, filename order silently decides behaviour.
+        seen: dict[str, str] = {}
+        for path in _sim_dropin_files():
+            for key in _environment_assignments(path.read_text()):
+                with self.subTest(variable=key):
+                    self.assertNotIn(key, seen, f"also set by {seen.get(key)}")
+                seen[key] = path.name
+
+    def test_sim_dropins_carry_numeric_prefixes(self):
+        # Bare names are what forced the `zz-` hack; numeric prefixes make the
+        # ordering explicit even while the no-duplicate test keeps it moot.
+        for path in _sim_dropin_files():
+            with self.subTest(file=path.name):
+                self.assertRegex(path.name, r"^\d\d-")
+
+
 if __name__ == "__main__":
     unittest.main()
