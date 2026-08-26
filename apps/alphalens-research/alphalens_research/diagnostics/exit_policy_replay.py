@@ -78,7 +78,9 @@ _ARMS: frozenset[str] = frozenset({ARM_A, ARM_B})
 # bracket parameters (stop/tp ATR multiples, cost floor) and the reanchor
 # semantics (decide_reanchor + min_stop_distance_frac) are the LIVE objects,
 # never constants retyped here. Parity with build_exit_geometry_spec is pinned
-# by a test that is a HALT tripwire during accrual (memo §11 item 4).
+# by a test that is a HALT tripwire during accrual (memo §11 item 4). Resolved
+# once at import: the registry is static configuration, and the parity test
+# breaks loudly if the resolved object ever drifts from the live composition.
 _LIVE_POLICY = resolve_exit_policy("atr_bracket_1p5")
 
 _BPS = 10_000.0
@@ -268,7 +270,7 @@ def _tranche_sold_shares(
         share = full_share / filled_frac if filled_frac > 0 else full_share
         share = min(share, 1.0 - cumulative)
         if share <= 0:
-            break
+            continue  # cumulative already 1.0; later tranches contribute nothing (engine pattern)
         if t.level_id in hit_tp_ids:
             sold.append((t.level_id, t.price, share))
             cumulative += share

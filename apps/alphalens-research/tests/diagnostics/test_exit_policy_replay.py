@@ -341,6 +341,38 @@ class TestArmBFallback(unittest.TestCase):
         self.assertAlmostEqual(out.net_cash, q0 * 4.0 + q1 * 13.0, places=6)
 
 
+class TestFallbackIndexClampedLast(unittest.TestCase):
+    def test_third_tier_reuses_the_last_tranche_target(self):
+        # execution.py: take_profit = tp_tranches[min(tier_index, len-1)].
+        # Three tiers, two tranches -> tier2 exits at TP2 (index-clamped-last).
+        setup = _setup(
+            entries=[(100.0, 40.0), (95.0, 30.0), (90.0, 30.0)],
+            tps=[(104.0, 50.0), (108.0, 50.0)],
+            stop=80.0,
+            atr=70.0,  # bracket stop below zero -> fallback
+        )
+        bars = _bars(
+            (100.0, 100.0, 100.0),
+            (89.0, 100.0, 92.0),  # all three tiers fill
+            (90.0, 109.0, 108.5),  # both targets trade
+        )
+        n0 = 10_000.0
+        out = epr.replay_arm(
+            setup,
+            bars,
+            arm=epr.ARM_B,
+            notional=n0,
+            slippage_bps=0.0,
+            position_expiry_ms=10 * _MIN,
+            charge_fees=False,
+        )
+        self.assertTrue(out.used_fallback)
+        denom = 40.0 * 100.0 + 30.0 * 95.0 + 30.0 * 90.0
+        q = [n0 * w / denom for w in (40.0, 30.0, 30.0)]
+        expected = q[0] * (104.0 - 100.0) + q[1] * (108.0 - 95.0) + q[2] * (108.0 - 90.0)
+        self.assertAlmostEqual(out.net_cash, expected, places=6)
+
+
 class TestSmgIncidentPin(unittest.TestCase):
     """Memo §10.1: pinned on the SMG 2026-08-24 numbers via the shared fixture,
     and parity with the LIVE build_exit_geometry_spec — the §11 item 4 HALT
