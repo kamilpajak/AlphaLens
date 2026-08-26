@@ -18,48 +18,102 @@ function packageManagerField(): string {
 	return pkg.packageManager ?? '';
 }
 
+interface EnginesEntry {
+	range: string;
+	context: string;
+}
+
 /**
- * Every `engines: {node: ...}` range declared in pnpm-lock.yaml, excluding
- * entries that are platform-scoped (os/cpu-restricted binary shims may never
- * install on the build platform, so their ranges must not gate the pin).
+ * Every `engines: {node: ...}` range declared in a pnpm-lock.yaml body,
+ * excluding entries that cannot install on the build platform (linux/x64 for
+ * Pages and CI): an `os:`/`cpu:` list that omits linux/x64 means the package
+ * never installs there, so its range must not gate the pin. A platform list
+ * that INCLUDES linux/x64 does not exclude the entry.
  *
- * Line-oriented on purpose: the lockfile is YAML, but the two shapes involved
- * (`engines: {node: <range>}` inline, and an os/cpu line inside the same
- * package block) are stable pnpm-9-format output, and a full YAML parse of a
- * multi-MB lockfile per test run buys nothing.
+ * Line-oriented on purpose: the shapes involved (`engines: {...}` inline and
+ * flow-style `os: [...]`/`cpu: [...]` inside the same package block) are
+ * stable pnpm-9-format output, and a full YAML parse of a multi-MB lockfile
+ * per test run buys nothing. The engines regex tolerates extra engine keys
+ * (`{node: '>=12', npm: '>=6'}`); os/cpu order within a block is irrelevant
+ * because entries are only committed at the next package header.
  */
-function lockfileNodeRanges(): { range: string; context: string }[] {
-	const lines = readFileSync(join(webRoot, 'pnpm-lock.yaml'), 'utf8').split('\n');
-	const ranges: { range: string; context: string }[] = [];
+function lockfileNodeRanges(lockfileText: string): EnginesEntry[] {
+	const ranges: EnginesEntry[] = [];
 	let currentPackage = '';
-	let platformScoped = false;
+	let installsOnLinuxX64 = true;
 	let pendingEngines: string | null = null;
-	for (const line of lines) {
+	const commit = () => {
+		if (pendingEngines !== null && installsOnLinuxX64) {
+			ranges.push({ range: pendingEngines, context: currentPackage });
+		}
+	};
+	for (const line of lockfileText.split('\n')) {
 		const pkgHeader = line.match(/^ {2}(\S.*):$/);
 		if (pkgHeader) {
-			if (pendingEngines !== null && !platformScoped) {
-				ranges.push({ range: pendingEngines, context: currentPackage });
-			}
+			commit();
 			currentPackage = pkgHeader[1];
-			platformScoped = false;
+			installsOnLinuxX64 = true;
 			pendingEngines = null;
 			continue;
 		}
-		if (/^ {4}(os|cpu):/.test(line)) platformScoped = true;
-		const engines = line.match(/^ {4}engines: \{node: '?([^,}']+)'?\}/);
+		const platform = line.match(/^ {4}(os|cpu): \[([^\]]*)\]/);
+		if (platform) {
+			const wanted = platform[1] === 'os' ? 'linux' : 'x64';
+			const listed = platform[2].split(',').map((t) => t.trim().replace(/'/g, ''));
+			if (!listed.includes(wanted)) installsOnLinuxX64 = false;
+		}
+		const engines = line.match(/^ {4}engines: \{node:\s*'?([^,}']+)'?\s*[,}]/);
 		if (engines) pendingEngines = engines[1].trim();
 	}
-	if (pendingEngines !== null && !platformScoped) {
-		ranges.push({ range: pendingEngines, context: currentPackage });
-	}
+	commit();
 	return ranges;
 }
 
-function rangesRejecting(nodeVersion: string, ranges: { range: string; context: string }[]) {
-	return ranges.filter(
-		({ range }) => semver.validRange(range) !== null && !semver.satisfies(nodeVersion, range)
-	);
+function rangesRejecting(nodeVersion: string, ranges: EnginesEntry[]) {
+	return ranges.filter(({ range }) => !semver.satisfies(nodeVersion, range));
 }
+
+function liveLockfileRanges(): EnginesEntry[] {
+	return lockfileNodeRanges(readFileSync(join(webRoot, 'pnpm-lock.yaml'), 'utf8'));
+}
+
+describe('lockfile engines parser', () => {
+	const fixture = [
+		'  plain@1.0.0:',
+		"    resolution: {integrity: sha512-aaa}",
+		'    engines: {node: ^20.19.0 || >=22.12.0}',
+		'  quoted@1.0.0:',
+		"    engines: {node: '>= 0.4'}",
+		'  multikey@1.0.0:',
+		"    engines: {node: '>=12', npm: '>=6'}",
+		'  win-only@1.0.0:',
+		'    engines: {node: ^30.0.0}',
+		'    os: [win32]',
+		'    cpu: [x64]',
+		'  linux-shim@1.0.0:',
+		'    os: [linux]',
+		'    cpu: [x64]',
+		'    engines: {node: ^18.0.0}',
+		'  no-engines@1.0.0:',
+		'    resolution: {integrity: sha512-bbb}',
+		''
+	].join('\n');
+
+	it('extracts plain, quoted, and multi-key node ranges', () => {
+		const byContext = Object.fromEntries(
+			lockfileNodeRanges(fixture).map((e) => [e.context, e.range])
+		);
+		expect(byContext['plain@1.0.0']).toBe('^20.19.0 || >=22.12.0');
+		expect(byContext['quoted@1.0.0']).toBe('>= 0.4');
+		expect(byContext['multikey@1.0.0']).toBe('>=12');
+	});
+
+	it('excludes entries that cannot install on linux/x64 but keeps linux/x64-scoped ones', () => {
+		const contexts = lockfileNodeRanges(fixture).map((e) => e.context);
+		expect(contexts).not.toContain('win-only@1.0.0');
+		expect(contexts).toContain('linux-shim@1.0.0');
+	});
+});
 
 describe('build toolchain pins (CI ↔ Cloudflare Pages parity)', () => {
 	it('pins the Node version in .node-version', () => {
@@ -77,11 +131,16 @@ describe('build toolchain pins (CI ↔ Cloudflare Pages parity)', () => {
 	it('finds engines.node ranges in the lockfile (parser vacuity guard)', () => {
 		// vite alone declares one; an empty list means the line-oriented parser
 		// rotted against a lockfile format change, not that no package cares.
-		expect(lockfileNodeRanges().length).toBeGreaterThan(0);
+		expect(liveLockfileRanges().length).toBeGreaterThan(0);
+	});
+
+	it('every extracted range is valid semver (an unparsable range must fail, not be skipped)', () => {
+		const invalid = liveLockfileRanges().filter(({ range }) => semver.validRange(range) === null);
+		expect(invalid).toEqual([]);
 	});
 
 	it('pinned Node satisfies every engines.node range in the lockfile', () => {
-		const rejecting = rangesRejecting(pinnedNodeVersion(), lockfileNodeRanges());
+		const rejecting = rangesRejecting(pinnedNodeVersion(), liveLockfileRanges());
 		expect(
 			rejecting,
 			`bump .node-version: ${rejecting.map((r) => `${r.context} needs ${r.range}`).join('; ')}`
@@ -90,7 +149,7 @@ describe('build toolchain pins (CI ↔ Cloudflare Pages parity)', () => {
 
 	it('flags a version the ranges reject (positive control)', () => {
 		// The checker must be able to fail, or the gate above proves nothing.
-		const rejecting = rangesRejecting('0.0.1', lockfileNodeRanges());
+		const rejecting = rangesRejecting('0.0.1', liveLockfileRanges());
 		expect(rejecting.length).toBeGreaterThan(0);
 	});
 });
