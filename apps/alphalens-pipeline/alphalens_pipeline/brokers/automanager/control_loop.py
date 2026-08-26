@@ -44,6 +44,7 @@ from broker_contract.exit_geometry import (
     SetupStaticPolicy,
     resolve_exit_policy,
 )
+from broker_contract.exit_geometry.registry import resolve_policy
 from broker_contract.price_feed import SupportsSessionLow
 
 from alphalens_pipeline.brokers.automanager import (
@@ -5619,6 +5620,26 @@ def _is_journalable_price(value: float | None) -> bool:
     return value is not None and math.isfinite(value) and value > 0
 
 
+# The exit-geometry policy whose numbers `build_exit_geometry_spec` builds. NOTE:
+# this is the GEOMETRY policy, not the behavioural exit policy the live rail runs
+# (that is `trailing_atr` per #1008), so the stamped `policy_name` is still
+# narrower than it reads. Fixing that means threading the resolved policy's name
+# through the placement path, which is out of scope for #1114.
+_GEOMETRY_STAMP_POLICY_NAME = "atr_bracket_1p5"
+
+# The entry anchor `build_exit_geometry_spec` places against: the alloc-weighted
+# blend over ALL intended tiers (`planned_blended_entry`). Mirrors
+# `alphalens_pipeline.feedback.ladder_replay.ANCHOR_PLANNED` without importing
+# the feedback tier into the broker daemon's hot path.
+_GEOMETRY_STAMP_ANCHOR_MODE = "planned"
+
+# The take-profit cost floor the geometry policy applies, resolved ONCE at import
+# time. `resolve_policy` raises ValueError on an unknown name and the stamp runs
+# on every watch_open inside the unattended drain, where nothing may raise — so
+# an unknown name must fail the daemon at startup, not on a tick hours later.
+_GEOMETRY_STAMP_TP_FLOOR_FRAC = resolve_policy(_GEOMETRY_STAMP_POLICY_NAME).tp_floor_frac
+
+
 def _geometry_shadow_stamp(
     exit_spec: Any, spec: Any, *, use_geometry: bool
 ) -> dict[str, Any] | None:
@@ -5647,7 +5668,7 @@ def _geometry_shadow_stamp(
     reanchor = next((p for p in exit_spec.reaction_plan if isinstance(p, ReanchorOnFill)), None)
     blend = planned_blended_entry_from_spec(spec) if spec is not None else None
     return {
-        "policy_name": "atr_bracket_1p5",
+        "policy_name": _GEOMETRY_STAMP_POLICY_NAME,
         "policy_version": 1,
         "planned_blend": blend,
         "geometry_stop": exit_spec.initial_levels.stop,
@@ -5656,6 +5677,14 @@ def _geometry_shadow_stamp(
         "atr": reanchor.atr if reanchor is not None else None,
         "ceiling_price": reanchor.ceiling_price if reanchor is not None else None,
         "applied": use_geometry,
+        # Issue #1114: the two facts that made the divergence unreadable. The
+        # stamp already carried the planned blend as a VALUE, but nothing said
+        # the levels came from the planned anchor, and the /edge lens sharing
+        # this policy_name used the realised one. It also never named the
+        # take-profit floor, which is why the floor looked one-sided when in
+        # fact both sides reach it through the same atr_bracket_levels leaf.
+        "anchor_mode": _GEOMETRY_STAMP_ANCHOR_MODE,
+        "tp_floor_frac": _GEOMETRY_STAMP_TP_FLOOR_FRAC,
     }
 
 

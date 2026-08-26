@@ -11,13 +11,17 @@ and the pipeline's ``breakeven_grid``. Writes the parquet SoT atomically per fil
 NEVER overwrites a value the monitor already stamped. DISPLAY-ONLY (realized_r is
 never touched). It is an in-sample counterfactual either way.
 
-KNOWN LIMITATION (atr_bracket_1p5): this script calls ``breakeven_grid`` WITHOUT
-``pct_off_52w_high`` (the CandidateBrief column is not loaded here), so any
-backfilled ATR-bracket values carry an UNCAPPED TP — a different cohort than the
-monitor's forward-stamped, 52w-ceiling-capped values (memo
-``bezpazery_lens_design_2026_07_16.md`` section 4.2). Deliberate: the lens accrues
-forward-only; do not use this script to seed its history without threading the
-brief column first.
+KNOWN LIMITATION (both ATR-bracket lenses — ``atr_bracket_1p5`` on the realised
+anchor and ``atr_bracket_1p5_planned`` on the planned anchor, issue #1114): this
+script calls ``breakeven_grid`` WITHOUT ``pct_off_52w_high`` (the CandidateBrief
+column is not loaded here), so any backfilled ATR-bracket values carry an
+UNCAPPED TP — a different cohort than the monitor's forward-stamped,
+52w-ceiling-capped values (memo ``bezpazery_lens_design_2026_07_16.md`` section
+4.2). Deliberate: both lenses accrue forward-only; do not use this script to seed
+their history without threading the brief column first. The warning applies twice
+now, once per anchor, and this script cannot seed the planned lens onto a row
+that already carries a map at all — ``rows_needing_backfill`` treats a non-empty
+cell as done and never per-key merges.
 
 DRY-RUN by default. Pass ``--write`` to persist, then re-ingest to Postgres:
     compose run --rm rebuild-ladder-outcomes

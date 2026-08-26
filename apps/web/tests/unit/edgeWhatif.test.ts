@@ -44,7 +44,15 @@ describe('resolveLensMeta', () => {
 
 	it('resolves the ATR-bracket lens to its label + status', () => {
 		const m = resolveLensMeta('atr_bracket_1p5');
-		expect(m.label).toBe('ATR bracket 1.5 (bezpazery)');
+		expect(m.label).toBe('ATR bracket 1.5 (bezpazery) · realised-fill anchor');
+		expect(m.status).toBe('in_sample');
+		expect(m.category).toBe('exit-stop');
+	});
+
+	it('resolves the planned-anchor ATR-bracket lens to a distinct label', () => {
+		const m = resolveLensMeta('atr_bracket_1p5_planned');
+		expect(m.label).toBe('ATR bracket 1.5 (bezpazery) · planned-blend anchor');
+		expect(m.label).not.toBe(resolveLensMeta('atr_bracket_1p5').label);
 		expect(m.status).toBe('in_sample');
 		expect(m.category).toBe('exit-stop');
 	});
@@ -184,9 +192,22 @@ describe('WHATIF_LENS_REGISTRY', () => {
 
 	it('declares the pre-registered ATR-bracket lens (bezpazery v1 memo s2)', () => {
 		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5).toBeDefined();
-		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5.label).toBe('ATR bracket 1.5 (bezpazery)');
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5.label).toBe(
+			'ATR bracket 1.5 (bezpazery) · realised-fill anchor'
+		);
 		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5.status).toBe('in_sample');
 		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5.category).toBe('exit-stop');
+	});
+
+	// The same bracket on the anchor the live rail uses (issue #1114). Both are
+	// registered so the pair is readable side by side; each label names its anchor.
+	it('declares the planned-anchor ATR-bracket lens (issue 1114)', () => {
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5_planned).toBeDefined();
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5_planned.label).toBe(
+			'ATR bracket 1.5 (bezpazery) · planned-blend anchor'
+		);
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5_planned.status).toBe('in_sample');
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5_planned.category).toBe('exit-stop');
 	});
 
 	it('declares the pre-registered trailing lens (exit-geometry memo s7)', () => {

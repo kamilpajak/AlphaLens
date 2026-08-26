@@ -11,7 +11,8 @@
 	// tests/fixtures/api-mock/edge-summary.json.
 	// whatifEarnsDisplay requires >= 2 lenses with n > 0, so we add the other
 	// registry lenses (fill_anchored_0p5atr + the pre-registered be_0p5r_trail0p6
-	// and atr_bracket_1p5) alongside the canonical be_0p5r entry. All be_0p5r numeric values (n=112,
+	// and both ATR-bracket anchor modes) alongside the canonical be_0p5r entry.
+	// All be_0p5r numeric values (n=112,
 	// mean_r=0.069, median_r=0.044, realized_r_baseline=-0.22,
 	// realized_r_baseline_n=110, n_helped=74, n_harmed=9) come directly from
 	// the fixture file.
@@ -96,6 +97,20 @@
 					n_harmed: 5,
 					preregistered_ref:
 						'betlejem5_comparative bezpazery v1 (bracket 1.5xATR, floor 0.6%, ceiling 52w-high)'
+				},
+				// The planned-blend anchor (issue #1114) populates FORWARD-ONLY, so a
+				// realistic story shows it with a much smaller n than its realised-anchor
+				// twin above and its means still below the N-gate coverage of that twin.
+				atr_bracket_1p5_planned: {
+					n: 3,
+					mean_r: -0.31,
+					median_r: -0.28,
+					realized_r_baseline: -0.22,
+					realized_r_baseline_n: 3,
+					n_helped: 0,
+					n_harmed: 3,
+					preregistered_ref:
+						'bezpazery v1 bracket on the live planned-blend anchor (issue #1114 option 1)'
 				}
 			}
 		},

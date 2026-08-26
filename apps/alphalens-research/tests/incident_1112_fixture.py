@@ -44,6 +44,26 @@ SMG_GEOMETRY_TP = 59.6277090157
 SMG_GEOMETRY_STOP = 51.5637090157
 """blend - 1.5 * ATR."""
 
+# --- the REALISED-anchor mirror of the three above (issue #1114) -----------
+# The ``/edge`` what-if lens anchored its bracket on the tiers that TOUCHED in
+# the bar walk rather than on all intended tiers. On SMG only the top tier was
+# reachable, so the lens's anchor is that tier's LIMIT -- not the broker's
+# actual fill (59.9261), because the replay fills a tier AT its limit.
+SMG_E1_LIMIT = 59.786017
+"""Top entry tier limit; the realised anchor when only that tier touches."""
+
+SMG_REALISED_GEOMETRY_TP = 63.818017
+"""E1 limit + 1.5 * ATR. Reproduced by a self-check test, not typed from prose."""
+
+SMG_REALISED_GEOMETRY_STOP = 55.754017
+"""E1 limit - 1.5 * ATR."""
+
+SMG_AVG_PRICE_GEOMETRY_TP = 63.9581
+"""The target a THIRD anchor -- the broker's realised average fill price -- would
+give (``SMG_ACTUAL_FILL + 1.5 * ATR``). NO code path produces it today; it is the
+number #1112 step 4 would move live onto. Named here so a future third
+``AnchorMode`` has its incident constant already measured."""
+
 # --- measured, from entry_trails.jsonl / standalone_stops.jsonl ------------
 SMG_TOUCH_BID = 59.77
 """The touch reference bid at 17:20:02 UTC; also the recorded trough."""
@@ -104,4 +124,8 @@ def smg_geometry_stamp() -> dict:
         "atr": SMG_ATR,
         "ceiling_price": None,
         "applied": True,
+        # Added by issue #1114 so a journal line says which anchor produced the
+        # levels and which take-profit floor was applied.
+        "anchor_mode": "planned",
+        "tp_floor_frac": 0.006,
     }

@@ -266,14 +266,20 @@ def build_exit_geometry_spec(
     when the ATR bracket lands under it; the replay lens does not, on purpose,
     because clamping there would rewrite the historical what-if series issues
     #1114 / #1115 measure against. So an ``/edge`` ``atr_bracket_1p5`` what-if
-    figure is NOT a prediction of what live will do on the take-profit side. The
-    stop and the anchor blend still match. Pinned by ``test_exit_geometry_spec.py
-    ::test_multi_tier_blend_and_stop_match_replay_but_the_take_profit_does_not``.
+    figure is NOT a prediction of what live will do on the take-profit side.
+    The stop and the anchor blend match ONLY when every entry tier fills: the
+    replay lens takes its anchor as an explicit argument since issue #1114, and
+    on a partial fill ``anchor="realised"`` (the historical ``atr_bracket_1p5``
+    lens) blends only the tiers that touched, so both the anchor AND the stop
+    derived from it diverge -- on SMG, 59.786017 vs 55.5957 on the blend and
+    55.754017 vs 51.5637 on the stop. ``anchor="planned"`` is the mode that
+    mirrors this builder; it is registered as ``atr_bracket_1p5_planned``.
+    Pinned by ``test_exit_geometry_spec.py
+    ::test_multi_tier_blend_and_stop_match_replay_but_the_take_profit_does_not``
+    (every tier fills) and by
+    ``tests/feedback/test_atr_bracket_anchor_mode.py`` (partial fill).
 
-    The one place this diverges from the replay's ``_blended_entry`` by
-    necessity: replay anchors the bracket at the blend over tiers that actually
-    TOUCHED in the bar-replay walk, but at PLACEMENT time no bars/fills exist
-    yet -- ``pct_off_52w_high`` is deliberately NOT read off ``brief_trade_setup``
+    ``pct_off_52w_high`` is deliberately NOT read off ``brief_trade_setup``
     (it is a sibling column on the candidate/brief row, e.g.
     ``CandidateBrief.technical_pct_off_52w_high`` in ``paper/brief_loader.py``,
     never a key inside the ``trade_setup`` JSON blob itself -- confirmed against

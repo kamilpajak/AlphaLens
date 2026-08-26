@@ -31,7 +31,12 @@ export const WHATIF_LENS_REGISTRY: Record<string, WhatIfLensMeta> = {
 		category: 'exit-stop'
 	},
 	atr_bracket_1p5: {
-		label: 'ATR bracket 1.5 (bezpazery)',
+		label: 'ATR bracket 1.5 (bezpazery) · realised-fill anchor',
+		status: 'in_sample',
+		category: 'exit-stop'
+	},
+	atr_bracket_1p5_planned: {
+		label: 'ATR bracket 1.5 (bezpazery) · planned-blend anchor',
 		status: 'in_sample',
 		category: 'exit-stop'
 	}
