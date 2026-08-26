@@ -72,26 +72,26 @@ def _setup_from_brief(brief: pd.DataFrame, ticker: str) -> tuple[dict | None, fl
 def _bars_for(ticker: str, brief_date: str) -> list[dict]:
     """The cached bar path for THIS row's arrival.
 
-    Bars files are keyed ``TICKER_<arrival-date>``, and the arrival lags the
-    brief date by 0-3 calendar days (weekends/holidays) — measured on the real
-    cache: 249 exact, 56 at +1, 48 at +2..3. The search window is
-    [brief_date, brief_date+5], EARLIEST match wins. Deliberately no fallback
-    to other dates: bars from a different brief of the same ticker would walk
-    a foreign window and misclassify this row — a missing cache entry is an
+    Uses the population monitor's OWN filename convention
+    (``_bars_cache_path`` keyed by ``session_on_or_after(brief_date)``) — the
+    same helper the planning-sd script uses, so the two audit drivers cannot
+    diverge on which path a row replays. Deliberately no fallback to other
+    dates: bars from a different brief of the same ticker would walk a
+    foreign window and misclassify this row — a missing cache entry is an
     honest ``no_bars``.
     """
-    from datetime import date, timedelta
+    import datetime as dt
 
-    start = date.fromisoformat(brief_date)
-    for offset in range(6):
-        candidate = (
-            STORE_DIR / "bars"
-        ) / f"{ticker}_{(start + timedelta(days=offset)).isoformat()}.parquet"
-        if candidate.exists():
-            frame = pd.read_parquet(candidate)
-            if {"t", "l", "h", "c"}.issubset(frame.columns):
-                return frame[["t", "l", "h", "c"]].to_dict("records")
-            return []
+    from alphalens_pipeline.feedback.population_ladder_monitor import _bars_cache_path
+    from alphalens_pipeline.paper.calendar import session_on_or_after
+
+    arrival = session_on_or_after(dt.date.fromisoformat(brief_date), "XNYS")
+    candidate = _bars_cache_path(STORE_DIR, ticker, arrival)
+    if not candidate.exists():
+        return []
+    frame = pd.read_parquet(candidate)
+    if {"t", "l", "h", "c"}.issubset(frame.columns):
+        return frame[["t", "l", "h", "c"]].to_dict("records")
     return []
 
 
