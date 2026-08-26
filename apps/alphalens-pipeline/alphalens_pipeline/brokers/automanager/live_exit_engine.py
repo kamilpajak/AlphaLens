@@ -1,8 +1,9 @@
 """Live take-profit engine (the 'brain') — decide + execute TP-tranche exits.
 
-INERT: no live caller wires this into the daemon tick yet (INC-2 supplies the
-real price feed; a later increment wires it). Everything here is driven by an
-injected PriceFeed + the Broker capabilities, and is exercised hermetically.
+Wired into the daemon tick via ``control_loop._run_live_exits_pass`` (behind
+``ALPHALENS_LIVE_MARKET_EXITS``). Everything here is driven by an injected
+PriceFeed + a broker satisfying :class:`LiveExitBroker`, and is exercised
+hermetically.
 
 Safe sequence (SIM-probed 2026-08-05, netting account): shrink the standalone SL
 by the tranche FIRST, THEN market-sell the tranche (a sell while the SL commits
@@ -16,9 +17,15 @@ import logging
 import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
-from broker_contract.contract import _QTY_EPS, Broker, OrderState
+from broker_contract.contract import (
+    _QTY_EPS,
+    OrderState,
+    SupportsAmendStop,
+    SupportsMarketOrders,
+    SupportsNettedPositionReads,
+)
 from broker_contract.price_feed import PriceFeed, PricePoint
 from broker_contract.quantity import QuantityLattice, quantize_down
 from broker_contract.sizing import TpTranchePlan
@@ -35,6 +42,39 @@ from alphalens_pipeline.brokers.automanager.position_manager import _sole_standa
 from alphalens_pipeline.brokers.execution import assert_rail_lattice
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class LiveExitBroker(
+    SupportsAmendStop, SupportsMarketOrders, SupportsNettedPositionReads, Protocol
+):
+    """The engine's stated broker requirement set (#1141) — narrowed ONCE by the
+    caller (``control_loop._run_live_exits_pass``) before any engine call, and
+    guaranteed at boot by ``build_default_deps`` whenever
+    ``ALPHALENS_LIVE_MARKET_EXITS=1``.
+
+    Deliberately NOT the full frozen :class:`~broker_contract.contract.Broker`:
+    the pass + engine together touch exactly these six methods (the engine
+    itself calls five; ``get_long_positions`` is the pass's position read), and
+    demanding ``place_bracket_order`` etc. would make the pass-level
+    ``isinstance`` refuse a broker for abilities the engine never uses.
+    Composition over a blanket base is the same capability-protocol pattern the
+    parents follow.
+
+    CPython runtime-checkable notes, both load-bearing: (1) ``isinstance`` uses
+    ``inspect.getattr_static``, so a mock/fake must set every capability method
+    EXPLICITLY — attributes a bare ``Mock.__getattr__`` fabricates on first
+    access are invisible to the check (this bit the LIVE-composition stub in
+    this very PR); (2) ``runtime_checkable`` re-derives the check from the
+    COMBINED member set rather than composing the parents' checks, which is
+    equivalent only while every parent stays method-only — keep data members
+    out of the parent capabilities.
+    """
+
+    def cancel_order(self, order_id: str) -> None: ...
+
+    def list_working_sell_orders(self) -> list[OrderState]: ...
+
 
 _PRICE_EPS = 1e-9  # a long tranche fires when price >= target (within eps)
 _BPS_PER_UNIT = 10_000.0
@@ -255,7 +295,7 @@ def plan_tranche_exits(
 
 
 def execute_tranche_exit(
-    broker: Broker,
+    broker: LiveExitBroker,
     *,
     uic: int,
     exit: TrancheExit,
@@ -283,13 +323,7 @@ def execute_tranche_exit(
     # is module-level and callable directly; a guard that fires on one entry
     # point only is a guard that can be walked past.
     assert_rail_lattice(lattice)
-    # Three undeclared abilities in this function: get_positions_by_uic is a
-    # SaxoBroker method no protocol names, while amend_stop_amount and
-    # place_market_order DO have protocols (SupportsAmendStop /
-    # SupportsMarketOrders) that this call path never narrows to. Tracked at
-    # #1141 — the fix adds a runtime refusal, which does not belong in the PR
-    # that merely pointed the type checker at this package.
-    live = broker.get_positions_by_uic(uic)  # pyright: ignore[reportAttributeAccessIssue]
+    live = broker.get_positions_by_uic(uic)
     if not _is_real_quantity(live.quantity):
         # Same stance as the planner: a live read that degrades to None / nan /
         # inf must end this tranche, never raise past the pass boundary and
@@ -321,7 +355,7 @@ def execute_tranche_exit(
     if new_sl_qty <= _QTY_EPS:
         broker.cancel_order(sl_leg.order_id)  # full close — cancel, don't amend-to-zero
     else:
-        broker.amend_stop_amount(  # pyright: ignore[reportAttributeAccessIssue]
+        broker.amend_stop_amount(
             uic=uic,
             order_id=sl_leg.order_id,
             side=sl_leg.side or "SELL",
@@ -331,7 +365,7 @@ def execute_tranche_exit(
             request_id=f"{request_ref}-{exit.tag}-amend",
         )
     # 2) market-sell the freed tranche.
-    placed = broker.place_market_order(  # pyright: ignore[reportAttributeAccessIssue]
+    placed = broker.place_market_order(
         uic, "SELL", qty, request_id=f"{request_ref}-{exit.tag}-sell"
     )
     sell_order_id = placed.entry_order_id or None
@@ -424,21 +458,19 @@ class ManagedExit:
 
 
 def run_live_exits(
-    broker: Broker,
+    broker: LiveExitBroker,
     feed: PriceFeed,
     managed: list[ManagedExit],
     *,
     lattice: QuantityLattice,
 ) -> int:
     """One live-exit pass over managed positions. Stale/absent price -> veto (skip).
-    INERT: no daemon caller yet. Returns the number of tranches fired.
+    Returns the number of tranches fired.
 
-    ``list_working_sell_orders`` is NOT part of the ``Broker`` Protocol
-    (``broker_contract/contract.py``), so it is read via the same defensive
-    ``getattr(broker, "list_working_sell_orders", None)`` convention
-    ``control_loop.py`` already uses at two call sites -- an
-    ``AttributeError`` here would escape the ``except BrokerError`` boundary
-    and kill the whole tick.
+    ``broker`` is the engine's own :class:`LiveExitBroker` requirement set — the
+    caller (``control_loop._run_live_exits_pass``) ``isinstance``-narrows before
+    calling, so a broker missing any of the six methods never reaches this
+    function and the historical per-uic ``getattr`` dance is gone (#1141).
 
     A point whose BID is not a finite positive number vetoes the uic, BEFORE any
     comparison or ladder activation. The motivating case is a wrong action, not
@@ -456,7 +488,6 @@ def run_live_exits(
     # reason about ends the pass rather than being re-checked per position.
     assert_rail_lattice(lattice)
     fired = 0
-    list_sells = getattr(broker, "list_working_sell_orders", None)
     for m in managed:
         point = feed.latest(m.uic)
         if point is None:
@@ -468,17 +499,8 @@ def run_live_exits(
                 point.bid,
             )
             continue
-        if list_sells is None:
-            logger.warning(
-                "uic %s: broker has no list_working_sell_orders - skipping live exits this pass",
-                m.uic,
-            )
-            continue
-        # The line above checks list_working_sell_orders and skips the pass when
-        # the broker lacks it; this read is the SAME kind of ability with no such
-        # check and no protocol behind it (#1141).
-        live = broker.get_positions_by_uic(m.uic)  # pyright: ignore[reportAttributeAccessIssue]
-        legs = tuple(list_sells())
+        live = broker.get_positions_by_uic(m.uic)
+        legs = tuple(broker.list_working_sell_orders())
         legs = tuple(leg for leg in legs if leg.uic == m.uic)
         sl = _sole_standalone_stop(legs)
         if sl is None:

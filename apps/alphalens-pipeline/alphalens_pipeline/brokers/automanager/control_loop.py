@@ -32,6 +32,7 @@ from broker_contract.contract import (
     PlacedOrder,
     Position,
     SupportsAmendStop,
+    SupportsNettedPositionReads,
     SupportsOcoExit,
     SupportsStandaloneStop,
     SupportsTrailingStop,
@@ -66,6 +67,7 @@ from alphalens_pipeline.brokers.automanager.labels import (
     human_label_from_external_reference,
 )
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
+    LiveExitBroker,
     ManagedExit,
     run_live_exits,
 )
@@ -1111,11 +1113,23 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         # forever.
         _release_feed_scope(deps, _FEED_SCOPE_EXITS)
         return
+    broker = deps.broker
+    if not isinstance(broker, LiveExitBroker):
+        # Structurally impossible after build_default_deps (its boot gate refuses
+        # such a broker when the flag is on) — reachable only for directly
+        # composed deps, i.e. tests. Skip + alert, NEVER an AttributeError: the
+        # try below catches only BrokerError, so an AttributeError would escape
+        # and starve the protection pass that follows in the tick (#1141).
+        if deps.alert_throttled(
+            f"live-exits: broker {getattr(broker, 'name', '?')!r} lacks the "
+            "live-exit capability set (LiveExitBroker) — pass skipped",
+            "live-exits-capability",
+        ):
+            report.alerts += 1
+        _release_feed_scope(deps, _FEED_SCOPE_EXITS)
+        return
     try:
-        # get_long_positions is a SaxoBroker method that no protocol declares
-        # (#1141). The checker is right; the fix is a runtime decision — refuse
-        # at boot, or skip the pass — so it is tracked, not made here.
-        long_positions = deps.broker.get_long_positions()  # pyright: ignore[reportAttributeAccessIssue]
+        long_positions = broker.get_long_positions()
     except BrokerError as exc:
         if deps.alert_throttled(
             f"live-exits: position read failed (broker error) — skipped: {exc}",
@@ -1153,7 +1167,7 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     from alphalens_pipeline.brokers.execution import RAIL_LATTICE
 
     try:
-        fired_count = run_live_exits(deps.broker, feed, managed, lattice=RAIL_LATTICE)
+        fired_count = run_live_exits(broker, feed, managed, lattice=RAIL_LATTICE)
     except BrokerError as exc:
         if deps.alert_throttled(
             f"live-exits: pass failed (broker error) — skipped: {exc}",
@@ -1187,9 +1201,29 @@ def _fetch_protection_peaks(
     the caller still runs ``build_protection_view`` + ``reconcile_protection`` with
     empty maps, so trailing simply goes dark this tick while never-naked holds. The
     failure is surfaced via the shared throttled-alert sink the pass already uses."""
+    broker = deps.broker
+    if not isinstance(broker, SupportsNettedPositionReads):
+        # Boot-unreachable (build_default_deps refuses such a broker
+        # unconditionally, #1141) — reachable only for directly composed deps.
+        # An EXPLICIT refusal, not the except-Exception path below: an absent
+        # capability is a composition defect that holds on EVERY tick, and the
+        # generic "peak fetch failed" message reads as a transient feed error —
+        # the operator would wait out an outage that is not one. logger.error,
+        # not logger.exception: there is no active exception here, and a
+        # fabricated "NoneType: None" traceback would only mislead.
+        logger.error(
+            "trailing: broker %r lacks netted position reads — trailing dark",
+            getattr(broker, "name", "?"),
+        )
+        if deps.alert_throttled(
+            f"trailing: broker {getattr(broker, 'name', '?')!r} lacks netted "
+            "position reads (SupportsNettedPositionReads) — trailing dark",
+            "trail-peak-capability",
+        ):
+            report.alerts += 1
+        return {}, {}
     try:
-        # Undeclared SaxoBroker method — see the note at the live-exits pass (#1141).
-        long_positions = deps.broker.get_long_positions()  # pyright: ignore[reportAttributeAccessIssue]
+        long_positions = broker.get_long_positions()
         return _update_peaks(deps, long_positions)
     # Broad on purpose (mirrors _build_live_exits_feed): a feed/network/auth error
     # must not propagate into the protection pass. Trailing goes dark, protection
@@ -2935,6 +2969,13 @@ def _reconcile_one_armed_tier(
     if order_id is None:  # defensive — _resting_armed_tiers already filtered
         return
     broker = deps.broker
+    if not isinstance(broker, SupportsOrderResolution):
+        # Defensive re-narrow (#1141): the ONLY caller
+        # (_run_entry_trail_reconcile_pass) already gates on this, but a guard
+        # that fires on one entry point only is a guard that can be walked past
+        # — this helper's guarantee is now its own, and the narrowing survives
+        # the re-read of deps.broker.
+        return
     # Still resting on the open-orders book -> nothing to reconcile (the server is
     # ratcheting / waiting for the bounce). get_order answers WORKING while it
     # rests and UNKNOWN once it DISAPPEARS (Saxo drops filled/expired/cancelled
@@ -2949,11 +2990,7 @@ def _reconcile_one_armed_tier(
     # audit below, never a fabricated terminal.
     if not _acquire_outcome_audit_budget(deps, broker, order_id):
         return
-    # The SupportsOrderResolution narrowing lives in the ONLY caller
-    # (_run_entry_trail_reconcile_pass) and is lost re-reading deps.broker here,
-    # so this helper's guarantee rests on one call site. Passing the narrowed
-    # broker down is the fix; it is tracked at #1141 with the other three.
-    outcome = _resolve_entry_order_outcome(broker, order_id)  # pyright: ignore[reportArgumentType]
+    outcome = _resolve_entry_order_outcome(broker, order_id)
     filled_qty = _entry_order_filled_qty(outcome)
     if filled_qty is None:
         # A GONE-but-UNFILLED order: the DayOrder cancelled at the session close.
@@ -3676,6 +3713,22 @@ def build_default_deps(
             "(SupportsStandaloneStop) — the auto-manager's disaster-stop flow "
             "requires it; wire a different broker or add the capability."
         )
+    # UNCONDITIONAL, like the standalone-stop gate above (#1141): the protection
+    # view's per-uic netting and the execute-time owned re-checks read
+    # get_long_positions / get_positions_by_uic on every tick, and their
+    # historical getattr fallback substituted the UN-NETTED get_positions()
+    # result — a stop sized to one lot with the rest of the position naked. A
+    # broker that cannot read netted positions must not boot the manager.
+    # ORDERING is deliberate: this gate sits BEFORE the amend / exit-policy
+    # gates so their capability errors stay attributable — the amend-gate tests'
+    # _StopOnlyBroker stubs carry the reads for exactly that reason.
+    if not isinstance(broker, SupportsNettedPositionReads):
+        raise BrokerCapabilityError(
+            f"broker {broker.name!r} does not implement get_long_positions / "
+            "get_positions_by_uic (SupportsNettedPositionReads) — the protection "
+            "pass sizes stops off the NETTED per-uic reads; wire a capable broker "
+            "or add the capability."
+        )
     # OCO (rung 1 -> 2) is OPTIONAL, unlike the hard standalone-stop gate above: a
     # broker lacking SupportsOcoExit (or with the env flag off) runs stop-only,
     # unchanged. Detect it once here and inject into the executor closure.
@@ -3712,6 +3765,19 @@ def build_default_deps(
             f"the PR-6b fill-complete reanchor, but broker {broker.name!r} does not implement "
             "amend_stop_amount (SupportsAmendStop) — geometry-live would leave a wrong-distance "
             "stop. Wire an amend-capable broker or unset the flag (setup_static)."
+        )
+    # Live-exits capability gate (#1141), mirroring the _amend_enabled() gate
+    # above: when the flag is on, the pass amends the SL and market-sells
+    # tranches, so the FULL engine requirement set (LiveExitBroker — amend +
+    # market orders + netted reads + cancel + working-sell listing) must be
+    # guaranteed at boot; with the flag off, an incapable broker is fine — the
+    # pass never runs and its own isinstance guard backstops a post-boot flip.
+    if _live_market_exits_enabled() and not isinstance(broker, LiveExitBroker):
+        raise BrokerCapabilityError(
+            f"broker {broker.name!r} does not satisfy the live-exit capability set "
+            "(LiveExitBroker: amend_stop_amount, place_market_order, netted position "
+            "reads, cancel_order, list_working_sell_orders) but "
+            "ALPHALENS_LIVE_MARKET_EXITS=1 — wire a capable broker or unset the flag."
         )
     # ONE token-provider instance is shared by the SessionKeeper AND the (SIM-only)
     # streaming reader, so there is a single OAuth chain / one flock owner and the
@@ -6788,8 +6854,16 @@ def build_protection_view(
             all_positions[uic] = pos
 
     long_positions: dict[int, Position] = {}
-    get_long = getattr(broker, "get_long_positions", None)
-    longs = get_long() if get_long is not None else list(all_positions.values())
+    # Boot-unreachable fallback (#1141): build_default_deps refuses a broker
+    # without the netted reads, so the else-branch serves only directly composed
+    # deps (tests). It keeps its historical un-netted behaviour on purpose —
+    # changing it would silently move test expectations, and no production path
+    # can reach it.
+    longs = (
+        broker.get_long_positions()
+        if isinstance(broker, SupportsNettedPositionReads)
+        else list(all_positions.values())
+    )
     # get_long_positions returns ONE netted Position per uic (it sums same-uic
     # lots); this assignment therefore never overwrites a live uic. If a source
     # ever returned multiple lots per uic here, the stop would size to one lot
@@ -7120,9 +7194,8 @@ def _execute_upgrade_to_oco(
     # Execute-time owned re-check (mirror _execute_place_stop): never place on a
     # uic that shrank / closed between the snapshot and now.
     qty = action.qty
-    get_by_uic = getattr(broker, "get_positions_by_uic", None)
-    if get_by_uic is not None:
-        live = get_by_uic(action.uic)
+    if isinstance(broker, SupportsNettedPositionReads):
+        live = broker.get_positions_by_uic(action.uic)
         if live.quantity + _QTY_EPS < qty:
             qty = max(live.quantity, 0.0)
     if qty <= _QTY_EPS:
@@ -7244,9 +7317,8 @@ def _execute_amend_stop(
         return  # broker lacks SupportsAmendStop -> the pure arm never emits this
 
     target = action.target_qty
-    get_by_uic = getattr(broker, "get_positions_by_uic", None)
-    if get_by_uic is not None:
-        target = max(get_by_uic(action.uic).quantity, 0.0)
+    if isinstance(broker, SupportsNettedPositionReads):
+        target = max(broker.get_positions_by_uic(action.uic).quantity, 0.0)
     if target <= _QTY_EPS:
         _emit_alert(
             throttle,
@@ -7369,9 +7441,8 @@ def _execute_place_stop(
     # Execute-time owned re-check: never oversell, never plant a stop on a uic
     # that closed between the snapshot and now (it could later fire into a short).
     qty = action.qty
-    get_by_uic = getattr(broker, "get_positions_by_uic", None)
-    if get_by_uic is not None:
-        live = get_by_uic(action.uic)
+    if isinstance(broker, SupportsNettedPositionReads):
+        live = broker.get_positions_by_uic(action.uic)
         if live.quantity + _QTY_EPS < qty:
             qty = max(live.quantity, 0.0)
     if qty <= _QTY_EPS:

@@ -290,6 +290,19 @@ def _make_broker(**kw: Any) -> SaxoBroker:
     return SaxoBroker(_StubSaxoClient(), **kw)  # type: ignore[arg-type]
 
 
+class TestSaxoBrokerCapabilityConformance(unittest.TestCase):
+    def test_satisfies_the_automanager_capability_protocols(self):
+        # #1141: the boot gates in build_default_deps refuse a broker without
+        # these — a real SaxoBroker instance must pass both, or the daemon
+        # cannot boot in production.
+        from alphalens_pipeline.brokers.automanager.live_exit_engine import LiveExitBroker
+        from broker_contract.contract import SupportsNettedPositionReads
+
+        broker = _make_broker()
+        self.assertIsInstance(broker, SupportsNettedPositionReads)
+        self.assertIsInstance(broker, LiveExitBroker)
+
+
 class TestAccountSnapshotTranslation(unittest.TestCase):
     def test_single_account_maps_balances(self):
         snapshot = _make_broker().get_account()

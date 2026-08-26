@@ -6,6 +6,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
+    LiveExitBroker,
     ManagedExit,
     plan_tranche_exits,
     run_live_exits,
@@ -150,29 +151,40 @@ class TestRunLiveExits(unittest.TestCase):
             },
         )
 
-    def test_broker_without_list_working_sell_orders_skips_the_uic_no_crash(self):
-        """list_working_sell_orders is NOT part of the Broker Protocol
-        (broker_contract/contract.py). Calling it unguarded would let an
-        AttributeError escape the `except BrokerError` boundary and kill the
-        whole tick -- one uic missing a capability must not do that. Mirrors
-        the getattr(broker, "list_working_sell_orders", None) convention
-        control_loop.py already uses at two sites."""
-        b, uic, feed, managed = self._mk(price=16.5)  # would otherwise fire tp1
+    def test_the_engine_requirement_set_is_stated_and_fake_broker_satisfies_it(self):
+        """#1141: run_live_exits no longer getattr-probes per uic — its broker
+        parameter IS the contract (LiveExitBroker) and the CALLER
+        (control_loop._run_live_exits_pass) isinstance-narrows before invoking,
+        so a broker missing a capability skips the whole pass with an alert
+        (tests/brokers/automanager/test_live_exits_pass.py::
+        TestLiveExitsPassCapabilityGuard) instead of warning per uic here.
+        This pin proves the conformance fake satisfies the stated set and that
+        the runtime check genuinely discriminates (negative control)."""
+        self.assertIsInstance(FakeBroker(), LiveExitBroker)
 
-        class _BrokerWithoutListSells(FakeBroker):
-            list_working_sell_orders = None
-
-        no_cap = _BrokerWithoutListSells()
-        no_cap._positions = b._positions
-        no_cap._orders = b._orders
-
-        with self.assertLogs(
-            "alphalens_pipeline.brokers.automanager.live_exit_engine", level="WARNING"
-        ) as cm:
-            n = run_live_exits(no_cap, feed, managed, lattice=RAIL_LATTICE)
-        self.assertEqual(n, 0)
-        self.assertEqual(no_cap.get_positions_by_uic(uic).quantity, 100.0)  # nothing sold
-        self.assertTrue(any(str(uic) in line for line in cm.output), cm.output)
+        # Negative control per MEMBER: the combined runtime check must reject a
+        # broker missing ANY of the six, not merely the one a single hand-built
+        # stub happens to omit — this pins the union semantics of the composed
+        # protocol as executable fact.
+        members = (
+            "amend_stop_amount",
+            "place_market_order",
+            "get_long_positions",
+            "get_positions_by_uic",
+            "cancel_order",
+            "list_working_sell_orders",
+        )
+        for missing in members:
+            with self.subTest(missing=missing):
+                stub = type(
+                    "_AlmostCapable",
+                    (),
+                    {
+                        "name": "almost",
+                        **{m: (lambda self, *a, **k: None) for m in members if m != missing},
+                    },
+                )()
+                self.assertNotIsInstance(stub, LiveExitBroker)
 
 
 class TestRunLiveExitsCostGate(unittest.TestCase):

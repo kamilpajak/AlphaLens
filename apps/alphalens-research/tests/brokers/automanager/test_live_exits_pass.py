@@ -705,5 +705,30 @@ class TestOpenPositionsStayManagedWhenTheTrailIsDisabled(_JournalCase):
         self.assertEqual(broker.get_positions_by_uic(uic).quantity, 0.0)
 
 
+class TestLiveExitsPassCapabilityGuard(unittest.TestCase):
+    """#1141: the pass narrows deps.broker to the engine's requirement set
+    (LiveExitBroker) BEFORE any broker call. A non-conforming broker — possible
+    only when build_default_deps and its boot gate were bypassed, i.e. in tests
+    — skips the pass with a throttled alert. It must NEVER surface as an
+    AttributeError: the pass's try catches only BrokerError, so an
+    AttributeError would escape and starve the protection pass that follows in
+    the same tick."""
+
+    def test_broker_without_the_capability_set_skips_with_alert(self) -> None:
+        class _NoReadsBroker:
+            name = "noreads"
+
+        alerts: list[str] = []
+        deps = _deps(_NoReadsBroker(), alerts=alerts)
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            report = cl.TickReport()
+            cl._run_live_exits_pass(deps, report)  # must not raise
+        self.assertTrue(
+            any("live-exit capability" in msg for msg in alerts),
+            f"expected the capability-skip alert, got: {alerts}",
+        )
+        self.assertEqual(report.exits_placed, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
