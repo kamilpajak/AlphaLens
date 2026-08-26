@@ -229,6 +229,63 @@ class TestAnalyzeRefusals(unittest.TestCase):
                     driver.cmd_analyze(args)
         self.assertIn("pairs", str(ctx.exception))
 
+    def test_no_replay_runs_below_the_block_floor(self):
+        # Memo section 11 item 3 / 12.1 item 5: a below-floor state must
+        # refuse BEFORE any A-vs-B contrast exists. The floors are checked
+        # from parse + feasibility alone; replay_arm must never fire.
+        with tempfile.TemporaryDirectory() as tmp:
+            store, briefs = _fixture_dirs(tmp)
+            _write_day(store, briefs, "2026-06-02", ["AAA"])
+            path = self._extract_file(tmp, ["2026-06-02"])
+            args = argparse.Namespace(
+                extract=str(path),
+                sha256=epa.sha256_of(path),
+                n0=3750.0,
+                sd_d=1.0,
+                delta_min=10.0,
+            )
+            with (
+                mock.patch.object(driver, "STORE_DIR", store),
+                mock.patch.object(driver, "BRIEFS_DIR", briefs),
+                mock.patch.object(
+                    driver, "replay_arm", side_effect=AssertionError("contrast computed")
+                ),
+            ):
+                with self.assertRaises(SystemExit) as ctx:
+                    driver.cmd_analyze(args)
+        self.assertIn("blocks", str(ctx.exception))
+
+    def test_null_setup_row_is_excluded_without_exception(self):
+        # Regression pin for a review claim: a null trade_setup_json row must
+        # flow through analyze as a clean section 5.1 exclusion, never a crash.
+        with tempfile.TemporaryDirectory() as tmp:
+            store, briefs = _fixture_dirs(tmp)
+            _write_day(store, briefs, "2026-06-02", ["AAA"])
+            rows = [
+                {
+                    "brief_date": "2026-06-02",
+                    "ticker": "AAA",
+                    "trade_setup_json": json.dumps(_setup()),
+                    "pct_off_52w_high": None,
+                },
+                {
+                    "brief_date": "2026-06-02",
+                    "ticker": "NUL",
+                    "trade_setup_json": None,
+                    "pct_off_52w_high": None,
+                },
+            ]
+            path = Path(tmp) / "extract.parquet"
+            pd.DataFrame(rows, columns=list(epa.EXTRACT_COLUMNS)).to_parquet(path, index=False)
+            with (
+                mock.patch.object(driver, "STORE_DIR", store),
+                mock.patch.object(driver, "BRIEFS_DIR", briefs),
+            ):
+                outcomes = driver.compute_outcomes(
+                    pd.read_parquet(path), n0=3750.0, slippage_bps=40.0
+                )
+        self.assertEqual(sorted(outcomes["ticker"]), ["AAA"])
+
 
 class TestAnalyzeEndToEnd(unittest.TestCase):
     def test_synthetic_cohort_produces_the_full_payload(self):

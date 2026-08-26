@@ -128,8 +128,10 @@ def build_extract(cohort_open: str, analysis_session: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=list(EXTRACT_COLUMNS))
 
 
-def _row_outcomes(row: pd.Series, *, n0: float, slippage_bps: float, **variant) -> dict | None:
-    """Both-arm net cash for one extract row, or ``None`` when §5.1 excludes it."""
+def _row_inputs(row: pd.Series) -> tuple[dict, list[dict], int, int] | None:
+    """Parse + §5.1 feasibility for one extract row — NO replay, so the
+    floors can be checked before any A-vs-B contrast exists (§11 item 3 /
+    §12.1 item 5). ``None`` when the row is excluded."""
     setup = None
     if isinstance(row["trade_setup_json"], str):
         try:
@@ -143,6 +145,15 @@ def _row_outcomes(row: pd.Series, *, n0: float, slippage_bps: float, **variant) 
     covers = bool(bars) and max(int(b["t"]) for b in bars) >= position_expiry_ms
     if infeasibility_reason(setup, bars_cover_window=covers) is not None:
         return None
+    return setup, bars, entry_expiry_ms, position_expiry_ms  # type: ignore[return-value]
+
+
+def _row_outcomes(row: pd.Series, *, n0: float, slippage_bps: float, **variant) -> dict | None:
+    """Both-arm net cash for one extract row, or ``None`` when §5.1 excludes it."""
+    inputs = _row_inputs(row)
+    if inputs is None:
+        return None
+    setup, bars, entry_expiry_ms, position_expiry_ms = inputs
     outcomes = {
         arm: replay_arm(
             setup,  # type: ignore[arg-type]
@@ -215,9 +226,8 @@ def _dist_or_none(values: pd.Series) -> dict | None:
     return distribution_report(clean.to_numpy()) if len(clean) else None
 
 
-def _sensitivities(extract: pd.DataFrame, *, n0: float) -> dict:
+def _sensitivities(extract: pd.DataFrame, *, n0: float, primary: pd.DataFrame) -> dict:
     """§8.3 items — descriptive only, no verdict words, none replace the primary."""
-    primary = compute_outcomes(extract, n0=n0, slippage_bps=PRIMARY_SLIPPAGE_BPS)
     result: dict = {}
     # 1. jointly feasible = rows where arm B did NOT fall back.
     jf = primary[~primary["fallback_b"].astype(bool)]
@@ -278,9 +288,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     verify_extract_hash(extract_path, args.sha256)
     extract = pd.read_parquet(extract_path)
 
-    outcomes = compute_outcomes(extract, n0=args.n0, slippage_bps=PRIMARY_SLIPPAGE_BPS)
-    days = sorted(outcomes["brief_date"].unique().tolist())
-    blocks = non_overlapping_blocks(days, block_len=BLOCK_LEN_SESSIONS)
+    # Both floors are checked from parse + feasibility ALONE, before a single
+    # replay runs: a below-floor state must refuse while no A-vs-B contrast
+    # exists anywhere, not even in memory (§11 item 3 / §12.1 item 5).
+    feasible_days = [
+        row["brief_date"] for _, row in extract.iterrows() if _row_inputs(row) is not None
+    ]
+    blocks = non_overlapping_blocks(sorted(set(feasible_days)), block_len=BLOCK_LEN_SESSIONS)
     if blocks < BLOCK_FLOOR:
         raise SystemExit(
             f"{blocks} non-overlapping {BLOCK_LEN_SESSIONS}-session blocks < floor "
@@ -288,12 +302,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             "(memo section 6.3 / 12.1 item 5)"
         )
     floor = pair_floor(sd_d=args.sd_d, delta_min=args.delta_min)
-    if len(outcomes) < floor:
+    if len(feasible_days) < floor:
         raise SystemExit(
-            f"{len(outcomes)} pairs < the section 6.4 floor {floor} at the realised "
-            "sd — the look does not happen"
+            f"{len(feasible_days)} pairs < the section 6.4 floor {floor} at the "
+            "planning sd — the look does not happen"
         )
 
+    outcomes = compute_outcomes(extract, n0=args.n0, slippage_bps=PRIMARY_SLIPPAGE_BPS)
     arms = inference_arms(outcomes, n_boot=BOOTSTRAP_RESAMPLES, seed=BOOTSTRAP_SEED)
     widest_name, verdict = primary_verdict(arms)
     d = outcomes["d"].to_numpy(dtype=float)
@@ -338,7 +353,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             f"--span-start {extract['brief_date'].min()} "
             f"--span-end {extract['brief_date'].max()} (memo section 8.1 item 8)"
         ),
-        "sensitivities": _sensitivities(extract, n0=args.n0),
+        "sensitivities": _sensitivities(extract, n0=args.n0, primary=outcomes),
         "floors": {"blocks": blocks, "pair_floor": floor, "pairs": len(outcomes)},
         "extract_sha256": args.sha256,
     }
