@@ -126,7 +126,8 @@ jobs:
       - name: Run tests with coverage
         # NO coverage config applies to this run, deliberately (#1142). The
         # cwd is the repo root, whose pyproject.toml carries no [tool.coverage]
-        # section, and coverage reads config from the cwd ONLY — so the
+        # section, no --rcfile / COVERAGE_RCFILE override is set, and absent
+        # such an override coverage reads config from the cwd only — so the
         # measurement is UNSCOPED: every executed non-stdlib file is measured,
         # which is exactly what lets the diff-cover gate below and SonarCloud
         # see every first-party package (research, pipeline, broker-contract,

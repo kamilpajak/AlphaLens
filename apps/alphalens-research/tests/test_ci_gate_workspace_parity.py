@@ -28,10 +28,12 @@ Scope decisions (why this is parity, not equality):
     workflow, because the Django app is linted in its own CI job with its own
     ``uv sync``. Requiring one command line to name every member would force a
     layout the workflow does not have.
-  - Coverage and SonarCloud have the same blind spot on broker-contract and are
-    deliberately NOT asserted here — widening either moves the coverage
-    denominator and so the quality gate, which needs its own measurement. They
-    are tracked separately.
+  - SonarCloud joined as the fourth gate in #1142 (``sonar.sources`` — a
+    member outside it is invisible to analysis entirely). Coverage needs NO
+    parity list: the CI coverage run is repo-root-cwd and deliberately
+    UNSCOPED (no [tool.coverage] anywhere), so it measures every executed
+    first-party file with no source list that could drift — see the comment
+    on the ci.yml coverage step.
 
 Positive control:
   ``test_positive_control_ghost_member_would_fail`` drives the same pure helper
@@ -120,13 +122,34 @@ def _sonar_sources() -> list[str]:
     claims did not: the CI coverage run is repo-root-cwd and unscoped, so it
     already measures every executed first-party file).
     """
-    for line in SONAR_PROPERTIES.read_text(encoding="utf-8").splitlines():
-        if line.startswith("sonar.sources="):
-            return [tok.strip() for tok in line.split("=", 1)[1].split(",") if tok.strip()]
-    raise AssertionError(
-        f"Could not find a `sonar.sources=` line in {SONAR_PROPERTIES.name} — "
-        "the property moved or was renamed; update _sonar_sources in this test."
-    )
+    value: str | None = None
+    for raw in SONAR_PROPERTIES.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^\s*sonar\.sources\s*[:=]\s*(.*)$", raw)
+        if match is None:
+            continue
+        if raw.rstrip().endswith("\\"):
+            # .properties supports trailing-backslash line continuations. A
+            # continued list would parse WRONG-BUT-NONEMPTY here (only the
+            # first physical line), sliding past the vacuity guard — refuse
+            # the shape outright instead of mis-parsing it.
+            raise AssertionError(
+                "sonar.sources uses a line continuation — keep it on ONE "
+                "physical line, or teach _sonar_sources to join continuations."
+            )
+        if value is not None:
+            # In .properties the LAST occurrence wins, so a duplicate key is
+            # the dangerous shape: an earlier full list would satisfy the
+            # parity while SonarCloud reads a later partial one.
+            raise AssertionError(
+                f"Duplicate sonar.sources property in {SONAR_PROPERTIES.name} — keep exactly one."
+            )
+        value = match.group(1)
+    if value is None:
+        raise AssertionError(
+            f"Could not find a `sonar.sources` property in {SONAR_PROPERTIES.name} — "
+            "the property moved or was renamed; update _sonar_sources in this test."
+        )
+    return [tok.strip() for tok in value.split(",") if tok.strip()]
 
 
 def _members_missing_from(members: Iterable[str], gate_paths: Iterable[str]) -> set[str]:
