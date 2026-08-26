@@ -57,7 +57,9 @@ _UIC = 43070
 # 100 + 0.5*6 = 103. Chandelier target = peak - 2*atr. min_stop_distance_frac
 # (inherited from atr_bracket_1p5) = 0.002 -> the live-price clamp floor is
 # last_price*0.998, matching test_trail_wiring.py's pinned numbers.
-_TRAIL = TrailingAtrPolicy(resolve_policy("atr_bracket_1p5"), activation_r=0.5, k_atr=2.0)
+_TRAIL = TrailingAtrPolicy(
+    resolve_policy("atr_bracket_1p5"), name="trailing_atr", activation_r=0.5, k_atr=2.0
+)
 _ATR_BRACKET = resolve_exit_policy("atr_bracket_1p5")  # trails=False sibling
 
 
@@ -443,7 +445,11 @@ class TestBuildDefaultDepsFlagPath(unittest.TestCase):
             deps = cl.build_default_deps(
                 notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
             )
-        self.assertEqual(deps.exit_policy.name, "atr_bracket_1p5")  # the wire key (geometry)
+        # The flag path resolves the TRAILING policy, and the deps now say so.
+        # Before #1138 this asserted "atr_bracket_1p5" — the name of the policy
+        # this path deliberately does NOT resolve.
+        self.assertEqual(deps.exit_policy.name, "trailing_atr")
+        self.assertEqual(deps.exit_policy.geometry_name, "atr_bracket_1p5")
         self.assertTrue(deps.exit_policy.trails)
         self.assertTrue(deps.exit_policy.requires_amend_stop)
 

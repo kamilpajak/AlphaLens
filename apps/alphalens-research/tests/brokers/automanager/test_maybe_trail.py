@@ -42,7 +42,9 @@ _UIC = 43070
 # raw ``peak - k*atr`` and the assertions read cleanly. atr_bracket_1p5 sets
 # stop_atr_mult=1.5, so risk = 1.5*atr and activation fires at
 # ``peak >= avg_price + 0.5*1.5*atr``.
-_TRAIL = TrailingAtrPolicy(resolve_policy("atr_bracket_1p5"), activation_r=0.5, k_atr=2.0)
+_TRAIL = TrailingAtrPolicy(
+    resolve_policy("atr_bracket_1p5"), name="trailing_atr", activation_r=0.5, k_atr=2.0
+)
 _ATR_BRACKET = resolve_exit_policy("atr_bracket_1p5")  # trails=False sibling
 
 

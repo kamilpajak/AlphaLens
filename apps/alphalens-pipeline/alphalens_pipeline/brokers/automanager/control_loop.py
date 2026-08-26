@@ -1676,7 +1676,10 @@ def _route_pick_to_entry_watch(
             fx,
             d_bps=d_bps,
             geometry_stamp=_geometry_shadow_stamp(
-                exit_spec, intent.spec, use_geometry=use_geometry
+                exit_spec,
+                intent.spec,
+                use_geometry=use_geometry,
+                exit_policy=resolved_exit_policy,
             ),
         )
     # Broad on purpose: an unrecognised MIC (calendar ValueError) or a journal
@@ -5641,7 +5644,7 @@ _GEOMETRY_STAMP_TP_FLOOR_FRAC = resolve_policy(_GEOMETRY_STAMP_POLICY_NAME).tp_f
 
 
 def _geometry_shadow_stamp(
-    exit_spec: Any, spec: Any, *, use_geometry: bool
+    exit_spec: Any, spec: Any, *, use_geometry: bool, exit_policy: ExitPolicy
 ) -> dict[str, Any] | None:
     """The ``"geometry"`` stamp journaled alongside a ``planned`` line (memo §4.3).
 
@@ -5685,6 +5688,12 @@ def _geometry_shadow_stamp(
         # fact both sides reach it through the same atr_bracket_levels leaf.
         "anchor_mode": _GEOMETRY_STAMP_ANCHOR_MODE,
         "tp_floor_frac": _GEOMETRY_STAMP_TP_FLOOR_FRAC,
+        # Issue #1138: which POLICY ran, as distinct from which geometry it
+        # placed. ``policy_name`` above is the geometry and keeps that meaning
+        # on every row already written; this is the behavioural policy the
+        # daemon resolved from ALPHALENS_BROKER_EXIT_POLICY. Read off the
+        # already-resolved instance -- no registry lookup on the drain path.
+        "exit_policy_name": exit_policy.name,
     }
 
 
@@ -5928,7 +5937,12 @@ def _place_tiers(
                 stop_price=stop_price,
                 take_profit=take_profit,
                 tier_index=tier.tier_index,
-                geometry_stamp=_geometry_shadow_stamp(exit_spec, spec, use_geometry=use_geometry),
+                geometry_stamp=_geometry_shadow_stamp(
+                    exit_spec,
+                    spec,
+                    use_geometry=use_geometry,
+                    exit_policy=resolved_exit_policy,
+                ),
             )
         )
 

@@ -5462,7 +5462,11 @@ class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
         self.assertIsNotNone(deps)
         # The policy is resolved ONCE at startup and cached on the deps so the hot
         # protection path never re-resolves the env string (adversarial-review P0).
+        # Correct as-is: this path resolves the non-trailing bracket, whose own
+        # name IS "atr_bracket_1p5". Kept to pin that #1138 did not rename the
+        # policy that was always named honestly.
         self.assertEqual(deps.exit_policy.name, "atr_bracket_1p5")
+        self.assertFalse(deps.exit_policy.trails)
         self.assertTrue(deps.exit_policy.requires_amend_stop)
 
     def test_fail_fasts_when_flag_flipped_but_broker_cannot_amend(self) -> None:

@@ -56,7 +56,9 @@ _UIC = 43070
 # atr_bracket_1p5 base (stop_atr_mult=1.5): activation fires at
 # ``peak >= avg_price + activation_r*1.5*atr``; the Chandelier target is
 # ``peak - k_atr*atr``.
-_TRAIL = TrailingAtrPolicy(resolve_policy("atr_bracket_1p5"), activation_r=0.5, k_atr=2.0)
+_TRAIL = TrailingAtrPolicy(
+    resolve_policy("atr_bracket_1p5"), name="trailing_atr", activation_r=0.5, k_atr=2.0
+)
 _ATR_BRACKET = resolve_exit_policy("atr_bracket_1p5")  # trails=False sibling
 
 
