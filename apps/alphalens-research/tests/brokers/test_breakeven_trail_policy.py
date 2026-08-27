@@ -43,6 +43,11 @@ class TestFractionalGivebackTarget(unittest.TestCase):
         self.assertIsNone(fractional_giveback_target(math.nan, 110.0, frac=0.6))
         self.assertIsNone(fractional_giveback_target(100.0, math.inf, frac=0.6))
 
+    def test_frac_one_trails_at_the_peak(self):
+        # The upper bound is INCLUSIVE: frac=1.0 is a zero-giveback trail
+        # pinned to the peak itself.
+        self.assertAlmostEqual(fractional_giveback_target(100.0, 110.0, frac=1.0), 110.0)
+
     def test_none_on_frac_outside_unit_interval(self):
         self.assertIsNone(fractional_giveback_target(100.0, 110.0, frac=0.0))
         self.assertIsNone(fractional_giveback_target(100.0, 110.0, frac=-0.5))
