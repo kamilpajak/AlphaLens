@@ -291,21 +291,7 @@ def reconcile_brackets(
     asof = today or dt.datetime.now(dt.UTC).date()
     open_states = {state.order_id: state for state in broker.list_open_orders()}
     resolver = broker if isinstance(broker, SupportsOrderResolution) else None
-    cross_check: _CrossCheckData | None = None
-    if isinstance(broker, SupportsFillCrossCheck):
-        # Netted owned qty per uic — the per-uic multi-tier match source (§8),
-        # gated on its own capability so a broker that cannot net positions
-        # degrades to the source-tier / closed-pair join (empty map).
-        owned_by_uic = (
-            _owned_by_uic(broker.get_positions())
-            if isinstance(broker, SupportsPositionNetting)
-            else {}
-        )
-        cross_check = _CrossCheckData(
-            open_references=set(broker.get_open_position_references()),
-            closed_rows=[_flatten_closed_row(row) for row in broker.get_closed_position_rows()],
-            owned_by_uic=owned_by_uic,
-        )
+    cross_check = _build_cross_check(broker)
 
     slots: list[ReconcileVerdict | _PendingAudit] = []
     for record in records:
@@ -326,8 +312,33 @@ def reconcile_brackets(
         asof=asof,
         audit_budget=audit_budget,
     )
-    # Journal order is preserved for every EMITTED verdict; a deferred bracket
-    # simply has no row this pass (never a fabricated verdict).
+    return _merge_verdicts(slots, audited)
+
+
+def _build_cross_check(broker: Broker) -> _CrossCheckData | None:
+    """Snapshot the fill cross-check inputs when the broker supports them.
+
+    Netted owned qty per uic — the per-uic multi-tier match source (§8),
+    gated on its own capability so a broker that cannot net positions
+    degrades to the source-tier / closed-pair join (empty map)."""
+    if not isinstance(broker, SupportsFillCrossCheck):
+        return None
+    owned_by_uic = (
+        _owned_by_uic(broker.get_positions()) if isinstance(broker, SupportsPositionNetting) else {}
+    )
+    return _CrossCheckData(
+        open_references=set(broker.get_open_position_references()),
+        closed_rows=[_flatten_closed_row(row) for row in broker.get_closed_position_rows()],
+        owned_by_uic=owned_by_uic,
+    )
+
+
+def _merge_verdicts(
+    slots: list[ReconcileVerdict | _PendingAudit],
+    audited: dict[int, ReconcileVerdict],
+) -> list[ReconcileVerdict]:
+    """Journal order is preserved for every EMITTED verdict; a deferred bracket
+    simply has no row this pass (never a fabricated verdict)."""
     verdicts: list[ReconcileVerdict] = []
     for slot in slots:
         if isinstance(slot, _PendingAudit):
