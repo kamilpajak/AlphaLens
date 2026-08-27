@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
@@ -35,10 +35,19 @@ class TestPrescreenerConfig(unittest.TestCase):
 
 
 class TestSP500Universe(unittest.TestCase):
+    @patch("requests.get")
     @patch("alphalens_research.screeners.prescreener.universe.pd.read_html")
-    def test_fetch_returns_list_of_strings(self, mock_read_html):
+    def test_fetch_returns_list_of_strings(self, mock_read_html, mock_get):
+        """Both halves of the fetch are stubbed on purpose.
+
+        Patching only ``pd.read_html`` left the REAL ``requests.get`` to
+        Wikipedia running on every suite run — invisibly, because the mocked
+        parse discarded the page anyway. The no-live-network guard (#1179) is
+        what surfaced it: the request then raised, ``get_sp500_tickers``'s broad
+        except swallowed it, and the assertion saw the 503-ticker fallback."""
         from alphalens_research.screeners.prescreener.universe import get_sp500_tickers
 
+        mock_get.return_value = MagicMock(text="<table></table>")
         mock_read_html.return_value = [pd.DataFrame({"Symbol": ["AAPL", "MSFT", "GOOGL"]})]
         tickers = get_sp500_tickers()
         self.assertIsInstance(tickers, list)

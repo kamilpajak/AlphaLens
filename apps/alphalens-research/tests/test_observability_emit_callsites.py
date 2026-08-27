@@ -579,6 +579,19 @@ class TestThematicScoreCoreNumericsMetrics(unittest.TestCase):
             }
         )
 
+    def setUp(self) -> None:
+        # See TestThematicStageVolumeEmits.setUp: the placeholder POLYGON_API_KEY
+        # these tests inject would otherwise be baked into the process-wide
+        # client singleton and outlive the patch (#1179).
+        self._reset_polygon_singleton()
+        self.addCleanup(self._reset_polygon_singleton)
+
+    @staticmethod
+    def _reset_polygon_singleton() -> None:
+        from alphalens_pipeline.data.alt_data import polygon_client
+
+        polygon_client._reset_default_client_for_tests()
+
     def test_counts_rows_where_every_core_numeric_is_finite(self) -> None:
         import numpy as np
         from alphalens_cli.commands import thematic
@@ -688,6 +701,22 @@ class TestThematicStageVolumeEmits(unittest.TestCase):
         if cols:
             return pd.DataFrame(cols)
         return pd.DataFrame({"_": list(range(n))})
+
+    def setUp(self) -> None:
+        # Tests below put a PLACEHOLDER POLYGON_API_KEY in the environment so
+        # the stage under test can construct its clients. get_default_polygon_client
+        # caches a process-wide singleton, so without this the placeholder-keyed
+        # client OUTLIVES the patch.dict and serves every later test in the run —
+        # which is how live calls (and their 429 backoff) leaked across the suite
+        # before #1179. Reset before and after, so neither direction contaminates.
+        self._reset_polygon_singleton()
+        self.addCleanup(self._reset_polygon_singleton)
+
+    @staticmethod
+    def _reset_polygon_singleton() -> None:
+        from alphalens_pipeline.data.alt_data import polygon_client
+
+        polygon_client._reset_default_client_for_tests()
 
     def test_ingest_emits_stage_volume(self) -> None:
         import pandas as pd
