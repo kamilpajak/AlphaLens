@@ -2341,7 +2341,7 @@ def _commit_resolved_row(
     if result.guard_disposition is not None:
         _stamp_guard(row, result.guard_disposition, counts)
         if result.guard_disposition == DISPOSITION_SPLIT_INVALIDATED:
-            _apply_split_invalidation(row, last_closed_session)
+            row = _apply_split_invalidation(row, last_closed_session)
     rows_by_ticker[ticker] = _stamp_scorer_version(_stamp_theme(row, theme), scorer_version)
     counts["terminal" if row["terminal"] else "ongoing"] += 1
 
