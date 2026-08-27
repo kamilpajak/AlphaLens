@@ -532,10 +532,11 @@ def _arm_b_bracket_walk(
         mae_pct = (in_trade_low - fill_blend_slipped) / fill_blend_slipped
 
     net = gross - fees if charge_fees else gross
+    total_fees = fees if filled and charge_fees else 0.0
     return ArmOutcome(
         net_cash=net if filled else 0.0,
         gross_cash=gross if filled else 0.0,
-        total_fees=(fees if charge_fees else 0.0) if filled else 0.0,
+        total_fees=total_fees,
         chargeable_fills=fills,
         classification=classification,
         exit_levels=Levels(stop=stop, tp=tp, ceiling_capped=levels.ceiling_capped),

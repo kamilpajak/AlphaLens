@@ -82,7 +82,7 @@ def get_cached_vix(
             payload.get("fetched_at"),
         )
         return vix
-    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+    except (OSError, ValueError, TypeError, KeyError):
         return None
 
 
