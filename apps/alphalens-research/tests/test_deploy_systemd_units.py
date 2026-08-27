@@ -2146,7 +2146,7 @@ class TestSimBrokerManagerDropIns(unittest.TestCase):
                 "ALPHALENS_BROKER_SIZING_EQUITY": "100000",
                 "ALPHALENS_BROKER_SIZING_EQUITY_MODE": "declared",
                 "ALPHALENS_BROKER_STREAMING_ENABLED": "1",
-                "ALPHALENS_BROKER_EXIT_POLICY": "trailing_atr",
+                "ALPHALENS_BROKER_EXIT_POLICY": "breakeven_trail",
             },
         )
 
