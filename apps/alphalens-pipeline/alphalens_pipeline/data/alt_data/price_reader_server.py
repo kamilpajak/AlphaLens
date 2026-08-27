@@ -291,7 +291,9 @@ class PriceReaderServer:
     def start(self) -> None:
         """Bind, then serve in a background thread."""
         self._bind()
-        self._thread = threading.Thread(target=self._serve, name="price-reader-server", daemon=True)
+        self._thread = threading.Thread(
+            target=self._serve_in_background, name="price-reader-server", daemon=True
+        )
         self._thread.start()
         self._start_heartbeat()
 
@@ -308,14 +310,39 @@ class PriceReaderServer:
 
     def _serve(self) -> None:
         assert self._server is not None
-        with contextlib.suppress(Exception):
-            self._server.serve_forever(poll_interval=0.2)
+        self._server.serve_forever(poll_interval=0.2)
+
+    def _serve_in_background(self) -> None:
+        """``start()``'s thread body: a crash here must be LOUD in the log but
+        must not kill the hosting process (tests, or a future embedder)."""
+        try:
+            self._serve()
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("price reader: serve loop crashed", exc_info=True)
 
     def serve_forever(self) -> None:
-        """Bind and serve on the CALLING thread (the daemon entry point)."""
+        """Bind and serve on the CALLING thread (the daemon entry point).
+
+        Deliberately does NOT swallow exceptions: this is the unit's main loop,
+        so a real failure must reach the CLI and surface as a failed unit
+        rather than as a silent clean exit."""
         self._bind()
         self._start_heartbeat()
         self._serve()
+
+    def request_stop(self) -> None:
+        """Ask the server to stop from a context that MUST NOT BLOCK — namely a
+        signal handler.
+
+        ``stop()`` calls ``BaseServer.shutdown()``, which sets a flag and then
+        WAITS for the serve loop to acknowledge it. A signal handler runs on the
+        thread it interrupted, so calling ``stop()`` there from inside
+        ``serve_forever`` waits for a loop that cannot run again until the
+        handler returns: a permanent deadlock, measured before this method
+        existed (the process hung until SIGKILL, leaving the socket file and the
+        venue price subscription behind). Handing the blocking work to another
+        thread lets the interrupted loop resume, see the flag and exit."""
+        threading.Thread(target=self.stop, name="price-reader-stop", daemon=True).start()
 
     def _start_heartbeat(self) -> None:
         self._heartbeat_stop.clear()

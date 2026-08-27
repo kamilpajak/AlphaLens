@@ -751,8 +751,12 @@ def price_reader_command(
     server = reader.PriceReaderServer(stream, socket_path)
 
     def _shutdown(signum, frame) -> None:
-        """Signal-handler signature: both args are required and unused."""
-        server.stop()
+        """Signal-handler signature: both args are required and unused.
+
+        MUST use ``request_stop`` (non-blocking), never ``stop`` — a handler
+        runs on the thread it interrupted, and ``stop`` waits for that very
+        serve loop to acknowledge the shutdown."""
+        server.request_stop()
 
     # systemd stops the unit with SIGTERM; without a handler the process would
     # die with the socket file and the venue subscription still in place.
