@@ -4484,6 +4484,18 @@ def _parse_tranche_plan_line(
             )
             for t in raw_tranches
         )
+        # Same source-refusal as the scalars above: tranche_frac is covered by
+        # TpTranchePlan's [0, 1] guard (NaN fails the range check), but
+        # target_price and r_multiple have no construction guard — a
+        # hand-edited line carrying a non-finite take-profit must contribute
+        # nothing, never become a governing ladder whose TP limit goes to the
+        # broker.
+        for tranche in tranches:
+            if not math.isfinite(tranche.target_price) or not math.isfinite(tranche.r_multiple):
+                raise ValueError(
+                    f"non-finite tranche field for uic {uic}: "
+                    f"target_price={tranche.target_price!r} r_multiple={tranche.r_multiple!r}"
+                )
     except (KeyError, TypeError, ValueError):
         return None
     return uic, tranches, reference_qty, stop_price
@@ -4903,20 +4915,15 @@ def _track_tranche_plan(
     fired_lines: dict[int, list[Mapping[str, Any]]],
 ) -> None:
     """Advance the tranche-compaction state for one ``tranche_plan`` line,
-    mirroring ``_fold_fired_since_latest_plan``'s identity-keyed reset EXACTLY:
-    a keyless line or a ``pick_key`` differing from the uic's governing key
-    resets the fired accumulator; a same-key re-append (the crash-recovery
-    re-drive) does not. The line becomes the uic's latest plan always, and its
-    ladder-governing plan only when ``fold_tranche_plans`` accepts it as
-    well-formed (a corrupt line still resets fired but never governs the
-    ladder — the folds' own semantics, reproduced line-for-line)."""
-    key = line.get("pick_key")
-    if key is None or str(key) != governing_key.get(uic):
-        fired_lines.pop(uic, None)
-    if key is None:
-        governing_key.pop(uic, None)
-    else:
-        governing_key[uic] = str(key)
+    delegating the identity-keyed reset to ``_apply_generation_reset`` (the
+    live folds' single implementation): a keyless line or a ``pick_key``
+    differing from the uic's governing key resets the fired accumulator; a
+    same-key re-append (the crash-recovery re-drive) does not. The line
+    becomes the uic's latest plan always, and its ladder-governing plan only
+    when ``fold_tranche_plans`` accepts it as well-formed (a corrupt line
+    still resets fired but never governs the ladder — the folds' own
+    semantics)."""
+    _apply_generation_reset(_TRANCHE_PLAN_KIND, line, uic, governing_key, (fired_lines,))
     latest_plan[uic] = line
     if fold_tranche_plans([line]):
         ladder_line[uic] = line
