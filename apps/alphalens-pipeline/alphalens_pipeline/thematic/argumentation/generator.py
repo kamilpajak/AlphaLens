@@ -345,19 +345,9 @@ def generate_brief(
         )
         return None, BriefErrorKind.EMPTY
 
-    parsed = parse_extraction(raw)
+    parsed = _parse_with_repair(raw, facts)
     if parsed is None:
-        # finish_reason=STOP + parse failed → try json-repair (per
-        # Perplexity 2026-05-17 §1.2). The model finished generating but
-        # the JSON has small structural errors (missing comma, trailing
-        # bracket, etc); json_repair often salvages exactly the kind of
-        # output the schema expects. We do NOT apply repair to TRUNCATED
-        # responses — those short-circuit upstream so the retry wrapper
-        # can drive a fresh attempt with more tokens.
-        parsed = _try_json_repair(raw, ticker=facts.get("ticker"))
-        if parsed is None:
-            logger.warning("brief response unparseable for %s: %r", facts.get("ticker"), raw[:200])
-            return None, BriefErrorKind.MALFORMED_JSON
+        return None, BriefErrorKind.MALFORMED_JSON
 
     # Defensive: ensure all 4 expected keys present; missing key → string "".
     for key in BRIEF_RESPONSE_SCHEMA["required"]:
@@ -395,11 +385,47 @@ def generate_brief(
     # parsed cleanly, but it violates a hard contract. INERT unless the record
     # is bottom-level, absent, or not grounded, so a well-grounded brief is
     # never touched.
-    # An absent ``causal_support`` means the CALLER projected no record at all,
-    # which is not the same as a record that failed: there is nothing for the
-    # prose to contradict, so the guard stays inert. Production cannot take this
-    # branch — ``orchestrator._row_to_facts`` always projects the key, using
-    # ``no_record`` for an outage, and a test pins that.
+    if _support_guard_fires(parsed, facts, violation_sink):
+        return None, BriefErrorKind.UNSUPPORTED_BENEFIT_CLAIM
+
+    parsed["model_used"] = model
+    return parsed, BriefErrorKind.NONE
+
+
+def _parse_with_repair(raw: str, facts: dict) -> dict | None:
+    """Parse the brief body, falling back to json-repair on a clean-finish parse fail.
+
+    finish_reason=STOP + parse failed → try json-repair (per Perplexity
+    2026-05-17 §1.2). The model finished generating but the JSON has small
+    structural errors (missing comma, trailing bracket, etc); json_repair often
+    salvages exactly the kind of output the schema expects. We do NOT apply
+    repair to TRUNCATED responses — those short-circuit upstream so the retry
+    wrapper can drive a fresh attempt with more tokens."""
+    parsed = parse_extraction(raw)
+    if parsed is not None:
+        return parsed
+    parsed = _try_json_repair(raw, ticker=facts.get("ticker"))
+    if parsed is None:
+        logger.warning("brief response unparseable for %s: %r", facts.get("ticker"), raw[:200])
+    return parsed
+
+
+def _support_guard_fires(parsed: dict, facts: dict, violation_sink: list | None) -> bool:
+    """Run the support-language guard; True when an unsuppressed violation fires.
+
+    An absent ``causal_support`` means the CALLER projected no record at all,
+    which is not the same as a record that failed: there is nothing for the
+    prose to contradict, so the guard stays inert. Production cannot take this
+    branch — ``orchestrator._row_to_facts`` always projects the key, using
+    ``no_record`` for an outage, and a test pins that.
+
+    The sink is refilled on EVERY guard-evaluated draw, including a draw with
+    no matches at all, so it always describes the LAST draw the guard actually
+    scanned. That is what lets the caller tell "the guard fired and the
+    re-roll then died for another reason" (sink holds the first draw, because
+    the second never reached the guard) from "no draw ever reached the guard"
+    (sink empty). Suppressed matches ride along: a suppressor that misfires
+    must be visible, not indistinguishable from no match at all."""
     causal_support = str(facts.get("causal_support") or "")
     matches = (
         check_support_language(
@@ -413,33 +439,22 @@ def generate_brief(
         if causal_support
         else []
     )
-    # The sink is refilled on EVERY guard-evaluated draw, including a draw with
-    # no matches at all, so it always describes the LAST draw the guard actually
-    # scanned. That is what lets the caller tell "the guard fired and the
-    # re-roll then died for another reason" (sink holds the first draw, because
-    # the second never reached the guard) from "no draw ever reached the guard"
-    # (sink empty). Suppressed matches ride along: a suppressor that misfires
-    # must be visible, not indistinguishable from no match at all.
     if causal_support and violation_sink is not None:
         violation_sink.clear()
         violation_sink.extend(matches)
     violations = [v for v in matches if v.suppressed_by is None]
-    if violations:
-        for violation in violations:
-            logger.warning(
-                "brief asserts an unsupported benefit for %s "
-                "(causal_support=%s, grounding=%s, field=%s, phrase=%r): %s",
-                facts.get("ticker"),
-                facts.get("causal_support"),
-                facts.get("channel_grounding"),
-                violation.field,
-                violation.matched_phrase,
-                violation.span,
-            )
-        return None, BriefErrorKind.UNSUPPORTED_BENEFIT_CLAIM
-
-    parsed["model_used"] = model
-    return parsed, BriefErrorKind.NONE
+    for violation in violations:
+        logger.warning(
+            "brief asserts an unsupported benefit for %s "
+            "(causal_support=%s, grounding=%s, field=%s, phrase=%r): %s",
+            facts.get("ticker"),
+            facts.get("causal_support"),
+            facts.get("channel_grounding"),
+            violation.field,
+            violation.matched_phrase,
+            violation.span,
+        )
+    return bool(violations)
 
 
 def _try_json_repair(raw: str, *, ticker: str | None = None) -> dict | None:

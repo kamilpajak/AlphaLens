@@ -2297,28 +2297,53 @@ def _resolve_queue(
             _stamp_guard(rows_by_ticker[ticker], result.disposition, counts)
             continue
 
-        row = _terminal_row(
-            item.brief_date,
-            ticker,
-            item.candidate.trade_setup,
-            result.outcome,
-            item.cutoffs,
-            last_closed_session,
-            last_priced_session=result.horizon_session,
-            last_resolved_session=result.horizon_session,
-            reference_close=result.reference_close,
-            grid_realized_r=result.grid_realized_r,
-            breakeven_grid_r=result.breakeven_grid_r,
-            realized_r_full=result.realized_r_full,
-            prior_chart_payload=_carried_chart(item.prior),
+        _commit_resolved_row(
+            item,
+            result,
+            ticker=ticker,
+            theme=theme,
+            scorer_version=scorer_version,
+            rows_by_ticker=rows_by_ticker,
+            counts=counts,
+            last_closed_session=last_closed_session,
         )
-        if result.guard_disposition is not None:
-            _stamp_guard(row, result.guard_disposition, counts)
-            if result.guard_disposition == DISPOSITION_SPLIT_INVALIDATED:
-                _apply_split_invalidation(row, last_closed_session)
-        rows_by_ticker[ticker] = _stamp_scorer_version(_stamp_theme(row, theme), scorer_version)
-        counts["terminal" if row["terminal"] else "ongoing"] += 1
     return deferred_ages
+
+
+def _commit_resolved_row(
+    item: _ResolveItem,
+    result: _ResolveResult,
+    *,
+    ticker: str,
+    theme: str | None,
+    scorer_version: str | None,
+    rows_by_ticker: dict[str, dict[str, Any]],
+    counts: dict[str, int],
+    last_closed_session: dt.date,
+) -> None:
+    """Build, guard-stamp, and store the terminal/ongoing row for one resolve."""
+    assert item.candidate.trade_setup is not None
+    row = _terminal_row(
+        item.brief_date,
+        ticker,
+        item.candidate.trade_setup,
+        result.outcome,
+        item.cutoffs,
+        last_closed_session,
+        last_priced_session=result.horizon_session,
+        last_resolved_session=result.horizon_session,
+        reference_close=result.reference_close,
+        grid_realized_r=result.grid_realized_r,
+        breakeven_grid_r=result.breakeven_grid_r,
+        realized_r_full=result.realized_r_full,
+        prior_chart_payload=_carried_chart(item.prior),
+    )
+    if result.guard_disposition is not None:
+        _stamp_guard(row, result.guard_disposition, counts)
+        if result.guard_disposition == DISPOSITION_SPLIT_INVALIDATED:
+            _apply_split_invalidation(row, last_closed_session)
+    rows_by_ticker[ticker] = _stamp_scorer_version(_stamp_theme(row, theme), scorer_version)
+    counts["terminal" if row["terminal"] else "ongoing"] += 1
 
 
 def _stamp_guard(row: dict[str, Any], disposition: str, counts: dict[str, int]) -> None:

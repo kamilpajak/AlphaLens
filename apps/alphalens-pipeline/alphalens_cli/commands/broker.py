@@ -1703,37 +1703,10 @@ def stream_status_command(
 
     path = textfile._resolve_dir() / f"alphalens_domain_{job}.prom"
     if not path.is_file():
-        error = {
-            "code": _STREAM_STATUS_MISSING_CODE,
-            "message": f"no stream gauge textfile at {path}",
-            "retryable": False,
-            "details": {"path": str(path), "env": env, "job": job},
-            "suggestions": [
-                {
-                    "argv": [
-                        "systemctl",
-                        "--user",
-                        "status",
-                        "alphalens-broker-manager.service",
-                    ],
-                    "why": (
-                        "the daemon writes the gauges every tick only while it "
-                        "runs with ALPHALENS_BROKER_STREAMING_ENABLED=1"
-                    ),
-                }
-            ],
-        }
-        typer.secho(json.dumps(error), err=True)
+        _emit_stream_status_missing(path, env=env, job=job)
         raise typer.Exit(code=_STREAM_STATUS_EXIT_NOT_FOUND)
 
-    gauges: dict[str, float] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        match = _PROM_LINE_RE.match(line.strip())
-        if match:
-            try:
-                gauges[match.group("name")] = float(match.group("value"))
-            except ValueError:  # a malformed value line is skipped, not fatal
-                continue
+    gauges = _parse_prom_gauges(path)
 
     result = {
         "schema": _STREAM_STATUS_SCHEMA,
@@ -1746,6 +1719,50 @@ def stream_status_command(
     if output_format == "json":
         typer.echo(json.dumps(result))
         return
+
+    _render_stream_status_human(env, gauges)
+
+
+def _emit_stream_status_missing(path: Path, *, env: str, job: str) -> None:
+    """Write the structured not-found error for ``stream status`` to stderr."""
+    error = {
+        "code": _STREAM_STATUS_MISSING_CODE,
+        "message": f"no stream gauge textfile at {path}",
+        "retryable": False,
+        "details": {"path": str(path), "env": env, "job": job},
+        "suggestions": [
+            {
+                "argv": [
+                    "systemctl",
+                    "--user",
+                    "status",
+                    "alphalens-broker-manager.service",
+                ],
+                "why": (
+                    "the daemon writes the gauges every tick only while it "
+                    "runs with ALPHALENS_BROKER_STREAMING_ENABLED=1"
+                ),
+            }
+        ],
+    }
+    typer.secho(json.dumps(error), err=True)
+
+
+def _parse_prom_gauges(path: Path) -> dict[str, float]:
+    """Parse ``name value`` gauge lines; a malformed value line is skipped, not fatal."""
+    gauges: dict[str, float] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = _PROM_LINE_RE.match(line.strip())
+        if match:
+            try:
+                gauges[match.group("name")] = float(match.group("value"))
+            except ValueError:
+                continue
+    return gauges
+
+
+def _render_stream_status_human(env: str, gauges: dict[str, float]) -> None:
+    """Render the stream gauges as the human table (same facts as the JSON)."""
 
     def _gauge(name: str) -> float | None:
         return gauges.get(f"alphalens_broker_manager_stream_{name}")

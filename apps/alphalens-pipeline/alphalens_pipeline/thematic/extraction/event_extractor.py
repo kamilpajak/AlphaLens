@@ -405,25 +405,9 @@ def extract_daily(
     # metrics flush below sees the same accumulator every row fed.
     eng = engine if engine is not None else _get_default_engine()
 
-    new_rows: list[dict] = []
-    for _, row in to_extract.iterrows():
-        event = extract_one(
-            row,
-            llm_client=llm_client,
-            model=model,
-            engine=eng,
-            resolver=resolver,
-        )
-        if event is None:
-            continue
-        new_rows.append(
-            {
-                "news_id": row["id"],
-                **event,
-                "model": model,
-                "extracted_at": pd.Timestamp.now(tz="UTC"),
-            }
-        )
+    new_rows = _extract_new_rows(
+        to_extract, llm_client=llm_client, model=model, engine=eng, resolver=resolver
+    )
 
     if new_rows:
         new_df = pd.DataFrame(new_rows)
@@ -451,6 +435,37 @@ def extract_daily(
         logger.exception("template metrics flush failed; the extract run succeeded")
 
     return combined
+
+
+def _extract_new_rows(
+    to_extract: pd.DataFrame,
+    *,
+    llm_client: OpenRouterClient,
+    model: str,
+    engine: TemplateEngine,
+    resolver: EntityResolver | None,
+) -> list[dict]:
+    """Extract one event row per not-yet-cached news item; skipped items drop out."""
+    new_rows: list[dict] = []
+    for _, row in to_extract.iterrows():
+        event = extract_one(
+            row,
+            llm_client=llm_client,
+            model=model,
+            engine=engine,
+            resolver=resolver,
+        )
+        if event is None:
+            continue
+        new_rows.append(
+            {
+                "news_id": row["id"],
+                **event,
+                "model": model,
+                "extracted_at": pd.Timestamp.now(tz="UTC"),
+            }
+        )
+    return new_rows
 
 
 __all__ = [
