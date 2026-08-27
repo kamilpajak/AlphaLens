@@ -715,6 +715,61 @@ def marketdata_auth_command(
         typer.echo("refresh         stored (single-use, rotates on every refresh)")
 
 
+@broker_app.command(name="price-reader")
+def price_reader_command(
+    socket: Path = typer.Option(
+        None,
+        "--socket",
+        help="UNIX socket to serve on (default: ~/.alphalens/price_reader/reader.sock, "
+        "or $ALPHALENS_SAXO_PRICE_READER_SOCKET).",
+    ),
+) -> None:
+    """Serve the ONE elevated Saxo LIVE price session to the local daemons.
+
+    Saxo grants a single elevated (real-time) session per LIVE login, so the SIM
+    and LIVE broker-manager daemons cannot each hold one — the second silently
+    demotes both to 15-minute-delayed quotes. This process holds it instead and
+    both daemons read from it over a local socket (#1172).
+
+    Runs until stopped. On exit the price subscription is deleted and the venue
+    session released, so a restart never leaves an orphan subscription behind.
+    """
+    import contextlib
+    import signal
+
+    from alphalens_pipeline.brokers.automanager.control_loop import (
+        _stream_session_window_if_enabled,
+    )
+    from alphalens_pipeline.data.alt_data import price_reader_server as reader
+    from alphalens_pipeline.data.alt_data.saxo_price_stream import get_shared_price_stream
+
+    socket_path = Path(socket) if socket is not None else reader.default_socket_path()
+    stream = get_shared_price_stream(
+        metrics_job=reader.READER_STREAM_METRICS_JOB,
+        session_window=_stream_session_window_if_enabled(),
+    )
+    server = reader.PriceReaderServer(stream, socket_path)
+
+    def _shutdown(signum, frame) -> None:
+        """Signal-handler signature: both args are required and unused."""
+        server.stop()
+
+    # systemd stops the unit with SIGTERM; without a handler the process would
+    # die with the socket file and the venue subscription still in place.
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(ValueError):  # not the main thread (tests)
+            signal.signal(sig, _shutdown)
+
+    typer.echo(f"price-reader serving on {socket_path}", err=True)
+    try:
+        server.serve_forever()
+    finally:
+        server.stop()
+        # Release the elevated session LAST: the server must stop accepting
+        # before the quotes behind it disappear.
+        stream.stop()
+
+
 @broker_app.command(name="account")
 def account_command() -> None:
     """Print the broker account snapshot (cash, total value, margin)."""
