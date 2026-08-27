@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from alphalens_pipeline.brokers.automanager.costs import (
@@ -294,6 +294,87 @@ def _tranche_sold_shares(
     return sold, 1.0 - cumulative
 
 
+@dataclass
+class _CashAcc:
+    """Mutable cash accumulator shared by the engine-outcome render helpers."""
+
+    gross: float = 0.0
+    fees: float = 0.0
+    fills: int = 0
+    entry_cost: float = 0.0
+    first_fill_ts: int | None = None
+    exit_ts: int | None = None
+
+
+def _acc_entry_crossings(
+    acc: _CashAcc,
+    outcome: LadderOutcome,
+    ladder: Any,
+    quantities: Mapping[str, float],
+    slip: float,
+) -> None:
+    """Fold the ENTRY crossings (buys) and the first exit timestamp into ``acc``."""
+    by_id = {lvl.level_id: lvl for lvl in ladder.entries}
+    for crossing in outcome.sequence:
+        if crossing.kind == "ENTRY" and crossing.level_id in outcome.entries_filled:
+            lvl = by_id[crossing.level_id]
+            qty = quantities.get(lvl.level_id, 0.0)
+            if qty <= 0:
+                continue  # execution.py skips zero-qty tiers; no phantom $1 minimum
+            price = lvl.price * (1.0 + slip)
+            acc.gross -= qty * price
+            acc.entry_cost += qty * price
+            acc.fees += _per_fill_fee(qty * price)
+            acc.fills += 1
+            if acc.first_fill_ts is None:
+                acc.first_fill_ts = crossing.bar_ts_ms
+        elif crossing.kind in ("SL", "TP", "TIME_STOP") and acc.exit_ts is None:
+            acc.exit_ts = crossing.bar_ts_ms
+
+
+def _acc_tp_sales(
+    acc: _CashAcc,
+    sold: Sequence[tuple[str, float, float]],
+    shares: float,
+    slip: float,
+) -> None:
+    """Fold the tranche scale-out sells into ``acc``."""
+    for _tp_id, price, share in sold:
+        qty = share * shares
+        if qty <= 0:
+            continue
+        eff = price * (1.0 - slip)
+        acc.gross += qty * eff
+        acc.fees += _per_fill_fee(qty * eff)
+        acc.fills += 1
+
+
+def _acc_residual(
+    acc: _CashAcc,
+    outcome: LadderOutcome,
+    ladder: Any,
+    residual: float,
+    shares: float,
+    slip: float,
+    last_close: float | None,
+) -> None:
+    """Fold the residual position into ``acc`` — a stop fill or a §5.4 mark."""
+    if residual <= 1e-12:
+        return
+    qty = residual * shares
+    if outcome.sl_hit:
+        assert ladder.disaster_stop is not None
+        eff = ladder.disaster_stop * (1.0 - slip)
+        acc.gross += qty * eff
+        acc.fees += _per_fill_fee(qty * eff)
+        acc.fills += 1
+    else:
+        mark = _mark_price(outcome, last_close)
+        if mark is not None:
+            # A mark is a valuation, not a fill: no fee, no slippage (§5.4).
+            acc.gross += qty * mark
+
+
 def _cash_from_engine_outcome(
     trade_setup: Mapping[str, Any],
     outcome: LadderOutcome,
@@ -321,69 +402,28 @@ def _cash_from_engine_outcome(
             exit_levels=exit_levels,
         )
 
-    gross = 0.0
-    fees = 0.0
-    fills = 0
-    entry_cost = 0.0
-    first_fill_ts: int | None = None
-    exit_ts: int | None = None
-
-    by_id = {lvl.level_id: lvl for lvl in ladder.entries}
-    for crossing in outcome.sequence:
-        if crossing.kind == "ENTRY" and crossing.level_id in outcome.entries_filled:
-            lvl = by_id[crossing.level_id]
-            qty = quantities.get(lvl.level_id, 0.0)
-            if qty <= 0:
-                continue  # execution.py skips zero-qty tiers; no phantom $1 minimum
-            price = lvl.price * (1.0 + slip)
-            gross -= qty * price
-            entry_cost += qty * price
-            fees += _per_fill_fee(qty * price)
-            fills += 1
-            if first_fill_ts is None:
-                first_fill_ts = crossing.bar_ts_ms
-        elif crossing.kind in ("SL", "TP", "TIME_STOP") and exit_ts is None:
-            exit_ts = crossing.bar_ts_ms
+    acc = _CashAcc()
+    _acc_entry_crossings(acc, outcome, ladder, quantities, slip)
 
     shares = filled_shares(trade_setup, outcome.entries_filled, notional=notional)
     filled_frac = outcome.filled_fraction or 0.0
     sold, residual = _tranche_sold_shares(ladder.tps, set(outcome.tps_hit), filled_frac)
-    for _tp_id, price, share in sold:
-        qty = share * shares
-        if qty <= 0:
-            continue
-        eff = price * (1.0 - slip)
-        gross += qty * eff
-        fees += _per_fill_fee(qty * eff)
-        fills += 1
+    _acc_tp_sales(acc, sold, shares, slip)
+    _acc_residual(acc, outcome, ladder, residual, shares, slip, last_close)
 
-    if residual > 1e-12:
-        qty = residual * shares
-        if outcome.sl_hit:
-            assert ladder.disaster_stop is not None
-            eff = ladder.disaster_stop * (1.0 - slip)
-            gross += qty * eff
-            fees += _per_fill_fee(qty * eff)
-            fills += 1
-        else:
-            mark = _mark_price(outcome, last_close)
-            if mark is not None:
-                # A mark is a valuation, not a fill: no fee, no slippage (§5.4).
-                gross += qty * mark
-
-    net = gross - fees if charge_fees else gross
+    net = acc.gross - acc.fees if charge_fees else acc.gross
     return ArmOutcome(
         net_cash=net,
-        gross_cash=gross,
-        total_fees=fees if charge_fees else 0.0,
-        chargeable_fills=fills,
+        gross_cash=acc.gross,
+        total_fees=acc.fees if charge_fees else 0.0,
+        chargeable_fills=acc.fills,
         classification=outcome.classification,
         used_fallback=used_fallback,
         exit_levels=exit_levels,
-        first_fill_ts_ms=first_fill_ts,
-        exit_ts_ms=exit_ts,
+        first_fill_ts_ms=acc.first_fill_ts,
+        exit_ts_ms=acc.exit_ts,
         mae_pct=outcome.mae_pct,
-        entry_cost=entry_cost,
+        entry_cost=acc.entry_cost,
     )
 
 
@@ -411,6 +451,132 @@ def _mark_price(outcome: LadderOutcome, last_close: float | None) -> float | Non
 # --------------------------------------------------------------------------
 
 
+@dataclass
+class _BracketWalkState:
+    """Mutable per-walk state threaded through the ``_arm_b_bracket_walk`` helpers."""
+
+    stop: float
+    tp: float
+    filled: list[Any] = field(default_factory=list)
+    filled_ids: set[str] = field(default_factory=set)
+    gross: float = 0.0
+    fees: float = 0.0
+    fills: int = 0
+    entry_cost: float = 0.0
+    first_fill_ts: int | None = None
+    exit_ts: int | None = None
+    classification: str = "NO_FILL"
+    in_trade_low: float | None = None
+    fill_blend_slipped: float | None = None
+
+
+def _walk_fill_entries(
+    state: _BracketWalkState,
+    ladder: Any,
+    quantities: Mapping[str, float],
+    slip: float,
+    *,
+    ts: int,
+    low: float,
+    entry_expiry_ms: int | None,
+) -> bool:
+    """Fill any tier limits this bar reaches; True when a NEW tier filled."""
+    newly_filled = False
+    for lvl in ladder.entries:
+        if entry_expiry_ms is not None and ts >= entry_expiry_ms:
+            break
+        if lvl.level_id not in state.filled_ids and low <= lvl.price:
+            state.filled.append(lvl)
+            state.filled_ids.add(lvl.level_id)
+            qty = quantities.get(lvl.level_id, 0.0)
+            if qty > 0:  # execution.py skips zero-qty tiers
+                price = lvl.price * (1.0 + slip)
+                state.gross -= qty * price
+                state.entry_cost += qty * price
+                state.fees += _per_fill_fee(qty * price)
+                state.fills += 1
+            newly_filled = True
+            if state.first_fill_ts is None:
+                state.first_fill_ts = ts
+    return newly_filled
+
+
+def _walk_reanchor(state: _BracketWalkState, ladder: Any, slip: float) -> None:
+    """ReanchorOnFill (§5.2): the realised average fill in the replay is the
+    alloc-weighted blend of the tier LIMITS that filled, plus the declared
+    entry slippage. Re-fires on every NEW blend, mirroring the live
+    per-avg_price latch."""
+    wsum = sum(lvl.weight for lvl in state.filled)
+    blend = (
+        sum(lvl.price * lvl.weight for lvl in state.filled) / wsum
+        if wsum > 0
+        else sum(lvl.price for lvl in state.filled) / len(state.filled)
+    )
+    state.fill_blend_slipped = blend * (1.0 + slip)
+    reanchored = arm_b_reanchored_stop(
+        state.fill_blend_slipped, ladder.atr, brief_disaster_stop=ladder.disaster_stop
+    )
+    if reanchored is not None:
+        state.stop = reanchored
+
+
+def _walk_try_exit(
+    state: _BracketWalkState,
+    held: float,
+    slip: float,
+    *,
+    ts: int,
+    low: float,
+    high: float,
+    close: float,
+    position_expiry_ms: int | None,
+) -> bool:
+    """Resolve this bar's exit, if any: SL first, then TP, then the time stop."""
+    if low <= state.stop:
+        # SL-first on the same-bar ambiguity, as at the engine.
+        eff = state.stop * (1.0 - slip)
+        state.gross += held * eff
+        state.fees += _per_fill_fee(held * eff)
+        state.fills += 1
+        state.classification = "SL_HIT"
+        state.exit_ts = ts
+        return True
+    if high >= state.tp:
+        eff = state.tp * (1.0 - slip)
+        state.gross += held * eff
+        state.fees += _per_fill_fee(held * eff)
+        state.fills += 1
+        state.classification = "TP_FULL"
+        state.exit_ts = ts
+        return True
+    if position_expiry_ms is not None and ts >= position_expiry_ms:
+        state.gross += held * close  # mark, not a fill (§5.4)
+        state.classification = "TIME_STOP"
+        state.exit_ts = ts
+        return True
+    return False
+
+
+def _walk_mark_open_remainder(
+    state: _BracketWalkState,
+    trade_setup: Mapping[str, Any],
+    ordered: Sequence[Mapping[str, Any]],
+    *,
+    notional: float,
+) -> None:
+    """Bars ended before any exit event: the position is OPEN and the remainder
+    is MARKED at the last close (engine semantics; the driver's §5.1 rule 4
+    makes this unreachable in the primary, but the variant paths and ad-hoc
+    calls must not report NO_FILL cash while holding shares)."""
+    if not state.filled or state.classification != "NO_FILL":
+        return
+    held = filled_shares(trade_setup, tuple(state.filled_ids), notional=notional)
+    last_close = _last_close(ordered)
+    if held > 0 and last_close is not None:
+        state.gross += held * last_close
+    state.classification = "OPEN"
+
+
 def _arm_b_bracket_walk(
     trade_setup: Mapping[str, Any],
     bars: Sequence[Mapping[str, Any]],
@@ -428,122 +594,63 @@ def _arm_b_bracket_walk(
     assert ladder.ok and ladder.disaster_stop is not None and ladder.atr is not None
     quantities = _tier_quantities(trade_setup, notional=notional)
 
-    stop = levels.stop
-    tp = levels.tp
-    filled: list[Any] = []
-    filled_ids: set[str] = set()
-    gross = 0.0
-    fees = 0.0
-    fills = 0
-    entry_cost = 0.0
-    first_fill_ts: int | None = None
-    exit_ts: int | None = None
-    classification = "NO_FILL"
-    in_trade_low: float | None = None
-    fill_blend_slipped: float | None = None
-
+    state = _BracketWalkState(stop=levels.stop, tp=levels.tp)
     ordered = sorted(bars, key=lambda b: int(b["t"]))
     assert TIE_BREAK_SL_FIRST == "sl_first"  # convention documented at the engine
 
     for bar in ordered:
         ts, low, high, close = int(bar["t"]), float(bar["l"]), float(bar["h"]), float(bar["c"])
 
-        newly_filled = False
-        for lvl in ladder.entries:
-            if entry_expiry_ms is not None and ts >= entry_expiry_ms:
-                break
-            if lvl.level_id not in filled_ids and low <= lvl.price:
-                filled.append(lvl)
-                filled_ids.add(lvl.level_id)
-                qty = quantities.get(lvl.level_id, 0.0)
-                if qty > 0:  # execution.py skips zero-qty tiers
-                    price = lvl.price * (1.0 + slip)
-                    gross -= qty * price
-                    entry_cost += qty * price
-                    fees += _per_fill_fee(qty * price)
-                    fills += 1
-                newly_filled = True
-                if first_fill_ts is None:
-                    first_fill_ts = ts
-
-        if not filled:
+        newly_filled = _walk_fill_entries(
+            state, ladder, quantities, slip, ts=ts, low=low, entry_expiry_ms=entry_expiry_ms
+        )
+        if not state.filled:
             continue
 
         if newly_filled and reanchor:
-            # ReanchorOnFill (§5.2): the realised average fill in the replay is
-            # the alloc-weighted blend of the tier LIMITS that filled, plus the
-            # declared entry slippage. Re-fires on every NEW blend, mirroring
-            # the live per-avg_price latch.
-            wsum = sum(lvl.weight for lvl in filled)
-            blend = (
-                sum(lvl.price * lvl.weight for lvl in filled) / wsum
-                if wsum > 0
-                else sum(lvl.price for lvl in filled) / len(filled)
-            )
-            fill_blend_slipped = blend * (1.0 + slip)
-            reanchored = arm_b_reanchored_stop(
-                fill_blend_slipped, ladder.atr, brief_disaster_stop=ladder.disaster_stop
-            )
-            if reanchored is not None:
-                stop = reanchored
+            _walk_reanchor(state, ladder, slip)
 
-        in_trade_low = low if in_trade_low is None else min(in_trade_low, low)
+        state.in_trade_low = low if state.in_trade_low is None else min(state.in_trade_low, low)
 
-        held = filled_shares(trade_setup, tuple(filled_ids), notional=notional)
+        held = filled_shares(trade_setup, tuple(state.filled_ids), notional=notional)
         if held <= 0:
             continue
-        if low <= stop:
-            # SL-first on the same-bar ambiguity, as at the engine.
-            eff = stop * (1.0 - slip)
-            gross += held * eff
-            fees += _per_fill_fee(held * eff)
-            fills += 1
-            classification = "SL_HIT"
-            exit_ts = ts
-            break
-        if high >= tp:
-            eff = tp * (1.0 - slip)
-            gross += held * eff
-            fees += _per_fill_fee(held * eff)
-            fills += 1
-            classification = "TP_FULL"
-            exit_ts = ts
-            break
-        if position_expiry_ms is not None and ts >= position_expiry_ms:
-            gross += held * close  # mark, not a fill (§5.4)
-            classification = "TIME_STOP"
-            exit_ts = ts
+        if _walk_try_exit(
+            state,
+            held,
+            slip,
+            ts=ts,
+            low=low,
+            high=high,
+            close=close,
+            position_expiry_ms=position_expiry_ms,
+        ):
             break
     else:
-        if filled and classification == "NO_FILL":
-            # Bars ended before any exit event: the position is OPEN and the
-            # remainder is MARKED at the last close (engine semantics; the
-            # driver's §5.1 rule 4 makes this unreachable in the primary, but
-            # the variant paths and ad-hoc calls must not report NO_FILL cash
-            # while holding shares).
-            held = filled_shares(trade_setup, tuple(filled_ids), notional=notional)
-            last_close = _last_close(ordered)
-            if held > 0 and last_close is not None:
-                gross += held * last_close
-            classification = "OPEN"
+        _walk_mark_open_remainder(state, trade_setup, ordered, notional=notional)
 
     mae_pct: float | None = None
-    if fill_blend_slipped is not None and in_trade_low is not None and fill_blend_slipped > 0:
-        mae_pct = (in_trade_low - fill_blend_slipped) / fill_blend_slipped
+    if (
+        state.fill_blend_slipped is not None
+        and state.in_trade_low is not None
+        and state.fill_blend_slipped > 0
+    ):
+        mae_pct = (state.in_trade_low - state.fill_blend_slipped) / state.fill_blend_slipped
 
-    net = gross - fees if charge_fees else gross
-    total_fees = fees if filled and charge_fees else 0.0
+    filled = bool(state.filled)
+    net = state.gross - state.fees if charge_fees else state.gross
+    total_fees = state.fees if filled and charge_fees else 0.0
     return ArmOutcome(
         net_cash=net if filled else 0.0,
-        gross_cash=gross if filled else 0.0,
+        gross_cash=state.gross if filled else 0.0,
         total_fees=total_fees,
-        chargeable_fills=fills,
-        classification=classification,
-        exit_levels=Levels(stop=stop, tp=tp, ceiling_capped=levels.ceiling_capped),
-        first_fill_ts_ms=first_fill_ts,
-        exit_ts_ms=exit_ts,
+        chargeable_fills=state.fills,
+        classification=state.classification,
+        exit_levels=Levels(stop=state.stop, tp=state.tp, ceiling_capped=levels.ceiling_capped),
+        first_fill_ts_ms=state.first_fill_ts,
+        exit_ts_ms=state.exit_ts,
         mae_pct=mae_pct,
-        entry_cost=entry_cost if filled else 0.0,
+        entry_cost=state.entry_cost if filled else 0.0,
         ceiling_capped=levels.ceiling_capped,
     )
 
@@ -576,40 +683,25 @@ def _arm_b_fallback(
     classifications: list[str] = []
 
     for index, tier in enumerate(raw_entries):
-        tranche = raw_tps[min(index, len(raw_tps) - 1)] if raw_tps else None
-        sub_setup = dict(trade_setup)
-        sub_setup["entry_tiers"] = [dict(tier, alloc_pct=100.0)]
-        sub_setup["tp_tranches"] = [dict(tranche, tranche_pct=100.0)] if tranche else []
-        # The tier keeps EXACTLY its main-convention share count: sub notional
-        # = qty_i * limit_i, so the fallback and the bracket path size fills
-        # identically (§5.4 "the share count on each fill is the same").
-        tier_qty = quantities.get(f"E{index + 1}", 0.0)
-        sub = _cash_from_engine_outcome(
-            sub_setup,
-            replay_ladder(
-                sub_setup,
-                bars,
-                entry_expiry_ms=entry_expiry_ms,
-                position_expiry_ms=position_expiry_ms,
-            ),
-            notional=tier_qty * float(tier["limit"]),
+        sub = _fallback_tier_outcome(
+            trade_setup,
+            index,
+            tier,
+            raw_tps,
+            bars,
+            tier_qty=quantities.get(f"E{index + 1}", 0.0),
             slippage_bps=slippage_bps,
             charge_fees=charge_fees,
-            last_close=_last_close(bars),
+            entry_expiry_ms=entry_expiry_ms,
+            position_expiry_ms=position_expiry_ms,
         )
         gross += sub.gross_cash
         fees += sub.total_fees
         fills += sub.chargeable_fills
         entry_cost += sub.entry_cost
         classifications.append(sub.classification)
-        if sub.first_fill_ts_ms is not None:
-            first_fill_ts = (
-                sub.first_fill_ts_ms
-                if first_fill_ts is None
-                else min(first_fill_ts, sub.first_fill_ts_ms)
-            )
-        if sub.exit_ts_ms is not None:
-            exit_ts = sub.exit_ts_ms if exit_ts is None else max(exit_ts, sub.exit_ts_ms)
+        first_fill_ts = _min_optional(first_fill_ts, sub.first_fill_ts_ms)
+        exit_ts = _max_optional(exit_ts, sub.exit_ts_ms)
 
     classification = (
         "NO_FILL"
@@ -627,6 +719,54 @@ def _arm_b_fallback(
         exit_ts_ms=exit_ts,
         entry_cost=entry_cost,
     )
+
+
+def _fallback_tier_outcome(
+    trade_setup: Mapping[str, Any],
+    index: int,
+    tier: Mapping[str, Any],
+    raw_tps: Sequence[Mapping[str, Any]],
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    tier_qty: float,
+    slippage_bps: float,
+    charge_fees: bool,
+    entry_expiry_ms: int | None,
+    position_expiry_ms: int | None,
+) -> ArmOutcome:
+    """Replay ONE tier as an independent single-tranche ladder (§5.3)."""
+    tranche = raw_tps[min(index, len(raw_tps) - 1)] if raw_tps else None
+    sub_setup = dict(trade_setup)
+    sub_setup["entry_tiers"] = [dict(tier, alloc_pct=100.0)]
+    sub_setup["tp_tranches"] = [dict(tranche, tranche_pct=100.0)] if tranche else []
+    # The tier keeps EXACTLY its main-convention share count: sub notional
+    # = qty_i * limit_i, so the fallback and the bracket path size fills
+    # identically (§5.4 "the share count on each fill is the same").
+    return _cash_from_engine_outcome(
+        sub_setup,
+        replay_ladder(
+            sub_setup,
+            bars,
+            entry_expiry_ms=entry_expiry_ms,
+            position_expiry_ms=position_expiry_ms,
+        ),
+        notional=tier_qty * float(tier["limit"]),
+        slippage_bps=slippage_bps,
+        charge_fees=charge_fees,
+        last_close=_last_close(bars),
+    )
+
+
+def _min_optional(current: int | None, candidate: int | None) -> int | None:
+    if candidate is None:
+        return current
+    return candidate if current is None else min(current, candidate)
+
+
+def _max_optional(current: int | None, candidate: int | None) -> int | None:
+    if candidate is None:
+        return current
+    return candidate if current is None else max(current, candidate)
 
 
 # --------------------------------------------------------------------------

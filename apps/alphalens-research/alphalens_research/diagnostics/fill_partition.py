@@ -364,26 +364,50 @@ def walk_entry_fills(
         if entry_expiry_ms is not None and ts >= entry_expiry_ms:
             break
         low = float(bar["l"])
-        for tier in tiers:
-            if tier.tier_id in filled_ids:
-                continue
-            if not tier_fills(low=low, limit=tier.limit, fill_model=fill_model, tick=tick):
-                continue
-            filled_ids.add(tier.tier_id)
-            fills.append(
-                TierFill(
-                    tier_id=tier.tier_id,
-                    limit=tier.limit,
-                    alloc_pct=tier.alloc_pct,
-                    fill_price=fill_price_from_limit(tier.limit, overshoot_bps),
-                    bar_ts_ms=ts,
-                )
-            )
+        _fill_tiers_on_bar(
+            tiers,
+            fills,
+            filled_ids,
+            ts=ts,
+            low=low,
+            fill_model=fill_model,
+            overshoot_bps=overshoot_bps,
+            tick=tick,
+        )
         if not filled_ids:
             continue  # no position yet -> no exit can fire
         if _position_exited(bar, ts, low, exit_levels, hit_tp_indices):
             break
     return tuple(fills)
+
+
+def _fill_tiers_on_bar(
+    tiers: Sequence[EntryTier],
+    fills: list[TierFill],
+    filled_ids: set[str],
+    *,
+    ts: int,
+    low: float,
+    fill_model: str,
+    overshoot_bps: float,
+    tick: float,
+) -> None:
+    """Record every not-yet-filled tier whose limit this bar's low reaches."""
+    for tier in tiers:
+        if tier.tier_id in filled_ids:
+            continue
+        if not tier_fills(low=low, limit=tier.limit, fill_model=fill_model, tick=tick):
+            continue
+        filled_ids.add(tier.tier_id)
+        fills.append(
+            TierFill(
+                tier_id=tier.tier_id,
+                limit=tier.limit,
+                alloc_pct=tier.alloc_pct,
+                fill_price=fill_price_from_limit(tier.limit, overshoot_bps),
+                bar_ts_ms=ts,
+            )
+        )
 
 
 def _position_exited(
