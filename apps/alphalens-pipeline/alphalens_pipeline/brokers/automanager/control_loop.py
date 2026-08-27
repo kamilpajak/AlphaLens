@@ -1351,7 +1351,7 @@ effect on the next tick without a daemon restart."""
 
 _ENTRY_WATCH_MAX_PICKS_DEFAULT = 1
 _ENTRY_WATCH_MAX_PICKS_MIN = 1
-_ENTRY_WATCH_MAX_PICKS_MAX = 4
+_ENTRY_WATCH_MAX_PICKS_MAX = 10
 
 _entry_watch_max_picks_warned = False
 """One logger.warning per process for an invalid/out-of-range env value — the
