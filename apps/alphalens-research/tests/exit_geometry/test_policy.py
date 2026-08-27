@@ -24,7 +24,7 @@ class BehaviouralIdentityIsNotTheGeometryNameTest(unittest.TestCase):
         # The anti-rot guard: enumerated from the registry itself, so a policy
         # added later cannot quietly inherit its wrapped geometry's name again.
         registry = exit_policy_registry()
-        self.assertGreaterEqual(len(registry), 3)
+        self.assertGreaterEqual(len(registry), 4)
         for key, policy in registry.items():
             with self.subTest(key=key):
                 self.assertEqual(policy.name, key)
@@ -46,9 +46,11 @@ class BehaviouralIdentityIsNotTheGeometryNameTest(unittest.TestCase):
                 self.assertEqual(resolve_exit_policy(key).geometry_name, "atr_bracket_1p5")
 
     def test_a_policy_that_wraps_no_geometry_has_no_geometry_name(self):
-        # Honest absence rather than a placeholder string: setup_static places
-        # no geometry at all, so there is no geometry to name.
-        self.assertIsNone(resolve_exit_policy("setup_static").geometry_name)
+        # Honest absence rather than a placeholder string: setup_static and
+        # breakeven_trail place no geometry at all, so there is none to name.
+        for key in ("setup_static", "breakeven_trail"):
+            with self.subTest(key=key):
+                self.assertIsNone(resolve_exit_policy(key).geometry_name)
 
 
 class SetupStaticPolicyTest(unittest.TestCase):

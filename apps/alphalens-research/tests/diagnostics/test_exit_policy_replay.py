@@ -452,8 +452,11 @@ class TestFallbackIndexClampedLast(unittest.TestCase):
 
 class TestSmgIncidentPin(unittest.TestCase):
     """Memo §10.1: pinned on the SMG 2026-08-24 numbers via the shared fixture,
-    and parity with the LIVE build_exit_geometry_spec — the §11 item 4 HALT
-    tripwire. This test going red during accrual is a HALT, not a flake."""
+    and parity with the LIVE build_exit_geometry_spec. Historical note: while
+    the 2026-08-24 pre-registration was live this was its §11 item 4 HALT
+    tripwire; the prereg was voided 2026-08-27 before its cohort opened (see
+    the memo's status note), so this is now an ordinary regression test —
+    red means the replay and the live geometry composition drifted apart."""
 
     def test_arm_b_levels_equal_the_live_spec_with_the_step3_clamp(self):
         from alphalens_pipeline.paper.sizing import build_exit_geometry_spec

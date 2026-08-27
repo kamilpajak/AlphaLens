@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from broker_contract.exit_geometry.levels import chandelier_target
+from broker_contract.exit_geometry.levels import chandelier_target, fractional_giveback_target
 from broker_contract.exit_geometry.registry import ExitGeometryPolicy
 
 
@@ -73,6 +73,10 @@ class ExitPolicy(Protocol):
         self, blended: float, atr: float, *, ceiling_price: float | None
     ) -> tuple[float, float] | None: ...
 
+    # ``plan_stop`` is the journaled brief disaster floor (``plan.stop_price``)
+    # — the 1R denominator for policies whose risk unit is the BRIEF geometry
+    # (entry minus disaster stop) rather than an ATR multiple. Policies that
+    # define risk off their wrapped geometry ignore it.
     def decide_reanchor(
         self,
         avg_price: float,
@@ -80,6 +84,7 @@ class ExitPolicy(Protocol):
         *,
         peak: float | None = None,
         last_price: float | None = None,
+        plan_stop: float | None = None,
     ) -> float | None: ...
 
 
@@ -105,6 +110,7 @@ class SetupStaticPolicy:
         *,
         peak: float | None = None,
         last_price: float | None = None,
+        plan_stop: float | None = None,
     ) -> float | None:
         return None
 
@@ -141,6 +147,7 @@ class AtrBracketPolicy:
         *,
         peak: float | None = None,
         last_price: float | None = None,
+        plan_stop: float | None = None,
     ) -> float | None:
         if not math.isfinite(avg_price) or avg_price <= 0:
             return None
@@ -192,6 +199,7 @@ class TrailingAtrPolicy:
         *,
         peak: float | None = None,
         last_price: float | None = None,
+        plan_stop: float | None = None,
     ) -> float | None:
         if not math.isfinite(avg_price) or avg_price <= 0:
             return None
@@ -203,3 +211,57 @@ class TrailingAtrPolicy:
         if peak < avg_price + self.activation_r * risk:
             return None
         return chandelier_target(peak, atr, k=self.k_atr)
+
+
+@dataclass(frozen=True)
+class BreakevenTrailPolicy:
+    """Bot-amend break-even + fractional-giveback trailing stop — the live port
+    of the ``be_0p5r_trail0p6`` what-if lens. Places NO geometry
+    (``applies_geometry=False``): the brief's TP tranche ladder and the brief
+    disaster stop are journaled verbatim, so profit realizes through the
+    research TP levels while this policy manages ONLY the stop. 1R is the
+    LENS risk unit — ``avg_price - plan_stop`` (filled blend minus the brief
+    disaster floor), NOT an ATR multiple — and ``atr`` is ignored entirely.
+    Dark until the peak reaches ``avg_price + activation_r*R``; once armed the
+    target is ``max(avg_price, avg_price + trail_frac*(peak - avg_price))``,
+    which at the arming instant already sits at
+    ``avg_price + activation_r*trail_frac*R`` (entry+0.3R for 0.5/0.6), same
+    as the lens. The caller's ratchet + clamp keep the placed stop monotone."""
+
+    activation_r: float
+    trail_frac: float
+    # Required and keyword-only — see AtrBracketPolicy.name.
+    name: str = field(kw_only=True)
+    geometry_name: str | None = None  # places no geometry at all
+    version: int = 1
+    applies_geometry: bool = False
+    requires_amend_stop: bool = True
+    min_stop_distance_frac: float = 0.002
+    trails: bool = True
+
+    def decide_placement_geometry(
+        self, blended: float, atr: float, *, ceiling_price: float | None
+    ) -> tuple[float, float] | None:
+        return None
+
+    def decide_reanchor(
+        self,
+        avg_price: float,
+        atr: float,
+        *,
+        peak: float | None = None,
+        last_price: float | None = None,
+        plan_stop: float | None = None,
+    ) -> float | None:
+        if not math.isfinite(avg_price) or avg_price <= 0:
+            return None
+        if peak is None or not math.isfinite(peak) or peak <= 0:
+            return None
+        if plan_stop is None or not math.isfinite(plan_stop) or plan_stop <= 0:
+            return None
+        risk = avg_price - plan_stop
+        if risk <= 0:
+            return None
+        if peak < avg_price + self.activation_r * risk:
+            return None
+        return fractional_giveback_target(avg_price, peak, frac=self.trail_frac)
