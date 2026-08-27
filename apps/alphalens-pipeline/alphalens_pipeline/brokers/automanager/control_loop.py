@@ -723,30 +723,48 @@ def _fold_fired_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[in
     fired: dict[int, set[str]] = {}
     governing_key: dict[int, str] = {}
     for line in lines:
-        raw_uic = line.get("uic")
-        if raw_uic is None:
-            continue
-        try:
-            uic = int(raw_uic)
-        except (TypeError, ValueError):
+        uic = _coerce(line, "uic", int)
+        if uic is None:
             continue
         kind = line.get("kind")
-        if kind == _TRANCHE_PLAN_KIND:
-            key = line.get("pick_key")
-            if key is None or str(key) != governing_key.get(uic):
-                fired.pop(uic, None)
-            if key is None:
-                governing_key.pop(uic, None)
-            else:
-                governing_key[uic] = str(key)
-        elif kind == _TRANCHE_PLAN_RETRACTED_KIND:
-            fired.pop(uic, None)
-            governing_key.pop(uic, None)
-        elif kind == "tranche_fired":
+        if _apply_generation_reset(kind, line, uic, governing_key, (fired,)):
+            continue
+        if kind == "tranche_fired":
             tag = line.get("tag")
             if tag:
                 fired.setdefault(uic, set()).add(str(tag))
     return {u: frozenset(t) for u, t in fired.items()}
+
+
+def _apply_generation_reset(
+    kind: Any,
+    line: Mapping[str, Any],
+    uic: int,
+    governing_key: dict[int, str],
+    accumulators: tuple[dict[int, Any], ...],
+) -> bool:
+    """The identity-keyed generation reset shared by the fired/trailed folds
+    (see ``_fold_fired_since_latest_plan`` for the incident history): a keyless
+    ``tranche_plan`` or one with a DIFFERENT ``pick_key`` clears the uic's
+    accumulators; a SAME-key re-append does not; ``tranche_plan_retracted``
+    always clears. Returns True when the line was a plan/retraction line (the
+    caller consumes it and moves on)."""
+    if kind == _TRANCHE_PLAN_KIND:
+        key = line.get("pick_key")
+        if key is None or str(key) != governing_key.get(uic):
+            for acc in accumulators:
+                acc.pop(uic, None)
+        if key is None:
+            governing_key.pop(uic, None)
+        else:
+            governing_key[uic] = str(key)
+        return True
+    if kind == _TRANCHE_PLAN_RETRACTED_KIND:
+        for acc in accumulators:
+            acc.pop(uic, None)
+        governing_key.pop(uic, None)
+        return True
+    return False
 
 
 def _build_managed_exits(
@@ -3437,6 +3455,171 @@ def _emit_stream_gauge(values: Mapping[str, float]) -> None:
         logger.warning("broker-manager stream gauges emit failed", exc_info=True)
 
 
+@dataclass
+class _StreamEpisodeState:
+    """Daemon-lifetime breaker-episode state threaded through the stream-tick
+    helpers (memo §4.5) — one instance per ``_make_stream_tick`` closure."""
+
+    started_mono: float
+    last_trips_total: int
+    stale_s: float
+    episode_open: bool = False
+    episode_rearms: int = 0
+    cooldown_s: float = _STREAM_REARM_FLOOR_S
+    next_trial_mono: float = 0.0
+    delivered_at_rearm: int = 0
+    up_since: float | None = None
+    trip_times: deque[float] = field(default_factory=deque)
+    flap_latched: bool = False
+
+
+@dataclass(frozen=True)
+class _StreamHealthSample:
+    """One tick's delivery-backed health sample (memo §4.4 step 2). ``up``
+    requires a frame delivered on THIS trial (``frames > delivered_at_rearm``)
+    — never ``is_streaming``, which ``rearm()`` sets True before any evidence;
+    ``reader_dark`` includes ``not is_running()`` so a reader thread that
+    crashed WITHOUT tripping is recovered by the same path."""
+
+    running: bool
+    streaming: bool
+    frames: int
+    silence: float | None
+    reader_dark: bool
+    up: bool
+
+
+def _sample_stream_health(
+    trigger: StreamTrigger, state: _StreamEpisodeState
+) -> _StreamHealthSample:
+    running = trigger.is_running()
+    streaming = trigger.is_streaming
+    frames = trigger.frames_delivered
+    silence = trigger.seconds_since_last_message()
+    return _StreamHealthSample(
+        running=running,
+        streaming=streaming,
+        frames=frames,
+        silence=silence,
+        reader_dark=(not running) or (not streaming),
+        up=(
+            running
+            and streaming
+            and frames > state.delivered_at_rearm
+            and silence is not None
+            and silence <= state.stale_s
+        ),
+    )
+
+
+def _account_stream_flaps(
+    state: _StreamEpisodeState, trips: int, now: float, alert: Callable[[str], None]
+) -> None:
+    """Track breaker trips inside the flap window; latch ONE CRITICAL page when
+    the escalation threshold is crossed (memo §7.1)."""
+    for _ in range(max(0, trips - state.last_trips_total)):
+        state.trip_times.append(now)
+    state.last_trips_total = trips
+    while state.trip_times and now - state.trip_times[0] > _STREAM_FLAP_WINDOW_S:
+        state.trip_times.popleft()
+    flap_active = len(state.trip_times) >= _STREAM_FLAP_ESCALATE_AT
+    if flap_active and not state.flap_latched:
+        alert(
+            f"CRITICAL: saxo stream flapping — {len(state.trip_times)} breaker trips "
+            f"inside {_STREAM_FLAP_WINDOW_S / 60:.0f} min; episode-OPEN pages "
+            "suppressed until the window clears (recovery pages never are)"
+        )
+    state.flap_latched = flap_active
+
+
+def _drive_stream_state_machine(
+    state: _StreamEpisodeState,
+    trigger: StreamTrigger,
+    alert: Callable[[str], None],
+    *,
+    now: float,
+    health: _StreamHealthSample,
+) -> float | None:
+    """CLOSED -> OPEN -> TRIAL -> CLOSED episode machine (memo §4.5). Returns
+    the silence sample, refreshed after a TRIAL's ``rearm()``."""
+    silence = health.silence
+    if not state.episode_open:
+        if health.reader_dark:
+            # CLOSED -> OPEN: arm the ladder; NO trial on the opening tick.
+            state.episode_open = True
+            state.episode_rearms = 0
+            state.cooldown_s = _STREAM_REARM_FLOOR_S
+            state.next_trial_mono = now + state.cooldown_s
+            state.up_since = None
+            if not state.flap_latched:
+                alert(
+                    "saxo stream DOWN — reader dark, re-arm ladder engaged; "
+                    "running on poll backstop"
+                )
+    elif health.up:
+        if state.up_since is None:
+            state.up_since = now
+        if now - state.up_since >= _STREAM_HEALTHY_DWELL_S:
+            # OPEN -> CLOSED: delivery-confirmed recovery held for the full
+            # dwell. NEVER suppressed by the flap latch — the operator must
+            # always see an episode end.
+            state.episode_open = False
+            state.cooldown_s = _STREAM_REARM_FLOOR_S
+            state.up_since = None
+            alert(
+                f"saxo stream RECOVERED — delivery-confirmed after "
+                f"{state.episode_rearms} re-arm trial(s); ladder reset"
+            )
+    else:
+        state.up_since = None  # the dwell must be CONTINUOUS delivery-backed health
+        if health.reader_dark and now >= state.next_trial_mono:
+            # OPEN -> TRIAL: at most ONE trial per tick, no page. The ladder
+            # advances BEFORE the rearm so a raising spawn cannot burn
+            # trials at the floor rate.
+            state.delivered_at_rearm = health.frames
+            trigger.reset_liveness()  # an hours-old epoch must never page stream-dead
+            state.cooldown_s = min(state.cooldown_s * 2.0, _STREAM_REARM_CEILING_S)
+            state.next_trial_mono = now + state.cooldown_s
+            state.episode_rearms += 1
+            trigger.rearm()
+            silence = trigger.seconds_since_last_message()
+    return silence
+
+
+def _emit_stream_tick_gauges(
+    state: _StreamEpisodeState,
+    trigger: StreamTrigger,
+    emit_gauge: Callable[[Mapping[str, float]], None],
+    session_predicate: Callable[[], bool],
+    *,
+    now: float,
+    health: _StreamHealthSample,
+    silence: float | None,
+    trips: int,
+) -> None:
+    """ONE atomic multi-key gauge write (all SIX keys: an omitted key deletes
+    its series). The age key is never omitted: epoch None -> seconds since
+    closure build. Fallback diverges from memo §4.6's "seconds since reader
+    start": started_mono is the CLOSURE build time (daemon start). Harmless —
+    no alert keys on the absolute value while the breaker is open."""
+    age = silence if silence is not None else now - state.started_mono
+    try:
+        session = 1.0 if session_predicate() else 0.0
+    except Exception:  # calendar fail-open: report in-session, keep gauges
+        logger.warning("streaming: session predicate raised — reporting in-session")
+        session = 1.0
+    emit_gauge(
+        {
+            _STREAM_READER_UP_METRIC_NAME: 1.0 if (health.running and health.streaming) else 0.0,
+            _STREAM_BREAKER_OPEN_METRIC_NAME: 1.0 if state.episode_open else 0.0,
+            _STREAM_LAST_MESSAGE_METRIC_NAME: age,
+            _STREAM_CONSECUTIVE_FAILURES_METRIC_NAME: float(trigger.consecutive_failures),
+            _STREAM_TRIPS_TOTAL_METRIC_NAME: float(trips),
+            _STREAM_IN_SESSION_METRIC_NAME: session,
+        }
+    )
+
+
 def _make_stream_tick(
     trigger: StreamTrigger,
     *,
@@ -3489,9 +3672,9 @@ def _make_stream_tick(
     (e.g. ``Thread.start()`` under thread exhaustion) must never unwind the
     protective daemon."""
 
-    # Episode state lives in this closure, constructed once per daemon by
-    # _build_stream_handles — the same daemon-lifetime one-slot shape as
-    # deps.kill_state, without a new LoopDeps field (memo §4.5).
+    # Episode state lives in a per-closure _StreamEpisodeState, constructed once
+    # per daemon by _build_stream_handles — the same daemon-lifetime one-slot
+    # shape as deps.kill_state, without a new LoopDeps field (memo §4.5).
     #
     # The session predicate feeds the in_session GAUGE only (memo §3 Q5) —
     # nothing here gates on it. Built per-tick-closure (main-thread-only, so
@@ -3500,123 +3683,37 @@ def _make_stream_tick(
     # treated as in-session, and a calendar bug must never take the other five
     # gauges down with it.
     session_predicate = in_session if in_session is not None else _make_stream_session_window()
-    started_mono = monotonic()
-    episode_open = False
-    episode_rearms = 0
-    cooldown_s = _STREAM_REARM_FLOOR_S
-    next_trial_mono = 0.0
-    delivered_at_rearm = 0
-    up_since: float | None = None
-    last_trips_total = trigger.trips_total
-    trip_times: deque[float] = deque()
-    flap_latched = False
+    state = _StreamEpisodeState(
+        started_mono=monotonic(), last_trips_total=trigger.trips_total, stale_s=stale_s
+    )
 
     def _drive_episode() -> None:
-        nonlocal episode_open, episode_rearms, cooldown_s, next_trial_mono
-        nonlocal delivered_at_rearm, up_since, last_trips_total, flap_latched
         now = monotonic()
         # (2) Delivery-backed health sample (memo §4.4 step 2).
-        running = trigger.is_running()
-        streaming = trigger.is_streaming
-        frames = trigger.frames_delivered
-        silence = trigger.seconds_since_last_message()
-        reader_dark = (not running) or (not streaming)
-        up = (
-            running
-            and streaming
-            and frames > delivered_at_rearm
-            and silence is not None
-            and silence <= stale_s
-        )
-
+        health = _sample_stream_health(trigger, state)
         # Flap accounting off the monotonic trips_total counter — a trip whose
         # whole lifetime falls between two ticks is still counted (memo §7.1).
         trips = trigger.trips_total
-        for _ in range(max(0, trips - last_trips_total)):
-            trip_times.append(now)
-        last_trips_total = trips
-        while trip_times and now - trip_times[0] > _STREAM_FLAP_WINDOW_S:
-            trip_times.popleft()
-        flap_active = len(trip_times) >= _STREAM_FLAP_ESCALATE_AT
-        if flap_active and not flap_latched:
-            alert(
-                f"CRITICAL: saxo stream flapping — {len(trip_times)} breaker trips "
-                f"inside {_STREAM_FLAP_WINDOW_S / 60:.0f} min; episode-OPEN pages "
-                "suppressed until the window clears (recovery pages never are)"
-            )
-        flap_latched = flap_active
-
+        _account_stream_flaps(state, trips, now, alert)
         # (3) Episode state machine (memo §4.5).
-        if not episode_open:
-            if reader_dark:
-                # CLOSED -> OPEN: arm the ladder; NO trial on the opening tick.
-                episode_open = True
-                episode_rearms = 0
-                cooldown_s = _STREAM_REARM_FLOOR_S
-                next_trial_mono = now + cooldown_s
-                up_since = None
-                if not flap_latched:
-                    alert(
-                        "saxo stream DOWN — reader dark, re-arm ladder engaged; "
-                        "running on poll backstop"
-                    )
-        elif up:
-            if up_since is None:
-                up_since = now
-            if now - up_since >= _STREAM_HEALTHY_DWELL_S:
-                # OPEN -> CLOSED: delivery-confirmed recovery held for the full
-                # dwell. NEVER suppressed by the flap latch — the operator must
-                # always see an episode end.
-                episode_open = False
-                cooldown_s = _STREAM_REARM_FLOOR_S
-                up_since = None
-                alert(
-                    f"saxo stream RECOVERED — delivery-confirmed after "
-                    f"{episode_rearms} re-arm trial(s); ladder reset"
-                )
-        else:
-            up_since = None  # the dwell must be CONTINUOUS delivery-backed health
-            if reader_dark and now >= next_trial_mono:
-                # OPEN -> TRIAL: at most ONE trial per tick, no page. The ladder
-                # advances BEFORE the rearm so a raising spawn cannot burn
-                # trials at the floor rate.
-                delivered_at_rearm = frames
-                trigger.reset_liveness()  # an hours-old epoch must never page stream-dead
-                cooldown_s = min(cooldown_s * 2.0, _STREAM_REARM_CEILING_S)
-                next_trial_mono = now + cooldown_s
-                episode_rearms += 1
-                trigger.rearm()
-                silence = trigger.seconds_since_last_message()
-
+        silence = _drive_stream_state_machine(state, trigger, alert, now=now, health=health)
         # stream-dead is for the dark-but-CONNECTED case only (memo §7.2): an
         # open episode already reports the dark stream via its own page + gauge.
-        if not episode_open and silence is not None and silence > stale_s:
+        if not state.episode_open and silence is not None and silence > stale_s:
             alert_throttled(
                 f"saxo stream silent >{stale_s:.0f}s ({silence:.0f}s) — running on poll backstop",
                 "stream-dead",
             )
-
-        # (4) Gauges — every tick, including while dark, ONE atomic emit (all
-        # SIX keys: an omitted key deletes its series). The age key is never
-        # omitted: epoch None -> seconds since closure build.
-        # Fallback diverges from memo §4.6's "seconds since reader start":
-        # started_mono is the CLOSURE build time (daemon start). Harmless — no
-        # alert keys on the absolute value while the breaker is open.
-        age = silence if silence is not None else now - started_mono
-        try:
-            session = 1.0 if session_predicate() else 0.0
-        except Exception:  # calendar fail-open: report in-session, keep gauges
-            logger.warning("streaming: session predicate raised — reporting in-session")
-            session = 1.0
-        emit_gauge(
-            {
-                _STREAM_READER_UP_METRIC_NAME: 1.0 if (running and streaming) else 0.0,
-                _STREAM_BREAKER_OPEN_METRIC_NAME: 1.0 if episode_open else 0.0,
-                _STREAM_LAST_MESSAGE_METRIC_NAME: age,
-                _STREAM_CONSECUTIVE_FAILURES_METRIC_NAME: float(trigger.consecutive_failures),
-                _STREAM_TRIPS_TOTAL_METRIC_NAME: float(trips),
-                _STREAM_IN_SESSION_METRIC_NAME: session,
-            }
+        # (4) Gauges — every tick, including while dark.
+        _emit_stream_tick_gauges(
+            state,
+            trigger,
+            emit_gauge,
+            session_predicate,
+            now=now,
+            health=health,
+            silence=silence,
+            trips=trips,
         )
 
     def _tick() -> None:
@@ -4327,8 +4424,6 @@ def fold_tranche_plans(
     A ``tranche_plan_retracted`` line (2026-08-19 adjudication finding 3 -- a
     watch that ended with no fill) REMOVES the uic's governing ladder; a later
     plan line for the uic governs again (still last-wins, in write order)."""
-    from broker_contract.sizing import TpTranchePlan
-
     out: dict[int, tuple[tuple[TpTranchePlan, ...], float, float]] = {}
     for line in lines:
         kind = line.get("kind")
@@ -4339,47 +4434,59 @@ def fold_tranche_plans(
             continue
         if kind != _TRANCHE_PLAN_KIND:
             continue
-        raw_uic = line.get("uic")
-        raw_tranches = line.get("tp_tranches")
-        if raw_uic is None or not isinstance(raw_tranches, list):
+        parsed = _parse_tranche_plan_line(line)
+        if parsed is None:
             continue
-        try:
-            uic = int(raw_uic)
-            reference_qty = float(line["reference_qty"])
-            stop_price = float(line["stop_price"])
-            # `float()` happily parses JSON's `NaN` / `Infinity`, so a malformed
-            # or hand-edited line could otherwise become a GOVERNING ladder
-            # carrying a non-finite size. Refused at the SOURCE as well as at
-            # the sizer, because a bad line should contribute nothing rather
-            # than be caught later by whichever consumer happens to look first.
-            if not math.isfinite(reference_qty) or not math.isfinite(stop_price):
-                raise ValueError(
-                    f"non-finite tranche_plan scalars for uic {uic}: "
-                    f"reference_qty={reference_qty!r} stop_price={stop_price!r}"
-                )
-            tranches = tuple(
-                TpTranchePlan(
-                    tranche_index=int(t["tranche_index"]),
-                    target_price=float(t["target_price"]),
-                    # Legacy lines carry "tranche_pct". Read them as a FRACTION,
-                    # because that is what the writer meant: every tranche_plan
-                    # record on the LIVE rail was written by the geometry
-                    # producer with the literal 1.0 for "the whole position"
-                    # (verified 2026-08-25 against all three live journal
-                    # lines). Converting them as percentages would resize an
-                    # in-flight position's exit to 1% and leave the rest naked.
-                    tranche_frac=float(
-                        t["tranche_frac"] if "tranche_frac" in t else t["tranche_pct"]
-                    ),
-                    r_multiple=float(t["r_multiple"]),
-                    tag=str(t["tag"]),
-                )
-                for t in raw_tranches
-            )
-        except (KeyError, TypeError, ValueError):
-            continue
+        uic, tranches, reference_qty, stop_price = parsed
         out[uic] = (tranches, reference_qty, stop_price)
     return out
+
+
+def _parse_tranche_plan_line(
+    line: Mapping[str, Any],
+) -> tuple[int, tuple[TpTranchePlan, ...], float, float] | None:
+    """Parse one ``tranche_plan`` line; None for ANY malformation (a bad line
+    contributes nothing, never a partial fold)."""
+    from broker_contract.sizing import TpTranchePlan
+
+    raw_uic = line.get("uic")
+    raw_tranches = line.get("tp_tranches")
+    if raw_uic is None or not isinstance(raw_tranches, list):
+        return None
+    try:
+        uic = int(raw_uic)
+        reference_qty = float(line["reference_qty"])
+        stop_price = float(line["stop_price"])
+        # `float()` happily parses JSON's `NaN` / `Infinity`, so a malformed
+        # or hand-edited line could otherwise become a GOVERNING ladder
+        # carrying a non-finite size. Refused at the SOURCE as well as at
+        # the sizer, because a bad line should contribute nothing rather
+        # than be caught later by whichever consumer happens to look first.
+        if not math.isfinite(reference_qty) or not math.isfinite(stop_price):
+            raise ValueError(
+                f"non-finite tranche_plan scalars for uic {uic}: "
+                f"reference_qty={reference_qty!r} stop_price={stop_price!r}"
+            )
+        tranches = tuple(
+            TpTranchePlan(
+                tranche_index=int(t["tranche_index"]),
+                target_price=float(t["target_price"]),
+                # Legacy lines carry "tranche_pct". Read them as a FRACTION,
+                # because that is what the writer meant: every tranche_plan
+                # record on the LIVE rail was written by the geometry
+                # producer with the literal 1.0 for "the whole position"
+                # (verified 2026-08-25 against all three live journal
+                # lines). Converting them as percentages would resize an
+                # in-flight position's exit to 1% and leave the rest naked.
+                tranche_frac=float(t["tranche_frac"] if "tranche_frac" in t else t["tranche_pct"]),
+                r_multiple=float(t["r_multiple"]),
+                tag=str(t["tag"]),
+            )
+            for t in raw_tranches
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    return uic, tranches, reference_qty, stop_price
 
 
 def _fold_governing_plan_pick_keys(lines: Iterable[Mapping[str, Any]]) -> dict[int, str | None]:
@@ -4687,28 +4794,13 @@ def _fold_trailed_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[
     latest_level: dict[int, float] = {}
     governing_key: dict[int, str] = {}
     for line in lines:
-        raw_uic = line.get("uic")
-        if raw_uic is None:
-            continue
-        try:
-            uic = int(raw_uic)
-        except (TypeError, ValueError):
+        uic = _coerce(line, "uic", int)
+        if uic is None:
             continue
         kind = line.get("kind")
-        if kind == _TRANCHE_PLAN_KIND:
-            key = line.get("pick_key")
-            if key is None or str(key) != governing_key.get(uic):
-                latest_ts.pop(uic, None)
-                latest_level.pop(uic, None)
-            if key is None:
-                governing_key.pop(uic, None)
-            else:
-                governing_key[uic] = str(key)
-        elif kind == _TRANCHE_PLAN_RETRACTED_KIND:
-            latest_ts.pop(uic, None)
-            latest_level.pop(uic, None)
-            governing_key.pop(uic, None)
-        elif kind == "trailed":
+        if _apply_generation_reset(kind, line, uic, governing_key, (latest_ts, latest_level)):
+            continue
+        if kind == "trailed":
             try:
                 level = float(line["level"])
                 ts = float(line["ts"])
@@ -6646,27 +6738,7 @@ def _place_pick(
         _AlreadyGatedSessionState(),
     )
     if isinstance(decision, safety.Refuse):
-        logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
-        # Terminal refusal (queue-semantics fix 2026-07-30): ONLY a capacity
-        # refusal (decision.terminal — MAX_OPEN / portfolio gross cap) journals
-        # a refused line so the pick never retries — left armed it would retry
-        # every tick for days and then self-place a stale brief signal once
-        # capacity frees. Re-arming via `alphalens broker arm` is the explicit
-        # human path back. The transient rails (KILL file, dead chain,
-        # ALLOW_ORDERS master arm, daily-loss lockout) keep the pick armed —
-        # an inert/paused daemon must never destroy the armed queue. The
-        # append is fallible I/O and must never crash the drain: on OSError
-        # the pick stays armed and the refusal re-fires next tick
-        # (re-attempting the append).
-        if decision.terminal:
-            from alphalens_pipeline.brokers.automanager import picks
-
-            try:
-                picks.mark_refused(ticker, brief_date, decision.reason)
-            except OSError as exc:
-                logger.warning(
-                    "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc
-                )
+        _handle_safety_refusal(decision, ticker, brief_date)
         return False
 
     resolved = _resolve_and_size(broker, ticker, account, spec)
@@ -6794,6 +6866,32 @@ def _place_pick(
         )
         > 0
     )
+
+
+def _handle_safety_refusal(decision: Any, ticker: str, brief_date: dt.date) -> None:
+    """Log a ``safety.Refuse`` and journal it when terminal.
+
+    Terminal refusal (queue-semantics fix 2026-07-30): ONLY a capacity
+    refusal (decision.terminal — MAX_OPEN / portfolio gross cap) journals
+    a refused line so the pick never retries — left armed it would retry
+    every tick for days and then self-place a stale brief signal once
+    capacity frees. Re-arming via `alphalens broker arm` is the explicit
+    human path back. The transient rails (KILL file, dead chain,
+    ALLOW_ORDERS master arm, daily-loss lockout) keep the pick armed —
+    an inert/paused daemon must never destroy the armed queue. The
+    append is fallible I/O and must never crash the drain: on OSError
+    the pick stays armed and the refusal re-fires next tick
+    (re-attempting the append)."""
+    logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
+    if decision.terminal:
+        from alphalens_pipeline.brokers.automanager import picks
+
+        try:
+            picks.mark_refused(ticker, brief_date, decision.reason)
+        except OSError as exc:
+            logger.warning(
+                "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc
+            )
 
 
 def _make_position_view_builder(
