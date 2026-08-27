@@ -754,13 +754,22 @@ def _build_managed_exits(
     long_positions: Iterable[Position],
     tranche_plans: Mapping[int, tuple[tuple[TpTranchePlan, ...], float, float]],
     fired: Mapping[int, frozenset[str]],
+    trailed: Mapping[int, float],
 ) -> list[ManagedExit]:
     """Build this tick's managed-position list. Pure — no broker/journal I/O.
 
     A live long position whose uic has a folded ``tranche_plan`` (Task 1)
     becomes ONE ``ManagedExit``; a live long with NO ``tranche_plan`` on record
     is SKIPPED — positions placed before this deploys carry no ladder and stay
-    stop-only forever (the deliberate gradual-rollout boundary)."""
+    stop-only forever (the deliberate gradual-rollout boundary).
+
+    ``trailed`` is the generation-gated ``_fold_trailed_since_latest_plan`` map: a
+    tranche fire amends the SL to ``ManagedExit.stop_price``
+    (``execute_tranche_exit``), so under a trailing policy the placement-time
+    plan stop must be RAISED to the last confirmed trailed level — otherwise
+    TP1 firing would PATCH a ratcheted stop back down to the disaster level,
+    and ``_maybe_trail``'s own ratchet floor would then refuse to restore it
+    until the peak advanced past the old level again."""
     managed: list[ManagedExit] = []
     skipped = 0
     for pos in long_positions:
@@ -773,6 +782,9 @@ def _build_managed_exits(
             skipped += 1
             continue
         tp_tranches, reference_qty, stop_price = plan
+        trailed_level = trailed.get(uic)
+        if trailed_level is not None:
+            stop_price = max(stop_price, trailed_level)
         managed.append(
             ManagedExit(
                 uic=uic,
@@ -1142,6 +1154,7 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         long_positions=long_positions,
         tranche_plans=fold_tranche_plans(journal_lines),
         fired=_fold_fired_since_latest_plan(journal_lines),
+        trailed=_fold_trailed_since_latest_plan(journal_lines),
     )
     # uic -> (ticker, venue) off the live positions just read. The venue must
     # survive: resolving a LIVE instrument by bare ticker is ambiguous for
@@ -4603,7 +4616,7 @@ def _journal_trailed(
     """Persist a timestamped ``trailed`` marker (Task 4). Written by the executor
     ONLY on a CONFIRMED trail AmendStop PATCH success (never on a failed attempt —
     a failed amend journals ``amend_failed`` like any other amend and simply
-    retries). Mirrors ``_journal_reanchored``: ``_fold_trailed_markers`` folds
+    retries). Mirrors ``_journal_reanchored``: ``_fold_trailed_since_latest_plan`` folds
     these into ``ProtectionView.trailed_stop_by_uic``, the never-DOWN ratchet floor
     a new trail proposal must clear by ``_TRAIL_STEP_EPS``.
 
@@ -4647,28 +4660,63 @@ def _fold_reanchored_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, fl
     return latest_avg_price
 
 
-def _fold_trailed_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
+def _fold_trailed_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
     """Fold the append-only ``trailed`` journal markers into the LATEST (by ``ts``)
-    trailed ``level`` per uic (Task 2). Mirrors ``_fold_reanchored_markers`` — a
-    DICT, not a TTL frozenset — but reads ``line["level"]`` (the price the stop was
-    confirmed trailed to) instead of the reanchor avg_price. Feeds
-    ``ProtectionView.trailed_stop_by_uic``, the never-DOWN ratchet floor
-    ``_maybe_trail`` requires a new proposal to clear by ``_TRAIL_STEP_EPS``.
+    trailed ``level`` per uic (Task 2), RESET on each new-generation
+    ``tranche_plan`` line. Mirrors ``_fold_reanchored_markers`` — a DICT, not a
+    TTL frozenset — but reads ``line["level"]`` (the price the stop was
+    confirmed trailed to) instead of the reanchor avg_price.
+
+    The generation reset uses the SAME identity rules as
+    ``_fold_fired_since_latest_plan`` (see its docstring for the incident
+    history): a keyless ``tranche_plan`` or one with a DIFFERENT ``pick_key``
+    is a NEW trade in the uic and drops the accumulated level — the journal is
+    append-only and uic-keyed, so without the reset a re-entered position
+    would inherit the PRIOR trade's trailed level. That stale level used to be
+    merely a too-high ratchet floor that silently blackholed trailing for the
+    new position; once the level also feeds ``ManagedExit.stop_price`` it
+    would be actively PLACED (an absurdly high SL on a fresh entry), so the
+    reset is load-bearing for both consumers. A ``tranche_plan`` re-appended
+    with the SAME ``pick_key`` (the already_watching crash-recovery re-drive)
+    does NOT reset; ``tranche_plan_retracted`` clears. Feeds
+    ``ProtectionView.trailed_stop_by_uic`` (the never-DOWN ratchet floor
+    ``_maybe_trail`` requires a new proposal to clear by ``_TRAIL_STEP_EPS``)
+    and the live-exit engine's SL-amend level via ``_build_managed_exits``.
     Malformed (missing / unparsable uic, level, or ts) lines are skipped."""
     latest_ts: dict[int, float] = {}
     latest_level: dict[int, float] = {}
+    governing_key: dict[int, str] = {}
     for line in lines:
-        if line.get("kind") != "trailed":
+        raw_uic = line.get("uic")
+        if raw_uic is None:
             continue
         try:
-            uic = int(line["uic"])
-            level = float(line["level"])
-            ts = float(line["ts"])
-        except (KeyError, TypeError, ValueError):
+            uic = int(raw_uic)
+        except (TypeError, ValueError):
             continue
-        if uic not in latest_ts or ts >= latest_ts[uic]:
-            latest_ts[uic] = ts
-            latest_level[uic] = level
+        kind = line.get("kind")
+        if kind == _TRANCHE_PLAN_KIND:
+            key = line.get("pick_key")
+            if key is None or str(key) != governing_key.get(uic):
+                latest_ts.pop(uic, None)
+                latest_level.pop(uic, None)
+            if key is None:
+                governing_key.pop(uic, None)
+            else:
+                governing_key[uic] = str(key)
+        elif kind == _TRANCHE_PLAN_RETRACTED_KIND:
+            latest_ts.pop(uic, None)
+            latest_level.pop(uic, None)
+            governing_key.pop(uic, None)
+        elif kind == "trailed":
+            try:
+                level = float(line["level"])
+                ts = float(line["ts"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if uic not in latest_ts or ts >= latest_ts[uic]:
+                latest_ts[uic] = ts
+                latest_level[uic] = level
     return latest_level
 
 
@@ -6901,7 +6949,7 @@ def build_protection_view(
         ),
         reanchored_by_uic=_fold_reanchored_markers(journal_lines),
         # Task 2 trailing ratchet floor: uic -> the last CONFIRMED trailed level.
-        trailed_stop_by_uic=_fold_trailed_markers(journal_lines),
+        trailed_stop_by_uic=_fold_trailed_since_latest_plan(journal_lines),
         # Task 4: this tick's high-water peaks / live prices, fetched ONLY on the
         # trailing path (``_run_protection_pass`` passes them when the cached policy
         # trails, else omits them). Default empty -> the trailing arm stays dark (a

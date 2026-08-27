@@ -2350,7 +2350,7 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
         # A hardcoded inert policy at this call site therefore survived the whole
         # broker suite. Asserting the value per policy is what closes it.
         spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
-        for key in ("trailing_atr", "atr_bracket_1p5", "setup_static"):
+        for key in ("trailing_atr", "atr_bracket_1p5", "setup_static", "breakeven_trail"):
             with self.subTest(exit_policy=key):
                 _count, journaled = self._run(exit_spec=spec, exit_policy=resolve_exit_policy(key))
                 self.assertEqual(journaled[0]["geometry"]["exit_policy_name"], key)

@@ -854,7 +854,14 @@ def _maybe_trail(
     last_price = view.last_price_by_uic.get(uic)
     if not _finite_positive(last_price):
         return None  # feed veto / no live price yet (same discipline as the peak veto)
-    proposed = policy.decide_reanchor(avg_price, atr, peak=peak, last_price=last_price)
+    # ``plan_stop`` is the brief disaster floor (MAX across the ladder's tiers,
+    # which under a no-geometry policy all journal the same
+    # ``placement.disaster_stop_price``) — the 1R denominator for policies
+    # whose risk unit is the brief geometry (``breakeven_trail``); the
+    # ATR-family policies ignore it.
+    proposed = policy.decide_reanchor(
+        avg_price, atr, peak=peak, last_price=last_price, plan_stop=plan.stop_price
+    )
     if proposed is None:
         return None  # dark before activation (or a degenerate the policy refuses)
     # Anchor the min-distance floor to the LIVE PRICE, not the entry: for a

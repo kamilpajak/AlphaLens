@@ -127,7 +127,7 @@ class TestBuildManagedExits(unittest.TestCase):
         tranches = (_tr(0, 16.0, 0.5),)
         tranche_plans = {486: (tranches, 100.0, 13.0)}
         managed = cl._build_managed_exits(
-            long_positions=[pos], tranche_plans=tranche_plans, fired={}
+            long_positions=[pos], tranche_plans=tranche_plans, fired={}, trailed={}
         )
         self.assertEqual(len(managed), 1)
         m = managed[0]
@@ -139,14 +139,19 @@ class TestBuildManagedExits(unittest.TestCase):
 
     def test_a_uic_with_no_tranche_plan_is_skipped(self) -> None:
         pos = _mk_pos(uic=999, qty=50.0)
-        managed = cl._build_managed_exits(long_positions=[pos], tranche_plans={}, fired={})
+        managed = cl._build_managed_exits(
+            long_positions=[pos], tranche_plans={}, fired={}, trailed={}
+        )
         self.assertEqual(managed, [])
 
     def test_fired_tags_flow_into_already_fired(self) -> None:
         pos = _mk_pos(uic=486, qty=50.0)
         tranche_plans = {486: ((_tr(0, 16.0, 0.5), _tr(1, 18.0, 0.3)), 100.0, 13.0)}
         managed = cl._build_managed_exits(
-            long_positions=[pos], tranche_plans=tranche_plans, fired={486: frozenset({"tp1"})}
+            long_positions=[pos],
+            tranche_plans=tranche_plans,
+            fired={486: frozenset({"tp1"})},
+            trailed={},
         )
         self.assertEqual(managed[0].already_fired, frozenset({"tp1"}))
 
@@ -155,9 +160,49 @@ class TestBuildManagedExits(unittest.TestCase):
         skipped_pos = _mk_pos(uic=2, qty=20.0)
         tranche_plans = {1: ((_tr(0, 5.0, 1.0),), 10.0, 4.0)}
         managed = cl._build_managed_exits(
-            long_positions=[managed_pos, skipped_pos], tranche_plans=tranche_plans, fired={}
+            long_positions=[managed_pos, skipped_pos],
+            tranche_plans=tranche_plans,
+            fired={},
+            trailed={},
         )
         self.assertEqual([m.uic for m in managed], [1])
+
+    def test_a_trailed_level_above_the_plan_stop_wins(self) -> None:
+        # The partial-sale stop-reset hazard: execute_tranche_exit amends the
+        # SL to ManagedExit.stop_price, so a tranche fire under a trailing
+        # policy must carry the RATCHETED level, never the placement-time
+        # disaster stop — otherwise TP1 firing would PATCH the stop back down.
+        pos = _mk_pos(uic=486, qty=100.0)
+        tranche_plans = {486: ((_tr(0, 16.0, 0.5),), 100.0, 13.0)}
+        managed = cl._build_managed_exits(
+            long_positions=[pos],
+            tranche_plans=tranche_plans,
+            fired={},
+            trailed={486: 14.5},
+        )
+        self.assertEqual(managed[0].stop_price, 14.5)
+
+    def test_a_trailed_level_below_the_plan_stop_never_loosens(self) -> None:
+        pos = _mk_pos(uic=486, qty=100.0)
+        tranche_plans = {486: ((_tr(0, 16.0, 0.5),), 100.0, 13.0)}
+        managed = cl._build_managed_exits(
+            long_positions=[pos],
+            tranche_plans=tranche_plans,
+            fired={},
+            trailed={486: 12.0},
+        )
+        self.assertEqual(managed[0].stop_price, 13.0)
+
+    def test_a_uic_absent_from_trailed_keeps_the_plan_stop(self) -> None:
+        pos = _mk_pos(uic=486, qty=100.0)
+        tranche_plans = {486: ((_tr(0, 16.0, 0.5),), 100.0, 13.0)}
+        managed = cl._build_managed_exits(
+            long_positions=[pos],
+            tranche_plans=tranche_plans,
+            fired={},
+            trailed={999: 50.0},
+        )
+        self.assertEqual(managed[0].stop_price, 13.0)
 
 
 class TestFoldFiredSinceLatestPlan(unittest.TestCase):
@@ -406,6 +451,71 @@ class TestLiveExitsFlagOnFires(_JournalCase):
             if line.get("kind") == "tranche_fired"
         }
         self.assertEqual(fired_tags, {"tp1", "tp2"})
+
+    def test_a_tranche_fire_amends_the_sl_at_the_trailed_level_not_the_plan_stop(self) -> None:
+        # The partial-sale stop-reset hazard: with a trailing policy the SL has
+        # been ratcheted ABOVE the placement-time stop; the tranche fire's SL
+        # shrink must carry the ratcheted level, or TP1 firing would PATCH the
+        # stop back down to the disaster level.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 16.0, 0.5),), reference_qty=100.0, stop_price=13.0
+        )
+        cl._append_standalone_stop_journal(
+            {"kind": "trailed", "uic": uic, "level": 14.5, "ts": 1.0}
+        )
+        seen_stop_prices: list[float] = []
+        orig_amend = broker.amend_stop_amount
+
+        def _recording_amend(*args: object, **kwargs: object):
+            seen_stop_prices.append(float(kwargs["stop_price"]))  # type: ignore[arg-type]
+            return orig_amend(*args, **kwargs)
+
+        alerts: list[str] = []
+        deps = _deps(
+            broker,
+            alerts=alerts,
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+        )
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            with mock.patch.object(broker, "amend_stop_amount", side_effect=_recording_amend):
+                cl._run_live_exits_pass(deps, cl.TickReport())
+        self.assertEqual(seen_stop_prices, [14.5])
+
+    def test_a_prior_generation_trailed_level_does_not_reach_the_sl_amend(self) -> None:
+        # A trailed marker journaled BEFORE the current position's tranche_plan
+        # belongs to a PRIOR trade in the same uic — the amend must carry the
+        # current plan's stop, never the stale (possibly absurdly high) level.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        cl._append_standalone_stop_journal(
+            {"kind": "trailed", "uic": uic, "level": 44.0, "ts": 1.0}
+        )
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 16.0, 0.5),), reference_qty=100.0, stop_price=13.0
+        )
+        seen_stop_prices: list[float] = []
+        orig_amend = broker.amend_stop_amount
+
+        def _recording_amend(*args: object, **kwargs: object):
+            seen_stop_prices.append(float(kwargs["stop_price"]))  # type: ignore[arg-type]
+            return orig_amend(*args, **kwargs)
+
+        alerts: list[str] = []
+        deps = _deps(
+            broker,
+            alerts=alerts,
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+        )
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            with mock.patch.object(broker, "amend_stop_amount", side_effect=_recording_amend):
+                cl._run_live_exits_pass(deps, cl.TickReport())
+        self.assertEqual(seen_stop_prices, [13.0])
 
     def test_stale_feed_vetoes_all_fires(self) -> None:
         broker = FakeBroker()
