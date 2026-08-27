@@ -86,6 +86,23 @@ def chandelier_target(peak: float, atr: float, *, k: float) -> float | None:
     return target
 
 
+def fractional_giveback_target(entry: float, peak: float, *, frac: float) -> float | None:
+    """Trailing-stop level for a long that gives back at most ``1 - frac`` of the
+    open gain: ``max(entry, entry + frac*(peak - entry))`` (ratchets up via the
+    caller's peak). Unlike :func:`chandelier_target` the distance to the peak is
+    a FRACTION of the gain, not an ATR offset, so it widens as the gain grows —
+    this is the ``be_0p5r_trail0p6`` lens formula. Floors at ``entry`` so a
+    direct call with ``peak < entry`` still returns a break-even stop, never a
+    loosen. Returns ``None`` on any degenerate price or a ``frac`` outside
+    ``(0, 1]`` — never a bad stop."""
+    for value in (entry, peak):
+        if not math.isfinite(value) or value <= 0:
+            return None
+    if not math.isfinite(frac) or frac <= 0.0 or frac > 1.0:
+        return None
+    return max(entry, entry + frac * (peak - entry))
+
+
 def clamp_reanchor_target(
     prior_stop: float,
     proposed_target: float,

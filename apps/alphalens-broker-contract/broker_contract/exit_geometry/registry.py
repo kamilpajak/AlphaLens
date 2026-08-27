@@ -79,6 +79,7 @@ def exit_policy_registry() -> dict[str, ExitPolicy]:
     """
     from broker_contract.exit_geometry.policy import (
         AtrBracketPolicy,
+        BreakevenTrailPolicy,
         SetupStaticPolicy,
         TrailingAtrPolicy,
     )
@@ -91,6 +92,12 @@ def exit_policy_registry() -> dict[str, ExitPolicy]:
         "setup_static": SetupStaticPolicy(),
         "atr_bracket_1p5": AtrBracketPolicy(geom, name="atr_bracket_1p5"),
         "trailing_atr": TrailingAtrPolicy(geom, name="trailing_atr", activation_r=0.5, k_atr=0.6),
+        # The lens-faithful break-even + fractional-giveback trail (the live
+        # port of be_0p5r_trail0p6): no geometry — the brief ladder + brief
+        # disaster stop stay placed; only the stop is managed.
+        "breakeven_trail": BreakevenTrailPolicy(
+            activation_r=0.5, trail_frac=0.6, name="breakeven_trail"
+        ),
     }
 
 
