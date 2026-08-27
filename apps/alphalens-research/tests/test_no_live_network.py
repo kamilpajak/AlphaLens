@@ -61,6 +61,23 @@ class TestGuardBlocksTheInternet(unittest.TestCase):
         with self.assertRaises(LiveNetworkInTestError):
             sock.connect_ex(("93.184.216.34", 80))
 
+    def test_connectionless_sendto_is_guarded_too(self):
+        """A datagram send names its destination inline, so it never touches
+        ``connect``. Measured as a real leak before this arm existed — no
+        vendor here speaks UDP, but a guard with a known hole is a guard
+        someone will walk through."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(sock.close)
+        with self.assertRaises(LiveNetworkInTestError):
+            sock.sendto(b"x", ("8.8.8.8", 53))
+
+    def test_the_guard_covers_the_common_client_stacks(self):
+        """Named routes, verified rather than assumed: ``create_connection``
+        (which urllib3/requests build on) and ``asyncio``'s connector both
+        funnel through the patched primitives."""
+        with self.assertRaises(LiveNetworkInTestError):
+            socket.create_connection(("example.com", 80), timeout=3)
+
 
 class TestGuardAllowsLocalTransports(unittest.TestCase):
     """Local sockets are how several tests exercise real code paths (the
