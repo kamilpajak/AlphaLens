@@ -629,14 +629,24 @@ def _arm_b_bracket_walk(
     else:
         _walk_mark_open_remainder(state, trade_setup, ordered, notional=notional)
 
-    mae_pct: float | None = None
+    return _bracket_walk_outcome(state, levels, charge_fees=charge_fees)
+
+
+def _walk_mae_pct(state: _BracketWalkState) -> float | None:
+    """MAE of the walk: in-trade low vs the slipped fill blend, when both exist."""
     if (
         state.fill_blend_slipped is not None
         and state.in_trade_low is not None
         and state.fill_blend_slipped > 0
     ):
-        mae_pct = (state.in_trade_low - state.fill_blend_slipped) / state.fill_blend_slipped
+        return (state.in_trade_low - state.fill_blend_slipped) / state.fill_blend_slipped
+    return None
 
+
+def _bracket_walk_outcome(
+    state: _BracketWalkState, levels: Levels, *, charge_fees: bool
+) -> ArmOutcome:
+    """Render the finished walk state into the ArmOutcome (NO_FILL zeroes cash)."""
     filled = bool(state.filled)
     net = state.gross - state.fees if charge_fees else state.gross
     total_fees = state.fees if filled and charge_fees else 0.0
@@ -649,7 +659,7 @@ def _arm_b_bracket_walk(
         exit_levels=Levels(stop=state.stop, tp=state.tp, ceiling_capped=levels.ceiling_capped),
         first_fill_ts_ms=state.first_fill_ts,
         exit_ts_ms=state.exit_ts,
-        mae_pct=mae_pct,
+        mae_pct=_walk_mae_pct(state),
         entry_cost=state.entry_cost if filled else 0.0,
         ceiling_capped=levels.ceiling_capped,
     )
