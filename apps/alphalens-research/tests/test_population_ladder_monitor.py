@@ -1260,6 +1260,9 @@ class TestIncrementalCache(_MonitorTestBase):
             store_dir=self.store_dir,
             bar_fetch=_fetch,
             now=now1,
+            # The split cross-check defaults to yfinance (keyless), so leaving
+            # it unstubbed reached Yahoo for real on every run (#1179).
+            adjusted_closes_fetch=lambda t, s, e: None,
         )
         # Cache is keyed by (ticker, arrival_session); 2026-05-01 is a trading day
         # so arrival == brief_date.
@@ -1278,6 +1281,7 @@ class TestIncrementalCache(_MonitorTestBase):
             store_dir=self.store_dir,
             bar_fetch=_fetch,
             now=now2,
+            adjusted_closes_fetch=lambda t, s, e: None,
         )
         self.assertTrue(fetch_windows, "second run must fetch the tail")
         second_start = fetch_windows[0][1]
@@ -3724,6 +3728,10 @@ class TestImplausibleGuardDispositions(_MonitorTestBase):
             bar_fetch=_failing_fetch,
             now=self._NOW,
             lookback_days=(self._NOW.date() - self._BRIEF_DATE).days,
+            # Stubbing bar_fetch alone left the split cross-check on its
+            # default, which is yfinance — no API key needed, so it reached
+            # Yahoo for real on every run (#1179).
+            adjusted_closes_fetch=lambda t, s, e: None,
         )
         df = self._read_store(self._BRIEF_DATE)
         self.assertIn("guard_disposition", df.columns)
