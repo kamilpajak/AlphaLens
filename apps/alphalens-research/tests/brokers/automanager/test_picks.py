@@ -18,9 +18,11 @@ from tempfile import TemporaryDirectory
 
 from alphalens_pipeline.brokers.automanager.picks import (
     STATUS_ARMED,
+    STATUS_DISARMED,
     STATUS_REFUSED,
     arm_pick,
     iter_picks,
+    mark_disarmed,
     mark_refused,
 )
 from broker_contract.trade_intent.schema import (
@@ -113,6 +115,61 @@ class MarkRefusedTest(unittest.TestCase):
         nested = Path(self._tmp.name) / "broker_orders" / "picks.jsonl"
         mark_refused("KO", dt.date(2026, 7, 29), "cap", path=nested)
         self.assertTrue(nested.exists())
+
+
+class MarkDisarmedTest(unittest.TestCase):
+    """`alphalens broker disarm` — the operator terminal, sibling of refused."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "picks.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_mark_disarmed_appends_terminal_disarmed_line(self) -> None:
+        arm_pick(_intent("ko", "2026-08-26"), path=self.path)
+        mark_disarmed("ko", dt.date(2026, 8, 26), note="duplicate", path=self.path)
+        lines = self.path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 2, "append-only: the armed line must stay")
+        record = json.loads(lines[1])
+        self.assertEqual(record["ticker"], "KO")
+        self.assertEqual(record["date"], "2026-08-26")
+        self.assertEqual(record["status"], STATUS_DISARMED)
+        self.assertEqual(record["note"], "duplicate")
+        self.assertNotIn("intent", record)
+        parsed_ts = dt.datetime.fromisoformat(record["disarmed_ts"])
+        self.assertIsNotNone(parsed_ts.tzinfo, "disarmed_ts must be timezone-aware UTC")
+
+    def test_disarmed_latest_line_retires_the_armed_pick(self) -> None:
+        arm_pick(_intent("KO", "2026-08-26"), path=self.path)
+        arm_pick(_intent("MU", "2026-08-26"), path=self.path)
+        mark_disarmed("KO", dt.date(2026, 8, 26), path=self.path)
+        intents = list(iter_picks(path=self.path))
+        self.assertEqual([i.instrument.ticker for i in intents], ["MU"])
+
+    def test_rearm_after_disarm_yields_the_pick_again(self) -> None:
+        # Queue-side re-arm works (latest wins), mirroring refused. NOTE the
+        # entry-trail watch side is stickier: a cancelled crid stays terminal
+        # forever (see test_entry_trails_disarm.py), so a re-armed pick for the
+        # SAME (ticker, date) will not re-open its watch.
+        arm_pick(_intent("KO", "2026-08-26"), path=self.path)
+        mark_disarmed("KO", dt.date(2026, 8, 26), path=self.path)
+        arm_pick(_intent("KO", "2026-08-26"), path=self.path)
+        intents = list(iter_picks(path=self.path))
+        self.assertEqual([i.instrument.ticker for i in intents], ["KO"])
+
+    def test_disarm_scoped_to_its_brief_date(self) -> None:
+        # The exact production case: IBRX armed under 2026-08-25 AND 2026-08-26;
+        # disarming one date must not retire the other.
+        arm_pick(_intent("IBRX", "2026-08-25"), path=self.path)
+        arm_pick(_intent("IBRX", "2026-08-26"), path=self.path)
+        mark_disarmed("IBRX", dt.date(2026, 8, 26), path=self.path)
+        intents = list(iter_picks(path=self.path))
+        self.assertEqual(
+            [(i.instrument.ticker, i.meta.brief_date) for i in intents],
+            [("IBRX", "2026-08-25")],
+        )
 
 
 class IterPicksTest(unittest.TestCase):

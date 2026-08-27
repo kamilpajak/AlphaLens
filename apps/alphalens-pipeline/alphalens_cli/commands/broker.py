@@ -1304,6 +1304,72 @@ def arm_command(
     typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {picks_target}")
 
 
+@broker_app.command(name="disarm")
+def disarm_command(
+    ticker: str = typer.Argument(..., help="Plain ticker of the armed pick, e.g. KO."),
+    date: str = typer.Option(..., "--date", help="Brief date of the pick (YYYY-MM-DD)."),
+    env: str = typer.Option(
+        _DEFAULT_ARM_ENV,
+        "--env",
+        help="Broker instance whose pick is disarmed: 'sim' or 'live' (ADR 0016). Default: sim.",
+    ),
+    note: str = typer.Option(
+        "operator disarm", "--note", help="Reason recorded on both journal lines."
+    ),
+) -> None:
+    """Disarm a picked candidate — retire the (ticker, date) pick from the
+    queue AND cancel its open entry-trail watch tiers.
+
+    The operator counterpart of `arm`, a PURE EXECUTOR with no selection
+    logic: it disarms exactly the named (ticker, date) identity. Two
+    append-only writes, in a strict order:
+
+    1. WATCH first: one terminal 'cancelled' line per open entry-trail tier
+       of the pick (releases the active set, the virtual gross reservation
+       and the watch-capacity slot; the routed tranche_plan is retracted by
+       the daemon's next tick). If any tier has a native entry arm — a real
+       resting order id, or an in-flight write-ahead — the WHOLE disarm
+       refuses and writes NOTHING: cancel the order at the broker first
+       (`alphalens broker cancel <order_id>`), then disarm again.
+    2. QUEUE second: one terminal 'disarmed' line so the drain never yields
+       the pick again.
+
+    Watch-refusal-first means a refused disarm leaves BOTH journals
+    untouched; a repeated disarm is idempotent (zero open tiers -> zero
+    cancelled lines, one more terminal queue line). Re-arming the SAME
+    (ticker, date) works queue-side but will NOT re-open its watch tiers
+    (deterministic crids stay terminal) — a fresh brief date is the real
+    path back. Best-effort vs the running daemon: it can arm a native trail
+    between the read and the write; rerun after `broker cancel` if refused.
+    """
+    from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
+    from alphalens_pipeline.brokers.automanager.picks import mark_disarmed
+
+    try:
+        brief_date = dt.date.fromisoformat(date)
+    except ValueError as exc:
+        raise _fail(f"invalid --date {date!r}: {exc}") from exc
+
+    try:
+        picks_target = state_paths.picks_path(env=env)
+        trails_target = state_paths.entry_trails_path(env=env)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+
+    _guard_state_layout()
+
+    wanted = ticker.upper()
+    pick_key = f"{wanted}:{brief_date.isoformat()}"
+    try:
+        cancelled = entry_trails.cancel_open_watches(pick_key, note=note, path=trails_target)
+    except entry_trails.DisarmRestingOrderError as exc:
+        raise _fail(f"disarm refused — resting entry order: {exc}") from exc
+
+    mark_disarmed(wanted, brief_date, note=note, path=picks_target)
+    watch_note = f"cancelled {len(cancelled)} watch tier(s)" if cancelled else "no open watch"
+    typer.echo(f"disarmed {pick_key} (queue) + {watch_note} -> {picks_target.parent}")
+
+
 @broker_app.command(name="orders")
 def orders_command() -> None:
     """List open orders (entry + exit children; UNKNOWN never guessed)."""

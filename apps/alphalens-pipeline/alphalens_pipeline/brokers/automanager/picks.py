@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 STATUS_ARMED = "armed"
 STATUS_REFUSED = "refused"
+STATUS_DISARMED = "disarmed"
 
 
 def _append_record(record: dict, path: Path | None) -> None:
@@ -88,6 +89,31 @@ def mark_refused(ticker: str, date: dt.date, reason: str, *, path: Path | None =
             "refused_ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
             "reason": reason,
             "status": STATUS_REFUSED,
+        },
+        path,
+    )
+
+
+def mark_disarmed(
+    ticker: str, date: dt.date, *, note: str | None = None, path: Path | None = None
+) -> None:
+    """Append one TERMINAL 'disarmed' line retiring the (ticker, date) pick.
+
+    The OPERATOR terminal (`alphalens broker disarm`), sibling of the daemon's
+    ``mark_refused``: latest-wins retires the pick from ``iter_picks`` with no
+    daemon change. Re-arming via `alphalens broker arm` is the explicit human
+    path back QUEUE-side — but note the entry-trail side is stickier: a
+    ``cancelled`` crid never leaves the terminal state and crids are
+    deterministic per (ticker, date, tier), so a re-armed pick for the SAME
+    (ticker, date) will not re-open its watch. A fresh brief date is the real
+    path back."""
+    _append_record(
+        {
+            "ticker": ticker.upper(),
+            "date": date.isoformat(),
+            "disarmed_ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+            "note": note,
+            "status": STATUS_DISARMED,
         },
         path,
     )
@@ -164,8 +190,10 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
 
 __all__ = [
     "STATUS_ARMED",
+    "STATUS_DISARMED",
     "STATUS_REFUSED",
     "arm_pick",
     "iter_picks",
+    "mark_disarmed",
     "mark_refused",
 ]
