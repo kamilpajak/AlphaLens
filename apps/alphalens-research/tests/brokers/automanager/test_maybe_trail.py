@@ -46,6 +46,7 @@ _TRAIL = TrailingAtrPolicy(
     resolve_policy("atr_bracket_1p5"), name="trailing_atr", activation_r=0.5, k_atr=2.0
 )
 _ATR_BRACKET = resolve_exit_policy("atr_bracket_1p5")  # trails=False sibling
+_BE_TRAIL = resolve_exit_policy("breakeven_trail")  # lens-faithful, plan_stop-risk
 
 
 def _instrument(uic: int = _UIC) -> InstrumentRef:
@@ -420,9 +421,78 @@ class TestNonTrailingPolicyNeverTrails(unittest.TestCase):
         self.assertEqual(_reconcile_long(_UIC, pos, view), [NoOp()])
 
 
+class TestMaybeTrailBreakevenTrail(unittest.TestCase):
+    """The ``breakeven_trail`` policy through the SAME arm: risk is the brief
+    geometry (``plan.stop_price``), which ``_maybe_trail`` must pass into
+    ``decide_reanchor`` as ``plan_stop`` — without it the policy is
+    unconditionally dark and the lens-faithful trail never fires."""
+
+    def test_armed_emits_amendstop_at_fractional_giveback_target(self) -> None:
+        pos = _pos(avg_price=100.0)  # qty 7.0
+        plan = _plan(stop_price=90.0)  # 1R = 100 - 90 = 10
+        legs = (_stop_leg(),)
+        # peak 106 >= activation 100 + 0.5*10 = 105 -> armed; target
+        # 100 + 0.6*(106-100) = 103.6; live price 106 -> clamp floor 105.788
+        # does not bind -> the raw fractional-giveback level is emitted.
+        view = _view(
+            pos=pos,
+            plan=plan,
+            legs=legs,
+            exit_policy=_BE_TRAIL,
+            peak_by_uic={_UIC: 106.0},
+            last_price_by_uic={_UIC: 106.0},
+        )
+        action = _maybe_trail(_UIC, pos, plan, legs, view)
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        self.assertAlmostEqual(action.stop_price, 103.6)
+        self.assertEqual(action.reason, "trail")
+
+    def test_dark_before_half_r(self) -> None:
+        pos = _pos(avg_price=100.0)
+        plan = _plan(stop_price=90.0)
+        legs = (_stop_leg(),)
+        # peak 104.9 < 105 -> not armed; ATR-based arming (103.0 for the
+        # trailing_atr fixture above) must NOT apply here.
+        view = _view(
+            pos=pos,
+            plan=plan,
+            legs=legs,
+            exit_policy=_BE_TRAIL,
+            peak_by_uic={_UIC: 104.9},
+            last_price_by_uic={_UIC: 104.9},
+        )
+        self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
+
+    def test_reconcile_long_routes_breakeven_trail_to_maybe_trail(self) -> None:
+        pos = _pos(avg_price=100.0)
+        plan = _plan(stop_price=90.0)
+        legs = (_stop_leg(),)
+        view = _view(
+            pos=pos,
+            plan=plan,
+            legs=legs,
+            exit_policy=_BE_TRAIL,
+            peak_by_uic={_UIC: 106.0},
+            last_price_by_uic={_UIC: 106.0},
+        )
+        actions = _reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], AmendStop)
+        assert isinstance(actions[0], AmendStop)
+        self.assertEqual(actions[0].reason, "trail")
+
+
 class TestFoldTrailedMarkers(unittest.TestCase):
     """``_fold_trailed_markers`` folds append-only ``trailed`` markers into the
-    latest-by-ts ``level`` per uic (mirror of ``_fold_reanchored_markers``)."""
+    latest-by-ts ``level`` per uic (mirror of ``_fold_reanchored_markers``) —
+    RESET on each new-generation ``tranche_plan`` line, with the SAME identity
+    rules as ``_fold_fired_since_latest_plan``: a keyless plan or a DIFFERENT
+    ``pick_key`` starts a new position generation (drop the old trailed level —
+    a new position in a previously-traded uic must never inherit the prior
+    trade's trail, which could sit absurdly above its entry); a re-appended plan
+    with the SAME ``pick_key`` is the idempotent crash-recovery re-drive and
+    must NOT reset; ``tranche_plan_retracted`` clears."""
 
     def test_latest_by_ts_per_uic(self) -> None:
         lines = [
@@ -444,6 +514,51 @@ class TestFoldTrailedMarkers(unittest.TestCase):
 
     def test_empty_is_empty(self) -> None:
         self.assertEqual(cl._fold_trailed_markers([]), {})
+
+    def test_new_keyless_plan_drops_the_prior_trailed_level(self) -> None:
+        # The stale-generation poison: position 1 trailed to 115, closed; a NEW
+        # placement (keyless bracket-path plan) opens at a lower price. The old
+        # 115 must not survive into the new generation.
+        lines = [
+            {"kind": "tranche_plan", "uic": _UIC},
+            {"kind": "trailed", "uic": _UIC, "level": 115.0, "ts": 1.0},
+            {"kind": "tranche_plan", "uic": _UIC},
+        ]
+        self.assertEqual(cl._fold_trailed_markers(lines), {})
+
+    def test_new_pick_key_drops_the_prior_trailed_level(self) -> None:
+        lines = [
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "trade-1"},
+            {"kind": "trailed", "uic": _UIC, "level": 115.0, "ts": 1.0},
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "trade-2"},
+        ]
+        self.assertEqual(cl._fold_trailed_markers(lines), {})
+
+    def test_same_pick_key_reappend_keeps_the_trailed_level(self) -> None:
+        # The already_watching crash-recovery re-drive re-journals the SAME
+        # plan every tick; that identity re-append is not a new generation.
+        lines = [
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "trade-1"},
+            {"kind": "trailed", "uic": _UIC, "level": 96.0, "ts": 1.0},
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "trade-1"},
+        ]
+        self.assertEqual(cl._fold_trailed_markers(lines), {_UIC: 96.0})
+
+    def test_retracted_plan_drops_the_trailed_level(self) -> None:
+        lines = [
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "trade-1"},
+            {"kind": "trailed", "uic": _UIC, "level": 96.0, "ts": 1.0},
+            {"kind": "tranche_plan_retracted", "uic": _UIC},
+        ]
+        self.assertEqual(cl._fold_trailed_markers(lines), {})
+
+    def test_reset_is_per_uic(self) -> None:
+        lines = [
+            {"kind": "trailed", "uic": _UIC, "level": 96.0, "ts": 1.0},
+            {"kind": "trailed", "uic": 999, "level": 50.0, "ts": 1.0},
+            {"kind": "tranche_plan", "uic": 999},
+        ]
+        self.assertEqual(cl._fold_trailed_markers(lines), {_UIC: 96.0})
 
 
 if __name__ == "__main__":

@@ -164,5 +164,9 @@ class TestTheStampNamesTheBehaviouralPolicy(unittest.TestCase):
     def test_a_policy_that_places_no_geometry_still_names_itself(self):
         # setup_static never reaches this stamp in production (the caller gates
         # on applies_geometry), but the field must not become a place where a
-        # None quietly appears if that ever changes.
-        self.assertEqual(self._stamp("setup_static")["exit_policy_name"], "setup_static")
+        # None quietly appears if that ever changes. breakeven_trail DOES reach
+        # it (the stamp is unconditional and feeds plan.reanchor for the trail
+        # arm even when the placed exits are the brief's own).
+        for key in ("setup_static", "breakeven_trail"):
+            with self.subTest(exit_policy=key):
+                self.assertEqual(self._stamp(key)["exit_policy_name"], key)
