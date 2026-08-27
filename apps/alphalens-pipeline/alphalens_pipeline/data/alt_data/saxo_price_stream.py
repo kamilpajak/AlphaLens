@@ -11,9 +11,13 @@ quote may drive an order lives in the feed adapter's freshness gate.
 The ONE exception is the 1 Hz running-low accumulator (touch-latch,
 entry_trailing_design_2026_08_12.md §5): a per-tick running minimum bid that
 provably CANNOT live in the 45s feed adapter — it needs every 1 Hz frame the
-adapter never sees. ``apply`` therefore folds each latchable quote into
-``QuoteCache._running_low`` here, gated by a local latchable check (undelayed,
-un-crossed, sane spread, both sides finite positive). This gate is a
+adapter never sees. ``apply`` therefore folds each latchable quote into the
+per-consumer accumulators in ``QuoteCache._latches`` here, gated by a local
+latchable check (undelayed, un-crossed, sane spread, both sides finite
+positive). One accumulator PER CONSUMER (#1172), because a single cross-process
+reader serves both broker-manager daemons and the drain is a POP: a shared
+accumulator would let one daemon's drain destroy the other's touch evidence.
+The in-process path uses the unfiltered ``default`` consumer. This gate is a
 NECESSARY-condition prefilter, not the order-decision gate: the feed adapter
 still decides, at DRAIN time, whether a drained low may drive a touch (the
 concurrent point-sample must itself be fresh/trusted). The accumulator is
@@ -232,21 +236,95 @@ class Quote:
     received_at: dt.datetime
 
 
+# The in-process consumer's reserved id. A cross-process client id colliding
+# with it would silently share — and POP — the local daemon's own accumulator,
+# so registering/unregistering under this name fails loud.
+_DEFAULT_LATCH_CONSUMER = "default"
+
+
+class _LatchAccumulator:
+    """One consumer's 1 Hz running-low accumulator (#1172).
+
+    NOT thread-safe on its own: every method here runs with
+    ``QuoteCache._lock`` held (the reader thread folds, caller threads
+    drain/reseed). Keeping the ONE lock in the cache rather than one per
+    accumulator is what makes the fan-out across consumers atomic with the
+    quote merge that produced the bid.
+
+    ``filtered=False`` means "no uic filter" and is reserved for the
+    in-process consumer: the stream already narrows what reaches the cache to
+    the wire-level union, so that path needs no second filter and keeps its
+    pre-#1172 behaviour exactly. A cross-process consumer IS filtered — the
+    union it shares the wire with is wider than its own watch list, and a low
+    for a uic it never asked about must not reach it.
+    """
+
+    def __init__(self, *, filtered: bool) -> None:
+        self._lows: dict[int, float] = {}
+        self._uics: set[int] | None = set() if filtered else None
+
+    def wants(self, uic: int) -> bool:
+        return self._uics is None or uic in self._uics
+
+    def set_uics(self, uics: set[int]) -> None:
+        """Replace this consumer's desired set, clearing the accumulator for
+        every uic that LEFT it AND every uic that newly ENTERED it.
+
+        The entering half is the safety-critical one: a watch that starts now
+        must never inherit a low accrued while it was not watching — that low
+        would drive a touch the watch never actually saw. It mirrors the
+        wire-level ``forget``-on-unsubscribe one level down. A no-op on the
+        unfiltered in-process consumer."""
+        if self._uics is None:
+            return
+        previous = self._uics
+        self._uics = set(uics)
+        for uic in previous ^ self._uics:
+            self._lows.pop(uic, None)
+
+    def fold(self, uic: int, bid: float) -> None:
+        """Fold one already-proven-latchable bid into the running minimum."""
+        prev = self._lows.get(uic)
+        self._lows[uic] = bid if prev is None else min(prev, bid)
+
+    def drain(self, uic: int) -> float | None:
+        return self._lows.pop(uic, None)
+
+    def reseed(self, uic: int, low: float) -> None:
+        """MIN-MERGE an already-coerced low back in (see
+        :meth:`QuoteCache.reseed_running_low` for why the hand-back exists)."""
+        prev = self._lows.get(uic)
+        self._lows[uic] = low if prev is None else min(prev, low)
+
+    def forget(self, uic: int) -> None:
+        self._lows.pop(uic, None)
+
+    def prune_except(self, keep: set[int]) -> None:
+        for uic in [u for u in self._lows if u not in keep]:
+            del self._lows[uic]
+
+
 class QuoteCache:
     """Thread-safe per-uic quote state with delta merging."""
 
     def __init__(self) -> None:
         self._quotes: dict[int, Quote] = {}
-        # 1 Hz running-LOW accumulator per uic (touch-latch,
-        # entry_trailing_design §5): the minimum latchable bid since the last
-        # drain. Bounded by the live subscription set — ``forget`` (on
-        # unsubscribe) pops it alongside the quote. Written under ``_lock`` on
-        # the reader thread, drained under ``_lock`` on the caller thread. This
-        # is the ONE accumulation that provably cannot live in the 45s feed
-        # adapter (it needs every 1 Hz frame), so it is gated HERE by exception
-        # for the reader thread's sake; the freshness gate that decides whether
-        # a drained low may drive an order still lives in the feed adapter.
-        self._running_low: dict[int, float] = {}
+        # 1 Hz running-LOW accumulators (touch-latch, entry_trailing_design
+        # §5), ONE PER CONSUMER (#1172). The in-process daemon uses the
+        # unfiltered default consumer created here, so its behaviour is
+        # unchanged; the cross-process reader registers one filtered
+        # accumulator per client connection so a second daemon's drain (a POP)
+        # cannot destroy the first daemon's touch evidence.
+        #
+        # Written under ``_lock`` on the reader thread, drained under ``_lock``
+        # on the caller thread. This is the ONE accumulation that provably
+        # cannot live in the 45s feed adapter (it needs every 1 Hz frame), so
+        # it is gated HERE by exception for the reader thread's sake; the
+        # freshness gate that decides whether a drained low may drive an order
+        # still lives in the feed adapter.
+        self._latches: dict[str, _LatchAccumulator] = {
+            _DEFAULT_LATCH_CONSUMER: _LatchAccumulator(filtered=False)
+        }
         self._lock = threading.Lock()
 
     def apply(self, row: dict[str, Any], *, received_at: dt.datetime) -> None:
@@ -326,16 +404,18 @@ class QuoteCache:
             self._update_running_low(uic, merged)
 
     def _update_running_low(self, uic: int, quote: Quote) -> None:
-        """Fold ``quote.bid`` into the per-uic running low, but ONLY for a
-        latchable quote. MUST be called with ``self._lock`` held (it is, from
-        ``apply``) — it never re-acquires (``_lock`` is non-reentrant).
+        """Fold ``quote.bid`` into the running low of EVERY consumer watching
+        ``uic``, but ONLY for a latchable quote. MUST be called with
+        ``self._lock`` held (it is, from ``apply``) — it never re-acquires
+        (``_lock`` is non-reentrant).
 
         Latchable = undelayed (``DelayedByMinutes`` strictly ``0``; None/absent
         rejected) AND both sides finite positive numbers AND not crossed
         (``ask >= bid``) AND relative spread within ``_LATCH_MAX_RELATIVE_SPREAD``.
         Any doubt is a veto (no arithmetic on a side until proven finite): a
         single transient crossed / delayed / garbage tick must never plant a
-        phantom low that later drives a false touch."""
+        phantom low that later drives a false touch. The gate runs ONCE, before
+        the fan-out — every consumer sees the same verdict on the same tick."""
         if quote.delayed_by_minutes != 0:
             return
         bid = _latchable_side(quote.bid)
@@ -346,45 +426,107 @@ class QuoteCache:
             return
         if (ask - bid) / bid > _LATCH_MAX_RELATIVE_SPREAD:
             return
-        prev = self._running_low.get(uic)
-        self._running_low[uic] = bid if prev is None else min(prev, bid)
+        for latch in self._latches.values():
+            if latch.wants(uic):
+                latch.fold(uic, bid)
 
-    def drain_running_low(self, uic: int) -> float | None:
-        """Pop-and-reset the accumulated running low for ``uic`` (read once,
-        then gone), or ``None`` when nothing latchable accrued since the last
-        drain. The reset is what bounds the accumulation window to one tick —
-        the caller drains each watched uic EXACTLY once per decision tick, so a
-        laddered pick's deeper tiers all share the same drained low rather than
-        the first tier consuming it."""
+    def register_latch(self, consumer: str) -> None:
+        """Give ``consumer`` its own (filtered, initially empty) accumulator.
+
+        Re-registering an existing consumer RESETS it — a reconnecting client
+        must start from an empty window rather than inherit lows accrued while
+        it was gone. Registering under the reserved in-process name fails loud
+        (a colliding client id would silently pop the local daemon's own
+        accumulator)."""
+        self._reject_reserved_consumer(consumer)
         with self._lock:
-            return self._running_low.pop(uic, None)
+            self._latches[consumer] = _LatchAccumulator(filtered=True)
 
-    def reseed_running_low(self, uic: int, low: float) -> None:
-        """Hand a drained running low BACK to the accumulator (the 2026-08-18
-        incident): the caller drains unconditionally once per tick, but when its
-        concurrent point-sample is veto-stale it cannot act on the low — and the
-        pop had already destroyed the only evidence of a real touch. MIN-MERGE:
-        a deeper accrual the reader thread applied after the drain wins over the
-        reseeded value, so a repeated reseed is idempotent and never resurrects
-        a shallower low. Runs on the caller (tick) thread under the same
-        ``_lock`` the reader's ``apply`` writes under. Same veto-not-raise
-        discipline as the latch gate: a non-finite/non-positive value is
-        silently ignored (a doubtful reseed must never plant a phantom low)."""
+    def unregister_latch(self, consumer: str) -> None:
+        """Release ``consumer``'s accumulator (its connection closed). Unknown
+        consumer is a silent no-op; the reserved in-process name fails loud."""
+        self._reject_reserved_consumer(consumer)
+        with self._lock:
+            self._latches.pop(consumer, None)
+
+    @staticmethod
+    def _reject_reserved_consumer(consumer: str) -> None:
+        if consumer == _DEFAULT_LATCH_CONSUMER:
+            raise ValueError(
+                f"{_DEFAULT_LATCH_CONSUMER!r} is the reserved in-process latch consumer; "
+                "a cross-process client must register under its own id"
+            )
+
+    def set_latch_uics(self, consumer: str, uics: set[int] | list[int]) -> None:
+        """Replace ``consumer``'s watched-uic set (see
+        :meth:`_LatchAccumulator.set_uics` for the clear-on-enter-AND-leave
+        rule). Unknown consumer is a silent no-op — the same veto-not-raise
+        discipline the drain/reseed paths use.
+
+        SYNCHRONISATION OBLIGATION: ``uics`` MUST be the same set the caller
+        passes to ``SaxoPriceStream.ensure_subscribed`` for that consumer's
+        scopes. The two are separate calls on purpose (the wire subscription is
+        the union across ALL consumers; the latch set is one consumer's slice),
+        and nothing here can detect divergence: a latch set narrower than the
+        subscription accrues nothing for the missing uics, so touch detection
+        goes DARK for them with no error, no alert and a healthy-looking
+        stream. A caller that updates one side must update the other in the
+        same operation."""
+        with self._lock:
+            latch = self._latches.get(consumer)
+            if latch is not None:
+                latch.set_uics(set(uics))
+
+    def drain_running_low(
+        self, uic: int, *, consumer: str = _DEFAULT_LATCH_CONSUMER
+    ) -> float | None:
+        """Pop-and-reset ``consumer``'s accumulated running low for ``uic``
+        (read once, then gone), or ``None`` when nothing latchable accrued since
+        that consumer's last drain. The reset is what bounds the accumulation
+        window to one tick — a caller drains each watched uic EXACTLY once per
+        decision tick, so a laddered pick's deeper tiers all share the same
+        drained low rather than the first tier consuming it.
+
+        Per consumer (#1172): with one reader serving both daemons a shared
+        accumulator would let one daemon's pop destroy the other's touch
+        evidence. An unknown consumer yields ``None`` (veto, never raise)."""
+        with self._lock:
+            latch = self._latches.get(consumer)
+            return None if latch is None else latch.drain(uic)
+
+    def reseed_running_low(
+        self, uic: int, low: float, *, consumer: str = _DEFAULT_LATCH_CONSUMER
+    ) -> None:
+        """Hand a drained running low BACK to ``consumer``'s accumulator (the
+        2026-08-18 incident): the caller drains unconditionally once per tick,
+        but when its concurrent point-sample is veto-stale it cannot act on the
+        low — and the pop had already destroyed the only evidence of a real
+        touch. MIN-MERGE: a deeper accrual the reader thread applied after the
+        drain wins over the reseeded value, so a repeated reseed is idempotent
+        and never resurrects a shallower low. Runs on the caller (tick) thread
+        under the same ``_lock`` the reader's ``apply`` writes under. Same
+        veto-not-raise discipline as the latch gate: a non-finite/non-positive
+        value — or an unknown consumer — is silently ignored (a doubtful reseed
+        must never plant a phantom low)."""
         value = _latchable_side(low)
         if value is None:
             return
         with self._lock:
-            prev = self._running_low.get(uic)
-            self._running_low[uic] = value if prev is None else min(prev, value)
+            latch = self._latches.get(consumer)
+            if latch is not None:
+                latch.reseed(uic, value)
 
     def get(self, uic: int) -> Quote | None:
         with self._lock:
             return self._quotes.get(uic)
 
     def forget(self, uic: int) -> None:
+        """Wire-level unsubscribe: the uic left the UNION, so no consumer can
+        still be watching it — clear it everywhere."""
         with self._lock:
             self._quotes.pop(uic, None)
-            self._running_low.pop(uic, None)
+            for latch in self._latches.values():
+                latch.forget(uic)
 
     def prune_except(self, keep: set[int]) -> None:
         """Drop every cached quote AND running low whose uic is not in
@@ -401,8 +543,8 @@ class QuoteCache:
         with self._lock:
             for uic in [u for u in self._quotes if u not in keep]:
                 del self._quotes[uic]
-            for uic in [u for u in self._running_low if u not in keep]:
-                del self._running_low[uic]
+            for latch in self._latches.values():
+                latch.prune_except(keep)
 
     def any_delayed(self) -> bool:
         """True once ANY cached quote reports a positive ``DelayedByMinutes``
@@ -522,15 +664,35 @@ class SaxoPriceStream:
     def get(self, uic: int) -> Quote | None:
         return self.cache.get(uic)
 
-    def drain_running_low(self, uic: int) -> float | None:
-        """Pop-and-reset the cache's 1 Hz running low for ``uic`` (touch-latch).
-        The feed adapter drains this once per watched uic per decision tick."""
-        return self.cache.drain_running_low(uic)
+    def drain_running_low(
+        self, uic: int, *, consumer: str = _DEFAULT_LATCH_CONSUMER
+    ) -> float | None:
+        """Pop-and-reset ``consumer``'s 1 Hz running low for ``uic``
+        (touch-latch). The feed adapter drains this once per watched uic per
+        decision tick; the default consumer is the in-process daemon."""
+        return self.cache.drain_running_low(uic, consumer=consumer)
 
-    def reseed_running_low(self, uic: int, low: float) -> None:
-        """Hand a drained-but-unusable running low back to the cache's
+    def reseed_running_low(
+        self, uic: int, low: float, *, consumer: str = _DEFAULT_LATCH_CONSUMER
+    ) -> None:
+        """Hand a drained-but-unusable running low back to ``consumer``'s
         accumulator (min-merge; see :meth:`QuoteCache.reseed_running_low`)."""
-        self.cache.reseed_running_low(uic, low)
+        self.cache.reseed_running_low(uic, low, consumer=consumer)
+
+    def register_latch_consumer(self, consumer: str) -> None:
+        """Register a cross-process consumer's own touch-latch accumulator
+        (#1172) — one per reader-server client connection."""
+        self.cache.register_latch(consumer)
+
+    def unregister_latch_consumer(self, consumer: str) -> None:
+        """Release a cross-process consumer's accumulator (connection closed)."""
+        self.cache.unregister_latch(consumer)
+
+    def set_latch_uics(self, consumer: str, uics: set[int] | list[int]) -> None:
+        """Replace the uic set ``consumer``'s accumulator folds for. Kept in
+        step with that consumer's own ``ensure_subscribed`` scopes by the
+        reader server — NOT with the wire-level union, which is wider."""
+        self.cache.set_latch_uics(consumer, uics)
 
     def is_running(self) -> bool:
         """True once ``start()`` has launched the reader thread and it is

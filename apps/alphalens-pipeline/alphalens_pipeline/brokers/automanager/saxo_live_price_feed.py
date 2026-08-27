@@ -14,7 +14,7 @@ from collections.abc import Callable
 
 from broker_contract.price_feed import PricePoint, is_fresh
 
-from alphalens_pipeline.data.alt_data.saxo_price_stream import SaxoPriceStream
+from alphalens_pipeline.data.alt_data.quote_source import QuoteSource
 
 SOURCE = "saxo-live-l1"
 
@@ -26,12 +26,16 @@ class SaxoLivePriceFeed:
     positions — SIM, or LIVE under the ADR 0017 daemon; the same feed factory
     serves both) to the LIVE uic the stream is keyed by. The two are NOT assumed
     equal: subscribing to the wrong instrument would be a silent catastrophe.
+
+    ``stream`` is typed as the structural :class:`QuoteSource`, not the concrete
+    in-process stream: under #1172 the same adapter reads either the local
+    ``SaxoPriceStream`` or a socket proxy onto the one cross-process reader.
     """
 
     def __init__(
         self,
         *,
-        stream: SaxoPriceStream,
+        stream: QuoteSource,
         resolve_live_uic: Callable[[int], int | None],
         clock: Callable[[], dt.datetime] | None = None,
     ) -> None:
