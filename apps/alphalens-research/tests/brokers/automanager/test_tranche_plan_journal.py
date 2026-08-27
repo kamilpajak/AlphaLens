@@ -159,6 +159,36 @@ class TestFoldTranchePlans(unittest.TestCase):
         out = fold_tranche_plans([_line("tranche_pct", 1.0)])
         self.assertEqual(out[486][0][0].tranche_frac, 1.0)
 
+    def test_non_finite_tranche_fields_skip_the_whole_line(self) -> None:
+        # The scalar guard already refuses NaN/Infinity reference_qty and
+        # stop_price at the source; tranche_frac is covered by TpTranchePlan's
+        # [0, 1] guard (NaN fails the range check). target_price and r_multiple
+        # had NO guard — a hand-edited or corrupted journal line carrying a
+        # non-finite take-profit would have become a GOVERNING ladder whose TP
+        # limit goes to the broker. Same source-refusal contract as the
+        # scalars: the line contributes nothing.
+        def _line(field: str, value: float) -> dict:
+            tranche = {
+                "tranche_index": 0,
+                "target_price": 16.0,
+                "tranche_frac": 0.5,
+                "r_multiple": 1.5,
+                "tag": "tp1",
+            }
+            tranche[field] = value
+            return {
+                "kind": "tranche_plan",
+                "uic": 486,
+                "reference_qty": 100.0,
+                "stop_price": 13.0,
+                "tp_tranches": [tranche],
+            }
+
+        for field in ("target_price", "r_multiple", "tranche_frac"):
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(field=field, value=value):
+                    self.assertEqual(fold_tranche_plans([_line(field, value)]), {})
+
     def test_a_retraction_removes_the_uic_from_the_fold(self) -> None:
         # 2026-08-19 adjudication finding 3: a watch that ends unfired retracts
         # its plan — the fold must stop governing the uic.
