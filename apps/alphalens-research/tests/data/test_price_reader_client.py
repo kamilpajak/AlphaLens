@@ -13,6 +13,7 @@ must therefore look exactly like "no price".
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import socket
 import tempfile
@@ -236,6 +237,27 @@ class TestEveryFailureIsAVeto(unittest.TestCase):
         for conn in accepted:
             conn.close()
 
+    def test_an_endless_reply_is_bounded_rather_than_buffered_forever(self):
+        """The server bounds REQUEST lines; the client must bound REPLIES. A
+        reader that streams without ever sending a newline would otherwise grow
+        the daemon's memory unbounded — the per-read timeout does not help,
+        because every read succeeds."""
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        listener.bind(str(self.path))
+        listener.listen(1)
+        self.addCleanup(listener.close)
+
+        def _flood() -> None:
+            conn, _ = listener.accept()
+            with contextlib.suppress(OSError):
+                conn.recv(4096)
+                while True:
+                    conn.sendall(b"x" * 8192)  # never a newline
+
+        threading.Thread(target=_flood, daemon=True).start()
+        self.assertIsNone(self._client().get(211))
+
     def test_garbage_on_the_wire_vetoes(self):
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -278,6 +300,73 @@ class TestReconnect(unittest.TestCase):
         restarted.start()
         self.addCleanup(restarted.stop)
         self.assertIsNotNone(client.get(211), "the client must reconnect to the new reader")
+
+    def test_a_reseed_that_lands_on_a_fresh_connection_cannot_become_a_phantom_touch(self):
+        """The cross-PR interaction worth proving rather than assuming.
+
+        A reconnect gives the client a NEW server-side consumer with an empty
+        accumulator. A reseed issued right after (the client re-hands a low it
+        drained before the drop) therefore lands on a consumer that is not yet
+        watching that uic. PR-1's clear-on-ENTER rule is what stops that from
+        waiting there and firing a touch the watch never saw, once the uic is
+        subscribed."""
+        from alphalens_pipeline.data.alt_data.saxo_price_stream import SaxoPriceStream
+
+        class _Client:
+            def access_token(self):  # pragma: no cover - not reached
+                return "t"
+
+        stream = SaxoPriceStream(object(), _Client())
+        server = PriceReaderServer(stream, self.path, heartbeat_interval_s=3600)
+        server.start()
+        self.addCleanup(server.stop)
+        client = RemoteQuoteSource(self.path, timeout_s=5.0, reconnect_backoff_s=0.0)
+        self.addCleanup(client.close)
+
+        # A low handed back BEFORE this connection watches the uic ...
+        client.reseed_running_low(211, 18.61)
+        # ... then the watch arms.
+        client.ensure_subscribed([211], scope="entry-watch")
+        self.assertIsNone(
+            client.drain_running_low(211),
+            "a low from before the watch existed must not survive into it",
+        )
+
+    def test_a_dead_connection_is_retried_within_the_call_at_production_defaults(self):
+        """MEASURED as broken before this fix, and the earlier test missed it
+        because it configured ``reconnect_backoff_s=0.0`` — it proved a shape
+        we do not ship.
+
+        With the production backoff, a failed exchange marked the client down
+        immediately, so the in-call retry found itself inside the cooldown and
+        returned nothing. A daemon whose reader restarted therefore stayed
+        priceless for a full cooldown instead of recovering on the next call.
+        A connection that WAS open and died is the case that deserves the
+        retry; a fresh connect failure still enters the cooldown at once."""
+        server = PriceReaderServer(self.stream, self.path, heartbeat_interval_s=3600)
+        server.start()
+        client = RemoteQuoteSource(self.path)  # production defaults
+        self.addCleanup(client.close)
+        self.stream.quotes[211] = _FakeQuote(211, 18.61, 18.62)
+        self.assertIsNotNone(client.get(211))
+
+        server.stop()
+        restarted = PriceReaderServer(self.stream, self.path, heartbeat_interval_s=3600)
+        restarted.start()
+        self.addCleanup(restarted.stop)
+
+        self.assertIsNotNone(
+            client.get(211),
+            "a call whose established connection died must reconnect within the call",
+        )
+
+    def test_a_fresh_connect_failure_still_enters_the_cooldown_at_once(self):
+        """The other half: with no reader at all there is nothing to retry, so
+        the call must not burn a second connect attempt."""
+        client = RemoteQuoteSource(self.path)  # production defaults, no server
+        self.addCleanup(client.close)
+        self.assertIsNone(client.get(211))
+        self.assertEqual(client.connect_attempts, 1)
 
     def test_reconnect_attempts_are_throttled(self):
         """~30 uics per tick against a down reader must not become 30 connect

@@ -56,6 +56,11 @@ _DEFAULT_RECONNECT_BACKOFF_S = 30.0
 
 _RECV_CHUNK = 65536
 
+# Reply-line ceiling, mirroring the server's request ceiling. Every legitimate
+# reply is a short JSON object; anything larger is a broken reader, and an
+# unbounded buffer inside the trading daemon is not an option.
+_MAX_REPLY_BYTES = 64 * 1024
+
 
 @dataclass(frozen=True)
 class RemoteQuote:
@@ -170,10 +175,16 @@ class RemoteQuoteSource:
     def _call(self, op: str, **args: Any) -> Any:
         """One request/response. Returns the result, or ``None`` on ANY doubt.
 
-        One retry at most, and only when the connection was already open: a
+        One retry at most, and ONLY when the connection was already open: a
         reader restarted between ticks leaves a stale socket whose first write
-        fails, and that case deserves a second try. Beyond that the call
-        vetoes — a tick must not spend its budget reconnecting."""
+        fails, and that case deserves a second try. A fresh connect failure has
+        nothing to retry, so it enters the cooldown at once.
+
+        The ordering here is load-bearing and was measured wrong before: marking
+        the client down BEFORE the retry put attempt 2 inside its own cooldown,
+        so the retry never ran at the production backoff and a daemon whose
+        reader restarted stayed priceless for the whole cooldown."""
+        had_connection = self._sock is not None
         for attempt in (1, 2):
             sock = self._connection()
             if sock is None:
@@ -183,8 +194,9 @@ class RemoteQuoteSource:
             # Deliberately broad: every transport doubt is a veto, never a raise
             # into the tick (see the module docstring).
             except Exception as exc:
-                self._on_failure(op, exc)
-                if attempt == 2:
+                self.close()  # drop the socket AND its half-read buffer
+                if attempt == 2 or not had_connection:
+                    self._mark_down(f"{op} failed: {exc}")
                     return None
         return None
 
@@ -202,11 +214,18 @@ class RemoteQuoteSource:
         return reply.get("result")
 
     def _read_line(self, sock: socket.socket) -> bytes:
+        """Read one newline-terminated reply, BOUNDED.
+
+        The per-read timeout does not bound a reader that keeps sending without
+        ever ending the line — every read succeeds, and the buffer grows inside
+        the daemon. The server bounds request lines for the same reason."""
         while b"\n" not in self._buf:
             chunk = sock.recv(_RECV_CHUNK)
             if not chunk:
                 raise ConnectionError("reader closed the connection")
             self._buf += chunk
+            if len(self._buf) > _MAX_REPLY_BYTES:
+                raise ConnectionError("reader reply exceeded the line ceiling")
         line, self._buf = self._buf.split(b"\n", 1)
         return line
 
@@ -231,12 +250,6 @@ class RemoteQuoteSource:
             logger.info("price-reader client: reconnected to %s", self._path)
             self._down_logged = False
         return sock
-
-    def _on_failure(self, op: str, exc: Exception) -> None:
-        """Drop the connection so the next call reconnects; the buffer goes
-        with it (a half-read reply must never be parsed as the next one's)."""
-        self.close()
-        self._mark_down(f"{op} failed: {exc}")
 
     def _mark_down(self, detail: str) -> None:
         self.failures += 1
