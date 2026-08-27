@@ -69,11 +69,19 @@ class QuoteSource(Protocol):
         ...
 
     def drain_running_low(self, uic: int) -> float | None:
-        """POP the 1 Hz touch-latch running low for ``uic`` (read-and-reset)."""
+        """POP the 1 Hz touch-latch running low for ``uic`` (read-and-reset).
+
+        No ``consumer`` argument by design — see the module docstring. The
+        in-process stream takes one (``QuoteCache.drain_running_low``) and
+        defaults it to the local daemon; a socket client is identified by its
+        connection, so consumer isolation happens entirely server-side."""
         ...
 
     def reseed_running_low(self, uic: int, low: float) -> None:
-        """MIN-MERGE a drained-but-unusable low back into the accumulator."""
+        """MIN-MERGE a drained-but-unusable low back into the accumulator.
+
+        Same ``consumer``-free signature and the same reason as
+        :meth:`drain_running_low`."""
         ...
 
     def live_uic_for(self, ticker: str, *, exchange_mic: str) -> int | None:

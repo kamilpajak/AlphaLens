@@ -461,7 +461,17 @@ class QuoteCache:
         """Replace ``consumer``'s watched-uic set (see
         :meth:`_LatchAccumulator.set_uics` for the clear-on-enter-AND-leave
         rule). Unknown consumer is a silent no-op — the same veto-not-raise
-        discipline the drain/reseed paths use."""
+        discipline the drain/reseed paths use.
+
+        SYNCHRONISATION OBLIGATION: ``uics`` MUST be the same set the caller
+        passes to ``SaxoPriceStream.ensure_subscribed`` for that consumer's
+        scopes. The two are separate calls on purpose (the wire subscription is
+        the union across ALL consumers; the latch set is one consumer's slice),
+        and nothing here can detect divergence: a latch set narrower than the
+        subscription accrues nothing for the missing uics, so touch detection
+        goes DARK for them with no error, no alert and a healthy-looking
+        stream. A caller that updates one side must update the other in the
+        same operation."""
         with self._lock:
             latch = self._latches.get(consumer)
             if latch is not None:
