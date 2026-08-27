@@ -226,6 +226,12 @@ class _ConnectionState:
         # Set once the server has released this connection; a handler still
         # mid-request must not resurrect scopes after that.
         self.closed = False
+        # The client socket, so a stop() can actually END this conversation.
+        # `daemon_threads` leaves accepted connections running after
+        # `server_close()`, and a handler that keeps answering would serve
+        # quotes out of a cache whose stream is being torn down — measured: a
+        # client kept receiving prices from a stopped reader.
+        self.sock: socket.socket | None = None
 
     def wire_scope(self, scope: str) -> str:
         return f"{self.consumer}:{scope}"
@@ -251,6 +257,9 @@ class _Handler(socketserver.StreamRequestHandler):
     def setup(self) -> None:
         super().setup()
         self._state = self._server.open_connection()
+        # Hand the socket to the server so stop() can end this conversation
+        # rather than leave a daemon thread answering from a dying cache.
+        self._state.sock = self.connection
 
     def handle(self) -> None:
         while True:
@@ -586,6 +595,14 @@ class PriceReaderServer:
         a failure to release one scope must not skip the others."""
         with self._lock:
             state.closed = True
+            sock, state.sock = state.sock, None
+        if sock is not None:
+            # Half-close so a handler blocked in readline() returns and its
+            # thread exits; the handler's own finish() then no-ops (the pop
+            # already missed). Without this a client keeps being served by a
+            # STOPPED reader — measured, not theorised.
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
         for scope in list(state.scope_uics):
             with contextlib.suppress(Exception):
                 self._stream.ensure_subscribed([], scope=state.wire_scope(scope))

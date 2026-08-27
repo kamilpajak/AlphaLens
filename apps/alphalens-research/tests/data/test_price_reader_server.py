@@ -255,10 +255,13 @@ class TestWireRobustness(PriceReaderServerTestCase):
         allocate without limit inside the reader both daemons depend on.
 
         The server answers once and drops THAT connection, so the oversized
-        send can legitimately fail with EPIPE mid-write — which is the point:
-        it stopped reading instead of buffering the rest."""
+        send can legitimately fail mid-write — which is the point: it stopped
+        reading instead of buffering the rest. Any OSError counts: the errno
+        depends on how far the drop got (EPIPE, ECONNRESET, or ENOTCONN once
+        the server half-closes), and pinning one of them would make the test
+        assert a platform detail rather than the behaviour."""
         client = self.connect()
-        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+        with contextlib.suppress(OSError):
             client.send_raw(b'{"v":1,"op":"quote","uic":' + b"9" * 200_000 + b"}\n")
         with contextlib.suppress(AssertionError, OSError):
             reply = client.read_response()
