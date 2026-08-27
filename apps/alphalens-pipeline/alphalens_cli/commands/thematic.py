@@ -35,6 +35,7 @@ thematic_app = typer.Typer(
 logger = logging.getLogger(__name__)
 
 _DATE_OPTION_HELP = "UTC date in YYYY-MM-DD (default: yesterday)."
+_MSG_OPENROUTER_KEY_MISSING = "OPENROUTER_API_KEY missing from environment."
 
 
 def _stage_volume_metrics(stage: str, *, output_rows: int, input_rows: int) -> dict[str, int]:
@@ -693,7 +694,7 @@ def extract(
     # routes the stage through `get_default_openrouter_client()`, which reads
     # the SAME env var for the key and honours the pin.
     if not os.environ.get("OPENROUTER_API_KEY"):
-        raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
+        raise typer.BadParameter(_MSG_OPENROUTER_KEY_MISSING)
 
     events = event_extractor.extract_daily(
         date=target,
@@ -795,7 +796,7 @@ def map_themes_cmd(
     # inherits the operator's ALPHALENS_OPENROUTER_* provider pin. Threading
     # `api_key=` down would pick the un-pinned constructor instead.
     if not os.environ.get("OPENROUTER_API_KEY"):
-        raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
+        raise typer.BadParameter(_MSG_OPENROUTER_KEY_MISSING)
     polygon_key = os.environ.get("POLYGON_API_KEY", "")
 
     # Single source for recent_days so roll_up and the novelty_config_version
@@ -1459,7 +1460,7 @@ def shadow_map_cmd(
         else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
     )
     if not os.environ.get("OPENROUTER_API_KEY"):
-        raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
+        raise typer.BadParameter(_MSG_OPENROUTER_KEY_MISSING)
 
     # The daily pipeline fires six times on the same asof; the draw happens once.
     if not rebuild and shadow_sampler.already_collected(asof, store_dir=store_dir):

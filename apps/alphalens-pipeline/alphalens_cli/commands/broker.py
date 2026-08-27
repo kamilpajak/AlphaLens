@@ -1753,14 +1753,13 @@ def stream_status_command(
     def _fmt(value: float | None) -> str:
         return "absent" if value is None else f"{value:g}"
 
-    breaker_open = _gauge("breaker_open")
-    breaker_state = (
-        "absent"
-        if breaker_open is None
-        else ("OPEN (episode running)" if breaker_open else "closed")
-    )
-    reader_up = _gauge("reader_up")
-    reader_state = "absent" if reader_up is None else ("up" if reader_up else "down")
+    def _tristate(value: float | None, on: str, off: str) -> str:
+        if value is None:
+            return "absent"
+        return on if value else off
+
+    breaker_state = _tristate(_gauge("breaker_open"), "OPEN (episode running)", "closed")
+    reader_state = _tristate(_gauge("reader_up"), "up", "down")
     typer.echo(f"env                   {env}")
     typer.echo(f"breaker               {breaker_state}")
     typer.echo(f"reader                {reader_state}")
