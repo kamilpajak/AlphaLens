@@ -49,7 +49,14 @@ _SCRIPT = textwrap.dedent(
     signal.signal(signal.SIGTERM, lambda *_: server.request_stop())
     threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
 
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        # Mirrors the CLI command exactly. serve_forever returns as soon as the
+        # loop sees the shutdown flag, which is BEFORE the stop thread has
+        # finished releasing state and unlinking; stop() is serialized, so this
+        # call waits for that thread and then no-ops.
+        server.stop()
     print("CLEAN-EXIT", flush=True)
     print("SOCKET-GONE" if not path.exists() else "SOCKET-LEFT", flush=True)
     """

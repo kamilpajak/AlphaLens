@@ -50,7 +50,9 @@ import datetime as dt
 import itertools
 import json
 import logging
+import math
 import os
+import socket
 import socketserver
 import threading
 import time
@@ -91,6 +93,16 @@ READER_STREAM_METRICS_JOB = "live-price-stream-reader"
 # and cheap (one small file write).
 _HEARTBEAT_INTERVAL_S = 30.0
 
+# How long to wait when probing whether another reader already owns the socket.
+# Local UNIX connect is immediate; this only bounds a pathological case.
+_LIVENESS_PROBE_TIMEOUT_S = 0.5
+
+# Request-line ceiling. Every legitimate request is a short JSON object (the
+# largest is a subscribe with a few dozen uics), so anything beyond this is a
+# corrupted frame or a client bug — and an unbounded readline inside the reader
+# both daemons depend on is an allocation nobody bounds.
+_MAX_LINE_BYTES = 64 * 1024
+
 
 def default_socket_path() -> Path:
     """``~/.alphalens/price_reader/reader.sock`` unless the env names another.
@@ -120,6 +132,15 @@ class ProtocolError(Exception):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class PriceReaderAlreadyRunningError(RuntimeError):
+    """Another reader is already serving this socket — refuse to start.
+
+    Fail LOUD rather than take over: two readers mean two elevated Saxo
+    sessions on one login, which demotes both to 15-minute-delayed quotes
+    silently. That is the exact failure this server exists to prevent, so a
+    duplicate start must never look like a success."""
 
 
 def _as_int(value: object, *, field: str) -> int:
@@ -166,6 +187,17 @@ def _iso(value: dt.datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _wire_number(value: object) -> object:
+    """A non-finite float is not JSON (``json.dumps`` writes a bare ``NaN``)
+    and, worse, would arrive at the consumer as a number-shaped value its
+    arithmetic has to defend against. Report it as null — the same "no usable
+    price" the freshness gate already vetoes on. Anything else passes through
+    untouched: the cache stores quote sides uncoerced by design."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
 def _quote_payload(quote: Quotelike | None) -> dict[str, Any] | None:
     """Serialise a quote for the wire, passing NULLS THROUGH.
 
@@ -176,8 +208,8 @@ def _quote_payload(quote: Quotelike | None) -> dict[str, Any] | None:
         return None
     return {
         "uic": quote.uic,
-        "bid": quote.bid,
-        "ask": quote.ask,
+        "bid": _wire_number(quote.bid),
+        "ask": _wire_number(quote.ask),
         "event_time": _iso(quote.event_time),
         "delayed_by_minutes": quote.delayed_by_minutes,
         "received_at": _iso(quote.received_at),
@@ -191,6 +223,9 @@ class _ConnectionState:
     def __init__(self, consumer: str) -> None:
         self.consumer = consumer
         self.scope_uics: dict[str, set[int]] = {}
+        # Set once the server has released this connection; a handler still
+        # mid-request must not resurrect scopes after that.
+        self.closed = False
 
     def wire_scope(self, scope: str) -> str:
         return f"{self.consumer}:{scope}"
@@ -218,15 +253,32 @@ class _Handler(socketserver.StreamRequestHandler):
         self._state = self._server.open_connection()
 
     def handle(self) -> None:
-        for raw in self.rfile:
-            response = self._server.dispatch(self._state, raw)
-            try:
-                self.wfile.write(json.dumps(response).encode("utf-8") + b"\n")
-                self.wfile.flush()
-            except OSError:
-                # The client vanished mid-reply. Its state is released in
-                # finish(); nothing here is worth an alert.
+        while True:
+            # BOUNDED read: `for raw in self.rfile` is an unbounded readline,
+            # so one corrupted frame could allocate without limit inside the
+            # process both daemons depend on. Reading one byte past the ceiling
+            # is what distinguishes "exactly at the limit" from "too long".
+            raw = self.rfile.readline(_MAX_LINE_BYTES + 1)
+            if not raw:
+                return  # client closed
+            if len(raw) > _MAX_LINE_BYTES or not raw.endswith(b"\n"):
+                # Oversized or truncated: answer once and drop THIS connection
+                # rather than keep draining a stream we cannot frame.
+                self._server.count_error()
+                self._reply({"ok": False, "error": ERR_BAD_REQUEST})
                 return
+            if not self._reply(self._server.dispatch(self._state, raw)):
+                return
+
+    def _reply(self, response: dict[str, Any]) -> bool:
+        """Write one response line; False once the client has vanished (its
+        state is released in ``finish``, so nothing here is worth an alert)."""
+        try:
+            self.wfile.write(json.dumps(response).encode("utf-8") + b"\n")
+            self.wfile.flush()
+        except OSError:
+            return False
+        return True
 
     def finish(self) -> None:
         with contextlib.suppress(Exception):
@@ -272,6 +324,17 @@ class PriceReaderServer:
         self._thread: threading.Thread | None = None
         self._heartbeat: threading.Thread | None = None
         self._heartbeat_stop = threading.Event()
+        # Durable stop request. A signal can land BETWEEN installing the
+        # handler and binding; without this flag that stop was lost and the
+        # unit served on forever while systemd believed it had stopped it
+        # (measured). Checked on both sides of the bind.
+        self._stop_requested = threading.Event()
+        # stop() runs concurrently by design (the signal path and the CLI's
+        # finally), so its idempotency has to be real, not accidental.
+        self._stop_lock = threading.RLock()
+        # One emit at a time: the heartbeat thread must not overwrite the final
+        # up=0 with a stale up=1 it was already writing.
+        self._emit_lock = threading.Lock()
         self._heartbeat_interval_s = heartbeat_interval_s
         self._metrics_job = metrics_job
         self._emit = emit or _default_emit
@@ -290,7 +353,12 @@ class PriceReaderServer:
 
     def start(self) -> None:
         """Bind, then serve in a background thread."""
+        if self._stop_requested.is_set():
+            return
         self._bind()
+        if self._stop_requested.is_set():
+            self.stop()
+            return
         self._thread = threading.Thread(
             target=self._serve_in_background, name="price-reader-server", daemon=True
         )
@@ -300,6 +368,7 @@ class PriceReaderServer:
     def _bind(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(self._path.parent, _SOCKET_DIR_MODE)
+        self._refuse_if_live()
         # A hard kill leaves the socket file behind and bind() would then fail
         # with EADDRINUSE forever — the reader must come back after a crash or
         # a reboot without an operator deleting a file by hand.
@@ -307,6 +376,30 @@ class PriceReaderServer:
             self._path.unlink()
         self._server = _ThreadingUnixServer(str(self._path), _Handler, self)
         os.chmod(self._path, _SOCKET_MODE)
+
+    def _refuse_if_live(self) -> None:
+        """Raise if something is ALREADY accepting on this path.
+
+        Unlinking removes the directory entry, not the other process's
+        listening socket — measured: the second reader bound happily, served
+        the next client, and both processes then held an elevated Saxo session.
+        Only a connect attempt distinguishes a live owner from the stale file a
+        hard kill leaves behind: refused/absent means stale (replace it),
+        accepted means occupied (refuse)."""
+        if not self._path.exists():
+            return
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe.settimeout(_LIVENESS_PROBE_TIMEOUT_S)
+        try:
+            probe.connect(str(self._path))
+        except OSError:
+            return  # nobody is listening — a stale file from a hard kill
+        finally:
+            probe.close()
+        raise PriceReaderAlreadyRunningError(
+            f"another price reader is already serving {self._path}; refusing to start a "
+            "second one (two readers would hold two elevated Saxo sessions and demote both)"
+        )
 
     def _serve(self) -> None:
         assert self._server is not None
@@ -326,7 +419,15 @@ class PriceReaderServer:
         Deliberately does NOT swallow exceptions: this is the unit's main loop,
         so a real failure must reach the CLI and surface as a failed unit
         rather than as a silent clean exit."""
+        # A signal can land between installing the handler and getting here.
+        # Without these two checks that stop was silently lost and the unit
+        # served on forever (measured).
+        if self._stop_requested.is_set():
+            return
         self._bind()
+        if self._stop_requested.is_set():
+            self.stop()
+            return
         self._start_heartbeat()
         self._serve()
 
@@ -341,7 +442,11 @@ class PriceReaderServer:
         handler returns: a permanent deadlock, measured before this method
         existed (the process hung until SIGKILL, leaving the socket file and the
         venue price subscription behind). Handing the blocking work to another
-        thread lets the interrupted loop resume, see the flag and exit."""
+        thread lets the interrupted loop resume, see the flag and exit.
+
+        The flag is set FIRST and is durable, so a signal arriving before the
+        bind is honoured rather than lost."""
+        self._stop_requested.set()
         threading.Thread(target=self.stop, name="price-reader-stop", daemon=True).start()
 
     def _start_heartbeat(self) -> None:
@@ -365,26 +470,36 @@ class PriceReaderServer:
             clients = len(self._open)
             requests, errors, last_ts = self._requests, self._errors, self._last_request_ts
         try:
-            self._emit(
-                self._metrics_job,
-                {
-                    f"alphalens_price_reader_up{label}": int(up),
-                    f"alphalens_price_reader_clients{label}": clients,
-                    f"alphalens_price_reader_requests_total{label}": requests,
-                    f"alphalens_price_reader_request_errors_total{label}": errors,
-                    f"alphalens_price_reader_last_request_timestamp_seconds{label}": last_ts,
-                },
-            )
+            # Serialized: the heartbeat thread must not land a stale up=1 on
+            # top of the final up=0 that stop() writes.
+            with self._emit_lock:
+                self._emit(
+                    self._metrics_job,
+                    {
+                        f"alphalens_price_reader_up{label}": int(up),
+                        f"alphalens_price_reader_clients{label}": clients,
+                        f"alphalens_price_reader_requests_total{label}": requests,
+                        f"alphalens_price_reader_request_errors_total{label}": errors,
+                        f"alphalens_price_reader_last_request_timestamp_seconds{label}": last_ts,
+                    },
+                )
         except Exception:
             logger.warning("price reader: gauge emit failed", exc_info=True)
 
     def stop(self) -> None:
         """Shut the listener down, drop every connection's state, unlink the
-        socket. Idempotent — a SIGTERM path may race an operator ``stop``."""
+        socket.
+
+        Serialized AND idempotent: the SIGTERM path (``request_stop``'s thread)
+        and the CLI's ``finally`` both call this, so two threads reaching the
+        body together would otherwise each observe the same non-None server and
+        double-shutdown it."""
+        with self._stop_lock:
+            self._stop_locked()
+
+    def _stop_locked(self) -> None:
         self._heartbeat_stop.set()
         heartbeat, self._heartbeat = self._heartbeat, None
-        if heartbeat is not None:
-            heartbeat.join(timeout=2.0)
         server, self._server = self._server, None
         if server is not None:
             with contextlib.suppress(Exception):
@@ -394,6 +509,10 @@ class PriceReaderServer:
         thread, self._thread = self._thread, None
         if thread is not None:
             thread.join(timeout=5.0)
+        # Join the heartbeat BEFORE the final emit, so no in-flight up=1 can
+        # land after it.
+        if heartbeat is not None and heartbeat is not threading.current_thread():
+            heartbeat.join(timeout=2.0)
         for state in self._drain_open_states():
             self._release(state)
         with contextlib.suppress(FileNotFoundError):
@@ -429,7 +548,11 @@ class PriceReaderServer:
             consumer = f"conn-{next(self._ids)}"
             state = _ConnectionState(consumer)
             self._open[consumer] = state
-        self._stream.register_latch_consumer(consumer)
+            # Registered INSIDE the critical section: a stop() draining _open
+            # between the insert and the register would otherwise unregister a
+            # consumer that does not exist yet, and the registration landing
+            # afterwards would leave a phantom accumulator nobody ever drains.
+            self._stream.register_latch_consumer(consumer)
         logger.info("price reader: client connected (%s)", consumer)
         return state
 
@@ -437,7 +560,19 @@ class PriceReaderServer:
         with self._lock:
             if self._open.pop(state.consumer, None) is None:
                 return  # already released (stop() raced the handler)
+            state.closed = True
         self._release(state)
+
+    def is_open(self, state: _ConnectionState) -> bool:
+        """Is this connection still the live owner of its consumer id?
+
+        ``server_close()`` does NOT close already-accepted sockets when
+        ``daemon_threads`` is on, so a handler can still be mid-request after
+        ``stop()`` released its state. A mutating op that runs then would
+        re-create a wire scope nobody will ever release (its own close returns
+        early, the pop having already missed)."""
+        with self._lock:
+            return not state.closed and self._open.get(state.consumer) is state
 
     def _drain_open_states(self) -> list[_ConnectionState]:
         with self._lock:
@@ -449,6 +584,8 @@ class PriceReaderServer:
         """Hand back everything the connection held: an EMPTY desired set for
         each of its wire scopes, then its accumulator. Best-effort per step —
         a failure to release one scope must not skip the others."""
+        with self._lock:
+            state.closed = True
         for scope in list(state.scope_uics):
             with contextlib.suppress(Exception):
                 self._stream.ensure_subscribed([], scope=state.wire_scope(scope))
@@ -471,13 +608,13 @@ class PriceReaderServer:
                 raise ProtocolError(ERR_UNKNOWN_OP)
             return {"ok": True, "result": handler(self, state, request)}
         except ProtocolError as exc:
-            self._count_error()
+            self.count_error()
             return {"ok": False, "error": exc.code}
         # Deliberately broad: a defect in the quote source (or an unexpected
         # payload shape) must degrade to one error response, never kill the
         # reader process that both daemons depend on.
         except Exception:
-            self._count_error()
+            self.count_error()
             logger.warning("price reader: request failed", exc_info=True)
             return {"ok": False, "error": ERR_INTERNAL}
 
@@ -486,7 +623,7 @@ class PriceReaderServer:
             self._requests += 1
             self._last_request_ts = int(time.time())
 
-    def _count_error(self) -> None:
+    def count_error(self) -> None:
         with self._lock:
             self._errors += 1
 
@@ -512,12 +649,31 @@ class PriceReaderServer:
 
     def _op_subscribe(self, state: _ConnectionState, request: dict[str, Any]) -> None:
         """Replace this connection's ``scope`` slice, then move the wire
-        subscription and the latch set TOGETHER (see the module docstring)."""
+        subscription and the latch set TOGETHER (see the module docstring).
+
+        Refuses once the connection has been released (``stop()`` can drain a
+        handler's state while it is still mid-request) — re-creating a wire
+        scope there would leave a subscription nobody releases, because the
+        handler's own close already missed the pop.
+
+        The recorded slice is ROLLED BACK if a stream call fails: a connection
+        that believes it subscribed when the stream disagrees would compute a
+        union the wire never had, and hand back a set it never took."""
         scope = _as_str(request.get("scope"), field="scope")
         uics = _as_uic_list(request.get("uics"))
+        if not self.is_open(state):
+            return
+        previous = state.scope_uics.get(scope)
         state.scope_uics[scope] = set(uics)
-        self._stream.ensure_subscribed(sorted(set(uics)), scope=state.wire_scope(scope))
-        self._stream.set_latch_uics(state.consumer, state.union())
+        try:
+            self._stream.ensure_subscribed(sorted(set(uics)), scope=state.wire_scope(scope))
+            self._stream.set_latch_uics(state.consumer, state.union())
+        except Exception:
+            if previous is None:
+                state.scope_uics.pop(scope, None)
+            else:
+                state.scope_uics[scope] = previous
+            raise
 
     def _op_quote(self, state: _ConnectionState, request: dict[str, Any]) -> dict[str, Any] | None:
         return _quote_payload(self._stream.get(_as_int(request.get("uic"), field="uic")))

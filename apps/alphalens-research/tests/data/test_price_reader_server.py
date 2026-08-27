@@ -12,12 +12,14 @@ phantom subscriptions behind.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import os
 import socket
 import stat
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from alphalens_pipeline.data.alt_data.price_reader_server import (
     PROTOCOL_VERSION,
     READER_STREAM_METRICS_JOB,
     SERVER_METRICS_JOB,
+    PriceReaderAlreadyRunningError,
     PriceReaderServer,
 )
 
@@ -231,6 +234,58 @@ class TestPerConnectionIsolation(PriceReaderServerTestCase):
         )
 
 
+class TestWireRobustness(PriceReaderServerTestCase):
+    def test_a_non_finite_quote_side_is_nulled_rather_than_emitted_as_nan(self):
+        """`QuoteCache` stores quote sides uncoerced, so a NaN can reach here.
+        `json.dumps` would happily write bare `NaN`, which is not JSON — and a
+        NaN that survives the wire is a number-shaped value the consumer's
+        arithmetic would have to defend against. Null is the honest wire form
+        for 'no usable price'."""
+        self.stream.quotes[211] = _FakeQuote(211, float("nan"), float("inf"))
+        raw = self.connect()
+        raw.send_raw(
+            json.dumps({"v": PROTOCOL_VERSION, "op": "quote", "uic": 211}).encode() + b"\n"
+        )
+        line = raw.read_response()
+        self.assertIsNone(line["result"]["bid"])
+        self.assertIsNone(line["result"]["ask"])
+
+    def test_an_oversized_line_is_rejected_without_unbounded_buffering(self):
+        """A client bug (or a corrupted frame) must not let one connection
+        allocate without limit inside the reader both daemons depend on.
+
+        The server answers once and drops THAT connection, so the oversized
+        send can legitimately fail with EPIPE mid-write — which is the point:
+        it stopped reading instead of buffering the rest."""
+        client = self.connect()
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+            client.send_raw(b'{"v":1,"op":"quote","uic":' + b"9" * 200_000 + b"}\n")
+        with contextlib.suppress(AssertionError, OSError):
+            reply = client.read_response()
+            self.assertFalse(reply["ok"])
+            self.assertEqual(reply["error"], "bad_request")
+        # Whatever the write raced to, the OTHER daemon's connection is fine.
+        healthy = self.connect()
+        self.assertTrue(healthy.call("hello", client="other")["ok"])
+
+    def test_a_failed_subscribe_does_not_leave_the_scope_recorded(self):
+        """If the stream call fails, the connection must not believe the scope
+        is subscribed: its union would then diverge from the wire, and the
+        release on close would hand back a set that was never taken."""
+        client = self.connect()
+        original = self.stream.ensure_subscribed
+
+        def _boom(uics, *, scope="default"):
+            raise RuntimeError("stream down")
+
+        self.stream.ensure_subscribed = _boom
+        self.assertEqual(client.call("subscribe", scope="exits", uics=[211])["error"], "internal")
+        self.stream.ensure_subscribed = original
+        client.call("subscribe", scope="exits", uics=[212])
+        consumer = self.stream.registered[-1]
+        self.assertEqual(self.stream.latch_uics[consumer], {212})
+
+
 class TestProtocolErrors(PriceReaderServerTestCase):
     def test_an_unknown_op_errors_without_dropping_the_connection(self):
         client = self.connect()
@@ -368,6 +423,46 @@ class TestSocketLifecycle(unittest.TestCase):
         server.start()
         server.stop()
         self.assertFalse(self.path.exists())
+
+    def test_a_second_reader_refuses_to_take_over_a_live_socket(self):
+        """MEASURED before this guard existed: the second reader unlinked the
+        path, bound its own socket and served the next client — so two readers
+        held two elevated Saxo sessions, which is the exact demotion this whole
+        design exists to prevent. Unlinking removes the directory entry, not
+        the first process's listening socket, so 'it bound fine' is not
+        evidence that nobody else is serving."""
+        first = PriceReaderServer(_FakeStream(), self.path)
+        first.start()
+        self.addCleanup(first.stop)
+        second = PriceReaderServer(_FakeStream(), self.path)
+        with self.assertRaises(PriceReaderAlreadyRunningError):
+            second.start()
+        # ... and the first one still owns the socket.
+        client = _Client(self.path)
+        self.addCleanup(client.close)
+        self.assertTrue(client.call("hello", client="probe")["ok"])
+
+    def test_a_stale_socket_left_by_a_dead_reader_is_replaced(self):
+        """The mirror case: nothing is listening, so the leftover file must NOT
+        block a restart (a hard kill leaves one behind)."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_bytes(b"")
+        server = PriceReaderServer(_FakeStream(), self.path)
+        server.start()
+        self.addCleanup(server.stop)
+        client = _Client(self.path)
+        self.addCleanup(client.close)
+        self.assertTrue(client.call("hello", client="probe")["ok"])
+
+    def test_a_stop_requested_before_serving_is_honoured(self):
+        """MEASURED before the durable flag existed: a SIGTERM arriving between
+        installing the handler and binding was silently lost, and the unit then
+        served forever — systemd would report a stop that never happened."""
+        server = PriceReaderServer(_FakeStream(), self.path, heartbeat_interval_s=3600)
+        server.request_stop()
+        done = threading.Event()
+        threading.Thread(target=lambda: (server.serve_forever(), done.set()), daemon=True).start()
+        self.assertTrue(done.wait(5.0), "serve_forever ignored a stop requested before it started")
 
 
 if __name__ == "__main__":
