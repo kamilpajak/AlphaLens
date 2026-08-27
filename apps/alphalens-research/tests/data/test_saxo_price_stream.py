@@ -540,6 +540,215 @@ class TestQuoteCache(unittest.TestCase):
         self.assertIsNone(c.drain_running_low(211))
 
 
+class TestPerConsumerLatch(unittest.TestCase):
+    """The touch-latch accumulator is PER CONSUMER (#1172).
+
+    With one cross-process reader serving both broker-manager daemons, a single
+    shared accumulator would let the SIM daemon's drain destroy the LIVE
+    daemon's touch evidence (the drain is a pop). Each consumer therefore owns
+    its own accumulator; the reader thread folds one latchable bid into every
+    consumer that is actually subscribed to that uic.
+
+    The in-process path keeps the UNFILTERED default consumer, so its behaviour
+    is unchanged (the whole TestQuoteCache latch battery above still pins it).
+    """
+
+    def _row(self, second: int, *, uic: int = 211, bid: float, ask: float) -> dict:
+        return {
+            "Uic": uic,
+            "LastUpdated": f"2026-08-07T13:48:{second:02d}Z",
+            "Quote": {"Bid": bid, "Ask": ask, "DelayedByMinutes": 0},
+        }
+
+    def test_registering_a_consumer_does_not_change_what_the_default_drains(self):
+        """The in-process path must not notice that other consumers exist."""
+        c = QuoteCache()
+        c.register_latch("sim")
+        c.set_latch_uics("sim", {211})
+        c.apply(self._row(0, bid=313.80, ask=313.83), received_at=_T0)
+        self.assertEqual(c.drain_running_low(211), 313.80)
+
+    def test_each_consumer_drains_its_own_copy_of_the_same_low(self):
+        """THE point of the split: one quote, two consumers, two independent
+        pops — SIM draining must not starve LIVE."""
+        c = QuoteCache()
+        for consumer in ("sim", "live"):
+            c.register_latch(consumer)
+            c.set_latch_uics(consumer, {211})
+        c.apply(self._row(0, bid=313.80, ask=313.83), received_at=_T0)
+        self.assertEqual(c.drain_running_low(211, consumer="sim"), 313.80)
+        self.assertEqual(c.drain_running_low(211, consumer="live"), 313.80)
+        self.assertIsNone(c.drain_running_low(211, consumer="sim"))
+
+    def test_reseed_restores_only_the_reseeding_consumers_low(self):
+        c = QuoteCache()
+        for consumer in ("sim", "live"):
+            c.register_latch(consumer)
+            c.set_latch_uics(consumer, {211})
+        c.apply(self._row(0, bid=18.61, ask=18.62), received_at=_T0)
+        self.assertEqual(c.drain_running_low(211, consumer="sim"), 18.61)
+        self.assertEqual(c.drain_running_low(211, consumer="live"), 18.61)
+        c.reseed_running_low(211, 18.61, consumer="sim")
+        self.assertEqual(c.drain_running_low(211, consumer="sim"), 18.61)
+        self.assertIsNone(c.drain_running_low(211, consumer="live"))
+
+    def test_a_consumer_never_accrues_a_uic_outside_its_own_set(self):
+        """The union across consumers drives the wire subscription, so quotes
+        arrive for uics a given consumer does not watch. Folding those in would
+        hand it a low for an instrument it never asked about."""
+        c = QuoteCache()
+        c.register_latch("sim")
+        c.set_latch_uics("sim", {211})
+        c.register_latch("live")
+        c.set_latch_uics("live", {212})
+        c.apply(self._row(0, uic=211, bid=313.80, ask=313.83), received_at=_T0)
+        self.assertEqual(c.drain_running_low(211, consumer="sim"), 313.80)
+        self.assertIsNone(c.drain_running_low(211, consumer="live"))
+
+    def test_a_uic_leaving_a_consumers_set_clears_its_low(self):
+        """Closing a watch drops its accumulation window — the mirror of the
+        wire-level ``forget`` on unsubscribe, one level down."""
+        c = QuoteCache()
+        c.register_latch("sim")
+        c.set_latch_uics("sim", {211})
+        c.apply(self._row(0, bid=313.80, ask=313.83), received_at=_T0)
+        c.set_latch_uics("sim", set())
+        self.assertIsNone(c.drain_running_low(211, consumer="sim"))
+
+    def test_a_uic_entering_the_set_clears_a_low_planted_while_unwatched(self):
+        """A watch that STARTS now must never inherit a low from before it
+        began — that is a manufactured touch.
+
+        The reachable path is the RESEED, which is deliberately unfiltered (it
+        hands back a value the consumer legitimately drained, and the drain
+        happens before any set change this tick). A reseed that lands after the
+        uic left the set plants a low nobody is watching; without the
+        clear-on-ENTER half of ``set_uics`` that low would be waiting when the
+        ticker is armed again days later, and the first drain would report a
+        touch that never happened."""
+        c = QuoteCache()
+        c.register_latch("sim")
+        c.reseed_running_low(211, 313.80, consumer="sim")  # lands while unwatched
+        c.set_latch_uics("sim", {211})  # ... then the watch arms
+        self.assertIsNone(c.drain_running_low(211, consumer="sim"))
+
+    def test_an_unrelated_uic_joining_the_set_preserves_an_existing_low(self):
+        """The mirror of the test above: only a uic that NEWLY enters is
+        cleared. A second ticker joining the watch must not wipe the first
+        ticker's accrued touch."""
+        c = QuoteCache()
+        c.register_latch("sim")
+        c.set_latch_uics("sim", {211})
+        c.apply(self._row(0, bid=313.80, ask=313.83), received_at=_T0)
+        c.set_latch_uics("sim", {211, 212})
+        self.assertEqual(c.drain_running_low(211, consumer="sim"), 313.80)
+
+    def test_unregister_drops_only_that_consumers_latch(self):
+        """A disconnecting client releases its accumulator; the survivors keep
+        theirs."""
+        c = QuoteCache()
+        for consumer in ("sim", "live"):
+            c.register_latch(consumer)
+            c.set_latch_uics(consumer, {211})
+        c.apply(self._row(0, bid=313.80, ask=313.83), received_at=_T0)
+        c.unregister_latch("sim")
+        self.assertIsNone(c.drain_running_low(211, consumer="sim"))
+        self.assertEqual(c.drain_running_low(211, consumer="live"), 313.80)
+
+    def test_an_unknown_consumer_vetoes_instead_of_raising(self):
+        """Same veto-not-raise discipline as every other latch path: a drain
+        for a consumer the cache never registered (a race with an unregister)
+        must yield no low, and a reseed must be a silent no-op."""
+        c = QuoteCache()
+        c.reseed_running_low(211, 18.61, consumer="ghost")  # must not raise
+        self.assertIsNone(c.drain_running_low(211, consumer="ghost"))
+
+    def test_forget_clears_every_consumers_latch(self):
+        """``forget`` is the WIRE-level unsubscribe (the uic left the union), so
+        it must pop across all consumers — none of them can still be watching
+        it."""
+        c = QuoteCache()
+        for consumer in ("sim", "live"):
+            c.register_latch(consumer)
+            c.set_latch_uics(consumer, {211})
+        c.apply(self._row(0, bid=313.80, ask=313.83), received_at=_T0)
+        c.forget(211)
+        self.assertIsNone(c.drain_running_low(211, consumer="sim"))
+        self.assertIsNone(c.drain_running_low(211, consumer="live"))
+
+    def test_prune_except_clears_across_consumers(self):
+        c = QuoteCache()
+        for consumer in ("sim", "live"):
+            c.register_latch(consumer)
+            c.set_latch_uics(consumer, {211, 212})
+        c.apply(self._row(0, uic=211, bid=313.80, ask=313.83), received_at=_T0)
+        c.apply(self._row(0, uic=212, bid=99.10, ask=99.12), received_at=_T0)
+        c.prune_except({212})
+        self.assertIsNone(c.drain_running_low(211, consumer="sim"))
+        self.assertEqual(c.drain_running_low(212, consumer="live"), 99.10)
+
+    def test_the_default_consumer_name_is_reserved(self):
+        """A client id colliding with the in-process consumer would silently
+        share (and pop) the in-process daemon's own accumulator. Fail loud."""
+        c = QuoteCache()
+        with self.assertRaises(ValueError):
+            c.register_latch(sps._DEFAULT_LATCH_CONSUMER)
+        with self.assertRaises(ValueError):
+            c.unregister_latch(sps._DEFAULT_LATCH_CONSUMER)
+
+    def test_the_latch_gate_still_applies_per_consumer(self):
+        """The latchable prefilter (undelayed, un-crossed, sane spread) runs
+        ONCE before the fan-out — a delayed quote plants nothing anywhere."""
+        c = QuoteCache()
+        c.register_latch("sim")
+        c.set_latch_uics("sim", {211})
+        c.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:48:00Z",
+                "Quote": {"Bid": 313.80, "Ask": 313.83, "DelayedByMinutes": 15},
+            },
+            received_at=_T0,
+        )
+        self.assertIsNone(c.drain_running_low(211, consumer="sim"))
+
+
+class TestStreamLatchConsumerPassthroughs(unittest.TestCase):
+    """The reader server (#1172 PR-2) registers one latch consumer per client
+    connection through the stream, not by reaching into the cache."""
+
+    def test_stream_registers_and_drains_a_named_consumer(self):
+        stream = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+        stream.register_latch_consumer("conn-1")
+        stream.set_latch_uics("conn-1", {211})
+        stream.cache.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:48:00Z",
+                "Quote": {"Bid": 313.80, "Ask": 313.83, "DelayedByMinutes": 0},
+            },
+            received_at=_T0,
+        )
+        self.assertEqual(stream.drain_running_low(211, consumer="conn-1"), 313.80)
+        stream.reseed_running_low(211, 313.80, consumer="conn-1")
+        self.assertEqual(stream.drain_running_low(211, consumer="conn-1"), 313.80)
+
+    def test_unregistering_a_consumer_releases_its_latch(self):
+        stream = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+        stream.register_latch_consumer("conn-1")
+        stream.set_latch_uics("conn-1", {211})
+        stream.cache.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:48:00Z",
+                "Quote": {"Bid": 313.80, "Ask": 313.83, "DelayedByMinutes": 0},
+            },
+            received_at=_T0,
+        )
+        stream.unregister_latch_consumer("conn-1")
+        self.assertIsNone(stream.drain_running_low(211, consumer="conn-1"))
+
+
 class TestLatchSpreadCeilingMirrorsContract(unittest.TestCase):
     def test_latch_spread_ceiling_equals_broker_contract_value(self):
         """``_LATCH_MAX_RELATIVE_SPREAD`` is a VALUE copy of
