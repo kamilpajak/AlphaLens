@@ -484,7 +484,7 @@ class TestMaybeTrailBreakevenTrail(unittest.TestCase):
 
 
 class TestFoldTrailedMarkers(unittest.TestCase):
-    """``_fold_trailed_markers`` folds append-only ``trailed`` markers into the
+    """``_fold_trailed_since_latest_plan`` folds append-only ``trailed`` markers into the
     latest-by-ts ``level`` per uic (mirror of ``_fold_reanchored_markers``) —
     RESET on each new-generation ``tranche_plan`` line, with the SAME identity
     rules as ``_fold_fired_since_latest_plan``: a keyless plan or a DIFFERENT
@@ -501,7 +501,7 @@ class TestFoldTrailedMarkers(unittest.TestCase):
             {"kind": "trailed", "uic": _UIC, "level": 96.0, "ts": 2.0},
             {"kind": "trailed", "uic": 999, "level": 50.0, "ts": 1.0},
         ]
-        self.assertEqual(cl._fold_trailed_markers(lines), {_UIC: 97.0, 999: 50.0})
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {_UIC: 97.0, 999: 50.0})
 
     def test_ignores_other_kinds_and_malformed(self) -> None:
         lines = [
@@ -510,10 +510,10 @@ class TestFoldTrailedMarkers(unittest.TestCase):
             {"kind": "trailed", "uic": "oops", "level": 96.0, "ts": 3.0},  # bad uic
             {"kind": "trailed", "uic": _UIC, "level": 96.5, "ts": 4.0},
         ]
-        self.assertEqual(cl._fold_trailed_markers(lines), {_UIC: 96.5})
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {_UIC: 96.5})
 
     def test_empty_is_empty(self) -> None:
-        self.assertEqual(cl._fold_trailed_markers([]), {})
+        self.assertEqual(cl._fold_trailed_since_latest_plan([]), {})
 
     def test_new_keyless_plan_drops_the_prior_trailed_level(self) -> None:
         # The stale-generation poison: position 1 trailed to 115, closed; a NEW
@@ -524,7 +524,7 @@ class TestFoldTrailedMarkers(unittest.TestCase):
             {"kind": "trailed", "uic": _UIC, "level": 115.0, "ts": 1.0},
             {"kind": "tranche_plan", "uic": _UIC},
         ]
-        self.assertEqual(cl._fold_trailed_markers(lines), {})
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {})
 
     def test_new_pick_key_drops_the_prior_trailed_level(self) -> None:
         lines = [
@@ -532,7 +532,7 @@ class TestFoldTrailedMarkers(unittest.TestCase):
             {"kind": "trailed", "uic": _UIC, "level": 115.0, "ts": 1.0},
             {"kind": "tranche_plan", "uic": _UIC, "pick_key": "trade-2"},
         ]
-        self.assertEqual(cl._fold_trailed_markers(lines), {})
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {})
 
     def test_same_pick_key_reappend_keeps_the_trailed_level(self) -> None:
         # The already_watching crash-recovery re-drive re-journals the SAME
@@ -542,7 +542,7 @@ class TestFoldTrailedMarkers(unittest.TestCase):
             {"kind": "trailed", "uic": _UIC, "level": 96.0, "ts": 1.0},
             {"kind": "tranche_plan", "uic": _UIC, "pick_key": "trade-1"},
         ]
-        self.assertEqual(cl._fold_trailed_markers(lines), {_UIC: 96.0})
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {_UIC: 96.0})
 
     def test_retracted_plan_drops_the_trailed_level(self) -> None:
         lines = [
@@ -550,7 +550,7 @@ class TestFoldTrailedMarkers(unittest.TestCase):
             {"kind": "trailed", "uic": _UIC, "level": 96.0, "ts": 1.0},
             {"kind": "tranche_plan_retracted", "uic": _UIC},
         ]
-        self.assertEqual(cl._fold_trailed_markers(lines), {})
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {})
 
     def test_reset_is_per_uic(self) -> None:
         lines = [
@@ -558,7 +558,19 @@ class TestFoldTrailedMarkers(unittest.TestCase):
             {"kind": "trailed", "uic": 999, "level": 50.0, "ts": 1.0},
             {"kind": "tranche_plan", "uic": 999},
         ]
-        self.assertEqual(cl._fold_trailed_markers(lines), {_UIC: 96.0})
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {_UIC: 96.0})
+
+    def test_a_marker_before_the_first_plan_line_is_dropped(self) -> None:
+        # A trailed marker that precedes the uic's FIRST tranche_plan belongs
+        # to an earlier (pre-plan-journal) generation: the first plan line is a
+        # new placement and resets, exactly like any other generation boundary.
+        # (Markers for uics that never get a plan line at all are kept — see
+        # test_latest_by_ts_per_uic, which folds without any plan lines.)
+        lines = [
+            {"kind": "trailed", "uic": _UIC, "level": 115.0, "ts": 1.0},
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "trade-1"},
+        ]
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {})
 
 
 if __name__ == "__main__":

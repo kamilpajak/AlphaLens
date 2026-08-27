@@ -763,7 +763,7 @@ def _build_managed_exits(
     is SKIPPED — positions placed before this deploys carry no ladder and stay
     stop-only forever (the deliberate gradual-rollout boundary).
 
-    ``trailed`` is the generation-gated ``_fold_trailed_markers`` map: a
+    ``trailed`` is the generation-gated ``_fold_trailed_since_latest_plan`` map: a
     tranche fire amends the SL to ``ManagedExit.stop_price``
     (``execute_tranche_exit``), so under a trailing policy the placement-time
     plan stop must be RAISED to the last confirmed trailed level — otherwise
@@ -1154,7 +1154,7 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         long_positions=long_positions,
         tranche_plans=fold_tranche_plans(journal_lines),
         fired=_fold_fired_since_latest_plan(journal_lines),
-        trailed=_fold_trailed_markers(journal_lines),
+        trailed=_fold_trailed_since_latest_plan(journal_lines),
     )
     # uic -> (ticker, venue) off the live positions just read. The venue must
     # survive: resolving a LIVE instrument by bare ticker is ambiguous for
@@ -4616,7 +4616,7 @@ def _journal_trailed(
     """Persist a timestamped ``trailed`` marker (Task 4). Written by the executor
     ONLY on a CONFIRMED trail AmendStop PATCH success (never on a failed attempt —
     a failed amend journals ``amend_failed`` like any other amend and simply
-    retries). Mirrors ``_journal_reanchored``: ``_fold_trailed_markers`` folds
+    retries). Mirrors ``_journal_reanchored``: ``_fold_trailed_since_latest_plan`` folds
     these into ``ProtectionView.trailed_stop_by_uic``, the never-DOWN ratchet floor
     a new trail proposal must clear by ``_TRAIL_STEP_EPS``.
 
@@ -4660,7 +4660,7 @@ def _fold_reanchored_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, fl
     return latest_avg_price
 
 
-def _fold_trailed_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
+def _fold_trailed_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
     """Fold the append-only ``trailed`` journal markers into the LATEST (by ``ts``)
     trailed ``level`` per uic (Task 2), RESET on each new-generation
     ``tranche_plan`` line. Mirrors ``_fold_reanchored_markers`` — a DICT, not a
@@ -6949,7 +6949,7 @@ def build_protection_view(
         ),
         reanchored_by_uic=_fold_reanchored_markers(journal_lines),
         # Task 2 trailing ratchet floor: uic -> the last CONFIRMED trailed level.
-        trailed_stop_by_uic=_fold_trailed_markers(journal_lines),
+        trailed_stop_by_uic=_fold_trailed_since_latest_plan(journal_lines),
         # Task 4: this tick's high-water peaks / live prices, fetched ONLY on the
         # trailing path (``_run_protection_pass`` passes them when the cached policy
         # trails, else omits them). Default empty -> the trailing arm stays dark (a
