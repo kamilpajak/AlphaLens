@@ -112,6 +112,89 @@ class TestDefaultFactoryOnPathWiring(unittest.TestCase):
         self.assertIsNone(feed.latest(9001))
 
 
+class TestSharedReaderSelection(unittest.TestCase):
+    """#1172: with a reader socket configured, the daemon must read the ONE
+    elevated session that process holds instead of opening its own. Saxo grants
+    a single elevated session per LIVE login, so two in-process streams demote
+    BOTH daemons to 15-minute quotes — silently."""
+
+    _SOCKET_ENV = "ALPHALENS_SAXO_PRICE_READER_SOCKET"
+
+    def test_the_socket_env_routes_the_feed_through_the_reader(self):
+        remote = mock.MagicMock()
+        remote.live_uic_for.return_value = 9001
+        with (
+            mock.patch.dict(
+                "os.environ", {**_LIVE_PRICES_ENV, self._SOCKET_ENV: "/tmp/r.sock"}, clear=True
+            ),
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.price_reader_client.RemoteQuoteSource",
+                return_value=remote,
+            ) as remote_cls,
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.saxo_price_stream.get_shared_price_stream"
+            ) as in_process,
+        ):
+            feed = _default_live_exits_feed_factory({211: ("AAPL", "XNYS")}, scope="exits")
+
+        in_process.assert_not_called()
+        self.assertEqual(str(remote_cls.call_args.args[0]), "/tmp/r.sock")
+        remote.ensure_subscribed.assert_called_once()
+        self.assertEqual(remote.ensure_subscribed.call_args.kwargs["scope"], "exits")
+        self.assertIsNotNone(feed)
+
+    def test_without_the_socket_the_daemon_keeps_its_own_stream(self):
+        """Rollback lever: removing the drop-in restores today's behaviour
+        exactly, with no code change."""
+        with (
+            mock.patch.dict("os.environ", _LIVE_PRICES_ENV, clear=True),
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.price_reader_client.RemoteQuoteSource"
+            ) as remote_cls,
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.saxo_price_stream.get_shared_price_stream"
+            ) as in_process,
+        ):
+            _default_live_exits_feed_factory({211: ("AAPL", "XNYS")}, scope="exits")
+
+        remote_cls.assert_not_called()
+        in_process.assert_called_once()
+
+    def test_the_off_flag_still_wins_over_a_configured_socket(self):
+        """``ALPHALENS_SAXO_LIVE_PRICES`` stays the master switch: a socket
+        left in the environment must not resurrect prices on an instance whose
+        feature is off."""
+        with (
+            mock.patch.dict("os.environ", {self._SOCKET_ENV: "/tmp/r.sock"}, clear=True),
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.price_reader_client.RemoteQuoteSource"
+            ) as remote_cls,
+        ):
+            feed = _default_live_exits_feed_factory({211: ("AAPL", "XNYS")}, scope="exits")
+
+        remote_cls.assert_not_called()
+        self.assertIsNone(feed.latest(211))
+
+    def test_the_remote_source_is_reused_across_ticks(self):
+        """The reader keys each client's touch-latch accumulator by CONNECTION.
+        A per-tick client would reconnect every ~45 s and drain a fresh, always
+        empty window — the latch would never see a touch."""
+        with (
+            mock.patch.dict(
+                "os.environ", {**_LIVE_PRICES_ENV, self._SOCKET_ENV: "/tmp/r.sock"}, clear=True
+            ),
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.price_reader_client.RemoteQuoteSource"
+            ) as remote_cls,
+        ):
+            cl._reset_remote_quote_source_for_tests()
+            _default_live_exits_feed_factory({211: ("AAPL", "XNYS")}, scope="exits")
+            _default_live_exits_feed_factory({211: ("AAPL", "XNYS")}, scope="entry-watch")
+            cl._reset_remote_quote_source_for_tests()
+
+        self.assertEqual(remote_cls.call_count, 1)
+
+
 class TestSaxoImportsStayLazy(unittest.TestCase):
     """Fix round 2, minor 7: 'nothing is imported on the OFF path' was prose,
     not a test -- moving these two imports to module scope would keep every

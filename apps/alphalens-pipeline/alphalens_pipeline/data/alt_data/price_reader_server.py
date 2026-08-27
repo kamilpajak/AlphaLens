@@ -156,10 +156,20 @@ def _as_int(value: object, *, field: str) -> int:
 
 
 def _as_float(value: object, *, field: str) -> float:
+    """Coerce a wire float, REJECTING non-finite values.
+
+    ``json.loads`` accepts bare ``NaN`` / ``Infinity`` even though they are not
+    JSON, so without this a malformed ``reseed_low`` could plant a non-finite
+    low in the accumulator BOTH daemons read. The outgoing side already
+    sanitises (``_wire_number``); the incoming side must match."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         logger.debug("price reader: bad %s field: %r", field, value)
         raise ProtocolError(ERR_BAD_REQUEST)
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+        logger.debug("price reader: non-finite %s field: %r", field, value)
+        raise ProtocolError(ERR_BAD_REQUEST)
+    return number
 
 
 def _as_str(value: object, *, field: str) -> str:
@@ -226,6 +236,12 @@ class _ConnectionState:
         # Set once the server has released this connection; a handler still
         # mid-request must not resurrect scopes after that.
         self.closed = False
+        # The client socket, so a stop() can actually END this conversation.
+        # `daemon_threads` leaves accepted connections running after
+        # `server_close()`, and a handler that keeps answering would serve
+        # quotes out of a cache whose stream is being torn down — measured: a
+        # client kept receiving prices from a stopped reader.
+        self.sock: socket.socket | None = None
 
     def wire_scope(self, scope: str) -> str:
         return f"{self.consumer}:{scope}"
@@ -251,6 +267,9 @@ class _Handler(socketserver.StreamRequestHandler):
     def setup(self) -> None:
         super().setup()
         self._state = self._server.open_connection()
+        # Hand the socket to the server so stop() can end this conversation
+        # rather than leave a daemon thread answering from a dying cache.
+        self._state.sock = self.connection
 
     def handle(self) -> None:
         while True:
@@ -586,6 +605,14 @@ class PriceReaderServer:
         a failure to release one scope must not skip the others."""
         with self._lock:
             state.closed = True
+            sock, state.sock = state.sock, None
+        if sock is not None:
+            # Half-close so a handler blocked in readline() returns and its
+            # thread exits; the handler's own finish() then no-ops (the pop
+            # already missed). Without this a client keeps being served by a
+            # STOPPED reader — measured, not theorised.
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
         for scope in list(state.scope_uics):
             with contextlib.suppress(Exception):
                 self._stream.ensure_subscribed([], scope=state.wire_scope(scope))
@@ -669,10 +696,19 @@ class PriceReaderServer:
             self._stream.ensure_subscribed(sorted(set(uics)), scope=state.wire_scope(scope))
             self._stream.set_latch_uics(state.consumer, state.union())
         except Exception:
+            # Roll back BOTH sides. Restoring only the recorded slice would
+            # leave the wire subscription holding uics this connection no longer
+            # believes it owns — and its release on close hands back only what
+            # it believes, which is the phantom subscription this module exists
+            # to prevent.
             if previous is None:
                 state.scope_uics.pop(scope, None)
             else:
                 state.scope_uics[scope] = previous
+            with contextlib.suppress(Exception):
+                self._stream.ensure_subscribed(
+                    sorted(previous or set()), scope=state.wire_scope(scope)
+                )
             raise
 
     def _op_quote(self, state: _ConnectionState, request: dict[str, Any]) -> dict[str, Any] | None:
