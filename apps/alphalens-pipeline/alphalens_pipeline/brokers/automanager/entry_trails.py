@@ -324,16 +324,21 @@ def _entry_trail_journal_path() -> Path:
     return state_paths.entry_trails_path()
 
 
-def read_entry_trail_fold() -> EntryTrailFold:
+def read_entry_trail_fold(*, path: Path | None = None) -> EntryTrailFold:
     """The fold of the current journal; a missing file folds empty (PR-T0
     inertness: no journal -> zero watching reservation, zero malformed).
+
+    ``path`` overrides the per-env seam (``_entry_trail_journal_path``) — the
+    same explicit-target shape as ``picks.iter_picks(path=...)``, so a CLI can
+    address a specific instance's journal without touching
+    ``ALPHALENS_BROKER_ENVIRONMENT``. Omitted = current behavior.
 
     An UNREADABLE journal (a directory at the path, permissions, I/O error)
     is contained as a fail-closed ``malformed=1`` fold rather than raised:
     the gross-cap/cash-floor callers run inside ``_place_pick``, which only
     catches ``BrokerError`` — an escaping ``OSError`` would abort the whole
     tick BEFORE the protection pass instead of merely refusing the pick."""
-    path = _entry_trail_journal_path()
+    path = path if path is not None else _entry_trail_journal_path()
     if not path.exists():
         return EntryTrailFold(tiers={}, malformed=0)
     try:
@@ -347,7 +352,7 @@ def read_entry_trail_fold() -> EntryTrailFold:
 # --- Journal append (PR-T1 writer) -------------------------------------------
 
 
-def append_entry_trail_line(record: Mapping[str, Any]) -> None:
+def append_entry_trail_line(record: Mapping[str, Any], *, path: Path | None = None) -> None:
     """Append one line to the entry-trails journal (never rewrites).
 
     The WIRE-phase counterpart of the read/fold primitives above: the watcher
@@ -363,13 +368,95 @@ def append_entry_trail_line(record: Mapping[str, Any]) -> None:
 
     ``sort_keys`` keeps the on-disk form stable across runs (the compaction
     round-trip test relies on it); ``default=str`` lets a stray
-    ``datetime``/``Path`` in a payload serialize rather than crash the append."""
-    path = _entry_trail_journal_path()
+    ``datetime``/``Path`` in a payload serialize rather than crash the append.
+    ``path`` overrides the per-env seam (see :func:`read_entry_trail_fold`)."""
+    path = path if path is not None else _entry_trail_journal_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
         fh.flush()
         os.fsync(fh.fileno())
+
+
+# --- Operator disarm (the watch half of `alphalens broker disarm`) -----------
+
+
+class DisarmRestingOrderError(RuntimeError):
+    """A tier of the pick has a resting (or in-flight) native entry BUY.
+
+    ``cancelled`` sits outside the resting-bearing terminals: every producer
+    of a ``cancelled`` line is expected to have no broker order behind the
+    tier. The reconcile pass filters terminal tiers, so cancelling a
+    ``trail_armed`` tier from the outside would ORPHAN its live order —
+    nothing would ever cancel it or reconcile its fill. The operator path is
+    `alphalens broker cancel <order_id>` first, then disarm again."""
+
+
+def cancel_open_watches(pick_key: str, *, note: str, path: Path | None = None) -> list[str]:
+    """Append one terminal ``cancelled`` line per OPEN watch tier of
+    ``pick_key``; return the cancelled crids (empty when none are open).
+
+    The watch half of `alphalens broker disarm`: retiring the pick from the
+    queue does not stop an open watch (the watch pass reads only this
+    journal), so the disarm must terminate the tiers here. ``cancelled`` is a
+    kind the running daemon already folds — it drops the tier from the active
+    set, releases the virtual gross reservation and the watch-capacity slot,
+    and lets the stale-ladder retraction retire the routed ``tranche_plan``
+    on the next tick. No daemon restart is needed.
+
+    Refuse-first atomicity: if ANY open tier of the pick has a ``trail_armed``
+    latest kind — a REAL resting order id, or the null-id write-ahead of an
+    in-flight POST that may have landed one — raise
+    :class:`DisarmRestingOrderError` and write NOTHING.
+
+    Sticky-terminal caveat (deliberate): the fold never clears
+    ``terminal_kind`` and crids are deterministic per (ticker, date, tier),
+    so a later re-arm of the SAME (ticker, date) will not re-open these
+    tiers; a fresh brief date is the path back.
+
+    Best-effort vs a live daemon: the daemon can arm a native trail between
+    this fold read and the append — rerun after `broker cancel` if the
+    refusal fires late."""
+    fold = read_entry_trail_fold(path=path)
+    open_tiers = []
+    for tier in fold.tiers.values():
+        if tier.terminal_kind is not None or tier.watch_open is None:
+            continue
+        tier_key = tier.watch_open.get("pick_key")
+        if tier_key is None:
+            # Every watch_open the daemon writes carries pick_key; a keyless
+            # one (future code change, hand-edited journal) must be a VISIBLE
+            # skip, never a silent one — the tier stays open and disarm
+            # cannot see it belongs to anyone.
+            logger.warning(
+                "cancel_open_watches: open tier %s has a watch_open without a "
+                "pick_key — skipped (cannot attribute it to %s)",
+                tier.crid,
+                pick_key,
+            )
+            continue
+        if str(tier_key) == pick_key:
+            open_tiers.append(tier)
+    for tier in open_tiers:
+        # latest_kind == trail_armed covers the normal state machine (a real
+        # resting order, or the null-id write-ahead of an in-flight POST). The
+        # armed_order_id check is defense in depth: the rearm path clears it
+        # only via a fresh watch_open written AFTER the broker confirmed the
+        # order gone — if a future bug ever leaves a real id behind on a
+        # non-armed latest_kind, refusing is still the only safe answer.
+        if tier.latest_kind == KIND_TRAIL_ARMED or tier.armed_order_id is not None:
+            raise DisarmRestingOrderError(
+                f"tier {tier.crid} has a native entry arm "
+                f"(order_id={tier.armed_order_id!r}) — cancel it at the broker "
+                f"first (`alphalens broker cancel`), then disarm again"
+            )
+    cancelled: list[str] = []
+    for tier in open_tiers:
+        append_entry_trail_line(
+            {"kind": KIND_CANCELLED, "crid": tier.crid, "note": note}, path=path
+        )
+        cancelled.append(tier.crid)
+    return cancelled
 
 
 # --- Compaction (memo G4) ----------------------------------------------------
