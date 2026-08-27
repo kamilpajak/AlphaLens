@@ -1,6 +1,6 @@
 # Exit policy comparison — brief take-profit ladder vs the ATR bracket — pre-registration
 
-**Status:** LOCKED
+**Status:** VOID (2026-08-27) — see the status note below. LOCKED 2026-08-24 until then.
 **Date:** 2026-08-24 (drafted against the #1112 incident record; committed 2026-08-25)
 **Author:** Kamil Pajak
 **Issue:** #1115. Motivating incident: #1112. Instrument prerequisite: #1114 / PR #1117.
@@ -15,6 +15,32 @@ locked; no outcome in it exists at lock time. The exploratory read quoted in iss
 quoted verbatim in §9 and appended in the first implementation PR, before any look.
 
 ---
+
+## Status note — VOID, 2026-08-27 (before cohort open)
+
+This pre-registration is void under its own §11 item 1: **arm B ceases to be the live
+operational policy before the cohort opened.** On 2026-08-27 the owner decided to adopt a
+break-even + trailing exit policy (`breakeven_trail`, the live port of the registered
+`be_0p5r_trail0p6` lens — brief TP tranches kept, dynamic stop management) as the next live
+policy, replacing the ATR-bracket family this memo defines as arm B.
+
+Facts of record:
+
+- **The cohort never opened.** The first nightly run that would have stamped
+  `atr_bracket_1p5_planned` (the §13.2 boundary event) was held on 2026-08-27 at 06:27 UTC,
+  three minutes before its 06:30 fire, on the owner's instruction. No boundary date exists;
+  no cohort row was ever produced under this design.
+- **The slot is returned.** The §9 ledger row in `edge_hypothesis_budget_2026_07.md` §4.1 is
+  annotated VOID; the look was never consumed. The two lens registrations
+  (`atr_bracket_1p5`, `atr_bracket_1p5_planned`) are untouched and keep accruing as
+  display-only telemetry under their own registrations.
+- **The instrument survives.** The §10 machinery (PRs #1154-#1158: net-cash replay,
+  missingness audit, planning-sd, analysis driver with floors + hash protocol) stays in-tree
+  as reusable measurement code. The replay↔`build_exit_geometry_spec` parity test loses its
+  §11 item 4 HALT semantics and remains an ordinary regression test.
+
+A future head-to-head involving the new policy would be a NEW pre-registration with its own
+ledger row; nothing in this memo pre-authorizes it.
 
 ## 1. The question, stated precisely
 
