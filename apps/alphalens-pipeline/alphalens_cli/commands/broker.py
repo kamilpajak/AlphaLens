@@ -94,6 +94,10 @@ _ARM_INSTRUMENT_MIC = "XNYS"
 # full sim/live vocabulary) is owned by the seam at call time, not here.
 _DEFAULT_ARM_ENV = "sim"
 
+# Disarm's --note is written verbatim to two append-only journals; bound it so
+# an accidental paste cannot bloat lines every future fold re-reads.
+_DISARM_NOTE_MAX_CHARS = 500
+
 
 def _fail(message: str) -> typer.Exit:
     typer.secho(message, fg=typer.colors.RED, err=True)
@@ -1341,9 +1345,21 @@ def disarm_command(
     (deterministic crids stay terminal) — a fresh brief date is the real
     path back. Best-effort vs the running daemon: it can arm a native trail
     between the read and the write; rerun after `broker cancel` if refused.
+
+    Crash recovery: dying between the two writes leaves the watch cancelled
+    and the queue still armed. That state places NO orders (a re-driven pick
+    re-routes to the watch path, whose tiers stay terminal; the classic
+    tier-order path is only reachable with the entry trail off, where no
+    watch existed to cancel) — rerun disarm to finish the queue half.
     """
     from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
     from alphalens_pipeline.brokers.automanager.picks import mark_disarmed
+
+    if len(note) > _DISARM_NOTE_MAX_CHARS:
+        raise _fail(
+            f"--note is {len(note)} chars; max {_DISARM_NOTE_MAX_CHARS} — the note is "
+            "written verbatim to two append-only journals"
+        )
 
     try:
         brief_date = dt.date.fromisoformat(date)

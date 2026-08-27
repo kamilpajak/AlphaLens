@@ -418,15 +418,33 @@ def cancel_open_watches(pick_key: str, *, note: str, path: Path | None = None) -
     this fold read and the append — rerun after `broker cancel` if the
     refusal fires late."""
     fold = read_entry_trail_fold(path=path)
-    open_tiers = [
-        tier
-        for tier in fold.tiers.values()
-        if tier.terminal_kind is None
-        and tier.watch_open is not None
-        and str(tier.watch_open.get("pick_key", "")) == pick_key
-    ]
+    open_tiers = []
+    for tier in fold.tiers.values():
+        if tier.terminal_kind is not None or tier.watch_open is None:
+            continue
+        tier_key = tier.watch_open.get("pick_key")
+        if tier_key is None:
+            # Every watch_open the daemon writes carries pick_key; a keyless
+            # one (future code change, hand-edited journal) must be a VISIBLE
+            # skip, never a silent one — the tier stays open and disarm
+            # cannot see it belongs to anyone.
+            logger.warning(
+                "cancel_open_watches: open tier %s has a watch_open without a "
+                "pick_key — skipped (cannot attribute it to %s)",
+                tier.crid,
+                pick_key,
+            )
+            continue
+        if str(tier_key) == pick_key:
+            open_tiers.append(tier)
     for tier in open_tiers:
-        if tier.latest_kind == KIND_TRAIL_ARMED:
+        # latest_kind == trail_armed covers the normal state machine (a real
+        # resting order, or the null-id write-ahead of an in-flight POST). The
+        # armed_order_id check is defense in depth: the rearm path clears it
+        # only via a fresh watch_open written AFTER the broker confirmed the
+        # order gone — if a future bug ever leaves a real id behind on a
+        # non-armed latest_kind, refusing is still the only safe answer.
+        if tier.latest_kind == KIND_TRAIL_ARMED or tier.armed_order_id is not None:
             raise DisarmRestingOrderError(
                 f"tier {tier.crid} has a native entry arm "
                 f"(order_id={tier.armed_order_id!r}) — cancel it at the broker "

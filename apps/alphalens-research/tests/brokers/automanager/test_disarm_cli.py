@@ -99,6 +99,17 @@ class DisarmCommandTest(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("legacy flat broker state", result.output)
 
+    def test_disarm_overlong_note_refuses(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(
+            broker_app, ["disarm", "KO", "--date", "2026-08-26", "--note", "x" * 501]
+        )
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("note", result.output)
+        picks = self.home / ".alphalens" / "broker_orders" / "sim" / "picks.jsonl"
+        self.assertFalse(picks.exists())
+
     def test_disarm_refuses_on_resting_armed_order_and_writes_nothing(self) -> None:
         from alphalens_cli.commands.broker import broker_app
 

@@ -130,6 +130,50 @@ class CancelOpenWatchesTest(unittest.TestCase):
         self.assertEqual(fold.tiers["IBRX-2026-08-26-entry-t0"].terminal_kind, "cancelled")
 
 
+class ReviewHardeningTest(unittest.TestCase):
+    """Zen review follow-ups: visible skip on a keyless watch_open, defensive
+    refusal on a lingering armed_order_id, note length bound (CLI-side)."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.path = Path(self._tmp.name) / "entry_trails.jsonl"
+
+    def test_open_tier_without_pick_key_logs_a_warning(self) -> None:
+        # The pick_key invariant holds for every line the daemon writes today;
+        # a keyless watch_open (future code change, hand-edited journal) must
+        # not be a SILENT skip.
+        self.path.write_text(
+            _line("watch_open", "IBRX-2026-08-26-entry-t0", limit=10.0, qty=5) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertLogs(et.__name__, level="WARNING") as cm:
+            cancelled = et.cancel_open_watches(_PICK_KEY, note="operator disarm", path=self.path)
+        self.assertEqual(cancelled, [])
+        self.assertTrue(any("pick_key" in message for message in cm.output))
+
+    def test_refuses_on_a_lingering_armed_order_id_even_after_a_rearm(self) -> None:
+        # Defense in depth: the rearm path clears armed_order_id via a fresh
+        # watch_open only AFTER the broker confirmed the order gone — but if a
+        # future bug ever leaves a real order id on a tier whose latest_kind
+        # is no longer trail_armed, disarm must still refuse, never orphan.
+        self.path.write_text(
+            "".join(
+                line + "\n"
+                for line in (
+                    _watch_open("IBRX-2026-08-26-entry-t0", _PICK_KEY),
+                    _line("trail_armed", "IBRX-2026-08-26-entry-t0", order_id="77"),
+                    _line("touched", "IBRX-2026-08-26-entry-t0"),
+                )
+            ),
+            encoding="utf-8",
+        )
+        before = self.path.read_bytes()
+        with self.assertRaises(et.DisarmRestingOrderError):
+            et.cancel_open_watches(_PICK_KEY, note="operator disarm", path=self.path)
+        self.assertEqual(self.path.read_bytes(), before)
+
+
 class PathSeamTest(unittest.TestCase):
     def test_read_and_append_honor_an_explicit_path(self) -> None:
         with TemporaryDirectory() as d:
