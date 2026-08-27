@@ -1,0 +1,79 @@
+[Unit]
+# The SOLE holder of the elevated Saxo LIVE price session (#1172).
+#
+# Saxo grants exactly one elevated (FullTradingAndChat) session per LIVE login.
+# Before this unit, each broker-manager daemon opened its own stream, so only
+# ONE of them could have real-time prices — the second silently demoted both to
+# 15-minute-delayed quotes. The documented workaround was to turn
+# ALPHALENS_SAXO_LIVE_PRICES off on SIM, which is why the SIM soak ran dark for
+# weeks. This process holds the session; both daemons read it over a local
+# UNIX socket and neither opens one of its own.
+#
+# Install:
+#   cp deploy/systemd/alphalens-saxo-price-reader.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-saxo-price-reader.service
+#   systemctl --user status alphalens-saxo-price-reader.service
+#
+# Verify it holds an UNDELAYED session (the entitlements endpoint lies; trust
+# DelayedByMinutes):
+#   journalctl --user -u alphalens-saxo-price-reader -f
+#   alphalens broker stream-status --env sim     # consumer side
+#
+# Stop: systemctl --user stop alphalens-saxo-price-reader.service
+#   The daemons then veto every quote — the same state as the feature being
+#   off. They keep reconciling and keep managing the standalone disaster stop.
+#
+# Persistence: sudo loginctl enable-linger "$USER"
+Description=AlphaLens shared Saxo LIVE price reader (one elevated session, many consumers)
+After=network-online.target
+Wants=network-online.target
+
+# Cap crash loops. [Unit]-section keys — under [Service] modern systemd
+# silently ignores them.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/AlphaLens
+
+# Needs the LIVE market-data OAuth chain (SAXO_LIVE_APP_KEY / SAXO_LIVE_APP_SECRET
+# and the bootstrapped ~/.alphalens/saxo_auth_live/ store — README section 9,
+# "LIVE market-data OAuth"). No leading `-`: fail loud on a missing env file.
+EnvironmentFile=/etc/alphalens/env
+
+# Hold no WebSocket outside the trading window. Overnight no frames flow, so a
+# 24/7 connection recv-times-out every few minutes and churns reconnect plus
+# subscription-recreate all night. Fail-open by contract: a raising calendar
+# predicate is treated as in-session, so this can never silence quotes during
+# trading hours.
+Environment=ALPHALENS_SAXO_STREAM_SESSION_GATE=1
+
+# Node_exporter textfile dir for the reader's own gauges (job "price-reader")
+# and the stream's (job "live-price-stream-reader").
+Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile
+
+# Serves ~/.alphalens/price_reader/reader.sock unless the env names another.
+# The process refuses to start if another reader is already accepting on that
+# path — two readers would be two elevated sessions, which is the failure this
+# unit exists to prevent.
+ExecStart=%h/AlphaLens/.venv/bin/alphalens broker price-reader
+
+# SIGTERM is handled: the socket is unlinked and the venue subscription
+# deleted, so a restart never leaves an orphan subscription behind. Give it
+# room to finish rather than being SIGKILLed mid-teardown.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=on-failure
+RestartSec=15
+
+StandardOutput=journal
+StandardError=journal
+
+MemoryMax=512M
+TasksMax=32
+
+[Install]
+WantedBy=default.target

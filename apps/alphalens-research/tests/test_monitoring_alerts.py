@@ -1665,5 +1665,54 @@ class TestBrokerStreamRules(unittest.TestCase):
             self.assertIn("emergency", description, name)
 
 
+class TestSharedPriceReaderAlerts(unittest.TestCase):
+    """#1172: the reader is a NEW always-on unit that both daemons depend on.
+    A reader that stops, or one that runs while a daemon cannot reach its
+    socket, must page — the second case is invisible from the reader's side."""
+
+    def _rules(self) -> dict[str, dict]:
+        group = _load_rules()["groups"][0]
+        return {r["alert"]: r for r in group["rules"] if "alert" in r}
+
+    def test_a_down_reader_pages(self) -> None:
+        rule = self._rules()["AlphalensPriceReaderDown"]
+        expr = " ".join(rule["expr"].split())
+        self.assertIn('alphalens_price_reader_up{job="price-reader"} == 0', expr)
+        self.assertEqual(rule["labels"]["route"], "telegram")
+
+    def test_a_reader_whose_stream_went_dark_pages(self) -> None:
+        """The dark-but-connected case: the process is up, the stream is not.
+        Gated on subscribed uics (an idle reader holds no WebSocket by design)
+        and on the session gate, which parks the stream overnight."""
+        expr = " ".join(self._rules()["AlphalensPriceReaderStreamStale"]["expr"].split())
+        self.assertIn('job="live-price-stream-reader"', expr)
+        self.assertIn("subscribed_uics", expr)
+        self.assertIn("unless", expr)
+        self.assertIn("session_asleep", expr)
+
+    def test_each_daemon_pages_when_it_cannot_reach_the_reader(self) -> None:
+        """The consumption side. A wrong socket path in a drop-in, or a
+        permissions problem, leaves the reader healthy and the daemon
+        priceless — nothing on the reader's side would show it."""
+        rules = self._rules()
+        for env in ("sim", "live"):
+            name = f"AlphalensPriceReaderClientDisconnected{env.capitalize()}"
+            expr = " ".join(rules[name]["expr"].split())
+            self.assertIn(
+                f'alphalens_price_reader_client_up{{job="price-reader-client-{env}"}}', expr
+            )
+            self.assertIn("== 0", expr)
+
+    def test_the_new_alerts_carry_the_sync_note(self) -> None:
+        """Same contract as every other rule here: the operator reading the
+        page must know a merged change deploys itself."""
+        for name, rule in self._rules().items():
+            if "PriceReader" not in name:
+                continue
+            description = rule.get("annotations", {}).get("description", "")
+            self.assertIn("alphalens-prometheus-rules-sync", description, name)
+            self.assertIn("emergency", description, name)
+
+
 if __name__ == "__main__":
     unittest.main()

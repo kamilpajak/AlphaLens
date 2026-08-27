@@ -458,6 +458,47 @@ def _default_emit_heartbeat(kill: bool = False) -> None:
         logger.warning("broker-manager heartbeat emit failed", exc_info=True)
 
 
+def price_reader_client_metrics_job(env: str | None = None) -> str:
+    """``"price-reader-client-<env>"`` — this daemon's view of the shared reader.
+
+    A job of its OWN, distinct from the reader's (`price-reader`) and from the
+    per-env price-stream jobs: ``emit_domain_metrics`` rewrites a whole per-job
+    file, so two emitters sharing a job silently erase each other's series."""
+    return f"price-reader-client-{state_paths._resolve_env(env)}"
+
+
+def _emit_price_reader_client_gauges(remote: Any | None) -> None:
+    """Publish whether THIS daemon is actually getting prices from the reader.
+
+    The reader publishes its own liveness, which answers a different question:
+    a reader that is up while a daemon cannot reach its socket (a wrong path in
+    a drop-in, permissions, a restart race) is invisible from the reader's side
+    alone. A daemon on the in-process path has no client to describe and emits
+    NOTHING — writing up=0 there would page for a reader it never meant to use.
+
+    Best-effort, like the heartbeat: a textfile-dir hiccup must never reach the
+    tick."""
+    if remote is None:
+        return
+    from alphalens_pipeline.observability.textfile import emit_domain_metrics
+
+    job = price_reader_client_metrics_job()
+    label = f'{{job="{job}"}}'
+    try:
+        emit_domain_metrics(
+            job,
+            {
+                f"alphalens_price_reader_client_up{label}": int(bool(remote.is_connected)),
+                f"alphalens_price_reader_client_connect_attempts_total{label}": (
+                    remote.connect_attempts
+                ),
+                f"alphalens_price_reader_client_failures_total{label}": remote.failures,
+            },
+        )
+    except OSError:
+        logger.warning("price-reader client gauge emit failed", exc_info=True)
+
+
 def _kill_active(deps: LoopDeps) -> bool:
     """D3 (ADR 0016): True when EITHER the per-instance ``kill_file`` OR the
     GLOBAL kill (when wired) is present — defense in depth. ``global_kill_file``
@@ -3436,6 +3477,10 @@ def run_daemon(
         # Task 13: writes the Prometheus heartbeat gauge + the KILL-active gauge
         # (co-emitted so an emergency stop is visible to Prometheus, not just journald).
         heartbeat_fn(_kill_active(deps))
+        # #1172: and this instance's view of the shared price reader. A no-op on
+        # the in-process path. Separate emit because it is a separate job — one
+        # emit call writes one whole per-job textfile.
+        _emit_price_reader_client_gauges(_REMOTE_QUOTE_SOURCE)
         if on_tick is not None:
             on_tick()  # push_token + stream stale/breaker alert + liveness gauge (main thread)
         first = False

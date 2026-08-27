@@ -90,6 +90,15 @@ EXEMPT_JOBS: dict[str, str] = {
         "built around. Same rationale as broker-manager and form4-backfill above; "
         "mirrors the ACTIVE_SERVICES exclusion in test_deploy_systemd_units.py."
     ),
+    "saxo-price-reader": (
+        "Long-running shared price reader (Type=simple + Restart=on-failure), #1172. "
+        "Same shape as the two broker-manager daemons above: it emits its OWN "
+        "liveness continuously (alphalens_price_reader_up, plus an explicit up=0 on "
+        "a clean stop, watched by AlphalensPriceReaderDown) rather than a single "
+        "last_success point at process exit. An ExecStopPost hook would additionally "
+        "be MISLEADING here — for a process that is supposed to run forever, a fresh "
+        "'last success' timestamp means it just died."
+    ),
 }
 
 

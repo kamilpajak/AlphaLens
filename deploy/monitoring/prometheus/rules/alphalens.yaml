@@ -1445,6 +1445,71 @@ groups:
           summary: "LIVE price stream silent > 5m with subscriptions active (REAL MONEY)"
           description: "The reader is up and uics are subscribed but no frame has arrived for {{ $value | humanizeDuration }} — the feed is dark-but-connected. Recv timeout + resubscribe should self-heal; sustained staleness means they are not. Verify DelayedByMinutes==0 separately — a silent demotion to delayed data would NOT trip this rule (frames keep arriving, just stale-priced)."
 
+      # --- Shared Saxo price reader (#1172) ------------------------------
+      # ONE process holds the single elevated Saxo session; both broker-manager
+      # daemons read it over a UNIX socket. Two failure surfaces need watching:
+      # the reader itself, and each daemon's ability to REACH it (a reader that
+      # is up while a daemon cannot talk to its socket is invisible from the
+      # reader's side alone).
+      - alert: AlphalensPriceReaderDown
+        # The unit publishes up=0 explicitly on a clean stop, so this fires on
+        # both "stopped" and "crashed and did not come back". With the reader
+        # gone BOTH daemons veto every quote — no trailing, no live-market
+        # exits — while the standalone disaster stops stay with the broker.
+        expr: alphalens_price_reader_up{job="price-reader"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: price-reader
+        annotations:
+          summary: "Shared Saxo price reader is down — BOTH daemons are priceless"
+          description: "alphalens-saxo-price-reader is not running, so neither broker-manager can get a quote: entry trailing and live-market exits are dark on SIM and LIVE alike (resting disaster stops are unaffected — Saxo holds those). Check `journalctl --user -u alphalens-saxo-price-reader`. If it refuses to start with 'already serving', another reader owns the socket — that refusal is deliberate, since two readers would be two elevated Saxo sessions and would demote each other to 15-minute quotes. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+
+      - alert: AlphalensPriceReaderStreamStale
+        # The reader process is up but its stream went dark. Gated on
+        # subscribed_uics (an idle reader holds no WebSocket BY DESIGN) and on
+        # session_asleep via `unless`, so the overnight session-gate sleep does
+        # not page — and an ABSENT gauge leaves the alert exactly as before.
+        expr: >-
+          (time() - alphalens_live_price_stream_last_frame_timestamp_seconds{job="live-price-stream-reader"}) > 300
+          and alphalens_live_price_stream_subscribed_uics{job="live-price-stream-reader"} > 0
+          and alphalens_live_price_stream_reader_up{job="live-price-stream-reader"} == 1
+          unless alphalens_live_price_stream_session_asleep{job="live-price-stream-reader"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: price-reader
+        annotations:
+          summary: "Shared price reader silent > 5m with subscriptions active"
+          description: "The reader process is up and uics are subscribed, but no frame has arrived for {{ $value | humanizeDuration }} — dark-but-connected. Recv timeout plus resubscribe should self-heal; sustained staleness means they are not. Verify DelayedByMinutes==0 separately: a silent demotion to delayed data would NOT trip this rule, because frames keep arriving, just stale-priced. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+
+      - alert: AlphalensPriceReaderClientDisconnectedSim
+        # The consumption side. A wrong socket path in a drop-in, a
+        # permissions problem, or a reader restart the daemon never recovered
+        # from leaves the reader healthy and THIS instance priceless.
+        expr: alphalens_price_reader_client_up{job="price-reader-client-sim"} == 0
+        for: 10m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager
+        annotations:
+          summary: "SIM daemon cannot reach the shared price reader"
+          description: "The SIM broker-manager has a reader socket configured but is not connected to it, so every quote is vetoed and the soak collects nothing. Check that alphalens-saxo-price-reader is running and that the path in 42-price-reader.conf matches the socket it serves. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+
+      - alert: AlphalensPriceReaderClientDisconnectedLive
+        expr: alphalens_price_reader_client_up{job="price-reader-client-live"} == 0
+        for: 10m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: "LIVE daemon cannot reach the shared price reader (REAL MONEY)"
+          description: "The LIVE broker-manager has a reader socket configured but is not connected to it: entry trailing and live-market exits are dark on the risk-bearing instance. Resting disaster stops are unaffected (Saxo holds them independently of the daemon). Check alphalens-saxo-price-reader and the path in 51-price-reader.conf. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+
       # LIVE market-data OAuth idle keep-alive (alphalens-saxo-marketdata-
       # refresh.{service,timer}, design memo §5) — same job-metrics shape as
       # saxo-refresh above (timer-driven oneshot, ~20min cadence), distinct

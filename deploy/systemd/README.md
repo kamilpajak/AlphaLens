@@ -1649,23 +1649,31 @@ upward past where you already are.
    stop the unit once the account is flat (step 4) or once a human has
    deliberately taken over exit management.
 
-#### 9.6 Sole elevated holder — coordinate with SIM before enabling
+#### 9.6 Sole elevated holder — now a separate unit, not a coin flip
 
-The LIVE daemon is the SOLE elevated (`FullTradingAndChat`) holder for the
-duration of the soak (design memo §6) — Saxo allows exactly one elevated
-session per login, and a second elevated consumer silently demotes both
-sides to 15-minute-delayed prices. **Before enabling
-`alphalens-broker-manager-live.service`, turn LIVE prices OFF on the SIM
-instance:**
+Saxo still allows exactly one elevated (`FullTradingAndChat`) session per LIVE
+login, and a second elevated consumer still demotes both sides to
+15-minute-delayed prices. What changed (#1172) is WHO holds it: neither daemon
+does. `alphalens-saxo-price-reader.service` holds the single session and both
+broker-managers read it over a local UNIX socket.
+
+**There is no longer a flag to flip between instances.** The previous procedure
+— turning `ALPHALENS_SAXO_LIVE_PRICES` off on SIM before enabling the LIVE
+daemon — is obsolete and must NOT be re-applied: it would only blind SIM again
+while changing nothing about the elevation, which the reader owns. That
+workaround is why the SIM breakeven_trail soak collected nothing for weeks.
+
+Install the reader (see "Shared price reader" below) BEFORE enabling either
+daemon's price-reader drop-in, then verify both sides see undelayed quotes:
 
 ```bash
-sudo sed -i 's/^ALPHALENS_SAXO_LIVE_PRICES=1/ALPHALENS_SAXO_LIVE_PRICES=0/' /etc/alphalens/env
-systemctl --user restart alphalens-broker-manager.service
+systemctl --user status alphalens-saxo-price-reader
+journalctl --user -u alphalens-saxo-price-reader -n 50 --no-pager
 ```
 
-SIM's cost is stale prices on virtual money — zero. Revisit when SIM needs
-its LIVE prices back (a cross-process shared price reader is a deferred
-standing need, design memo §6, not YAGNI-never).
+Two readers are refused, not merged: a second `alphalens broker price-reader`
+on the same socket exits with `already serving`. That refusal is the guard —
+two readers would be two elevated sessions demoting each other.
 
 #### 9.7 Standing-grant decommission
 
@@ -1974,6 +1982,82 @@ is using (§2). The daemon's own reclaim logic (`ReclaimLimiter`,
 it observes a delayed quote, so a human who keeps pressing "resume" in
 SaxoTraderGO eventually wins the ping-pong by persistence — by design, not a
 bug.
+
+### 5a. Shared price reader (#1172) — install, verify, roll back
+
+`alphalens-saxo-price-reader.service` is the single elevated holder. Both
+broker-manager daemons read it; neither opens a stream of its own.
+
+**Install (VPS, once):**
+
+```bash
+cd ~/AlphaLens && git pull --ff-only
+cp deploy/systemd/alphalens-saxo-price-reader.service ~/.config/systemd/user/
+mkdir -p ~/.config/systemd/user/alphalens-broker-manager.service.d \
+         ~/.config/systemd/user/alphalens-broker-manager-live.service.d
+cp deploy/systemd/alphalens-broker-manager.service.d/42-price-reader.conf \
+   ~/.config/systemd/user/alphalens-broker-manager.service.d/
+cp deploy/systemd/alphalens-broker-manager-live.service.d/51-price-reader.conf \
+   ~/.config/systemd/user/alphalens-broker-manager-live.service.d/
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-saxo-price-reader.service
+```
+
+**Order matters.** Start the reader FIRST. A daemon restarted with the drop-in
+but no reader running simply vetoes every quote — safe, but it looks like the
+feature failed.
+
+**Restart the daemons OUTSIDE XNYS hours** (13:30-20:00 UTC): a restart resets
+the in-memory trailing peaks.
+
+```bash
+systemctl --user restart alphalens-broker-manager
+systemctl --user restart alphalens-broker-manager-live   # if enabled
+```
+
+**Delete the stale per-env price-stream textfiles.** Neither daemon writes
+`alphalens_domain_live-price-stream-{sim,live}.prom` any more, and
+node_exporter keeps serving a textfile until it is removed — a frozen
+`reader_up=1` with an old `last_frame` would page `AlphalensLivePriceStreamStale`
+forever:
+
+```bash
+rm -f /var/lib/node_exporter/textfile/alphalens_domain_live-price-stream-sim.prom \
+      /var/lib/node_exporter/textfile/alphalens_domain_live-price-stream-live.prom
+```
+
+**Verify** (the reader's own liveness AND each daemon's ability to reach it —
+a reader that is up while a daemon cannot open its socket is invisible from the
+reader's side):
+
+```bash
+journalctl --user -u alphalens-saxo-price-reader -n 50 --no-pager
+grep alphalens_price_reader /var/lib/node_exporter/textfile/alphalens_domain_price-reader.prom
+grep client_up /var/lib/node_exporter/textfile/alphalens_domain_price-reader-client-sim.prom
+journalctl --user -u alphalens-broker-manager | grep -i "shared price reader"
+```
+
+Trust `DelayedByMinutes == 0`, never the entitlements endpoint. The soak is
+working once the SIM entry-trail journal starts recording `touched` — that is
+the outcome the whole change exists for.
+
+**Roll back** (restores the previous behaviour with no code change):
+
+```bash
+rm ~/.config/systemd/user/alphalens-broker-manager.service.d/42-price-reader.conf
+rm ~/.config/systemd/user/alphalens-broker-manager-live.service.d/51-price-reader.conf
+systemctl --user daemon-reload
+systemctl --user stop alphalens-saxo-price-reader
+systemctl --user restart alphalens-broker-manager alphalens-broker-manager-live
+```
+
+After a rollback the OLD constraint returns: only one daemon may have LIVE
+prices. If both keep them, they demote each other and nobody notices — that is
+the failure this unit removed.
+
+**Attended live probes** (§7) still need the single-holder rule, but now
+against the READER: stop `alphalens-saxo-price-reader` before running one from
+either machine, not the broker-manager.
 
 ### 6. Known issues
 
