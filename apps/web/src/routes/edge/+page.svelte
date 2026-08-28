@@ -565,7 +565,9 @@
 			</section>
 		</div>
 
-		<!-- WHAT-IF sandbox — display-only, in-sample counterfactual exit-stop lenses.
+		<!-- WHAT-IF sandbox — display-only, in-sample counterfactual exit lenses.
+		     Lenses differ in SCOPE (stop only / stop + entry / whole exit) — the per-lens
+		     scope lives in WHATIF_LENS_REGISTRY in $lib/edgeWhatif (#1160).
 		     Collapsed by default; the realized panels above stay the production view.
 		     Never a primary KPI card. -->
 		<WhatIfPanel {summary} />
