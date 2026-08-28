@@ -675,7 +675,7 @@ _FILL_ANCHOR_SETUP = _setup(entries=[(100.0, 100.0)], tps=[(110.0, 100.0)], stop
 
 
 class TestFillAnchoredWhatIf(unittest.TestCase):
-    """Fill-anchored exit-stop what-if (path b): a display-only counterfactual that
+    """Fill-anchored what-if (path b): a display-only counterfactual that
     re-runs the pick as a single-tier E1 entry with a stop 0.5*ATR below E1 — the
     faithful collapse of a fill-anchored stop (the tight stop pierces before E2/E3
     can fill). Never overrides the headline realized_r."""

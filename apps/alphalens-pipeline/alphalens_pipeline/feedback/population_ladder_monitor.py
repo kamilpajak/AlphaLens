@@ -292,9 +292,13 @@ _PROVENANCE_COLUMNS = ("scorer_config_version",)
 # other additive measurement columns.
 _GRID_COLUMNS = ("grid_realized_r_json",)
 
-# The break-even exit-stop WHAT-IF grid (Stage A): a JSON map {lens_id -> realized_r}
-# from re-replaying the SAME bars under each registered break-even lens. Display-only
-# (never overrides the headline realized_r); carried/back-filled like the grid above.
+# The WHAT-IF exit-lens grid (Stage A): a JSON map {lens_id -> realized_r} from
+# re-replaying the SAME bars under every registered lens. The lenses differ in SCOPE
+# -- stop only / stop + entry ladder / whole exit -- so this is NOT a break-even-only
+# measurement (#1160); the per-lens scope lives in BreakevenLens.category/replaces.
+# Display-only (never overrides the headline realized_r); carried/back-filled like
+# the grid above. The ``breakeven_`` column name predates the non-stop lenses and is
+# kept deliberately -- renaming a stamped column is a data migration.
 _BREAKEVEN_COLUMNS = ("breakeven_realized_r_json",)
 
 # The entry-side counterfactual (PR-3): realized R if all tiers had filled at the
@@ -930,7 +934,8 @@ def _terminal_row(
         "setup_builder_config_version": setup.get("builder_config_version"),
         # Alternate-exit-ladder grid (None until a minute resolve computes it).
         "grid_realized_r_json": json.dumps(grid_realized_r) if grid_realized_r else None,
-        # Break-even exit-stop WHAT-IF grid (display-only, None until a minute resolve).
+        # WHAT-IF exit-lens grid (display-only, None until a minute resolve); the
+        # registered lenses differ in scope -- see breakeven_lenses (#1160).
         "breakeven_realized_r_json": json.dumps(breakeven_grid_r) if breakeven_grid_r else None,
         # Entry-side counterfactual: realized R at the full-fill blended entry.
         "realized_r_full_fill": realized_r_full,
@@ -2518,9 +2523,10 @@ def _replay_candidate(
         entry_expiry_ms=entry_expiry_ms,
         position_expiry_ms=position_expiry_ms,
     )
-    # Break-even exit-stop WHAT-IF grid (Stage A): re-replay the SAME bars under each
-    # registered break-even lens. Display-only; the entry-TTL / time-stop are not
-    # honoured in the what-if (matching replay_ladder_breakeven's contract).
+    # WHAT-IF exit-lens grid (Stage A): re-replay the SAME bars under every registered
+    # lens; scopes differ per lens (stop only / stop + entry ladder / whole exit).
+    # Display-only; the entry-TTL / time-stop are not honoured in any what-if lens
+    # (matching replay_ladder_breakeven's contract).
     breakeven_grid_r = breakeven_grid(setup, bars, pct_off_52w_high=pct_off_52w_high)
     # Entry-side counterfactual (PR-3): realized R at the full-fill blended entry,
     # same exit ladder + bars. Also zero extra Polygon cost.

@@ -217,9 +217,10 @@ class _Accumulator:
     # for this tool (ADR 0012).
     realized_risk_pcts: list[float] = field(default_factory=list)
     tiers_filled: list[float] = field(default_factory=list)
-    # Break-even exit-stop WHAT-IF (terminal only) — realized R per lens_id, parsed
-    # from breakeven_realized_r_json. Display-only, in-sample; the registry of lens
-    # labels/status lives client-side, so this is keyed by lens_id only.
+    # WHAT-IF exit-lens R (terminal only) — realized R per lens_id, parsed from
+    # breakeven_realized_r_json. Lens scope differs per lens (#1160), so never label
+    # them collectively as exit-stop. Display-only, in-sample; the registry of lens
+    # labels/scope/status lives client-side, so this is keyed by lens_id only.
     breakeven_r: dict[str, list[float]] = field(default_factory=dict)
     # The realized-R baseline the what-if is compared against, restricted PER LENS to
     # exactly the rows that fed that lens's counterfactual (finite break-even R AND
@@ -387,7 +388,9 @@ def _build_whatif(acc: _Accumulator, *, gated: bool, status: str) -> dict[str, A
     """Break-even what-if panel — per-lens R aggregates keyed by ``lens_id``.
 
     DISPLAY-ONLY, in-sample counterfactual: the realized headline is untouched and
-    these means are recomputed under an alternative exit-stop on the SAME picks.
+    these means are recomputed under an alternative exit POLICY on the SAME picks --
+    scope differs per lens (stop only / stop + entry / whole exit), so they must never
+    be labelled collectively as exit-stop (#1160).
     N-gated exactly like the edge panel (the per-lens ``n`` survives the gate so the
     UI can show coverage; ``mean_r`` / ``median_r`` are nulled below the gate). The
     lens labels + ``in_sample``/``validated`` status live client-side (the registry),

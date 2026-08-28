@@ -136,10 +136,14 @@ class LadderOutcome(models.Model):
     # Empty until a minute resolve computes it (non-plannable / placeholder rows).
     grid_realized_r_json = models.TextField(blank=True, default="")
 
-    # Break-even exit-stop WHAT-IF grid (Stage A): JSON map {lens_id -> realized_r}
-    # from re-replaying the SAME bars under each registered break-even lens. DISPLAY-
-    # ONLY counterfactual (never overrides realized_r); the /edge selector reads it as
-    # a labelled, in-sample what-if. Empty until a minute resolve computes it.
+    # WHAT-IF exit-lens grid (Stage A): JSON map {lens_id -> realized_r} from re-replaying
+    # the SAME bars under every registered lens. Lens SCOPE is per-lens, never blanket
+    # (#1160): a break-even lens moves only the stop, the fill-anchored lens also collapses
+    # the entry ladder, and the ATR-bracket pair discards the brief TP ladder for a single
+    # target. DISPLAY-ONLY counterfactual (never overrides realized_r); the /edge selector
+    # reads it as a labelled, in-sample what-if. Empty until a minute resolve computes it.
+    # The ``breakeven_`` prefix predates the non-stop lenses and is kept to avoid a data
+    # migration on this live stamped column.
     breakeven_realized_r_json = models.TextField(blank=True, default="")
 
     # Entry-side counterfactual (PR-3): realized R if all tiers had filled at the

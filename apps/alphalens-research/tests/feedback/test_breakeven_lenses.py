@@ -1,9 +1,12 @@
 """Tests for the WHAT-IF lens registry.
 
-Each lens recomputes realized R under an alternate EXIT-STOP policy over the SAME
-picks + price paths: a break-even / trailing stop (PR #722) or a fill-anchored stop
-(exit-geometry path b). The registry is data-driven so a new lens is one entry, and
-the grid is a `{lens_id: realized_r}` map stamped display-only.
+Each lens recomputes realized R under an alternate EXIT POLICY over the SAME picks +
+price paths. The three kinds replace DIFFERENT amounts of the plan: a break-even /
+trailing stop moves only the stop (PR #722); the fill-anchored stop also collapses the
+entry ladder (exit-geometry path b); the ATR bracket discards the brief TP ladder for a
+single target (bezpazery v1). Describing them collectively as exit-stop was #1160. The
+registry is data-driven so a new lens is one entry, and the grid is a
+`{lens_id: realized_r}` map stamped display-only.
 """
 
 from __future__ import annotations
