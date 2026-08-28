@@ -278,9 +278,15 @@ def drift_findings(
             findings.append(
                 Finding(unit, "content_drift", name, "host bytes differ from the origin/main blob")
             )
-        reason = file_unreadable_reason(host_text)
-        if reason is not None:
-            findings.append(Finding(unit, "unreadable_file", name, reason))
+        # BOTH sides, not just the host. A repo blob carrying a form this
+        # parser refuses (an unsupported specifier, say) would otherwise be
+        # composed and compared as literal text — a confidently wrong answer,
+        # strictly worse than a loud finding. The host-side check alone only
+        # covers it while the two texts happen to agree.
+        for side, text in (("host", host_text), ("repo", repo_text)):
+            reason = file_unreadable_reason(text)
+            if reason is not None:
+                findings.append(Finding(unit, "unreadable_file", name, f"{side}: {reason}"))
 
     if live_env is None:
         findings.append(

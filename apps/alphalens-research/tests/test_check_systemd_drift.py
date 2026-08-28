@@ -80,6 +80,35 @@ class TestSpecifierExpansion(unittest.TestCase):
         composed = drift.composed_environment("[Service]\nEnvironment=A=100%%\n", [])
         self.assertEqual(composed["A"], "100%")
 
+    def test_an_unsupported_specifier_in_the_REPO_blob_is_refused_too(self):
+        """The refusal must not depend on the host happening to carry the same
+        bytes.
+
+        Only the host text used to be checked for unreadable forms. A repo
+        blob introducing, say, `%t` would then be left unexpanded and compared
+        as literal text against systemd's expanded value — a confidently wrong
+        answer, which is worse than the loud false positive this PR removes.
+        """
+        # DIVERGENT on purpose. With identical texts the host-side check
+        # already catches it, so that case cannot fail for the reason claimed
+        # here. Only a repo blob the host does not carry exercises the gap.
+        findings = drift.drift_findings(
+            "alphalens-broker-manager",
+            repo_files={
+                "alphalens-broker-manager.service": "[Service]\nEnvironment=RUNTIME=%t/run\n"
+            },
+            host_files={
+                "alphalens-broker-manager.service": "[Service]\nEnvironment=RUNTIME=/run/user/1000/run\n"
+            },
+            repo_env={},
+            live_env={},
+            host_only_vars=frozenset(),
+        )
+        self.assertTrue(
+            any(f.kind == "unreadable_file" for f in findings),
+            f"an unsupported specifier must surface as unreadable_file; got {findings}",
+        )
+
     def test_an_unknown_specifier_is_refused_rather_than_compared(self):
         """Refusal, not best effort — the module's existing contract. An
         unexpanded specifier compared as literal text is exactly the silent
