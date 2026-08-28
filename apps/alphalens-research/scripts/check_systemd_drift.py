@@ -30,6 +30,18 @@ Contract
     (``systemctl --user show -p Environment``). Catches a drifted-but-not-
     daemon-reloaded host and env injected through paths the file checks
     cannot see. Host-only vars are excluded, not reported.
+* One INVERTED signal, on its own gauge (#1193):
+  - ``missing_grant``: the ADR 0017 account-bound grant is host-only by
+    construction, so every comparison above is structurally BLIND to it —
+    wiping it off the host makes the two sides agree perfectly and the check
+    reports ``converged``. That happened twice (2026-08-25, 2026-08-28), the
+    second time undetected. Only a positive assertion — these names must be
+    PRESENT, in the host config AND in what systemd loaded — can see it.
+    Asserted for the units that DECLARE a requirement in :data:`UNITS`, on
+    PRESENCE not location, so the host can move the grant from the base unit
+    into an untracked drop-in without a window in which this alerts.
+    It carries its OWN gauge and alert deliberately: the drift alert's remedy
+    is "reinstall the tracked files", which is exactly what causes this.
 * Drift is a MEASUREMENT, not a job failure: the run exits 0 whenever the
   check completed, and the gauge carries the count (0 written explicitly per
   unit — an absent series must mean "broken emitter", never "no drift").
@@ -56,22 +68,32 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SYSTEMD_DIR = "deploy/systemd"
 HOST_UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
 
-# The account-bound LIVE grant (ADR 0017) is host-only by design: it must
-# never sit in a public-repo unit file, so its presence on the host is not
-# drift. Applied to BOTH units — neither var means anything to the SIM
-# daemon, so the allowlist cannot hide a SIM-side change.
-HOST_ONLY_VARS = frozenset({"ALPHALENS_SAXO_LIVE_STANDING", "SAXO_LIVE_ACCOUNT_KEY"})
+# The account-bound LIVE grant (ADR 0017). One pair, two roles:
+#   * host-only — it must never sit in a public-repo unit file, so its
+#     presence on the host is not drift. Applied to BOTH units: neither var
+#     means anything to the SIM daemon, so the allowlist cannot hide a
+#     SIM-side change.
+#   * REQUIRED on the LIVE unit (#1193) — without it the daemon cannot
+#     construct a real-money client at its next start.
+# Deliberately ONE constant behind both, so the "never compare these" list and
+# the "these must exist" list cannot drift apart.
+LIVE_GRANT_VARS = frozenset({"ALPHALENS_SAXO_LIVE_STANDING", "SAXO_LIVE_ACCOUNT_KEY"})
+HOST_ONLY_VARS = LIVE_GRANT_VARS
 
-# (unit name, base unit filename). The drop-in directory is <base>.d in both
-# the repo and the host layout.
-UNITS: tuple[tuple[str, str], ...] = (
-    ("alphalens-broker-manager", "alphalens-broker-manager.service"),
-    ("alphalens-broker-manager-live", "alphalens-broker-manager-live.service"),
+# (unit name, base unit filename, host-only vars this unit REQUIRES). The
+# drop-in directory is <base>.d in both the repo and the host layout. The
+# requirement is a third TUPLE FIELD rather than a lookup table keyed by unit
+# name: a parallel table can silently lose an entry on a rename, and a check
+# that can rot to always-green is the one failure this module exists to
+# prevent.
+UNITS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("alphalens-broker-manager", "alphalens-broker-manager.service", frozenset()),
+    ("alphalens-broker-manager-live", "alphalens-broker-manager-live.service", LIVE_GRANT_VARS),
     # The shared price reader (#1172) holds the ONE elevated Saxo session both
     # daemons read. A hand edit here (a different socket path, the session gate
     # flipped) silently changes what every price decision on this host sees, so
     # it belongs under the same detect-never-auto-apply watch as the daemons.
-    ("alphalens-saxo-price-reader", "alphalens-saxo-price-reader.service"),
+    ("alphalens-saxo-price-reader", "alphalens-saxo-price-reader.service", frozenset()),
 )
 
 METRICS_BASENAME = "alphalens_domain_systemd-drift-check.prom"
@@ -231,6 +253,40 @@ def strip_host_only_environment_lines(text: str, host_only: frozenset[str] | set
     return "".join(kept)
 
 
+def is_host_only_grant_dropin(text: str, host_only: frozenset[str] | set[str]) -> bool:
+    """True when this drop-in does NOTHING but assign host-only vars.
+
+    The tolerance for the one untracked file the host is expected to carry
+    (#1193): the operator-local grant drop-in, which a unit-file ``cp``
+    cannot reach and which therefore survives every future deploy. Same rule
+    :func:`strip_host_only_environment_lines` already applies to the base
+    unit, extended to one more place.
+
+    A CONTENT contract, not a basename allowlist — a name-based exception
+    would let any future file called ``99-live-grant.conf`` govern the daemon
+    unseen, which is the ``zz-oco-disable.conf`` lesson (#1136) this module
+    exists to keep. Judging by the assigned VARIABLES alone is the trap that
+    makes the content check necessary: grant-only ``Environment=`` lines PLUS
+    an ``ExecStart=`` override would sail through it. So every non-blank,
+    non-comment line has to be accounted for, and an unreadable payload is
+    refused rather than waved past.
+    """
+    assigned = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";")) or stripped == "[Service]":
+            continue
+        if not stripped.startswith("Environment="):
+            return False
+        if unreadable_reason(stripped[len("Environment=") :]) is not None:
+            return False
+        names = set(environment_assignments(stripped))
+        if not names or not names <= set(host_only):
+            return False
+        assigned = True
+    return assigned
+
+
 # --------------------------------------------------------------------------
 # The pure comparison.
 # --------------------------------------------------------------------------
@@ -264,6 +320,11 @@ def drift_findings(
     findings: list[Finding] = []
 
     for name in sorted(set(host_files) - set(repo_files)):
+        # The one expected untracked file: the operator-local grant drop-in
+        # (#1193). Tolerated by CONTENT — anything it governs beyond the
+        # host-only vars still flags.
+        if is_host_only_grant_dropin(host_files[name], host_only_vars):
+            continue
         findings.append(Finding(unit, "untracked_file", name, "host file the repo does not track"))
     for name in sorted(set(repo_files) - set(host_files)):
         findings.append(Finding(unit, "missing_file", name, "tracked file absent on the host"))
@@ -316,6 +377,58 @@ def drift_findings(
     return findings
 
 
+def grant_findings(
+    unit: str,
+    host_env: dict[str, str],
+    live_env: dict[str, str] | None,
+    required: frozenset[str],
+) -> list[Finding]:
+    """The inverted assertion: the required host-only names must be PRESENT.
+
+    Both sides are judged because they answer different questions. The host
+    configuration predicts the NEXT start; the loaded environment describes
+    the current one. A wipe that has not been ``daemon-reload``ed yet shows
+    up only in the first — and that is the dangerous window, because the
+    running daemon keeps trading on its exec-time environment and nothing
+    looks wrong until it restarts.
+
+    ``live_env=None`` (systemctl rendered a form the narrow parser refuses)
+    silences only the systemd half. The file half must still run: it is the
+    predictive one, and letting an unreadable property suppress it would
+    reintroduce exactly the blindness this function removes.
+
+    An EMPTY value counts as absent. ``Environment=SAXO_LIVE_ACCOUNT_KEY=``
+    sets the name to the empty string, so a presence-by-name test would call
+    that grant healthy while ``_standing_grant_valid`` (which requires present
+    AND non-empty AND equal) refuses at the next start — a false green on the
+    exact question this gauge answers. Emptiness is the most of that rule this
+    can mirror: equality would mean comparing the values, and the values must
+    never be read here.
+
+    Presence, never VALUES: the grant is an opaque account identifier and no
+    finding text may carry it.
+    """
+    findings: list[Finding] = []
+    for var in sorted(required):
+        absent_from: list[str] = []
+        if not host_env.get(var):
+            absent_from.append("the host unit configuration")
+        if live_env is not None and not live_env.get(var):
+            absent_from.append("the systemd-loaded environment")
+        if not absent_from:
+            continue
+        findings.append(
+            Finding(
+                unit,
+                "missing_grant",
+                var,
+                f"absent or empty in {' and '.join(absent_from)} — without the ADR 0017 grant this "
+                "instance refuses to construct a real-money client at its NEXT start",
+            )
+        )
+    return findings
+
+
 def render_metrics(findings_per_unit: dict[str, int]) -> str:
     lines = [
         "# HELP alphalens_systemd_drift_findings Divergences between the repo-declared and host systemd state (0 = converged).",
@@ -323,6 +436,25 @@ def render_metrics(findings_per_unit: dict[str, int]) -> str:
     ]
     for unit, count in sorted(findings_per_unit.items()):
         lines.append(f'alphalens_systemd_drift_findings{{unit="{unit}"}} {count}')
+    return "\n".join(lines) + "\n"
+
+
+def render_grant_metrics(present_per_unit: dict[str, bool]) -> str:
+    """A gauge of its OWN, not a contribution to the drift count (#1193).
+
+    The drift alert tells the operator to reinstall the tracked files, which
+    is precisely what wipes the grant — routing this through it would hand
+    out the remedy that caused the failure. Only units that DECLARE a
+    requirement get a sample: a `1` for the SIM daemon would be meaningless,
+    while an explicit `0` for the LIVE one is the point (an absent series must
+    mean "broken emitter", never "the grant is fine").
+    """
+    lines = [
+        "# HELP alphalens_systemd_live_grant_present The ADR 0017 account-bound grant is present for this unit (1 = present).",
+        "# TYPE alphalens_systemd_live_grant_present gauge",
+    ]
+    for unit, present in sorted(present_per_unit.items()):
+        lines.append(f'alphalens_systemd_live_grant_present{{unit="{unit}"}} {int(present)}')
     return "\n".join(lines) + "\n"
 
 
@@ -377,6 +509,15 @@ def _host_files(base_name: str) -> dict[str, str]:
     return files
 
 
+def _dropin_texts(files: dict[str, str]) -> list[tuple[str, str]]:
+    """The drop-in files systemd would apply, in its lexical order.
+
+    Only ``.conf`` counts: a tracked ``README.md`` is compared as a FILE (so a
+    host copy cannot diverge unseen) but is not configuration.
+    """
+    return sorted((name, text) for name, text in files.items() if name.endswith(".conf"))
+
+
 def _live_environment(unit: str) -> dict[str, str] | None:
     """The systemd-loaded environment, or ``None`` when systemctl renders a
     form (quoting, escapes) the narrow parser would shred into phantom
@@ -409,13 +550,21 @@ def main() -> int:
         return 1
 
     counts: dict[str, int] = {}
+    grant_present: dict[str, bool] = {}
     all_findings: list[Finding] = []
-    for unit, base_name in UNITS:
+    all_grant_findings: list[Finding] = []
+    for unit, base_name, required in UNITS:
         try:
             repo_files = _repo_files(base_name)
             host_files = _host_files(base_name)
-            dropins = sorted((n, t) for n, t in repo_files.items() if n.endswith(".conf"))
-            repo_env = composed_environment(repo_files[base_name], dropins)
+            repo_env = composed_environment(repo_files[base_name], _dropin_texts(repo_files))
+            # `.get`, not `[...]`: a host with no installed unit at all is a
+            # real state (reported as missing_file plus a missing grant), and
+            # a KeyError here is outside the caught pair below — it would kill
+            # the job with a traceback instead of measuring.
+            host_env = composed_environment(
+                host_files.get(base_name, ""), _dropin_texts(host_files)
+            )
             live_env = _live_environment(unit)
         except (subprocess.SubprocessError, OSError) as exc:
             print(f"check_failed unit={unit}: {exc}", file=sys.stderr)
@@ -423,13 +572,19 @@ def main() -> int:
         findings = drift_findings(unit, repo_files, host_files, repo_env, live_env, HOST_ONLY_VARS)
         counts[unit] = len(findings)
         all_findings.extend(findings)
+        if required:
+            missing = grant_findings(unit, host_env, live_env, required)
+            grant_present[unit] = not missing
+            all_grant_findings.extend(missing)
 
     for f in all_findings:
         print(f"DRIFT unit={f.unit} kind={f.kind} subject={f.subject}: {f.detail}")
-    if not all_findings:
-        print(f"converged: {', '.join(u for u, _ in UNITS)} match origin/main")
+    for f in all_grant_findings:
+        print(f"GRANT unit={f.unit} kind={f.kind} subject={f.subject}: {f.detail}")
+    if not all_findings and not all_grant_findings:
+        print(f"converged: {', '.join(u for u, _, _ in UNITS)} match origin/main")
 
-    _write_metrics(render_metrics(counts))
+    _write_metrics(render_metrics(counts) + render_grant_metrics(grant_present))
     return 0
 
 

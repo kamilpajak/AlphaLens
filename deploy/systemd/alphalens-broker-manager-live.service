@@ -25,15 +25,22 @@
 #
 # Install as a user unit:
 #   cp deploy/systemd/alphalens-broker-manager-live.service ~/.config/systemd/user/
-#   # then fill in the two ACCOUNT-BOUND Environment= lines below (see the
-#   # comment above them) — the unit refuses to boot a real LIVE client
-#   # without them.
+#   # then put the two ACCOUNT-BOUND Environment= lines in the operator-local
+#   # drop-in .d/99-live-grant.conf (see the grant section below) — the unit
+#   # refuses to boot a real LIVE client without them.
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now alphalens-broker-manager-live.service
 #
+# Since #1193 that `cp` is SAFE to repeat: the grant lives in the drop-in
+# directory, which copying this file never touches. It used to live in the
+# installed copy of THIS file, so every re-install silently deleted it and the
+# daemon kept trading until its next start, when it would refuse to construct
+# a LIVE client at all. That happened twice (2026-08-25, 2026-08-28).
+#
 # Then, to run what production runs (see that directory's README — it also
 # tells you to delete any UNTRACKED drop-in first, because an unprefixed
-# filename sorts after every numbered one and silently wins):
+# filename sorts after every numbered one and silently wins; 99-live-grant.conf
+# is the ONE documented exception and must be kept):
 #   mkdir -p ~/.config/systemd/user/alphalens-broker-manager-live.service.d
 #   cp deploy/systemd/alphalens-broker-manager-live.service.d/*.conf \
 #      ~/.config/systemd/user/alphalens-broker-manager-live.service.d/
@@ -110,16 +117,25 @@ EnvironmentFile=/etc/alphalens/env
 Environment=ALPHALENS_BROKER_ENVIRONMENT=live
 
 # --- Account-bound standing grant (ADR 0017 §1.3) --------------------------
-# COMMENTED OUT on purpose. Fill in the REAL live account key on the VPS
-# copy of this unit, in BOTH lines below (uncomment + replace the
-# placeholder) — never commit real values to this repo file. These two
-# values are account identifiers, not a bearer credential, but together
-# they are the one resource-bound grant that lets
+# DOCUMENTED HERE, INSTALLED ELSEWHERE. These two lines record the shape of
+# the grant; the real values belong in the operator-local drop-in
+#   ~/.config/systemd/user/alphalens-broker-manager-live.service.d/99-live-grant.conf
+# (mode 0600, deliberately untracked). Never commit real values to this repo
+# file, and never uncomment these lines on the host — a drop-in survives
+# re-installing this unit, an in-unit line does not (#1193).
+#
+# These two values are account identifiers, not a bearer credential, but
+# together they are the one resource-bound grant that lets
 # `create_saxo_broker_live_from_env` construct a non-SIM SaxoClient at all
 # (ADR 0017 §1: `ALPHALENS_SAXO_LIVE_STANDING` must equal the resolved
 # `SAXO_LIVE_ACCOUNT_KEY`, checked IN the constructor). Left unset (as
 # shipped here), the LIVE boot-assert / grant check refuses to construct —
 # the daemon fails loud at startup rather than silently staying SIM-only.
+#
+# The hourly drift check asserts these two NAMES are present in the composed
+# LIVE environment and drops alphalens_systemd_live_grant_present to 0 when
+# they are not. That assertion is inverted on purpose: the grant is host-only,
+# so comparing the host against origin/main can never see it go.
 #Environment=ALPHALENS_SAXO_LIVE_STANDING=<live account key>
 #Environment=SAXO_LIVE_ACCOUNT_KEY=<live account key>
 

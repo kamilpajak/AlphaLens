@@ -40,6 +40,42 @@ exact situation this directory exists to end.
 
     ls ~/.config/systemd/user/alphalens-broker-manager-live.service.d/
     # anything not named NN-*.conf is untracked: remove it
+    # EXCEPTION: keep 99-live-grant.conf (see below) — deleting it stops the
+    # daemon from starting at all
+
+## `99-live-grant.conf` — the one file that is untracked on purpose
+
+The ADR 0017 account-bound grant (`ALPHALENS_SAXO_LIVE_STANDING` and
+`SAXO_LIVE_ACCOUNT_KEY`) lives ONLY on the host, in a drop-in this repository
+does not carry:
+
+    ~/.config/systemd/user/alphalens-broker-manager-live.service.d/99-live-grant.conf
+
+It sits here rather than in the base unit because installing the base unit is
+`cp deploy/systemd/alphalens-broker-manager-live.service ~/.config/systemd/user/`,
+which overwrites whatever was typed into the installed copy. That silently
+deleted the grant twice (2026-08-25 and 2026-08-28). Nothing looked wrong
+either time: the running daemon keeps the environment it started with, so the
+break only lands at the next reboot or restart, when the LIVE client refuses
+to construct and any open position is left without stop management. A `cp` of
+the unit file never touches this directory, so the grant now survives it. The
+`99-` prefix puts it last, after every decision file above.
+
+Create it with mode 0600, holding nothing but the two `Environment=` lines,
+then `systemctl --user daemon-reload`. No restart is needed if the values are
+unchanged.
+
+Two guards depend on it staying that shape:
+
+- the hourly drift check accepts an untracked drop-in only when every line in
+  it assigns one of those two names. Add a third variable, or an
+  `ExecStart=`, and it is reported as `untracked_file` like any other
+  unreadable-from-the-repo file.
+- the same check asserts the two names are PRESENT in the composed LIVE
+  environment and drops `alphalens_systemd_live_grant_present` to 0 otherwise,
+  which pages through `AlphalensLiveGrantMissing`. That assertion runs in the
+  opposite direction from every other one in the check, because a host-only
+  variable cannot be caught by comparing the host with the repository.
 
     mkdir -p ~/.config/systemd/user/alphalens-broker-manager-live.service.d
     cp deploy/systemd/alphalens-broker-manager-live.service.d/*.conf \

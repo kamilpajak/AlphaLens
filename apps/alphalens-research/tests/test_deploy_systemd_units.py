@@ -2129,6 +2129,26 @@ class TestSystemdDriftCheckUnit(unittest.TestCase):
         self.assertIn(f"expr: {metric_name} > 0", rules)
         self.assertIn('job="systemd-drift-check"', rules)
 
+    def test_grant_alert_reads_the_gauge_the_script_writes(self) -> None:
+        # Same cross-file pin for the INVERTED signal (#1193). It carries its
+        # own gauge and its own alert precisely BECAUSE the drift alert's
+        # remedy ("reinstall the tracked files") is what wipes the grant, so
+        # the two must not be allowed to collapse into one.
+        rules = (
+            REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
+        ).read_text()
+        from scripts.check_systemd_drift import render_grant_metrics
+
+        metric_line = render_grant_metrics({"x": False}).splitlines()[-1]
+        metric_name = metric_line.split("{")[0]
+        self.assertIn(f"expr: {metric_name} == 0", rules)
+        self.assertIn("alert: AlphalensLiveGrantMissing", rules)
+        # The `== 0` rule cannot fire on an ABSENT series, and the gauge is
+        # emitted only for units declaring a requirement — so the absent()
+        # companion is what covers the gauge disappearing rather than zeroing.
+        self.assertIn(f"expr: absent({metric_name})", rules)
+        self.assertIn("alert: AlphalensLiveGrantMetricMissing", rules)
+
 
 class TestSimBrokerManagerDropIns(unittest.TestCase):
     def test_composed_sim_environment_is_exactly_the_soak_config(self):
