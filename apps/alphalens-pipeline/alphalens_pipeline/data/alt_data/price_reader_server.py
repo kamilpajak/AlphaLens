@@ -54,6 +54,7 @@ import math
 import os
 import socket
 import socketserver
+import struct
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -103,8 +104,11 @@ _LIVENESS_PROBE_TIMEOUT_S = 0.5
 # both daemons depend on is an allocation nobody bounds.
 _MAX_LINE_BYTES = 64 * 1024
 
-# Write-side ceiling. A local UNIX write completes in microseconds; this only
-# bounds a client that stopped reading. Reads are deliberately unbounded.
+# Write-side ceiling, applied via SO_SNDTIMEO so it bounds sends ONLY. A local
+# UNIX write completes in microseconds; this exists solely to stop a client
+# that quit reading from pinning a handler thread in sendall. Reads stay
+# unbounded on purpose: a client keeps one connection open across ticks and is
+# silent between them, so an idle read is the normal state, not a fault.
 _SEND_TIMEOUT_S = 10.0
 
 
@@ -275,7 +279,23 @@ class _Handler(socketserver.StreamRequestHandler):
         # client that stops READING its replies would otherwise block this
         # handler in sendall forever, pinning the thread and the subscription
         # slice it owns.
-        self.connection.settimeout(_SEND_TIMEOUT_S)
+        #
+        # NOT settimeout(): that bounds EVERY blocking call, reads included, so
+        # it dropped any client quiet for longer than the bound. Measured on
+        # the VPS 2026-08-28 — the SIM daemon showed 103 connect attempts
+        # instead of 1 (one reconnect per ~45 s tick), the journal was a stream
+        # of TimeoutError out of handle()'s readline, and the clients gauge
+        # oscillated 0-2 so it reported nothing usable. SO_SNDTIMEO applies to
+        # sends alone and leaves the socket blocking.
+        #
+        # "ll" is struct timeval (seconds, microseconds) on the 64-bit Linux
+        # and macOS this runs on.
+        seconds, fraction = divmod(_SEND_TIMEOUT_S, 1)
+        self.connection.setsockopt(
+            socket.SOL_SOCKET,
+            socket.SO_SNDTIMEO,
+            struct.pack("ll", int(seconds), int(fraction * 1_000_000)),
+        )
         self._state = self._server.open_connection()
         # Hand the socket to the server so stop() can end this conversation
         # rather than leave a daemon thread answering from a dying cache.

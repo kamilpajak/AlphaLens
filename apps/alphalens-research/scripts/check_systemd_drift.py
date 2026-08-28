@@ -280,6 +280,18 @@ def _repo_files(base_name: str) -> dict[str, str]:
     # parity has to cover non-.conf files too, or a host README could neither
     # flag as untracked nor be content-checked.
     files = {base_name: _run(["git", "show", f"origin/main:{SYSTEMD_DIR}/{base_name}"])}
+    # Not every unit HAS a tracked drop-in directory — the shared price reader
+    # (#1172) has none. Ask the parent listing first rather than letting
+    # `git ls-tree` on a non-existent path exit 128: that raised out of here,
+    # reported check_failed, and exited 1 — which this script reserves for
+    # "could not measure", so it stalled the job's last-success clock and
+    # would page through the staleness pair. Probing the parent also keeps a
+    # GENUINE git failure (unreadable repo) propagating, which catching an
+    # exit code would have blurred. `_host_files` guards the same case with
+    # `is_dir()`; this is the repo half of that symmetry.
+    tracked = _run(["git", "ls-tree", "--name-only", f"origin/main:{SYSTEMD_DIR}"]).split()
+    if f"{base_name}.d" not in tracked:
+        return files
     dropin_dir = f"{SYSTEMD_DIR}/{base_name}.d"
     listing = _run(["git", "ls-tree", "--name-only", f"origin/main:{dropin_dir}"])
     for name in listing.split():
