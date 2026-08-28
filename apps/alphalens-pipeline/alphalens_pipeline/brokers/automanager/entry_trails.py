@@ -92,10 +92,12 @@ ENTRY_WATCH_MAX_PICKS_MIN = 1
 # only code-level bound on LIVE's watch capacity; `live_rails.assert_live_rails`
 # now pins the rail to [1, 2] for LIVE and FAILS ON UNSET, so raising the shared
 # ceiling for the SIM lab cannot widen the LIVE one.
+#
+# The LIVE upper bound is NOT here: it lives with the other LIVE bounds in
+# ``live_rails._ENTRY_WATCH_MAX_PICKS_UPPER``, so an audit of "what bounds LIVE"
+# finds the whole table in one module. Raising the value below does not widen
+# LIVE — that is the point of the pin.
 ENTRY_WATCH_MAX_PICKS_MAX = 25
-ENTRY_WATCH_MAX_PICKS_LIVE_MAX = 2
-"""The LIVE boot-assert upper bound (mirrors the LIVE unit's own pinned value);
-kept beside the shared bound so the two can be read together."""
 
 _entry_trail_bps_warned = False
 """Once-per-process latch for the invalid-flag warning (mirrors

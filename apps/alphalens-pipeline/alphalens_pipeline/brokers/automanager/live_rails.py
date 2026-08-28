@@ -66,7 +66,6 @@ from alphalens_pipeline.brokers.automanager.entry_trails import (
     ENTRY_TRAIL_BPS_ENV,
     ENTRY_TRAIL_BPS_MAX,
     ENTRY_WATCH_MAX_PICKS_ENV,
-    ENTRY_WATCH_MAX_PICKS_LIVE_MAX,
     ENTRY_WATCH_MAX_PICKS_MIN,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import _EXIT_POLICY_ENV
@@ -111,6 +110,12 @@ _DAILY_LOSS_LIMIT_R_UPPER = 2.0
 # future widening is now a reviewed code change rather than a silent host edit.
 _SIZING_EQUITY_UPPER = 15_000.0
 _MAX_FEE_BPS_UPPER = 1_000.0
+# The LIVE ceiling on concurrent entry-trail watches (#1189). Deliberately here
+# and NOT beside the shared runtime bound in `entry_trails`: this module is the
+# one place the LIVE bounds table lives, and a bound kept elsewhere is a bound a
+# future "what limits LIVE?" audit misses. The shared runtime ceiling
+# (ENTRY_WATCH_MAX_PICKS_MAX, 25) exists for the SIM lab and does not gate LIVE.
+_ENTRY_WATCH_MAX_PICKS_UPPER = 2
 
 
 def _missing_or_blank(raw: str | None) -> bool:
@@ -248,7 +253,7 @@ def assert_live_rails() -> None:
             _check_int_bounded(
                 ENTRY_WATCH_MAX_PICKS_ENV,
                 lo=ENTRY_WATCH_MAX_PICKS_MIN,
-                hi=ENTRY_WATCH_MAX_PICKS_LIVE_MAX,
+                hi=_ENTRY_WATCH_MAX_PICKS_UPPER,
             ),
         )
         if v is not None
