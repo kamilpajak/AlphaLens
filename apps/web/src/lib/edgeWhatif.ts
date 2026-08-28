@@ -1,8 +1,10 @@
 /** Client-side registry + derivation for the /edge break-even WHAT-IF sandbox.
  *
  * The Django API serves the what-if lens map keyed by `lens_id` ONLY (the slim
- * image must not import the pipeline registry), so the human labels + the
- * in_sample/validated status live HERE. Keep `WHATIF_LENS_REGISTRY` in sync with
+ * image must not import the pipeline registry), so the human labels, the
+ * in_sample/validated status AND the per-lens scope live HERE — the served
+ * `note` says so, rather than pointing a standalone API consumer at fields the
+ * payload does not carry. Keep `WHATIF_LENS_REGISTRY` in sync with
  * `alphalens_pipeline/feedback/breakeven_lenses.py::BREAKEVEN_LENSES`. An unknown
  * lens_id (a pipeline lens added before this mirror is updated) degrades to a
  * cautious NOT-validated default rather than breaking the UI.
@@ -75,7 +77,7 @@ export function resolveLensMeta(lensId: string): WhatIfLensMeta {
 			category: 'unknown',
 			// Never guess a scope for an unmirrored lens: claiming the wrong one
 			// with confidence is the defect this field exists to prevent (#1160).
-			replaces: 'unknown - this lens is not in the SPA mirror yet'
+			replaces: 'not in the SPA mirror yet - scope unknown'
 		}
 	);
 }
