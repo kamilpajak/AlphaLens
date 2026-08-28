@@ -193,6 +193,20 @@ class PicksCommandOutputTest(unittest.TestCase):
         self.assertIn("PLACED", result.stdout)
         self.assertIn("placed 1", result.stdout)
 
+    def test_an_unknown_status_reaches_both_renderings(self) -> None:
+        # Repo CLI doctrine: the human and JSON renderings carry the SAME facts.
+        # A status this build does not know about is counted in JSON, so the
+        # human summary must name it too rather than iterate a fixed list.
+        _append_raw(
+            _picks_path(self.home),
+            {"ticker": "NEW", "date": "2026-08-27", "status": "quarantined"},
+        )
+        payload = json.loads(_run(self.runner, "--format", "json").stdout)
+        self.assertEqual(payload["counts"]["quarantined"], 1)
+        human = _run(self.runner).stdout
+        self.assertIn("QUARANTINED", human)
+        self.assertIn("quarantined 1", human)
+
     def test_a_row_without_detail_carries_no_trailing_padding(self) -> None:
         # The state column is padded so details line up; a row that has no
         # detail must not ship that padding as trailing whitespace.

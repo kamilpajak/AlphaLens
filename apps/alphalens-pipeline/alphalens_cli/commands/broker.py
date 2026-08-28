@@ -1510,7 +1510,12 @@ def _render_picks_human(result: dict[str, Any]) -> None:
         line = f"{row['ticker']:<{width}}  {row['brief_date']}  {row['state']:<10}{detail}"
         typer.echo(line.rstrip())
     counts = result["counts"]
-    summary = "  ".join(f"{name} {counts[name]}" for name in _PICK_STATES)
+    # Iterate the counts THEMSELVES, not the known-state tuple: a status this
+    # build does not know about is still counted, and the human rendering must
+    # carry the same facts as the JSON (repo CLI doctrine). Known states keep
+    # their fixed order; anything else follows, sorted for stable output.
+    extra = sorted(name for name in counts if name not in _PICK_STATES)
+    summary = "  ".join(f"{name} {counts[name]}" for name in (*_PICK_STATES, *extra))
     typer.echo(f"{summary}  ({sum(counts.values())} picks)")
 
 
