@@ -67,6 +67,11 @@ HOST_ONLY_VARS = frozenset({"ALPHALENS_SAXO_LIVE_STANDING", "SAXO_LIVE_ACCOUNT_K
 UNITS: tuple[tuple[str, str], ...] = (
     ("alphalens-broker-manager", "alphalens-broker-manager.service"),
     ("alphalens-broker-manager-live", "alphalens-broker-manager-live.service"),
+    # The shared price reader (#1172) holds the ONE elevated Saxo session both
+    # daemons read. A hand edit here (a different socket path, the session gate
+    # flipped) silently changes what every price decision on this host sees, so
+    # it belongs under the same detect-never-auto-apply watch as the daemons.
+    ("alphalens-saxo-price-reader", "alphalens-saxo-price-reader.service"),
 )
 
 METRICS_BASENAME = "alphalens_domain_systemd-drift-check.prom"

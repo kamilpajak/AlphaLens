@@ -1012,6 +1012,17 @@ class SaxoPriceStream:
                     # gauge lets the Stale rules drop the asleep state
                     # (`unless ... == 1`) instead of firing all night.
                     f"alphalens_live_price_stream_session_asleep{label}": int(self._session_asleep),
+                    # The demotion signal, and the ONLY gauge that can see it.
+                    # When a second elevated consumer steals the session, Saxo
+                    # keeps sending frames — the reader stays up, the
+                    # subscription stays alive, last_frame keeps advancing —
+                    # and only the PRICES go 15 minutes stale. Every other
+                    # gauge here reads healthy through that, so without this
+                    # one nothing can alert on the exact failure the single
+                    # elevated holder exists to prevent.
+                    f"alphalens_live_price_stream_any_delayed{label}": int(
+                        self.cache.any_delayed()
+                    ),
                 },
             )
         except OSError:

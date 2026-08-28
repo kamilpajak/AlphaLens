@@ -2148,6 +2148,12 @@ class TestSimBrokerManagerDropIns(unittest.TestCase):
                 "ALPHALENS_BROKER_SIZING_EQUITY_MODE": "declared",
                 "ALPHALENS_BROKER_STREAMING_ENABLED": "1",
                 "ALPHALENS_BROKER_EXIT_POLICY": "breakeven_trail",
+                # #1172: read the shared reader's single elevated session. Both
+                # lines are load-bearing together — the socket does nothing
+                # while LIVE_PRICES is off, and the flag alone would open a
+                # competing stream and demote both daemons.
+                "ALPHALENS_SAXO_PRICE_READER_SOCKET": ("%h/.alphalens/price_reader/reader.sock"),
+                "ALPHALENS_SAXO_LIVE_PRICES": "1",
             },
         )
 
@@ -2176,6 +2182,103 @@ class TestSimBrokerManagerDropIns(unittest.TestCase):
         for path in _sim_dropin_files():
             with self.subTest(file=path.name):
                 self.assertRegex(path.name, r"^\d\d-")
+
+
+class TestSharedPriceReaderUnit(unittest.TestCase):
+    """#1172: the unit that holds the ONE elevated Saxo session both daemons
+    read. Its shape is what makes 'one holder' true in practice."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.path = SYSTEMD_DIR / "alphalens-saxo-price-reader.service"
+        cls.text = cls.path.read_text()
+
+    def test_the_unit_exists_and_runs_the_reader_command(self) -> None:
+        self.assertTrue(self.path.exists())
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/alphalens broker price-reader\s*$",
+                re.MULTILINE,
+            ),
+        )
+
+    def test_it_is_a_long_running_service_that_restarts(self) -> None:
+        self.assertRegex(self.text, re.compile(r"^Type=simple\s*$", re.MULTILINE))
+        self.assertRegex(self.text, re.compile(r"^Restart=on-failure\s*$", re.MULTILINE))
+
+    def test_shutdown_gets_room_to_release_the_venue_session(self) -> None:
+        """SIGTERM unlinks the socket and DELETEs the price subscription. Being
+        SIGKILLed mid-teardown would leave both behind, which is the state the
+        reader refuses to start into."""
+        self.assertRegex(self.text, re.compile(r"^KillSignal=SIGTERM\s*$", re.MULTILINE))
+        self.assertRegex(self.text, re.compile(r"^TimeoutStopSec=\d+\s*$", re.MULTILINE))
+
+    def test_the_session_gate_is_on(self) -> None:
+        """Outside market hours no frames flow; a 24/7 socket just churns
+        reconnect plus subscription-recreate all night."""
+        self.assertRegex(
+            self.text,
+            re.compile(r"^Environment=ALPHALENS_SAXO_STREAM_SESSION_GATE=1\s*$", re.MULTILINE),
+        )
+
+    def test_gauges_land_on_the_scraped_textfile_dir(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"^Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile\s*$",
+                re.MULTILINE,
+            ),
+        )
+
+    def test_it_loads_the_shared_env_fail_loud(self) -> None:
+        self.assertRegex(
+            self.text, re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE)
+        )
+
+    def test_the_drift_check_watches_it(self) -> None:
+        """A hand edit here silently changes what every price decision on this
+        host sees, so it belongs under the same watch as the daemons."""
+        script = REPO_ROOT / "apps" / "alphalens-research" / "scripts" / "check_systemd_drift.py"
+        self.assertIn("alphalens-saxo-price-reader.service", script.read_text())
+
+
+class TestBothDaemonsPointAtTheReader(unittest.TestCase):
+    def test_each_daemon_has_a_price_reader_drop_in_with_the_same_socket(self) -> None:
+        """Different files, ONE path: a mismatch would leave one daemon talking
+        to a socket nobody serves, and the reader itself would look healthy."""
+        sim = (_SIM_DROPIN_DIR / "42-price-reader.conf").read_text()
+        live = (_LIVE_DROPIN_DIR / "51-price-reader.conf").read_text()
+        socket_line = (
+            "Environment=ALPHALENS_SAXO_PRICE_READER_SOCKET=%h/.alphalens/price_reader/reader.sock"
+        )
+        self.assertIn(socket_line, sim)
+        self.assertIn(socket_line, live)
+
+    def test_the_sim_drop_in_also_turns_live_prices_back_on(self) -> None:
+        """The pair is the point: SIM's prices were turned OFF precisely
+        because it could not share the elevated session. The socket alone
+        would leave the master switch off and change nothing."""
+        sim = (_SIM_DROPIN_DIR / "42-price-reader.conf").read_text()
+        self.assertIn("Environment=ALPHALENS_SAXO_LIVE_PRICES=1", sim)
+
+    def test_the_live_master_switch_stays_in_the_unit(self) -> None:
+        """The risk-bearing instance does not delegate its master switch to a
+        drop-in; 51-price-reader.conf only redirects WHERE prices come from."""
+        live = (_LIVE_DROPIN_DIR / "51-price-reader.conf").read_text()
+        # Assert on what the drop-in SETS, not on what it mentions: the file
+        # explains the rule in prose, and matching the raw text would fail on
+        # its own comment.
+        set_vars = {
+            line.split("=", 2)[1]
+            for line in live.splitlines()
+            if line.strip().startswith("Environment=")
+        }
+        self.assertNotIn("ALPHALENS_SAXO_LIVE_PRICES", set_vars)
+        self.assertRegex(
+            LIVE_BROKER_MANAGER_SERVICE.read_text(),
+            re.compile(r"^Environment=ALPHALENS_SAXO_LIVE_PRICES=1\s*$", re.MULTILINE),
+        )
 
 
 if __name__ == "__main__":
