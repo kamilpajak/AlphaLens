@@ -59,6 +59,35 @@ class TestComposedEnvironment(unittest.TestCase):
         self.assertEqual(composed["ALPHALENS_BROKER_ENVIRONMENT"], "sim")
 
 
+class TestSpecifierExpansion(unittest.TestCase):
+    """``Environment=`` values may carry systemd specifiers — #1172 introduced
+    the first one, ``%h`` in the price-reader socket path.
+
+    systemd reports the EXPANDED value through ``show -p Environment``, so a
+    raw text comparison reported permanent ``env_drift`` on a host that was in
+    fact converged. That is not a cosmetic miss: the gauge feeds
+    ``alphalens_systemd_drift_findings > 0``, so it alerted on every
+    evaluation, and an alert that is always on is an alert nobody reads.
+    """
+
+    def test_percent_h_expands_to_the_running_users_home(self):
+        composed = drift.composed_environment(
+            "[Service]\nEnvironment=SOCK=%h/.alphalens/price_reader/reader.sock\n", []
+        )
+        self.assertEqual(composed["SOCK"], f"{Path.home()}/.alphalens/price_reader/reader.sock")
+
+    def test_double_percent_is_a_literal_percent(self):
+        composed = drift.composed_environment("[Service]\nEnvironment=A=100%%\n", [])
+        self.assertEqual(composed["A"], "100%")
+
+    def test_an_unknown_specifier_is_refused_rather_than_compared(self):
+        """Refusal, not best effort — the module's existing contract. An
+        unexpanded specifier compared as literal text is exactly the silent
+        wrong answer this check exists to prevent."""
+        self.assertIsNotNone(drift.unreadable_reason("RUNTIME=%t/run"))
+        self.assertIsNone(drift.unreadable_reason("SOCK=%h/run"))
+
+
 class TestStripHostOnlyLines(unittest.TestCase):
     def test_drops_lines_assigning_only_allowlisted_vars(self):
         text = (

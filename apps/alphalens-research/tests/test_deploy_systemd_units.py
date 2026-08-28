@@ -2156,7 +2156,14 @@ class TestSimBrokerManagerDropIns(unittest.TestCase):
                 # lines are load-bearing together — the socket does nothing
                 # while LIVE_PRICES is off, and the flag alone would open a
                 # competing stream and demote both daemons.
-                "ALPHALENS_SAXO_PRICE_READER_SOCKET": ("%h/.alphalens/price_reader/reader.sock"),
+                # EXPANDED, not the literal `%h`: this dict is supposed to equal
+                # what `systemctl show -p Environment` reports, and systemd
+                # expands specifiers before reporting them. Pinning the literal
+                # here mirrored the drift check's own blind spot, which is what
+                # made it report permanent env_drift on a converged host.
+                "ALPHALENS_SAXO_PRICE_READER_SOCKET": (
+                    f"{Path.home()}/.alphalens/price_reader/reader.sock"
+                ),
                 "ALPHALENS_SAXO_LIVE_PRICES": "1",
             },
         )

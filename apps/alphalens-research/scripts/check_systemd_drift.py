@@ -110,8 +110,61 @@ def environment_assignments(text: str) -> dict[str, str]:
             continue
         for assignment in stripped[len("Environment=") :].split():
             key, _, value = assignment.partition("=")
-            values[key.strip()] = value.strip()
+            values[key.strip()] = expand_specifiers(value.strip())
     return values
+
+
+# systemd specifiers this comparison understands. `%h` is the invoking user's
+# home; `%%` is a literal percent. Both sides of the comparison must mean the
+# same string, and `systemctl show -p Environment` reports the EXPANDED value,
+# so the repo side has to expand too — #1172 put `%h` into an Environment=
+# value for the first time and the raw comparison reported permanent drift on
+# a converged host.
+#
+# Deliberately a SHORT list rather than a general expander: every other
+# specifier is refused (below) instead of guessed, matching this module's
+# refuse-rather-than-misread contract. `%h` resolves from the running user, so
+# the check is only meaningful run AS the unit's user — already true, since it
+# reads that user's ~/.config/systemd/user.
+_SUPPORTED_SPECIFIERS = {"h": lambda: str(Path.home())}
+
+
+def expand_specifiers(value: str) -> str:
+    """Expand the systemd specifiers this module supports; leave the rest.
+
+    An unsupported specifier is NOT expanded here — it is reported by
+    :func:`unreadable_reason`, so it surfaces as "cannot measure" rather than
+    as a wrong comparison."""
+    out: list[str] = []
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char != "%" or index + 1 >= len(value):
+            out.append(char)
+            index += 1
+            continue
+        specifier = value[index + 1]
+        if specifier == "%":
+            out.append("%")
+        elif specifier in _SUPPORTED_SPECIFIERS:
+            out.append(_SUPPORTED_SPECIFIERS[specifier]())
+        else:
+            out.append(char + specifier)  # left for unreadable_reason to refuse
+        index += 2
+    return "".join(out)
+
+
+def _unsupported_specifier(assignments: str) -> str | None:
+    index = 0
+    while index < len(assignments) - 1:
+        if assignments[index] == "%":
+            specifier = assignments[index + 1]
+            if specifier != "%" and specifier not in _SUPPORTED_SPECIFIERS:
+                return f"%{specifier}"
+            index += 2
+            continue
+        index += 1
+    return None
 
 
 def unreadable_reason(assignments: str) -> str | None:
@@ -128,6 +181,9 @@ def unreadable_reason(assignments: str) -> str | None:
     """
     if "\\" in assignments:
         return "backslash: continuation and C-style escapes are not parsed"
+    unsupported = _unsupported_specifier(assignments)
+    if unsupported is not None:
+        return f"{unsupported} specifier is not expanded — comparing it as text would be wrong"
     if '"' in assignments or "'" in assignments:
         return "quoted value is not parsed"
     tokens = assignments.split()
