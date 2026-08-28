@@ -59,6 +59,64 @@ class TestComposedEnvironment(unittest.TestCase):
         self.assertEqual(composed["ALPHALENS_BROKER_ENVIRONMENT"], "sim")
 
 
+class TestSpecifierExpansion(unittest.TestCase):
+    """``Environment=`` values may carry systemd specifiers — #1172 introduced
+    the first one, ``%h`` in the price-reader socket path.
+
+    systemd reports the EXPANDED value through ``show -p Environment``, so a
+    raw text comparison reported permanent ``env_drift`` on a host that was in
+    fact converged. That is not a cosmetic miss: the gauge feeds
+    ``alphalens_systemd_drift_findings > 0``, so it alerted on every
+    evaluation, and an alert that is always on is an alert nobody reads.
+    """
+
+    def test_percent_h_expands_to_the_running_users_home(self):
+        composed = drift.composed_environment(
+            "[Service]\nEnvironment=SOCK=%h/.alphalens/price_reader/reader.sock\n", []
+        )
+        self.assertEqual(composed["SOCK"], f"{Path.home()}/.alphalens/price_reader/reader.sock")
+
+    def test_double_percent_is_a_literal_percent(self):
+        composed = drift.composed_environment("[Service]\nEnvironment=A=100%%\n", [])
+        self.assertEqual(composed["A"], "100%")
+
+    def test_an_unsupported_specifier_in_the_REPO_blob_is_refused_too(self):
+        """The refusal must not depend on the host happening to carry the same
+        bytes.
+
+        Only the host text used to be checked for unreadable forms. A repo
+        blob introducing, say, `%t` would then be left unexpanded and compared
+        as literal text against systemd's expanded value — a confidently wrong
+        answer, which is worse than the loud false positive this PR removes.
+        """
+        # DIVERGENT on purpose. With identical texts the host-side check
+        # already catches it, so that case cannot fail for the reason claimed
+        # here. Only a repo blob the host does not carry exercises the gap.
+        findings = drift.drift_findings(
+            "alphalens-broker-manager",
+            repo_files={
+                "alphalens-broker-manager.service": "[Service]\nEnvironment=RUNTIME=%t/run\n"
+            },
+            host_files={
+                "alphalens-broker-manager.service": "[Service]\nEnvironment=RUNTIME=/run/user/1000/run\n"
+            },
+            repo_env={},
+            live_env={},
+            host_only_vars=frozenset(),
+        )
+        self.assertTrue(
+            any(f.kind == "unreadable_file" for f in findings),
+            f"an unsupported specifier must surface as unreadable_file; got {findings}",
+        )
+
+    def test_an_unknown_specifier_is_refused_rather_than_compared(self):
+        """Refusal, not best effort — the module's existing contract. An
+        unexpanded specifier compared as literal text is exactly the silent
+        wrong answer this check exists to prevent."""
+        self.assertIsNotNone(drift.unreadable_reason("RUNTIME=%t/run"))
+        self.assertIsNone(drift.unreadable_reason("SOCK=%h/run"))
+
+
 class TestStripHostOnlyLines(unittest.TestCase):
     def test_drops_lines_assigning_only_allowlisted_vars(self):
         text = (
