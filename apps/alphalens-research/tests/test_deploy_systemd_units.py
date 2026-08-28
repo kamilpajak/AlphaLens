@@ -2143,6 +2143,11 @@ class TestSystemdDriftCheckUnit(unittest.TestCase):
         metric_name = metric_line.split("{")[0]
         self.assertIn(f"expr: {metric_name} == 0", rules)
         self.assertIn("alert: AlphalensLiveGrantMissing", rules)
+        # The `== 0` rule cannot fire on an ABSENT series, and the gauge is
+        # emitted only for units declaring a requirement — so the absent()
+        # companion is what covers the gauge disappearing rather than zeroing.
+        self.assertIn(f"expr: absent({metric_name})", rules)
+        self.assertIn("alert: AlphalensLiveGrantMetricMissing", rules)
 
 
 class TestSimBrokerManagerDropIns(unittest.TestCase):

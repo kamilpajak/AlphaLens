@@ -500,6 +500,29 @@ groups:
           summary: "{{ $labels.unit }} has lost the ADR 0017 account-bound grant"
           description: "ALPHALENS_SAXO_LIVE_STANDING and/or SAXO_LIVE_ACCOUNT_KEY are absent from the installed {{ $labels.unit }} configuration. The running daemon is NOT affected — it keeps the environment it started with — but the next start (reboot, crash restart, `systemctl --user restart`) will refuse to construct a real-money client, leaving any open position without stop management. Do NOT reinstall the tracked unit file: that is what removes the grant. Restore the operator-local drop-in `~/.config/systemd/user/alphalens-broker-manager-live.service.d/99-live-grant.conf` (see deploy/systemd/README.md section 9.1), then `systemctl --user daemon-reload`. Read `journalctl --user -u alphalens-systemd-drift-check.service` for the GRANT lines naming which variable is gone."
 
+      # The `== 0` rule above cannot fire if the SERIES disappears, and the
+      # grant gauge is emitted only for units that declare a requirement — so
+      # dropping that requirement removes the series rather than zeroing it,
+      # and the alert silently stops being able to fire. CI pins the
+      # requirement table, this is the runtime half of the same guard.
+      #
+      # `for: 2h` rather than the 5m used by the job-metric rules beside it:
+      # those watch a series that already exists, this one can legitimately be
+      # absent until the hourly check runs for the first time after a deploy.
+      # Firing before the emitter exists is the ADR 0016 D5 precedent (README
+      # section 9) — an absent-rule that pages on rules-reload teaches the
+      # operator to ignore it. 2h is one missed run plus slack.
+      - alert: AlphalensLiveGrantMetricMissing
+        expr: absent(alphalens_systemd_live_grant_present)
+        for: 2h
+        labels:
+          severity: warning
+          route: telegram
+          unit: systemd-drift-check
+        annotations:
+          summary: "the LIVE grant gauge is not being emitted at all"
+          description: "alphalens_systemd_live_grant_present has no series, so AlphalensLiveGrantMissing cannot fire and the ADR 0017 grant is unmonitored. The drift check may still be running and reporting success — this is the blind spot where the gauge stops being produced rather than reading 0. Check that the LIVE unit still declares its required host-only vars in UNITS (apps/alphalens-research/scripts/check_systemd_drift.py) and that the run is writing to ALPHALENS_TEXTFILE_DIR."
+
       - alert: AlphalensJobStale
         expr: time() - alphalens_job_last_success_timestamp_seconds{job="systemd-drift-check"} > 7200
         for: 5m
