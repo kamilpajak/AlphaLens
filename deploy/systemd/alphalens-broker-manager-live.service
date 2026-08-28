@@ -150,24 +150,49 @@ Environment=ALPHALENS_BROKER_SIZING_EQUITY=10000
 # cash floor + gross cap guard it. Required by the boot-assert — a template
 # missing this pin cannot boot (matches the deployed LIVE unit).
 Environment=ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared
-Environment=ALPHALENS_BROKER_EXIT_POLICY=trailing_atr
+# breakeven_trail since 2026-08-28 (owner confirmation; the LIVE flip that
+# breakeven_trail_live_policy_design_2026_08_27.md §5 reserved for a separate
+# PR). SIM has run it since 2026-08-27, so both instances now share one exit
+# policy and a SIM observation carries over to LIVE.
+#
+# This is NOT just a different trailing formula. trailing_atr wraps the
+# atr_bracket_1p5 GEOMETRY, so the rail placed one volatility-derived target;
+# breakeven_trail sets applies_geometry=False, so the brief's own multi-tranche
+# TP ladder and the brief disaster stop are what get placed, and the policy
+# only manages the stop (arms at +0.5R, then trails at 0.6 of the run-up).
+# The change therefore alters WHAT is placed on LIVE, not only how it moves.
+#
+# ROLLBACK: put trailing_atr back here, `systemctl --user daemon-reload`,
+# restart OUTSIDE XNYS hours (13:30-20:00 UTC) — a restart resets the
+# in-memory peak, so arming can go dark until price re-crosses the threshold.
+# The journal-folded trailed floor means the placed stop never loosens.
+Environment=ALPHALENS_BROKER_EXIT_POLICY=breakeven_trail
 Environment=ALPHALENS_BROKER_MAX_FEE_BPS=100
 # 8th pin (entry-trailing memo §6): trail distance in bps, 0 = feature OFF
 # (limit-at-touch entries). Bound [0, 150]; widen only per memo. Production
-# runs 50 via .d/40-entry-trail.conf. Note this pin also selects which arm
-# gates run: at 0, with the geometry exit policy active, the daemon REFUSES
-# to arm new entries and alerts rather than taking the classic bracket path,
-# which carries neither #1112 gate.
+# runs 50 via .d/40-entry-trail.conf.
+# This pin also selects which arm gates run, and the exit-policy flip above
+# changed that interaction: the refusal in `_geometry_without_entry_trail_note`
+# fires only when the exit policy APPLIES GEOMETRY. Under breakeven_trail it
+# does not, so at 0 the daemon now falls through to the classic bracket path
+# WITHOUT refusing. That is the documented-safe case, not a regression: the
+# placed exit is the brief's own ladder, so the #1112 defect (an entry filling
+# inside a geometry-priced exit region) has nothing to price against. It would
+# become live again if this unit is ever put back on trailing_atr.
 Environment=ALPHALENS_BROKER_ENTRY_TRAIL_BPS=0
 
 # --- Streaming + price-feed topology (design memo §6) -----------------------
 # Order-WS early-wake stays OFF for the soak — it needs its own LIVE
 # re-validation before it is wired to real-money placement.
 Environment=ALPHALENS_BROKER_STREAMING_ENABLED=0
-# The LIVE daemon is the SOLE elevated (FullTradingAndChat) holder for the
-# duration of the soak — a second elevated consumer on the same Saxo login
-# ping-pong-demotes both to 15min-delayed prices, silently. The SIM
-# instance sets this to 0 for the soak (design memo §6).
+# Saxo grants ONE elevated (FullTradingAndChat) session per login — a second
+# elevated consumer silently demotes both sides to 15min-delayed prices.
+# Since #1172 the sole holder is alphalens-saxo-price-reader.service, and BOTH
+# daemons read its quotes over a UNIX socket (.d/51-price-reader.conf here,
+# .d/42-price-reader.conf on SIM). This pin stays the master switch for
+# whether this instance uses live prices at all; it no longer means "this
+# daemon owns the session". The old rule that SIM had to set it to 0 is
+# obsolete — that is exactly what kept the SIM soak dark for weeks.
 Environment=ALPHALENS_SAXO_LIVE_PRICES=1
 # Live-market exits engine (execution model 2026-08-05): the broker holds
 # ONLY the disaster stop, so TP tranches fire as live-market sells off the

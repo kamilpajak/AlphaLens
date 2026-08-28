@@ -89,6 +89,20 @@ owner confirmation. The registry keeps `setup_static` / `atr_bracket_1p5` / `tra
 selectable — switching policies remains a config change, per the owner's directive to keep
 the codebase able to choose.
 
+**LIVE flip done 2026-08-28** (owner confirmation), pinning
+`ALPHALENS_BROKER_EXIT_POLICY=breakeven_trail` in
+`deploy/systemd/alphalens-broker-manager-live.service`. Both instances now run one policy.
+
+What the SIM soak had actually shown at that moment, stated plainly because the flip did not
+wait for the rest: the brief ladder in `tranche_plan` was confirmed — for `SAIC:2026-08-26`
+the journaled targets `180.91514536839634` / `211.0057292791067` are identical to the
+brief's own `brief_trade_setup.tp_tranches`. The other three observations were NOT yet
+available: the SIM journal held ten `tranche_plan` lines but **zero** `tranche_fired` and no
+`trailed` markers, so "tranche fires preserving the trailed floor" and the §3.5 `avg_price`
+drift check remain unobserved on either instance. The `avg_price` exposure is not new — it
+existed identically under `trailing_atr` (§3.5) — but it is now carried on LIVE under a
+policy whose tranche-fire interaction has never been seen in a journal.
+
 ## 6. Measurement stance
 
 No new pre-registration is created here. The `be_0p5r_trail0p6` lens keeps accruing as
