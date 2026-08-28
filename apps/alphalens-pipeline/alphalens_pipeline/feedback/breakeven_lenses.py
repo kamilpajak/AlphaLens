@@ -1,10 +1,16 @@
-"""Registry of exit-stop WHAT-IF lenses + grid replay.
+"""Registry of WHAT-IF exit lenses + grid replay.
 
-Each lens is an alternative EXIT-STOP policy re-applied to the SAME picks and the
-SAME retained price paths — entry tiers, TP ladder, and the pick held fixed, so a
-difference in realized R is the exit-stop effect, not the selection. The result is
-a display-only counterfactual map ``{lens_id: realized_r}`` stamped exactly like
+Each lens is an alternative EXIT POLICY re-applied to the SAME picks and the SAME
+retained price paths — the pick and the bars are held fixed, so a difference in
+realized R is the exit effect, not the selection. The result is a display-only
+counterfactual map ``{lens_id: realized_r}`` stamped exactly like
 ``grid_realized_r_json``; it NEVER overrides the headline ``realized_r``.
+
+Lenses differ in SCOPE and must not be described collectively as "exit-stop"
+policies (#1160): a ``breakeven`` lens moves only the stop; ``fill_anchored`` also
+collapses the entry ladder to one tier; ``atr_bracket`` discards the brief TP
+ladder for a single 100% target. Each entry states its own scope in ``category``
+and ``replaces``, and the ``/edge`` panel renders those per lens.
 
 Three lens KINDS today (dispatched by ``BreakevenLens.kind``):
 
@@ -36,7 +42,7 @@ gate, then ``"validated"`` — a flag flip, not a code change. The design doctri
 NAMING NOTE: the historical module / ``BREAKEVEN_LENSES`` / ``breakeven_grid`` /
 ``breakeven_realized_r_json`` names predate the second (fill-anchored) kind and are
 kept to avoid a data migration on the live stamped column. Read them as the general
-"exit-stop what-if" registry.
+"exit what-if" registry — not as a claim that every lens only moves the stop.
 """
 
 from __future__ import annotations
@@ -63,7 +69,16 @@ _DEFAULT_BRACKET_TP_FLOOR_FRAC = 0.006
 
 @dataclass(frozen=True)
 class BreakevenLens:
-    """One registered exit-stop what-if policy.
+    """One registered what-if exit policy.
+
+    ``category`` and ``replaces`` are the SCOPE fields, and they are per-lens on
+    purpose (#1160). Until 2026-08-28 every lens declared ``category="exit-stop"``
+    and the ``/edge`` panel rendered one blanket "alternative exit-stop" label
+    over all of them, which is false for three of the five: ``fill_anchored``
+    also collapses the entry ladder, and both ``atr_bracket`` lenses discard the
+    brief TP ladder outright. A reader took the label at face value, as they
+    should. ``category`` is the short token the chip can hold; ``replaces`` is
+    the one-line sentence the panel shows for the SELECTED lens.
 
     ``status`` ∈ {``"in_sample"``, ``"validated"``}: a lens read from the same
     sample it was tuned on is ``in_sample`` (optimistic, not proof); it graduates
@@ -85,6 +100,7 @@ class BreakevenLens:
     lens_id: str
     label: str
     category: str
+    replaces: str
     status: str
     kind: str = "breakeven"
     mfe_trigger_r: float | None = None  # breakeven-kind replay param
@@ -109,12 +125,18 @@ MAX_REGISTERED_LENSES = 5
 
 # Adding another lens is a single entry here — the JSON-map column and the
 # registry-driven selector absorb it with no schema or UI change. All current
-# lenses are exit-stop counterfactuals, display-only, in_sample.
+# lenses are display-only and in_sample; they differ in SCOPE (see `category` /
+# `replaces` on each entry), so do not describe them collectively as exit-stop
+# policies — that blanket claim was #1160.
 BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     BreakevenLens(
         lens_id="be_0p5r",
         label="break-even +0.5R",
-        category="exit-stop",
+        category="stop only",
+        replaces=(
+            "the stop only - the brief TP ladder and entry tiers are kept; "
+            "once +0.5R is reached the stop ratchets up to break-even"
+        ),
         status="in_sample",
         kind="breakeven",
         mfe_trigger_r=0.5,
@@ -123,7 +145,11 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     BreakevenLens(
         lens_id="fill_anchored_0p5atr",
         label="fill-anchored stop (0.5·ATR)",
-        category="exit-stop",
+        category="stop + entry",
+        replaces=(
+            "the stop AND the entry ladder - entries collapse to a single 100% tier at E1 "
+            "and the stop sits 0.5xATR below that fill; the brief TP ladder is kept"
+        ),
         status="in_sample",
         kind="fill_anchored",
         stop_atr_mult=0.5,
@@ -138,7 +164,11 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     BreakevenLens(
         lens_id="be_0p5r_trail0p6",
         label="break-even +0.5R · trail 0.6",
-        category="exit-stop",
+        category="stop only",
+        replaces=(
+            "the stop only - the brief TP ladder and entry tiers are kept; "
+            "past +0.5R the stop trails at 0.6 of the peak gain instead of sitting at break-even"
+        ),
         status="in_sample",
         kind="breakeven",
         mfe_trigger_r=0.5,
@@ -157,7 +187,13 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     BreakevenLens(
         lens_id="atr_bracket_1p5",
         label="ATR bracket 1.5 (bezpazery) · realised-fill anchor",
-        category="exit-stop",
+        category="whole exit",
+        replaces=(
+            "the WHOLE exit - the brief TP tranches are discarded for a single 100% target at "
+            "anchor +1.5xATR (floor +0.6%, capped at the 52-week high), with a static stop at "
+            "anchor -1.5xATR (no ratchet, no trail); entry tiers are kept and the anchor is the "
+            "realised fill blend"
+        ),
         status="in_sample",
         kind="atr_bracket",
         stop_atr_mult=1.5,
@@ -183,7 +219,13 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     BreakevenLens(
         lens_id="atr_bracket_1p5_planned",
         label="ATR bracket 1.5 (bezpazery) · planned-blend anchor",
-        category="exit-stop",
+        category="whole exit",
+        replaces=(
+            "the WHOLE exit - the brief TP tranches are discarded for a single 100% target at "
+            "anchor +1.5xATR (floor +0.6%, capped at the 52-week high), with a static stop at "
+            "anchor -1.5xATR (no ratchet, no trail); entry tiers are kept and the anchor is the "
+            "planned blend over ALL intended tiers, which is what the live rail places against"
+        ),
         status="in_sample",
         kind="atr_bracket",
         stop_atr_mult=1.5,
@@ -259,10 +301,11 @@ def breakeven_grid(
     *,
     pct_off_52w_high: float | None = None,
 ) -> dict[str, float | None]:
-    """Realized R under each registered exit-stop lens, keyed by ``lens_id``.
+    """Realized R under each registered exit lens, keyed by ``lens_id``.
 
-    Re-replays the SAME bars under each lens's exit-stop policy (break-even,
-    fill-anchored, or ATR bracket), reusing the pure replay engine. A lens that
+    Re-replays the SAME bars under each lens's exit policy (break-even,
+    fill-anchored, or ATR bracket), reusing the pure replay engine. The three
+    kinds replace different amounts of the plan — see each lens's ``replaces``. A lens that
     cannot resolve (unparseable setup / no bars / no fill / risk <= 0 / missing
     ATR for an ATR-parametrized lens / non-constructible bracket) maps to
     ``None``. ``pct_off_52w_high`` is the brief row's

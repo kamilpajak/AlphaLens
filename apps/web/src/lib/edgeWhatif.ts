@@ -14,31 +14,53 @@ export type WhatIfStatus = 'in_sample' | 'validated';
 export interface WhatIfLensMeta {
 	label: string;
 	status: WhatIfStatus;
+	/** Short scope token for the chip — how much of the plan this lens replaces. */
 	category: string;
+	/** One-line scope sentence for the SELECTED lens (#1160). Per-lens on purpose:
+	 *  the panel used to state one blanket "alternative exit-stop" over all of
+	 *  them, which is false for the fill-anchored and both bracket lenses. */
+	replaces: string;
 }
 
-/** Mirror of the pipeline BREAKEVEN_LENSES registry (labels + status only). */
+/** Mirror of the pipeline BREAKEVEN_LENSES registry (label + status + scope).
+ *  Entries MUST stay FLAT object literals — the cross-language parity guard
+ *  (`test_spa_registry_mirrors_pipeline_lenses`) matches `id: { ... }` up to the
+ *  first closing brace, so a nested value silently breaks it. */
 export const WHATIF_LENS_REGISTRY: Record<string, WhatIfLensMeta> = {
-	be_0p5r: { label: 'break-even +0.5R', status: 'in_sample', category: 'exit-stop' },
+	be_0p5r: {
+		label: 'break-even +0.5R',
+		status: 'in_sample',
+		category: 'stop only',
+		replaces:
+			'the stop only - the brief TP ladder and entry tiers are kept; once +0.5R is reached the stop ratchets up to break-even'
+	},
 	fill_anchored_0p5atr: {
 		label: 'fill-anchored stop (0.5·ATR)',
 		status: 'in_sample',
-		category: 'exit-stop'
+		category: 'stop + entry',
+		replaces:
+			'the stop AND the entry ladder - entries collapse to a single 100% tier at E1 and the stop sits 0.5xATR below that fill; the brief TP ladder is kept'
 	},
 	be_0p5r_trail0p6: {
 		label: 'break-even +0.5R · trail 0.6',
 		status: 'in_sample',
-		category: 'exit-stop'
+		category: 'stop only',
+		replaces:
+			'the stop only - the brief TP ladder and entry tiers are kept; past +0.5R the stop trails at 0.6 of the peak gain instead of sitting at break-even'
 	},
 	atr_bracket_1p5: {
 		label: 'ATR bracket 1.5 (bezpazery) · realised-fill anchor',
 		status: 'in_sample',
-		category: 'exit-stop'
+		category: 'whole exit',
+		replaces:
+			'the WHOLE exit - the brief TP tranches are discarded for a single 100% target at anchor +1.5xATR (floor +0.6%, capped at the 52-week high), with a static stop at anchor -1.5xATR (no ratchet, no trail); entry tiers are kept and the anchor is the realised fill blend'
 	},
 	atr_bracket_1p5_planned: {
 		label: 'ATR bracket 1.5 (bezpazery) · planned-blend anchor',
 		status: 'in_sample',
-		category: 'exit-stop'
+		category: 'whole exit',
+		replaces:
+			'the WHOLE exit - the brief TP tranches are discarded for a single 100% target at anchor +1.5xATR (floor +0.6%, capped at the 52-week high), with a static stop at anchor -1.5xATR (no ratchet, no trail); entry tiers are kept and the anchor is the planned blend over ALL intended tiers, which is what the live rail places against'
 	}
 };
 
@@ -46,7 +68,16 @@ export const WHATIF_LENS_REGISTRY: Record<string, WhatIfLensMeta> = {
  *  the raw id as the label + a cautious `in_sample` status (never `validated`),
  *  so a pipeline lens added ahead of this mirror still renders, clearly unvalidated. */
 export function resolveLensMeta(lensId: string): WhatIfLensMeta {
-	return WHATIF_LENS_REGISTRY[lensId] ?? { label: lensId, status: 'in_sample', category: 'unknown' };
+	return (
+		WHATIF_LENS_REGISTRY[lensId] ?? {
+			label: lensId,
+			status: 'in_sample',
+			category: 'unknown',
+			// Never guess a scope for an unmirrored lens: claiming the wrong one
+			// with confidence is the defect this field exists to prevent (#1160).
+			replaces: 'unknown - this lens is not in the SPA mirror yet'
+		}
+	);
 }
 
 export interface WhatIfLensView extends WhatIfLensMeta {

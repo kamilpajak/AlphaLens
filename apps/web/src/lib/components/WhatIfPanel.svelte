@@ -45,7 +45,10 @@
 		>
 			<FlaskConical class="size-3.5" />
 			<span class="font-bold">// what-if · experimental</span>
-			<span class="text-fg-muted normal-case tracking-normal">exit-stop · counterfactual</span>
+			<!-- No scope word here on purpose (#1160): the heading covers ALL lenses and
+			     they do not share a scope, so any single word it could use would be a
+			     false claim about some of them. The scope is stated per lens below. -->
+			<span class="text-fg-muted normal-case tracking-normal">counterfactual</span>
 		</summary>
 
 		<div class="px-4 pb-4">
@@ -61,10 +64,12 @@
 							? 'what-if · validated forward'
 							: 'what-if · in-sample · not validated'}
 					</span>
-					— realized R recomputed under an alternative exit-stop on the
+					— realized R recomputed under an alternative exit policy on the
 					<span class="whitespace-nowrap">SAME picks</span>{activeStatus === 'validated'
 						? ''
-						: '; tuned on this sample, so optimistic'}.
+						: '; tuned on this sample, so optimistic'}. Lenses differ in how much of the plan
+					they replace — see <span class="whitespace-nowrap">replaces:</span> under the selected
+					one.
 					<span class="font-bold">Never the realized result</span> — the panels above are what the tool
 					actually emitted.
 				</p>
@@ -86,10 +91,24 @@
 						aria-pressed={selected?.lensId === l.lensId}
 					>
 						{l.label}
-						<span class="ml-1 text-fg-muted normal-case tracking-normal">[{l.status}]</span>
+						<span class="ml-1 text-fg-muted normal-case tracking-normal"
+							>[{l.category} · {l.status}]</span
+						>
 					</button>
 				{/each}
 			</div>
+
+			{#if selected}
+				<!-- Scope of the SELECTED lens (#1160). The panel used to carry one
+				     blanket "alternative exit-stop" line over every lens, which reads as
+				     "these what-ifs only move the stop-loss" — false for the fill-anchored
+				     lens (it also collapses the entry ladder) and for both ATR-bracket
+				     lenses (they discard the brief TP tranches entirely). Stated per lens
+				     so a sixth lens cannot inherit a claim that does not fit it. -->
+				<p class="mb-3 -mt-1 text-[10px] text-fg-muted" data-testid="whatif-replaces">
+					replaces: {selected.replaces}
+				</p>
+			{/if}
 
 			{#if selected?.preregisteredRef}
 				<!-- Provenance footnote: this lens's parameters were written down in a

@@ -279,11 +279,16 @@ class WhatIfLensSerializer(serializers.Serializer):
 
 
 class WhatIfPanelSerializer(serializers.Serializer):
-    """The WHAT-IF panel — display-only, IN-SAMPLE counterfactual exit-stop lenses.
+    """The WHAT-IF panel — display-only, IN-SAMPLE counterfactual exit lenses.
 
     Gated like EDGE. The realized headline is never touched by this block. The lens
-    registry (labels + ``in_sample``/``validated`` status) lives client-side, so the
-    ``lenses`` map is keyed by ``lens_id`` only.
+    registry (labels + scope + ``in_sample``/``validated`` status) lives client-side,
+    so the ``lenses`` map is keyed by ``lens_id`` only.
+
+    Lenses are NOT all exit-stop policies: some move only the stop, one also
+    collapses the entry ladder, and the ATR-bracket pair discards the brief
+    take-profit tranches for a single target. Describing them collectively as
+    exit-stop was issue #1160.
     """
 
     status = serializers.ChoiceField(choices=["insufficient", "early", "ok"])

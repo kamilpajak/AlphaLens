@@ -279,9 +279,11 @@ class TestFullPayloadCharacterization:
                 "threshold": 30,
                 "in_sample": True,
                 "note": (
-                    "counterfactual: realized R recomputed under an alternative "
-                    "exit-stop on the SAME picks + price paths; in-sample (tuned on "
-                    "this sample) and NOT validated — never the realized result."
+                    "counterfactual: realized R recomputed under an alternative exit "
+                    "POLICY on the SAME picks + price paths; lenses differ in how much "
+                    "of the plan they replace (stop only / stop + entry / whole exit) — see the "
+                    "per-lens scope below. In-sample (tuned on this sample) and NOT "
+                    "validated — never the realized result."
                 ),
                 "lenses": {},
             },
