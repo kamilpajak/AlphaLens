@@ -397,15 +397,23 @@ def grant_findings(
     predictive one, and letting an unreadable property suppress it would
     reintroduce exactly the blindness this function removes.
 
+    An EMPTY value counts as absent. ``Environment=SAXO_LIVE_ACCOUNT_KEY=``
+    sets the name to the empty string, so a presence-by-name test would call
+    that grant healthy while ``_standing_grant_valid`` (which requires present
+    AND non-empty AND equal) refuses at the next start — a false green on the
+    exact question this gauge answers. Emptiness is the most of that rule this
+    can mirror: equality would mean comparing the values, and the values must
+    never be read here.
+
     Presence, never VALUES: the grant is an opaque account identifier and no
     finding text may carry it.
     """
     findings: list[Finding] = []
     for var in sorted(required):
         absent_from: list[str] = []
-        if var not in host_env:
+        if not host_env.get(var):
             absent_from.append("the host unit configuration")
-        if live_env is not None and var not in live_env:
+        if live_env is not None and not live_env.get(var):
             absent_from.append("the systemd-loaded environment")
         if not absent_from:
             continue
@@ -414,7 +422,7 @@ def grant_findings(
                 unit,
                 "missing_grant",
                 var,
-                f"absent from {' and '.join(absent_from)} — without the ADR 0017 grant this "
+                f"absent or empty in {' and '.join(absent_from)} — without the ADR 0017 grant this "
                 "instance refuses to construct a real-money client at its NEXT start",
             )
         )

@@ -145,6 +145,33 @@ _GRANT_DROPIN = (
 )
 
 
+class TestUnitRequirements(unittest.TestCase):
+    """The requirement table itself, pinned against silent erasure.
+
+    `main()` emits the grant gauge only for units that declare a requirement,
+    so emptying the LIVE entry does not turn the gauge to 0 — it removes the
+    SERIES. `AlphalensLiveGrantMissing` matches on `== 0` and there is no
+    `absent()` companion, so the alert would simply stop being able to fire:
+    the always-green rot this module exists to prevent, reachable by deleting
+    two words. CI is the guard.
+    """
+
+    def test_the_live_unit_requires_exactly_the_grant_pair(self):
+        required = {unit: req for unit, _base, req in drift.UNITS}
+        self.assertEqual(required["alphalens-broker-manager-live"], drift.LIVE_GRANT_VARS)
+        self.assertEqual(
+            drift.LIVE_GRANT_VARS,
+            frozenset({"ALPHALENS_SAXO_LIVE_STANDING", "SAXO_LIVE_ACCOUNT_KEY"}),
+        )
+
+    def test_only_the_live_unit_requires_a_grant(self):
+        # Positive control on the other side: a requirement added to SIM or
+        # the price reader would emit a gauge that can only ever read 0.
+        for unit, _base, required in drift.UNITS:
+            if unit != "alphalens-broker-manager-live":
+                self.assertEqual(required, frozenset(), unit)
+
+
 class TestHostOnlyGrantDropinPredicate(unittest.TestCase):
     """What makes an UNTRACKED host drop-in acceptable (#1193).
 
@@ -246,6 +273,15 @@ class TestGrantPresence(unittest.TestCase):
         env = dict.fromkeys(drift.LIVE_GRANT_VARS, "opaque")
         self.assertEqual(self._findings(host_env=env, live_env=None), [])
         self.assertEqual(len(self._findings(host_env={}, live_env=None)), 2)
+
+    def test_an_empty_value_counts_as_absent(self):
+        # `Environment=SAXO_LIVE_ACCOUNT_KEY=` sets the name to the empty
+        # string, so a presence-by-name check would report a healthy grant.
+        # The daemon disagrees: `_standing_grant_valid` requires present AND
+        # non-empty AND equal, so it would refuse at the next start while this
+        # gauge said 1 — a false green on the exact question it answers.
+        env = dict.fromkeys(drift.LIVE_GRANT_VARS, "")
+        self.assertEqual(len(self._findings(host_env=env, live_env=dict(env))), 2)
 
     def test_findings_never_carry_the_grant_value(self):
         findings = self._findings(
