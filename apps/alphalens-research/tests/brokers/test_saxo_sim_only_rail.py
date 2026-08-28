@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -26,11 +27,33 @@ from alphalens_pipeline.brokers.saxo.client import (
     SaxoClient,
     SaxoLiveEnvironmentBlockedError,
 )
-from alphalens_pipeline.brokers.saxo.tokens import TOKEN_ENV
+from alphalens_pipeline.brokers.saxo.tokens import (
+    APP_KEY_ENV,
+    APP_SECRET_ENV,
+    REDIRECT_URL_ENV,
+    TOKEN_ENV,
+    TOKEN_STORE_PATH_ENV,
+)
 
 # tests/brokers/ is one level deeper than tests/, so the repo root is parents[4].
 WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 BROKERS_DIR = WORKSPACE_ROOT / "apps" / "alphalens-pipeline" / "alphalens_pipeline" / "brokers"
+
+
+def _sim_env(token_store: Path) -> dict[str, str]:
+    """Minimal SIM environment, used with ``clear=True``.
+
+    Every variable ``from_env`` consults is stated here, so the test asserts
+    the same thing on a laptop with real Saxo credentials as it does in CI
+    with none (#1176). ``SAXO_TOKEN_STORE_PATH`` is what keeps it away from
+    the operator's real token store — both the client-side branch check and
+    the provider read the path through it.
+    """
+    return {
+        TOKEN_ENV: "tok",
+        TOKEN_STORE_PATH_ENV: str(token_store),
+        "SAXO_ENV": "sim",
+    }
 
 
 class _AnyTokenProvider:
@@ -72,10 +95,31 @@ class TestSimOnlyRail(unittest.TestCase):
             with self.assertRaises(SaxoLiveEnvironmentBlockedError):
                 SaxoClient.from_env()
 
-    def test_from_env_with_saxo_env_sim_is_accepted(self):
-        with mock.patch.dict("os.environ", {TOKEN_ENV: "tok", "SAXO_ENV": "sim"}):
-            client = SaxoClient.from_env()
-            self.assertIsInstance(client, SaxoClient)
+    def test_from_env_with_saxo_env_sim_is_accepted_on_the_static_path(self):
+        """No token store on disk → the ``SAXO_SIM_TOKEN`` static provider."""
+        with tempfile.TemporaryDirectory() as tmp:
+            absent = Path(tmp) / "token_store.json"
+            with mock.patch.dict("os.environ", _sim_env(absent), clear=True):
+                client = SaxoClient.from_env()
+                self.assertIsInstance(client, SaxoClient)
+
+    def test_from_env_with_saxo_env_sim_is_accepted_on_the_oauth_path(self):
+        """Token store present → the OAuth provider, which needs the app
+        credentials. Pinned explicitly because ``from_env`` picks its provider
+        from what is on DISK: before #1176 this test read the operator's real
+        store and real ``SAXO_APP_KEY``, so it asserted a different branch on
+        the VPS than in CI and failed outright when run on its own."""
+        with tempfile.TemporaryDirectory() as tmp:
+            present = Path(tmp) / "token_store.json"
+            present.write_text("{}", encoding="utf-8")
+            env = _sim_env(present) | {
+                APP_KEY_ENV: "app-key",
+                APP_SECRET_ENV: "app-secret",
+                REDIRECT_URL_ENV: "http://localhost/callback",
+            }
+            with mock.patch.dict("os.environ", env, clear=True):
+                client = SaxoClient.from_env()
+                self.assertIsInstance(client, SaxoClient)
 
     def test_no_live_url_string_outside_marker_tuple(self):
         self.assertTrue(BROKERS_DIR.is_dir(), f"brokers package not found at {BROKERS_DIR}")
