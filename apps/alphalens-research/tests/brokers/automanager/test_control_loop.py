@@ -818,6 +818,30 @@ class TestPlacePickBranches(unittest.TestCase):
         )
         self.assertFalse(placer(_pick()))
 
+    def test_the_gross_cap_still_gates_placement(self) -> None:
+        # #1192 WIRING pin, not arithmetic. The pre-sizing gross arm in
+        # safety.check was deleted, and with it the only acceptance-level
+        # statement that a gross cap sits on the placement path at all (the
+        # acceptance world injects a stub place_pick and never reached the real
+        # rail). This pins the property that statement carried: when
+        # _check_gross_cap reports a violation, NOTHING is placed.
+        #
+        # Deliberately blind to how the cap decides — TestCheckGrossCap owns
+        # that. Here the rail is forced to refuse, so the test fails if a
+        # future refactor stops calling it or ignores its answer.
+        placed: list[Any] = []
+        broker = _PlaceBroker(on_place=placed.append)
+        with mock.patch.object(cl, "_check_gross_cap", return_value="gross-sentinel"):
+            self.assertFalse(self._placer(broker)(_pick()))
+        self.assertEqual(placed, [])
+
+    def test_the_gross_cap_lets_a_clean_pick_through(self) -> None:
+        # Positive control for the pin above: with the same wiring and the rail
+        # reporting no violation, the pick IS placed. Without this, the test
+        # above would still pass if _place_pick refused everything.
+        with mock.patch.object(cl, "_check_gross_cap", return_value=None):
+            self.assertTrue(self._placer(_PlaceBroker())(_pick()))
+
     def test_terminal_safety_refuse_appends_terminal_refused_line(self) -> None:
         # Queue-semantics fix (2026-07-30): a capacity/cap refusal retires the
         # pick via a terminal refused line — otherwise it retries every ~45s

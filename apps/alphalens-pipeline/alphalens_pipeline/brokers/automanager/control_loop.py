@@ -5599,10 +5599,13 @@ def _estimate_round_trip_fee_bps(
 # of any size always passed; (3) filled-position blindness — only
 # WORKING/PARTIALLY_FILLED verdicts counted, filled exposure dropped out.
 #
-# It was removed rather than repaired because it could not be repaired in
-# place: the fix needs `fx`, which _resolve_and_size produces AFTER
-# safety.check runs. Any correct pre-sizing gross rail would need its own
-# broker round-trip, to duplicate what this one already does for free.
+# It was removed rather than repaired, and the distinction is per TERM: the
+# committed-working term could have been valued correctly pre-sizing from each
+# record's journaled fx_rate (exactly what _committed_working_gross_acct does
+# below), but the candidate has no rate or size until _resolve_and_size runs
+# AFTER safety.check, and filled exposure needs a rate too. Fixing only the
+# term that was fixable leaves a candidate-blind, filled-blind rail — still
+# unable to bound exposure, and still shadowed by this one.
 #
 # THIS check (a sibling of the fee floor, same inputs, zero new broker I/O):
 #
@@ -5630,8 +5633,8 @@ def _committed_working_gross_acct(
     EXISTS at the broker but cannot be valued from the journal. The caller
     fails CLOSED on it (zen pre-merge finding): silently skipping would
     understate committed gross and let a pick through over the true cap.
-    ``_summarize_open_verdicts`` tolerates the same skew because its rail is
-    the cheap pre-sizing early exit; THIS fold is the authoritative one."""
+    ``_summarize_open_verdicts`` no longer folds gross at all (#1192) — it
+    counts slots and today's realized R; THIS fold is the only gross valuation."""
     entry_fx_by_request_id: dict[str, tuple[Mapping[str, Any], Any]] = {
         str(bracket.get("client_request_id")): (bracket, record.get("fx_rate"))
         for record in records
@@ -5720,9 +5723,11 @@ def _check_gross_cap(
     account.total_value``; else a terminal refusal message naming the total,
     its components, the limit, GROSS_FRAC and total_value.
 
-    ``GROSS_FRAC`` is read exactly like ``safety.check`` reads it (same env
-    var, same default, same malformed-value fallback via ``_float_env``), so
-    the pre- and post-sizing rails never disagree on the limit. The candidate
+    ``GROSS_FRAC`` is read THROUGH ``safety.PORTFOLIO_GROSS_FRAC_ENV`` and
+    ``safety.DEFAULT_PORTFOLIO_GROSS_FRAC`` with the same ``_float_env``
+    fallback, so this rail can never drift from the configured name or
+    default even though ``safety.check`` no longer reads them itself.
+    (``safety`` still OWNS the env contract; #1192 removed only its rail.) The candidate
     folds its RAW planned gross (``setup_plan_gross_notional``) — explicitly
     NO cash/fee buffer: the cap measures EXPOSURE, not funding.
 
@@ -6854,10 +6859,9 @@ def _place_pick(
     # safety.check — the same snapshot feeds the money gates here and the
     # drain intercept below.)
 
-    # Post-sizing portfolio gross cap (broker sizing memo §3) — the pre-sizing
-    # safety.check gross rail stays as a cheap early exit, but it is currency-
-    # mismatched, candidate-blind and filled-blind; THIS is the authoritative
-    # account-currency check, candidate included (see the section comment above
+    # Portfolio gross cap (broker sizing memo §3) — the ONLY gross rail since
+    # #1192 removed the currency-mismatched pre-sizing arm from safety.check.
+    # Account-currency, candidate included (see the section comment above
     # _check_gross_cap). Same inputs already in scope — zero new broker I/O.
     # Staleness bound: `positions`/`account` were snapshotted a few synchronous
     # (non-network) steps above; at the 45s poll cadence that skew is benign.
@@ -6963,7 +6967,8 @@ def _handle_safety_refusal(decision: Any, ticker: str, brief_date: dt.date) -> N
     """Log a ``safety.Refuse`` and journal it when terminal.
 
     Terminal refusal (queue-semantics fix 2026-07-30): ONLY a capacity
-    refusal (decision.terminal — MAX_OPEN / portfolio gross cap) journals
+    refusal (decision.terminal — the MAX_OPEN cap; the gross and cash rails
+    journal their own refusals via ``_refuse_pick_terminal``) journals
     a refused line so the pick never retries — left armed it would retry
     every tick for days and then self-place a stale brief signal once
     capacity frees. Re-arming via `alphalens broker arm` is the explicit

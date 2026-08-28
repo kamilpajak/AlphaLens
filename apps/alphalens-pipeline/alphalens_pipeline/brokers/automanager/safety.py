@@ -148,10 +148,13 @@ def check(
     # `control_loop._check_gross_cap`, which runs post-sizing with `fx` in hand
     # and folds working + candidate + filled + watching in one currency.
     #
-    # Repairing it in place was not possible: `fx` is produced by
-    # `_resolve_and_size`, which runs AFTER this function. There is no currency
-    # to compare in yet, so any pre-sizing gross rail is either wrong or needs
-    # its own broker round-trip. `PORTFOLIO_GROSS_FRAC_ENV` and its default stay
+    # Repairing the FULL rail in place was not possible, though the committed
+    # term alone was: each journaled record carries its own `fx_rate`, so that
+    # one term could have been valued correctly here. The candidate has no rate
+    # and no size until `_resolve_and_size` runs (after this function), and
+    # filled exposure needs a rate too. A currency-correct but candidate-blind
+    # and filled-blind rail still cannot bound exposure, so it was removed
+    # rather than kept half-correct. `PORTFOLIO_GROSS_FRAC_ENV` and its default stay
     # exported — `_check_gross_cap` reads the env THROUGH them so the two can
     # never disagree on the limit, and `live_rails` pins the name at boot.
 
