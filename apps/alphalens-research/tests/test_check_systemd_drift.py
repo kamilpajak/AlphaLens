@@ -307,7 +307,12 @@ class TestRepoFileReading(unittest.TestCase):
     def test_reads_the_base_blob_and_every_listed_dropin_blob(self):
         def fake_run(argv, timeout=120):
             if argv[1] == "ls-tree":
-                return "10-a.conf\nREADME.md\n"
+                # Two distinct listings now: the tracked systemd directory
+                # (to learn whether a drop-in dir exists at all) and then the
+                # drop-in directory itself.
+                if argv[-1].endswith(".d"):
+                    return "10-a.conf\nREADME.md\n"
+                return "u.service\nu.service.d\n"
             return f"blob:{argv[-1]}"
 
         with mock.patch.object(drift, "_run", side_effect=fake_run):
@@ -320,6 +325,41 @@ class TestRepoFileReading(unittest.TestCase):
                 "README.md": "blob:origin/main:deploy/systemd/u.service.d/README.md",
             },
         )
+
+    def test_a_unit_with_no_tracked_dropin_directory_reads_only_its_base(self):
+        """Not every unit has a drop-in directory.
+
+        ``git ls-tree origin/main:<dir>`` exits 128 when the path does not
+        exist in the tree, which ``_run`` raises. Before this was handled,
+        adding such a unit to ``UNITS`` (the shared price reader, #1172) made
+        the whole check report ``check_failed`` and exit 1 — and exit 1 is
+        reserved for "could not measure", so it stalled the job's last-success
+        clock and would page through the staleness pair. ``_host_files``
+        already guards the same case with ``is_dir()``; this is the repo half.
+        """
+
+        def fake_run(argv, timeout=120):
+            if argv[1] == "ls-tree":
+                # The tracked systemd directory holds the unit but no `.d` for it.
+                return "u.service\nother.service\nother.service.d\n"
+            return f"blob:{argv[-1]}"
+
+        with mock.patch.object(drift, "_run", side_effect=fake_run):
+            files = drift._repo_files("u.service")
+        self.assertEqual(files, {"u.service": "blob:origin/main:deploy/systemd/u.service"})
+
+    def test_a_git_failure_still_propagates(self):
+        """The fix must not swallow a real git failure — an unreadable repo is
+        exactly the 'cannot measure' case that exit 1 exists for."""
+
+        def fake_run(argv, timeout=120):
+            if argv[1] == "ls-tree":
+                raise subprocess.CalledProcessError(2, argv)
+            return "base"
+
+        with mock.patch.object(drift, "_run", side_effect=fake_run):
+            with self.assertRaises(subprocess.CalledProcessError):
+                drift._repo_files("u.service")
 
 
 class TestMainExitSemantics(unittest.TestCase):

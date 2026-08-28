@@ -18,11 +18,15 @@ import json
 import os
 import socket
 import stat
+import struct
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from alphalens_pipeline.data.alt_data import price_reader_server
 from alphalens_pipeline.data.alt_data.price_reader_server import (
     PROTOCOL_VERSION,
     READER_STREAM_METRICS_JOB,
@@ -287,6 +291,124 @@ class TestWireRobustness(PriceReaderServerTestCase):
         client.call("subscribe", scope="exits", uics=[212])
         consumer = self.stream.registered[-1]
         self.assertEqual(self.stream.latch_uics[consumer], {212})
+
+
+class TestIdleConnectionsSurvive(unittest.TestCase):
+    """A client holds ONE connection open across ticks and is silent between
+    them — the daemons poll every ~45 s.
+
+    ``socket.settimeout`` bounds EVERY blocking call, reads included, so
+    setting it on the accepted connection dropped any client that stayed quiet
+    longer than the timeout. Measured on the VPS 2026-08-28: the SIM daemon had
+    103 connect attempts (one per tick) instead of 1, the reader's journal was
+    a stream of ``TimeoutError`` out of ``handle``'s ``readline``, and the
+    ``clients`` gauge oscillated 0-2 so it said nothing about health. The write
+    side still has to be bounded — a client that stops READING would otherwise
+    pin a handler thread in ``sendall`` forever — so the bound moved to
+    ``SO_SNDTIMEO``, which applies to sends only.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "sock" / "reader.sock"
+        self.stream = _FakeStream()
+        # Short enough to keep the test fast, long enough that the round trip
+        # below is not racing it. Read at call time by `setup()`.
+        self._patch = mock.patch.object(price_reader_server, "_SEND_TIMEOUT_S", 0.3)
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
+        self.server = PriceReaderServer(self.stream, self.path)
+        self.server.start()
+        self.addCleanup(self.server.stop)
+
+    def test_a_client_silent_past_the_send_timeout_is_still_served(self):
+        self.stream.quotes[211] = _FakeQuote(211, 18.61, 18.62)
+        client = _Client(self.path)
+        self.addCleanup(client.close)
+
+        first = client.call("quote", uic=211)
+        self.assertTrue(first["ok"])
+
+        time.sleep(0.9)  # three times the bound, with no traffic at all
+
+        second = client.call("quote", uic=211)
+        self.assertTrue(
+            second["ok"],
+            "the reader dropped a connection that was merely idle — every "
+            "daemon tick would then pay a reconnect",
+        )
+        self.assertEqual(second["result"]["bid"], 18.61)
+
+    def test_the_send_bound_is_actually_installed_on_the_accepted_socket(self):
+        """Pins the PRESENCE of the replacement, not only the absence of the
+        old mechanism.
+
+        Without this, deleting the setsockopt call would leave every other
+        test green while a client that stopped reading could pin a handler
+        thread forever — the same "no test can see it" shape that produced the
+        defect this class fixes."""
+        client = _Client(self.path)
+        self.addCleanup(client.close)
+        self.assertTrue(client.call("hello")["ok"])
+
+        states = list(self.server._open.values())
+        raw = states[0].sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, 32)
+        seconds, microseconds = struct.unpack("ll", raw[: struct.calcsize("ll")])
+        self.assertAlmostEqual(seconds + microseconds / 1_000_000, 0.3, places=6)
+
+    def test_the_connection_is_not_left_in_timeout_mode(self):
+        """Guards the mechanism, not just the symptom: a non-None
+        ``gettimeout()`` on the accepted socket means some later edit put the
+        blanket timeout back and idle reads are bounded again."""
+        client = _Client(self.path)
+        self.addCleanup(client.close)
+        self.assertTrue(client.call("hello")["ok"])
+
+        states = list(self.server._open.values())
+        self.assertEqual(len(states), 1)
+        self.assertIsNone(
+            states[0].sock.gettimeout(),
+            "the accepted socket must stay in blocking mode; bound the write "
+            "side with SO_SNDTIMEO instead",
+        )
+
+
+class TestWriteTimeoutIsTreatedAsAVanishedClient(unittest.TestCase):
+    """The write bound changed exception TYPE, and that had to be checked.
+
+    ``settimeout`` raises ``TimeoutError``; ``SO_SNDTIMEO`` raises
+    ``BlockingIOError`` (EAGAIN) instead — verified by filling a socketpair
+    whose peer never reads. Both are ``OSError`` subclasses, so ``_reply``'s
+    handler covers them, but nothing pinned that, and a write bound that
+    escapes ``_reply`` would kill the handler thread mid-protocol instead of
+    releasing the connection cleanly.
+    """
+
+    def _reply_result(self, error: Exception) -> bool:
+        handler = object.__new__(price_reader_server._Handler)
+
+        class _RaisingFile:
+            def write(self, _data):
+                raise error
+
+            def flush(self):
+                raise error
+
+        handler.wfile = _RaisingFile()
+        return handler._reply({"ok": True})
+
+    def test_a_send_timeout_reports_the_client_as_gone(self):
+        for error in (
+            BlockingIOError(35, "Resource temporarily unavailable"),
+            TimeoutError("timed out"),
+            BrokenPipeError(32, "Broken pipe"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.assertFalse(
+                    self._reply_result(error),
+                    "a failed write must release the connection, never escape",
+                )
 
 
 class TestProtocolErrors(PriceReaderServerTestCase):
