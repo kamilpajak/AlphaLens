@@ -55,6 +55,16 @@ combination.
    `QuoteCache._update_running_low`, drained into `peak_tracker`.
 2. **Restart.** The peak resets (arming can go dark until price re-crosses the threshold);
    the journal-folded trailed floor guarantees the placed stop never loosens.
+
+   *Restart during a session.* Clearing the in-memory peak pauses only the UPSIDE trail —
+   protection is unaffected, because the placed stop is held by the journal-folded trailed
+   floor and `_maybe_trail`'s ratchet refuses to lower it. The cost depends on where price
+   sits: restart with price already at or above `avg + 0.5R` and arming re-triggers on the
+   same tick, so nothing is lost; restart below the threshold, or after a reversal that had
+   already armed, and the trail stays dark until price advances past the threshold again —
+   minutes or hours. Prefer restarting outside XNYS hours (13:30-20:00 UTC). If an
+   intra-session restart cannot be avoided, check afterwards that trailing resumes on any
+   position that was armed before it.
 3. **Slippage/gaps.** The lens books SL fills exactly at the stop level and TP fills exactly
    at target; live pays gap-throughs and market-sell slippage.
 4. **TTL.** The lens ignores entry-TTL/TIME_STOP; the live rails keep the 7-day entry TTL.
