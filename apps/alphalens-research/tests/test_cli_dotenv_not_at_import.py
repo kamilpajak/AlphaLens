@@ -132,8 +132,32 @@ class TestNoDotenvAtImportTime(unittest.TestCase):
         source = "def main(_loaded=load_dotenv()):\n    pass\n"
         self.assertEqual(import_time_dotenv_lines(source), [1])
 
+    def test_detector_flags_a_call_in_a_class_body(self):
+        """A class body runs when the class statement is executed, so at
+        module scope it is import time. Pinned because it is the one shape a
+        reader is most likely to mistake for deferred and 'fix' into a miss.
+        """
+        source = "class C:\n    X = load_dotenv()\n"
+        self.assertEqual(import_time_dotenv_lines(source), [2])
+
+    def test_detector_flags_a_call_inside_a_module_scope_lambda(self):
+        """Deliberate over-strictness, recorded so nobody relaxes it by
+        accident: a lambda BODY is not evaluated at def time, so this is a
+        false alarm in the strict sense. The gate still reports it — for a
+        credential leak a false alarm is cheap and a miss is not, and a
+        module-scope lambda wrapping load_dotenv has no legitimate use.
+        """
+        source = "loader = lambda: load_dotenv()\n"
+        self.assertEqual(import_time_dotenv_lines(source), [1])
+
     def test_detector_accepts_a_call_inside_a_function_body(self):
         source = "def main():\n    load_dotenv()\n"
+        self.assertEqual(import_time_dotenv_lines(source), [])
+
+    def test_detector_accepts_a_call_inside_a_nested_function_body(self):
+        """Deferral is inherited: an inner def inside a deferred body stays
+        deferred."""
+        source = "def outer():\n    def inner():\n        load_dotenv()\n"
         self.assertEqual(import_time_dotenv_lines(source), [])
 
 
