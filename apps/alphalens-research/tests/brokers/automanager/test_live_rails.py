@@ -99,7 +99,7 @@ class TestValidEnvPasses(unittest.TestCase):
         edge_env[MAX_OPEN_ENV] = "2"
         edge_env[PORTFOLIO_GROSS_FRAC_ENV] = "0.5"
         edge_env[DAILY_LOSS_LIMIT_R_ENV] = "2.0"
-        edge_env[SIZING_EQUITY_ENV] = "15000"
+        edge_env[SIZING_EQUITY_ENV] = "20000"
         edge_env[MAX_FEE_BPS_ENV] = "1000"
         edge_env[ENTRY_WATCH_MAX_PICKS_ENV] = "2"
         with mock.patch.dict("os.environ", edge_env, clear=True):
@@ -305,11 +305,22 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
         self.assertIn(SIZING_EQUITY_ENV, str(captured.exception))
 
     def test_sizing_equity_at_the_deployed_frame_passes(self):
-        # 15000 is what the LIVE unit runs (declared frame, 1% = 150). The cap
+        # 20000 is what the LIVE unit runs (declared frame, 1% = 200). The cap
         # is inclusive, so bounding the rail must not refuse production.
-        env = dict(_VALID_ENV, **{SIZING_EQUITY_ENV: "15000"})
+        env = dict(_VALID_ENV, **{SIZING_EQUITY_ENV: "20000"})
         with mock.patch.dict("os.environ", env, clear=True):
             assert_live_rails()
+
+    def test_sizing_equity_just_above_the_cap_rejected(self):
+        # The cap is the operator's risk decision, not a sanity check: one PLN
+        # over it is refused, so widening always costs a code change that
+        # leaves a trace. Distinct from the 150000 typo case above, which any
+        # order-of-magnitude guard would catch.
+        env = dict(_VALID_ENV, **{SIZING_EQUITY_ENV: "20001"})
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        self.assertIn(SIZING_EQUITY_ENV, str(captured.exception))
 
     def test_max_fee_bps_above_cap_rejected(self):
         # Same hole, opposite direction: a looser fee floor admits trades the

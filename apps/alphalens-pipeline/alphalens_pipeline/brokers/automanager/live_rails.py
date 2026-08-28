@@ -27,7 +27,7 @@ typo'd policy name must never reach the per-tick protection pass, where a
 ``ValueError`` would starve every position that tick.
 
 The numeric bounds (MAX_OPEN <= 2, PORTFOLIO_GROSS_FRAC <= 0.5,
-DAILY_LOSS_LIMIT_R <= 2.0, SIZING_EQUITY <= 15000, MAX_FEE_BPS <= 1000,
+DAILY_LOSS_LIMIT_R <= 2.0, SIZING_EQUITY <= 20000, MAX_FEE_BPS <= 1000,
 ENTRY_TRAIL_BPS <= 150, and ENTRY_WATCH_MAX_PICKS <= 2) are the
 operator-decided §8 caps for the soak — NOT a mechanism for widening risk
 later without also widening this assert.
@@ -109,7 +109,12 @@ _DAILY_LOSS_LIMIT_R_UPPER = 2.0
 # intended size. Each ceiling is the value the LIVE unit already runs, so
 # bounding them changed nothing on the day it shipped; the point is that every
 # future widening is now a reviewed code change rather than a silent host edit.
-_SIZING_EQUITY_UPPER = 15_000.0
+# 20_000 PLN since 2026-08-28, raised from 15_000 at the owner's explicit
+# instruction: the declared frame is the ONLY lever on per-pick risk, so a
+# target of ~200 PLN risk per pick (up from ~145) can only be expressed here.
+# The cap is deliberately the value production runs, so any further widening
+# is again a code change that leaves a trace (the regime #1121 established).
+_SIZING_EQUITY_UPPER = 20_000.0
 _MAX_FEE_BPS_UPPER = 1_000.0
 # The LIVE ceiling on concurrent entry-trail watches (#1189). Deliberately here
 # and NOT beside the shared runtime bound in `entry_trails`: this module is the
