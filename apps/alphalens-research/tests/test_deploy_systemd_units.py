@@ -1545,7 +1545,11 @@ class TestLiveBrokerManagerUnit(unittest.TestCase):
             "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC": "0.25",
             "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "1.0",
             "ALPHALENS_BROKER_SIZING_EQUITY": "10000",
-            "ALPHALENS_BROKER_EXIT_POLICY": "trailing_atr",
+            # Flipped from trailing_atr on 2026-08-28 (owner confirmation, the
+            # step breakeven_trail_live_policy_design_2026_08_27.md section 5
+            # reserved for a separate PR). Both instances now run the same
+            # policy, so a SIM observation carries over to LIVE.
+            "ALPHALENS_BROKER_EXIT_POLICY": "breakeven_trail",
             "ALPHALENS_BROKER_MAX_FEE_BPS": "100",
         }
         for var, value in expected.items():

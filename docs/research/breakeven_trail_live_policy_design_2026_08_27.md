@@ -55,6 +55,16 @@ combination.
    `QuoteCache._update_running_low`, drained into `peak_tracker`.
 2. **Restart.** The peak resets (arming can go dark until price re-crosses the threshold);
    the journal-folded trailed floor guarantees the placed stop never loosens.
+
+   *Restart during a session.* Clearing the in-memory peak pauses only the UPSIDE trail —
+   protection is unaffected, because the placed stop is held by the journal-folded trailed
+   floor and `_maybe_trail`'s ratchet refuses to lower it. The cost depends on where price
+   sits: restart with price already at or above `avg + 0.5R` and arming re-triggers on the
+   same tick, so nothing is lost; restart below the threshold, or after a reversal that had
+   already armed, and the trail stays dark until price advances past the threshold again —
+   minutes or hours. Prefer restarting outside XNYS hours (13:30-20:00 UTC). If an
+   intra-session restart cannot be avoided, check afterwards that trailing resumes on any
+   position that was armed before it.
 3. **Slippage/gaps.** The lens books SL fills exactly at the stop level and TP fills exactly
    at target; live pays gap-throughs and market-sell slippage.
 4. **TTL.** The lens ignores entry-TTL/TIME_STOP; the live rails keep the 7-day entry TTL.
@@ -88,6 +98,20 @@ floor, the §3.5 `avg_price` check). The LIVE unit flip is a separate later PR o
 owner confirmation. The registry keeps `setup_static` / `atr_bracket_1p5` / `trailing_atr`
 selectable — switching policies remains a config change, per the owner's directive to keep
 the codebase able to choose.
+
+**LIVE flip done 2026-08-28** (owner confirmation), pinning
+`ALPHALENS_BROKER_EXIT_POLICY=breakeven_trail` in
+`deploy/systemd/alphalens-broker-manager-live.service`. Both instances now run one policy.
+
+What the SIM soak had actually shown at that moment, stated plainly because the flip did not
+wait for the rest: the brief ladder in `tranche_plan` was confirmed — for `SAIC:2026-08-26`
+the journaled targets `180.91514536839634` / `211.0057292791067` are identical to the
+brief's own `brief_trade_setup.tp_tranches`. The other three observations were NOT yet
+available: the SIM journal held ten `tranche_plan` lines but **zero** `tranche_fired` and no
+`trailed` markers, so "tranche fires preserving the trailed floor" and the §3.5 `avg_price`
+drift check remain unobserved on either instance. The `avg_price` exposure is not new — it
+existed identically under `trailing_atr` (§3.5) — but it is now carried on LIVE under a
+policy whose tranche-fire interaction has never been seen in a journal.
 
 ## 6. Measurement stance
 
