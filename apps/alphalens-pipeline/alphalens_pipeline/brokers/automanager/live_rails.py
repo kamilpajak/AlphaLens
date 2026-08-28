@@ -36,7 +36,8 @@ ENTRY_WATCH_MAX_PICKS is the newest pin and exists for a reason worth stating:
 it was the one rail whose LIVE ceiling came from a constant SHARED with the SIM
 runtime reader rather than from this assert. Raising that constant so the SIM
 lab could hold more concurrent watches would therefore have widened LIVE as a
-side effect of a SIM-only decision. Pinning it here makes the two independent.
+side effect of a decision taken about the lab alone. Pinning it here makes the
+two independent.
 
 SIZING_EQUITY and MAX_FEE_BPS carried a floor but no CEILING until issue
 #1121, which is the one shape this assert was blind to: the declared frame is
