@@ -76,7 +76,7 @@ dependencies = [
 ]
 
 [project.scripts]
-alphalens = "alphalens_cli.main:app"
+alphalens = "alphalens_cli.main:main"
 
 [tool.uv.sources]
 alphalens-feedback = { workspace = true }

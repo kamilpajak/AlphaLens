@@ -36,8 +36,6 @@ from alphalens_cli.commands.status import status
 from alphalens_cli.commands.templates import templates_app
 from alphalens_cli.commands.thematic import thematic_app
 
-load_dotenv()
-
 app = typer.Typer(
     name="alphalens",
     help="AlphaLens stock analysis pipeline CLI.",
@@ -86,5 +84,26 @@ app.command(
 )(audit_verdict_command)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Console-script entry point (``[project.scripts] alphalens``).
+
+    ``load_dotenv()`` lives HERE, not at module scope, because importing this
+    module must not mutate ``os.environ``. It used to run on import, so every
+    test module that imports the CLI loaded the operator's real root ``.env``
+    into the test process — real API keys and Saxo OAuth credentials included —
+    and one test passed only because of it (#1176).
+
+    Starting a process is the right moment to read a dotenv file; importing a
+    library is not. In-process callers (``CliRunner``, imports) keep whatever
+    environment they set up themselves.
+
+    Placement inside this function rather than the Typer callback is
+    deliberate: the callback does not run for ``--help``, and ``CliRunner``
+    would run it, which is exactly the in-process case that must stay clean.
+    """
+    load_dotenv()
     app()
+
+
+if __name__ == "__main__":
+    main()
