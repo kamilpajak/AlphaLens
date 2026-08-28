@@ -290,6 +290,12 @@ class _Handler(socketserver.StreamRequestHandler):
         #
         # "ll" is struct timeval (seconds, microseconds) on the 64-bit Linux
         # and macOS this runs on.
+        #
+        # Verified by experiment, not assumed: filling a socketpair whose peer
+        # never reads makes sendall raise after the bound, and it raises
+        # BlockingIOError (EAGAIN) rather than the TimeoutError settimeout
+        # would give. Both are OSError subclasses, so `_reply`'s handler
+        # already covers the change; a test pins that.
         seconds, fraction = divmod(_SEND_TIMEOUT_S, 1)
         self.connection.setsockopt(
             socket.SOL_SOCKET,

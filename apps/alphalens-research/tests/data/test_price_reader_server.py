@@ -18,6 +18,7 @@ import json
 import os
 import socket
 import stat
+import struct
 import tempfile
 import threading
 import time
@@ -339,6 +340,23 @@ class TestIdleConnectionsSurvive(unittest.TestCase):
         )
         self.assertEqual(second["result"]["bid"], 18.61)
 
+    def test_the_send_bound_is_actually_installed_on_the_accepted_socket(self):
+        """Pins the PRESENCE of the replacement, not only the absence of the
+        old mechanism.
+
+        Without this, deleting the setsockopt call would leave every other
+        test green while a client that stopped reading could pin a handler
+        thread forever — the same "no test can see it" shape that produced the
+        defect this class fixes."""
+        client = _Client(self.path)
+        self.addCleanup(client.close)
+        self.assertTrue(client.call("hello")["ok"])
+
+        states = list(self.server._open.values())
+        raw = states[0].sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, 32)
+        seconds, microseconds = struct.unpack("ll", raw[: struct.calcsize("ll")])
+        self.assertAlmostEqual(seconds + microseconds / 1_000_000, 0.3, places=6)
+
     def test_the_connection_is_not_left_in_timeout_mode(self):
         """Guards the mechanism, not just the symptom: a non-None
         ``gettimeout()`` on the accepted socket means some later edit put the
@@ -354,6 +372,43 @@ class TestIdleConnectionsSurvive(unittest.TestCase):
             "the accepted socket must stay in blocking mode; bound the write "
             "side with SO_SNDTIMEO instead",
         )
+
+
+class TestWriteTimeoutIsTreatedAsAVanishedClient(unittest.TestCase):
+    """The write bound changed exception TYPE, and that had to be checked.
+
+    ``settimeout`` raises ``TimeoutError``; ``SO_SNDTIMEO`` raises
+    ``BlockingIOError`` (EAGAIN) instead — verified by filling a socketpair
+    whose peer never reads. Both are ``OSError`` subclasses, so ``_reply``'s
+    handler covers them, but nothing pinned that, and a write bound that
+    escapes ``_reply`` would kill the handler thread mid-protocol instead of
+    releasing the connection cleanly.
+    """
+
+    def _reply_result(self, error: Exception) -> bool:
+        handler = object.__new__(price_reader_server._Handler)
+
+        class _RaisingFile:
+            def write(self, _data):
+                raise error
+
+            def flush(self):
+                raise error
+
+        handler.wfile = _RaisingFile()
+        return handler._reply({"ok": True})
+
+    def test_a_send_timeout_reports_the_client_as_gone(self):
+        for error in (
+            BlockingIOError(35, "Resource temporarily unavailable"),
+            TimeoutError("timed out"),
+            BrokenPipeError(32, "Broken pipe"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.assertFalse(
+                    self._reply_result(error),
+                    "a failed write must release the connection, never escape",
+                )
 
 
 class TestProtocolErrors(PriceReaderServerTestCase):
