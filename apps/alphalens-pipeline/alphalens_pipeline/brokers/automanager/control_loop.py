@@ -5281,27 +5281,18 @@ def _make_place_pick(
     return _place
 
 
-def _index_entries_by_request_id(
-    records: Iterable[Mapping[str, Any]],
-) -> dict[str, Mapping[str, Any]]:
-    """Map each journaled bracket's client_request_id -> the bracket dict."""
-    return {
-        str(bracket.get("client_request_id")): bracket
-        for record in records
-        for bracket in record.get("brackets") or []
-    }
-
-
-def _summarize_open_verdicts(
-    open_verdicts: Iterable[Any], records: Iterable[Mapping[str, Any]], today_iso: str
-) -> tuple[int, float, float]:
+def _summarize_open_verdicts(open_verdicts: Iterable[Any], today_iso: str) -> tuple[int, float]:
     """Fold open verdicts into the safety.JournalView inputs
-    ``(open_bracket_count, gross_committed, realized_r_today)``. ``gross_committed``
-    joins each still-working verdict back to its journaled entry bracket for the
-    committed-capital figure; ``realized_r_today`` sums today's closed R."""
-    entry_by_request_id = _index_entries_by_request_id(records)
+    ``(open_bracket_count, realized_r_today)``: still-working verdicts are
+    counted for the MAX_OPEN rail, and ``realized_r_today`` sums today's
+    closed R for the daily-loss rail.
+
+    No committed-gross term, and so no ``records`` argument (#1192): the gross
+    rail moved to :func:`_check_gross_cap`, which values exposure post-sizing
+    in account currency and builds its own verdict-to-bracket join because it
+    also needs each record's journaled ``fx_rate``. This function no longer
+    reads the journal at all — it is a pure fold over verdicts."""
     open_bracket_count = 0
-    gross_committed = 0.0
     realized_r_today = 0.0
     for verdict in open_verdicts:
         realized_r = verdict.details.get("realized_r")
@@ -5310,10 +5301,7 @@ def _summarize_open_verdicts(
             realized_r_today += float(realized_r)
         if verdict.status in {"WORKING", "PARTIALLY_FILLED"}:
             open_bracket_count += 1
-            bracket = entry_by_request_id.get(str(verdict.details.get("client_request_id") or ""))
-            if bracket and bracket.get("entry") is not None and bracket.get("qty") is not None:
-                gross_committed += float(bracket["entry"]) * float(bracket["qty"])
-    return open_bracket_count, gross_committed, realized_r_today
+    return open_bracket_count, realized_r_today
 
 
 def _resolve_sizing_equity(account_equity: float) -> float:
@@ -5603,14 +5591,20 @@ def _estimate_round_trip_fee_bps(
 
 # --- Post-sizing portfolio gross cap (broker sizing memo §3) -----------------
 #
-# The pre-sizing safety.check gross rail is broken three ways: (1) currency
-# mismatch — the journal's gross_committed sums entry x qty in INSTRUMENT
-# currency (USD) against a limit in ACCOUNT currency (PLN), ~3.7x looser than
-# intended; (2) candidate exclusion — it runs BEFORE _resolve_and_size, so the
-# first pick of any size always passes; (3) filled-position blindness — only
-# WORKING/PARTIALLY_FILLED verdicts count, filled exposure drops out. It stays
-# as a cheap early exit; THIS post-sizing check (a sibling of the fee floor,
-# same inputs, zero new broker I/O) is the authoritative one:
+# THE gross rail — there is no longer a second one. A pre-sizing arm lived in
+# safety.check until #1192 and was broken three ways: (1) currency mismatch —
+# the journal's committed sum is entry x qty in INSTRUMENT currency (USD)
+# against a limit in ACCOUNT currency (PLN), ~3.7x looser than it read;
+# (2) candidate exclusion — it ran BEFORE _resolve_and_size, so the first pick
+# of any size always passed; (3) filled-position blindness — only
+# WORKING/PARTIALLY_FILLED verdicts counted, filled exposure dropped out.
+#
+# It was removed rather than repaired because it could not be repaired in
+# place: the fix needs `fx`, which _resolve_and_size produces AFTER
+# safety.check runs. Any correct pre-sizing gross rail would need its own
+# broker round-trip, to duplicate what this one already does for free.
+#
+# THIS check (a sibling of the fee floor, same inputs, zero new broker I/O):
 #
 #   committed_working_acct + candidate_gross_acct + filled_positions_acct
 #       <= GROSS_FRAC x account.total_value
@@ -5623,9 +5617,9 @@ def _committed_working_gross_acct(
     into ACCOUNT currency, plus the count of working verdicts that could NOT
     be joined back to a journaled entry bracket.
 
-    Same record set as ``_summarize_open_verdicts``'s ``gross_committed``
-    (WORKING/PARTIALLY_FILLED verdicts joined back to their journaled entry
-    bracket), but each bracket's ``entry x qty`` — INSTRUMENT currency — is
+    WORKING/PARTIALLY_FILLED verdicts joined back to their journaled entry
+    bracket — the join the removed pre-sizing rail used to do untyped — but
+    each bracket's ``entry x qty`` — INSTRUMENT currency — is
     converted through that record's OWN journaled ``fx_rate`` (submission_log
     schema 2: the account-ccy -> instrument-ccy Mid the sizing used), so
     mixed-vintage rates never revalue each other. ``fx_rate`` null
@@ -6819,14 +6813,13 @@ def _place_pick(
         position_uics=net_position_uics,
     )
 
-    open_bracket_count, gross_committed, realized_r_today = _summarize_open_verdicts(
-        open_verdicts, records, dt.date.today().isoformat()
+    open_bracket_count, realized_r_today = _summarize_open_verdicts(
+        open_verdicts, dt.date.today().isoformat()
     )
     decision = safety.check(
         intent,
         safety.JournalView(
             open_bracket_count=open_bracket_count + len(open_watch_picks),
-            gross_committed=gross_committed,
             realized_r_today=realized_r_today,
         ),
         safety.BrokerView(

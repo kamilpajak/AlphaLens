@@ -961,7 +961,6 @@ class TestPlacePickBranches(unittest.TestCase):
         )
         self.assertTrue(placer(_pick()))
         self.assertEqual(captured["jv"].open_bracket_count, 1)
-        self.assertEqual(captured["jv"].gross_committed, 50.0)
         self.assertEqual(captured["jv"].realized_r_today, 1.5)
 
 
@@ -2900,8 +2899,8 @@ class TestPlaceTiersWriteAheadDedup(unittest.TestCase):
             brackets=[],
             note="placement attempt",
         )
-        summary = cl._summarize_open_verdicts([], [note_record], "2026-07-20")
-        self.assertEqual(summary, (0, 0.0, 0.0))
+        summary = cl._summarize_open_verdicts([], "2026-07-20")
+        self.assertEqual(summary, (0, 0.0))
         total, unjoined = cl._committed_working_gross_acct([], [note_record])
         self.assertEqual((total, unjoined), (0.0, 0))
 

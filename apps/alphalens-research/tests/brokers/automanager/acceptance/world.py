@@ -363,7 +363,6 @@ class ManagerWorld:
         *,
         open_brackets: int = 0,
         open_positions: int = 0,
-        gross_committed: float = 0.0,
         realized_r_today: float = 0.0,
         equity: float = 1_000_000.0,
     ) -> bool:
@@ -372,7 +371,6 @@ class ManagerWorld:
             _pick("KO"),
             safety.JournalView(
                 open_bracket_count=open_brackets,
-                gross_committed=gross_committed,
                 realized_r_today=realized_r_today,
             ),
             safety.BrokerView(open_position_count=open_positions, equity=equity),
@@ -387,7 +385,6 @@ class ManagerWorld:
             _pick("KO"),
             safety.JournalView(
                 open_bracket_count=kw.get("open_brackets", 0),
-                gross_committed=kw.get("gross_committed", 0.0),
                 realized_r_today=kw.get("realized_r_today", 0.0),
             ),
             safety.BrokerView(
