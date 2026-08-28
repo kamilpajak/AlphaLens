@@ -1641,7 +1641,10 @@ class TestEntryWatchCapacityEnvRail(unittest.TestCase):
     was a hardcoded constant of 1 — with MAX_OPEN raised to 2 a second armed
     pick was silently capacity-deferred forever at DEBUG. The cap becomes a
     call-time env rail (ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS, default 1,
-    valid [1, 10]) and the FIRST deferral of a pick logs at INFO."""
+    valid [1, 25]) and the FIRST deferral of a pick logs at INFO.
+
+    The ceiling was 10 until #1189 raised it for the SIM soak; LIVE is held to
+    [1, 2] by its own boot-assert pin, not by this shared bound."""
 
     def setUp(self) -> None:
         # Reset the process-lifetime observability state so tests are hermetic.
@@ -1653,7 +1656,7 @@ class TestEntryWatchCapacityEnvRail(unittest.TestCase):
             self.assertEqual(cl._entry_watch_max_picks(), 1)
 
     def test_valid_values_are_honoured(self) -> None:
-        for raw, expected in (("1", 1), ("2", 2), ("4", 4), ("5", 5), ("10", 10)):
+        for raw, expected in (("1", 1), ("2", 2), ("4", 4), ("5", 5), ("10", 10), ("25", 25)):
             with mock.patch.dict("os.environ", {cl._ENTRY_WATCH_MAX_PICKS_ENV: raw}, clear=True):
                 self.assertEqual(cl._entry_watch_max_picks(), expected)
 
@@ -1668,7 +1671,7 @@ class TestEntryWatchCapacityEnvRail(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
 
     def test_out_of_range_values_fall_back_to_one(self) -> None:
-        for raw in ("0", "11", "-1", ""):
+        for raw in ("0", "26", "-1", ""):
             with (
                 self.subTest(raw=raw),
                 mock.patch.object(cl, "_entry_watch_max_picks_warned", False),

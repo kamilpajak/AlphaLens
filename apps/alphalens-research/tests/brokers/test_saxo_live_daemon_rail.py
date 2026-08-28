@@ -21,6 +21,7 @@ from unittest import mock
 from alphalens_pipeline.brokers.automanager.live_rails import (
     DAILY_LOSS_LIMIT_R_ENV,
     ENTRY_TRAIL_BPS_ENV,
+    ENTRY_WATCH_MAX_PICKS_ENV,
     EXIT_POLICY_ENV,
     MAX_FEE_BPS_ENV,
     MAX_OPEN_ENV,
@@ -55,6 +56,7 @@ _VALID_RAIL_ENV: dict[str, str] = {
     EXIT_POLICY_ENV: "trailing_atr",
     MAX_FEE_BPS_ENV: "100",
     ENTRY_TRAIL_BPS_ENV: "0",
+    ENTRY_WATCH_MAX_PICKS_ENV: "2",
 }
 
 
