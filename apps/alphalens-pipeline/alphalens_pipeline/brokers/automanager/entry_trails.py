@@ -9,7 +9,10 @@ runtime behavior is byte-identical to the pre-trailing daemon.
 **Module-ownership doctrine** (mirrors ``safety.py`` / ``position_manager.py``):
 :data:`ENTRY_TRAIL_BPS_ENV` and :data:`ENTRY_TRAIL_BPS_MAX` live ONLY here —
 ``live_rails`` imports them for the 8th boot-assert pin, so the boot-assert
-and the runtime reader can never drift onto different names or bounds.
+and the runtime reader can never drift onto different names or bounds. The
+watch-capacity rail (:data:`ENTRY_WATCH_MAX_PICKS_ENV` and its bounds) follows
+the same rule since #1189: ``live_rails`` pins it as the 9th rail and
+``control_loop`` re-exports it for the runtime reader.
 
 **Journal** (memo §5, G4): per-tier trail state lives in its OWN per-env
 ``entry_trails.jsonl`` (sibling of ``standalone_stops.jsonl``), JSON lines
@@ -60,6 +63,41 @@ ENTRY_TRAIL_BPS_ENV = "ALPHALENS_BROKER_ENTRY_TRAIL_BPS"
 ENTRY_TRAIL_BPS_MAX = 150
 
 _FEATURE_OFF_BPS = 0  # trailing disabled — today's limit-at-touch behavior
+
+# --- Watch capacity (memo decision #4 / G5 CRITICAL-1) -----------------------
+#
+# Owned here for the same reason as ENTRY_TRAIL_BPS above: `live_rails` imports
+# these for the 9th boot-assert pin and `control_loop` imports them for the
+# runtime reader, so the assert and the reader can never drift onto different
+# names or bounds. `control_loop` re-exports them under its historical private
+# names for its own call sites.
+
+ENTRY_WATCH_MAX_PICKS_ENV = "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS"
+"""Env rail for the watch capacity (2026-08-19 live incident, ETSY: the old
+hardcoded constant of 1 silently capacity-deferred every second armed pick
+after MAX_OPEN was raised to 2). Read at CALL time so an operator bump takes
+effect on the next tick without a daemon restart."""
+
+ENTRY_WATCH_MAX_PICKS_DEFAULT = 1
+ENTRY_WATCH_MAX_PICKS_MIN = 1
+
+# 25, raised from 10 on 2026-08-28 (#1189). This is a VALIDATION range, not a
+# risk control: the account is bounded by MAX_OPEN and by the money-denominated
+# virtual gross/cash reservation fold below. The old ceiling of 10 had become
+# the binding limit on SIM sample collection — watches hold their slot for up
+# to the 7-day order TTL, and on 2026-08-28 seven picks from two prior briefs
+# still held slots while only three had ever touched their tier limit.
+#
+# LIVE does NOT rely on this number. Until #1189 this shared ceiling was the
+# only code-level bound on LIVE's watch capacity; `live_rails.assert_live_rails`
+# now pins the rail to [1, 2] for LIVE and FAILS ON UNSET, so raising the shared
+# ceiling for the SIM lab cannot widen the LIVE one.
+#
+# The LIVE upper bound is NOT here: it lives with the other LIVE bounds in
+# ``live_rails._ENTRY_WATCH_MAX_PICKS_UPPER``, so an audit of "what bounds LIVE"
+# finds the whole table in one module. Raising the value below does not widen
+# LIVE — that is the point of the pin.
+ENTRY_WATCH_MAX_PICKS_MAX = 25
 
 _entry_trail_bps_warned = False
 """Once-per-process latch for the invalid-flag warning (mirrors

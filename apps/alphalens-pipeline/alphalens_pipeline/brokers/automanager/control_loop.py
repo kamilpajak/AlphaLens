@@ -1449,15 +1449,14 @@ def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) ->
 # plus a journal marker (memo §7 PR-T1). Flag unset/0 => nothing here runs and
 # the daemon is byte-identical to today (PR-T0 inertness).
 
-_ENTRY_WATCH_MAX_PICKS_ENV = "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS"
-"""Env rail for the watch capacity (2026-08-19 live incident, ETSY: the old
-hardcoded constant of 1 silently capacity-deferred every second armed pick
-after MAX_OPEN was raised to 2). Read at CALL time so an operator bump takes
-effect on the next tick without a daemon restart."""
-
-_ENTRY_WATCH_MAX_PICKS_DEFAULT = 1
-_ENTRY_WATCH_MAX_PICKS_MIN = 1
-_ENTRY_WATCH_MAX_PICKS_MAX = 10
+# The watch-capacity rail is OWNED by entry_trails (module-ownership doctrine,
+# #1189): live_rails pins it as the 9th LIVE boot-assert rail and this module
+# reads it every tick, so both must resolve the same name and bounds. Re-exported
+# under the historical private names so the call sites below stay unchanged.
+_ENTRY_WATCH_MAX_PICKS_ENV = entry_trails.ENTRY_WATCH_MAX_PICKS_ENV
+_ENTRY_WATCH_MAX_PICKS_DEFAULT = entry_trails.ENTRY_WATCH_MAX_PICKS_DEFAULT
+_ENTRY_WATCH_MAX_PICKS_MIN = entry_trails.ENTRY_WATCH_MAX_PICKS_MIN
+_ENTRY_WATCH_MAX_PICKS_MAX = entry_trails.ENTRY_WATCH_MAX_PICKS_MAX
 
 _entry_watch_max_picks_warned = False
 """One logger.warning per process for an invalid/out-of-range env value — the

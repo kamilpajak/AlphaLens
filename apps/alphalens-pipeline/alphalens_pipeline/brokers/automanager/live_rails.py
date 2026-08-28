@@ -9,15 +9,16 @@ snapshot sizing, the silently-inert ``setup_static`` exit geometry, and an
 unset fee floor respectively). A LIVE unit missing one pin would trade 100%
 gross of the real balance instead of failing to boot.
 
-``assert_live_rails`` refuses to let a LIVE instance start unless ALL EIGHT of
+``assert_live_rails`` refuses to let a LIVE instance start unless ALL NINE of
 ``ALPHALENS_BROKER_MAX_OPEN``, ``ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC``,
 ``ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R``, ``ALPHALENS_BROKER_SIZING_EQUITY``,
 ``ALPHALENS_BROKER_SIZING_EQUITY_MODE``, ``ALPHALENS_BROKER_EXIT_POLICY``,
-``ALPHALENS_BROKER_MAX_FEE_BPS``, and ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS``
+``ALPHALENS_BROKER_MAX_FEE_BPS``, ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS``
 (the entry-trailing distance, memo
 ``docs/research/entry_trailing_design_2026_08_12.md`` §6 — an operator must
-explicitly state ``0`` = trailing off rather than inherit it) are
-EXPLICITLY set AND within the live bounds table below. Every violation is
+explicitly state ``0`` = trailing off rather than inherit it), and
+``ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS`` (the entry-watch capacity, #1189)
+are EXPLICITLY set AND within the live bounds table below. Every violation is
 collected and reported TOGETHER (not fail-fast on the first one) so an
 operator with a unit file missing several pins fixes it in one edit instead
 of one restart per missing pin. ``EXIT_POLICY`` is additionally checked
@@ -26,9 +27,17 @@ typo'd policy name must never reach the per-tick protection pass, where a
 ``ValueError`` would starve every position that tick.
 
 The numeric bounds (MAX_OPEN <= 2, PORTFOLIO_GROSS_FRAC <= 0.5,
-DAILY_LOSS_LIMIT_R <= 2.0, SIZING_EQUITY <= 15000, MAX_FEE_BPS <= 1000, and
-ENTRY_TRAIL_BPS <= 150) are the operator-decided §8 caps for the soak — NOT a
-mechanism for widening risk later without also widening this assert.
+DAILY_LOSS_LIMIT_R <= 2.0, SIZING_EQUITY <= 15000, MAX_FEE_BPS <= 1000,
+ENTRY_TRAIL_BPS <= 150, and ENTRY_WATCH_MAX_PICKS <= 2) are the
+operator-decided §8 caps for the soak — NOT a mechanism for widening risk
+later without also widening this assert.
+
+ENTRY_WATCH_MAX_PICKS is the newest pin and exists for a reason worth stating:
+it was the one rail whose LIVE ceiling came from a constant SHARED with the SIM
+runtime reader rather than from this assert. Raising that constant so the SIM
+lab could hold more concurrent watches would therefore have widened LIVE as a
+side effect of a decision taken about the lab alone. Pinning it here makes the
+two independent.
 
 SIZING_EQUITY and MAX_FEE_BPS carried a floor but no CEILING until issue
 #1121, which is the one shape this assert was blind to: the declared frame is
@@ -57,6 +66,8 @@ from broker_contract.exit_geometry.registry import resolve_exit_policy
 from alphalens_pipeline.brokers.automanager.entry_trails import (
     ENTRY_TRAIL_BPS_ENV,
     ENTRY_TRAIL_BPS_MAX,
+    ENTRY_WATCH_MAX_PICKS_ENV,
+    ENTRY_WATCH_MAX_PICKS_MIN,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import _EXIT_POLICY_ENV
 from alphalens_pipeline.brokers.automanager.safety import (
@@ -100,6 +111,12 @@ _DAILY_LOSS_LIMIT_R_UPPER = 2.0
 # future widening is now a reviewed code change rather than a silent host edit.
 _SIZING_EQUITY_UPPER = 15_000.0
 _MAX_FEE_BPS_UPPER = 1_000.0
+# The LIVE ceiling on concurrent entry-trail watches (#1189). Deliberately here
+# and NOT beside the shared runtime bound in `entry_trails`: this module is the
+# one place the LIVE bounds table lives, and a bound kept elsewhere is a bound a
+# future "what limits LIVE?" audit misses. The shared runtime ceiling
+# (ENTRY_WATCH_MAX_PICKS_MAX, 25) exists for the SIM lab and does not gate LIVE.
+_ENTRY_WATCH_MAX_PICKS_UPPER = 2
 
 
 def _missing_or_blank(raw: str | None) -> bool:
@@ -180,10 +197,12 @@ def _check_sizing_mode(var: str) -> str | None:
 
 
 def assert_live_rails() -> None:
-    """Refuse to let a LIVE instance boot unless all eight safety-rail env vars
+    """Refuse to let a LIVE instance boot unless all nine safety-rail env vars
     are explicitly set and within the live-soak bounds (design memo §3 point
     2 / ADR 0017 point 4; the 8th pin is the entry-trailing distance per the
-    entry-trailing design memo §6 — explicit ``"0"`` = trailing off).
+    entry-trailing design memo §6 — explicit ``"0"`` = trailing off; the 9th is
+    the entry-watch capacity, pinned to [1, 2] since #1189 so the shared code
+    ceiling can be raised for the SIM lab without widening LIVE).
 
     Call ONCE, at LIVE composition-root time, BEFORE any broker/network I/O —
     mirrors the two ADR 0016 state-safety guards already run first in
@@ -225,6 +244,18 @@ def assert_live_rails() -> None:
                 hi=ENTRY_TRAIL_BPS_MAX,
                 unset_reason="explicit 0 = trailing off; the pin must still be stated",
             ),
+            # Entry-watch capacity (#1189): [1, 2] for LIVE. The runtime reader
+            # in control_loop accepts up to ENTRY_WATCH_MAX_PICKS_MAX (25) so the
+            # SIM lab can hold many concurrent watches; that shared ceiling used
+            # to be the ONLY code-level bound on LIVE's watch capacity, which
+            # made raising it for SIM a LIVE change by accident. Pinning it here
+            # decouples the two: the SIM ceiling may move freely, LIVE stays at
+            # its own bound and refuses to boot on unset like every other rail.
+            _check_int_bounded(
+                ENTRY_WATCH_MAX_PICKS_ENV,
+                lo=ENTRY_WATCH_MAX_PICKS_MIN,
+                hi=_ENTRY_WATCH_MAX_PICKS_UPPER,
+            ),
         )
         if v is not None
     ]
@@ -239,6 +270,7 @@ def assert_live_rails() -> None:
 __all__ = [
     "DAILY_LOSS_LIMIT_R_ENV",
     "ENTRY_TRAIL_BPS_ENV",
+    "ENTRY_WATCH_MAX_PICKS_ENV",
     "EXIT_POLICY_ENV",
     "MAX_FEE_BPS_ENV",
     "MAX_OPEN_ENV",
