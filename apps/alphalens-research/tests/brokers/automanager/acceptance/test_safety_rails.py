@@ -29,13 +29,6 @@ class TheSafetyRailsAreRespected(unittest.TestCase):
         # The default cap is 3 open positions/brackets.
         self.assertFalse(world.safety_allows_a_new_pick(open_positions=3))
 
-    def test_no_new_pick_beyond_the_gross_exposure_cap(self) -> None:
-        world = ManagerWorld(self)
-        # Already committed 2x the equity — no more.
-        self.assertFalse(
-            world.safety_allows_a_new_pick(gross_committed=2_000_000.0, equity=1_000_000.0)
-        )
-
     def test_no_new_pick_after_the_daily_loss_cutoff(self) -> None:
         world = ManagerWorld(self)
         # The day is down more than the 3R daily-loss limit.

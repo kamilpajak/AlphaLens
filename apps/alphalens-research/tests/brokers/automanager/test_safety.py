@@ -18,7 +18,6 @@ from alphalens_pipeline.brokers.automanager.safety import (
     ALLOW_ORDERS_ENV,
     DAILY_LOSS_LIMIT_R_ENV,
     MAX_OPEN_ENV,
-    PORTFOLIO_GROSS_FRAC_ENV,
     Allow,
     BrokerView,
     JournalView,
@@ -33,7 +32,7 @@ class _StubSession:
 
 
 _PICK = object()  # check()'s `pick` arg is vestigial — never referenced in the body
-_CLEAR_JOURNAL = JournalView(open_bracket_count=0, gross_committed=0.0, realized_r_today=0.0)
+_CLEAR_JOURNAL = JournalView(open_bracket_count=0, realized_r_today=0.0)
 _CLEAR_BROKER = BrokerView(open_position_count=0, equity=1_000.0)
 
 
@@ -129,7 +128,7 @@ class SafetyGateTest(unittest.TestCase):
 
     @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "1", MAX_OPEN_ENV: "2"}, clear=False)
     def test_max_open_cap_refuses_terminally(self) -> None:
-        journal = JournalView(open_bracket_count=1, gross_committed=0.0, realized_r_today=0.0)
+        journal = JournalView(open_bracket_count=1, realized_r_today=0.0)
         broker = BrokerView(open_position_count=1, equity=1_000.0)
         d = check(
             _PICK,
@@ -146,27 +145,10 @@ class SafetyGateTest(unittest.TestCase):
         self.assertTrue(d.terminal)
 
     @mock.patch.dict(
-        os.environ, {ALLOW_ORDERS_ENV: "1", PORTFOLIO_GROSS_FRAC_ENV: "1.0"}, clear=False
-    )
-    def test_portfolio_gross_cap_refuses_terminally(self) -> None:
-        journal = JournalView(open_bracket_count=0, gross_committed=1_200.0, realized_r_today=0.0)
-        d = check(
-            _PICK,
-            journal,
-            _CLEAR_BROKER,
-            _StubSession(alive=True),
-            kill_path=self.kill,
-            global_kill_path=self.global_kill,
-        )
-        self.assertIsInstance(d, Refuse)
-        self.assertIn("gross", d.reason.lower())
-        self.assertTrue(d.terminal)
-
-    @mock.patch.dict(
         os.environ, {ALLOW_ORDERS_ENV: "1", DAILY_LOSS_LIMIT_R_ENV: "3.0"}, clear=False
     )
     def test_daily_loss_limit_refuses_without_side_effects(self) -> None:
-        journal = JournalView(open_bracket_count=0, gross_committed=0.0, realized_r_today=-3.5)
+        journal = JournalView(open_bracket_count=0, realized_r_today=-3.5)
         d = check(
             _PICK,
             journal,

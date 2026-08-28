@@ -5,9 +5,14 @@ inputs + three process rails read at call time (instance KILL file, GLOBAL
 KILL file, ALLOW_ORDERS). Places, cancels, and writes nothing: the daily-loss
 branch RETURNS Refuse; tripping a KILL file is the control loop's job.
 Refusal order (first failing rail wins): instance KILL file -> GLOBAL KILL
-file -> chain dead -> ALLOW_ORDERS != '1' -> MAX_OPEN cap -> portfolio gross
-cap -> daily-loss limit. The cap numbers are operator policy with no
-validated basis (memo risk 7) — set conservatively.
+file -> chain dead -> ALLOW_ORDERS != '1' -> MAX_OPEN cap -> daily-loss
+limit. The cap numbers are operator policy with no validated basis (memo
+risk 7) — set conservatively.
+
+The portfolio-gross cap is deliberately NOT here (#1192): it needs the
+post-sizing plan and the FX conversion, neither of which exists this early,
+so it lives in ``control_loop._check_gross_cap``. This module still owns
+``PORTFOLIO_GROSS_FRAC_ENV`` and its default, which that rail reads through.
 
 Both KILL paths default through the ONE broker-state path seam
 (``state_paths.kill_file_path`` / ``state_paths.global_kill_file_path``,
@@ -44,7 +49,7 @@ class Allow:
 class Refuse:
     """A refused placement. ``terminal`` splits the rails by queue semantics:
 
-    - terminal=True — CAPACITY refusals (MAX_OPEN cap, portfolio gross cap).
+    - terminal=True — CAPACITY refusals (the MAX_OPEN cap).
       The drain retires the pick with a refused line in picks.jsonl; left
       armed it would retry every tick and self-place a stale brief signal
       once capacity frees. `alphalens broker arm` is the human path back.
@@ -75,7 +80,6 @@ class SessionState(Protocol):
 @dataclass(frozen=True)
 class JournalView:
     open_bracket_count: int
-    gross_committed: float
     realized_r_today: float
 
 
@@ -136,14 +140,23 @@ def check(
             terminal=True,
         )
 
-    gross_frac = _float_env(PORTFOLIO_GROSS_FRAC_ENV, DEFAULT_PORTFOLIO_GROSS_FRAC)
-    gross_limit = gross_frac * broker_view.equity
-    if journal_view.gross_committed > gross_limit:
-        return Refuse(
-            f"committed gross {journal_view.gross_committed:,.2f} exceeds portfolio cap "
-            f"{gross_limit:,.2f} ({gross_frac:g} x equity {broker_view.equity:,.2f})",
-            terminal=True,
-        )
+    # No portfolio-gross rail here. It lived here until #1192 and could not
+    # work: it compared a journal sum in INSTRUMENT currency against a limit in
+    # ACCOUNT currency (~3.7x looser than it read on a PLN account holding USD
+    # instruments), it ran before sizing so the candidate never counted, and it
+    # saw only WORKING verdicts so filled exposure dropped out. The rail is
+    # `control_loop._check_gross_cap`, which runs post-sizing with `fx` in hand
+    # and folds working + candidate + filled + watching in one currency.
+    #
+    # Repairing the FULL rail in place was not possible, though the committed
+    # term alone was: each journaled record carries its own `fx_rate`, so that
+    # one term could have been valued correctly here. The candidate has no rate
+    # and no size until `_resolve_and_size` runs (after this function), and
+    # filled exposure needs a rate too. A currency-correct but candidate-blind
+    # and filled-blind rail still cannot bound exposure, so it was removed
+    # rather than kept half-correct. `PORTFOLIO_GROSS_FRAC_ENV` and its default stay
+    # exported — `_check_gross_cap` reads the env THROUGH them so the two can
+    # never disagree on the limit, and `live_rails` pins the name at boot.
 
     loss_limit_r = abs(_float_env(DAILY_LOSS_LIMIT_R_ENV, DEFAULT_DAILY_LOSS_LIMIT_R))
     if journal_view.realized_r_today <= -loss_limit_r:
