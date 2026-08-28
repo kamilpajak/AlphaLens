@@ -1485,6 +1485,24 @@ groups:
           summary: "Shared price reader silent > 5m with subscriptions active"
           description: "The reader process is up and uics are subscribed, but no frame has arrived for {{ $value | humanizeDuration }} — dark-but-connected. Recv timeout plus resubscribe should self-heal; sustained staleness means they are not. Verify DelayedByMinutes==0 separately: a silent demotion to delayed data would NOT trip this rule, because frames keep arriving, just stale-priced. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
 
+      - alert: AlphalensPriceReaderDelayed
+        # The demotion the whole single-holder design exists to prevent, and the
+        # one no other gauge can see: a second elevated consumer steals the
+        # session, Saxo keeps sending frames, and only the PRICES go 15 minutes
+        # stale. reader_up stays 1, last_frame keeps advancing, StreamStale
+        # never fires — while both daemons trade trailing stops and live exits
+        # off stale quotes. `for: 5m` rides out the moments around a legitimate
+        # session reclaim (the stream re-elevates itself up to 4x/hour).
+        expr: alphalens_live_price_stream_any_delayed{job="live-price-stream-reader"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: price-reader
+        annotations:
+          summary: "Shared price reader is serving DELAYED quotes (both daemons affected)"
+          description: "At least one cached quote reports DelayedByMinutes > 0: the session was demoted, almost always because a second elevated consumer took the elevation (an operator logging into SaxoTraderGO, a live probe run, or a second reader). The stream looks healthy on every other gauge. The reader re-elevates itself up to 4x/hour; sustained delay means it is losing that fight. Trailing and live-market exits on BOTH daemons are pricing off stale data until it clears. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+
       - alert: AlphalensPriceReaderClientDisconnectedSim
         # The consumption side. A wrong socket path in a drop-in, a
         # permissions problem, or a reader restart the daemon never recovered

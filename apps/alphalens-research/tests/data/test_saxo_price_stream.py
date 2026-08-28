@@ -749,6 +749,57 @@ class TestStreamLatchConsumerPassthroughs(unittest.TestCase):
         self.assertIsNone(stream.drain_running_low(211, consumer="conn-1"))
 
 
+class TestDelayedQuotesAreObservable(unittest.TestCase):
+    """A silent demotion to 15-minute quotes is the failure this whole feed
+    exists to avoid, and it is INVISIBLE to every other gauge: frames keep
+    arriving, the reader stays up, the subscription stays alive — only the
+    prices are stale. Without a gauge for it, nothing can alert on it."""
+
+    def _stream(self):
+        emitted: list[dict] = []
+        stream = SaxoPriceStream(
+            _FakeMarketDataClient(),
+            _FakeTokenProvider(),
+            metrics_job="test-job",
+        )
+        return stream, emitted
+
+    def _emit(self, stream) -> dict:
+        captured: dict = {}
+        with mock.patch(
+            "alphalens_pipeline.observability.textfile.emit_domain_metrics",
+            lambda job, metrics: captured.update(metrics),
+        ):
+            stream._emit_stream_gauge(reader_up=True, force=True)
+        return captured
+
+    def test_an_undelayed_stream_reports_zero(self):
+        stream, _ = self._stream()
+        stream.cache.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:48:00Z",
+                "Quote": {"Bid": 10.0, "Ask": 10.01, "DelayedByMinutes": 0},
+            },
+            received_at=_T0,
+        )
+        metrics = self._emit(stream)
+        self.assertEqual(metrics['alphalens_live_price_stream_any_delayed{job="test-job"}'], 0)
+
+    def test_a_demoted_stream_reports_one(self):
+        stream, _ = self._stream()
+        stream.cache.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:48:00Z",
+                "Quote": {"Bid": 10.0, "Ask": 10.01, "DelayedByMinutes": 15},
+            },
+            received_at=_T0,
+        )
+        metrics = self._emit(stream)
+        self.assertEqual(metrics['alphalens_live_price_stream_any_delayed{job="test-job"}'], 1)
+
+
 class TestLatchSpreadCeilingMirrorsContract(unittest.TestCase):
     def test_latch_spread_ceiling_equals_broker_contract_value(self):
         """``_LATCH_MAX_RELATIVE_SPREAD`` is a VALUE copy of

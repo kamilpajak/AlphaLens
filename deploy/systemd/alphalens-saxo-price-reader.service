@@ -29,10 +29,15 @@ Description=AlphaLens shared Saxo LIVE price reader (one elevated session, many 
 After=network-online.target
 Wants=network-online.target
 
-# Cap crash loops. [Unit]-section keys — under [Service] modern systemd
-# silently ignores them.
-StartLimitIntervalSec=600
-StartLimitBurst=5
+# Cap crash loops WITHOUT ever giving up. Both daemons price off this unit, so
+# a permanent `failed` state after a short burst (a Saxo maintenance window, a
+# transient DNS failure) would leave the whole host priceless until a human
+# noticed. Generous limits keep the retry going through a vendor outage; a real
+# crash loop still trips it, and AlphalensPriceReaderDown pages within 5 min
+# either way. Clearing a tripped limit is `systemctl --user reset-failed`.
+# [Unit]-section keys — under [Service] modern systemd silently ignores them.
+StartLimitIntervalSec=3600
+StartLimitBurst=20
 
 [Service]
 Type=simple

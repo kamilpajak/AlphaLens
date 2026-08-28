@@ -1703,6 +1703,18 @@ class TestSharedPriceReaderAlerts(unittest.TestCase):
             )
             self.assertIn("== 0", expr)
 
+    def test_a_silent_demotion_to_delayed_quotes_pages(self) -> None:
+        """The failure the single-holder design exists to prevent, and the one
+        every other gauge reads healthy through: frames keep arriving, the
+        reader stays up, only the prices are 15 minutes stale. Both daemons
+        would trade trailing stops and live exits off them."""
+        rule = self._rules()["AlphalensPriceReaderDelayed"]
+        expr = " ".join(rule["expr"].split())
+        self.assertIn(
+            'alphalens_live_price_stream_any_delayed{job="live-price-stream-reader"} == 1', expr
+        )
+        self.assertEqual(rule["labels"]["route"], "telegram")
+
     def test_the_new_alerts_carry_the_sync_note(self) -> None:
         """Same contract as every other rule here: the operator reading the
         page must know a merged change deploys itself."""

@@ -103,6 +103,10 @@ _LIVENESS_PROBE_TIMEOUT_S = 0.5
 # both daemons depend on is an allocation nobody bounds.
 _MAX_LINE_BYTES = 64 * 1024
 
+# Write-side ceiling. A local UNIX write completes in microseconds; this only
+# bounds a client that stopped reading. Reads are deliberately unbounded.
+_SEND_TIMEOUT_S = 10.0
+
 
 def default_socket_path() -> Path:
     """``~/.alphalens/price_reader/reader.sock`` unless the env names another.
@@ -266,6 +270,12 @@ class _Handler(socketserver.StreamRequestHandler):
 
     def setup(self) -> None:
         super().setup()
+        # Bound the WRITE side only. Reads stay unbounded on purpose (a client
+        # holds its connection open across ticks, so silence is normal), but a
+        # client that stops READING its replies would otherwise block this
+        # handler in sendall forever, pinning the thread and the subscription
+        # slice it owns.
+        self.connection.settimeout(_SEND_TIMEOUT_S)
         self._state = self._server.open_connection()
         # Hand the socket to the server so stop() can end this conversation
         # rather than leave a daemon thread answering from a dying cache.

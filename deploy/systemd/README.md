@@ -2003,9 +2003,18 @@ systemctl --user daemon-reload
 systemctl --user enable --now alphalens-saxo-price-reader.service
 ```
 
-**Order matters.** Start the reader FIRST. A daemon restarted with the drop-in
-but no reader running simply vetoes every quote — safe, but it looks like the
-feature failed.
+**Order matters, in both directions.**
+
+- Start the reader FIRST. A daemon restarted with the drop-in but no reader
+  running simply vetoes every quote — safe, but it looks like the feature
+  failed.
+- Do NOT leave the reader running next to daemons that have not been restarted
+  yet. Until a daemon picks up its drop-in it still opens its OWN stream, so
+  the reader plus one un-restarted daemon is TWO elevated consumers — worse
+  than before, because they demote each other and the LIVE daemon loses its
+  real-time prices silently. Install the drop-ins and restart both daemons in
+  the SAME maintenance window as the reader start; the gap should be minutes,
+  not hours.
 
 **Restart the daemons OUTSIDE XNYS hours** (13:30-20:00 UTC): a restart resets
 the in-memory trailing peaks.
@@ -2037,6 +2046,14 @@ grep client_up /var/lib/node_exporter/textfile/alphalens_domain_price-reader-cli
 journalctl --user -u alphalens-broker-manager | grep -i "shared price reader"
 ```
 
+**What is deliberately NOT alerted:** a reader sitting with zero subscribed
+uics. That is indistinguishable from a legitimately idle system — overnight,
+on a non-trading day, or simply with nothing armed — so a rule on it would fire
+most nights and teach the reader of alerts to ignore them. The
+client-disconnected rules cover the case that actually matters (a daemon that
+wants prices and cannot get them); a reader nobody subscribes to while both
+daemons report `client_up=1` is a quiet system, not a broken one.
+
 Trust `DelayedByMinutes == 0`, never the entitlements endpoint. The soak is
 working once the SIM entry-trail journal starts recording `touched` — that is
 the outcome the whole change exists for.
@@ -2051,7 +2068,21 @@ systemctl --user stop alphalens-saxo-price-reader
 systemctl --user restart alphalens-broker-manager alphalens-broker-manager-live
 ```
 
-After a rollback the OLD constraint returns: only one daemon may have LIVE
+**Verify after a rollback**, do not assume:
+
+```bash
+systemctl --user show alphalens-broker-manager -p Environment | tr ' ' '\n' | grep SAXO
+```
+
+**A rollback re-blinds SIM, on purpose.** `ALPHALENS_SAXO_LIVE_PRICES=1` for
+SIM lives ONLY in `42-price-reader.conf` (verified on the VPS 2026-08-27: the
+composed SIM environment carries no such variable without it). Deleting that
+file therefore takes away both the socket and the master switch, and SIM goes
+back to having no prices at all — which is the state the whole change exists to
+fix. That is the correct "restore what was there before", but do not mistake a
+quiet SIM afterwards for a healthy rollback.
+
+After a rollback the OLD constraint returns too: only one daemon may have LIVE
 prices. If both keep them, they demote each other and nobody notices — that is
 the failure this unit removed.
 
