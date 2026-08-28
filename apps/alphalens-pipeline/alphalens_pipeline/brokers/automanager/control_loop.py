@@ -52,6 +52,7 @@ from alphalens_pipeline.brokers.automanager import (
     entry_trail_geometry,
     entry_trail_watcher,
     entry_trails,
+    picks,
     state_paths,
 )
 from alphalens_pipeline.brokers.automanager.costs import (
@@ -412,27 +413,6 @@ def _always() -> bool:
     return True
 
 
-def _submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
-    """The (ticker, brief_date) pairs already present in the submissions journal.
-
-    Design §Data-flow step 4: the drain places only picks NOT yet joined to
-    submissions.jsonl. Without this join every armed pick is re-submitted on
-    every tick with a fresh client_request_id (execution.py mints uuid4 per
-    bracket), which Saxo's 15 s x-request-id dedup cannot catch."""
-    keys: set[tuple[str, str]] = set()
-    for record in records:
-        ticker = record.get("ticker")
-        brief_date = record.get("brief_date")
-        if ticker and brief_date:
-            keys.add((str(ticker).upper(), str(brief_date)))
-    return keys
-
-
-def _pick_key(intent: Any) -> tuple[str, str]:
-    """The (ticker, brief_date) join key for one armed intent."""
-    return (str(intent.instrument.ticker).upper(), str(intent.meta.brief_date))
-
-
 def _default_emit_heartbeat(kill: bool = False) -> None:
     """Write the per-tick Prometheus heartbeat + KILL-active gauges. A Type=simple
     daemon rarely triggers ExecStopPost, so the emit-job-metrics last_success clock is
@@ -636,10 +616,10 @@ def _run_placement_drain(deps: LoopDeps, report: TickReport) -> None:
     # even when the first attempt returns False (refused / zero-sized / partial-
     # then-failed). Recording the attempt (not just a success) guards the
     # never-double-commit invariant against a retry inside the same tick.
-    already_submitted = _submitted_pick_keys(deps.read_records())
+    already_submitted = picks.submitted_pick_keys(deps.read_records())
     placed_this_tick: set[tuple[str, str]] = set()
     for pick in deps.iter_picks():
-        key = _pick_key(pick)
+        key = picks.pick_key(pick)
         if key in already_submitted or key in placed_this_tick:
             continue
         placed_this_tick.add(key)
@@ -1784,7 +1764,7 @@ def _route_pick_to_entry_watch(
     journal-FIRST; the tranche_plan goes to disk BEFORE the watch_open lines so
     a crash between the two never yields a watching tier without its ladder),
     then RETIRE the pick from the drain with the SAME note-only submission
-    record ``_place_tiers`` uses (``_submitted_pick_keys`` treats a note-only
+    record ``_place_tiers`` uses (``picks.submitted_pick_keys`` treats a note-only
     record as submitted, so the drain never re-drives this pick). Returns True
     when at least one watch opened. No broker order is placed here — the
     native trail rests later, at TOUCH.
@@ -5922,8 +5902,6 @@ def _refuse_pick_terminal(
     logger.warning("place_pick %s: %s", ticker, violation)
     if alert_throttled is not None:
         alert_throttled(violation, alert_key)
-    from alphalens_pipeline.brokers.automanager import picks
-
     try:
         picks.mark_refused(ticker, brief_date, violation)
     except OSError as exc:
@@ -6272,7 +6250,7 @@ def _place_tiers(
     )
 
     # Write-ahead dedup line (memo §4.4 B2): register the (ticker, brief_date)
-    # dedup key BEFORE the first broker POST — _submitted_pick_keys already
+    # dedup key BEFORE the first broker POST — picks.submitted_pick_keys already
     # treats note-only records as submitted, so a crash between the POST and
     # the per-tier journal append strands an alertable non-retried attempt
     # instead of re-placing the whole frame-sized ladder on restart. The
@@ -6980,8 +6958,6 @@ def _handle_safety_refusal(decision: Any, ticker: str, brief_date: dt.date) -> N
     (re-attempting the append)."""
     logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
     if decision.terminal:
-        from alphalens_pipeline.brokers.automanager import picks
-
         try:
             picks.mark_refused(ticker, brief_date, decision.reason)
         except OSError as exc:

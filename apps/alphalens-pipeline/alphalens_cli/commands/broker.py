@@ -51,7 +51,7 @@ import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import typer
 
@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     # Type-only imports for the extracted submit helpers. Guarded by
     # TYPE_CHECKING so they never run at import time (lazy-CLI startup budget) —
     # `from __future__ import annotations` keeps the annotations as strings.
+    from alphalens_pipeline.brokers.automanager.picks import PickRecord
     from alphalens_pipeline.brokers.notifications import NotificationPort
     from broker_contract.contract import Broker, InstrumentRef
     from broker_contract.fx import FxConversion
@@ -1443,6 +1444,198 @@ def disarm_command(
     mark_disarmed(wanted, brief_date, note=note, path=picks_target)
     watch_note = f"cancelled {len(cancelled)} watch tier(s)" if cancelled else "no open watch"
     typer.echo(f"disarmed {pick_key} (queue) + {watch_note} -> {picks_target.parent}")
+
+
+_PICKS_SCHEMA = "alphalens.broker.picks/v1"
+
+# The states the view resolves. Only the first four are reachable from a
+# healthy journal; UNREADABLE exists because an armed line the decoder rejects
+# is skipped by the drain FOREVER and today announces itself only on a DEBUG
+# logger — calling it PENDING would promise a placement that can never happen.
+_PICK_STATE_PENDING = "PENDING"
+_PICK_STATE_PLACED = "PLACED"
+_PICK_STATE_UNREADABLE = "UNREADABLE"
+_PICK_STATES = ("pending", "placed", "refused", "disarmed", "unreadable")
+_PICK_STATE_FILTER_ALL = "all"
+
+# Generous rather than small: the queue is append-only and never pruned, but it
+# grows by a handful of picks a day, so a bound that never truncates in practice
+# beats a tight default that hides rows from an operator asking what is pending.
+_PICKS_DEFAULT_LIMIT = 200
+
+
+def _pick_state(
+    record: PickRecord, *, submitted: set[tuple[str, str]], decodable: set[tuple[str, str]]
+) -> str:
+    """Resolve one folded pick to a state, mirroring the drain's decision.
+
+    Order matters: a pick present in the submissions journal is PLACED even if
+    its armed line no longer decodes — the submission is the record of what
+    actually happened, and the queue line cannot overrule it.
+    """
+    from alphalens_pipeline.brokers.automanager.picks import STATUS_ARMED
+
+    if record.status != STATUS_ARMED:
+        # refused / disarmed, and verbatim for any status added later — never
+        # silently folded into one of the states above.
+        return record.status.upper() or "UNKNOWN"
+    key = (record.ticker, record.brief_date.isoformat())
+    if key in submitted:
+        return _PICK_STATE_PLACED
+    if key not in decodable:
+        return _PICK_STATE_UNREADABLE
+    return _PICK_STATE_PENDING
+
+
+def _pick_detail(record: PickRecord) -> str | None:
+    """The refusal reason or disarm note, when the line carries one."""
+    for field in ("reason", "note"):
+        value = record.record.get(field)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _render_picks_human(result: dict[str, Any]) -> None:
+    """Render the picks table as the human view (same facts as the JSON)."""
+    typer.echo(f"env  {result['env']}")
+    rows = result["picks"]
+    if not rows:
+        typer.echo(f"no picks in {result['picks_journal']}")
+        return
+    width = max(len(row["ticker"]) for row in rows)
+    for row in rows:
+        detail = f"  {row['detail']}" if row["detail"] else ""
+        # rstrip: a row with no detail must not trail the state-column padding.
+        line = f"{row['ticker']:<{width}}  {row['brief_date']}  {row['state']:<10}{detail}"
+        typer.echo(line.rstrip())
+    counts = result["counts"]
+    summary = "  ".join(f"{name} {counts[name]}" for name in _PICK_STATES)
+    typer.echo(f"{summary}  ({sum(counts.values())} picks)")
+
+
+@broker_app.command(name="picks")
+def picks_command(
+    env: str = typer.Option(
+        _DEFAULT_ARM_ENV,
+        "--env",
+        help="Broker instance whose queue to read: 'sim' or 'live' (ADR 0016). Default: sim.",
+    ),
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="Output format: human|json (json = exactly one JSON value on stdout).",
+    ),
+    state: str = typer.Option(
+        _PICK_STATE_FILTER_ALL,
+        "--state",
+        help="Filter rows: all|pending|placed|refused|disarmed|unreadable. Counts stay global.",
+    ),
+    limit: int = typer.Option(
+        _PICKS_DEFAULT_LIMIT, "--limit", help="Maximum rows to render; truncation is announced."
+    ),
+) -> None:
+    """Show the pick queue with each pick's REAL state — READ-ONLY (issue #1197).
+
+    ``picks.jsonl`` has no ``placed`` status: a pick submitted a month ago
+    still reads ``armed`` as its latest line forever, because the drain
+    decides what to place by joining armed picks against ``submissions.jsonl``
+    on (ticker, brief_date) rather than by reading the status. So the queue
+    file alone cannot answer "what is still pending" — reading it straight
+    once produced a report of 45 pending placements when the true count was 0.
+
+    This command performs that same join, through the same
+    ``picks.submitted_pick_keys`` the drain calls, and resolves one state per
+    pick: PENDING (armed, decodable, not yet submitted — the drain will place
+    it), PLACED (already joined to a submission), REFUSED / DISARMED (terminal,
+    with the reason or note), UNREADABLE (armed but the intent does not decode,
+    so the drain skips it forever — re-arm is the way back).
+
+    No broker, no auth, no mutation; safe while the daemon runs. Exit 0 for any
+    successful read, including a missing journal (an empty queue is an honest
+    state, not an error).
+    """
+    from alphalens_pipeline.brokers.automanager import picks as picks_mod
+    from alphalens_pipeline.brokers.automanager import state_paths
+    from alphalens_pipeline.brokers.submission_log import iter_submission_records
+
+    if output_format not in ("human", "json"):
+        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
+    if state != _PICK_STATE_FILTER_ALL and state not in _PICK_STATES:
+        raise _fail(
+            f"unknown --state {state!r} "
+            f"(expected {_PICK_STATE_FILTER_ALL}|{'|'.join(_PICK_STATES)})"
+        )
+    if limit < 1:
+        raise _fail(f"--limit must be >= 1, got {limit}")
+    try:
+        picks_target = state_paths.picks_path(env=env)
+        submissions_target = state_paths.submissions_path(env=env)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+
+    _guard_state_layout()
+
+    fold = picks_mod.read_pick_fold(path=picks_target)
+    submitted = picks_mod.submitted_pick_keys(iter_submission_records(submissions_target))
+    # The REAL decoder decides decodability — a second one here would be free to
+    # disagree with the drain about which picks it can actually place.
+    decodable = {picks_mod.pick_key(intent) for intent in picks_mod.iter_picks(path=picks_target)}
+
+    rows = [
+        {
+            "ticker": record.ticker,
+            "brief_date": record.brief_date.isoformat(),
+            "state": _pick_state(record, submitted=submitted, decodable=decodable),
+            "armed_ts": record.record.get("armed_ts"),
+            "detail": _pick_detail(record),
+        }
+        for record in fold.records
+    ]
+
+    # Counts are computed over EVERY pick, before --state and --limit narrow the
+    # rows: a summary that counted only what it rendered would lie by omission.
+    counts = dict.fromkeys(_PICK_STATES, 0)
+    for row in rows:
+        key = row["state"].lower()
+        counts[key] = counts.get(key, 0) + 1
+
+    selected = (
+        rows
+        if state == _PICK_STATE_FILTER_ALL
+        else [row for row in rows if row["state"].lower() == state]
+    )
+    truncated = len(selected) > limit
+
+    if fold.malformed:
+        typer.secho(
+            f"picks: skipped {fold.malformed} malformed line(s) in {picks_target}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    if truncated:
+        typer.secho(
+            f"showing {limit} of {len(selected)} pick(s) — raise --limit to see the rest",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+
+    result = {
+        "schema": _PICKS_SCHEMA,
+        "env": env,
+        "picks_journal": str(picks_target),
+        "submissions_journal": str(submissions_target),
+        "counts": counts,
+        "malformed": fold.malformed,
+        "truncated": truncated,
+        "picks": selected[:limit],
+    }
+
+    if output_format == "json":
+        typer.echo(json.dumps(result))
+        return
+
+    _render_picks_human(result)
 
 
 @broker_app.command(name="orders")

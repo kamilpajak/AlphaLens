@@ -24,6 +24,9 @@ from alphalens_pipeline.brokers.automanager.picks import (
     iter_picks,
     mark_disarmed,
     mark_refused,
+    pick_key,
+    read_pick_fold,
+    submitted_pick_keys,
 )
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
@@ -362,6 +365,102 @@ class IterPicksTest(unittest.TestCase):
         with self.assertLogs(level="WARNING"):
             intents = list(iter_picks(path=self.path))
         self.assertEqual(intents, [])
+
+
+class ReadPickFoldTest(unittest.TestCase):
+    """The fold ``iter_picks`` computes internally, exposed for readers.
+
+    ``iter_picks`` yields only DECODED ARMED intents, so a reader asking
+    "what is in this queue" cannot see refused / disarmed rows or their
+    reason. This fold is that reader's input; the CLI view joins it against
+    the submissions journal exactly like the drain does. Shape mirrors the
+    sibling ``entry_trails.read_entry_trail_fold`` — records + a malformed
+    count, surfaced rather than silently dropped.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "picks.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_missing_file_folds_empty(self) -> None:
+        fold = read_pick_fold(path=self.path)
+        self.assertEqual(fold.records, [])
+        self.assertEqual(fold.malformed, 0)
+
+    def test_latest_status_line_per_key_wins(self) -> None:
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        mark_refused("KO", dt.date(2026, 7, 20), "gross cap", path=self.path)
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        records = read_pick_fold(path=self.path).records
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].status, STATUS_ARMED)
+
+    def test_fold_order_matches_iter_picks(self) -> None:
+        # Positive control on ordering: the CLI renders rows in this order, so
+        # a fold that reordered keys would silently reshuffle the operator view.
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        arm_pick(_intent("MU", "2026-07-21"), path=self.path)
+        arm_pick(_intent("AMD", "2026-07-22"), path=self.path)
+        folded = [r.ticker for r in read_pick_fold(path=self.path).records]
+        yielded = [i.instrument.ticker for i in iter_picks(path=self.path)]
+        self.assertEqual(folded, ["KO", "MU", "AMD"])
+        self.assertEqual(folded, yielded)
+
+    def test_non_armed_rows_are_folded_with_their_detail(self) -> None:
+        mark_refused("GME", dt.date(2026, 8, 27), "gross cap: exceeds limit", path=self.path)
+        mark_disarmed("SMG", dt.date(2026, 8, 19), note="retired to free it", path=self.path)
+        by_ticker = {r.ticker: r for r in read_pick_fold(path=self.path).records}
+        self.assertEqual(by_ticker["GME"].status, STATUS_REFUSED)
+        self.assertEqual(by_ticker["GME"].record["reason"], "gross cap: exceeds limit")
+        self.assertEqual(by_ticker["SMG"].status, STATUS_DISARMED)
+        self.assertEqual(by_ticker["SMG"].record["note"], "retired to free it")
+
+    def test_brief_date_is_a_date_and_ticker_is_upper(self) -> None:
+        arm_pick(_intent("ko", "2026-07-20"), path=self.path)
+        record = read_pick_fold(path=self.path).records[0]
+        self.assertEqual(record.brief_date, dt.date(2026, 7, 20))
+        self.assertEqual(record.ticker, "KO")
+
+    def test_malformed_lines_are_counted_not_fatal(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("not json\n[]\n", encoding="utf-8")
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        fold = read_pick_fold(path=self.path)
+        self.assertEqual([r.ticker for r in fold.records], ["KO"])
+        self.assertEqual(fold.malformed, 2)
+
+    def test_a_blank_line_is_not_counted_as_malformed(self) -> None:
+        # Trailing newlines are normal in an append-only journal; counting them
+        # would put a permanent non-zero malformed count in front of the operator.
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write("\n")
+        self.assertEqual(read_pick_fold(path=self.path).malformed, 0)
+
+
+class JoinHelperTest(unittest.TestCase):
+    """The (ticker, brief_date) join the drain places on.
+
+    Moved out of ``control_loop`` so the CLI view and the drain cannot drift
+    apart — a second implementation of this join would be its own defect.
+    """
+
+    def test_pick_key_is_upper_ticker_and_string_date(self) -> None:
+        self.assertEqual(pick_key(_intent("ko", "2026-07-20")), ("KO", "2026-07-20"))
+
+    def test_submitted_pick_keys_collects_ticker_and_brief_date(self) -> None:
+        records = [
+            {"ticker": "ko", "brief_date": "2026-07-20"},
+            {"ticker": "MU", "brief_date": "2026-07-21"},
+        ]
+        self.assertEqual(submitted_pick_keys(records), {("KO", "2026-07-20"), ("MU", "2026-07-21")})
+
+    def test_submitted_pick_keys_skips_records_missing_either_half(self) -> None:
+        records = [{"ticker": "KO"}, {"brief_date": "2026-07-20"}, {}]
+        self.assertEqual(submitted_pick_keys(records), set())
 
 
 if __name__ == "__main__":

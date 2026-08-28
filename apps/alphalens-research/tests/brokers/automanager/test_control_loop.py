@@ -670,7 +670,9 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
         broker = self._run()
         snapshot = broker.journal_at_second_tier
         self.assertTrue(snapshot, "tier 1 must be journaled BEFORE the second tier is attempted")
-        keys = cl._submitted_pick_keys(snapshot or [])
+        from alphalens_pipeline.brokers.automanager import picks as picks_mod
+
+        keys = picks_mod.submitted_pick_keys(snapshot or [])
         self.assertIn(
             ("KO", "2026-07-20"),
             keys,
@@ -2845,7 +2847,7 @@ class TestPlaceTiersWriteAheadDedup(unittest.TestCase):
     note="placement attempt") BEFORE the first broker POST, so a crash between
     the POST and the per-tier journal append can no longer re-place the whole
     (frame-sized, no longer balance-bounded) ladder on restart —
-    ``_submitted_pick_keys`` already treats note-only records as submitted."""
+    ``picks.submitted_pick_keys`` already treats note-only records as submitted."""
 
     def _run_crashing(self) -> list[dict[str, Any]]:
         class _CrashBroker:
@@ -2872,11 +2874,13 @@ class TestPlaceTiersWriteAheadDedup(unittest.TestCase):
         return appended
 
     def test_crash_between_post_and_journal_still_retires_the_pick_key(self) -> None:
+        from alphalens_pipeline.brokers.automanager import picks as picks_mod
+
         appended = self._run_crashing()
         self.assertTrue(appended, "the write-ahead record must land BEFORE the first POST")
         self.assertIn(
             ("KO", "2026-07-20"),
-            cl._submitted_pick_keys(appended),
+            picks_mod.submitted_pick_keys(appended),
             "the restart drain must see the pick as submitted and never re-place it",
         )
 

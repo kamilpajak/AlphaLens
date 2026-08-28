@@ -1005,7 +1005,7 @@ class TestDeferralIsNoWeakerThanUnresolved(unittest.TestCase):
     What UNRESOLVED(audit_error) does downstream (inspected):
     - ``advance`` -> ``AlertOnly`` (position_manager.py) — an alert and NOTHING
       else: no CancelRemaining, no stop placement, no broker mutation;
-    - placement dedup is journal-keyed (``_submitted_pick_keys``) and the
+    - placement dedup is journal-keyed (``picks.submitted_pick_keys``) and the
       protection pass is broker-state-keyed — NEITHER reads verdicts;
     - the bracket is re-audited on the next pass (verdicts are recomputed).
 
