@@ -2146,7 +2146,7 @@ class TestSimBrokerManagerDropIns(unittest.TestCase):
                 "ALPHALENS_BROKER_ENTRY_TRAIL_BPS": "50",
                 "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS": "10",
                 "ALPHALENS_LIVE_MARKET_EXITS": "1",
-                "ALPHALENS_BROKER_MAX_OPEN": "10",
+                "ALPHALENS_BROKER_MAX_OPEN": "25",
                 "ALPHALENS_BROKER_OCO_ENABLED": "0",
                 "ALPHALENS_BROKER_SIZING_EQUITY": "100000",
                 "ALPHALENS_BROKER_SIZING_EQUITY_MODE": "declared",
