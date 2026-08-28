@@ -377,7 +377,7 @@ export interface OpenPositionsPanel {
 	note: string;
 }
 
-/** One exit-stop lens's gated R aggregate (keyed by `lens_id` in the panel map).
+/** One exit lens's gated R aggregate (keyed by `lens_id` in the panel map).
  *  `mean_r` / `median_r` are null below the N-gate; `n` (fill-coverage) survives. */
 export interface WhatIfLens {
 	n: number;
@@ -400,7 +400,9 @@ export interface WhatIfLens {
 	preregistered_ref: string | null;
 }
 
-/** The WHAT-IF panel — DISPLAY-ONLY, in-sample counterfactual exit-stop lenses.
+/** The WHAT-IF panel — DISPLAY-ONLY, in-sample counterfactual exit lenses.
+ *  Lenses differ in SCOPE (stop only / stop + entry / whole exit) — see
+ *  WHATIF_LENS_REGISTRY in edgeWhatif.ts; they are not all exit-stop policies (#1160).
  *  Never the realized result; the realized panels stay the default view. Lens labels
  *  + in_sample/validated status live client-side (see `$lib/edgeWhatif`); the map is
  *  keyed by `lens_id` only. N-gated exactly like the EDGE panel. */

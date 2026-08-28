@@ -46,7 +46,7 @@ describe('resolveLensMeta', () => {
 		const m = resolveLensMeta('atr_bracket_1p5');
 		expect(m.label).toBe('ATR bracket 1.5 (bezpazery) · realised-fill anchor');
 		expect(m.status).toBe('in_sample');
-		expect(m.category).toBe('exit-stop');
+		expect(m.category).toBe('whole exit');
 	});
 
 	it('resolves the planned-anchor ATR-bracket lens to a distinct label', () => {
@@ -54,7 +54,7 @@ describe('resolveLensMeta', () => {
 		expect(m.label).toBe('ATR bracket 1.5 (bezpazery) · planned-blend anchor');
 		expect(m.label).not.toBe(resolveLensMeta('atr_bracket_1p5').label);
 		expect(m.status).toBe('in_sample');
-		expect(m.category).toBe('exit-stop');
+		expect(m.category).toBe('whole exit');
 	});
 
 	it('falls back for an unknown lens_id to the raw id + a cautious in_sample default', () => {
@@ -187,7 +187,7 @@ describe('WHATIF_LENS_REGISTRY', () => {
 	it('declares the fill-anchored lens (exit-geometry path b)', () => {
 		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr).toBeDefined();
 		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr.status).toBe('in_sample');
-		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr.category).toBe('exit-stop');
+		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr.category).toBe('stop + entry');
 	});
 
 	it('declares the pre-registered ATR-bracket lens (bezpazery v1 memo s2)', () => {
@@ -196,7 +196,7 @@ describe('WHATIF_LENS_REGISTRY', () => {
 			'ATR bracket 1.5 (bezpazery) · realised-fill anchor'
 		);
 		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5.status).toBe('in_sample');
-		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5.category).toBe('exit-stop');
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5.category).toBe('whole exit');
 	});
 
 	// The same bracket on the anchor the live rail uses (issue #1114). Both are
@@ -207,13 +207,54 @@ describe('WHATIF_LENS_REGISTRY', () => {
 			'ATR bracket 1.5 (bezpazery) · planned-blend anchor'
 		);
 		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5_planned.status).toBe('in_sample');
-		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5_planned.category).toBe('exit-stop');
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5_planned.category).toBe('whole exit');
 	});
 
 	it('declares the pre-registered trailing lens (exit-geometry memo s7)', () => {
 		expect(WHATIF_LENS_REGISTRY.be_0p5r_trail0p6).toBeDefined();
 		expect(WHATIF_LENS_REGISTRY.be_0p5r_trail0p6.label).toBe('break-even +0.5R · trail 0.6');
 		expect(WHATIF_LENS_REGISTRY.be_0p5r_trail0p6.status).toBe('in_sample');
-		expect(WHATIF_LENS_REGISTRY.be_0p5r_trail0p6.category).toBe('exit-stop');
+		expect(WHATIF_LENS_REGISTRY.be_0p5r_trail0p6.category).toBe('stop only');
+	});
+});
+
+describe('lens scope metadata (#1160)', () => {
+	// The registry mirror can agree with Python and still be useless if every
+	// lens shares one blanket scope — that WAS the state that produced #1160
+	// (all five said 'exit-stop', false for three of them). These pin that the
+	// scope fields actually discriminate, on the side that renders them.
+	it('gives the ATR-bracket lens a different scope from a stop-only lens', () => {
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5.category).not.toBe(
+			WHATIF_LENS_REGISTRY.be_0p5r.category
+		);
+	});
+
+	it('does not call the fill-anchored lens stop-only (it collapses the entry ladder)', () => {
+		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr.category).not.toBe(
+			WHATIF_LENS_REGISTRY.be_0p5r.category
+		);
+		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr.replaces).toMatch(/entry ladder/i);
+	});
+
+	it('says the bracket lenses discard the brief TP tranches', () => {
+		for (const id of ['atr_bracket_1p5', 'atr_bracket_1p5_planned']) {
+			expect(WHATIF_LENS_REGISTRY[id].replaces).toMatch(/WHOLE exit/i);
+			expect(WHATIF_LENS_REGISTRY[id].replaces).toMatch(/TP tranches are discarded/i);
+		}
+	});
+
+	it('every registered lens states a scope', () => {
+		for (const [id, meta] of Object.entries(WHATIF_LENS_REGISTRY)) {
+			expect(meta.category, id).toBeTruthy();
+			expect(meta.replaces, id).toBeTruthy();
+		}
+	});
+
+	it('never invents a scope for an unmirrored lens', () => {
+		// Claiming the wrong scope confidently is the defect; "unknown" is the
+		// only honest answer for a pipeline lens this mirror has not seen.
+		const m = resolveLensMeta('be_9p9r_future');
+		expect(m.category).toBe('unknown');
+		expect(m.replaces).toMatch(/unknown/i);
 	});
 });

@@ -1,4 +1,4 @@
-"""Tests for the exit-stop WHAT-IF lens registry.
+"""Tests for the WHAT-IF lens registry.
 
 Each lens recomputes realized R under an alternate EXIT-STOP policy over the SAME
 picks + price paths: a break-even / trailing stop (PR #722) or a fill-anchored stop
@@ -87,10 +87,53 @@ class TestBreakevenRegistry(unittest.TestCase):
             m = re.search(re.escape(lens.lens_id) + r"\s*:\s*\{(.*?)\}", src, re.DOTALL)
             assert m is not None, f"{lens.lens_id} missing from SPA WHATIF_LENS_REGISTRY"
             block = m.group(1)
-            self.assertIn(f"label: '{lens.label}'", block, f"{lens.lens_id} label drift in mirror")
-            self.assertIn(
-                f"status: '{lens.status}'", block, f"{lens.lens_id} status drift in mirror"
-            )
+            # Match `key: 'value'` tolerant of the line break Prettier inserts
+            # after the colon for a long value — the guard is about the VALUE,
+            # not about where the formatter chose to wrap.
+            for field, value in (
+                ("label", lens.label),
+                ("status", lens.status),
+                # `category` and `replaces` are the per-lens SCOPE facts (#1160).
+                # They are bound like label/status because the panel renders them
+                # as a claim about what this lens changes: a stale mirror would
+                # state the wrong scope with full confidence, which IS the defect.
+                ("category", lens.category),
+                ("replaces", lens.replaces),
+            ):
+                self.assertRegex(
+                    block,
+                    rf"{field}:\s*'{re.escape(value)}'",
+                    f"{lens.lens_id} {field} drift in mirror",
+                )
+
+    def test_scope_metadata_distinguishes_the_lens_kinds(self):
+        """Positive control for the parity guard above.
+
+        The guard only proves the two registries AGREE; it would stay green if
+        every lens shared one blanket category — which is exactly the state that
+        produced #1160 (all five said ``exit-stop``, false for three of them).
+        This pins that the scope fields actually DISCRIMINATE.
+        """
+        by_id = {lens.lens_id: lens for lens in BREAKEVEN_LENSES}
+
+        # The two bracket lenses replace the whole exit, so their category must
+        # differ from a stop-only lens's.
+        self.assertNotEqual(
+            by_id["atr_bracket_1p5"].category,
+            by_id["be_0p5r"].category,
+            "an ATR-bracket lens discards the brief TP ladder; a break-even lens keeps it — "
+            "one category for both is the #1160 defect",
+        )
+        # fill_anchored also collapses the ENTRY ladder to a single tier, so it
+        # is not a stop-only lens either.
+        self.assertNotEqual(
+            by_id["fill_anchored_0p5atr"].category,
+            by_id["be_0p5r"].category,
+            "fill_anchored collapses the entry ladder to one 100% tier at E1",
+        )
+        for lens in BREAKEVEN_LENSES:
+            with self.subTest(lens_id=lens.lens_id):
+                self.assertTrue(lens.replaces, "every lens must state what it replaces")
 
     def test_grid_keyed_by_lens_id_matches_replay(self):
         grid = breakeven_grid(_SETUP, _BARS)
@@ -127,7 +170,7 @@ class TestBreakevenRegistry(unittest.TestCase):
         self.assertEqual(lens.mfe_trigger_r, 0.5)
         self.assertEqual(lens.trail_frac, 0.6)
         self.assertEqual(lens.status, "in_sample")
-        self.assertEqual(lens.category, "exit-stop")
+        self.assertEqual(lens.category, "stop only")
         self.assertEqual(lens.preregistered_ref, "exit_geometry_2026_06_30 s7 be0.5/trail0.6")
 
     def test_existing_lenses_carry_no_preregistered_ref(self):
@@ -177,7 +220,9 @@ class TestBreakevenRegistry(unittest.TestCase):
         self.assertEqual(lens.tp_atr_mult, 1.5)
         self.assertEqual(lens.tp_floor_frac, 0.006)
         self.assertEqual(lens.status, "in_sample")
-        self.assertEqual(lens.category, "exit-stop")
+        # "whole exit", not "exit-stop": this lens discards the brief TP
+        # ladder for a single 100% target (#1160).
+        self.assertEqual(lens.category, "whole exit")
         # The label names the anchor since #1114 -- "ATR bracket 1.5" alone was
         # what let a reader assume the lens described the live policy.
         self.assertEqual(lens.label, "ATR bracket 1.5 (bezpazery) · realised-fill anchor")
@@ -196,7 +241,7 @@ class TestBreakevenRegistry(unittest.TestCase):
         self.assertEqual(planned.anchor_mode, "planned")
         for lens in (realised, planned):
             self.assertEqual(lens.kind, "atr_bracket")
-            self.assertEqual(lens.category, "exit-stop")
+            self.assertEqual(lens.category, "whole exit")
             self.assertEqual(lens.status, "in_sample")
             self.assertEqual(lens.stop_atr_mult, 1.5)
             self.assertEqual(lens.tp_atr_mult, 1.5)
@@ -232,7 +277,8 @@ class TestBreakevenRegistry(unittest.TestCase):
         lens = BreakevenLens(
             lens_id="atr_bracket_no_anchor",
             label="unanchored",
-            category="exit-stop",
+            category="whole exit",
+            replaces="test fixture",
             status="in_sample",
             kind="atr_bracket",
             stop_atr_mult=1.5,
@@ -325,7 +371,12 @@ class TestBreakevenRegistry(unittest.TestCase):
         # A registered lens with an unrecognised kind is a config error that must
         # fail loudly at dispatch, not silently fall through to the break-even path.
         bogus = BreakevenLens(
-            lens_id="bogus", label="bogus", category="exit-stop", status="in_sample", kind="bogus"
+            lens_id="bogus",
+            label="bogus",
+            category="unknown",
+            replaces="test fixture",
+            status="in_sample",
+            kind="bogus",
         )
         with self.assertRaises(ValueError):
             _lens_realized_r(bogus, _SETUP, _BARS)

@@ -55,7 +55,7 @@
 			n_matured: 118,
 			threshold: 30,
 			in_sample: true,
-			note: 'counterfactual: realized R recomputed under an alternative exit-stop on the SAME picks + price paths; in-sample (tuned on this sample) and NOT validated — never the realized result.',
+			note: 'counterfactual: realized R recomputed under an alternative exit POLICY on the SAME picks + price paths; lenses differ in how much of the plan they replace (stop only / stop + entry / whole exit) — the per-lens scope is not in this payload, the client registry carries it. In-sample (tuned on this sample) and NOT validated — never the realized result.',
 			lenses: {
 				be_0p5r: {
 					n: 112,
@@ -240,6 +240,40 @@
 	{#snippet template()}
 		<div style="padding: 4rem 6rem; max-width: 40rem;">
 			<WhatIfPanel summary={insufficientSummary} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Story 3: the scope footnote (#1160). Selecting the ATR-bracket lens must say
+     the WHOLE exit is replaced — the panel used to state "alternative exit-stop"
+     over every lens, which reads as "these what-ifs only move the stop-loss" and
+     is false for this one: it discards the brief TP tranches for a single target. -->
+<Story
+	name="Bracket lens scope"
+	play={async ({ canvas }) => {
+		const summaryEl = canvas.getByText(/what-if · experimental/i);
+		await userEvent.click(summaryEl);
+
+		// Pick the realised-fill bracket specifically — /ATR bracket/ alone matches
+		// both anchor variants.
+		const lensButton = canvas.getByRole('button', { name: /realised-fill anchor/i });
+		await userEvent.click(lensButton);
+
+		// The scope line must name what this lens replaces, not just the stop.
+		await waitFor(() => expect(canvas.getByTestId('whatif-replaces')).toBeVisible());
+		await waitFor(() =>
+			expect(canvas.getByTestId('whatif-replaces')).toHaveTextContent(/the WHOLE exit/i)
+		);
+		await waitFor(() =>
+			expect(canvas.getByTestId('whatif-replaces')).toHaveTextContent(
+				/brief TP tranches are discarded/i
+			)
+		);
+	}}
+>
+	{#snippet template()}
+		<div style="padding: 4rem 6rem; max-width: 40rem;">
+			<WhatIfPanel summary={baseSummary} />
 		</div>
 	{/snippet}
 </Story>

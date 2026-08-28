@@ -2751,7 +2751,7 @@
             },
             "WhatIfPanel": {
                 "type": "object",
-                "description": "The WHAT-IF panel — display-only, IN-SAMPLE counterfactual exit-stop lenses.\n\nGated like EDGE. The realized headline is never touched by this block. The lens\nregistry (labels + ``in_sample``/``validated`` status) lives client-side, so the\n``lenses`` map is keyed by ``lens_id`` only.",
+                "description": "The WHAT-IF panel — display-only, IN-SAMPLE counterfactual exit lenses.\n\nGated like EDGE. The realized headline is never touched by this block. The lens\nregistry (labels + scope + ``in_sample``/``validated`` status) lives client-side,\nso the ``lenses`` map is keyed by ``lens_id`` only.\n\nLenses are NOT all exit-stop policies: some move only the stop, one also\ncollapses the entry ladder, and the ATR-bracket pair discards the brief\ntake-profit tranches for a single target. Describing them collectively as\nexit-stop was issue #1160.",
                 "properties": {
                     "status": {
                         "$ref": "#/components/schemas/Status3b9Enum"
