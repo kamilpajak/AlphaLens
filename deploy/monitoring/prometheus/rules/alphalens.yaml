@@ -477,6 +477,29 @@ groups:
           summary: "systemd drift on {{ $labels.unit }}: {{ $value }} finding(s) vs origin/main"
           description: "The installed {{ $labels.unit }} unit diverges from what the repository declares ({{ $value }} finding(s): untracked/missing drop-in, content drift, or a loaded-environment mismatch). This is the #1121 failure class — a hand edit on the host that no repo gate can see. Read `journalctl --user -u alphalens-systemd-drift-check.service` for the named findings, then either land the host's value in deploy/systemd/ or reinstall the tracked files; NEVER let the two stay different silently."
 
+      # The INVERTED assertion, on its own gauge (#1193). The ADR 0017 grant
+      # is host-only, so the drift comparison above is structurally BLIND to
+      # it: wiping it makes the host match origin/main PERFECTLY. It happened
+      # twice by copying the repo unit over the installed one, the second time
+      # undetected. Deliberately NOT folded into the drift alert — that alert
+      # tells the operator to reinstall the tracked files, which is exactly
+      # what causes this.
+      #
+      # `severity: warning`, not critical: nothing is failing at the moment it
+      # fires. The daemon keeps its exec-time environment and trades on; the
+      # break lands at the next start. 15m of debounce only delays the first
+      # fire (the textfile gauge persists between the hourly runs, so this is
+      # not a two-run agreement like the drift alert's 30m).
+      - alert: AlphalensLiveGrantMissing
+        expr: alphalens_systemd_live_grant_present == 0
+        for: 15m
+        labels:
+          severity: warning
+          route: telegram
+        annotations:
+          summary: "{{ $labels.unit }} has lost the ADR 0017 account-bound grant"
+          description: "ALPHALENS_SAXO_LIVE_STANDING and/or SAXO_LIVE_ACCOUNT_KEY are absent from the installed {{ $labels.unit }} configuration. The running daemon is NOT affected — it keeps the environment it started with — but the next start (reboot, crash restart, `systemctl --user restart`) will refuse to construct a real-money client, leaving any open position without stop management. Do NOT reinstall the tracked unit file: that is what removes the grant. Restore the operator-local drop-in `~/.config/systemd/user/alphalens-broker-manager-live.service.d/99-live-grant.conf` (see deploy/systemd/README.md section 9.1), then `systemctl --user daemon-reload`. Read `journalctl --user -u alphalens-systemd-drift-check.service` for the GRANT lines naming which variable is gone."
+
       - alert: AlphalensJobStale
         expr: time() - alphalens_job_last_success_timestamp_seconds{job="systemd-drift-check"} > 7200
         for: 5m

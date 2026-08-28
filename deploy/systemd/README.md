@@ -1428,22 +1428,42 @@ cd ~/AlphaLens
 cp deploy/systemd/alphalens-broker-manager-live.service ~/.config/systemd/user/
 ```
 
-Fill in the TWO account-bound lines on the **VPS copy only** — the repo
-copy ships them commented out on purpose (ADR 0017 §1.3: together they are
-the one grant that lets the LIVE factory construct a non-SIM `SaxoClient`
-at all; the constructor itself checks
+Put the TWO account-bound lines in an operator-local **drop-in**, never in
+the unit file itself (ADR 0017 §1.3: together they are the one grant that
+lets the LIVE factory construct a non-SIM `SaxoClient` at all; the
+constructor itself checks
 `ALPHALENS_SAXO_LIVE_STANDING == SAXO_LIVE_ACCOUNT_KEY`):
 
 ```bash
-$EDITOR ~/.config/systemd/user/alphalens-broker-manager-live.service
-# uncomment BOTH lines, fill BOTH with the SAME real live account key:
+mkdir -p ~/.config/systemd/user/alphalens-broker-manager-live.service.d
+$EDITOR ~/.config/systemd/user/alphalens-broker-manager-live.service.d/99-live-grant.conf
+# exactly these three lines, both keys the SAME real live account key:
+#   [Service]
 #   Environment=ALPHALENS_SAXO_LIVE_STANDING=<live account key>
 #   Environment=SAXO_LIVE_ACCOUNT_KEY=<live account key>
+chmod 600 ~/.config/systemd/user/alphalens-broker-manager-live.service.d/99-live-grant.conf
+systemctl --user daemon-reload
 ```
 
-Never commit the filled-in unit back to the repo — the account key is not
-a secret value in the credential sense, but it is still account-identifying
-and must never leave this one VPS file.
+**Why a drop-in and not the unit file (#1193).** The `cp` above overwrites
+the installed unit, so a grant typed into it is deleted by every future
+re-install. That happened twice, on 2026-08-25 and 2026-08-28. It is
+invisible when it happens — the running daemon keeps the environment it
+started with and trades on normally — and only breaks at the next reboot
+or restart, when the LIVE client refuses to construct and any open position
+is left without stop management. Copying the unit file never touches the
+`.d/` directory, so the grant survives it. The hourly drift check now also
+asserts both names are present and pages via `AlphalensLiveGrantMissing`
+if they are not; before #1193 it could not, because a wiped host matches
+`origin/main` perfectly.
+
+Keep the file to nothing but those two assignments. The drift check accepts
+an untracked drop-in only when every line in it assigns one of the two
+account-bound names; anything else is reported as `untracked_file`.
+
+Never commit the grant back to the repo — the account key is not a secret
+value in the credential sense, but it is still account-identifying and must
+never leave this one VPS file.
 
 ```bash
 systemctl --user daemon-reload
@@ -1686,10 +1706,17 @@ the mitigation in the meantime:
 
 ```bash
 systemctl --user disable --now alphalens-broker-manager-live.service
-$EDITOR ~/.config/systemd/user/alphalens-broker-manager-live.service
-# delete both account-bound Environment= lines
+rm ~/.config/systemd/user/alphalens-broker-manager-live.service.d/99-live-grant.conf
 systemctl --user daemon-reload
 ```
+
+Deleting the file is the whole decommission since #1193 — there is nothing
+to edit out of the unit any more. Verify with the drift check rather than by
+eye: `alphalens_systemd_live_grant_present` drops to 0, which is the
+expected state for a decommissioned instance (silence the resulting
+`AlphalensLiveGrantMissing` by removing the unit from `UNITS` in
+`apps/alphalens-research/scripts/check_systemd_drift.py`, in the same change
+that decommissions it).
 
 ### 10. Per-environment state separation (ADR 0016) — one-time VPS migration
 

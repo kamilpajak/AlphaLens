@@ -138,6 +138,125 @@ class TestStripHostOnlyLines(unittest.TestCase):
         self.assertEqual(stripped, text)
 
 
+_GRANT_DROPIN = (
+    "[Service]\n"
+    "Environment=ALPHALENS_SAXO_LIVE_STANDING=opaque\n"
+    "Environment=SAXO_LIVE_ACCOUNT_KEY=opaque\n"
+)
+
+
+class TestHostOnlyGrantDropinPredicate(unittest.TestCase):
+    """What makes an UNTRACKED host drop-in acceptable (#1193).
+
+    A content contract, not a basename allowlist. The file is acceptable only
+    when it does nothing but assign host-only vars — the same rule
+    :func:`strip_host_only_environment_lines` already applies to the base
+    unit, extended to one more place. A name-based allowlist would let any
+    future file called ``99-live-grant.conf`` govern the daemon unseen, which
+    is the #1136 lesson this module exists to keep.
+    """
+
+    def _is(self, text: str) -> bool:
+        return drift.is_host_only_grant_dropin(text, drift.LIVE_GRANT_VARS)
+
+    def test_accepts_a_file_that_only_assigns_host_only_vars(self):
+        self.assertTrue(self._is(_GRANT_DROPIN))
+
+    def test_accepts_comments_and_blank_lines_around_them(self):
+        self.assertTrue(self._is("# operator-local\n\n" + _GRANT_DROPIN))
+
+    def test_rejects_a_file_that_also_assigns_a_governed_var(self):
+        self.assertFalse(self._is(_GRANT_DROPIN + "Environment=ALPHALENS_BROKER_MAX_OPEN=9\n"))
+
+    def test_rejects_a_file_carrying_any_other_directive(self):
+        # The dangerous shape: grant-only Environment= lines PLUS an
+        # ExecStart= override. Judging by the variables alone would wave it
+        # through.
+        self.assertFalse(self._is(_GRANT_DROPIN + "ExecStart=/bin/evil\n"))
+
+    def test_rejects_a_file_that_assigns_nothing(self):
+        self.assertFalse(self._is("[Service]\n# nothing here\n"))
+
+
+class TestGrantPresence(unittest.TestCase):
+    """The INVERTED assertion (#1193).
+
+    Every other signal in this module compares the host against the repo. The
+    ADR 0017 grant is host-only by construction, so that comparison is
+    structurally blind to it: wiping the grant off the host makes the two
+    sides agree PERFECTLY and the check reports converged. Measured on the
+    real blob before this existed — a fully wiped LIVE host produced zero
+    findings, twice in production (2026-08-25, 2026-08-28).
+
+    Only an assertion in the opposite direction — these names must be
+    PRESENT — can see it.
+    """
+
+    def _findings(self, host_env, live_env, required=None):
+        return drift.grant_findings(
+            "alphalens-broker-manager-live",
+            host_env=host_env,
+            live_env=live_env,
+            required=drift.LIVE_GRANT_VARS if required is None else required,
+        )
+
+    def test_a_wiped_host_reports_one_finding_per_grant_name(self):
+        findings = self._findings(host_env={"ALPHALENS_BROKER_ENVIRONMENT": "live"}, live_env={})
+        self.assertEqual(
+            [(f.kind, f.subject) for f in findings],
+            [
+                ("missing_grant", "ALPHALENS_SAXO_LIVE_STANDING"),
+                ("missing_grant", "SAXO_LIVE_ACCOUNT_KEY"),
+            ],
+        )
+
+    def test_a_wipe_before_daemon_reload_is_still_reported(self):
+        # The pre-failure window: the unit file has lost the grant but systemd
+        # still holds the environment it loaded earlier, so the daemon trades
+        # on and only the NEXT start breaks. The host-side half is the only
+        # thing that can see this, and it is the half that matters.
+        findings = self._findings(host_env={}, live_env=dict.fromkeys(drift.LIVE_GRANT_VARS, "x"))
+        self.assertEqual(len(findings), 2)
+        for f in findings:
+            self.assertIn("host unit configuration", f.detail)
+            self.assertNotIn("systemd-loaded", f.detail)
+
+    def test_the_grant_in_the_base_unit_is_a_clean_bill(self):
+        # Positive control: the layout production runs TODAY must not alert.
+        env = dict.fromkeys(drift.LIVE_GRANT_VARS, "opaque")
+        self.assertEqual(self._findings(host_env=env, live_env=dict(env)), [])
+
+    def test_the_grant_in_a_dropin_is_equally_clean(self):
+        # The check asserts PRESENCE, not location — that is what lets the
+        # host migrate from the base unit to the drop-in without a window in
+        # which it alerts.
+        composed = drift.composed_environment(
+            "[Service]\nEnvironment=ALPHALENS_BROKER_ENVIRONMENT=live\n",
+            [("99-live-grant.conf", _GRANT_DROPIN)],
+        )
+        self.assertEqual(self._findings(host_env=composed, live_env=dict(composed)), [])
+
+    def test_a_unit_requiring_nothing_never_reports(self):
+        self.assertEqual(self._findings(host_env={}, live_env={}, required=frozenset()), [])
+
+    def test_an_unreadable_loaded_environment_still_judges_the_host_side(self):
+        # live_env=None means systemctl rendered a form the narrow parser
+        # refuses. That must not silence the file half — the file half is the
+        # one that predicts the next restart.
+        env = dict.fromkeys(drift.LIVE_GRANT_VARS, "opaque")
+        self.assertEqual(self._findings(host_env=env, live_env=None), [])
+        self.assertEqual(len(self._findings(host_env={}, live_env=None)), 2)
+
+    def test_findings_never_carry_the_grant_value(self):
+        findings = self._findings(
+            host_env={"ALPHALENS_SAXO_LIVE_STANDING": "opaque-value"},
+            live_env={"ALPHALENS_SAXO_LIVE_STANDING": "opaque-value"},
+        )
+        self.assertTrue(findings)
+        for f in findings:
+            self.assertNotIn("opaque-value", f.detail)
+
+
 class TestDriftFindings(unittest.TestCase):
     """The pure comparison over (repo files, host files, repo env, live env)."""
 
@@ -174,6 +293,42 @@ class TestDriftFindings(unittest.TestCase):
             [(f.kind, f.subject) for f in findings],
             [("untracked_file", "zz-mystery.conf")],
         )
+
+    def test_a_grant_only_untracked_dropin_is_expected_state(self):
+        # #1193: the grant moves OUT of the base unit into an untracked
+        # drop-in a unit-file `cp` cannot reach. Reporting it as untracked
+        # would trade a silent failure for a permanent false alert.
+        findings = self._findings(
+            host_files={
+                "alphalens-broker-manager.service": _BASE,
+                "10-a.conf": _DROPIN_A,
+                "99-live-grant.conf": _GRANT_DROPIN,
+            },
+            host_only_vars=drift.LIVE_GRANT_VARS,
+        )
+        self.assertEqual(findings, [])
+
+    def test_an_untracked_dropin_that_governs_anything_else_is_still_flagged(self):
+        # Positive control for the tolerance: it is a content contract, so a
+        # file that ALSO sets a governed rail, or overrides ExecStart, keeps
+        # flagging exactly as before.
+        for suffix, why in (
+            ("Environment=ALPHALENS_BROKER_MAX_OPEN=9\n", "extra variable"),
+            ("ExecStart=/bin/evil\n", "other directive"),
+        ):
+            with self.subTest(case=why):
+                findings = self._findings(
+                    host_files={
+                        "alphalens-broker-manager.service": _BASE,
+                        "10-a.conf": _DROPIN_A,
+                        "99-live-grant.conf": _GRANT_DROPIN + suffix,
+                    },
+                    host_only_vars=drift.LIVE_GRANT_VARS,
+                )
+                self.assertIn(
+                    ("untracked_file", "99-live-grant.conf"),
+                    [(f.kind, f.subject) for f in findings],
+                )
 
     def test_tracked_file_missing_from_host_is_flagged(self):
         findings = self._findings(host_files={"alphalens-broker-manager.service": _BASE})
@@ -308,6 +463,18 @@ class TestMetricsRendering(unittest.TestCase):
         )
         self.assertTrue(text.endswith("\n"))
 
+    def test_renders_the_grant_gauge_only_for_units_that_require_one(self):
+        # A `1` for the SIM daemon would be meaningless — it needs no grant.
+        # An explicit 0 for the unit that DOES is the whole point: an absent
+        # series must mean "broken emitter", never "the grant is fine".
+        text = drift.render_grant_metrics({"alphalens-broker-manager-live": False})
+        self.assertIn(
+            'alphalens_systemd_live_grant_present{unit="alphalens-broker-manager-live"} 0',
+            text,
+        )
+        self.assertNotIn('alphalens-broker-manager"', text)
+        self.assertTrue(text.endswith("\n"))
+
 
 class TestMetricsWriting(unittest.TestCase):
     def test_writes_atomically_into_the_textfile_dir(self):
@@ -424,11 +591,24 @@ class TestMainExitSemantics(unittest.TestCase):
     """Drift is a measurement (exit 0); only an inability to MEASURE is a
     job failure (exit 1)."""
 
-    def _run_main(self, fetch_raises=False, repo_raises=False, drifted=False):
+    def _run_main(
+        self,
+        fetch_raises=False,
+        repo_raises=False,
+        drifted=False,
+        grant_wiped=False,
+        host_base_absent=False,
+    ):
         base = "[Service]\nEnvironment=ALPHALENS_BROKER_ENVIRONMENT=sim\n"
 
         def fake_host_files(base_name):
+            if host_base_absent:
+                return {}
             files = {base_name: base}
+            # The LIVE host carries the ADR 0017 grant; the repo blob never
+            # does, which is exactly why the file comparison cannot see it go.
+            if not grant_wiped and base_name.endswith("-live.service"):
+                files[base_name] = base + _GRANT_DROPIN.removeprefix("[Service]\n")
             if drifted and base_name == "alphalens-broker-manager.service":
                 files["extra.conf"] = "[Service]\nEnvironment=X=1\n"
             return files
@@ -445,7 +625,12 @@ class TestMainExitSemantics(unittest.TestCase):
             if argv[1] == "show":
                 return base
             if argv[0] == "systemctl":
-                return "Environment=ALPHALENS_BROKER_ENVIRONMENT=sim\n"
+                loaded = "Environment=ALPHALENS_BROKER_ENVIRONMENT=sim"
+                if not grant_wiped and argv[3].endswith("-live"):
+                    loaded += " " + " ".join(
+                        f"{var}=opaque" for var in sorted(drift.LIVE_GRANT_VARS)
+                    )
+                return loaded + "\n"
             raise AssertionError(f"unexpected argv {argv}")
 
         written: dict[str, str] = {}
@@ -462,8 +647,38 @@ class TestMainExitSemantics(unittest.TestCase):
     def test_converged_host_exits_zero_with_zero_gauges(self):
         code, metrics = self._run_main()
         self.assertEqual(code, 0)
-        for unit, _base in drift.UNITS:
+        for unit, _base, _required in drift.UNITS:
             self.assertIn(f'alphalens_systemd_drift_findings{{unit="{unit}"}} 0', metrics)
+        self.assertIn(
+            'alphalens_systemd_live_grant_present{unit="alphalens-broker-manager-live"} 1',
+            metrics,
+        )
+
+    def test_a_wiped_grant_leaves_the_drift_gauge_at_zero_and_drops_the_grant_gauge(self):
+        # The finding this whole change exists for. The drift gauge staying 0
+        # is not a bug — the host genuinely matches origin/main. That is why
+        # the grant needs a gauge and an alert of its OWN: the drift alert's
+        # remedy ("reinstall the tracked files") is what CAUSES this.
+        code, metrics = self._run_main(grant_wiped=True)
+        self.assertEqual(code, 0)
+        self.assertIn(
+            'alphalens_systemd_drift_findings{unit="alphalens-broker-manager-live"} 0', metrics
+        )
+        self.assertIn(
+            'alphalens_systemd_live_grant_present{unit="alphalens-broker-manager-live"} 0',
+            metrics,
+        )
+
+    def test_a_host_with_no_installed_unit_reports_rather_than_crashing(self):
+        # Composing the host environment from a base unit the host does not
+        # have would raise KeyError, which main() does not catch — the job
+        # would die with a traceback instead of reporting missing_file.
+        code, metrics = self._run_main(host_base_absent=True)
+        self.assertEqual(code, 0)
+        self.assertIn(
+            'alphalens_systemd_live_grant_present{unit="alphalens-broker-manager-live"} 0',
+            metrics,
+        )
 
     def test_drift_still_exits_zero_and_the_gauge_carries_the_count(self):
         code, metrics = self._run_main(drifted=True)
