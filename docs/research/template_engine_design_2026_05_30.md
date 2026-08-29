@@ -68,6 +68,8 @@ Template engine attempts match
 
 **Important — don't panic early on aggregate rate:** with only 5 templates day one against a 39-class event_type enum on a 200-article/day feed, the aggregate `template_match_rate` will sit in the **20-35% range** for the first several months. That is the **expected coexistence baseline**, not failure. The aggregate threshold table becomes directional only after the template library reaches ~10+ templates. The actionable alert is per-template (§2.4): `AlphalensTemplateMatchRateLow` fires when a *specific* template drops below 20% over 7d — that catches pattern rot in one template without burning attention on the expected steady-state aggregate.
 
+> **Superseded 2026-08-29 (#1200).** The per-template rule was removed. It assumed each template's match rate is independent, but the engine returns on the first match, so a template's denominator is "articles that reached it" and the per-template shares add up to the *aggregate*. Requiring five templates to each clear 20% therefore requires an aggregate near 100% — contradicting the 20-35% band this same paragraph predicts. Measured 2026-08-29: aggregate 11/51 = 21.6%, all five templates firing continuously since 2026-08-26. #1201 replaces it with a self-relative threshold (7d against the template's own 30d baseline) once 30 days of history exist.
+
 ---
 
 **EMPIRICAL CORRECTION (2026-05-31) — corpus assumption falsified.**
