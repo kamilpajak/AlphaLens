@@ -571,14 +571,17 @@ class TestTemplateEngineMonitoring(unittest.TestCase):
     ``AlphalensTemplateMatchRateLow`` used to page when one template's
     ``match/attempt`` share fell under an absolute 20%. #1200 removed it.
     ``TemplateEngine.match`` returns on the FIRST matching template, so a
-    template's denominator is "articles that reached it", and the five
-    per-template shares therefore add up to the aggregate match rate.
-    Requiring each of five templates to clear 20% requires an aggregate
-    near 100%, while the design memo expects 20-35% — so the rule paged
-    every day from 2026-08-26 while the engine worked exactly as
-    designed. #1201 replaces it with a self-relative threshold once 30
-    days of history exist. Until then the tests below pin the removal, so
-    the same absolute-threshold shape cannot return by accident.
+    template's denominator is "articles that reached it" and each template
+    only sees what the earlier ones left. If all N templates held a share
+    of at least t, at most ``(1-t)**N`` of the articles would survive the
+    chain unmatched, so the aggregate match rate would have to be at least
+    ``1-(1-t)**N`` — for five templates at 20% that is 67%, against the
+    20-35% the design memo expects and the 21.6% measured. The rule
+    therefore paged every day from 2026-08-26 while the engine worked
+    exactly as designed. #1201 replaces it with a self-relative threshold
+    once 30 days of history exist. Until then the tests below pin the
+    removal, so the same absolute-threshold shape cannot return by
+    accident.
     """
 
     def _rules(self) -> list[dict]:

@@ -1029,12 +1029,15 @@ groups:
       # ``TemplateEngine.match`` iterates the templates in order and
       # RETURNS on the first match, so a template's denominator is
       # "articles that reached it", not "articles of that event class".
-      # Every article has at most one winner, so the five per-template
-      # shares add up to the aggregate match rate. Requiring each of five
-      # templates to clear 20% therefore requires an aggregate near 100%
-      # — every press release matching some template — while the design
-      # memo (template_engine_design_2026_05_30.md §1.1) expects the
-      # aggregate to sit at 20-35%.
+      # Each template only sees what the earlier ones left, so the shares
+      # are not independent. If every one of N templates held a share of
+      # at least t, the unmatched fraction surviving the chain would be
+      # at most (1-t)^N, which forces an aggregate match rate of at least
+      # 1-(1-t)^N. For the five shipped templates at t=0.20 that is
+      # 1-0.8^5 = 67%, against the 20-35% aggregate the design memo
+      # (template_engine_design_2026_05_30.md §1.1) expects and the 21.6%
+      # actually measured. The rule demanded roughly three times the
+      # match rate the engine is designed to produce.
       #
       # Measured 2026-08-29 06:46 UTC from the production textfile
       # (attempts / matches): earnings_surprise 51/6, then
