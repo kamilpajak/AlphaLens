@@ -794,6 +794,33 @@ def account_command() -> None:
     typer.echo(f"asof      {snapshot.asof.isoformat(timespec='seconds')}")
 
 
+@broker_app.command(name="capital-reader")
+def capital_reader_command() -> None:
+    """Read the account balance once and publish it as a Prometheus gauge (#1203).
+
+    The expensive half of the frame-vs-balance ratio. It lives OUT of the
+    broker-manager daemon on purpose: `get_account()` is three HTTP requests,
+    each retrying up to four attempts behind a 30s timeout, so one read can block
+    for minutes — and the daemon's loop runs the protective tick bare, so a
+    blocking observability read would stall stop management for exactly that
+    long, precisely during a broker outage. The daemon publishes the cheap half
+    (the sizing pin) itself, every tick, so the frame reported is provably the
+    frame in use.
+
+    Run it from a timer. On failure it writes NOTHING and exits non-zero, which
+    leaves the previous reading in place: the series goes stale rather than
+    absent, and AlphalensBrokerCapitalReadStale is what notices.
+    """
+    from alphalens_pipeline.brokers.automanager.control_loop import emit_capital_reader_gauges
+    from broker_contract.contract import BrokerError
+
+    try:
+        balance = emit_capital_reader_gauges(_cli_broker(mutating=False))
+    except (BrokerError, OSError, ValueError) as exc:
+        raise _fail(f"capital-reader failed: {exc}") from exc
+    typer.echo(f"balance {balance:,.2f}")
+
+
 @broker_app.command(name="positions")
 def positions_command() -> None:
     """List open positions (signed quantity, avg price, market value, PnL)."""

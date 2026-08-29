@@ -1760,8 +1760,12 @@ class TestCapitalAdequacyRules(unittest.TestCase):
 
     def test_the_ratio_rule_is_guarded_on_both_clocks(self) -> None:
         expr = self._one("AlphalensBrokerFrameToBalanceHigh")["expr"]
-        self.assertIn("alphalens_broker_manager_sizing_frame_acct", expr)
+        self.assertIn("alphalens_broker_manager_sizing_pin_acct", expr)
         self.assertIn("alphalens_broker_manager_account_total_value_acct", expr)
+        # Mode guard: in clamped mode the pin is NOT the frame (the frame is
+        # min(pin, balance)), so the ratio would be meaningless. The rule must
+        # STATE that assumption rather than make it silently.
+        self.assertIn("alphalens_broker_manager_sizing_mode_declared", expr)
         # Daemon freshness: emit_domain_metrics never unlinks, so a stopped unit
         # leaves node_exporter re-serving a frozen ratio forever.
         self.assertIn("alphalens_broker_manager_last_tick_timestamp_seconds", expr)

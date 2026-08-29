@@ -79,6 +79,14 @@ STALENESS_EXEMPT_JOBS: frozenset[str] = frozenset(
         # /edge freshness via job="edge-mirror" last-success) rather than the generic
         # AlphalensJobStale per-job rule. See deploy/monitoring/prometheus/rules/alphalens.yaml.
         "edge-mirror",
+        # broker-capital-reader is covered by the dedicated
+        # AlphalensBrokerCapitalReadStale alert, which is STRICTLY better than a
+        # generic JobStale rule here: it watches the freshness of the READING
+        # (alphalens_broker_manager_account_read_timestamp_seconds), so it also
+        # catches a unit that runs and exits 0 while never producing a usable
+        # balance. A JobStale twin would only add a second page for the same
+        # condition. See deploy/monitoring/prometheus/rules/alphalens.yaml.
+        "broker-capital-reader",
     }
 )
 

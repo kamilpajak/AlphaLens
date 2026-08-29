@@ -166,8 +166,10 @@ tests:
   # Pending at 20m (for: 30m), firing at 35m.
   - interval: 1m
     input_series:
-      - series: 'alphalens_broker_manager_sizing_frame_acct{job="broker-manager-live"}'
+      - series: 'alphalens_broker_manager_sizing_pin_acct{job="broker-manager-live"}'
         values: '15000x40'
+      - series: 'alphalens_broker_manager_sizing_mode_declared{job="broker-manager-live"}'
+        values: '1x40'
       - series: 'alphalens_broker_manager_account_total_value_acct{job="broker-manager-live"}'
         values: '1000x40'
       - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}'
@@ -195,8 +197,10 @@ tests:
   # the rule from being noise on the state the system is deliberately in.
   - interval: 1m
     input_series:
-      - series: 'alphalens_broker_manager_sizing_frame_acct{job="broker-manager-live"}'
+      - series: 'alphalens_broker_manager_sizing_pin_acct{job="broker-manager-live"}'
         values: '15000x40'
+      - series: 'alphalens_broker_manager_sizing_mode_declared{job="broker-manager-live"}'
+        values: '1x40'
       - series: 'alphalens_broker_manager_account_total_value_acct{job="broker-manager-live"}'
         values: '3000x40'
       - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}'
@@ -214,8 +218,10 @@ tests:
   # told the capital alert has gone blind rather than being told nothing.
   - interval: 1m
     input_series:
-      - series: 'alphalens_broker_manager_sizing_frame_acct{job="broker-manager-live"}'
+      - series: 'alphalens_broker_manager_sizing_pin_acct{job="broker-manager-live"}'
         values: '15000x120'
+      - series: 'alphalens_broker_manager_sizing_mode_declared{job="broker-manager-live"}'
+        values: '1x120'
       - series: 'alphalens_broker_manager_account_total_value_acct{job="broker-manager-live"}'
         values: '1000x120'
       - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}'
@@ -236,4 +242,4 @@ tests:
               job: broker-manager-live
             exp_annotations:
               summary: "LIVE account balance has not been read for over an hour"
-              description: "The LIVE daemon is ticking but its account read (expected every 15 min) has not succeeded for over an hour, so AlphalensBrokerFrameToBalanceHigh is disarmed. The balance gauge is holding its last known value on purpose. Check the daemon log for 'capital gauge account read failed' — usually an expired Saxo token or a broker outage."
+              description: "The LIVE daemon is ticking but the balance read (alphalens-broker-capital-reader, expected every 15 min) has not succeeded for over an hour, so AlphalensBrokerFrameToBalanceHigh is disarmed. The balance gauge is holding its last known value on purpose — a failed read writes nothing rather than lying. Check `journalctl --user -u alphalens-broker-capital-reader.service`; usually an expired Saxo token or a broker outage."

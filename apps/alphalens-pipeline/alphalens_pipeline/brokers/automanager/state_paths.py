@@ -196,6 +196,16 @@ def capital_metrics_job(env: str | None = None) -> str:
     return f"{metrics_job(env)}-{_CAPITAL_METRICS_JOB_SUFFIX}"
 
 
+def capital_reader_metrics_job(env: str | None = None) -> str:
+    """``"broker-capital-reader-<env>"`` — the out-of-process balance-read domain.
+
+    A job of its OWN, distinct from :func:`capital_metrics_job`: the daemon owns
+    the sizing pin and writes it every tick, while a separate timer owns the
+    balance. Sharing one domain would make each writer erase the other's series
+    on every write. The two are joined in PromQL, not on disk."""
+    return f"broker-capital-reader-{_resolve_env(env)}"
+
+
 def price_stream_metrics_job(env: str | None = None) -> str:
     """``"live-price-stream-<env>"`` — the ``SaxoLivePriceStream`` gauge job label."""
     return f"{_PRICE_STREAM_JOB_PREFIX}-{_resolve_env(env)}"

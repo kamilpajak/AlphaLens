@@ -1482,17 +1482,31 @@ groups:
       #
       # SIM has no twin on purpose: SIM never sets the pin, so clamped mode
       # makes its frame the balance, and the ratio is identically 1.
+      #
+      # TWO WRITERS, ONE RATIO. The pin is published by the daemon itself, every
+      # tick, from a config read — so the frame reported is provably the frame in
+      # use and cannot drift from a second config source. The balance is
+      # published by `alphalens broker capital-reader` on its own timer, because
+      # `get_account()` is three HTTP requests with retries and can block for
+      # minutes: putting it in the daemon loop would stall stop management during
+      # exactly the broker outage that makes it slow. node_exporter merges the
+      # two textfiles, so the join happens here.
       - alert: AlphalensBrokerFrameToBalanceHigh
-        # Guarded twice. The daemon-freshness guard is the same one every
-        # stream rule carries (emit_domain_metrics never unlinks, so a stopped
-        # unit leaves node_exporter re-serving frozen gauges). The read-freshness
-        # guard exists because the balance is refreshed at most every 15 min and
-        # a FAILING read deliberately keeps the last known value: without it,
-        # this rule would compare today's frame against a week-old balance.
+        # Guarded three ways. The MODE guard: in clamped mode the pin is NOT the
+        # frame (the frame is min(pin, balance)), so the ratio would be
+        # meaningless — the rule states that assumption instead of making it. The
+        # daemon-freshness guard is the one every stream rule carries
+        # (emit_domain_metrics never unlinks, so a stopped unit leaves
+        # node_exporter re-serving frozen gauges). The read-freshness guard
+        # exists because a FAILED balance read deliberately leaves the previous
+        # snapshot in place: without it, this would compare today's pin against a
+        # week-old balance.
         expr: >-
-          (alphalens_broker_manager_sizing_frame_acct{job="broker-manager-live"}
+          (alphalens_broker_manager_sizing_pin_acct{job="broker-manager-live"}
            /
            alphalens_broker_manager_account_total_value_acct{job="broker-manager-live"}) > 10
+          and
+          alphalens_broker_manager_sizing_mode_declared{job="broker-manager-live"} == 1
           and
           (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}) < 300
           and
@@ -1522,7 +1536,7 @@ groups:
           unit: broker-manager-live
         annotations:
           summary: "LIVE account balance has not been read for over an hour"
-          description: "The LIVE daemon is ticking but its account read (expected every 15 min) has not succeeded for over an hour, so AlphalensBrokerFrameToBalanceHigh is disarmed. The balance gauge is holding its last known value on purpose. Check the daemon log for 'capital gauge account read failed' — usually an expired Saxo token or a broker outage."
+          description: "The LIVE daemon is ticking but the balance read (alphalens-broker-capital-reader, expected every 15 min) has not succeeded for over an hour, so AlphalensBrokerFrameToBalanceHigh is disarmed. The balance gauge is holding its last known value on purpose — a failed read writes nothing rather than lying. Check `journalctl --user -u alphalens-broker-capital-reader.service`; usually an expired Saxo token or a broker outage."
 
       - alert: AlphalensLivePriceStreamReaderDown
         # Same anti-false-positive gate as the SIM version: an idle reader

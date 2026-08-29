@@ -1,0 +1,56 @@
+[Unit]
+# The EXPENSIVE half of the frame-vs-balance ratio (#1203): read the LIVE
+# account balance and publish it as a Prometheus gauge.
+#
+# WHY A SEPARATE UNIT AND NOT THE DAEMON. `get_account()` is three HTTP
+# requests, each retrying up to four attempts with 5/15/30s backoffs behind a
+# 30s timeout, so one read can block for minutes. `run_daemon` calls its
+# protective tick BARE, so a blocking observability read inside the loop would
+# stall reconcile, exit management and stop placement for exactly that long —
+# and precisely during the broker outage that makes the read slow. Telemetry may
+# observe the control path; it must not decide whether that path runs.
+#
+# The CHEAP half — the sizing pin actually in use — is published by the daemon
+# itself, every tick, from a config read. That keeps the consistency guarantee
+# (the frame reported is the frame in use, it cannot drift from a second config
+# source) without putting its acquisition on the critical path. The two
+# textfiles are joined in PromQL; node_exporter merges every *.prom in the dir.
+#
+#   cp deploy/systemd/alphalens-broker-capital-reader.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-broker-capital-reader.timer
+#
+# READ-ONLY on LIVE by construction: `_cli_broker(mutating=False)` routes LIVE
+# reads and refuses LIVE placement (#1052), so this unit needs the LIVE
+# credentials but NOT the daemon's arming rails — nothing here can place an
+# order, and there is no rails config to drift out of sync.
+Description=AlphaLens LIVE account-balance gauge (frame-vs-balance ratio)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+
+# SAXO_LIVE_* credentials. Fail loud on a missing env file.
+EnvironmentFile=/etc/alphalens/env
+
+Environment=ALPHALENS_BROKER_ENVIRONMENT=live
+Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile
+
+ExecStart=%h/AlphaLens/.venv/bin/alphalens broker capital-reader
+
+# Cron-health metrics. A failed read writes NO gauge file on purpose (the
+# previous reading stays in place, going stale rather than absent), so the
+# staleness is what AlphalensBrokerCapitalReadStale detects; this records the
+# unit's own last_success for AlphalensJobStale.
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics broker-capital-reader
+
+StandardOutput=journal
+StandardError=journal
+
+MemoryMax=512M
+TasksMax=16
+
+[Install]
+WantedBy=default.target
