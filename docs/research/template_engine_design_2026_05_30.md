@@ -68,6 +68,8 @@ Template engine attempts match
 
 **Important — don't panic early on aggregate rate:** with only 5 templates day one against a 39-class event_type enum on a 200-article/day feed, the aggregate `template_match_rate` will sit in the **20-35% range** for the first several months. That is the **expected coexistence baseline**, not failure. The aggregate threshold table becomes directional only after the template library reaches ~10+ templates. The actionable alert is per-template (§2.4): `AlphalensTemplateMatchRateLow` fires when a *specific* template drops below 20% over 7d — that catches pattern rot in one template without burning attention on the expected steady-state aggregate.
 
+> **Superseded 2026-08-29 (#1200).** The per-template rule was removed. It assumed each template's match rate is independent, but the engine returns on the first match, so a template's denominator is "articles that reached it" and each template only sees what the earlier ones left. If all N templates held a share of at least t, at most (1−t)^N of the articles would survive the chain unmatched, so the aggregate would have to be at least 1−(1−t)^N — for five templates at 20% that is 67%, roughly three times the 20-35% band this same paragraph predicts. Measured 2026-08-29: aggregate 11/51 = 21.6%, all five templates firing continuously since 2026-08-26. #1201 replaces it with a self-relative threshold (7d against the template's own 30d baseline) once 30 days of history exist.
+
 ---
 
 **EMPIRICAL CORRECTION (2026-05-31) — corpus assumption falsified.**
@@ -95,6 +97,8 @@ Direct TemplateEngine trace on the two `event_type="m_and_a"` rows in this corpu
 **Implementation slot:** new follow-up issue, scoped as `apps/alphalens-pipeline/alphalens_pipeline/thematic/sources/edgar_press_release.py` adapter emitting `Article` records with `source="edgar_press_release"`, plus a one-line extension to `is_press_release` allowlist treating that source as equivalent to the press-wire allowlist. Volume estimate: 35-45 earnings releases + 5-15 M&A announcements per day during active periods, well within existing ingestion capacity.
 
 **Updated forecast:** after the EDGAR 8-K source lands, measure the new aggregate match rate over 7d. The 20-35% projection is provisionally retained as the target band, but with the understanding it is now a *post-EDGAR-integration* forecast, not an as-shipped baseline. The current 0% measurement is the correct as-shipped baseline given the ingest gap. Per-template `AlphalensTemplateMatchRateLow` alert (§2.4) is intentionally NOT firing today, because every template's denominator (articles that passed `is_press_release`) is zero — the alert is gated on receiving any press-release input at all.
+
+> **Superseded 2026-08-29 (#1200).** Once press-release input did arrive, the alert fired on all five templates continuously. It was removed — see the note under §1.1 and the marker in §2.4.
 
 ### §1.2 Template DSL — **YAML + named Python predicates**
 
@@ -239,7 +243,9 @@ alphalens_template_match_rate{template_id="..."}
 alphalens_template_predicate_total{name="...", outcome="pass|fail"}
 ```
 
-Plus one Grafana dashboard panel (auto-pickup via the existing provisioning) and one alert rule:
+Plus one Grafana dashboard panel (auto-pickup via the existing provisioning) and one alert rule.
+
+> **The alert rule below was REMOVED 2026-08-29 (#1200) and no longer exists in `deploy/monitoring/prometheus/rules/alphalens.yaml`.** It is kept here only as the historical spec. The threshold cannot be satisfied: the engine returns on the first match, so if all N templates held a share of at least t the aggregate would have to be at least 1−(1−t)^N — 67% for five templates at 20%, against the 20-35% this memo predicts. #1201 replaces it with a self-relative threshold. Do not re-create it from this block.
 
 ```yaml
 - alert: AlphalensTemplateMatchRateLow

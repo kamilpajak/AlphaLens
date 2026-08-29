@@ -559,55 +559,71 @@ class TestGrafanaDashboard(unittest.TestCase):
 
 
 class TestTemplateEngineMonitoring(unittest.TestCase):
-    """Pin the per-template alert + dashboard panel introduced in epic #321 PR-1.
+    """Pin the template-engine monitoring contract (epic #321 PR-1, revised #1200).
 
     The structured-event-template engine (issue #143) emits four metric
     families: ``alphalens_template_match_total``,
     ``alphalens_template_attempt_total``,
     ``alphalens_template_holdout_total``,
-    ``alphalens_template_predicate_total``. If a future edit silently
-    drops the per-template alert or the panel that surfaces these,
-    Operator loses the only signal that says "a template stopped
-    matching". This file guards the contract.
+    ``alphalens_template_predicate_total``. The dashboard panels that
+    surface them are pinned at the bottom of this class.
+
+    ``AlphalensTemplateMatchRateLow`` used to page when one template's
+    ``match/attempt`` share fell under an absolute 20%. #1200 removed it.
+    ``TemplateEngine.match`` returns on the FIRST matching template, so a
+    template's denominator is "articles that reached it" and each template
+    only sees what the earlier ones left. If all N templates held a share
+    of at least t, at most ``(1-t)**N`` of the articles would survive the
+    chain unmatched, so the aggregate match rate would have to be at least
+    ``1-(1-t)**N`` — for five templates at 20% that is 67%, against the
+    20-35% the design memo expects and the 21.6% measured. The rule
+    therefore paged every day from 2026-08-26 while the engine worked
+    exactly as designed. #1201 replaces it with a self-relative threshold
+    once 30 days of history exist. Until then the tests below pin the
+    removal, so the same absolute-threshold shape cannot return by
+    accident.
     """
 
     def _rules(self) -> list[dict]:
         return _load_rules()["groups"][0]["rules"]
 
-    def test_template_match_rate_low_alert_exists(self) -> None:
-        rules = self._rules()
-        match_rate_alerts = [r for r in rules if r.get("alert") == "AlphalensTemplateMatchRateLow"]
-        self.assertEqual(
-            len(match_rate_alerts),
-            1,
-            "Expected exactly one AlphalensTemplateMatchRateLow alert.",
+    def test_template_match_rate_low_alert_is_removed(self) -> None:
+        names = [r.get("alert") for r in self._rules()]
+        self.assertNotIn(
+            "AlphalensTemplateMatchRateLow",
+            names,
+            "The per-template match-rate alert cannot be satisfied (#1200). "
+            "Read #1201 before re-adding any per-template rate alert.",
         )
-        alert = match_rate_alerts[0]
-        # Threshold from design memo §1.1 — per-template, not aggregate.
-        self.assertIn("0.20", alert["expr"])
-        # Per-template grouping is the load-bearing part of the design.
-        self.assertIn("by (template_id)", alert["expr"])
-        # Denominator-zero guard so a brand-new template doesn't trip
-        # on the first second of life (no attempts yet → no rate series).
-        self.assertIn(
-            "alphalens_template_attempt_total",
-            alert["expr"],
-            "Alert must reference attempts so the >0 guard can fire.",
-        )
-        self.assertEqual(alert.get("for"), "1d")
-        self.assertEqual(alert.get("labels", {}).get("route"), "telegram")
 
-    def test_template_match_rate_low_has_min_sample_guard(self) -> None:
-        # A single low-volume template (e.g. 1 attempt / 0 match in 7 days)
-        # must not page on a 7-day low-match-rate alert. The denominator
-        # guard is an absolute min-sample count via increase(), not just
-        # rate(...) > 0 (which a single attempt already satisfies).
-        rules = self._rules()
-        match_rate_alerts = [r for r in rules if r.get("alert") == "AlphalensTemplateMatchRateLow"]
-        self.assertEqual(len(match_rate_alerts), 1)
-        expr = match_rate_alerts[0]["expr"]
-        self.assertIn("increase(alphalens_template_attempt_total[7d])", expr)
-        self.assertIn(">= 50", expr)
+    def test_no_alert_thresholds_a_per_template_match_share(self) -> None:
+        # Generalised guard: the defect is the SHAPE — an absolute threshold on
+        # a share whose denominator is shared across templates — not the name.
+        # Renaming the rule must not slip the same expression back in.
+        #
+        # Deliberately broad. Matching only the exact `< 0.20` / `>= 50` shape
+        # would wave through the identical defect written as `< 0.19`. #1201's
+        # self-relative rule WILL have to relax this assertion — that is the
+        # point: the relaxation is where someone re-reads the bound above.
+        offenders = [
+            r.get("alert")
+            for r in self._rules()
+            if "alphalens_template_match_total" in r.get("expr", "")
+        ]
+        self.assertEqual(
+            offenders,
+            [],
+            "No alert may threshold alphalens_template_match_total until #1201 "
+            f"defines a self-relative rule; found: {offenders}",
+        )
+
+    def test_template_metrics_missing_alert_survives(self) -> None:
+        # Over-deletion guard: dropping the match-rate rule must not take the
+        # metric-family dead-man switch with it.
+        missing = [r for r in self._rules() if r.get("alert") == "AlphalensTemplateMetricsMissing"]
+        self.assertEqual(len(missing), 1, "The metric-family guard must stay.")
+        self.assertIn("absent(alphalens_template_attempt_total)", missing[0]["expr"])
+        self.assertEqual(missing[0].get("labels", {}).get("route"), "telegram")
 
     def test_dashboard_includes_template_engine_panels(self) -> None:
         dash = _load_dashboard()

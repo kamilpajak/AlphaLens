@@ -1018,55 +1018,62 @@ groups:
           description: "The rollup-write gauge fell back to outcome=unknown, which no code path is supposed to reach — an outcome literal drifted out of THEME_ROLLUP_WRITE_OUTCOMES in alphalens_cli/commands/thematic.py. The stage still completed and the briefs are unaffected, but AlphalensThematicThemeRollupLost is blind for as long as this lasts: it can no longer tell a written day from a failed one."
 
       # ---------------------------------------------------------------
-      # Structured-event-template health (epic #321 PR-1).
+      # Structured-event-template health (epic #321 PR-1, revised #1200).
       # ---------------------------------------------------------------
       #
-      # ``AlphalensTemplateMatchRateLow`` fires when a SPECIFIC template
-      # drops below 20% match-rate over a rolling 7-day window. The
-      # aggregate template_match_rate across all 5 dnia-jeden templates
-      # is expected to sit in the 20-35% range for the first months
-      # (design memo §1.1) — alerting on aggregate would be noisy.
-      # Per-template lets the operator catch pattern rot in one template
-      # without burning attention on the expected steady-state aggregate.
+      # ``AlphalensTemplateMatchRateLow`` USED to live here: it paged when
+      # one template's match/attempt share stayed under an absolute 20%
+      # over 7 days. #1200 removed it because that threshold can never be
+      # satisfied.
       #
-      # ``for: 1d`` debounce — a single quiet news day on a niche
-      # template (e.g. regulatory_action when there's no FDA panel that
-      # week) should not page; sustained drift is the signal.
+      # ``TemplateEngine.match`` iterates the templates in order and
+      # RETURNS on the first match, so a template's denominator is
+      # "articles that reached it", not "articles of that event class".
+      # Each template only sees what the earlier ones left, so the shares
+      # are not independent. If every one of N templates held a share of
+      # at least t, the unmatched fraction surviving the chain would be
+      # at most (1-t)^N, which forces an aggregate match rate of at least
+      # 1-(1-t)^N. For the five shipped templates at t=0.20 that is
+      # 1-0.8^5 = 67%, against the 20-35% aggregate the design memo
+      # (template_engine_design_2026_05_30.md §1.1) expects and the 21.6%
+      # actually measured. The rule demanded roughly three times the
+      # match rate the engine is designed to produce.
       #
-      # Guard against judging the match rate on too few attempts. A
-      # brand-new or low-traffic template (e.g. 1 attempt / 0 match over
-      # the window) would otherwise trip a 7-day low-match-rate page on
-      # statistically meaningless volume. Require an absolute minimum of
-      # 50 attempts over the 7-day window before the rate clause counts;
-      # ``increase()`` gives the total count (not the per-second rate, so
-      # a single attempt no longer satisfies the old ``rate(...) > 0``
-      # guard). This also keeps the zero-denominator division safe — no
-      # series is produced until the min-sample clause passes.
-      - alert: AlphalensTemplateMatchRateLow
-        expr: |
-          (sum by (template_id) (rate(alphalens_template_match_total[7d]))
-           /
-           sum by (template_id) (rate(alphalens_template_attempt_total[7d])))
-          < 0.20
-          and
-          sum by (template_id) (increase(alphalens_template_attempt_total[7d])) >= 50
-        for: 1d
-        labels:
-          severity: warning
-          route: telegram
-        annotations:
-          summary: "Template {{ $labels.template_id }} match rate < 20% for 7 days"
-          description: "Per-template match-rate sustained below 20% — review pattern in templates/{{ $labels.template_id }}.yaml or accept drift via `alphalens templates evaluate`."
+      # Measured 2026-08-29 06:46 UTC from the production textfile
+      # (attempts / matches): earnings_surprise 51/6, then
+      # financing_announcement 45/5, guidance_update 40/0,
+      # m_and_a_press_release 40/0, regulatory_action 40/0. The cascade
+      # 51 -> 45 (= 51-6) -> 40 (= 45-5) is the first-match-wins
+      # denominator in plain sight; the aggregate was 11/51 = 21.6%,
+      # inside the memo's band. All five series went firing at
+      # 2026-08-26 05:04 UTC — the same second — and never resolved, so
+      # `repeat_interval: 24h` sent one identical Telegram message per
+      # day while the engine worked exactly as designed.
+      #
+      # #1201 restores per-template rot detection with a SELF-RELATIVE
+      # threshold (7d share against the template's own 30d baseline),
+      # which is immune both to this shared denominator and to a niche
+      # template having a legitimately quiet week. It waits until 30 days
+      # of history exist (metrics start 2026-08-24) so the threshold is
+      # derived rather than invented. Read #1201 before adding any new
+      # alert over alphalens_template_match_total.
 
       # Missing-family guard (zen review of PR #1109, same rationale as
       # the AlphalensJobMetricMissing companions above): the production
       # flush in extract_daily is failure-isolated, so a chronically
       # failing or unwired flush leaves the whole family absent with
-      # only a container log line — and the match-rate alert above is
-      # silently blind. ``for: 6h`` rides through the gap between two
-      # 6x/day thematic-build slots plus an image rebuild; on a fresh
-      # VPS this fires until the first successful extract run, same
-      # accepted behaviour as the JobMetricMissing family.
+      # only a container log line. ``for: 6h`` rides through the gap
+      # between two 6x/day thematic-build slots plus an image rebuild;
+      # on a fresh VPS this fires until the first successful extract
+      # run, same accepted behaviour as the JobMetricMissing family.
+      #
+      # KNOW WHAT THIS DOES NOT COVER (#1200 -> #1201). It detects the
+      # absence of the WHOLE alphalens_template_* family, nothing finer.
+      # A single template decaying to zero matches while the others keep
+      # emitting does NOT page, and will not until #1201 lands. That is
+      # a deliberate interim gap, accepted because the alert that used
+      # to claim this coverage was firing on all five templates at once
+      # and so delivered no usable signal either.
       - alert: AlphalensTemplateMetricsMissing
         expr: absent(alphalens_template_attempt_total)
         for: 6h
@@ -1075,7 +1082,7 @@ groups:
           route: telegram
         annotations:
           summary: "Template-engine metrics missing"
-          description: "alphalens_template_attempt_total is absent — the production template-metrics flush is unwired, chronically failing inside its failure-isolation catch, or the textfile was deleted. The match-rate alert is blind while this lasts. Check the thematic-build container log for 'template metrics flush failed'."
+          description: "alphalens_template_attempt_total is absent — the production template-metrics flush is unwired, chronically failing inside its failure-isolation catch, or the textfile was deleted. Every template-engine panel is blank while this lasts. Check the thematic-build container log for 'template metrics flush failed'."
 
       # ---------------------------------------------------------------
       # EDGAR EX-99.1 press-release dead-man-switch (epic #379 / #384).
