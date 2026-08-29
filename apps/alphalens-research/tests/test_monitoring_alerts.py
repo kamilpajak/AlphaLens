@@ -600,6 +600,11 @@ class TestTemplateEngineMonitoring(unittest.TestCase):
         # Generalised guard: the defect is the SHAPE — an absolute threshold on
         # a share whose denominator is shared across templates — not the name.
         # Renaming the rule must not slip the same expression back in.
+        #
+        # Deliberately broad. Matching only the exact `< 0.20` / `>= 50` shape
+        # would wave through the identical defect written as `< 0.19`. #1201's
+        # self-relative rule WILL have to relax this assertion — that is the
+        # point: the relaxation is where someone re-reads the bound above.
         offenders = [
             r.get("alert")
             for r in self._rules()

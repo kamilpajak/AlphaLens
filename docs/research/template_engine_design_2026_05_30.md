@@ -98,6 +98,8 @@ Direct TemplateEngine trace on the two `event_type="m_and_a"` rows in this corpu
 
 **Updated forecast:** after the EDGAR 8-K source lands, measure the new aggregate match rate over 7d. The 20-35% projection is provisionally retained as the target band, but with the understanding it is now a *post-EDGAR-integration* forecast, not an as-shipped baseline. The current 0% measurement is the correct as-shipped baseline given the ingest gap. Per-template `AlphalensTemplateMatchRateLow` alert (§2.4) is intentionally NOT firing today, because every template's denominator (articles that passed `is_press_release`) is zero — the alert is gated on receiving any press-release input at all.
 
+> **Superseded 2026-08-29 (#1200).** Once press-release input did arrive, the alert fired on all five templates continuously. It was removed — see the note under §1.1 and the marker in §2.4.
+
 ### §1.2 Template DSL — **YAML + named Python predicates**
 
 **Both reviewers converged independently.**
@@ -241,7 +243,9 @@ alphalens_template_match_rate{template_id="..."}
 alphalens_template_predicate_total{name="...", outcome="pass|fail"}
 ```
 
-Plus one Grafana dashboard panel (auto-pickup via the existing provisioning) and one alert rule:
+Plus one Grafana dashboard panel (auto-pickup via the existing provisioning) and one alert rule.
+
+> **The alert rule below was REMOVED 2026-08-29 (#1200) and no longer exists in `deploy/monitoring/prometheus/rules/alphalens.yaml`.** It is kept here only as the historical spec. The threshold cannot be satisfied: the engine returns on the first match, so if all N templates held a share of at least t the aggregate would have to be at least 1−(1−t)^N — 67% for five templates at 20%, against the 20-35% this memo predicts. #1201 replaces it with a self-relative threshold. Do not re-create it from this block.
 
 ```yaml
 - alert: AlphalensTemplateMatchRateLow

@@ -222,7 +222,7 @@
       "id": 14,
       "type": "timeseries",
       "title": "Per-template match rate (7d rolling)",
-      "description": "Share of the articles that reached each template which it then matched. Templates are tried in order and the first match wins, so each series only sees what the ones above it left — these shares are not independent and are not comparable to a fixed target. No alert thresholds them (see #1200); #1201 adds a self-relative one.",
+      "description": "Share of the articles that reached each template which it then matched. Templates are tried in order and the first match wins, so each series only sees what the ones above it left — these shares are not independent and are not comparable to a fixed target. Read as a trend, not a number: the counters reset on every pipeline run, so the 7d rate() is approximate. No alert thresholds them (see #1200); #1201 adds a self-relative one.",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 30},
       "targets": [
         {

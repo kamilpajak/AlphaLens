@@ -1062,11 +1062,18 @@ groups:
       # the AlphalensJobMetricMissing companions above): the production
       # flush in extract_daily is failure-isolated, so a chronically
       # failing or unwired flush leaves the whole family absent with
-      # only a container log line — and the match-rate alert above is
-      # silently blind. ``for: 6h`` rides through the gap between two
-      # 6x/day thematic-build slots plus an image rebuild; on a fresh
-      # VPS this fires until the first successful extract run, same
-      # accepted behaviour as the JobMetricMissing family.
+      # only a container log line. ``for: 6h`` rides through the gap
+      # between two 6x/day thematic-build slots plus an image rebuild;
+      # on a fresh VPS this fires until the first successful extract
+      # run, same accepted behaviour as the JobMetricMissing family.
+      #
+      # KNOW WHAT THIS DOES NOT COVER (#1200 -> #1201). It detects the
+      # absence of the WHOLE alphalens_template_* family, nothing finer.
+      # A single template decaying to zero matches while the others keep
+      # emitting does NOT page, and will not until #1201 lands. That is
+      # a deliberate interim gap, accepted because the alert that used
+      # to claim this coverage was firing on all five templates at once
+      # and so delivered no usable signal either.
       - alert: AlphalensTemplateMetricsMissing
         expr: absent(alphalens_template_attempt_total)
         for: 6h
@@ -1075,7 +1082,7 @@ groups:
           route: telegram
         annotations:
           summary: "Template-engine metrics missing"
-          description: "alphalens_template_attempt_total is absent — the production template-metrics flush is unwired, chronically failing inside its failure-isolation catch, or the textfile was deleted. The match-rate alert is blind while this lasts. Check the thematic-build container log for 'template metrics flush failed'."
+          description: "alphalens_template_attempt_total is absent — the production template-metrics flush is unwired, chronically failing inside its failure-isolation catch, or the textfile was deleted. Every template-engine panel is blank while this lasts. Check the thematic-build container log for 'template metrics flush failed'."
 
       # ---------------------------------------------------------------
       # EDGAR EX-99.1 press-release dead-man-switch (epic #379 / #384).
