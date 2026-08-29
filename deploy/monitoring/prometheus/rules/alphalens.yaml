@@ -1459,6 +1459,90 @@ groups:
           summary: "LIVE broker-manager heartbeat metric missing"
           description: "No heartbeat gauge for the LIVE auto-manager (REAL MONEY). The daemon has not ticked since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Clears after the first tick."
 
+      # --- LIVE capital adequacy: declared frame vs real balance (#1203) ----
+      #
+      # Under `declared` sizing mode the pin IS the frame, so position size does
+      # not follow the account. The daily-loss breaker is denominated in that
+      # frame, which makes one "1R" cost frame/balance times what it looks like
+      # in real money. The DIRECTION is the hazard: a loss lowers the balance,
+      # raises the ratio, and lets the daily stop tolerate a LARGER share of
+      # what is left — the rail loosens exactly when it should tighten.
+      # Specified as critic finding B9 in
+      # broker_sizing_declared_frame_design_2026_08_12.md section 4.6.
+      #
+      # THRESHOLD 10 IS A BACKSTOP, NOT THE PRODUCTION VALUE. The live account
+      # has knowingly run near 7.5 since the declared frame shipped (the memo
+      # accepted that for Path A), so a rule that paged on today's deliberate
+      # state would be noise from day one — the failure removed in #1200. At 10
+      # it is silent today and still catches the runaway direction. Lower it to
+      # about 2 once the account is funded: that is where the worst-case frame
+      # draw (MAX_OPEN x max suggested weight = 0.5 of the frame) meets the
+      # gross cap (GROSS_FRAC x total_value = 0.5 of the balance). Lowering it
+      # is a deliberate edit, never a tuning knob.
+      #
+      # SIM has no twin on purpose: SIM never sets the pin, so clamped mode
+      # makes its frame the balance, and the ratio is identically 1.
+      #
+      # TWO WRITERS, ONE RATIO. The pin is published by the daemon itself, every
+      # tick, from a config read — so the frame reported is provably the frame in
+      # use and cannot drift from a second config source. The balance is
+      # published by `alphalens broker capital-reader` on its own timer, because
+      # `get_account()` is three HTTP requests with retries and can block for
+      # minutes: putting it in the daemon loop would stall stop management during
+      # exactly the broker outage that makes it slow. node_exporter merges the
+      # two textfiles, so the join happens here.
+      - alert: AlphalensBrokerFrameToBalanceHigh
+        # Guarded three ways. The MODE guard: in clamped mode the pin is NOT the
+        # frame (the frame is min(pin, balance)), so the ratio would be
+        # meaningless — the rule states that assumption instead of making it. The
+        # daemon-freshness guard is the one every stream rule carries
+        # (emit_domain_metrics never unlinks, so a stopped unit leaves
+        # node_exporter re-serving frozen gauges). The read-freshness guard
+        # exists because a FAILED balance read deliberately leaves the previous
+        # snapshot in place: without it, this would compare today's pin against a
+        # week-old balance.
+        expr: >-
+          (alphalens_broker_manager_sizing_pin_acct{job="broker-manager-live"}
+           /
+           alphalens_broker_manager_account_total_value_acct{job="broker-manager-live"}) > 10
+          and
+          alphalens_broker_manager_sizing_mode_declared{job="broker-manager-live"} == 1
+          and
+          (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}) < 300
+          and
+          (time() - alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"}) < 3600
+        for: 30m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: 'LIVE sizing frame is {{ $value | printf "%.1f" }}x the real balance'
+          description: "Position size is computed from the declared frame, not the account, and the daily-loss breaker is denominated in that same frame — so one 1R day now costs roughly this multiple of one percent of REAL capital. Either fund the account or lower ALPHALENS_BROKER_SIZING_EQUITY; the two are meant to track each other."
+
+      # Companion to the rule above, same reason the JobMetricMissing pairs
+      # exist: the ratio rule disarms itself when the read-freshness guard goes
+      # false, so a permanently failing account read would silently take the
+      # capital alert offline while the daemon looks healthy.
+      # 1800s = TWICE the reader's ~15min cadence: one missed fire is a
+      # transient Saxo blip, two is a unit that stopped. Deliberately TIGHTER
+      # than the ratio rule's own 3600s read-freshness guard, so the operator
+      # is warned that the balance is going stale a full window BEFORE the
+      # ratio rule disarms itself on the same staleness.
+      - alert: AlphalensBrokerCapitalReadStale
+        expr: >-
+          (time() - alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"}) > 1800
+          and
+          (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}) < 300
+        for: 15m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: "LIVE account balance has not been read for over 30 minutes"
+          description: "The LIVE daemon is ticking but the balance read (alphalens-broker-capital-reader, expected every 15 min) has missed two consecutive fires, so AlphalensBrokerFrameToBalanceHigh is within one window of disarming itself. The balance gauge is holding its last known value on purpose — a failed read writes nothing rather than lying. Check `journalctl --user -u alphalens-broker-capital-reader.service`; usually an expired Saxo token or a broker outage."
+
       - alert: AlphalensLivePriceStreamReaderDown
         # Same anti-false-positive gate as the SIM version: an idle reader
         # (nothing subscribed) holds no WebSocket BY DESIGN and must not

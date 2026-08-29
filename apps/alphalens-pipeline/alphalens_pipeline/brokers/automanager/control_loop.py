@@ -479,6 +479,139 @@ def _emit_price_reader_client_gauges(remote: Any | None) -> None:
         logger.warning("price-reader client gauge emit failed", exc_info=True)
 
 
+# --- Frame gauge: the capital frame this daemon is actually sizing with (#1203)
+#
+# Under `declared` sizing mode the pin IS the frame, so position size does not
+# follow the account. The daily-loss breaker is denominated in that frame, which
+# makes one "1R" cost `frame / balance` times what it looks like in real money.
+# The direction is the hazard: a loss lowers the balance, raises the ratio, and
+# lets the daily stop tolerate a LARGER share of what is left — the rail loosens
+# exactly when it should tighten. Specified as critic finding B9 in
+# `broker_sizing_declared_frame_design_2026_08_12.md` section 4.6.
+#
+# OWNERSHIP SPLIT — the daemon publishes the CHEAP half only. The frame is a
+# local config read; the balance needs a broker round trip, and `get_account()`
+# is THREE HTTP requests, each retrying up to
+# ``SaxoClient._MAX_REQUEST_ATTEMPTS`` times on ``_SERVER_ERROR_BACKOFFS`` behind
+# the client ``timeout`` (4 / 5-15-30s / 30s today), so one read can block for
+# minutes. `run_daemon` calls
+# `run_once` BARE, so a blocking observability read would stall the protective
+# tick — no reconcile, no exit management, no stop placement — for exactly as
+# long, and precisely during a broker outage. Telemetry may observe the control
+# path; it must not become a participant in whether that path runs.
+#
+# The expensive half is therefore collected out-of-process by
+# `alphalens broker capital-reader`, on its own timer, into its own domain. The
+# alert joins the two (node_exporter merges every *.prom in the directory). This
+# keeps the consistency guarantee that motivated in-process emission — the frame
+# published is the frame in use, it cannot drift from a second config source —
+# without putting its acquisition on the critical path.
+_SIZING_PIN_METRIC_NAME = "alphalens_broker_manager_sizing_pin_acct"
+_SIZING_MODE_DECLARED_METRIC_NAME = "alphalens_broker_manager_sizing_mode_declared"
+
+
+def _sizing_pin_and_mode() -> tuple[float | None, bool]:
+    """The configured pin and whether the mode is ``declared``, read from env.
+
+    Deliberately NOT via :func:`_resolve_sizing_equity`: that function needs the
+    account equity to resolve ``clamped`` mode (``min(pin, snapshot)``), and the
+    balance is exactly what this daemon no longer reads. So it reports the raw
+    pin plus the mode, and the consumer decides — in ``declared`` mode the pin IS
+    the effective frame, which is why the alert conditions on the mode gauge
+    instead of assuming it.
+
+    Returns ``(None, ...)`` when the pin is unset or unparseable; the caller then
+    emits nothing rather than publishing a frame that does not exist."""
+    from alphalens_pipeline.brokers.automanager.live_rails import (
+        SIZING_EQUITY_ENV,
+        SIZING_EQUITY_MODE_ENV,
+        SIZING_MODE_DECLARED,
+    )
+
+    declared = (
+        os.environ.get(SIZING_EQUITY_MODE_ENV) or ""
+    ).strip().lower() == SIZING_MODE_DECLARED
+    raw = os.environ.get(SIZING_EQUITY_ENV)
+    if raw is None or not raw.strip():
+        return None, declared
+    try:
+        pin = float(raw)
+    except ValueError:
+        return None, declared
+    if not math.isfinite(pin) or pin <= 0.0:
+        return None, declared
+    return pin, declared
+
+
+def _emit_frame_gauges() -> None:
+    """Publish the sizing pin and the mode. Pure local work — no broker call.
+
+    Its own domain (``state_paths.capital_metrics_job``): ``emit_domain_metrics``
+    overwrites a whole per-job file, so sharing the heartbeat's domain would
+    erase the liveness gauge every tick. The ``{job=...}`` LABEL stays the
+    heartbeat's — same daemon instance, different file.
+
+    Best-effort, like the emitters above: a textfile-dir hiccup must never reach
+    the tick."""
+    pin, declared = _sizing_pin_and_mode()
+    if pin is None:
+        return
+    from alphalens_pipeline.observability.textfile import emit_domain_metrics
+
+    domain = state_paths.capital_metrics_job()
+    label = f'{{job="{state_paths.metrics_job()}"}}'
+    try:
+        emit_domain_metrics(
+            domain,
+            {
+                f"{_SIZING_PIN_METRIC_NAME}{label}": pin,
+                f"{_SIZING_MODE_DECLARED_METRIC_NAME}{label}": int(declared),
+            },
+        )
+    except OSError:
+        logger.warning("sizing frame gauge emit failed", exc_info=True)
+
+
+_BALANCE_METRIC_NAME = "alphalens_broker_manager_account_total_value_acct"
+_BALANCE_READ_TS_METRIC_NAME = "alphalens_broker_manager_account_read_timestamp_seconds"
+
+
+def emit_capital_reader_gauges(broker: Broker, *, now_wall: float | None = None) -> float:
+    """Read the account balance ONCE and publish it. The expensive half of #1203.
+
+    Called out-of-process by ``alphalens broker capital-reader`` on its own
+    timer, never from the daemon tick — see the ownership-split note above.
+
+    ``total_value`` is ACCOUNT currency, the same denomination as the sizing pin
+    (it comes from the account-scoped balances payload, while the pin is
+    ``paper_equity``, which ``broker_contract.sizing`` documents as account
+    currency). That is what lets the alert divide the two directly; fx enters
+    only later, converting a notional to the instrument currency for the share
+    count.
+
+    ON FAILURE THIS WRITES NOTHING, deliberately. ``emit_domain_metrics``
+    replaces a whole file atomically, so declining to write leaves the previous
+    snapshot — balance AND its read timestamp — exactly as it was. The reading
+    goes STALE rather than ABSENT, which is what the alert's freshness guard
+    detects; writing a zero or dropping the keys would either lie or silently
+    disarm the rule. Raises so the unit exits non-zero and systemd records it."""
+    account = broker.get_account()
+    balance = float(account.total_value)
+    if not math.isfinite(balance) or balance <= 0.0:
+        raise ValueError(f"account total_value is not a usable balance: {balance!r}")
+    from alphalens_pipeline.observability.textfile import emit_domain_metrics
+
+    label = f'{{job="{state_paths.metrics_job()}"}}'
+    emit_domain_metrics(
+        state_paths.capital_reader_metrics_job(),
+        {
+            f"{_BALANCE_METRIC_NAME}{label}": balance,
+            f"{_BALANCE_READ_TS_METRIC_NAME}{label}": time.time() if now_wall is None else now_wall,
+        },
+    )
+    return balance
+
+
 def _kill_active(deps: LoopDeps) -> bool:
     """D3 (ADR 0016): True when EITHER the per-instance ``kill_file`` OR the
     GLOBAL kill (when wired) is present — defense in depth. ``global_kill_file``
@@ -3460,6 +3593,10 @@ def run_daemon(
         # the in-process path. Separate emit because it is a separate job — one
         # emit call writes one whole per-job textfile.
         _emit_price_reader_client_gauges(_REMOTE_QUOTE_SOURCE)
+        # #1203: the frame this daemon is sizing with. Config read + one local
+        # file write, no broker call — see the ownership-split note on
+        # _emit_frame_gauges. The balance half is collected out-of-process.
+        _emit_frame_gauges()
         if on_tick is not None:
             on_tick()  # push_token + stream stale/breaker alert + liveness gauge (main thread)
         first = False

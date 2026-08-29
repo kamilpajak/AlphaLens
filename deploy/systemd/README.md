@@ -1695,7 +1695,68 @@ Two readers are refused, not merged: a second `alphalens broker price-reader`
 on the same socket exits with `already serving`. That refusal is the guard —
 two readers would be two elevated sessions demoting each other.
 
-#### 9.7 Standing-grant decommission
+#### 9.7 Capital adequacy — the declared frame against the real balance (#1203)
+
+Under `ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared` the pin **is** the frame:
+position size comes from `ALPHALENS_BROKER_SIZING_EQUITY`, not from the account.
+The daily-loss breaker (`ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R`) is denominated in
+that same frame, so one "1R" day costs roughly `frame / balance` times one
+percent of REAL capital — 1% at parity, ~7.5% at a frame of 15 000 against a
+2 000 balance. The direction is the hazard: a loss lowers the balance, raises the
+ratio, and lets the daily stop tolerate a **larger** share of what is left.
+
+**Two writers, one ratio — split by COST, not by ownership.**
+
+The daemon publishes the cheap half itself, every tick, from a config read and
+one local file write — no broker call — into
+`alphalens_domain_broker-manager-<env>-capital.prom`:
+
+- `alphalens_broker_manager_sizing_pin_acct` — the configured pin, account currency;
+- `alphalens_broker_manager_sizing_mode_declared` — 1 when the mode is `declared`, so the pin IS the effective frame (in `clamped` mode the frame is `min(pin, balance)`, which the daemon cannot know without the balance it deliberately does not read).
+
+`alphalens-broker-capital-reader.timer` publishes the expensive half every
+~15 min into `alphalens_domain_broker-capital-reader-<env>.prom`:
+
+- `alphalens_broker_manager_account_total_value_acct` — the balance, same currency as the pin, so the alert divides them directly;
+- `alphalens_broker_manager_account_read_timestamp_seconds` — when that read succeeded.
+
+**Why the balance is NOT read in the daemon.** `get_account()` is three HTTP
+requests, each retrying up to four attempts with 5/15/30 s backoffs behind a 30 s
+timeout, so one read can block for minutes. `run_daemon` runs its protective tick
+bare, so a blocking observability read would stall reconcile, exit management and
+stop placement for exactly that long — during precisely the broker outage that
+makes it slow. Telemetry may observe the control path; it must not decide whether
+that path runs. Keeping the pin in-process is what preserves the consistency the
+in-daemon version was for: the frame reported is provably the frame in use.
+
+**A failed read writes nothing.** `emit_domain_metrics` replaces a whole file
+atomically, so declining to write leaves the previous balance and its timestamp
+in place. The reading goes stale rather than absent, which is what the alert's
+freshness guard detects; writing a zero would lie, and dropping the keys would
+silently disarm the rule.
+
+Two LIVE-only rules (SIM never sets the pin, so its ratio is identically 1):
+
+- `AlphalensBrokerFrameToBalanceHigh` — ratio > 10 for 30 m, guarded on the sizing MODE, the daemon heartbeat and the read timestamp;
+- `AlphalensBrokerCapitalReadStale` — the balance read has not succeeded for over an hour while the daemon still ticks, which means the rule above has silently disarmed.
+
+**The threshold of 10 is a backstop, not the production value.** The account has
+knowingly run near 7.5 since the declared frame shipped, so a rule that paged on
+that state would be noise. Lower it to about 2 once the account is funded — that
+is where the worst-case frame draw (`MAX_OPEN` x max suggested weight = 0.5 of
+the frame) meets the gross cap (`GROSS_FRAC` x `total_value` = 0.5 of the
+balance), and every declared rail then means what it says.
+
+Triage:
+
+```bash
+cat /var/lib/node_exporter/textfile/alphalens_domain_broker-manager-live-capital.prom
+cat /var/lib/node_exporter/textfile/alphalens_domain_broker-capital-reader-live.prom
+journalctl --user -u alphalens-broker-capital-reader.service --since -2h
+alphalens broker capital-reader        # one-shot, ALPHALENS_BROKER_ENVIRONMENT=live
+```
+
+#### 9.8 Standing-grant decommission
 
 The account-bound grant (`ALPHALENS_SAXO_LIVE_STANDING` /
 `SAXO_LIVE_ACCOUNT_KEY`) does not self-expire — a disabled-but-not-cleaned

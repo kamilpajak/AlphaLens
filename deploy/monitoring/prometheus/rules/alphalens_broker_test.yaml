@@ -156,3 +156,113 @@ tests:
             exp_annotations:
               summary: "SIM order-stream breaker flapping (>3 trips/hour)"
               description: "More than 3 breaker trips inside an hour — the stream connects and dies repeatedly, so the re-arm ladder is cycling instead of converging (a gateway that accepts sockets and then drops them, or a Saxo-side incident). Check `journalctl --user -u alphalens-broker-manager.service` for the trip reasons. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+
+  # ---------------------------------------------------------------------
+  # AlphalensBrokerFrameToBalanceHigh / AlphalensBrokerCapitalReadStale (#1203)
+  # ---------------------------------------------------------------------
+
+  # Frame 15000 against a balance of 1000 is a ratio of 15, above the backstop
+  # threshold of 10, with a fresh daemon heartbeat and a fresh account read.
+  # Pending at 20m (for: 30m), firing at 35m.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_sizing_pin_acct{job="broker-manager-live"}'
+        values: '15000x40'
+      - series: 'alphalens_broker_manager_sizing_mode_declared{job="broker-manager-live"}'
+        values: '1x40'
+      - series: 'alphalens_broker_manager_account_total_value_acct{job="broker-manager-live"}'
+        values: '1000x40'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}'
+        values: '0+60x40'
+      - series: 'alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AlphalensBrokerFrameToBalanceHigh
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: AlphalensBrokerFrameToBalanceHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: broker-manager-live
+              job: broker-manager-live
+            exp_annotations:
+              summary: 'LIVE sizing frame is 15.0x the real balance'
+              description: "Position size is computed from the declared frame, not the account, and the daily-loss breaker is denominated in that same frame — so one 1R day now costs roughly this multiple of one percent of REAL capital. Either fund the account or lower ALPHALENS_BROKER_SIZING_EQUITY; the two are meant to track each other."
+
+  # A funded account: frame 15000 against 3000 is a ratio of 5, under the
+  # backstop. Never pages, however long it holds. This is the case that keeps
+  # the rule from being noise on the state the system is deliberately in.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_sizing_pin_acct{job="broker-manager-live"}'
+        values: '15000x40'
+      - series: 'alphalens_broker_manager_sizing_mode_declared{job="broker-manager-live"}'
+        values: '1x40'
+      - series: 'alphalens_broker_manager_account_total_value_acct{job="broker-manager-live"}'
+        values: '3000x40'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}'
+        values: '0+60x40'
+      - series: 'alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: AlphalensBrokerFrameToBalanceHigh
+        exp_alerts: []
+
+  # The balance gauge is stale: the daemon still ticks, but the account read
+  # froze at t=0. The ratio would be 15, yet the read-freshness guard disarms
+  # the ratio rule — and the companion rule fires instead, so the operator is
+  # told the capital alert has gone blind rather than being told nothing.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_sizing_pin_acct{job="broker-manager-live"}'
+        values: '15000x120'
+      - series: 'alphalens_broker_manager_sizing_mode_declared{job="broker-manager-live"}'
+        values: '1x120'
+      - series: 'alphalens_broker_manager_account_total_value_acct{job="broker-manager-live"}'
+        values: '1000x120'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}'
+        values: '0+60x120'
+      - series: 'alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"}'
+        values: '0x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: AlphalensBrokerFrameToBalanceHigh
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: AlphalensBrokerCapitalReadStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: broker-manager-live
+              job: broker-manager-live
+            exp_annotations:
+              summary: "LIVE account balance has not been read for over 30 minutes"
+              description: "The LIVE daemon is ticking but the balance read (alphalens-broker-capital-reader, expected every 15 min) has missed two consecutive fires, so AlphalensBrokerFrameToBalanceHigh is within one window of disarming itself. The balance gauge is holding its last known value on purpose — a failed read writes nothing rather than lying. Check `journalctl --user -u alphalens-broker-capital-reader.service`; usually an expired Saxo token or a broker outage."
+
+  # TODAY'S PRODUCTION STATE, pinned as silent. Frame 15000 against a balance of
+  # 2000 is a ratio of 7.5 — the state the account has knowingly been in since
+  # the declared frame shipped, and the reason the threshold is 10 rather than
+  # the ~2 it should become once the account is funded. If someone lowers the
+  # threshold below 7.5 without funding first, THIS case turns red instead of
+  # the operator's phone.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_sizing_pin_acct{job="broker-manager-live"}'
+        values: '15000x40'
+      - series: 'alphalens_broker_manager_sizing_mode_declared{job="broker-manager-live"}'
+        values: '1x40'
+      - series: 'alphalens_broker_manager_account_total_value_acct{job="broker-manager-live"}'
+        values: '2000x40'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}'
+        values: '0+60x40'
+      - series: 'alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: AlphalensBrokerFrameToBalanceHigh
+        exp_alerts: []

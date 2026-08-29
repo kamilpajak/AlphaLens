@@ -1742,5 +1742,61 @@ class TestSharedPriceReaderAlerts(unittest.TestCase):
             self.assertIn("emergency", description, name)
 
 
+class TestCapitalAdequacyRules(unittest.TestCase):
+    """Pin the declared-frame / balance rules (#1203).
+
+    Position size comes from the declared frame, and the daily-loss breaker is
+    denominated in that same frame, so a balance that falls without the frame
+    following makes one "1R" a larger share of real capital. These two rules are
+    the only thing that says so."""
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self, name: str) -> dict:
+        found = [r for r in self._rules() if r.get("alert") == name]
+        self.assertEqual(len(found), 1, f"expected exactly one {name}")
+        return found[0]
+
+    def test_the_ratio_rule_is_guarded_on_both_clocks(self) -> None:
+        expr = self._one("AlphalensBrokerFrameToBalanceHigh")["expr"]
+        self.assertIn("alphalens_broker_manager_sizing_pin_acct", expr)
+        self.assertIn("alphalens_broker_manager_account_total_value_acct", expr)
+        # Mode guard: in clamped mode the pin is NOT the frame (the frame is
+        # min(pin, balance)), so the ratio would be meaningless. The rule must
+        # STATE that assumption rather than make it silently.
+        self.assertIn("alphalens_broker_manager_sizing_mode_declared", expr)
+        # Daemon freshness: emit_domain_metrics never unlinks, so a stopped unit
+        # leaves node_exporter re-serving a frozen ratio forever.
+        self.assertIn("alphalens_broker_manager_last_tick_timestamp_seconds", expr)
+        # Read freshness: the balance is refreshed at most every 15 min and a
+        # FAILING read deliberately keeps the last known value, so without this
+        # the rule would compare today's frame against a week-old balance.
+        self.assertIn("alphalens_broker_manager_account_read_timestamp_seconds", expr)
+
+    def test_the_stale_read_companion_exists(self) -> None:
+        # The ratio rule disarms itself when its read-freshness guard goes
+        # false, so a permanently failing read would silently take the capital
+        # alert offline while the daemon still looks healthy.
+        expr = self._one("AlphalensBrokerCapitalReadStale")["expr"]
+        self.assertIn("alphalens_broker_manager_account_read_timestamp_seconds", expr)
+        self.assertIn("alphalens_broker_manager_last_tick_timestamp_seconds", expr)
+
+    def test_both_rules_are_live_scoped_and_route_to_telegram(self) -> None:
+        for name in ("AlphalensBrokerFrameToBalanceHigh", "AlphalensBrokerCapitalReadStale"):
+            rule = self._one(name)
+            self.assertIn('job="broker-manager-live"', rule["expr"], name)
+            self.assertEqual(rule.get("labels", {}).get("route"), "telegram", name)
+            self.assertEqual(rule.get("labels", {}).get("unit"), "broker-manager-live", name)
+
+    def test_there_is_deliberately_no_sim_twin(self) -> None:
+        """SIM never sets the sizing pin, so clamped mode makes its frame the
+        balance and the ratio is identically 1. A SIM twin would page about
+        virtual money."""
+        for rule in self._rules():
+            if rule.get("alert", "").startswith(("AlphalensBrokerFrameToBalance",)):
+                self.assertNotIn('job="broker-manager-sim"', rule["expr"], rule["alert"])
+
+
 if __name__ == "__main__":
     unittest.main()

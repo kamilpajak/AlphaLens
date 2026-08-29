@@ -1,0 +1,14 @@
+[Unit]
+Description=AlphaLens LIVE account-balance gauge timer (~15min)
+
+[Timer]
+# The balance moves on deposits, withdrawals and P&L — nothing that needs the
+# daemon's 45s cadence. 15min is far finer than the question and keeps the read
+# well inside the 1h staleness guard on AlphalensBrokerFrameToBalanceHigh, so a
+# single missed fire never disarms the ratio alert.
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
