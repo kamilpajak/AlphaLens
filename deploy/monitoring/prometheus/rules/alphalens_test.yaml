@@ -488,7 +488,7 @@ tests:
               route: telegram
             exp_annotations:
               summary: "Template-engine metrics missing"
-              description: "alphalens_template_attempt_total is absent — the production template-metrics flush is unwired, chronically failing inside its failure-isolation catch, or the textfile was deleted. The match-rate alert is blind while this lasts. Check the thematic-build container log for 'template metrics flush failed'."
+              description: "alphalens_template_attempt_total is absent — the production template-metrics flush is unwired, chronically failing inside its failure-isolation catch, or the textfile was deleted. Every template-engine panel is blank while this lasts. Check the thematic-build container log for 'template metrics flush failed'."
 
   # Case 2: the family exists (even at explicit 0) -> guard stays quiet.
   - interval: 1h
