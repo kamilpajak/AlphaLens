@@ -1459,6 +1459,71 @@ groups:
           summary: "LIVE broker-manager heartbeat metric missing"
           description: "No heartbeat gauge for the LIVE auto-manager (REAL MONEY). The daemon has not ticked since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Clears after the first tick."
 
+      # --- LIVE capital adequacy: declared frame vs real balance (#1203) ----
+      #
+      # Under `declared` sizing mode the pin IS the frame, so position size does
+      # not follow the account. The daily-loss breaker is denominated in that
+      # frame, which makes one "1R" cost frame/balance times what it looks like
+      # in real money. The DIRECTION is the hazard: a loss lowers the balance,
+      # raises the ratio, and lets the daily stop tolerate a LARGER share of
+      # what is left — the rail loosens exactly when it should tighten.
+      # Specified as critic finding B9 in
+      # broker_sizing_declared_frame_design_2026_08_12.md section 4.6.
+      #
+      # THRESHOLD 10 IS A BACKSTOP, NOT THE PRODUCTION VALUE. The live account
+      # has knowingly run near 7.5 since the declared frame shipped (the memo
+      # accepted that for Path A), so a rule that paged on today's deliberate
+      # state would be noise from day one — the failure removed in #1200. At 10
+      # it is silent today and still catches the runaway direction. Lower it to
+      # about 2 once the account is funded: that is where the worst-case frame
+      # draw (MAX_OPEN x max suggested weight = 0.5 of the frame) meets the
+      # gross cap (GROSS_FRAC x total_value = 0.5 of the balance). Lowering it
+      # is a deliberate edit, never a tuning knob.
+      #
+      # SIM has no twin on purpose: SIM never sets the pin, so clamped mode
+      # makes its frame the balance, and the ratio is identically 1.
+      - alert: AlphalensBrokerFrameToBalanceHigh
+        # Guarded twice. The daemon-freshness guard is the same one every
+        # stream rule carries (emit_domain_metrics never unlinks, so a stopped
+        # unit leaves node_exporter re-serving frozen gauges). The read-freshness
+        # guard exists because the balance is refreshed at most every 15 min and
+        # a FAILING read deliberately keeps the last known value: without it,
+        # this rule would compare today's frame against a week-old balance.
+        expr: >-
+          (alphalens_broker_manager_sizing_frame_acct{job="broker-manager-live"}
+           /
+           alphalens_broker_manager_account_total_value_acct{job="broker-manager-live"}) > 10
+          and
+          (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}) < 300
+          and
+          (time() - alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"}) < 3600
+        for: 30m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: 'LIVE sizing frame is {{ $value | printf "%.1f" }}x the real balance'
+          description: "Position size is computed from the declared frame, not the account, and the daily-loss breaker is denominated in that same frame — so one 1R day now costs roughly this multiple of one percent of REAL capital. Either fund the account or lower ALPHALENS_BROKER_SIZING_EQUITY; the two are meant to track each other."
+
+      # Companion to the rule above, same reason the JobMetricMissing pairs
+      # exist: the ratio rule disarms itself when the read-freshness guard goes
+      # false, so a permanently failing account read would silently take the
+      # capital alert offline while the daemon looks healthy.
+      - alert: AlphalensBrokerCapitalReadStale
+        expr: >-
+          (time() - alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"}) > 3600
+          and
+          (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}) < 300
+        for: 15m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: "LIVE account balance has not been read for over an hour"
+          description: "The LIVE daemon is ticking but its account read (expected every 15 min) has not succeeded for over an hour, so AlphalensBrokerFrameToBalanceHigh is disarmed. The balance gauge is holding its last known value on purpose. Check the daemon log for 'capital gauge account read failed' — usually an expired Saxo token or a broker outage."
+
       - alert: AlphalensLivePriceStreamReaderDown
         # Same anti-false-positive gate as the SIM version: an idle reader
         # (nothing subscribed) holds no WebSocket BY DESIGN and must not

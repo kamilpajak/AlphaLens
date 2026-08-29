@@ -1695,7 +1695,47 @@ Two readers are refused, not merged: a second `alphalens broker price-reader`
 on the same socket exits with `already serving`. That refusal is the guard —
 two readers would be two elevated sessions demoting each other.
 
-#### 9.7 Standing-grant decommission
+#### 9.7 Capital adequacy — the declared frame against the real balance (#1203)
+
+Under `ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared` the pin **is** the frame:
+position size comes from `ALPHALENS_BROKER_SIZING_EQUITY`, not from the account.
+The daily-loss breaker (`ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R`) is denominated in
+that same frame, so one "1R" day costs roughly `frame / balance` times one
+percent of REAL capital — 1% at parity, ~7.5% at a frame of 15 000 against a
+2 000 balance. The direction is the hazard: a loss lowers the balance, raises the
+ratio, and lets the daily stop tolerate a **larger** share of what is left.
+
+Three gauges, written every tick in ONE atomic emit to the daemon's OWN capital
+textfile — `alphalens_domain_broker-manager-<env>-capital.prom`, separate from
+the heartbeat and stream files for the usual `emit_domain_metrics` clobber
+reason — all labeled `{job="broker-manager-<env>"}`:
+
+- `alphalens_broker_manager_sizing_frame_acct` — the effective frame, account currency;
+- `alphalens_broker_manager_account_total_value_acct` — the real balance, same currency, so the ratio is a plain division;
+- `alphalens_broker_manager_account_read_timestamp_seconds` — when that balance was last read successfully.
+
+The balance is read at most every 15 min and cached; a failed read keeps the last
+known value on purpose, so the series goes **stale rather than absent**. Nothing
+is emitted until the first successful read — without a balance the effective
+frame cannot be resolved at all in clamped mode.
+
+Two LIVE-only rules (SIM never sets the pin, so its ratio is identically 1):
+
+- `AlphalensBrokerFrameToBalanceHigh` — ratio > 10 for 30 m, guarded on BOTH the daemon heartbeat and the read timestamp;
+- `AlphalensBrokerCapitalReadStale` — the read has not succeeded for over an hour while the daemon still ticks, which means the rule above has silently disarmed.
+
+**The threshold of 10 is a backstop, not the production value.** The account has
+knowingly run near 7.5 since the declared frame shipped, so a rule that paged on
+that state would be noise. Lower it to about 2 once the account is funded — that
+is where the worst-case frame draw (`MAX_OPEN` x max suggested weight = 0.5 of
+the frame) meets the gross cap (`GROSS_FRAC` x `total_value` = 0.5 of the
+balance), and every declared rail then means what it says.
+
+Triage: `grep . /var/lib/node_exporter/textfile/alphalens_domain_broker-manager-live-capital.prom`
+for the current pair, and `journalctl --user -u alphalens-broker-manager-live.service | grep "capital gauge"`
+for read failures (usually an expired Saxo token).
+
+#### 9.8 Standing-grant decommission
 
 The account-bound grant (`ALPHALENS_SAXO_LIVE_STANDING` /
 `SAXO_LIVE_ACCOUNT_KEY`) does not self-expire — a disabled-but-not-cleaned

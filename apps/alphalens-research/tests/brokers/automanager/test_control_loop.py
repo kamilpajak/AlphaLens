@@ -5965,6 +5965,141 @@ def _planned_fold_data(
     }
 
 
+class TestCapitalGauges(unittest.TestCase):
+    """#1203 — publish the declared frame and the real balance so the ratio
+    between them is queryable.
+
+    The daily-loss breaker is denominated in the FRAME, not the balance, so a
+    balance that falls while the frame stays put makes the same "1R" a larger
+    share of real capital: the rail loosens itself exactly when it should
+    tighten, and nothing says so. Specified as critic finding B9 in
+    ``broker_sizing_declared_frame_design_2026_08_12.md`` §4.6 and never built.
+
+    OBSERVABILITY ONLY — nothing here may change a sizing, refusal or
+    placement decision.
+    """
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _textfile_dir():
+        with (
+            TemporaryDirectory() as d,
+            mock.patch.dict(os.environ, {"ALPHALENS_TEXTFILE_DIR": d}, clear=False),
+        ):
+            yield Path(d)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _declared_frame(frame: str = "15000"):
+        with mock.patch.dict(
+            os.environ,
+            {SIZING_EQUITY_ENV: frame, SIZING_EQUITY_MODE_ENV: "declared"},
+            clear=False,
+        ):
+            yield
+
+    @staticmethod
+    def _broker(balance: float | None = 2000.0, *, raises: BaseException | None = None) -> Any:
+        calls: list[int] = []
+
+        class _B:
+            def get_account(self) -> Any:
+                calls.append(1)
+                if raises is not None:
+                    raise raises
+                return type("Acct", (), {"total_value": balance, "currency": "PLN"})()
+
+        broker = _B()
+        broker.calls = calls  # type: ignore[attr-defined]
+        return broker
+
+    def _deps_for(self, broker: Any, tmp: Path) -> Any:
+        return _deps(broker, kill_file=tmp / "KILL", verdicts=[], place_calls=[], alerts=[])
+
+    def test_the_three_gauges_land_in_their_own_domain_file(self) -> None:
+        with self._textfile_dir() as d:
+            cl._emit_capital_gauges(frame=15000.0, balance=2000.0, read_ts=1_700_000_000.0)
+            written = d / "alphalens_domain_broker-manager-sim-capital.prom"
+            self.assertTrue(written.is_file(), "capital gauges must have their OWN domain file")
+            body = written.read_text()
+        for name in (
+            "alphalens_broker_manager_sizing_frame_acct",
+            "alphalens_broker_manager_account_total_value_acct",
+            "alphalens_broker_manager_account_read_timestamp_seconds",
+        ):
+            self.assertIn(name, body)
+        # Same instance as the heartbeat: only the containing file differs.
+        self.assertIn('job="broker-manager-sim"', body)
+
+    def test_the_capital_domain_does_not_clobber_the_heartbeat(self) -> None:
+        # emit_domain_metrics overwrites a whole per-job file, so two emitters
+        # sharing a job erase each other's series.
+        with self._textfile_dir() as d:
+            cl._default_emit_heartbeat()
+            cl._emit_capital_gauges(frame=15000.0, balance=2000.0, read_ts=1.0)
+            heartbeat = d / "alphalens_domain_broker-manager-sim.prom"
+            capital = d / "alphalens_domain_broker-manager-sim-capital.prom"
+            self.assertTrue(heartbeat.is_file() and capital.is_file())
+            self.assertIn(
+                "alphalens_broker_manager_last_tick_timestamp_seconds", heartbeat.read_text()
+            )
+
+    def test_a_raising_account_read_never_escapes_the_tick(self) -> None:
+        """The protective daemon calls run_once BARE — an exception anywhere in
+        the loop body kills it and strands the disaster stops. The broker read
+        added for these gauges must therefore swallow EVERYTHING, not just
+        OSError like the filesystem-only emitters beside it."""
+        with self._textfile_dir(), self._declared_frame(), TemporaryDirectory() as home:
+            broker = self._broker(raises=RuntimeError("saxo is down"))
+            deps = self._deps_for(broker, Path(home))
+            state = cl._CapitalState()
+            cl._capital_tick(deps, state, now_mono=0.0, now_wall=1.0)  # must not raise
+        self.assertIsNone(state.balance, "a failed read must not invent a balance")
+
+    def test_the_account_read_is_rate_limited(self) -> None:
+        with self._textfile_dir(), self._declared_frame(), TemporaryDirectory() as home:
+            broker = self._broker(balance=2000.0)
+            deps = self._deps_for(broker, Path(home))
+            state = cl._CapitalState()
+            for tick in range(10):
+                cl._capital_tick(
+                    deps, state, now_mono=float(tick) * 45.0, now_wall=1.0, interval_s=900.0
+                )
+            self.assertEqual(
+                len(broker.calls),
+                1,
+                "ten 45s ticks span 405s — one read, not ten, inside a 900s interval",
+            )
+
+    def test_a_failed_read_keeps_the_last_balance_and_does_not_advance_the_timestamp(self) -> None:
+        with self._textfile_dir() as d, self._declared_frame(), TemporaryDirectory() as home:
+            ok = self._broker(balance=2000.0)
+            deps_ok = self._deps_for(ok, Path(home))
+            state = cl._CapitalState()
+            cl._capital_tick(deps_ok, state, now_mono=0.0, now_wall=100.0, interval_s=10.0)
+            self.assertEqual(state.balance, 2000.0)
+            self.assertEqual(state.read_ts, 100.0)
+
+            bad = self._broker(raises=RuntimeError("boom"))
+            deps_bad = self._deps_for(bad, Path(home))
+            cl._capital_tick(deps_bad, state, now_mono=100.0, now_wall=200.0, interval_s=10.0)
+            # Stale, not absent: the alert's freshness guard is what detects this.
+            body = (d / "alphalens_domain_broker-manager-sim-capital.prom").read_text()
+        self.assertEqual(state.balance, 2000.0, "keep the last known balance")
+        self.assertEqual(state.read_ts, 100.0, "the read timestamp must not advance on failure")
+        self.assertIn("100", body)
+
+    def test_nothing_is_emitted_before_the_first_successful_read(self) -> None:
+        """No balance means the effective frame cannot be resolved either (clamped
+        mode is min(pin, snapshot)). Emitting a half-known pair would publish a
+        ratio against an invented denominator."""
+        with self._textfile_dir() as d, self._declared_frame(), TemporaryDirectory() as home:
+            broker = self._broker(raises=RuntimeError("cold start"))
+            deps = self._deps_for(broker, Path(home))
+            cl._capital_tick(deps, cl._CapitalState(), now_mono=0.0, now_wall=1.0)
+            self.assertFalse((d / "alphalens_domain_broker-manager-sim-capital.prom").exists())
+
+
 def _position_row(uic: int | None, qty: float) -> Any:
     """A duck-typed broker position ledger row; ``uic=None`` builds a row whose
     ``broker_instrument_id`` cannot be parsed back to a uic."""

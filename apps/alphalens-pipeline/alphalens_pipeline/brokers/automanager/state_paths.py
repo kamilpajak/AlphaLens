@@ -65,6 +65,7 @@ LEGACY_FLAT_STATE_FILENAMES = (
 
 _METRICS_JOB_PREFIX = "broker-manager"
 _STREAM_METRICS_JOB_SUFFIX = "stream"
+_CAPITAL_METRICS_JOB_SUFFIX = "capital"
 _PRICE_STREAM_JOB_PREFIX = "live-price-stream"
 
 
@@ -182,6 +183,17 @@ def metrics_job(env: str | None = None) -> str:
 def stream_metrics_job(env: str | None = None) -> str:
     """``"broker-manager-<env>-stream"`` — the streaming-liveness gauge domain."""
     return f"{metrics_job(env)}-{_STREAM_METRICS_JOB_SUFFIX}"
+
+
+def capital_metrics_job(env: str | None = None) -> str:
+    """``"broker-manager-<env>-capital"`` — the sizing-frame / balance gauge domain.
+
+    Its OWN domain for the same reason the stream gauges have one:
+    ``emit_domain_metrics`` rewrites a whole per-job file, so an emitter sharing
+    the heartbeat's domain would erase the liveness gauge on every tick. The
+    ``{job=...}`` LABEL stays :func:`metrics_job` — it is the same daemon
+    instance, only a different file."""
+    return f"{metrics_job(env)}-{_CAPITAL_METRICS_JOB_SUFFIX}"
 
 
 def price_stream_metrics_job(env: str | None = None) -> str:
