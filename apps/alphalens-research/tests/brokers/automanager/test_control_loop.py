@@ -5986,7 +5986,16 @@ class TestCapitalGauges(unittest.TestCase):
     def _textfile_dir():
         with (
             TemporaryDirectory() as d,
-            mock.patch.dict(os.environ, {"ALPHALENS_TEXTFILE_DIR": d}, clear=False),
+            # ALPHALENS_BROKER_ENVIRONMENT is pinned, not inherited: every
+            # assertion below hardcodes the "-sim" domain and job label, and
+            # state_paths resolves those from this variable. Left ambient, an
+            # unrelated test that sets it to "live" would make this class fail
+            # by execution order alone.
+            mock.patch.dict(
+                os.environ,
+                {"ALPHALENS_TEXTFILE_DIR": d, "ALPHALENS_BROKER_ENVIRONMENT": "sim"},
+                clear=False,
+            ),
         ):
             yield Path(d)
 
@@ -6082,7 +6091,11 @@ class TestCapitalGauges(unittest.TestCase):
         bare, so that would stall stop management for exactly as long, precisely
         during a broker outage. A broker that explodes on ``get_account`` must
         therefore never be touched by a tick."""
-        broker = self._account_broker(raises=RuntimeError("must never be called"))
+        # mock.Mock(spec=[]) raises AttributeError on ANY attribute access, so
+        # this fails on get_positions() or list_open_orders() too — not just on
+        # the get_account() the first shape called. A broker-shaped stub that
+        # only explodes on one method would pass vacuously.
+        broker = mock.Mock(spec=[])
         with self._textfile_dir(), self._declared_frame(), TemporaryDirectory() as home:
             deps = _deps(
                 broker, kill_file=Path(home) / "KILL", verdicts=[], place_calls=[], alerts=[]
@@ -6095,7 +6108,7 @@ class TestCapitalGauges(unittest.TestCase):
                 sleep_fn=lambda _s: None,
                 wake_event=None,
             )
-        self.assertEqual(broker.calls, [], "the tick must make no account read at all")
+        self.assertEqual(broker.mock_calls, [], "the tick must not touch the broker at all")
 
     # --- the collector half: out of process, allowed to be slow -----------
 

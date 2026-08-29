@@ -491,8 +491,10 @@ def _emit_price_reader_client_gauges(remote: Any | None) -> None:
 #
 # OWNERSHIP SPLIT — the daemon publishes the CHEAP half only. The frame is a
 # local config read; the balance needs a broker round trip, and `get_account()`
-# is THREE HTTP requests, each retrying up to 4 attempts with 5/15/30s backoffs
-# behind a 30s timeout, so one read can block for minutes. `run_daemon` calls
+# is THREE HTTP requests, each retrying up to
+# ``SaxoClient._MAX_REQUEST_ATTEMPTS`` times on ``_SERVER_ERROR_BACKOFFS`` behind
+# the client ``timeout`` (4 / 5-15-30s / 30s today), so one read can block for
+# minutes. `run_daemon` calls
 # `run_once` BARE, so a blocking observability read would stall the protective
 # tick — no reconcile, no exit management, no stop placement — for exactly as
 # long, and precisely during a broker outage. Telemetry may observe the control

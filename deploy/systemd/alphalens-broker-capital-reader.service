@@ -3,8 +3,9 @@
 # account balance and publish it as a Prometheus gauge.
 #
 # WHY A SEPARATE UNIT AND NOT THE DAEMON. `get_account()` is three HTTP
-# requests, each retrying up to four attempts with 5/15/30s backoffs behind a
-# 30s timeout, so one read can block for minutes. `run_daemon` calls its
+# requests, each retrying up to SaxoClient._MAX_REQUEST_ATTEMPTS times on
+# _SERVER_ERROR_BACKOFFS behind the client timeout (4 / 5-15-30s / 30s today), so
+# one read can block for minutes. `run_daemon` calls its
 # protective tick BARE, so a blocking observability read inside the loop would
 # stall reconcile, exit management and stop placement for exactly that long —
 # and precisely during the broker outage that makes the read slow. Telemetry may
@@ -40,10 +41,13 @@ Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile
 
 ExecStart=%h/AlphaLens/.venv/bin/alphalens broker capital-reader
 
-# Cron-health metrics. A failed read writes NO gauge file on purpose (the
-# previous reading stays in place, going stale rather than absent), so the
-# staleness is what AlphalensBrokerCapitalReadStale detects; this records the
-# unit's own last_success for AlphalensJobStale.
+# Cron-health metrics, wired like every other timer-driven unit. The generic
+# AlphalensJobStale rule is deliberately NOT added on top: a failed read writes
+# no gauge file on purpose, so AlphalensBrokerCapitalReadStale already pages on
+# a dead reader — and on a STRICTLY better signal, the freshness of the READING
+# itself, which also catches a run that exits 0 while producing nothing usable.
+# The exemption is recorded in tests/test_prometheus_rule_unit_parity.py, the
+# same shape edge-mirror already uses.
 ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics broker-capital-reader
 
 StandardOutput=journal

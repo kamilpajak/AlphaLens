@@ -1524,9 +1524,14 @@ groups:
       # exist: the ratio rule disarms itself when the read-freshness guard goes
       # false, so a permanently failing account read would silently take the
       # capital alert offline while the daemon looks healthy.
+      # 1800s = TWICE the reader's ~15min cadence: one missed fire is a
+      # transient Saxo blip, two is a unit that stopped. Deliberately TIGHTER
+      # than the ratio rule's own 3600s read-freshness guard, so the operator
+      # is warned that the balance is going stale a full window BEFORE the
+      # ratio rule disarms itself on the same staleness.
       - alert: AlphalensBrokerCapitalReadStale
         expr: >-
-          (time() - alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"}) > 3600
+          (time() - alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"}) > 1800
           and
           (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}) < 300
         for: 15m
@@ -1535,8 +1540,8 @@ groups:
           route: telegram
           unit: broker-manager-live
         annotations:
-          summary: "LIVE account balance has not been read for over an hour"
-          description: "The LIVE daemon is ticking but the balance read (alphalens-broker-capital-reader, expected every 15 min) has not succeeded for over an hour, so AlphalensBrokerFrameToBalanceHigh is disarmed. The balance gauge is holding its last known value on purpose — a failed read writes nothing rather than lying. Check `journalctl --user -u alphalens-broker-capital-reader.service`; usually an expired Saxo token or a broker outage."
+          summary: "LIVE account balance has not been read for over 30 minutes"
+          description: "The LIVE daemon is ticking but the balance read (alphalens-broker-capital-reader, expected every 15 min) has missed two consecutive fires, so AlphalensBrokerFrameToBalanceHigh is within one window of disarming itself. The balance gauge is holding its last known value on purpose — a failed read writes nothing rather than lying. Check `journalctl --user -u alphalens-broker-capital-reader.service`; usually an expired Saxo token or a broker outage."
 
       - alert: AlphalensLivePriceStreamReaderDown
         # Same anti-false-positive gate as the SIM version: an idle reader
