@@ -2344,7 +2344,15 @@ class TestBrokerCapitalReaderUnit(unittest.TestCase):
         # Ban the DIRECTIVES, not the words: the comment block is allowed (and
         # expected) to narrate the incident, so match `Key=` at line start
         # rather than a substring anywhere.
-        for banned in ("OnUnitActiveSec", "OnBootSec", "OnActiveSec", "OnUnitInactiveSec"):
+        # All five monotonic anchors from systemd.timer(5) — the whole class,
+        # not just the two the incident used.
+        for banned in (
+            "OnUnitActiveSec",
+            "OnBootSec",
+            "OnStartupSec",
+            "OnActiveSec",
+            "OnUnitInactiveSec",
+        ):
             self.assertNotRegex(
                 self.timer,
                 re.compile(rf"^\s*{banned}\s*=", re.MULTILINE),
