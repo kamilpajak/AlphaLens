@@ -164,11 +164,30 @@ class TestUnitRequirements(unittest.TestCase):
             frozenset({"ALPHALENS_SAXO_LIVE_STANDING", "SAXO_LIVE_ACCOUNT_KEY"}),
         )
 
-    def test_only_the_live_unit_requires_a_grant(self):
-        # Positive control on the other side: a requirement added to SIM or
-        # the price reader would emit a gauge that can only ever read 0.
+    def test_only_units_that_build_a_live_client_require_a_grant(self):
+        """The rule is "declares the grant iff it constructs a LIVE client",
+        not "iff it is the daemon".
+
+        This test used to say ONLY the LIVE daemon may require it, on the
+        grounds that a requirement anywhere else "would emit a gauge that can
+        only ever read 0". That reasoning holds for SIM and for the price
+        reader — neither touches the grant — but it stopped being the whole
+        rule when the capital reader (#1203) arrived: it places nothing, yet
+        `create_saxo_broker_live_from_env` refuses it a client without the
+        grant exactly as it refuses the daemon, so its gauge is meaningful and
+        an explicit 0 there is the point.
+
+        The positive control survives in the arm that matters: a unit that
+        never builds a LIVE client must NOT declare a requirement, or the
+        gauge really would be a permanent 0."""
+        builds_live_client = {
+            "alphalens-broker-manager-live",
+            "alphalens-broker-capital-reader",
+        }
         for unit, _base, required in drift.UNITS:
-            if unit != "alphalens-broker-manager-live":
+            if unit in builds_live_client:
+                self.assertEqual(required, drift.LIVE_GRANT_VARS, unit)
+            else:
                 self.assertEqual(required, frozenset(), unit)
 
 

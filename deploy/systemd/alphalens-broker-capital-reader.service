@@ -22,9 +22,20 @@
 #   systemctl --user enable --now alphalens-broker-capital-reader.timer
 #
 # READ-ONLY on LIVE by construction: `_cli_broker(mutating=False)` routes LIVE
-# reads and refuses LIVE placement (#1052), so this unit needs the LIVE
-# credentials but NOT the daemon's arming rails — nothing here can place an
-# order, and there is no rails config to drift out of sync.
+# reads and refuses LIVE placement (#1052) — nothing here can place an order.
+# That does NOT make the unit rail-free, and the first deploy of this unit
+# failed on exactly that. `create_saxo_broker_live_from_env` runs
+# `assert_live_rails()` BEFORE any broker I/O and refuses to construct a LIVE
+# client at all until the risk rails are pinned inside the live-soak bounds, so
+# a balance read pays the same boot surface as the daemon: the rails below, the
+# SAXO_LIVE_* auth env from /etc/alphalens/env, and the account-bound ADR 0017
+# grant (host-only drop-in, see the runbook).
+#
+# The rails ARE config that can drift, so this unit is watched by the hourly
+# drift check like the daemons (UNITS in
+# apps/alphalens-research/scripts/check_systemd_drift.py). Read the values as
+# "what the assert demands", never as a statement about what the LIVE daemon
+# runs — production overrides several of them via its own tracked drop-ins.
 Description=AlphaLens LIVE account-balance gauge (frame-vs-balance ratio)
 After=network-online.target
 Wants=network-online.target
@@ -37,6 +48,31 @@ WorkingDirectory=%h/AlphaLens
 EnvironmentFile=/etc/alphalens/env
 
 Environment=ALPHALENS_BROKER_ENVIRONMENT=live
+
+# The nine rails `assert_live_rails` demands before ANY LIVE client is built —
+# see the header. None of them governs anything here: this unit never sizes,
+# places or exits. They are copies of the base LIVE unit's conservative pins,
+# so they are already-reviewed numbers rather than a second set invented here.
+#
+# ALLOW_ORDERS=0 is NOT one of the nine (the assert never reads it). It is here
+# because a rails block with zero is this repo's canonical DISARMED shape — the
+# base LIVE unit ships exactly that, and arming lives in its own separate
+# drop-in. A reader is never armed.
+#
+# Do not "tighten" these to zeros: four of the bounds are lower-exclusive and
+# two integer bounds start at 1, so an all-zero block fails the assert with six
+# violations.
+Environment=ALPHALENS_BROKER_ALLOW_ORDERS=0
+Environment=ALPHALENS_BROKER_MAX_OPEN=1
+Environment=ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC=0.25
+Environment=ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=1.0
+Environment=ALPHALENS_BROKER_SIZING_EQUITY=10000
+Environment=ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared
+Environment=ALPHALENS_BROKER_EXIT_POLICY=breakeven_trail
+Environment=ALPHALENS_BROKER_MAX_FEE_BPS=100
+Environment=ALPHALENS_BROKER_ENTRY_TRAIL_BPS=0
+Environment=ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS=1
+
 Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile
 
 ExecStart=%h/AlphaLens/.venv/bin/alphalens broker capital-reader

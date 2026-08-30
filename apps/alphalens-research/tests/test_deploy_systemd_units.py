@@ -2274,6 +2274,69 @@ class TestSharedPriceReaderUnit(unittest.TestCase):
         self.assertIn("alphalens-saxo-price-reader.service", script.read_text())
 
 
+class TestBrokerCapitalReaderUnit(unittest.TestCase):
+    """#1203: the oneshot that reads the LIVE balance for the frame-vs-balance
+    ratio. It places nothing — but every LIVE broker construction runs
+    ``assert_live_rails`` before any I/O, so a read-only unit pays the same boot
+    surface as a daemon. The unit shipped WITHOUT the rails and failed on the
+    host; this class exists so the next one fails here instead."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.path = SYSTEMD_DIR / "alphalens-broker-capital-reader.service"
+        cls.text = cls.path.read_text()
+        cls.timer = (SYSTEMD_DIR / "alphalens-broker-capital-reader.timer").read_text()
+
+    def test_the_unit_environment_passes_the_live_boot_assert(self) -> None:
+        """THE test. A green suite plus a red host is what this replaces."""
+        with mock.patch.dict("os.environ", _environment_assignments(self.text), clear=True):
+            assert_live_rails()
+
+    def test_the_gate_can_actually_fail(self) -> None:
+        """A boot assert that has never been shown to refuse is not a gate.
+        One typo'd digit in the declared frame must be caught."""
+        broken = dict(_environment_assignments(self.text), **{_SIZING_EQUITY: "150000"})
+        with mock.patch.dict("os.environ", broken, clear=True):
+            with self.assertRaises(BrokerCapabilityError):
+                assert_live_rails()
+
+    def test_it_is_disarmed(self) -> None:
+        """The rails block is this repo's DISARMED shape — the base LIVE unit
+        ships the same pins with ALLOW_ORDERS=0 and arming lives in a separate
+        drop-in. Nothing arms a reader."""
+        self.assertRegex(
+            self.text, re.compile(rf"^Environment={_ALLOW_ORDERS}=0\s*$", re.MULTILINE)
+        )
+
+    def test_every_environment_line_is_the_simple_form(self) -> None:
+        """The drift check and these tests share one narrow parser; a quoted or
+        multi-pair line would be read differently by systemd than by the check."""
+        for line in self.text.splitlines():
+            if line.startswith("Environment="):
+                self.assertIsNone(_unreadable_reason(line[len("Environment=") :]), line)
+
+    def test_it_reads_the_credentials_file_and_places_nothing(self) -> None:
+        self.assertRegex(self.text, re.compile(r"^Type=oneshot\s*$", re.MULTILINE))
+        self.assertRegex(
+            self.text, re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE)
+        )
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/alphalens broker capital-reader\s*$",
+                re.MULTILINE,
+            ),
+        )
+        self.assertRegex(self.timer, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
+
+    def test_the_drift_check_watches_it(self) -> None:
+        """The rails are config that can drift, and one of them (EXIT_POLICY) is
+        resolved against a live registry at boot — a rename would kill the read
+        silently. Same watch as the daemons."""
+        script = REPO_ROOT / "apps" / "alphalens-research" / "scripts" / "check_systemd_drift.py"
+        self.assertIn("alphalens-broker-capital-reader.service", script.read_text())
+
+
 class TestBothDaemonsPointAtTheReader(unittest.TestCase):
     def test_each_daemon_has_a_price_reader_drop_in_with_the_same_socket(self) -> None:
         """Different files, ONE path: a mismatch would leave one daemon talking
