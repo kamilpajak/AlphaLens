@@ -1754,6 +1754,15 @@ are pinned. They are in the unit file at the base LIVE unit's conservative
 values with `ALPHALENS_BROKER_ALLOW_ORDERS=0`; none of them governs anything
 here. The first deploy of this unit shipped WITHOUT them and failed on the host.
 
+**Do NOT mirror daemon rail changes into this unit.** The values here are not a
+copy that tracks production — they are any legal inert set, taken from the base
+LIVE unit only so they are already-reviewed numbers. Nothing on the
+`get_account()` path reads them. The drift check is strictly per-unit
+(`drift_findings` receives one unit's files and `main` loops over `UNITS`), so
+it compares this unit against its own `origin/main` blob and never against the
+daemon's rails; a divergence between the two is neither detected nor a problem.
+Changing a rail on the daemon requires no change here.
+
 Beyond the rails it needs the account-bound ADR 0017 grant, which is host-only
 and must NEVER go in `/etc/alphalens/env`. Create it BEFORE copying the unit —
 `cp` of the `.service`/`.timer` cannot touch a `.d/` directory, which is exactly
