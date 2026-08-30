@@ -1735,10 +1735,11 @@ in place. The reading goes stale rather than absent, which is what the alert's
 freshness guard detects; writing a zero would lie, and dropping the keys would
 silently disarm the rule.
 
-Two LIVE-only rules (SIM never sets the pin, so its ratio is identically 1):
+Three LIVE-only rules (SIM never sets the pin, so its ratio is identically 1):
 
 - `AlphalensBrokerFrameToBalanceHigh` — ratio > 10 for 30 m, guarded on the sizing MODE, the daemon heartbeat and the read timestamp;
-- `AlphalensBrokerCapitalReadStale` — the balance read has not succeeded for over an hour while the daemon still ticks, which means the rule above has silently disarmed.
+- `AlphalensBrokerCapitalReadStale` — the balance read has missed two consecutive fires while the daemon still ticks, warning a full window before the ratio rule disarms itself;
+- `AlphalensBrokerCapitalReadMissing` — the read-timestamp series does not exist at all (never written, or the textfile deleted), the quadrant the other two structurally cannot see: a failed read writes nothing on purpose, so a chain that never succeeded leaves nothing to age.
 
 **The threshold of 10 is a backstop, not the production value.** The account has
 knowingly run near 7.5 since the declared frame shipped, so a rule that paged on

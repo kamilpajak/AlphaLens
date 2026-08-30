@@ -1543,6 +1543,36 @@ groups:
           summary: "LIVE account balance has not been read for over 30 minutes"
           description: "The LIVE daemon is ticking but the balance read (alphalens-broker-capital-reader, expected every 15 min) has missed two consecutive fires, so AlphalensBrokerFrameToBalanceHigh is within one window of disarming itself. The balance gauge is holding its last known value on purpose — a failed read writes nothing rather than lying. Check `journalctl --user -u alphalens-broker-capital-reader.service`; usually an expired Saxo token or a broker outage."
 
+      # The third quadrant, which the two rules above structurally cannot see.
+      # A failed read deliberately writes NOTHING, so the previous snapshot
+      # survives and goes stale — that is what ...ReadStale ages. But when the
+      # series NEVER existed (a first-ever run that fails writes no file —
+      # observed live 2026-08-29, when the reader shipped without its rails and
+      # the only page came from the generic AlphalensJobFailed) or the textfile
+      # was DELETED (the series vanishes), there is nothing to age and both
+      # rules above are silent. Plain absent(), no daemon-freshness guard —
+      # the same accepted fresh-host semantics as every other Missing twin
+      # (fires until the first success; see the JobMetricMissing family).
+      #
+      # ``for: 1h`` is four reader windows: a normal install produces its first
+      # success within ~15 min and never pages, a genuinely broken first
+      # install pages within the hour.
+      #
+      # DELIBERATELY no absent() for the frame gauge (sizing_pin_acct): the
+      # daemon emits it every tick, so its absence is already owned by the
+      # heartbeat Stale/Missing twins — a second rule there would double-page
+      # one condition (the #1200 failure class).
+      - alert: AlphalensBrokerCapitalReadMissing
+        expr: absent(alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"})
+        for: 1h
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: "LIVE account-balance gauge has never been written (or vanished)"
+          description: "No alphalens_broker_manager_account_read_timestamp_seconds series exists, so both capital rules are structurally disarmed: nothing to age, nothing to divide. Either the capital reader has never succeeded on this host (check `journalctl --user -u alphalens-broker-capital-reader.service` and that the timer shows a populated NEXT), or the textfile was deleted. Clears after the first successful read."
+
       - alert: AlphalensLivePriceStreamReaderDown
         # Same anti-false-positive gate as the SIM version: an idle reader
         # (nothing subscribed) holds no WebSocket BY DESIGN and must not
