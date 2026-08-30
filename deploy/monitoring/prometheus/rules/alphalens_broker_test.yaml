@@ -266,3 +266,42 @@ tests:
       - eval_time: 35m
         alertname: AlphalensBrokerFrameToBalanceHigh
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensBrokerCapitalReadMissing (#1210)
+  # ---------------------------------------------------------------------
+
+  # The never-existed quadrant: no read-timestamp series at all (the daemon's
+  # heartbeat is present, proving the rule is independent of daemon health).
+  # Silent at 30m (for: 1h not elapsed), firing at 70m.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}'
+        values: '0+60x80'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: AlphalensBrokerCapitalReadMissing
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: AlphalensBrokerCapitalReadMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: broker-manager-live
+              job: broker-manager-live
+            exp_annotations:
+              summary: "LIVE account-balance gauge has never been written (or vanished)"
+              description: "No alphalens_broker_manager_account_read_timestamp_seconds series exists, so both capital rules are structurally disarmed: nothing to age, nothing to divide. Either the capital reader has never succeeded on this host (check `journalctl --user -u alphalens-broker-capital-reader.service` and that the timer shows a populated NEXT), or the textfile was deleted. Clears after the first successful read."
+
+  # The converged host: the series exists (today's production state) — the rule
+  # loads quietly and never fires, however stale the value gets (staleness is
+  # ...ReadStale's job, not this rule's).
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_account_read_timestamp_seconds{job="broker-manager-live"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AlphalensBrokerCapitalReadMissing
+        exp_alerts: []

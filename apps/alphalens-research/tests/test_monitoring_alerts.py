@@ -1783,11 +1783,37 @@ class TestCapitalAdequacyRules(unittest.TestCase):
         self.assertIn("alphalens_broker_manager_last_tick_timestamp_seconds", expr)
 
     def test_both_rules_are_live_scoped_and_route_to_telegram(self) -> None:
-        for name in ("AlphalensBrokerFrameToBalanceHigh", "AlphalensBrokerCapitalReadStale"):
+        for name in (
+            "AlphalensBrokerFrameToBalanceHigh",
+            "AlphalensBrokerCapitalReadStale",
+            "AlphalensBrokerCapitalReadMissing",
+        ):
             rule = self._one(name)
             self.assertIn('job="broker-manager-live"', rule["expr"], name)
             self.assertEqual(rule.get("labels", {}).get("route"), "telegram", name)
             self.assertEqual(rule.get("labels", {}).get("unit"), "broker-manager-live", name)
+
+    def test_the_missing_companion_exists(self) -> None:
+        """The third quadrant. `...High` judges the ratio, `...Stale` catches
+        "existed, then stopped succeeding" (a failed read keeps the last file),
+        and this one catches what the other two structurally cannot see: the
+        series NEVER existed (a first-ever run that fails writes nothing —
+        observed live 2026-08-29) or the textfile was deleted (the series
+        vanishes, so `...Stale` has nothing to age)."""
+        missing = self._one("AlphalensBrokerCapitalReadMissing")
+        self.assertIn(
+            "absent(alphalens_broker_manager_account_read_timestamp_seconds", missing["expr"]
+        )
+        self.assertIsNotNone(missing.get("for"), "a fresh deploy needs riding through")
+
+    def test_deliberately_no_absent_rule_for_the_frame_gauge(self) -> None:
+        """The daemon emits sizing_pin_acct every tick, so its absence is
+        already owned by the heartbeat Stale/Missing twins — a second absent()
+        there would double-page one condition (the #1200 failure class)."""
+        for rule in self._rules():
+            expr = rule.get("expr", "")
+            if "absent(" in expr:
+                self.assertNotIn("alphalens_broker_manager_sizing_pin_acct", expr, rule["alert"])
 
     def test_there_is_deliberately_no_sim_twin(self) -> None:
         """SIM never sets the sizing pin, so clamped mode makes its frame the
