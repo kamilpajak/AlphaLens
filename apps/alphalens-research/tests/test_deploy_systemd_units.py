@@ -2329,6 +2329,38 @@ class TestBrokerCapitalReaderUnit(unittest.TestCase):
         )
         self.assertRegex(self.timer, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
 
+    def test_the_timer_is_wall_clock_anchored(self) -> None:
+        """2026-08-30 dormancy incident: with OnBootSec + OnUnitActiveSec the
+        timer sat `enabled` + `active` with NEXT empty, because OnUnitActiveSec
+        anchors to a service activation OBSERVED WHILE THE TIMER RUNS — and the
+        deploy started the service manually first, enabled the timer after, with
+        OnBootSec long elapsed. The balance read silently stopped and
+        AlphalensBrokerCapitalReadStale paged. OnCalendar schedules the moment
+        the timer starts, independent of activation history, and is the only
+        form under which Persistent=true has any effect at all
+        (systemd.timer(5))."""
+        self.assertRegex(self.timer, re.compile(r"^OnCalendar=", re.MULTILINE))
+        self.assertRegex(self.timer, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
+        # Ban the DIRECTIVES, not the words: the comment block is allowed (and
+        # expected) to narrate the incident, so match `Key=` at line start
+        # rather than a substring anywhere.
+        # All five monotonic anchors from systemd.timer(5) — the whole class,
+        # not just the two the incident used.
+        for banned in (
+            "OnUnitActiveSec",
+            "OnBootSec",
+            "OnStartupSec",
+            "OnActiveSec",
+            "OnUnitInactiveSec",
+        ):
+            self.assertNotRegex(
+                self.timer,
+                re.compile(rf"^\s*{banned}\s*=", re.MULTILINE),
+                f"{banned}= anchors to activation history — the shape that went "
+                "dormant in production on 2026-08-30. Schedule on the wall "
+                "clock (OnCalendar) instead.",
+            )
+
     def test_the_drift_check_watches_it(self) -> None:
         """The rails are config that can drift, and one of them (EXIT_POLICY) is
         resolved against a live registry at boot — a rename would kill the read
