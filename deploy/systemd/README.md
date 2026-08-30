@@ -1779,7 +1779,13 @@ chmod 600 ~/.config/systemd/user/alphalens-broker-capital-reader.service.d/99-li
 cp deploy/systemd/alphalens-broker-capital-reader.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now alphalens-broker-capital-reader.timer
-systemctl --user start alphalens-broker-capital-reader.service   # verify the EFFECT, not is-active
+# Verify the TIMER's effect: NEXT must be populated on the :15 wall-clock grid.
+# `is-active`/`is-enabled` are NOT evidence — the 2026-08-30 dormancy incident
+# was exactly `enabled` + `active` with NEXT empty (the old interval-anchored
+# stanza had no anchor; the timer is OnCalendar now, which schedules the moment
+# it starts, so ordering against the service no longer matters).
+systemctl --user list-timers alphalens-broker-capital-reader.timer
+systemctl --user start alphalens-broker-capital-reader.service   # verify the SERVICE's effect, not is-active
 ```
 
 The unit is watched by the hourly drift check and DECLARES the grant

@@ -1,13 +1,31 @@
 [Unit]
-Description=AlphaLens LIVE account-balance gauge timer (~15min)
+Description=AlphaLens LIVE account-balance gauge timer (15min wall-clock grid)
 
 [Timer]
 # The balance moves on deposits, withdrawals and P&L — nothing that needs the
-# daemon's 45s cadence. 15min is far finer than the question and keeps the read
-# well inside the 1h staleness guard on AlphalensBrokerFrameToBalanceHigh, so a
-# single missed fire never disarms the ratio alert.
-OnBootSec=5min
-OnUnitActiveSec=15min
+# daemon's 45s cadence. A 15min grid is far finer than the question and keeps
+# the read well inside the 1h staleness guard on
+# AlphalensBrokerFrameToBalanceHigh, so a single missed fire never disarms the
+# ratio alert (AlphalensBrokerCapitalReadStale pages at two missed fires).
+#
+# WALL-CLOCK, NOT INTERVAL — the 2026-08-30 dormancy incident. This stanza was
+# OnBootSec=5min + OnUnitActiveSec=15min, and the timer sat `enabled` + `active`
+# with NEXT empty: OnUnitActiveSec anchors to a service activation observed
+# WHILE THE TIMER RUNS, the deploy had started the service manually before
+# enabling the timer, and OnBootSec had long elapsed — so nothing was ever
+# scheduled and the balance read silently stopped. OnCalendar schedules the
+# moment the timer starts, independent of activation history, and it is the
+# only form under which Persistent=true has any effect at all
+# (systemd.timer(5): catch-up applies to calendar timers only).
+#
+# No RandomizedDelaySec on purpose: one few-second Saxo read has nothing to
+# thundering-herd with, and a fixed grid keeps the read timestamps legible
+# against the 1800s alert threshold.
+#
+# After enabling, verify the EFFECT: `systemctl --user list-timers` must show a
+# populated NEXT — `is-active`/`is-enabled` are not evidence (the incident state
+# was both, with NEXT empty).
+OnCalendar=*-*-* *:00/15:00 UTC
 Persistent=true
 
 [Install]
