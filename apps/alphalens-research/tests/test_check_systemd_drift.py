@@ -437,6 +437,79 @@ class TestGrantPresence(unittest.TestCase):
             self.assertNotIn("opaque-value", f.detail)
 
 
+_ENV_FILE_BENIGN = (
+    "# Saxo LIVE auth (bracket-keeper app)\n"
+    "SAXO_LIVE_APP_KEY=fake-key\n"
+    "SAXO_LIVE_APP_SECRET=fake-secret\n"
+    "SAXO_LIVE_AUTH_REDIRECT_URL=http://localhost:1/cb\n"
+    "\n"
+    "; systemd also accepts semicolon comments\n"
+    "SEC_EDGAR_USER_AGENT=AlphaLens/1.0 (kontakt@example.pl)\n"
+)
+
+
+class TestEnvFileFindings(unittest.TestCase):
+    """The /etc/alphalens/env broker-rail ban (#1209).
+
+    systemd applies ``EnvironmentFile=`` AFTER in-unit ``Environment=`` lines,
+    so one arming line in the shared credentials file overrides every reader's
+    explicit ``ALLOW_ORDERS=0`` at its next start. Names only, never values —
+    the file holds secrets.
+    """
+
+    def test_an_arming_line_is_flagged_by_name(self):
+        findings = drift.env_file_findings("ALPHALENS_BROKER_ALLOW_ORDERS=1\n")
+        self.assertEqual(
+            [(f.unit, f.kind, f.subject) for f in findings],
+            [
+                (
+                    drift.ENV_FILE_UNIT_LABEL,
+                    "banned_env_var",
+                    "ALPHALENS_BROKER_ALLOW_ORDERS",
+                )
+            ],
+        )
+
+    def test_the_real_world_shape_passes_clean(self):
+        # Includes the one value with unquoted spaces and parentheses (the
+        # SEC contact UA) — the scan must not shred it into phantom names.
+        self.assertEqual(drift.env_file_findings(_ENV_FILE_BENIGN), [])
+
+    def test_an_export_prefixed_arming_line_is_still_flagged(self):
+        findings = drift.env_file_findings("export ALPHALENS_BROKER_MAX_OPEN=9\n")
+        self.assertEqual([f.subject for f in findings], ["ALPHALENS_BROKER_MAX_OPEN"])
+
+    def test_the_grant_pair_is_banned_from_the_shared_file_too(self):
+        # In the 0600 per-unit drop-in the grant arms ONE unit (ADR 0017);
+        # here it would grant every reader of the file. The LIVE unit header
+        # is the authority: "NEVER add any ALPHALENS_BROKER_*,
+        # ALPHALENS_SAXO_LIVE_STANDING, or SAXO_LIVE_ACCOUNT_KEY line to the
+        # shared /etc/alphalens/env".
+        text = "ALPHALENS_SAXO_LIVE_STANDING=x\nSAXO_LIVE_ACCOUNT_KEY=y\n"
+        findings = drift.env_file_findings(text)
+        self.assertEqual(
+            sorted(f.subject for f in findings),
+            sorted(drift.LIVE_GRANT_VARS),
+        )
+
+    def test_prefix_boundary_includes_the_trailing_underscore(self):
+        # ALPHALENS_BROKERAGE_* is not a rail; the banned prefix ends in "_".
+        self.assertEqual(drift.env_file_findings("ALPHALENS_BROKERAGE_X=1\n"), [])
+
+    def test_blank_comment_and_non_assignment_lines_are_ignored(self):
+        # A line without "=" cannot set a variable, so it cannot arm anything;
+        # commented-out rails are inert too.
+        text = "\n# ALPHALENS_BROKER_ALLOW_ORDERS=1\n; ditto\nJUSTAWORD\n"
+        self.assertEqual(drift.env_file_findings(text), [])
+
+    def test_findings_never_carry_the_value(self):
+        findings = drift.env_file_findings("ALPHALENS_BROKER_ALLOW_ORDERS=opaque-secret\n")
+        self.assertEqual(len(findings), 1)
+        for f in findings:
+            self.assertNotIn("opaque-secret", f.subject)
+            self.assertNotIn("opaque-secret", f.detail)
+
+
 class TestDropinTexts(unittest.TestCase):
     def test_only_conf_files_feed_env_composition(self):
         # `.timer` (and README.md) entries are compared as FILES but must
@@ -873,8 +946,17 @@ class TestMainExitSemantics(unittest.TestCase):
         drifted=False,
         grant_wiped=False,
         host_base_absent=False,
+        env_file_armed=False,
+        env_file_unreadable=False,
     ):
         base = "[Service]\nEnvironment=ALPHALENS_BROKER_ENVIRONMENT=sim\n"
+
+        def fake_read_env_file():
+            if env_file_unreadable:
+                raise OSError("permission denied")
+            if env_file_armed:
+                return _ENV_FILE_BENIGN + "ALPHALENS_BROKER_ALLOW_ORDERS=1\n"
+            return _ENV_FILE_BENIGN
 
         def fake_host_files(base_name):
             if host_base_absent:
@@ -912,6 +994,7 @@ class TestMainExitSemantics(unittest.TestCase):
         with (
             mock.patch.object(drift, "_run", side_effect=fake_run),
             mock.patch.object(drift, "_host_files", side_effect=fake_host_files),
+            mock.patch.object(drift, "_read_env_file", side_effect=fake_read_env_file),
             mock.patch.object(
                 drift, "_write_metrics", side_effect=lambda text: written.update(metrics=text)
             ),
@@ -928,6 +1011,28 @@ class TestMainExitSemantics(unittest.TestCase):
             'alphalens_systemd_live_grant_present{unit="alphalens-broker-manager-live"} 1',
             metrics,
         )
+        # The env-file scan (#1209) emits its explicit 0 on the same gauge.
+        self.assertIn(
+            f'alphalens_systemd_drift_findings{{unit="{drift.ENV_FILE_UNIT_LABEL}"}} 0',
+            metrics,
+        )
+
+    def test_an_armed_env_file_counts_on_the_drift_gauge(self):
+        # Measured, not a job failure: exit 0 with the synthetic series at 1,
+        # so AlphalensSystemdUnitDrift pages within its 30m for-window.
+        code, metrics = self._run_main(env_file_armed=True)
+        self.assertEqual(code, 0)
+        self.assertIn(
+            f'alphalens_systemd_drift_findings{{unit="{drift.ENV_FILE_UNIT_LABEL}"}} 1',
+            metrics,
+        )
+
+    def test_an_unreadable_env_file_is_cannot_measure(self):
+        # The invariant cannot be verified — reserved exit 1 (stalls the
+        # last-success clock, pages via the staleness pair), no metrics.
+        code, metrics = self._run_main(env_file_unreadable=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(metrics, "")
 
     def test_a_wiped_grant_leaves_the_drift_gauge_at_zero_and_drops_the_grant_gauge(self):
         # The finding this whole change exists for. The drift gauge staying 0

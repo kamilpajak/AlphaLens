@@ -105,11 +105,24 @@ UNITS: tuple[tuple[str, str, frozenset[str]], ...] = (
 
 METRICS_BASENAME = "alphalens_domain_systemd-drift-check.prom"
 
+# The shared credentials file every broker unit sources. systemd applies
+# `EnvironmentFile=` AFTER in-unit `Environment=` lines, so one arming line
+# here overrides every reader's explicit ALLOW_ORDERS=0 at its next start —
+# which is why the broker-rail ban on this file (#1209) is watched hourly.
+ENV_FILE_PATH = Path("/etc/alphalens/env")
+# Synthetic key on the drift gauge for env-file findings — NOT a systemd unit.
+# Riding alphalens_systemd_drift_findings means the existing
+# AlphalensSystemdUnitDrift alert pages with zero new rules.
+ENV_FILE_UNIT_LABEL = "etc-alphalens-env"
+# Trailing underscore on purpose: ALPHALENS_BROKER_* are the nine rails plus
+# ALLOW_ORDERS; ALPHALENS_BROKERAGE_-style names are not rails.
+BANNED_ENV_NAME_PREFIX = "ALPHALENS_BROKER_"
+
 
 @dataclass(frozen=True)
 class Finding:
     unit: str
-    kind: str  # untracked_file | missing_file | content_drift | env_drift | unreadable_file
+    kind: str  # untracked_file | missing_file | content_drift | env_drift | unreadable_file | banned_env_var
     subject: str  # filename or variable name
     detail: str
 
@@ -562,6 +575,48 @@ def _write_metrics(text: str) -> None:
     tmp.replace(target)
 
 
+def env_file_findings(text: str) -> list[Finding]:
+    """The broker-rail ban on the shared credentials file (#1209).
+
+    Names only, never values: the file holds secrets, so the scan looks at
+    the part of each assignment line BEFORE the first ``=`` and nothing else.
+    Banned: every ``ALPHALENS_BROKER_*`` name, plus the ADR 0017 grant pair —
+    in the 0600 per-unit drop-in the grant arms ONE unit; here it would grant
+    all readers of the file (the LIVE unit header is the authority: "NEVER
+    add any ALPHALENS_BROKER_*, ALPHALENS_SAXO_LIVE_STANDING, or
+    SAXO_LIVE_ACCOUNT_KEY line to the shared /etc/alphalens/env").
+
+    Blank lines, ``#``/``;`` comments and lines without ``=`` cannot set a
+    variable, so they cannot arm anything and are ignored; an optional
+    ``export `` prefix is stripped the way systemd's EnvironmentFile parser
+    strips it.
+    """
+    findings: list[Finding] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";")) or "=" not in stripped:
+            continue
+        name = stripped.split("=", 1)[0].strip().removeprefix("export ").strip()
+        if name.startswith(BANNED_ENV_NAME_PREFIX) or name in LIVE_GRANT_VARS:
+            findings.append(
+                Finding(
+                    ENV_FILE_UNIT_LABEL,
+                    "banned_env_var",
+                    name,
+                    "a broker rail or LIVE grant in the shared credentials "
+                    "file overrides every unit's Environment= at its next "
+                    "start (EnvironmentFile= wins) — the one arming surface "
+                    "is the LIVE unit's 10-allow-orders.conf drop-in; remove "
+                    "this line",
+                )
+            )
+    return findings
+
+
+def _read_env_file() -> str:
+    return ENV_FILE_PATH.read_text()
+
+
 def main() -> int:
     try:
         _run(["git", "fetch", "--quiet", "origin", "main"], timeout=180)
@@ -597,12 +652,27 @@ def main() -> int:
             grant_present[unit] = not missing
             all_grant_findings.extend(missing)
 
+    # The env-file ban (#1209). Unreadable = cannot verify the invariant =
+    # the reserved exit 1 — in practice near-unreachable, because this very
+    # unit sources the file via a no-leading-dash EnvironmentFile= and would
+    # fail before ExecStart.
+    try:
+        env_findings = env_file_findings(_read_env_file())
+    except OSError as exc:
+        print(f"check_failed env_file: {exc}", file=sys.stderr)
+        return 1
+    counts[ENV_FILE_UNIT_LABEL] = len(env_findings)
+    all_findings.extend(env_findings)
+
     for f in all_findings:
         print(f"DRIFT unit={f.unit} kind={f.kind} subject={f.subject}: {f.detail}")
     for f in all_grant_findings:
         print(f"GRANT unit={f.unit} kind={f.kind} subject={f.subject}: {f.detail}")
     if not all_findings and not all_grant_findings:
-        print(f"converged: {', '.join(u for u, _, _ in UNITS)} match origin/main")
+        print(
+            f"converged: {', '.join(u for u, _, _ in UNITS)} match origin/main "
+            "and /etc/alphalens/env carries no broker rail"
+        )
 
     _write_metrics(render_metrics(counts) + render_grant_metrics(grant_present))
     return 0
