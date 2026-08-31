@@ -324,10 +324,15 @@ class _JournalCase(unittest.TestCase):
         tranches: tuple[TpTranchePlan, ...],
         reference_qty: float,
         stop_price: float,
+        pick_key: str | None = None,
     ) -> None:
         cl._append_standalone_stop_journal(
             cl._build_tranche_plan_line(
-                uic=uic, tp_tranches=tranches, reference_qty=reference_qty, stop_price=stop_price
+                uic=uic,
+                tp_tranches=tranches,
+                reference_qty=reference_qty,
+                stop_price=stop_price,
+                pick_key=pick_key,
             )
         )
 
@@ -416,6 +421,105 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         self.assertEqual(len(fired), 1)
         self.assertEqual(fired[0]["uic"], uic)
         self.assertEqual(fired[0]["tag"], "tp1")
+
+    def test_a_full_close_retires_open_sibling_watches(self) -> None:
+        # #1198 option B: the last tranche closes the position -> the pick's
+        # still-open sibling entry watches are cancelled (journal terminal),
+        # releasing their virtual gross reservation.
+        import json as _json
+        from pathlib import Path as _Path
+        from tempfile import TemporaryDirectory
+
+        from alphalens_pipeline.brokers.automanager import entry_trails
+
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic,
+            tranches=(_tr(0, 16.0, 1.0),),
+            reference_qty=100.0,
+            stop_price=13.0,
+            pick_key="KO:2026-08-27",
+        )
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        entry_path = _Path(tmp.name) / "entry_trails.jsonl"
+        entry_path.write_text(
+            _json.dumps(
+                {
+                    "kind": "watch_open",
+                    "crid": "KO-2026-08-27-entry-t1",
+                    "pick_key": "KO:2026-08-27",
+                    "limit": 14.0,
+                    "qty": 10.0,
+                }
+            )
+            + "\n"
+        )
+        alerts: list[str] = []
+        with mock.patch.object(entry_trails, "_entry_trail_journal_path", lambda: entry_path):
+            deps = _deps(
+                broker,
+                alerts=alerts,
+                live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            )
+            with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+                cl._run_live_exits_pass(deps, cl.TickReport())
+        cancelled = [
+            _json.loads(ln)
+            for ln in entry_path.read_text().splitlines()
+            if _json.loads(ln).get("kind") == "cancelled"
+        ]
+        self.assertEqual([c["crid"] for c in cancelled], ["KO-2026-08-27-entry-t1"])
+        self.assertTrue(any("retired 1 sibling" in a for a in alerts))
+        self.assertEqual(broker.get_positions_by_uic(uic).quantity, 0.0)
+
+    def test_a_partial_fire_leaves_sibling_watches_alone(self) -> None:
+        import json as _json
+        from pathlib import Path as _Path
+        from tempfile import TemporaryDirectory
+
+        from alphalens_pipeline.brokers.automanager import entry_trails
+
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic,
+            tranches=(_tr(0, 16.0, 0.5),),
+            reference_qty=100.0,
+            stop_price=13.0,
+            pick_key="KO:2026-08-27",
+        )
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        entry_path = _Path(tmp.name) / "entry_trails.jsonl"
+        entry_path.write_text(
+            _json.dumps(
+                {
+                    "kind": "watch_open",
+                    "crid": "KO-2026-08-27-entry-t1",
+                    "pick_key": "KO:2026-08-27",
+                    "limit": 14.0,
+                    "qty": 10.0,
+                }
+            )
+            + "\n"
+        )
+        with mock.patch.object(entry_trails, "_entry_trail_journal_path", lambda: entry_path):
+            deps = _deps(
+                broker,
+                alerts=[],
+                live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            )
+            with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+                cl._run_live_exits_pass(deps, cl.TickReport())
+        kinds = [_json.loads(ln).get("kind") for ln in entry_path.read_text().splitlines()]
+        self.assertNotIn("cancelled", kinds)
+        self.assertEqual(broker.get_positions_by_uic(uic).quantity, 50.0)
 
     def test_a_fired_tranche_sends_one_operator_alert(self) -> None:
         # #1219: exits must announce themselves — one throttled alert per fired

@@ -113,6 +113,10 @@ class TrancheExitResult:
 
     sold: bool
     sell_order_id: str | None
+    # True iff THIS tranche closed the whole position (the SL was cancelled,
+    # not amended) -- the #1198 sibling-watch retire keys off it, because a
+    # TP-exit round trip produces no stop fill for the stop-fill pass to see.
+    position_closed: bool = False
 
 
 def _is_decidable_price(price: Any) -> bool:
@@ -376,7 +380,9 @@ def execute_tranche_exit(
         new_sl_qty,
         qty,
     )
-    return TrancheExitResult(sold=True, sell_order_id=sell_order_id)
+    return TrancheExitResult(
+        sold=True, sell_order_id=sell_order_id, position_closed=new_sl_qty <= _QTY_EPS
+    )
 
 
 def fold_fired_tranches(lines: Iterable[Mapping[str, Any]]) -> dict[int, frozenset[str]]:
@@ -468,6 +474,7 @@ class FiredTranche:
     tag: str
     qty: float
     sell_order_id: str | None
+    position_closed: bool = False
 
 
 def run_live_exits(
@@ -549,6 +556,7 @@ def run_live_exits(
                         tag=ex.tag,
                         qty=ex.qty,
                         sell_order_id=result.sell_order_id,
+                        position_closed=result.position_closed,
                     )
                 )
     return fired

@@ -17,11 +17,15 @@ from typing import Any
 from unittest import mock
 
 import alphalens_pipeline.brokers.automanager.control_loop as cl
+from alphalens_pipeline.brokers.automanager import entry_trails
 from broker_contract.contract import OrderState, OrderStatus
 
 _UIC = 5555
 _STOP_ID = "S-7727"
 _REF = "GME-2026-08-27-entry-t0-stop-1"
+_PICK_KEY = "GME:2026-08-27"
+_E1_CRID = "GME-2026-08-27-entry-t0"
+_E2_CRID = "GME-2026-08-27-entry-t1"
 
 
 def _stop_journal(test: unittest.TestCase) -> Path:
@@ -231,6 +235,134 @@ class TestStopFillReconcile(unittest.TestCase):
         _run(_deps(_Plain(), alerts))
         self.assertEqual([ln for ln in _lines(path) if ln["kind"] == "stop_filled"], [])
         self.assertEqual(alerts, [])
+
+
+def _entry_journal(test: unittest.TestCase) -> Path:
+    tmp = TemporaryDirectory()
+    test.addCleanup(tmp.cleanup)
+    path = Path(tmp.name) / "entry_trails.jsonl"
+    patcher = mock.patch.object(entry_trails, "_entry_trail_journal_path", lambda: path)
+    patcher.start()
+    test.addCleanup(patcher.stop)
+    return path
+
+
+def _tranche_plan(*, uic: int = _UIC, pick_key: str | None = _PICK_KEY) -> dict[str, Any]:
+    return {
+        "kind": "tranche_plan",
+        "uic": uic,
+        "pick_key": pick_key,
+        "reference_qty": 55.0,
+        "stop_price": 16.81,
+        "tp_tranches": [],
+    }
+
+
+def _watch_open(crid: str = _E2_CRID, *, pick_key: str = _PICK_KEY) -> dict[str, Any]:
+    return {
+        "kind": "watch_open",
+        "crid": crid,
+        "pick_key": pick_key,
+        "limit": 17.3152,
+        "qty": 39.0,
+        "fx_rate": 0.268,
+    }
+
+
+def _filled_broker() -> _StopBroker:
+    return _StopBroker(
+        outcome=OrderState(
+            order_id=_STOP_ID,
+            status=OrderStatus.FILLED,
+            instrument=None,
+            filled_quantity=16.0,
+            raw_status="Filled",
+            avg_fill_price=18.51,
+        )
+    )
+
+
+class TestSiblingRetireOnStopFill(unittest.TestCase):
+    """#1198 option B: a stop fill retires the pick's still-open sibling
+    watch tiers (backtest: exercised re-entries net R -0.03..-0.07 vs +0.365R
+    for freed capacity)."""
+
+    def test_open_sibling_is_cancelled_and_alerted(self) -> None:
+        stops = _stop_journal(self)
+        _seed(stops, _stop_placed(), _tranche_plan())
+        entries = _entry_journal(self)
+        _seed(
+            entries,
+            {"kind": "fired", "crid": _E1_CRID, "order_id": "B-1", "realized_qty": 16.0},
+            _watch_open(_E2_CRID),
+        )
+        alerts: list[str] = []
+        _run(_deps(_filled_broker(), alerts))
+
+        cancelled = [ln for ln in _lines(entries) if ln["kind"] == "cancelled"]
+        self.assertEqual([ln["crid"] for ln in cancelled], [_E2_CRID])
+        self.assertIn("round-trip", cancelled[0]["note"])
+        self.assertEqual(len([ln for ln in _lines(stops) if ln["kind"] == "stop_filled"]), 1)
+        self.assertTrue(any("retired 1 sibling" in a and _PICK_KEY in a for a in alerts))
+        # The reservation is REALLY released: the fold now values zero watching
+        # gross (the cancelled terminal excludes the tier), with nothing bad.
+        fold = entry_trails.read_entry_trail_fold()
+        self.assertEqual(entry_trails.watching_virtual_gross_acct(fold), (0.0, 0))
+
+    def test_armed_sibling_is_skipped_with_alert(self) -> None:
+        stops = _stop_journal(self)
+        _seed(stops, _stop_placed(), _tranche_plan())
+        entries = _entry_journal(self)
+        _seed(
+            entries,
+            _watch_open(_E2_CRID),
+            {"kind": "trail_armed", "crid": _E2_CRID, "order_id": "B-9", "trigger": 17.4},
+        )
+        alerts: list[str] = []
+        _run(_deps(_filled_broker(), alerts))
+
+        self.assertEqual([ln for ln in _lines(entries) if ln["kind"] == "cancelled"], [])
+        self.assertEqual(len([ln for ln in _lines(stops) if ln["kind"] == "stop_filled"]), 1)
+        self.assertTrue(any("skipped" in a and _PICK_KEY in a for a in alerts))
+
+    def test_ref_fallback_when_no_tranche_plan(self) -> None:
+        stops = _stop_journal(self)
+        _seed(stops, _stop_placed())  # no tranche_plan line
+        entries = _entry_journal(self)
+        _seed(entries, _watch_open(_E2_CRID))
+        alerts: list[str] = []
+        _run(_deps(_filled_broker(), alerts))
+
+        cancelled = [ln for ln in _lines(entries) if ln["kind"] == "cancelled"]
+        self.assertEqual([ln["crid"] for ln in cancelled], [_E2_CRID])
+
+    def test_unresolvable_pick_is_a_noop(self) -> None:
+        stops = _stop_journal(self)
+        _seed(stops, _stop_placed(ref=None))  # legacy: no ref, no tranche_plan
+        entries = _entry_journal(self)
+        _seed(entries, _watch_open(_E2_CRID))
+        alerts: list[str] = []
+        _run(_deps(_filled_broker(), alerts))
+
+        self.assertEqual([ln for ln in _lines(entries) if ln["kind"] == "cancelled"], [])
+        self.assertEqual(len([ln for ln in _lines(stops) if ln["kind"] == "stop_filled"]), 1)
+
+    def test_second_run_is_idempotent(self) -> None:
+        stops = _stop_journal(self)
+        _seed(stops, _stop_placed(), _tranche_plan())
+        entries = _entry_journal(self)
+        _seed(entries, _watch_open(_E2_CRID))
+        alerts: list[str] = []
+        _run(_deps(_filled_broker(), alerts))
+        first_cancelled = [ln for ln in _lines(entries) if ln["kind"] == "cancelled"]
+        alerts_after_first = list(alerts)
+
+        _run(_deps(_filled_broker(), alerts))  # stop_filled latch -> no candidate
+
+        self.assertEqual(
+            [ln for ln in _lines(entries) if ln["kind"] == "cancelled"], first_cancelled
+        )
+        self.assertEqual(alerts, alerts_after_first)
 
 
 class TestFoldStandingStopIds(unittest.TestCase):

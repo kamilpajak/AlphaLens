@@ -1431,6 +1431,18 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
                 f"tranche-fired:{tranche.uic}:{tranche.tag}",
             ):
                 report.alerts += 1
+            if tranche.position_closed:
+                # #1198 option B: a TP exit that closed the position produces
+                # no stop fill (the SL is CANCELLED), so the sibling-watch
+                # retire hooks HERE. journal_lines is this tick's snapshot —
+                # the plan for a just-closed position cannot have been written
+                # after it.
+                _retire_sibling_watches(
+                    deps,
+                    _fold_governing_plan_pick_keys(journal_lines).get(tranche.uic),
+                    report,
+                    trigger=f"tranche {tp_label_from_tag(tranche.tag)} closed the position",
+                )
 
 
 def _fetch_protection_peaks(
@@ -3282,7 +3294,11 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
     broker = deps.broker
     if not isinstance(broker, SupportsOrderResolution):
         return
-    standing = _fold_standing_stop_ids(_iter_standalone_stop_journal())
+    lines = list(_iter_standalone_stop_journal())
+    standing = _fold_standing_stop_ids(lines)
+    if not standing:
+        return
+    plan_pick_keys = _fold_governing_plan_pick_keys(lines)
     for uic in sorted(standing):
         stop = standing[uic]
         if not _armed_order_is_gone(_read_entry_order(broker, stop.order_id)):
@@ -3307,6 +3323,63 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
             f"stop-fill:{stop.order_id}",
         ):
             report.alerts += 1
+        # #1198 option B: the round trip is over — retire the pick's still-open
+        # sibling entry watches so their virtual gross reservation and watch
+        # slot free NOW instead of at the entry TTL.
+        pick_key = plan_pick_keys.get(uic) or _pick_key_from_stop_ref(stop.ref)
+        _retire_sibling_watches(deps, pick_key, report, trigger=f"stop {stop.order_id} filled")
+
+
+def _pick_key_from_stop_ref(ref: str | None) -> str | None:
+    """Recover the colon-form pick key from a stop ref (fallback when the uic
+    has no ``tranche_plan`` ``pick_key`` on record).
+
+    The entry-trail stop ref is ``<ticker>-<brief_date>-entry-t<i>-stop-<gen>``
+    (``position_manager._exit_stop_ref`` over the watch crid). A classic
+    bracket ref has a different shape and returns ``None`` — the caller treats
+    that as "no entry-trail siblings exist", which is true by construction."""
+    if not ref or "-entry-t" not in ref:
+        return None
+    prefix = ref.split("-entry-t", 1)[0]  # "<ticker>-<YYYY-MM-DD>"
+    ticker, _, brief_date = prefix.partition("-")
+    if not ticker or len(brief_date) != 10:
+        return None
+    return f"{ticker}:{brief_date}"
+
+
+def _retire_sibling_watches(
+    deps: LoopDeps, pick_key: str | None, report: TickReport, *, trigger: str
+) -> None:
+    """Cancel the pick's still-open sibling entry-watch tiers after a
+    round-trip close (#1198, option B — backtest in the issue: exercised
+    post-round-trip re-entries net R -0.03..-0.07 while a freed slot earns
+    +0.365R under the same policy).
+
+    Reuses ``entry_trails.cancel_open_watches`` (the disarm machinery):
+    journal-terminal writes only, idempotent (already-terminal tiers never
+    match), and refuse-first on a tier with a resting armed BUY — v1 SKIPS
+    that pick with an alert rather than cancel-then-verifying the broker
+    order. ``pick_key is None`` means a bracket-path position with no
+    entry-trail siblings — a quiet no-op."""
+    if pick_key is None:
+        return
+    try:
+        cancelled = entry_trails.cancel_open_watches(
+            pick_key, note=f"sibling retire: position round-tripped ({trigger}) — #1198"
+        )
+    except entry_trails.DisarmRestingOrderError as exc:
+        if deps.alert_throttled(
+            f"entry-watch: sibling retire of {pick_key} skipped — {exc}",
+            f"sibling-retire-armed:{pick_key}",
+        ):
+            report.alerts += 1
+        return
+    if cancelled and deps.alert_throttled(
+        f"entry-watch: retired {len(cancelled)} sibling tier(s) of {pick_key} "
+        f"after round-trip ({trigger})",
+        f"sibling-retire:{pick_key}",
+    ):
+        report.alerts += 1
 
 
 def _reconcile_one_armed_tier(
