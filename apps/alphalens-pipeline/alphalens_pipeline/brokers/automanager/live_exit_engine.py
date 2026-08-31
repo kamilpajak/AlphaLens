@@ -426,7 +426,13 @@ def _fire_telemetry(
     }
 
 
-def mark_tranche_fired(uic: int, tag: str, *, telemetry: Mapping[str, Any] | None = None) -> None:
+def mark_tranche_fired(
+    uic: int,
+    tag: str,
+    *,
+    telemetry: Mapping[str, Any] | None = None,
+    position_closed: bool = False,
+) -> None:
     """Append one ``tranche_fired`` marker (idempotency: a fired tranche never
     re-fires). Writes via the shared append-only standalone-stop journal seam.
 
@@ -451,6 +457,11 @@ def mark_tranche_fired(uic: int, tag: str, *, telemetry: Mapping[str, Any] | Non
     line: dict[str, Any] = {"kind": "tranche_fired", "uic": int(uic), "tag": str(tag)}
     if telemetry is not None:
         line["telemetry"] = dict(telemetry)
+    if position_closed:
+        # Durable #1198 retire trigger: the SL was CANCELLED on this full
+        # close, so no stop fill will ever record the round trip — this field
+        # is what the restart-safe sibling-retire sweep keys off.
+        line["position_closed"] = True
     _append_standalone_stop_journal(line)
 
 
@@ -549,7 +560,9 @@ def run_live_exits(
             )
             if result.sold:
                 telemetry = _fire_telemetry(point, ex, sell_order_id=result.sell_order_id)
-                mark_tranche_fired(m.uic, ex.tag, telemetry=telemetry)
+                mark_tranche_fired(
+                    m.uic, ex.tag, telemetry=telemetry, position_closed=result.position_closed
+                )
                 fired.append(
                     FiredTranche(
                         uic=m.uic,

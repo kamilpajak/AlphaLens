@@ -675,6 +675,10 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # reconcile on purpose: both are journal-vs-book terminal writers, UNGATED
     # by KILL, and both draw on the same per-tick audit budget started above.
     _run_stop_fill_reconcile_pass(deps, report)
+    # #1198 restart-safe backstop: re-derive owed sibling retires from the
+    # durable round-trip records (crash between a terminal write and the
+    # inline retire self-heals here; idempotent, quiet in steady state).
+    _sweep_owed_sibling_retires(deps, report)
 
     if not kill and alive:
         _run_placement_drain(deps, report)
@@ -3291,6 +3295,8 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
     ``_entry_order_filled_qty`` helpers are named for their entry-trail origin
     but operate on ANY order id — deliberate reuse of the battle-tested logic
     over a renamed duplicate."""
+    from broker_contract.contract import OrderStatus
+
     broker = deps.broker
     if not isinstance(broker, SupportsOrderResolution):
         return
@@ -3312,7 +3318,19 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
         if filled_qty is None:
             continue
         avg_price = outcome.avg_fill_price if outcome is not None else None
-        _journal_stop_filled(uic, order_id=stop.order_id, qty=filled_qty, avg_price=avg_price)
+        # PARTIALLY_FILLED terminal = the remainder was cancelled with residual
+        # exposure still on the book — announce the fill, never treat it as a
+        # round trip (zen MEDIUM on #1222). FILLED = the whole resting stop
+        # (protection keeps SL == owned) executed: the position is closed.
+        partial = outcome is not None and outcome.status is not OrderStatus.FILLED
+        _journal_stop_filled(
+            uic,
+            order_id=stop.order_id,
+            qty=filled_qty,
+            avg_price=avg_price,
+            ref=stop.ref,
+            partial=partial,
+        )
         # The stop ref is `<entry_crid>-stop-<gen>` (position_manager._exit_stop_ref)
         # — no E{n}/TP{n} shape to render, so the operator label is the ticker
         # prefix (labels doctrine: never a raw machine ref in message text).
@@ -3323,15 +3341,53 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
             f"stop-fill:{stop.order_id}",
         ):
             report.alerts += 1
+        if partial:
+            continue
         # #1198 option B: the round trip is over — retire the pick's still-open
         # sibling entry watches so their virtual gross reservation and watch
-        # slot free NOW instead of at the entry TTL.
+        # slot free NOW instead of at the entry TTL. The restart-safe sweep
+        # (_sweep_owed_sibling_retires) re-derives this from the journal, so a
+        # crash between the stop_filled write and this call self-heals.
         # Ref first: the stop ref is stamped from the exact PlannedExit that
         # owned THIS stop (generation-exact); the tranche_plan fold is uic-keyed
         # last-wins and could in principle point at a newer pick on a reused
         # uic. The fold is the fallback for a ref-less legacy record.
         pick_key = _pick_key_from_stop_ref(stop.ref) or plan_pick_keys.get(uic)
         _retire_sibling_watches(deps, pick_key, report, trigger=f"stop {stop.order_id} filled")
+
+
+def _sweep_owed_sibling_retires(deps: LoopDeps, report: TickReport) -> None:
+    """Restart-safe backstop for the #1198 sibling retire (zen HIGH on #1222).
+
+    The inline retires in the stop-fill and live-exits passes are side effects
+    AFTER their durable trigger records (``stop_filled`` /
+    ``tranche_fired[position_closed]``) — a crash in that window would
+    otherwise leave a sibling watch open forever (the stop-fill latch removes
+    the uic from the reconcile fold, so the inline call never retries). This
+    sweep re-derives the owed picks from the journal every tick and calls the
+    idempotent ``cancel_open_watches`` machinery; once a pick's tiers are all
+    terminal the call matches nothing, writes nothing and alerts nothing, so
+    the steady state is a cheap no-op."""
+    owed: dict[str, str] = {}
+    lines = list(_iter_standalone_stop_journal())
+    plan_pick_keys = _fold_governing_plan_pick_keys(lines)
+    for line in lines:
+        kind = line.get("kind")
+        if kind == "stop_filled" and not line.get("partial"):
+            ref = line.get("ref")
+            uic = _coerce(line, "uic", int)
+            pick_key = _pick_key_from_stop_ref(ref if isinstance(ref, str) else None) or (
+                plan_pick_keys.get(uic) if uic is not None else None
+            )
+            if pick_key is not None:
+                owed.setdefault(pick_key, "stop fill on record")
+        elif kind == "tranche_fired" and line.get("position_closed"):
+            uic = _coerce(line, "uic", int)
+            pick_key = plan_pick_keys.get(uic) if uic is not None else None
+            if pick_key is not None:
+                owed.setdefault(pick_key, "position-closing tranche on record")
+    for pick_key in sorted(owed):
+        _retire_sibling_watches(deps, pick_key, report, trigger=owed[pick_key])
 
 
 def _pick_key_from_stop_ref(ref: str | None) -> str | None:
@@ -3345,8 +3401,17 @@ def _pick_key_from_stop_ref(ref: str | None) -> str | None:
     if not ref or "-entry-t" not in ref:
         return None
     prefix = ref.split("-entry-t", 1)[0]  # "<ticker>-<YYYY-MM-DD>"
-    ticker, _, brief_date = prefix.partition("-")
-    if not ticker or len(brief_date) != 10:
+    # rpartition: the DATE is the fixed-shape tail; the ticker may itself carry
+    # a hyphen (yfinance-style class shares, e.g. BRK-B) — zen LOW on #1222.
+    head, sep, day = prefix.rpartition("-")
+    head, sep2, month = head.rpartition("-")
+    ticker, sep3, year = head.rpartition("-")
+    if not (sep and sep2 and sep3 and ticker):
+        return None
+    brief_date = f"{year}-{month}-{day}"
+    try:
+        dt.date.fromisoformat(brief_date)
+    except ValueError:
         return None
     return f"{ticker}:{brief_date}"
 
@@ -3375,6 +3440,16 @@ def _retire_sibling_watches(
         if deps.alert_throttled(
             f"entry-watch: sibling retire of {pick_key} skipped — {exc}",
             f"sibling-retire-armed:{pick_key}",
+        ):
+            report.alerts += 1
+        return
+    except OSError as exc:
+        # A journal write failure (ENOSPC, permissions) must never escape the
+        # tick — it would starve the protection pass (zen MEDIUM on #1222).
+        # The restart-safe sweep retries next tick off the durable record.
+        if deps.alert_throttled(
+            f"entry-watch: sibling retire of {pick_key} failed — journal write error: {exc}",
+            f"sibling-retire-io:{pick_key}",
         ):
             report.alerts += 1
         return
@@ -5139,6 +5214,8 @@ def _journal_stop_filled(
     order_id: str,
     qty: float,
     avg_price: float | None,
+    ref: str | None = None,
+    partial: bool = False,
     clock: Callable[[], float] = time.time,
 ) -> None:
     """Append the terminal ``stop_filled`` line for a reconciled stop fill (#1219).
@@ -5156,6 +5233,12 @@ def _journal_stop_filled(
             "order_id": str(order_id),
             "qty": float(qty),
             "avg_price": avg_price if avg_price is None else float(avg_price),
+            # Durable retire-trigger fields (#1198 crash window): `ref` carries
+            # the generation-exact pick attribution into the restart-safe
+            # sweep; `partial` (PARTIALLY_FILLED terminal — residual exposure
+            # remains) marks a fill that must announce but never retire.
+            "ref": ref,
+            "partial": bool(partial),
             "ts": float(clock()),
         }
     )

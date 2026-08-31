@@ -35,6 +35,16 @@ def _stop_journal(test: unittest.TestCase) -> Path:
     patcher = mock.patch.object(cl, "_standalone_stop_journal_path", lambda: path)
     patcher.start()
     test.addCleanup(patcher.stop)
+    # Hermetic default for the ENTRY journal too: the sibling-retire paths read
+    # and write it, and an unpatched seam would touch the developer's real
+    # ~/.alphalens tree. Tests that inspect entries call _entry_journal(),
+    # whose later patch takes precedence.
+    entry_tmp = TemporaryDirectory()
+    test.addCleanup(entry_tmp.cleanup)
+    entry_path = Path(entry_tmp.name) / "entry_trails.jsonl"
+    entry_patcher = mock.patch.object(entry_trails, "_entry_trail_journal_path", lambda: entry_path)
+    entry_patcher.start()
+    test.addCleanup(entry_patcher.stop)
     return path
 
 
@@ -116,8 +126,11 @@ def _deps(broker: Any, alerts: list[str], **over: Any) -> cl.LoopDeps:
 
 
 def _run(deps: cl.LoopDeps) -> cl.TickReport:
+    """One reconcile step as run_once sequences it: the pass, then the
+    restart-safe sibling-retire sweep."""
     report = cl.TickReport()
     cl._run_stop_fill_reconcile_pass(deps, report)
+    cl._sweep_owed_sibling_retires(deps, report)
     return report
 
 
@@ -363,6 +376,132 @@ class TestSiblingRetireOnStopFill(unittest.TestCase):
             [ln for ln in _lines(entries) if ln["kind"] == "cancelled"], first_cancelled
         )
         self.assertEqual(alerts, alerts_after_first)
+
+
+class TestSiblingRetireSweep(unittest.TestCase):
+    """Zen HIGH on #1222: the retire must be crash-consistent. A durable
+    round-trip record (stop_filled / tranche_fired[position_closed]) with NO
+    matching cancelled lines — the crash window — must retire the sibling on
+    the NEXT tick."""
+
+    def test_stop_filled_without_cancel_retires_next_tick(self) -> None:
+        stops = _stop_journal(self)
+        _seed(
+            stops,
+            _stop_placed(),
+            {
+                "kind": "stop_filled",
+                "uic": _UIC,
+                "order_id": _STOP_ID,
+                "qty": 16.0,
+                "ref": _REF,
+                "partial": False,
+                "ts": 200.0,
+            },
+        )
+        entries = _entry_journal(self)
+        _seed(entries, _watch_open(_E2_CRID))
+        alerts: list[str] = []
+        _run(_deps(_StopBroker(), alerts))  # no resolve possible: latch excludes the uic
+
+        cancelled = [ln for ln in _lines(entries) if ln["kind"] == "cancelled"]
+        self.assertEqual([ln["crid"] for ln in cancelled], [_E2_CRID])
+        self.assertTrue(any("retired 1 sibling" in a for a in alerts))
+
+    def test_tranche_close_without_cancel_retires_next_tick(self) -> None:
+        stops = _stop_journal(self)
+        _seed(
+            stops,
+            _tranche_plan(),
+            {"kind": "tranche_fired", "uic": _UIC, "tag": "tp1", "position_closed": True},
+        )
+        entries = _entry_journal(self)
+        _seed(entries, _watch_open(_E2_CRID))
+        alerts: list[str] = []
+        _run(_deps(_StopBroker(), alerts))
+
+        cancelled = [ln for ln in _lines(entries) if ln["kind"] == "cancelled"]
+        self.assertEqual([ln["crid"] for ln in cancelled], [_E2_CRID])
+
+    def test_partial_tranche_fire_record_does_not_retire(self) -> None:
+        stops = _stop_journal(self)
+        _seed(
+            stops,
+            _tranche_plan(),
+            {"kind": "tranche_fired", "uic": _UIC, "tag": "tp1"},  # no position_closed
+        )
+        entries = _entry_journal(self)
+        _seed(entries, _watch_open(_E2_CRID))
+        alerts: list[str] = []
+        _run(_deps(_StopBroker(), alerts))
+
+        self.assertEqual([ln for ln in _lines(entries) if ln["kind"] == "cancelled"], [])
+
+
+class TestPartialStopFill(unittest.TestCase):
+    """Zen MEDIUM on #1222: a PARTIALLY_FILLED terminal stop announces the fill
+    but must NOT retire siblings — residual exposure means no round-trip."""
+
+    def test_partial_fill_announces_but_does_not_retire(self) -> None:
+        stops = _stop_journal(self)
+        _seed(stops, _stop_placed(), _tranche_plan())
+        entries = _entry_journal(self)
+        _seed(entries, _watch_open(_E2_CRID))
+        broker = _StopBroker(
+            outcome=OrderState(
+                order_id=_STOP_ID,
+                status=OrderStatus.PARTIALLY_FILLED,
+                instrument=None,
+                filled_quantity=8.0,
+                raw_status="PartiallyFilled",
+                avg_fill_price=18.51,
+            )
+        )
+        alerts: list[str] = []
+        _run(_deps(broker, alerts))
+
+        filled = [ln for ln in _lines(stops) if ln["kind"] == "stop_filled"]
+        self.assertEqual(len(filled), 1)
+        self.assertTrue(filled[0]["partial"])
+        self.assertEqual([ln for ln in _lines(entries) if ln["kind"] == "cancelled"], [])
+        self.assertTrue(any("filled 8" in a for a in alerts))
+        self.assertFalse(any("retired" in a for a in alerts))
+
+
+class TestRetireJournalWriteBoundary(unittest.TestCase):
+    """Zen MEDIUM on #1222: an OSError from the entry-trails journal write must
+    alert and return, never escape the tick (it would starve protection)."""
+
+    def test_oserror_alerts_and_does_not_raise(self) -> None:
+        stops = _stop_journal(self)
+        _seed(stops, _stop_placed(), _tranche_plan())
+        _entry_journal(self)
+        alerts: list[str] = []
+        with mock.patch.object(
+            entry_trails, "cancel_open_watches", side_effect=OSError("disk full")
+        ):
+            _run(_deps(_filled_broker(), alerts))  # must not raise
+        self.assertTrue(any("sibling retire" in a and "disk full" in a for a in alerts))
+
+
+class TestPickKeyFromStopRef(unittest.TestCase):
+    def test_plain_ticker(self) -> None:
+        self.assertEqual(
+            cl._pick_key_from_stop_ref("GME-2026-08-27-entry-t0-stop-1"), "GME:2026-08-27"
+        )
+
+    def test_hyphenated_ticker(self) -> None:
+        # Zen LOW on #1222: yfinance-style class shares carry a hyphen.
+        self.assertEqual(
+            cl._pick_key_from_stop_ref("BRK-B-2026-08-27-entry-t0-stop-1"), "BRK-B:2026-08-27"
+        )
+
+    def test_classic_bracket_ref_returns_none(self) -> None:
+        self.assertIsNone(cl._pick_key_from_stop_ref("some-classic-bracket-id"))
+
+    def test_malformed_date_returns_none(self) -> None:
+        self.assertIsNone(cl._pick_key_from_stop_ref("GME-notadate-entry-t0-stop-1"))
+        self.assertIsNone(cl._pick_key_from_stop_ref(None))
 
 
 class TestFoldStandingStopIds(unittest.TestCase):
