@@ -1,12 +1,30 @@
 [Unit]
-Description=AlphaLens Saxo OAuth keep-alive timer (~20min, inside the 40min window)
+Description=AlphaLens Saxo OAuth keep-alive timer (20min wall-clock grid, inside the 40min window)
 
 [Timer]
-# 20min << 40min refresh-token life -> two consecutive misses still leave a
-# margin. OnBootSec re-arms promptly after reboot; Persistent=true self-heals a
-# single missed window on the next boot.
-OnBootSec=3min
-OnUnitActiveSec=20min
+# 20min << 40min refresh-token life. WALL-CLOCK, NOT INTERVAL (#1208, after
+# the 2026-08-30 #1206 dormancy): OnUnitActiveSec anchors to a service
+# activation observed WHILE THE TIMER RUNS, so a mid-uptime stop/start
+# ordering — exactly the incident-time manual intervention a keep-alive must
+# survive — can leave the timer `enabled` + `active` with NEXT empty, and the
+# refresh chain dies ~40 min later. OnCalendar schedules the moment the timer
+# starts, independent of activation history.
+#
+# Reboot phase arithmetic (the grid is never worse than the old
+# OnBootSec=3min shape): if downtime spans a grid point, Persistent=true —
+# live for the first time here, it only works with OnCalendar — fires the
+# catch-up at timer start (gap ~= downtime); if it spans none, the total gap
+# is <= 20 min. A chain already >40 min dead is unrecoverable under either
+# shape (attended `alphalens broker auth` re-login only).
+#
+# Shares the :00/20 grid with the marketdata twin on purpose — the two
+# chains use DISJOINT token stores (saxo_auth vs saxo_auth_live), so there
+# is nothing to phase-offset. No RandomizedDelaySec: nothing to
+# thundering-herd with, and a fixed grid keeps journal timestamps legible.
+#
+# After enabling, verify the EFFECT: `systemctl --user list-timers` must
+# show a populated NEXT — `is-active`/`is-enabled` are not evidence.
+OnCalendar=*-*-* *:00/20:00 UTC
 Persistent=true
 
 [Install]
