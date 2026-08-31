@@ -3326,7 +3326,11 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
         # #1198 option B: the round trip is over — retire the pick's still-open
         # sibling entry watches so their virtual gross reservation and watch
         # slot free NOW instead of at the entry TTL.
-        pick_key = plan_pick_keys.get(uic) or _pick_key_from_stop_ref(stop.ref)
+        # Ref first: the stop ref is stamped from the exact PlannedExit that
+        # owned THIS stop (generation-exact); the tranche_plan fold is uic-keyed
+        # last-wins and could in principle point at a newer pick on a reused
+        # uic. The fold is the fallback for a ref-less legacy record.
+        pick_key = _pick_key_from_stop_ref(stop.ref) or plan_pick_keys.get(uic)
         _retire_sibling_watches(deps, pick_key, report, trigger=f"stop {stop.order_id} filled")
 
 
