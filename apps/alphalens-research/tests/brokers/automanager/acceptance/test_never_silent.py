@@ -43,6 +43,19 @@ class ItNeverFailsSilently(unittest.TestCase):
 
         world.assert_alerted(containing="chain")
 
+    def test_a_filled_stop_is_announced(self) -> None:
+        # #1219 — the gap this guarantee existed for: a real-money position
+        # closed by its protective stop used to vanish without a word.
+        world = ManagerWorld(self)
+        world.entry_fills("KO", shares=100)
+        world.run_tick()  # protection places + journals the standalone stop
+        world.stop_fills("KO")
+
+        world.run_tick()
+
+        world.assert_alerted(containing="stop")
+        world.assert_flat("KO")
+
     def test_a_healthy_tick_is_quiet(self) -> None:
         world = ManagerWorld(self)
         # A normal fill that protects cleanly should NOT spam alerts.

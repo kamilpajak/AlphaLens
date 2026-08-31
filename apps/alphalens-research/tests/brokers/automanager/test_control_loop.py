@@ -4153,9 +4153,27 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                cl._journal_stop_placed(_UIC, 46.0, clock=lambda: 1234.5)
+                cl._journal_stop_placed(
+                    _UIC,
+                    46.0,
+                    order_id="S-1",
+                    ref="KO-2026-08-01-entry-t0-stop-1",
+                    clock=lambda: 1234.5,
+                )
                 lines = self._stop_placed_lines()
-        self.assertEqual(lines, [{"kind": "stop_placed", "uic": _UIC, "qty": 46.0, "ts": 1234.5}])
+        self.assertEqual(
+            lines,
+            [
+                {
+                    "kind": "stop_placed",
+                    "uic": _UIC,
+                    "qty": 46.0,
+                    "order_id": "S-1",
+                    "ref": "KO-2026-08-01-entry-t0-stop-1",
+                    "ts": 1234.5,
+                }
+            ],
+        )
 
     def test_success_appends_stop_placed_with_ts_and_qty(self) -> None:
         with TemporaryDirectory() as d:
@@ -5418,7 +5436,9 @@ class TestProtectionViewIgnoresOutcomeRecords(unittest.TestCase):
                 before = self._view_fields(
                     cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
                 )
-                cl._journal_stop_placed(_UIC, 46.0, clock=lambda: 1000.0 - 5.0)
+                cl._journal_stop_placed(
+                    _UIC, 46.0, order_id="S-1", ref="ref-1", clock=lambda: 1000.0 - 5.0
+                )
                 cl._journal_amend_ok(_UIC, 46.0, clock=lambda: 1000.0 - 5.0)
                 after = self._view_fields(
                     cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)

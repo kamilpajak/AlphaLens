@@ -48,6 +48,7 @@ class FakeBroker:
         self._positions: dict[int, Position] = {}
         self._orders: dict[str, OrderState] = {}
         self._oco_sibling: dict[str, str] = {}
+        self._order_outcomes: dict[str, OrderState] = {}
         self._seq = 0
 
         # Fault-injection knobs (set by the DSL for the resilience scenarios).
@@ -161,6 +162,49 @@ class FakeBroker:
             external_reference=request.client_request_id,
         )
         return PlacedOrder(entry_order_id=entry_id, exit_order_ids=())
+
+    def fill_resting_order(self, order_id: str, *, price: float) -> None:
+        """Simulate the broker FILLING a resting sell order (#1219): it leaves
+        the open-orders book, the position shrinks by the filled amount, and the
+        audit log memoizes the terminal fill for ``resolve_order_outcome``."""
+        order = self._orders.pop(order_id)
+        uic = order.uic
+        qty = float(order.amount or 0.0)
+        if uic is not None:
+            pos = self._positions.get(uic)
+            if pos is not None:
+                remaining = pos.quantity - qty
+                self.set_position(self._ticker_by_uic[uic], remaining, avg_price=pos.avg_price)
+        self._order_outcomes[order_id] = OrderState(
+            order_id=order_id,
+            status=OrderStatus.FILLED,
+            instrument=order.instrument,
+            filled_quantity=qty,
+            raw_status="Filled",
+            uic=uic,
+            side=order.side,
+            order_type=order.order_type,
+            amount=order.amount,
+            external_reference=order.external_reference,
+            avg_fill_price=float(price),
+        )
+
+    def has_cached_order_outcome(self, order_id: str) -> bool:
+        return order_id in self._order_outcomes
+
+    def resolve_order_outcome(self, order_id: str) -> OrderState:
+        # UNKNOWN for an id the fake never filled — a fabricated terminal here
+        # would let the reconcile passes invent fills the scenario never staged.
+        outcome = self._order_outcomes.get(order_id)
+        if outcome is not None:
+            return outcome
+        return OrderState(
+            order_id=order_id,
+            status=OrderStatus.UNKNOWN,
+            instrument=None,
+            filled_quantity=0.0,
+            raw_status="",
+        )
 
     def get_order(self, order_id: str) -> OrderState:
         order = self._orders.get(order_id)

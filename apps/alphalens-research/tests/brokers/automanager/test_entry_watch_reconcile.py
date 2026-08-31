@@ -81,7 +81,11 @@ class _ResolvingBroker(_RecordingBroker):
 
     def resolve_order_outcome(self, order_id: str) -> OrderState:
         self.resolve_calls.append(order_id)
-        return self.resolutions[order_id]
+        # UNKNOWN for an id the scenario never seeded (e.g. the standalone stop
+        # the #1219 fill-reconcile pass probes) — mirroring the contract: the
+        # audit log never fabricates a terminal it does not hold.
+        state = self.resolutions.get(order_id)
+        return state if state is not None else _os(order_id, OrderStatus.UNKNOWN)
 
 
 def _seed_armed(path: Any, *, crid: str = _CRID, order_id: str, limit: float = 10.0) -> None:

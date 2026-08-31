@@ -457,15 +457,28 @@ class ManagedExit:
     already_fired: frozenset[str]
 
 
+@dataclass(frozen=True)
+class FiredTranche:
+    """One tranche this pass actually market-sold (#1219) — the facts the caller
+    needs to render an operator alert. The engine stays notification-port-free
+    (mirroring ``entry_trail_watcher``'s alert-intent pattern): control_loop owns
+    delivery, message text and the uic -> ticker mapping."""
+
+    uic: int
+    tag: str
+    qty: float
+    sell_order_id: str | None
+
+
 def run_live_exits(
     broker: LiveExitBroker,
     feed: PriceFeed,
     managed: list[ManagedExit],
     *,
     lattice: QuantityLattice,
-) -> int:
+) -> list[FiredTranche]:
     """One live-exit pass over managed positions. Stale/absent price -> veto (skip).
-    Returns the number of tranches fired.
+    Returns one :class:`FiredTranche` per tranche fired (fired count = its length).
 
     ``broker`` is the engine's own :class:`LiveExitBroker` requirement set — the
     caller (``control_loop._run_live_exits_pass``) ``isinstance``-narrows before
@@ -487,7 +500,7 @@ def run_live_exits(
     # Once per pass, before any per-position work: a lattice the rail cannot
     # reason about ends the pass rather than being re-checked per position.
     assert_rail_lattice(lattice)
-    fired = 0
+    fired: list[FiredTranche] = []
     for m in managed:
         point = feed.latest(m.uic)
         if point is None:
@@ -530,5 +543,12 @@ def run_live_exits(
             if result.sold:
                 telemetry = _fire_telemetry(point, ex, sell_order_id=result.sell_order_id)
                 mark_tranche_fired(m.uic, ex.tag, telemetry=telemetry)
-                fired += 1
+                fired.append(
+                    FiredTranche(
+                        uic=m.uic,
+                        tag=ex.tag,
+                        qty=ex.qty,
+                        sell_order_id=result.sell_order_id,
+                    )
+                )
     return fired

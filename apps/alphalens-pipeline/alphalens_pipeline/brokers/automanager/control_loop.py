@@ -66,6 +66,7 @@ from alphalens_pipeline.brokers.automanager.costs import (
 from alphalens_pipeline.brokers.automanager.labels import (
     entry_label_from_crid,
     human_label_from_external_reference,
+    tp_label_from_tag,
 )
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     LiveExitBroker,
@@ -667,6 +668,13 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # just placed a WORKING order (reconcile no-ops on it), so it only reconciles
     # prior-tick resting orders.
     _run_entry_trail_reconcile_pass(deps, report)
+
+    # #1219 stop-fill reconcile: announce a standalone stop that FILLED at the
+    # broker (terminal `stop_filled` line + ONE throttled alert). Placement-order
+    # independent (no money-gate fold reads it) but grouped with the entry
+    # reconcile on purpose: both are journal-vs-book terminal writers, UNGATED
+    # by KILL, and both draw on the same per-tick audit budget started above.
+    _run_stop_fill_reconcile_pass(deps, report)
 
     if not kill and alive:
         _run_placement_drain(deps, report)
@@ -1399,7 +1407,7 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     from alphalens_pipeline.brokers.execution import RAIL_LATTICE
 
     try:
-        fired_count = run_live_exits(broker, feed, managed, lattice=RAIL_LATTICE)
+        fired = run_live_exits(broker, feed, managed, lattice=RAIL_LATTICE)
     except BrokerError as exc:
         if deps.alert_throttled(
             f"live-exits: pass failed (broker error) — skipped: {exc}",
@@ -1407,9 +1415,22 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         ):
             report.alerts += 1
         return
-    if fired_count:
-        report.exits_placed += fired_count
-        report.actions.append(("live-exits", f"fired={fired_count}"))
+    if fired:
+        report.exits_placed += len(fired)
+        report.actions.append(("live-exits", f"fired={len(fired)}"))
+        # #1219: exits announce themselves — ONE throttled alert per fired
+        # tranche, rendered HERE (not in the engine, which stays port-free and
+        # knows no tickers). The (uic, tag) key lets a repeat within the
+        # throttle window dedup while a distinct tranche still notifies.
+        for tranche in fired:
+            ticker = uic_to_instrument.get(tranche.uic, (f"uic {tranche.uic}", None))[0]
+            order_text = f" (order {tranche.sell_order_id})" if tranche.sell_order_id else ""
+            if deps.alert_throttled(
+                f"exit: {ticker} tranche {tp_label_from_tag(tranche.tag)} sold "
+                f"{tranche.qty:g} shares{order_text}",
+                f"tranche-fired:{tranche.uic}:{tranche.tag}",
+            ):
+                report.alerts += 1
 
 
 def _fetch_protection_peaks(
@@ -3178,6 +3199,100 @@ def _run_entry_trail_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
         _reconcile_one_armed_tier(deps, crid, tier_state, d_bps, now, report)
 
 
+@dataclass(frozen=True)
+class _StandingStop:
+    """One journaled standalone stop the fill-reconcile pass can still act on:
+    the broker ``order_id`` to compare against the open-orders book and the
+    deterministic ``ref`` that renders the operator label (may be ``None`` only
+    for records written before the ``ref`` field existed)."""
+
+    order_id: str
+    ref: str | None
+
+
+def _fold_standing_stop_ids(lines: Iterable[Mapping[str, Any]]) -> dict[int, _StandingStop]:
+    """Fold ``stop_placed`` / ``stop_filled`` lines into the per-uic standing
+    stop the fill-reconcile pass should watch (#1219).
+
+    Per uic the LATEST (by ``ts``) ``stop_placed`` carrying an ``order_id`` wins
+    — records predating #1219 carry none and can never be reconciled (their id
+    was never journaled), so they yield no candidate rather than a false one. A
+    ``stop_filled`` line whose ``order_id`` matches the elected candidate removes
+    the uic: the terminal already exists, so the pass must not re-resolve or
+    re-alert it (restart idempotence, mirroring the entry-side ``fired`` fold)."""
+    latest_ts: dict[int, float] = {}
+    latest: dict[int, _StandingStop] = {}
+    filled_ids: set[str] = set()
+    for line in lines:
+        kind = line.get("kind")
+        if kind == "stop_placed":
+            order_id = line.get("order_id")
+            if not isinstance(order_id, str) or not order_id:
+                continue
+            try:
+                uic = int(line["uic"])
+                ts = float(line["ts"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if uic not in latest_ts or ts >= latest_ts[uic]:
+                latest_ts[uic] = ts
+                ref = line.get("ref")
+                latest[uic] = _StandingStop(
+                    order_id=order_id, ref=ref if isinstance(ref, str) and ref else None
+                )
+        elif kind == "stop_filled":
+            order_id = line.get("order_id")
+            if isinstance(order_id, str) and order_id:
+                filled_ids.add(order_id)
+    return {uic: stop for uic, stop in latest.items() if stop.order_id not in filled_ids}
+
+
+def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
+    """Reconcile every journaled standing standalone stop against the broker and
+    announce a FILL (#1219 — the silent-exit gap).
+
+    Mirrors ``_run_entry_trail_reconcile_pass`` exactly: journaled order id ->
+    gone from the open-orders book -> ONE budgeted audit-log resolution -> on a
+    FILLED outcome the terminal ``stop_filled`` line FIRST (the idempotence
+    latch), then ONE throttled operator alert. Runs UNGATED by KILL (a stop that
+    fills during an emergency stop must still be announced; the pass writes only
+    terminals — it never places, amends or cancels) and needs no feature flag:
+    it is a no-op whenever no journaled stop id is outstanding.
+
+    Rotation-race safety (the false "chain lost" class): an id gone from the
+    book is NOT evidence of a fill — daily order rotation, an OCO-upgrade
+    supersede-cancel and a manual cancel all look identical there. Only a
+    resolved FILLED outcome acts; every other outcome is left untouched (the
+    protection pass owns re-covering a still-open position, and the superseding
+    ``stop_placed`` line re-points the fold at the replacement id)."""
+    broker = deps.broker
+    if not isinstance(broker, SupportsOrderResolution):
+        return
+    standing = _fold_standing_stop_ids(_iter_standalone_stop_journal())
+    for uic in sorted(standing):
+        stop = standing[uic]
+        if not _armed_order_is_gone(_read_entry_order(broker, stop.order_id)):
+            continue
+        if not _acquire_outcome_audit_budget(deps, broker, stop.order_id):
+            continue
+        outcome = _resolve_entry_order_outcome(broker, stop.order_id)
+        filled_qty = _entry_order_filled_qty(outcome)
+        if filled_qty is None:
+            continue
+        avg_price = outcome.avg_fill_price if outcome is not None else None
+        _journal_stop_filled(uic, order_id=stop.order_id, qty=filled_qty, avg_price=avg_price)
+        # The stop ref is `<entry_crid>-stop-<gen>` (position_manager._exit_stop_ref)
+        # — no E{n}/TP{n} shape to render, so the operator label is the ticker
+        # prefix (labels doctrine: never a raw machine ref in message text).
+        label = stop.ref.split("-", 1)[0] if stop.ref else f"uic {uic}"
+        price_text = f" @ {avg_price:g}" if avg_price is not None else ""
+        if deps.alert_throttled(
+            f"exit: {label} stop {stop.order_id} filled {filled_qty:g} shares{price_text}",
+            f"stop-fill:{stop.order_id}",
+        ):
+            report.alerts += 1
+
+
 def _reconcile_one_armed_tier(
     deps: LoopDeps,
     crid: str,
@@ -4889,16 +5004,62 @@ def _journal_amend_failed(uic: int, *, clock: Callable[[], float] = time.time) -
     _append_standalone_stop_journal({"kind": "amend_failed", "uic": int(uic), "ts": float(clock())})
 
 
-def _journal_stop_placed(uic: int, qty: float, *, clock: Callable[[], float] = time.time) -> None:
-    """Persist a timestamped ``stop_placed`` outcome record (observability-only).
+def _journal_stop_placed(
+    uic: int,
+    qty: float,
+    *,
+    order_id: str,
+    ref: str,
+    clock: Callable[[], float] = time.time,
+) -> None:
+    """Persist a timestamped ``stop_placed`` outcome record.
 
     Written by the executor ONLY on a confirmed standalone-stop placement, with the
-    qty ACTUALLY placed (post execute-time clamp). Read by nothing in the protection
-    logic — no fold consumes it — it exists so fill-to-protection latency is
-    measurable for the non-OCO path too (``oco_placed`` covers the OCO path). The
-    ``clock`` seam keeps the record's ``ts`` testable (default wall clock)."""
+    qty ACTUALLY placed (post execute-time clamp). Since #1219 the record also
+    carries the broker ``order_id`` (the ONLY durable handle the stop-fill
+    reconcile pass can later compare against the open-orders book — no other
+    journal line retains it) and the deterministic ``ref``
+    (``PlaceStop.request_id``) that renders the operator label on the fill alert.
+    ``_fold_standing_stop_ids`` consumes both; fill-to-protection latency stays
+    measurable as before (``oco_placed`` covers the OCO path). The ``clock`` seam
+    keeps the record's ``ts`` testable (default wall clock)."""
     _append_standalone_stop_journal(
-        {"kind": "stop_placed", "uic": int(uic), "qty": float(qty), "ts": float(clock())}
+        {
+            "kind": "stop_placed",
+            "uic": int(uic),
+            "qty": float(qty),
+            "order_id": str(order_id),
+            "ref": str(ref),
+            "ts": float(clock()),
+        }
+    )
+
+
+def _journal_stop_filled(
+    uic: int,
+    *,
+    order_id: str,
+    qty: float,
+    avg_price: float | None,
+    clock: Callable[[], float] = time.time,
+) -> None:
+    """Append the terminal ``stop_filled`` line for a reconciled stop fill (#1219).
+
+    The top-level ``order_id`` is the idempotence latch: once written,
+    ``_fold_standing_stop_ids`` excludes the uic, so the reconcile pass never
+    re-resolves or re-alerts the same fill (restart-safe by construction, like
+    the entry-side ``fired`` line). ``qty`` / ``avg_price`` carry the realized
+    exit the offline exec-quality join needs; ``avg_price`` may be ``None`` when
+    the audit row's price is unparseable — the fill still terminates."""
+    _append_standalone_stop_journal(
+        {
+            "kind": "stop_filled",
+            "uic": int(uic),
+            "order_id": str(order_id),
+            "qty": float(qty),
+            "avg_price": avg_price if avg_price is None else float(avg_price),
+            "ts": float(clock()),
+        }
     )
 
 
@@ -5211,8 +5372,13 @@ def _compact_standalone_stop_journal_lines(
       - the NEWEST (max ``ts``) ``oco_placed`` / ``amend_failed`` / ``oco_too_far``
         per uic — the TTL fold's membership for ANY ``now`` is decided by the
         newest marker, so older ones are redundant — plus the NEWEST ``stop_placed``
-        / ``amend_ok`` outcome record per uic (observability-only, no fold reads
-        them; the latest outcome is what latency inspection needs);
+        / ``amend_ok`` outcome record per uic (the latest outcome is what latency
+        inspection needs; since #1219 ``stop_placed`` also feeds
+        ``_fold_standing_stop_ids``), and for each KEPT ``stop_placed`` its
+        matching ``stop_filled`` terminal (newest per order_id) — dropping it
+        would resurrect the uic as a reconcile candidate and re-alert a fill
+        already announced (a ``stop_filled`` for any OTHER order id cannot
+        affect the fold, so it compacts away);
       - the ``amend_seq`` carrying the MAX seq per uic (``_read_persisted_amend_seq``
         returns that max);
       - the tranche-ladder lines ``_compact_tranche_lines`` elects — per uic the
@@ -5247,6 +5413,9 @@ def _compact_standalone_stop_journal_lines(
         "amend_ok": {},
     }
     amend_seq: dict[int, tuple[float, dict[str, Any]]] = {}
+    # Newest stop_filled per ORDER ID (not uic): only the one matching a kept
+    # stop_placed matters for _fold_standing_stop_ids, elected below.
+    stop_filled_by_id: dict[str, tuple[float, dict[str, Any]]] = {}
 
     for line in materialized:
         kind = line.get("kind")
@@ -5262,6 +5431,13 @@ def _compact_standalone_stop_journal_lines(
             _keep_latest_marker(
                 amend_seq, _coerce(line, "uic", int), _coerce(line, "seq", int), line
             )
+        elif kind == "stop_filled":
+            order_id = line.get("order_id")
+            ts = _coerce(line, "ts", float)
+            if isinstance(order_id, str) and order_id and ts is not None:
+                kept = stop_filled_by_id.get(order_id)
+                if kept is None or ts >= kept[0]:
+                    stop_filled_by_id[order_id] = (ts, dict(line))
 
     compacted: list[dict[str, Any]] = list(planned)
     compacted.extend(oco_unsupported[uic] for uic in sorted(oco_unsupported))
@@ -5271,6 +5447,10 @@ def _compact_standalone_stop_journal_lines(
     )
     compacted.extend(ttl_latest["oco_too_far"][uic][1] for uic in sorted(ttl_latest["oco_too_far"]))
     compacted.extend(ttl_latest["stop_placed"][uic][1] for uic in sorted(ttl_latest["stop_placed"]))
+    for uic in sorted(ttl_latest["stop_placed"]):
+        kept_order_id = ttl_latest["stop_placed"][uic][1].get("order_id")
+        if isinstance(kept_order_id, str) and kept_order_id in stop_filled_by_id:
+            compacted.append(stop_filled_by_id[kept_order_id][1])
     compacted.extend(ttl_latest["amend_ok"][uic][1] for uic in sorted(ttl_latest["amend_ok"]))
     compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
     compacted.extend(_compact_tranche_lines(materialized))
@@ -7814,7 +7994,7 @@ def _execute_place_stop(
     # standalone-stop capability is guaranteed present at runtime.
     stop_broker = cast(SupportsStandaloneStop, broker)
     try:
-        stop_broker.place_standalone_stop(
+        placed_stop = stop_broker.place_standalone_stop(
             action.uic, action.side, qty, action.stop_price, action.request_id
         )
     except OrderRejectedError as exc:
@@ -7852,7 +8032,9 @@ def _execute_place_stop(
     # side: a cancel that raises skips the record, so a MISSING stop_placed
     # never implies a naked position — the place above already succeeded.
     _journal_outcome_best_effort(
-        lambda: _journal_stop_placed(action.uic, qty),
+        lambda: _journal_stop_placed(
+            action.uic, qty, order_id=placed_stop.entry_order_id, ref=action.request_id
+        ),
         throttle,
         report,
         uic=action.uic,

@@ -220,6 +220,18 @@ class ManagerWorld:
         """A protective stop already rests on the position."""
         return self.broker.add_resting_sell(ticker, shares, price, order_type="StopIfTraded")
 
+    def stop_fills(self, ticker: str, *, price: float = _DEFAULT_STOP) -> str:
+        """The broker FILLS the resting protective stop (#1219): the order
+        leaves the book, the position closes, the audit log knows the fill."""
+        uic = self.broker.uic_of(ticker)
+        stop = next(
+            o
+            for o in self.broker.list_working_sell_orders()
+            if o.uic == uic and o.order_type == "StopIfTraded"
+        )
+        self.broker.fill_resting_order(stop.order_id, price=price)
+        return stop.order_id
+
     def broker_rejects_oco(self, *, code: str = "TooFarFromMarket") -> None:
         """The broker will refuse any OCO placement with this reject code."""
         self.broker.oco_reject_code = code
