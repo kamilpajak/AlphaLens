@@ -81,6 +81,37 @@ class TestRunLiveExits(unittest.TestCase):
         self.assertEqual(len(n), 1)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 50.0)
 
+    def test_full_close_marks_position_closed(self):
+        # #1198: the engine is the only place that knows a tranche closed the
+        # position (the SL is cancelled, not filled) — the flag drives the
+        # sibling-watch retire in the pass.
+        b = FakeBroker()
+        uic = b.uic_of("KO")
+        b.set_position("KO", 100, avg_price=15.0)
+        b.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        feed = _FakeFeed({uic: 16.5})
+        managed = [
+            ManagedExit(
+                uic=uic,
+                tp_tranches=(_tr(0, 16.0, 1.0),),
+                reference_qty=100,
+                stop_price=13.0,
+                already_fired=frozenset(),
+            )
+        ]
+        with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=[].append):
+            fired = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
+        self.assertEqual(len(fired), 1)
+        self.assertTrue(fired[0].position_closed)
+        self.assertEqual(b.get_positions_by_uic(uic).quantity, 0.0)
+
+    def test_partial_fire_does_not_mark_position_closed(self):
+        b, uic, feed, managed = self._mk(price=16.5)
+        fired = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
+        self.assertEqual(len(fired), 1)
+        self.assertFalse(fired[0].position_closed)
+        self.assertEqual(b.get_positions_by_uic(uic).quantity, 50.0)
+
     def test_stale_price_vetoes_all_fires(self):
         b, uic, feed, managed = self._mk(price=None)  # feed.latest -> None
         n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)

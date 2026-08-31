@@ -113,6 +113,10 @@ class TrancheExitResult:
 
     sold: bool
     sell_order_id: str | None
+    # True iff THIS tranche closed the whole position (the SL was cancelled,
+    # not amended) -- the #1198 sibling-watch retire keys off it, because a
+    # TP-exit round trip produces no stop fill for the stop-fill pass to see.
+    position_closed: bool = False
 
 
 def _is_decidable_price(price: Any) -> bool:
@@ -376,7 +380,9 @@ def execute_tranche_exit(
         new_sl_qty,
         qty,
     )
-    return TrancheExitResult(sold=True, sell_order_id=sell_order_id)
+    return TrancheExitResult(
+        sold=True, sell_order_id=sell_order_id, position_closed=new_sl_qty <= _QTY_EPS
+    )
 
 
 def fold_fired_tranches(lines: Iterable[Mapping[str, Any]]) -> dict[int, frozenset[str]]:
@@ -420,7 +426,13 @@ def _fire_telemetry(
     }
 
 
-def mark_tranche_fired(uic: int, tag: str, *, telemetry: Mapping[str, Any] | None = None) -> None:
+def mark_tranche_fired(
+    uic: int,
+    tag: str,
+    *,
+    telemetry: Mapping[str, Any] | None = None,
+    position_closed: bool = False,
+) -> None:
     """Append one ``tranche_fired`` marker (idempotency: a fired tranche never
     re-fires). Writes via the shared append-only standalone-stop journal seam.
 
@@ -445,6 +457,11 @@ def mark_tranche_fired(uic: int, tag: str, *, telemetry: Mapping[str, Any] | Non
     line: dict[str, Any] = {"kind": "tranche_fired", "uic": int(uic), "tag": str(tag)}
     if telemetry is not None:
         line["telemetry"] = dict(telemetry)
+    if position_closed:
+        # Durable #1198 retire trigger: the SL was CANCELLED on this full
+        # close, so no stop fill will ever record the round trip — this field
+        # is what the restart-safe sibling-retire sweep keys off.
+        line["position_closed"] = True
     _append_standalone_stop_journal(line)
 
 
@@ -468,6 +485,7 @@ class FiredTranche:
     tag: str
     qty: float
     sell_order_id: str | None
+    position_closed: bool = False
 
 
 def run_live_exits(
@@ -542,13 +560,16 @@ def run_live_exits(
             )
             if result.sold:
                 telemetry = _fire_telemetry(point, ex, sell_order_id=result.sell_order_id)
-                mark_tranche_fired(m.uic, ex.tag, telemetry=telemetry)
+                mark_tranche_fired(
+                    m.uic, ex.tag, telemetry=telemetry, position_closed=result.position_closed
+                )
                 fired.append(
                     FiredTranche(
                         uic=m.uic,
                         tag=ex.tag,
                         qty=ex.qty,
                         sell_order_id=result.sell_order_id,
+                        position_closed=result.position_closed,
                     )
                 )
     return fired
