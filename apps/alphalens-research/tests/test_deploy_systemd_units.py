@@ -316,6 +316,40 @@ class TestSystemdUnits(unittest.TestCase):
         )
 
 
+def _assert_wall_clock_anchored(tc: unittest.TestCase, timer_text: str) -> None:
+    """Every recurring timer must schedule on the wall clock (#1206/#1208).
+
+    The 2026-08-30 dormancy incident: with OnBootSec + OnUnitActiveSec a timer
+    sat `enabled` + `active` with NEXT empty, because OnUnitActiveSec anchors
+    to a service activation observed WHILE THE TIMER RUNS — a mid-uptime
+    enable after a manual service start schedules nothing, forever. OnCalendar
+    schedules the moment the timer starts, independent of activation history,
+    and is the only form under which Persistent=true has any effect at all
+    (systemd.timer(5)).
+
+    Bans the DIRECTIVES, not the words: comment blocks are allowed (and
+    expected) to narrate the incident, so this matches `Key=` at line start
+    rather than a substring anywhere. All five monotonic anchors from
+    systemd.timer(5) — the whole class, not just the two the incident used.
+    """
+    tc.assertRegex(timer_text, re.compile(r"^OnCalendar=", re.MULTILINE))
+    tc.assertRegex(timer_text, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
+    for banned in (
+        "OnUnitActiveSec",
+        "OnBootSec",
+        "OnStartupSec",
+        "OnActiveSec",
+        "OnUnitInactiveSec",
+    ):
+        tc.assertNotRegex(
+            timer_text,
+            re.compile(rf"^\s*{banned}\s*=", re.MULTILINE),
+            f"{banned}= anchors to activation history — the shape that went "
+            "dormant in production on 2026-08-30. Schedule on the wall "
+            "clock (OnCalendar) instead.",
+        )
+
+
 class TestMigratedLaunchdUnits(unittest.TestCase):
     """The three units migrated from macOS launchd in PR-1.
 
@@ -349,13 +383,24 @@ class TestMigratedLaunchdUnits(unittest.TestCase):
     def test_edgar_detect_service_is_oneshot(self) -> None:
         self.assertIn("Type=oneshot", EDGAR_SERVICE.read_text())
 
-    def test_edgar_detect_timer_fires_every_15min_with_boot_offset(self) -> None:
+    def test_edgar_detect_timer_fires_every_15min_on_the_wall_clock(self) -> None:
         text = EDGAR_TIMER.read_text()
-        # Mirrors launchd StartInterval=900 + a 2min OnBootSec buffer so
-        # a reboot doesn't fire instantly into a half-warm env.
-        self.assertRegex(text, re.compile(r"^OnUnitActiveSec=15min\s*$", re.MULTILINE))
-        self.assertRegex(text, re.compile(r"^OnBootSec=2min\s*$", re.MULTILINE))
-        self.assertRegex(text, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
+        _assert_wall_clock_anchored(self, text)
+        # The exact 15-min grid is load-bearing: AlphalensJobStale pages at
+        # 1800s = 2x this cadence, and the Layer 1 SoT contract is "every
+        # 15 min" (launchd StartInterval=900 heritage). No network-warmup
+        # ordering: network-online.target is not-found in the USER manager
+        # (verified live), so the protection is absorb-next-fire alone —
+        # a failed boot poll retries at the next grid point.
+        self.assertRegex(
+            text, re.compile(r"^OnCalendar=\*-\*-\* \*:00/15:00 UTC\s*$", re.MULTILINE)
+        )
+        self.assertNotRegex(
+            text,
+            re.compile(r"^After=network-online\.target", re.MULTILINE),
+            "network-online.target does not exist in the user manager — an "
+            "After= on it is a silent no-op that reads like protection",
+        )
 
     # --- literature scan units -----------------------------------------
 
@@ -1292,10 +1337,17 @@ class TestSaxoRefreshUnit(unittest.TestCase):
         self.assertRegex(text, re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE))
         self.assertIn("WorkingDirectory=%h/AlphaLens", text)
 
-    def test_timer_fires_inside_40min_window_persistent(self) -> None:
+    def test_timer_fires_inside_40min_window_on_the_wall_clock(self) -> None:
         text = SAXO_REFRESH_TIMER.read_text()
-        self.assertRegex(text, re.compile(r"^OnUnitActiveSec=20min\s*$", re.MULTILINE))
-        self.assertRegex(text, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
+        _assert_wall_clock_anchored(self, text)
+        # The exact 20-min grid is load-bearing: the OAuth refresh chain dies
+        # after a ~40-min gap, and AlphalensJobStale pages at 3600s = 3x this
+        # cadence. Persistent=true fires a boot catch-up when downtime spans a
+        # grid point, so the reboot gap is never worse than the old
+        # OnBootSec=3min shape.
+        self.assertRegex(
+            text, re.compile(r"^OnCalendar=\*-\*-\* \*:00/20:00 UTC\s*$", re.MULTILINE)
+        )
 
     def test_timer_carries_install_section(self) -> None:
         text = SAXO_REFRESH_TIMER.read_text()
@@ -1745,10 +1797,15 @@ class TestSaxoMarketdataRefreshUnit(unittest.TestCase):
             ),
         )
 
-    def test_timer_fires_inside_40min_window_persistent(self) -> None:
+    def test_timer_fires_inside_40min_window_on_the_wall_clock(self) -> None:
         text = SAXO_MARKETDATA_REFRESH_TIMER.read_text()
-        self.assertRegex(text, re.compile(r"^OnUnitActiveSec=20min\s*$", re.MULTILINE))
-        self.assertRegex(text, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
+        _assert_wall_clock_anchored(self, text)
+        # Same 20-min-grid arithmetic as the SIM twin (test above); the two
+        # chains use DISJOINT token stores (saxo_auth vs saxo_auth_live), so
+        # sharing the grid phase is harmless.
+        self.assertRegex(
+            text, re.compile(r"^OnCalendar=\*-\*-\* \*:00/20:00 UTC\s*$", re.MULTILINE)
+        )
 
     def test_timer_carries_install_section(self) -> None:
         text = SAXO_MARKETDATA_REFRESH_TIMER.read_text()
@@ -2335,31 +2392,10 @@ class TestBrokerCapitalReaderUnit(unittest.TestCase):
         anchors to a service activation OBSERVED WHILE THE TIMER RUNS — and the
         deploy started the service manually first, enabled the timer after, with
         OnBootSec long elapsed. The balance read silently stopped and
-        AlphalensBrokerCapitalReadStale paged. OnCalendar schedules the moment
-        the timer starts, independent of activation history, and is the only
-        form under which Persistent=true has any effect at all
-        (systemd.timer(5))."""
-        self.assertRegex(self.timer, re.compile(r"^OnCalendar=", re.MULTILINE))
-        self.assertRegex(self.timer, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
-        # Ban the DIRECTIVES, not the words: the comment block is allowed (and
-        # expected) to narrate the incident, so match `Key=` at line start
-        # rather than a substring anywhere.
-        # All five monotonic anchors from systemd.timer(5) — the whole class,
-        # not just the two the incident used.
-        for banned in (
-            "OnUnitActiveSec",
-            "OnBootSec",
-            "OnStartupSec",
-            "OnActiveSec",
-            "OnUnitInactiveSec",
-        ):
-            self.assertNotRegex(
-                self.timer,
-                re.compile(rf"^\s*{banned}\s*=", re.MULTILINE),
-                f"{banned}= anchors to activation history — the shape that went "
-                "dormant in production on 2026-08-30. Schedule on the wall "
-                "clock (OnCalendar) instead.",
-            )
+        AlphalensBrokerCapitalReadStale paged. The mechanism and the
+        five-anchor ban live in `_assert_wall_clock_anchored`, shared with the
+        three timers converted under #1208."""
+        _assert_wall_clock_anchored(self, self.timer)
 
     def test_the_drift_check_watches_it(self) -> None:
         """The rails are config that can drift, and one of them (EXIT_POLICY) is
