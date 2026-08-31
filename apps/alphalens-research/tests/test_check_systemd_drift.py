@@ -249,6 +249,10 @@ class TestUnitsTableCompleteness(unittest.TestCase):
 
     @staticmethod
     def _service_names() -> set[str]:
+        # Top-level only, by convention: every unit lives flat in
+        # deploy/systemd/ (the metrics-hook sibling globs the same way). A
+        # unit placed in a subdirectory would evade this gate — that is a
+        # deliberate boundary, not an oversight; revisit if the layout grows.
         systemd_dir = drift.REPO_ROOT / drift.SYSTEMD_DIR
         return {p.name for p in systemd_dir.glob("alphalens-*.service")}
 
@@ -263,6 +267,18 @@ class TestUnitsTableCompleteness(unittest.TestCase):
             ghosts,
             set(),
             "exemptions for units that no longer exist — delete these entries",
+        )
+
+    def test_units_entries_correspond_to_real_service_files(self):
+        # The reverse of the ghost-exemption check: a stale or misspelled
+        # UNITS base name would otherwise pass CI and fail only at runtime on
+        # the VPS, when `git show` on the vanished path exits 128 — turning a
+        # table typo into a paged cannot-measure incident.
+        watched = {base for _unit, base, _req in drift.UNITS}
+        self.assertEqual(
+            watched - self._service_names(),
+            set(),
+            "every UNITS base name must reference a tracked deploy/systemd service file",
         )
 
     def test_exempt_units_are_not_in_the_units_table(self):
@@ -471,6 +487,22 @@ class TestDriftFindings(unittest.TestCase):
         self.assertEqual(
             [(f.kind, f.subject) for f in findings],
             [("content_drift", "alphalens-broker-manager.timer")],
+        )
+
+    def test_an_untracked_timer_on_the_host_is_flagged_by_name(self):
+        # Third arm of the timer coverage: a host-only timer must surface as
+        # untracked_file and must NOT be swallowed by the grant-dropin
+        # tolerance (its [Timer] lines fail that predicate's Environment=-only
+        # content contract).
+        repo = {"alphalens-broker-manager.service": _BASE}
+        host = {
+            **repo,
+            "alphalens-broker-manager.timer": "[Timer]\nOnCalendar=*:00/15\n",
+        }
+        findings = self._findings(repo_files=repo, host_files=host)
+        self.assertEqual(
+            [(f.kind, f.subject) for f in findings],
+            [("untracked_file", "alphalens-broker-manager.timer")],
         )
 
     def test_a_tracked_timer_absent_on_the_host_is_a_missing_file(self):
