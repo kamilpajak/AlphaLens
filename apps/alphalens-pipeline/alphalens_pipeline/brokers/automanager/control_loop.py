@@ -3273,7 +3273,12 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
     supersede-cancel and a manual cancel all look identical there. Only a
     resolved FILLED outcome acts; every other outcome is left untouched (the
     protection pass owns re-covering a still-open position, and the superseding
-    ``stop_placed`` line re-points the fold at the replacement id)."""
+    ``stop_placed`` line re-points the fold at the replacement id).
+
+    The reused ``_read_entry_order`` / ``_resolve_entry_order_outcome`` /
+    ``_entry_order_filled_qty`` helpers are named for their entry-trail origin
+    but operate on ANY order id — deliberate reuse of the battle-tested logic
+    over a renamed duplicate."""
     broker = deps.broker
     if not isinstance(broker, SupportsOrderResolution):
         return
@@ -3282,7 +3287,9 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
         stop = standing[uic]
         if not _armed_order_is_gone(_read_entry_order(broker, stop.order_id)):
             continue
-        if not _acquire_outcome_audit_budget(deps, broker, stop.order_id):
+        if not _acquire_outcome_audit_budget(
+            deps, broker, stop.order_id, context="stop-fill reconcile"
+        ):
             continue
         outcome = _resolve_entry_order_outcome(broker, stop.order_id)
         filled_qty = _entry_order_filled_qty(outcome)
@@ -3387,13 +3394,17 @@ def _armed_order_is_gone(state: OrderState | None) -> bool:
     return state.status not in (OrderStatus.WORKING, OrderStatus.PARTIALLY_FILLED)
 
 
-def _acquire_outcome_audit_budget(deps: LoopDeps, broker: Broker, order_id: str) -> bool:
+def _acquire_outcome_audit_budget(
+    deps: LoopDeps, broker: Broker, order_id: str, *, context: str = "entry-trail reconcile"
+) -> bool:
     """One draw on the SHARED per-tick audit-read budget (audit-429 memo §3).
 
     A memoized terminal (``SupportsOutcomeCachePeek``) resolves budget-free —
     no audit HTTP read happens. Over budget: count + log the deferral (the
     non-alerting ``VERDICT_AUDIT_DEFERRED`` marker) and let the caller retry
-    next tick."""
+    next tick. ``context`` names the CALLING pass in the deferral log line so a
+    post-mortem can tell an entry-trail deferral from a stop-fill one (#1219
+    zen finding) — both passes draw from this one budget, entry-trail first."""
     if isinstance(broker, SupportsOutcomeCachePeek) and broker.has_cached_order_outcome(order_id):
         # Contract (SupportsOutcomeCachePeek): a True peek MUST mean
         # resolve_order_outcome answers from the terminal memo with NO audit
@@ -3404,7 +3415,8 @@ def _acquire_outcome_audit_budget(deps: LoopDeps, broker: Broker, order_id: str)
         return True
     deps.audit_budget.note_deferred()
     logger.info(
-        "entry-trail reconcile: %s — audit budget exhausted, deferred resolve of %s to next tick",
+        "%s: %s — audit budget exhausted, deferred resolve of %s to next tick",
+        context,
         VERDICT_AUDIT_DEFERRED,
         order_id,
     )
