@@ -191,6 +191,131 @@ class TestUnitRequirements(unittest.TestCase):
                 self.assertEqual(required, frozenset(), unit)
 
 
+def _unwatched_units(
+    service_names: set[str],
+    units: tuple[tuple[str, str, frozenset[str]], ...],
+    exempt: set[str],
+) -> list[str]:
+    """Service files that are neither in the UNITS table nor exempted.
+
+    Pure so the positive controls can feed synthetic inputs — the gate's
+    ability to fail is demonstrated, not assumed.
+    """
+    watched = {base for _unit, base, _req in units}
+    return sorted(service_names - watched - exempt)
+
+
+# Every tracked service that is deliberately NOT under the drift watch, with
+# the reason (#1207). The watch exists for units whose host config is an arming
+# or pricing surface (broker rails, ALLOW_ORDERS, the grant); the units below
+# carry none of that, their config converges by `cp` at deploy, and a drift
+# there breaks a measurable output rather than silently changing what real
+# money does. Removing a name from here without adding a UNITS entry turns the
+# gate red — the table cannot rot to always-green.
+DRIFT_EXEMPT_UNITS: dict[str, str] = {
+    "alphalens-bracket-cost.service": "measurement job; no broker rails or arming env",
+    "alphalens-edgar-detect.service": "EDGAR poller; no broker env at all",
+    "alphalens-edge-mirror.service": "Postgres cache rebuild wrapper; no broker env",
+    "alphalens-feedback-shadow-returns.service": "population monitor; broker-free by ADR 0012",
+    "alphalens-form4-backfill.service": "dormant one-shot seed; no broker env",
+    "alphalens-form4-incremental.service": "SEC store top-up; no broker env",
+    "alphalens-grafana-provisioning-sync.service": "dashboard sync; no broker env",
+    "alphalens-grouped-daily-topup.service": "Polygon store top-up; no broker env",
+    "alphalens-issue-wake.service": "issue-label timer; no broker env",
+    "alphalens-literature-scan-monthly.service": "Perplexity scan; no broker env",
+    "alphalens-literature-scan-weekly.service": "Perplexity scan; no broker env",
+    "alphalens-prometheus-rules-sync.service": "rules sync; no broker env",
+    "alphalens-saxo-marketdata-refresh.service": (
+        "OAuth keep-alive; refreshes a token, carries no rails or arming env"
+    ),
+    "alphalens-saxo-refresh.service": (
+        "OAuth keep-alive; refreshes a token, carries no rails or arming env"
+    ),
+    "alphalens-systemd-drift-check.service": "the checker itself; watching it here is circular",
+    "alphalens-thematic-build.service": "Docker pipeline wrapper; no broker env",
+}
+
+
+class TestUnitsTableCompleteness(unittest.TestCase):
+    """A new `.service` cannot merge without a UNITS entry or a documented
+    exemption (#1207).
+
+    The two sibling convention gates (metrics-hook completeness, staleness
+    rule parity) already glob `deploy/systemd/*.service` and force every new
+    unit into their registries; the drift table was the outlier — the capital
+    reader (#1204) shipped without an entry and nothing flagged it until a
+    review pass added one by hand.
+    """
+
+    @staticmethod
+    def _service_names() -> set[str]:
+        # Top-level only, by convention: every unit lives flat in
+        # deploy/systemd/ (the metrics-hook sibling globs the same way). A
+        # unit placed in a subdirectory would evade this gate — that is a
+        # deliberate boundary, not an oversight; revisit if the layout grows.
+        systemd_dir = drift.REPO_ROOT / drift.SYSTEMD_DIR
+        return {p.name for p in systemd_dir.glob("alphalens-*.service")}
+
+    def test_glob_finds_service_units(self):
+        # Anti-vacuous guard: an empty glob (moved directory, renamed prefix)
+        # would make every assertion below pass over nothing.
+        self.assertGreater(len(self._service_names()), 0)
+
+    def test_exempt_units_correspond_to_real_service_files(self):
+        ghosts = set(DRIFT_EXEMPT_UNITS) - self._service_names()
+        self.assertEqual(
+            ghosts,
+            set(),
+            "exemptions for units that no longer exist — delete these entries",
+        )
+
+    def test_units_entries_correspond_to_real_service_files(self):
+        # The reverse of the ghost-exemption check: a stale or misspelled
+        # UNITS base name would otherwise pass CI and fail only at runtime on
+        # the VPS, when `git show` on the vanished path exits 128 — turning a
+        # table typo into a paged cannot-measure incident.
+        watched = {base for _unit, base, _req in drift.UNITS}
+        self.assertEqual(
+            watched - self._service_names(),
+            set(),
+            "every UNITS base name must reference a tracked deploy/systemd service file",
+        )
+
+    def test_exempt_units_are_not_in_the_units_table(self):
+        # Bidirectional honesty (the parity gate's pattern): an entry that is
+        # both watched and exempted means one of the two statements is stale.
+        watched = {base for _unit, base, _req in drift.UNITS}
+        self.assertEqual(set(DRIFT_EXEMPT_UNITS) & watched, set())
+
+    def test_every_service_unit_is_watched_or_exempt(self):
+        unwatched = _unwatched_units(self._service_names(), drift.UNITS, set(DRIFT_EXEMPT_UNITS))
+        self.assertEqual(
+            unwatched,
+            [],
+            "new unit(s) without drift coverage — add a UNITS entry in "
+            "check_systemd_drift.py, or a documented exemption in "
+            "DRIFT_EXEMPT_UNITS here",
+        )
+
+
+class TestUnitsTableCompletenessPositiveControls(unittest.TestCase):
+    """The gate can actually fail — over synthetic inputs, not the live tree."""
+
+    _UNITS = (("u", "u.service", frozenset()),)
+
+    def test_a_service_missing_from_both_registries_is_flagged(self):
+        self.assertEqual(
+            _unwatched_units({"u.service", "new.service"}, self._UNITS, set()),
+            ["new.service"],
+        )
+
+    def test_an_exemption_clears_the_flag(self):
+        self.assertEqual(
+            _unwatched_units({"u.service", "new.service"}, self._UNITS, {"new.service"}),
+            [],
+        )
+
+
 class TestHostOnlyGrantDropinPredicate(unittest.TestCase):
     """What makes an UNTRACKED host drop-in acceptable (#1193).
 
@@ -312,6 +437,20 @@ class TestGrantPresence(unittest.TestCase):
             self.assertNotIn("opaque-value", f.detail)
 
 
+class TestDropinTexts(unittest.TestCase):
+    def test_only_conf_files_feed_env_composition(self):
+        # `.timer` (and README.md) entries are compared as FILES but must
+        # never be composed as configuration — [Timer] has no Environment=
+        # semantics and a stray parse there would fabricate env drift.
+        files = {
+            "u.service": _BASE,
+            "u.timer": "[Timer]\nOnCalendar=*:00/15\n",
+            "README.md": "prose",
+            "10-a.conf": _DROPIN_A,
+        }
+        self.assertEqual(drift._dropin_texts(files), [("10-a.conf", _DROPIN_A)])
+
+
 class TestDriftFindings(unittest.TestCase):
     """The pure comparison over (repo files, host files, repo env, live env)."""
 
@@ -333,6 +472,52 @@ class TestDriftFindings(unittest.TestCase):
 
     def test_identical_state_yields_no_findings(self):
         self.assertEqual(self._findings(), [])
+
+    def test_a_drifted_timer_reports_content_drift_on_raw_bytes(self):
+        # A timer never carries Environment=, so it takes the raw-bytes branch
+        # (no host-only stripping) — the #1206 scheduling-stanza edit is
+        # exactly a byte difference.
+        repo = {
+            "alphalens-broker-manager.service": _BASE,
+            "alphalens-broker-manager.timer": "[Timer]\nOnCalendar=*:00/15\n",
+        }
+        host = dict(repo)
+        host["alphalens-broker-manager.timer"] = "[Timer]\nOnUnitActiveSec=15min\n"
+        findings = self._findings(repo_files=repo, host_files=host)
+        self.assertEqual(
+            [(f.kind, f.subject) for f in findings],
+            [("content_drift", "alphalens-broker-manager.timer")],
+        )
+
+    def test_an_untracked_timer_on_the_host_is_flagged_by_name(self):
+        # Third arm of the timer coverage: a host-only timer must surface as
+        # untracked_file and must NOT be swallowed by the grant-dropin
+        # tolerance (its [Timer] lines fail that predicate's Environment=-only
+        # content contract).
+        repo = {"alphalens-broker-manager.service": _BASE}
+        host = {
+            **repo,
+            "alphalens-broker-manager.timer": "[Timer]\nOnCalendar=*:00/15\n",
+        }
+        findings = self._findings(repo_files=repo, host_files=host)
+        self.assertEqual(
+            [(f.kind, f.subject) for f in findings],
+            [("untracked_file", "alphalens-broker-manager.timer")],
+        )
+
+    def test_a_tracked_timer_absent_on_the_host_is_a_missing_file(self):
+        # The never-installed-timer state: #1206's dormancy would have started
+        # here had the timer file not been copied at all.
+        repo = {
+            "alphalens-broker-manager.service": _BASE,
+            "alphalens-broker-manager.timer": "[Timer]\nOnCalendar=*:00/15\n",
+        }
+        host = {"alphalens-broker-manager.service": _BASE}
+        findings = self._findings(repo_files=repo, host_files=host)
+        self.assertEqual(
+            [(f.kind, f.subject) for f in findings],
+            [("missing_file", "alphalens-broker-manager.timer")],
+        )
 
     def test_untracked_host_file_is_flagged_by_name(self):
         # The #1136 lesson: a stale file with matching values is still a host
@@ -582,6 +767,20 @@ class TestHostFileReading(unittest.TestCase):
             with mock.patch.object(drift, "HOST_UNIT_DIR", Path(tmp)):
                 self.assertEqual(drift._host_files("u.service"), {})
 
+    def test_a_sibling_timer_on_the_host_is_read_alongside_the_base(self):
+        # #1207: the #1206 dormancy was a scheduling-stanza problem, and the
+        # check could not see it — timers were simply never collected.
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp)
+            (host / "u.service").write_text("base")
+            (host / "u.timer").write_text("[Timer]\nOnCalendar=*:00/15\n")
+            with mock.patch.object(drift, "HOST_UNIT_DIR", host):
+                files = drift._host_files("u.service")
+        self.assertEqual(
+            files,
+            {"u.service": "base", "u.timer": "[Timer]\nOnCalendar=*:00/15\n"},
+        )
+
 
 class TestRepoFileReading(unittest.TestCase):
     def test_reads_the_base_blob_and_every_listed_dropin_blob(self):
@@ -627,6 +826,27 @@ class TestRepoFileReading(unittest.TestCase):
         with mock.patch.object(drift, "_run", side_effect=fake_run):
             files = drift._repo_files("u.service")
         self.assertEqual(files, {"u.service": "blob:origin/main:deploy/systemd/u.service"})
+
+    def test_a_sibling_timer_in_the_tree_is_read_alongside_the_base(self):
+        # #1207: from the parent listing the builder already holds — no extra
+        # git call is spent learning whether the timer exists.
+        def fake_run(argv, timeout=120):
+            if argv[1] == "ls-tree":
+                if argv[-1].endswith(".d"):
+                    return "10-a.conf\n"
+                return "u.service\nu.service.d\nu.timer\n"
+            return f"blob:{argv[-1]}"
+
+        with mock.patch.object(drift, "_run", side_effect=fake_run):
+            files = drift._repo_files("u.service")
+        self.assertEqual(
+            files,
+            {
+                "u.service": "blob:origin/main:deploy/systemd/u.service",
+                "u.timer": "blob:origin/main:deploy/systemd/u.timer",
+                "10-a.conf": "blob:origin/main:deploy/systemd/u.service.d/10-a.conf",
+            },
+        )
 
     def test_a_git_failure_still_propagates(self):
         """The fix must not swallow a real git failure — an unreadable repo is

@@ -491,6 +491,13 @@ def _repo_files(base_name: str) -> dict[str, str]:
     # exit code would have blurred. `_host_files` guards the same case with
     # `is_dir()`; this is the repo half of that symmetry.
     tracked = _run(["git", "ls-tree", "--name-only", f"origin/main:{SYSTEMD_DIR}"]).split()
+    # The sibling timer (#1207): a scheduling-stanza edit on the host is drift
+    # like any other (the #1206 dormancy was exactly that), so the timer rides
+    # the same byte compare. It is a FILE here and nothing more — never fed to
+    # env composition (`_dropin_texts` keeps `.conf` only).
+    timer_name = base_name.removesuffix(".service") + ".timer"
+    if timer_name in tracked:
+        files[timer_name] = _run(["git", "show", f"origin/main:{SYSTEMD_DIR}/{timer_name}"])
     if f"{base_name}.d" not in tracked:
         return files
     dropin_dir = f"{SYSTEMD_DIR}/{base_name}.d"
@@ -505,6 +512,12 @@ def _host_files(base_name: str) -> dict[str, str]:
     base_path = HOST_UNIT_DIR / base_name
     if base_path.is_file():
         files[base_name] = base_path.read_text()
+    # Host half of the sibling-timer coverage (#1207) — see `_repo_files`. A
+    # tracked timer missing here reports missing_file (a never-installed timer
+    # is exactly the state that precedes a #1206-style silent dormancy).
+    timer_path = HOST_UNIT_DIR / (base_name.removesuffix(".service") + ".timer")
+    if timer_path.is_file():
+        files[timer_path.name] = timer_path.read_text()
     dropin_dir = HOST_UNIT_DIR / f"{base_name}.d"
     if dropin_dir.is_dir():
         for path in sorted(dropin_dir.iterdir()):
