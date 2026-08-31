@@ -587,9 +587,16 @@ def env_file_findings(text: str) -> list[Finding]:
     SAXO_LIVE_ACCOUNT_KEY line to the shared /etc/alphalens/env").
 
     Blank lines, ``#``/``;`` comments and lines without ``=`` cannot set a
-    variable, so they cannot arm anything and are ignored; an optional
-    ``export `` prefix is stripped the way systemd's EnvironmentFile parser
-    strips it.
+    variable, so they cannot arm anything and are ignored. An ``export ``
+    prefix is stripped CONSERVATIVELY: systemd sets nothing for such a line
+    (verified empirically on the host, systemd 255 — it neither strips the
+    prefix nor accepts the spaced key), but a dotenv-habituated hand edit
+    could write one, and a rail-shaped line in the secrets file deserves a
+    page even while inert. Same conservatism covers a banned name absorbed
+    into a previous line's backslash-continued VALUE (sets nothing; still
+    flagged). Key-side continuation was probed too: systemd drops the split
+    line entirely, so a name cannot be smuggled across two lines past this
+    scan.
     """
     findings: list[Finding] = []
     for line in text.splitlines():
