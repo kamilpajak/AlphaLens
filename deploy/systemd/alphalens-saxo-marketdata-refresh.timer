@@ -7,8 +7,8 @@ Description=AlphaLens Saxo LIVE market-data OAuth keep-alive timer (20min wall-c
 # alphalens-saxo-refresh.timer (the SIM/order-chain twin): OnUnitActiveSec
 # anchors to activation history and can leave the timer dormant with NEXT
 # empty after a mid-uptime stop/start (#1206); OnCalendar schedules on start,
-# and Persistent=true (only effective with OnCalendar) fires the boot
-# catch-up when downtime spans a grid point.
+# and Persistent=true (only effective with OnCalendar) fires ONE coalesced
+# boot catch-up when downtime spans a grid point.
 #
 # Sharing the :00/20 grid with the twin is deliberate — DISJOINT token
 # stores (saxo_auth_live vs saxo_auth), nothing to phase-offset. This timer
@@ -19,6 +19,7 @@ Description=AlphaLens Saxo LIVE market-data OAuth keep-alive timer (20min wall-c
 # show a populated NEXT — `is-active`/`is-enabled` are not evidence.
 OnCalendar=*-*-* *:00/20:00 UTC
 Persistent=true
+Unit=alphalens-saxo-marketdata-refresh.service
 
 [Install]
 WantedBy=timers.target

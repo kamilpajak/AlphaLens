@@ -5,7 +5,9 @@
 # Boot warmup: the old OnBootSec=2min buffer is gone WITHOUT a replacement
 # ordering — `network-online.target` does not exist in the USER manager
 # (LoadState=not-found, verified live 2026-08-31), so an After= on it was
-# always a silent no-op. The real protection is absorb-next-fire: a boot
+# always a silent no-op. The SERVICE files carry the same After=/Wants=
+# lines and they are equally inert there (follow-up cleanup, not this
+# change). The real protection is absorb-next-fire: a boot
 # catch-up poll that lands in a half-warm DNS window fails once and the
 # next grid fire (<= 15 min) retries, well inside the 1800s
 # AlphalensJobStale budget; the dedup store gates re-alerting.

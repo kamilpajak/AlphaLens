@@ -12,9 +12,10 @@ Description=AlphaLens Saxo OAuth keep-alive timer (20min wall-clock grid, inside
 #
 # Reboot phase arithmetic (the grid is never worse than the old
 # OnBootSec=3min shape): if downtime spans a grid point, Persistent=true —
-# live for the first time here, it only works with OnCalendar — fires the
-# catch-up at timer start (gap ~= downtime); if it spans none, the total gap
-# is <= 20 min. A chain already >40 min dead is unrecoverable under either
+# live for the first time here, it only works with OnCalendar — fires ONE
+# catch-up activation at timer start (missed grid points coalesce into a
+# single run; gap ~= downtime); if it spans none, the total gap is
+# <= 20 min. A chain already >40 min dead is unrecoverable under either
 # shape (attended `alphalens broker auth` re-login only).
 #
 # Shares the :00/20 grid with the marketdata twin on purpose — the two
@@ -26,6 +27,7 @@ Description=AlphaLens Saxo OAuth keep-alive timer (20min wall-clock grid, inside
 # show a populated NEXT — `is-active`/`is-enabled` are not evidence.
 OnCalendar=*-*-* *:00/20:00 UTC
 Persistent=true
+Unit=alphalens-saxo-refresh.service
 
 [Install]
 WantedBy=timers.target
