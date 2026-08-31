@@ -475,7 +475,7 @@ groups:
           route: telegram
         annotations:
           summary: "systemd drift on {{ $labels.unit }}: {{ $value }} finding(s) vs origin/main"
-          description: "The installed {{ $labels.unit }} unit diverges from what the repository declares ({{ $value }} finding(s): untracked/missing drop-in, content drift, or a loaded-environment mismatch). This is the #1121 failure class — a hand edit on the host that no repo gate can see. Read `journalctl --user -u alphalens-systemd-drift-check.service` for the named findings, then either land the host's value in deploy/systemd/ or reinstall the tracked files; NEVER let the two stay different silently."
+          description: "The installed {{ $labels.unit }} unit diverges from what the repository declares ({{ $value }} finding(s): untracked/missing drop-in, content drift, or a loaded-environment mismatch). This is the #1121 failure class — a hand edit on the host that no repo gate can see. Read `journalctl --user -u alphalens-systemd-drift-check.service` for the named findings, then either land the host's value in deploy/systemd/ or reinstall the tracked files; NEVER let the two stay different silently. The synthetic series unit=etc-alphalens-env (#1209) means a banned ALPHALENS_BROKER_* or LIVE-grant name sits in the shared /etc/alphalens/env, where EnvironmentFile= would arm EVERY reader at its next start — remove that line; the one arming surface is the LIVE unit's 10-allow-orders.conf drop-in."
 
       # The INVERTED assertion, on its own gauge (#1193). The ADR 0017 grant
       # is host-only, so the drift comparison above is structurally BLIND to
