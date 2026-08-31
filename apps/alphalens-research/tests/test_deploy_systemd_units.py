@@ -388,13 +388,19 @@ class TestMigratedLaunchdUnits(unittest.TestCase):
         _assert_wall_clock_anchored(self, text)
         # The exact 15-min grid is load-bearing: AlphalensJobStale pages at
         # 1800s = 2x this cadence, and the Layer 1 SoT contract is "every
-        # 15 min" (launchd StartInterval=900 heritage). The old OnBootSec=2min
-        # network-warmup buffer is owned by After=network-online.target on the
-        # timer plus absorb-next-fire (dedup gates re-alerting).
+        # 15 min" (launchd StartInterval=900 heritage). No network-warmup
+        # ordering: network-online.target is not-found in the USER manager
+        # (verified live), so the protection is absorb-next-fire alone —
+        # a failed boot poll retries at the next grid point.
         self.assertRegex(
             text, re.compile(r"^OnCalendar=\*-\*-\* \*:00/15:00 UTC\s*$", re.MULTILINE)
         )
-        self.assertRegex(text, re.compile(r"^After=network-online\.target\s*$", re.MULTILINE))
+        self.assertNotRegex(
+            text,
+            re.compile(r"^After=network-online\.target", re.MULTILINE),
+            "network-online.target does not exist in the user manager — an "
+            "After= on it is a silent no-op that reads like protection",
+        )
 
     # --- literature scan units -----------------------------------------
 

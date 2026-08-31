@@ -2,17 +2,19 @@
 # Fires the companion alphalens-edgar-detect.service every 15 min on the
 # wall clock, matching the Mac launchd StartInterval=900 cadence.
 #
-# After=network-online.target: hold the TIMER back until the network
-# stabilises after a VPS reboot — this owns the job the old OnBootSec=2min
-# buffer did. A poll that still lands in a half-warm DNS window is absorbed
-# by the next grid fire (the dedup store gates re-alerting).
+# Boot warmup: the old OnBootSec=2min buffer is gone WITHOUT a replacement
+# ordering — `network-online.target` does not exist in the USER manager
+# (LoadState=not-found, verified live 2026-08-31), so an After= on it was
+# always a silent no-op. The real protection is absorb-next-fire: a boot
+# catch-up poll that lands in a half-warm DNS window fails once and the
+# next grid fire (<= 15 min) retries, well inside the 1800s
+# AlphalensJobStale budget; the dedup store gates re-alerting.
 #
 # Persistent=true: if the VPS was off when a scheduled fire was due,
 # trigger one catch-up run at boot. SEC EDGAR data is append-only and
 # the dedup store gates re-alerting, so a catch-up fire just walks a
 # slightly wider window without dispatching duplicate Telegrams.
 Description=Trigger AlphaLens Layer 1 EDGAR detector every 15 minutes
-After=network-online.target
 
 [Timer]
 # WALL-CLOCK, NOT INTERVAL (#1208, after the 2026-08-30 #1206 dormancy):
