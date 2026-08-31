@@ -78,13 +78,13 @@ class TestRunLiveExits(unittest.TestCase):
     def test_touch_fires_tranche_and_shrinks_sl(self):
         b, uic, feed, managed = self._mk(price=16.5)
         n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
-        self.assertEqual(n, 1)
+        self.assertEqual(len(n), 1)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 50.0)
 
     def test_stale_price_vetoes_all_fires(self):
         b, uic, feed, managed = self._mk(price=None)  # feed.latest -> None
         n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
-        self.assertEqual(n, 0)
+        self.assertEqual(n, [])
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 100.0)
 
     def test_gap_through_fires_both_and_sl_tracks_remaining_owned(self):
@@ -95,7 +95,7 @@ class TestRunLiveExits(unittest.TestCase):
         records: list[dict] = []
         with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
             n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
-        self.assertEqual(n, 2)
+        self.assertEqual(len(n), 2)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 20.0)  # sold 50 + 30
         sl_now = next(o for o in b.list_working_sell_orders() if o.order_type == "StopIfTraded")
         self.assertEqual(sl_now.amount, 20.0)  # SL tracks remaining owned, not stale 70
@@ -129,7 +129,7 @@ class TestRunLiveExits(unittest.TestCase):
         records: list[dict] = []
         with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
             n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
-        self.assertEqual(n, 1)
+        self.assertEqual(len(n), 1)
         fired = [r for r in records if r.get("kind") == "tranche_fired"]
         self.assertEqual(len(fired), 1)
         self.assertEqual(fired[0]["uic"], uic)
@@ -222,7 +222,7 @@ class TestRunLiveExitsCostGate(unittest.TestCase):
         records: list[dict] = []
         with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
             n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
-        self.assertEqual(n, 0)
+        self.assertEqual(n, [])
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 1.0, "position untouched")
         sl_now = next(o for o in b.list_working_sell_orders() if o.order_type == "StopIfTraded")
         self.assertEqual(sl_now.amount, 1.0, "the disaster stop is neither shrunk nor cancelled")
@@ -251,7 +251,7 @@ class TestRunLiveExitsCostGate(unittest.TestCase):
         feed = _FakeFeed({uic: SMG_TP_TRANCHES[0] + 0.05})
         with mock.patch.object(cl, "_append_standalone_stop_journal"):
             n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
-        self.assertEqual(n, 1)
+        self.assertEqual(len(n), 1)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 0.0)
 
 
@@ -307,7 +307,7 @@ class TestDegeneratePriceFiresNothing(unittest.TestCase):
         for bid in self._DEGENERATE_BIDS:
             with self.subTest(bid=bid):
                 fired, owned = self._run(bid, avg_price=15.0)
-                self.assertEqual(fired, 0)
+                self.assertEqual(fired, [])
                 self.assertEqual(owned, 100.0, "nothing may be sold on a degenerate price")
 
     def test_no_degenerate_bid_fires_when_the_realised_entry_is_unknown(self) -> None:
@@ -316,12 +316,12 @@ class TestDegeneratePriceFiresNothing(unittest.TestCase):
         for bid in self._DEGENERATE_BIDS:
             with self.subTest(bid=bid):
                 fired, owned = self._run(bid, avg_price=0.0)
-                self.assertEqual(fired, 0)
+                self.assertEqual(fired, [])
                 self.assertEqual(owned, 100.0)
 
     def test_a_finite_positive_bid_still_fires(self) -> None:
         fired, owned = self._run(16.5, avg_price=15.0)
-        self.assertEqual(fired, 1)
+        self.assertEqual(len(fired), 1)
         self.assertEqual(owned, 50.0)
 
 

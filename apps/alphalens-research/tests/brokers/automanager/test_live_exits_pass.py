@@ -417,6 +417,35 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         self.assertEqual(fired[0]["uic"], uic)
         self.assertEqual(fired[0]["tag"], "tp1")
 
+    def test_a_fired_tranche_sends_one_operator_alert(self) -> None:
+        # #1219: exits must announce themselves — one throttled alert per fired
+        # tranche, keyed per (uic, tag) so a repeat within the throttle window
+        # cannot spam while a distinct tranche still notifies.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 16.0, 0.5),), reference_qty=100.0, stop_price=13.0
+        )
+        seen: list[tuple[str, str]] = []
+        deps = _deps(
+            broker,
+            alerts=[],
+            alert_throttled=lambda msg, reason: seen.append((msg, reason)) or True,
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+        )
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            report = cl.TickReport()
+            cl._run_live_exits_pass(deps, report)
+        self.assertEqual(len(seen), 1)
+        msg, reason = seen[0]
+        self.assertIn("KO", msg)
+        self.assertIn("TP1", msg)
+        self.assertIn("50", msg)
+        self.assertEqual(reason, f"tranche-fired:{uic}:tp1")
+        self.assertEqual(report.alerts, 1)
+
     def test_a_gap_through_price_fires_two_tranches_in_one_pass(self) -> None:
         # price crosses tp1 (16, 50%) AND tp2 (18, 30%) of a 100-share reference
         # in ONE pass. Guards the engine's cumulative-clamp + SL stepping on a
