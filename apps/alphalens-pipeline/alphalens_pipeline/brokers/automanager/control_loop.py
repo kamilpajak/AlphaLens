@@ -3214,21 +3214,22 @@ def _fold_standing_stop_ids(lines: Iterable[Mapping[str, Any]]) -> dict[int, _St
     """Fold ``stop_placed`` / ``stop_filled`` lines into the per-uic standing
     stop the fill-reconcile pass should watch (#1219).
 
-    Per uic the LATEST (by ``ts``) ``stop_placed`` carrying an ``order_id`` wins
-    — records predating #1219 carry none and can never be reconciled (their id
-    was never journaled), so they yield no candidate rather than a false one. A
+    Per uic the LATEST (by ``ts``, later line breaks a tie) ``stop_placed`` wins
+    OUTRIGHT; if that elected record carries no ``order_id`` (written before
+    #1219) the uic yields NO candidate — its id was never journaled, so it can
+    never be reconciled. Electing latest-overall (not latest-WITH-id) keeps this
+    fold exactly equivalent under the boot compactor, which keeps only the
+    newest ``stop_placed`` per uic — a latest-with-id election would survive
+    compaction differently whenever an id-less record is newer. A
     ``stop_filled`` line whose ``order_id`` matches the elected candidate removes
     the uic: the terminal already exists, so the pass must not re-resolve or
     re-alert it (restart idempotence, mirroring the entry-side ``fired`` fold)."""
     latest_ts: dict[int, float] = {}
-    latest: dict[int, _StandingStop] = {}
+    latest: dict[int, _StandingStop | None] = {}
     filled_ids: set[str] = set()
     for line in lines:
         kind = line.get("kind")
         if kind == "stop_placed":
-            order_id = line.get("order_id")
-            if not isinstance(order_id, str) or not order_id:
-                continue
             try:
                 uic = int(line["uic"])
                 ts = float(line["ts"])
@@ -3236,15 +3237,23 @@ def _fold_standing_stop_ids(lines: Iterable[Mapping[str, Any]]) -> dict[int, _St
                 continue
             if uic not in latest_ts or ts >= latest_ts[uic]:
                 latest_ts[uic] = ts
-                ref = line.get("ref")
-                latest[uic] = _StandingStop(
-                    order_id=order_id, ref=ref if isinstance(ref, str) and ref else None
-                )
+                order_id = line.get("order_id")
+                if isinstance(order_id, str) and order_id:
+                    ref = line.get("ref")
+                    latest[uic] = _StandingStop(
+                        order_id=order_id, ref=ref if isinstance(ref, str) and ref else None
+                    )
+                else:
+                    latest[uic] = None
         elif kind == "stop_filled":
             order_id = line.get("order_id")
             if isinstance(order_id, str) and order_id:
                 filled_ids.add(order_id)
-    return {uic: stop for uic, stop in latest.items() if stop.order_id not in filled_ids}
+    return {
+        uic: stop
+        for uic, stop in latest.items()
+        if stop is not None and stop.order_id not in filled_ids
+    }
 
 
 def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:

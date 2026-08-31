@@ -257,6 +257,26 @@ class TestFoldStandingStopIds(unittest.TestCase):
         fold = cl._fold_standing_stop_ids([_stop_placed(order_id=None)])
         self.assertEqual(fold, {})
 
+    def test_a_newer_id_less_record_shadows_an_older_id(self) -> None:
+        # Latest-OVERALL election (not latest-with-id): the boot compactor keeps
+        # only the newest stop_placed per uic, so electing an older id-carrying
+        # record here would make the fold change under compaction.
+        fold = cl._fold_standing_stop_ids(
+            [
+                _stop_placed(order_id="S-old", ts=100.0),
+                _stop_placed(order_id=None, ref=None, ts=200.0),
+            ]
+        )
+        self.assertEqual(fold, {})
+
+    def test_compaction_preserves_the_shadowed_id_case(self) -> None:
+        lines = [
+            _stop_placed(order_id="S-old", ts=100.0),
+            _stop_placed(order_id=None, ref=None, ts=200.0),
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        self.assertEqual(cl._fold_standing_stop_ids(lines), cl._fold_standing_stop_ids(compacted))
+
 
 class TestCompactorKeepsStopFilled(unittest.TestCase):
     def test_stop_filled_survives_compaction_and_fold_is_identical(self) -> None:
