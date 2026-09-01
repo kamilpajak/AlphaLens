@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -86,6 +86,39 @@ buffer, shared with the arm-time gate so the two cannot drift apart."""
 
 def tranche_tag(index: int) -> str:
     return f"tp{index + 1}"
+
+
+def apportion_tranche_quantities(
+    *, reference_qty: float, tranche_fracs: Sequence[float]
+) -> tuple[float, ...]:
+    """Whole-share quantities per tranche, by largest-remainder (Hamilton)
+    apportionment — issue #1112, the breakeven_trail follow-up.
+
+    Per-tranche ``round(reference_qty * frac)`` loses shares to rounding: at
+    ``reference_qty = 1`` every 1/3 tranche rounds to ZERO (the position has no
+    take-profit path at all), and at 7 the ladder sums to 6 (a permanent
+    one-share stop-only remainder). Apportionment hands out exactly
+    ``round(reference_qty * sum(fracs))`` shares — the plan's own DECLARED
+    coverage, never normalized to 100%; full coverage is an arm-time contract
+    (:func:`~alphalens_pipeline.brokers.automanager.costs.apportioned_coverage_violation`),
+    not this function's call — floor-first, leftover shares by largest
+    fractional remainder, ties to the SHALLOWEST tranche (earliest realization,
+    shortest stop-only exposure).
+
+    Pure and deterministic in (``reference_qty``, ``tranche_fracs``) alone — a
+    fired tranche never reshuffles its siblings' counts. Inputs are trusted:
+    ``reference_qty`` is guarded by the callers' ``_is_real_quantity`` and every
+    ``tranche_frac`` is a validated [0, 1] fraction
+    (``TpTranchePlan.__post_init__`` refuses anything else, and the journal fold
+    drops a line whose tranche cannot be constructed).
+    """
+    quotas = [reference_qty * frac for frac in tranche_fracs]
+    base = [math.floor(q) for q in quotas]
+    leftover = round(reference_qty * sum(tranche_fracs)) - sum(base)
+    by_largest_remainder = sorted(range(len(quotas)), key=lambda i: (base[i] - quotas[i], i))
+    for i in by_largest_remainder[: max(leftover, 0)]:
+        base[i] += 1
+    return tuple(float(b) for b in base)
 
 
 @dataclass(frozen=True)
@@ -162,14 +195,16 @@ def _exit_clears_cost(
     The threshold is :func:`~alphalens_pipeline.brokers.automanager.costs.min_profitable_exit_price`,
     evaluated at THIS TRANCHE's quantity.
 
-    READING RULE — the arm-time gate calls the same function, but at the
-    quantity of the position it opens, so the two bars differ whenever the two
-    quantities do: a smaller exit quantity pays proportionally more of the
-    per-fill USD minimum and therefore needs a HIGHER price. An armed tier is
-    not automatically an exit this gate will fire. They coincide only while the
-    exit plan is one tranche selling the whole position, which
-    :func:`~alphalens_pipeline.brokers.automanager.costs.single_full_position_tranche_violation`
-    enforces at arm time.
+    READING RULE — the arm-time gates call the same function, and the bar
+    depends on the quantity it is evaluated at: a smaller exit quantity pays
+    proportionally more of the per-fill USD minimum and therefore needs a
+    HIGHER price. The bars agree only when the arm-time caller priced the
+    quantity this gate sells — the geometry path pins its plan to one tranche
+    selling the whole position
+    (:func:`~alphalens_pipeline.brokers.automanager.costs.single_full_position_tranche_violation`),
+    the brief-ladder path prices tp1's apportioned share count
+    (``control_loop._brief_plan_arm_refusal``); a DEEPER brief tranche was
+    never priced at arm time and can still be refused here.
 
     FAILS OPEN — an unknown realised entry (``None``, the SIM ``NoAccess``
     non-positive sentinel, or a NaN) returns ``True`` and logs. This is the
@@ -224,8 +259,14 @@ def plan_tranche_exits(
     """Which not-yet-fired tranches a LONG at ``price`` should realize now.
 
     ``reference_qty`` is the tranche-sizing base (the intended/peak filled
-    position); tranche qty = round(reference_qty * tranche_frac), cumulatively
-    clamped so the batch never exceeds live ``owned``. Order preserved.
+    position); tranche quantities come from
+    :func:`apportion_tranche_quantities` over the WHOLE ladder — largest-
+    remainder, ties to the shallowest tranche — cumulatively clamped so the
+    batch never exceeds live ``owned``. Order preserved. Apportionment (issue
+    #1112, breakeven_trail follow-up) replaced per-tranche
+    ``round(reference_qty * frac)``, which left a 1-share position with NO
+    take-profit path (every 1/3 tranche rounded to zero, silently) and a
+    7-share ladder with a permanent stop-only remainder.
 
     ``realised_entry`` is the position's realised average entry price
     (``Position.avg_price``). When supplied, a tranche whose distance from it is
@@ -269,6 +310,9 @@ def plan_tranche_exits(
         )
         return []
     available = quantize_down(owned, lattice)
+    quantities = apportion_tranche_quantities(
+        reference_qty=reference_qty, tranche_fracs=tuple(t.tranche_frac for t in tp_tranches)
+    )
     out: list[TrancheExit] = []
     for i, t in enumerate(tp_tranches):
         tag = tranche_tag(i)
@@ -276,9 +320,9 @@ def plan_tranche_exits(
             continue
         if price + _PRICE_EPS < t.target_price:
             continue  # target not touched
-        qty = min(round(reference_qty * t.tranche_frac), available)
+        qty = min(quantities[i], available)
         if qty <= 0:
-            continue
+            continue  # this tranche's apportioned share is zero, or owned ran out
         if realised_entry is not None and not _exit_clears_cost(
             price=price,
             target_price=t.target_price,
