@@ -5257,8 +5257,12 @@ def _retract_stale_tranche_plans(
             _retract_round_tripped_tranche_plans(candidates, governing, journal_lines, deps)
     # Broad on purpose: the sweep is housekeeping inside the watch pass — a
     # journal read/write failure must degrade to a warning + retry next tick,
-    # never abort the pass that advances live watches.
+    # never abort the pass that advances live watches. The latch clears too:
+    # a failed tick observed nothing, and every fired-class retraction must
+    # rest on two consecutive CLEAN observations (#1223 zen M2).
     except Exception:
+        if deps is not None:
+            deps.pending_plan_retractions.clear()
         logger.warning("entry-trail: stale tranche_plan retraction sweep failed", exc_info=True)
 
 
@@ -7823,7 +7827,9 @@ def _position_uic(pos: Position) -> int | None:
 
 
 def _net_open_position_uics(positions: Iterable[Position]) -> tuple[frozenset[int], int]:
-    """``(uics with nonzero NET quantity, count of rows with no resolvable uic)``.
+    """``(uics with nonzero NET quantity, count of unreadable rows)`` — a row
+    is unreadable when its uic cannot be resolved OR its quantity is
+    missing/None/non-finite.
 
     LIVE Saxo accounts run End-Of-Day netting
     (``ClosedPositionNotAccessibleInEndOfDayNettingMode``): positions net only
@@ -7842,8 +7848,16 @@ def _net_open_position_uics(positions: Iterable[Position]) -> tuple[frozenset[in
         if uic is None:
             unresolvable += 1
             continue
-        qty = float(getattr(pos, "quantity", 0.0) or 0.0)
-        net_by_uic[uic] = net_by_uic.get(uic, 0.0) + qty
+        # A missing/None/non-finite quantity is UNRESOLVABLE, never flat:
+        # abs(nan) > eps is False, so a malformed row would otherwise net to
+        # "no open position" — and net-flatness is the fired-class
+        # retraction's last live-position gate (#1223 zen M1). A genuine 0.0
+        # row still nets flat below.
+        raw_qty = getattr(pos, "quantity", None)
+        if raw_qty is None or not math.isfinite(float(raw_qty)):
+            unresolvable += 1
+            continue
+        net_by_uic[uic] = net_by_uic.get(uic, 0.0) + float(raw_qty)
     open_uics = frozenset(uic for uic, net in net_by_uic.items() if abs(net) > _QTY_EPS)
     return open_uics, unresolvable
 

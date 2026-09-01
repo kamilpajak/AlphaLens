@@ -2875,6 +2875,31 @@ class TestFiredTerminalPlanRetraction(unittest.TestCase):
         self._sweep(deps)
         self.assertEqual(self._retractions(stops_path), [])
 
+    def test_an_outer_sweep_failure_also_clears_the_latch(self) -> None:
+        # #1223 zen M2: the latch contract is "every retraction rests on two
+        # consecutive CLEAN observations" — a tick whose journal read blew up
+        # observed nothing, so the latch from before it must not survive.
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled()
+        deps = self._deps(_BrokerWithPositions([]))
+        self._sweep(deps)  # clean -> latched
+
+        def boom() -> Any:
+            raise OSError("journal unreadable")
+
+        with (
+            mock.patch.object(cl, "_iter_standalone_stop_journal", boom),
+            self.assertLogs(cl.logger, level="WARNING"),
+        ):
+            self._sweep(deps)  # outer failure -> latch must clear
+        self._sweep(deps)  # clean again -> re-latch only
+        self.assertEqual(self._retractions(stops_path), [])
+        self._sweep(deps)
+        self.assertEqual(len(self._retractions(stops_path)), 1)
+
     def test_watch_pass_reaches_the_fired_class_end_to_end(self) -> None:
         _journal(self)
         stops_path = _planned_journal(self)
