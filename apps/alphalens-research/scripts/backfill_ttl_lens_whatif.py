@@ -44,7 +44,7 @@ import pandas as pd
 import pandas.testing as pdt
 from alphalens_pipeline.feedback.breakeven_lenses import BREAKEVEN_LENSES
 from alphalens_pipeline.feedback.ladder_replay import replay_ladder_breakeven
-from alphalens_pipeline.paper.calendar import session_close_utc, session_open_utc
+from alphalens_pipeline.feedback.population_ladder_monitor import _rth_window_utc
 from alphalens_research.diagnostics.breakeven_backfill import (
     UNRESOLVABLE,
     apply_lens_key_backfill,
@@ -58,19 +58,23 @@ _EXCHANGE = "XNYS"
 
 
 def _rth_session_aware(df: pd.DataFrame) -> pd.DataFrame:
-    """Keep bars inside their own session's RTH window (calendar-derived per day)."""
+    """Keep bars inside their own session's RTH window.
+
+    Reuses the monitor's ``_rth_window_utc`` (span-derived close, half-day aware,
+    close-INCLUSIVE) so the filter cannot drift from the windows the monitor
+    itself replays under — a hand-rolled ``session_close_utc`` mirror here was
+    both exclusive at the close and blind to half-day spans (zen review).
+    """
     if df.empty:
         return df
     days = pd.to_datetime(df["t"], unit="ms", utc=True).dt.date
     keep = pd.Series(False, index=df.index)
     for day in days.unique():
         try:
-            open_ms = int(session_open_utc(day, _EXCHANGE).timestamp() * 1000)
-            close_ms = int(session_close_utc(day, _EXCHANGE).timestamp() * 1000)
+            open_ms, close_ms = _rth_window_utc(day, _EXCHANGE)
         except ValueError:  # non-session day: no bar of that day is RTH
             continue
-        mask = days == day
-        keep |= mask & (df["t"] >= open_ms) & (df["t"] < close_ms)
+        keep |= (days == day) & (df["t"] >= open_ms) & (df["t"] <= close_ms)
     return df[keep]
 
 
