@@ -18,7 +18,7 @@ import math
 import os
 import time
 from collections import deque
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
@@ -376,6 +376,14 @@ class LoopDeps:
     # ``ALPHALENS_BROKER_DAY1_GAP_GATE=1``, so a ``None`` probe with the flag
     # off is completely inert.
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None
+    # #1223 two-consecutive-tick confirmation latch for the FIRED-terminal
+    # tranche_plan retraction (``_retract_round_tripped_tranche_plans``):
+    # ``(pick_key, uic)`` candidates that passed every gate on the PREVIOUS
+    # sweep. A MUTABLE set on the (frozen) deps — built once, carried across
+    # ticks, mirroring oco_lag_counts above; a daemon restart starts empty
+    # (one extra clean tick, fail-safe). Frozen forbids REBINDING the field,
+    # not mutating the set it points at.
+    pending_plan_retractions: set[tuple[str, int]] = field(default_factory=set)
     # Entry-trailing watcher runtimes (PR-T1, DRY-RUN): crid -> the daemon-
     # lifetime state for ONE open entry-tier watch (the stateful engine watcher
     # + its measurement marks). A MUTABLE dict on the (frozen-field) deps — built
@@ -933,6 +941,57 @@ def _apply_generation_reset(
         governing_key.pop(uic, None)
         return True
     return False
+
+
+def _fold_round_trip_closures_since_latest_plan(
+    lines: Iterable[Mapping[str, Any]],
+) -> dict[int, frozenset[str | None]]:
+    """Durable round-trip closure evidence per uic, RESET on each new plan
+    generation (#1223).
+
+    The fired-terminal retraction sweep needs POSITIVE journal evidence that a
+    fired tier's position lifecycle CONCLUDED before it may consult the
+    positions endpoint at all: a positions read alone can report flat while a
+    fresh fill has not materialized yet (retracting then would strip a LIVE
+    position's exit management — fail-deadly), and a held position whose
+    sibling watches merely expired looks terminal without ever having closed.
+
+    Evidence setters, counted only while the uic's plan generation is OPEN (a
+    ``tranche_plan`` line was seen and not retracted — a closure can never
+    predate the plan it closes, and requiring this keeps the boot compactor's
+    reordered output folding identically):
+      - a full ``stop_filled`` (falsy ``partial``); its element is the stop
+        ref's parsed pick key, or ``None`` when the ref has no entry-trail
+        shape (a classic bracket stop round-tripping the uic still closed it);
+      - a ``tranche_fired`` carrying ``position_closed`` (element ``None`` —
+        the line has no ref to attribute).
+    Reset shares :func:`_apply_generation_reset` verbatim: a keyless or
+    different-key plan line and a retraction clear the uic; the
+    ``already_watching`` same-key re-append does not."""
+    closures: dict[int, set[str | None]] = {}
+    governing_key: dict[int, str] = {}
+    generation_open: set[int] = set()
+    for line in lines:
+        uic = _coerce(line, "uic", int)
+        if uic is None:
+            continue
+        kind = line.get("kind")
+        if _apply_generation_reset(kind, line, uic, governing_key, (closures,)):
+            if kind == _TRANCHE_PLAN_KIND:
+                generation_open.add(uic)
+            else:
+                generation_open.discard(uic)
+            continue
+        if uic not in generation_open:
+            continue
+        if kind == "stop_filled" and not line.get("partial"):
+            ref = line.get("ref")
+            closures.setdefault(uic, set()).add(
+                _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
+            )
+        elif kind == _TRANCHE_FIRED_KIND and line.get("position_closed"):
+            closures.setdefault(uic, set()).add(None)
+    return {u: frozenset(s) for u, s in closures.items()}
 
 
 def _build_managed_exits(
@@ -2062,7 +2121,7 @@ def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> Non
     # (2026-08-19 adjudication finding 3). Self-contained error boundary; under
     # KILL the pass returned above, so a KILL-cancelled watch is swept on the
     # first non-KILL tick.
-    _retract_stale_tranche_plans(fold)
+    _retract_stale_tranche_plans(fold, deps)
     active = _active_entry_watches(fold)
     if not active:
         deps.entry_watchers.clear()  # every watch went terminal — drop stale runtimes
@@ -5118,14 +5177,14 @@ def _fold_governing_plan_pick_keys(lines: Iterable[Mapping[str, Any]]) -> dict[i
     return governing
 
 
-def _unfired_terminal_watch_picks(fold: entry_trails.EntryTrailFold) -> dict[str, int]:
-    """``{pick_key: uic}`` for every pick whose entry watch is FULLY terminal
-    with NO tier fired — the picks whose routed ``tranche_plan`` never matched
-    a fill and is now an order-free stale ladder (2026-08-19 adjudication
-    finding 3). A pick with any still-open tier is live; a pick with any
-    ``fired`` tier has a position whose ladder must stand. Records whose
-    pick_key or uic cannot be reconstructed are skipped — never retract on
-    doubt."""
+def _terminal_watch_picks(fold: entry_trails.EntryTrailFold) -> dict[str, tuple[int, bool]]:
+    """``{pick_key: (uic, any_tier_fired)}`` for every pick whose entry watch
+    is FULLY terminal (2026-08-19 adjudication finding 3 / #1223). A pick with
+    any still-open or ARMED tier is live (``terminal_kind is None`` — an armed
+    sibling skipped by the #1198 retire still owns a resting native BUY, so the
+    first skip also encodes #1223's "never retract while any tier is open or
+    armed"). Records whose pick_key or uic cannot be reconstructed are skipped
+    — never retract on doubt."""
     states_by_pick: dict[str, list[entry_trails.EntryTrailTierState]] = {}
     for state in fold.tiers.values():
         record = state.watch_open
@@ -5135,29 +5194,37 @@ def _unfired_terminal_watch_picks(fold: entry_trails.EntryTrailFold) -> dict[str
         if key is None:
             continue
         states_by_pick.setdefault(str(key), []).append(state)
-    out: dict[str, int] = {}
+    out: dict[str, tuple[int, bool]] = {}
     for pick_key, states in states_by_pick.items():
         if any(s.terminal_kind is None for s in states):
             continue  # a tier still watches / arms — the pick is live
-        if any(s.terminal_kind == entry_trails.KIND_FIRED for s in states):
-            continue  # a fill happened — the position's ladder must stand
         uics = {_coerce(s.watch_open or {}, "uic", int) for s in states}
         if len(uics) != 1 or None in uics:
             continue  # unmappable / inconsistent — never retract on doubt
-        out[pick_key] = cast(int, next(iter(uics)))
+        fired = any(s.terminal_kind == entry_trails.KIND_FIRED for s in states)
+        out[pick_key] = (cast(int, next(iter(uics))), fired)
     return out
 
 
-def _retract_stale_tranche_plans(fold: entry_trails.EntryTrailFold) -> None:
-    """Retract the routed ``tranche_plan`` of every watch that ended with no
-    fill (2026-08-19 adjudication finding 3).
+def _retract_stale_tranche_plans(
+    fold: entry_trails.EntryTrailFold, deps: LoopDeps | None = None
+) -> None:
+    """Retract every ``tranche_plan`` that no longer governs anything real.
 
-    The watch routing journals the ladder at watch-OPEN — before any order
-    exists — so a watch that expires / suspends / is KILL-cancelled unfired
-    would otherwise leave its ladder governing the uic FOREVER, and any later
-    long on the uic that ends up with a sole standalone SL (protection-pass
-    covering of an out-of-band fill, a manual buy plus manual stop) would be
-    silently sold down the stale pick's targets.
+    Two independent candidate classes, each ending the last-wins fold's
+    "governs the uic FOREVER" default — without which any later long on the
+    uic that ends up with a sole standalone SL (protection-pass covering of an
+    out-of-band fill, a manual buy plus manual stop) would be silently sold
+    down the stale pick's targets:
+
+    - UNFIRED (2026-08-19 adjudication finding 3): the watch ended with no
+      fill (expired / suspended / KILL-cancelled) — the ladder never matched
+      an order. Journal-only, position-blind, retracted immediately.
+    - FIRED-terminal (#1223): a fill happened but the position ROUND-TRIPPED
+      (durable closure evidence + a net-flat book) and every sibling tier is
+      terminal — delegated to :func:`_retract_round_tripped_tranche_plans`
+      with its belt-and-braces gates; skipped entirely when ``deps`` is
+      ``None`` (direct-call tests, pre-#1223 harnesses).
 
     Only a plan whose governing ``pick_key`` MATCHES the ended pick is
     retracted: a keyless bracket plan (coupled to a real placement) and a
@@ -5166,11 +5233,16 @@ def _retract_stale_tranche_plans(fold: entry_trails.EntryTrailFold) -> None:
     one line per ended pick). Runs every watch-pass tick; any journal failure
     degrades to a WARN and a retry next tick — never an aborted pass."""
     try:
-        candidates = _unfired_terminal_watch_picks(fold)
+        candidates = _terminal_watch_picks(fold)
         if not candidates:
+            if deps is not None:
+                deps.pending_plan_retractions.clear()
             return
-        governing = _fold_governing_plan_pick_keys(_iter_standalone_stop_journal())
-        for pick_key, uic in candidates.items():
+        journal_lines = list(_iter_standalone_stop_journal())
+        governing = _fold_governing_plan_pick_keys(journal_lines)
+        for pick_key, (uic, fired) in candidates.items():
+            if fired:
+                continue  # the fired class runs below with its own gates
             if governing.get(uic) != pick_key:
                 continue  # keyless/bracket plan, newer pick, or already retracted
             _append_standalone_stop_journal(
@@ -5181,11 +5253,104 @@ def _retract_stale_tranche_plans(fold: entry_trails.EntryTrailFold) -> None:
                 pick_key,
                 uic,
             )
+        if deps is not None:
+            _retract_round_tripped_tranche_plans(candidates, governing, journal_lines, deps)
     # Broad on purpose: the sweep is housekeeping inside the watch pass — a
     # journal read/write failure must degrade to a warning + retry next tick,
-    # never abort the pass that advances live watches.
+    # never abort the pass that advances live watches. The latch clears too:
+    # a failed tick observed nothing, and every fired-class retraction must
+    # rest on two consecutive CLEAN observations (#1223 zen M2).
     except Exception:
+        if deps is not None:
+            deps.pending_plan_retractions.clear()
         logger.warning("entry-trail: stale tranche_plan retraction sweep failed", exc_info=True)
+
+
+def _retract_round_tripped_tranche_plans(
+    candidates: Mapping[str, tuple[int, bool]],
+    governing: Mapping[int, str | None],
+    journal_lines: Sequence[Mapping[str, Any]],
+    deps: LoopDeps,
+) -> None:
+    """The FIRED-terminal retraction class (#1223): a round-tripped pick's
+    ``tranche_plan`` stops governing the uic, so a later manual/out-of-band
+    long is never adopted onto the closed trade's ladder.
+
+    Wrongly retracting under a live position would strip its exit management —
+    strictly worse than the stale-ladder hazard being fixed — so every
+    candidate must clear ALL of, in order:
+      1. every tier terminal + ≥1 FIRED (from ``candidates``);
+      2. the governing plan is the candidate's own (idempotence / newer pick /
+         keyless — same rule as the unfired class);
+      3. closure evidence since the current plan generation
+         (:func:`_fold_round_trip_closures_since_latest_plan`) whose element
+         is keyless or matches the pick — WITHOUT this, a positions read that
+         lags a fresh fill would look flat (fail-deadly), and a held position
+         with expired siblings would never be distinguishable from a closed
+         one. A manually-closed position leaves no record, so its plan is
+         (accepted limitation) never retracted;
+      4. a NET-flat book on a fresh positions read — lazy: the endpoint is
+         only consulted when a candidate survives 1-3, so the steady state
+         adds zero REST calls. EOD-netting rows (+q/−q) net to flat
+         (:func:`_net_open_position_uics`); any unresolvable row or read
+         failure skips the class this tick (fail-safe), as does a broker
+         without ``get_positions`` (test harnesses);
+      5. the two-consecutive-tick confirmation latch
+         (``deps.pending_plan_retractions``): retract only a candidate that
+         ALSO passed 1-4 on the previous sweep. A sub-tick positions lag (the
+         armed-sibling second-fire scenario: the same plan generation fills
+         again with no new plan line, so 1-3 all pass on stale evidence)
+         cannot survive two ~45 s polls; any class skip clears the latch, so
+         every retraction rests on two consecutive CLEAN observations. A
+         daemon restart costs one extra clean tick — the sweep stays fully
+         re-derivable from the journals plus one positions read."""
+    pending = deps.pending_plan_retractions
+    try:
+        fired_candidates = {
+            (pick_key, uic)
+            for pick_key, (uic, fired) in candidates.items()
+            if fired and governing.get(uic) == pick_key
+        }
+        if fired_candidates:
+            closures = _fold_round_trip_closures_since_latest_plan(journal_lines)
+            fired_candidates = {
+                (pick_key, uic)
+                for pick_key, uic in fired_candidates
+                if any(key is None or key == pick_key for key in closures.get(uic, ()))
+            }
+        if not fired_candidates:
+            pending.clear()
+            return
+        get_positions = getattr(deps.broker, "get_positions", None)
+        if get_positions is None:
+            pending.clear()
+            return
+        open_uics, unresolvable = _net_open_position_uics(get_positions())
+        if unresolvable:
+            pending.clear()
+            return
+        passing = {(pk, uic) for pk, uic in fired_candidates if uic not in open_uics}
+        confirmed = passing & pending
+        for pick_key, uic in sorted(confirmed):
+            _append_standalone_stop_journal(
+                {"kind": _TRANCHE_PLAN_RETRACTED_KIND, "uic": uic, "pick_key": pick_key}
+            )
+            logger.info(
+                "entry-trail %s: round trip closed and the book is flat — "
+                "retracted the tranche_plan for uic %d",
+                pick_key,
+                uic,
+            )
+        pending.clear()
+        pending.update(passing - confirmed)
+    # Broad like the caller's sweep boundary: a positions/journal failure must
+    # degrade to a warning + a cleared latch (never a first-sight retraction
+    # on the next tick), and never abort the unfired class already done.
+    except Exception:
+        pending.clear()
+        logger.warning(
+            "entry-trail: round-tripped tranche_plan retraction sweep failed", exc_info=True
+        )
 
 
 def _mark_oco_unsupported(uic: int) -> None:
@@ -5563,17 +5728,20 @@ def _track_tranche_plan(
     latest_plan: dict[int, Mapping[str, Any]],
     governing_key: dict[int, str],
     fired_lines: dict[int, list[Mapping[str, Any]]],
+    closure_lines: dict[int, dict[str | None, Mapping[str, Any]]],
 ) -> None:
     """Advance the tranche-compaction state for one ``tranche_plan`` line,
     delegating the identity-keyed reset to ``_apply_generation_reset`` (the
     live folds' single implementation): a keyless line or a ``pick_key``
-    differing from the uic's governing key resets the fired accumulator; a
-    same-key re-append (the crash-recovery re-drive) does not. The line
-    becomes the uic's latest plan always, and its ladder-governing plan only
-    when ``fold_tranche_plans`` accepts it as well-formed (a corrupt line
-    still resets fired but never governs the ladder — the folds' own
-    semantics)."""
-    _apply_generation_reset(_TRANCHE_PLAN_KIND, line, uic, governing_key, (fired_lines,))
+    differing from the uic's governing key resets the fired and closure
+    accumulators; a same-key re-append (the crash-recovery re-drive) does
+    not. The line becomes the uic's latest plan always, and its
+    ladder-governing plan only when ``fold_tranche_plans`` accepts it as
+    well-formed (a corrupt line still resets fired but never governs the
+    ladder — the folds' own semantics)."""
+    _apply_generation_reset(
+        _TRANCHE_PLAN_KIND, line, uic, governing_key, (fired_lines, closure_lines)
+    )
     latest_plan[uic] = line
     if fold_tranche_plans([line]):
         ladder_line[uic] = line
@@ -5581,31 +5749,47 @@ def _track_tranche_plan(
 
 def _compact_tranche_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """The kept tranche-ladder lines: per uic, the governing plan line(s)
-    followed by the fired lines still counting, so ``fold_tranche_plans``,
-    ``_fold_fired_since_latest_plan``, and ``_fold_governing_plan_pick_keys``
-    all return exactly what they return on the full journal.
+    followed by the fired and closure-evidence lines still counting, so
+    ``fold_tranche_plans``, ``_fold_fired_since_latest_plan``,
+    ``_fold_governing_plan_pick_keys``, and
+    ``_fold_round_trip_closures_since_latest_plan`` all return exactly what
+    they return on the full journal.
 
-    Per uic the election keeps, in this write order (both folds process lines
-    in order — the governing plan MUST precede its fired lines so a fired tag
-    recorded before a same-key re-append is never mistaken for a pre-reset
-    leftover):
+    Per uic the election keeps, in this write order (the folds process lines
+    in order — the governing plan MUST precede its fired/closure lines so a
+    record written before a same-key re-append is never mistaken for a
+    pre-reset leftover, and so the closure fold's open-generation gate sees
+    the plan first despite the compactor reordering the file):
       1. the plan line whose values are the uic's final folded ladder (if any);
       2. the LATEST plan line, when distinct from (1) — it may be
          ladder-malformed yet still carry the fired fold's reset identity and
          the retraction sweep's governing ``pick_key``;
       3. every ``tranche_fired`` line inside the fired fold's END accumulator
-         (fired tags reset away by a later plan/retraction are dropped).
+         (fired tags reset away by a later plan/retraction are dropped) — a
+         tag-less line survives here only when it carries ``position_closed``
+         (worthless to the fired fold, closure evidence to #1223's);
+      4. the NEWEST full ``stop_filled`` per (uic, parsed ref key) inside the
+         closure fold's END accumulator (#1223) — the top-level compactor's
+         own ``stop_filled`` keep is keyed to the newest ``stop_placed``, so a
+         stop rotation AFTER the fill would otherwise drop the round-trip
+         evidence at startup and the stale plan would silently survive.
     ``tranche_plan_retracted`` markers are consumed during the election — a
-    retraction erases the uic's kept plan and fired lines, so a fully
-    retracted uic keeps NOTHING (all three folds already treat it as absent).
+    retraction erases the uic's kept plan, fired and closure lines, so a fully
+    retracted uic keeps NOTHING (the folds already treat it as absent).
     Pure; kept lines are shallow-copied."""
     ladder_line: dict[int, Mapping[str, Any]] = {}
     latest_plan: dict[int, Mapping[str, Any]] = {}
     governing_key: dict[int, str] = {}
     fired_lines: dict[int, list[Mapping[str, Any]]] = {}
+    closure_lines: dict[int, dict[str | None, Mapping[str, Any]]] = {}
     for line in lines:
         kind = line.get("kind")
-        if kind not in (_TRANCHE_PLAN_KIND, _TRANCHE_PLAN_RETRACTED_KIND, _TRANCHE_FIRED_KIND):
+        if kind not in (
+            _TRANCHE_PLAN_KIND,
+            _TRANCHE_PLAN_RETRACTED_KIND,
+            _TRANCHE_FIRED_KIND,
+            "stop_filled",
+        ):
             continue
         uic = _coerce(line, "uic", int)
         if uic is None:
@@ -5618,16 +5802,25 @@ def _compact_tranche_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str,
                 latest_plan=latest_plan,
                 governing_key=governing_key,
                 fired_lines=fired_lines,
+                closure_lines=closure_lines,
             )
         elif kind == _TRANCHE_PLAN_RETRACTED_KIND:
             ladder_line.pop(uic, None)
             latest_plan.pop(uic, None)
             governing_key.pop(uic, None)
             fired_lines.pop(uic, None)
-        elif line.get("tag"):
+            closure_lines.pop(uic, None)
+        elif kind == "stop_filled":
+            # Closure evidence only while the generation is open — mirroring
+            # the closure fold's own gate (a pre-plan fill never counts).
+            if uic in latest_plan and not line.get("partial"):
+                ref = line.get("ref")
+                key = _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
+                closure_lines.setdefault(uic, {})[key] = line
+        elif line.get("tag") or line.get("position_closed"):
             fired_lines.setdefault(uic, []).append(line)
     kept: list[dict[str, Any]] = []
-    for uic in sorted(set(latest_plan) | set(fired_lines)):
+    for uic in sorted(set(latest_plan) | set(fired_lines) | set(closure_lines)):
         ladder = ladder_line.get(uic)
         latest = latest_plan.get(uic)
         if ladder is not None:
@@ -5635,6 +5828,7 @@ def _compact_tranche_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str,
         if latest is not None and latest is not ladder:
             kept.append(dict(latest))
         kept.extend(dict(fired) for fired in fired_lines.get(uic, ()))
+        kept.extend(dict(fill) for fill in closure_lines.get(uic, {}).values())
     return kept
 
 
@@ -5659,16 +5853,20 @@ def _compact_standalone_stop_journal_lines(
         matching ``stop_filled`` terminal (newest per order_id) — dropping it
         would resurrect the uic as a reconcile candidate and re-alert a fill
         already announced (a ``stop_filled`` for any OTHER order id cannot
-        affect the fold, so it compacts away);
+        affect that fold, but #1223's closure fold may still need it — see the
+        tranche election below; when both elections pick the same line the
+        tranche copy is the one kept);
       - the ``amend_seq`` carrying the MAX seq per uic (``_read_persisted_amend_seq``
         returns that max);
       - the tranche-ladder lines ``_compact_tranche_lines`` elects — per uic the
         governing ``tranche_plan`` line(s) followed by the ``tranche_fired``
-        lines still inside ``_fold_fired_since_latest_plan``'s accumulator, so
+        lines still inside ``_fold_fired_since_latest_plan``'s accumulator and
+        the ``stop_filled`` closure evidence still inside
+        ``_fold_round_trip_closures_since_latest_plan``'s (#1223), so
         ``fold_tranche_plans`` / ``_fold_fired_since_latest_plan`` / the
-        retraction sweep's ``_fold_governing_plan_pick_keys`` are unchanged;
-        ``tranche_plan_retracted`` markers are consumed during the election (a
-        fully retracted uic keeps nothing).
+        retraction sweep's ``_fold_governing_plan_pick_keys`` / the closure
+        fold are all unchanged; ``tranche_plan_retracted`` markers are
+        consumed during the election (a fully retracted uic keeps nothing).
 
     Every other line — ``gen`` markers (read only by ``_read_persisted_gen``, whose
     reset to the initial gen is harmless: post-restart re-emits are past Saxo's 15s
@@ -5728,13 +5926,27 @@ def _compact_standalone_stop_journal_lines(
     )
     compacted.extend(ttl_latest["oco_too_far"][uic][1] for uic in sorted(ttl_latest["oco_too_far"]))
     compacted.extend(ttl_latest["stop_placed"][uic][1] for uic in sorted(ttl_latest["stop_placed"]))
+    # The tranche election may keep the SAME stop_filled line as round-trip
+    # closure evidence (#1223) — positioned AFTER its plan line, where the
+    # closure fold's open-generation gate can see it. _fold_standing_stop_ids
+    # collects filled ids over the whole file (position-insensitive), so when
+    # both elections pick one line the closure copy serves both folds and the
+    # stop_placed-matched keep below skips it.
+    tranche_kept = _compact_tranche_lines(materialized)
+    closure_fill_keys = {
+        (line.get("order_id"), line.get("ts"))
+        for line in tranche_kept
+        if line.get("kind") == "stop_filled"
+    }
     for uic in sorted(ttl_latest["stop_placed"]):
         kept_order_id = ttl_latest["stop_placed"][uic][1].get("order_id")
         if isinstance(kept_order_id, str) and kept_order_id in stop_filled_by_id:
-            compacted.append(stop_filled_by_id[kept_order_id][1])
+            matched = stop_filled_by_id[kept_order_id][1]
+            if (matched.get("order_id"), matched.get("ts")) not in closure_fill_keys:
+                compacted.append(matched)
     compacted.extend(ttl_latest["amend_ok"][uic][1] for uic in sorted(ttl_latest["amend_ok"]))
     compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
-    compacted.extend(_compact_tranche_lines(materialized))
+    compacted.extend(tranche_kept)
     return compacted
 
 
@@ -7615,7 +7827,9 @@ def _position_uic(pos: Position) -> int | None:
 
 
 def _net_open_position_uics(positions: Iterable[Position]) -> tuple[frozenset[int], int]:
-    """``(uics with nonzero NET quantity, count of rows with no resolvable uic)``.
+    """``(uics with nonzero NET quantity, count of unreadable rows)`` — a row
+    is unreadable when its uic cannot be resolved OR its quantity is
+    missing/None/non-finite.
 
     LIVE Saxo accounts run End-Of-Day netting
     (``ClosedPositionNotAccessibleInEndOfDayNettingMode``): positions net only
@@ -7634,8 +7848,16 @@ def _net_open_position_uics(positions: Iterable[Position]) -> tuple[frozenset[in
         if uic is None:
             unresolvable += 1
             continue
-        qty = float(getattr(pos, "quantity", 0.0) or 0.0)
-        net_by_uic[uic] = net_by_uic.get(uic, 0.0) + qty
+        # A missing/None/non-finite quantity is UNRESOLVABLE, never flat:
+        # abs(nan) > eps is False, so a malformed row would otherwise net to
+        # "no open position" — and net-flatness is the fired-class
+        # retraction's last live-position gate (#1223 zen M1). A genuine 0.0
+        # row still nets flat below.
+        raw_qty = getattr(pos, "quantity", None)
+        if raw_qty is None or not math.isfinite(float(raw_qty)):
+            unresolvable += 1
+            continue
+        net_by_uic[uic] = net_by_uic.get(uic, 0.0) + float(raw_qty)
     open_uics = frozenset(uic for uic, net in net_by_uic.items() if abs(net) > _QTY_EPS)
     return open_uics, unresolvable
 

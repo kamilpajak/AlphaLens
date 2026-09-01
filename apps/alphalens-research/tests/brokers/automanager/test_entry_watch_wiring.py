@@ -2501,24 +2501,7 @@ class TestStaleTranchePlanRetraction(unittest.TestCase):
     unfired."""
 
     def _seed_plan(self, pick_key: str | None = "KO:2026-07-20", uic: int = 307) -> None:
-        line: dict[str, Any] = {
-            "kind": "tranche_plan",
-            "uic": uic,
-            "tp_tranches": [
-                {
-                    "tranche_index": 0,
-                    "target_price": 14.0,
-                    "tranche_frac": 1.0,
-                    "r_multiple": 0.0,
-                    "tag": "geometry",
-                }
-            ],
-            "reference_qty": 100.0,
-            "stop_price": 8.0,
-        }
-        if pick_key is not None:
-            line["pick_key"] = pick_key
-        cl._append_standalone_stop_journal(line)
+        _seed_plan_line(pick_key=pick_key, uic=uic)
 
     def _sweep(self) -> None:
         cl._retract_stale_tranche_plans(entry_trails.read_entry_trail_fold())
@@ -2547,6 +2530,10 @@ class TestStaleTranchePlanRetraction(unittest.TestCase):
                 self.assertNotIn(307, cl.fold_tranche_plans(_lines(stops_path)))
 
     def test_a_fired_tier_blocks_retraction(self) -> None:
+        # A fired pick is NEVER the unfired class's candidate. Without deps
+        # (this direct call) the #1223 fired class is skipped entirely; with
+        # deps it still demands closure evidence + a net-flat book + the
+        # two-tick latch — see TestFiredTerminalPlanRetraction.
         _journal(self)
         stops_path = _planned_journal(self)
         _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=entry_trails.KIND_FIRED)
@@ -2616,6 +2603,314 @@ class TestStaleTranchePlanRetraction(unittest.TestCase):
         ):
             self._sweep()  # must swallow + warn, never raise
         self.assertTrue(any("retraction" in msg for msg in captured.output))
+
+
+def _seed_plan_line(pick_key: str | None = "KO:2026-07-20", uic: int = 307) -> None:
+    line: dict[str, Any] = {
+        "kind": "tranche_plan",
+        "uic": uic,
+        "tp_tranches": [
+            {
+                "tranche_index": 0,
+                "target_price": 14.0,
+                "tranche_frac": 1.0,
+                "r_multiple": 0.0,
+                "tag": "geometry",
+            }
+        ],
+        "reference_qty": 100.0,
+        "stop_price": 8.0,
+    }
+    if pick_key is not None:
+        line["pick_key"] = pick_key
+    cl._append_standalone_stop_journal(line)
+
+
+def _seed_stop_filled(
+    *,
+    uic: int = 307,
+    ref: str | None = "KO-2026-07-20-entry-t0-stop-1",
+    partial: bool = False,
+    order_id: str = "S-1223",
+) -> None:
+    cl._append_standalone_stop_journal(
+        {
+            "kind": "stop_filled",
+            "uic": uic,
+            "order_id": order_id,
+            "qty": 100.0,
+            "avg_price": 9.0,
+            "ref": ref,
+            "partial": partial,
+            "ts": 1_700_000_000.0,
+        }
+    )
+
+
+def _seed_position_closing_fire(*, uic: int = 307) -> None:
+    cl._append_standalone_stop_journal(
+        {"kind": "tranche_fired", "uic": uic, "tag": "tp1", "position_closed": True}
+    )
+
+
+class _CountingPositionsBroker(_BrokerWithPositions):
+    """Counts ``get_positions`` reads — pins the fired-class sweep's lazy-fetch
+    contract (zero extra REST calls without a fired candidate)."""
+
+    def __init__(self, positions: list[Any]) -> None:
+        super().__init__(positions)
+        self.position_reads = 0
+
+    def get_positions(self) -> list:
+        self.position_reads += 1
+        return super().get_positions()
+
+
+class _ExplodingPositionsBroker(_RecordingBroker):
+    def get_positions(self) -> list:
+        raise RuntimeError("positions endpoint down")
+
+
+class TestFiredTerminalPlanRetraction(unittest.TestCase):
+    """#1223: a round-tripped pick's ``tranche_plan`` must stop governing the
+    uic. A fired tier whose position CLOSED (durable ``stop_filled`` /
+    ``tranche_fired[position_closed]`` evidence since the current plan
+    generation) and whose uic is NET-FLAT at the broker is a fully terminal,
+    flat pick — its plan is the exact stale-ladder hazard the unfired sweep
+    already closes. Retraction is belt-and-braces gated: journal closure
+    evidence AND a positions read AND a two-consecutive-tick confirmation
+    latch (a wrongly retracted plan on a LIVE position would strip its exit
+    management — worse than the hazard being fixed)."""
+
+    def _seed_fired_pick(self) -> None:
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=entry_trails.KIND_FIRED)
+        _seed_terminal_watch(
+            crid="KO-2026-07-20-entry-t1", terminal_kind=entry_trails.KIND_CANCELLED
+        )
+
+    def _deps(self, broker: Any) -> cl.LoopDeps:
+        return _watch_deps(_FakeFeed({}), [], broker=broker)
+
+    def _sweep(self, deps: cl.LoopDeps) -> None:
+        cl._retract_stale_tranche_plans(entry_trails.read_entry_trail_fold(), deps)
+
+    def _retractions(self, stops_path: Path) -> list[dict[str, Any]]:
+        return [ln for ln in _lines(stops_path) if ln["kind"] == "tranche_plan_retracted"]
+
+    def test_round_tripped_flat_pick_retracts_on_the_second_sweep(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled()
+        deps = self._deps(_BrokerWithPositions([]))
+        self._sweep(deps)
+        self.assertEqual(self._retractions(stops_path), [])  # first sight: latch only
+        self._sweep(deps)
+        retractions = self._retractions(stops_path)
+        self.assertEqual(len(retractions), 1)
+        self.assertEqual(retractions[0]["uic"], 307)
+        self.assertEqual(retractions[0]["pick_key"], "KO:2026-07-20")
+        self.assertNotIn(307, cl.fold_tranche_plans(_lines(stops_path)))
+
+    def test_a_position_closing_tranche_also_counts_as_closure(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_position_closing_fire()
+        deps = self._deps(_BrokerWithPositions([]))
+        self._sweep(deps)
+        self._sweep(deps)
+        self.assertEqual(len(self._retractions(stops_path)), 1)
+
+    def test_eod_netting_rows_net_to_flat(self) -> None:
+        # LIVE Saxo EOD netting: an intraday round trip leaves +q and -q rows
+        # until the nightly netting — net-flat must count as flat.
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled()
+        deps = self._deps(
+            _BrokerWithPositions([_live_long(307, qty=8.0), _live_long(307, qty=-8.0)])
+        )
+        self._sweep(deps)
+        self._sweep(deps)
+        self.assertEqual(len(self._retractions(stops_path)), 1)
+
+    def test_a_net_open_uic_blocks_and_resets_the_latch(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled()
+        positions: list[Any] = []
+        deps = self._deps(_BrokerWithPositions(positions))
+        self._sweep(deps)  # flat -> latched
+        positions.append(_live_long(307, qty=5.0))
+        self._sweep(deps)  # OPEN -> blocked AND latch cleared
+        self.assertEqual(self._retractions(stops_path), [])
+        positions.clear()
+        self._sweep(deps)  # flat again -> must re-latch, not retract
+        self.assertEqual(self._retractions(stops_path), [])
+        self._sweep(deps)
+        self.assertEqual(len(self._retractions(stops_path)), 1)
+
+    def test_no_closure_evidence_never_retracts(self) -> None:
+        # Fired tier + expired sibling + flat-LOOKING book but no durable
+        # closure record: the position may be held (sibling TTL expiry) or was
+        # closed manually — either way the ladder must stand and the positions
+        # endpoint must not even be consulted.
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=entry_trails.KIND_FIRED)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t1", terminal_kind=entry_trails.KIND_EXPIRED)
+        _seed_plan_line()
+        broker = _CountingPositionsBroker([])
+        deps = self._deps(broker)
+        self._sweep(deps)
+        self._sweep(deps)
+        self.assertEqual(self._retractions(stops_path), [])
+        self.assertEqual(broker.position_reads, 0)
+
+    def test_a_partial_stop_fill_is_not_closure(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled(partial=True)
+        deps = self._deps(_BrokerWithPositions([]))
+        self._sweep(deps)
+        self._sweep(deps)
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_another_picks_stop_fill_is_not_closure(self) -> None:
+        # uic reuse defense: a stop ref parsing to a DIFFERENT pick key is not
+        # this pick's round trip.
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled(ref="ZZ-2026-01-05-entry-t0-stop-1")
+        deps = self._deps(_BrokerWithPositions([]))
+        self._sweep(deps)
+        self._sweep(deps)
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_closure_before_the_current_plan_generation_does_not_count(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_stop_filled()  # older generation's round trip...
+        _seed_plan_line()  # ...reset by the current plan line
+        deps = self._deps(_BrokerWithPositions([]))
+        self._sweep(deps)
+        self._sweep(deps)
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_unresolvable_position_rows_skip_the_class(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled()
+        unresolvable = type("Pos", (), {"instrument": None, "quantity": 1.0})()
+        deps = self._deps(_BrokerWithPositions([unresolvable]))
+        self._sweep(deps)
+        self._sweep(deps)
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_a_positions_read_failure_skips_fired_class_not_unfired(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled()
+        # An UNFIRED terminal pick on another uic in the same sweep.
+        _seed_terminal_watch(
+            crid="OT-2026-07-19-entry-t0",
+            pick_key="OT:2026-07-19",
+            uic=42,
+            terminal_kind=entry_trails.KIND_EXPIRED,
+        )
+        _seed_plan_line(pick_key="OT:2026-07-19", uic=42)
+        deps = self._deps(_ExplodingPositionsBroker())
+        self._sweep(deps)
+        self._sweep(deps)
+        retractions = self._retractions(stops_path)
+        self.assertEqual([r["uic"] for r in retractions], [42])
+
+    def test_a_broker_without_get_positions_skips_quietly(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled()
+        deps = _watch_deps(_FakeFeed({}), [])  # broker=object(), the default test deps
+        with self.assertNoLogs(cl.logger, level="WARNING"):
+            self._sweep(deps)
+            self._sweep(deps)
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_no_positions_read_without_a_fired_candidate(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=entry_trails.KIND_EXPIRED)
+        _seed_plan_line()
+        broker = _CountingPositionsBroker([])
+        deps = self._deps(broker)
+        self._sweep(deps)
+        self.assertEqual(len(self._retractions(stops_path)), 1)  # unfired class unaffected
+        self.assertEqual(broker.position_reads, 0)
+
+    def test_a_newer_picks_plan_is_never_retracted(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line(pick_key="KO:2026-08-01")  # a NEWER pick owns the uic now
+        _seed_stop_filled()
+        deps = self._deps(_BrokerWithPositions([]))
+        self._sweep(deps)
+        self._sweep(deps)
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_an_outer_sweep_failure_also_clears_the_latch(self) -> None:
+        # #1223 zen M2: the latch contract is "every retraction rests on two
+        # consecutive CLEAN observations" — a tick whose journal read blew up
+        # observed nothing, so the latch from before it must not survive.
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled()
+        deps = self._deps(_BrokerWithPositions([]))
+        self._sweep(deps)  # clean -> latched
+
+        def boom() -> Any:
+            raise OSError("journal unreadable")
+
+        with (
+            mock.patch.object(cl, "_iter_standalone_stop_journal", boom),
+            self.assertLogs(cl.logger, level="WARNING"),
+        ):
+            self._sweep(deps)  # outer failure -> latch must clear
+        self._sweep(deps)  # clean again -> re-latch only
+        self.assertEqual(self._retractions(stops_path), [])
+        self._sweep(deps)
+        self.assertEqual(len(self._retractions(stops_path)), 1)
+
+    def test_watch_pass_reaches_the_fired_class_end_to_end(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled()
+        deps = self._deps(_BrokerWithPositions([]))
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        self.assertEqual(len(self._retractions(stops_path)), 1)
 
 
 if __name__ == "__main__":

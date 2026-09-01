@@ -6218,6 +6218,32 @@ class TestNetOpenPositionUics(unittest.TestCase):
     def test_empty_book_is_zero(self) -> None:
         self.assertEqual(cl._net_open_position_uics([]), (frozenset(), 0))
 
+    def test_a_non_finite_quantity_row_is_unresolvable_not_flat(self) -> None:
+        # #1223 zen M1: abs(nan) > eps is False, so a malformed row would
+        # otherwise read as FLAT — and net-flatness is the fired-class
+        # retraction's last live-position gate. Fail closed instead.
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(bad=bad):
+                uics, unresolvable = cl._net_open_position_uics([_position_row(42, bad)])
+                self.assertEqual(uics, frozenset())
+                self.assertEqual(unresolvable, 1)
+
+    def test_a_missing_or_none_quantity_row_is_unresolvable_not_flat(self) -> None:
+        instr = type("I", (), {"broker_instrument_id": "42", "currency": "USD"})()
+        none_qty = type("Pos", (), {"instrument": instr, "quantity": None})()
+        no_qty = type("Pos", (), {"instrument": instr})()
+        uics, unresolvable = cl._net_open_position_uics([none_qty, no_qty])
+        self.assertEqual(uics, frozenset())
+        self.assertEqual(unresolvable, 2)
+
+    def test_a_zero_quantity_row_is_still_resolvable_flat(self) -> None:
+        # A genuine zero row nets to flat — it must NOT be lumped in with the
+        # unreadable rows, or every closed-out ledger row would block the
+        # fired-class retraction forever.
+        uics, unresolvable = cl._net_open_position_uics([_position_row(42, 0.0)])
+        self.assertEqual(uics, frozenset())
+        self.assertEqual(unresolvable, 0)
+
 
 class TestCompactStandaloneStopJournalLines(unittest.TestCase):
     """Issue #895: the pure compaction returns the minimal fold-equivalent set."""
