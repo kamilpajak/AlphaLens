@@ -110,9 +110,16 @@ and is a function of panel-derived features + the ATR control only):
   model test is NULL; no alpha rescue. NO gradient boosting / LightGBM
   (an unbudgeted extra look at n_eff ~ 120).
 
+SEEDS (pre-committed): base SEED=0; per-stage offsets so independent tests
+draw independent randomness — partial-Spearman bootstrap SEED+1, model delta
+bootstrap SEED+2, LOBO/LOTO verification WCB SEED+3; the exact-reproduce
+check deliberately reuses the primary SEED.
+
 VERIFICATION BATTERY (mandatory gates for any clearing test; ALL must pass):
 - exact reproduce (same seeds, second execution in-process);
-- leave-one-block-out worst-case WCB p < 0.05 (B=1,999 per refit);
+- leave-one-block-out worst-case WCB p < 0.05 (B=1,999 per refit; blocks are
+  rebuilt on the member's own complete-case arrival sessions — contiguous in
+  time — not subset from the full panel's blocks);
 - leave-one-theme-out worst-case WCB p < 0.05;
 - ATR-partialled Spearman (member and car_10 both residualized on ATR)
   cluster-bootstrap two-sided p < 0.05 with sign retained; ROIC-shaped
@@ -206,6 +213,11 @@ SPLIT_RATIO_LO, SPLIT_RATIO_HI = 0.55, 1.8
 ALPHA_GRID_SD_MULTIPLES = (0.05, 0.15, 0.5)
 ALPHA_PRIMARY_SD_MULTIPLE = 0.15
 SEED = 0
+# Per-stage seed offsets (pre-committed): independent tests draw independent
+# randomness; the exact-reproduce check deliberately reuses the primary SEED.
+SEED_PARTIAL_SPEARMAN = SEED + 1
+SEED_DELTA_BOOT = SEED + 2
+SEED_VERIFY = SEED + 3
 
 MEMBERS = (
     # (name, panel column, needs_mfr_veto)
@@ -513,7 +525,7 @@ def wcb(y, X, cl, j, n_boot, seed=SEED):
     return wild_cluster_bootstrap_p(y, X, cl, j, n_boot=n_boot, seed=seed)
 
 
-def partial_spearman_ci(sub, col, n_boot=N_BOOT_PRIMARY, seed=SEED):
+def partial_spearman_ci(sub, col, n_boot=N_BOOT_PRIMARY, seed=SEED_PARTIAL_SPEARMAN):
     """ATR-partialled Spearman of member vs car_10 + cluster-bootstrap CI at
     CI_LEVEL and a two-sided bootstrap-percentile p (H0: rho_partial = 0)."""
     y = sub["car_10"].astype(float).to_numpy()
@@ -555,12 +567,15 @@ def verify_member(dd, name, col, beta_full, extra_controls=()):
     p_again = wcb(y, X, cl, 1, N_BOOT_PRIMARY)
     notes.append(f"reproduce: p={p_again:.5f}")
     ok &= p_again < FAMILY_BAR
-    # leave-one-block-out
+    # leave-one-block-out — blocks are REBUILT on the member's own
+    # complete-case arrival sessions (contiguous in time), not subset from the
+    # full panel's blocks: full-panel blocks restricted to a low-coverage
+    # member can leave 1-2-row shards whose removal tests nothing.
     blocks, _ = make_blocks(sub.reset_index(drop=True))
     worst_lobo = 0.0
     for b in sorted(set(blocks)):
         keep = blocks != b
-        p = wcb(y[keep], X[keep], cl[keep], 1, N_BOOT_VERIFY)
+        p = wcb(y[keep], X[keep], cl[keep], 1, N_BOOT_VERIFY, seed=SEED_VERIFY)
         worst_lobo = max(worst_lobo, p)
     notes.append(f"LOBO worst p={worst_lobo:.3f}")
     ok &= worst_lobo < 0.05
@@ -571,7 +586,7 @@ def verify_member(dd, name, col, beta_full, extra_controls=()):
         keep = themes != t
         if keep.sum() < MIN_EPISODES:
             continue
-        p = wcb(y[keep], X[keep], cl[keep], 1, N_BOOT_VERIFY)
+        p = wcb(y[keep], X[keep], cl[keep], 1, N_BOOT_VERIFY, seed=SEED_VERIFY)
         worst_loto = max(worst_loto, p)
     notes.append(f"LOTO worst p={worst_loto:.3f}")
     ok &= worst_loto < 0.05
@@ -627,9 +642,11 @@ def purged_folds(dd, blocks):
         if not val_blocks:
             continue
         va = np.where(np.isin(blocks, list(val_blocks)))[0]
-        span_lo, span_hi = arr[va].min(), hor[va].max()
+        # Pure DATE comparisons on session dates: the validation fold's span
+        # runs from its earliest arrival to its latest outcome-window close.
+        val_span_lo, val_span_hi = arr[va].min(), hor[va].max()
         tr_mask = ~np.isin(blocks, list(val_blocks))
-        overlap = (arr <= span_hi) & (hor >= span_lo)
+        overlap = (arr <= val_span_hi) & (hor >= val_span_lo)
         purged = tr_mask & overlap
         tr = np.where(tr_mask & ~overlap)[0]
         folds.append((tr, va, int(purged.sum())))
@@ -692,12 +709,13 @@ def run_model(dd, blocks):
     for alpha in alphas:
         pred = oof(alpha)
         deg = sum(1 for _, va, _ in folds if np.ptp(pred[va]) == 0)
-        per_fold = [
-            float("nan")
-            if np.ptp(pred[va]) == 0
-            else float(scipy_stats.spearmanr(pred[va], y[va])[0])
-            for _, va, _ in folds
-        ]
+        per_fold = []
+        for _, va, _ in folds:
+            m = ~(np.isnan(pred[va]) | np.isnan(y[va]))
+            if m.sum() < 3 or np.ptp(pred[va][m]) == 0:
+                per_fold.append(float("nan"))
+            else:
+                per_fold.append(float(scipy_stats.spearmanr(pred[va][m], y[va][m])[0]))
         pooled = pooled_spearman(rank_within_fold(pred, folds), y_rank)
         tag = ""
         if math.isclose(alpha, primary_alpha):
@@ -717,7 +735,7 @@ def run_model(dd, blocks):
     cl = dd["arrival"].astype(str).to_numpy()
     by_cluster = {c: np.where(cl == c)[0] for c in sorted(set(cl))}
     keys = list(by_cluster)
-    rng = np.random.default_rng(SEED)
+    rng = np.random.default_rng(SEED_DELTA_BOOT)
     diffs = []
     skipped = 0
     for _ in range(N_BOOT_PRIMARY):
@@ -755,6 +773,10 @@ def run_model(dd, blocks):
                 atr_rank[keep], y_rank[keep]
             )
             worst = min(worst, d2)
+        # Keep the FIRST episode per ticker, then re-align to dd's original
+        # row order — the .sort_index() is load-bearing: without it the mask
+        # would be in ticker-sorted order and silently misalign with the
+        # positional pred_rank/atr_rank/y_rank arrays.
         tc_mask = (
             ~dd.sort_values(["ticker", "brief_date"]).duplicated("ticker").sort_index().to_numpy()
         )
@@ -819,7 +841,11 @@ def full_run():
             if ok:
                 survivors.append((name, "member"))
         else:
-            tag = "inconclusive-range CI" if inconclusive else "CI inside equivalence bound"
+            tag = (
+                "partial-Spearman CI covers |rho|>=0.10 -> inconclusive"
+                if inconclusive
+                else "partial-Spearman CI inside the equivalence bound"
+            )
             print(f"    not cleared ({tag})")
 
     print("\nPART B — elastic net vs -ATR (purged block folds):")

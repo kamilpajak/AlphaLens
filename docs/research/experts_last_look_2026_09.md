@@ -48,6 +48,10 @@ No feature-vs-outcome statistic was computed. Counts only:
   (2026-07-06 → 2026-08-23). The car_10 panel at run time will be larger
   (car_10 needs only grouped-store maturity) and then shrinks under
   `ticker_episode_dedup`.
+- Note: the percentages below are from the matured-LADDER join (the only
+  sample measurable on the VPS that day); the car_10 preflight panel (§5) is
+  a different, slightly smaller cut, so its coverage differs by a few points
+  per column. The registration decisions (exclusions, floors) key off both.
 - Coverage (held-out, per column): O'Neil price terms 99-100%,
   `oneil_score` 98%, qual pillars 95%, `buffett_roic_latest` 68%,
   `oneil_earnings_growth_yoy_pct` 61%, `buffett_quality_score` 53%,
@@ -135,7 +139,9 @@ Registration-time notes (all outcome-blind):
 - Simulated power uses the burnt discovery panel's outcome scale (sd 0.192,
   ICC ≈ 0 by brief-date clusters) with today's held-out cluster structure;
   the run-date panel (~240 episodes / ~50 clusters) will sit above these
-  numbers.
+  numbers. Caveat: the discovery scale is measured on the stored
+  `market_excess_return` (position-window), not car_10 — the two are close in
+  scale but not identical, so the power table is indicative, not exact.
 
 Interpretation guardrail: the look can only rescue a large effect; a real but
 moderate |ρ| ≈ 0.2 signal will most likely NOT clear and the family will
