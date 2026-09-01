@@ -74,9 +74,13 @@ StandardOutput=journal
 StandardError=journal
 MemoryMax=2G
 TasksMax=32
-# Four replay passes at Polygon's 5 req/min can reach ~40min on a backlog day;
-# the nightly feedback job uses 90min for the same reason.
-TimeoutStartSec=90min
+# Session-day runs measured 80-90min in late Aug 2026 and the 2026-09-01 run
+# was SIGTERM-killed exactly at the old 90min ceiling while still deferring
+# tickers on an exhausted Polygon budget (5 req/min is the binding constraint).
+# The open population keeps growing until the first post-2026-08-18 cohort
+# matures at ~42 sessions (~mid-Oct), so size the ceiling for that plateau
+# with ~2x headroom, not for today's run.
+TimeoutStartSec=180min
 
 [Install]
 WantedBy=default.target
