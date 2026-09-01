@@ -117,6 +117,59 @@ class TestSingleFullPositionTrancheContract(unittest.TestCase):
                 )
 
 
+class TestApportionedCoverageContract(unittest.TestCase):
+    """The brief-ladder sibling of the single-full-tranche contract (#1112,
+    breakeven_trail follow-up): a multi-tranche plan must, AFTER apportionment,
+    sell the whole position — otherwise the un-covered remainder is permanently
+    stop-only and the arm gate's tp1 pricing describes an exit path that does
+    not exist."""
+
+    def test_the_brief_thirds_ladder_covers_a_seven_share_position(self) -> None:
+        self.assertIsNone(
+            costs.apportioned_coverage_violation(
+                tranche_quantities=(3.0, 2.0, 2.0), reference_qty=7.0
+            )
+        )
+
+    def test_a_one_share_position_is_covered_by_its_single_apportioned_share(self) -> None:
+        self.assertIsNone(
+            costs.apportioned_coverage_violation(
+                tranche_quantities=(1.0, 0.0, 0.0), reference_qty=1.0
+            )
+        )
+
+    def test_a_partial_coverage_plan_is_a_violation(self) -> None:
+        violation = costs.apportioned_coverage_violation(
+            tranche_quantities=(2.0, 2.0), reference_qty=8.0
+        )
+        self.assertIsNotNone(violation)
+        self.assertIn("4", str(violation))
+        self.assertIn("8", str(violation))
+
+    def test_a_sub_share_position_is_a_violation(self) -> None:
+        # Nothing to sell on a whole-share rail — the plan cannot describe an
+        # exit path at all.
+        self.assertIsNotNone(
+            costs.apportioned_coverage_violation(tranche_quantities=(), reference_qty=0.4)
+        )
+
+    def test_a_degenerate_reference_quantity_is_a_violation(self) -> None:
+        for bad in (0.0, -1.0, float("nan"), float("inf")):
+            with self.subTest(reference_qty=bad):
+                self.assertIsNotNone(
+                    costs.apportioned_coverage_violation(
+                        tranche_quantities=(1.0,), reference_qty=bad
+                    )
+                )
+
+    def test_a_non_finite_tranche_quantity_is_a_violation(self) -> None:
+        self.assertIsNotNone(
+            costs.apportioned_coverage_violation(
+                tranche_quantities=(float("nan"), 1.0), reference_qty=1.0
+            )
+        )
+
+
 class TestArmGateResolvesThePlanFromTheWatchRecord(unittest.TestCase):
     """``control_loop._exit_plan_shape_refusal`` at the unit level, for the two
     record shapes the end-to-end pass cannot produce."""

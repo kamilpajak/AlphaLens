@@ -34,7 +34,8 @@ and only the first two are about Saxo:
    ``FX_ROUND_TRIP_RATE``, and the two ``COST_GATE_*`` declarations that stand
    in for a currency the gates cannot see;
 2. pure arithmetic — ``round_trip_fee_bps``, ``min_profitable_exit_price``,
-   ``single_full_position_tranche_violation``; these hold for any schedule;
+   ``single_full_position_tranche_violation``,
+   ``apportioned_coverage_violation``; these hold for any schedule;
 3. one declared STRATEGY parameter — ``EXIT_EDGE_MIN_BPS``. It is not a broker
    fact and not derivable from one. It is kept beside the cost model because
    the two only ever appear together, in one formula; changing it is a strategy
@@ -139,10 +140,14 @@ def min_profitable_exit_price(
     62.6000 at 1 share. The smaller the exit quantity, the HIGHER the exit-time
     bar — so an armed tier is not automatically an exit the gate will fire.
 
-    What keeps that safe today is :func:`single_full_position_tranche_violation`,
-    which refuses to arm unless the exit plan is exactly one tranche selling the
-    whole position. Remove that guard and the arm gate's whole-position pricing
-    stops being conservative.
+    What makes the arm-time pricing honest depends on which exit plan governs
+    the watch. A GEOMETRY plan is pinned to one tranche selling the whole
+    position (:func:`single_full_position_tranche_violation`), so the quantity
+    the arm gate prices is the quantity the exit will sell. A BRIEF-ladder plan
+    (breakeven_trail, since #1183) is multi-tranche by construction, so the arm
+    gate prices its FIRST tranche's apportioned share count instead
+    (``control_loop._brief_plan_arm_refusal``) — the bar it draws is the bar the
+    exit gate will draw for that same tranche.
 
     ``None`` (never raises) on any degenerate input — a non-finite or
     non-positive ``entry_price`` / ``qty``. Callers fail OPEN on ``None``: a
@@ -163,14 +168,17 @@ def min_profitable_exit_price(
 def single_full_position_tranche_violation(
     *, tranche_quantities: Sequence[float], position_qty: float
 ) -> str | None:
-    """Why this exit plan breaks the contract the #1112 arm gate depends on, or
-    ``None`` when it holds.
+    """Why this exit plan breaks the contract the #1112 GEOMETRY arm gate
+    depends on, or ``None`` when it holds.
 
-    The contract: an exit plan must be exactly ONE active tranche that sells the
-    WHOLE position. The arm gate prices the round trip at the quantity of the
-    position it opens; the exit gate prices it at the quantity of the tranche it
-    sells. Those two bars only coincide while the two quantities do (see
-    :func:`min_profitable_exit_price`).
+    The contract, scoped to geometry-policy plans (a watch with an APPLIED
+    geometry target): the exit plan must be exactly ONE active tranche that
+    sells the WHOLE position. The arm gate prices the round trip at the
+    quantity of the position it opens; the exit gate prices it at the quantity
+    of the tranche it sells. Those two bars only coincide while the two
+    quantities do (see :func:`min_profitable_exit_price`). Brief-ladder plans
+    (no applied geometry) are multi-tranche by design and answer to
+    :func:`apportioned_coverage_violation` instead.
 
     Measured 2026-08-25: every ``tranche_plan`` record on the LIVE rail
     (SMG 2026-08-19, uic 23474, ETSY 2026-08-18) carries one ``geometry``
@@ -207,6 +215,43 @@ def single_full_position_tranche_violation(
     return None
 
 
+def apportioned_coverage_violation(
+    *, tranche_quantities: Sequence[float], reference_qty: float
+) -> str | None:
+    """Why this multi-tranche exit plan, AFTER whole-share apportionment, does
+    not sell the whole position — or ``None`` when it does (issue #1112,
+    breakeven_trail follow-up).
+
+    The brief-ladder sibling of :func:`single_full_position_tranche_violation`:
+    where the geometry contract demands ONE tranche selling everything (so
+    whole-position pricing at arm time stays conservative), this one demands
+    that the apportioned tranche quantities SUM to the whole position — an
+    un-covered remainder has no take-profit path and sits stop-only until the
+    disaster stop or a trail rescue, which is the silent-defect shape the
+    2026-08-31 seven-share NOV plan carried before apportionment.
+
+    ``tranche_quantities`` are the whole-share counts
+    ``live_exit_engine.apportion_tranche_quantities`` produced; a position that
+    rounds below one share cannot be exited by any tranche and is refused
+    outright. Same return contract as the sibling: a human-readable reason,
+    never raises on numeric input, and the caller decides what loudly means.
+    """
+    if not math.isfinite(reference_qty) or reference_qty <= 0.0:
+        return f"position quantity is not usable ({reference_qty!r})"
+    if any(not math.isfinite(q) for q in tranche_quantities):
+        return f"exit plan carries a non-finite tranche quantity ({list(tranche_quantities)!r})"
+    whole_position = round(reference_qty)
+    if whole_position < 1:
+        return f"position of {reference_qty:g} share(s) rounds below one sellable share"
+    covered = sum(tranche_quantities)
+    if abs(covered - whole_position) > QTY_PRECISION:
+        return (
+            f"exit plan's apportioned tranches sell {covered:g} of {whole_position:g} "
+            f"share(s) — the remainder would sit stop-only with no take-profit path"
+        )
+    return None
+
+
 __all__ = [
     "COMMISSION_RATE",
     "COST_GATE_FX_APPLIES",
@@ -215,6 +260,7 @@ __all__ = [
     "FX_ROUND_TRIP_RATE",
     "MIN_COMMISSION_USD",
     "QTY_PRECISION",
+    "apportioned_coverage_violation",
     "min_profitable_exit_price",
     "round_trip_fee_bps",
     "single_full_position_tranche_violation",

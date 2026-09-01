@@ -60,6 +60,7 @@ from alphalens_pipeline.brokers.automanager.costs import (
     EXIT_EDGE_MIN_BPS,
     FX_ROUND_TRIP_RATE,
     MIN_COMMISSION_USD,
+    apportioned_coverage_violation,
     round_trip_fee_bps,
     single_full_position_tranche_violation,
 )
@@ -71,6 +72,7 @@ from alphalens_pipeline.brokers.automanager.labels import (
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     LiveExitBroker,
     ManagedExit,
+    apportion_tranche_quantities,
     run_live_exits,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (
@@ -2837,7 +2839,10 @@ def _exit_plan_shape_refusal(record: Mapping[str, Any], position_qty: float) -> 
     tranches, reference_qty, _stop = plan
     violation = single_full_position_tranche_violation(
         # Exactly how live_exit_engine.plan_tranche_exits sizes each tranche.
-        tranche_quantities=[round(reference_qty * t.tranche_frac) for t in tranches],
+        tranche_quantities=apportion_tranche_quantities(
+            reference_qty=reference_qty,
+            tranche_fracs=tuple(t.tranche_frac for t in tranches),
+        ),
         position_qty=reference_qty,
     )
     if violation is None:
@@ -2845,6 +2850,102 @@ def _exit_plan_shape_refusal(record: Mapping[str, Any], position_qty: float) -> 
     return _ArmRefusal(
         f"{violation} (arm gate priced {position_qty:g} share(s))",
         _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+        terminal=True,
+    )
+
+
+def _brief_plan_arm_refusal(
+    record: Mapping[str, Any], d_bps: int, reference: float, trough: float
+) -> _ArmRefusal | None:
+    """Why this tier must not arm against the BRIEF's own take-profit ladder,
+    else ``None`` (issue #1112, breakeven_trail follow-up).
+
+    Since #1183 both daemons run a no-geometry exit policy
+    (``applies_geometry=False``): the placed exit is the brief's multi-tranche
+    ladder, ``_stamped_exit_target`` returns ``None``, and the two geometry-
+    scoped gates above price nothing. This gate closes that hole with the same
+    issue-#1112 condition, evaluated against the plan that will ACTUALLY govern
+    the position:
+
+        refuse unless  tp1 > fill_estimate + round_trip_cost + E_min
+
+    where tp1 is the shallowest ACTIVE tranche of the journaled ``tranche_plan``
+    and the cost is priced at THAT tranche's apportioned share count — the exact
+    quantity ``live_exit_engine.plan_tranche_exits`` will sell there, so the arm
+    bar and the exit bar coincide for the tranche this gate prices.
+
+    Scoped to watches WITHOUT an applied geometry target (the geometry path
+    keeps its own pair of gates above). Same journal-read stances as
+    :func:`_exit_plan_shape_refusal`: a read failure defers (non-terminal), a
+    missing plan refuses terminally (the router writes the plan before the
+    watch, so a missing one means the exit shape is unknown), and a plan whose
+    apportioned tranches do not cover the whole position refuses terminally
+    (:func:`~alphalens_pipeline.brokers.automanager.costs.apportioned_coverage_violation`).
+    The COST comparison itself fails open on degenerate geometry, mirroring
+    ``arms_inside_exit_region``.
+    """
+    if _stamped_exit_target(record) is not None:
+        return None
+    uic = _coerce(record, "uic", int)
+    if uic is None:
+        return _ArmRefusal(
+            "entry watch carries no uic — the exit plan cannot be resolved",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=True,
+        )
+    try:
+        plan = fold_tranche_plans(_iter_standalone_stop_journal()).get(uic)
+    # Broad on purpose, mirroring _exit_plan_shape_refusal: a journal read
+    # failure degrades to "unknown", never to an aborted pass.
+    except Exception:
+        logger.warning(
+            "entry-trail arm: exit-plan read failed for uic %d — deferring the check",
+            uic,
+            exc_info=True,
+        )
+        return _ArmRefusal(
+            f"exit plan for uic {uic} could not be read",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=False,
+        )
+    if plan is None:
+        return _ArmRefusal(
+            f"no exit plan on record for uic {uic}",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=True,
+        )
+    tranches, reference_qty, _stop = plan
+    quantities = apportion_tranche_quantities(
+        reference_qty=reference_qty, tranche_fracs=tuple(t.tranche_frac for t in tranches)
+    )
+    violation = apportioned_coverage_violation(
+        tranche_quantities=quantities, reference_qty=reference_qty
+    )
+    if violation is not None:
+        return _ArmRefusal(f"{violation}", _ARM_REFUSAL_EXIT_PLAN_SHAPE, terminal=True)
+    first_active = next(
+        ((t, q) for t, q in zip(tranches, quantities, strict=True) if q > 0.0), None
+    )
+    if first_active is None:  # unreachable: coverage above guarantees >= 1 share
+        return _ArmRefusal(
+            f"exit plan for uic {uic} has no sellable tranche",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=True,
+        )
+    tranche, tranche_qty = first_active
+    estimate = entry_trail_geometry.entry_fill_estimate(
+        reference=reference, trough=trough, d_bps=d_bps
+    )
+    if not entry_trail_geometry.arms_inside_exit_region(
+        fill_estimate=estimate, exit_target=tranche.target_price, qty=tranche_qty
+    ):
+        return None
+    return _ArmRefusal(
+        f"tier would fill inside the exit region of the brief's own ladder: fill "
+        f"estimate {estimate:.4f}, first take-profit {tranche.target_price:.4f} "
+        f"({tranche.tag}, {tranche_qty:g} share(s)) does not clear round-trip cost "
+        f"+ E_min {EXIT_EDGE_MIN_BPS:.0f} bps",
+        _ARM_REFUSAL_INSIDE_EXIT_REGION,
         terminal=True,
     )
 
@@ -2953,6 +3054,11 @@ def _arm_native_trail(
         # tranche. Checked, never assumed (issue #1112 round 2, point 2).
         else _exit_plan_shape_refusal(record, qty)
     )
+    if refusal is None:
+        # Both gates above are scoped to an APPLIED geometry target. Under a
+        # no-geometry exit policy (breakeven_trail, since #1183) the placed
+        # exit is the brief's own ladder — priced by its own gate instead.
+        refusal = _brief_plan_arm_refusal(record, d_bps, reference, trough)
     if refusal is not None:
         if lookup.read_ok and refusal.terminal:
             _terminal_refuse_arm(

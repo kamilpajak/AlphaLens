@@ -124,14 +124,16 @@ def arms_inside_exit_region(
     minimum makes the required move depend on it (one share at about $60 pays
     roughly 382 bps round trip).
 
-    READING RULE — clearing this gate does NOT mean the exit gate
+    READING RULE — clearing this gate does NOT automatically mean the exit gate
     (``live_exit_engine._exit_clears_cost``) will fire the same target. Both
     call the same :func:`~alphalens_pipeline.brokers.automanager.costs.min_profitable_exit_price`, but
-    at different quantities, and a SMALLER exit quantity draws a HIGHER bar. The
-    two only coincide while the exit plan is one tranche selling the whole
-    position, which
-    :func:`~alphalens_pipeline.brokers.automanager.costs.single_full_position_tranche_violation`
-    enforces at arm time rather than assuming.
+    the threshold depends on the quantity it is evaluated at, and a SMALLER
+    quantity draws a HIGHER bar. The two bars agree only when the caller passes
+    the quantity the exit will actually sell: the geometry path pins its plan
+    to one tranche selling the whole position
+    (:func:`~alphalens_pipeline.brokers.automanager.costs.single_full_position_tranche_violation`),
+    and the brief-ladder path passes tp1's apportioned share count
+    (``control_loop._brief_plan_arm_refusal``).
 
     FAILS OPEN by design: a missing, non-finite or non-positive input returns
     ``False`` (arm as before). A gate that silently refuses every arm on

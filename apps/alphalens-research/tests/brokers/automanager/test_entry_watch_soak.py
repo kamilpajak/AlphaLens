@@ -57,10 +57,26 @@ from tests.brokers.automanager.test_entry_watch_wiring import (
     _journal,
     _lines,
     _placement,
-    _plan,
+    _plan_with_tranches,
+    _planned_journal,
+    _tranche,
 )
 
 _ENV = entry_trails.ENTRY_TRAIL_BPS_ENV
+
+
+def _plan_l(*tiers: tuple[int, float, int]):
+    """A SetupPlan with the brief's thirds TP ladder attached, targets far above
+    every price this file ticks — the router journals a ``tranche_plan`` only
+    for a non-empty ladder, and the #1112 brief-ladder arm gate fails CLOSED on
+    a missing plan, so a trancheless SetupPlan routes a watch production could
+    never produce."""
+    return _plan_with_tranches(
+        tuple(tiers),
+        (_tranche(0, 1000.0, 1 / 3), _tranche(1, 1005.0, 1 / 3), _tranche(2, 1010.0, 1 / 3)),
+    )
+
+
 _ALLOW_ORDERS_ENV = "ALPHALENS_BROKER_ALLOW_ORDERS"
 _GROSS_FRAC_ENV = "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC"
 
@@ -132,7 +148,9 @@ class TestEntryWatchMultiSessionSoak(unittest.TestCase):
             (f"{pkg}.automanager.picks.mark_refused", self._record_refused),
         ):
             self.enterContext(mock.patch(target, fn))
-        self.enterContext(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _l: None))
+        # Real tranche_plan writes land in a temp journal — the #1112
+        # brief-ladder arm gate reads them back at touch time (fail-closed).
+        _planned_journal(self)
 
         def _throttled(message: str, reason: str) -> bool:
             self.alerts.append((message, reason))
@@ -226,8 +244,8 @@ class TestEntryWatchMultiSessionSoak(unittest.TestCase):
         # A laddered pick (strictly-descending tiers, all uic 307): t0 the shallow
         # latch-fill tier, t1 the deep-decline suspend tier, t2 the re-arm/expiry
         # tier. Reservation at open = 20_000 + 12_500 + 5_000 = 37_500.
-        ko_plan = _plan((0, 40.0, 500), (1, 25.0, 500), (2, 10.0, 500))
-        newco_plan = _plan((0, 250.0, 100))  # gross 25_000 — the (g) competitor
+        ko_plan = _plan_l((0, 40.0, 500), (1, 25.0, 500), (2, 10.0, 500))
+        newco_plan = _plan_l((0, 250.0, 100))  # gross 25_000 — the (g) competitor
         self.picks: list[Any] = []
         self.deps = self._build_deps(self.broker, self.picks)
 
@@ -389,7 +407,7 @@ class TestEntryWatchMultiSessionSoak(unittest.TestCase):
         self.broker = _ResolvingBroker()
 
         # One tier — reservation 20_000 — is all this invariant needs.
-        ko_plan = _plan((0, 40.0, 500))
+        ko_plan = _plan_l((0, 40.0, 500))
         self.picks: list[Any] = []
         self.deps = self._build_deps(self.broker, self.picks)
 
