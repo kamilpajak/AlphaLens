@@ -2779,6 +2779,52 @@ class _ArmRefusal(NamedTuple):
     terminal: bool
 
 
+def _governing_plan_lookup(
+    record: Mapping[str, Any],
+) -> tuple[tuple[tuple[TpTranchePlan, ...], float, float] | None, _ArmRefusal | None]:
+    """The journaled ``tranche_plan`` governing this watch's uic, or the refusal
+    that stands in for it — the shared read half of the two plan-reading arm
+    gates (:func:`_exit_plan_shape_refusal`, :func:`_brief_plan_arm_refusal`).
+
+    Exactly one of the pair is non-None. The stances are the gates' contract:
+    a record with no uic and a uic with no plan on record refuse TERMINALLY
+    (the router journals the plan BEFORE the ``watch_open`` lines, so a missing
+    plan means the exit shape is unknown); a journal READ failure refuses
+    NON-terminally — it is not evidence about the plan, and this runs inside
+    ``_run_entry_watch_pass``, which has no per-watch exception boundary, so an
+    OSError let out would abort the tick for every other watch too.
+    """
+    uic = _coerce(record, "uic", int)
+    if uic is None:
+        return None, _ArmRefusal(
+            "entry watch carries no uic — the exit plan cannot be resolved",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=True,
+        )
+    try:
+        plan = fold_tranche_plans(_iter_standalone_stop_journal()).get(uic)
+    # Broad on purpose, mirroring _retract_stale_tranche_plans' sweep: a journal
+    # read failure degrades to "unknown", never to an aborted pass.
+    except Exception:
+        logger.warning(
+            "entry-trail arm: exit-plan read failed for uic %d — deferring the check",
+            uic,
+            exc_info=True,
+        )
+        return None, _ArmRefusal(
+            f"exit plan for uic {uic} could not be read",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=False,
+        )
+    if plan is None:
+        return None, _ArmRefusal(
+            f"no exit plan on record for uic {uic}",
+            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
+            terminal=True,
+        )
+    return plan, None
+
+
 def _exit_plan_shape_refusal(record: Mapping[str, Any], position_qty: float) -> _ArmRefusal | None:
     """Why this tier must not arm on the exit plan governing its uic, else
     ``None`` (issue #1112 round 2, point 2).
@@ -2799,43 +2845,15 @@ def _exit_plan_shape_refusal(record: Mapping[str, Any], position_qty: float) -> 
     take-profit the rail cannot describe.
 
     Scoped to the arm gate's own reach: ``None`` when no applied geometry target
-    is stamped, because there the arm gate does not price anything.
-
-    A journal READ failure is the one case that refuses NON-terminally. It is
-    not evidence about the plan, and this runs inside ``_run_entry_watch_pass``,
-    which has no per-watch exception boundary — letting an OSError out would
-    abort the tick for every other watch too.
+    is stamped, because there the arm gate does not price anything. The read
+    stances (missing plan terminal, read failure deferred) live in
+    :func:`_governing_plan_lookup`.
     """
     if _stamped_exit_target(record) is None:
         return None
-    uic = _coerce(record, "uic", int)
-    if uic is None:
-        return _ArmRefusal(
-            "entry watch carries no uic — the exit plan cannot be resolved",
-            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
-            terminal=True,
-        )
-    try:
-        plan = fold_tranche_plans(_iter_standalone_stop_journal()).get(uic)
-    # Broad on purpose, mirroring _retract_stale_tranche_plans' sweep: a journal
-    # read failure degrades to "unknown", never to an aborted pass.
-    except Exception:
-        logger.warning(
-            "entry-trail arm: exit-plan read failed for uic %d — deferring the check",
-            uic,
-            exc_info=True,
-        )
-        return _ArmRefusal(
-            f"exit plan for uic {uic} could not be read",
-            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
-            terminal=False,
-        )
+    plan, lookup_refusal = _governing_plan_lookup(record)
     if plan is None:
-        return _ArmRefusal(
-            f"no exit plan on record for uic {uic}",
-            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
-            terminal=True,
-        )
+        return lookup_refusal
     tranches, reference_qty, _stop = plan
     violation = single_full_position_tranche_violation(
         # Exactly how live_exit_engine.plan_tranche_exits sizes each tranche.
@@ -2875,45 +2893,21 @@ def _brief_plan_arm_refusal(
     bar and the exit bar coincide for the tranche this gate prices.
 
     Scoped to watches WITHOUT an applied geometry target (the geometry path
-    keeps its own pair of gates above). Same journal-read stances as
-    :func:`_exit_plan_shape_refusal`: a read failure defers (non-terminal), a
-    missing plan refuses terminally (the router writes the plan before the
-    watch, so a missing one means the exit shape is unknown), and a plan whose
-    apportioned tranches do not cover the whole position refuses terminally
+    keeps its own pair of gates above). The journal-read stances — read failure
+    defers (non-terminal), a missing plan refuses terminally (the router writes
+    the plan before the watch, so a missing one means the exit shape is
+    unknown) — are shared with the geometry shape gate via
+    :func:`_governing_plan_lookup`. A plan whose apportioned tranches do not
+    cover the whole position refuses terminally
     (:func:`~alphalens_pipeline.brokers.automanager.costs.apportioned_coverage_violation`).
     The COST comparison itself fails open on degenerate geometry, mirroring
     ``arms_inside_exit_region``.
     """
     if _stamped_exit_target(record) is not None:
         return None
-    uic = _coerce(record, "uic", int)
-    if uic is None:
-        return _ArmRefusal(
-            "entry watch carries no uic — the exit plan cannot be resolved",
-            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
-            terminal=True,
-        )
-    try:
-        plan = fold_tranche_plans(_iter_standalone_stop_journal()).get(uic)
-    # Broad on purpose, mirroring _exit_plan_shape_refusal: a journal read
-    # failure degrades to "unknown", never to an aborted pass.
-    except Exception:
-        logger.warning(
-            "entry-trail arm: exit-plan read failed for uic %d — deferring the check",
-            uic,
-            exc_info=True,
-        )
-        return _ArmRefusal(
-            f"exit plan for uic {uic} could not be read",
-            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
-            terminal=False,
-        )
+    plan, lookup_refusal = _governing_plan_lookup(record)
     if plan is None:
-        return _ArmRefusal(
-            f"no exit plan on record for uic {uic}",
-            _ARM_REFUSAL_EXIT_PLAN_SHAPE,
-            terminal=True,
-        )
+        return lookup_refusal
     tranches, reference_qty, _stop = plan
     quantities = apportion_tranche_quantities(
         reference_qty=reference_qty, tranche_fracs=tuple(t.tranche_frac for t in tranches)
@@ -2928,7 +2922,7 @@ def _brief_plan_arm_refusal(
     )
     if first_active is None:  # unreachable: coverage above guarantees >= 1 share
         return _ArmRefusal(
-            f"exit plan for uic {uic} has no sellable tranche",
+            "exit plan has no sellable tranche",
             _ARM_REFUSAL_EXIT_PLAN_SHAPE,
             terminal=True,
         )
