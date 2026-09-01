@@ -235,6 +235,12 @@ def apportioned_coverage_violation(
     rounds below one share cannot be exited by any tranche and is refused
     outright. Same return contract as the sibling: a human-readable reason,
     never raises on numeric input, and the caller decides what loudly means.
+
+    DELIBERATE rounding-target mismatch: the apportionment sums to the plan's
+    own DECLARED coverage (``round(reference_qty * sum(fracs))``) while this
+    check compares against the WHOLE position (``round(reference_qty)``). That
+    gap is the point — apportionment realizes a partial plan faithfully, and
+    this contract is where a partial plan gets refused.
     """
     if not math.isfinite(reference_qty) or reference_qty <= 0.0:
         return f"position quantity is not usable ({reference_qty!r})"
