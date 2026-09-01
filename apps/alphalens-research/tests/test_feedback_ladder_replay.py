@@ -658,6 +658,105 @@ class TestTimeAwareness(unittest.TestCase):
         self.assertEqual(outcome.classification, "TP_FULL")
 
 
+class TestBreakevenEntryTTL(unittest.TestCase):
+    """Issue #1232: ``replay_ladder_breakeven`` honours an optional entry-TTL.
+
+    ``entry_expiry_ms=None`` (the default) stays byte-identical to the legacy
+    no-TTL what-if (frozen lens history). With a cutoff, tiers first touched
+    at-or-after it never fill — in EITHER walk — so the what-if measures the
+    fill cohort the production 7-session entry-order TTL would actually take.
+    """
+
+    # MYGN-shaped (brief 2026-07-10): a 3-tier dip ladder where the deep tiers
+    # only fill long after the production entry TTL. Averaging down shrinks the
+    # blended risk enough to arm the +0.5R/0.6 trail off the day-1 high, so the
+    # no-TTL what-if converts a full -1R stop-out into a trailed-stop gain.
+    _MYGN = {
+        "entries": [(4.60, 40.0), (4.20, 30.0), (4.00, 30.0)],
+        "tps": [(6.50, 100.0)],
+        "stop": 3.90,
+    }
+    _MYGN_BARS = [
+        _bar(1, low=4.55, high=4.70, close=4.60),  # fills E1(4.60); peak 4.70
+        _bar(12, low=3.95, high=4.40, close=4.10),  # E2+E3 touch — post-cutoff(10)
+        _bar(15, low=2.81, high=4.00, close=3.00),  # collapse through the stop
+        _bar(16, low=5.00, high=6.43, close=6.40),  # post-exit bounce (must not matter)
+    ]
+
+    def test_mygn_shaped_ttl_variant_takes_the_stop_not_the_rescue(self):
+        # No TTL: all three tiers fill (blended 4.30, risk 0.40); the day-1 high
+        # 4.70 is +1.0R of the FINAL blend, so the trail arms and lifts the stop
+        # to 4.30 + 0.6*0.40 = 4.54 -> the t=12 dip exits at +0.60R.
+        # TTL (cutoff 10): E1 only (blended 4.60, risk 0.70); MFE peaks +0.14R,
+        # the trail never arms, and the collapse takes the full -1R -- the path
+        # the live rail would actually have walked.
+        setup = _setup(**self._MYGN)
+        no_ttl = replay_ladder_breakeven(setup, self._MYGN_BARS, mfe_trigger_r=0.5, trail_frac=0.6)
+        ttl = replay_ladder_breakeven(
+            setup, self._MYGN_BARS, mfe_trigger_r=0.5, trail_frac=0.6, entry_expiry_ms=10
+        )
+        self.assertAlmostEqual(no_ttl, 0.60, places=4)
+        self.assertAlmostEqual(ttl, -1.0, places=4)
+        # The TTL path must agree with the TTL-honouring headline replay.
+        headline = replay_ladder(setup, self._MYGN_BARS, entry_expiry_ms=10).realized_r
+        self.assertAlmostEqual(ttl, headline, places=4)
+
+    def test_all_fills_within_window_match_the_no_ttl_variant(self):
+        # Every tier touch lands strictly before the cutoff -> the TTL variant
+        # must be EXACTLY the no-TTL value (issue #1232 test plan, case 2).
+        setup = _setup(**self._MYGN)
+        bars = [
+            _bar(1, low=4.55, high=4.70, close=4.60),
+            _bar(2, low=3.95, high=4.40, close=4.10),  # E2+E3 fill pre-cutoff
+            _bar(3, low=2.81, high=4.00, close=3.00),
+            _bar(4, low=5.00, high=6.43, close=6.40),
+        ]
+        no_ttl = replay_ladder_breakeven(setup, bars, mfe_trigger_r=0.5, trail_frac=0.6)
+        ttl = replay_ladder_breakeven(
+            setup, bars, mfe_trigger_r=0.5, trail_frac=0.6, entry_expiry_ms=100
+        )
+        self.assertEqual(ttl, no_ttl)
+
+    def test_touch_at_cutoff_does_not_fill(self):
+        # The only touch of the single tier lands AT the cutoff (ts == cutoff is
+        # stale -- mirrors the base walk's ``ts >= entry_expiry_ms``): nothing
+        # fills, the what-if resolves to None.
+        setup = _setup(entries=[(99.0, 100.0)], tps=[(110.0, 100.0)], stop=92.0)
+        bars = [
+            _bar(1, low=100.0, high=101.0, close=100.5),  # above the limit
+            _bar(2, low=98.0, high=100.0, close=99.0),  # touches 99 AT cutoff
+        ]
+        result = replay_ladder_breakeven(setup, bars, mfe_trigger_r=0.5, entry_expiry_ms=2)
+        self.assertIsNone(result)
+
+    def test_explicit_none_matches_omitted(self):
+        setup = _setup(**self._MYGN)
+        omitted = replay_ladder_breakeven(setup, self._MYGN_BARS, mfe_trigger_r=0.5, trail_frac=0.6)
+        explicit = replay_ladder_breakeven(
+            setup, self._MYGN_BARS, mfe_trigger_r=0.5, trail_frac=0.6, entry_expiry_ms=None
+        )
+        self.assertEqual(explicit, omitted)
+
+    def test_ttl_equals_no_ttl_replay_of_stripped_setup(self):
+        # Cohort equivalence: the TTL replay must equal the no-TTL replay of the
+        # SAME setup with the never-fillable (post-cutoff-touched) tiers removed.
+        # Proves the cutoff selects the fill cohort and nothing else -- robust to
+        # either walk's internals.
+        setup = _setup(**self._MYGN)
+        stripped = _setup(
+            entries=[(4.60, 40.0)],
+            tps=[(6.50, 100.0)],
+            stop=3.90,
+        )
+        ttl = replay_ladder_breakeven(
+            setup, self._MYGN_BARS, mfe_trigger_r=0.5, trail_frac=0.6, entry_expiry_ms=10
+        )
+        stripped_no_ttl = replay_ladder_breakeven(
+            stripped, self._MYGN_BARS, mfe_trigger_r=0.5, trail_frac=0.6
+        )
+        self.assertEqual(ttl, stripped_no_ttl)
+
+
 class TestStatusGuards(unittest.TestCase):
     def test_no_structure(self):
         self.assertEqual(replay_ladder(None, [_bar(1, 1, 2, 1.5)]).status, "NO_STRUCTURE")

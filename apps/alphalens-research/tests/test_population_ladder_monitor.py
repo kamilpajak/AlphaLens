@@ -351,6 +351,54 @@ class TestGridRealizedRStamp(_MonitorTestBase):
         self.assertAlmostEqual(grid["atr_bracket_1p5"], (100.0 / 0.98 - 100.0) / 3.0, places=6)
         self.assertNotAlmostEqual(grid["atr_bracket_1p5"], 0.8, places=6)
 
+    def test_breakeven_whatif_threads_entry_ttl_cutoff_into_ttl_lens(self):
+        # Issue #1232: the monitor passes its own entry-TTL cutoff (cutoffs[5])
+        # into breakeven_grid, so the TTL lens walks the SAME fill cohort as the
+        # headline while the no-TTL sibling still averages down past the cutoff.
+        # Path: E1(100) fills day 1 with a +1.5 peak; E2(95) only touches AFTER
+        # the 7-session cutoff; then the stop(90) is hit. Sibling (no TTL):
+        # blended 97.5, risk 7.5, the peak arms the trail (MFE 0.53R) and the
+        # post-cutoff dip exits at 99.9 -> +0.32R. TTL lens: E1-only, the peak
+        # is just +0.15R, the trail never arms -> full -1R, agreeing with the
+        # TTL-honouring headline realized_r.
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        setup = {
+            **_OK_SETUP,
+            "disaster_stop": 90.0,
+            "entry_tiers": [
+                {"limit": 100.0, "alloc_pct": 50.0},
+                {"limit": 95.0, "alloc_pct": 50.0},
+            ],
+            "tp_tranches": [{"target": 200.0, "tranche_pct": 100.0}],
+        }
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": setup}])
+        cutoff_ms = _engine_cutoffs(brief_date, setup, "XNYS")[5]
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [
+                {"t": base, "o": 100.0, "h": 101.5, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {"t": cutoff_ms + 60_000, "o": 95.0, "h": 100.0, "l": 94.0, "c": 95.0, "v": 1000.0},
+                {"t": cutoff_ms + 120_000, "o": 95.0, "h": 95.0, "l": 89.0, "c": 90.0, "v": 1000.0},
+            ]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        df = self._read_store(brief_date).set_index("ticker")
+        grid = json.loads(str(df.loc["NVDA", "breakeven_realized_r_json"]))
+        self.assertIsNotNone(grid["be_0p5r_trail0p6_ttl7"])
+        self.assertAlmostEqual(grid["be_0p5r_trail0p6_ttl7"], -1.0, places=6)
+        self.assertAlmostEqual(grid["be_0p5r_trail0p6"], 0.32, places=6)
+        self.assertAlmostEqual(
+            grid["be_0p5r_trail0p6_ttl7"], float(df.loc["NVDA", "realized_r"]), places=6
+        )
+
     def test_resolved_plannable_row_carries_entry_counterfactual(self):
         # The entry-side counterfactual (realized_r_full_fill) is stamped on a
         # resolved plannable row and absent on the non-plannable one.
