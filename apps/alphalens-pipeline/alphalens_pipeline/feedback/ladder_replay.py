@@ -1264,6 +1264,7 @@ def replay_ladder_breakeven(
     *,
     mfe_trigger_r: float,
     trail_frac: float | None = None,
+    entry_expiry_ms: int | None = None,
 ) -> float | None:
     """What-if realized R under an MFE-triggered break-even / trailing stop.
 
@@ -1283,12 +1284,15 @@ def replay_ladder_breakeven(
     ``mfe_trigger_r = inf`` with ``trail_frac=None`` reduces to a static
     disaster-stop walk (baseline parity with :func:`replay_ladder`'s ``realized_r``).
 
-    Like :func:`_replay_ratchet`, this what-if honours NO entry-TTL / position
-    TIME_STOP — it terminates on SL / full-TP / horizon only. It therefore takes no
-    ``entry_expiry_ms`` / ``position_expiry_ms``: exposing them would invite a
-    biased what-if where the fill set (and ``filled_frac``) is determined under an
-    expiry the second walk's re-derivation ignores. Both walks here re-derive fills
-    without an expiry, so they stay internally consistent (zen review, PR #722).
+    ``entry_expiry_ms`` (default ``None`` = the legacy no-TTL what-if, byte-identical
+    — frozen lens history) blocks entry fills first touched at-or-after the cutoff
+    in BOTH walks, so the what-if measures the fill cohort the production
+    entry-order TTL would actually take (issue #1232). The historical refusal to
+    expose expiries (zen review, PR #722) targeted ONE-SIDED exposure biasing the
+    fill set; note ``filled_frac``/``blended``/``risk`` are walk-1-derived, so walk 1
+    alone determines the fill cohort — the walk-2 guard keeps the two walks' fill
+    model unified. The position TIME_STOP remains unapplied: callers bound the bar
+    horizon instead, which is the de-facto time-stop.
     """
     ladder = parse_ladder(trade_setup)
     if not ladder.ok or not bars:
@@ -1296,9 +1300,7 @@ def replay_ladder_breakeven(
     ordered = sorted(bars, key=lambda b: int(b["t"]))
     stop = ladder.disaster_stop
     assert stop is not None  # ok=True guarantees it
-    # No entry-TTL / time-stop in the what-if (see docstring): both walks re-derive
-    # fills without an expiry, keeping filled_frac and the second walk consistent.
-    walk = _LadderWalk(ladder, stop, entry_expiry_ms=None, position_expiry_ms=None)
+    walk = _LadderWalk(ladder, stop, entry_expiry_ms=entry_expiry_ms, position_expiry_ms=None)
     for bar in ordered:
         walk.step(bar)
     if not walk.filled:
@@ -1309,7 +1311,15 @@ def replay_ladder_breakeven(
         return None
     filled_frac = _filled_frac(ladder, walk.filled)
     return _replay_breakeven(
-        ladder, ordered, blended, risk, stop, filled_frac, mfe_trigger_r, trail_frac
+        ladder,
+        ordered,
+        blended,
+        risk,
+        stop,
+        filled_frac,
+        mfe_trigger_r,
+        trail_frac,
+        entry_expiry_ms=entry_expiry_ms,
     )
 
 
@@ -1329,6 +1339,8 @@ def _replay_breakeven(
     filled_frac: float,
     mfe_trigger_r: float,
     trail_frac: float | None,
+    *,
+    entry_expiry_ms: int | None = None,
 ) -> float:
     """Second walk with an MFE-triggered break-even / trailing effective stop.
 
@@ -1337,7 +1349,9 @@ def _replay_breakeven(
     for an MFE-R-threshold break-even (optionally trailing). The running MFE is
     measured against the FINAL ``blended`` (same anchor as the stored ``mfe``). The
     position TIME_STOP is intentionally NOT applied — the what-if terminates on
-    SL / full-TP / horizon only, matching the ratchet pass.
+    SL / full-TP / horizon only, matching the ratchet pass. ``entry_expiry_ms``
+    blocks fill re-derivation at-or-after the cutoff, mirroring walk 1's
+    ``_LadderWalk`` gate (the caller passes the same cutoff to both walks).
     """
     eff_stop = stop
     hit_tp_ids: set[str] = set()
@@ -1347,9 +1361,10 @@ def _replay_breakeven(
     peak_high: float | None = None
     triggered = False
     for bar in ordered_bars:
-        _ts, low, high, close = _bar_lhc(bar)
+        ts, low, high, close = _bar_lhc(bar)
         last_close = close
-        _fill_entry_ids(ladder, filled_ids, low)
+        if entry_expiry_ms is None or ts < entry_expiry_ms:
+            _fill_entry_ids(ladder, filled_ids, low)
         if not filled_ids:
             continue
         # SL-first on ambiguity: a pierce of the (possibly ratcheted) stop ends the

@@ -109,7 +109,12 @@ fault.
   `MAX_REGISTERED_LENSES` to be added beside `BREAKEVEN_LENSES`), and every
   registered lens — including retired ones — counts toward the walk-forward's
   multiplicity budget. Graduation = pre-registered forward validation, nothing
-  less. Evidence: the break-even lens flipped mean R −0.371 → +0.069 in-sample
+  less. *Amendment 2026-09-01 (issue #1232): cap raised 5 → 6 for the
+  TTL-honouring twin of `be_0p5r_trail0p6` (`be_0p5r_trail0p6_ttl7`), charging
+  its own row in the multiplicity budget. One-in-one-out was rejected because
+  retirement does not refund the budget (this rule), every removable lens is an
+  accruing pre-registered forward read, and the no-TTL sibling must keep
+  stamping — the TTL-vs-no-TTL drift is itself the measurement.* Evidence: the break-even lens flipped mean R −0.371 → +0.069 in-sample
   (`exit_geometry_reward_risk_2026_06_30.md` §4) and was still held to
   display-only, correctly — §5 lists why in-sample counterfactuals overstate.
 - **R5 — Failures attribute to exactly ONE layer.** ADR 0007's founding

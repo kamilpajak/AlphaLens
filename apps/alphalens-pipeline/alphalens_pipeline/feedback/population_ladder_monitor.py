@@ -2525,9 +2525,13 @@ def _replay_candidate(
     )
     # WHAT-IF exit-lens grid (Stage A): re-replay the SAME bars under every registered
     # lens; scopes differ per lens (stop only / stop + entry ladder / whole exit).
-    # Display-only; the entry-TTL / time-stop are not honoured in any what-if lens
-    # (matching replay_ladder_breakeven's contract).
-    breakeven_grid_r = breakeven_grid(setup, bars, pct_off_52w_high=pct_off_52w_high)
+    # Display-only. The entry-TTL cutoff is passed through but consumed ONLY by
+    # lenses declaring entry_ttl_sessions (issue #1232) -- the legacy lenses keep
+    # their frozen no-TTL contract; the position time-stop stays unapplied in every
+    # lens (the bar horizon is the de-facto stop).
+    breakeven_grid_r = breakeven_grid(
+        setup, bars, pct_off_52w_high=pct_off_52w_high, entry_expiry_ms=entry_expiry_ms
+    )
     # Entry-side counterfactual (PR-3): realized R at the full-fill blended entry,
     # same exit ladder + bars. Also zero extra Polygon cost.
     realized_r_full = realized_r_full_fill(

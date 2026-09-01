@@ -26,6 +26,7 @@ from alphalens_pipeline.feedback.ladder_replay import (
     replay_ladder_atr_bracket,
     replay_ladder_breakeven,
 )
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.exit_geometry.registry import resolve_policy
 
 _BEZPAZERY_REF = (
@@ -156,6 +157,10 @@ class TestBreakevenRegistry(unittest.TestCase):
                     tp_atr_mult=lens.tp_atr_mult,
                     tp_floor_frac=lens.tp_floor_frac,
                 )
+            elif lens.entry_ttl_sessions is not None:
+                # Grid called without a cutoff -> a TTL lens refuses (None)
+                # rather than replaying the no-TTL policy under a TTL label.
+                expected = None
             else:
                 expected = replay_ladder_breakeven(
                     _SETUP, _BARS, mfe_trigger_r=lens.mfe_trigger_r, trail_frac=lens.trail_frac
@@ -369,6 +374,73 @@ class TestBreakevenRegistry(unittest.TestCase):
         setup = _setup(entries=[(100.0, 100.0)], tps=[(110.0, 100.0)], stop=90.0, atr=2.0)
         bars = [_bar(1, 99.5, 101.0, 100.0), _bar(2, 105.0, 111.0, 110.0)]
         self.assertAlmostEqual(breakeven_grid(setup, bars)["fill_anchored_0p5atr"], 10.0, places=6)
+
+    def test_ttl_lens_registered_with_exact_params_and_preregistered_ref(self):
+        # Issue #1232: the TTL-honouring twin of be_0p5r_trail0p6. Same trigger
+        # and trail, plus an EXPLICIT entry-TTL declaration pinned to the
+        # production entry-order TTL constant (a future TTL change must surface
+        # as a conscious registry edit, not silent drift).
+        by_id = {lens.lens_id: lens for lens in BREAKEVEN_LENSES}
+        self.assertIn("be_0p5r_trail0p6_ttl7", by_id)
+        lens = by_id["be_0p5r_trail0p6_ttl7"]
+        self.assertEqual(lens.kind, "breakeven")
+        self.assertEqual(lens.mfe_trigger_r, 0.5)
+        self.assertEqual(lens.trail_frac, 0.6)
+        self.assertEqual(lens.entry_ttl_sessions, 7)
+        self.assertEqual(lens.entry_ttl_sessions, DEFAULT_ORDER_TTL_DAYS)
+        self.assertEqual(lens.status, "in_sample")
+        self.assertEqual(lens.category, "stop only")
+        self.assertIsNotNone(lens.preregistered_ref)
+        self.assertIn("1232", lens.preregistered_ref or "")
+
+    def test_only_the_ttl_lens_declares_an_entry_ttl(self):
+        # The legacy five keep their frozen no-TTL contract; a stray TTL there
+        # would silently change stamped-history semantics.
+        for lens in BREAKEVEN_LENSES:
+            with self.subTest(lens_id=lens.lens_id):
+                if lens.lens_id == "be_0p5r_trail0p6_ttl7":
+                    self.assertIsNotNone(lens.entry_ttl_sessions)
+                else:
+                    self.assertIsNone(lens.entry_ttl_sessions)
+
+    def test_grid_threads_cutoff_only_to_ttl_lens(self):
+        # MYGN-shaped path (deep tiers only touch after the cutoff): with a
+        # cutoff supplied, the TTL lens must equal the direct TTL replay while
+        # its no-TTL sibling stays EXACTLY the no-cutoff replay -- the frozen
+        # guarantee that a caller-supplied cutoff never leaks into legacy lenses.
+        setup = _setup(
+            entries=[(4.60, 40.0), (4.20, 30.0), (4.00, 30.0)],
+            tps=[(6.50, 100.0)],
+            stop=3.90,
+        )
+        bars = [
+            _bar(1, 4.55, 4.70, 4.60),
+            _bar(12, 3.95, 4.40, 4.10),
+            _bar(15, 2.81, 4.00, 3.00),
+        ]
+        grid = breakeven_grid(setup, bars, entry_expiry_ms=10)
+        self.assertEqual(
+            grid["be_0p5r_trail0p6_ttl7"],
+            replay_ladder_breakeven(
+                setup, bars, mfe_trigger_r=0.5, trail_frac=0.6, entry_expiry_ms=10
+            ),
+        )
+        self.assertEqual(
+            grid["be_0p5r_trail0p6"],
+            replay_ladder_breakeven(setup, bars, mfe_trigger_r=0.5, trail_frac=0.6),
+        )
+        # Positive control: on this path the cutoff actually discriminates.
+        self.assertNotEqual(grid["be_0p5r_trail0p6_ttl7"], grid["be_0p5r_trail0p6"])
+
+    def test_ttl_lens_is_none_when_caller_supplies_no_cutoff(self):
+        # The anchor_mode precedent (#1114), softened to a refusal-by-None: a
+        # TTL lens replayed without a cutoff would measure the no-TTL policy
+        # under a TTL label. Legacy call sites (the old backfill script, ad-hoc
+        # diagnostics) may keep calling without one -- they get a safe null,
+        # never a silently wrong number.
+        grid = breakeven_grid(_SETUP, _BARS)
+        self.assertIsNone(grid["be_0p5r_trail0p6_ttl7"])
+        self.assertIsNotNone(grid["be_0p5r_trail0p6"])
 
     def test_unknown_lens_kind_raises(self):
         # A registered lens with an unrecognised kind is a config error that must

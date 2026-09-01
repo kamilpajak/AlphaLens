@@ -57,6 +57,14 @@ describe('resolveLensMeta', () => {
 		expect(m.category).toBe('whole exit');
 	});
 
+	it('resolves the TTL-honouring trail lens to a distinct label naming the TTL', () => {
+		const m = resolveLensMeta('be_0p5r_trail0p6_ttl7');
+		expect(m.label).toBe('break-even +0.5R · trail 0.6 · entry TTL 7');
+		expect(m.label).not.toBe(resolveLensMeta('be_0p5r_trail0p6').label);
+		expect(m.status).toBe('in_sample');
+		expect(m.category).toBe('stop only');
+	});
+
 	it('falls back for an unknown lens_id to the raw id + a cautious in_sample default', () => {
 		const m = resolveLensMeta('be_9p9r_future');
 		expect(m.label).toBe('be_9p9r_future');

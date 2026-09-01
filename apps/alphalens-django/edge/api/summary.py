@@ -49,6 +49,7 @@ _LENS_PREREGISTERED_REF: dict[str, str] = {
     # '"lens_id": "ref"' substring, so the ref must not be paren-wrapped.
     "atr_bracket_1p5": "betlejem5_comparative bezpazery v1 (bracket 1.5xATR, floor 0.6%, ceiling 52w-high)",
     "atr_bracket_1p5_planned": "bezpazery v1 bracket on the live planned-blend anchor (issue #1114 option 1)",
+    "be_0p5r_trail0p6_ttl7": "issue #1232 prod-policy TTL variant of exit_geometry_2026_06_30 s7 be0.5/trail0.6",
 }
 
 

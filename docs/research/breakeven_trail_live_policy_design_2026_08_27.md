@@ -68,6 +68,10 @@ combination.
 3. **Slippage/gaps.** The lens books SL fills exactly at the stop level and TP fills exactly
    at target; live pays gap-throughs and market-sell slippage.
 4. **TTL.** The lens ignores entry-TTL/TIME_STOP; the live rails keep the 7-day entry TTL.
+   *Closed for the entry side on 2026-09-01 (issue #1232): the TTL-honouring twin
+   `be_0p5r_trail0p6_ttl7` replays the production entry-TTL fill cohort (session-OPEN
+   cutoff, shared with the headline `realized_r`); this lens stays as the no-TTL
+   what-if. The position TIME_STOP remains unapplied in every lens.*
 5. **`avg_price` drift after partial sells.** The live anchor is the broker's netted
    `pos.avg_price`; whether Saxo's lot accounting shifts it after a TP tranche sells is to be
    verified empirically during the SIM soak (compare before/after a tranche fire). The same

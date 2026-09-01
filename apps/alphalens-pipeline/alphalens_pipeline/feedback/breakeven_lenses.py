@@ -115,13 +115,26 @@ class BreakevenLens:
     # REFUSED at dispatch, because a what-if figure must name the policy it
     # replays. ``None`` on every other kind.
     anchor_mode: AnchorMode | None = None
+    # Entry-order TTL in trading sessions (issue #1232). When set, the dispatch
+    # applies the CALLER's per-row ``entry_expiry_ms`` cutoff (the production
+    # entry-order TTL boundary the headline replay already honours); when the
+    # caller supplies no cutoff, a TTL lens resolves to ``None`` rather than
+    # silently replaying without the TTL (the anchor_mode lesson, #1114 -- a
+    # what-if figure must name the policy it replays). ``None`` on every legacy
+    # lens: their no-TTL contract and stamped history are frozen.
+    entry_ttl_sessions: int | None = None
     preregistered_ref: str | None = None  # provenance (design-memo section), display-only
 
 
 # ADR 0013 R4: the registry is bounded — at most this many concurrently
 # registered lenses (one-in-one-out beyond it); every registered lens, retired
 # ones included, counts toward the walk-forward multiplicity budget.
-MAX_REGISTERED_LENSES = 5
+# Raised 5 -> 6 on 2026-09-01 (ADR 0013 R4 amendment, issue #1232): the
+# TTL-honouring twin of be_0p5r_trail0p6 must accrue BESIDE its no-TTL sibling
+# (the TTL-vs-no-TTL drift is the measurement), and retiring any other lens
+# would strand an accruing pre-registered forward read without refunding the
+# multiplicity budget.
+MAX_REGISTERED_LENSES = 6
 
 # Adding another lens is a single entry here — the JSON-map column and the
 # registry-driven selector absorb it with no schema or UI change. All current
@@ -215,7 +228,7 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     # anchors share the no-fill gate but not the bracket-constructibility gates
     # (bezpazery_lens_design_2026_07_16.md §7.5).
     # Charges its own row in the ~2026-09 walk-forward multiplicity budget
-    # (ADR 0013 R4); this is the 5th of MAX_REGISTERED_LENSES.
+    # (ADR 0013 R4).
     BreakevenLens(
         lens_id="atr_bracket_1p5_planned",
         label="ATR bracket 1.5 (bezpazery) · planned-blend anchor",
@@ -236,6 +249,36 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
             "bezpazery v1 bracket on the live planned-blend anchor (issue #1114 option 1)"
         ),
     ),
+    # The TTL-honouring twin of be_0p5r_trail0p6 (issue #1232): same trigger and
+    # trail, but entry limits expire at the production 7-session entry-order TTL
+    # boundary (the same session-OPEN cutoff the headline realized_r honours, so
+    # lens and headline share the exact fill cohort; production expires at that
+    # session's CLOSE, so both are ~1 session conservative vs the live rail).
+    # The no-TTL sibling KEEPS stamping -- the TTL-vs-no-TTL drift is the
+    # measurement. Returns null on rows whose only fills land past the cutoff,
+    # so any mean comparison against a sibling lens is valid ONLY on rows where
+    # both are non-null (the atr_bracket_1p5_planned cohort lesson above).
+    # Populates FORWARD-ONLY via the daily path; history via the per-key merge
+    # backfill script (frozen terminal rows keep every other stamped key).
+    BreakevenLens(
+        lens_id="be_0p5r_trail0p6_ttl7",
+        label="break-even +0.5R · trail 0.6 · entry TTL 7",
+        category="stop only",
+        replaces=(
+            "the stop only - the brief TP ladder and entry tiers are kept; "
+            "past +0.5R the stop trails at 0.6 of the peak gain, and entry limits expire "
+            "after the production 7-session order TTL, so tiers the live rail could never "
+            "fill do not fill here"
+        ),
+        status="in_sample",
+        kind="breakeven",
+        mfe_trigger_r=0.5,
+        trail_frac=0.6,
+        entry_ttl_sessions=7,
+        preregistered_ref=(
+            "issue #1232 prod-policy TTL variant of exit_geometry_2026_06_30 s7 be0.5/trail0.6"
+        ),
+    ),
 )
 
 
@@ -245,11 +288,17 @@ def _lens_realized_r(
     bars: Sequence[Mapping[str, Any]],
     *,
     pct_off_52w_high: float | None = None,
+    entry_expiry_ms: int | None = None,
 ) -> float | None:
     """Dispatch one lens to its replay, returning realized R (or ``None``).
 
     ``pct_off_52w_high`` is the brief-row 52w-high distance (only the
     ``atr_bracket`` kind consumes it — as the reconstructed TP ceiling).
+    ``entry_expiry_ms`` is the row's production entry-TTL cutoff — consumed ONLY
+    by a lens declaring ``entry_ttl_sessions``; a TTL lens dispatched without it
+    resolves to ``None`` (refusal-by-null: replaying without the TTL would
+    measure the no-TTL policy under a TTL label), and a legacy lens NEVER
+    receives it (frozen no-TTL contract).
 
     Raises ``ValueError`` on an unregistered ``kind`` — a new lens kind must be a
     conscious two-step change (register + add a branch here), never a silent
@@ -286,11 +335,17 @@ def _lens_realized_r(
             ceiling_price=ceiling_from_52w_high(trade_setup, pct_off_52w_high),
         )
     if lens.kind == "breakeven":
+        if lens.entry_ttl_sessions is not None and entry_expiry_ms is None:
+            return None  # a TTL lens without a cutoff cannot be replayed honestly
         # MFE-triggered break-even / trailing. A missing trigger reduces to a static
         # disaster-stop walk (mfe_trigger_r=inf never arms it -> baseline parity).
         trigger = lens.mfe_trigger_r if lens.mfe_trigger_r is not None else float("inf")
         return replay_ladder_breakeven(
-            trade_setup, bars, mfe_trigger_r=trigger, trail_frac=lens.trail_frac
+            trade_setup,
+            bars,
+            mfe_trigger_r=trigger,
+            trail_frac=lens.trail_frac,
+            entry_expiry_ms=entry_expiry_ms if lens.entry_ttl_sessions is not None else None,
         )
     raise ValueError(f"unknown exit-lens kind: {lens.kind!r}")
 
@@ -300,6 +355,7 @@ def breakeven_grid(
     bars: Sequence[Mapping[str, Any]],
     *,
     pct_off_52w_high: float | None = None,
+    entry_expiry_ms: int | None = None,
 ) -> dict[str, float | None]:
     """Realized R under each registered exit lens, keyed by ``lens_id``.
 
@@ -311,9 +367,18 @@ def breakeven_grid(
     ``None``. ``pct_off_52w_high`` is the brief row's
     ``technical_pct_off_52w_high`` (the trade setup does not carry it) — the
     ``atr_bracket`` kind reconstructs its TP ceiling from it; ``None`` leaves
-    that TP uncapped. Display-only; never feeds the headline ``realized_r``.
+    that TP uncapped. ``entry_expiry_ms`` is the row's production entry-TTL
+    cutoff (epoch-ms; the monitor's ``_engine_cutoffs`` index 5) — consumed only
+    by lenses declaring ``entry_ttl_sessions``; without it, those lenses map to
+    ``None``. Display-only; never feeds the headline ``realized_r``.
     """
     return {
-        lens.lens_id: _lens_realized_r(lens, trade_setup, bars, pct_off_52w_high=pct_off_52w_high)
+        lens.lens_id: _lens_realized_r(
+            lens,
+            trade_setup,
+            bars,
+            pct_off_52w_high=pct_off_52w_high,
+            entry_expiry_ms=entry_expiry_ms,
+        )
         for lens in BREAKEVEN_LENSES
     }
