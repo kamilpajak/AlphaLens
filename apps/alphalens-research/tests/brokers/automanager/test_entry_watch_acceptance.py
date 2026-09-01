@@ -32,11 +32,25 @@ from tests.brokers.automanager.test_entry_watch_wiring import (
     _lines,
     _pick,
     _placement,
-    _plan,
+    _plan_with_tranches,
+    _planned_journal,
     _RecordingBroker,
+    _tranche,
 )
 
 _ENV = entry_trails.ENTRY_TRAIL_BPS_ENV
+
+
+def _plan_l(*tiers: tuple[int, float, int]):
+    """A SetupPlan with the brief's thirds TP ladder attached, targets far above
+    every price this file ticks — the router journals a ``tranche_plan`` only
+    for a non-empty ladder, and the #1112 brief-ladder arm gate fails CLOSED on
+    a missing plan, so a trancheless SetupPlan routes a watch production could
+    never produce."""
+    return _plan_with_tranches(
+        tuple(tiers),
+        (_tranche(0, 1000.0, 1 / 3), _tranche(1, 1005.0, 1 / 3), _tranche(2, 1010.0, 1 / 3)),
+    )
 
 
 def _empty_pview() -> Any:
@@ -73,7 +87,10 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
             (f"{pkg}.automanager.picks.mark_refused", lambda *_a, **_k: None),
         ):
             self.enterContext(mock.patch(target, fn))
-        self.enterContext(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _l: None))
+        # The routed tranche_plan must actually land: the #1112 brief-ladder
+        # arm gate reads it back at touch time and fails CLOSED on a missing
+        # plan, so a swallowed write would refuse every arm in this test.
+        _planned_journal(self)
 
         def _throttled(message: str, reason: str) -> bool:
             alerts.append((message, reason))
@@ -104,7 +121,7 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
         # A recent brief_date so the real-calendar TTL window_end is in the
         # future (a stale date would expire the watch on tick 1).
         picks = [_pick(date=dt.date.today().isoformat())]
-        deps = self._deps(broker, _plan((0, 10.0, 100)), picks, _FakeFeed(prices), alerts)
+        deps = self._deps(broker, _plan_l((0, 10.0, 100)), picks, _FakeFeed(prices), alerts)
 
         with mock.patch.dict(
             "os.environ", {_ENV: "50", "ALPHALENS_BROKER_ALLOW_ORDERS": "1"}, clear=True
@@ -140,7 +157,7 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
         prices: dict[int, float | None] = {}
         picks = [_pick(date=dt.date.today().isoformat())]
         deps = self._deps(
-            broker, _plan((0, 10.0, 100), (1, 9.5, 100)), picks, _FakeFeed(prices), []
+            broker, _plan_l((0, 10.0, 100), (1, 9.5, 100)), picks, _FakeFeed(prices), []
         )
         with mock.patch.dict(
             "os.environ", {_ENV: "50", "ALPHALENS_BROKER_ALLOW_ORDERS": "1"}, clear=True
@@ -161,7 +178,7 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
         path = _journal(self)
         broker = _RecordingBroker()
         picks = [_pick()]
-        deps = self._deps(broker, _plan((0, 10.0, 100)), picks, _FakeFeed({}), [])
+        deps = self._deps(broker, _plan_l((0, 10.0, 100)), picks, _FakeFeed({}), [])
         with mock.patch.dict("os.environ", {}, clear=True):
             cl.run_once(deps)
         self.assertEqual(len(broker.brackets), 1, "flag OFF: normal limit-entry placement runs")

@@ -45,6 +45,7 @@ from tests.brokers.automanager.test_entry_watch_wiring import (
     _lines,
     _planned_journal,
     _RecordingBroker,
+    _seed_healthy_plan,
     _seed_watch,
     _watch_deps,
 )
@@ -71,6 +72,7 @@ def _seed_armed_with_trough(path: Any, *, crid: str = _CRID, order_id: str, trou
     """A resting armed tier that tracked a trough before it armed (the realistic
     order: watch_open -> trough -> trail_armed, so ``latest_kind`` is trail_armed
     and ``min_trough`` is carried)."""
+    _seed_healthy_plan()
     _seed_watch(path, crid=crid, limit=10.0, next_tier_limit=None)
     _seed_carried_trough(crid, trough)
     entry_trails.append_entry_trail_line(
@@ -90,6 +92,7 @@ def _rearm_watch_open(
     (the running min from before the DayOrder-cancel) + a re-arm ``watch_open``
     (arm state reset, ``awaiting_fresh_low`` open-check marker) as the latest
     non-terminal line, exactly what ``_run_entry_trail_reconcile_pass`` writes."""
+    _seed_healthy_plan()
     _seed_carried_trough(crid, trough)
     entry_trails.append_entry_trail_line(
         {

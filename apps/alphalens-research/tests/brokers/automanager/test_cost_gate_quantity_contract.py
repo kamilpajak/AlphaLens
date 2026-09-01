@@ -17,11 +17,21 @@ _REFUTED_DOCSTRING_CLAIMS: tuple[str, ...] = (
     "draw the same line",
     "can never be armed on a target",
     "the ONE threshold both",
+    # Refuted by #1183: since both daemons run breakeven_trail
+    # (applies_geometry=False), every new live plan is the brief's 3-tranche
+    # ladder and the single-full-tranche contract governs only geometry-policy
+    # plans — an unconditional "the shape contract keeps whole-position pricing
+    # safe" claim is false on the live rail.
+    "What keeps that safe today",
+    "enforces at arm time",
 )
-"""Phrases asserting the two gates share ONE threshold. Measured false: at an
-entry of 60.00 the threshold is 60.8000 for 10 shares and 62.6000 for 1 share.
-Kept here so re-introducing the claim in any of the three modules turns a test
-red rather than the money rail."""
+"""Phrases asserting the two gates share ONE threshold, or that the
+single-full-tranche shape contract unconditionally protects the arm gate's
+pricing. Measured false: at an entry of 60.00 the threshold is 60.8000 for 10
+shares and 62.6000 for 1 share; and since #1183 the live plans are the brief's
+own multi-tranche ladders, priced per-tranche instead. Kept here so
+re-introducing either claim in any of the three modules turns a test red rather
+than the money rail."""
 
 _ENTRY_PRICE = 60.0
 _ARM_GATE_QTY = 10.0
