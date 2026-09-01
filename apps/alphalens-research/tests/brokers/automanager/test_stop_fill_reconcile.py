@@ -560,5 +560,79 @@ class TestCompactorKeepsStopFilled(unittest.TestCase):
         self.assertEqual(cl._fold_standing_stop_ids(lines), cl._fold_standing_stop_ids(compacted))
 
 
+def _stop_filled_line(
+    *, order_id: str = _STOP_ID, ref: str | None = _REF, ts: float = 300.0
+) -> dict[str, Any]:
+    return {
+        "kind": "stop_filled",
+        "uic": _UIC,
+        "order_id": order_id,
+        "qty": 16.0,
+        "avg_price": 17.0,
+        "ref": ref,
+        "partial": False,
+        "ts": ts,
+    }
+
+
+class TestCompactorKeepsClosureEvidence(unittest.TestCase):
+    """#1223: the fired-terminal retraction sweep reads
+    ``_fold_round_trip_closures_since_latest_plan`` — the boot compactor's
+    "folds identically" contract now covers it. The old election kept a
+    ``stop_filled`` only when it matched the NEWEST ``stop_placed`` per uic, so
+    a stop rotation AFTER the fill dropped the closure evidence at startup and
+    the round-tripped pick's stale plan silently survived forever."""
+
+    def _closure_fold(self, lines: list[dict[str, Any]]) -> dict[int, Any]:
+        return cl._fold_round_trip_closures_since_latest_plan(lines)
+
+    def test_a_rotated_away_stop_fill_survives_compaction(self) -> None:
+        lines = [
+            _tranche_plan(),
+            _stop_placed(order_id="S-old", ts=100.0),
+            _stop_placed(order_id="S-new", ts=200.0),
+            _stop_filled_line(order_id="S-old", ts=300.0),
+        ]
+        self.assertIn(_UIC, self._closure_fold(lines))  # power check: evidence exists
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        self.assertEqual(self._closure_fold(lines), self._closure_fold(compacted))
+        self.assertEqual(cl._fold_standing_stop_ids(lines), cl._fold_standing_stop_ids(compacted))
+
+    def test_a_matched_stop_fill_is_kept_exactly_once(self) -> None:
+        # The common no-rotation case: the closure evidence IS the
+        # stop_placed-matched terminal — one kept copy must serve both folds.
+        lines = [_tranche_plan(), _stop_placed(), _stop_filled_line()]
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        kept_fills = [ln for ln in compacted if ln.get("kind") == "stop_filled"]
+        self.assertEqual(len(kept_fills), 1)
+        self.assertEqual(self._closure_fold(lines), self._closure_fold(compacted))
+        self.assertEqual(cl._fold_standing_stop_ids(lines), cl._fold_standing_stop_ids(compacted))
+
+    def test_a_retracted_uic_folds_to_no_closure_after_compaction(self) -> None:
+        lines = [
+            _tranche_plan(),
+            _stop_placed(),
+            _stop_filled_line(),
+            {"kind": "tranche_plan_retracted", "uic": _UIC, "pick_key": _PICK_KEY},
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        self.assertEqual(self._closure_fold(compacted), {})
+        self.assertEqual(cl.fold_tranche_plans(lines), cl.fold_tranche_plans(compacted))
+        self.assertEqual(cl._fold_standing_stop_ids(lines), cl._fold_standing_stop_ids(compacted))
+
+    def test_a_reset_away_stop_fill_compacts_out_of_the_closure_fold(self) -> None:
+        # A NEW pick's plan on the uic resets closure — the compacted file must
+        # fold to the same nothing (the dropped line is genuinely redundant).
+        lines = [
+            _tranche_plan(),
+            _stop_placed(),
+            _stop_filled_line(),
+            _tranche_plan(pick_key="GME:2026-09-15"),
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        self.assertEqual(self._closure_fold(lines), self._closure_fold(compacted))
+        self.assertEqual(self._closure_fold(compacted), {})
+
+
 if __name__ == "__main__":
     unittest.main()

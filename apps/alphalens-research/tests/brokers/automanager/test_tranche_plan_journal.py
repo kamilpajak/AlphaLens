@@ -12,6 +12,7 @@ import unittest
 
 from alphalens_pipeline.brokers.automanager.control_loop import (
     _build_tranche_plan_line,
+    _fold_round_trip_closures_since_latest_plan,
     fold_tranche_plans,
 )
 from broker_contract.sizing import TpTranchePlan
@@ -247,6 +248,104 @@ class TestFoldTranchePlans(unittest.TestCase):
         )
         out = fold_tranche_plans([line_a, line_b])
         self.assertEqual(set(out.keys()), {1, 2})
+
+
+def _closure_plan(*, uic: int = 486, pick_key: str | None = "KO:2026-07-20") -> dict:
+    kwargs = {} if pick_key is None else {"pick_key": pick_key}
+    return _build_tranche_plan_line(
+        uic=uic, tp_tranches=(_tr(0, 16.0, 1.0),), reference_qty=100.0, stop_price=13.0, **kwargs
+    )
+
+
+def _stop_filled(
+    *, uic: int = 486, ref: str | None = "KO-2026-07-20-entry-t0-stop-1", partial: bool = False
+) -> dict:
+    return {
+        "kind": "stop_filled",
+        "uic": uic,
+        "order_id": "S-1",
+        "qty": 100.0,
+        "avg_price": 9.0,
+        "ref": ref,
+        "partial": partial,
+        "ts": 200.0,
+    }
+
+
+class TestFoldRoundTripClosures(unittest.TestCase):
+    """#1223: durable round-trip closure evidence per uic, RESET on each new
+    plan generation. The fired-terminal retraction sweep requires POSITIVE
+    journal evidence that the fired position's lifecycle concluded — a
+    positions read alone could report flat while a fresh fill has not
+    materialized yet (fail-deadly), and a held position with expired siblings
+    would look terminal without ever having closed."""
+
+    def test_a_full_stop_fill_counts_with_its_ref_pick_key(self) -> None:
+        out = _fold_round_trip_closures_since_latest_plan([_closure_plan(), _stop_filled()])
+        self.assertEqual(out, {486: frozenset({"KO:2026-07-20"})})
+
+    def test_an_unparseable_ref_counts_as_a_keyless_closure(self) -> None:
+        # A classic bracket stop that round-tripped the position is still a
+        # closure of THIS uic within the current generation.
+        out = _fold_round_trip_closures_since_latest_plan(
+            [_closure_plan(), _stop_filled(ref="bracket-style-ref")]
+        )
+        self.assertEqual(out, {486: frozenset({None})})
+
+    def test_a_partial_stop_fill_is_not_closure(self) -> None:
+        out = _fold_round_trip_closures_since_latest_plan(
+            [_closure_plan(), _stop_filled(partial=True)]
+        )
+        self.assertEqual(out, {})
+
+    def test_a_position_closing_tranche_counts_as_keyless_closure(self) -> None:
+        out = _fold_round_trip_closures_since_latest_plan(
+            [_closure_plan(), {"kind": "tranche_fired", "uic": 486, "position_closed": True}]
+        )
+        self.assertEqual(out, {486: frozenset({None})})
+
+    def test_a_non_closing_tranche_fired_is_not_closure(self) -> None:
+        out = _fold_round_trip_closures_since_latest_plan(
+            [_closure_plan(), {"kind": "tranche_fired", "uic": 486, "tag": "tp1"}]
+        )
+        self.assertEqual(out, {})
+
+    def test_a_new_plan_generation_resets_closure(self) -> None:
+        out = _fold_round_trip_closures_since_latest_plan(
+            [_closure_plan(), _stop_filled(), _closure_plan(pick_key="KO:2026-08-01")]
+        )
+        self.assertEqual(out, {})
+
+    def test_a_keyless_plan_resets_closure(self) -> None:
+        out = _fold_round_trip_closures_since_latest_plan(
+            [_closure_plan(), _stop_filled(), _closure_plan(pick_key=None)]
+        )
+        self.assertEqual(out, {})
+
+    def test_a_same_key_plan_reappend_preserves_closure(self) -> None:
+        # The already_watching crash-recovery re-drive re-journals the pick's
+        # plan every tick — an identity-idempotent re-append must not erase
+        # the round trip already on record.
+        out = _fold_round_trip_closures_since_latest_plan(
+            [_closure_plan(), _stop_filled(), _closure_plan()]
+        )
+        self.assertEqual(out, {486: frozenset({"KO:2026-07-20"})})
+
+    def test_a_retraction_resets_closure(self) -> None:
+        out = _fold_round_trip_closures_since_latest_plan(
+            [_closure_plan(), _stop_filled(), {"kind": "tranche_plan_retracted", "uic": 486}]
+        )
+        self.assertEqual(out, {})
+
+    def test_closure_before_the_first_plan_is_reset_by_it(self) -> None:
+        out = _fold_round_trip_closures_since_latest_plan([_stop_filled(), _closure_plan()])
+        self.assertEqual(out, {})
+
+    def test_a_line_without_a_uic_contributes_nothing(self) -> None:
+        out = _fold_round_trip_closures_since_latest_plan(
+            [{"kind": "stop_filled", "partial": False}]
+        )
+        self.assertEqual(out, {})
 
 
 if __name__ == "__main__":
