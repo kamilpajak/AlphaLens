@@ -570,7 +570,7 @@ def order_filled(ticker: str, *, shares: float, closed_r: float | None = None) -
     )
 
 
-def order_cancelled(ticker: str, *, request_id: str = "entry-KO") -> Any:
+def order_cancelled(ticker: str, *, request_id: str = "entry-KO", crid: str | None = None) -> Any:
     from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
     return ReconcileVerdict(
@@ -580,6 +580,7 @@ def order_cancelled(ticker: str, *, request_id: str = "entry-KO") -> Any:
         entry_order_id=request_id,
         status=OrderStatus.CANCELLED.value,
         verdict="CANCELLED",
+        details={"client_request_id": crid} if crid else {},
     )
 
 

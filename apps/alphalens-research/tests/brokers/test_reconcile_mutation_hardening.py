@@ -357,6 +357,43 @@ class TestReconcileResolvedCascadeNote(unittest.TestCase):
         self.assertIsNone(verdict.note)
 
 
+class TestReconcileResolvedTerminalFillEvidence(unittest.TestCase):
+    """#1249 class (c) prerequisite: a terminal non-filled verdict must carry
+    any partial-fill evidence in ``details`` — the planned-line retraction
+    vetoes on it, and a partially-filled-then-cancelled entry leaves a real
+    position whose planned line must never be retracted."""
+
+    def _resolved(self, *, status: OrderStatus, filled_quantity: float) -> ReconcileVerdict:
+        state = OrderState(
+            order_id="E",
+            status=status,
+            instrument=None,
+            filled_quantity=filled_quantity,
+            raw_status="",
+        )
+        return _reconcile_resolved(
+            {},
+            state,
+            brief=("d", "T", 10.0, "E"),
+            details={},
+            cross_check=None,
+        )
+
+    def test_cancelled_after_partial_fill_stamps_filled_quantity(self):
+        verdict = self._resolved(status=OrderStatus.CANCELLED, filled_quantity=2.0)
+        self.assertEqual(verdict.details.get("filled_quantity"), 2.0)
+
+    def test_cancelled_with_no_fill_leaves_the_stamp_absent(self):
+        # Mirrors _reconcile_open: a zero fill stays ABSENT, not 0.0 — the
+        # retraction veto keys on presence.
+        verdict = self._resolved(status=OrderStatus.CANCELLED, filled_quantity=0.0)
+        self.assertNotIn("filled_quantity", verdict.details)
+
+    def test_expired_after_partial_fill_stamps_filled_quantity(self):
+        verdict = self._resolved(status=OrderStatus.EXPIRED, filled_quantity=1.0)
+        self.assertEqual(verdict.details.get("filled_quantity"), 1.0)
+
+
 # --------------------------------------------------------------------------
 # _reconcile_filled — closed-pair FIFO join by OpeningExternalReferenceId.
 # --------------------------------------------------------------------------

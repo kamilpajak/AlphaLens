@@ -4824,6 +4824,103 @@ class TestFoldPlannedExitsPricesOnly(unittest.TestCase):
         self.assertTrue(planned.conflicting)
         self.assertEqual(planned.n_plans, 2)
 
+    def test_a_retraction_marker_drops_the_crid_from_the_fold(self) -> None:
+        # #1249 part 2: a planned line is no longer immortal — a
+        # planned_retracted marker removes its crid from the fold entirely.
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": None,
+                "tier_index": 0,
+                "gen": 0,
+            },
+            {"kind": "planned_retracted", "client_request_id": "crid-0", "uic": 43070},
+        ]
+        self.assertEqual(cl._fold_planned_exits(lines), {})
+
+    def test_a_retraction_heals_a_two_plan_conflict(self) -> None:
+        # The BAH shape (#1249): two crids on one uic with the same tier_index
+        # conflict; retracting the stale one leaves the fresh plan governing.
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-A0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": 306.72,
+                "tier_index": 0,
+                "gen": 0,
+            },
+            {
+                "kind": "planned",
+                "client_request_id": "crid-B0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 210.00,
+                "take_profit": 300.00,
+                "tier_index": 0,
+                "gen": 0,
+            },
+            {"kind": "planned_retracted", "client_request_id": "crid-B0", "uic": 43070},
+        ]
+        planned = cl._fold_planned_exits(lines)[43070]
+        self.assertFalse(planned.conflicting)
+        self.assertEqual(planned.n_plans, 1)
+        self.assertEqual(planned.entry_crid, "crid-A0")
+        self.assertAlmostEqual(planned.stop_price, 216.48)
+
+    def test_a_planned_line_after_a_retraction_governs_again(self) -> None:
+        # Write-order semantics: a planned line APPENDED AFTER the retraction is
+        # a genuinely new plan and governs (entry-trail crids are sticky-terminal
+        # and bracket crids are UUIDs, so a retracted crid cannot resurrect by
+        # accident — only by a deliberate later write).
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": None,
+                "tier_index": 0,
+                "gen": 0,
+            },
+            {"kind": "planned_retracted", "client_request_id": "crid-0", "uic": 43070},
+            {
+                "kind": "planned",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 220.00,
+                "take_profit": None,
+                "tier_index": 0,
+                "gen": 0,
+            },
+        ]
+        planned = cl._fold_planned_exits(lines)[43070]
+        self.assertAlmostEqual(planned.stop_price, 220.00)
+
+    def test_a_keyless_retraction_marker_is_ignored(self) -> None:
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": None,
+                "tier_index": 0,
+                "gen": 0,
+            },
+            {"kind": "planned_retracted", "uic": 43070},  # malformed: no crid
+        ]
+        self.assertIn(43070, cl._fold_planned_exits(lines))
+
     def test_tiers_disagree_takes_max_stop_for_a_long(self) -> None:
         lines = [
             {
@@ -4869,6 +4966,123 @@ class TestFoldPlannedExitsPricesOnly(unittest.TestCase):
                 folded = cl._fold_planned_exits(list(cl._iter_standalone_stop_journal()))
         self.assertIn(_UIC, folded)
         self.assertAlmostEqual(folded[_UIC].tp_price or 0.0, 306.72)
+
+
+class TestVerdictDrivenPlannedRetraction(unittest.TestCase):
+    """#1249 class (c): a definitively-unfilled disappeared bracket's verdict
+    (CANCELLED / REJECTED / EXPIRED with no fill evidence) retracts the
+    bracket's ``planned`` line — the stale-UUID-crid class the entry-trail
+    sweeps cannot reach (the July BAH offenders). Any fill evidence, an
+    unresolved outcome, or a missing crid vetoes the retraction: a wrongly
+    retracted plan under a live position is worse than a lingering one."""
+
+    def _journal(self) -> Path:
+        d = TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        journal = Path(d.name) / "standalone_stops.jsonl"
+        patcher = mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return journal
+
+    def _seed_planned(self, crid: str = "454d-stale", uic: int = 49284) -> None:
+        cl._append_standalone_stop_journal(
+            cl._build_planned_line(
+                entry_crid=crid,
+                uic=uic,
+                side="SELL",
+                stop_price=56.75,
+                take_profit=None,
+                tier_index=0,
+            )
+        )
+
+    def _markers(self) -> list[dict[str, Any]]:
+        return [
+            dict(line)
+            for line in cl._iter_standalone_stop_journal()
+            if line.get("kind") == "planned_retracted"
+        ]
+
+    def _cancelled(self, **over: Any) -> ReconcileVerdict:
+        base: dict[str, Any] = {
+            "status": "CANCELLED",
+            "verdict": "CANCELLED",
+            "details": {"client_request_id": "454d-stale"},
+        }
+        base.update(over)
+        return _verdict(**base)
+
+    def test_terminal_unfilled_verdict_retracts_the_planned_line(self) -> None:
+        for status in ("CANCELLED", "REJECTED", "EXPIRED"):
+            with self.subTest(status=status):
+                self._journal()
+                self._seed_planned()
+                cl._retract_planned_for_verdicts([self._cancelled(status=status, verdict=status)])
+                markers = self._markers()
+                self.assertEqual(len(markers), 1)
+                self.assertEqual(markers[0]["client_request_id"], "454d-stale")
+                self.assertEqual(markers[0]["uic"], 49284)
+                self.assertNotIn(
+                    49284, cl._fold_planned_exits(list(cl._iter_standalone_stop_journal()))
+                )
+
+    def test_retraction_is_idempotent_across_ticks(self) -> None:
+        # Verdicts recur every tick from memoized audit outcomes — the helper
+        # must skip a crid that no longer governs, never stack markers.
+        self._journal()
+        self._seed_planned()
+        cl._retract_planned_for_verdicts([self._cancelled()])
+        cl._retract_planned_for_verdicts([self._cancelled()])
+        self.assertEqual(len(self._markers()), 1)
+
+    def test_a_filled_verdict_never_retracts(self) -> None:
+        self._journal()
+        self._seed_planned()
+        cl._retract_planned_for_verdicts([self._cancelled(status="FILLED", verdict="FILLED")])
+        self.assertEqual(self._markers(), [])
+
+    def test_an_unresolved_verdict_never_retracts(self) -> None:
+        self._journal()
+        self._seed_planned()
+        cl._retract_planned_for_verdicts(
+            [self._cancelled(status="UNRESOLVED", verdict="UNRESOLVED(aged-out)")]
+        )
+        self.assertEqual(self._markers(), [])
+
+    def test_fill_evidence_vetoes_retraction(self) -> None:
+        # A partially-filled-then-cancelled entry leaves a position — its
+        # planned line still covers something real.
+        self._journal()
+        self._seed_planned()
+        verdict = self._cancelled(
+            details={"client_request_id": "454d-stale", "filled_quantity": 2.0}
+        )
+        cl._retract_planned_for_verdicts([verdict])
+        self.assertEqual(self._markers(), [])
+
+    def test_a_verdict_without_a_crid_never_retracts(self) -> None:
+        self._journal()
+        self._seed_planned()
+        cl._retract_planned_for_verdicts([self._cancelled(details={})])
+        self.assertEqual(self._markers(), [])
+
+    def test_verdict_advance_runs_the_retraction(self) -> None:
+        # Wiring: the control loop's verdict phase drives class (c) — one tick
+        # with a terminal-unfilled verdict retracts, BEFORE the protection pass
+        # (run_once ordering) so the healed fold governs the same tick.
+        with TemporaryDirectory() as d:
+            self._journal()
+            self._seed_planned()
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[self._cancelled()],
+                place_calls=[],
+                alerts=[],
+            )
+            cl._run_verdict_advance(deps, deps.read_records(), cl.TickReport())
+        self.assertEqual(len(self._markers()), 1)
 
 
 class TestFoldOcoUnsupported(unittest.TestCase):
@@ -6504,6 +6718,29 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
 
     def test_empty_input_is_empty_output(self) -> None:
         self.assertEqual(cl._compact_standalone_stop_journal_lines([]), [])
+
+    def test_a_retracted_crid_leaves_no_compacted_lines(self) -> None:
+        # #1249 part 2: a fully retracted crid keeps NEITHER its planned line
+        # NOR the marker (the marker is consumed during the per-crid election,
+        # mirroring the tranche retraction semantics) — and the fold stays
+        # equivalent by construction because compaction re-uses the fold's own
+        # per-crid selection.
+        lines = [
+            *_rich_standalone_stop_journal(),
+            {"kind": "planned_retracted", "client_request_id": "crid-B0", "uic": 0},
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        self.assertEqual(
+            _planned_fold_data(cl._fold_planned_exits(lines)),
+            _planned_fold_data(cl._fold_planned_exits(compacted)),
+        )
+        self.assertFalse(
+            any(
+                line["kind"] == "planned" and line.get("client_request_id") == "crid-B0"
+                for line in compacted
+            )
+        )
+        self.assertFalse(any(line["kind"] == "planned_retracted" for line in compacted))
 
     def test_keeps_newest_stop_placed_and_amend_ok_per_uic(self) -> None:
         # The compactor drops unknown kinds, so the outcome records MUST be listed

@@ -701,6 +701,12 @@ def _reconcile_resolved(
             asof=asof,
         )
     if state.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.EXPIRED):
+        # #1249: partial-fill evidence on a terminal outcome must reach the
+        # verdict — the planned-line retraction vetoes on it (a partially
+        # filled-then-cancelled entry leaves a position). Mirrors
+        # _reconcile_open: zero stays ABSENT, the veto keys on presence.
+        if state.filled_quantity:
+            details["filled_quantity"] = state.filled_quantity
         note = None
         if state.status is OrderStatus.CANCELLED and bracket.get("exit_order_ids"):
             note = "children cancelled via cascade"
