@@ -167,9 +167,14 @@ class IntentMeta:
 
     # ISO-8601 timestamp string.
     armed_ts: str
-    # YYYY-MM-DD string.
+    # YYYY-MM-DD string. For a manual pick (no brief row) this is the arm date.
     brief_date: str
     schema_version: str = SCHEMA_VERSION
+    # Where the intent came from: "brief" (parsed from a brief row by `broker
+    # arm`) or "manual" (operator-provided levels via `broker arm-manual`,
+    # #1235). Journals and later measurement separate the two populations on
+    # this marker; legacy payloads without the key decode to "brief".
+    source: Literal["brief", "manual"] = "brief"
 
 
 @dataclass(frozen=True)

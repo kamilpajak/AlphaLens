@@ -131,6 +131,32 @@ class TestRoundTrip(unittest.TestCase):
         self.assertEqual(primitive.ceiling_price, 120.0)
 
 
+class TestMetaSource(unittest.TestCase):
+    """The provenance marker separating manual picks from brief picks (#1235)."""
+
+    def test_meta_source_manual_round_trips(self) -> None:
+        intent = TradeIntent(
+            intent_id="NVO:2026-09-02:manual",
+            instrument=InstrumentHint(ticker="NVO", mic="XNYS"),
+            spec=_spec(),
+            meta=IntentMeta(
+                armed_ts="2026-09-02T12:00:00+00:00",
+                brief_date="2026-09-02",
+                source="manual",
+            ),
+            exit=None,
+        )
+        restored = intent_from_jsonable(intent_to_jsonable(intent))
+        self.assertEqual(restored, intent)
+        self.assertEqual(restored.meta.source, "manual")
+
+    def test_legacy_payload_without_source_decodes_to_brief(self) -> None:
+        data = intent_to_jsonable(_intent_with_reanchor())
+        del data["meta"]["source"]
+        restored = intent_from_jsonable(data)
+        self.assertEqual(restored.meta.source, "brief")
+
+
 class TestDecodeErrors(unittest.TestCase):
     def test_unknown_reaction_kind_raises(self) -> None:
         data = intent_to_jsonable(_intent_with_reanchor())

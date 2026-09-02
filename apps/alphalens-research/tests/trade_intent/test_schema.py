@@ -120,6 +120,14 @@ class TestDefaults(unittest.TestCase):
         self.assertEqual(tranche.r_multiple, 0.0)
         self.assertEqual(tranche.tag, "")
 
+    def test_intent_meta_source_defaults_to_brief(self):
+        meta = IntentMeta(armed_ts="2026-09-02T12:00:00Z", brief_date="2026-09-02")
+        self.assertEqual(meta.source, "brief")
+
+    def test_intent_meta_source_accepts_manual(self):
+        meta = IntentMeta(armed_ts="2026-09-02T12:00:00Z", brief_date="2026-09-02", source="manual")
+        self.assertEqual(meta.source, "manual")
+
 
 class TestReactionPrimitiveDiscriminatedUnion(unittest.TestCase):
     def test_each_primitive_carries_its_distinct_kind_tag(self):
