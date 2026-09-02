@@ -155,6 +155,26 @@ class TestExplicitMicFromHint(unittest.TestCase):
     def test_non_us_hint_is_explicit_and_normalized(self):
         self.assertEqual(explicit_mic_from_hint("XWAR"), "XWAR")
         self.assertEqual(explicit_mic_from_hint("xwar"), "XWAR")
+        self.assertEqual(explicit_mic_from_hint(" xwar "), "XWAR")
+
+    def test_whitespace_only_hint_probes(self):
+        self.assertIsNone(explicit_mic_from_hint("   "))
+
+    def test_unknown_mic_is_passed_through_verbatim(self):
+        # Validity is the broker venue map's call (MIC_TO_SAXO_EXCHANGE_ID),
+        # never a second whitelist here — a typo'd venue must reach
+        # resolve_instrument and fail loudly there, not be silently probed.
+        self.assertEqual(explicit_mic_from_hint("XXXX"), "XXXX")
+
+    def test_unknown_mic_reaches_the_broker_and_is_never_probed(self):
+        broker = _RoutingStubBroker({})
+        with self.assertRaises(InstrumentNotFoundError):
+            resolve_us_instrument(
+                broker,  # type: ignore[arg-type]
+                "CDR",
+                exchange_mic=explicit_mic_from_hint("XXXX"),
+            )
+        self.assertEqual(broker.resolve_calls, [("CDR", "XXXX")])
 
     def test_xnys_hinted_ticker_that_only_lists_on_xnas_still_resolves(self):
         # The load-bearing brief-pick regression: every brief intent hints

@@ -43,8 +43,15 @@ def explicit_mic_from_hint(hint_mic: str | None) -> str | None:
     caller keeps probing exactly as before. A non-US hint (``arm-manual``
     stamps the operator's venue, e.g. XWAR) is AUTHORITATIVE: it returns the
     normalized MIC for an explicit single-venue resolve, so a same-ticker US
-    listing is unreachable. Single-sourced here — the day-1 gap gate price
-    probe applies the same rule.
+    listing is unreachable. Single-sourced here; NOTE the day-1 gap gate
+    price probe still owns a separate US-pinned candidate list today — it is
+    aligned to this rule in the next PR of the venue arc (#1238).
+
+    An unknown non-US MIC (a typo, an unmapped venue) is returned verbatim:
+    validity is the broker venue map's call (``MIC_TO_SAXO_EXCHANGE_ID``),
+    never a second whitelist here. Downstream that resolve failure is a
+    caught ``InstrumentNotFoundError`` — the pick logs and retries next
+    tick, it never crashes the tick and is never terminally refused.
     """
     if not hint_mic:
         return None

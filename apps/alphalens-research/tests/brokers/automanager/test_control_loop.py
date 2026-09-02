@@ -1156,6 +1156,26 @@ class TestResolveAndSizeThreadsTheVenueHint(unittest.TestCase):
     def test_a_non_us_hint_resolves_explicitly(self) -> None:
         self.assertEqual(self._captured_exchange_mic("XWAR"), "XWAR")
 
+    def test_an_unmapped_hint_retries_not_crashes(self) -> None:
+        # A typo'd venue hint fails resolve with InstrumentNotFoundError
+        # (a BrokerError) — _resolve_and_size returns None so the pick logs
+        # and retries next tick; DELIBERATELY non-terminal (zen review,
+        # PR #1239): validity is the broker venue map's call and a hand-fixed
+        # journal line self-heals on the next drain.
+        from broker_contract.contract import InstrumentNotFoundError
+
+        pkg = "alphalens_pipeline.brokers"
+
+        def _resolve(_b: Any, _t: str, exchange_mic: str | None = None) -> Any:
+            raise InstrumentNotFoundError(f"unknown venue {exchange_mic!r}")
+
+        with contextlib.ExitStack() as stack:
+            p = stack.enter_context
+            p(mock.patch(f"{pkg}.routing.resolve_us_instrument", _resolve))
+            p(mock.patch.dict("os.environ", {}, clear=True))
+            result = cl._resolve_and_size(_PlaceBroker(), "CDR", _acct(), object(), hint_mic="XXXX")
+        self.assertIsNone(result)
+
 
 def _fee_plan(notional: float) -> SetupPlan:
     """A minimal ``SetupPlan`` whose ``setup_plan_gross_notional`` is exactly
