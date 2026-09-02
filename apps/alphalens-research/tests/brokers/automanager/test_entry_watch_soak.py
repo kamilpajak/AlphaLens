@@ -139,7 +139,7 @@ class TestEntryWatchMultiSessionSoak(unittest.TestCase):
         for target, fn in (
             (f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b, **_k: []),
             (f"{pkg}.automanager.safety.check", lambda *_a, **_k: object()),
-            (f"{pkg}.routing.resolve_us_instrument", lambda _b, t: instruments[t]),
+            (f"{pkg}.routing.resolve_us_instrument", lambda _b, t, **_kw: instruments[t]),
             (f"{pkg}.submission_log.iter_submission_records", lambda _p: []),
             (f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)),
             (f"{pkg}.submission_log.append_submission_record", lambda _r: None),

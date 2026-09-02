@@ -276,7 +276,7 @@ def _placer(test: unittest.TestCase, broker: Any, plan: SetupPlan) -> Any:
     for target, fn in (
         (f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b, **_k: []),
         (f"{pkg}.automanager.safety.check", lambda *_a, **_k: object()),
-        (f"{pkg}.routing.resolve_us_instrument", lambda _b, _t: _instr()),
+        (f"{pkg}.routing.resolve_us_instrument", lambda _b, _t, **_kw: _instr()),
         (f"{pkg}.submission_log.iter_submission_records", lambda _p: []),
         (f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)),
         (f"{pkg}.submission_log.append_submission_record", submissions.append),
