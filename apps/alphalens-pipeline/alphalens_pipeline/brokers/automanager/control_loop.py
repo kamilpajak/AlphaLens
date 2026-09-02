@@ -6550,49 +6550,109 @@ def _committed_working_gross_acct(
     return total, unjoined
 
 
-def _filled_positions_gross_acct(positions: Iterable[Any], fx: Any) -> tuple[float, str | None]:
+def _filled_positions_gross_acct(
+    positions: Iterable[Any],
+    fx: Any,
+    *,
+    account_currency: str = "",
+    rate_lookup: Callable[[str], float | None] | None = None,
+) -> tuple[float, str | None]:
     """``(total, None)`` — the broker positions' mark-to-market gross in
     ACCOUNT currency — or ``(0.0, failure)`` when any position carries no
-    usable mark or a currency the candidate's fx cannot convert.
+    usable mark or a currency that cannot be converted.
 
     Valuation choice: ``Position.market_value`` (Saxo
     ``PositionView.MarketValue`` — qty x current market price, INSTRUMENT
     currency) is the one current-price field the position row carries;
     ``avg_price`` is the stale open price and would mis-state exposure after
-    any move. Converted through the CANDIDATE's current ``fx.rate`` (every
-    first-cohort instrument is USD; ``fx=None`` is the same-currency no-op).
-    A ``None`` mark (SIM NoAccess) cannot be valued conservatively HIGH
-    without a price, so it FAILS CLOSED — the caller refuses the pick with an
-    alert rather than silently skipping the position. ``abs`` because gross
-    exposure ignores position sign.
+    any move. A ``None`` mark (SIM NoAccess) cannot be valued conservatively
+    HIGH without a price, so it FAILS CLOSED — the caller refuses the pick
+    with an alert rather than silently skipping the position. ``abs`` because
+    gross exposure ignores position sign.
 
-    Currency guard (zen pre-merge finding): the single candidate ``fx`` rate
-    is only valid for positions trading in the SAME instrument currency. A
-    position whose ``instrument.currency`` is stamped AND differs from the
-    conversion's instrument currency fails CLOSED rather than being mis-valued
-    through a foreign rate. ``""`` (not stamped — best-effort reverse lookup
-    rows, ``InstrumentRef`` docstring) is tolerated: today's cohort is
-    single-currency and the stamp is absent, not wrong."""
+    Mixed-currency book (#1238 PR 4 — pre-#1238 this failed closed the moment
+    ANY stamped currency differed from the candidate's fx, so the first GPW
+    position alongside USD ones would have refused every placement). Per
+    position, by its stamped ``instrument.currency``:
+
+    - ``""`` (not stamped — best-effort reverse lookup rows,
+      ``InstrumentRef`` docstring): today's path byte-identical — the
+      candidate ``fx.rate`` when present, else raw. Absent is not wrong.
+    - equal to the candidate fx's instrument currency: the candidate rate.
+    - equal to ``account_currency``: already account currency, folds raw.
+    - anything else: converted through ``rate_lookup`` (ONE lookup per
+      distinct currency per attempt — it is broker I/O inside a money gate);
+      no lookup available or no rate producible fails CLOSED, exactly like a
+      missing mark."""
     expected_ccy = getattr(fx, "instrument_currency", "") if fx is not None else ""
+    rates: dict[str, float] = {}
     total = 0.0
     for position in positions:
         position_ccy = getattr(position.instrument, "currency", "") or ""
-        if expected_ccy and position_ccy and position_ccy != expected_ccy:
-            return 0.0, (
-                f"position {position.instrument.ticker} trades in {position_ccy} but the "
-                f"candidate's fx converts {expected_ccy} — cannot value gross exposure "
-                "through a foreign rate, failing closed"
-            )
         if position.market_value is None:
             return 0.0, (
                 f"position {position.instrument.ticker} has no broker mark "
                 "(market_value=None) — cannot value gross exposure, failing closed"
             )
-        value_acct = abs(float(position.market_value))
-        if fx is not None:
-            value_acct /= float(fx.rate)
-        total += value_acct
+        value_instr = abs(float(position.market_value))
+        # Legacy path first, byte-identical: a candidate fx with no stamped
+        # instrument currency (or an unstamped/matching position) converts
+        # through the candidate rate exactly as before #1238; fx=None with an
+        # unstamped position folds raw.
+        if fx is not None and (not expected_ccy or position_ccy in ("", expected_ccy)):
+            total += value_instr / float(fx.rate)
+            continue
+        if fx is None and not position_ccy:
+            total += value_instr
+            continue
+        if account_currency and position_ccy == account_currency:
+            total += value_instr
+            continue
+        rate = rates.get(position_ccy)
+        if rate is None and rate_lookup is not None:
+            looked_up = rate_lookup(position_ccy)
+            if looked_up is not None and looked_up > 0.0:
+                rate = float(looked_up)
+                rates[position_ccy] = rate
+        if rate is None:
+            return 0.0, (
+                f"position {position.instrument.ticker} trades in {position_ccy} and no "
+                f"conversion into the account currency is available — cannot value gross "
+                "exposure through a foreign rate, failing closed"
+            )
+        total += value_instr / rate
     return total, None
+
+
+def _make_position_rate_lookup(broker: Any, account_currency: str) -> Callable[[str], float | None]:
+    """A policy-checked ``instrument-per-account`` rate per foreign currency
+    for :func:`_filled_positions_gross_acct` (#1238 PR 4). Reuses the SAME
+    quote source and acceptance policy as candidate sizing
+    (``broker.get_fx_rate`` -> ``build_fx_conversion``); any failure —
+    missing capability, a broker error, a policy-rejected quote — returns
+    ``None`` and the fold fails closed."""
+
+    def _lookup(currency: str) -> float | None:
+        get_fx_rate = getattr(broker, "get_fx_rate", None)
+        if get_fx_rate is None or not account_currency:
+            return None
+        from broker_contract.contract import BrokerError
+        from broker_contract.sizing import TradeSetupNotPlannableError
+
+        from alphalens_pipeline.brokers.execution import build_fx_conversion
+
+        try:
+            return float(build_fx_conversion(get_fx_rate(account_currency, currency)).rate)
+        except (BrokerError, TradeSetupNotPlannableError, TypeError, ValueError) as exc:
+            logger.warning(
+                "gross cap: FX lookup %s->%s failed (%s) — the fold fails closed",
+                account_currency,
+                currency,
+                exc,
+            )
+            return None
+
+    return _lookup
 
 
 def _check_gross_cap(
@@ -6605,6 +6665,7 @@ def _check_gross_cap(
     positions: Iterable[Any],
     ticker: str,
     entry_trail_fold: entry_trails.EntryTrailFold | None = None,
+    broker: Any = None,
 ) -> str | None:
     """``None`` iff the pick keeps total gross exposure — still-working
     journaled entries + THIS candidate + filled positions + WATCHING trail
@@ -6650,7 +6711,13 @@ def _check_gross_cap(
             "joined to a journaled entry bracket; committed gross cannot be valued, "
             "failing closed"
         )
-    filled_acct, mark_failure = _filled_positions_gross_acct(positions, fx)
+    account_ccy = str(getattr(account, "currency", "") or "")
+    filled_acct, mark_failure = _filled_positions_gross_acct(
+        positions,
+        fx,
+        account_currency=account_ccy,
+        rate_lookup=_make_position_rate_lookup(broker, account_ccy) if broker is not None else None,
+    )
     if mark_failure is not None:
         return f"gross cap: {ticker} refused — {mark_failure}"
 
@@ -7781,6 +7848,7 @@ def _place_pick(
         positions=positions,
         ticker=ticker,
         entry_trail_fold=entry_trail_fold,
+        broker=broker,
     )
     if gross_violation is not None:
         _refuse_pick_terminal(
