@@ -2607,6 +2607,132 @@ class TestStaleTranchePlanRetraction(unittest.TestCase):
         self.assertTrue(any("retraction" in msg for msg in captured.output))
 
 
+def _seed_planned_fire_line(crid: str = "KO-2026-07-20-entry-t0-fire", uic: int = 307) -> None:
+    cl._append_standalone_stop_journal(
+        cl._build_planned_line(
+            entry_crid=crid,
+            uic=uic,
+            side="SELL",
+            stop_price=9.0,
+            take_profit=None,
+            tier_index=0,
+        )
+    )
+
+
+class TestStalePlannedLineRetraction(unittest.TestCase):
+    """#1249 part 2, class (a): the fire-arm ``planned`` write-ahead of a pick
+    whose watch ended with NO fill covers nothing — the sweep retracts it so a
+    stale line can never conflict a later fill on the uic (the merge-refusal
+    deadlock). Keyed per-crid, orthogonal to tranche governance; a fired or
+    still-open tier blocks the class exactly like the tranche sweep."""
+
+    def _sweep(self) -> None:
+        cl._retract_stale_tranche_plans(entry_trails.read_entry_trail_fold())
+
+    def _markers(self, stops_path: Path) -> list[dict[str, Any]]:
+        return [ln for ln in _lines(stops_path) if ln["kind"] == "planned_retracted"]
+
+    def test_unfired_terminal_pick_retracts_its_planned_lines(self) -> None:
+        for terminal in (
+            entry_trails.KIND_EXPIRED,
+            entry_trails.KIND_SUSPENDED,
+            entry_trails.KIND_CANCELLED,
+        ):
+            with self.subTest(terminal=terminal):
+                _journal(self)
+                stops_path = _planned_journal(self)
+                _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=terminal)
+                _seed_planned_fire_line()
+                self._sweep()
+                markers = self._markers(stops_path)
+                self.assertEqual(len(markers), 1)
+                self.assertEqual(markers[0]["client_request_id"], "KO-2026-07-20-entry-t0-fire")
+                self.assertEqual(markers[0]["uic"], 307)
+                self.assertNotIn(307, cl._fold_planned_exits(_lines(stops_path)))
+
+    def test_a_fired_tier_blocks_the_unfired_class(self) -> None:
+        # The fired pick's planned line may still cover a LIVE position — the
+        # unfired class never touches it (the fired class has its own gates).
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=entry_trails.KIND_FIRED)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t1", terminal_kind=entry_trails.KIND_EXPIRED)
+        _seed_planned_fire_line()
+        _seed_planned_fire_line(crid="KO-2026-07-20-entry-t1-fire")
+        self._sweep()
+        self.assertEqual(self._markers(stops_path), [])
+
+    def test_a_still_open_tier_blocks(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=entry_trails.KIND_EXPIRED)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t1", terminal_kind=None)  # still watching
+        _seed_planned_fire_line()
+        self._sweep()
+        self.assertEqual(self._markers(stops_path), [])
+
+    def test_retraction_is_idempotent(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        _seed_planned_fire_line()
+        self._sweep()
+        self._sweep()
+        self.assertEqual(len(self._markers(stops_path)), 1)
+
+    def test_planned_retraction_ignores_tranche_governance(self) -> None:
+        # A NEWER pick may already govern the uic's tranche ladder — the ended
+        # pick's own fire-crid planned line is retracted regardless (per-crid
+        # key, so the newer pick's lines are structurally untouchable), while
+        # the newer pick's tranche plan is left alone.
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        _seed_plan_line(pick_key="KO:2026-08-01")  # a NEWER pick owns the ladder
+        _seed_planned_fire_line()
+        self._sweep()
+        self.assertEqual(len(self._markers(stops_path)), 1)
+        tranche_retractions = [
+            ln for ln in _lines(stops_path) if ln["kind"] == "tranche_plan_retracted"
+        ]
+        self.assertEqual(tranche_retractions, [])
+
+    def test_a_tier_that_never_armed_leaves_no_marker(self) -> None:
+        # An expired tier that never reached the fire-arm wrote no planned line
+        # — nothing to retract, and the sweep writes nothing.
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._sweep()
+        self.assertEqual(self._markers(stops_path), [])
+
+    def test_watch_pass_runs_the_sweep(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        _seed_planned_fire_line()
+        deps = _watch_deps(_FakeFeed({}), [])
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        self.assertEqual(len(self._markers(stops_path)), 1)
+
+    def test_a_read_failure_in_the_helper_warns_and_returns_zero(self) -> None:
+        _journal(self)
+        _planned_journal(self)
+
+        def boom() -> Any:
+            raise OSError("disk gone")
+
+        with (
+            mock.patch.object(cl, "_iter_standalone_stop_journal", boom),
+            self.assertLogs(cl.logger, level="WARNING") as captured,
+        ):
+            count = cl._retract_planned_lines(["x-fire"], note="test")
+        self.assertEqual(count, 0)
+        self.assertTrue(any("planned" in msg for msg in captured.output))
+
+
 def _seed_plan_line(pick_key: str | None = "KO:2026-07-20", uic: int = 307) -> None:
     line: dict[str, Any] = {
         "kind": "tranche_plan",
@@ -2786,6 +2912,27 @@ class TestFiredTerminalPlanRetraction(unittest.TestCase):
         self._sweep(deps)
         self._sweep(deps)
         self.assertEqual(self._retractions(stops_path), [])
+
+    def test_round_trip_confirmation_also_retracts_the_planned_lines(self) -> None:
+        # #1249 part 2, class (b): the confirmed round-trip write retracts the
+        # pick's fire-crid planned lines alongside the tranche plan — riding the
+        # SAME belt-and-braces gates (closure evidence + net-flat book + the
+        # two-tick latch), never before them.
+        _journal(self)
+        stops_path = _planned_journal(self)
+        self._seed_fired_pick()
+        _seed_plan_line()
+        _seed_stop_filled()
+        _seed_planned_fire_line()
+        deps = self._deps(_BrokerWithPositions([]))
+        self._sweep(deps)
+        planned_markers = [ln for ln in _lines(stops_path) if ln["kind"] == "planned_retracted"]
+        self.assertEqual(planned_markers, [])  # first sight: latch only
+        self._sweep(deps)
+        planned_markers = [ln for ln in _lines(stops_path) if ln["kind"] == "planned_retracted"]
+        self.assertEqual(len(planned_markers), 1)
+        self.assertEqual(planned_markers[0]["client_request_id"], "KO-2026-07-20-entry-t0-fire")
+        self.assertNotIn(307, cl._fold_planned_exits(_lines(stops_path)))
 
     def test_another_picks_stop_fill_is_not_closure(self) -> None:
         # uic reuse defense: a stop ref parsing to a DIFFERENT pick key is not

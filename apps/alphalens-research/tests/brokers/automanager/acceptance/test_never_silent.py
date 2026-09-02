@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import unittest
 
-from .world import ManagerWorld, a_divergence
+from .world import ManagerWorld, a_divergence, order_cancelled
 
 
 class ItNeverFailsSilently(unittest.TestCase):
@@ -66,6 +66,22 @@ class ItNeverFailsSilently(unittest.TestCase):
         world.run_tick()
 
         world.assert_alerted(containing="refusing to merge")
+
+    def test_a_stale_plans_terminal_verdict_heals_the_conflict(self) -> None:
+        # #1249 part 2, end-to-end healing: the stale plan's bracket resolves
+        # CANCELLED without a fill, so the verdict phase retracts its planned
+        # line BEFORE the protection pass (run_once ordering) — the conflict
+        # never reaches the merge guard, the position is protected off the one
+        # remaining plan, and the tick stays quiet.
+        world = ManagerWorld(self)
+        world.entry_fills("KO", shares=100, stop=44.0)
+        world.a_stale_plan_also_governs("KO", stop=40.0)
+        world.broker_reports(order_cancelled("KO", crid="crid-KO-stale"))
+
+        world.run_tick()
+
+        world.assert_protected("KO")
+        world.assert_silent()
 
     def test_a_healthy_tick_is_quiet(self) -> None:
         world = ManagerWorld(self)

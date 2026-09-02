@@ -80,6 +80,7 @@ from alphalens_pipeline.brokers.automanager.live_exit_engine import (
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (
     _OCO_LAG_HOLD_REASON,
+    _TERMINAL_NON_FILLED,
     Action,
     AlertOnly,
     AmendStop,
@@ -816,6 +817,11 @@ def _run_verdict_advance(
         return
     for verdict in verdicts:
         _advance_and_execute(deps, verdict, position_view, report)
+    # #1249 class (c): a bracket whose verdict proves the entry terminally
+    # never filled retracts its ``planned`` line. Runs AFTER the advance loop
+    # (advance() stays pure) and BEFORE the protection pass in run_once, so a
+    # healed fold governs the same tick.
+    _retract_planned_for_verdicts(verdicts)
 
 
 def _advance_and_execute(
@@ -4979,10 +4985,23 @@ def _latest_planned_by_crid(
 ) -> dict[str, tuple[int, Mapping[str, Any]]]:
     """The newest well-formed ``planned`` line per entry client_request_id
     (append-only: highest ``gen`` wins). Non-``planned``, keyless, or malformed
-    (bad uic / stop_price) lines are skipped."""
+    (bad uic / stop_price) lines are skipped.
+
+    A ``planned_retracted`` marker (#1249) REMOVES the crid in write order — a
+    ``planned`` line appended AFTER the marker is a genuinely new plan and
+    governs again (entry-trail crids are sticky-terminal and bracket crids are
+    UUIDs, so a retracted crid cannot resurrect by accident). This is the ONE
+    choke point both the fold and the compaction read, so retraction semantics
+    cannot drift between them."""
     latest: dict[str, tuple[int, Mapping[str, Any]]] = {}
     for line in lines:
-        if line.get("kind") != "planned":
+        kind = line.get("kind")
+        if kind == _PLANNED_RETRACTED_KIND:
+            retracted_crid = line.get("client_request_id")
+            if retracted_crid:
+                latest.pop(str(retracted_crid), None)
+            continue
+        if kind != "planned":
             continue
         crid = line.get("client_request_id")
         raw_uic = line.get("uic")
@@ -5080,6 +5099,11 @@ def _reanchor_facts_from_governing(governing: Mapping[str, Any]) -> ReanchorFact
 _TRANCHE_PLAN_KIND = "tranche_plan"
 _TRANCHE_PLAN_RETRACTED_KIND = "tranche_plan_retracted"
 _TRANCHE_FIRED_KIND = "tranche_fired"
+# #1249: the per-crid retraction marker for ``planned`` disaster-stop lines —
+# the tranche marker's sibling, keyed by client_request_id instead of uic.
+# Consumed inside ``_latest_planned_by_crid`` (write-order pop), so the fold
+# and the compaction inherit retraction at the same choke point.
+_PLANNED_RETRACTED_KIND = "planned_retracted"
 
 
 def _build_tranche_plan_line(
@@ -5287,33 +5311,102 @@ def _fold_governing_plan_pick_keys(lines: Iterable[Mapping[str, Any]]) -> dict[i
     return governing
 
 
-def _terminal_watch_picks(fold: entry_trails.EntryTrailFold) -> dict[str, tuple[int, bool]]:
-    """``{pick_key: (uic, any_tier_fired)}`` for every pick whose entry watch
-    is FULLY terminal (2026-08-19 adjudication finding 3 / #1223). A pick with
-    any still-open or ARMED tier is live (``terminal_kind is None`` — an armed
-    sibling skipped by the #1198 retire still owns a resting native BUY, so the
-    first skip also encodes #1223's "never retract while any tier is open or
-    armed"). Records whose pick_key or uic cannot be reconstructed are skipped
-    — never retract on doubt."""
-    states_by_pick: dict[str, list[entry_trails.EntryTrailTierState]] = {}
-    for state in fold.tiers.values():
+def _terminal_watch_picks(
+    fold: entry_trails.EntryTrailFold,
+) -> dict[str, tuple[int, bool, tuple[str, ...]]]:
+    """``{pick_key: (uic, any_tier_fired, tier_crids)}`` for every pick whose
+    entry watch is FULLY terminal (2026-08-19 adjudication finding 3 / #1223).
+    A pick with any still-open or ARMED tier is live (``terminal_kind is None``
+    — an armed sibling skipped by the #1198 retire still owns a resting native
+    BUY, so the first skip also encodes #1223's "never retract while any tier
+    is open or armed"). ``tier_crids`` carries the pick's tier watch crids so
+    the planned-line retraction (#1249) can derive the fire-crids without a
+    second fold walk. Records whose pick_key or uic cannot be reconstructed are
+    skipped — never retract on doubt."""
+    states_by_pick: dict[str, list[tuple[str, entry_trails.EntryTrailTierState]]] = {}
+    for crid, state in fold.tiers.items():
         record = state.watch_open
         if record is None:
             continue
         key = record.get("pick_key")
         if key is None:
             continue
-        states_by_pick.setdefault(str(key), []).append(state)
-    out: dict[str, tuple[int, bool]] = {}
-    for pick_key, states in states_by_pick.items():
-        if any(s.terminal_kind is None for s in states):
+        states_by_pick.setdefault(str(key), []).append((str(crid), state))
+    out: dict[str, tuple[int, bool, tuple[str, ...]]] = {}
+    for pick_key, crid_states in states_by_pick.items():
+        if any(s.terminal_kind is None for _crid, s in crid_states):
             continue  # a tier still watches / arms — the pick is live
-        uics = {_coerce(s.watch_open or {}, "uic", int) for s in states}
+        uics = {_coerce(s.watch_open or {}, "uic", int) for _crid, s in crid_states}
         if len(uics) != 1 or None in uics:
             continue  # unmappable / inconsistent — never retract on doubt
-        fired = any(s.terminal_kind == entry_trails.KIND_FIRED for s in states)
-        out[pick_key] = (cast(int, next(iter(uics))), fired)
+        fired = any(s.terminal_kind == entry_trails.KIND_FIRED for _crid, s in crid_states)
+        crids = tuple(sorted(crid for crid, _s in crid_states))
+        out[pick_key] = (cast(int, next(iter(uics))), fired, crids)
     return out
+
+
+def _retract_planned_lines(
+    crids: Iterable[str],
+    *,
+    note: str,
+    journal_lines: Sequence[Mapping[str, Any]] | None = None,
+) -> int:
+    """Append one ``planned_retracted`` marker per STILL-GOVERNING crid (#1249).
+
+    Idempotence lives here so every retraction class gets it for free: a crid
+    already retracted (or never journaled — a tier that expired before its
+    fire-arm) is skipped, never marker-stacked. ``journal_lines`` lets a sweep
+    that already read the journal skip the re-read; omitted, the journal is
+    read fresh. Broad exception boundary on purpose — retraction is journal
+    housekeeping, a read/write failure degrades to a WARN and a retry on the
+    next tick, never an aborted caller. Returns the number of markers written."""
+    try:
+        lines = (
+            journal_lines if journal_lines is not None else list(_iter_standalone_stop_journal())
+        )
+        latest = _latest_planned_by_crid(lines)
+        count = 0
+        for crid in crids:
+            entry = latest.get(str(crid))
+            if entry is None:
+                continue  # absent or already retracted — nothing to do
+            _gen, line = entry
+            _append_standalone_stop_journal(
+                {
+                    "kind": _PLANNED_RETRACTED_KIND,
+                    "client_request_id": str(crid),
+                    "uic": _coerce(line, "uic", int),
+                    "note": note,
+                }
+            )
+            logger.info("planned line %s retracted — %s", crid, note)
+            count += 1
+        return count
+    except Exception:
+        logger.warning("planned-line retraction failed — will retry next tick", exc_info=True)
+        return 0
+
+
+def _retract_planned_for_verdicts(verdicts: Iterable[ReconcileVerdict]) -> None:
+    """#1249 class (c): retract the ``planned`` line of every bracket whose
+    verdict proves the entry TERMINALLY NEVER FILLED (CANCELLED / REJECTED /
+    EXPIRED with no fill evidence). Per-order proof, not per-uic state: an
+    entry that provably never filled has a planned line that covers nothing
+    regardless of what else lives on the uic — exactly the stale-UUID-crid
+    class the entry-trail sweeps cannot reach. Any ``filled_quantity`` in the
+    verdict details vetoes (a partial fill leaves a position); UNRESOLVED /
+    UNKNOWN outcomes never retract; a missing crid never retracts."""
+    crids = sorted(
+        {
+            str(v.details["client_request_id"])
+            for v in verdicts
+            if v.status in _TERMINAL_NON_FILLED
+            and not v.details.get("filled_quantity")
+            and v.details.get("client_request_id")
+        }
+    )
+    if crids:
+        _retract_planned_lines(crids, note="entry verdict: terminal without a fill")
 
 
 def _retract_stale_tranche_plans(
@@ -5350,9 +5443,20 @@ def _retract_stale_tranche_plans(
             return
         journal_lines = list(_iter_standalone_stop_journal())
         governing = _fold_governing_plan_pick_keys(journal_lines)
-        for pick_key, (uic, fired) in candidates.items():
+        for pick_key, (uic, fired, crids) in candidates.items():
             if fired:
                 continue  # the fired class runs below with its own gates
+            # #1249: an ended-unfired pick's fire-arm ``planned`` write-aheads
+            # cover nothing (no fill ever happened) — retract them so a stale
+            # line can never conflict a later fill on the uic. Keyed per-crid,
+            # so this is orthogonal to the tranche governance check below (a
+            # newer pick's lines are structurally untouchable) and idempotent
+            # inside the helper.
+            _retract_planned_lines(
+                (_entry_fire_request_id(crid) for crid in crids),
+                note=f"entry-trail {pick_key}: watch ended with no fill",
+                journal_lines=journal_lines,
+            )
             if governing.get(uic) != pick_key:
                 continue  # keyless/bracket plan, newer pick, or already retracted
             _append_standalone_stop_journal(
@@ -5377,7 +5481,7 @@ def _retract_stale_tranche_plans(
 
 
 def _retract_round_tripped_tranche_plans(
-    candidates: Mapping[str, tuple[int, bool]],
+    candidates: Mapping[str, tuple[int, bool, tuple[str, ...]]],
     governing: Mapping[int, str | None],
     journal_lines: Sequence[Mapping[str, Any]],
     deps: LoopDeps,
@@ -5418,7 +5522,7 @@ def _retract_round_tripped_tranche_plans(
     try:
         fired_candidates = {
             (pick_key, uic)
-            for pick_key, (uic, fired) in candidates.items()
+            for pick_key, (uic, fired, _crids) in candidates.items()
             if fired and governing.get(uic) == pick_key
         }
         if fired_candidates:
@@ -5450,6 +5554,15 @@ def _retract_round_tripped_tranche_plans(
                 "retracted the tranche_plan for uic %d",
                 pick_key,
                 uic,
+            )
+            # #1249: the closed trade's fire-arm ``planned`` write-aheads ride
+            # the SAME confirmed write (closure evidence + net-flat book + the
+            # two-tick latch) — retract-with, never retract-before. Fresh
+            # journal read inside the helper: this tick may already have
+            # appended markers.
+            _retract_planned_lines(
+                (_entry_fire_request_id(crid) for crid in candidates[pick_key][2]),
+                note=f"entry-trail {pick_key}: round trip closed, book flat",
             )
         pending.clear()
         pending.update(passing - confirmed)
@@ -5977,6 +6090,9 @@ def _compact_standalone_stop_journal_lines(
         retraction sweep's ``_fold_governing_plan_pick_keys`` / the closure
         fold are all unchanged; ``tranche_plan_retracted`` markers are
         consumed during the election (a fully retracted uic keeps nothing).
+        ``planned_retracted`` markers (#1249) are consumed the same way — the
+        per-crid election above runs through ``_latest_planned_by_crid``, so a
+        fully retracted crid keeps neither its planned line nor the marker.
 
     Every other line — ``gen`` markers (read only by ``_read_persisted_gen``, whose
     reset to the initial gen is harmless: post-restart re-emits are past Saxo's 15s
