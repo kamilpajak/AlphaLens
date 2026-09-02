@@ -1258,14 +1258,19 @@ class TestCheckFeeFloor(unittest.TestCase):
     def test_non_usd_instrument_skips_the_min_commission_clamp(self) -> None:
         # The $1-min commission is a USD-venue figure; comparing it against a
         # notional denominated in another currency mixes units (a 50-PLN
-        # notional is NOT $50). Non-USD instruments get the ad-valorem rate
-        # only — memo §4's clamp is calibrated for the first-cohort US venue.
+        # notional is NOT $50). Since #1238 PR 3 a currency WITH a verified
+        # venue card prices that card (PLN -> WSE: min 10 PLN dominates a
+        # 50 PLN gross, so the tiny GPW plan is refused too — honestly); a
+        # currency with NO card keeps the ad-valorem-only legacy shape.
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
             self.assertIsNotNone(
                 cl._check_fee_floor(_fee_plan(50.0), None, ticker="KO", instrument_currency="USD")
             )
-            self.assertIsNone(
+            self.assertIsNotNone(
                 cl._check_fee_floor(_fee_plan(50.0), None, ticker="CDR", instrument_currency="PLN")
+            )
+            self.assertIsNone(
+                cl._check_fee_floor(_fee_plan(50.0), None, ticker="ASM", instrument_currency="EUR")
             )
 
 
@@ -2741,17 +2746,20 @@ class TestEstimateRoundTripFeeBps(unittest.TestCase):
         assert estimate is not None
         self.assertAlmostEqual(estimate, 70.0)
 
-    def test_non_usd_instrument_skips_the_min_commission_clamp(self) -> None:
-        # The $1 clamp is a USD figure (mirrors round_trip_fee_bps): a
-        # 1000-unit non-USD notional pays ad-valorem only.
+    def test_non_usd_instrument_prices_its_card_or_skips_the_clamp(self) -> None:
+        # Since #1238 PR 3: a currency WITH a verified venue card prices that
+        # card's rate and minimum in its own units (PLN -> WSE 0.12% min 10);
+        # a currency with NO card keeps the legacy ad-valorem-only shape.
         plan = _tiered_plan(
             tiers=(TierPlan(tier_index=0, limit_price=10.0, qty=100, alloc_pct=100.0, tag="T1"),),
         )
         usd = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="USD")
         pln = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="PLN")
-        assert usd is not None and pln is not None
+        eur = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="EUR")
+        assert usd is not None and pln is not None and eur is not None
         self.assertAlmostEqual(usd, 20.0)  # 2 x $1 min / 1000 x 10^4
-        self.assertAlmostEqual(pln, 16.0)  # 2 x 0.8 ad-valorem / 1000 x 10^4
+        self.assertAlmostEqual(pln, 200.0)  # 2 x 10 PLN min / 1000 x 10^4
+        self.assertAlmostEqual(eur, 16.0)  # 2 x 0.8 ad-valorem / 1000 x 10^4
 
     def test_zero_qty_tiers_pay_no_commission(self) -> None:
         # A zero-qty tier is never POSTed (_ZERO_QTY_TIER_POLICY = skip-log),
