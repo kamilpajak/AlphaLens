@@ -56,6 +56,17 @@ class ItNeverFailsSilently(unittest.TestCase):
         world.assert_alerted(containing="stop")
         world.assert_flat("KO")
 
+    def test_conflicting_plans_still_page_the_operator(self) -> None:
+        # #1249 — the conservative cover must not silence the ambiguity: the
+        # merge-refusal alert still reaches the operator alongside the stop.
+        world = ManagerWorld(self)
+        world.entry_fills("KO", shares=100, stop=44.0)
+        world.a_stale_plan_also_governs("KO", stop=40.0)
+
+        world.run_tick()
+
+        world.assert_alerted(containing="refusing to merge")
+
     def test_a_healthy_tick_is_quiet(self) -> None:
         world = ManagerWorld(self)
         # A normal fill that protects cleanly should NOT spam alerts.

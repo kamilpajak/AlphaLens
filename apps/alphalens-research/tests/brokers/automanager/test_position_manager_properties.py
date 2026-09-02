@@ -763,20 +763,33 @@ class TestCancelFields(unittest.TestCase):
 
 
 class TestAlertArms(unittest.TestCase):
-    @given(_one_of(_ALERT_BUILDERS))
+    @given(_one_of([_build_plan_none]))
     @_LONG_SETTINGS
-    def test_no_plan_or_conflicting_single_alert(self, c: _LongComp) -> None:
-        # INV10 — plan None or conflicting -> exactly [AlertOnly], no order action.
+    def test_no_plan_single_alert(self, c: _LongComp) -> None:
+        # INV10 — plan None -> exactly [AlertOnly], no order action.
         actions = reconcile_long(c.uic, c.position, _view_from_long(c))
         self.assertEqual(len(actions), 1, f"alert arm must be length-1 (label={c.label})")
         self.assertIsInstance(actions[0], AlertOnly)
+
+    @given(_one_of([_build_conflicting]))
+    @_LONG_SETTINGS
+    def test_conflicting_alerts_and_covers_the_naked_long(self, c: _LongComp) -> None:
+        # INV10b (#1249) — a conflicted NAKED long yields exactly one AlertOnly
+        # ("refusing to merge") PLUS exactly one conservative PlaceStop covering
+        # full owned at the folded stop price; never an OCO/amend/cancel/NoOp.
+        actions = reconcile_long(c.uic, c.position, _view_from_long(c))
+        alerts = [a for a in actions if isinstance(a, AlertOnly)]
+        places = [a for a in actions if isinstance(a, PlaceStop)]
+        self.assertEqual(len(alerts), 1, f"exactly one merge alert (label={c.label})")
+        self.assertIn("refusing to merge", alerts[0].reason)
+        self.assertEqual(len(places), 1, f"conflict never yields a naked deficit (label={c.label})")
+        self.assertLessEqual(abs(places[0].qty - c.position.quantity), _QTY_EPS)
+        assert c.plan is not None
+        self.assertEqual(places[0].stop_price, c.plan.stop_price)
         self.assertFalse(
-            any(isinstance(a, (PlaceStop, CancelSellLegs, UpgradeToOco, NoOp)) for a in actions)
+            any(isinstance(a, (UpgradeToOco, AmendStop, CancelSellLegs, NoOp)) for a in actions)
         )
-        if c.label == "plan_conflicting_alert":
-            a = actions[0]
-            assert isinstance(a, AlertOnly)
-            self.assertIn("refusing to merge", a.reason)
+        self.assertEqual(len(actions), 2)
 
 
 class TestProtectionLevel(unittest.TestCase):
