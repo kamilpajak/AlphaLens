@@ -8229,6 +8229,7 @@ class TestDay1GapProbeVenueFallback(unittest.TestCase):
         probe, holder = self._probe_with(_WseResolves)
         self.assertEqual(probe("CDR", "XWAR"), 231.5)
         self.assertEqual(holder["client"].resolved, ["XWAR"])
+        holder["client"]._session.close.assert_called_once()
 
     def test_non_us_hint_unresolvable_never_falls_back_to_us(self) -> None:
         class _NeverResolves(self._FakeClient):
@@ -8239,6 +8240,7 @@ class TestDay1GapProbeVenueFallback(unittest.TestCase):
         probe, holder = self._probe_with(_NeverResolves)
         self.assertIsNone(probe("CDR", "XWAR"))
         self.assertEqual(holder["client"].resolved, ["XWAR"])
+        holder["client"]._session.close.assert_called_once()
 
 
 class TestDay1GapProbeOrder(unittest.TestCase):
@@ -8254,6 +8256,45 @@ class TestDay1GapProbeOrder(unittest.TestCase):
         from alphalens_pipeline.brokers import routing
 
         self.assertEqual(cl._DAY1_GAP_US_VENUE_PROBE_ORDER, routing.US_MIC_PROBE_ORDER)
+
+
+class TestDay1GapGateXwarEndToEnd(unittest.TestCase):
+    """zen review (PR #1240): pin the XWAR path THROUGH the orchestrator.
+
+    Two ways the probe-level pins could lie: (1) if the calendar did not
+    resolve XWAR, ``_day1_gap_gate_session_info`` would return None and the
+    gate would silently "pass" — the explicit-only probe would be dead code;
+    (2) the orchestrator could hand the probe a different mic than the
+    intent's. Both are pinned here."""
+
+    _BRIEF = dt.date(2026, 8, 10)  # Monday -> day1 = Tuesday 2026-08-11
+    # WSE continuous session opens 09:00 Warsaw = 07:00 UTC in August; the
+    # probe runs only past open + the 300s grace.
+    _WITHIN_DAY1 = dt.datetime(2026, 8, 11, 8, 30, tzinfo=dt.UTC)
+
+    def test_xwar_resolves_on_the_calendar(self) -> None:
+        info = cl._day1_gap_gate_session_info(self._BRIEF, "XWAR")
+        self.assertIsNotNone(info)
+        day1, open_utc = info
+        self.assertEqual(day1, dt.date(2026, 8, 11))
+        self.assertEqual(open_utc, dt.datetime(2026, 8, 11, 7, 0, tzinfo=dt.UTC))
+
+    def test_gate_hands_the_probe_the_xwar_pair(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def _probe(ticker: str, mic: str) -> float:
+            calls.append((ticker, mic))
+            return 232.0  # opens above E1 231.1 -> verdict "pass", no defer
+
+        with (
+            _frozen_now(self._WITHIN_DAY1),
+            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+        ):
+            deferred = cl._day1_gap_gate_defers(
+                "CDR", self._BRIEF, _day1_spec(limit_price=231.1), "XWAR", _probe, None
+            )
+        self.assertFalse(deferred)
+        self.assertEqual(calls, [("CDR", "XWAR")])
 
 
 class TestDay1GapGateDefersObservability(unittest.TestCase):
