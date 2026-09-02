@@ -588,7 +588,11 @@ class TestReconcileDecisionTable(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertIsInstance(actions[0], AlertOnly)
 
-    def test_conflicting_plans_refuse_merge(self) -> None:
+    def test_conflicting_plans_alert_and_cover_the_naked_long(self) -> None:
+        # #1249 — never-naked beats refuse-to-merge: a NAKED conflicted long still
+        # gets its disaster stop at the folded conservative price (max across the
+        # colliding plans = tightest for a long); the ambiguity alert stays, and
+        # the cover lands BEFORE the alert so a throttled alert cannot delay it.
         pos = _pos(46.0)
         actions = reconcile_long(
             _UIC,
@@ -598,10 +602,15 @@ class TestReconcileDecisionTable(unittest.TestCase):
                 planned_by_uic={_UIC: _plan(conflicting=True, n_plans=2)},
             ),
         )
-        self.assertEqual(len(actions), 1)
-        self.assertIsInstance(actions[0], AlertOnly)
-        assert isinstance(actions[0], AlertOnly)
-        self.assertIn("refusing to merge", actions[0].reason)
+        self.assertEqual(len(actions), 2)
+        place, alert = actions
+        self.assertIsInstance(place, PlaceStop)
+        assert isinstance(place, PlaceStop)
+        self.assertEqual(place.qty, 46.0)
+        self.assertEqual(place.stop_price, 216.48)
+        self.assertIsInstance(alert, AlertOnly)
+        assert isinstance(alert, AlertOnly)
+        self.assertIn("refusing to merge", alert.reason)
 
 
 class TestOcoEnablementGate(unittest.TestCase):
@@ -661,6 +670,82 @@ class TestOcoEnablementGate(unittest.TestCase):
             actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
         self.assertIsInstance(actions[0], NoOp)
+
+
+class TestConflictingPlansConservativeCover(unittest.TestCase):
+    """#1249 conservative cover: under a plan conflict ONLY the purely additive
+    deficit primitives run (B1/B2 — sized from live resting stop qty, so the sell
+    side can never exceed owned); every ambiguity-dependent arm (B0 OCO-direct,
+    the grow amends, the over-hedge repair, arm-C post-fill moves) stays refused
+    alongside the merge alert."""
+
+    def _view(self, pos: Position, legs: tuple[OrderState, ...], plan: PlannedExit):
+        return _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: legs} if legs else {},
+            planned_by_uic={_UIC: plan},
+        )
+
+    def test_covered_conflicting_stays_alert_only(self) -> None:
+        # A covering stop already rests -> nothing is naked -> the alert is the
+        # only action (no amend, no reanchor, no NoOp).
+        pos = _pos(46.0)
+        stop = _leg("stop-1", "StopIfTraded", 46.0)
+        plan = _plan(conflicting=True, n_plans=2)
+        actions = reconcile_long(_UIC, pos, self._view(pos, (stop,), plan))
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], AlertOnly)
+
+    def test_over_hedged_conflicting_stays_alert_only(self) -> None:
+        # Over-covered is not naked; the repair cancels are ambiguity-dependent.
+        pos = _pos(46.0)
+        stop = _leg("stop-1", "StopIfTraded", 60.0)
+        plan = _plan(conflicting=True, n_plans=2)
+        actions = reconcile_long(_UIC, pos, self._view(pos, (stop,), plan))
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], AlertOnly)
+
+    def test_naked_conflicting_with_tp_never_goes_oco(self) -> None:
+        # B0 keys the OCO TP on an arbitrarily-governing plan of a merge we
+        # refused -> under conflict the cover is a plain stop, never an OCO pair.
+        pos = _pos(46.0)
+        plan = _plan(tp_price=306.72, conflicting=True, n_plans=2)
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, self._view(pos, (), plan))
+        self.assertFalse(any(isinstance(a, UpgradeToOco) for a in actions))
+        places = [a for a in actions if isinstance(a, PlaceStop)]
+        self.assertEqual(len(places), 1)
+        self.assertEqual(places[0].qty, 46.0)
+        self.assertTrue(any(isinstance(a, AlertOnly) for a in actions))
+
+    def test_under_sized_sole_stop_conflicting_grows_additively_never_amends(self) -> None:
+        # The grow amend re-prices ANOTHER plan's resting order -> refused; the
+        # B1 additive delta covers the gap while the resting stop stays put.
+        pos = _pos(46.0)
+        stop = _leg("stop-1", "StopIfTraded", 20.0)
+        plan = _plan(conflicting=True, n_plans=2)
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, self._view(pos, (stop,), plan))
+        self.assertFalse(any(isinstance(a, AmendStop) for a in actions))
+        places = [a for a in actions if isinstance(a, PlaceStop)]
+        self.assertEqual(len(places), 1)
+        self.assertEqual(places[0].qty, 26.0)  # additive delta, not full owned
+        self.assertEqual(places[0].supersede_ids, ())
+        self.assertTrue(any(isinstance(a, AlertOnly) for a in actions))
+
+    def test_lone_tp_conflicting_deficit_cancels_the_tp_before_the_place(self) -> None:
+        # Bug-B ordering survives under conflict: the lone TP holds the sell
+        # commitment, so it is named in cancel_conflicting (cleared BEFORE the
+        # place), and the stop covers full owned.
+        pos = _pos(46.0)
+        tp = _leg("tp-1", "Limit", 46.0)
+        plan = _plan(conflicting=True, n_plans=2)
+        actions = reconcile_long(_UIC, pos, self._view(pos, (tp,), plan))
+        places = [a for a in actions if isinstance(a, PlaceStop)]
+        self.assertEqual(len(places), 1)
+        self.assertEqual(places[0].qty, 46.0)
+        self.assertEqual(places[0].cancel_conflicting, ("tp-1",))
+        self.assertTrue(any(isinstance(a, AlertOnly) for a in actions))
 
 
 def _oco_leg(

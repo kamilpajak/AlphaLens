@@ -52,6 +52,21 @@ class EveryPositionIsProtected(unittest.TestCase):
         world.assert_protected("KO")
         world.assert_not_oversold("KO")
 
+    def test_a_position_with_conflicting_plans_still_gets_a_stop(self) -> None:
+        # #1249 — a stale plan from an earlier pick collides with the live one on
+        # the netted uic. The merge stays refused, but never-naked wins: the
+        # fresh fill is still covered on the first tick.
+        world = ManagerWorld(self)
+        # GIVEN a KO trade opened, and a stale second plan governing the same uic
+        world.entry_fills("KO", shares=100, stop=44.0)
+        world.a_stale_plan_also_governs("KO", stop=40.0)
+
+        # WHEN the manager runs one tick
+        world.run_tick()
+
+        # THEN all 100 shares are covered despite the plan conflict
+        world.assert_protected("KO")
+
     def test_a_position_that_grows_has_its_protection_grown(self) -> None:
         world = ManagerWorld(self)
         # GIVEN 100 KO, protected on the first tick

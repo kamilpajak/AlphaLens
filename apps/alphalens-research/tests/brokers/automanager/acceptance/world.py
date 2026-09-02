@@ -191,6 +191,22 @@ class ManagerWorld:
             )
         )
 
+    def a_stale_plan_also_governs(self, ticker: str, *, stop: float = _DEFAULT_STOP) -> None:
+        """A stale ``planned`` line from an EARLIER pick still sits on this uic
+        (#1249): same ``tier_index`` as the live plan under a different entry
+        crid — the repeated-tier_index shape ``_fold_planned_exits`` reads as a
+        plan conflict on the netted position."""
+        cl._append_standalone_stop_journal(
+            cl._build_planned_line(
+                entry_crid=f"crid-{ticker.upper()}-stale",
+                uic=self.broker.uic_of(ticker),
+                side="SELL",
+                stop_price=stop,
+                take_profit=None,
+                tier_index=0,
+            )
+        )
+
     def live_exits_are_enabled(self) -> None:
         """The live TP-tranche exit engine tick phase is armed (INC-5)."""
         os.environ["ALPHALENS_LIVE_MARKET_EXITS"] = "1"

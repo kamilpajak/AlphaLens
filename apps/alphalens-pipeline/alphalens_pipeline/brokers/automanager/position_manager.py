@@ -929,13 +929,6 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
                 f"uic {uic}: long {owned} open but no journaled disaster-stop plan — cannot protect"
             )
         ]
-    if plan.conflicting:  # >1 distinct active plan folded to one netted uic
-        return [
-            AlertOnly(
-                f"uic {uic}: {plan.n_plans} active plans on one netted position — refusing to merge"
-            )
-        ]
-
     # Explicit-None guard: ``amount`` is ``float | None`` (the RESTING qty). A
     # genuine ``0.0`` must contribute 0.0 to the sum, not be misread as an absent
     # amount — ``or 0.0`` conflates the two (harmless today, latent misread).
@@ -945,6 +938,23 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
     # pair {stop=owned, tp=owned} commits owned ONCE (mutually exclusive), so it is
     # the terminal rung-2 state, never a 2*owned over-hedge (saxo-oco memo, Stage 2).
     total = _sell_commitment(legs)
+
+    if plan.conflicting:  # >1 distinct active plan folded to one netted uic
+        alert = AlertOnly(
+            f"uic {uic}: {plan.n_plans} active plans on one netted position — refusing to merge"
+        )
+        if total <= owned + _QTY_EPS and stop_qty + _QTY_EPS < owned:
+            # Never-naked is the prime invariant (#1249): a DEFICIT under conflict
+            # is still covered — at the folded conservative stop (max across the
+            # colliding plans = tightest for a long), additive primitives only.
+            # Every ambiguity-dependent arm (B0 OCO, the grow amends, over-hedge
+            # repair, arm-C post-fill moves) stays refused. The PlaceStop precedes
+            # the AlertOnly so alert throttling can never delay the cover.
+            return [
+                *_reconcile_deficit(uic, owned, stop_qty, plan, legs, view, conservative=True),
+                alert,
+            ]
+        return [alert]
 
     if total > owned + _QTY_EPS:
         return _reconcile_over_hedge(uic, owned, plan, legs, view)
@@ -1105,10 +1115,18 @@ def _reconcile_deficit(
     plan: PlannedExit,
     legs: tuple[OrderState, ...],
     view: ProtectionView,
+    *,
+    conservative: bool = False,
 ) -> list[Action]:
     """(B) DOWNSIDE-DEFICIT arm of ``_reconcile_long``: the resting stop qty is below
     netted owned (naked, grew past the covering stop, a lone-TP Bug-B shape, or a
-    stale/partial stop). Covers the deficit without ever opening a naked window."""
+    stale/partial stop). Covers the deficit without ever opening a naked window.
+
+    ``conservative`` (#1249, the conflicting-plans cover): keep ONLY the purely
+    additive primitives (B1/B2 — sized from live resting stop qty, so the sell
+    side can never exceed owned). B0 keys its TP on an arbitrarily-governing plan
+    of a merge that was refused, and the grow amends re-price ANOTHER plan's
+    resting order — all three are ambiguity-dependent and gated off."""
     # (B) DOWNSIDE DEFICIT: naked, grew past the covering stop, a lone-TP Bug-B
     #     shape, or a stale/partial stop. A lone TP is always cancelled BEFORE the
     #     place (it holds the conflicting sell commitment — Bug B).
@@ -1122,6 +1140,7 @@ def _reconcile_deficit(
     #      placement == owned once, never 2x.
     if (
         _oco_enabled()
+        and not conservative
         and plan.tp_price is not None
         and uic not in view.oco_unsupported
         and not legs
@@ -1157,6 +1176,7 @@ def _reconcile_deficit(
     sole = _sole_standalone_stop(legs)
     if (
         _amend_enabled()
+        and not conservative
         and sole is not None
         and uic not in view.oco_unsupported
         and uic not in view.amend_recently_failed
@@ -1186,6 +1206,7 @@ def _reconcile_deficit(
     oco_stop = _oco_stop_leg(legs)
     if (
         _amend_enabled()
+        and not conservative
         and oco_stop is not None
         and uic not in view.oco_unsupported
         and uic not in view.amend_recently_failed

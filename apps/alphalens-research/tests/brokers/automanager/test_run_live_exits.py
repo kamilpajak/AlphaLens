@@ -105,6 +105,31 @@ class TestRunLiveExits(unittest.TestCase):
         self.assertTrue(fired[0].position_closed)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 0.0)
 
+    def test_no_standalone_sl_skips_the_uic_and_says_so(self):
+        # #1249 pin — the silent branch that hid the naked-BAH incident: a
+        # managed uic with NO resting sell legs fires nothing, and the skip is
+        # at least visible in the log (never a crash, never a market sell).
+        b = FakeBroker()
+        uic = b.uic_of("KO")
+        b.set_position("KO", 100, avg_price=15.0)  # position, but zero sell legs
+        feed = _FakeFeed({uic: 16.5})
+        managed = [
+            ManagedExit(
+                uic=uic,
+                tp_tranches=(_tr(0, 16.0, 0.5),),
+                reference_qty=100,
+                stop_price=13.0,
+                already_fired=frozenset(),
+            )
+        ]
+        with self.assertLogs(
+            "alphalens_pipeline.brokers.automanager.live_exit_engine", level="INFO"
+        ) as logs:
+            fired = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
+        self.assertEqual(fired, [])
+        self.assertEqual(b.get_positions_by_uic(uic).quantity, 100.0)
+        self.assertTrue(any("no sole standalone SL" in line for line in logs.output))
+
     def test_partial_fire_does_not_mark_position_closed(self):
         b, uic, feed, managed = self._mk(price=16.5)
         fired = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
