@@ -34,6 +34,8 @@ from broker_contract.trade_intent.schema import (
     TradeSpec,
 )
 
+from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
+
 # v1 supports US venues only (#1235 decision 2026-09-02). XWAR / XAMS are
 # planned follow-ups: the calendar helper is already MIC-parametrized, but the
 # daemon's routing (`resolve_us_instrument`) and price feed are US-pinned, so
@@ -64,40 +66,59 @@ def _parse_float(raw: str, *, what: str) -> float:
 def parse_entry_tiers(raw_tiers: list[str] | tuple[str, ...]) -> tuple[EntryTierSpec, ...]:
     """Parse repeated ``--tier price[:alloc_pct]`` values into entry tiers.
 
-    A single bare ``price`` means 100% allocation. With multiple tiers every
-    one must carry an explicit allocation, and the allocations must sum to
-    100 (float-noise tolerance only).
+    An ALL-BARE ladder (prices only — the WhatsApp signal shape
+    ``t1:GME@17.90 t2:GME@17.00 t3:GME@16.20``) splits the allocation equally;
+    the compiled-intent echo surfaces the split for verification. When any
+    tier carries an explicit allocation, every tier must, and the allocations
+    must sum to 100 (float-noise tolerance only — no silent rescaling).
     """
     if not raw_tiers:
         raise ManualIntentError("at least one --tier is required")
 
-    tiers: list[EntryTierSpec] = []
-    for index, raw in enumerate(raw_tiers):
+    parsed: list[tuple[float, float | None]] = []
+    for raw in raw_tiers:
         parts = raw.split(":")
         if len(parts) == 1:
-            if len(raw_tiers) > 1:
-                raise ManualIntentError(
-                    f"every --tier needs price:alloc_pct when more than one is given, got {raw!r}"
-                )
-            price_raw, alloc_raw = parts[0], "100"
+            price_raw, alloc_raw = parts[0], None
         elif len(parts) == 2:
             price_raw, alloc_raw = parts
         else:
             raise ManualIntentError(f"cannot parse --tier: {raw!r} (expected price[:alloc_pct])")
-        price = _parse_float(price_raw, what="--tier")
-        alloc = _parse_float(alloc_raw, what="--tier")
+        price = _parse_float(price_raw, what=f"--tier price in {raw!r}")
         if price <= 0:
             raise ManualIntentError(f"--tier price must be positive, got {raw!r}")
-        if alloc <= 0:
-            raise ManualIntentError(f"--tier alloc_pct must be positive, got {raw!r}")
-        tiers.append(EntryTierSpec(limit_price=price, alloc_pct=alloc, tag=f"T{index + 1}"))
+        alloc: float | None = None
+        if alloc_raw is not None:
+            alloc = _parse_float(alloc_raw, what=f"--tier alloc_pct in {raw!r}")
+            if alloc <= 0:
+                raise ManualIntentError(f"--tier alloc_pct must be positive, got {raw!r}")
+        parsed.append((price, alloc))
 
-    alloc_sum = sum(t.alloc_pct for t in tiers)
-    if abs(alloc_sum - 100.0) > _PCT_SUM_TOL:
+    n_bare = sum(1 for _, alloc in parsed if alloc is None)
+    if n_bare == len(parsed):
+        parsed = [(price, 100.0 / len(parsed)) for price, _ in parsed]
+    elif n_bare:
         raise ManualIntentError(
-            f"--tier allocations must sum to 100, got {alloc_sum:g} — no silent rescaling"
+            "either every --tier carries an explicit alloc_pct or none does "
+            f"(equal split) — got a mix in {list(raw_tiers)!r}"
         )
-    return tuple(tiers)
+    else:
+        alloc_sum = sum(alloc for _, alloc in parsed if alloc is not None)
+        if abs(alloc_sum - 100.0) > _PCT_SUM_TOL:
+            raise ManualIntentError(
+                f"--tier allocations must sum to 100, got {alloc_sum:g} — no silent rescaling"
+            )
+
+    prices = [price for price, _ in parsed]
+    if len(set(prices)) != len(prices):
+        # The same price twice is almost certainly a pasted-twice typo — the
+        # deeper rung of such a ladder can never fill separately.
+        raise ManualIntentError(f"duplicate --tier price: {prices}")
+    return tuple(
+        EntryTierSpec(limit_price=price, alloc_pct=alloc, tag=f"T{index + 1}")
+        for index, (price, alloc) in enumerate(parsed)
+        if alloc is not None
+    )
 
 
 def parse_tp_tranches(
@@ -117,16 +138,16 @@ def parse_tp_tranches(
         if len(parts) != 2:
             raise ManualIntentError(f"cannot parse --tp: {raw!r} (expected price:pct or <N>R:pct)")
         level_raw, pct_raw = parts
-        pct = _parse_float(pct_raw, what="--tp")
+        pct = _parse_float(pct_raw, what=f"--tp tranche_pct in {raw!r}")
         if pct <= 0:
             raise ManualIntentError(f"--tp tranche_pct must be positive, got {raw!r}")
         if level_raw and level_raw[-1] in ("R", "r"):
-            r_multiple = _parse_float(level_raw[:-1], what="--tp")
+            r_multiple = _parse_float(level_raw[:-1], what=f"--tp R-multiple in {raw!r}")
             if r_multiple <= 0:
                 raise ManualIntentError(f"--tp R-multiple must be positive, got {raw!r}")
             price = blend + r_multiple * risk
         else:
-            price = _parse_float(level_raw, what="--tp")
+            price = _parse_float(level_raw, what=f"--tp price in {raw!r}")
             if price <= blend:
                 raise ManualIntentError(
                     f"--tp price must be above the planned blend entry {blend:g}, got {raw!r}"
@@ -139,6 +160,12 @@ def parse_tp_tranches(
     pct_sum = sum(t.tranche_pct for t in tranches)
     if pct_sum - 100.0 > _PCT_SUM_TOL:
         raise ManualIntentError(f"--tp tranche percentages exceed 100, got {pct_sum:g}")
+    prices = [t.price for t in tranches]
+    if len(set(prices)) != len(prices):
+        # Two tranches at one target are one bigger tranche at best and a
+        # pasted-twice typo at worst (an R-form can land exactly on a given
+        # absolute target) — refuse either way.
+        raise ManualIntentError(f"duplicate --tp price: {prices}")
     return tuple(tranches)
 
 
@@ -151,8 +178,6 @@ def planned_blended_entry_of(tiers: tuple[EntryTierSpec, ...], *, disaster_stop:
     replay lenses compute — blend divergence is exactly the SMG class of bug
     (issue #1114).
     """
-    from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
-
     provisional = TradeSpec(
         entry_tiers=tiers,
         disaster_stop=disaster_stop,

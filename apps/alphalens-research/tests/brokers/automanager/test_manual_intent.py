@@ -65,12 +65,21 @@ class ParseEntryTiersTest(unittest.TestCase):
         tiers = parse_entry_tiers(["100:33.3", "99:33.3", "98:33.4"])
         self.assertEqual(len(tiers), 3)
 
+    def test_all_bare_tiers_split_equally(self) -> None:
+        # The WhatsApp signal format: "t1:GME@17.90 t2:GME@17.00 t3:GME@16.20"
+        # carries prices only. All-bare ladders split the allocation equally;
+        # the compiled-intent echo surfaces the split for verification.
+        tiers = parse_entry_tiers(["17.90", "17.00", "16.20"])
+        self.assertEqual([t.limit_price for t in tiers], [17.9, 17.0, 16.2])
+        for tier in tiers:
+            self.assertAlmostEqual(tier.alloc_pct, 100.0 / 3)
+
     def test_no_tiers_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "at least one --tier"):
             parse_entry_tiers([])
 
-    def test_bare_tier_among_multiple_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "every --tier needs price:alloc_pct"):
+    def test_mixed_bare_and_allocated_tiers_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "either every --tier"):
             parse_entry_tiers(["72.5:60", "70"])
 
     def test_alloc_sum_off_100_refuses(self) -> None:
@@ -96,6 +105,12 @@ class ParseEntryTiersTest(unittest.TestCase):
     def test_too_many_colons_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "cannot parse --tier"):
             parse_entry_tiers(["72.5:60:1"])
+
+    def test_duplicate_tier_price_refuses(self) -> None:
+        # The same price twice is almost certainly a pasted-twice typo: the
+        # deeper rung of such a ladder can never fill separately.
+        with self.assertRaisesRegex(ManualIntentError, "duplicate --tier price"):
+            parse_entry_tiers(["72.5:60", "72.5:40"])
 
 
 class ParseTpTranchesTest(unittest.TestCase):
@@ -143,6 +158,12 @@ class ParseTpTranchesTest(unittest.TestCase):
     def test_garbage_tp_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "cannot parse --tp"):
             parse_tp_tranches(["2X:50"], blend=_BLEND, stop=_STOP)
+
+    def test_duplicate_tp_price_refuses(self) -> None:
+        # Two tranches at one target are one bigger tranche at best and a
+        # pasted-twice typo at worst — refuse either way (fail-loud doctrine).
+        with self.assertRaisesRegex(ManualIntentError, "duplicate --tp price"):
+            parse_tp_tranches(["110:50", "1R:50"], blend=_BLEND, stop=_STOP)
 
 
 class ResolveSizePctTest(unittest.TestCase):

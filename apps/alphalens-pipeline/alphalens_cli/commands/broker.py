@@ -1402,8 +1402,9 @@ def arm_manual_command(
     tier: list[str] = typer.Option(
         ...,
         "--tier",
-        help="Entry tier as price[:alloc_pct]; repeatable. A single bare price means 100%. "
-        "Allocations must sum to 100 (no silent rescaling).",
+        help="Entry tier as price[:alloc_pct]; repeatable. An all-bare ladder (prices only) "
+        "splits equally; with explicit allocations every tier needs one and they must sum "
+        "to 100 (no silent rescaling).",
     ),
     stop: float = typer.Option(..., "--stop", help="Disaster stop (absolute price)."),
     tp: list[str] = typer.Option(
@@ -1458,7 +1459,10 @@ def arm_manual_command(
 
     Re-arming the same ticker on the same day REPLACES the pending intent
     (the picks fold keys on (ticker, date), latest wins) — that is the
-    typo-fix path, not a same-day add-on mechanism.
+    typo-fix path, not a same-day add-on mechanism. The same fold rule means
+    a manual pick also replaces a BRIEF-armed pick that happens to share the
+    (ticker, date) key; the command warns whenever an existing pick line
+    would be superseded.
     """
     from alphalens_pipeline.brokers.automanager import state_paths
     from alphalens_pipeline.brokers.automanager.manual_intent import (
@@ -1466,7 +1470,7 @@ def arm_manual_command(
         build_manual_intent,
         planned_blended_entry_of,
     )
-    from alphalens_pipeline.brokers.automanager.picks import arm_pick
+    from alphalens_pipeline.brokers.automanager.picks import arm_pick, read_pick_fold
 
     try:
         picks_target = state_paths.picks_path(env=env)
@@ -1518,6 +1522,12 @@ def arm_manual_command(
         )
         or "none (trail-only)"
     )
+    tranche_sum = sum(t.tranche_pct for t in intent.spec.tp_tranches)
+    if intent.spec.tp_tranches and tranche_sum < 100.0:
+        tp_echo += (
+            f"  — WARNING: {100.0 - tranche_sum:g}% of the position has no TP "
+            "(runs under the stop policy only)"
+        )
     size_echo = f"{intent.spec.suggested_size_pct:.2f}% of frame"
     if frame is not None:
         size_echo += f" {frame:g}"
@@ -1531,6 +1541,23 @@ def arm_manual_command(
         f"  tp:    {tp_echo}\n"
         f"  size:  {size_echo}  |  ttl {intent.spec.order_ttl_days} session(s)"
     )
+    superseded = next(
+        (
+            p
+            for p in read_pick_fold(path=picks_target).records
+            if p.ticker.upper() == intent.instrument.ticker
+            and p.brief_date.isoformat() == intent.meta.brief_date
+        ),
+        None,
+    )
+    if superseded is not None:
+        typer.secho(
+            f"warning: a pick line for {intent.instrument.ticker} @ "
+            f"{intent.meta.brief_date} already exists in this inbox (status "
+            f"{superseded.status!r}) — arming will REPLACE it (the fold keys on "
+            "ticker+date, latest wins), even if it came from a brief",
+            fg=typer.colors.YELLOW,
+        )
     if dry_run:
         typer.echo("dry-run: nothing armed")
         return

@@ -132,6 +132,56 @@ class ArmManualCommandTest(unittest.TestCase):
         self.assertEqual(kwargs["path"], state_paths.picks_path(env="live"))
 
 
+class ArmManualEchoWarningsTest(unittest.TestCase):
+    """Echo-completeness warnings (zen review, PR #1237): the operator must
+    see an under-100 TP coverage and an about-to-be-replaced pending pick."""
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        self.home = _isolate_home(self)
+
+    def test_under_100_tp_coverage_is_called_out(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        args = [
+            "arm-manual", "nvo",
+            "--tier", "72.5:60", "--tier", "70.0:40",
+            "--stop", "66.0",
+            "--tp", "80:40",  # 60% of the position keeps no TP target
+            "--notional", "10000", "--frame", "15000",
+        ]  # fmt: skip
+        with mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick"):
+            result = self.runner.invoke(broker_app, args)
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("60", result.output)  # the uncovered remainder
+        self.assertIn("no TP", result.output)
+
+    def test_full_tp_coverage_emits_no_warning(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        with mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick"):
+            result = self.runner.invoke(broker_app, _HAPPY_ARGS)
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertNotIn("uncovered", result.output)
+
+    def test_rearm_same_ticker_same_day_warns_about_replacement(self) -> None:
+        # Real appends (no arm_pick mock): the picks fold keys on
+        # (ticker, date) latest-wins, so the second arm REPLACES the first —
+        # including a brief-armed pick that happens to share the date. The
+        # operator must be told, on the arming run itself.
+        from alphalens_cli.commands.broker import broker_app
+
+        first = self.runner.invoke(broker_app, _HAPPY_ARGS)
+        self.assertEqual(first.exit_code, 0, first.output)
+        self.assertNotIn("REPLACE", first.output)
+
+        second = self.runner.invoke(broker_app, _HAPPY_ARGS)
+        self.assertEqual(second.exit_code, 0, second.output)
+        self.assertIn("REPLACE", second.output)
+
+
 class ArmManualFrameFallbackTest(unittest.TestCase):
     """``--notional`` without ``--frame`` falls back to the declared-frame env
     (``live_rails.SIZING_EQUITY_ENV``); no env either → loud refusal."""
