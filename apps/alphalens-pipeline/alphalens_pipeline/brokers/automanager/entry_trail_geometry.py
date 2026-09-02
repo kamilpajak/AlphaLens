@@ -34,7 +34,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from alphalens_pipeline.brokers.automanager.costs import min_profitable_exit_price
+from alphalens_pipeline.brokers.automanager.costs import (
+    CostGateFacts,
+    min_profitable_exit_price,
+)
 
 _BPS_DENOMINATOR = 10_000
 """``d = d_bps / 10_000`` (50 bps -> 0.005) — mirrors ``entry_trail_watcher``."""
@@ -107,7 +110,11 @@ def entry_fill_estimate(*, reference: float, trough: float, d_bps: int) -> float
 
 
 def arms_inside_exit_region(
-    *, fill_estimate: float | None, exit_target: float | None, qty: float | None
+    *,
+    fill_estimate: float | None,
+    exit_target: float | None,
+    qty: float | None,
+    facts: CostGateFacts | None = None,
 ) -> bool:
     """Whether arming this tier would open a position its own exit target cannot
     pay for (issue #1112: the LIVE SMG round trip of 2026-08-24, 62 seconds,
@@ -145,7 +152,7 @@ def arms_inside_exit_region(
     for value in (fill_estimate, exit_target, qty):
         if not math.isfinite(value) or value <= 0.0:
             return False
-    required = min_profitable_exit_price(entry_price=fill_estimate, qty=qty)
+    required = min_profitable_exit_price(entry_price=fill_estimate, qty=qty, facts=facts)
     if required is None:
         return False
     return exit_target < required

@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from broker_contract.contract import (
@@ -30,13 +30,12 @@ from broker_contract.price_feed import PriceFeed, PricePoint
 from broker_contract.quantity import QuantityLattice, quantize_down
 from broker_contract.sizing import TpTranchePlan
 
+from alphalens_pipeline.brokers.automanager.costs import EXIT_EDGE_MIN_BPS as _EXIT_EDGE_MIN_BPS
 from alphalens_pipeline.brokers.automanager.costs import (
-    COST_GATE_FX_APPLIES,
-    COST_GATE_MIN_COMMISSION_APPLIES,
+    CostGateFacts,
     min_profitable_exit_price,
     round_trip_fee_bps,
 )
-from alphalens_pipeline.brokers.automanager.costs import EXIT_EDGE_MIN_BPS as _EXIT_EDGE_MIN_BPS
 from alphalens_pipeline.brokers.automanager.labels import tp_label_from_tag
 from alphalens_pipeline.brokers.automanager.position_manager import _sole_standalone_stop
 from alphalens_pipeline.brokers.execution import assert_rail_lattice
@@ -186,7 +185,13 @@ def _is_real_quantity(qty: Any) -> bool:
 
 
 def _exit_clears_cost(
-    *, price: float, target_price: float, qty: float, realised_entry: float | None, tag: str
+    *,
+    price: float,
+    target_price: float,
+    qty: float,
+    realised_entry: float | None,
+    tag: str,
+    facts: CostGateFacts | None = None,
 ) -> bool:
     """Whether selling ``qty`` shares at ``price`` clears round-trip cost plus
     the declared :data:`EXIT_EDGE_MIN_BPS` buffer, measured from the REALISED
@@ -221,15 +226,18 @@ def _exit_clears_cost(
             realised_entry,
         )
         return True
-    required_price = min_profitable_exit_price(entry_price=realised_entry, qty=qty)
+    if facts is None:
+        facts = CostGateFacts.legacy()
+    required_price = min_profitable_exit_price(entry_price=realised_entry, qty=qty, facts=facts)
     if required_price is None or price >= required_price:
         return True
     # Refused. Restate the same threshold in bps, which is the shape an operator
     # reads the journal in (the decision above is the price comparison).
     cost_bps = round_trip_fee_bps(
         qty * realised_entry,
-        fx_applies=COST_GATE_FX_APPLIES,
-        min_commission_applies=COST_GATE_MIN_COMMISSION_APPLIES,
+        fx_applies=facts.fx_applies,
+        min_commission_applies=facts.min_commission_applies,
+        card=facts.card,
     )
     edge_bps = (price / realised_entry - 1.0) * _BPS_PER_UNIT
     logger.warning(
@@ -255,6 +263,7 @@ def plan_tranche_exits(
     already_fired: frozenset[str],
     lattice: QuantityLattice,
     realised_entry: float | None = None,
+    facts: CostGateFacts | None = None,
 ) -> list[TrancheExit]:
     """Which not-yet-fired tranches a LONG at ``price`` should realize now.
 
@@ -329,6 +338,7 @@ def plan_tranche_exits(
             qty=qty,
             realised_entry=realised_entry,
             tag=tag,
+            facts=facts,
         ):
             # STOP the batch, never skip to the deeper tranche. The threshold
             # scales with the tranche's own notional (the per-fill USD minimum
@@ -516,6 +526,10 @@ class ManagedExit:
     reference_qty: float
     stop_price: float
     already_fired: frozenset[str]
+    # #1238 PR 3: the journal-stamped currency facts the #1112 cost gate
+    # prices this position's tranches with; legacy (pre-stamp) plans keep the
+    # conservative pre-#1238 constants.
+    cost_facts: CostGateFacts = field(default_factory=CostGateFacts.legacy)
 
 
 @dataclass(frozen=True)
@@ -591,6 +605,7 @@ def run_live_exits(
             # The realised entry the #1112 cost gate measures from — already in
             # hand from the position read above, so no extra broker I/O.
             realised_entry=live.avg_price,
+            facts=m.cost_facts,
         )
         for ex in exits:
             result = execute_tranche_exit(

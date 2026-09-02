@@ -44,6 +44,7 @@ and only the first two are about Saxo:
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from collections.abc import Sequence
 
@@ -62,25 +63,71 @@ FX_ROUND_TRIP_RATE = 0.0050
 _BPS_PER_UNIT = 10_000.0
 
 
+@dataclasses.dataclass(frozen=True)
+class VenueFeeCard:
+    """One venue's commission schedule (#1238 PR 3). ``min_commission`` is
+    denominated in the INSTRUMENT currency — the same currency as the notional
+    the fee equation prices, so the model needs no conversion."""
+
+    commission_rate: float
+    min_commission: float
+    label: str
+
+
+US_FEE_CARD = VenueFeeCard(
+    commission_rate=COMMISSION_RATE, min_commission=MIN_COMMISSION_USD, label="saxo-pl-classic-us"
+)
+"""Saxo LIVE Polish schedule, US venues: 0.08% min USD 1 per fill."""
+
+WSE_FEE_CARD = VenueFeeCard(
+    commission_rate=0.0012, min_commission=10.0, label="saxo-pl-classic-wse"
+)
+"""Saxo LIVE Polish schedule, WSE (GPW): 0.12% min PLN 10 per fill (Saxo PL
+Classic tier, read from home.saxo/pl-pl 2026-09-02). ASSUMES the Classic tier —
+the operator must confirm the account tier before the first LIVE GPW pick."""
+
+_FEE_CARD_BY_INSTRUMENT_CURRENCY: dict[str, VenueFeeCard] = {
+    "USD": US_FEE_CARD,
+    "PLN": WSE_FEE_CARD,
+}
+
+
+def fee_card_for(instrument_currency: str | None) -> VenueFeeCard | None:
+    """The venue fee card for an instrument currency, or ``None`` when this
+    rail has no verified schedule for it (callers then keep the conservative
+    legacy constants). Keyed by CURRENCY, not MIC: on this rail the currency
+    identifies the venue schedule (USD ↔ US venues, PLN ↔ WSE), and the
+    currency is the fact both gates already have stamped."""
+    if not instrument_currency:
+        return None
+    return _FEE_CARD_BY_INSTRUMENT_CURRENCY.get(instrument_currency.upper())
+
+
 def round_trip_fee_bps(
-    notional: float, *, fx_applies: bool, min_commission_applies: bool = True
+    notional: float,
+    *,
+    fx_applies: bool,
+    min_commission_applies: bool = True,
+    card: VenueFeeCard = US_FEE_CARD,
 ) -> float:
     """The estimated round-trip fee for ``notional`` (instrument currency), in
-    bps of that notional.
+    bps of that notional, priced on ``card``'s schedule (default: the US card —
+    byte-identical to the pre-#1238 model).
 
     ``fx_applies`` is ``True`` iff the account currency differs from the
     instrument currency, which adds the FX round-trip leg.
-    ``min_commission_applies`` gates the per-fill USD minimum: it is only
-    meaningful when ``notional`` is USD-denominated; a non-USD instrument gets
-    the ad-valorem rate alone.
+    ``min_commission_applies`` gates the per-fill minimum: with a matching
+    ``card`` the minimum is denominated in the notional's own currency and the
+    flag stays ``True``; the ``False`` arm survives for the legacy callers that
+    cannot name the venue and drop the (USD) minimum for a non-USD notional.
 
     A non-positive ``notional`` returns ``0.0`` — a caller's cap comparison then
     stays inert rather than dividing by zero.
     """
     if notional <= 0:
         return 0.0
-    ad_valorem = COMMISSION_RATE * notional
-    per_fill = max(MIN_COMMISSION_USD, ad_valorem) if min_commission_applies else ad_valorem
+    ad_valorem = card.commission_rate * notional
+    per_fill = max(card.min_commission, ad_valorem) if min_commission_applies else ad_valorem
     commission_round_trip = 2.0 * per_fill
     fx_round_trip = FX_ROUND_TRIP_RATE * notional if fx_applies else 0.0
     return (commission_round_trip + fx_round_trip) / notional * _BPS_PER_UNIT
@@ -102,28 +149,69 @@ belongs in a pre-registered measurement, not in a bug fix.
 """
 
 COST_GATE_FX_APPLIES = True
-"""Whether the #1112 cost gates charge the FX round-trip leg. DECLARED, because
-neither gate knows the account currency: the exit engine holds only uic /
-tranches / qty / stop, and the entry watch line carries the tier, not the
-account. The live account is PLN and every first-cohort instrument is USD, so a
-conversion always applies today."""
+"""LEGACY default for the #1112 cost gates' FX leg (#1238 PR 3 threaded the
+REAL fact through: the gates now read the journal-stamped currency pair via
+:func:`cost_gate_facts`). This constant survives as the conservative fallback
+for records armed before the stamps existed — the pre-stamp cohort is USD on a
+PLN account, so a conversion always applied there."""
 
 COST_GATE_MIN_COMMISSION_APPLIES = True
-"""Whether the #1112 cost gates apply the per-fill USD minimum. DECLARED for the
-same reason, and for the same first US-only cohort. It is the conservative
-choice: the minimum can only RAISE the required edge, so a non-USD venue would
-see the gates refuse a little too eagerly, never too late. Placement-side
-(``control_loop._check_fee_floor``) does know the instrument currency and gates
-on it there; when a non-USD venue (XWAR / XTKS) actually opens, these two
-gates need the same currency fact threaded through instead of this constant."""
+"""LEGACY default for the #1112 cost gates' per-fill minimum, same fallback
+role as :data:`COST_GATE_FX_APPLIES`. Conservative by construction: the
+minimum can only RAISE the required edge, so an unstamped record is refused a
+little too eagerly, never too late. Stamped records price the venue's own
+minimum from its :class:`VenueFeeCard` instead."""
+
+
+@dataclasses.dataclass(frozen=True)
+class CostGateFacts:
+    """The currency facts the #1112 gates price a round trip with (#1238 PR 3).
+
+    Derived from the journal-stamped instrument/sizing currencies by
+    :func:`cost_gate_facts`; :meth:`legacy` reproduces the conservative
+    ``COST_GATE_*`` constants exactly, for records armed before the stamps
+    existed and for any currency this rail has no verified fee card for."""
+
+    fx_applies: bool
+    min_commission_applies: bool
+    card: VenueFeeCard
+
+    @classmethod
+    def legacy(cls) -> CostGateFacts:
+        return cls(
+            fx_applies=COST_GATE_FX_APPLIES,
+            min_commission_applies=COST_GATE_MIN_COMMISSION_APPLIES,
+            card=US_FEE_CARD,
+        )
+
+
+def cost_gate_facts(
+    *, instrument_currency: str | None, sizing_currency: str | None
+) -> CostGateFacts:
+    """Turn the journal-stamped currency pair into gate facts.
+
+    Both currencies known AND a verified fee card for the instrument currency
+    → real facts: the FX leg applies iff the currencies differ, and the
+    venue's own per-fill minimum applies (it is denominated in the notional's
+    currency). Anything unknown → :meth:`CostGateFacts.legacy` — the
+    conservative pre-#1238 constants, which can only over-refuse an exit,
+    never under-charge it."""
+    card = fee_card_for(instrument_currency)
+    if card is None or not sizing_currency:
+        return CostGateFacts.legacy()
+    assert instrument_currency is not None  # fee_card_for(None) is None
+    return CostGateFacts(
+        fx_applies=instrument_currency.upper() != sizing_currency.upper(),
+        min_commission_applies=True,
+        card=card,
+    )
 
 
 def min_profitable_exit_price(
     *,
     entry_price: float,
     qty: float,
-    fx_applies: bool = COST_GATE_FX_APPLIES,
-    min_commission_applies: bool = COST_GATE_MIN_COMMISSION_APPLIES,
+    facts: CostGateFacts | None = None,
 ) -> float | None:
     """The lowest exit price that clears round-trip cost plus
     :data:`EXIT_EDGE_MIN_BPS` on a position of ``qty`` shares bought at
@@ -157,10 +245,13 @@ def min_profitable_exit_price(
     for value in (entry_price, qty):
         if not math.isfinite(value) or value <= 0.0:
             return None
+    if facts is None:
+        facts = CostGateFacts.legacy()
     cost_bps = round_trip_fee_bps(
         qty * entry_price,
-        fx_applies=fx_applies,
-        min_commission_applies=min_commission_applies,
+        fx_applies=facts.fx_applies,
+        min_commission_applies=facts.min_commission_applies,
+        card=facts.card,
     )
     return entry_price * (1.0 + (cost_bps + EXIT_EDGE_MIN_BPS) / _BPS_PER_UNIT)
 

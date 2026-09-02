@@ -61,6 +61,7 @@ from alphalens_pipeline.brokers.automanager.costs import (
     FX_ROUND_TRIP_RATE,
     MIN_COMMISSION_USD,
     apportioned_coverage_violation,
+    cost_gate_facts,
     round_trip_fee_bps,
     single_full_position_tranche_violation,
 )
@@ -1000,6 +1001,7 @@ def _build_managed_exits(
     tranche_plans: Mapping[int, tuple[tuple[TpTranchePlan, ...], float, float]],
     fired: Mapping[int, frozenset[str]],
     trailed: Mapping[int, float],
+    plan_currencies: Mapping[int, tuple[str | None, str | None]] | None = None,
 ) -> list[ManagedExit]:
     """Build this tick's managed-position list. Pure — no broker/journal I/O.
 
@@ -1030,6 +1032,7 @@ def _build_managed_exits(
         trailed_level = trailed.get(uic)
         if trailed_level is not None:
             stop_price = max(stop_price, trailed_level)
+        instrument_ccy, sizing_ccy = (plan_currencies or {}).get(uic, (None, None))
         managed.append(
             ManagedExit(
                 uic=uic,
@@ -1037,6 +1040,9 @@ def _build_managed_exits(
                 reference_qty=reference_qty,
                 stop_price=stop_price,
                 already_fired=fired.get(uic, frozenset()),
+                cost_facts=cost_gate_facts(
+                    instrument_currency=instrument_ccy, sizing_currency=sizing_ccy
+                ),
             )
         )
     logger.info(
@@ -1447,6 +1453,7 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         tranche_plans=fold_tranche_plans(journal_lines),
         fired=_fold_fired_since_latest_plan(journal_lines),
         trailed=_fold_trailed_since_latest_plan(journal_lines),
+        plan_currencies=fold_tranche_plan_currencies(journal_lines),
     )
     # uic -> (ticker, venue) off the live positions just read. The venue must
     # survive: resolving a LIVE instrument by bare ticker is ambiguous for
@@ -1899,6 +1906,17 @@ def _log_watch_capacity_deferral(ticker: str, pick_key: str) -> None:
     )
 
 
+def _sizing_currency_of(fx: Any, instrument: Any) -> str:
+    """The account/sizing currency for a journal currency stamp (#1238 PR 3).
+
+    ``fx`` is None on the same-currency path, where the sizing currency IS the
+    instrument currency by construction; a stub without the attribute yields
+    "" (no stamp -> the gates keep the conservative legacy facts)."""
+    if fx is not None:
+        return str(getattr(fx, "account_currency", "") or "")
+    return str(getattr(instrument, "currency", "") or "")
+
+
 def _open_entry_watches(
     intent: Any,
     ticker: str,
@@ -1968,6 +1986,11 @@ def _open_entry_watches(
             # PRICE the broker cannot know) WITHOUT re-running classify.
             "disaster_stop": float(plan.disaster_stop),
             "tier_index": int(tier.tier_index),
+            # #1238 PR 3: the currency pair the #1112 arm gate prices the
+            # round trip with. fx is None on the same-currency path, where
+            # the sizing currency IS the instrument currency.
+            "instrument_currency": str(instrument.currency or ""),
+            "sizing_currency": _sizing_currency_of(fx, instrument),
         }
         if geometry_stamp is not None:
             line["geometry"] = geometry_stamp
@@ -2030,6 +2053,8 @@ def _route_pick_to_entry_watch(
             # re-drive re-appends this line — the SAME pick_key keeps the
             # fired-tranche fold from resetting on the re-append.
             pick_key=f"{ticker}:{intent.meta.brief_date}",
+            instrument_currency=str(getattr(instrument, "currency", "") or ""),
+            sizing_currency=_sizing_currency_of(fx, instrument),
         )
         # Same use_geometry decision _place_tiers makes for its planned lines:
         # the stamp rides every watch_open so the fire-arm planned writer can
@@ -2812,8 +2837,12 @@ def _inside_exit_region_note(
     estimate = entry_trail_geometry.entry_fill_estimate(
         reference=reference, trough=trough, d_bps=d_bps
     )
+    facts = cost_gate_facts(
+        instrument_currency=record.get("instrument_currency"),
+        sizing_currency=record.get("sizing_currency"),
+    )
     if not entry_trail_geometry.arms_inside_exit_region(
-        fill_estimate=estimate, exit_target=target, qty=qty
+        fill_estimate=estimate, exit_target=target, qty=qty, facts=facts
     ):
         return None
     if estimate is None or target is None:
@@ -5026,6 +5055,8 @@ def _build_tranche_plan_line(
     reference_qty: float,
     stop_price: float,
     pick_key: str | None = None,
+    instrument_currency: str | None = None,
+    sizing_currency: str | None = None,
 ) -> dict[str, Any]:
     """One append-only ``tranche_plan`` journal line -- the per-uic TP ladder the
     live-exit engine needs (INC-5) but the ``planned`` line does not carry.
@@ -5060,6 +5091,13 @@ def _build_tranche_plan_line(
     }
     if pick_key is not None:
         line["pick_key"] = str(pick_key)
+    # #1238 PR 3: the currency pair the #1112 exit gate prices the round trip
+    # with. Written only when known -- an absent stamp folds to the
+    # conservative legacy facts, exactly like a pre-#1238 line.
+    if instrument_currency:
+        line["instrument_currency"] = str(instrument_currency)
+    if sizing_currency:
+        line["sizing_currency"] = str(sizing_currency)
     return line
 
 
@@ -5094,6 +5132,44 @@ def fold_tranche_plans(
             continue
         uic, tranches, reference_qty, stop_price = parsed
         out[uic] = (tranches, reference_qty, stop_price)
+    return out
+
+
+def fold_tranche_plan_currencies(
+    lines: Iterable[Mapping[str, Any]],
+) -> dict[int, tuple[str | None, str | None]]:
+    """Fold the ``tranche_plan`` lines into the newest journal-stamped
+    ``(instrument_currency, sizing_currency)`` per uic (#1238 PR 3).
+
+    A SEPARATE fold from :func:`fold_tranche_plans` on purpose: the ladder
+    fold's ``(tranches, reference_qty, stop_price)`` tuple is a shape many
+    consumers key on, and the currency pair is consumed by exactly one
+    (:func:`_build_managed_exits`). Same walk, same semantics: last
+    well-formed line per uic wins, ``tranche_plan_retracted`` pops the uic,
+    and a legacy line without the stamps folds to ``(None, None)`` -- which
+    :func:`~alphalens_pipeline.brokers.automanager.costs.cost_gate_facts`
+    turns into the conservative legacy facts."""
+    out: dict[int, tuple[str | None, str | None]] = {}
+    for line in lines:
+        kind = line.get("kind")
+        if kind == _TRANCHE_PLAN_RETRACTED_KIND:
+            retracted_uic = _coerce(line, "uic", int)
+            if retracted_uic is not None:
+                out.pop(retracted_uic, None)
+            continue
+        if kind != _TRANCHE_PLAN_KIND:
+            continue
+        if _parse_tranche_plan_line(line) is None:
+            continue
+        uic = _coerce(line, "uic", int)
+        if uic is None:
+            continue
+        instrument_ccy = line.get("instrument_currency")
+        sizing_ccy = line.get("sizing_currency")
+        out[uic] = (
+            str(instrument_ccy) if instrument_ccy else None,
+            str(sizing_ccy) if sizing_ccy else None,
+        )
     return out
 
 
@@ -6844,6 +6920,8 @@ def _journal_tranche_plan_core(
     uic: int,
     use_geometry: bool,
     pick_key: str | None = None,
+    instrument_currency: str | None = None,
+    sizing_currency: str | None = None,
 ) -> None:
     """The ladder-choice + line-build core shared by BOTH placement paths
     (bracket ``_journal_tranche_plan`` and the entry-trail watch routing).
@@ -6884,6 +6962,8 @@ def _journal_tranche_plan_core(
             reference_qty=reference_qty,
             stop_price=stop_price,
             pick_key=pick_key,
+            instrument_currency=instrument_currency,
+            sizing_currency=sizing_currency,
         )
     )
 
@@ -6895,6 +6975,7 @@ def _journal_tranche_plan(
     placement: Any,
     instrument: Any,
     use_geometry: bool,
+    fx: Any = None,
 ) -> None:
     """INC-5: journal ONE ``tranche_plan`` line per uic so the live-exit engine can
     rebuild the TP ladder from the journal alone — see
@@ -6915,6 +6996,8 @@ def _journal_tranche_plan(
         reference_qty=sum(t.qty for t in entry_tiers),
         uic=int(instrument.broker_instrument_id),
         use_geometry=use_geometry,
+        instrument_currency=str(getattr(instrument, "currency", "") or ""),
+        sizing_currency=_sizing_currency_of(fx, instrument),
     )
 
 
@@ -7066,6 +7149,7 @@ def _place_tiers(
         placement=placement,
         instrument=instrument,
         use_geometry=resolved_exit_policy.applies_geometry,
+        fx=fx,
     )
 
     # Write-ahead dedup line (memo §4.4 B2): register the (ticker, brief_date)
