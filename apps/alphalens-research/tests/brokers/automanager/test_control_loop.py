@@ -77,7 +77,7 @@ _RID = "rid-KO"
 _UIC = 43070
 
 
-def _pick(ticker: str = "KO", date: str = "2026-07-20") -> TradeIntent:
+def _pick(ticker: str = "KO", date: str = "2026-07-20", source: str = "brief") -> TradeIntent:
     """A minimal, structurally valid armed TradeIntent (PR-7: the daemon drains
     TradeIntent, never a bare (ticker, date) Pick)."""
     spec = TradeSpec(
@@ -90,7 +90,7 @@ def _pick(ticker: str = "KO", date: str = "2026-07-20") -> TradeIntent:
         intent_id=f"{ticker}:{date}",
         instrument=InstrumentHint(ticker=ticker.upper(), mic="XNYS"),
         spec=spec,
-        meta=IntentMeta(armed_ts="2026-07-20T14:00:00+00:00", brief_date=date),
+        meta=IntentMeta(armed_ts="2026-07-20T14:00:00+00:00", brief_date=date, source=source),
     )
 
 
@@ -8146,6 +8146,28 @@ class TestDay1GapGateSessionInfo(unittest.TestCase):
             result = cl._day1_gap_gate_session_info(dt.date(2026, 8, 10), "ZZZZ")
         self.assertIsNone(result)
 
+    # -- manual anchor (#1246): day1_includes_brief_date=True -> the session
+    # ON-OR-AFTER brief_date (a manual pick's arm date IS its day 1) --
+
+    def test_manual_anchor_session_brief_date_is_its_own_day1(self) -> None:
+        day1, day1_open = cl._day1_gap_gate_session_info(
+            dt.date(2026, 8, 10), "XNYS", day1_includes_brief_date=True
+        )
+        self.assertEqual(day1, dt.date(2026, 8, 10))
+        self.assertEqual(day1_open, dt.datetime(2026, 8, 10, 13, 30, tzinfo=dt.UTC))
+
+    def test_manual_anchor_saturday_brief_date_rolls_to_monday(self) -> None:
+        day1, _day1_open = cl._day1_gap_gate_session_info(
+            dt.date(2026, 8, 8), "XNYS", day1_includes_brief_date=True
+        )
+        self.assertEqual(day1, dt.date(2026, 8, 10))
+
+    def test_default_anchor_still_strictly_after(self) -> None:
+        day1, _day1_open = cl._day1_gap_gate_session_info(
+            dt.date(2026, 8, 10), "XNYS", day1_includes_brief_date=False
+        )
+        self.assertEqual(day1, dt.date(2026, 8, 11))
+
 
 class TestDay1GapGateDecision(unittest.TestCase):
     """``_day1_gap_gate_decision`` — pure, total, no I/O (design memo: N=30/588
@@ -8207,6 +8229,47 @@ class TestDay1GapGateDecision(unittest.TestCase):
         verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 1.0, "ZZZZ")
         self.assertEqual(verdict, "pass")
 
+    # -- manual source (#1246): day 1 is the brief_date session ITSELF --
+
+    _BRIEF_OPEN = dt.datetime(2026, 8, 10, 13, 30, tzinfo=dt.UTC)  # Monday open
+
+    def test_manual_intraday_of_brief_date_open_at_or_above_e1_passes(self) -> None:
+        now = self._BRIEF_OPEN + dt.timedelta(minutes=30)
+        verdict = cl._day1_gap_gate_decision(
+            now, self._BRIEF, self._E1, self._E1, "XNYS", source="manual"
+        )
+        self.assertEqual(verdict, "pass")
+
+    def test_manual_intraday_of_brief_date_open_below_e1_defers_below_e1(self) -> None:
+        now = self._BRIEF_OPEN + dt.timedelta(minutes=30)
+        verdict = cl._day1_gap_gate_decision(
+            now, self._BRIEF, self._E1, 99.99, "XNYS", source="manual"
+        )
+        self.assertEqual(verdict, "defer_below_e1")
+
+    def test_manual_preopen_on_brief_date_defers_preopen(self) -> None:
+        now = self._BRIEF_OPEN - dt.timedelta(minutes=10)
+        verdict = cl._day1_gap_gate_decision(
+            now, self._BRIEF, self._E1, 200.0, "XNYS", source="manual"
+        )
+        self.assertEqual(verdict, "defer_preopen")
+
+    def test_manual_next_day_passes_regardless_of_price(self) -> None:
+        now = dt.datetime(2026, 8, 11, 12, 0, tzinfo=dt.UTC)  # Tuesday = its day 2
+        verdict = cl._day1_gap_gate_decision(
+            now, self._BRIEF, self._E1, 1.0, "XNYS", source="manual"
+        )
+        self.assertEqual(verdict, "pass")
+
+    def test_brief_source_same_inputs_still_defers_preopen(self) -> None:
+        # The discriminator itself: identical inputs, source="brief" -> the
+        # brief-day intraday tick is still PRE-day1 (day 1 = Tuesday).
+        now = self._BRIEF_OPEN + dt.timedelta(minutes=30)
+        verdict = cl._day1_gap_gate_decision(
+            now, self._BRIEF, self._E1, self._E1, "XNYS", source="brief"
+        )
+        self.assertEqual(verdict, "defer_preopen")
+
 
 class TestEvaluateDay1GapGate(unittest.TestCase):
     """``_evaluate_day1_gap_gate`` — resolves E1, calls the probe ONLY when the
@@ -8253,6 +8316,24 @@ class TestEvaluateDay1GapGate(unittest.TestCase):
         with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
             verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, _day1_spec(), "XNYS", None)
         self.assertEqual(verdict, "defer_no_price")
+
+    def test_manual_probe_called_intraday_on_brief_date_itself(self) -> None:
+        # #1246: a manual pick's arm date IS its day 1 — the probe must run
+        # during the brief_date session (where a brief pick is still pre-day1
+        # and must NOT probe, pinned by test_probe_not_called_before_day1).
+        calls: list[tuple[str, str]] = []
+
+        def _probe(ticker: str, exchange_mic: str) -> float | None:
+            calls.append((ticker, exchange_mic))
+            return 100.0
+
+        brief_open = dt.datetime(2026, 8, 10, 13, 30, tzinfo=dt.UTC)
+        with _frozen_now(brief_open + dt.timedelta(minutes=30)):
+            verdict = cl._evaluate_day1_gap_gate(
+                "KO", self._BRIEF, _day1_spec(), "XNYS", _probe, source="manual"
+            )
+        self.assertEqual(calls, [("KO", "XNYS")])
+        self.assertEqual(verdict, "pass")
 
 
 class TestDay1GapGateEnabledFlag(unittest.TestCase):
@@ -8445,7 +8526,13 @@ class TestDay1GapGateXwarEndToEnd(unittest.TestCase):
             mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             deferred = cl._day1_gap_gate_defers(
-                "CDR", self._BRIEF, _day1_spec(limit_price=231.1), "XWAR", _probe, None
+                "CDR",
+                self._BRIEF,
+                _day1_spec(limit_price=231.1),
+                "XWAR",
+                _probe,
+                None,
+                source="brief",
             )
         self.assertFalse(deferred)
         self.assertEqual(calls, [("CDR", "XWAR")])
@@ -8476,7 +8563,7 @@ class TestDay1GapGateDefersObservability(unittest.TestCase):
             mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             deferred = cl._day1_gap_gate_defers(
-                "KO", self._BRIEF, _day1_spec(), "XNYS", probe, _alert
+                "KO", self._BRIEF, _day1_spec(), "XNYS", probe, _alert, source="brief"
             )
         return deferred, alerts
 
@@ -8604,6 +8691,51 @@ class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
             placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=_RaisingProbe())
             self.assertTrue(placer(_pick("KO", self._BRIEF)))
         self.assertTrue(broker.placed)
+        self.assertEqual(alerts, [])
+        self.assertEqual(refusals, [])
+
+    # -- manual source (#1246): the arm date IS day 1, so an intraday manual
+    # arm places (or gates) THE SAME session instead of silently waiting for
+    # the next one (RHI incident 2026-09-02) --
+
+    _BRIEF_INTRADAY = dt.datetime(2026, 8, 10, 15, 0, tzinfo=dt.UTC)  # Monday, post-grace
+
+    def test_manual_intraday_open_at_e1_places_same_session(self) -> None:
+        broker = _RecordingBroker()
+        with (
+            _frozen_now(self._BRIEF_INTRADAY),
+            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+        ):
+            placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=lambda *_a: 100.0)
+            self.assertTrue(placer(_pick("KO", self._BRIEF, source="manual")))
+        self.assertTrue(broker.placed)
+        self.assertEqual(alerts, [])
+        self.assertEqual(refusals, [])
+
+    def test_manual_intraday_open_below_e1_defers_same_session_alerts_once(self) -> None:
+        broker = _RecordingBroker()
+        with (
+            _frozen_now(self._BRIEF_INTRADAY),
+            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+        ):
+            placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=lambda *_a: 99.0)
+            self.assertFalse(placer(_pick("KO", self._BRIEF, source="manual")))
+        self.assertEqual(broker.placed, [])
+        self.assertEqual(refusals, [], "a day1-gap deferral must NEVER journal a refused line")
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0][1], "day1-gap:KO")
+
+    def test_brief_pick_same_intraday_tick_still_defers_preopen(self) -> None:
+        # Byte-identical pin for the brief population: on the brief_date
+        # itself a brief pick is pre-day1 — no probe call, no placement.
+        broker = _RecordingBroker()
+        with (
+            _frozen_now(self._BRIEF_INTRADAY),
+            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+        ):
+            placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=_RaisingProbe())
+            self.assertFalse(placer(_pick("KO", self._BRIEF)))
+        self.assertEqual(broker.placed, [])
         self.assertEqual(alerts, [])
         self.assertEqual(refusals, [])
 
