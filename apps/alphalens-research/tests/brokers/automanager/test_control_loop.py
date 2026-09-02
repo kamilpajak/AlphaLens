@@ -1772,6 +1772,152 @@ class TestCheckGrossCap(unittest.TestCase):
             self.assertIsNone(self._check(notional=10_000.0))
 
 
+def _fx_quote(mid: float, base: str = "PLN", quote: str = "USD") -> Any:
+    from broker_contract.fx import FxRateQuote
+
+    return FxRateQuote(
+        base_currency=base,
+        quote_currency=quote,
+        mid=mid,
+        bid=mid - 0.001,
+        ask=mid + 0.001,
+        price_type_bid="Tradable",
+        price_type_ask="Tradable",
+        market_state="Open",
+        source="test-fx-quote",
+        asof=dt.datetime.now(dt.UTC),
+    )
+
+
+class TestFilledPositionsMixedCurrencyBook(unittest.TestCase):
+    """#1238 PR 4: the position fold values a MIXED-currency book per
+    position instead of failing closed the moment any stamped currency
+    differs from the candidate's fx. Rules: unstamped "" keeps today's
+    candidate-fx path byte-identical; account-currency positions fold raw; the
+    candidate's instrument currency folds through the candidate rate; any
+    OTHER stamped currency converts through ``rate_lookup`` (one lookup per
+    distinct currency), and fails closed when no lookup is available or the
+    lookup cannot produce a rate."""
+
+    def _fold(self, positions, fx, *, account_currency="PLN", rate_lookup=None):
+        return cl._filled_positions_gross_acct(
+            positions, fx, account_currency=account_currency, rate_lookup=rate_lookup
+        )
+
+    def test_usd_plus_pln_book_on_pln_account_values_both(self) -> None:
+        # Candidate is USD (rate 0.25 USD per 1 PLN): the USD position folds
+        # through the candidate rate (1_000 / 0.25 = 4_000 PLN), the PLN
+        # position folds raw (500).
+        total, failure = self._fold(
+            [
+                _position(1_000.0, ticker="NVAX", currency="USD"),
+                _position(500.0, ticker="CDR", currency="PLN"),
+            ],
+            _fx(0.25, instrument_currency="USD"),
+        )
+        self.assertIsNone(failure)
+        self.assertAlmostEqual(total, 4_500.0)
+
+    def test_same_currency_candidate_converts_the_usd_leg_via_lookup(self) -> None:
+        # A GPW candidate on the PLN account has fx=None; the stamped USD
+        # position must convert through the lookup, never fold raw.
+        calls: list[str] = []
+
+        def _lookup(ccy: str) -> float | None:
+            calls.append(ccy)
+            return 0.25
+
+        total, failure = self._fold(
+            [
+                _position(1_000.0, ticker="NVAX", currency="USD"),
+                _position(1_000.0, ticker="ALE", currency="PLN"),
+            ],
+            None,
+            rate_lookup=_lookup,
+        )
+        self.assertIsNone(failure)
+        self.assertAlmostEqual(total, 5_000.0)
+        self.assertEqual(calls, ["USD"])
+
+    def test_one_lookup_per_distinct_currency(self) -> None:
+        calls: list[str] = []
+
+        def _lookup(ccy: str) -> float | None:
+            calls.append(ccy)
+            return 0.25
+
+        total, failure = self._fold(
+            [
+                _position(1_000.0, ticker="NVAX", currency="USD"),
+                _position(2_000.0, ticker="MARA", currency="USD"),
+            ],
+            None,
+            rate_lookup=_lookup,
+        )
+        self.assertIsNone(failure)
+        self.assertAlmostEqual(total, 12_000.0)
+        self.assertEqual(calls, ["USD"], "the rate must be cached per attempt")
+
+    def test_foreign_currency_without_a_lookup_fails_closed(self) -> None:
+        total, failure = self._fold(
+            [_position(1_000.0, ticker="SAP", currency="EUR")],
+            _fx(0.25, instrument_currency="USD"),
+        )
+        self.assertEqual(total, 0.0)
+        assert failure is not None
+        self.assertIn("SAP", failure)
+        self.assertIn("EUR", failure)
+        self.assertIn("failing closed", failure)
+
+    def test_lookup_failure_fails_closed(self) -> None:
+        total, failure = self._fold(
+            [_position(1_000.0, ticker="SAP", currency="EUR")],
+            None,
+            rate_lookup=lambda _ccy: None,
+        )
+        self.assertEqual(total, 0.0)
+        assert failure is not None
+        self.assertIn("EUR", failure)
+
+    def test_unstamped_positions_keep_the_candidate_fx_path(self) -> None:
+        # "" is tolerated exactly as before: candidate fx present -> divide by
+        # its rate; fx None -> fold raw.
+        total, failure = self._fold(
+            [_position(1_000.0, currency="")], _fx(0.25, instrument_currency="USD")
+        )
+        self.assertIsNone(failure)
+        self.assertAlmostEqual(total, 4_000.0)
+        total, failure = self._fold([_position(1_000.0, currency="")], None)
+        self.assertIsNone(failure)
+        self.assertAlmostEqual(total, 1_000.0)
+
+    def test_gross_cap_threads_the_broker_lookup(self) -> None:
+        # End-to-end through _check_gross_cap: a PLN candidate (fx=None) with
+        # a USD position on the book converts via broker.get_fx_rate and can
+        # tip the cap; without the mixed-book support this refused with the
+        # foreign-rate fail-closed message instead of a valued total.
+        class _FxBroker:
+            def get_fx_rate(self, base: str, quote: str) -> Any:
+                assert (base, quote) == ("PLN", "USD")
+                return _fx_quote(0.25)
+
+        _entry_trail_journal(self, None)
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.04"}, clear=True):
+            violation = cl._check_gross_cap(
+                _fee_plan(100.0),
+                None,
+                account=_acct("PLN"),
+                open_verdicts=[],
+                records=[],
+                positions=[_position(1_000.0, ticker="NVAX", currency="USD")],
+                ticker="CDR",
+                broker=_FxBroker(),
+            )
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertIn("4,000.00", violation)
+
+
 class TestPlacePickGrossCapIntegration(unittest.TestCase):
     """The gross cap gate inside ``_place_pick``: computed AFTER the fee floor
     (same post-sizing inputs), BEFORE any bracket construction or placement.
