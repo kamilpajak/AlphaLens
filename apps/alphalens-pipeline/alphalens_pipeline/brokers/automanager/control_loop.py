@@ -1083,7 +1083,10 @@ _STREAM_SESSION_GRACE = dt.timedelta(minutes=10)
 # CONFIG-DRIVEN on purpose, never derived from open watches/positions: the
 # stream must be up (warmup included) BEFORE the first watch on a new venue
 # can tick — a derived window would hold the socket closed exactly when the
-# venue's first pick needs quotes.
+# venue's first pick needs quotes. INVARIANT: every configured venue's hull
+# (open - warmup .. close + grace) must stay inside one UTC day — the per-day
+# window memo keys on UTC now.date(); an Asian venue opening near 00:00 UTC
+# needs that memo redesigned first.
 _STREAM_SESSION_VENUES_ENV = "ALPHALENS_SAXO_STREAM_SESSION_VENUES"
 _STREAM_SESSION_DEFAULT_VENUES: tuple[str, ...] = ("XNYS",)
 
