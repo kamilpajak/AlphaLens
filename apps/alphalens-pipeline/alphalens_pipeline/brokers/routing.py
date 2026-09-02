@@ -34,6 +34,33 @@ from broker_contract.contract import (
 from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 
 
+def explicit_mic_from_hint(hint_mic: str | None) -> str | None:
+    """Map an intent's ``InstrumentHint.mic`` to the routing decision (#1238).
+
+    A US hint is ADVISORY: every brief pick stamps ``mic="XNYS"`` while its
+    real venue may be XNAS/XASE, so any hint inside
+    :data:`US_MIC_PROBE_ORDER` (or an absent hint) returns ``None`` — the
+    caller keeps probing exactly as before. A non-US hint (``arm-manual``
+    stamps the operator's venue, e.g. XWAR) is AUTHORITATIVE: it returns the
+    normalized MIC for an explicit single-venue resolve, so a same-ticker US
+    listing is unreachable. Single-sourced here; NOTE the day-1 gap gate
+    price probe still owns a separate US-pinned candidate list today — it is
+    aligned to this rule in the next PR of the venue arc (#1238).
+
+    An unknown non-US MIC (a typo, an unmapped venue) is returned verbatim:
+    validity is the broker venue map's call (``MIC_TO_SAXO_EXCHANGE_ID``),
+    never a second whitelist here. Downstream that resolve failure is a
+    caught ``InstrumentNotFoundError`` — the pick logs and retries next
+    tick, it never crashes the tick and is never terminally refused.
+    """
+    if not hint_mic:
+        return None
+    mic = hint_mic.strip().upper()
+    if not mic or mic in US_MIC_PROBE_ORDER:
+        return None
+    return mic
+
+
 def resolve_us_instrument(
     broker: Broker,
     ticker: str,
@@ -71,5 +98,6 @@ def resolve_us_instrument(
 
 __all__ = [
     "US_MIC_PROBE_ORDER",
+    "explicit_mic_from_hint",
     "resolve_us_instrument",
 ]

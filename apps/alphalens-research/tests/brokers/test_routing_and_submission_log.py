@@ -11,7 +11,11 @@ import unittest
 from pathlib import Path
 
 from alphalens_pipeline.brokers.execution import execution_config_version
-from alphalens_pipeline.brokers.routing import US_MIC_PROBE_ORDER, resolve_us_instrument
+from alphalens_pipeline.brokers.routing import (
+    US_MIC_PROBE_ORDER,
+    explicit_mic_from_hint,
+    resolve_us_instrument,
+)
 from alphalens_pipeline.brokers.submission_log import (
     append_submission_record,
     build_submission_record,
@@ -129,6 +133,73 @@ class TestResolveUsInstrument(unittest.TestCase):
         with self.assertRaises(InstrumentNotFoundError):
             resolve_us_instrument(broker, "CDR")  # type: ignore[arg-type]
         self.assertNotIn(("CDR", "XWAR"), broker.resolve_calls)
+
+
+class TestExplicitMicFromHint(unittest.TestCase):
+    """The single-source hint rule (#1238 PR 1): a US hint is ADVISORY
+    (brief picks stamp XNYS while the real venue may be XNAS — resolution
+    must keep probing), a non-US hint is AUTHORITATIVE (explicit-only
+    venues like XWAR resolve exactly where the operator said)."""
+
+    def test_absent_hint_probes(self):
+        self.assertIsNone(explicit_mic_from_hint(None))
+        self.assertIsNone(explicit_mic_from_hint(""))
+
+    def test_every_us_probe_mic_is_advisory(self):
+        for mic in US_MIC_PROBE_ORDER:
+            self.assertIsNone(explicit_mic_from_hint(mic))
+
+    def test_us_hint_is_case_insensitive(self):
+        self.assertIsNone(explicit_mic_from_hint("xnys"))
+
+    def test_non_us_hint_is_explicit_and_normalized(self):
+        self.assertEqual(explicit_mic_from_hint("XWAR"), "XWAR")
+        self.assertEqual(explicit_mic_from_hint("xwar"), "XWAR")
+        self.assertEqual(explicit_mic_from_hint(" xwar "), "XWAR")
+
+    def test_whitespace_only_hint_probes(self):
+        self.assertIsNone(explicit_mic_from_hint("   "))
+
+    def test_unknown_mic_is_passed_through_verbatim(self):
+        # Validity is the broker venue map's call (MIC_TO_SAXO_EXCHANGE_ID),
+        # never a second whitelist here — a typo'd venue must reach
+        # resolve_instrument and fail loudly there, not be silently probed.
+        self.assertEqual(explicit_mic_from_hint("XXXX"), "XXXX")
+
+    def test_unknown_mic_reaches_the_broker_and_is_never_probed(self):
+        broker = _RoutingStubBroker({})
+        with self.assertRaises(InstrumentNotFoundError):
+            resolve_us_instrument(
+                broker,  # type: ignore[arg-type]
+                "CDR",
+                exchange_mic=explicit_mic_from_hint("XXXX"),
+            )
+        self.assertEqual(broker.resolve_calls, [("CDR", "XXXX")])
+
+    def test_xnys_hinted_ticker_that_only_lists_on_xnas_still_resolves(self):
+        # The load-bearing brief-pick regression: every brief intent hints
+        # XNYS, so the hint must map to "probe", never to "explicit XNYS".
+        broker = _RoutingStubBroker({("NVDA", "XNAS"): _ref("NVDA", "XNAS")})
+
+        ref = resolve_us_instrument(
+            broker,  # type: ignore[arg-type]
+            "NVDA",
+            exchange_mic=explicit_mic_from_hint("XNYS"),
+        )
+
+        self.assertEqual(ref.exchange_mic, "XNAS")
+
+    def test_xwar_hint_resolves_explicitly_without_touching_us_venues(self):
+        broker = _RoutingStubBroker({("CDR", "XWAR"): _ref("CDR", "XWAR")})
+
+        ref = resolve_us_instrument(
+            broker,  # type: ignore[arg-type]
+            "CDR",
+            exchange_mic=explicit_mic_from_hint("XWAR"),
+        )
+
+        self.assertEqual(ref.exchange_mic, "XWAR")
+        self.assertEqual(broker.resolve_calls, [("CDR", "XWAR")])
 
 
 class TestSubmissionLog(unittest.TestCase):

@@ -646,7 +646,7 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
             p(mock.patch(f"{pkg}.submission_log.iter_submission_records", lambda _p: []))
             p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b, **_k: []))
             p(mock.patch(f"{pkg}.automanager.safety.check", lambda *_a, **_k: object()))
-            p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t: instrument))
+            p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t, **_kw: instrument))
             p(
                 mock.patch(
                     f"{pkg}.automanager.placement_planner.classify", lambda *_a, **_k: placement
@@ -755,7 +755,7 @@ class TestPlacePickBranches(unittest.TestCase):
         m: dict[str, Any] = {
             "verdicts": lambda _r, _b, **_k: [],
             "safety_check": lambda *_a, **_k: object(),
-            "resolve": lambda _b, _t: _instr(),
+            "resolve": lambda _b, _t, **_kw: _instr(),
             "classify": lambda *_a, **_k: _placement(),
             # A REAL (inert, well-under-cap) plan: the post-sizing gross cap
             # reads plan.entry_tiers, so a bare object() would crash.
@@ -927,12 +927,12 @@ class TestPlacePickBranches(unittest.TestCase):
         self.assertFalse(placer(_pick()))  # must not raise
 
     def test_no_instrument_currency_returns_false(self) -> None:
-        placer = self._placer(_PlaceBroker(), resolve=lambda _b, _t: _instr(currency=""))
+        placer = self._placer(_PlaceBroker(), resolve=lambda _b, _t, **_kw: _instr(currency=""))
         self.assertFalse(placer(_pick()))
 
     def test_fx_needed_but_broker_cannot_convert_returns_false(self) -> None:
         # instrument EUR vs account USD, broker without get_fx_rate -> cannot size.
-        placer = self._placer(_PlaceBroker(), resolve=lambda _b, _t: _instr(currency="EUR"))
+        placer = self._placer(_PlaceBroker(), resolve=lambda _b, _t, **_kw: _instr(currency="EUR"))
         self.assertFalse(placer(_pick()))
 
     def test_fx_conversion_built_when_broker_supports_it(self) -> None:
@@ -941,11 +941,11 @@ class TestPlacePickBranches(unittest.TestCase):
         with mock.patch(
             "alphalens_pipeline.brokers.execution.build_fx_conversion", lambda _r: fx_obj
         ):
-            placer = self._placer(broker, resolve=lambda _b, _t: _instr(currency="EUR"))
+            placer = self._placer(broker, resolve=lambda _b, _t, **_kw: _instr(currency="EUR"))
             self.assertTrue(placer(_pick()))
 
     def test_resolve_or_size_error_returns_false(self) -> None:
-        def _boom(_b: Any, _t: Any) -> Any:
+        def _boom(_b: Any, _t: Any, **_kw: Any) -> Any:
             raise BrokerError("instrument lookup down")
 
         self.assertFalse(self._placer(_PlaceBroker(), resolve=_boom)(_pick()))
@@ -1097,7 +1097,7 @@ class TestResolveAndSizeUsesEffectiveSizingEquity(unittest.TestCase):
         account.total_value = account_equity  # type: ignore[attr-defined]
         with contextlib.ExitStack() as stack:
             p = stack.enter_context
-            p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t: _instr()))
+            p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t, **_kw: _instr()))
             p(mock.patch("broker_contract.sizing.compute_setup_plan", _capture_plan))
             p(mock.patch.dict("os.environ", env, clear=True))
             cl._resolve_and_size(_PlaceBroker(), "KO", account, object())
@@ -1121,6 +1121,60 @@ class TestResolveAndSizeUsesEffectiveSizingEquity(unittest.TestCase):
             env={SIZING_EQUITY_ENV: "16000", SIZING_EQUITY_MODE_ENV: "declared"},
         )
         self.assertEqual(equity, 16_000.0)
+
+
+class TestResolveAndSizeThreadsTheVenueHint(unittest.TestCase):
+    """#1238 PR 1: the drain threads ``intent.instrument.mic`` into routing.
+
+    A US hint stays ADVISORY — ``exchange_mic=None`` reaches routing, which
+    keeps probing (every brief pick hints XNYS while its real venue may be
+    XNAS). A non-US hint (XWAR) is AUTHORITATIVE and reaches routing as the
+    explicit venue, so a same-ticker US listing is unreachable."""
+
+    def _captured_exchange_mic(self, hint: str | None) -> Any:
+        pkg = "alphalens_pipeline.brokers"
+        captured: dict[str, Any] = {}
+
+        def _resolve(_b: Any, _t: str, exchange_mic: str | None = None) -> Any:
+            captured["exchange_mic"] = exchange_mic
+            return _instr()
+
+        with contextlib.ExitStack() as stack:
+            p = stack.enter_context
+            p(mock.patch(f"{pkg}.routing.resolve_us_instrument", _resolve))
+            p(mock.patch("broker_contract.sizing.compute_setup_plan", lambda _s, **_k: object()))
+            p(mock.patch.dict("os.environ", {}, clear=True))
+            cl._resolve_and_size(_PlaceBroker(), "KO", _acct(), object(), hint_mic=hint)
+        return captured["exchange_mic"]
+
+    def test_a_us_hint_keeps_probing(self) -> None:
+        self.assertIsNone(self._captured_exchange_mic("XNYS"))
+
+    def test_an_absent_hint_keeps_probing(self) -> None:
+        self.assertIsNone(self._captured_exchange_mic(None))
+
+    def test_a_non_us_hint_resolves_explicitly(self) -> None:
+        self.assertEqual(self._captured_exchange_mic("XWAR"), "XWAR")
+
+    def test_an_unmapped_hint_retries_not_crashes(self) -> None:
+        # A typo'd venue hint fails resolve with InstrumentNotFoundError
+        # (a BrokerError) — _resolve_and_size returns None so the pick logs
+        # and retries next tick; DELIBERATELY non-terminal (zen review,
+        # PR #1239): validity is the broker venue map's call and a hand-fixed
+        # journal line self-heals on the next drain.
+        from broker_contract.contract import InstrumentNotFoundError
+
+        pkg = "alphalens_pipeline.brokers"
+
+        def _resolve(_b: Any, _t: str, exchange_mic: str | None = None) -> Any:
+            raise InstrumentNotFoundError(f"unknown venue {exchange_mic!r}")
+
+        with contextlib.ExitStack() as stack:
+            p = stack.enter_context
+            p(mock.patch(f"{pkg}.routing.resolve_us_instrument", _resolve))
+            p(mock.patch.dict("os.environ", {}, clear=True))
+            result = cl._resolve_and_size(_PlaceBroker(), "CDR", _acct(), object(), hint_mic="XXXX")
+        self.assertIsNone(result)
 
 
 def _fee_plan(notional: float) -> SetupPlan:
@@ -1349,7 +1403,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
         m: dict[str, Any] = {
             "verdicts": lambda _r, _b, **_k: [],
             "safety_check": lambda *_a, **_k: object(),
-            "resolve": resolve if resolve is not None else (lambda _b, _t: _instr()),
+            "resolve": resolve if resolve is not None else (lambda _b, _t, **_kw: _instr()),
             "classify": lambda *_a, **_k: _placement(),
             "compute_plan": lambda _spec, **_k: _fee_plan(notional),
             "iter_records": lambda _p: [],
@@ -1442,7 +1496,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
         p(mock.patch(f"{pkg}.submission_log.iter_submission_records", lambda _p: []))
         p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b, **_k: []))
         p(mock.patch(f"{pkg}.automanager.safety.check", lambda *_a, **_k: object()))
-        p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t: _instr()))
+        p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t, **_kw: _instr()))
         p(mock.patch("broker_contract.sizing.compute_setup_plan", lambda _s, **_k: _fee_plan(50.0)))
         p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
@@ -1462,7 +1516,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
             mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "50"}, clear=True),
         ):
             placer, _alerts, refusals = self._placer(
-                broker, notional=1000.0, resolve=lambda _b, _t: _instr(currency="EUR")
+                broker, notional=1000.0, resolve=lambda _b, _t, **_kw: _instr(currency="EUR")
             )
             self.assertFalse(placer(_pick()))
         self.assertEqual(broker.placed, [])
@@ -1740,7 +1794,7 @@ class TestPlacePickGrossCapIntegration(unittest.TestCase):
         m: dict[str, Any] = {
             "verdicts": lambda _r, _b, **_k: [],
             "safety_check": lambda *_a, **_k: object(),
-            "resolve": lambda _b, _t: _instr(),
+            "resolve": lambda _b, _t, **_kw: _instr(),
             "classify": lambda *_a, **_k: _placement(),
             "compute_plan": lambda _spec, **_k: _fee_plan(notional),
             "iter_records": lambda _p: [],
@@ -1997,7 +2051,7 @@ class TestPlacePickCashFloorIntegration(unittest.TestCase):
         m: dict[str, Any] = {
             "verdicts": lambda _r, _b, **_k: [],
             "safety_check": lambda *_a, **_k: object(),
-            "resolve": lambda _b, _t: _instr(),
+            "resolve": lambda _b, _t, **_kw: _instr(),
             "classify": lambda *_a, **_k: _placement(),
             "compute_plan": lambda _spec, **_k: _fee_plan(notional),
             "iter_records": lambda _p: [],
@@ -8251,7 +8305,7 @@ class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
         m: dict[str, Any] = {
             "verdicts": lambda _r, _b, **_k: [],
             "safety_check": lambda *_a, **_k: object(),
-            "resolve": lambda _b, _t: _instr(),
+            "resolve": lambda _b, _t, **_kw: _instr(),
             "classify": lambda *_a, **_k: _placement(),
             # A REAL (inert, well-under-cap) plan: the post-sizing gross cap
             # reads plan.entry_tiers, so a bare object() would crash.

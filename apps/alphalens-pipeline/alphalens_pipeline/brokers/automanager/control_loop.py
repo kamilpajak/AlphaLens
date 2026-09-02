@@ -6169,11 +6169,18 @@ def _resolve_and_size(
     ticker: str,
     account: Any,
     spec: Any,
+    hint_mic: str | None = None,
 ) -> tuple[Any, Any, Any] | None:
-    """Resolve the US instrument, build any needed FX conversion, and size the
+    """Resolve the instrument, build any needed FX conversion, and size the
     already-parsed :class:`~broker_contract.trade_intent.schema.TradeSpec`.
     Returns ``(instrument, fx, plan)`` or ``None`` on any resolve/size failure
     (logged) — one bad pick must never crash a tick.
+
+    ``hint_mic`` is the intent's ``InstrumentHint.mic`` (#1238):
+    ``explicit_mic_from_hint`` keeps US hints on the probe path (a brief pick
+    hints XNYS while its real venue may be XNAS) and turns a non-US hint
+    (``arm-manual``'s operator venue, e.g. XWAR) into an explicit
+    single-venue resolve.
 
     PR-7 (broker-manager extraction memo §5): the brief-side parse
     (``parse_brief_to_spec``) and the exit-geometry build
@@ -6187,10 +6194,12 @@ def _resolve_and_size(
     from broker_contract.sizing import TradeSetupNotPlannableError, compute_setup_plan
 
     from alphalens_pipeline.brokers.execution import build_fx_conversion
-    from alphalens_pipeline.brokers.routing import resolve_us_instrument
+    from alphalens_pipeline.brokers.routing import explicit_mic_from_hint, resolve_us_instrument
 
     try:
-        instrument = resolve_us_instrument(broker, ticker)
+        instrument = resolve_us_instrument(
+            broker, ticker, exchange_mic=explicit_mic_from_hint(hint_mic)
+        )
         if not instrument.currency:
             logger.warning("place_pick %s: resolved with no instrument currency", ticker)
             return None
@@ -7625,7 +7634,7 @@ def _place_pick(
         _handle_safety_refusal(decision, ticker, brief_date)
         return False
 
-    resolved = _resolve_and_size(broker, ticker, account, spec)
+    resolved = _resolve_and_size(broker, ticker, account, spec, hint_mic=intent.instrument.mic)
     if resolved is None:
         return False
     instrument, fx, plan = resolved
