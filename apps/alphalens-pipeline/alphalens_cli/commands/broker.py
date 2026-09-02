@@ -48,6 +48,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -1393,6 +1394,175 @@ def arm_command(
     )
     arm_pick(intent, path=picks_target)
     typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {picks_target}")
+
+
+@broker_app.command(name="arm-manual")
+def arm_manual_command(
+    ticker: str = typer.Argument(..., help="Ticker of the off-brief pick, e.g. NVO."),
+    tier: list[str] = typer.Option(
+        ...,
+        "--tier",
+        help="Entry tier as price[:alloc_pct]; repeatable. An all-bare ladder (prices only) "
+        "splits equally; with explicit allocations every tier needs one and they must sum "
+        "to 100 (no silent rescaling).",
+    ),
+    stop: float = typer.Option(..., "--stop", help="Disaster stop (absolute price)."),
+    tp: list[str] = typer.Option(
+        [],
+        "--tp",
+        help="TP tranche as price:pct or <N>R:pct (R over planned blend - stop); repeatable, "
+        "forms mixable. Tranche percentages must not exceed 100.",
+    ),
+    no_tp: bool = typer.Option(False, "--no-tp", help="Arm with no TP ladder (trail-only pick)."),
+    size_pct: float | None = typer.Option(
+        None, "--size-pct", help="Full-entry size as percent of the declared frame."
+    ),
+    notional: float | None = typer.Option(
+        None,
+        "--notional",
+        help="Full-entry notional in ACCOUNT currency; divided by the declared frame. "
+        "Exactly one of --size-pct / --notional.",
+    ),
+    frame: float | None = typer.Option(
+        None,
+        "--frame",
+        help="Declared sizing frame for --notional; falls back to the sizing-equity env "
+        "(live_rails.SIZING_EQUITY_ENV).",
+    ),
+    ttl_days: int | None = typer.Option(
+        None, "--ttl-days", help="Entry TTL in sessions (default: contract default)."
+    ),
+    mic: str = typer.Option(
+        _ARM_INSTRUMENT_MIC, "--mic", help="ISO 10383 MIC; v1 supports XNYS / XNAS only."
+    ),
+    env: str = typer.Option(
+        _DEFAULT_ARM_ENV,
+        "--env",
+        help="Broker instance inbox to arm into: 'sim' or 'live' (ADR 0016). Default: sim.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Compile and echo the intent, append nothing."
+    ),
+) -> None:
+    """Arm an off-brief manual pick (#1235) — compile operator-provided levels
+    into a full TradeIntent and append it to the selected instance inbox.
+
+    The WhatsApp flow: the group agrees levels, the operator types them here,
+    and downstream everything is the standard daemon policy (entry-trail
+    watch, TTL, day-1 gap gate, daemon-wide stop management, Telegram) —
+    the daemon never learns where a pick came from beyond ``meta.source``.
+
+    Same pure-executor doctrine as `arm`: no selection filter, no
+    second-guessing; only level/sizing-consistency refusals. The intent arms
+    with ``exit=None`` (static disaster stop + tranche TPs at placement; stop
+    management is the daemon-wide policy — per-pick override is #1236).
+
+    Re-arming the same ticker on the same day REPLACES the pending intent
+    (the picks fold keys on (ticker, date), latest wins) — that is the
+    typo-fix path, not a same-day add-on mechanism. The same fold rule means
+    a manual pick also replaces a BRIEF-armed pick that happens to share the
+    (ticker, date) key; the command warns whenever an existing pick line
+    would be superseded.
+    """
+    from alphalens_pipeline.brokers.automanager import state_paths
+    from alphalens_pipeline.brokers.automanager.manual_intent import (
+        ManualIntentError,
+        build_manual_intent,
+        planned_blended_entry_of,
+    )
+    from alphalens_pipeline.brokers.automanager.picks import arm_pick, read_pick_fold
+
+    try:
+        picks_target = state_paths.picks_path(env=env)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+
+    _guard_state_layout()
+
+    if notional is not None and frame is None:
+        from alphalens_pipeline.brokers.automanager.live_rails import SIZING_EQUITY_ENV
+
+        raw_frame = os.environ.get(SIZING_EQUITY_ENV)
+        if raw_frame is not None and raw_frame.strip():
+            try:
+                frame = float(raw_frame)
+            except ValueError as exc:
+                raise _fail(f"{SIZING_EQUITY_ENV} is not a number: {raw_frame!r}") from exc
+
+    now = dt.datetime.now(dt.UTC)
+    try:
+        intent = build_manual_intent(
+            ticker=ticker,
+            mic=mic,
+            tiers_raw=tier,
+            stop=stop,
+            tps_raw=tp,
+            no_tp=no_tp,
+            size_pct=size_pct,
+            notional=notional,
+            frame=frame,
+            ttl_days=ttl_days,
+            arm_date=now.date(),
+            armed_ts=now.isoformat(timespec="seconds"),
+        )
+    except ManualIntentError as exc:
+        raise _fail(str(exc)) from exc
+
+    blend = planned_blended_entry_of(
+        intent.spec.entry_tiers, disaster_stop=intent.spec.disaster_stop
+    )
+    risk = blend - intent.spec.disaster_stop
+    tiers_echo = ", ".join(
+        f"{t.tag} {t.limit_price:g} ({t.alloc_pct:g}%)" for t in intent.spec.entry_tiers
+    )
+    tp_echo = (
+        ", ".join(
+            f"{t.tag} {t.price:g} ({t.tranche_pct:g}%, {t.r_multiple:.2f}R)"
+            for t in intent.spec.tp_tranches
+        )
+        or "none (trail-only)"
+    )
+    tranche_sum = sum(t.tranche_pct for t in intent.spec.tp_tranches)
+    if intent.spec.tp_tranches and tranche_sum < 100.0:
+        tp_echo += (
+            f"  — WARNING: {100.0 - tranche_sum:g}% of the position has no TP "
+            "(runs under the stop policy only)"
+        )
+    size_echo = f"{intent.spec.suggested_size_pct:.2f}% of frame"
+    if frame is not None:
+        size_echo += f" {frame:g}"
+    if notional is not None:
+        size_echo += f" (notional {notional:g})"
+    typer.echo(
+        f"manual intent {intent.intent_id} ({intent.instrument.ticker} @ "
+        f"{intent.instrument.mic}, source={intent.meta.source})\n"
+        f"  tiers: {tiers_echo}  |  planned blend {blend:g}\n"
+        f"  stop:  {intent.spec.disaster_stop:g}  (1R = {risk:g})\n"
+        f"  tp:    {tp_echo}\n"
+        f"  size:  {size_echo}  |  ttl {intent.spec.order_ttl_days} session(s)"
+    )
+    superseded = next(
+        (
+            p
+            for p in read_pick_fold(path=picks_target).records
+            if p.ticker.upper() == intent.instrument.ticker
+            and p.brief_date.isoformat() == intent.meta.brief_date
+        ),
+        None,
+    )
+    if superseded is not None:
+        typer.secho(
+            f"warning: a pick line for {intent.instrument.ticker} @ "
+            f"{intent.meta.brief_date} already exists in this inbox (status "
+            f"{superseded.status!r}) — arming will REPLACE it (the fold keys on "
+            "ticker+date, latest wins), even if it came from a brief",
+            fg=typer.colors.YELLOW,
+        )
+    if dry_run:
+        typer.echo("dry-run: nothing armed")
+        return
+    arm_pick(intent, path=picks_target)
+    typer.echo(f"armed {intent.instrument.ticker} (manual) -> {picks_target}")
 
 
 @broker_app.command(name="disarm")
