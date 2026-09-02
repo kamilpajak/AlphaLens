@@ -179,7 +179,9 @@ Environment=ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared
 # The change therefore alters WHAT is placed on LIVE, not only how it moves.
 #
 # ROLLBACK: put trailing_atr back here, `systemctl --user daemon-reload`,
-# restart OUTSIDE XNYS hours (13:30-20:00 UTC) — a restart resets the
+# restart OUTSIDE the configured venue-set hours (default XNYS 13:30-20:00
+# UTC; with ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR the union runs
+# ~06:45-20:10 UTC) — a restart resets the
 # in-memory peak, so arming can go dark until price re-crosses the threshold.
 # The journal-folded trailed floor means the placed stop never loosens.
 Environment=ALPHALENS_BROKER_EXIT_POLICY=breakeven_trail

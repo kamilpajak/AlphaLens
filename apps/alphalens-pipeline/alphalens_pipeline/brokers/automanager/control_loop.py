@@ -1077,10 +1077,26 @@ _STREAM_SESSION_GATE_ENV = "ALPHALENS_SAXO_STREAM_SESSION_GATE"
 _STREAM_SESSION_WARMUP = dt.timedelta(minutes=15)
 _STREAM_SESSION_GRACE = dt.timedelta(minutes=10)
 
-# US equities: XNYS and XNAS share the regular session (09:30-16:00 ET, same
-# holidays and early closes), so the XNYS calendar gates the stream for every
-# instrument the daemon trades on either venue.
-_STREAM_SESSION_EXCHANGE = "XNYS"
+# The venue set the window is computed over (#1238 PR 5). Comma-separated
+# MICs; unset -> ("XNYS",), byte-identical to the pre-#1238 single-venue gate
+# (XNYS and XNAS share the regular session, so one US calendar covers both).
+# CONFIG-DRIVEN on purpose, never derived from open watches/positions: the
+# stream must be up (warmup included) BEFORE the first watch on a new venue
+# can tick — a derived window would hold the socket closed exactly when the
+# venue's first pick needs quotes. INVARIANT: every configured venue's hull
+# (open - warmup .. close + grace) must stay inside one UTC day — the per-day
+# window memo keys on UTC now.date(); an Asian venue opening near 00:00 UTC
+# needs that memo redesigned first.
+_STREAM_SESSION_VENUES_ENV = "ALPHALENS_SAXO_STREAM_SESSION_VENUES"
+_STREAM_SESSION_DEFAULT_VENUES: tuple[str, ...] = ("XNYS",)
+
+
+def _stream_session_venues() -> tuple[str, ...]:
+    raw = os.environ.get(_STREAM_SESSION_VENUES_ENV, "")
+    venues = tuple(
+        dict.fromkeys(token.strip().upper() for token in raw.split(",") if token.strip())
+    )
+    return venues or _STREAM_SESSION_DEFAULT_VENUES
 
 
 def _stream_session_gate_enabled() -> bool:
@@ -1107,10 +1123,18 @@ def _make_stream_session_window(
     second while asleep); only successful lookups are cached, so a transient
     raise is retried on the next poll.
 
-    UTC-date note: the XNYS regular session plus WARMUP/GRACE spans at most
-    13:15-21:10 UTC, never crossing UTC midnight, so ``now.date()`` in UTC is
-    always the session date being asked about.
+    The window is the per-day HULL over ``_stream_session_venues()`` — from
+    the earliest trading venue's open − WARMUP to the latest close + GRACE,
+    skipping each venue on its own holidays (#1238 PR 5); no venue trading
+    means False all day. A hull, not a union: the socket stays up between a
+    European close and the US open — reconnect churn in that gap is exactly
+    what the gate exists to avoid overnight, and the gap is bounded.
+
+    UTC-date note: every supported hull (XWAR 06:45 UTC at the earliest to
+    XNYS 21:10 UTC at the latest) never crosses UTC midnight, so
+    ``now.date()`` in UTC is always the session date being asked about.
     """
+    venues = _stream_session_venues()
     read_clock = clock or (lambda: dt.datetime.now(dt.UTC))
     # Single-writer by construction: the predicate is called ONLY from the
     # stream's reader thread (_supervise), so this memo needs no lock — do not
@@ -1124,12 +1148,16 @@ def _make_stream_session_window(
             session_open_utc,
         )
 
-        if not is_trading_day(day, _STREAM_SESSION_EXCHANGE):
+        opens: list[dt.datetime] = []
+        closes: list[dt.datetime] = []
+        for venue in venues:
+            if not is_trading_day(day, venue):
+                continue
+            opens.append(session_open_utc(day, venue))
+            closes.append(session_close_utc(day, venue))
+        if not opens:
             return None
-        return (
-            session_open_utc(day, _STREAM_SESSION_EXCHANGE) - _STREAM_SESSION_WARMUP,
-            session_close_utc(day, _STREAM_SESSION_EXCHANGE) + _STREAM_SESSION_GRACE,
-        )
+        return (min(opens) - _STREAM_SESSION_WARMUP, max(closes) + _STREAM_SESSION_GRACE)
 
     def _in_window() -> bool:
         now = read_clock()
