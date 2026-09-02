@@ -26,6 +26,12 @@ MIC_TO_SAXO_EXCHANGE_ID: dict[str, str] = {
     "XNAS": "NASDAQ",
     "XASE": "AMEX",  # NYSE American — live-verified UUUU:xase / uic 549463 (2026-08-12)
     "XWAR": "WSE",
+    # Euronext Amsterdam cash equities — live-verified against SIM
+    # /ref/v1/exchanges (ExchangeId "AMS", Mic XAMS, NL) and by resolving
+    # ASML:xams / uic 1636 / EUR (2026-09-02). Map entry ONLY (#1238 PR 6):
+    # XAMS stays out of every probe order and out of arm-manual's
+    # SUPPORTED_MICS until its own validation arc.
+    "XAMS": "AMS",
 }
 
 # Market ticker -> Saxo symbol root, consulted by BOTH resolvers AFTER the

@@ -98,6 +98,21 @@ class TestSaxoSimLive(unittest.TestCase):
             if not ref.broker_instrument_id:
                 raise PermanentProbeError(f"CDR resolve returned empty Uic: {ref!r}")
 
+        def _probe_resolve_xams() -> None:
+            # Euronext-Amsterdam-on-SIM coverage (#1238 PR 6) — same stance as
+            # the WSE probe: InstrumentNotFoundError is a PERMANENT finding
+            # (SIM does not serve XAMS listings), everything else classifies.
+            try:
+                ref = broker.resolve_instrument("ASML", "XAMS")
+            except InstrumentNotFoundError as exc:
+                raise PermanentProbeError(
+                    f"XAMS-on-SIM coverage gap: ASML @ XAMS did not resolve ({exc})"
+                ) from exc
+            except Exception as exc:
+                raise _classify(exc) from exc
+            if not ref.broker_instrument_id:
+                raise PermanentProbeError(f"ASML resolve returned empty Uic: {ref!r}")
+
         run_probes(
             self,
             {
@@ -105,6 +120,7 @@ class TestSaxoSimLive(unittest.TestCase):
                 "port/accounts-me": _probe_accounts,
                 "resolve AAPL@XNAS": _probe_resolve_us,
                 "resolve CDR@XWAR (WSE-on-SIM validation)": _probe_resolve_wse,
+                "resolve ASML@XAMS (Euronext-on-SIM validation)": _probe_resolve_xams,
             },
             label="saxo",
         )
