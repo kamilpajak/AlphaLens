@@ -8212,6 +8212,34 @@ class TestDay1GapProbeVenueFallback(unittest.TestCase):
         self.assertIsNone(probe("ZZZZ", "XNYS"))
         self.assertEqual(holder["client"].resolved, ["XNYS", "XNAS", "XASE"])
 
+    def test_non_us_hint_probes_only_the_hinted_venue(self) -> None:
+        # #1238 PR 2: a non-US hint is AUTHORITATIVE (routing rule, PR #1239)
+        # — the gate must price CDR on XWAR (uic 53932, FX-leg memo P1) and
+        # never touch US venues, where a same-ticker US listing could
+        # otherwise price a European entry.
+        class _WseResolves(self._FakeClient):
+            def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:
+                self.resolved.append(exchange_mic)
+                return 53932 if exchange_mic == "XWAR" else None
+
+            def get_stock_infoprice(self, uic: int, **_kw) -> dict[str, Any]:
+                assert uic == 53932
+                return {"PriceInfoDetails": {"Open": 231.5}}
+
+        probe, holder = self._probe_with(_WseResolves)
+        self.assertEqual(probe("CDR", "XWAR"), 231.5)
+        self.assertEqual(holder["client"].resolved, ["XWAR"])
+
+    def test_non_us_hint_unresolvable_never_falls_back_to_us(self) -> None:
+        class _NeverResolves(self._FakeClient):
+            def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:
+                self.resolved.append(exchange_mic)
+                return None
+
+        probe, holder = self._probe_with(_NeverResolves)
+        self.assertIsNone(probe("CDR", "XWAR"))
+        self.assertEqual(holder["client"].resolved, ["XWAR"])
+
 
 class TestDay1GapProbeOrder(unittest.TestCase):
     """The gate's US venue probe order — includes XASE (NYSE American,

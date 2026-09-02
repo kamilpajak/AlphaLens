@@ -7174,7 +7174,10 @@ def _day1_gap_gate_session_info(
 ) -> tuple[dt.date, dt.datetime] | None:
     """``(day1 session date, day1 session open UTC)`` for ``brief_date`` on
     ``exchange_mic``, or ``None`` when the calendar cannot resolve it (e.g. an
-    unrecognised exchange MIC) — never raises.
+    unrecognised exchange MIC) — never raises. NOTE the consequence: ``None``
+    makes ``_day1_gap_gate_decision`` return "pass", so an unknown-to-calendar
+    MIC DISABLES the gate for that pick — visible only through the WARNING
+    below, never a refusal (#1238).
 
     ``day1`` is the first trading session STRICTLY AFTER ``brief_date``:
     ``paper.calendar.advance_trading_sessions(brief_date, 1, exchange=...)``
@@ -7313,20 +7316,27 @@ def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
             client = SaxoMarketDataClient(
                 token_provider=LiveTokenProvider(LiveAuthConfig.from_env())
             )
-            # PROBE US venues like placement routing does (XNYS, XNAS, XASE)
-            # instead of trusting the hint: every armed intent carries the
-            # advisory InstrumentHint.mic="XNYS", so a NASDAQ name would
-            # otherwise resolve to None here and the gate would silently
-            # defer its entire day 1 (false veto; live-verified with NVAX,
-            # XNAS uic 6820, 2026-08-11). Hinted venue first, then the rest.
+            # Same hint rule as placement routing (explicit_mic_from_hint,
+            # #1238): a US hint is ADVISORY — every brief intent carries
+            # "XNYS" while a NASDAQ name resolves only on XNAS (false veto,
+            # live-verified with NVAX, XNAS uic 6820, 2026-08-11) — so US
+            # hints probe the full US order, hinted venue first. A NON-US
+            # hint is AUTHORITATIVE: probe that venue ALONE, because a
+            # same-ticker US listing would otherwise price a European entry.
             # One-shot client: the outer finally releases the connection
             # pool on EVERY return path — the unresolvable-uic early return
             # used to leak the session once per tick, all day, on exactly
             # the failing-probe scenario this gate surfaces (zen finding).
             try:
-                candidate_mics = [exchange_mic] + [
-                    m for m in _DAY1_GAP_US_VENUE_PROBE_ORDER if m != exchange_mic
-                ]
+                from alphalens_pipeline.brokers.routing import explicit_mic_from_hint
+
+                explicit = explicit_mic_from_hint(exchange_mic)
+                if explicit is not None:
+                    candidate_mics = [explicit]
+                else:
+                    candidate_mics = [exchange_mic] + [
+                        m for m in _DAY1_GAP_US_VENUE_PROBE_ORDER if m != exchange_mic
+                    ]
                 uic = None
                 for mic in candidate_mics:
                     uic = client.resolve_uic(ticker, exchange_mic=mic)
