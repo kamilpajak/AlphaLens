@@ -60,8 +60,10 @@ from alphalens_pipeline.brokers.automanager.costs import (
     EXIT_EDGE_MIN_BPS,
     FX_ROUND_TRIP_RATE,
     MIN_COMMISSION_USD,
+    US_FEE_CARD,
     apportioned_coverage_violation,
     cost_gate_facts,
+    fee_card_for,
     round_trip_fee_bps,
     single_full_position_tranche_violation,
 )
@@ -3018,8 +3020,12 @@ def _brief_plan_arm_refusal(
     estimate = entry_trail_geometry.entry_fill_estimate(
         reference=reference, trough=trough, d_bps=d_bps
     )
+    facts = cost_gate_facts(
+        instrument_currency=record.get("instrument_currency"),
+        sizing_currency=record.get("sizing_currency"),
+    )
     if not entry_trail_geometry.arms_inside_exit_region(
-        fill_estimate=estimate, exit_target=tranche.target_price, qty=tranche_qty
+        fill_estimate=estimate, exit_target=tranche.target_price, qty=tranche_qty, facts=facts
     ):
         return None
     return _ArmRefusal(
@@ -6382,10 +6388,12 @@ def _check_fee_floor(
             ticker,
             notional,
         )
+        fallback_card = fee_card_for(instrument_currency)
         fee_bps = round_trip_fee_bps(
             notional,
             fx_applies=fx is not None,
-            min_commission_applies=instrument_currency == "USD",
+            min_commission_applies=fallback_card is not None or instrument_currency == "USD",
+            card=fallback_card if fallback_card is not None else US_FEE_CARD,
         )
     if fee_bps <= max_fee_bps:
         return None
@@ -6442,12 +6450,18 @@ def _estimate_round_trip_fee_bps(
     gross = setup_plan_gross_notional(plan)
     if gross <= 0:
         return None
-    min_commission_applies = instrument_currency == "USD"
+    # #1238 PR 3: price the venue's own card when one exists (WSE 0.12% min
+    # PLN 10); a currency with no verified card keeps the legacy shape (US
+    # rate, minimum only for USD).
+    card = fee_card_for(instrument_currency)
+    commission_rate = card.commission_rate if card is not None else COMMISSION_RATE
+    min_commission = card.min_commission if card is not None else MIN_COMMISSION_USD
+    min_commission_applies = card is not None or instrument_currency == "USD"
 
     def _fill_fee(qty: float, price: float) -> float:
-        ad_valorem = COMMISSION_RATE * qty * price
+        ad_valorem = commission_rate * qty * price
         if min_commission_applies:
-            return max(MIN_COMMISSION_USD, ad_valorem)
+            return max(min_commission, ad_valorem)
         return ad_valorem
 
     entry_fees = sum(_fill_fee(t.qty, t.limit_price) for t in entry_tiers if t.qty > 0)

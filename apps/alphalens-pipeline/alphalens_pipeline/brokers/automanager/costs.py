@@ -157,10 +157,13 @@ PLN account, so a conversion always applied there."""
 
 COST_GATE_MIN_COMMISSION_APPLIES = True
 """LEGACY default for the #1112 cost gates' per-fill minimum, same fallback
-role as :data:`COST_GATE_FX_APPLIES`. Conservative by construction: the
-minimum can only RAISE the required edge, so an unstamped record is refused a
-little too eagerly, never too late. Stamped records price the venue's own
-minimum from its :class:`VenueFeeCard` instead."""
+role as :data:`COST_GATE_FX_APPLIES`. Conservative FOR THE PRE-STAMP COHORT
+(all USD): the USD minimum can only RAISE that cohort's required edge. The
+guarantee is scoped, not universal — an unstamped NON-USD record would price
+the USD 1 minimum against a notional whose real venue minimum is larger
+(WSE: PLN 10), which is why the writers stamp every new line and only the
+historical USD cohort ever folds to legacy. Stamped records price the
+venue's own minimum from its :class:`VenueFeeCard`."""
 
 
 @dataclasses.dataclass(frozen=True)
