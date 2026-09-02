@@ -102,7 +102,7 @@ def _mk_pick(ticker: str, date: str, plan: Any, mic: str = "XNYS") -> Any:
         (),
         {
             "instrument": type("Hint", (), {"ticker": ticker, "mic": mic})(),
-            "meta": type("Meta", (), {"brief_date": date})(),
+            "meta": type("Meta", (), {"brief_date": date, "source": "brief"})(),
             "spec": spec,
             "exit": None,
         },

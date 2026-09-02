@@ -7363,7 +7363,7 @@ def _day1_gap_gate_enabled() -> bool:
 
 
 def _day1_gap_gate_session_info(
-    brief_date: dt.date, exchange_mic: str
+    brief_date: dt.date, exchange_mic: str, *, day1_includes_brief_date: bool = False
 ) -> tuple[dt.date, dt.datetime] | None:
     """``(day1 session date, day1 session open UTC)`` for ``brief_date`` on
     ``exchange_mic``, or ``None`` when the calendar cannot resolve it (e.g. an
@@ -7372,21 +7372,28 @@ def _day1_gap_gate_session_info(
     MIC DISABLES the gate for that pick — visible only through the WARNING
     below, never a refusal (#1238).
 
-    ``day1`` is the first trading session STRICTLY AFTER ``brief_date``:
-    ``paper.calendar.advance_trading_sessions(brief_date, 1, exchange=...)``
-    is "the session immediately after the session on-or-after ``brief_date``"
-    — for a session ``brief_date`` that lands on the VERY NEXT session (a
-    Monday brief's day1 is Tuesday, a Friday brief's day1 is the following
-    Monday); for a weekend/holiday ``brief_date`` it lands one session past
-    the weekend's first session.
+    The anchor depends on the pick's provenance (#1246):
 
-    Pure calendar math, no I/O — shared by ``_day1_gap_gate_decision`` and the
-    placer's probe-gating check (``_evaluate_day1_gap_gate``) so the two never
-    disagree on what "day1" means."""
+    - default (brief picks): ``day1`` is the first trading session STRICTLY
+      AFTER ``brief_date`` — a brief holds T-1 data and trades the next
+      session (a Monday brief's day1 is Tuesday, a Friday brief's day1 is the
+      following Monday; a weekend/holiday ``brief_date`` lands one session
+      past the weekend's first session).
+    - ``day1_includes_brief_date=True`` (manual picks, whose ``brief_date``
+      IS the arm date): ``day1`` is the session ON-OR-AFTER ``brief_date`` —
+      an "as of now" operator decision trades its own arm day, not the next
+      one (a weekend arm still rolls to the next session).
+
+    Both anchors are one ``advance_trading_sessions`` call (``n=0`` is
+    documented as session-on-or-after). Pure calendar math, no I/O — shared
+    by ``_day1_gap_gate_decision`` and the placer's probe-gating check
+    (``_evaluate_day1_gap_gate``) so the two never disagree on what "day1"
+    means."""
     try:
         from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_open_utc
 
-        day1 = advance_trading_sessions(brief_date, 1, exchange=exchange_mic)
+        step = 0 if day1_includes_brief_date else 1
+        day1 = advance_trading_sessions(brief_date, step, exchange=exchange_mic)
         return day1, session_open_utc(day1, exchange=exchange_mic)
     except Exception:
         logger.warning(
@@ -7404,9 +7411,14 @@ def _day1_gap_gate_decision(
     e1_limit: float | None,
     probe_price: float | None,
     exchange_mic: str,
+    *,
+    source: str = "brief",
 ) -> Day1GapGateVerdict:
     """Pure day-1 gap gate verdict — no I/O, total (never raises on weird
-    inputs).
+    inputs). ``source`` picks the day-1 anchor (#1246): ``"manual"`` anchors
+    day 1 on the session on-or-after ``brief_date`` (the arm date itself),
+    anything else on the session strictly after it — see
+    ``_day1_gap_gate_session_info``.
 
     - ``e1_limit is None`` (a pick the gate cannot evaluate) -> "pass" with a
       WARNING log — a doubt about GATING must never itself become a
@@ -7426,7 +7438,9 @@ def _day1_gap_gate_decision(
     if e1_limit is None:
         logger.warning("day1 gap gate: pick carries no E1 limit — gate cannot evaluate, passing")
         return "pass"
-    info = _day1_gap_gate_session_info(brief_date, exchange_mic)
+    info = _day1_gap_gate_session_info(
+        brief_date, exchange_mic, day1_includes_brief_date=source == "manual"
+    )
     if info is None:
         return "pass"
     day1, day1_open = info
@@ -7447,6 +7461,8 @@ def _evaluate_day1_gap_gate(
     spec: Any,
     exchange_mic: str,
     probe: Callable[[str, str], float | None] | None,
+    *,
+    source: str = "brief",
 ) -> Day1GapGateVerdict:
     """Orchestrates the gate for one pick: resolves E1 (the highest/first
     entry tier — ``ladder.build_entry_tiers`` returns tiers strictly
@@ -7455,18 +7471,24 @@ def _evaluate_day1_gap_gate(
     session at/after the open+grace window — every other phase (pre-day1,
     pre-open, day 2+) needs no price at all, and the probe is a real network
     round-trip — then delegates the full verdict to the pure
-    ``_day1_gap_gate_decision``."""
+    ``_day1_gap_gate_decision``. ``source`` threads the day-1 anchor choice
+    (#1246) into BOTH the probe-gating check here and the decision, so the
+    two can never disagree on what "day1" means."""
     e1_limit = spec.entry_tiers[0].limit_price if spec.entry_tiers else None
     now_utc = dt.datetime.now(dt.UTC)
     probe_price: float | None = None
     if e1_limit is not None and probe is not None:
-        info = _day1_gap_gate_session_info(brief_date, exchange_mic)
+        info = _day1_gap_gate_session_info(
+            brief_date, exchange_mic, day1_includes_brief_date=source == "manual"
+        )
         if info is not None:
             day1, day1_open = info
             grace_open = day1_open + dt.timedelta(seconds=_DAY1_GAP_GATE_OPEN_GRACE_S)
             if now_utc.date() <= day1 and now_utc >= grace_open:
                 probe_price = probe(ticker, exchange_mic)
-    return _day1_gap_gate_decision(now_utc, brief_date, e1_limit, probe_price, exchange_mic)
+    return _day1_gap_gate_decision(
+        now_utc, brief_date, e1_limit, probe_price, exchange_mic, source=source
+    )
 
 
 # US venue probe order for the day-1 gap gate price probe — the SAME shared
@@ -7582,6 +7604,8 @@ def _day1_gap_gate_defers(
     exchange_mic: str,
     probe: Callable[[str, str], float | None] | None,
     alert_throttled: Callable[[str, str], bool] | None,
+    *,
+    source: str,
 ) -> bool:
     """True iff the day-1 gap gate is enabled AND defers this pick (the
     ``_place_pick`` early-return). Pages the operator (throttled) for the
@@ -7589,10 +7613,16 @@ def _day1_gap_gate_defers(
     INFRASTRUCTURE failure — the probe could not produce a price at all;
     real incident 2026-08-12: LAC's resolve failure silently deferred its
     whole day 1 at DEBUG); "defer_preopen" stays a DEBUG line (expected,
-    high-frequency)."""
+    high-frequency).
+
+    ``source`` (no default — the one production caller must be explicit)
+    picks the day-1 anchor: ``"manual"`` gates on the arm date's own session,
+    ``"brief"`` on the next session (#1246)."""
     if not _day1_gap_gate_enabled():
         return False
-    gate_verdict = _evaluate_day1_gap_gate(ticker, brief_date, spec, exchange_mic, probe)
+    gate_verdict = _evaluate_day1_gap_gate(
+        ticker, brief_date, spec, exchange_mic, probe, source=source
+    )
     if gate_verdict == "pass":
         return False
     if gate_verdict == "defer_no_price":
@@ -7779,7 +7809,13 @@ def _place_pick(
     # journals a refusal (queue-semantics stays unchanged): a deferred pick
     # stays armed and is re-evaluated next tick.
     if _day1_gap_gate_defers(
-        ticker, brief_date, spec, intent.instrument.mic, day1_gap_price_probe, alert_throttled
+        ticker,
+        brief_date,
+        spec,
+        intent.instrument.mic,
+        day1_gap_price_probe,
+        alert_throttled,
+        source=intent.meta.source,
     ):
         return False
 

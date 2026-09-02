@@ -52,13 +52,15 @@ _REAL_SAFETY_CHECK = _safety.check
 # --------------------------------------------------------------------------
 
 
-def _pick(ticker: str = "KO", date: str = "2026-07-20") -> Any:
+def _pick(ticker: str = "KO", date: str = "2026-07-20", source: str = "brief") -> Any:
     return type(
         "Intent",
         (),
         {
             "instrument": type("Hint", (), {"ticker": ticker, "mic": "XNYS"})(),
-            "meta": type("Meta", (), {"brief_date": date})(),
+            # `source` mirrors IntentMeta's field (#1246: _place_pick threads it
+            # into the day-1 gap gate's anchor choice).
+            "meta": type("Meta", (), {"brief_date": date, "source": source})(),
             "spec": type("Spec", (), {"entry_tiers": ("t",)})(),
             "exit": None,
         },
