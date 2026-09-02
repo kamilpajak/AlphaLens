@@ -2151,7 +2151,9 @@ systemctl --user enable --now alphalens-saxo-price-reader.service
   the SAME maintenance window as the reader start; the gap should be minutes,
   not hours.
 
-**Restart the daemons OUTSIDE XNYS hours** (13:30-20:00 UTC): a restart resets
+**Restart the daemons OUTSIDE the configured venue-set hours** (default XNYS
+13:30-20:00 UTC; with `ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR` the
+union spans ~06:45-20:10 UTC): a restart resets
 the in-memory trailing peaks.
 
 ```bash
