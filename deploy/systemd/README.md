@@ -2151,6 +2151,15 @@ systemctl --user enable --now alphalens-saxo-price-reader.service
   the SAME maintenance window as the reader start; the gap should be minutes,
   not hours.
 
+**GPW (XWAR) on LIVE — prerequisites** (#1238): before the first LIVE XWAR
+arm, (1) verify the GPW market-data entitlement on the LIVE account — a
+delayed GPW quote is vetoed by the live feed and `any_delayed` is
+process-wide, so one delayed subscription degrades US exits too; (2) set
+`Environment=ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR` on BOTH the
+LIVE daemon drop-in and the shared price-reader unit (the session gate ships
+ON for both); (3) confirm the account is on the Saxo Classic tier — the WSE
+fee card in `costs.py` (0.12% min 10 PLN) assumes it.
+
 **Restart the daemons OUTSIDE the configured venue-set hours** (default XNYS
 13:30-20:00 UTC; with `ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR` the
 union spans ~06:45-20:10 UTC): a restart resets

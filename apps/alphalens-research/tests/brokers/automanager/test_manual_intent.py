@@ -250,9 +250,16 @@ class BuildManualIntentTest(unittest.TestCase):
         with self.assertRaisesRegex(ManualIntentError, "stop must be positive"):
             _build(stop=0.0)
 
-    def test_unsupported_mic_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "XWAR"):
-            _build(mic="XWAR")
+    def test_xwar_is_accepted(self) -> None:
+        # #1238 PR 7: GPW opens after the venue arc (routing, day-1 gate,
+        # cost gates, gross cap, stream window) and the SIM first-fill
+        # experiment.
+        intent = _build(mic="XWAR")
+        self.assertEqual(intent.instrument.mic, "XWAR")
+
+    def test_unsupported_mic_refuses_naming_the_supported_set(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "XAMS"):
+            _build(mic="XAMS")
 
     def test_ttl_default_is_contract_default(self) -> None:
         from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
