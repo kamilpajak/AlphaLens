@@ -7650,13 +7650,9 @@ def _place_tiers(
                 **_tranche_kwargs("placed"),
             )
         )
-        use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
-        if use_geometry and exit_spec is not None:  # 2nd clause restated to narrow exit_spec
-            stop_price = exit_spec.initial_levels.stop
-            take_profit = exit_spec.initial_levels.tp
-        else:
-            stop_price = placement.disaster_stop_price
-            take_profit = tier.tp
+        use_geometry, stop_price, take_profit = _planned_exit_levels(
+            resolved_exit_policy, exit_spec, placement, tier
+        )
         _append_standalone_stop_journal(
             _build_planned_line(
                 entry_crid=bracket.client_request_id,
@@ -7715,70 +7711,107 @@ def _place_tiers(
     placed_count = 0
     placed_entry_ids: list[str] = []
     failure_note: str | None = None
-    failure_outcome = "failed"
     try:
         for tier in placement.tiers:
-            bracket: Any = tier.bracket
-            if (
-                entry_duration is not None
-                and is_dataclass(bracket)
-                and not isinstance(bracket, type)
-            ):
-                # #1247 now tranche: dataclasses.replace keeps the request
-                # frozen; PR-B's adapter dispatches the duration block on it.
-                # (Duck-typed test brackets skip the replace; the record stamp
-                # below still carries the duration.)
-                bracket = cast(Any, replace(bracket, entry_duration=entry_duration))
+            bracket = _bracket_with_duration(tier.bracket, entry_duration)
             placed = broker.place_bracket_order(cast(Any, bracket))
             _journal_tier(tier, bracket, placed)
             placed_entry_ids.append(str(placed.entry_order_id))
             placed_count += 1
     except BrokerError as exc:
-        failure_note = (
-            f"placement stopped after {placed_count}/{len(placement.tiers)} bracket(s): {exc}"
-        )
-        if on_broker_error is not None:
-            # #1247 now tranche: classify (price-tolerance reject vs generic
-            # failure) + page; the returned string is the failure record's
-            # tranche_meta outcome. The exception still never escapes.
-            failure_outcome = on_broker_error(exc)
-        # Memo §4.4 B1 — insufficient-funds rollback: a tier rejected for lack
-        # of cash means the WHOLE pick is unaffordable; leaving the earlier
-        # tiers resting would keep a partial frame-sized ladder live at a
-        # near-boundary account. Cancel the just-placed unfilled entries
-        # (cancel_order is deliberately ungated) BEFORE journaling the note.
-        # Classified on the structured Saxo error code only — any other
-        # BrokerError (including error_code=None) keeps today's behavior.
-        if _is_insufficient_funds(exc) and placed_entry_ids:
-            cancelled = _cancel_orders_best_effort(broker, placed_entry_ids, ticker=ticker)
-            failure_note += (
-                f"; insufficient funds — cancelled {cancelled}/{len(placed_entry_ids)} "
-                "placed entry tier(s)"
-            )
-        # Journal a note-only record so the failure is traced (and, when nothing
-        # placed, the pick is not silently retried forever).
-        append_submission_record(
-            build_submission_record(
-                brief_date=intent.meta.brief_date,
-                ticker=ticker,
-                mic=instrument.exchange_mic,
-                uic=instrument.broker_instrument_id,
-                brackets=[],
-                note=failure_note,
-                sizing=SizingStamp(
-                    sizing_currency=account.currency,
-                    instrument_currency=instrument.currency,
-                    sizing_equity=_resolve_sizing_equity(account.total_value),
-                    fx=fx,
-                    est_round_trip_fee_bps=est_fee_bps,
-                ),
-                **_tranche_kwargs(failure_outcome),
-            )
+        failure_note = _handle_tier_placement_failure(
+            refs,
+            exc,
+            placed_count=placed_count,
+            total_tiers=len(placement.tiers),
+            placed_entry_ids=placed_entry_ids,
+            on_broker_error=on_broker_error,
+            est_fee_bps=est_fee_bps,
+            tranche_kwargs=_tranche_kwargs,
         )
 
     if failure_note:
         logger.warning("place_pick %s: %s", ticker, failure_note)
     return placed_count
+
+
+def _bracket_with_duration(bracket: Any, entry_duration: str | None) -> Any:
+    """#1247 now tranche: dataclasses.replace keeps the request frozen; PR-B's
+    adapter dispatches the duration block on it. (Duck-typed test brackets
+    skip the replace; the record stamp still carries the duration.)"""
+    if entry_duration is not None and is_dataclass(bracket) and not isinstance(bracket, type):
+        return cast(Any, replace(bracket, entry_duration=entry_duration))
+    return bracket
+
+
+def _handle_tier_placement_failure(
+    refs: _PickRefs,
+    exc: BrokerError,
+    *,
+    placed_count: int,
+    total_tiers: int,
+    placed_entry_ids: list[str],
+    on_broker_error: Callable[[Any], str] | None,
+    est_fee_bps: float | None,
+    tranche_kwargs: Callable[[str], dict[str, Any]],
+) -> str:
+    """A BrokerError mid-ladder: classify (#1247), roll back an
+    insufficient-funds partial ladder (memo §4.4 B1 — cancel the just-placed
+    unfilled entries BEFORE journaling the note; classified on the structured
+    Saxo error code only), then journal the note-only failure record so the
+    failure is traced (and, when nothing placed, the pick is not silently
+    retried forever). Returns the failure note for the caller's warning."""
+    from alphalens_pipeline.brokers.submission_log import (
+        SizingStamp,
+        append_submission_record,
+        build_submission_record,
+    )
+
+    broker, intent, ticker = refs.broker, refs.intent, refs.ticker
+    instrument, account, fx = refs.instrument, refs.account, refs.fx
+    failure_note = f"placement stopped after {placed_count}/{total_tiers} bracket(s): {exc}"
+    failure_outcome = "failed"
+    if on_broker_error is not None:
+        # The returned string is the failure record's tranche_meta outcome.
+        # The exception still never escapes.
+        failure_outcome = on_broker_error(exc)
+    if _is_insufficient_funds(exc) and placed_entry_ids:
+        cancelled = _cancel_orders_best_effort(broker, placed_entry_ids, ticker=ticker)
+        failure_note += (
+            f"; insufficient funds — cancelled {cancelled}/{len(placed_entry_ids)} "
+            "placed entry tier(s)"
+        )
+    append_submission_record(
+        build_submission_record(
+            brief_date=intent.meta.brief_date,
+            ticker=ticker,
+            mic=instrument.exchange_mic,
+            uic=instrument.broker_instrument_id,
+            brackets=[],
+            note=failure_note,
+            sizing=SizingStamp(
+                sizing_currency=account.currency,
+                instrument_currency=instrument.currency,
+                sizing_equity=_resolve_sizing_equity(account.total_value),
+                fx=fx,
+                est_round_trip_fee_bps=est_fee_bps,
+            ),
+            **tranche_kwargs(failure_outcome),
+        )
+    )
+    return failure_note
+
+
+def _planned_exit_levels(
+    resolved_exit_policy: ExitPolicy, exit_spec: Any, placement: Any, tier: Any
+) -> tuple[bool, float, float | None]:
+    """``(use_geometry, stop_price, take_profit)`` for the journaled
+    ``planned`` line: geometry levels under an applying policy, else the
+    brief's static disaster stop / tier TP (byte-identical to pre-PR-6a)."""
+    use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
+    if use_geometry and exit_spec is not None:  # 2nd clause restated to narrow exit_spec
+        return use_geometry, exit_spec.initial_levels.stop, exit_spec.initial_levels.tp
+    return use_geometry, placement.disaster_stop_price, tier.tp
 
 
 # --- Day-1 gap gate (execution-quality placement discipline) -----------------
@@ -8441,20 +8474,9 @@ def _handle_now_tranche(
     from alphalens_pipeline.brokers.automanager.placement_planner import classify
 
     broker, intent, ticker = refs.broker, refs.intent, refs.ticker
-    instrument, account, fx = refs.instrument, refs.account, refs.fx
-    armed_ts = str(intent.meta.armed_ts)
-    for record in records:
-        # Idempotency / crash re-drive: ANY now record for this arm generation
-        # means the now half is done (placed, refused, or write-ahead-then-
-        # crashed — the _place_tiers write-ahead contract: an attempt marker
-        # with no bracket is an alertable non-retried attempt, never re-POSTed).
-        if (
-            str(record.get("tranche") or "") == "now"
-            and str(record.get("ticker") or "").upper() == ticker
-            and str(record.get("brief_date") or "") == str(intent.meta.brief_date)
-            and str((record.get("tranche_meta") or {}).get("armed_ts") or "") == armed_ts
-        ):
-            return _NowOutcome.ALREADY_DONE
+    instrument, fx = refs.instrument, refs.fx
+    if _now_already_done(records, ticker, intent):
+        return _NowOutcome.ALREADY_DONE
     if now_tier.qty <= 0:
         logger.warning("place_pick %s: now tier sized to zero shares — skipped", ticker)
         return _NowOutcome.REFUSED_NOW
@@ -8474,13 +8496,7 @@ def _handle_now_tranche(
         return _NowOutcome.REFUSED_PICK
     uic = int(instrument.broker_instrument_id)
     scope = f"{_FEED_SCOPE_NOW_ENTRY_PREFIX}:{uic}"
-    point = None
-    if now_entry_feed_factory is not None:
-        try:
-            feed = now_entry_feed_factory({uic: (ticker, instrument.exchange_mic)}, scope=scope)
-            point = feed.latest(uic)
-        except Exception:
-            logger.warning("place_pick %s: now quote read failed — deferred", ticker, exc_info=True)
+    point = _read_now_quote(now_entry_feed_factory, uic, ticker, instrument.exchange_mic, scope)
     if point is None:
         # Feed off / outage / halt / stale (memo §3.6): non-terminal — the
         # whole pick stays armed and retries next tick; the page names the
@@ -8505,24 +8521,13 @@ def _handle_now_tranche(
             factory({}, scope=scope)
 
     if float(point.ask) > submitted_cap:
-        _refuse_now_tranche(
-            intent,
-            ticker,
-            instrument,
-            account,
-            fx,
-            note=f"now refused: ask {float(point.ask):.4f} above cap {submitted_cap:.4f}",
-            meta=dict(
-                _now_meta(intent, operator_cap, submitted_cap, point, None), outcome="refused_cap"
-            ),
+        _refuse_now_above_cap(
+            refs,
+            point=point,
+            operator_cap=operator_cap,
+            submitted_cap=submitted_cap,
+            alert_throttled=alert_throttled,
         )
-        if alert_throttled is not None:
-            alert_throttled(
-                f"now tranche {ticker}: price above cap "
-                f"({float(point.ask):.4f} > {submitted_cap:.4f}) — NOT entered; "
-                "re-arm with a fresh cap if the signal stands",
-                f"now-cap:{ticker}",
-            )
         _release_scope()
         return _NowOutcome.REFUSED_NOW
     duration = "ioc" if _now_ioc_supported(broker, instrument) else "day"
@@ -8538,17 +8543,7 @@ def _handle_now_tranche(
         return _NowOutcome.REFUSED_NOW
 
     def _classify_error(exc: Any) -> str:
-        if _is_price_tolerance_reject(exc):
-            if alert_throttled is not None:
-                alert_throttled(
-                    f"now tranche {ticker}: rejected by the venue price-tolerance check "
-                    f"({exc}) — NOT entered; re-arm with a fresh cap if the signal stands",
-                    f"now-reject:{ticker}",
-                )
-            return "refused_reject"
-        if alert_throttled is not None:
-            alert_throttled(f"now tranche {ticker}: placement failed ({exc})", f"now-fail:{ticker}")
-        return "failed"
+        return _classify_now_broker_error(exc, ticker, alert_throttled)
 
     placed = _place_tiers(
         refs,
@@ -8566,6 +8561,88 @@ def _handle_now_tranche(
     )
     _release_scope()
     return _NowOutcome.PLACED if placed > 0 else _NowOutcome.REFUSED_NOW
+
+
+def _now_already_done(records: Sequence[Mapping[str, Any]], ticker: str, intent: Any) -> bool:
+    """Idempotency / crash re-drive: ANY now record for this arm generation
+    means the now half is done (placed, refused, or write-ahead-then-crashed —
+    the ``_place_tiers`` write-ahead contract: an attempt marker with no
+    bracket is an alertable non-retried attempt, never re-POSTed)."""
+    armed_ts = str(intent.meta.armed_ts)
+    return any(
+        str(record.get("tranche") or "") == "now"
+        and str(record.get("ticker") or "").upper() == ticker
+        and str(record.get("brief_date") or "") == str(intent.meta.brief_date)
+        and str((record.get("tranche_meta") or {}).get("armed_ts") or "") == armed_ts
+        for record in records
+    )
+
+
+def _read_now_quote(
+    now_entry_feed_factory: Callable[..., Any] | None,
+    uic: int,
+    ticker: str,
+    exchange_mic: Any,
+    scope: str,
+) -> Any | None:
+    """The now tranche's real-time quote off the shared feed, or ``None``
+    (feed off / read failure — the caller defers, subscription kept)."""
+    if now_entry_feed_factory is None:
+        return None
+    try:
+        feed = now_entry_feed_factory({uic: (ticker, exchange_mic)}, scope=scope)
+        return feed.latest(uic)
+    except Exception:
+        logger.warning("place_pick %s: now quote read failed — deferred", ticker, exc_info=True)
+        return None
+
+
+def _classify_now_broker_error(
+    exc: Any, ticker: str, alert_throttled: Callable[[str, str], bool] | None
+) -> str:
+    """#1247: classify a now-placement BrokerError (price-tolerance reject vs
+    generic failure) + page; the returned string is the failure record's
+    ``tranche_meta`` outcome."""
+    if _is_price_tolerance_reject(exc):
+        if alert_throttled is not None:
+            alert_throttled(
+                f"now tranche {ticker}: rejected by the venue price-tolerance check "
+                f"({exc}) — NOT entered; re-arm with a fresh cap if the signal stands",
+                f"now-reject:{ticker}",
+            )
+        return "refused_reject"
+    if alert_throttled is not None:
+        alert_throttled(f"now tranche {ticker}: placement failed ({exc})", f"now-fail:{ticker}")
+    return "failed"
+
+
+def _refuse_now_above_cap(
+    refs: _PickRefs,
+    *,
+    point: Any,
+    operator_cap: float,
+    submitted_cap: float,
+    alert_throttled: Callable[[str, str], bool] | None,
+) -> None:
+    """Journal the terminal above-cap now refusal and page the operator."""
+    _refuse_now_tranche(
+        refs.intent,
+        refs.ticker,
+        refs.instrument,
+        refs.account,
+        refs.fx,
+        note=f"now refused: ask {float(point.ask):.4f} above cap {submitted_cap:.4f}",
+        meta=dict(
+            _now_meta(refs.intent, operator_cap, submitted_cap, point, None), outcome="refused_cap"
+        ),
+    )
+    if alert_throttled is not None:
+        alert_throttled(
+            f"now tranche {refs.ticker}: price above cap "
+            f"({float(point.ask):.4f} > {submitted_cap:.4f}) — NOT entered; "
+            "re-arm with a fresh cap if the signal stands",
+            f"now-cap:{refs.ticker}",
+        )
 
 
 def _place_pick(
@@ -8757,49 +8834,23 @@ def _place_pick(
     # already price both halves) and BEFORE the sibling routing: a now DEFER
     # returns before any sibling record could retire the pick and strand the
     # now half; a now refusal lets the siblings route the same tick.
-    now_tiers = tuple(
-        t for t in plan.entry_tiers if getattr(t, "entry_mode", "pullback") == "immediate"
+    routing = _route_now_tranche(
+        _PickRefs(broker, intent, ticker, instrument, account, fx),
+        plan,
+        brief_date=brief_date,
+        records=records,
+        spec=spec,
+        exit_spec=exit_spec,
+        exit_policy=exit_policy,
+        alert_throttled=alert_throttled,
+        now_entry_feed_factory=now_entry_feed_factory,
     )
-    now_placed = False
-    reference_qty_override: float | None = None
-    tranche_plan_override: tuple[str, float] | None = None
-    if now_tiers:
-        pick_key = f"{ticker}:{intent.meta.brief_date}"
-        full_ladder_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
-        outcome = _handle_now_tranche(
-            _PickRefs(broker, intent, ticker, instrument, account, fx),
-            plan,
-            now_tier=now_tiers[0],
-            records=records,
-            spec=spec,
-            exit_spec=exit_spec,
-            exit_policy=exit_policy,
-            alert_throttled=alert_throttled,
-            now_entry_feed_factory=now_entry_feed_factory,
-            tranche_plan_override=(pick_key, full_ladder_qty),
-        )
-        if outcome in (_NowOutcome.DEFER, _NowOutcome.REFUSED_PICK):
-            return False
-        now_placed = outcome is _NowOutcome.PLACED
-        pullback_tiers = tuple(
-            t for t in plan.entry_tiers if getattr(t, "entry_mode", "pullback") != "immediate"
-        )
-        if not pullback_tiers:
-            if outcome is _NowOutcome.REFUSED_NOW:
-                # A now-only pick has nothing left to drain: retire it so a
-                # fresh arm (new armed_ts, latest-wins) is the path back
-                # (memo §3.7). The refusal detail is in the submissions
-                # journal's tranche record.
-                picks.mark_refused(
-                    ticker, brief_date, "now tranche refused (see submissions journal)"
-                )
-            return now_placed
-        plan = replace(plan, entry_tiers=pullback_tiers)
-        if now_placed:
-            # The TP ladder must cover BOTH halves' fills; the watch route
-            # re-appends the SAME keyed plan (benign, no generation reset).
-            reference_qty_override = full_ladder_qty
-            tranche_plan_override = (pick_key, full_ladder_qty)
+    if routing.early_result is not None:
+        return routing.early_result
+    plan = routing.plan
+    now_placed = routing.now_placed
+    reference_qty_override = routing.reference_qty_override
+    tranche_plan_override = routing.tranche_plan_override
 
     # Entry-trailing intercept (memo §5 / drain_intercept): with the flag armed
     # AND the pick trailing-eligible, route it into a WATCH (per-tier watch_open
@@ -8828,20 +8879,7 @@ def _place_pick(
         # the tick the siblings actually route.
         return intercepted
 
-    # The pick is about to take the CLASSIC bracket path, which carries neither
-    # #1112 arm gate. Refuse a new entry while the geometry exit is active and
-    # the trail is off (issue #1112 round 2, point 4). NOT terminal: this is a
-    # configuration rail like KILL / ALLOW_ORDERS, so the pick stays armed and
-    # places itself once the trail is on — a terminal refusal would destroy the
-    # armed queue over an operator setting.
-    no_trail_note = _geometry_without_entry_trail_note(exit_policy, exit_spec)
-    if no_trail_note is not None:
-        logger.warning("place_pick %s: refused — %s", ticker, no_trail_note)
-        if alert_throttled is not None:
-            alert_throttled(
-                f"place_pick {ticker}: {no_trail_note}",
-                f"{_GEOMETRY_WITHOUT_TRAIL_ALERT_PREFIX}:{ticker}",
-            )
+    if _refuse_geometry_without_trail(exit_policy, exit_spec, ticker, alert_throttled):
         return False
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
@@ -8861,6 +8899,99 @@ def _place_pick(
         )
         > 0
     ) or now_placed
+
+
+class _NowRouting(NamedTuple):
+    """The now-tranche routing result: ``early_result`` not-None means
+    ``_place_pick`` returns it immediately; otherwise ``plan`` is the
+    (possibly pullback-only) remainder and the overrides thread into the
+    watch route / classic placement."""
+
+    early_result: bool | None
+    plan: Any
+    now_placed: bool
+    reference_qty_override: float | None
+    tranche_plan_override: tuple[str, float] | None
+
+
+def _route_now_tranche(
+    refs: _PickRefs,
+    plan: Any,
+    *,
+    brief_date: dt.date,
+    records: Sequence[Mapping[str, Any]],
+    spec: Any,
+    exit_spec: Any,
+    exit_policy: ExitPolicy | None,
+    alert_throttled: Callable[[str, str], bool] | None,
+    now_entry_feed_factory: Callable[..., Any] | None,
+) -> _NowRouting:
+    """Drain the immediate tranche (if any) and split off the pullback
+    remainder — the #1247 memo §3.2/§3.5/§3.7 routing, verbatim."""
+    ticker, intent = refs.ticker, refs.intent
+    now_tiers = tuple(
+        t for t in plan.entry_tiers if getattr(t, "entry_mode", "pullback") == "immediate"
+    )
+    if not now_tiers:
+        return _NowRouting(None, plan, False, None, None)
+    pick_key = f"{ticker}:{intent.meta.brief_date}"
+    full_ladder_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
+    outcome = _handle_now_tranche(
+        refs,
+        plan,
+        now_tier=now_tiers[0],
+        records=records,
+        spec=spec,
+        exit_spec=exit_spec,
+        exit_policy=exit_policy,
+        alert_throttled=alert_throttled,
+        now_entry_feed_factory=now_entry_feed_factory,
+        tranche_plan_override=(pick_key, full_ladder_qty),
+    )
+    if outcome in (_NowOutcome.DEFER, _NowOutcome.REFUSED_PICK):
+        return _NowRouting(False, plan, False, None, None)
+    now_placed = outcome is _NowOutcome.PLACED
+    pullback_tiers = tuple(
+        t for t in plan.entry_tiers if getattr(t, "entry_mode", "pullback") != "immediate"
+    )
+    if not pullback_tiers:
+        if outcome is _NowOutcome.REFUSED_NOW:
+            # A now-only pick has nothing left to drain: retire it so a
+            # fresh arm (new armed_ts, latest-wins) is the path back
+            # (memo §3.7). The refusal detail is in the submissions
+            # journal's tranche record.
+            picks.mark_refused(ticker, brief_date, "now tranche refused (see submissions journal)")
+        return _NowRouting(now_placed, plan, now_placed, None, None)
+    plan = replace(plan, entry_tiers=pullback_tiers)
+    if now_placed:
+        # The TP ladder must cover BOTH halves' fills; the watch route
+        # re-appends the SAME keyed plan (benign, no generation reset).
+        return _NowRouting(None, plan, True, full_ladder_qty, (pick_key, full_ladder_qty))
+    return _NowRouting(None, plan, False, None, None)
+
+
+def _refuse_geometry_without_trail(
+    exit_policy: ExitPolicy | None,
+    exit_spec: Any,
+    ticker: str,
+    alert_throttled: Callable[[str, str], bool] | None,
+) -> bool:
+    """The pick is about to take the CLASSIC bracket path, which carries
+    neither #1112 arm gate. Refuse a new entry while the geometry exit is
+    active and the trail is off (issue #1112 round 2, point 4). NOT terminal:
+    this is a configuration rail like KILL / ALLOW_ORDERS, so the pick stays
+    armed and places itself once the trail is on — a terminal refusal would
+    destroy the armed queue over an operator setting."""
+    no_trail_note = _geometry_without_entry_trail_note(exit_policy, exit_spec)
+    if no_trail_note is None:
+        return False
+    logger.warning("place_pick %s: refused — %s", ticker, no_trail_note)
+    if alert_throttled is not None:
+        alert_throttled(
+            f"place_pick {ticker}: {no_trail_note}",
+            f"{_GEOMETRY_WITHOUT_TRAIL_ALERT_PREFIX}:{ticker}",
+        )
+    return True
 
 
 def _handle_safety_refusal(decision: Any, ticker: str, brief_date: dt.date) -> None:
