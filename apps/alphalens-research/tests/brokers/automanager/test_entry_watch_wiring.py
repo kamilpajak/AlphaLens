@@ -3428,6 +3428,40 @@ class TestPlacePickNowTranche(unittest.TestCase):
         _v, _s, _a, defer_calls, _p = self._drain(_now_plan(), points={}, broker=broker2)
         self.assertTrue(all(c[0] != {} for c in defer_calls))  # DEFER keeps the subscription
 
+    def test_watch_capacity_deferral_after_placed_now_re_drives_siblings_next_tick(self) -> None:
+        # The critical interleave: the now half places, but the sibling watch
+        # DEFERS on capacity. The now records (tranche=="now") must not retire
+        # the pick — next tick the armed_ts scan skips the now half and the
+        # siblings route.
+        path = _journal(self)
+        _planned_journal(self)
+        broker = _RecordingBroker()
+        submissions_seen: list[dict[str, Any]] = []
+        placer, submissions = _placer(
+            self,
+            broker,
+            _now_plan(),
+            now_entry_feed_factory=_now_feed({307: _point()}, []),
+            submission_records=submissions_seen,
+        )
+        with (
+            mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
+            mock.patch.object(cl, "_entry_watch_capacity_reached", lambda _f: True),
+        ):
+            placer(_pick())  # tick 1: now placed, siblings capacity-deferred
+        self.assertEqual(len(broker.brackets), 1)
+        # The pick must NOT be retired: only tranche=="now" records exist.
+        from alphalens_pipeline.brokers.automanager import picks as picks_mod
+
+        self.assertEqual(picks_mod.submitted_pick_keys(submissions), set())
+        # Tick 2: capacity freed; the recorded submissions become the journal.
+        submissions_seen.extend(submissions)
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertTrue(placer(_pick()))
+        self.assertEqual(len(broker.brackets), 1)  # no duplicate now order
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)  # siblings routed on the re-drive
+
     def test_all_pullback_pick_is_byte_identical_no_feed_call_no_new_keys(self) -> None:
         broker = _RecordingBroker()
         path = _journal(self)
