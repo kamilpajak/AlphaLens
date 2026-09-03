@@ -19,7 +19,7 @@ import os
 import time
 from collections import deque
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
@@ -8227,6 +8227,39 @@ def _net_open_position_uics(positions: Iterable[Position]) -> tuple[frozenset[in
     return open_uics, unresolvable
 
 
+def _netted_all_positions(rows: Iterable[Position]) -> dict[int, Position]:
+    """One Position per uic with the NET quantity over the raw ledger rows.
+
+    LIVE Saxo nets only at End-Of-Day, so an intraday round-trip leaves TWO
+    rows (+q and -q) for one uic (see ``_net_open_position_uics``). A
+    last-row-wins dict over that book shows whichever leg Saxo returned second
+    — on the short leg the protection reconciler paged a spurious "unexpected
+    SHORT — manual intervention" for a perfectly normal stop fill (#1221).
+
+    A single-row uic keeps its raw row untouched. A multi-row uic keeps the
+    FIRST row's fields with the summed quantity — ``avg_price`` is NOT blended
+    (the blend helper is the saxo adapter's, and both consumers of this map
+    read only ``quantity``). Rows with an unreadable quantity are excluded
+    from a multi-row sum (a NaN would poison the net); a net-flat pair stays
+    in the map at ~0.0 — callers branch on the quantity, not on presence."""
+    netted: dict[int, Position] = {}
+    for pos in rows:
+        uic = _position_uic(pos)
+        if uic is None:
+            continue
+        first = netted.get(uic)
+        if first is None:
+            netted[uic] = pos
+            continue
+        raw_qty = getattr(pos, "quantity", None)
+        if raw_qty is None or not math.isfinite(float(raw_qty)):
+            continue
+        base_qty = getattr(first, "quantity", None)
+        base = float(base_qty) if base_qty is not None and math.isfinite(float(base_qty)) else 0.0
+        netted[uic] = cast(Position, replace(first, quantity=base + float(raw_qty)))
+    return netted
+
+
 def build_protection_view(
     broker: Broker,
     _records: list[Mapping[str, Any]],
@@ -8250,18 +8283,17 @@ def build_protection_view(
     Unexpired ``oco_too_far`` markers (transient TooFarFromMarket rejects) are
     unioned into ``oco_unsupported`` itself, so the degrade self-clears after
     ``_OCO_TOO_FAR_TTL_S`` with no downstream branching change."""
-    all_positions: dict[int, Position] = {}
-    for pos in broker.get_positions():
-        uic = _position_uic(pos)
-        if uic is not None:
-            all_positions[uic] = pos
+    # #1221: fold same-uic ledger rows to their NET quantity — a raw
+    # last-row-wins dict over an un-netted intraday round-trip pair showed
+    # whichever leg Saxo returned second and could page a spurious SHORT alert.
+    all_positions = _netted_all_positions(broker.get_positions())
 
     long_positions: dict[int, Position] = {}
     # Boot-unreachable fallback (#1141): build_default_deps refuses a broker
     # without the netted reads, so the else-branch serves only directly composed
-    # deps (tests). It keeps its historical un-netted behaviour on purpose —
-    # changing it would silently move test expectations, and no production path
-    # can reach it.
+    # deps (tests). Since #1221 it yields ONE netted row per uic (previously
+    # last-row-wins) — strictly closer to get_long_positions semantics; no
+    # production path can reach it.
     longs = (
         broker.get_long_positions()
         if isinstance(broker, SupportsNettedPositionReads)
