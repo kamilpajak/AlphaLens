@@ -7506,14 +7506,18 @@ def _place_tiers(
     failure_outcome = "failed"
     try:
         for tier in placement.tiers:
-            bracket = tier.bracket
-            if entry_duration is not None and is_dataclass(bracket):
+            bracket: Any = tier.bracket
+            if (
+                entry_duration is not None
+                and is_dataclass(bracket)
+                and not isinstance(bracket, type)
+            ):
                 # #1247 now tranche: dataclasses.replace keeps the request
                 # frozen; PR-B's adapter dispatches the duration block on it.
                 # (Duck-typed test brackets skip the replace; the record stamp
                 # below still carries the duration.)
-                bracket = replace(bracket, entry_duration=entry_duration)
-            placed = broker.place_bracket_order(bracket)
+                bracket = cast(Any, replace(bracket, entry_duration=entry_duration))
+            placed = broker.place_bracket_order(cast(Any, bracket))
             _journal_tier(tier, bracket, placed)
             placed_entry_ids.append(str(placed.entry_order_id))
             placed_count += 1
@@ -8199,7 +8203,7 @@ def _handle_now_tranche(
     fx: Any,
     *,
     now_tier: Any,
-    records: list[Mapping[str, Any]],
+    records: Sequence[Mapping[str, Any]],
     spec: Any,
     exit_spec: Any,
     exit_policy: ExitPolicy | None,
@@ -8264,11 +8268,15 @@ def _handle_now_tranche(
             )
         return _NowOutcome.DEFER
 
+    factory = now_entry_feed_factory
+
     def _release_scope() -> None:
         import contextlib
 
+        if factory is None:
+            return
         with contextlib.suppress(Exception):
-            now_entry_feed_factory({}, scope=scope)
+            factory({}, scope=scope)
 
     if float(point.ask) > submitted_cap:
         _refuse_now_tranche(
