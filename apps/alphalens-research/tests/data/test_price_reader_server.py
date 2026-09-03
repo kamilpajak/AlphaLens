@@ -442,6 +442,13 @@ class TestProtocolErrors(PriceReaderServerTestCase):
             client.call("subscribe", scope="exits", uics="all")["error"], "bad_request"
         )
 
+    def test_bad_float_and_string_fields_error_rather_than_crash(self):
+        client = self.connect()
+        self.assertEqual(client.call("reseed_low", uic=211, low="oops")["error"], "bad_request")
+        self.assertEqual(
+            client.call("resolve_uic", ticker=123, exchange_mic="XNYS")["error"], "bad_request"
+        )
+
     def test_an_exception_inside_the_stream_becomes_an_error_response(self):
         """The reader must survive a defect in the quote source: one client's
         failing call cannot take the process (and the other daemon) down."""

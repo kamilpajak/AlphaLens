@@ -2068,6 +2068,17 @@ class TestFilledPositionsMixedCurrencyBook(unittest.TestCase):
         assert failure is not None
         self.assertIn("EUR", failure)
 
+    def test_a_raising_broker_quote_makes_the_rate_lookup_return_none(self) -> None:
+        # _make_position_rate_lookup's contract: ANY quote failure (here a
+        # ValueError from the broker) degrades to None so the fold above
+        # fails closed instead of raising out of the gross-cap gate.
+        class _RaisingFxBroker:
+            def get_fx_rate(self, base: str, quote: str) -> Any:
+                raise ValueError("no quote available")
+
+        lookup = cl._make_position_rate_lookup(_RaisingFxBroker(), "PLN")
+        self.assertIsNone(lookup("USD"))
+
     def test_unstamped_positions_keep_the_candidate_fx_path(self) -> None:
         # "" is tolerated exactly as before: candidate fx present -> divide by
         # its rate; fx None -> fold raw.
