@@ -152,3 +152,13 @@ Consequences frozen into the retrospective designs: (a) inference window 2013-20
 | 9 | 13D retrospective | **Wait for the cluster result**, then decide |
 | 10 | Cluster 21 (mechanical rule vs LLM) | **Read on the live v4 cohort at >= 30 brief-dates**, with `sector_excess_return` pre-registered as the secondary outcome (issue) |
 | 11 | Short-interest telemetry | **Yes, small forward-only PR this month** (issue); first look at N >= 30 ~2026-11/12 |
+
+## 14. Adversarial review amendments (2026-09-03) — lane-level
+
+From the same review round as the cluster memo §12 (Perplexity `reason` + zen `deepseek/deepseek-v4-pro` high):
+
+1. **Two-stage design clarified:** the retrospective is an ESTIMATION stage (no verdict, no programme-bar test); the forward accrual is the single confirmatory test per class. This removes the double-look on one hypothesis that the original §6 implied.
+2. **`item4_demand_type` is a judgment call, not a fact.** The primary gate field becomes a **keyword rule** (regex over Item 4 for "sale of the company", "strategic alternatives", "board representation", "capital allocation", "passive"/"investment purposes only"), versioned as `event_gate_version`. An LLM classification of the same text may be stamped as a SEPARATE, explicitly-labelled judgment field with its own version and reliability metric; it never gates.
+3. **13D regime split:** any 13D retrospective must separate pre-2024-02 (10-day deadline) from post-2024-02 (5-business-day deadline) and pre-register that ONLY the post-2024 estimate informs the forward stage. The 2024-2026 burn applies to Form-4 features, not to 13D.
+4. **Pre-filing run-up as a covariate** for 13D (return from -20 sessions to the filing date), so reversal of the activist's accumulation is not read as post-filing drift.
+5. **Retail-book simulation** (3- and 5-name caps) is a required descriptive output of every stage; the equal-weight basket remains the estimand, the simulation shows what a concentrated book would have seen.
