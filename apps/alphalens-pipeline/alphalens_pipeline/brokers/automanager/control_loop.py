@@ -3699,9 +3699,9 @@ def _sweep_owed_sibling_retires(deps: LoopDeps, report: TickReport) -> None:
         _retire_sibling_watches(deps, pick_key, report, trigger=owed[pick_key])
 
 
-def _derive_owed_sibling_retires(lines: list[Mapping[str, Any]]) -> dict[str, str]:
-    """Pure derivation of the owed pick keys -> trigger text (see the sweep's
-    docstring for the ref-first vs generation-scoped attribution rules)."""
+def _owed_from_stop_fill_refs(lines: list[Mapping[str, Any]]) -> dict[str, str]:
+    """The ref-first half of the owed derivation: every full ``stop_filled``
+    with a parseable entry-trail ref owes its pick a sibling retire."""
     owed: dict[str, str] = {}
     for line in lines:
         if line.get("kind") == "stop_filled" and not line.get("partial"):
@@ -3709,6 +3709,13 @@ def _derive_owed_sibling_retires(lines: list[Mapping[str, Any]]) -> dict[str, st
             pick_key = _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
             if pick_key is not None:
                 owed.setdefault(pick_key, "stop fill on record")
+    return owed
+
+
+def _derive_owed_sibling_retires(lines: list[Mapping[str, Any]]) -> dict[str, str]:
+    """Pure derivation of the owed pick keys -> trigger text (see the sweep's
+    docstring for the ref-first vs generation-scoped attribution rules)."""
+    owed = _owed_from_stop_fill_refs(lines)
     plan_pick_keys = _fold_governing_plan_pick_keys(lines)
     for uic, closure_keys in _fold_round_trip_closures_since_latest_plan(lines).items():
         # str elements are parsed stop refs the ref-first walk above already
@@ -6223,22 +6230,46 @@ def _compact_tranche_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str,
                 fired_lines=fired_lines,
                 closure_lines=closure_lines,
             )
-        elif kind == _TRANCHE_PLAN_RETRACTED_KIND:
-            ladder_line.pop(uic, None)
-            latest_plan.pop(uic, None)
-            governing_key.pop(uic, None)
-            fired_lines.pop(uic, None)
-            closure_lines.pop(uic, None)
-        elif kind == "stop_filled":
-            # Closure evidence only while the generation is open — mirroring
-            # the closure fold's own gate (a pre-plan fill never counts).
-            if uic in latest_plan and not line.get("partial"):
-                ref = line.get("ref")
-                key = _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
-                closure_lines.setdefault(uic, {})[key] = line
-        elif line.get("tag") or line.get("position_closed"):
-            fired_lines.setdefault(uic, []).append(line)
+        else:
+            _track_non_plan_tranche_line(
+                line,
+                kind,
+                uic,
+                ladder_line=ladder_line,
+                latest_plan=latest_plan,
+                governing_key=governing_key,
+                fired_lines=fired_lines,
+                closure_lines=closure_lines,
+            )
     return _emit_kept_tranche_lines(ladder_line, latest_plan, fired_lines, closure_lines)
+
+
+def _track_non_plan_tranche_line(
+    line: Mapping[str, Any],
+    kind: Any,
+    uic: int,
+    *,
+    ladder_line: dict[int, Mapping[str, Any]],
+    latest_plan: dict[int, Mapping[str, Any]],
+    governing_key: dict[int, str],
+    fired_lines: dict[int, list[Mapping[str, Any]]],
+    closure_lines: dict[int, dict[str | None, Mapping[str, Any]]],
+) -> None:
+    """Fold one retraction / ``stop_filled`` / ``tranche_fired`` line into the
+    election trackers (in place). The caller pre-filters kinds, so the final
+    branch only ever sees ``tranche_fired`` lines."""
+    if kind == _TRANCHE_PLAN_RETRACTED_KIND:
+        for tracker in (ladder_line, latest_plan, governing_key, fired_lines, closure_lines):
+            tracker.pop(uic, None)
+    elif kind == "stop_filled":
+        # Closure evidence only while the generation is open — mirroring
+        # the closure fold's own gate (a pre-plan fill never counts).
+        if uic in latest_plan and not line.get("partial"):
+            ref = line.get("ref")
+            key = _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
+            closure_lines.setdefault(uic, {})[key] = line
+    elif line.get("tag") or line.get("position_closed"):
+        fired_lines.setdefault(uic, []).append(line)
 
 
 def _emit_kept_tranche_lines(
@@ -6391,13 +6422,21 @@ def _classify_standalone_lines(
                 amend_seq, _coerce(line, "uic", int), _coerce(line, "seq", int), line
             )
         elif kind == "stop_filled":
-            order_id = line.get("order_id")
-            ts = _coerce(line, "ts", float)
-            if isinstance(order_id, str) and order_id and ts is not None:
-                kept = stop_filled_by_id.get(order_id)
-                if kept is None or ts >= kept[0]:
-                    stop_filled_by_id[order_id] = (ts, dict(line))
+            _track_stop_filled_by_id(line, stop_filled_by_id)
     return oco_unsupported, ttl_latest, amend_seq, stop_filled_by_id
+
+
+def _track_stop_filled_by_id(
+    line: Mapping[str, Any], stop_filled_by_id: dict[str, tuple[float, dict[str, Any]]]
+) -> None:
+    """Elect the newest ``stop_filled`` per order id (ts tie keeps the later
+    line), in place; a line without a usable order id / ts contributes nothing."""
+    order_id = line.get("order_id")
+    ts = _coerce(line, "ts", float)
+    if isinstance(order_id, str) and order_id and ts is not None:
+        kept = stop_filled_by_id.get(order_id)
+        if kept is None or ts >= kept[0]:
+            stop_filled_by_id[order_id] = (ts, dict(line))
 
 
 def _compact_standalone_stop_journal() -> None:
