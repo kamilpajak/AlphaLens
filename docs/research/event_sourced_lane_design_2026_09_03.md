@@ -136,3 +136,19 @@ Estimated 4-6 PRs. Nothing here touches selection or ordering of the thematic la
 | Live detector 13D feed | VPS `edgar-detect` | digest: 299 events, all Form 4 / 8-K, **zero 13D/13G ever** | **bug #1263**: `FormType.from_sec_string` knows only the legacy names; the 13D forward arm has no accrual until fixed |
 
 Consequences frozen into the retrospective designs: (a) inference window 2013-2023 (universe >= 450 names); (b) 2024-01 -> 2026-03 is BURNT for Form-4 features (paradigm #11 final lock + the earlier cluster screener) and is reported descriptively only; (c) survivor bias is handled by a **universe-matched control cohort** (non-event firm-days from the same survivor universe, same month, same size tercile) so the first-order survivor premium cancels in the treated-minus-control difference — the residual bias (distress-related insider buying is missing) is UPWARD and is disclosed; the forward stage is the unbiased check; (d) compute runs where the data are: Form-4 from the VPS, prices/factors/survivorship from the Mac — rsync to one host (runpod or the VPS) before the run.
+
+## 13. Owner decisions (2026-09-03)
+
+| # | Question (§11 / cluster memo §10) | Decision |
+|---|---|---|
+| 1 | Cluster USD floor | **100k primary**, 250k reported alongside as a strength check (pre-flight: 1,004 vs 633 events) |
+| 2 | Delisted price history | **Not purchased for the discovery stage**; the upward survivor bias is disclosed in every table; revisit if the retrospective clears |
+| 3 | Retrospective universe | **PIT yaml primary** (comparability with paradigm #11); full Form-4 store universe as a secondary descriptive read |
+| 4 | 13D arm universe | **Russell 2000 (as in the activism literature)**, not the $0.5-10B bracket; the bracket becomes a covariate |
+| 5 | Cluster definition | **2 distinct insiders within 2 sessions primary**; 3-in-5 stamped as a covariate |
+| 6 | SIM basket alongside the human overlay | **Deferred** to the forward stage decision; the retrospective answers "is there drift" without it. The SIM basket exists only to observe OUR execution frictions (7-session TTL fills, Saxo fees, slippage) and the news gate on our own news store — things no historical test can measure. Decide after the retrospective result. |
+| 7 | Detector bug #1263 | **Fix now** (small PR: map `SCHEDULE 13D/13G(/A)` in `FormType.from_sec_string` + tests + live probe) |
+| 8 | Adversarial design review | **Yes** — zen `deepseek/deepseek-v4-pro` (thinking high) + Perplexity `reason` on both memos before DRAFT -> LOCKED |
+| 9 | 13D retrospective | **Wait for the cluster result**, then decide |
+| 10 | Cluster 21 (mechanical rule vs LLM) | **Read on the live v4 cohort at >= 30 brief-dates**, with `sector_excess_return` pre-registered as the secondary outcome (issue) |
+| 11 | Short-interest telemetry | **Yes, small forward-only PR this month** (issue); first look at N >= 30 ~2026-11/12 |
