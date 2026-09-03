@@ -467,6 +467,57 @@ class TestSiblingRetireSweep(unittest.TestCase):
 
         self.assertEqual([ln for ln in _lines(entries) if ln["kind"] == "cancelled"], [])
 
+    def test_malformed_ref_stop_fill_is_generation_scoped(self) -> None:
+        # A ref that contains "-entry-t" but does not parse (bad date) is
+        # KEYLESS evidence — it must ride the generation-scoped path, never
+        # fall back to the unscoped governing fold (zen LOW on #1230).
+        stops = _stop_journal(self)
+        _seed(
+            stops,
+            _tranche_plan(),  # pick A governs
+            {
+                "kind": "stop_filled",
+                "uic": _UIC,
+                "order_id": _STOP_ID,
+                "qty": 16.0,
+                "ref": "GME-notadate-entry-t0-stop-1",
+                "partial": False,
+                "ts": 200.0,
+            },
+            _tranche_plan(pick_key="GME:2026-09-02"),  # pick B takes over the uic
+        )
+        entries = _entry_journal(self)
+        _seed(entries, _watch_open("GME-2026-09-02-entry-t0", pick_key="GME:2026-09-02"))
+        alerts: list[str] = []
+        _run(_deps(_StopBroker(), alerts))
+
+        self.assertEqual([ln for ln in _lines(entries) if ln["kind"] == "cancelled"], [])
+
+    def test_malformed_ref_stop_fill_still_retires_within_its_generation(self) -> None:
+        # Same malformed ref, but the generation is still open — the keyless
+        # path must attribute to the (correct) governing pick and retire.
+        stops = _stop_journal(self)
+        _seed(
+            stops,
+            _tranche_plan(),
+            {
+                "kind": "stop_filled",
+                "uic": _UIC,
+                "order_id": _STOP_ID,
+                "qty": 16.0,
+                "ref": "GME-notadate-entry-t0-stop-1",
+                "partial": False,
+                "ts": 200.0,
+            },
+        )
+        entries = _entry_journal(self)
+        _seed(entries, _watch_open(_E2_CRID))
+        alerts: list[str] = []
+        _run(_deps(_StopBroker(), alerts))
+
+        cancelled = [ln for ln in _lines(entries) if ln["kind"] == "cancelled"]
+        self.assertEqual([ln["crid"] for ln in cancelled], [_E2_CRID])
+
     def test_same_key_plan_reappend_still_retires_owed_sibling(self) -> None:
         # A same-key re-append (the already_watching crash-recovery re-drive)
         # is NOT a new generation — A's own owed retire must survive it.
