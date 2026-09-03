@@ -62,7 +62,29 @@ The gate never decides "bullish". It answers checkable questions and stamps the 
 - **Pre-registered priors and verdict language:** H1(13D): mean `car_20_event` of gate-pass basket > 0 with equivalence bound |0.5%|; H1(cluster): same. Three-way conclusion as in `experts_last_look_2026_09.md` (cleared / inconclusive-retired-operationally / evidence against actionable effect).
 - **Gate value test (secondary, descriptive unless pre-registered at build time):** gate-pass minus gate-fail difference in `car_20_event`, same clusters.
 
-**Power (honest):** sd(car_20) ~ 0.20 -> at N = 150 episodes per class the se of the basket mean is ~1.6 pp, detecting >= ~4 pp at 80% one-sided power; at N = 300, ~2.9 pp. Against priors of +1% (13D) and +0.5-1.5% (cluster), a **single class at N < 300 cannot clear**; the design therefore commits to (a) an accrual of >= 300 gate-pass episodes per class before the first look (13D: ~8-12 months at 20-40/month; cluster: ~4-6 months), (b) the equivalence-bound three-way language so an inconclusive result is labelled as such, never as "null". The verdict is on the BASKET (equal-weight, all gate-pass names), never on the names a human chose from it — human cherry-picking stays an augmentation overlay, outside the test.
+**Power (honest) and the two-stage design (amended 2026-09-03, owner decision):** sd(car_20)
+~ 0.20 -> at N = 150 episodes per class the se of the basket mean is ~1.6 pp, detecting
+>= ~4 pp at 80% one-sided power; at N = 300, ~2.9 pp. Against priors of +1% (13D) and
++0.5-1.5% (cluster), forward accrual alone would need >= 300 gate-pass episodes per class
+(13D: 8-12 months). The design is therefore **two-stage**:
+
+1. **Retrospective (discovery + OOS), pre-registered, weeks not months.** Both classes are
+   reconstructable point-in-time from filings already on disk or in the EDGAR full index
+   (§12). The retrospective estimates the drift on OUR universe and windows, replacing the
+   literature prior with a measured one, and answers "does the class have any drift" in
+   days (cluster) to ~2 weeks (13D). Each retrospective is its own pre-registration
+   (`docs/research/preregistration/`), reviewed adversarially before the run, with the
+   PIT-universe rule for > 100 tickers and the programme-level Bonferroni count.
+   Cluster: `insider_cluster_retro_design_2026_09_03.md`. 13D: to follow (blocked on
+   #1263 for the forward arm, not for the retrospective).
+2. **Forward accrual = final lock**, at N ~ 100-150 gate-pass episodes per class (not 300),
+   because the prior is then measured, not borrowed. Forward is the only stage that sees
+   our execution frictions (7-session TTL fills, Saxo fees, slippage) and the news gate on
+   our own news store (which starts 2026-05).
+
+The verdict remains on the BASKET (equal-weight, all gate-pass names), never on the names a
+human chose from it; human cherry-picking stays an augmentation overlay, outside the test.
+The equivalence-bound three-way language applies to both stages.
 
 ## 7. Build sketch (for the implementation plan, after review)
 
@@ -98,3 +120,19 @@ Estimated 4-6 PRs. Nothing here touches selection or ordering of the thematic la
 - Universe for the 13D arm: the $500M-$10B thematic bracket (consistency) or R2000 constituents (fidelity to the activism literature)? Default in this draft: bracket.
 - Cluster definition: "2 in 2 sessions" (more events, weaker) vs "3 in 5" (fewer, stronger)? Default: 2-in-2 as primary, 3-in-5 stamped as a covariate, decided BEFORE accrual.
 - Whether the SIM broker runs the gate-pass basket mechanically (equal-weight, all names) alongside the human overlay, so the basket verdict has a realized_r shadow. Default: yes, SIM only.
+
+## 12. Data readiness — measured 2026-09-03 (VPS + Mac), not assumed
+
+| Asset | Where | Coverage | Verdict for the retrospectives |
+|---|---|---|---|
+| Form-4 store `~/.alphalens/form4_parquet/` | VPS (SoT, daily incremental); Mac copy stale (2026-05-08) | 2008-2026; `filed_date` 100% populated; officer/director open-market `P` legs 4k-20k/yr on 500-1,900 tickers/yr; price missing < 1.1% | usable as the PIT clock (`filed_date`), **but survivor-biased**: the 8,005-CIK backfill universe holds only 202 of 1,727 issuers delisted 2007-2018 (12% present as issuers 2008-2018) |
+| "R2000 PIT" `~/.alphalens/pit_universe/*.yaml` | Mac + VPS (207 monthly snapshots 2009-01..2026-03) | built by `build_pit_universe.py` from **current IWM holdings** back-filled by listing date: 4 names in 2009, ~430 in 2012, ~600 in 2015, ~750 in 2018, ~1,000 in 2023 | a survivor reconstruction, not a true PIT roster; usable from 2013 on, with the control-cohort design below; every earlier "R2000 PIT" audit shares this property |
+| S&P 1500 PIT `apps/alphalens-pipeline/data/sp{500,400,600}_pit/` | repo | 4 snapshots (2018, 2020, 2022, 2024), each labelled "FALLBACK proxy (iShares current membership — SURVIVORSHIP BIAS caveat)" | not a true PIT roster either |
+| Delisting lists `~/.alphalens/survivorship/` | **Mac only** | `delisted_2021_2026.parquet` covers 2004-2026 (6,237 names, date + reason, no CIK); `delisted_2007_2018.parquet` 2,051 names with CIK | roster of the missing names exists; their PRICES do not |
+| Price cache `~/.alphalens/prices/` (yfinance, per-ticker parquet OHLCV) | **Mac only** | 2,804 tickers, 100% of the PIT-yaml union, SPY/IWM/QQQ present, ends 2026-04/05; **0 of 2,051 and 1 of 6,230 delisted tickers present** | survivors only; delisted price history would need a paid vendor (Polygon paid tiers) — owner decision |
+| Fama-French / momentum factors `~/.alphalens/factors/` | **Mac only** | daily through 2026-02-27 | fine (needs a refresh for 2026-03+) |
+| Grouped daily (Polygon) `~/.alphalens/grouped_daily_history/` | VPS | 495 sessions (~2 years, free-tier cliff) | fine for the forward stage, too short for history |
+| EDGAR full index `full-index/<Y>/<Q>/form.idx` | live, via `get_default_sec_client().get_text` | initial 13D per quarter: 854 (2015 Q1), 608 (2024 Q1), 572 (2026 Q2); form type renamed `SC 13D` -> `SCHEDULE 13D` from 2024 Q4 | 13D retrospective feasible; documents must be fetched and Item 4 classified |
+| Live detector 13D feed | VPS `edgar-detect` | digest: 299 events, all Form 4 / 8-K, **zero 13D/13G ever** | **bug #1263**: `FormType.from_sec_string` knows only the legacy names; the 13D forward arm has no accrual until fixed |
+
+Consequences frozen into the retrospective designs: (a) inference window 2013-2023 (universe >= 450 names); (b) 2024-01 -> 2026-03 is BURNT for Form-4 features (paradigm #11 final lock + the earlier cluster screener) and is reported descriptively only; (c) survivor bias is handled by a **universe-matched control cohort** (non-event firm-days from the same survivor universe, same month, same size tercile) so the first-order survivor premium cancels in the treated-minus-control difference — the residual bias (distress-related insider buying is missing) is UPWARD and is disclosed; the forward stage is the unbiased check; (d) compute runs where the data are: Form-4 from the VPS, prices/factors/survivorship from the Mac — rsync to one host (runpod or the VPS) before the run.
