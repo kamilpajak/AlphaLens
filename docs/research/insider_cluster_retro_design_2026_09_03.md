@@ -66,7 +66,7 @@ Frozen definition applied to `transaction_year=2009..2026` (74,250 qualifying le
 | 2022 | 649 | 175 | 214 | 440k |
 | 2023 | 590 | 184 | 194 | 353k |
 
-**Inference window 2013-2023: 4,661 events store-wide, 1,004 inside the PIT yaml universe, 1,891 distinct arrival sessions, 1,936 tickers.** USD-floor sensitivity (in-universe): 100k -> 1,004; 250k -> 633; 500k -> 370. Insider-count mix (in-universe): 2 = 577, 3 = 201, 4 = 93, >= 5 = 133. The >= 300 floor is cleared at every candidate USD floor, so §10 Q1 is a power-vs-strength choice, not a feasibility one. Note for the universe decision (§10 Q3): only ~22% of store events fall inside the PIT yaml — the Form-4 store universe is ~4x broader (also survivor-based); one 2024 yaml snapshot is degenerate (1 ticker) and must be excluded or repaired before any 2024 descriptive read.
+**Inference window 2013-2023: 4,661 events store-wide, 1,004 inside the PIT yaml universe, 1,891 distinct arrival sessions, 1,936 tickers.** USD-floor sensitivity (in-universe): 100k -> 1,004; 250k -> 633; 500k -> 370. Insider-count mix (in-universe): 2 = 577, 3 = 201, 4 = 93, >= 5 = 133. The >= 300 floor is cleared at every candidate USD floor, so §10 Q1 is a power-vs-strength choice, not a feasibility one. Note for the universe decision (§10 Q3): only ~22% of store events fall inside the PIT yaml — the Form-4 store universe is ~4x broader (also survivor-based); **six 2024 yaml snapshots (2024-01..2024-06) are degenerate (1 ticker each)** — the 2024-2026 descriptive read must use the month-union or repaired snapshots, and any prior audit that read per-month membership over H1 2024 should be re-checked.
 
 ## 8. Abort and deviation rules
 
