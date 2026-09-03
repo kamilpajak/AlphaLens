@@ -127,8 +127,12 @@ def feature_at(feat: pd.DataFrame, day: dt.date) -> pd.Series | None:
     return None if row.isna().any() else row
 
 
+EVENTS_START = dt.date(2009, 1, 1)  # 2006-2008 rows serve only the Cohen-Malloy history
+
+
 def build_events(form4: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     legs = icr.qualifying_legs(form4)
+    legs = legs[legs.filed_date >= EVENTS_START].reset_index(drop=True)
     ev = icr.detect_clusters(legs)
     ev3 = icr.detect_clusters(legs, window_sessions=5, min_insiders=3)
     ev["flag_3_in_5"] = ev.set_index(["ticker", "event_date"]).index.isin(
