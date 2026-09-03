@@ -1399,6 +1399,57 @@ def arm_command(
     typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {picks_target}")
 
 
+def _frame_from_sizing_equity_env() -> float | None:
+    """The declared sizing frame off the sizing-equity env, or ``None``."""
+    from alphalens_pipeline.brokers.automanager.live_rails import SIZING_EQUITY_ENV
+
+    raw_frame = os.environ.get(SIZING_EQUITY_ENV)
+    if raw_frame is None or not raw_frame.strip():
+        return None
+    try:
+        return float(raw_frame)
+    except ValueError as exc:
+        raise _fail(f"{SIZING_EQUITY_ENV} is not a number: {raw_frame!r}") from exc
+
+
+def _echo_manual_intent(
+    intent: Any, *, blend: float, frame: float | None, notional: float | None
+) -> None:
+    """Echo the compiled manual intent for operator verification (levels, blend, 1R, sizing)."""
+    risk = blend - intent.spec.disaster_stop
+    tiers_echo = ", ".join(
+        f"{t.tag} {'now@' if t.entry_mode == 'immediate' else ''}{t.limit_price:g}"
+        f" ({t.alloc_pct:g}%)"
+        for t in intent.spec.entry_tiers
+    )
+    tp_echo = (
+        ", ".join(
+            f"{t.tag} {t.price:g} ({t.tranche_pct:g}%, {t.r_multiple:.2f}R)"
+            for t in intent.spec.tp_tranches
+        )
+        or "none (trail-only)"
+    )
+    tranche_sum = sum(t.tranche_pct for t in intent.spec.tp_tranches)
+    if intent.spec.tp_tranches and tranche_sum < 100.0:
+        tp_echo += (
+            f"  — WARNING: {100.0 - tranche_sum:g}% of the position has no TP "
+            "(runs under the stop policy only)"
+        )
+    size_echo = f"{intent.spec.suggested_size_pct:.2f}% of frame"
+    if frame is not None:
+        size_echo += f" {frame:g}"
+    if notional is not None:
+        size_echo += f" (notional {notional:g})"
+    typer.echo(
+        f"manual intent {intent.intent_id} ({intent.instrument.ticker} @ "
+        f"{intent.instrument.mic}, source={intent.meta.source})\n"
+        f"  tiers: {tiers_echo}  |  planned blend {blend:g}\n"
+        f"  stop:  {intent.spec.disaster_stop:g}  (1R = {risk:g})\n"
+        f"  tp:    {tp_echo}\n"
+        f"  size:  {size_echo}  |  ttl {intent.spec.order_ttl_days} session(s)"
+    )
+
+
 @broker_app.command(name="arm-manual")
 def arm_manual_command(
     ticker: str = typer.Argument(..., help="Ticker of the off-brief pick, e.g. NVO."),
@@ -1488,14 +1539,7 @@ def arm_manual_command(
     _guard_state_layout()
 
     if notional is not None and frame is None:
-        from alphalens_pipeline.brokers.automanager.live_rails import SIZING_EQUITY_ENV
-
-        raw_frame = os.environ.get(SIZING_EQUITY_ENV)
-        if raw_frame is not None and raw_frame.strip():
-            try:
-                frame = float(raw_frame)
-            except ValueError as exc:
-                raise _fail(f"{SIZING_EQUITY_ENV} is not a number: {raw_frame!r}") from exc
+        frame = _frame_from_sizing_equity_env()
 
     now = dt.datetime.now(dt.UTC)
     try:
@@ -1519,38 +1563,7 @@ def arm_manual_command(
     blend = planned_blended_entry_of(
         intent.spec.entry_tiers, disaster_stop=intent.spec.disaster_stop
     )
-    risk = blend - intent.spec.disaster_stop
-    tiers_echo = ", ".join(
-        f"{t.tag} {'now@' if t.entry_mode == 'immediate' else ''}{t.limit_price:g}"
-        f" ({t.alloc_pct:g}%)"
-        for t in intent.spec.entry_tiers
-    )
-    tp_echo = (
-        ", ".join(
-            f"{t.tag} {t.price:g} ({t.tranche_pct:g}%, {t.r_multiple:.2f}R)"
-            for t in intent.spec.tp_tranches
-        )
-        or "none (trail-only)"
-    )
-    tranche_sum = sum(t.tranche_pct for t in intent.spec.tp_tranches)
-    if intent.spec.tp_tranches and tranche_sum < 100.0:
-        tp_echo += (
-            f"  — WARNING: {100.0 - tranche_sum:g}% of the position has no TP "
-            "(runs under the stop policy only)"
-        )
-    size_echo = f"{intent.spec.suggested_size_pct:.2f}% of frame"
-    if frame is not None:
-        size_echo += f" {frame:g}"
-    if notional is not None:
-        size_echo += f" (notional {notional:g})"
-    typer.echo(
-        f"manual intent {intent.intent_id} ({intent.instrument.ticker} @ "
-        f"{intent.instrument.mic}, source={intent.meta.source})\n"
-        f"  tiers: {tiers_echo}  |  planned blend {blend:g}\n"
-        f"  stop:  {intent.spec.disaster_stop:g}  (1R = {risk:g})\n"
-        f"  tp:    {tp_echo}\n"
-        f"  size:  {size_echo}  |  ttl {intent.spec.order_ttl_days} session(s)"
-    )
+    _echo_manual_intent(intent, blend=blend, frame=frame, notional=notional)
     superseded = next(
         (
             p

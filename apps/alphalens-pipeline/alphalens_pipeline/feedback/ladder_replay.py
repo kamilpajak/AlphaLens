@@ -1373,18 +1373,45 @@ def _replay_breakeven(
             sl_hit = True
             break
         _scan_tp_hits(ladder, hit_tp_ids, high)
-        if peak_high is None or high > peak_high:
-            peak_high = high
-        if (peak_high - blended) / risk >= mfe_trigger_r:
-            triggered = True
-        if triggered:
-            eff_stop = max(eff_stop, _breakeven_eff_stop(blended, peak_high, trail_frac))
+        peak_high, eff_stop, triggered = _advance_breakeven_stop(
+            high,
+            blended=blended,
+            risk=risk,
+            mfe_trigger_r=mfe_trigger_r,
+            trail_frac=trail_frac,
+            peak_high=peak_high,
+            eff_stop=eff_stop,
+            triggered=triggered,
+        )
         if len(hit_tp_ids) == len(ladder.tps):
             break  # fully scaled out
     contrib, _open, _tp_ids, _residual = _realized_r_with_frac(
         ladder, hit_tp_ids, blended, eff_stop, risk, sl_hit, last_close, filled_frac
     )
     return contrib
+
+
+def _advance_breakeven_stop(
+    high: float,
+    *,
+    blended: float,
+    risk: float,
+    mfe_trigger_r: float,
+    trail_frac: float | None,
+    peak_high: float | None,
+    eff_stop: float,
+    triggered: bool,
+) -> tuple[float, float, bool]:
+    """One bar's running-MFE update: fold ``high`` into the peak, arm the
+    break-even trigger once the MFE-R threshold is crossed, and (while armed)
+    ratchet the effective stop. Returns ``(peak_high, eff_stop, triggered)``."""
+    if peak_high is None or high > peak_high:
+        peak_high = high
+    if (peak_high - blended) / risk >= mfe_trigger_r:
+        triggered = True
+    if triggered:
+        eff_stop = max(eff_stop, _breakeven_eff_stop(blended, peak_high, trail_frac))
+    return peak_high, eff_stop, triggered
 
 
 def _breakeven_eff_stop(blended: float, peak_high: float, trail_frac: float | None) -> float:
