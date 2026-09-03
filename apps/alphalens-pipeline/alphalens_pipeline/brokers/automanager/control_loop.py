@@ -7212,6 +7212,7 @@ def _journal_tranche_plan(
     instrument: Any,
     use_geometry: bool,
     fx: Any = None,
+    override: tuple[str, float] | None = None,
 ) -> None:
     """INC-5: journal ONE ``tranche_plan`` line per uic so the live-exit engine can
     rebuild the TP ladder from the journal alone — see
@@ -7225,13 +7226,21 @@ def _journal_tranche_plan(
     entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
     if not entry_tiers:
         return
+    if override is not None:
+        # #1247 split pick: ONE keyed tranche_plan for the whole pick with the
+        # FULL ladder's reference_qty (now + pullback) — a keyless line here
+        # would reset the generation the watch route's keyed re-append opens.
+        pick_key, reference_qty = override
+    else:
+        pick_key, reference_qty = None, sum(t.qty for t in entry_tiers)
     _journal_tranche_plan_core(
         plan=plan,
         exit_spec=exit_spec,
         stop_price=placement.disaster_stop_price,
-        reference_qty=sum(t.qty for t in entry_tiers),
+        reference_qty=reference_qty,
         uic=int(instrument.broker_instrument_id),
         use_geometry=use_geometry,
+        pick_key=pick_key,
         instrument_currency=str(getattr(instrument, "currency", "") or ""),
         sizing_currency=_sizing_currency_of(fx, instrument),
     )
@@ -7269,6 +7278,13 @@ def _place_tiers(
     exit_spec: Any = None,
     exit_policy: ExitPolicy | None = None,
     plan: Any = None,
+    *,
+    entry_duration: str | None = None,
+    record_tranche: str | None = None,
+    record_meta: Mapping[str, Any] | None = None,
+    write_ahead_note: str = "placement attempt",
+    tranche_plan_override: tuple[str, float] | None = None,
+    on_broker_error: Callable[[Any], str] | None = None,
 ) -> int:
     """Place each entry tier's bracket, journaling IMMEDIATELY after each fill so a
     mid-loop crash leaves at most a partial ladder joined to submissions.jsonl (the
@@ -7327,32 +7343,42 @@ def _place_tiers(
     # outcome was. None (a real null) when no sized plan is in scope.
     est_fee_bps = _estimate_round_trip_fee_bps(plan, fx, instrument_currency=instrument.currency)
 
-    def _journal_tier(tier: Any, placed: Any) -> None:
-        bracket = tier.bracket
+    def _tranche_kwargs(outcome: str) -> dict[str, Any]:
+        # #1247: per-tranche markers on every record this placement journals.
+        # Absent params -> empty dict -> legacy record shape byte-identical.
+        if record_tranche is None:
+            return {}
+        meta = dict(record_meta or {})
+        meta["outcome"] = outcome
+        return {"tranche": record_tranche, "tranche_meta": meta}
+
+    def _journal_tier(tier: Any, bracket: Any, placed: Any) -> None:
+        bracket_row: dict[str, Any] = {
+            "client_request_id": bracket.client_request_id,
+            "entry_order_id": placed.entry_order_id,
+            "exit_order_ids": list(placed.exit_order_ids),
+            "qty": bracket.quantity,
+            "entry": bracket.entry_limit,
+            "stop": bracket.stop_loss,
+            "tp": bracket.take_profit,
+            "ttl": bracket.entry_ttl_days,
+        }
+        if entry_duration is not None:
+            bracket_row["entry_duration"] = entry_duration
         append_submission_record(
             build_submission_record(
                 brief_date=intent.meta.brief_date,
                 ticker=ticker,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,
-                brackets=[
-                    {
-                        "client_request_id": bracket.client_request_id,
-                        "entry_order_id": placed.entry_order_id,
-                        "exit_order_ids": list(placed.exit_order_ids),
-                        "qty": bracket.quantity,
-                        "entry": bracket.entry_limit,
-                        "stop": bracket.stop_loss,
-                        "tp": bracket.take_profit,
-                        "ttl": bracket.entry_ttl_days,
-                    }
-                ],
+                brackets=[bracket_row],
                 note=None,
                 sizing_currency=account.currency,
                 instrument_currency=instrument.currency,
                 sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
                 est_round_trip_fee_bps=est_fee_bps,
+                **_tranche_kwargs("placed"),
             )
         )
         use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
@@ -7386,6 +7412,7 @@ def _place_tiers(
         instrument=instrument,
         use_geometry=resolved_exit_policy.applies_geometry,
         fx=fx,
+        override=tranche_plan_override,
     )
 
     # Write-ahead dedup line (memo §4.4 B2): register the (ticker, brief_date)
@@ -7404,28 +7431,40 @@ def _place_tiers(
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
             brackets=[],
-            note="placement attempt",
+            note=write_ahead_note,
             sizing_currency=account.currency,
             instrument_currency=instrument.currency,
             sizing_equity=_resolve_sizing_equity(account.total_value),
             fx=fx,
             est_round_trip_fee_bps=est_fee_bps,
+            **_tranche_kwargs("attempt"),
         )
     )
 
     placed_count = 0
     placed_entry_ids: list[str] = []
     failure_note: str | None = None
+    failure_outcome = "failed"
     try:
         for tier in placement.tiers:
-            placed = broker.place_bracket_order(tier.bracket)
-            _journal_tier(tier, placed)
+            bracket = tier.bracket
+            if entry_duration is not None:
+                # #1247 now tranche: dataclasses.replace keeps the request
+                # frozen; PR-B's adapter dispatches the duration block on it.
+                bracket = replace(bracket, entry_duration=entry_duration)
+            placed = broker.place_bracket_order(bracket)
+            _journal_tier(tier, bracket, placed)
             placed_entry_ids.append(str(placed.entry_order_id))
             placed_count += 1
     except BrokerError as exc:
         failure_note = (
             f"placement stopped after {placed_count}/{len(placement.tiers)} bracket(s): {exc}"
         )
+        if on_broker_error is not None:
+            # #1247 now tranche: classify (price-tolerance reject vs generic
+            # failure) + page; the returned string is the failure record's
+            # tranche_meta outcome. The exception still never escapes.
+            failure_outcome = on_broker_error(exc)
         # Memo §4.4 B1 — insufficient-funds rollback: a tier rejected for lack
         # of cash means the WHOLE pick is unaffordable; leaving the earlier
         # tiers resting would keep a partial frame-sized ladder live at a
@@ -7454,6 +7493,7 @@ def _place_tiers(
                 sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
                 est_round_trip_fee_bps=est_fee_bps,
+                **_tranche_kwargs(failure_outcome),
             )
         )
 
