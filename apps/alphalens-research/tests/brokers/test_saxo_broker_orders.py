@@ -296,6 +296,17 @@ class TestPlacementBody(unittest.TestCase):
         for child in body["Orders"]:
             self.assertEqual(child["OrderDuration"], {"DurationType": "GoodTillCancel"})
 
+    def test_unknown_entry_duration_fails_operator_readable(self):
+        # Literal is not runtime-enforced — an unknown value must raise a
+        # domain error naming the expected set, never a bare KeyError.
+        broker, stub = _make_broker()
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError) as ctx:
+                broker.place_bracket_order(_request(entry_duration="fok"))
+        self.assertIn("entry_duration", str(ctx.exception))
+        self.assertIn("'fok'", str(ctx.exception))
+        self.assertEqual(stub.place_calls, [])
+
     def test_default_entry_duration_is_gtd_byte_identical(self):
         # Dormancy pin: a request without the field builds the exact
         # three-key GTD block existing callers rely on.

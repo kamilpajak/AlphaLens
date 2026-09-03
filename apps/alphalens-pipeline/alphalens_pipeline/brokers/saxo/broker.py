@@ -1888,6 +1888,12 @@ class SaxoBroker:
         hard-fail as ``_quantize_price``: a floor is bounded by one tick, but
         one tick of a coarse scheme can still dwarf the price scale — the
         identical "tick scheme disagrees" pathology.
+
+        Epsilon bound: measured float-division noise on realistic price/tick
+        ratios (up to ~1e6) is 2.2e-12..2.2e-10, so 1e-9 clears it with two
+        orders of margin; the theoretical tick-UP it admits requires a
+        12-decimal sub-tick input no production path produces, and its
+        magnitude is bounded at tick*1e-9 — far below OrderDecimals.
         """
         if not math.isfinite(price):
             raise OrderRejectedError(f"{label} must be a finite number, got {price}")
@@ -2000,7 +2006,15 @@ class SaxoBroker:
         else:
             # Immediate entry (#1247): a capped now tranche never rests across
             # sessions — DayOrder dies at the close, IOC cancels the residual.
-            entry_duration = {"DurationType": _IMMEDIATE_ENTRY_DURATIONS[request.entry_duration]}
+            duration_type = _IMMEDIATE_ENTRY_DURATIONS.get(request.entry_duration)
+            if duration_type is None:
+                # Literal is not runtime-enforced — fail operator-readable,
+                # never a bare KeyError from a live placement path.
+                raise OrderRejectedError(
+                    f"unknown entry_duration {request.entry_duration!r}; expected "
+                    f"'gtd' or one of {sorted(_IMMEDIATE_ENTRY_DURATIONS)}"
+                )
+            entry_duration = {"DurationType": duration_type}
         body: dict[str, Any] = {
             "Uic": int(instrument.broker_instrument_id),
             "AssetType": instrument.asset_type,
