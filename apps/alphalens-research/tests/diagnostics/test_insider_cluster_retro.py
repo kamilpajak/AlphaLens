@@ -285,38 +285,61 @@ class TestParamsParity(unittest.TestCase):
 
 
 class TestAcceptanceFetchFallback(unittest.TestCase):
-    """The runner's acceptance fetch tries the issuer CIK path, then the reporter CIK path."""
+    """The acceptance fetch tries the issuer CIK path, then the reporter CIK path, and caches the URL."""
+
+    class FakeClient:
+        def __init__(self):
+            self.urls = []
+
+        def get_text(self, url):
+            self.urls.append(url)
+            if "/data/1/" in url:
+                raise RuntimeError("NoSuchKey")
+            return "<SEC-HEADER>\n<ACCEPTANCE-DATETIME>20200304081500\nFILER:"
 
     def test_falls_back_to_reporter_cik_and_caches_url(self):
-        import importlib.util
         import json
         import tempfile
         from pathlib import Path
 
-        root = Path(__file__).resolve().parents[4]
-        spec = importlib.util.spec_from_file_location(
-            "runner", root / "apps/alphalens-research/scripts/experiment_insider_cluster_retro.py"
-        )
-        runner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(runner)
-
-        class FakeClient:
-            def __init__(self):
-                self.urls = []
-
-            def get_text(self, url):
-                self.urls.append(url)
-                if "/data/1/" in url:
-                    raise RuntimeError("NoSuchKey")
-                return "<SEC-HEADER>\n<ACCEPTANCE-DATETIME>20200304081500\nFILER:"
-
         with tempfile.TemporaryDirectory() as tmp:
-            runner.ACCEPT_CACHE = Path(tmp)
-            client = FakeClient()
-            got = runner.fetch_acceptance("0000000002-20-000001", "1", client, fallback_ciks=["2"])
+            client = self.FakeClient()
+            got = icr.fetch_acceptance(
+                "0000000002-20-000001", "1", client, cache_dir=Path(tmp), fallback_ciks=["2"]
+            )
             self.assertEqual(got, dt.datetime(2020, 3, 4, 8, 15))
             self.assertEqual(len(client.urls), 2)
             self.assertIn("/data/2/", client.urls[1])
             cached = json.loads((Path(tmp) / "0000000002-20-000001.json").read_text())
             self.assertEqual(cached["acceptance"], "20200304081500")
             self.assertIn("/data/2/", cached["url"])
+            # second call is served from the cache (no new request)
+            icr.fetch_acceptance(
+                "0000000002-20-000001", "1", client, cache_dir=Path(tmp), fallback_ciks=["2"]
+            )
+            self.assertEqual(len(client.urls), 2)
+
+    def test_all_paths_missing_caches_the_error_and_returns_none(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        class Dead:
+            def get_text(self, url):
+                raise RuntimeError("NoSuchKey")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(
+                icr.fetch_acceptance(
+                    "0000000002-20-000002", "1", Dead(), cache_dir=Path(tmp), fallback_ciks=["2"]
+                )
+            )
+            cached = json.loads((Path(tmp) / "0000000002-20-000002.json").read_text())
+            self.assertIsNone(cached["acceptance"])
+            self.assertIn("NoSuchKey", cached["error"])
+            self.assertTrue(cached["fallback_tried"])
+
+    def test_accession_urls_dedups_and_skips_empty(self):
+        urls = icr.accession_urls("0000000002-20-000001", ["1", None, "1", "2"])
+        self.assertEqual(len(urls), 2)
+        self.assertTrue(urls[0].endswith("/data/1/000000000220000001/0000000002-20-000001.txt"))

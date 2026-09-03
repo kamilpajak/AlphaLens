@@ -15,6 +15,10 @@ orchestrates I/O and caching.
 from __future__ import annotations
 
 import datetime as dt
+import json
+import logging
+import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -40,6 +44,8 @@ CONTROLS_PER_EVENT = 5
 CALIPER_SD = 1.5
 FEE_ROUND_TRIP = 0.0066  # Saxo LIVE schedule: 0.08%/side + 0.25% FX each way on a fixed ticket
 PLANNING_BOUND = -0.005  # lower 90% CI bound, net of fees
+ACCEPT_RE = re.compile(r"<ACCEPTANCE-DATETIME>\s*(\d{14})")
+log = logging.getLogger(__name__)
 
 
 def qualifying_legs(form4: pd.DataFrame, *, leg_min_usd: float = LEG_MIN_USD) -> pd.DataFrame:
@@ -252,3 +258,67 @@ def planning_rule(
 ) -> bool:
     """Build the forward lane iff the net point estimate is positive AND the net lower 90% bound clears ``bound``."""
     return (mean - fee_round_trip) > 0.0 and (ci90_low - fee_round_trip) > bound
+
+
+def accession_urls(accession: str, ciks: list[str | None]) -> list[str]:
+    """Candidate full-submission URLs for a filing.
+
+    EDGAR files a Form 4 under the issuer AND each reporting-owner CIK, but the
+    Archives path is not always present under the issuer — try every CIK we know,
+    in order, without duplicates.
+    """
+    acc = accession.replace("-", "")
+    seen: set[str] = set()
+    urls = []
+    for cik in ciks:
+        if cik and str(cik) not in seen:
+            seen.add(str(cik))
+            urls.append(f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc}/{accession}.txt")
+    return urls
+
+
+def fetch_acceptance(
+    accession: str,
+    cik: str,
+    client,
+    *,
+    cache_dir: Path,
+    fallback_ciks: list[str | None] | None = None,
+) -> dt.datetime | None:
+    """EDGAR ``<ACCEPTANCE-DATETIME>`` of a filing, cached per accession.
+
+    The raw header text is persisted before parsing. Tries the issuer CIK path
+    first, then the reporting-owner paths. A cached miss caused by a missing
+    Archives key is retried once fallbacks are supplied. Unknown -> ``None``
+    (the caller maps that to the conservative next-session arrival).
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache = cache_dir / f"{accession}.json"
+    if cache.exists():
+        payload = json.loads(cache.read_text())
+        v = payload.get("acceptance")
+        retryable = (
+            v is None
+            and bool(fallback_ciks)
+            and "NoSuchKey" in (payload.get("error") or "")
+            and not payload.get("fallback_tried")
+        )
+        if not retryable:
+            return dt.datetime.strptime(v, "%Y%m%d%H%M%S") if v else None
+    last_err = None
+    for url in accession_urls(accession, [cik, *(fallback_ciks or [])]):
+        try:
+            text = client.get_text(url)[:4000]
+        except Exception as exc:  # next candidate URL; unknown -> conservative arrival
+            last_err = f"{type(exc).__name__}: {str(exc)[:200]}"
+            continue
+        m = ACCEPT_RE.search(text)
+        cache.write_text(
+            json.dumps({"acceptance": m.group(1) if m else None, "header": text[:600], "url": url})
+        )
+        return dt.datetime.strptime(m.group(1), "%Y%m%d%H%M%S") if m else None
+    log.warning("acceptance fetch failed %s: %s", accession, last_err)
+    cache.write_text(
+        json.dumps({"acceptance": None, "error": last_err, "fallback_tried": bool(fallback_ciks)})
+    )
+    return None

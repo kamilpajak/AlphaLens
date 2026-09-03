@@ -21,7 +21,6 @@ import argparse
 import datetime as dt
 import json
 import logging
-import re
 import sys
 from pathlib import Path
 
@@ -45,7 +44,6 @@ INFER_START, INFER_END = dt.date(2013, 1, 1), dt.date(2023, 12, 31)
 BURNT_START, BURNT_END = dt.date(2024, 1, 1), dt.date(2026, 3, 31)
 LATE_FILING_BDAYS = 10
 PRE_EVENT_LOOKBACK = 20
-ACCEPT_RE = re.compile(r"<ACCEPTANCE-DATETIME>\s*(\d{14})")
 log = logging.getLogger("insider_cluster_retro")
 
 
@@ -86,58 +84,6 @@ def sessions_back(calendar_px: pd.DataFrame, day: dt.date, n: int) -> dt.date:
 
 
 # ------------------------------------------------------------ acceptance times
-def _accession_urls(accession: str, ciks: list[str]) -> list[str]:
-    """Candidate full-submission URLs: EDGAR files a Form 4 under the issuer AND each reporter CIK,
-    but the Archives path is not always present under the issuer — try every CIK we know."""
-    acc = accession.replace("-", "")
-    seen, urls = set(), []
-    for cik in ciks:
-        if cik and str(cik) not in seen:
-            seen.add(str(cik))
-            urls.append(f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc}/{accession}.txt")
-    return urls
-
-
-def fetch_acceptance(
-    accession: str, cik: str, client, *, fallback_ciks: list[str] | None = None
-) -> dt.datetime | None:
-    """EDGAR <ACCEPTANCE-DATETIME> of a filing, cached per accession (raw header text persisted first).
-
-    Tries the issuer CIK path first, then the reporting-owner CIK paths. A cached
-    miss caused by a missing Archives key is retried when fallbacks are supplied.
-    """
-    ACCEPT_CACHE.mkdir(parents=True, exist_ok=True)
-    cache = ACCEPT_CACHE / f"{accession}.json"
-    if cache.exists():
-        payload = json.loads(cache.read_text())
-        v = payload.get("acceptance")
-        retryable = (
-            v is None
-            and fallback_ciks
-            and "NoSuchKey" in (payload.get("error") or "")
-            and not payload.get("fallback_tried")
-        )
-        if not retryable:
-            return dt.datetime.strptime(v, "%Y%m%d%H%M%S") if v else None
-    last_err = None
-    for url in _accession_urls(accession, [cik, *(fallback_ciks or [])]):
-        try:
-            text = client.get_text(url)[:4000]
-        except Exception as exc:  # logged, next candidate URL; unknown -> conservative arrival
-            last_err = f"{type(exc).__name__}: {str(exc)[:200]}"
-            continue
-        m = ACCEPT_RE.search(text)
-        cache.write_text(
-            json.dumps({"acceptance": m.group(1) if m else None, "header": text[:600], "url": url})
-        )
-        return dt.datetime.strptime(m.group(1), "%Y%m%d%H%M%S") if m else None
-    log.warning("acceptance fetch failed %s: %s", accession, last_err)
-    cache.write_text(
-        json.dumps({"acceptance": None, "error": last_err, "fallback_tried": bool(fallback_ciks)})
-    )
-    return None
-
-
 # -------------------------------------------------------------------- features
 def rolling_features(px: pd.DataFrame) -> pd.DataFrame:
     c = px["close"].astype(float)
@@ -263,9 +209,18 @@ def main(argv=None) -> int:
         client = get_default_sec_client()
         acc = {}
         todo = infer[infer.has_price & ~infer.late_filing]
+        owner_of = (
+            legs.drop_duplicates("accession_number")
+            .set_index("accession_number")["reporting_owner_cik"]
+            .to_dict()
+        )
         for i, r in enumerate(todo.itertuples(index=False)):
-            acc[r.completing_accession] = fetch_acceptance(
-                r.completing_accession, cik_of.get(r.ticker, "0"), client
+            acc[r.completing_accession] = icr.fetch_acceptance(
+                r.completing_accession,
+                cik_of.get(r.ticker, "0"),
+                client,
+                cache_dir=ACCEPT_CACHE,
+                fallback_ciks=[owner_of.get(r.completing_accession)],
             )
             if i % 500 == 0:
                 log.info("acceptance fetched %d/%d", i, len(todo))
