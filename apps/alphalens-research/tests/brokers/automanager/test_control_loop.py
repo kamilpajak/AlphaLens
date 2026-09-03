@@ -1445,6 +1445,9 @@ class TestCheckFeeFloor(unittest.TestCase):
         # venue card prices that card (PLN -> WSE: min 10 PLN dominates a
         # 50 PLN gross, so the tiny GPW plan is refused too — honestly); a
         # currency with NO card keeps the ad-valorem-only legacy shape.
+        # #1271: EUR joined the carded set (Xetra fallback, min EUR 3), so
+        # the no-card arm is pinned on CHF and the tiny EUR plan is now
+        # refused like the other carded venues.
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
             self.assertIsNotNone(
                 cl._check_fee_floor(_fee_plan(50.0), None, ticker="KO", instrument_currency="USD")
@@ -1452,8 +1455,11 @@ class TestCheckFeeFloor(unittest.TestCase):
             self.assertIsNotNone(
                 cl._check_fee_floor(_fee_plan(50.0), None, ticker="CDR", instrument_currency="PLN")
             )
-            self.assertIsNone(
+            self.assertIsNotNone(
                 cl._check_fee_floor(_fee_plan(50.0), None, ticker="ASM", instrument_currency="EUR")
+            )
+            self.assertIsNone(
+                cl._check_fee_floor(_fee_plan(50.0), None, ticker="NES", instrument_currency="CHF")
             )
 
 
@@ -3085,10 +3091,13 @@ class TestEstimateRoundTripFeeBps(unittest.TestCase):
         usd = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="USD")
         pln = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="PLN")
         eur = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="EUR")
-        assert usd is not None and pln is not None and eur is not None
+        chf = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="CHF")
+        assert usd is not None and pln is not None and eur is not None and chf is not None
         self.assertAlmostEqual(usd, 20.0)  # 2 x $1 min / 1000 x 10^4
         self.assertAlmostEqual(pln, 200.0)  # 2 x 10 PLN min / 1000 x 10^4
-        self.assertAlmostEqual(eur, 16.0)  # 2 x 0.8 ad-valorem / 1000 x 10^4
+        # #1271: EUR falls back to the conservative Xetra card (min EUR 3).
+        self.assertAlmostEqual(eur, 60.0)  # 2 x 3 EUR min / 1000 x 10^4
+        self.assertAlmostEqual(chf, 16.0)  # 2 x 0.8 ad-valorem / 1000 x 10^4
 
     def test_zero_qty_tiers_pay_no_commission(self) -> None:
         # A zero-qty tier is never POSTed (_ZERO_QTY_TIER_POLICY = skip-log),
