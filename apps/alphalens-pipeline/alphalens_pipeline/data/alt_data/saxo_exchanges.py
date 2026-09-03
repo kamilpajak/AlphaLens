@@ -32,6 +32,14 @@ MIC_TO_SAXO_EXCHANGE_ID: dict[str, str] = {
     # XAMS stays out of every probe order and out of arm-manual's
     # SUPPORTED_MICS until its own validation arc.
     "XAMS": "AMS",
+    # Deutsche Boerse Xetra cash equities — live-verified against SIM
+    # /ref/v1/exchanges (ExchangeId "FSE", Mic XETR, DE) and by resolving
+    # RHMG:xetr / uic 16135 / EUR (2026-09-03). CAUTION: several ExchangeIds
+    # share Mic XETR (FSE, XETRA, XETR_STARS, XETR_ETF, XETR_ETP) — cash
+    # equities live on FSE; the ``:xetr`` display-symbol suffix both
+    # resolvers match on is MIC-based, so it covers them all. Map entry only
+    # until #1271 PR 4 opens the venue in arm-manual's SUPPORTED_MICS.
+    "XETR": "FSE",
 }
 
 # Market ticker -> Saxo symbol root, consulted by BOTH resolvers AFTER the
@@ -52,6 +60,11 @@ SAXO_TICKER_ALIASES: Mapping[str, tuple[str, int]] = {
     # Lithium Americas, NYSE — Saxo symbol "LAC_NEW:xnys", uic 38022146
     # (post-2023 corporate-split leftover; live-verified 2026-08-12).
     "LAC": ("LAC_NEW", 38022146),
+    # Rheinmetall, Xetra — Saxo symbol root "RHMG", not the market ticker
+    # RHM (live-verified RHMG:xetr / uic 16135 / EUR on SIM 2026-09-03).
+    # A Milan listing 1RHM:xmil exists; the uic pin plus the exact ``:xetr``
+    # suffix match keep the alias from resolving the wrong venue.
+    "RHM": ("RHMG", 16135),
 }
 
 

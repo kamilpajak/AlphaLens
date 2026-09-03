@@ -113,6 +113,26 @@ class TestSaxoSimLive(unittest.TestCase):
             if not ref.broker_instrument_id:
                 raise PermanentProbeError(f"ASML resolve returned empty Uic: {ref!r}")
 
+        def _probe_resolve_xetr() -> None:
+            # Xetra-on-SIM coverage (#1271 PR 1) — same stance as the WSE /
+            # XAMS probes, plus the alias path: Saxo lists Rheinmetall under
+            # the root RHMG, so resolving the MARKET ticker RHM exercises
+            # SAXO_TICKER_ALIASES end to end and the uic pin (16135) is the
+            # shape assertion.
+            try:
+                ref = broker.resolve_instrument("RHM", "XETR")
+            except InstrumentNotFoundError as exc:
+                raise PermanentProbeError(
+                    f"XETR-on-SIM coverage gap: RHM @ XETR did not resolve ({exc})"
+                ) from exc
+            except Exception as exc:
+                raise _classify(exc) from exc
+            if str(ref.broker_instrument_id) != "16135":
+                raise PermanentProbeError(
+                    f"RHM alias resolved to unexpected Uic {ref.broker_instrument_id!r} "
+                    "(expected the pinned 16135 — Saxo may have renamed RHMG)"
+                )
+
         run_probes(
             self,
             {
@@ -121,6 +141,7 @@ class TestSaxoSimLive(unittest.TestCase):
                 "resolve AAPL@XNAS": _probe_resolve_us,
                 "resolve CDR@XWAR (WSE-on-SIM validation)": _probe_resolve_wse,
                 "resolve ASML@XAMS (Euronext-on-SIM validation)": _probe_resolve_xams,
+                "resolve RHM@XETR (alias + FSE-on-SIM validation)": _probe_resolve_xetr,
             },
             label="saxo",
         )

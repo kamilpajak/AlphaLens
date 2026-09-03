@@ -33,6 +33,23 @@ class TestMicToSaxoExchangeId(unittest.TestCase):
         SUPPORTED_MICS until its own validation arc."""
         self.assertEqual(MIC_TO_SAXO_EXCHANGE_ID["XAMS"], "AMS")
 
+    def test_xwar_maps_to_wse(self) -> None:
+        """Warsaw Stock Exchange (GPW) — the #1238 venue arc's first non-US
+        venue (CDR:xwar first fill 2026-09-03). Pinned retroactively: the
+        entry predates this suite's per-venue pins."""
+        self.assertEqual(MIC_TO_SAXO_EXCHANGE_ID["XWAR"], "WSE")
+
+    def test_xetr_maps_to_fse(self) -> None:
+        """Deutsche Boerse Xetra cash equities — live-verified against SIM
+        /ref/v1/exchanges (ExchangeId "FSE", Mic XETR, DE) and by resolving
+        RHMG:xetr / uic 16135 / EUR (2026-09-03). CAUTION: several
+        ExchangeIds share Mic XETR (FSE, XETRA, XETR_STARS, XETR_ETF,
+        XETR_ETP); cash equities live on FSE, and the ``:xetr``
+        display-symbol suffix both resolvers match on is MIC-based, so it
+        covers them all. Map entry only until #1271 PR 4 opens the venue in
+        arm-manual's SUPPORTED_MICS."""
+        self.assertEqual(MIC_TO_SAXO_EXCHANGE_ID["XETR"], "FSE")
+
 
 class TestSaxoTickerAliases(unittest.TestCase):
     def test_map_is_well_formed(self) -> None:
@@ -55,6 +72,13 @@ class TestSaxoTickerAliases(unittest.TestCase):
         """LAC -> (LAC_NEW, 38022146) (live-verified 2026-08-12) — a positive
         control so the alias map cannot rot to empty silently."""
         self.assertEqual(SAXO_TICKER_ALIASES["LAC"], ("LAC_NEW", 38022146))
+
+    def test_rhm_alias_pins_rhmg_uic(self) -> None:
+        """RHM -> (RHMG, 16135) — Saxo lists Rheinmetall under the symbol
+        root RHMG, not the Xetra market ticker RHM (live-verified on SIM
+        2026-09-03). A Milan listing 1RHM:xmil exists; the uic pin plus the
+        exact ``:xetr`` suffix match keep the alias from resolving it."""
+        self.assertEqual(SAXO_TICKER_ALIASES["RHM"], ("RHMG", 16135))
 
     def test_accessor_upper_cases_and_returns_the_pinned_pair(self) -> None:
         self.assertEqual(alias_expected_for("lac"), ("LAC_NEW", 38022146))
