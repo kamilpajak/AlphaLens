@@ -1,6 +1,6 @@
 # Insider cluster buying — retrospective pre-registration (draft for adversarial review)
 
-**Status:** DRAFT, adversarial review APPLIED 2026-09-03 (§12); two owner decisions outstanding (§12.3) before the `params_insider_cluster_retro_2026_09.json` lock; NO run before LOCKED.
+**Status:** LOCKED 2026-09-03 — spec frozen in `docs/research/preregistration/params_insider_cluster_retro_2026_09.json` (ledger id `insider_cluster_retro_2026_09`); owner decisions §12.3 resolved: universe = full Form-4 store (PIT yaml as secondary cut), ledger = exploratory estimation look without verdict. Results: §13 (placeholder until the run).
 **Parent:** [`event_sourced_lane_design_2026_09_03.md`](event_sourced_lane_design_2026_09_03.md) §6 stage 1, §12 data readiness.
 **Class:** informed-trader flow, Form-4 based — shares data with paradigm #11 (Cohen-Malloy opportunistic), so this is NOT a fresh class for multiplicity: programme-level Bonferroni applies (`feedback burnt-holdout multiplicity compounds`).
 **Compute:** small (Form-4 store + ~2,800 price parquets); runs on one host after rsync (Form-4 from the VPS, prices/factors from the Mac). Wall time minutes, not hours; the ">1h compute" review doctrine is applied anyway because the result feeds a multi-month forward lane.
@@ -121,3 +121,11 @@ Reviewers: Perplexity `reason` (16 findings) and zen `deepseek/deepseek-v4-pro` 
 
 1. **Universe for the estimation stage.** With power now the binding constraint, the reviewers recommend the **full Form-4 store universe as primary** (4,661 events, se ~0.29 pp) with the PIT yaml as a secondary cut — the reverse of decision 3. Recommendation: accept the reversal; comparability with paradigm #11 is a weaker good than a CI half as wide.
 2. **Ledger accounting.** Record the estimation stage as an exploratory look with no verdict (precedent: options retro pilot, 2026-07), i.e. it is COUNTED in the programme tally but produces no discovery claim; the forward stage is the single confirmatory charge. Recommendation: yes.
+
+## 13. Results (placeholder — filled by the results commit, which must not touch the executable spec)
+
+- Pre-flight (outcome-blind, run 2026-09-03 after the lock, cache complete): cluster events 2009-2026 = 6,750; inference window 2013-2023 = 4,662, of which 3,836 have a price history (830 missing tickers fetched through the yfinance cache on 2026-09-03; the remainder are delisted names yfinance cannot serve), 1,008 inside the PIT yaml, 86 late filings (> 10 business days) excluded, 1,792 also satisfy the 3-in-5 definition. EDGAR acceptance time known for 3,782 / 3,782 candidate events (31 needed the reporter-CIK fallback); only 6% were accepted before 09:00 ET, so ~94% of arrivals are next-session opens. Universe (store ∩ priced) = 3,236 tickers. Per-year priced events: 2013 122, 2014 192, 2015 223, 2016 210, 2017 210, 2018 363, 2019 379, 2020 569, 2021 443, 2022 569, 2023 556.
+- Primary estimate (treated − matched control, car_20, 2013-2023): PENDING
+- Planning rule: PENDING
+- Descriptives: PENDING
+- Deviations log: PENDING (empty = none)

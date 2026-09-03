@@ -4536,6 +4536,37 @@
         }
       },
       "notes": ""
+    },
+    {
+      "id": "insider_cluster_retro_2026_09",
+      "signal_class": "informed_trader_flow_form4 (shares data with insider_form4_opportunistic_2026_05_08_v2 — NOT a fresh class; programme-level count)",
+      "hypothesis": "A basket entered at the first obtainable price after an insider PURCHASE CLUSTER (>=2 distinct officers/directors, legs filed within 2 sessions, >=100k USD) becomes public earns a positive market-adjusted 20-session return relative to a characteristic-matched control cohort. EXPLORATORY ESTIMATION: CIs only, no verdict, no programme-bar test; a pre-registered planning rule decides whether the event-sourced lane (docs/research/event_sourced_lane_design_2026_09_03.md) is built. The forward stage is the single confirmatory test.",
+      "scorer_path": "apps/alphalens-research/scripts/experiment_insider_cluster_retro.py",
+      "params_frozen": {
+        "params_file": "docs/research/preregistration/params_insider_cluster_retro_2026_09.json",
+        "design_memo": "docs/research/insider_cluster_retro_design_2026_09_03.md",
+        "look_kind": "EXPLORATORY ESTIMATION (no discovery claim)",
+        "locked_at": "2026-09-03"
+      },
+      "outcome": null,
+      "periods": {
+        "inference_start": "2013-01-01",
+        "inference_end": "2023-12-31",
+        "burnt_descriptive_start": "2024-01-01",
+        "burnt_descriptive_end": "2026-03-31",
+        "excluded": "2009-2012 (universe too thin)",
+        "rationale": "universe >= 450 names from 2013; 2024-01..2026-03 burnt for Form-4 features by insider_form4_opportunistic final lock and the earlier cluster screener"
+      },
+      "success_criteria": {
+        "kind": "ESTIMATION — no hypothesis-test verdict, no programme-bar test",
+        "primary_statistic": "mean over events of car_20(treated) - mean(car_20 of 5 matched controls), arrival-session cluster bootstrap CI (B=9999, seed 0)",
+        "planning_rule": "build the event-sourced lane iff (mean - 0.0066) > 0 AND (ci90_low - 0.0066) > -0.005",
+        "reporting": "three-way language forbidden here; the forward stage is the single confirmatory test",
+        "abort_clause": "outcome-blind defects only"
+      },
+      "registered_at": "2026-09-03",
+      "status": "registered",
+      "notes": "Owner decisions 2026-09-03: full Form-4 store universe (PIT yaml secondary), exploratory look without verdict, USD floor 100k (250k check), delisted prices not purchased at this stage."
     }
   ]
 }

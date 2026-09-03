@@ -1,0 +1,58 @@
+{
+  "id": "insider_cluster_retro_2026_09",
+  "locked_at": "2026-09-03",
+  "look_kind": "EXPLORATORY ESTIMATION (no verdict, no programme-bar test, no discovery claim; informs whether the event-sourced lane is built)",
+  "design_memo": "docs/research/insider_cluster_retro_design_2026_09_03.md",
+  "parent_memo": "docs/research/event_sourced_lane_design_2026_09_03.md",
+  "runner": "apps/alphalens-research/scripts/experiment_insider_cluster_retro.py",
+  "helpers": "apps/alphalens-research/alphalens_research/diagnostics/insider_cluster_retro.py",
+  "data": {
+    "form4_store": "~/.alphalens/form4_parquet/ (VPS source of truth, synced to the analysis host 2026-09-03; survivor-biased: 12% of issuers delisted 2007-2018 present)",
+    "prices": "~/.alphalens/prices/<TICKER>.parquet (yfinance daily OHLCV; survivors only; tickers missing for cluster events fetched 2026-09-03 through yfinance_cache.download_and_cache)",
+    "acceptance_times": "EDGAR filing header <ACCEPTANCE-DATETIME> per completing accession, fetched through get_default_sec_client(), cached at ~/.alphalens/edgar_acceptance/",
+    "benchmarks": ["SPY", "IWM"],
+    "universe_primary": "every ticker present in the Form-4 store with a price history covering the event window (disclosed survivor set; owner decision 2026-09-03 for power)",
+    "universe_secondary_cut": "membership in ~/.alphalens/pit_universe/<event-month>.yaml (current-IWM reconstruction; 2024-01..2024-06 snapshots degenerate)"
+  },
+  "event": {
+    "leg": "transaction_code P, acquired_disposed A, is_amendment False, is_officer or is_director, price present, shares*price >= 10000 USD",
+    "cluster": ">= 2 distinct reporting_owner_cik with qualifying legs filed within 2 trading sessions of the anchor leg; cluster USD >= 100000 (250000 reported as a strength check, not a second test)",
+    "event_date": "filed_date of the leg that completes the insider count (2nd distinct insider)",
+    "dedup": "one event per ticker per 20 sessions, first wins",
+    "exclusions": ["completing leg filed > 10 business days after its transaction_date (late filing)", "no price row on the anchor session", "split guard: any day-over-day close ratio in the window outside [0.55, 1.8]"],
+    "covariates_stamped_never_filters": ["cluster_usd", "n_insiders", "cluster_usd / 20-session dollar volume", "Cohen-Malloy label of each buyer (classifier_year = event year)", "first_leg_date and car from the first leg", "3-in-5 cluster flag", "filing lag in business days", "pre-event 20-session return", "in PIT yaml universe"]
+  },
+  "arrival_and_anchor": {
+    "rule": "acceptance before 09:00 ET on the filing date -> same-session OPEN; otherwise (intraday, post-close, unknown) -> next-session OPEN",
+    "sensitivity": "same-day CLOSE anchor reported alongside"
+  },
+  "outcomes": {
+    "primary": "car_20_event = (close[arrival+19]/open[arrival] - 1) - same for SPY",
+    "secondary": ["car_40_event (arrival+39)", "IWM-relative car_20", "Carhart-4F residual of the treated basket (robustness)"]
+  },
+  "controls": {
+    "per_event": 5,
+    "pool": "universe tickers priced on the arrival session with no qualifying purchase leg in [-20, 0] sessions (a later purchase inside the window is stamped, never used to delete the control)",
+    "match_vars": ["ret_20d", "ret_6m", "vol_20d", "log_dv_20d"],
+    "method": "nearest neighbour in standardized matching space (pool sd per arrival month), each variable within a 1.5 sd caliper; same calendar month by construction (same arrival session)",
+    "balance_report": "standardized mean differences before/after matching"
+  },
+  "inference": {
+    "statistic": "mean over events of d_i = car_20(treated_i) - mean(car_20 of matched controls_i)",
+    "clusters": "arrival sessions (primary); two-way ticker x arrival session reported as sensitivity",
+    "bootstrap": {"method": "cluster bootstrap of arrival sessions", "n_boot": 9999, "seed": 0},
+    "co_primary_sensitivity": "regression car_20 ~ treated + match_vars on the pooled treated+control rows, arrival-session clusters",
+    "windows": {"inference": "2013-01-01..2023-12-31", "burnt_descriptive_only": "2024-01-01..2026-03-31 (paradigm #11 final lock + earlier cluster screener)", "excluded": "2009-2012 (universe too thin)"},
+    "stability_split": "2013-2018 / 2019-2023 (descriptive, not a second test)"
+  },
+  "planning_rule": {
+    "build_lane_iff": "(mean - fee_round_trip) > 0 AND (ci90_low - fee_round_trip) > -0.005",
+    "fee_round_trip": 0.0066,
+    "fee_model": "Saxo LIVE schedule on a fixed ticket: 0.08% per side + 0.25% FX each way (reference_saxo_fees_sim_vs_live_2026_07_29)",
+    "note": "a planning rule, not a hypothesis-test verdict; the forward stage is the single confirmatory test"
+  },
+  "descriptive_outputs": ["sub-windows", "USD floor 100k vs 250k", "n_insiders bins", "Cohen-Malloy label bins", "ticker-collapsed (first event per ticker)", "two-way clustering CI", "car from first leg", "retail simulation with 3- and 5-name caps, equal-dollar, fee model, first-come rule", "delisted-issuer subset present in the store", "PIT-yaml secondary cut"],
+  "seeds": {"bootstrap": 0, "matching_tiebreak": 1, "retail_sim": 2},
+  "abort_clause": "abort uncharged only for outcome-blind defects (row counts, join integrity, universe gaps, price-cache holes, acceptance-fetch failures); the moment any treated-vs-control number is emitted the look is spent",
+  "review_trail": "Perplexity reason (16) + zen deepseek-v4-pro (10), 2026-09-03; adjudication in the design memo §12"
+}
