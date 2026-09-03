@@ -452,9 +452,87 @@ class TestInstrumentResolution(unittest.TestCase):
         self.assertEqual(ref.broker_instrument_id, "38022146")
         self.assertEqual(client.search_calls, [("LAC", "NYSE"), ("LAC_NEW", "NYSE")])
 
+    def test_mic_tier_split_falls_back_to_unfiltered_search(self):
+        """Saxo splits one MIC across several ExchangeIds (Mic XNAS covers
+        NASDAQ plus NSC, the Nasdaq Capital Market tier QUBT lives on; Mic
+        XETR covers FSE/XETRA/...). The venue map names the PRIMARY
+        ExchangeId, so a tier-split listing comes back EMPTY from the
+        filtered search — the resolver must retry once WITHOUT the exchange
+        filter and match on the MIC-based ``:xnas`` suffix (the suffix-only
+        stance the LIVE marketdata client always had). Live shape: QUBT:xnas
+        uic 19756014 ExchangeId NSC, unresolvable pre-fix (2026-09-03)."""
+
+        class _TierSplit(_StubSaxoClient):
+            def search_instruments(
+                self,
+                keywords: str,
+                *,
+                asset_types: str = "Stock",
+                exchange_id: str | None = None,
+            ) -> dict[str, Any]:
+                self.search_calls.append((keywords, exchange_id))
+                if exchange_id is not None:
+                    return {"Data": []}
+                return {
+                    "Data": [
+                        {
+                            "Symbol": "QUBT:xnas",
+                            "Identifier": 19756014,
+                            "AssetType": "Stock",
+                            "CurrencyCode": "USD",
+                        }
+                    ]
+                }
+
+        client = _TierSplit()
+        ref = SaxoBroker(client).resolve_instrument("QUBT", "XNAS")  # type: ignore[arg-type]
+        self.assertEqual(ref.ticker, "QUBT")
+        self.assertEqual(ref.broker_instrument_id, "19756014")
+        self.assertEqual(ref.broker_symbol, "QUBT:xnas")
+        self.assertEqual(ref.currency, "USD")
+        self.assertEqual(client.search_calls, [("QUBT", "NASDAQ"), ("QUBT", None)])
+
+    def test_no_unfiltered_retry_when_the_filtered_search_matches(self):
+        client = _StubSaxoClient()
+        SaxoBroker(client).resolve_instrument("KO", "XNYS")  # type: ignore[arg-type]
+        self.assertEqual(client.search_calls, [("KO", "NYSE")])
+
+    def test_alias_participates_in_the_unfiltered_retry(self):
+        """When BOTH filtered rounds (primary + alias) come back empty, the
+        unfiltered retry re-runs the same two-step: exact suffix match first,
+        then the alias keyword with its uic pin."""
+
+        class _AliasTierSplit(_StubSaxoClient):
+            def search_instruments(
+                self,
+                keywords: str,
+                *,
+                asset_types: str = "Stock",
+                exchange_id: str | None = None,
+            ) -> dict[str, Any]:
+                self.search_calls.append((keywords, exchange_id))
+                if exchange_id is not None or keywords.upper() == "LAC":
+                    return {"Data": []}
+                return _SEARCH_RESULTS.get(keywords.upper(), {"Data": []})
+
+        client = _AliasTierSplit()
+        ref = SaxoBroker(client).resolve_instrument("LAC", "XNYS")  # type: ignore[arg-type]
+        self.assertEqual(ref.ticker, "LAC")
+        self.assertEqual(ref.broker_instrument_id, "38022146")
+        self.assertEqual(
+            client.search_calls,
+            [("LAC", "NYSE"), ("LAC_NEW", "NYSE"), ("LAC", None), ("LAC_NEW", None)],
+        )
+
     def test_zero_match_raises_instrument_not_found(self):
         with self.assertRaises(InstrumentNotFoundError):
             _make_broker().resolve_instrument("NOPE", "XNYS")
+
+    def test_zero_match_tried_both_filtered_and_unfiltered(self):
+        client = _StubSaxoClient()
+        with self.assertRaises(InstrumentNotFoundError):
+            SaxoBroker(client).resolve_instrument("NOPE", "XNYS")  # type: ignore[arg-type]
+        self.assertEqual(client.search_calls, [("NOPE", "NYSE"), ("NOPE", None)])
 
     def test_ambiguous_match_raises_instrument_not_found(self):
         with self.assertRaises(InstrumentNotFoundError) as ctx:

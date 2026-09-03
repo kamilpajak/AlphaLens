@@ -400,6 +400,25 @@ class SaxoBroker:
                 ticker, exchange_mic, exchange_id, rows, expected_symbol
             )
         if not matches:
+            # MIC-tier fallback: Saxo splits one MIC across several
+            # ExchangeIds (Mic XNAS covers NASDAQ plus NSC, the Nasdaq
+            # Capital Market tier; Mic XETR covers FSE/XETRA/...), and the
+            # venue map names only the PRIMARY ExchangeId — so a tier-split
+            # listing (QUBT:xnas on NSC, 2026-09-03) is invisible to the
+            # filtered search. Retry once with NO exchange filter and rerun
+            # the same two-step: the ``:mic`` suffix match is MIC-based
+            # (the LIVE marketdata client's suffix-only stance), so it still
+            # pins the venue.
+            with _translate_saxo_errors():
+                payload = self._client.search_instruments(ticker, exchange_id=None)
+            rows = payload.get("Data") or []
+            expected_symbol = f"{ticker}:{exchange_mic}".lower()
+            matches = [row for row in rows if str(row.get("Symbol", "")).lower() == expected_symbol]
+            if not matches:
+                matches, expected_symbol = self._alias_matches(
+                    ticker, exchange_mic, None, rows, expected_symbol
+                )
+        if not matches:
             raise InstrumentNotFoundError(
                 f"no Saxo instrument with symbol {expected_symbol!r} for "
                 f"({ticker}, {exchange_mic}); search returned "
@@ -439,7 +458,7 @@ class SaxoBroker:
         self,
         ticker: str,
         exchange_mic: str,
-        exchange_id: str,
+        exchange_id: str | None,
         rows: list[dict[str, Any]],
         expected_symbol: str,
     ) -> tuple[list[dict[str, Any]], str]:
