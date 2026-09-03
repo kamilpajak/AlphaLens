@@ -19,6 +19,7 @@ called on the flag-ON path — the "fire" is an alert-only log line.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
 import unittest
@@ -30,7 +31,9 @@ from unittest import mock
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_trails
 from alphalens_pipeline.brokers.automanager import safety as _safety
+from broker_contract.contract import OrderRejectedError
 from broker_contract.exit_geometry.registry import resolve_exit_policy
+from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import SetupPlan, TierPlan
 
 from tests.incident_1112_fixture import (
@@ -60,7 +63,11 @@ def _pick(ticker: str = "KO", date: str = "2026-07-20", source: str = "brief") -
             "instrument": type("Hint", (), {"ticker": ticker, "mic": "XNYS"})(),
             # `source` mirrors IntentMeta's field (#1246: _place_pick threads it
             # into the day-1 gap gate's anchor choice).
-            "meta": type("Meta", (), {"brief_date": date, "source": source})(),
+            "meta": type(
+                "Meta",
+                (),
+                {"brief_date": date, "source": source, "armed_ts": "2026-07-20T14:00:00+00:00"},
+            )(),
             "spec": type("Spec", (), {"entry_tiers": ("t",)})(),
             "exit": None,
         },
@@ -268,7 +275,16 @@ def _placement(n_tiers: int = 1) -> Any:
     return type("P", (), {"tiers": tiers, "disaster_stop_price": 9.0})()
 
 
-def _placer(test: unittest.TestCase, broker: Any, plan: SetupPlan) -> Any:
+def _placer(
+    test: unittest.TestCase,
+    broker: Any,
+    plan: SetupPlan,
+    *,
+    now_entry_feed_factory: Any = None,
+    submission_records: list[dict[str, Any]] | None = None,
+    alerts: list[str] | None = None,
+    refused_marks: list[tuple] | None = None,
+) -> Any:
     """A ``_place_pick`` closure with the resolve/size/verdict/journal seams
     stubbed hermetic, EXCEPT the entry-trails journal (pointed at a temp file by
     :func:`_journal`). ``classify`` returns a simple placement so the OFF branch
@@ -279,16 +295,32 @@ def _placer(test: unittest.TestCase, broker: Any, plan: SetupPlan) -> Any:
         (f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b, **_k: []),
         (f"{pkg}.automanager.safety.check", lambda *_a, **_k: object()),
         (f"{pkg}.routing.resolve_us_instrument", lambda _b, _t, **_kw: _instr()),
-        (f"{pkg}.submission_log.iter_submission_records", lambda _p: []),
+        (
+            f"{pkg}.submission_log.iter_submission_records",
+            lambda _p: list(submission_records or []),
+        ),
         (f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)),
         (f"{pkg}.submission_log.append_submission_record", submissions.append),
         ("broker_contract.sizing.compute_setup_plan", lambda _s, **_k: plan),
         (f"{pkg}.automanager.placement_planner.classify", lambda *_a, **_k: _placement()),
-        (f"{pkg}.automanager.picks.mark_refused", lambda *_a, **_k: None),
+        (
+            f"{pkg}.automanager.picks.mark_refused",
+            lambda *a, **_k: refused_marks.append(a) if refused_marks is not None else None,
+        ),
     ):
         test.enterContext(mock.patch(target, fn))
     test.enterContext(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _l: None))
-    placer = cl._make_place_pick(broker)
+
+    def _throttled(message: str, _reason: str) -> bool:
+        if alerts is not None:
+            alerts.append(message)
+        return True
+
+    placer = cl._make_place_pick(
+        broker,
+        alert_throttled=_throttled,
+        now_entry_feed_factory=now_entry_feed_factory,
+    )
     return placer, submissions
 
 
@@ -3136,3 +3168,281 @@ class TestFiredTerminalPlanRetraction(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------
+# Immediate ("now") tranche in the drain (#1247 PR-C core)
+# --------------------------------------------------------------------------
+
+
+def _now_plan(*, cap: float = 12.0, cap_qty: int = 40, pullback: bool = True) -> SetupPlan:
+    tiers = [
+        TierPlan(
+            tier_index=0,
+            limit_price=cap,
+            qty=cap_qty,
+            alloc_pct=40.0,
+            tag="T1",
+            entry_mode="immediate",
+        )
+    ]
+    if pullback:
+        tiers.append(TierPlan(tier_index=1, limit_price=10.0, qty=60, alloc_pct=60.0, tag="T2"))
+    return SetupPlan(
+        suggested_size_pct=1.0,
+        scale_factor=1.0,
+        final_size_pct=1.0,
+        total_notional=1000.0,
+        paper_equity=100_000.0,
+        disaster_stop=8.0,
+        order_ttl_days=1,
+        entry_tiers=tuple(tiers),
+        tp_tranches=(_tranche(0, 14.0, 1.0),),
+    )
+
+
+def _point(uic: int = 307, ask: float = 11.0) -> PricePoint:
+    now = dt.datetime.now(dt.UTC)
+    return PricePoint(
+        uic=uic, bid=ask - 0.02, ask=ask, event_time=now, received_at=now, source="test-l1"
+    )
+
+
+def _now_feed(points: dict[int, PricePoint | None], calls: list[tuple[dict, str]]) -> Any:
+    def factory(uic_map: Any, *, scope: str) -> Any:
+        calls.append((dict(uic_map), scope))
+
+        class _Feed:
+            def latest(self, uic: int) -> PricePoint | None:
+                return points.get(uic)
+
+        return _Feed()
+
+    return factory
+
+
+class TestPlacePickNowTranche(unittest.TestCase):
+    """#1247 PR-C: the immediate tranche places a capped entry at drain, then
+    the pullback siblings route to the watch exactly as today."""
+
+    def setUp(self) -> None:
+        self.enterContext(mock.patch.object(cl, "_entry_watch_live_uic_deferred", set()))
+
+    def _drain(
+        self,
+        plan: SetupPlan,
+        *,
+        points: dict[int, PricePoint | None] | None = None,
+        records: list[dict[str, Any]] | None = None,
+        broker: Any = None,
+    ) -> tuple[Any, list[dict[str, Any]], list[str], list[tuple[dict, str]], Path]:
+        path = _journal(self)
+        _planned_journal(self)
+        calls: list[tuple[dict, str]] = []
+        alerts: list[str] = []
+        the_broker = broker if broker is not None else _RecordingBroker()
+        placer, submissions = _placer(
+            self,
+            the_broker,
+            plan,
+            now_entry_feed_factory=_now_feed(
+                points if points is not None else {307: _point()}, calls
+            ),
+            submission_records=records,
+            alerts=alerts,
+        )
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            verdict = placer(_pick())
+        return verdict, submissions, alerts, calls, path
+
+    def test_price_at_or_below_cap_places_one_capped_limit_then_routes_siblings(self) -> None:
+        broker = _RecordingBroker()
+        verdict, submissions, _alerts, calls, path = self._drain(_now_plan(), broker=broker)
+        self.assertTrue(verdict)
+        self.assertEqual(len(broker.brackets), 1)  # ONE now entry, no classic ladder
+        now_records = [r for r in submissions if r.get("tranche") == "now"]
+        self.assertTrue(any(r["tranche_meta"]["outcome"] == "placed" for r in now_records))
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)  # the pullback sibling watches
+        self.assertEqual(calls[0][1], "now-entry:307")
+
+    def test_price_above_cap_refuses_now_only_pages_and_still_routes_siblings(self) -> None:
+        broker = _RecordingBroker()
+        verdict, submissions, alerts, _calls, path = self._drain(
+            _now_plan(cap=10.5), points={307: _point(ask=11.0)}, broker=broker
+        )
+        self.assertTrue(verdict)  # siblings still routed
+        self.assertEqual(broker.brackets, [])
+        refused = [
+            r
+            for r in submissions
+            if r.get("tranche") == "now" and r["tranche_meta"]["outcome"] == "refused_cap"
+        ]
+        self.assertEqual(len(refused), 1)
+        self.assertTrue(any("above cap" in a for a in alerts))
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+
+    def test_no_quote_defers_the_whole_pick_and_places_nothing(self) -> None:
+        broker = _RecordingBroker()
+        verdict, submissions, alerts, _calls, path = self._drain(
+            _now_plan(), points={}, broker=broker
+        )
+        self.assertFalse(verdict)
+        self.assertEqual(broker.brackets, [])
+        self.assertEqual(submissions, [])  # pick NOT retired - retried next tick
+        self.assertEqual(_lines(path), [])  # siblings NOT routed before the now half
+        self.assertTrue(any("no real-time quote" in a for a in alerts))
+
+    def test_none_factory_defers_with_a_page(self) -> None:
+        path = _journal(self)
+        _planned_journal(self)
+        alerts: list[str] = []
+        placer, submissions = _placer(
+            self, _RecordingBroker(), _now_plan(), now_entry_feed_factory=None, alerts=alerts
+        )
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(submissions, [])
+        self.assertTrue(any("no real-time quote" in a for a in alerts))
+
+    def test_caps_journaled_operator_and_submitted(self) -> None:
+        class _FloorBroker(_RecordingBroker):
+            def floor_limit_price_to_tick(self, uic: int, asset_type: str, price: float) -> float:
+                return 11.99  # floored below the operator's 12.0
+
+        broker = _FloorBroker()
+        _verdict, submissions, _alerts, _calls, _path = self._drain(_now_plan(), broker=broker)
+        placed = [
+            r
+            for r in submissions
+            if r.get("tranche") == "now" and r["tranche_meta"]["outcome"] == "placed"
+        ]
+        self.assertEqual(placed[0]["tranche_meta"]["operator_cap"], 12.0)
+        self.assertEqual(placed[0]["tranche_meta"]["submitted_cap"], 11.99)
+        self.assertEqual(placed[0]["tranche_meta"]["gate_ask"], 11.0)
+
+    def test_cost_gate_violation_refuses_the_whole_pick_terminal_before_any_post(self) -> None:
+        refusals: list[tuple] = []
+        self.enterContext(
+            mock.patch.object(cl, "_refuse_pick_terminal", lambda *a, **k: refusals.append(a))
+        )
+        broker = _RecordingBroker()
+        # TP1 at 12.01 barely above a 12.0 cap on 1 share -> inside exit region.
+        plan = dataclasses.replace(_now_plan(cap_qty=1), tp_tranches=(_tranche(0, 12.01, 1.0),))
+        verdict, _submissions, _alerts, _calls, path = self._drain(plan, broker=broker)
+        self.assertFalse(verdict)
+        self.assertEqual(len(refusals), 1)
+        self.assertEqual(broker.brackets, [])
+        self.assertEqual(_lines(path), [])  # siblings never routed
+
+    def test_no_tp_pick_skips_the_cost_gate(self) -> None:
+        plan = dataclasses.replace(_now_plan(), tp_tranches=())
+        verdict, _submissions, _alerts, _calls, _path = self._drain(plan)
+        self.assertTrue(verdict)
+
+    def test_existing_now_marker_same_armed_ts_routes_only_the_siblings(self) -> None:
+        broker = _RecordingBroker()
+        marker = {
+            "ticker": "KO",
+            "brief_date": "2026-07-20",
+            "tranche": "now",
+            "tranche_meta": {"armed_ts": "2026-07-20T14:00:00+00:00", "outcome": "placed"},
+        }
+        verdict, _submissions, _alerts, _calls, path = self._drain(
+            _now_plan(), records=[marker], broker=broker
+        )
+        self.assertTrue(verdict)
+        self.assertEqual(broker.brackets, [])  # no duplicate now order
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+
+    def test_fresh_armed_ts_re_drives_the_now_tranche_past_an_old_refusal(self) -> None:
+        broker = _RecordingBroker()
+        stale = {
+            "ticker": "KO",
+            "brief_date": "2026-07-20",
+            "tranche": "now",
+            "tranche_meta": {"armed_ts": "2026-07-19T10:00:00+00:00", "outcome": "refused_cap"},
+        }
+        verdict, _submissions, _alerts, _calls, _path = self._drain(
+            _now_plan(), records=[stale], broker=broker
+        )
+        self.assertTrue(verdict)
+        self.assertEqual(len(broker.brackets), 1)
+
+    def test_now_only_cap_breach_marks_the_pick_refused(self) -> None:
+        path = _journal(self)
+        _planned_journal(self)
+        refused: list[tuple] = []
+        alerts: list[str] = []
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(
+            self,
+            broker,
+            _now_plan(cap=10.5, pullback=False),
+            now_entry_feed_factory=_now_feed({307: _point(ask=11.0)}, []),
+            alerts=alerts,
+            refused_marks=refused,
+        )
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(len(refused), 1)
+        self.assertEqual(_lines(path), [])  # a now-only pick never reaches the intercept
+
+    def test_now_only_pick_places_and_never_reaches_the_intercept(self) -> None:
+        broker = _RecordingBroker()
+        verdict, _submissions, _alerts, _calls, path = self._drain(
+            _now_plan(pullback=False), broker=broker
+        )
+        self.assertTrue(verdict)
+        self.assertEqual(len(broker.brackets), 1)
+        self.assertEqual(_lines(path), [])  # no watch lines
+
+    def test_price_tolerance_reject_journals_refused_reject_and_pages(self) -> None:
+        class _RejectBroker(_RecordingBroker):
+            def place_bracket_order(self, bracket: Any) -> Any:
+                raise OrderRejectedError("too far", error_code="TooFarFromMarket")
+
+        broker = _RejectBroker()
+        verdict, submissions, alerts, _calls, path = self._drain(_now_plan(), broker=broker)
+        self.assertTrue(verdict)  # siblings still watch
+        failures = [
+            r
+            for r in submissions
+            if r.get("tranche") == "now"
+            and r.get("tranche_meta", {}).get("outcome") == "refused_reject"
+        ]
+        self.assertEqual(len(failures), 1)
+        self.assertTrue(any("rejected" in a for a in alerts))
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+
+    def test_scope_kept_on_defer_released_after_placement(self) -> None:
+        broker = _RecordingBroker()
+        _verdict, _submissions, _alerts, calls, _path = self._drain(_now_plan(), broker=broker)
+        # placement path: one subscribe call + one release (empty map) call
+        self.assertEqual(calls[0][0], {307: ("KO", "XNYS")})
+        self.assertEqual(calls[-1][0], {})
+        broker2 = _RecordingBroker()
+        _v, _s, _a, defer_calls, _p = self._drain(_now_plan(), points={}, broker=broker2)
+        self.assertTrue(all(c[0] != {} for c in defer_calls))  # DEFER keeps the subscription
+
+    def test_all_pullback_pick_is_byte_identical_no_feed_call_no_new_keys(self) -> None:
+        broker = _RecordingBroker()
+        path = _journal(self)
+        _planned_journal(self)
+        calls: list[tuple[dict, str]] = []
+        placer, submissions = _placer(
+            self,
+            broker,
+            _plan((0, 10.0, 100)),
+            now_entry_feed_factory=_now_feed({}, calls),
+        )
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertTrue(placer(_pick()))
+        self.assertEqual(calls, [])  # THE regression pin: no now machinery ran
+        for record in submissions:
+            self.assertNotIn("tranche", record)
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
