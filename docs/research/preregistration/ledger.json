@@ -4536,6 +4536,19 @@
         }
       },
       "notes": ""
+    },
+    {
+      "id": "insider_cluster_retro_2026_09",
+      "signal_class": "informed_trader_flow_form4 (shares data with insider_form4_opportunistic_2026_05_08_v2 — NOT a fresh class; programme-level count)",
+      "hypothesis": "A basket entered at the first obtainable price after an insider PURCHASE CLUSTER (>=2 distinct officers/directors, legs filed within 2 sessions, >=100k USD) becomes public earns a positive market-adjusted 20-session return relative to a characteristic-matched control cohort. EXPLORATORY ESTIMATION: CIs only, no verdict, no programme-bar test; a pre-registered planning rule decides whether the event-sourced lane (docs/research/event_sourced_lane_design_2026_09_03.md) is built. The forward stage is the single confirmatory test.",
+      "scorer_path": "apps/alphalens-research/scripts/experiment_insider_cluster_retro.py",
+      "params_frozen": {
+        "params_file": "docs/research/preregistration/params_insider_cluster_retro_2026_09.json",
+        "design_memo": "docs/research/insider_cluster_retro_design_2026_09_03.md",
+        "look_kind": "EXPLORATORY ESTIMATION (no discovery claim)",
+        "locked_at": "2026-09-03"
+      },
+      "outcome": "PENDING (locked 2026-09-03; run after the lock commit merges)"
     }
   ]
 }
