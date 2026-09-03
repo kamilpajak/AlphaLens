@@ -72,6 +72,54 @@ def _parse_float(raw: str, *, what: str) -> float:
     return value
 
 
+def _parse_one_tier(raw: str) -> tuple[float, float | None, bool]:
+    """Parse one ``price[:alloc_pct]`` / ``now@<cap>[:alloc_pct]`` value into
+    ``(price, alloc_pct-or-None, is_now)``."""
+    parts = raw.split(":")
+    if len(parts) == 1:
+        price_raw, alloc_raw = parts[0], None
+    elif len(parts) == 2:
+        price_raw, alloc_raw = parts
+    else:
+        raise ManualIntentError(f"cannot parse --tier: {raw!r} (expected price[:alloc_pct])")
+    is_now = price_raw.startswith(_NOW_PREFIX)
+    if is_now:
+        price_raw = price_raw[len(_NOW_PREFIX) :]
+        if not price_raw:
+            raise ManualIntentError(
+                f"a now tier needs a cap price, got {raw!r} (expected now@<cap>[:alloc_pct])"
+            )
+    price = _parse_float(price_raw, what=f"--tier price in {raw!r}")
+    if price <= 0:
+        raise ManualIntentError(f"--tier price must be positive, got {raw!r}")
+    alloc: float | None = None
+    if alloc_raw is not None:
+        alloc = _parse_float(alloc_raw, what=f"--tier alloc_pct in {raw!r}")
+        if alloc <= 0:
+            raise ManualIntentError(f"--tier alloc_pct must be positive, got {raw!r}")
+    return price, alloc, is_now
+
+
+def _resolve_tier_allocations(
+    parsed: list[tuple[float, float | None, bool]], raw_tiers: list[str] | tuple[str, ...]
+) -> list[tuple[float, float | None, bool]]:
+    """Apply the all-bare equal split, or validate explicit allocations."""
+    n_bare = sum(1 for _, alloc, _ in parsed if alloc is None)
+    if n_bare == len(parsed):
+        return [(price, 100.0 / len(parsed), is_now) for price, _, is_now in parsed]
+    if n_bare:
+        raise ManualIntentError(
+            "either every --tier carries an explicit alloc_pct or none does "
+            f"(equal split) — got a mix in {list(raw_tiers)!r}"
+        )
+    alloc_sum = sum(alloc for _, alloc, _ in parsed if alloc is not None)
+    if abs(alloc_sum - 100.0) > _PCT_SUM_TOL:
+        raise ManualIntentError(
+            f"--tier allocations must sum to 100, got {alloc_sum:g} — no silent rescaling"
+        )
+    return parsed
+
+
 def parse_entry_tiers(raw_tiers: list[str] | tuple[str, ...]) -> tuple[EntryTierSpec, ...]:
     """Parse repeated ``--tier price[:alloc_pct]`` values into entry tiers.
 
@@ -90,31 +138,7 @@ def parse_entry_tiers(raw_tiers: list[str] | tuple[str, ...]) -> tuple[EntryTier
     if not raw_tiers:
         raise ManualIntentError("at least one --tier is required")
 
-    parsed: list[tuple[float, float | None, bool]] = []
-    for raw in raw_tiers:
-        parts = raw.split(":")
-        if len(parts) == 1:
-            price_raw, alloc_raw = parts[0], None
-        elif len(parts) == 2:
-            price_raw, alloc_raw = parts
-        else:
-            raise ManualIntentError(f"cannot parse --tier: {raw!r} (expected price[:alloc_pct])")
-        is_now = price_raw.startswith(_NOW_PREFIX)
-        if is_now:
-            price_raw = price_raw[len(_NOW_PREFIX) :]
-            if not price_raw:
-                raise ManualIntentError(
-                    f"a now tier needs a cap price, got {raw!r} (expected now@<cap>[:alloc_pct])"
-                )
-        price = _parse_float(price_raw, what=f"--tier price in {raw!r}")
-        if price <= 0:
-            raise ManualIntentError(f"--tier price must be positive, got {raw!r}")
-        alloc: float | None = None
-        if alloc_raw is not None:
-            alloc = _parse_float(alloc_raw, what=f"--tier alloc_pct in {raw!r}")
-            if alloc <= 0:
-                raise ManualIntentError(f"--tier alloc_pct must be positive, got {raw!r}")
-        parsed.append((price, alloc, is_now))
+    parsed = [_parse_one_tier(raw) for raw in raw_tiers]
 
     now_indexes = [index for index, (_, _, is_now) in enumerate(parsed) if is_now]
     if len(now_indexes) > 1:
@@ -124,20 +148,7 @@ def parse_entry_tiers(raw_tiers: list[str] | tuple[str, ...]) -> tuple[EntryTier
     if now_indexes and now_indexes[0] != 0:
         raise ManualIntentError("the now tier must be listed first")
 
-    n_bare = sum(1 for _, alloc, _ in parsed if alloc is None)
-    if n_bare == len(parsed):
-        parsed = [(price, 100.0 / len(parsed), is_now) for price, _, is_now in parsed]
-    elif n_bare:
-        raise ManualIntentError(
-            "either every --tier carries an explicit alloc_pct or none does "
-            f"(equal split) — got a mix in {list(raw_tiers)!r}"
-        )
-    else:
-        alloc_sum = sum(alloc for _, alloc, _ in parsed if alloc is not None)
-        if abs(alloc_sum - 100.0) > _PCT_SUM_TOL:
-            raise ManualIntentError(
-                f"--tier allocations must sum to 100, got {alloc_sum:g} — no silent rescaling"
-            )
+    parsed = _resolve_tier_allocations(parsed, raw_tiers)
 
     prices = [price for price, _, _ in parsed]
     if len(set(prices)) != len(prices):
@@ -157,6 +168,33 @@ def parse_entry_tiers(raw_tiers: list[str] | tuple[str, ...]) -> tuple[EntryTier
     )
 
 
+def _parse_one_tp(raw: str, *, index: int, blend: float, risk: float) -> TpTrancheSpec:
+    """Parse one ``price:pct`` / ``<N>R:pct`` value into a tranche.
+
+    Both forms compile to an absolute price plus an ``r_multiple`` label
+    anchored on the planned blend entry (one R is ``blend - stop``)."""
+    parts = raw.split(":")
+    if len(parts) != 2:
+        raise ManualIntentError(f"cannot parse --tp: {raw!r} (expected price:pct or <N>R:pct)")
+    level_raw, pct_raw = parts
+    pct = _parse_float(pct_raw, what=f"--tp tranche_pct in {raw!r}")
+    if pct <= 0:
+        raise ManualIntentError(f"--tp tranche_pct must be positive, got {raw!r}")
+    if level_raw and level_raw[-1] in ("R", "r"):
+        r_multiple = _parse_float(level_raw[:-1], what=f"--tp R-multiple in {raw!r}")
+        if r_multiple <= 0:
+            raise ManualIntentError(f"--tp R-multiple must be positive, got {raw!r}")
+        price = blend + r_multiple * risk
+    else:
+        price = _parse_float(level_raw, what=f"--tp price in {raw!r}")
+        if price <= blend:
+            raise ManualIntentError(
+                f"--tp price must be above the planned blend entry {blend:g}, got {raw!r}"
+            )
+        r_multiple = (price - blend) / risk
+    return TpTrancheSpec(price=price, tranche_pct=pct, r_multiple=r_multiple, tag=f"TP{index + 1}")
+
+
 def parse_tp_tranches(
     raw_tps: list[str] | tuple[str, ...], *, blend: float, stop: float
 ) -> tuple[TpTrancheSpec, ...]:
@@ -168,30 +206,9 @@ def parse_tp_tranches(
     ``blend - stop``. Forms can be mixed across tranches.
     """
     risk = blend - stop
-    tranches: list[TpTrancheSpec] = []
-    for index, raw in enumerate(raw_tps):
-        parts = raw.split(":")
-        if len(parts) != 2:
-            raise ManualIntentError(f"cannot parse --tp: {raw!r} (expected price:pct or <N>R:pct)")
-        level_raw, pct_raw = parts
-        pct = _parse_float(pct_raw, what=f"--tp tranche_pct in {raw!r}")
-        if pct <= 0:
-            raise ManualIntentError(f"--tp tranche_pct must be positive, got {raw!r}")
-        if level_raw and level_raw[-1] in ("R", "r"):
-            r_multiple = _parse_float(level_raw[:-1], what=f"--tp R-multiple in {raw!r}")
-            if r_multiple <= 0:
-                raise ManualIntentError(f"--tp R-multiple must be positive, got {raw!r}")
-            price = blend + r_multiple * risk
-        else:
-            price = _parse_float(level_raw, what=f"--tp price in {raw!r}")
-            if price <= blend:
-                raise ManualIntentError(
-                    f"--tp price must be above the planned blend entry {blend:g}, got {raw!r}"
-                )
-            r_multiple = (price - blend) / risk
-        tranches.append(
-            TpTrancheSpec(price=price, tranche_pct=pct, r_multiple=r_multiple, tag=f"TP{index + 1}")
-        )
+    tranches = [
+        _parse_one_tp(raw, index=index, blend=blend, risk=risk) for index, raw in enumerate(raw_tps)
+    ]
 
     pct_sum = sum(t.tranche_pct for t in tranches)
     if pct_sum - 100.0 > _PCT_SUM_TOL:

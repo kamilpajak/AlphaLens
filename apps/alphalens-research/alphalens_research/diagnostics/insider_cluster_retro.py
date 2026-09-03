@@ -277,6 +277,29 @@ def accession_urls(accession: str, ciks: list[str | None]) -> list[str]:
     return urls
 
 
+def _read_acceptance_cache(
+    cache: Path, fallback_ciks: list[str | None] | None
+) -> tuple[bool, dt.datetime | None]:
+    """``(hit, value)`` from a prior fetch's cache file.
+
+    A cached miss caused by a missing Archives key ("NoSuchKey") counts as a
+    MISS once fallback CIKs are supplied and not yet tried — that one shape is
+    worth a retry; every other cached payload is honoured verbatim."""
+    if not cache.exists():
+        return False, None
+    payload = json.loads(cache.read_text())
+    v = payload.get("acceptance")
+    retryable = (
+        v is None
+        and bool(fallback_ciks)
+        and "NoSuchKey" in (payload.get("error") or "")
+        and not payload.get("fallback_tried")
+    )
+    if retryable:
+        return False, None
+    return True, dt.datetime.strptime(v, "%Y%m%d%H%M%S") if v else None
+
+
 def fetch_acceptance(
     accession: str,
     cik: str,
@@ -294,17 +317,9 @@ def fetch_acceptance(
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache = cache_dir / f"{accession}.json"
-    if cache.exists():
-        payload = json.loads(cache.read_text())
-        v = payload.get("acceptance")
-        retryable = (
-            v is None
-            and bool(fallback_ciks)
-            and "NoSuchKey" in (payload.get("error") or "")
-            and not payload.get("fallback_tried")
-        )
-        if not retryable:
-            return dt.datetime.strptime(v, "%Y%m%d%H%M%S") if v else None
+    hit, cached = _read_acceptance_cache(cache, fallback_ciks)
+    if hit:
+        return cached
     last_err = None
     for url in accession_urls(accession, [cik, *(fallback_ciks or [])]):
         try:

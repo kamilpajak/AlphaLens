@@ -310,46 +310,62 @@ def _lens_realized_r(
         mult = lens.stop_atr_mult if lens.stop_atr_mult is not None else _DEFAULT_STOP_ATR_MULT
         return realized_r_fill_anchored(trade_setup, bars, stop_atr_mult=mult)
     if lens.kind == "atr_bracket":
-        # DELIBERATELY NOT the "X if X is not None else _DEFAULT_X" pattern the
-        # other three params use (issue #1114). A default here would let a lens
-        # measure an anchor nobody chose, which is the exact defect: the lens
-        # replayed the realised-fill anchor while the live rail placed against
-        # the planned blend, and nothing said so.
-        if lens.anchor_mode is None:
-            raise ValueError(f"atr_bracket lens {lens.lens_id!r} must declare an anchor_mode")
-        return replay_ladder_atr_bracket(
-            trade_setup,
-            bars,
-            anchor=lens.anchor_mode,
-            stop_atr_mult=(
-                lens.stop_atr_mult
-                if lens.stop_atr_mult is not None
-                else _DEFAULT_BRACKET_STOP_ATR_MULT
-            ),
-            tp_atr_mult=(
-                lens.tp_atr_mult if lens.tp_atr_mult is not None else _DEFAULT_BRACKET_TP_ATR_MULT
-            ),
-            tp_floor_frac=(
-                lens.tp_floor_frac
-                if lens.tp_floor_frac is not None
-                else _DEFAULT_BRACKET_TP_FLOOR_FRAC
-            ),
-            ceiling_price=ceiling_from_52w_high(trade_setup, pct_off_52w_high),
-        )
+        return _replay_atr_bracket(lens, trade_setup, bars, pct_off_52w_high=pct_off_52w_high)
     if lens.kind == "breakeven":
-        if lens.entry_ttl_sessions is not None and entry_expiry_ms is None:
-            return None  # a TTL lens without a cutoff cannot be replayed honestly
-        # MFE-triggered break-even / trailing. A missing trigger reduces to a static
-        # disaster-stop walk (mfe_trigger_r=inf never arms it -> baseline parity).
-        trigger = lens.mfe_trigger_r if lens.mfe_trigger_r is not None else float("inf")
-        return replay_ladder_breakeven(
-            trade_setup,
-            bars,
-            mfe_trigger_r=trigger,
-            trail_frac=lens.trail_frac,
-            entry_expiry_ms=entry_expiry_ms if lens.entry_ttl_sessions is not None else None,
-        )
+        return _replay_breakeven(lens, trade_setup, bars, entry_expiry_ms=entry_expiry_ms)
     raise ValueError(f"unknown exit-lens kind: {lens.kind!r}")
+
+
+def _replay_atr_bracket(
+    lens: BreakevenLens,
+    trade_setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    pct_off_52w_high: float | None,
+) -> float | None:
+    # DELIBERATELY NOT the "X if X is not None else _DEFAULT_X" pattern the
+    # other three params use (issue #1114). A default here would let a lens
+    # measure an anchor nobody chose, which is the exact defect: the lens
+    # replayed the realised-fill anchor while the live rail placed against
+    # the planned blend, and nothing said so.
+    if lens.anchor_mode is None:
+        raise ValueError(f"atr_bracket lens {lens.lens_id!r} must declare an anchor_mode")
+    return replay_ladder_atr_bracket(
+        trade_setup,
+        bars,
+        anchor=lens.anchor_mode,
+        stop_atr_mult=(
+            lens.stop_atr_mult if lens.stop_atr_mult is not None else _DEFAULT_BRACKET_STOP_ATR_MULT
+        ),
+        tp_atr_mult=(
+            lens.tp_atr_mult if lens.tp_atr_mult is not None else _DEFAULT_BRACKET_TP_ATR_MULT
+        ),
+        tp_floor_frac=(
+            lens.tp_floor_frac if lens.tp_floor_frac is not None else _DEFAULT_BRACKET_TP_FLOOR_FRAC
+        ),
+        ceiling_price=ceiling_from_52w_high(trade_setup, pct_off_52w_high),
+    )
+
+
+def _replay_breakeven(
+    lens: BreakevenLens,
+    trade_setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    entry_expiry_ms: int | None,
+) -> float | None:
+    if lens.entry_ttl_sessions is not None and entry_expiry_ms is None:
+        return None  # a TTL lens without a cutoff cannot be replayed honestly
+    # MFE-triggered break-even / trailing. A missing trigger reduces to a static
+    # disaster-stop walk (mfe_trigger_r=inf never arms it -> baseline parity).
+    trigger = lens.mfe_trigger_r if lens.mfe_trigger_r is not None else float("inf")
+    return replay_ladder_breakeven(
+        trade_setup,
+        bars,
+        mfe_trigger_r=trigger,
+        trail_frac=lens.trail_frac,
+        entry_expiry_ms=entry_expiry_ms if lens.entry_ttl_sessions is not None else None,
+    )
 
 
 def breakeven_grid(
