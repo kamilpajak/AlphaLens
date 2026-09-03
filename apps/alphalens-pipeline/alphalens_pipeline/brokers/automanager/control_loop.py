@@ -995,16 +995,24 @@ def _fold_round_trip_closures_since_latest_plan(
             else:
                 generation_open.discard(uic)
             continue
-        if uic not in generation_open:
-            continue
-        if kind == "stop_filled" and not line.get("partial"):
-            ref = line.get("ref")
-            closures.setdefault(uic, set()).add(
-                _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
-            )
-        elif kind == _TRANCHE_FIRED_KIND and line.get("position_closed"):
-            closures.setdefault(uic, set()).add(None)
+        if uic in generation_open:
+            _fold_closure_evidence(line, kind, uic, closures)
     return {u: frozenset(s) for u, s in closures.items()}
+
+
+def _fold_closure_evidence(
+    line: Mapping[str, Any], kind: Any, uic: int, closures: dict[int, set[str | None]]
+) -> None:
+    """Fold one open-generation line's closure evidence (in place): a full
+    ``stop_filled`` adds its parsed pick key (or ``None`` for a classic
+    bracket ref); a position-closing ``tranche_fired`` adds ``None``."""
+    if kind == "stop_filled" and not line.get("partial"):
+        ref = line.get("ref")
+        closures.setdefault(uic, set()).add(
+            _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
+        )
+    elif kind == _TRANCHE_FIRED_KIND and line.get("position_closed"):
+        closures.setdefault(uic, set()).add(None)
 
 
 def _build_managed_exits(
@@ -1460,28 +1468,8 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     the tranche ladder and fired markers come from the SEPARATE standalone-stop
     journal, never the submissions journal — a signature carrying an unused
     param would be misleading, not merely symmetric."""
-    if not _live_market_exits_enabled() or not _live_exits_orders_allowed():
-        # While disabled the gate is the only code in this pass that runs, so
-        # it owns releasing the "exits" scope — otherwise toggling the feature
-        # off freezes the scope on its last uics (under a non-trailing policy
-        # nothing else writes it) and the shared subscription streams them
-        # forever.
-        _release_feed_scope(deps, _FEED_SCOPE_EXITS)
-        return
-    broker = deps.broker
-    if not isinstance(broker, LiveExitBroker):
-        # Structurally impossible after build_default_deps (its boot gate refuses
-        # such a broker when the flag is on) — reachable only for directly
-        # composed deps, i.e. tests. Skip + alert, NEVER an AttributeError: the
-        # try below catches only BrokerError, so an AttributeError would escape
-        # and starve the protection pass that follows in the tick (#1141).
-        if deps.alert_throttled(
-            f"live-exits: broker {getattr(broker, 'name', '?')!r} lacks the "
-            "live-exit capability set (LiveExitBroker) — pass skipped",
-            "live-exits-capability",
-        ):
-            report.alerts += 1
-        _release_feed_scope(deps, _FEED_SCOPE_EXITS)
+    broker = _live_exits_broker_or_none(deps, report)
+    if broker is None:
         return
     try:
         long_positions = broker.get_long_positions()
@@ -1535,31 +1523,67 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     if fired:
         report.exits_placed += len(fired)
         report.actions.append(("live-exits", f"fired={len(fired)}"))
-        # #1219: exits announce themselves — ONE throttled alert per fired
-        # tranche, rendered HERE (not in the engine, which stays port-free and
-        # knows no tickers). The (uic, tag) key lets a repeat within the
-        # throttle window dedup while a distinct tranche still notifies.
-        for tranche in fired:
-            ticker = uic_to_instrument.get(tranche.uic, (f"uic {tranche.uic}", None))[0]
-            order_text = f" (order {tranche.sell_order_id})" if tranche.sell_order_id else ""
-            if deps.alert_throttled(
-                f"exit: {ticker} tranche {tp_label_from_tag(tranche.tag)} sold "
-                f"{tranche.qty:g} shares{order_text}",
-                f"tranche-fired:{tranche.uic}:{tranche.tag}",
-            ):
-                report.alerts += 1
-            if tranche.position_closed:
-                # #1198 option B: a TP exit that closed the position produces
-                # no stop fill (the SL is CANCELLED), so the sibling-watch
-                # retire hooks HERE. journal_lines is this tick's snapshot —
-                # the plan for a just-closed position cannot have been written
-                # after it.
-                _retire_sibling_watches(
-                    deps,
-                    _fold_governing_plan_pick_keys(journal_lines).get(tranche.uic),
-                    report,
-                    trigger=f"tranche {tp_label_from_tag(tranche.tag)} closed the position",
-                )
+        _announce_fired_tranches(deps, fired, uic_to_instrument, journal_lines, report)
+
+
+def _live_exits_broker_or_none(deps: LoopDeps, report: TickReport) -> LiveExitBroker | None:
+    """The live-exits pass's gate: ``None`` when the feature/orders gates are
+    closed or the broker lacks the capability set — releasing the "exits" feed
+    scope either way, because while the pass is off this gate is the only code
+    in it that runs (a skipped release would stream the last uics forever)."""
+    if not _live_market_exits_enabled() or not _live_exits_orders_allowed():
+        _release_feed_scope(deps, _FEED_SCOPE_EXITS)
+        return None
+    broker = deps.broker
+    if not isinstance(broker, LiveExitBroker):
+        # Structurally impossible after build_default_deps (its boot gate refuses
+        # such a broker when the flag is on) — reachable only for directly
+        # composed deps, i.e. tests. Skip + alert, NEVER an AttributeError: the
+        # caller's try catches only BrokerError, so an AttributeError would escape
+        # and starve the protection pass that follows in the tick (#1141).
+        if deps.alert_throttled(
+            f"live-exits: broker {getattr(broker, 'name', '?')!r} lacks the "
+            "live-exit capability set (LiveExitBroker) — pass skipped",
+            "live-exits-capability",
+        ):
+            report.alerts += 1
+        _release_feed_scope(deps, _FEED_SCOPE_EXITS)
+        return None
+    return broker
+
+
+def _announce_fired_tranches(
+    deps: LoopDeps,
+    fired: Sequence[Any],
+    uic_to_instrument: Mapping[int, tuple[str, str | None]],
+    journal_lines: Sequence[Mapping[str, Any]],
+    report: TickReport,
+) -> None:
+    """#1219: exits announce themselves — ONE throttled alert per fired
+    tranche, rendered HERE (not in the engine, which stays port-free and
+    knows no tickers). The (uic, tag) key lets a repeat within the throttle
+    window dedup while a distinct tranche still notifies."""
+    for tranche in fired:
+        ticker = uic_to_instrument.get(tranche.uic, (f"uic {tranche.uic}", None))[0]
+        order_text = f" (order {tranche.sell_order_id})" if tranche.sell_order_id else ""
+        if deps.alert_throttled(
+            f"exit: {ticker} tranche {tp_label_from_tag(tranche.tag)} sold "
+            f"{tranche.qty:g} shares{order_text}",
+            f"tranche-fired:{tranche.uic}:{tranche.tag}",
+        ):
+            report.alerts += 1
+        if tranche.position_closed:
+            # #1198 option B: a TP exit that closed the position produces
+            # no stop fill (the SL is CANCELLED), so the sibling-watch
+            # retire hooks HERE. journal_lines is this tick's snapshot —
+            # the plan for a just-closed position cannot have been written
+            # after it.
+            _retire_sibling_watches(
+                deps,
+                _fold_governing_plan_pick_keys(journal_lines).get(tranche.uic),
+                report,
+                trigger=f"tranche {tp_label_from_tag(tranche.tag)} closed the position",
+            )
 
 
 def _fetch_protection_peaks(
@@ -3193,20 +3217,7 @@ def _arm_native_trail(
     # the watch while a real buy order still rests at the broker, and
     # KIND_CANCELLED is outside _RESTING_BEARING_TERMINALS so nothing would
     # cancel-then-verify it. Only a FRESH arm is refused.
-    region_note = _inside_exit_region_note(record, d_bps, reference, trough, qty)
-    refusal = (
-        _ArmRefusal(region_note, _ARM_REFUSAL_INSIDE_EXIT_REGION, terminal=True)
-        if region_note is not None
-        # The whole-position pricing the gate above just did is only
-        # conservative while the exit side sells the whole position in one
-        # tranche. Checked, never assumed (issue #1112 round 2, point 2).
-        else _exit_plan_shape_refusal(record, qty)
-    )
-    if refusal is None:
-        # Both gates above are scoped to an APPLIED geometry target. Under a
-        # no-geometry exit policy (breakeven_trail, since #1183) the placed
-        # exit is the brief's own ladder — priced by its own gate instead.
-        refusal = _brief_plan_arm_refusal(record, d_bps, reference, trough)
+    refusal = _resolve_arm_refusal(record, d_bps, reference, trough, qty)
     if refusal is not None:
         if lookup.read_ok and refusal.terminal:
             _terminal_refuse_arm(
@@ -3257,6 +3268,27 @@ def _arm_native_trail(
         geo.order_price,
         geo.ceiling_price,
     )
+
+
+def _resolve_arm_refusal(
+    record: Mapping[str, Any], d_bps: int, reference: float, trough: float, qty: float
+) -> _ArmRefusal | None:
+    """The fresh-arm refusal lattice, in gate order: inside-exit-region first;
+    then the exit-plan shape check (the whole-position pricing the region gate
+    just did is only conservative while the exit side sells the whole position
+    in one tranche — checked, never assumed, issue #1112 round 2, point 2);
+    both are scoped to an APPLIED geometry target, so under a no-geometry exit
+    policy (breakeven_trail, since #1183) the brief's own ladder is priced by
+    its own gate last. ``None`` means the arm may proceed."""
+    region_note = _inside_exit_region_note(record, d_bps, reference, trough, qty)
+    refusal = (
+        _ArmRefusal(region_note, _ARM_REFUSAL_INSIDE_EXIT_REGION, terminal=True)
+        if region_note is not None
+        else _exit_plan_shape_refusal(record, qty)
+    )
+    if refusal is None:
+        refusal = _brief_plan_arm_refusal(record, d_bps, reference, trough)
+    return refusal
 
 
 def _handle_arm_failure(
@@ -3500,21 +3532,7 @@ def _fold_standing_stop_ids(lines: Iterable[Mapping[str, Any]]) -> dict[int, _St
     for line in lines:
         kind = line.get("kind")
         if kind == "stop_placed":
-            try:
-                uic = int(line["uic"])
-                ts = float(line["ts"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if uic not in latest_ts or ts >= latest_ts[uic]:
-                latest_ts[uic] = ts
-                order_id = line.get("order_id")
-                if isinstance(order_id, str) and order_id:
-                    ref = line.get("ref")
-                    latest[uic] = _StandingStop(
-                        order_id=order_id, ref=ref if isinstance(ref, str) and ref else None
-                    )
-                else:
-                    latest[uic] = None
+            _elect_stop_placed(line, latest_ts, latest)
         elif kind == "stop_filled":
             order_id = line.get("order_id")
             if isinstance(order_id, str) and order_id:
@@ -3524,6 +3542,34 @@ def _fold_standing_stop_ids(lines: Iterable[Mapping[str, Any]]) -> dict[int, _St
         for uic, stop in latest.items()
         if stop is not None and stop.order_id not in filled_ids
     }
+
+
+def _elect_stop_placed(
+    line: Mapping[str, Any],
+    latest_ts: dict[int, float],
+    latest: dict[int, _StandingStop | None],
+) -> None:
+    """Fold one ``stop_placed`` line into the latest-wins election (in place).
+
+    A newest record WITHOUT an ``order_id`` still wins the election and yields
+    ``None`` — see :func:`_fold_standing_stop_ids` for why latest-overall (not
+    latest-with-id) is the compactor-stable choice."""
+    try:
+        uic = int(line["uic"])
+        ts = float(line["ts"])
+    except (KeyError, TypeError, ValueError):
+        return
+    if uic in latest_ts and ts < latest_ts[uic]:
+        return
+    latest_ts[uic] = ts
+    order_id = line.get("order_id")
+    if isinstance(order_id, str) and order_id:
+        ref = line.get("ref")
+        latest[uic] = _StandingStop(
+            order_id=order_id, ref=ref if isinstance(ref, str) and ref else None
+        )
+    else:
+        latest[uic] = None
 
 
 def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
@@ -3549,8 +3595,6 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
     ``_entry_order_filled_qty`` helpers are named for their entry-trail origin
     but operate on ANY order id — deliberate reuse of the battle-tested logic
     over a renamed duplicate."""
-    from broker_contract.contract import OrderStatus
-
     broker = deps.broker
     if not isinstance(broker, SupportsOrderResolution):
         return
@@ -3560,54 +3604,69 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
         return
     plan_pick_keys = _fold_governing_plan_pick_keys(lines)
     for uic in sorted(standing):
-        stop = standing[uic]
-        if not _armed_order_is_gone(_read_entry_order(broker, stop.order_id)):
-            continue
-        if not _acquire_outcome_audit_budget(
-            deps, broker, stop.order_id, context="stop-fill reconcile"
-        ):
-            continue
-        outcome = _resolve_entry_order_outcome(broker, stop.order_id)
-        filled_qty = _entry_order_filled_qty(outcome)
-        if filled_qty is None:
-            continue
-        avg_price = outcome.avg_fill_price if outcome is not None else None
-        # PARTIALLY_FILLED terminal = the remainder was cancelled with residual
-        # exposure still on the book — announce the fill, never treat it as a
-        # round trip (zen MEDIUM on #1222). FILLED = the whole resting stop
-        # (protection keeps SL == owned) executed: the position is closed.
-        partial = outcome is not None and outcome.status is not OrderStatus.FILLED
-        _journal_stop_filled(
-            uic,
-            order_id=stop.order_id,
-            qty=filled_qty,
-            avg_price=avg_price,
-            ref=stop.ref,
-            partial=partial,
-        )
-        # The stop ref is `<entry_crid>-stop-<gen>` (position_manager._exit_stop_ref)
-        # — no E{n}/TP{n} shape to render, so the operator label is the ticker
-        # prefix (labels doctrine: never a raw machine ref in message text).
-        label = stop.ref.split("-", 1)[0] if stop.ref else f"uic {uic}"
-        price_text = f" @ {avg_price:g}" if avg_price is not None else ""
-        if deps.alert_throttled(
-            f"exit: {label} stop {stop.order_id} filled {filled_qty:g} shares{price_text}",
-            f"stop-fill:{stop.order_id}",
-        ):
-            report.alerts += 1
-        if partial:
-            continue
-        # #1198 option B: the round trip is over — retire the pick's still-open
-        # sibling entry watches so their virtual gross reservation and watch
-        # slot free NOW instead of at the entry TTL. The restart-safe sweep
-        # (_sweep_owed_sibling_retires) re-derives this from the journal, so a
-        # crash between the stop_filled write and this call self-heals.
-        # Ref first: the stop ref is stamped from the exact PlannedExit that
-        # owned THIS stop (generation-exact); the tranche_plan fold is uic-keyed
-        # last-wins and could in principle point at a newer pick on a reused
-        # uic. The fold is the fallback for a ref-less legacy record.
-        pick_key = _pick_key_from_stop_ref(stop.ref) or plan_pick_keys.get(uic)
-        _retire_sibling_watches(deps, pick_key, report, trigger=f"stop {stop.order_id} filled")
+        _reconcile_one_standing_stop(deps, broker, uic, standing[uic], plan_pick_keys, report)
+
+
+def _reconcile_one_standing_stop(
+    deps: LoopDeps,
+    broker: Any,
+    uic: int,
+    stop: _StandingStop,
+    plan_pick_keys: Mapping[int, str | None],
+    report: TickReport,
+) -> None:
+    """Reconcile ONE journaled standing stop: gone-from-book -> budgeted
+    resolution -> on FILLED, the terminal ``stop_filled`` line first, then one
+    throttled alert, then the #1198 sibling retire (full fills only)."""
+    from broker_contract.contract import OrderStatus
+
+    if not _armed_order_is_gone(_read_entry_order(broker, stop.order_id)):
+        return
+    if not _acquire_outcome_audit_budget(
+        deps, broker, stop.order_id, context="stop-fill reconcile"
+    ):
+        return
+    outcome = _resolve_entry_order_outcome(broker, stop.order_id)
+    filled_qty = _entry_order_filled_qty(outcome)
+    if filled_qty is None:
+        return
+    avg_price = outcome.avg_fill_price if outcome is not None else None
+    # PARTIALLY_FILLED terminal = the remainder was cancelled with residual
+    # exposure still on the book — announce the fill, never treat it as a
+    # round trip (zen MEDIUM on #1222). FILLED = the whole resting stop
+    # (protection keeps SL == owned) executed: the position is closed.
+    partial = outcome is not None and outcome.status is not OrderStatus.FILLED
+    _journal_stop_filled(
+        uic,
+        order_id=stop.order_id,
+        qty=filled_qty,
+        avg_price=avg_price,
+        ref=stop.ref,
+        partial=partial,
+    )
+    # The stop ref is `<entry_crid>-stop-<gen>` (position_manager._exit_stop_ref)
+    # — no E{n}/TP{n} shape to render, so the operator label is the ticker
+    # prefix (labels doctrine: never a raw machine ref in message text).
+    label = stop.ref.split("-", 1)[0] if stop.ref else f"uic {uic}"
+    price_text = f" @ {avg_price:g}" if avg_price is not None else ""
+    if deps.alert_throttled(
+        f"exit: {label} stop {stop.order_id} filled {filled_qty:g} shares{price_text}",
+        f"stop-fill:{stop.order_id}",
+    ):
+        report.alerts += 1
+    if partial:
+        return
+    # #1198 option B: the round trip is over — retire the pick's still-open
+    # sibling entry watches so their virtual gross reservation and watch
+    # slot free NOW instead of at the entry TTL. The restart-safe sweep
+    # (_sweep_owed_sibling_retires) re-derives this from the journal, so a
+    # crash between the stop_filled write and this call self-heals.
+    # Ref first: the stop ref is stamped from the exact PlannedExit that
+    # owned THIS stop (generation-exact); the tranche_plan fold is uic-keyed
+    # last-wins and could in principle point at a newer pick on a reused
+    # uic. The fold is the fallback for a ref-less legacy record.
+    pick_key = _pick_key_from_stop_ref(stop.ref) or plan_pick_keys.get(uic)
+    _retire_sibling_watches(deps, pick_key, report, trigger=f"stop {stop.order_id} filled")
 
 
 def _sweep_owed_sibling_retires(deps: LoopDeps, report: TickReport) -> None:
@@ -3635,8 +3694,15 @@ def _sweep_owed_sibling_retires(deps: LoopDeps, report: TickReport) -> None:
     pick that closed (both folds consume the same plan lines in the same
     order), so the last-wins map becomes correct once scoped. This is the
     same semantics the boot compactor already applies to these lines."""
+    owed = _derive_owed_sibling_retires(list(_iter_standalone_stop_journal()))
+    for pick_key in sorted(owed):
+        _retire_sibling_watches(deps, pick_key, report, trigger=owed[pick_key])
+
+
+def _derive_owed_sibling_retires(lines: list[Mapping[str, Any]]) -> dict[str, str]:
+    """Pure derivation of the owed pick keys -> trigger text (see the sweep's
+    docstring for the ref-first vs generation-scoped attribution rules)."""
     owed: dict[str, str] = {}
-    lines = list(_iter_standalone_stop_journal())
     for line in lines:
         if line.get("kind") == "stop_filled" and not line.get("partial"):
             ref = line.get("ref")
@@ -3651,8 +3717,7 @@ def _sweep_owed_sibling_retires(deps: LoopDeps, report: TickReport) -> None:
             pick_key = plan_pick_keys.get(uic)
             if pick_key is not None:
                 owed.setdefault(pick_key, "position-closing tranche on record")
-    for pick_key in sorted(owed):
-        _retire_sibling_watches(deps, pick_key, report, trigger=owed[pick_key])
+    return owed
 
 
 def _pick_key_from_stop_ref(ref: str | None) -> str | None:
@@ -8372,7 +8437,11 @@ def _handle_now_tranche(
         _release_scope()
         return _NowOutcome.REFUSED_NOW
     duration = "ioc" if _now_ioc_supported(broker, instrument) else "day"
-    now_plan: SetupPlan = replace(plan, entry_tiers=(replace(now_tier, limit_price=submitted_cap),))
+    # cast, not an annotation: replace() preserves its input type at runtime,
+    # but static analyzers type it as a bare DataclassInstance protocol.
+    now_plan = cast(
+        "SetupPlan", replace(plan, entry_tiers=(replace(now_tier, limit_price=submitted_cap),))
+    )
     placement = classify(now_plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:
         logger.warning("place_pick %s: now tranche sized to zero shares", ticker)
