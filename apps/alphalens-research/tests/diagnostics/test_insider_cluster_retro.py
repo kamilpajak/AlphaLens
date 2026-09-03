@@ -111,8 +111,8 @@ class TestDetectClusters(unittest.TestCase):
         legs = self._legs(
             [
                 _leg("AAA", "1", D(2020, 3, 2)),
-                _leg("AAA", "2", D(2020, 3, 5)),  # +3 sessions (outside 2-in-2)
-                _leg("AAA", "3", D(2020, 3, 9)),  # +5 sessions
+                _leg("AAA", "2", D(2020, 3, 5)),  # +3 sessions from leg 1
+                _leg("AAA", "3", D(2020, 3, 9)),  # +5 sessions from leg 1, +2 from leg 2
             ]
         )
         two_in_two = icr.detect_clusters(
@@ -121,11 +121,12 @@ class TestDetectClusters(unittest.TestCase):
         three_in_five = icr.detect_clusters(
             legs, window_sessions=5, min_insiders=3, min_usd=100_000.0, dedup_sessions=20
         )
-        self.assertTrue(two_in_two.empty)
+        # legs 2 and 3 are within 2 sessions -> one 2-in-2 event completing on 03-09 (2 insiders)
+        self.assertEqual(len(two_in_two), 1)
+        self.assertEqual(two_in_two.iloc[0].n_insiders, 2)
+        # the 3-in-5 definition sees all three insiders and completes at the 3rd filing
         self.assertEqual(len(three_in_five), 1)
-        self.assertEqual(
-            three_in_five.iloc[0].event_date, D(2020, 3, 9)
-        )  # completion = 3rd insider
+        self.assertEqual(three_in_five.iloc[0].event_date, D(2020, 3, 9))
         self.assertEqual(three_in_five.iloc[0].n_insiders, 3)
 
     def test_dedup_keeps_first_event_per_ticker_per_window(self):
