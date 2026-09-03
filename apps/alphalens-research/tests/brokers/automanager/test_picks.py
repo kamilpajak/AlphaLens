@@ -41,7 +41,7 @@ from broker_contract.trade_intent.schema import (
 )
 
 
-def _intent(ticker: str = "KO", brief_date: str = "2026-07-20") -> TradeIntent:
+def _intent(ticker: str = "KO", trade_date: str = "2026-07-20") -> TradeIntent:
     spec = TradeSpec(
         entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=50.0, tag="T1"),),
         disaster_stop=90.0,
@@ -53,10 +53,10 @@ def _intent(ticker: str = "KO", brief_date: str = "2026-07-20") -> TradeIntent:
         reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=2.0),),
     )
     return TradeIntent(
-        intent_id=f"{ticker}:{brief_date}",
+        intent_id=f"{ticker}:{trade_date}",
         instrument=InstrumentHint(ticker=ticker.upper(), mic="XNYS"),
         spec=spec,
-        meta=IntentMeta(armed_ts=f"{brief_date}T14:00:00+00:00", brief_date=brief_date),
+        meta=IntentMeta(armed_ts=f"{trade_date}T14:00:00+00:00", trade_date=trade_date),
         exit=exit_spec,
     )
 
@@ -162,7 +162,7 @@ class MarkDisarmedTest(unittest.TestCase):
         intents = list(iter_picks(path=self.path))
         self.assertEqual([i.instrument.ticker for i in intents], ["KO"])
 
-    def test_disarm_scoped_to_its_brief_date(self) -> None:
+    def test_disarm_scoped_to_its_trade_date(self) -> None:
         # The exact production case: IBRX armed under 2026-08-25 AND 2026-08-26;
         # disarming one date must not retire the other.
         arm_pick(_intent("IBRX", "2026-08-25"), path=self.path)
@@ -170,7 +170,7 @@ class MarkDisarmedTest(unittest.TestCase):
         mark_disarmed("IBRX", dt.date(2026, 8, 26), path=self.path)
         intents = list(iter_picks(path=self.path))
         self.assertEqual(
-            [(i.instrument.ticker, i.meta.brief_date) for i in intents],
+            [(i.instrument.ticker, i.meta.trade_date) for i in intents],
             [("IBRX", "2026-08-25")],
         )
 
@@ -191,7 +191,7 @@ class IterPicksTest(unittest.TestCase):
         arm_pick(_intent("MU", "2026-07-21"), path=self.path)
         intents = list(iter_picks(path=self.path))
         self.assertEqual([i.instrument.ticker for i in intents], ["KO", "MU"])
-        self.assertEqual(intents[0].meta.brief_date, "2026-07-20")
+        self.assertEqual(intents[0].meta.trade_date, "2026-07-20")
         self.assertIsInstance(intents[0], TradeIntent)
         self.assertEqual(intents[0].spec.disaster_stop, 90.0)
         self.assertEqual(intents[0].exit.initial_levels.stop, 90.0)
@@ -259,7 +259,7 @@ class IterPicksTest(unittest.TestCase):
         intents = list(iter_picks(path=self.path))
         self.assertEqual([i.instrument.ticker for i in intents], ["KO"])
 
-    def test_refusal_scoped_to_its_brief_date(self) -> None:
+    def test_refusal_scoped_to_its_trade_date(self) -> None:
         # A refusal for one brief date must not retire the same ticker armed for
         # a different brief date — the queue key is (ticker, date).
         arm_pick(_intent("KO", "2026-07-28"), path=self.path)
@@ -267,7 +267,7 @@ class IterPicksTest(unittest.TestCase):
         mark_refused("KO", dt.date(2026, 7, 28), "portfolio cap exceeded", path=self.path)
         intents = list(iter_picks(path=self.path))
         self.assertEqual(
-            [(i.instrument.ticker, i.meta.brief_date) for i in intents], [("KO", "2026-07-29")]
+            [(i.instrument.ticker, i.meta.trade_date) for i in intents], [("KO", "2026-07-29")]
         )
 
     def test_iter_skips_malformed_and_undated_lines(self) -> None:
@@ -298,7 +298,7 @@ class IterPicksTest(unittest.TestCase):
                         },
                         "meta": {
                             "armed_ts": "2026-07-20T00:00:00+00:00",
-                            "brief_date": "2026-07-20",
+                            "trade_date": "2026-07-20",
                             "schema_version": "1",
                         },
                         "exit": None,
@@ -418,10 +418,10 @@ class ReadPickFoldTest(unittest.TestCase):
         self.assertEqual(by_ticker["SMG"].status, STATUS_DISARMED)
         self.assertEqual(by_ticker["SMG"].record["note"], "retired to free it")
 
-    def test_brief_date_is_a_date_and_ticker_is_upper(self) -> None:
+    def test_trade_date_is_a_date_and_ticker_is_upper(self) -> None:
         arm_pick(_intent("ko", "2026-07-20"), path=self.path)
         record = read_pick_fold(path=self.path).records[0]
-        self.assertEqual(record.brief_date, dt.date(2026, 7, 20))
+        self.assertEqual(record.trade_date, dt.date(2026, 7, 20))
         self.assertEqual(record.ticker, "KO")
 
     def test_malformed_lines_are_counted_not_fatal(self) -> None:
@@ -442,7 +442,7 @@ class ReadPickFoldTest(unittest.TestCase):
 
 
 class JoinHelperTest(unittest.TestCase):
-    """The (ticker, brief_date) join the drain places on.
+    """The (ticker, trade_date) join the drain places on.
 
     Moved out of ``control_loop`` so the CLI view and the drain cannot drift
     apart — a second implementation of this join would be its own defect.
@@ -451,32 +451,39 @@ class JoinHelperTest(unittest.TestCase):
     def test_pick_key_is_upper_ticker_and_string_date(self) -> None:
         self.assertEqual(pick_key(_intent("ko", "2026-07-20")), ("KO", "2026-07-20"))
 
-    def test_submitted_pick_keys_collects_ticker_and_brief_date(self) -> None:
+    def test_submitted_pick_keys_collects_ticker_and_trade_date(self) -> None:
         records = [
-            {"ticker": "ko", "brief_date": "2026-07-20"},
-            {"ticker": "MU", "brief_date": "2026-07-21"},
+            {"ticker": "ko", "trade_date": "2026-07-20"},
+            {"ticker": "MU", "trade_date": "2026-07-21"},
         ]
         self.assertEqual(submitted_pick_keys(records), {("KO", "2026-07-20"), ("MU", "2026-07-21")})
 
     def test_submitted_pick_keys_skips_records_missing_either_half(self) -> None:
-        records = [{"ticker": "KO"}, {"brief_date": "2026-07-20"}, {}]
+        records = [{"ticker": "KO"}, {"trade_date": "2026-07-20"}, {}]
         self.assertEqual(submitted_pick_keys(records), set())
 
     def test_now_tranche_record_does_not_retire_the_pick(self) -> None:
         # #1247: the now half's records must NOT join — otherwise a placed or
         # refused now tranche would strand the pullback siblings forever.
-        records = [{"ticker": "RHI", "brief_date": "2026-09-03", "tranche": "now"}]
+        records = [{"ticker": "RHI", "trade_date": "2026-09-03", "tranche": "now"}]
         self.assertEqual(submitted_pick_keys(records), set())
 
     def test_legacy_records_without_tranche_key_join_exactly_as_before(self) -> None:
         records = [
-            {"ticker": "KO", "brief_date": "2026-07-20"},
-            {"ticker": "RHI", "brief_date": "2026-09-03", "tranche": "now"},
-            {"ticker": "RHI", "brief_date": "2026-09-03", "note": "entry-trail watch opened"},
+            {"ticker": "KO", "trade_date": "2026-07-20"},
+            {"ticker": "RHI", "trade_date": "2026-09-03", "tranche": "now"},
+            {"ticker": "RHI", "trade_date": "2026-09-03", "note": "entry-trail watch opened"},
         ]
         self.assertEqual(
             submitted_pick_keys(records), {("KO", "2026-07-20"), ("RHI", "2026-09-03")}
         )
+
+    def test_submitted_pick_keys_folds_legacy_brief_date_key(self) -> None:
+        # #1252: the journal date key was renamed brief_date -> trade_date, but
+        # data on disk written before the rename still carries the old key
+        # (append-only journals are never rewritten).
+        records = [{"ticker": "KO", "brief_date": "2026-07-20"}]
+        self.assertEqual(submitted_pick_keys(records), {("KO", "2026-07-20")})
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ declared-frame memo §4.5)::
     {
         "execution_config_version": "execution-v3-...",
         "ts": "<UTC ISO-8601>",
-        "brief_date": "YYYY-MM-DD",
+        "trade_date": "YYYY-MM-DD",
         "ticker": "KO",
         "mic": "XNYS",          # the RESOLVED venue (routing decision)
         "uic": "307",           # broker instrument id
@@ -83,7 +83,7 @@ class SizingStamp:
 
 def build_submission_record(
     *,
-    brief_date: str,
+    trade_date: str,
     ticker: str,
     mic: str,
     uic: str,
@@ -113,7 +113,7 @@ def build_submission_record(
     record: dict[str, Any] = {
         "execution_config_version": execution_config_version(),
         "ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
-        "brief_date": brief_date,
+        "trade_date": trade_date,
         "ticker": ticker,
         "mic": mic,
         "uic": uic,

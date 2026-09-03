@@ -32,7 +32,7 @@ from unittest import mock
 from alphalens_pipeline.paper.brief_loader import CandidateBrief
 from typer.testing import CliRunner
 
-_BRIEF_DATE = dt.date(2026, 7, 20)
+_TRADE_DATE = dt.date(2026, 7, 20)
 
 
 def _plannable_trade_setup() -> dict:
@@ -57,7 +57,10 @@ def _candidate(ticker: str = "KO", *, trade_setup: dict | None = "__default__") 
     if trade_setup == "__default__":
         trade_setup = _plannable_trade_setup()
     return CandidateBrief(
-        brief_date=_BRIEF_DATE,
+        # CandidateBrief.brief_date is the thematic brief's OWN date field
+        # (alphalens_pipeline/paper/brief_loader.py) — a different concept
+        # from the broker journal's date key renamed by #1252, out of scope.
+        brief_date=_TRADE_DATE,
         ticker=ticker,
         theme="test-theme",
         verified=True,
@@ -119,7 +122,7 @@ class ArmCommandTest(unittest.TestCase):
         arm.assert_called_once()
         (intent,), _kwargs = arm.call_args
         self.assertEqual(intent.instrument.ticker, "KO")
-        self.assertEqual(intent.meta.brief_date, "2026-07-20")
+        self.assertEqual(intent.meta.trade_date, "2026-07-20")
         self.assertEqual(intent.spec.disaster_stop, 90.0)
         self.assertEqual(len(intent.spec.entry_tiers), 2)
         self.assertIsNotNone(intent.exit)

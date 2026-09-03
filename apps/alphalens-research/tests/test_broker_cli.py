@@ -45,12 +45,15 @@ _TRADE_SETUP = {
     "builder_config_version": "setup-v1-test",
 }
 
-_BRIEF_DATE = dt.date(2026, 7, 16)
+_TRADE_DATE = dt.date(2026, 7, 16)
 
 
 def _candidate(ticker: str = "KO", *, trade_setup: dict | None = None) -> CandidateBrief:
     return CandidateBrief(
-        brief_date=_BRIEF_DATE,
+        # CandidateBrief.brief_date is the thematic brief's OWN date field
+        # (alphalens_pipeline/paper/brief_loader.py) — a different concept
+        # from the broker journal's date key renamed by #1252, out of scope.
+        brief_date=_TRADE_DATE,
         ticker=ticker,
         theme="test-theme",
         verified=True,
@@ -538,7 +541,7 @@ def _verdict(**overrides):
     from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
     fields = {
-        "brief_date": "2026-07-16",
+        "trade_date": "2026-07-16",
         "ticker": "KO",
         "qty": 10.0,
         "entry_order_id": "E-1",

@@ -83,7 +83,7 @@ def place_and_journal(
     stop: float | None,
     tp: float | None,
     ttl: int,
-    brief_date: str,
+    trade_date: str,
     note: str,
     scratch: Path,
     out_name: str,
@@ -115,7 +115,7 @@ def place_and_journal(
     except BrokerError as exc:
         failure_note = f"{note}; placement failed: {exc}"
         record = build_submission_record(
-            brief_date=brief_date,
+            trade_date=trade_date,
             ticker=ticker,
             mic=mic,
             uic=instrument.broker_instrument_id,
@@ -142,7 +142,7 @@ def place_and_journal(
         "ttl": ttl,
     }
     record = build_submission_record(
-        brief_date=brief_date,
+        trade_date=trade_date,
         ticker=ticker,
         mic=mic,
         uic=instrument.broker_instrument_id,

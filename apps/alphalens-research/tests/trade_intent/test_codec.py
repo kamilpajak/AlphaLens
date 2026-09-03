@@ -38,7 +38,7 @@ def _spec() -> TradeSpec:
 
 
 def _meta() -> IntentMeta:
-    return IntentMeta(armed_ts="2026-07-31T12:00:00+00:00", brief_date="2026-07-31")
+    return IntentMeta(armed_ts="2026-07-31T12:00:00+00:00", trade_date="2026-07-31")
 
 
 def _intent_with_reanchor() -> TradeIntent:
@@ -141,7 +141,7 @@ class TestMetaSource(unittest.TestCase):
             spec=_spec(),
             meta=IntentMeta(
                 armed_ts="2026-09-02T12:00:00+00:00",
-                brief_date="2026-09-02",
+                trade_date="2026-09-02",
                 source="manual",
             ),
             exit=None,
@@ -155,6 +155,30 @@ class TestMetaSource(unittest.TestCase):
         del data["meta"]["source"]
         restored = intent_from_jsonable(data)
         self.assertEqual(restored.meta.source, "brief")
+
+
+class TestMetaTradeDateLegacyDecode(unittest.TestCase):
+    """The journal date key rename (#1252): the field is ``IntentMeta.trade_date``,
+    but data on disk written before the rename carries the old ``brief_date``
+    key under ``meta``. Legacy lines decode silently (no unknown-key warning)."""
+
+    def test_legacy_brief_date_key_decodes_silently(self) -> None:
+        data = intent_to_jsonable(_intent_with_reanchor())
+        data["meta"]["brief_date"] = data["meta"].pop("trade_date")
+        with self.assertNoLogs("broker_contract.trade_intent.codec", level="WARNING"):
+            restored = intent_from_jsonable(data)
+        self.assertEqual(restored.meta.trade_date, "2026-07-31")
+
+    def test_round_trip_encodes_trade_date_not_brief_date(self) -> None:
+        data = intent_to_jsonable(_intent_with_reanchor())
+        self.assertIn("trade_date", data["meta"])
+        self.assertNotIn("brief_date", data["meta"])
+
+    def test_trade_date_wins_when_both_keys_present(self) -> None:
+        data = intent_to_jsonable(_intent_with_reanchor())
+        data["meta"]["brief_date"] = "1999-01-01"
+        restored = intent_from_jsonable(data)
+        self.assertEqual(restored.meta.trade_date, "2026-07-31")
 
 
 class TestEntryTierMode(unittest.TestCase):

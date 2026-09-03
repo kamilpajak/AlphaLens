@@ -774,7 +774,7 @@ def _run_placement_drain(deps: LoopDeps, report: TickReport) -> None:
     # CROSS-tick join (an out-of-tick placement is caught by the next tick's
     # fresh read). ``placed_this_tick`` is the WITHIN-tick guard: it starts empty
     # each tick and records every pick we ATTEMPT to place, so two armed lines
-    # with the same (ticker, brief_date) in ONE tick never both drive placement —
+    # with the same (ticker, trade_date) in ONE tick never both drive placement —
     # even when the first attempt returns False (refused / zero-sized / partial-
     # then-failed). Recording the attempt (not just a success) guards the
     # never-double-commit invariant against a retry inside the same tick.
@@ -1821,7 +1821,7 @@ class _EntryWatchRuntime:
     touch_ts: str | None = None
 
 
-def _entry_watch_crid(ticker: str, brief_date: str, tier_index: int) -> str:
+def _entry_watch_crid(ticker: str, trade_date: str, tier_index: int) -> str:
     """Deterministic per-tier watch id in the ``-entry-`` request-id family
     (memo §5 — parallel to the exit ids so entry/exit ids can never collide on
     one uic). DETERMINISTIC, not a uuid: a crash between the journal-first
@@ -1829,7 +1829,7 @@ def _entry_watch_crid(ticker: str, brief_date: str, tier_index: int) -> str:
     next drain, and the fold's latest-watch_open-wins semantics make that
     re-open idempotent (no double reservation) where a fresh uuid would leak a
     second watch."""
-    return f"{ticker}-{brief_date}-entry-t{tier_index}"
+    return f"{ticker}-{trade_date}-entry-t{tier_index}"
 
 
 def _entry_trail_mode_tag(d_bps: int) -> str:
@@ -2000,7 +2000,7 @@ def _open_entry_watches(
     §5, G3 journal-FIRST) and return the count opened.
 
     The shared TTL ``window_end`` is resolved ONCE (memo §5 "one rule":
-    ``advance_trading_sessions(brief_date, DEFAULT_ORDER_TTL_DAYS)`` -> that
+    ``advance_trading_sessions(trade_date, DEFAULT_ORDER_TTL_DAYS)`` -> that
     session's close in UTC, never "+7d from each order"). Each watch_open
     carries BOTH the reservation-critical fields the gross/cash fold values
     (``limit``/``qty``/``fx_rate``) AND the WIRE context the per-tick pass needs
@@ -2018,16 +2018,16 @@ def _open_entry_watches(
     line byte-identical to a pre-stamp watch_open."""
     from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_close_utc
 
-    brief_date = intent.meta.brief_date
+    trade_date = intent.meta.trade_date
     mic = instrument.exchange_mic
     uic = int(instrument.broker_instrument_id)
     ttl_date = advance_trading_sessions(
-        dt.date.fromisoformat(brief_date), DEFAULT_ORDER_TTL_DAYS, exchange=mic
+        dt.date.fromisoformat(trade_date), DEFAULT_ORDER_TTL_DAYS, exchange=mic
     )
     window_end = session_close_utc(ttl_date, exchange=mic).isoformat()
     fx_rate = float(fx.rate) if fx is not None else None
     mode_tag = _entry_trail_mode_tag(d_bps)
-    pick_key = f"{ticker}:{brief_date}"
+    pick_key = f"{ticker}:{trade_date}"
 
     tiers = tuple(plan.entry_tiers)
     opened = 0
@@ -2037,7 +2037,7 @@ def _open_entry_watches(
         next_limit = tiers[index + 1].limit_price if index + 1 < len(tiers) else None
         line: dict[str, Any] = {
             "kind": entry_trails.KIND_WATCH_OPEN,
-            "crid": _entry_watch_crid(ticker, brief_date, tier.tier_index),
+            "crid": _entry_watch_crid(ticker, trade_date, tier.tier_index),
             "limit": float(tier.limit_price),
             "qty": float(tier.qty),
             "d_bps": int(d_bps),
@@ -2130,7 +2130,7 @@ def _route_pick_to_entry_watch(
             # Trade identity (adjudication finding 4): a crash-recovery
             # re-drive re-appends this line — the SAME pick_key keeps the
             # fired-tranche fold from resetting on the re-append.
-            pick_key=f"{ticker}:{intent.meta.brief_date}",
+            pick_key=f"{ticker}:{intent.meta.trade_date}",
             instrument_currency=str(getattr(instrument, "currency", "") or ""),
             sizing_currency=_sizing_currency_of(fx, instrument),
             exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
@@ -2168,7 +2168,7 @@ def _route_pick_to_entry_watch(
         return False
     append_submission_record(
         build_submission_record(
-            brief_date=intent.meta.brief_date,
+            trade_date=intent.meta.trade_date,
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -3738,7 +3738,7 @@ def _pick_key_from_stop_ref(ref: str | None) -> str | None:
     """Recover the colon-form pick key from a stop ref (fallback when the uic
     has no ``tranche_plan`` ``pick_key`` on record).
 
-    The entry-trail stop ref is ``<ticker>-<brief_date>-entry-t<i>-stop-<gen>``
+    The entry-trail stop ref is ``<ticker>-<trade_date>-entry-t<i>-stop-<gen>``
     (``position_manager._exit_stop_ref`` over the watch crid). A classic
     bracket ref has a different shape and returns ``None`` — the caller treats
     that as "no entry-trail siblings exist", which is true by construction."""
@@ -3752,12 +3752,12 @@ def _pick_key_from_stop_ref(ref: str | None) -> str | None:
     ticker, sep3, year = head.rpartition("-")
     if not (sep and sep2 and sep3 and ticker):
         return None
-    brief_date = f"{year}-{month}-{day}"
+    trade_date = f"{year}-{month}-{day}"
     try:
-        dt.date.fromisoformat(brief_date)
+        dt.date.fromisoformat(trade_date)
     except ValueError:
         return None
-    return f"{ticker}:{brief_date}"
+    return f"{ticker}:{trade_date}"
 
 
 def _retire_sibling_watches(
@@ -5256,7 +5256,7 @@ def _build_tranche_plan_line(
     exactly like ``_build_planned_line``).
 
     ``pick_key`` (2026-08-19 adjudication finding 4) is the plan's trade
-    identity: the entry-trail watch routing stamps ``ticker:brief_date`` so
+    identity: the entry-trail watch routing stamps ``ticker:trade_date`` so
     :func:`_fold_fired_since_latest_plan` treats a crash-recovery re-drive's
     re-append as the SAME trade (no fired-set reset). ``None`` (the bracket
     path) omits the key -- a keyless line keeps today's always-reset
@@ -6584,7 +6584,7 @@ def _summarize_open_verdicts(open_verdicts: Iterable[Any], today_iso: str) -> tu
     realized_r_today = 0.0
     for verdict in open_verdicts:
         realized_r = verdict.details.get("realized_r")
-        realized_date = (verdict.activity_time or "")[:10] or verdict.brief_date
+        realized_date = (verdict.activity_time or "")[:10] or verdict.trade_date
         if realized_r is not None and realized_date == today_iso:
             realized_r_today += float(realized_r)
         if verdict.status in {"WORKING", "PARTIALLY_FILLED"}:
@@ -7310,7 +7310,7 @@ def _check_cash_floor(
 
 def _refuse_pick_terminal(
     ticker: str,
-    brief_date: dt.date,
+    trade_date: dt.date,
     violation: str,
     alert_key: str,
     alert_throttled: Callable[[str, str], bool] | None,
@@ -7325,7 +7325,7 @@ def _refuse_pick_terminal(
     if alert_throttled is not None:
         alert_throttled(violation, alert_key)
     try:
-        picks.mark_refused(ticker, brief_date, violation)
+        picks.mark_refused(ticker, trade_date, violation)
     except OSError as exc:
         logger.warning(
             "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc
@@ -7680,7 +7680,7 @@ def _place_tiers(
             bracket_row["entry_duration"] = entry_duration
         append_submission_record(
             build_submission_record(
-                brief_date=intent.meta.brief_date,
+                trade_date=intent.meta.trade_date,
                 ticker=ticker,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,
@@ -7726,7 +7726,7 @@ def _place_tiers(
         override=tranche_plan_override,
     )
 
-    # Write-ahead dedup line (memo §4.4 B2): register the (ticker, brief_date)
+    # Write-ahead dedup line (memo §4.4 B2): register the (ticker, trade_date)
     # dedup key BEFORE the first broker POST — picks.submitted_pick_keys already
     # treats note-only records as submitted, so a crash between the POST and
     # the per-tier journal append strands an alertable non-retried attempt
@@ -7737,7 +7737,7 @@ def _place_tiers(
     # carries the real brackets.
     append_submission_record(
         build_submission_record(
-            brief_date=intent.meta.brief_date,
+            trade_date=intent.meta.trade_date,
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -7829,7 +7829,7 @@ def _handle_tier_placement_failure(
         )
     append_submission_record(
         build_submission_record(
-            brief_date=intent.meta.brief_date,
+            trade_date=intent.meta.trade_date,
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -7888,9 +7888,9 @@ def _day1_gap_gate_enabled() -> bool:
 
 
 def _day1_gap_gate_session_info(
-    brief_date: dt.date, exchange_mic: str, *, day1_includes_brief_date: bool = False
+    trade_date: dt.date, exchange_mic: str, *, day1_includes_trade_date: bool = False
 ) -> tuple[dt.date, dt.datetime] | None:
-    """``(day1 session date, day1 session open UTC)`` for ``brief_date`` on
+    """``(day1 session date, day1 session open UTC)`` for ``trade_date`` on
     ``exchange_mic``, or ``None`` when the calendar cannot resolve it (e.g. an
     unrecognised exchange MIC) — never raises. NOTE the consequence: ``None``
     makes ``_day1_gap_gate_decision`` return "pass", so an unknown-to-calendar
@@ -7900,12 +7900,12 @@ def _day1_gap_gate_session_info(
     The anchor depends on the pick's provenance (#1246):
 
     - default (brief picks): ``day1`` is the first trading session STRICTLY
-      AFTER ``brief_date`` — a brief holds T-1 data and trades the next
+      AFTER ``trade_date`` — a brief holds T-1 data and trades the next
       session (a Monday brief's day1 is Tuesday, a Friday brief's day1 is the
-      following Monday; a weekend/holiday ``brief_date`` lands one session
+      following Monday; a weekend/holiday ``trade_date`` lands one session
       past the weekend's first session).
-    - ``day1_includes_brief_date=True`` (manual picks, whose ``brief_date``
-      IS the arm date): ``day1`` is the session ON-OR-AFTER ``brief_date`` —
+    - ``day1_includes_trade_date=True`` (manual picks, whose ``trade_date``
+      IS the arm date): ``day1`` is the session ON-OR-AFTER ``trade_date`` —
       an "as of now" operator decision trades its own arm day, not the next
       one (a weekend arm still rolls to the next session).
 
@@ -7917,13 +7917,13 @@ def _day1_gap_gate_session_info(
     try:
         from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_open_utc
 
-        step = 0 if day1_includes_brief_date else 1
-        day1 = advance_trading_sessions(brief_date, step, exchange=exchange_mic)
+        step = 0 if day1_includes_trade_date else 1
+        day1 = advance_trading_sessions(trade_date, step, exchange=exchange_mic)
         return day1, session_open_utc(day1, exchange=exchange_mic)
     except Exception:
         logger.warning(
-            "day1 gap gate: calendar resolution failed for brief_date=%s exchange_mic=%s",
-            brief_date,
+            "day1 gap gate: calendar resolution failed for trade_date=%s exchange_mic=%s",
+            trade_date,
             exchange_mic,
             exc_info=True,
         )
@@ -7932,7 +7932,7 @@ def _day1_gap_gate_session_info(
 
 def _day1_gap_gate_decision(
     now_utc: dt.datetime,
-    brief_date: dt.date,
+    trade_date: dt.date,
     e1_limit: float | None,
     probe_price: float | None,
     exchange_mic: str,
@@ -7941,7 +7941,7 @@ def _day1_gap_gate_decision(
 ) -> Day1GapGateVerdict:
     """Pure day-1 gap gate verdict — no I/O, total (never raises on weird
     inputs). ``source`` picks the day-1 anchor (#1246): ``"manual"`` anchors
-    day 1 on the session on-or-after ``brief_date`` (the arm date itself),
+    day 1 on the session on-or-after ``trade_date`` (the arm date itself),
     anything else on the session strictly after it — see
     ``_day1_gap_gate_session_info``.
 
@@ -7964,7 +7964,7 @@ def _day1_gap_gate_decision(
         logger.warning("day1 gap gate: pick carries no E1 limit — gate cannot evaluate, passing")
         return "pass"
     info = _day1_gap_gate_session_info(
-        brief_date, exchange_mic, day1_includes_brief_date=source == "manual"
+        trade_date, exchange_mic, day1_includes_trade_date=source == "manual"
     )
     if info is None:
         return "pass"
@@ -7982,7 +7982,7 @@ def _day1_gap_gate_decision(
 
 def _evaluate_day1_gap_gate(
     ticker: str,
-    brief_date: dt.date,
+    trade_date: dt.date,
     spec: Any,
     exchange_mic: str,
     probe: Callable[[str, str], float | None] | None,
@@ -8017,7 +8017,7 @@ def _evaluate_day1_gap_gate(
     probe_price: float | None = None
     if e1_limit is not None and probe is not None:
         info = _day1_gap_gate_session_info(
-            brief_date, exchange_mic, day1_includes_brief_date=source == "manual"
+            trade_date, exchange_mic, day1_includes_trade_date=source == "manual"
         )
         if info is not None:
             day1, day1_open = info
@@ -8025,7 +8025,7 @@ def _evaluate_day1_gap_gate(
             if now_utc.date() <= day1 and now_utc >= grace_open:
                 probe_price = probe(ticker, exchange_mic)
     return _day1_gap_gate_decision(
-        now_utc, brief_date, e1_limit, probe_price, exchange_mic, source=source
+        now_utc, trade_date, e1_limit, probe_price, exchange_mic, source=source
     )
 
 
@@ -8137,7 +8137,7 @@ def _extract_day1_session_open(payload: Mapping[str, Any]) -> float | None:
 
 def _day1_gap_gate_defers(
     ticker: str,
-    brief_date: dt.date,
+    trade_date: dt.date,
     spec: Any,
     exchange_mic: str,
     probe: Callable[[str, str], float | None] | None,
@@ -8159,7 +8159,7 @@ def _day1_gap_gate_defers(
     if not _day1_gap_gate_enabled():
         return False
     gate_verdict = _evaluate_day1_gap_gate(
-        ticker, brief_date, spec, exchange_mic, probe, source=source
+        ticker, trade_date, spec, exchange_mic, probe, source=source
     )
     if gate_verdict == "pass":
         return False
@@ -8274,9 +8274,9 @@ def _entry_trail_intercept(
     # re-drive every tick. It re-opens idempotently (deterministic crid,
     # fold latest-wins) and finally writes the retiring submission record.
     # Match _open_entry_watches' pick_key byte-for-byte: the string
-    # brief_date, not the caller's parsed date (str(date) happens to agree,
+    # trade_date, not the caller's parsed date (str(date) happens to agree,
     # but pin the exact form the watch_open records actually carry).
-    pick_key = f"{ticker}:{intent.meta.brief_date}"
+    pick_key = f"{ticker}:{intent.meta.trade_date}"
     already_watching = pick_key in _open_watch_pick_keys(entry_trail_fold)
     if not already_watching and _entry_watch_capacity_reached(entry_trail_fold):
         # Pick-denominated capacity (memo decision #4): stay ARMED (not a
@@ -8473,7 +8473,7 @@ def _refuse_now_tranche(
     try:
         append_submission_record(
             build_submission_record(
-                brief_date=intent.meta.brief_date,
+                trade_date=intent.meta.trade_date,
                 ticker=ticker,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,
@@ -8534,7 +8534,7 @@ def _handle_now_tranche(
     if violation is not None:
         _refuse_pick_terminal(
             ticker,
-            dt.date.fromisoformat(str(intent.meta.brief_date)),
+            dt.date.fromisoformat(str(intent.meta.trade_date)),
             violation,
             f"now-cost:{ticker}",
             alert_throttled,
@@ -8618,7 +8618,11 @@ def _now_already_done(records: Sequence[Mapping[str, Any]], ticker: str, intent:
     return any(
         str(record.get("tranche") or "") == "now"
         and str(record.get("ticker") or "").upper() == ticker
-        and str(record.get("brief_date") or "") == str(intent.meta.brief_date)
+        # #1252: the journal date key was renamed brief_date -> trade_date.
+        # Legacy records on disk still carry the old key (append-only
+        # journals are never rewritten), so fall back to it.
+        and str(record.get("trade_date") or record.get("brief_date") or "")
+        == str(intent.meta.trade_date)
         and str((record.get("tranche_meta") or {}).get("armed_ts") or "") == armed_ts
         for record in records
     )
@@ -8719,7 +8723,7 @@ def _place_pick(
     tolerated exactly like ``alert_throttled=None``.
 
     PR-7 (broker-manager extraction memo §5): the daemon never touches a
-    brief any more — ``ticker``/``brief_date``/``spec``/``exit_spec`` are all
+    brief any more — ``ticker``/``trade_date``/``spec``/``exit_spec`` are all
     read directly off the drained ``intent`` (the client already parsed +
     validated the brief at arm time, in ``arm_command``)."""
     from broker_contract.contract import BrokerError
@@ -8732,7 +8736,7 @@ def _place_pick(
     from alphalens_pipeline.brokers.submission_log import iter_submission_records
 
     ticker = intent.instrument.ticker.upper()
-    brief_date = dt.date.fromisoformat(intent.meta.brief_date)
+    trade_date = dt.date.fromisoformat(intent.meta.trade_date)
     spec = intent.spec
     exit_spec = intent.exit
 
@@ -8742,7 +8746,7 @@ def _place_pick(
     # stays armed and is re-evaluated next tick.
     if _day1_gap_gate_defers(
         ticker,
-        brief_date,
+        trade_date,
         spec,
         intent.instrument.mic,
         day1_gap_price_probe,
@@ -8782,7 +8786,7 @@ def _place_pick(
     net_position_uics, unresolvable_position_rows = _net_open_position_uics(positions)
     open_watch_picks = _open_watch_picks_for_max_open(
         entry_trail_fold,
-        own_pick_key=f"{ticker}:{intent.meta.brief_date}",
+        own_pick_key=f"{ticker}:{intent.meta.trade_date}",
         position_uics=net_position_uics,
     )
 
@@ -8802,7 +8806,7 @@ def _place_pick(
         _AlreadyGatedSessionState(),
     )
     if isinstance(decision, safety.Refuse):
-        _handle_safety_refusal(decision, ticker, brief_date)
+        _handle_safety_refusal(decision, ticker, trade_date)
         return False
 
     resolved = _resolve_and_size(broker, ticker, account, spec, hint_mic=intent.instrument.mic)
@@ -8823,7 +8827,7 @@ def _place_pick(
     )
     if fee_violation is not None:
         _refuse_pick_terminal(
-            ticker, brief_date, fee_violation, f"fee-floor:{ticker}", alert_throttled
+            ticker, trade_date, fee_violation, f"fee-floor:{ticker}", alert_throttled
         )
         return False
 
@@ -8852,7 +8856,7 @@ def _place_pick(
     )
     if gross_violation is not None:
         _refuse_pick_terminal(
-            ticker, brief_date, gross_violation, f"gross-cap:{ticker}", alert_throttled
+            ticker, trade_date, gross_violation, f"gross-cap:{ticker}", alert_throttled
         )
         return False
 
@@ -8871,7 +8875,7 @@ def _place_pick(
     )
     if cash_violation is not None:
         _refuse_pick_terminal(
-            ticker, brief_date, cash_violation, f"cash-floor:{ticker}", alert_throttled
+            ticker, trade_date, cash_violation, f"cash-floor:{ticker}", alert_throttled
         )
         return False
 
@@ -8883,7 +8887,7 @@ def _place_pick(
     routing = _route_now_tranche(
         _PickRefs(broker, intent, ticker, instrument, account, fx),
         plan,
-        brief_date=brief_date,
+        trade_date=trade_date,
         records=records,
         spec=spec,
         exit_spec=exit_spec,
@@ -8964,7 +8968,7 @@ def _route_now_tranche(
     refs: _PickRefs,
     plan: Any,
     *,
-    brief_date: dt.date,
+    trade_date: dt.date,
     records: Sequence[Mapping[str, Any]],
     spec: Any,
     exit_spec: Any,
@@ -8980,7 +8984,7 @@ def _route_now_tranche(
     )
     if not now_tiers:
         return _NowRouting(None, plan, False, None, None)
-    pick_key = f"{ticker}:{intent.meta.brief_date}"
+    pick_key = f"{ticker}:{intent.meta.trade_date}"
     full_ladder_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
     outcome = _handle_now_tranche(
         refs,
@@ -9006,7 +9010,7 @@ def _route_now_tranche(
             # fresh arm (new armed_ts, latest-wins) is the path back
             # (memo §3.7). The refusal detail is in the submissions
             # journal's tranche record.
-            picks.mark_refused(ticker, brief_date, "now tranche refused (see submissions journal)")
+            picks.mark_refused(ticker, trade_date, "now tranche refused (see submissions journal)")
         return _NowRouting(now_placed, plan, now_placed, None, None)
     plan = replace(plan, entry_tiers=pullback_tiers)
     if now_placed:
@@ -9040,7 +9044,7 @@ def _refuse_geometry_without_trail(
     return True
 
 
-def _handle_safety_refusal(decision: Any, ticker: str, brief_date: dt.date) -> None:
+def _handle_safety_refusal(decision: Any, ticker: str, trade_date: dt.date) -> None:
     """Log a ``safety.Refuse`` and journal it when terminal.
 
     Terminal refusal (queue-semantics fix 2026-07-30): ONLY a capacity
@@ -9058,7 +9062,7 @@ def _handle_safety_refusal(decision: Any, ticker: str, brief_date: dt.date) -> N
     logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
     if decision.terminal:
         try:
-            picks.mark_refused(ticker, brief_date, decision.reason)
+            picks.mark_refused(ticker, trade_date, decision.reason)
         except OSError as exc:
             logger.warning(
                 "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc

@@ -1089,7 +1089,7 @@ def _place_and_record(
     *,
     broker: Broker,
     brackets: list,
-    brief_date: dt.date,
+    trade_date: dt.date,
     wanted: str,
     instrument: InstrumentRef,
     precheck_summaries: list[dict],
@@ -1150,7 +1150,7 @@ def _place_and_record(
     finally:
         if placed_records or failure_note:
             record = build_submission_record(
-                brief_date=brief_date.isoformat(),
+                trade_date=trade_date.isoformat(),
                 ticker=wanted,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,
@@ -1222,21 +1222,21 @@ def submit_command(
     )
 
     try:
-        brief_date = dt.date.fromisoformat(date)
+        trade_date = dt.date.fromisoformat(date)
     except ValueError as exc:
         raise _fail(f"invalid --date {date!r}: {exc}") from exc
 
     try:
-        candidates = load_brief(brief_date, briefs_dir)
+        candidates = load_brief(trade_date, briefs_dir)
     except (FileNotFoundError, ValueError) as exc:
         raise _fail(str(exc)) from exc
 
     wanted = ticker.upper()
     candidate = next((c for c in candidates if c.ticker.upper() == wanted), None)
     if candidate is None:
-        raise _fail(f"{wanted} not in the {brief_date} brief ({len(candidates)} candidates)")
+        raise _fail(f"{wanted} not in the {trade_date} brief ({len(candidates)} candidates)")
     if candidate.trade_setup is None:
-        raise _fail(f"{wanted} has no parseable brief_trade_setup on {brief_date}")
+        raise _fail(f"{wanted} has no parseable brief_trade_setup on {trade_date}")
 
     broker, account, sizing_equity, instrument, fx, plan = _resolve_instrument_and_plan(
         wanted=wanted,
@@ -1299,7 +1299,7 @@ def submit_command(
     _place_and_record(
         broker=broker,
         brackets=brackets,
-        brief_date=brief_date,
+        trade_date=trade_date,
         wanted=wanted,
         instrument=instrument,
         precheck_summaries=precheck_summaries,
@@ -1353,7 +1353,7 @@ def arm_command(
     from broker_contract.trade_intent.schema import InstrumentHint, IntentMeta, TradeIntent
 
     try:
-        brief_date = dt.date.fromisoformat(date)
+        trade_date = dt.date.fromisoformat(date)
     except ValueError as exc:
         raise _fail(f"invalid --date {date!r}: {exc}") from exc
 
@@ -1365,16 +1365,16 @@ def arm_command(
     _guard_state_layout()
 
     try:
-        candidates = load_brief(brief_date, briefs_dir)
+        candidates = load_brief(trade_date, briefs_dir)
     except (FileNotFoundError, ValueError) as exc:
         raise _fail(str(exc)) from exc
 
     wanted = ticker.upper()
     candidate = next((c for c in candidates if c.ticker.upper() == wanted), None)
     if candidate is None:
-        raise _fail(f"{wanted} not in the {brief_date} brief ({len(candidates)} candidates)")
+        raise _fail(f"{wanted} not in the {trade_date} brief ({len(candidates)} candidates)")
     if candidate.trade_setup is None:
-        raise _fail(f"{wanted}: no plannable trade_setup on {brief_date}")
+        raise _fail(f"{wanted}: no plannable trade_setup on {trade_date}")
 
     try:
         spec = parse_brief_to_spec(candidate.trade_setup)
@@ -1386,17 +1386,17 @@ def arm_command(
     )
 
     intent = TradeIntent(
-        intent_id=f"{wanted}:{brief_date.isoformat()}",
+        intent_id=f"{wanted}:{trade_date.isoformat()}",
         instrument=InstrumentHint(ticker=wanted, mic=_ARM_INSTRUMENT_MIC),
         spec=spec,
         exit=exit_spec,
         meta=IntentMeta(
             armed_ts=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
-            brief_date=brief_date.isoformat(),
+            trade_date=trade_date.isoformat(),
         ),
     )
     arm_pick(intent, path=picks_target)
-    typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {picks_target}")
+    typer.echo(f"armed {wanted} @ {trade_date.isoformat()} -> {picks_target}")
 
 
 def _frame_from_sizing_equity_env() -> float | None:
@@ -1569,14 +1569,14 @@ def arm_manual_command(
             p
             for p in read_pick_fold(path=picks_target).records
             if p.ticker.upper() == intent.instrument.ticker
-            and p.brief_date.isoformat() == intent.meta.brief_date
+            and p.trade_date.isoformat() == intent.meta.trade_date
         ),
         None,
     )
     if superseded is not None:
         typer.secho(
             f"warning: a pick line for {intent.instrument.ticker} @ "
-            f"{intent.meta.brief_date} already exists in this inbox (status "
+            f"{intent.meta.trade_date} already exists in this inbox (status "
             f"{superseded.status!r}) — arming will REPLACE it (the fold keys on "
             "ticker+date, latest wins), even if it came from a brief",
             fg=typer.colors.YELLOW,
@@ -1642,7 +1642,7 @@ def disarm_command(
         )
 
     try:
-        brief_date = dt.date.fromisoformat(date)
+        trade_date = dt.date.fromisoformat(date)
     except ValueError as exc:
         raise _fail(f"invalid --date {date!r}: {exc}") from exc
 
@@ -1655,13 +1655,13 @@ def disarm_command(
     _guard_state_layout()
 
     wanted = ticker.upper()
-    pick_key = f"{wanted}:{brief_date.isoformat()}"
+    pick_key = f"{wanted}:{trade_date.isoformat()}"
     try:
         cancelled = entry_trails.cancel_open_watches(pick_key, note=note, path=trails_target)
     except entry_trails.DisarmRestingOrderError as exc:
         raise _fail(f"disarm refused — resting entry order: {exc}") from exc
 
-    mark_disarmed(wanted, brief_date, note=note, path=picks_target)
+    mark_disarmed(wanted, trade_date, note=note, path=picks_target)
     watch_note = f"cancelled {len(cancelled)} watch tier(s)" if cancelled else "no open watch"
     typer.echo(f"disarmed {pick_key} (queue) + {watch_note} -> {picks_target.parent}")
 
@@ -1699,7 +1699,7 @@ def _pick_state(
         # refused / disarmed, and verbatim for any status added later — never
         # silently folded into one of the states above.
         return record.status.upper() or "UNKNOWN"
-    key = (record.ticker, record.brief_date.isoformat())
+    key = (record.ticker, record.trade_date.isoformat())
     if key in submitted:
         return _PICK_STATE_PLACED
     if key not in decodable:
@@ -1727,7 +1727,7 @@ def _render_picks_human(result: dict[str, Any]) -> None:
     for row in rows:
         detail = f"  {row['detail']}" if row["detail"] else ""
         # rstrip: a row with no detail must not trail the state-column padding.
-        line = f"{row['ticker']:<{width}}  {row['brief_date']}  {row['state']:<10}{detail}"
+        line = f"{row['ticker']:<{width}}  {row['trade_date']}  {row['state']:<10}{detail}"
         typer.echo(line.rstrip())
     counts = result["counts"]
     # Iterate the counts THEMSELVES, not the known-state tuple: a status this
@@ -1765,7 +1765,7 @@ def picks_command(
     ``picks.jsonl`` has no ``placed`` status: a pick submitted a month ago
     still reads ``armed`` as its latest line forever, because the drain
     decides what to place by joining armed picks against ``submissions.jsonl``
-    on (ticker, brief_date) rather than by reading the status. So the queue
+    on (ticker, trade_date) rather than by reading the status. So the queue
     file alone cannot answer "what is still pending" — reading it straight
     once produced a report of 45 pending placements when the true count was 0.
 
@@ -1810,7 +1810,7 @@ def picks_command(
     rows = [
         {
             "ticker": record.ticker,
-            "brief_date": record.brief_date.isoformat(),
+            "trade_date": record.trade_date.isoformat(),
             "state": _pick_state(record, submitted=submitted, decodable=decodable),
             "armed_ts": record.record.get("armed_ts"),
             "detail": _pick_detail(record),
@@ -1955,13 +1955,13 @@ def reconcile_command(
         return
 
     typer.echo(
-        f"{'brief_date':10s}  {'ticker':6s}  {'qty':>8s}  {'entry_order_id':14s}  "
+        f"{'trade_date':10s}  {'ticker':6s}  {'qty':>8s}  {'entry_order_id':14s}  "
         f"{'verdict':30s}  {'activity_time':28s}  note"
     )
     for verdict in verdicts:
         note_parts = [part for part in (verdict.note, verdict.reason) if part]
         typer.echo(
-            f"{verdict.brief_date:10s}  {verdict.ticker:6s}  {verdict.qty:>8.0f}  "
+            f"{verdict.trade_date:10s}  {verdict.ticker:6s}  {verdict.qty:>8.0f}  "
             f"{verdict.entry_order_id:14s}  {verdict.verdict:30s}  "
             f"{(verdict.activity_time or '-'):28s}  {'; '.join(note_parts) or '-'}"
         )

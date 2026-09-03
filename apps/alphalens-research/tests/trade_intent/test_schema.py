@@ -42,7 +42,7 @@ def _build_trade_intent() -> TradeIntent:
             TrailingStop(arm_trigger_r=0.5, trail_frac=0.6),
         ),
     )
-    meta = IntentMeta(armed_ts="2026-07-31T12:00:00Z", brief_date="2026-07-31")
+    meta = IntentMeta(armed_ts="2026-07-31T12:00:00Z", trade_date="2026-07-31")
     return TradeIntent(
         intent_id="abc123",
         instrument=InstrumentHint(ticker="NVDA", mic="XNAS"),
@@ -71,7 +71,7 @@ class TestTradeIntentRoundTrip(unittest.TestCase):
         self.assertEqual(intent.exit.initial_levels.stop, 90.0)
         self.assertEqual(intent.exit.initial_levels.tp, 110.0)
         self.assertEqual(intent.meta.armed_ts, "2026-07-31T12:00:00Z")
-        self.assertEqual(intent.meta.brief_date, "2026-07-31")
+        self.assertEqual(intent.meta.trade_date, "2026-07-31")
 
 
 class TestFrozenImmutability(unittest.TestCase):
@@ -129,11 +129,11 @@ class TestDefaults(unittest.TestCase):
         self.assertEqual(tranche.tag, "")
 
     def test_intent_meta_source_defaults_to_brief(self):
-        meta = IntentMeta(armed_ts="2026-09-02T12:00:00Z", brief_date="2026-09-02")
+        meta = IntentMeta(armed_ts="2026-09-02T12:00:00Z", trade_date="2026-09-02")
         self.assertEqual(meta.source, "brief")
 
     def test_intent_meta_source_accepts_manual(self):
-        meta = IntentMeta(armed_ts="2026-09-02T12:00:00Z", brief_date="2026-09-02", source="manual")
+        meta = IntentMeta(armed_ts="2026-09-02T12:00:00Z", trade_date="2026-09-02", source="manual")
         self.assertEqual(meta.source, "manual")
 
 

@@ -140,7 +140,14 @@ def intent_from_jsonable(data: Mapping[str, Any]) -> TradeIntent:
             **_filtered(InstrumentHint, _require_mapping(top["instrument"], what="instrument"))
         )
         spec = _decode_spec(top["spec"])
-        meta = IntentMeta(**_filtered(IntentMeta, _require_mapping(top["meta"], what="meta")))
+        meta_map = dict(_require_mapping(top["meta"], what="meta"))
+        if "brief_date" in meta_map:
+            # #1252: the journal date key was renamed brief_date -> trade_date.
+            # Legacy journal lines (pre-#1252) carry brief_date; decode
+            # silently — no unknown-key WARNING, and trade_date wins if a line
+            # somehow carries both.
+            meta_map.setdefault("trade_date", meta_map.pop("brief_date"))
+        meta = IntentMeta(**_filtered(IntentMeta, meta_map))
         exit_spec = _decode_exit(top.get("exit"))
         kwargs = _filtered(TradeIntent, top)
         kwargs["instrument"] = instrument

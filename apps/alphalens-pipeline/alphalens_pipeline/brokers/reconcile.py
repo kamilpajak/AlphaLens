@@ -169,7 +169,7 @@ class OutcomeAuditBudget:
 class ReconcileVerdict:
     """One journal bracket's reconciliation outcome (a fact, not state)."""
 
-    brief_date: str
+    trade_date: str
     ticker: str
     qty: float
     entry_order_id: str
@@ -190,7 +190,7 @@ class ReconcileVerdict:
     def as_dict(self) -> dict[str, Any]:
         """JSON-ready dict (``--json`` scripting surface)."""
         return {
-            "brief_date": self.brief_date,
+            "trade_date": self.trade_date,
             "ticker": self.ticker,
             "qty": self.qty,
             "entry_order_id": self.entry_order_id,
@@ -431,7 +431,10 @@ def _base_verdict_fields(
     except (TypeError, ValueError):
         qty = 0.0
     return (
-        str(record.get("brief_date", "")),
+        # #1252: the journal date key was renamed brief_date -> trade_date.
+        # Legacy records on disk still carry the old key (append-only
+        # journals are never rewritten), so fall back to it.
+        str(record.get("trade_date") or record.get("brief_date") or ""),
         str(record.get("ticker", "")),
         qty,
         str(bracket.get("entry_order_id") or ""),
@@ -536,13 +539,13 @@ def _audit_one(
     asof: dt.date,
 ) -> ReconcileVerdict:
     """One bracket's audit-log resolution -> verdict (the pre-cap inline body)."""
-    brief_date, ticker, qty, entry_order_id = item.brief
+    trade_date, ticker, qty, entry_order_id = item.brief
     try:
         state = item.resolver.resolve_order_outcome(entry_order_id)
     except BrokerError as exc:
         # Transient by contract — the audit store is durable; retry next run.
         return ReconcileVerdict(
-            brief_date=brief_date,
+            trade_date=trade_date,
             ticker=ticker,
             qty=qty,
             entry_order_id=entry_order_id,
@@ -570,7 +573,7 @@ def _triage_one(
     resolver: SupportsOrderResolution | None,
     today: dt.date,
 ) -> ReconcileVerdict | _PendingAudit:
-    brief_date, ticker, qty, entry_order_id = _base_verdict_fields(record, bracket)
+    trade_date, ticker, qty, entry_order_id = _base_verdict_fields(record, bracket)
     details: dict[str, Any] = {
         "client_request_id": bracket.get("client_request_id"),
         "mic": record.get("mic"),
@@ -595,14 +598,14 @@ def _triage_one(
             record,
             bracket,
             open_state,
-            brief=(brief_date, ticker, qty, entry_order_id),
+            brief=(trade_date, ticker, qty, entry_order_id),
             details=details,
             today=today,
         )
 
     if resolver is None:
         return ReconcileVerdict(
-            brief_date=brief_date,
+            trade_date=trade_date,
             ticker=ticker,
             qty=qty,
             entry_order_id=entry_order_id,
@@ -618,7 +621,7 @@ def _triage_one(
     return _PendingAudit(
         record=record,
         bracket=bracket,
-        brief=(brief_date, ticker, qty, entry_order_id),
+        brief=(trade_date, ticker, qty, entry_order_id),
         details=details,
         resolver=resolver,
         ts_key=_record_ts_key(record),
@@ -634,7 +637,7 @@ def _reconcile_open(
     details: dict[str, Any],
     today: dt.date,
 ) -> ReconcileVerdict:
-    brief_date, ticker, qty, entry_order_id = brief
+    trade_date, ticker, qty, entry_order_id = brief
     base = state.status.value if state.status in _WORKING_STATUSES else OrderStatus.WORKING.value
     details["raw_status"] = state.raw_status
     if state.filled_quantity:
@@ -658,7 +661,7 @@ def _reconcile_open(
                 f"vs ttl {ttl} — it should have expired"
             )
     return ReconcileVerdict(
-        brief_date=brief_date,
+        trade_date=trade_date,
         ticker=ticker,
         qty=qty,
         entry_order_id=entry_order_id,
@@ -685,7 +688,7 @@ def _reconcile_resolved(
     submission_date: dt.date | None = None,
     asof: dt.date | None = None,
 ) -> ReconcileVerdict:
-    brief_date, ticker, qty, entry_order_id = brief
+    trade_date, ticker, qty, entry_order_id = brief
     details["raw_status"] = state.raw_status
     activity_time = _extract_activity_time(state.raw_status)
 
@@ -711,7 +714,7 @@ def _reconcile_resolved(
         if state.status is OrderStatus.CANCELLED and bracket.get("exit_order_ids"):
             note = "children cancelled via cascade"
         return ReconcileVerdict(
-            brief_date=brief_date,
+            trade_date=trade_date,
             ticker=ticker,
             qty=qty,
             entry_order_id=entry_order_id,
@@ -724,7 +727,7 @@ def _reconcile_resolved(
     if state.status is OrderStatus.UNKNOWN:
         reason = state.raw_status or "unknown"
         return ReconcileVerdict(
-            brief_date=brief_date,
+            trade_date=trade_date,
             ticker=ticker,
             qty=qty,
             entry_order_id=entry_order_id,
@@ -738,7 +741,7 @@ def _reconcile_resolved(
     # the open-orders view is itself an inconsistency — surface, never guess.
     reason = f"resolver returned {state.status.value} for an order absent from the open-orders view"
     return ReconcileVerdict(
-        brief_date=brief_date,
+        trade_date=trade_date,
         ticker=ticker,
         qty=qty,
         entry_order_id=entry_order_id,
@@ -760,7 +763,7 @@ def _reconcile_closed_pair(
 ) -> ReconcileVerdict:
     """The FILLED verdict for a closed FIFO round-trip pair — realized R plus the
     optional P/L and effective settlement rate folded into ``details``."""
-    brief_date, ticker, qty, entry_order_id = brief
+    trade_date, ticker, qty, entry_order_id = brief
     realized_r = compute_realized_r(
         closed_match.get("ClosingPrice"), bracket.get("entry"), bracket.get("stop")
     )
@@ -777,7 +780,7 @@ def _reconcile_closed_pair(
         details["effective_settlement_rate"] = effective_rate
     label = f"FILLED(closed r={realized_r:+.2f})" if realized_r is not None else "FILLED(closed)"
     return ReconcileVerdict(
-        brief_date=brief_date,
+        trade_date=trade_date,
         ticker=ticker,
         qty=qty,
         entry_order_id=entry_order_id,
@@ -800,12 +803,12 @@ def _reconcile_filled(
     submission_date: dt.date | None = None,
     asof: dt.date | None = None,
 ) -> ReconcileVerdict:
-    brief_date, ticker, qty, entry_order_id = brief
+    trade_date, ticker, qty, entry_order_id = brief
     if state.filled_quantity:
         details["filled_quantity"] = state.filled_quantity
     if cross_check is None:
         return ReconcileVerdict(
-            brief_date=brief_date,
+            trade_date=trade_date,
             ticker=ticker,
             qty=qty,
             entry_order_id=entry_order_id,
@@ -839,7 +842,7 @@ def _reconcile_filled(
         )
     if request_id and request_id in cross_check.open_references:
         return ReconcileVerdict(
-            brief_date=brief_date,
+            trade_date=trade_date,
             ticker=ticker,
             qty=qty,
             entry_order_id=entry_order_id,
@@ -863,7 +866,7 @@ def _reconcile_filled(
     if owned > _QTY_EPS and filled_amount > _QTY_EPS:
         details["netted_owned"] = owned
         return ReconcileVerdict(
-            brief_date=brief_date,
+            trade_date=trade_date,
             ticker=ticker,
             qty=qty,
             entry_order_id=entry_order_id,
@@ -900,7 +903,7 @@ def _reconcile_filled(
     ):
         details["submission_date"] = submission_date.isoformat()
         return ReconcileVerdict(
-            brief_date=brief_date,
+            trade_date=trade_date,
             ticker=ticker,
             qty=qty,
             entry_order_id=entry_order_id,
@@ -918,7 +921,7 @@ def _reconcile_filled(
             details=details,
         )
     return ReconcileVerdict(
-        brief_date=brief_date,
+        trade_date=trade_date,
         ticker=ticker,
         qty=qty,
         entry_order_id=entry_order_id,

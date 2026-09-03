@@ -118,7 +118,7 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
         broker = _RecordingBroker()
         prices: dict[int, float | None] = {}
         alerts: list[tuple[str, str]] = []
-        # A recent brief_date so the real-calendar TTL window_end is in the
+        # A recent trade_date so the real-calendar TTL window_end is in the
         # future (a stale date would expire the watch on tick 1).
         picks = [_pick(date=dt.date.today().isoformat())]
         deps = self._deps(broker, _plan_l((0, 10.0, 100)), picks, _FakeFeed(prices), alerts)

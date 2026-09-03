@@ -533,7 +533,7 @@ class ManagerWorld:
 def _pick(ticker: str) -> Any:
     """A minimal, structurally valid armed TradeIntent (PR-7: the real
     _run_placement_drain calls the real _pick_key, which reads
-    intent.instrument.ticker / intent.meta.brief_date)."""
+    intent.instrument.ticker / intent.meta.trade_date)."""
     from broker_contract.trade_intent.schema import (
         EntryTierSpec,
         InstrumentHint,
@@ -551,7 +551,7 @@ def _pick(ticker: str) -> Any:
             tp_tranches=(),
             suggested_size_pct=3.0,
         ),
-        meta=IntentMeta(armed_ts="2026-07-23T00:00:00+00:00", brief_date="2026-07-23"),
+        meta=IntentMeta(armed_ts="2026-07-23T00:00:00+00:00", trade_date="2026-07-23"),
     )
 
 
@@ -561,7 +561,7 @@ def order_filled(ticker: str, *, shares: float, closed_r: float | None = None) -
 
     verdict = "FILLED" if closed_r is None else f"FILLED(closed r={closed_r:+.2f})"
     return ReconcileVerdict(
-        brief_date="2026-07-23",
+        trade_date="2026-07-23",
         ticker=ticker.upper(),
         qty=float(shares),
         entry_order_id=f"entry-{ticker.upper()}",
@@ -574,7 +574,7 @@ def order_cancelled(ticker: str, *, request_id: str = "entry-KO", crid: str | No
     from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
     return ReconcileVerdict(
-        brief_date="2026-07-23",
+        trade_date="2026-07-23",
         ticker=ticker.upper(),
         qty=0.0,
         entry_order_id=request_id,
@@ -590,7 +590,7 @@ def a_divergence(ticker: str) -> Any:
     from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
     return ReconcileVerdict(
-        brief_date="2026-07-23",
+        trade_date="2026-07-23",
         ticker=ticker.upper(),
         qty=100.0,
         entry_order_id=f"entry-{ticker.upper()}",

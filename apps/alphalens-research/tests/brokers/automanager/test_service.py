@@ -57,7 +57,7 @@ def _pick(ticker: str) -> TradeIntent:
             tp_tranches=(),
             suggested_size_pct=3.0,
         ),
-        meta=IntentMeta(armed_ts="2026-07-31T00:00:00+00:00", brief_date="2026-07-31"),
+        meta=IntentMeta(armed_ts="2026-07-31T00:00:00+00:00", trade_date="2026-07-31"),
     )
 
 

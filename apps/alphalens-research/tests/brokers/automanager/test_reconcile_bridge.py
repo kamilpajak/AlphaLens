@@ -40,7 +40,7 @@ def _record() -> dict[str, Any]:
     return {
         "execution_config_version": "execution-v1-test",
         "ts": _TS,
-        "brief_date": "2026-07-06",
+        "trade_date": "2026-07-06",
         "ticker": "KO",
         "mic": "XNYS",
         "uic": "307",

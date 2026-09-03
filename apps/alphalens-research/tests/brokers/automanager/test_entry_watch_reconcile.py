@@ -341,7 +341,7 @@ class TestReconcileRunsBeforePlacementDrain(unittest.TestCase):
             (),
             {
                 "instrument": type("I", (), {"ticker": "AAPL"})(),
-                "meta": type("M", (), {"brief_date": "2026-07-20"})(),
+                "meta": type("M", (), {"trade_date": "2026-07-20"})(),
             },
         )()
         seen: list[str | None] = []
@@ -460,7 +460,7 @@ class TestSharedBudgetAcrossTrailAndVerdictPasses(unittest.TestCase):
         records: list[dict[str, Any]] = [
             {
                 "ts": f"2026-07-06T{9 + n}:00:00+00:00",
-                "brief_date": "2026-07-06",
+                "trade_date": "2026-07-06",
                 "ticker": f"T{n}",
                 "mic": "XNYS",
                 "brackets": [

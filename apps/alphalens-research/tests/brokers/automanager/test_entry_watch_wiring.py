@@ -66,7 +66,7 @@ def _pick(ticker: str = "KO", date: str = "2026-07-20", source: str = "brief") -
             "meta": type(
                 "Meta",
                 (),
-                {"brief_date": date, "source": source, "armed_ts": "2026-07-20T14:00:00+00:00"},
+                {"trade_date": date, "source": source, "armed_ts": "2026-07-20T14:00:00+00:00"},
             )(),
             "spec": type("Spec", (), {"entry_tiers": ("t",)})(),
             "exit": None,
@@ -3365,7 +3365,7 @@ class TestPlacePickNowTranche(unittest.TestCase):
         broker = _RecordingBroker()
         marker = {
             "ticker": "KO",
-            "brief_date": "2026-07-20",
+            "trade_date": "2026-07-20",
             "tranche": "now",
             "tranche_meta": {"armed_ts": "2026-07-20T14:00:00+00:00", "outcome": "placed"},
         }
@@ -3381,7 +3381,7 @@ class TestPlacePickNowTranche(unittest.TestCase):
         broker = _RecordingBroker()
         stale = {
             "ticker": "KO",
-            "brief_date": "2026-07-20",
+            "trade_date": "2026-07-20",
             "tranche": "now",
             "tranche_meta": {"armed_ts": "2026-07-19T10:00:00+00:00", "outcome": "refused_cap"},
         }

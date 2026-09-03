@@ -166,7 +166,7 @@ class TestStepAEntry(_ScratchCase):
             "68.43",
             "--tp",
             "72.67",
-            "--brief-date",
+            "--trade-date",
             "2026-07-18",
             "--scratch",
             str(self.scratch),
@@ -190,7 +190,7 @@ class TestStepAEntry(_ScratchCase):
         uuid.UUID(request.client_request_id)  # must be a real uuid4 token
 
         (record,) = self._journal_records()
-        self.assertEqual((record["brief_date"], record["ticker"]), ("2026-07-18", "KO"))
+        self.assertEqual((record["trade_date"], record["ticker"]), ("2026-07-18", "KO"))
         # Poolability: the experiment's journal rows must carry the SAME
         # config-version stamp as production submits, or reconcile-era
         # analyses would silently pool rows across decomposer generations.
@@ -226,7 +226,7 @@ class TestStepAEntry(_ScratchCase):
                 "--entry",
                 "70.48",
                 "--naked",
-                "--brief-date",
+                "--trade-date",
                 "2026-07-18",
                 "--scratch",
                 str(self.scratch),
@@ -279,7 +279,7 @@ class TestStepCClose(_ScratchCase):
             "2",
             "--limit",
             "69.85",
-            "--brief-date",
+            "--trade-date",
             "2026-07-18",
             "--scratch",
             str(self.scratch),

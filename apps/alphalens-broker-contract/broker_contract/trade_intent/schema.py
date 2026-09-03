@@ -177,8 +177,10 @@ class IntentMeta:
 
     # ISO-8601 timestamp string.
     armed_ts: str
-    # YYYY-MM-DD string. For a manual pick (no brief row) this is the arm date.
-    brief_date: str
+    # YYYY-MM-DD string. Date key of the record — pick identity, TTL anchor,
+    # reconcile join. For a manual pick (no brief row) this is the arm date;
+    # provenance lives in `source`, not in this field's name (#1252).
+    trade_date: str
     schema_version: str = SCHEMA_VERSION
     # Where the intent came from: "brief" (parsed from a brief row by `broker
     # arm`) or "manual" (operator-provided levels via `broker arm-manual`,
