@@ -164,7 +164,11 @@ def arrival_session(
 
 def _row(prices: pd.DataFrame, day: dt.date) -> pd.Series | None:
     ts = pd.Timestamp(day)
-    return prices.loc[ts] if ts in prices.index else None
+    if ts not in prices.index:
+        return None
+    row = prices.loc[ts]
+    # a duplicated index label would return a frame; take its first row
+    return row.iloc[0] if isinstance(row, pd.DataFrame) else row
 
 
 def event_car(
