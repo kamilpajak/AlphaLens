@@ -60,6 +60,8 @@ from alphalens_pipeline.feedback.ladder_replay import (
     replay_ladder_breakeven,
 )
 
+_CATEGORY_STOP_ONLY = "stop only"
+
 _DEFAULT_STOP_ATR_MULT = 0.5
 # atr_bracket-kind defaults (bezpazery v1 pinned values — memo §2).
 _DEFAULT_BRACKET_STOP_ATR_MULT = 1.5
@@ -145,7 +147,7 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     BreakevenLens(
         lens_id="be_0p5r",
         label="break-even +0.5R",
-        category="stop only",
+        category=_CATEGORY_STOP_ONLY,
         replaces=(
             "the stop only - the brief TP ladder and entry tiers are kept; "
             "once +0.5R is reached the stop ratchets up to break-even"
@@ -177,7 +179,7 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     BreakevenLens(
         lens_id="be_0p5r_trail0p6",
         label="break-even +0.5R · trail 0.6",
-        category="stop only",
+        category=_CATEGORY_STOP_ONLY,
         replaces=(
             "the stop only - the brief TP ladder and entry tiers are kept; "
             "past +0.5R the stop trails at 0.6 of the peak gain instead of sitting at break-even"
@@ -263,7 +265,7 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     BreakevenLens(
         lens_id="be_0p5r_trail0p6_ttl7",
         label="break-even +0.5R · trail 0.6 · entry TTL 7",
-        category="stop only",
+        category=_CATEGORY_STOP_ONLY,
         replaces=(
             "the stop only - the brief TP ladder and entry tiers are kept; "
             "past +0.5R the stop trails at 0.6 of the peak gain, and entry limits expire "

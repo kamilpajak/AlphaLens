@@ -117,7 +117,7 @@ if TYPE_CHECKING:
 
     from broker_contract.contract import Broker, OrderState
     from broker_contract.price_feed import PriceFeed
-    from broker_contract.sizing import TpTranchePlan
+    from broker_contract.sizing import SetupPlan, TpTranchePlan
 
     from alphalens_pipeline.brokers.automanager.streaming_trigger import StreamTrigger
     from alphalens_pipeline.brokers.notifications import NotificationPort
@@ -6881,13 +6881,12 @@ def _make_position_rate_lookup(broker: Any, account_currency: str) -> Callable[[
         if get_fx_rate is None or not account_currency:
             return None
         from broker_contract.contract import BrokerError
-        from broker_contract.sizing import TradeSetupNotPlannableError
 
         from alphalens_pipeline.brokers.execution import build_fx_conversion
 
         try:
             return float(build_fx_conversion(get_fx_rate(account_currency, currency)).rate)
-        except (BrokerError, TradeSetupNotPlannableError, TypeError, ValueError) as exc:
+        except (BrokerError, TypeError, ValueError) as exc:
             logger.warning(
                 "gross cap: FX lookup %s->%s failed (%s) — the fold fails closed",
                 account_currency,
@@ -8350,7 +8349,7 @@ def _handle_now_tranche(
         _release_scope()
         return _NowOutcome.REFUSED_NOW
     duration = "ioc" if _now_ioc_supported(broker, instrument) else "day"
-    now_plan = replace(plan, entry_tiers=(replace(now_tier, limit_price=submitted_cap),))
+    now_plan: SetupPlan = replace(plan, entry_tiers=(replace(now_tier, limit_price=submitted_cap),))
     placement = classify(now_plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:
         logger.warning("place_pick %s: now tranche sized to zero shares", ticker)

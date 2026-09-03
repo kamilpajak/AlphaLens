@@ -81,6 +81,8 @@ ERR_BAD_REQUEST = "bad_request"
 ERR_UNKNOWN_OP = "unknown_op"
 ERR_INTERNAL = "internal"
 
+_BAD_FIELD_LOG_FMT = "price reader: bad %s field: %r"
+
 # Prometheus job labels. TWO of them, and both distinct from the per-env
 # ``live-price-stream-<env>`` jobs the in-process daemons use: emit_domain_metrics
 # rewrites a whole per-job file, so two emitters sharing a job silently erase
@@ -158,7 +160,7 @@ def _as_int(value: object, *, field: str) -> int:
     Python, and a JSON ``true`` reaching a uic field means the caller is
     confused, not that uic 1 was requested."""
     if isinstance(value, bool) or not isinstance(value, int):
-        logger.debug("price reader: bad %s field: %r", field, value)
+        logger.debug(_BAD_FIELD_LOG_FMT, field, value)
         raise ProtocolError(ERR_BAD_REQUEST)
     return value
 
@@ -171,7 +173,7 @@ def _as_float(value: object, *, field: str) -> float:
     low in the accumulator BOTH daemons read. The outgoing side already
     sanitises (``_wire_number``); the incoming side must match."""
     if isinstance(value, bool) or not isinstance(value, int | float):
-        logger.debug("price reader: bad %s field: %r", field, value)
+        logger.debug(_BAD_FIELD_LOG_FMT, field, value)
         raise ProtocolError(ERR_BAD_REQUEST)
     number = float(value)
     if not math.isfinite(number):
@@ -182,7 +184,7 @@ def _as_float(value: object, *, field: str) -> float:
 
 def _as_str(value: object, *, field: str) -> str:
     if not isinstance(value, str):
-        logger.debug("price reader: bad %s field: %r", field, value)
+        logger.debug(_BAD_FIELD_LOG_FMT, field, value)
         raise ProtocolError(ERR_BAD_REQUEST)
     return value
 
@@ -649,7 +651,9 @@ class PriceReaderServer:
             # STOPPED reader — measured, not theorised.
             with contextlib.suppress(OSError):
                 sock.shutdown(socket.SHUT_RDWR)
-        for scope in list(state.scope_uics):
+        # Snapshot on purpose: a handler thread mid-request past its is_open
+        # check can still mutate scope_uics while this release iterates.
+        for scope in list(state.scope_uics):  # NOSONAR
             with contextlib.suppress(Exception):
                 self._stream.ensure_subscribed([], scope=state.wire_scope(scope))
         with contextlib.suppress(Exception):
