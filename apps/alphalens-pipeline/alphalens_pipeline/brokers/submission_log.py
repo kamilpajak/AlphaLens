@@ -80,6 +80,8 @@ def build_submission_record(
     fx: FxConversion | None = None,
     precheck_conversion_rate: float | None = None,
     est_round_trip_fee_bps: float | None = None,
+    tranche: str | None = None,
+    tranche_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble one journal record, stamping the token + a UTC timestamp.
 
@@ -118,6 +120,14 @@ def build_submission_record(
     }
     if note:
         record["note"] = note
+    # #1247: per-tranche markers for the immediate-entry split. Emitted only
+    # when set so every legacy caller's record stays byte-identical; a
+    # tranche=="now" record is SKIPPED by picks.submitted_pick_keys (the
+    # pullback half's record is what retires the pick from the drain).
+    if tranche is not None:
+        record["tranche"] = tranche
+    if tranche_meta is not None:
+        record["tranche_meta"] = dict(tranche_meta)
     return record
 
 

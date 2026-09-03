@@ -49,6 +49,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
 from alphalens_pipeline.brokers.automanager.safety import PORTFOLIO_GROSS_FRAC_ENV
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 from broker_contract.contract import (
+    BracketOrderRequest,
     BrokerCapabilityError,
     BrokerError,
     InstrumentRef,
@@ -592,6 +593,168 @@ class TestRefusedPickNotRetriedAcrossTicks(unittest.TestCase):
 
 class _CrashError(Exception):
     """A hard, non-BrokerError crash (models a process death / uncaught bug)."""
+
+
+class TestPlaceTiersNowParams(unittest.TestCase):
+    """#1247: additive keyword-only params on ``_place_tiers`` for the
+    immediate-entry split — defaults byte-identical for every existing
+    caller."""
+
+    def _run(
+        self,
+        *,
+        broker: Any | None = None,
+        **kwargs: Any,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[Any], int]:
+        submitted: list[dict[str, Any]] = []
+        stop_lines: list[dict[str, Any]] = []
+        posted: list[Any] = []
+
+        class _Placed:
+            entry_order_id = "E-1"
+            exit_order_ids: tuple[str, ...] = ()
+
+        class _OkBroker:
+            def place_bracket_order(self, bracket: Any) -> Any:
+                posted.append(bracket)
+                return _Placed()
+
+        def _bracket(rid: str) -> BracketOrderRequest:
+            return BracketOrderRequest(
+                instrument=InstrumentRef(
+                    ticker="RHI",
+                    exchange_mic="XNYS",
+                    asset_type="Stock",
+                    broker_instrument_id="307",
+                    broker_symbol="rhi:xnys",
+                ),
+                side="BUY",
+                quantity=5,
+                entry_limit=43.0,
+                stop_loss=None,
+                take_profit=None,
+                entry_ttl_days=1,
+                client_request_id=rid,
+                tier_index=0,
+            )
+
+        placement = type(
+            "P",
+            (),
+            {
+                "tiers": [
+                    type("T", (), {"bracket": _bracket("rid-1"), "tier_index": 0, "tp": 50.0})()
+                ],
+                "disaster_stop_price": 39.0,
+            },
+        )()
+        account = type("A", (), {"total_value": 100000.0, "currency": "USD"})()
+        instrument = type(
+            "I", (), {"currency": "USD", "broker_instrument_id": 307, "exchange_mic": "XNYS"}
+        )()
+        intent = type("N", (), {"meta": type("M", (), {"brief_date": "2026-09-03"})()})()
+        pkg = "alphalens_pipeline.brokers"
+        with (
+            mock.patch(f"{pkg}.submission_log.append_submission_record", submitted.append),
+            mock.patch.object(cl, "_append_standalone_stop_journal", stop_lines.append),
+        ):
+            count = cl._place_tiers(
+                broker if broker is not None else _OkBroker(),
+                intent,
+                "RHI",
+                instrument,
+                account,
+                None,
+                placement,
+                **kwargs,
+            )
+        return submitted, stop_lines, posted, count
+
+    def test_default_params_keep_every_journal_record_byte_identical(self) -> None:
+        submitted, _stop_lines, posted, count = self._run()
+        self.assertEqual(count, 1)
+        for record in submitted:
+            self.assertNotIn("tranche", record)
+            self.assertNotIn("tranche_meta", record)
+        self.assertEqual(posted[0].entry_duration, "gtd")
+        write_ahead = [r for r in submitted if r.get("note") == "placement attempt"]
+        self.assertEqual(len(write_ahead), 1)
+        per_tier = [r for r in submitted if r["brackets"]]
+        self.assertNotIn("entry_duration", per_tier[0]["brackets"][0])
+
+    def test_entry_duration_is_stamped_on_the_posted_bracket_and_the_record(self) -> None:
+        submitted, _stop_lines, posted, _count = self._run(entry_duration="day")
+        self.assertEqual(posted[0].entry_duration, "day")
+        per_tier = [r for r in submitted if r["brackets"]]
+        self.assertEqual(per_tier[0]["brackets"][0]["entry_duration"], "day")
+
+    def test_tranche_and_meta_ride_write_ahead_and_per_tier_records(self) -> None:
+        meta = {"armed_ts": "2026-09-03T14:00:00+00:00", "submitted_cap": 43.0}
+        submitted, _stop_lines, _posted, _count = self._run(
+            record_tranche="now", record_meta=meta, write_ahead_note="now placement attempt"
+        )
+        write_ahead = [r for r in submitted if r.get("note") == "now placement attempt"]
+        per_tier = [r for r in submitted if r["brackets"]]
+        self.assertEqual(write_ahead[0]["tranche"], "now")
+        self.assertEqual(write_ahead[0]["tranche_meta"]["outcome"], "attempt")
+        self.assertEqual(per_tier[0]["tranche"], "now")
+        self.assertEqual(per_tier[0]["tranche_meta"]["outcome"], "placed")
+        self.assertEqual(per_tier[0]["tranche_meta"]["submitted_cap"], 43.0)
+
+    def test_tranche_plan_override_writes_one_keyed_full_ladder_line(self) -> None:
+        plan = dataclasses.replace(
+            _fee_plan(10_000.0),
+            tp_tranches=(
+                TpTranchePlan(
+                    tranche_index=0, target_price=12.0, tranche_frac=1.0, r_multiple=2.0, tag="TP1"
+                ),
+            ),
+        )
+        _submitted, stop_lines, _posted, _count = self._run(
+            plan=plan, tranche_plan_override=("RHI:2026-09-03", 55.0)
+        )
+        plans = [ln for ln in stop_lines if ln.get("kind") == "tranche_plan"]
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(plans[0]["pick_key"], "RHI:2026-09-03")
+        self.assertEqual(plans[0]["reference_qty"], 55.0)
+        # Same-key re-append benignity is pinned by
+        # TestFoldRoundTripClosures.test_a_same_key_plan_reappend_preserves_closure.
+
+    def test_on_broker_error_outcome_is_stamped_on_the_failure_record(self) -> None:
+        class _RejectBroker:
+            def place_bracket_order(self, bracket: Any) -> Any:
+                raise OrderRejectedError("too far", error_code="TooFarFromMarket")
+
+        outcomes: list[Any] = []
+
+        def _classify(exc: Any) -> str:
+            outcomes.append(exc)
+            return "refused_reject"
+
+        submitted, _stop_lines, _posted, count = self._run(
+            broker=_RejectBroker(),
+            record_tranche="now",
+            record_meta={"armed_ts": "t"},
+            on_broker_error=_classify,
+        )
+        self.assertEqual(count, 0)
+        self.assertEqual(len(outcomes), 1)
+        failure = [r for r in submitted if r.get("note", "").startswith("placement stopped")]
+        self.assertEqual(failure[0]["tranche_meta"]["outcome"], "refused_reject")
+
+    def test_now_records_brackets_still_feed_the_gross_fold(self) -> None:
+        # The additive tranche key must be inert to the working-gross join.
+        record = {
+            "ticker": "RHI",
+            "brief_date": "2026-09-03",
+            "tranche": "now",
+            "fx_rate": None,
+            "brackets": [{"client_request_id": "rid-1", "qty": 5, "entry": 43.0}],
+        }
+        verdict = type("V", (), {"status": "WORKING", "details": {"client_request_id": "rid-1"}})()
+        total, unjoined = cl._committed_working_gross_acct([verdict], [record])
+        self.assertEqual(total, 5 * 43.0)
+        self.assertEqual(unjoined, 0)
 
 
 class TestPlacePickPerTierJournaling(unittest.TestCase):
@@ -8654,6 +8817,50 @@ class TestEvaluateDay1GapGate(unittest.TestCase):
             verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, _day1_spec(), "XNYS", None)
         self.assertEqual(verdict, "defer_no_price")
 
+    def test_e1_anchors_on_the_first_pullback_tier_when_a_now_tier_leads(self) -> None:
+        # #1247: a leading now tier must NOT become the gate's E1 — the anchor
+        # is the first PULLBACK tier. Probe 110 sits between the now cap (120)
+        # and the pullback limit (100): pullback anchor -> pass; a wrong
+        # entry_tiers[0] anchor would defer_below_e1.
+        spec = TradeSpec(
+            entry_tiers=(
+                EntryTierSpec(limit_price=120.0, alloc_pct=40.0, tag="T1", entry_mode="immediate"),
+                EntryTierSpec(limit_price=100.0, alloc_pct=60.0, tag="T2"),
+            ),
+            disaster_stop=90.0,
+            tp_tranches=(),
+            suggested_size_pct=2.0,
+        )
+        with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
+            verdict = cl._evaluate_day1_gap_gate(
+                "KO", self._BRIEF, spec, "XNYS", lambda t, m: 110.0
+            )
+        self.assertEqual(verdict, "pass")
+
+    def test_now_only_pick_passes_without_probe(self) -> None:
+        # A now-only pick carries no pullback tier — the gate is not
+        # applicable and the (network) probe must never run.
+        spec = TradeSpec(
+            entry_tiers=(
+                EntryTierSpec(limit_price=120.0, alloc_pct=100.0, tag="T1", entry_mode="immediate"),
+            ),
+            disaster_stop=90.0,
+            tp_tranches=(),
+            suggested_size_pct=2.0,
+        )
+        with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
+            verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, spec, "XNYS", _RaisingProbe())
+        self.assertEqual(verdict, "pass")
+
+    def test_spec_tiers_without_entry_mode_still_evaluate(self) -> None:
+        # Duck-typed spec stubs carrying only limit_price exist in suites —
+        # absent entry_mode reads as pullback.
+        tier = type("T", (), {"limit_price": 100.0})()
+        spec = type("S", (), {"entry_tiers": (tier,)})()
+        with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
+            verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, spec, "XNYS", lambda t, m: 99.0)
+        self.assertEqual(verdict, "defer_below_e1")
+
     def test_manual_probe_called_intraday_on_brief_date_itself(self) -> None:
         # #1246: a manual pick's arm date IS its day 1 — the probe must run
         # during the brief_date session (where a brief pick is still pre-day1
@@ -9238,3 +9445,68 @@ class TestStreamDeliveryProof(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPageNowResiduals(unittest.TestCase):
+    """#1247 memo §3.2.6: a now order that died terminal with a PARTIAL fill
+    pages once — the position is smaller than planned and exits size to the
+    filled quantity. A full cancel with no fill stays quiet (the verdict flow
+    already covers it)."""
+
+    @staticmethod
+    def _verdict(status: str, *, crid: str = "rid-now", filled: float | None = 3.0) -> Any:
+        details: dict[str, Any] = {"client_request_id": crid}
+        if filled is not None:
+            details["filled_quantity"] = filled
+        return type("V", (), {"status": status, "details": details})()
+
+    @staticmethod
+    def _now_record(crid: str = "rid-now") -> dict[str, Any]:
+        return {
+            "ticker": "RHI",
+            "brief_date": "2026-09-03",
+            "tranche": "now",
+            "brackets": [{"client_request_id": crid, "qty": 5, "entry": 43.0}],
+        }
+
+    def test_terminal_partial_now_verdict_pages_throttled_once(self) -> None:
+        pages: list[tuple[str, str]] = []
+        cl._page_now_residuals(
+            [self._verdict("CANCELLED")],
+            [self._now_record()],
+            lambda msg, key: pages.append((msg, key)) or True,
+        )
+        self.assertEqual(len(pages), 1)
+        self.assertIn("partially filled", pages[0][0])
+        self.assertIn("3", pages[0][0])
+        self.assertEqual(pages[0][1], "now-residual:RHI")
+
+    def test_full_cancel_without_fill_does_not_page(self) -> None:
+        pages: list[tuple[str, str]] = []
+        cl._page_now_residuals(
+            [self._verdict("CANCELLED", filled=None)],
+            [self._now_record()],
+            lambda msg, key: pages.append((msg, key)) or True,
+        )
+        self.assertEqual(pages, [])
+
+    def test_non_now_records_and_working_verdicts_stay_quiet(self) -> None:
+        pages: list[tuple[str, str]] = []
+        plain = dict(self._now_record())
+        plain.pop("tranche")
+        cl._page_now_residuals(
+            [self._verdict("CANCELLED"), self._verdict("WORKING", crid="rid-other")],
+            [plain],
+            lambda msg, key: pages.append((msg, key)) or True,
+        )
+        self.assertEqual(pages, [])
+
+    def test_partial_fill_veto_keeps_the_planned_line(self) -> None:
+        # #1249 veto pin restated for the now shape: a terminal verdict WITH
+        # filled_quantity must never retract the disaster-stop plan.
+        retracted: list[Any] = []
+        with mock.patch.object(cl, "_retract_planned_lines", lambda c, **k: retracted.append(c)):
+            cl._retract_planned_for_verdicts(
+                [self._verdict("CANCELLED")]  # partial fill present
+            )
+        self.assertEqual(retracted, [])

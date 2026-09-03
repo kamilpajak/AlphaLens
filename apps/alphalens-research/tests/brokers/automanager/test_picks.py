@@ -462,6 +462,22 @@ class JoinHelperTest(unittest.TestCase):
         records = [{"ticker": "KO"}, {"brief_date": "2026-07-20"}, {}]
         self.assertEqual(submitted_pick_keys(records), set())
 
+    def test_now_tranche_record_does_not_retire_the_pick(self) -> None:
+        # #1247: the now half's records must NOT join — otherwise a placed or
+        # refused now tranche would strand the pullback siblings forever.
+        records = [{"ticker": "RHI", "brief_date": "2026-09-03", "tranche": "now"}]
+        self.assertEqual(submitted_pick_keys(records), set())
+
+    def test_legacy_records_without_tranche_key_join_exactly_as_before(self) -> None:
+        records = [
+            {"ticker": "KO", "brief_date": "2026-07-20"},
+            {"ticker": "RHI", "brief_date": "2026-09-03", "tranche": "now"},
+            {"ticker": "RHI", "brief_date": "2026-09-03", "note": "entry-trail watch opened"},
+        ]
+        self.assertEqual(
+            submitted_pick_keys(records), {("KO", "2026-07-20"), ("RHI", "2026-09-03")}
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

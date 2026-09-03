@@ -12,6 +12,7 @@ real modules.
 from __future__ import annotations
 
 import datetime as dt
+import enum
 import functools
 import logging
 import math
@@ -19,7 +20,7 @@ import os
 import time
 from collections import deque
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, is_dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
@@ -34,9 +35,11 @@ from broker_contract.contract import (
     SupportsAmendStop,
     SupportsNettedPositionReads,
     SupportsOcoExit,
+    SupportsPriceTickFloor,
     SupportsStandaloneStop,
     SupportsTrailingStop,
     _is_insufficient_funds,
+    _is_price_tolerance_reject,
     _is_sell_orders_already_exist,
     _is_too_far_from_market,
 )
@@ -804,6 +807,7 @@ def _run_verdict_advance(
             report.alerts += 1
         verdicts = []
     report.verdict_count = len(verdicts)
+    _page_now_residuals(verdicts, records, deps.alert_throttled)
     if not verdicts:
         return
     try:
@@ -2046,6 +2050,7 @@ def _route_pick_to_entry_watch(
     *,
     d_bps: int,
     exit_policy: ExitPolicy | None = None,
+    reference_qty_override: float | None = None,
 ) -> bool:
     """The flag-ON drain tail: journal the pick's managed-exit state (ONE
     ``tranche_plan`` line per uic, exactly what the bracket path journals in
@@ -2082,7 +2087,14 @@ def _route_pick_to_entry_watch(
             plan=plan,
             exit_spec=exit_spec,
             stop_price=float(plan.disaster_stop),
-            reference_qty=sum(t.qty for t in plan.entry_tiers if t.qty > 0),
+            # #1247 split pick: the override carries the FULL ladder qty
+            # (now + pullback) so the TP ladder covers both halves' fills;
+            # default = today's pullback-only sum, byte-identical.
+            reference_qty=(
+                reference_qty_override
+                if reference_qty_override is not None
+                else sum(t.qty for t in plan.entry_tiers if t.qty > 0)
+            ),
             uic=int(instrument.broker_instrument_id),
             use_geometry=resolved_exit_policy.applies_geometry,
             # Trade identity (adjudication finding 4): a crash-recovery
@@ -4689,6 +4701,9 @@ def build_default_deps(
             alert_throttled=_throttled,
             day1_gap_price_probe=day1_gap_probe,
             audit_budget=audit_budget,
+            # #1247: the now tranche's marketability gate reads the SAME live
+            # feed the exit/entry-watch passes use (per-uic now-entry scope).
+            now_entry_feed_factory=_default_live_exits_feed_factory,
         ),
         read_records=_read_records,
         verdicts_fn=functools.partial(reconcile_bridge.verdicts, audit_budget=audit_budget),
@@ -5396,6 +5411,48 @@ def _retract_planned_lines(
     except Exception:
         logger.warning("planned-line retraction failed — will retry next tick", exc_info=True)
         return 0
+
+
+def _page_now_residuals(
+    verdicts: Iterable[Any],
+    records: Iterable[Mapping[str, Any]],
+    alert_throttled: Callable[[str, str], bool] | None,
+) -> None:
+    """#1247 memo §3.2.6: page once when a now order died TERMINAL with a
+    PARTIAL fill — the position is smaller than planned; exits size to the
+    filled quantity (the standard exit management needs no action here). A
+    full cancel with no fill stays quiet (the existing verdict flow covers
+    it); the throttle bounds repeats per ticker."""
+    if alert_throttled is None:
+        return
+    now_brackets: dict[str, tuple[str, float | None]] = {}
+    for record in records:
+        if record.get("tranche") != "now":
+            continue
+        for bracket in record.get("brackets") or []:
+            crid = str(bracket.get("client_request_id") or "")
+            if crid:
+                ticker = str(record.get("ticker") or "?")
+                qty = bracket.get("qty")
+                now_brackets[crid] = (ticker, float(qty) if qty is not None else None)
+    if not now_brackets:
+        return
+    for verdict in verdicts:
+        if verdict.status not in _TERMINAL_NON_FILLED:
+            continue
+        filled = verdict.details.get("filled_quantity")
+        if not filled:
+            continue
+        joined = now_brackets.get(str(verdict.details.get("client_request_id") or ""))
+        if joined is None:
+            continue
+        ticker, qty = joined
+        planned = f"{qty:g}" if qty is not None else "?"
+        alert_throttled(
+            f"now tranche {ticker}: order died at close partially filled "
+            f"({float(filled):g} of {planned}) — exits size to the filled quantity",
+            f"now-residual:{ticker}",
+        )
 
 
 def _retract_planned_for_verdicts(verdicts: Iterable[ReconcileVerdict]) -> None:
@@ -6265,6 +6322,7 @@ def _make_place_pick(
     alert_throttled: Callable[[str, str], bool] | None = None,
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
     audit_budget: OutcomeAuditBudget | None = None,
+    now_entry_feed_factory: Callable[..., Any] | None = None,
 ) -> Callable[[Any], bool]:
     """Compose safety.check -> placement_planner.classify -> placer loop over
     place_bracket_order + the submissions journal for one armed pick, plus the
@@ -6303,6 +6361,7 @@ def _make_place_pick(
             alert_throttled=alert_throttled,
             day1_gap_price_probe=day1_gap_price_probe,
             audit_budget=audit_budget,
+            now_entry_feed_factory=now_entry_feed_factory,
         )
 
     return _place
@@ -7212,6 +7271,7 @@ def _journal_tranche_plan(
     instrument: Any,
     use_geometry: bool,
     fx: Any = None,
+    override: tuple[str, float] | None = None,
 ) -> None:
     """INC-5: journal ONE ``tranche_plan`` line per uic so the live-exit engine can
     rebuild the TP ladder from the journal alone — see
@@ -7225,13 +7285,21 @@ def _journal_tranche_plan(
     entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
     if not entry_tiers:
         return
+    if override is not None:
+        # #1247 split pick: ONE keyed tranche_plan for the whole pick with the
+        # FULL ladder's reference_qty (now + pullback) — a keyless line here
+        # would reset the generation the watch route's keyed re-append opens.
+        pick_key, reference_qty = override
+    else:
+        pick_key, reference_qty = None, sum(t.qty for t in entry_tiers)
     _journal_tranche_plan_core(
         plan=plan,
         exit_spec=exit_spec,
         stop_price=placement.disaster_stop_price,
-        reference_qty=sum(t.qty for t in entry_tiers),
+        reference_qty=reference_qty,
         uic=int(instrument.broker_instrument_id),
         use_geometry=use_geometry,
+        pick_key=pick_key,
         instrument_currency=str(getattr(instrument, "currency", "") or ""),
         sizing_currency=_sizing_currency_of(fx, instrument),
     )
@@ -7269,6 +7337,13 @@ def _place_tiers(
     exit_spec: Any = None,
     exit_policy: ExitPolicy | None = None,
     plan: Any = None,
+    *,
+    entry_duration: str | None = None,
+    record_tranche: str | None = None,
+    record_meta: Mapping[str, Any] | None = None,
+    write_ahead_note: str = "placement attempt",
+    tranche_plan_override: tuple[str, float] | None = None,
+    on_broker_error: Callable[[Any], str] | None = None,
 ) -> int:
     """Place each entry tier's bracket, journaling IMMEDIATELY after each fill so a
     mid-loop crash leaves at most a partial ladder joined to submissions.jsonl (the
@@ -7327,32 +7402,42 @@ def _place_tiers(
     # outcome was. None (a real null) when no sized plan is in scope.
     est_fee_bps = _estimate_round_trip_fee_bps(plan, fx, instrument_currency=instrument.currency)
 
-    def _journal_tier(tier: Any, placed: Any) -> None:
-        bracket = tier.bracket
+    def _tranche_kwargs(outcome: str) -> dict[str, Any]:
+        # #1247: per-tranche markers on every record this placement journals.
+        # Absent params -> empty dict -> legacy record shape byte-identical.
+        if record_tranche is None:
+            return {}
+        meta = dict(record_meta or {})
+        meta["outcome"] = outcome
+        return {"tranche": record_tranche, "tranche_meta": meta}
+
+    def _journal_tier(tier: Any, bracket: Any, placed: Any) -> None:
+        bracket_row: dict[str, Any] = {
+            "client_request_id": bracket.client_request_id,
+            "entry_order_id": placed.entry_order_id,
+            "exit_order_ids": list(placed.exit_order_ids),
+            "qty": bracket.quantity,
+            "entry": bracket.entry_limit,
+            "stop": bracket.stop_loss,
+            "tp": bracket.take_profit,
+            "ttl": bracket.entry_ttl_days,
+        }
+        if entry_duration is not None:
+            bracket_row["entry_duration"] = entry_duration
         append_submission_record(
             build_submission_record(
                 brief_date=intent.meta.brief_date,
                 ticker=ticker,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,
-                brackets=[
-                    {
-                        "client_request_id": bracket.client_request_id,
-                        "entry_order_id": placed.entry_order_id,
-                        "exit_order_ids": list(placed.exit_order_ids),
-                        "qty": bracket.quantity,
-                        "entry": bracket.entry_limit,
-                        "stop": bracket.stop_loss,
-                        "tp": bracket.take_profit,
-                        "ttl": bracket.entry_ttl_days,
-                    }
-                ],
+                brackets=[bracket_row],
                 note=None,
                 sizing_currency=account.currency,
                 instrument_currency=instrument.currency,
                 sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
                 est_round_trip_fee_bps=est_fee_bps,
+                **_tranche_kwargs("placed"),
             )
         )
         use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
@@ -7386,6 +7471,7 @@ def _place_tiers(
         instrument=instrument,
         use_geometry=resolved_exit_policy.applies_geometry,
         fx=fx,
+        override=tranche_plan_override,
     )
 
     # Write-ahead dedup line (memo §4.4 B2): register the (ticker, brief_date)
@@ -7404,28 +7490,46 @@ def _place_tiers(
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
             brackets=[],
-            note="placement attempt",
+            note=write_ahead_note,
             sizing_currency=account.currency,
             instrument_currency=instrument.currency,
             sizing_equity=_resolve_sizing_equity(account.total_value),
             fx=fx,
             est_round_trip_fee_bps=est_fee_bps,
+            **_tranche_kwargs("attempt"),
         )
     )
 
     placed_count = 0
     placed_entry_ids: list[str] = []
     failure_note: str | None = None
+    failure_outcome = "failed"
     try:
         for tier in placement.tiers:
-            placed = broker.place_bracket_order(tier.bracket)
-            _journal_tier(tier, placed)
+            bracket: Any = tier.bracket
+            if (
+                entry_duration is not None
+                and is_dataclass(bracket)
+                and not isinstance(bracket, type)
+            ):
+                # #1247 now tranche: dataclasses.replace keeps the request
+                # frozen; PR-B's adapter dispatches the duration block on it.
+                # (Duck-typed test brackets skip the replace; the record stamp
+                # below still carries the duration.)
+                bracket = cast(Any, replace(bracket, entry_duration=entry_duration))
+            placed = broker.place_bracket_order(cast(Any, bracket))
+            _journal_tier(tier, bracket, placed)
             placed_entry_ids.append(str(placed.entry_order_id))
             placed_count += 1
     except BrokerError as exc:
         failure_note = (
             f"placement stopped after {placed_count}/{len(placement.tiers)} bracket(s): {exc}"
         )
+        if on_broker_error is not None:
+            # #1247 now tranche: classify (price-tolerance reject vs generic
+            # failure) + page; the returned string is the failure record's
+            # tranche_meta outcome. The exception still never escapes.
+            failure_outcome = on_broker_error(exc)
         # Memo §4.4 B1 — insufficient-funds rollback: a tier rejected for lack
         # of cash means the WHOLE pick is unaffordable; leaving the earlier
         # tiers resting would keep a partial frame-sized ladder live at a
@@ -7454,6 +7558,7 @@ def _place_tiers(
                 sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
                 est_round_trip_fee_bps=est_fee_bps,
+                **_tranche_kwargs(failure_outcome),
             )
         )
 
@@ -7591,17 +7696,30 @@ def _evaluate_day1_gap_gate(
     *,
     source: str = "brief",
 ) -> Day1GapGateVerdict:
-    """Orchestrates the gate for one pick: resolves E1 (the highest/first
-    entry tier — ``ladder.build_entry_tiers`` returns tiers strictly
-    descending, so ``spec.entry_tiers[0]`` is always the shallowest/highest
-    limit), calls the price probe ONLY when the pick is within its day1
-    session at/after the open+grace window — every other phase (pre-day1,
-    pre-open, day 2+) needs no price at all, and the probe is a real network
-    round-trip — then delegates the full verdict to the pure
-    ``_day1_gap_gate_decision``. ``source`` threads the day-1 anchor choice
-    (#1246) into BOTH the probe-gating check here and the decision, so the
-    two can never disagree on what "day1" means."""
-    e1_limit = spec.entry_tiers[0].limit_price if spec.entry_tiers else None
+    """Orchestrates the gate for one pick: resolves E1 (the first PULLBACK
+    tier — ``ladder.build_entry_tiers`` returns tiers strictly descending, so
+    the first pullback tier is the shallowest/highest resting limit; a
+    leading immediate "now" tier (#1247) is EXCLUDED — its cap is not a
+    pullback rung and must not redefine the gate's threshold), calls the
+    price probe ONLY when the pick is within its day1 session at/after the
+    open+grace window — every other phase (pre-day1, pre-open, day 2+) needs
+    no price at all, and the probe is a real network round-trip — then
+    delegates the full verdict to the pure ``_day1_gap_gate_decision``.
+    ``source`` threads the day-1 anchor choice (#1246) into BOTH the
+    probe-gating check here and the decision, so the two can never disagree
+    on what "day1" means. A now-ONLY pick has no pullback rung: the gate is
+    not applicable (the group's decision IS the timing, memo §2) — pass
+    without probing."""
+    tiers = spec.entry_tiers or ()
+    e1_limit = next(
+        (t.limit_price for t in tiers if getattr(t, "entry_mode", "pullback") == "pullback"),
+        None,
+    )
+    if e1_limit is None and any(getattr(t, "entry_mode", "pullback") == "immediate" for t in tiers):
+        logger.info(
+            "day1 gap gate: %s carries only an immediate tier — gate not applicable", ticker
+        )
+        return "pass"
     now_utc = dt.datetime.now(dt.UTC)
     probe_price: float | None = None
     if e1_limit is not None and probe is not None:
@@ -7833,6 +7951,7 @@ def _entry_trail_intercept(
     exit_policy: ExitPolicy | None = None,
     *,
     positions: Iterable[Position] = (),
+    reference_qty_override: float | None = None,
 ) -> bool | None:
     """The _place_pick entry-trailing intercept outcome: ``None`` when the pick
     must fall through to classify + ``_place_tiers`` (flag off, ineligible plan,
@@ -7880,11 +7999,359 @@ def _entry_trail_intercept(
     # retirement record (its tranche_plan re-append is identity-idempotent).
     uic = int(instrument.broker_instrument_id)
     if not already_watching and _has_live_long_on_uic(positions, uic):
-        _log_live_uic_deferral(ticker, pick_key, uic)
-        return False
+        # #1247 memo §3.8 own-pick relaxation: a live long GOVERNED BY THIS
+        # PICK (its now tranche just filled) must not freeze its own
+        # pre-planned pullback tiers — the guard's purpose is a SECOND pick
+        # stacking onto an instrument another pick owns. Journal read only on
+        # this (rare) branch; mismatch, a keyless governing plan (classic-path
+        # fill) and an unreadable journal all stay the conservative defer.
+        try:
+            governing = _fold_governing_plan_pick_keys(_iter_standalone_stop_journal()).get(uic)
+        except OSError:
+            governing = None
+        if governing != pick_key:
+            _log_live_uic_deferral(ticker, pick_key, uic)
+            return False
+        logger.info(
+            "place_pick %s: live long on uic %d is governed by this pick — "
+            "routing its own pullback watches",
+            ticker,
+            uic,
+        )
     return _route_pick_to_entry_watch(
-        broker, intent, ticker, instrument, account, plan, fx, d_bps=d_bps, exit_policy=exit_policy
+        broker,
+        intent,
+        ticker,
+        instrument,
+        account,
+        plan,
+        fx,
+        d_bps=d_bps,
+        exit_policy=exit_policy,
+        reference_qty_override=reference_qty_override,
     )
+
+
+# --- Immediate ("now") tranche (#1247, memo docs/research/
+# arm_manual_immediate_entry_design_2026_09_03.md) ---------------------------
+
+# Per-uic feed scope for the now tranche's marketability gate. Per-uic so two
+# concurrent now picks never clobber each other's subscription slice; a DEFER
+# deliberately KEEPS the subscription (a fresh subscribe's snapshot arrives
+# async — release-on-defer would starve the gate forever).
+_FEED_SCOPE_NOW_ENTRY_PREFIX = "now-entry"
+
+
+class _NowOutcome(enum.Enum):
+    ALREADY_DONE = "already_done"  # marker for this arm generation exists
+    DEFER = "defer"  # no real-time quote — whole pick stays armed
+    PLACED = "placed"
+    REFUSED_NOW = "refused_now"  # terminal for the now tranche only
+    REFUSED_PICK = "refused_pick"  # cost gate — terminal for the whole pick
+
+
+def _now_ioc_supported(broker: Any, instrument: Any) -> bool:
+    """Whether the instrument supports IOC for Limit orders — fail-open to
+    False (DayOrder), never IOC on an unreadable capability (PR-B doctrine)."""
+    probe = getattr(broker, "limit_order_durations_for", None)
+    if probe is None:
+        return False
+    try:
+        durations = probe(
+            int(instrument.broker_instrument_id),
+            str(getattr(instrument, "asset_type", "Stock") or "Stock"),
+        )
+    except Exception:
+        return False
+    return durations is not None and "ImmediateOrCancel" in durations
+
+
+def _now_submitted_cap(broker: Any, instrument: Any, operator_cap: float) -> float:
+    """The cap floored DOWN to the limit tick (memo §3.2.3) when the adapter
+    exposes the floor capability; the verbatim operator cap otherwise (test
+    fakes — the adapter's own quantize still runs at POST)."""
+    if isinstance(broker, SupportsPriceTickFloor):
+        return broker.floor_limit_price_to_tick(
+            int(instrument.broker_instrument_id),
+            str(getattr(instrument, "asset_type", "Stock") or "Stock"),
+            operator_cap,
+        )
+    return operator_cap
+
+
+def _now_cost_gate_violation(
+    plan: Any,
+    fx: Any,
+    instrument: Any,
+    exit_spec: Any,
+    exit_policy: ExitPolicy | None,
+    *,
+    cap: float,
+) -> str | None:
+    """Memo §3.3 — the #1112 parity gate at drain: TP1 must clear round-trip
+    cost at the CAP (the worst-case fill). Mirrors ``_brief_plan_arm_refusal``
+    with ``fill_estimate = cap``; a ``--no-tp`` pick has no TP1 to gate —
+    vacuous by design (stop-only plan, the group manages exits)."""
+    resolved = exit_policy if exit_policy is not None else SetupStaticPolicy()
+    reference_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
+    if resolved.applies_geometry and exit_spec is not None:
+        target = float(exit_spec.initial_levels.tp)
+        qty = reference_qty
+    else:
+        tranches = getattr(plan, "tp_tranches", ()) or ()
+        if not tranches:
+            logger.info("now cost gate: pick has no TP tranches (--no-tp) — gate vacuous")
+            return None
+        quantities = apportion_tranche_quantities(
+            reference_qty=reference_qty,
+            tranche_fracs=tuple(t.tranche_frac for t in tranches),
+        )
+        violation = apportioned_coverage_violation(
+            tranche_quantities=quantities, reference_qty=reference_qty
+        )
+        if violation is not None:
+            return f"now tranche: {violation}"
+        first = next(((t, q) for t, q in zip(tranches, quantities, strict=True) if q > 0.0), None)
+        if first is None:
+            return "now tranche: exit plan has no sellable tranche"
+        target, qty = float(first[0].target_price), float(first[1])
+    facts = cost_gate_facts(
+        instrument_currency=str(getattr(instrument, "currency", "") or ""),
+        sizing_currency=_sizing_currency_of(fx, instrument),
+    )
+    if entry_trail_geometry.arms_inside_exit_region(
+        fill_estimate=cap, exit_target=target, qty=qty, facts=facts
+    ):
+        return (
+            f"now tranche would fill inside the exit region at the cap: cap {cap:.4f}, "
+            f"first take-profit {target:.4f} ({qty:g} share(s)) does not clear "
+            "round-trip cost + E_min"
+        )
+    return None
+
+
+def _now_meta(
+    intent: Any,
+    operator_cap: float,
+    submitted_cap: float,
+    point: Any,
+    duration: str | None,
+) -> dict[str, Any]:
+    """The now half's ``tranche_meta`` telemetry (memo §3.2 observability).
+    The quote's delay value is structurally 0 by the feed contract
+    (SaxoLivePriceFeed vetoes anything else) and is not on PricePoint."""
+    meta: dict[str, Any] = {
+        "armed_ts": str(intent.meta.armed_ts),
+        "operator_cap": operator_cap,
+        "submitted_cap": submitted_cap,
+    }
+    if point is not None:
+        meta["gate_ask"] = float(point.ask)
+        meta["gate_bid"] = float(point.bid)
+        meta["gate_event_time"] = (
+            point.event_time.isoformat(timespec="seconds") if point.event_time else None
+        )
+        meta["gate_source"] = str(point.source)
+    if duration is not None:
+        meta["entry_duration"] = duration
+    return meta
+
+
+def _refuse_now_tranche(
+    intent: Any,
+    ticker: str,
+    instrument: Any,
+    account: Any,
+    fx: Any,
+    *,
+    note: str,
+    meta: Mapping[str, Any],
+) -> None:
+    """Journal a terminal now-tranche refusal: a ``tranche=="now"`` record is
+    SKIPPED by ``picks.submitted_pick_keys`` (the siblings keep draining) and
+    found by the arm-generation scan (the now half never retries)."""
+    from alphalens_pipeline.brokers.submission_log import (
+        append_submission_record,
+        build_submission_record,
+    )
+
+    try:
+        append_submission_record(
+            build_submission_record(
+                brief_date=intent.meta.brief_date,
+                ticker=ticker,
+                mic=instrument.exchange_mic,
+                uic=instrument.broker_instrument_id,
+                brackets=[],
+                note=note,
+                sizing_currency=account.currency,
+                instrument_currency=instrument.currency,
+                sizing_equity=_resolve_sizing_equity(account.total_value),
+                fx=fx,
+                tranche="now",
+                tranche_meta=dict(meta),
+            )
+        )
+    except OSError as exc:
+        # Mirror _refuse_pick_terminal: a journal-append failure must never
+        # crash the tick; without the marker the now half re-evaluates next
+        # tick (the page is throttled).
+        logger.warning(
+            "place_pick %s: now-tranche refusal record append failed "
+            "(now half retries next tick): %s",
+            ticker,
+            exc,
+        )
+
+
+def _handle_now_tranche(
+    broker: Broker,
+    intent: Any,
+    ticker: str,
+    instrument: Any,
+    account: Any,
+    plan: Any,
+    fx: Any,
+    *,
+    now_tier: Any,
+    records: Sequence[Mapping[str, Any]],
+    spec: Any,
+    exit_spec: Any,
+    exit_policy: ExitPolicy | None,
+    alert_throttled: Callable[[str, str], bool] | None,
+    now_entry_feed_factory: Callable[..., Any] | None,
+    tranche_plan_override: tuple[str, float],
+) -> _NowOutcome:
+    """The immediate tranche's drain: idempotency scan → cap floor → cost
+    gate → real-time marketability gate → capped placement via the stock
+    ``classify`` + ``_place_tiers`` machinery (memo §3.2/§3.5/§3.6)."""
+    from alphalens_pipeline.brokers.automanager.placement_planner import classify
+
+    armed_ts = str(intent.meta.armed_ts)
+    for record in records:
+        # Idempotency / crash re-drive: ANY now record for this arm generation
+        # means the now half is done (placed, refused, or write-ahead-then-
+        # crashed — the _place_tiers write-ahead contract: an attempt marker
+        # with no bracket is an alertable non-retried attempt, never re-POSTed).
+        if (
+            str(record.get("tranche") or "") == "now"
+            and str(record.get("ticker") or "").upper() == ticker
+            and str(record.get("brief_date") or "") == str(intent.meta.brief_date)
+            and str((record.get("tranche_meta") or {}).get("armed_ts") or "") == armed_ts
+        ):
+            return _NowOutcome.ALREADY_DONE
+    if now_tier.qty <= 0:
+        logger.warning("place_pick %s: now tier sized to zero shares — skipped", ticker)
+        return _NowOutcome.REFUSED_NOW
+    operator_cap = float(now_tier.limit_price)
+    submitted_cap = _now_submitted_cap(broker, instrument, operator_cap)
+    violation = _now_cost_gate_violation(
+        plan, fx, instrument, exit_spec, exit_policy, cap=submitted_cap
+    )
+    if violation is not None:
+        _refuse_pick_terminal(
+            ticker,
+            dt.date.fromisoformat(str(intent.meta.brief_date)),
+            violation,
+            f"now-cost:{ticker}",
+            alert_throttled,
+        )
+        return _NowOutcome.REFUSED_PICK
+    uic = int(instrument.broker_instrument_id)
+    scope = f"{_FEED_SCOPE_NOW_ENTRY_PREFIX}:{uic}"
+    point = None
+    if now_entry_feed_factory is not None:
+        try:
+            feed = now_entry_feed_factory({uic: (ticker, instrument.exchange_mic)}, scope=scope)
+            point = feed.latest(uic)
+        except Exception:
+            logger.warning("place_pick %s: now quote read failed — deferred", ticker, exc_info=True)
+    if point is None:
+        # Feed off / outage / halt / stale (memo §3.6): non-terminal — the
+        # whole pick stays armed and retries next tick; the page names the
+        # config lever so a mis-set env is visible. Subscription kept (see
+        # _FEED_SCOPE_NOW_ENTRY_PREFIX).
+        if alert_throttled is not None:
+            alert_throttled(
+                f"now tranche {ticker}: no real-time quote (feed off/outage/halt/stale) — "
+                f"deferred, retried next tick; check ALPHALENS_SAXO_LIVE_PRICES / price reader",
+                f"now-noprice:{ticker}",
+            )
+        return _NowOutcome.DEFER
+
+    factory = now_entry_feed_factory
+
+    def _release_scope() -> None:
+        import contextlib
+
+        if factory is None:
+            return
+        with contextlib.suppress(Exception):
+            factory({}, scope=scope)
+
+    if float(point.ask) > submitted_cap:
+        _refuse_now_tranche(
+            intent,
+            ticker,
+            instrument,
+            account,
+            fx,
+            note=f"now refused: ask {float(point.ask):.4f} above cap {submitted_cap:.4f}",
+            meta=dict(
+                _now_meta(intent, operator_cap, submitted_cap, point, None), outcome="refused_cap"
+            ),
+        )
+        if alert_throttled is not None:
+            alert_throttled(
+                f"now tranche {ticker}: price above cap "
+                f"({float(point.ask):.4f} > {submitted_cap:.4f}) — NOT entered; "
+                "re-arm with a fresh cap if the signal stands",
+                f"now-cap:{ticker}",
+            )
+        _release_scope()
+        return _NowOutcome.REFUSED_NOW
+    duration = "ioc" if _now_ioc_supported(broker, instrument) else "day"
+    now_plan = replace(plan, entry_tiers=(replace(now_tier, limit_price=submitted_cap),))
+    placement = classify(now_plan, instrument, side=_ENTRY_SIDE)
+    if not placement.tiers:
+        logger.warning("place_pick %s: now tranche sized to zero shares", ticker)
+        _release_scope()
+        return _NowOutcome.REFUSED_NOW
+
+    def _classify_error(exc: Any) -> str:
+        if _is_price_tolerance_reject(exc):
+            if alert_throttled is not None:
+                alert_throttled(
+                    f"now tranche {ticker}: rejected by the venue price-tolerance check "
+                    f"({exc}) — NOT entered; re-arm with a fresh cap if the signal stands",
+                    f"now-reject:{ticker}",
+                )
+            return "refused_reject"
+        if alert_throttled is not None:
+            alert_throttled(f"now tranche {ticker}: placement failed ({exc})", f"now-fail:{ticker}")
+        return "failed"
+
+    placed = _place_tiers(
+        broker,
+        intent,
+        ticker,
+        instrument,
+        account,
+        fx,
+        placement,
+        spec,
+        exit_spec,
+        exit_policy=exit_policy,
+        plan=now_plan,
+        entry_duration=duration,
+        record_tranche="now",
+        record_meta=_now_meta(intent, operator_cap, submitted_cap, point, duration),
+        write_ahead_note="now placement attempt",
+        tranche_plan_override=tranche_plan_override,
+        on_broker_error=_classify_error,
+    )
+    _release_scope()
+    return _NowOutcome.PLACED if placed > 0 else _NowOutcome.REFUSED_NOW
 
 
 def _place_pick(
@@ -7895,6 +8362,7 @@ def _place_pick(
     alert_throttled: Callable[[str, str], bool] | None = None,
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
     audit_budget: OutcomeAuditBudget | None = None,
+    now_entry_feed_factory: Callable[..., Any] | None = None,
 ) -> bool:
     """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
@@ -8066,6 +8534,60 @@ def _place_pick(
         )
         return False
 
+    # --- Immediate ("now") tranche (#1247, memo §3.2/§3.5/§3.6) -------------
+    # Handled FIRST (time-critical), AFTER the whole-plan money gates (which
+    # already price both halves) and BEFORE the sibling routing: a now DEFER
+    # returns before any sibling record could retire the pick and strand the
+    # now half; a now refusal lets the siblings route the same tick.
+    now_tiers = tuple(
+        t for t in plan.entry_tiers if getattr(t, "entry_mode", "pullback") == "immediate"
+    )
+    now_placed = False
+    reference_qty_override: float | None = None
+    tranche_plan_override: tuple[str, float] | None = None
+    if now_tiers:
+        pick_key = f"{ticker}:{intent.meta.brief_date}"
+        full_ladder_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
+        outcome = _handle_now_tranche(
+            broker,
+            intent,
+            ticker,
+            instrument,
+            account,
+            plan,
+            fx,
+            now_tier=now_tiers[0],
+            records=records,
+            spec=spec,
+            exit_spec=exit_spec,
+            exit_policy=exit_policy,
+            alert_throttled=alert_throttled,
+            now_entry_feed_factory=now_entry_feed_factory,
+            tranche_plan_override=(pick_key, full_ladder_qty),
+        )
+        if outcome in (_NowOutcome.DEFER, _NowOutcome.REFUSED_PICK):
+            return False
+        now_placed = outcome is _NowOutcome.PLACED
+        pullback_tiers = tuple(
+            t for t in plan.entry_tiers if getattr(t, "entry_mode", "pullback") != "immediate"
+        )
+        if not pullback_tiers:
+            if outcome is _NowOutcome.REFUSED_NOW:
+                # A now-only pick has nothing left to drain: retire it so a
+                # fresh arm (new armed_ts, latest-wins) is the path back
+                # (memo §3.7). The refusal detail is in the submissions
+                # journal's tranche record.
+                picks.mark_refused(
+                    ticker, brief_date, "now tranche refused (see submissions journal)"
+                )
+            return now_placed
+        plan = replace(plan, entry_tiers=pullback_tiers)
+        if now_placed:
+            # The TP ladder must cover BOTH halves' fills; the watch route
+            # re-appends the SAME keyed plan (benign, no generation reset).
+            reference_qty_override = full_ladder_qty
+            tranche_plan_override = (pick_key, full_ladder_qty)
+
     # Entry-trailing intercept (memo §5 / drain_intercept): with the flag armed
     # AND the pick trailing-eligible, route it into a WATCH (per-tier watch_open
     # lines, journal-FIRST) INSTEAD of resting the three server-side limit-entry
@@ -8084,8 +8606,13 @@ def _place_pick(
         entry_trail_fold,
         exit_policy,
         positions=positions,
+        reference_qty_override=reference_qty_override,
     )
     if intercepted is not None:
+        # Deliberately NOT `or now_placed`: a capacity-deferred sibling half
+        # must read as not-placed so the drain retries next tick (the
+        # armed_ts scan skips the now half); the pick counts as placed on
+        # the tick the siblings actually route.
         return intercepted
 
     # The pick is about to take the CLASSIC bracket path, which carries neither
@@ -8107,7 +8634,7 @@ def _place_pick(
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:
         logger.warning("place_pick %s: every entry tier sized to zero shares", ticker)
-        return False
+        return now_placed
 
     return (
         _place_tiers(
@@ -8122,9 +8649,10 @@ def _place_pick(
             exit_spec,
             exit_policy=exit_policy,
             plan=plan,
+            tranche_plan_override=tranche_plan_override,
         )
         > 0
-    )
+    ) or now_placed
 
 
 def _handle_safety_refusal(decision: Any, ticker: str, brief_date: dt.date) -> None:

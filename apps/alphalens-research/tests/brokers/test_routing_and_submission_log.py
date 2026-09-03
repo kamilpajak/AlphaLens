@@ -234,6 +234,23 @@ class TestSubmissionLog(unittest.TestCase):
         self.assertEqual(record["mic"], "XNYS")
         self.assertEqual(record["uic"], "307")
 
+    def test_build_submission_record_stamps_tranche_and_tranche_meta(self):
+        # #1247: the now half's records carry the tranche marker + telemetry.
+        meta = {
+            "armed_ts": "2026-09-03T14:00:00+00:00",
+            "operator_cap": 43.0,
+            "submitted_cap": 43.0,
+            "outcome": "placed",
+        }
+        record = self._record(tranche="now", tranche_meta=meta)
+        self.assertEqual(record["tranche"], "now")
+        self.assertEqual(record["tranche_meta"], meta)
+
+    def test_absent_tranche_params_keep_the_legacy_record_shape_byte_identical(self):
+        record = self._record()
+        self.assertNotIn("tranche", record)
+        self.assertNotIn("tranche_meta", record)
+
     def test_schema_3_est_round_trip_fee_bps_always_present(self):
         # Schema-3 shape (broker sizing memo §4.5): the honest per-tier
         # round-trip estimate key is ALWAYS present — a REAL null when the
