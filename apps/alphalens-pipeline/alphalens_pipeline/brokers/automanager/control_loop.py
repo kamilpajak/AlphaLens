@@ -2209,7 +2209,12 @@ def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> Non
     Unlike the protection pass this takes NO ``records`` parameter: the watch
     state lives in the SEPARATE ``entry_trails.jsonl`` journal, never the
     submissions journal (the same reason :func:`_run_live_exits_pass` omits it).
-    A no-op when the flag is unset/0.
+    NOT a no-op when the flag is unset/0: the retraction sweep below runs on
+    every non-KILL tick regardless — the live-exits pass keeps consuming
+    ``fold_tranche_plans`` under its own (different) flag
+    (``ALPHALENS_LIVE_MARKET_EXITS``), so a stale plan left by a
+    KILL-cancelled or expired watch must retract even while entry trails are
+    OFF, or nothing ever clears it (#1231).
 
     Every early return RELEASES the pass's "entry-watch" slice of the shared
     price-stream subscription (:func:`_release_feed_scope`): the feed build
@@ -2220,17 +2225,19 @@ def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> Non
         _cancel_working_entry_orders(deps, report)
         _release_feed_scope(deps, _FEED_SCOPE_ENTRY_WATCH)
         return
+    # Sweep BEFORE the feature-off early return (#1231) and BEFORE the
+    # empty-active early return: an all-terminal fold is exactly the state
+    # whose stale routed ladders need retracting (2026-08-19 adjudication
+    # finding 3). Self-contained error boundary; it does not touch the feed
+    # factory. Kept BELOW the KILL gate so no journal writes happen under
+    # KILL (memo §3 G2) — a KILL-cancelled watch is swept on the first
+    # non-KILL tick instead, flag on or off.
+    fold = entry_trails.read_entry_trail_fold()
+    _retract_stale_tranche_plans(fold, deps)
     d_bps = entry_trails.entry_trail_bps()
     if d_bps <= 0:
         _release_feed_scope(deps, _FEED_SCOPE_ENTRY_WATCH)
         return
-    fold = entry_trails.read_entry_trail_fold()
-    # Housekeeping BEFORE the empty-active early return: an all-terminal fold
-    # is exactly the state whose stale routed ladders need retracting
-    # (2026-08-19 adjudication finding 3). Self-contained error boundary; under
-    # KILL the pass returned above, so a KILL-cancelled watch is swept on the
-    # first non-KILL tick.
-    _retract_stale_tranche_plans(fold, deps)
     active = _active_entry_watches(fold)
     if not active:
         deps.entry_watchers.clear()  # every watch went terminal — drop stale runtimes
