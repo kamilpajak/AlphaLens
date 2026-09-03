@@ -1,6 +1,6 @@
 # Insider cluster buying — retrospective pre-registration (draft for adversarial review)
 
-**Status:** DRAFT (frozen for review 2026-09-03; becomes LOCKED only after zen + Perplexity adversarial review and a `docs/research/preregistration/params_insider_cluster_retro_2026_09.json` lock; NO run before LOCKED).
+**Status:** DRAFT, adversarial review APPLIED 2026-09-03 (§12); two owner decisions outstanding (§12.3) before the `params_insider_cluster_retro_2026_09.json` lock; NO run before LOCKED.
 **Parent:** [`event_sourced_lane_design_2026_09_03.md`](event_sourced_lane_design_2026_09_03.md) §6 stage 1, §12 data readiness.
 **Class:** informed-trader flow, Form-4 based — shares data with paradigm #11 (Cohen-Malloy opportunistic), so this is NOT a fresh class for multiplicity: programme-level Bonferroni applies (`feedback burnt-holdout multiplicity compounds`).
 **Compute:** small (Form-4 store + ~2,800 price parquets); runs on one host after rsync (Form-4 from the VPS, prices/factors from the Mac). Wall time minutes, not hours; the ">1h compute" review doctrine is applied anyway because the result feeds a multi-month forward lane.
@@ -66,7 +66,7 @@ Frozen definition applied to `transaction_year=2009..2026` (74,250 qualifying le
 | 2022 | 649 | 175 | 214 | 440k |
 | 2023 | 590 | 184 | 194 | 353k |
 
-**Inference window 2013-2023: 4,661 events store-wide, 1,004 inside the PIT yaml universe, 1,891 distinct arrival sessions, 1,936 tickers.** USD-floor sensitivity (in-universe): 100k -> 1,004; 250k -> 633; 500k -> 370. Insider-count mix (in-universe): 2 = 577, 3 = 201, 4 = 93, >= 5 = 133. The >= 300 floor is cleared at every candidate USD floor, so §10 Q1 is a power-vs-strength choice, not a feasibility one. Note for the universe decision (§10 Q3): only ~22% of store events fall inside the PIT yaml — the Form-4 store universe is ~4x broader (also survivor-based); **six 2024 yaml snapshots (2024-01..2024-06) are degenerate (1 ticker each)** — the 2024-2026 descriptive read must use the month-union or repaired snapshots, and any prior audit that read per-month membership over H1 2024 should be re-checked.
+**Inference window 2013-2023: 4,661 events store-wide (1,891 distinct arrival sessions, 1,936 tickers); inside the PIT yaml universe 1,004 events on 686 distinct arrival sessions and 489 tickers (max 9 events per ticker; 191 sessions carry >= 2 events).** (Corrected 2026-09-03 after review: the first draft attached the store-wide session and ticker counts to the in-universe subset.) USD-floor sensitivity (in-universe): 100k -> 1,004; 250k -> 633; 500k -> 370. Insider-count mix (in-universe): 2 = 577, 3 = 201, 4 = 93, >= 5 = 133. The >= 300 floor is cleared at every candidate USD floor, so §10 Q1 is a power-vs-strength choice, not a feasibility one. Note for the universe decision (§10 Q3): only ~22% of store events fall inside the PIT yaml — the Form-4 store universe is ~4x broader (also survivor-based); **six 2024 yaml snapshots (2024-01..2024-06) are degenerate (1 ticker each)** — the 2024-2026 descriptive read must use the month-union or repaired snapshots, and any prior audit that read per-month membership over H1 2024 should be re-checked.
 
 ## 8. Abort and deviation rules
 
@@ -90,3 +90,34 @@ Execution frictions (fills inside the 7-session TTL, slippage), the news gate on
 5. Cluster **2 distinct insiders within 2 sessions** primary; 3-in-5 covariate.
 
 Status stays DRAFT until the adversarial review (decision 8) is applied; the review may amend §2-§6 BEFORE lock, never after.
+
+## 12. Adversarial review trail (2026-09-03) and amendments
+
+Reviewers: Perplexity `reason` (16 findings) and zen `deepseek/deepseek-v4-pro` thinking=high (10 findings), both hostile-referee framing, no go/no-go. Each finding was adjudicated separately from its remedy (house rule). Amendments below OVERRIDE the corresponding text in §2-§6 and are frozen into the params file at lock.
+
+### 12.1 Adopted
+
+| # | Finding (both reviewers unless noted) | Amendment |
+|---|---|---|
+| A1 | **Power.** At N ~ 1,000 in-universe events, se ~ 0.63 pp; P(|t| >= 3.1) is ~1% for a true +0.5%, ~6% for +1.0%, ~23% for +1.5%; 80% power at +1% needs ~6,200 events (iid, before clustering). "Inconclusive" is the near-certain outcome of a hypothesis test. | The retrospective is **re-classified as an ESTIMATION stage**: it reports the treated-minus-control effect with cluster-bootstrap CIs and NO three-way verdict, NO p-value against the programme bar. It is recorded in the ledger as an exploratory look (precedent: `options_retro_pilot_2026_07`) with an explicit "no discovery claim". The forward stage is the ONLY confirmatory test. A pre-registered **planning rule** (not a verdict) decides whether the forward lane is built: build iff point estimate > 0 AND lower 90% CI bound > -0.5 pp (net of the fee model); otherwise do not build. |
+| A2 | **Mean reversion masquerades as drift** (insiders buy dips; controls matched only on month x size are healthier). | Matching is **mandatory on**: 20-session pre-event return, 6-month pre-event return, 20-session realized volatility, 20-session average dollar volume, plus calendar month and size tercile (proxy from the price cache). Nearest-neighbour within calipers, 5 controls per event; standardized mean differences reported before/after; the treated-minus-control estimate is ALSO reported with a regression adjustment on the same variables as a co-primary sensitivity. |
+| A3 | **Control exclusion uses future information** ([-20,+20] insider legs). | Exclusion window becomes **[-20, 0] only**; a later qualifying purchase inside a control's window is stamped (censoring flag), never used to delete the control. |
+| A4 | **Survivor bias is not cancelled by survivor controls**; conditioning on "no insider buying" selects healthier controls; residual direction is not sign-guaranteed although upward is the likely case. | The claim "cancels to first order" is **withdrawn**. The estimand is redefined explicitly: *the post-cluster return of issuers that survive to 2026 in a survivor-reconstructed universe*, NOT the return available to a historical investor. Sensitivity: re-estimate on the 12% delisted-issuer subset present in the store to bound the magnitude. Purchase of delisted price history stays deferred (owner decision 2). |
+| A5 | **Anchor** `filed_date + 1 OPEN` is leak-free but throws away same-session drift for pre-open / early filings. | Fetch the EDGAR **acceptance datetime** from each event's filing header (accession numbers are in the store; ~1,000 requests through the canonical SEC client). Arrival rule: accepted before 09:00 ET -> same-session OPEN; otherwise next-session OPEN. Sensitivity: same-day CLOSE anchor reported alongside. Late filings (> 10 business days after the trade) excluded; filing lag stamped. |
+| A6 | **Dollar thresholds are not economically scaled**; **Cohen-Malloy routine trades dilute**; **cluster completion vs first filing**. | Covariates stamped (never filters): cluster USD / market cap, cluster USD / 20-session dollar volume, Cohen-Malloy label of each buyer (the classifier exists), first-leg filing date (car from the first leg reported descriptively). |
+| A7 | **Dependence**: single-way clustering by arrival session may overstate the effective N (same ticker repeats; sessions with many events). | Primary clusters stay arrival sessions; **two-way (ticker x arrival session) reported as a sensitivity**; cluster-size distribution and effective N printed. |
+| A8 | **Basket vs retail**: an equal-weight basket of ~1,000 events is not what a 2-5 name retail book experiences. | Descriptive **retail simulation**: 3- and 5-name caps, equal-dollar, fee model, first-come rule for simultaneous signals; full distribution (median, p10/p90, max drawdown) reported. This is descriptive here and becomes the SIM-basket question at the forward stage (parent memo decision 6). |
+| A9 | **Equivalence bound** must be net of costs. | The planning-rule threshold (-0.5 pp) is defined NET of the Saxo fee model for a fixed ticket; the fee model is the same in the power simulation and the estimate. |
+| A10 | **Benchmark**: SPY leaves size/value/momentum/liquidity exposure. | Primary statistic is the matched-control difference (characteristic-adjusted by construction after A2); a Carhart-4F residual on the treated basket is reported as robustness; SPY- and IWM-relative raw car are descriptive only. DGTW is NOT adopted (no PIT book-to-market). |
+
+### 12.2 Not adopted (with reason)
+
+- "Use CRSP/Compustat delisting returns" — not available to this programme; handled by A4's estimand redefinition and the deferred purchase decision.
+- "Make the first filing the event" — the strategy's signal is by construction the first moment the cluster condition is observable (second distinct insider); the first-leg car is reported descriptively (A6).
+- "DGTW as primary" — requires PIT book-to-market we do not have; A2 + A10 cover the intent.
+- Perplexity finding 1 ("1,004 events but 1,891 arrival sessions is impossible") — a REPORTING error in the pre-flight table, not a data error: 1,891 sessions and 1,936 tickers referred to all 4,661 store-wide events; the in-universe subset is recounted in §7.1.
+
+### 12.3 New owner decisions required before lock
+
+1. **Universe for the estimation stage.** With power now the binding constraint, the reviewers recommend the **full Form-4 store universe as primary** (4,661 events, se ~0.29 pp) with the PIT yaml as a secondary cut — the reverse of decision 3. Recommendation: accept the reversal; comparability with paradigm #11 is a weaker good than a CI half as wide.
+2. **Ledger accounting.** Record the estimation stage as an exploratory look with no verdict (precedent: options retro pilot, 2026-07), i.e. it is COUNTED in the programme tally but produces no discovery claim; the forward stage is the single confirmatory charge. Recommendation: yes.
