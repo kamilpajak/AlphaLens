@@ -1433,7 +1433,10 @@ def arm_manual_command(
         None, "--ttl-days", help="Entry TTL in sessions (default: contract default)."
     ),
     mic: str = typer.Option(
-        _ARM_INSTRUMENT_MIC, "--mic", help="ISO 10383 MIC; v1 supports XNYS / XNAS only."
+        _ARM_INSTRUMENT_MIC,
+        "--mic",
+        help="ISO 10383 MIC; supported: XNYS / XNAS / XWAR (GPW). LIVE XWAR needs "
+        "the stream venue env + GPW market-data entitlement — see the runbook.",
     ),
     env: str = typer.Option(
         _DEFAULT_ARM_ENV,

@@ -36,12 +36,14 @@ from broker_contract.trade_intent.schema import (
 
 from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
 
-# v1 supports US venues only (#1235 decision 2026-09-02). XWAR / XAMS are
-# planned follow-ups: the calendar helper is already MIC-parametrized, but the
-# daemon's routing (`resolve_us_instrument`) and price feed are US-pinned, so
-# an unsupported MIC must refuse here rather than arm an intent the daemon
-# cannot route.
-SUPPORTED_MICS = ("XNYS", "XNAS")
+# US venues plus GPW (#1238 PR 7 — XWAR opens after the venue arc made the
+# daemon venue-aware end to end: hint routing, day-1 gate, currency-aware
+# cost gates, mixed-book gross cap, multi-venue stream window). XAMS stays
+# refused until its own validation arc (map entry only, PR #1244). LIVE XWAR
+# additionally needs ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR on the
+# LIVE daemon + price-reader units and a verified GPW market-data
+# entitlement — see the arc runbook note in deploy/systemd/README.md.
+SUPPORTED_MICS = ("XNYS", "XNAS", "XWAR")
 
 # Percentage sums are validated against float noise only (33.3+33.3+33.4 !=
 # 100.0 exactly) — NEVER against sloppy input; 60+30 is a refusal, not a
@@ -245,8 +247,8 @@ def build_manual_intent(
         raise ManualIntentError("ticker must be non-empty")
     if mic not in SUPPORTED_MICS:
         raise ManualIntentError(
-            f"MIC {mic!r} is not supported in v1 (supported: {', '.join(SUPPORTED_MICS)}; "
-            "XWAR / XAMS are planned follow-ups, #1235)"
+            f"MIC {mic!r} is not supported (supported: {', '.join(SUPPORTED_MICS)}; "
+            "XAMS awaits its own validation arc, #1238)"
         )
     if stop <= 0:
         raise ManualIntentError(f"stop must be positive, got {stop:g}")
