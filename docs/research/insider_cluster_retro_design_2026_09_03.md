@@ -81,3 +81,12 @@ Execution frictions (fills inside the 7-session TTL, slippage), the news gate on
 1. Cluster USD floor 100k vs 250k (fewer, stronger events)?
 2. Buy delisted price history (Polygon paid tier, one month) to remove the survivor caveat, or accept the disclosed upward bias for the discovery stage?
 3. Universe: the PIT yaml (current-IWM reconstruction) vs the whole Form-4 store universe (broader, also survivor-based)? Default: PIT yaml, for comparability with #11.
+
+## 11. Owner decisions (2026-09-03) — frozen into the spec
+
+1. USD floor **100,000** primary; 250,000 as a strength check (reported, not a second test).
+2. Delisted prices **not purchased** for this stage; survivor bias disclosed as UPWARD in every result table; the control-cohort difference is the primary statistic for exactly this reason.
+3. Universe **PIT yaml** primary; full store universe secondary descriptive.
+5. Cluster **2 distinct insiders within 2 sessions** primary; 3-in-5 covariate.
+
+Status stays DRAFT until the adversarial review (decision 8) is applied; the review may amend §2-§6 BEFORE lock, never after.
