@@ -2242,6 +2242,10 @@ class TestSimBrokerManagerDropIns(unittest.TestCase):
                     f"{Path.home()}/.alphalens/price_reader/reader.sock"
                 ),
                 "ALPHALENS_SAXO_LIVE_PRICES": "1",
+                # #1271: the stream session window's venue set — the first
+                # TRACKED value of this env (it existed only as runbook prose
+                # through the XWAR arc; the code default is XNYS-only).
+                "ALPHALENS_SAXO_STREAM_SESSION_VENUES": "XNYS,XWAR,XETR",
             },
         )
 
