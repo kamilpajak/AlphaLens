@@ -40,6 +40,7 @@ import logging
 import math
 import os
 from datetime import date
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,7 @@ from alphalens_pipeline.data.fundamentals.owner_earnings import (
     OwnerEarnings,
     compute_owner_earnings,
 )
+from alphalens_pipeline.data.fundamentals.sic_index import get_sic
 from alphalens_pipeline.data.fundamentals.ttm_aggregator import (
     _arrow_table_to_entries,
     compute_ttm,
@@ -89,6 +91,40 @@ _TAX_RATE_DEFAULT = 0.21
 # `docs/research/edgar_fundamentals_data_quality_2026_05_20.md` and
 # Perplexity research persisted under `~/.claude/projects/.../tool-results/`.
 SHARES_MAX_AGE_DAYS = 180
+
+# Ascending, NON-OVERLAPPING [lo, hi] SIC-4 ranges whose gross-vs-net
+# assessed-tax gap (fuel/tobacco/alcohol excise, sales tax, USF/utility
+# surcharges) is large enough (10-20% of revenue) that the store must NOT
+# serve the gross-of-tax ``...IncludingAssessedTax`` fallback (issue #924).
+# Shape mirrors ``sector_etf._SIC_RANGES``; pinned by
+# TestTaxHeavySicRangesWellFormed.
+_TAX_HEAVY_SIC_RANGES: tuple[tuple[int, int, str], ...] = (
+    (2082, 2085, "alcohol excise"),  # malt/wine/distilled — federal + state excise tax
+    (2100, 2199, "tobacco excise"),  # cigarettes/cigars — federal + state excise tax
+    (2911, 2911, "petroleum refining"),  # motor-fuel excise tax
+    (4800, 4899, "telecom"),  # USF + state/local telecom excise surcharges
+    (4900, 4999, "utilities"),  # electric/gas/sanitary — state utility gross-receipts tax
+    (5171, 5172, "petroleum wholesale"),  # motor-fuel excise tax passthrough
+    (5200, 5999, "retail"),  # state/local sales tax
+)
+
+
+@cache
+def _is_tax_heavy(ticker: str) -> bool:
+    """True when ``ticker``'s SIC falls in a ``_TAX_HEAVY_SIC_RANGES`` band.
+
+    Fail-open: no SIC (unresolved ticker or missing index) -> False. The
+    guard is forward-insurance — 0 current candidates are tax-heavy today —
+    so failing open costs nothing now and simply protects future
+    tax-heavy-sector filers from serving gross-of-assessed-tax revenue via
+    the ``RevenueFromContractWithCustomerIncludingAssessedTax`` fallback.
+    lru-cached: zero I/O after the first call per ticker (``get_sic``
+    itself is backed by a process-wide memoised parquet lookup).
+    """
+    sic = get_sic(ticker)
+    if sic is None:
+        return False
+    return any(lo <= sic <= hi for lo, hi, _label in _TAX_HEAVY_SIC_RANGES)
 
 
 class EdgarFundamentalsStore:
@@ -236,7 +272,14 @@ class EdgarFundamentalsStore:
             return None
 
         # Duration concepts (TTM, Compustat formula).
-        revenue_ttm = compute_ttm(self._reader, cik, chains.REVENUE, asof)
+        # Revenue chain: tax-heavy sectors (fuel/tobacco/alcohol/retail/
+        # telecom/utilities) stay on the net-of-assessed-tax chain — the
+        # gross-of-tax ...IncludingAssessedTax fallback would understate
+        # PS / EV-REV and break cross-sector comparability there (#924).
+        revenue_chain = (
+            chains.REVENUE_NET_OF_ASSESSED_TAX if _is_tax_heavy(ticker) else chains.REVENUE
+        )
+        revenue_ttm = compute_ttm(self._reader, cik, revenue_chain, asof)
         operating_income_ttm = compute_ttm(self._reader, cik, chains.OPERATING_INCOME, asof)
         ocf_ttm = compute_ttm(self._reader, cik, chains.OPERATING_CASH_FLOW, asof)
         capex_ttm = compute_ttm(self._reader, cik, chains.CAPEX, asof)
@@ -321,7 +364,9 @@ class EdgarFundamentalsStore:
         # We pass the already-derived TTM tax_rate as the per-quarter proxy:
         # per-quarter tax rates are too noisy and a TTM-stable rate yields a
         # consistent FCFF tax shield across the 20-quarter window.
-        fcf_margin_5y_median = fcf_margin_rolling_median(self._reader, cik, asof, tax_rate=tax_rate)
+        fcf_margin_5y_median = fcf_margin_rolling_median(
+            self._reader, cik, asof, tax_rate=tax_rate, revenue_chain=revenue_chain
+        )
 
         publish_date_str = self._latest_publish_date(cik, asof)
 

@@ -356,3 +356,111 @@ class TestCrossConceptFallback(unittest.TestCase):
         )
         # Compustat: 100 (Q1 2025) + 400 (FY 2024) - 90 (Q1 2024) = 410
         self.assertAlmostEqual(out, 410.0, places=2)
+
+
+class TestIncludingAssessedTaxFallback(unittest.TestCase):
+    """Issue #924: filers that migrated fully to the gross-of-assessed-tax
+    ``RevenueFromContractWithCustomerIncludingAssessedTax`` tag (RGTI 2023,
+    VRNS 2018, FSLY, TWST, CEVA, ENS, AIR, DJCO) resolved ``revenue_ttm =
+    None`` because ``concept_chains.REVENUE`` only knew the Excluding
+    variant + legacy tags.
+    """
+
+    def test_including_only_filer_resolves_via_last_fallback(self):
+        """RGTI/VRNS-shaped: filer never reports Excluding/Revenues/
+        SalesRevenueNet — only the Including tag. ``compute_ttm`` over
+        ``chains.REVENUE`` must resolve via the LAST fallback entry
+        instead of emitting ``None``.
+        """
+        from alphalens_pipeline.data.fundamentals import concept_chains as chains
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_ttm
+
+        rows = [
+            _row(
+                concept="RevenueFromContractWithCustomerIncludingAssessedTax",
+                period_start="2025-04-01",
+                period_end="2025-06-30",
+                val=100.0,
+                filed_date="2025-08-01",
+                form="10-Q",
+                fp="Q2",
+            ),
+            _row(
+                concept="RevenueFromContractWithCustomerIncludingAssessedTax",
+                period_start="2025-07-01",
+                period_end="2025-09-30",
+                val=110.0,
+                filed_date="2025-11-01",
+                form="10-Q",
+                fp="Q3",
+            ),
+            _row(
+                concept="RevenueFromContractWithCustomerIncludingAssessedTax",
+                period_start="2025-10-01",
+                period_end="2025-12-31",
+                val=120.0,
+                filed_date="2026-02-15",
+                form="10-K",
+                fp="FY",
+            ),
+            _row(
+                concept="RevenueFromContractWithCustomerIncludingAssessedTax",
+                period_start="2026-01-01",
+                period_end="2026-03-31",
+                val=130.0,
+                filed_date="2026-05-01",
+                form="10-Q",
+                fp="Q1",
+            ),
+        ]
+        reader = _stub_reader(_arrow_table(rows))
+        out = compute_ttm(reader, cik="x", chain=chains.REVENUE, asof=date(2026, 5, 19))
+        # 100 + 110 + 120 + 130 = 460 over ~274d span (within 250..300).
+        self.assertAlmostEqual(out, 460.0, places=2)
+
+    def test_excluding_wins_over_including_when_both_present_per_end(self):
+        """Ordering regression: when both tags report the same quarter-end,
+        first-concept-wins keeps the Excluding (net-of-tax) value — the
+        Including tag, being the LAST chain entry, must never override a
+        value an earlier chain entry already supplied.
+        """
+        from alphalens_pipeline.data.fundamentals import concept_chains as chains
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import (
+            compute_per_quarter_series,
+        )
+
+        rows = []
+        for period_start, period_end, excl_val, incl_val, filed_date, fp in [
+            ("2025-04-01", "2025-06-30", 100.0, 111.0, "2025-08-01", "Q2"),
+            ("2025-07-01", "2025-09-30", 110.0, 121.0, "2025-11-01", "Q3"),
+        ]:
+            rows.append(
+                _row(
+                    concept="RevenueFromContractWithCustomerExcludingAssessedTax",
+                    period_start=period_start,
+                    period_end=period_end,
+                    val=excl_val,
+                    filed_date=filed_date,
+                    form="10-Q",
+                    fp=fp,
+                )
+            )
+            rows.append(
+                _row(
+                    concept="RevenueFromContractWithCustomerIncludingAssessedTax",
+                    period_start=period_start,
+                    period_end=period_end,
+                    val=incl_val,
+                    filed_date=filed_date,
+                    form="10-Q",
+                    fp=fp,
+                )
+            )
+        reader = _stub_reader(_arrow_table(rows))
+        series = dict(
+            compute_per_quarter_series(
+                reader, cik="x", chain=chains.REVENUE, asof=date(2026, 5, 19)
+            )
+        )
+        self.assertEqual(series["2025-06-30"], 100.0)
+        self.assertEqual(series["2025-09-30"], 110.0)
