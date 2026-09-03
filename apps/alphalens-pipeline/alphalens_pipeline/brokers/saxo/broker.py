@@ -123,11 +123,42 @@ _STOP_LIMIT_PRICE_FIELD = "StopLimitPrice"
 # trailing/clamp order is allowed to live past the session — cancel at close,
 # re-arm the watch next session. NOT the exit path's GoodTillCancel.
 _ENTRY_TRAIL_DURATION = "DayOrder"
+# Immediate-entry (#1247) bracket-entry duration spellings — LOCAL for the
+# same reason as the block above: they join execution_config_version()'s
+# namespace only when entry_duration becomes a live execution stamp.
+_IMMEDIATE_ENTRY_DURATIONS = {
+    "day": "DayOrder",
+    "ioc": "ImmediateOrCancel",
+}
 
 
 def _today() -> dt.date:
     """UTC today — module-level so tests can pin the GTD calendar math."""
     return dt.datetime.now(dt.UTC).date()
+
+
+def _limit_order_durations(details: dict[str, Any]) -> frozenset[str] | None:
+    """DurationTypes Saxo reports for Limit orders on this instrument.
+
+    ``None`` = shape unknown/absent (FAIL-OPEN): the caller must default to
+    DayOrder, never IOC, when support cannot be read. The wire shape of
+    ``SupportedOrderTypeSettings`` is UNVERIFIED offline (T3 probe pending,
+    ``docs/research/saxo_live_followup_tests_2026_07_20.md``) — the raw block
+    is INFO-logged so the SIM probe can pin the real shape before the drain
+    trusts an IOC answer.
+    """
+    settings = details.get("SupportedOrderTypeSettings")
+    if not isinstance(settings, list):
+        return None
+    logger.info("SupportedOrderTypeSettings (wire-shape verification): %r", settings)
+    for entry in settings:
+        if not isinstance(entry, dict) or entry.get("OrderType") != "Limit":
+            continue
+        durations = entry.get("DurationTypes")
+        if not isinstance(durations, list) or not durations:
+            return None
+        return frozenset(str(d) for d in durations)
+    return None
 
 
 # Saxo refuses /port/v1/closedpositions outright on EndOfDay-netting accounts
@@ -1130,10 +1161,7 @@ class SaxoBroker:
         # 2026-07-29: a TooFarFromMarket OCO reject dropped here without its
         # code, so the control loop journaled the PERMANENT oco_unsupported
         # marker instead of the transient 900s oco_too_far one.
-        error_info = payload.get("ErrorInfo")
-        error_code = error_info.get("ErrorCode") if isinstance(error_info, dict) else None
-        if error_code is None and payload.get("ErrorCode"):
-            error_code = payload.get("ErrorCode")
+        error_code = self._error_code_of(payload)
         live_order_id = self._find_order_id(payload)
         if live_order_id:
             cleanup = self._repair_partial_acceptance(live_order_id, account_key)
@@ -1853,6 +1881,46 @@ class SaxoBroker:
             )
         return quantized
 
+    def _floor_price_to_tick(self, price: float, details: dict[str, Any], *, label: str) -> float:
+        """Floor to the tick — NEVER up (#1247 memo §3.2.3: the immediate
+        entry's cap is the operator's max acceptable fill; nearest-rounding
+        could raise it). Same finite/positive guards and the same bps
+        hard-fail as ``_quantize_price``: a floor is bounded by one tick, but
+        one tick of a coarse scheme can still dwarf the price scale — the
+        identical "tick scheme disagrees" pathology.
+
+        Epsilon bound: measured float-division noise on realistic price/tick
+        ratios (up to ~1e6) is 2.2e-12..2.2e-10, so 1e-9 clears it with two
+        orders of margin; the theoretical tick-UP it admits requires a
+        12-decimal sub-tick input no production path produces, and its
+        magnitude is bounded at tick*1e-9 — far below OrderDecimals.
+        """
+        if not math.isfinite(price):
+            raise OrderRejectedError(f"{label} must be a finite number, got {price}")
+        if price <= 0:
+            raise OrderRejectedError(f"{label} must be > 0, got {price}")
+        tick = self._tick_size_for(price, details)
+        # +1e-9 epsilon: float noise must not floor an exactly-on-tick price
+        # one tick down (49.99 / 0.01 can land at 4998.9999...).
+        floored = round(math.floor(price / tick + 1e-9) * tick, 10)
+        adjustment_bps = abs(floored - price) / price * 1e4
+        max_bps = execution_policy._MAX_TICK_ADJUSTMENT_BPS
+        if adjustment_bps > max_bps:
+            raise OrderRejectedError(
+                f"{label}={price} needs a floor adjustment of {adjustment_bps:.1f} bps "
+                f"(tick {tick}) — exceeds the {max_bps} bps cap; the instrument's "
+                "tick scheme disagrees with the setup's price scale"
+            )
+        return floored
+
+    def floor_limit_price_to_tick(self, uic: int, asset_type: str, price: float) -> float:
+        """``SupportsPriceTickFloor``: fetch the instrument's tick scheme and
+        floor ``price`` to the limit tick (the drain journals the operator cap
+        beside this submitted cap; the wire path's nearest-quantize then
+        no-ops on the already-on-tick value)."""
+        details = self._client.get_instrument_details(uic, asset_type)
+        return self._floor_price_to_tick(price, details, label="cap_price")
+
     def _build_bracket_body(self, request: BracketOrderRequest, account_key: str) -> dict[str, Any]:
         """Single-shot 3-way bracket body for ``POST /trade/v2/orders``.
 
@@ -1929,6 +1997,24 @@ class SaxoBroker:
                 }
             )
 
+        if request.entry_duration == "gtd":
+            entry_duration: dict[str, Any] = {
+                "DurationType": "GoodTillDate",
+                "ExpirationDateTime": expiry.isoformat(),
+                "ExpirationDateContainsTime": False,
+            }
+        else:
+            # Immediate entry (#1247): a capped now tranche never rests across
+            # sessions — DayOrder dies at the close, IOC cancels the residual.
+            duration_type = _IMMEDIATE_ENTRY_DURATIONS.get(request.entry_duration)
+            if duration_type is None:
+                # Literal is not runtime-enforced — fail operator-readable,
+                # never a bare KeyError from a live placement path.
+                raise OrderRejectedError(
+                    f"unknown entry_duration {request.entry_duration!r}; expected "
+                    f"'gtd' or one of {sorted(_IMMEDIATE_ENTRY_DURATIONS)}"
+                )
+            entry_duration = {"DurationType": duration_type}
         body: dict[str, Any] = {
             "Uic": int(instrument.broker_instrument_id),
             "AssetType": instrument.asset_type,
@@ -1937,11 +2023,7 @@ class SaxoBroker:
             "BuySell": side,
             "OrderType": "Limit",
             "OrderPrice": entry_q,
-            "OrderDuration": {
-                "DurationType": "GoodTillDate",
-                "ExpirationDateTime": expiry.isoformat(),
-                "ExpirationDateContainsTime": False,
-            },
+            "OrderDuration": entry_duration,
             "ManualOrder": manual_order,
             # Correlation ONLY (echoed in responses/order objects); the real
             # idempotency lives in the x-request-id header (15s dedup window).
@@ -1979,6 +2061,21 @@ class SaxoBroker:
             if isinstance(child, dict) and child.get("OrderId"):
                 return str(child["OrderId"])
         return None
+
+    @staticmethod
+    def _error_code_of(payload: dict[str, Any]) -> str | None:
+        """The verbatim Saxo ErrorCode from a reject payload, or None.
+
+        Covers the same two shapes as ``_rejection_detail``: nested
+        ``{"ErrorInfo": {...}}`` first, then top-level ``{"ErrorCode": ...}``.
+        Safety branches classify on this STRUCTURED code (memo §4.2), never by
+        parsing the message.
+        """
+        error_info = payload.get("ErrorInfo")
+        error_code = error_info.get("ErrorCode") if isinstance(error_info, dict) else None
+        if error_code is None and payload.get("ErrorCode"):
+            error_code = payload.get("ErrorCode")
+        return None if error_code is None else str(error_code)
 
     @staticmethod
     def _rejection_detail(payload: dict[str, Any]) -> str:
@@ -2029,14 +2126,22 @@ class SaxoBroker:
                 f"{order_id}' if the entry is unwanted."
             )
         detail = self._rejection_detail(payload)
+        # #1247 PR-B: attach the structured code here too — before this only
+        # the precheck and OCO paths carried it, so a TooFarFromMarket /
+        # PriceExceedsAggressiveTolerance arriving on the real POST was
+        # structurally unclassifiable.
+        error_code = self._error_code_of(payload)
         live_order_id = self._find_order_id(payload)
         if live_order_id:
             cleanup = self._repair_partial_acceptance(live_order_id, account_key)
             raise OrderRejectedError(
                 f"Saxo rejected {request_id} with HTTP {status} "
-                f"AFTER accepting order {live_order_id} ({detail}); cleanup: {cleanup}"
+                f"AFTER accepting order {live_order_id} ({detail}); cleanup: {cleanup}",
+                error_code=error_code,
             )
-        raise OrderRejectedError(f"Saxo rejected {request_id} with HTTP {status}: {detail}")
+        raise OrderRejectedError(
+            f"Saxo rejected {request_id} with HTTP {status}: {detail}", error_code=error_code
+        )
 
     def _repair_partial_acceptance(self, order_id: str, account_key: str) -> str:
         try:

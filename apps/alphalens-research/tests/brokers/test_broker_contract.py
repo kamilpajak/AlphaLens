@@ -43,6 +43,7 @@ from broker_contract.contract import (
     OrderStatus,
     PlacedOrder,
     Position,
+    _is_price_tolerance_reject,
     _is_sell_orders_already_exist,
     _is_too_far_from_entry,
     _is_too_far_from_market,
@@ -330,6 +331,45 @@ class TestErrorClassifiersPositiveControl(unittest.TestCase):
         # is the bracket-child geometry reject, a different remediation path.
         self.assertFalse(
             _is_too_far_from_market(OrderRejectedError("x", error_code="TooFarFromEntryOrder"))
+        )
+
+    def test_bracket_request_entry_duration_defaults_gtd(self):
+        # #1247 PR-B: the entry-order lifetime axis defaults to today's
+        # GoodTillDate behavior — byte-identical for every existing caller.
+        request = BracketOrderRequest(
+            instrument=InstrumentRef(
+                ticker="KO",
+                exchange_mic="XNYS",
+                asset_type="Stock",
+                broker_instrument_id="1",
+                broker_symbol="KO:xnys",
+            ),
+            side="BUY",
+            quantity=1,
+            entry_limit=50.0,
+            stop_loss=None,
+            take_profit=None,
+            entry_ttl_days=5,
+            client_request_id="r-1",
+            tier_index=0,
+        )
+        self.assertEqual(request.entry_duration, "gtd")
+
+    def test_price_tolerance_reject_matches_both_codes(self):
+        # #1247 PR-B: the capped immediate entry treats BOTH price-tolerance
+        # rejects as normal race outcomes converted to a loud refusal.
+        for code in ("TooFarFromMarket", "PriceExceedsAggressiveTolerance"):
+            self.assertTrue(
+                _is_price_tolerance_reject(OrderRejectedError("x", error_code=code)),
+                code,
+            )
+        self.assertFalse(_is_price_tolerance_reject(BrokerError("boom")))
+        self.assertFalse(
+            _is_price_tolerance_reject(OrderRejectedError("x", error_code="OtherCode"))
+        )
+        self.assertFalse(_is_price_tolerance_reject(OrderRejectedError("x")))
+        self.assertFalse(
+            _is_price_tolerance_reject(OrderRejectedError("x", error_code="TooFarFromEntryOrder"))
         )
 
 

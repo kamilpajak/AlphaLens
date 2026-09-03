@@ -144,6 +144,29 @@ def _is_too_far_from_market(e: BrokerError) -> bool:
     return isinstance(e, OrderRejectedError) and e.error_code == "TooFarFromMarket"
 
 
+_PRICE_TOLERANCE_REJECT_ERROR_CODES = frozenset(
+    {"TooFarFromMarket", "PriceExceedsAggressiveTolerance"}
+)
+
+
+def _is_price_tolerance_reject(e: BrokerError) -> bool:
+    """True iff ``e`` is a Saxo price-tolerance rejection (either direction).
+
+    The capped immediate entry (#1247 memo §3.2.7) treats both as normal
+    check-then-POST race outcomes: ``TooFarFromMarket`` (price ran away from
+    the cap) and ``PriceExceedsAggressiveTolerance`` (the cap became "too
+    executable" — the mirror-image reject). The drain converts either into a
+    loud terminal refusal of the now tranche — never a market order, never a
+    silent retry loop. ``PriceExceedsAggressiveTolerance`` is best-effort
+    pending LIVE observation (same caveat class as ``InsufficentCash``).
+    ``TooFarFromEntryOrder`` (bracket-child geometry) deliberately does NOT
+    classify.
+    """
+    return isinstance(e, OrderRejectedError) and e.error_code in (
+        _PRICE_TOLERANCE_REJECT_ERROR_CODES
+    )
+
+
 # --------------------------------------------------------------------------
 # Contract dataclasses (frozen — execution records are facts, not state).
 # --------------------------------------------------------------------------
@@ -259,6 +282,12 @@ class BracketOrderRequest:
     # no default that could silently mislabel. Presentation-only overlay: the id,
     # ExternalReference, and every journal field keep their raw machine values.
     tier_index: int
+    # Entry-order lifetime axis (#1247 immediate entry). "gtd" = today's
+    # GoodTillDate-over-entry_ttl_days behavior (byte-identical default);
+    # "day"/"ioc" are placed only by the immediate-entry drain for now
+    # tranches. Exits are always GoodTillCancel regardless — a filled entry's
+    # exits outlive any entry duration.
+    entry_duration: Literal["gtd", "day", "ioc"] = "gtd"
 
 
 @dataclass(frozen=True)
@@ -320,6 +349,26 @@ class SupportsStandaloneStop(Protocol):
         stop_price: float,
         request_id: str | None = None,
     ) -> PlacedOrder: ...
+
+
+@runtime_checkable
+class SupportsPriceTickFloor(Protocol):
+    """Extension capability: floor a limit price to the instrument's tick.
+
+    The immediate-entry drain (#1247 memo §3.2.3) must submit the operator's
+    cap floored DOWN to the limit-order tick — never rounded up above it —
+    and must journal both the operator cap and the submitted cap. The tick
+    scheme lives in the vendor's instrument details, which only the adapter
+    fetches, so the floor is an adapter capability rather than contract math.
+    Same ``isinstance``-narrow pattern as :class:`SupportsStandaloneStop`.
+    """
+
+    def floor_limit_price_to_tick(
+        self,
+        uic: int,
+        asset_type: str,
+        price: float,
+    ) -> float: ...
 
 
 @runtime_checkable
@@ -540,6 +589,7 @@ __all__ = [
     "SupportsMarketOrders",
     "SupportsNettedPositionReads",
     "SupportsOcoExit",
+    "SupportsPriceTickFloor",
     "SupportsStandaloneStop",
     "SupportsTrailingStop",
 ]
