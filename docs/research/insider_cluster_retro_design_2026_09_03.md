@@ -48,6 +48,26 @@ For each event, draw **5 control firm-days** from the same PIT-yaml universe in 
 
 Event counts per year 2009-2026 under the frozen definition; universe coverage per year; share of events with an anchor price; control-pool depth per month. If the 2013-2023 event count is < 300 the design is re-scoped BEFORE lock (raise the window, never lower the floor after seeing outcomes). No outcome is joined in the pre-flight.
 
+### 7.1 Pre-flight result (run 2026-09-03 on the VPS store, counts only — no price or outcome joined)
+
+Frozen definition applied to `transaction_year=2009..2026` (74,250 qualifying legs):
+
+| Year | events (all store tickers) | in PIT yaml | arrival sessions | median cluster USD |
+|---|---|---|---|---|
+| 2013 | 174 | 17 | 119 | 292k |
+| 2014 | 259 | 44 | 153 | 350k |
+| 2015 | 304 | 60 | 157 | 351k |
+| 2016 | 277 | 52 | 143 | 417k |
+| 2017 | 291 | 46 | 151 | 466k |
+| 2018 | 446 | 103 | 180 | 393k |
+| 2019 | 460 | 96 | 182 | 422k |
+| 2020 | 676 | 147 | 192 | 391k |
+| 2021 | 535 | 80 | 206 | 688k |
+| 2022 | 649 | 175 | 214 | 440k |
+| 2023 | 590 | 184 | 194 | 353k |
+
+**Inference window 2013-2023: 4,661 events store-wide, 1,004 inside the PIT yaml universe, 1,891 distinct arrival sessions, 1,936 tickers.** USD-floor sensitivity (in-universe): 100k -> 1,004; 250k -> 633; 500k -> 370. Insider-count mix (in-universe): 2 = 577, 3 = 201, 4 = 93, >= 5 = 133. The >= 300 floor is cleared at every candidate USD floor, so §10 Q1 is a power-vs-strength choice, not a feasibility one. Note for the universe decision (§10 Q3): only ~22% of store events fall inside the PIT yaml — the Form-4 store universe is ~4x broader (also survivor-based); one 2024 yaml snapshot is degenerate (1 ticker) and must be excluded or repaired before any 2024 descriptive read.
+
 ## 8. Abort and deviation rules
 
 Abort uncharged only for outcome-blind defects (row counts, join integrity, universe gaps, price-cache holes). Any feature-vs-outcome number emitted = the look is spent. Deviations are logged in the results section; the executable spec must not change after lock.
