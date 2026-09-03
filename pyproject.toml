@@ -46,7 +46,7 @@ dev = [
     "django-types>=0.24.0",
     "djangorestframework-types>=0.9.0",
     "cosmic-ray>=8.7.0",
-    "hypothesis>=6.165.2",
+    "hypothesis>=6.165.10",
 ]
 
 [tool.ruff]
