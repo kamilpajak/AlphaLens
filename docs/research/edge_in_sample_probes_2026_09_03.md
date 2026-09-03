@@ -89,12 +89,39 @@ Consequence for the alpha question under the chosen frame: the remaining lever i
 POPULATION of the list (cluster 21, mechanical-rule-vs-LLM selection, already
 registered, zero new charge), or a change of frame to a second candidate source.
 
+## 4b. Earnings-window premium probe (Frazzini-Lamont) — not identifiable on this panel
+
+Pre-committed specs (3): (1) an earnings release whose effective session falls inside
+the car_10 window; (2) a release in the 10 sessions before arrival; (3) sessions-to-next
+release vs car_10. Sources tried: the AV `EARNINGS` cache (502 tickers) covers only 4% of
+candidate episodes (different universe); the PIT-stamped brief column
+`next_earnings_date` (from 2026-06-04) covers 84% of discovery rows in range and 91% of
+held-out episodes and is the usable instrument.
+
+Finding (feature-only, no outcome joined for spec 1 — the in-sample cell is empty):
+- Discovery (06-04..07-05): 2.8% of candidates had a release within 14 calendar days
+  (median gap 46 days). June is the inter-season gap — the in-window flag has ~0
+  positives in-sample, by calendar, not by effect.
+- Held-out (outcome-blind): 57 of 188 mature episodes (30%) are in-window, but 52 of
+  them sit in the three brief-weeks 2026-07-13..08-02 (Q2 season). The flag is a
+  calendar-season proxy: in-window vs not is "late-July briefs vs others", i.e. the
+  regime-confounded-with-time trap already documented in the options sweep.
+- Power: two-group se ~3.0 pp at 57/131 (sd 0.19) detects only >= ~7.5 pp; the
+  literature premium is ~1%/month. Within-week (regime-controlled) comparison has
+  se ~4.9 pp. Neither can refute the hypothesis at this N.
+
+Decision: NOT registered — a test that cannot refute has tested nothing; a positive
+would be a July-regime artifact. The instrument (`next_earnings_date`, PIT) is already
+stamped, so the look accrues for free. Revisit condition (issue, `waiting:data`): >= 150
+in-window ticker-episodes spanning >= 3 earnings seasons (regime diversity), i.e. after
+the Q3 and Q4 seasons mature (~2027-01). Specs 1-3 above stay the frozen family.
+
 ## 5. Hygiene rules confirmed this session (for future in-sample probes)
 
 1. Every in-sample script asserts `brief_date <= 2026-07-05` on outcome rows; held-out
    reads are outcome-blind only (counts, coverage, feature-only dropped share).
 2. Record the NUMBER of specifications examined per cluster in the ledger (this memo:
-   O'Neil 4, Buffett 8, spread 4, insider 8, filter 8 — 32 specifications, all on the
+   O'Neil 4, Buffett 8, spread 4, insider 8, filter 8, earnings 3 (feature-only) — 35 specifications, all on the
    burnt panel), so winner's-curse magnitude stays countable.
 3. Take only direction and kill/register decisions from in-sample; never a threshold,
    never a "win".
