@@ -807,6 +807,7 @@ def _run_verdict_advance(
             report.alerts += 1
         verdicts = []
     report.verdict_count = len(verdicts)
+    _page_now_residuals(verdicts, records, deps.alert_throttled)
     if not verdicts:
         return
     try:
@@ -5410,6 +5411,48 @@ def _retract_planned_lines(
     except Exception:
         logger.warning("planned-line retraction failed — will retry next tick", exc_info=True)
         return 0
+
+
+def _page_now_residuals(
+    verdicts: Iterable[Any],
+    records: Iterable[Mapping[str, Any]],
+    alert_throttled: Callable[[str, str], bool] | None,
+) -> None:
+    """#1247 memo §3.2.6: page once when a now order died TERMINAL with a
+    PARTIAL fill — the position is smaller than planned; exits size to the
+    filled quantity (the standard exit management needs no action here). A
+    full cancel with no fill stays quiet (the existing verdict flow covers
+    it); the throttle bounds repeats per ticker."""
+    if alert_throttled is None:
+        return
+    now_brackets: dict[str, tuple[str, float | None]] = {}
+    for record in records:
+        if record.get("tranche") != "now":
+            continue
+        for bracket in record.get("brackets") or []:
+            crid = str(bracket.get("client_request_id") or "")
+            if crid:
+                ticker = str(record.get("ticker") or "?")
+                qty = bracket.get("qty")
+                now_brackets[crid] = (ticker, float(qty) if qty is not None else None)
+    if not now_brackets:
+        return
+    for verdict in verdicts:
+        if verdict.status not in _TERMINAL_NON_FILLED:
+            continue
+        filled = verdict.details.get("filled_quantity")
+        if not filled:
+            continue
+        joined = now_brackets.get(str(verdict.details.get("client_request_id") or ""))
+        if joined is None:
+            continue
+        ticker, qty = joined
+        planned = f"{qty:g}" if qty is not None else "?"
+        alert_throttled(
+            f"now tranche {ticker}: order died at close partially filled "
+            f"({float(filled):g} of {planned}) — exits size to the filled quantity",
+            f"now-residual:{ticker}",
+        )
 
 
 def _retract_planned_for_verdicts(verdicts: Iterable[ReconcileVerdict]) -> None:

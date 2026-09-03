@@ -9445,3 +9445,68 @@ class TestStreamDeliveryProof(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPageNowResiduals(unittest.TestCase):
+    """#1247 memo §3.2.6: a now order that died terminal with a PARTIAL fill
+    pages once — the position is smaller than planned and exits size to the
+    filled quantity. A full cancel with no fill stays quiet (the verdict flow
+    already covers it)."""
+
+    @staticmethod
+    def _verdict(status: str, *, crid: str = "rid-now", filled: float | None = 3.0) -> Any:
+        details: dict[str, Any] = {"client_request_id": crid}
+        if filled is not None:
+            details["filled_quantity"] = filled
+        return type("V", (), {"status": status, "details": details})()
+
+    @staticmethod
+    def _now_record(crid: str = "rid-now") -> dict[str, Any]:
+        return {
+            "ticker": "RHI",
+            "brief_date": "2026-09-03",
+            "tranche": "now",
+            "brackets": [{"client_request_id": crid, "qty": 5, "entry": 43.0}],
+        }
+
+    def test_terminal_partial_now_verdict_pages_throttled_once(self) -> None:
+        pages: list[tuple[str, str]] = []
+        cl._page_now_residuals(
+            [self._verdict("CANCELLED")],
+            [self._now_record()],
+            lambda msg, key: pages.append((msg, key)) or True,
+        )
+        self.assertEqual(len(pages), 1)
+        self.assertIn("partially filled", pages[0][0])
+        self.assertIn("3", pages[0][0])
+        self.assertEqual(pages[0][1], "now-residual:RHI")
+
+    def test_full_cancel_without_fill_does_not_page(self) -> None:
+        pages: list[tuple[str, str]] = []
+        cl._page_now_residuals(
+            [self._verdict("CANCELLED", filled=None)],
+            [self._now_record()],
+            lambda msg, key: pages.append((msg, key)) or True,
+        )
+        self.assertEqual(pages, [])
+
+    def test_non_now_records_and_working_verdicts_stay_quiet(self) -> None:
+        pages: list[tuple[str, str]] = []
+        plain = dict(self._now_record())
+        plain.pop("tranche")
+        cl._page_now_residuals(
+            [self._verdict("CANCELLED"), self._verdict("WORKING", crid="rid-other")],
+            [plain],
+            lambda msg, key: pages.append((msg, key)) or True,
+        )
+        self.assertEqual(pages, [])
+
+    def test_partial_fill_veto_keeps_the_planned_line(self) -> None:
+        # #1249 veto pin restated for the now shape: a terminal verdict WITH
+        # filled_quantity must never retract the disaster-stop plan.
+        retracted: list[Any] = []
+        with mock.patch.object(cl, "_retract_planned_lines", lambda c, **k: retracted.append(c)):
+            cl._retract_planned_for_verdicts(
+                [self._verdict("CANCELLED")]  # partial fill present
+            )
+        self.assertEqual(retracted, [])
