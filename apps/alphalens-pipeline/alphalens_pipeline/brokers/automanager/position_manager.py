@@ -463,7 +463,9 @@ class ProtectionView:
     ``control_loop.build_protection_view``)."""
 
     long_positions: Mapping[int, Position]  # uic -> netted long, quantity > _QTY_EPS
-    all_positions: Mapping[int, Position]  # netted per uic (#1221); includes flats/shorts
+    # One NETTED row per uic (#1221, control_loop._netted_all_positions) —
+    # includes flats/shorts; only ``quantity`` is guaranteed net on multi-row uics.
+    all_positions: Mapping[int, Position]
     sell_legs_by_uic: Mapping[int, tuple[OrderState, ...]]
     planned_by_uic: Mapping[int, PlannedExit]
     oco_unsupported: frozenset[int]

@@ -8240,8 +8240,11 @@ def _netted_all_positions(rows: Iterable[Position]) -> dict[int, Position]:
     FIRST row's fields with the summed quantity — ``avg_price`` is NOT blended
     (the blend helper is the saxo adapter's, and both consumers of this map
     read only ``quantity``). Rows with an unreadable quantity are excluded
-    from a multi-row sum (a NaN would poison the net); a net-flat pair stays
-    in the map at ~0.0 — callers branch on the quantity, not on presence."""
+    from a multi-row sum, and a non-finite FIRST-row quantity resets the base
+    to 0.0 — but the first row's other fields (``avg_price``, ``market_value``,
+    ...) stay its own, so a consumer reading beyond ``quantity`` on a multi-row
+    uic must not assume they describe the net. A net-flat pair stays in the
+    map at 0.0 — callers branch on the quantity, not on presence."""
     netted: dict[int, Position] = {}
     for pos in rows:
         uic = _position_uic(pos)
