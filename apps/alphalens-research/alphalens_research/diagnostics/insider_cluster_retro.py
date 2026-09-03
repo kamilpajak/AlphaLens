@@ -64,7 +64,7 @@ def qualifying_legs(form4: pd.DataFrame, *, leg_min_usd: float = LEG_MIN_USD) ->
     out["usd"] = out["transaction_shares"].astype(float) * out[
         "transaction_price_per_share"
     ].astype(float)
-    out = out[out["usd"] >= leg_min_usd]
+    out = out[out["usd"] >= leg_min_usd].copy()  # explicit copy after the filter
     out["filed_date"] = pd.to_datetime(out["filed_date"]).dt.date
     out["transaction_date"] = pd.to_datetime(out["transaction_date"]).dt.date
     return out.reset_index(drop=True)
@@ -121,6 +121,9 @@ def detect_clusters(
                 continue
             firsts = w.groupby("reporting_owner_cik").filed_date.min().sort_values()
             ev_date = firsts.iloc[min_insiders - 1]
+            # first-wins dedup: a completion inside [last_event, last_event + dedup_sessions]
+            # (inclusive) is the same episode; the re-anchoring of the same cluster at its
+            # later legs lands here too.
             if last_event is not None and ev_date <= advance_trading_sessions(
                 session_on_or_after(last_event, exchange), dedup_sessions, exchange
             ):
@@ -184,6 +187,9 @@ def event_car(
         return None
     if min(a["open"], h["close"], ba["open"], bh["close"]) <= 0:
         return None
+    # NOTE: the slice skips sessions missing from the stock's own index, so a data gap
+    # shows up as a jump between consecutive AVAILABLE rows and may trip the guard.
+    # That is conservative (gap -> exclusion) and accepted for a survivor-only cache.
     window = stock.loc[pd.Timestamp(arrival) : pd.Timestamp(horizon), "close"]
     ratios = (window / window.shift(1)).dropna()
     if len(ratios) and not ((ratios >= SPLIT_RATIO_LO) & (ratios <= SPLIT_RATIO_HI)).all():

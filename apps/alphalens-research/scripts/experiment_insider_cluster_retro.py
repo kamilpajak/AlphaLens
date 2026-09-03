@@ -75,7 +75,11 @@ def business_days_between(a: dt.date, b: dt.date) -> int:
 
 
 def sessions_back(calendar_px: pd.DataFrame, day: dt.date, n: int) -> dt.date:
-    """The session ``n`` trading days before ``day`` on the benchmark's index."""
+    """The session ``n`` trading days before ``day`` on the benchmark's index.
+
+    SPY history starts in 1993, far before the 2013 inference start, so the clamp at
+    index 0 never binds for events in scope.
+    """
     idx = calendar_px.index
     pos = idx.searchsorted(pd.Timestamp(day))
     return idx[max(pos - n, 0)].date()
@@ -94,7 +98,9 @@ def fetch_acceptance(accession: str, cik: str, client) -> dt.datetime | None:
         text = client.get_text(url)[:4000]
     except Exception as exc:  # logged, treated as unknown (conservative arrival)
         log.warning("acceptance fetch failed %s: %s", accession, exc)
-        cache.write_text(json.dumps({"acceptance": None, "error": str(exc)[:200]}))
+        cache.write_text(
+            json.dumps({"acceptance": None, "error": f"{type(exc).__name__}: {str(exc)[:200]}"})
+        )
         return None
     m = ACCEPT_RE.search(text)
     cache.write_text(json.dumps({"acceptance": m.group(1) if m else None, "header": text[:600]}))
@@ -118,7 +124,11 @@ def rolling_features(px: pd.DataFrame) -> pd.DataFrame:
 
 
 def feature_at(feat: pd.DataFrame, day: dt.date) -> pd.Series | None:
-    """Features as of the close BEFORE ``day`` (pre-event information only)."""
+    """Features as of the close BEFORE ``day`` (pre-event information only).
+
+    ``day`` is always an arrival SESSION (a trading day), so ``searchsorted`` lands on
+    that session itself and ``pos - 1`` is the prior close — never a same-day row.
+    """
     ts = pd.Timestamp(day)
     pos = feat.index.searchsorted(ts)  # first index >= day
     if pos == 0:
@@ -472,7 +482,10 @@ def run_estimation(ev, legs, form4, priced, pit, args) -> int:
 def retail_sim(T: pd.DataFrame, *, caps=(3, 5), seed=2) -> dict:
     """Concentrated-book simulation: hold at most ``cap`` names, first-come, equal-dollar, hold 20 sessions."""
     res = {}
-    T = T.sort_values(["arrival", "ticker"])
+    rng = np.random.default_rng(seed)
+    T = T.assign(_tb=rng.random(len(T))).sort_values(
+        ["arrival", "_tb"]
+    )  # seeded same-session order
     for cap in caps:
         open_until: dict[str, dt.date] = {}
         taken = []

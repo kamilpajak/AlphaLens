@@ -107,6 +107,27 @@ class TestDetectClusters(unittest.TestCase):
             ).empty
         )
 
+    def test_three_in_five_definition_detects_three_distinct_insiders(self):
+        legs = self._legs(
+            [
+                _leg("AAA", "1", D(2020, 3, 2)),
+                _leg("AAA", "2", D(2020, 3, 5)),  # +3 sessions (outside 2-in-2)
+                _leg("AAA", "3", D(2020, 3, 9)),  # +5 sessions
+            ]
+        )
+        two_in_two = icr.detect_clusters(
+            legs, window_sessions=2, min_insiders=2, min_usd=100_000.0, dedup_sessions=20
+        )
+        three_in_five = icr.detect_clusters(
+            legs, window_sessions=5, min_insiders=3, min_usd=100_000.0, dedup_sessions=20
+        )
+        self.assertTrue(two_in_two.empty)
+        self.assertEqual(len(three_in_five), 1)
+        self.assertEqual(
+            three_in_five.iloc[0].event_date, D(2020, 3, 9)
+        )  # completion = 3rd insider
+        self.assertEqual(three_in_five.iloc[0].n_insiders, 3)
+
     def test_dedup_keeps_first_event_per_ticker_per_window(self):
         legs = self._legs(
             [
