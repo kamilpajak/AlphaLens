@@ -86,18 +86,62 @@ WSE_FEE_CARD = VenueFeeCard(
 Classic tier, read from home.saxo/pl-pl 2026-09-02). ASSUMES the Classic tier —
 the operator must confirm the account tier before the first LIVE GPW pick."""
 
+XETR_FEE_CARD = VenueFeeCard(
+    commission_rate=0.0008, min_commission=3.0, label="saxo-pl-classic-xetr"
+)
+"""Saxo LIVE Polish schedule, Xetra: 0.08% min EUR 3 per fill (Saxo Classic
+tier, read from home.saxo 2026-09-03). ASSUMES the Classic tier — the operator
+must confirm the account tier before the first LIVE Xetra pick."""
+
+XAMS_FEE_CARD = VenueFeeCard(
+    commission_rate=0.0008, min_commission=2.0, label="saxo-pl-classic-xams"
+)
+"""Saxo LIVE Polish schedule, Euronext Amsterdam: 0.08% min EUR 2 per fill
+(Saxo Classic tier, read from home.saxo 2026-09-03). The venue itself is NOT
+open (map entry only, #1244) — the card ships with the #1271 MIC re-key so the
+fee map covers the same venue set as ``MIC_TO_SAXO_EXCHANGE_ID`` and the two
+EUR minimums (Xetra 3 vs Euronext 2) stay distinguishable."""
+
+# The venue schedule keyed by the venue itself (#1271). Covers every MIC in
+# ``MIC_TO_SAXO_EXCHANGE_ID``; extending the venue map means extending this
+# map in the same PR.
+_FEE_CARD_BY_MIC: dict[str, VenueFeeCard] = {
+    "XNYS": US_FEE_CARD,
+    "XNAS": US_FEE_CARD,
+    "XASE": US_FEE_CARD,
+    "XWAR": WSE_FEE_CARD,
+    "XETR": XETR_FEE_CARD,
+    "XAMS": XAMS_FEE_CARD,
+}
+
+# CURRENCY fallback for records stamped before the MIC stamp existed (#1238
+# PR 3 cohort). "EUR" maps to the XETR card deliberately: its HIGHER minimum
+# (EUR 3 vs Euronext's EUR 2) can only over-refuse an unattributable EUR
+# record, never under-charge it.
 _FEE_CARD_BY_INSTRUMENT_CURRENCY: dict[str, VenueFeeCard] = {
     "USD": US_FEE_CARD,
     "PLN": WSE_FEE_CARD,
+    "EUR": XETR_FEE_CARD,
 }
 
 
-def fee_card_for(instrument_currency: str | None) -> VenueFeeCard | None:
-    """The venue fee card for an instrument currency, or ``None`` when this
-    rail has no verified schedule for it (callers then keep the conservative
-    legacy constants). Keyed by CURRENCY, not MIC: on this rail the currency
-    identifies the venue schedule (USD ↔ US venues, PLN ↔ WSE), and the
-    currency is the fact both gates already have stamped."""
+def fee_card_for(
+    instrument_currency: str | None, *, exchange_mic: str | None = None
+) -> VenueFeeCard | None:
+    """The venue fee card, or ``None`` when this rail has no verified schedule
+    (callers then keep the conservative legacy constants).
+
+    Keyed MIC-first (#1271): the venue names the schedule exactly, and the
+    currency cannot — Xetra and Euronext Amsterdam are both EUR with DIFFERENT
+    minimums. The currency key survives as the fallback for records stamped
+    before the MIC stamp existed (USD ↔ US venues, PLN ↔ WSE, EUR ↔ the
+    conservative Xetra card). Both stamps come from one resolved instrument,
+    so on a corrupt disagreement the MIC wins — reading a venue minimum in the
+    notional's currency can only over-state the fee."""
+    if exchange_mic:
+        card = _FEE_CARD_BY_MIC.get(exchange_mic.upper())
+        if card is not None:
+            return card
     if not instrument_currency:
         return None
     return _FEE_CARD_BY_INSTRUMENT_CURRENCY.get(instrument_currency.upper())
@@ -189,20 +233,25 @@ class CostGateFacts:
 
 
 def cost_gate_facts(
-    *, instrument_currency: str | None, sizing_currency: str | None
+    *,
+    instrument_currency: str | None,
+    sizing_currency: str | None,
+    exchange_mic: str | None = None,
 ) -> CostGateFacts:
-    """Turn the journal-stamped currency pair into gate facts.
+    """Turn the journal-stamped currency pair (and, since #1271, the stamped
+    venue MIC) into gate facts.
 
-    Both currencies known AND a verified fee card for the instrument currency
-    → real facts: the FX leg applies iff the currencies differ, and the
-    venue's own per-fill minimum applies (it is denominated in the notional's
-    currency). Anything unknown → :meth:`CostGateFacts.legacy` — the
-    conservative pre-#1238 constants, which can only over-refuse an exit,
-    never under-charge it."""
-    card = fee_card_for(instrument_currency)
-    if card is None or not sizing_currency:
+    Both currencies known AND a verified fee card (MIC-first, currency
+    fallback — see :func:`fee_card_for`) → real facts: the FX leg applies iff
+    the currencies differ, and the venue's own per-fill minimum applies (it is
+    denominated in the notional's currency). Anything unknown →
+    :meth:`CostGateFacts.legacy` — the conservative pre-#1238 constants,
+    which can only over-refuse an exit, never under-charge it."""
+    card = fee_card_for(instrument_currency, exchange_mic=exchange_mic)
+    if card is None or not sizing_currency or not instrument_currency:
+        # A MIC-only stamp can name a card, but ``fx_applies`` needs the
+        # currency PAIR — without it the facts stay conservative legacy.
         return CostGateFacts.legacy()
-    assert instrument_currency is not None  # fee_card_for(None) is None
     return CostGateFacts(
         fx_applies=instrument_currency.upper() != sizing_currency.upper(),
         min_commission_applies=True,
