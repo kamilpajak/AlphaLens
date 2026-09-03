@@ -124,7 +124,7 @@ Reviewers: Perplexity `reason` (16 findings) and zen `deepseek/deepseek-v4-pro` 
 
 ## 13. Results (placeholder — filled by the results commit, which must not touch the executable spec)
 
-- Pre-flight (outcome-blind): PENDING
+- Pre-flight (outcome-blind, run 2026-09-03 after the lock, cache complete): cluster events 2009-2026 = 6,750; inference window 2013-2023 = 4,662, of which 3,836 have a price history (830 missing tickers fetched through the yfinance cache on 2026-09-03; the remainder are delisted names yfinance cannot serve), 1,008 inside the PIT yaml, 86 late filings (> 10 business days) excluded, 1,792 also satisfy the 3-in-5 definition. EDGAR acceptance time known for 3,782 / 3,782 candidate events (31 needed the reporter-CIK fallback); only 6% were accepted before 09:00 ET, so ~94% of arrivals are next-session opens. Universe (store ∩ priced) = 3,236 tickers. Per-year priced events: 2013 122, 2014 192, 2015 223, 2016 210, 2017 210, 2018 363, 2019 379, 2020 569, 2021 443, 2022 569, 2023 556.
 - Primary estimate (treated − matched control, car_20, 2013-2023): PENDING
 - Planning rule: PENDING
 - Descriptives: PENDING
