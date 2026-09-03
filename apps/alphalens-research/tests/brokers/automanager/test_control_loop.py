@@ -10,6 +10,7 @@ throttle, and re-derive-on-restart.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import datetime as dt
 import os
 import unittest
@@ -28,6 +29,7 @@ from alphalens_pipeline.brokers.automanager.live_rails import (
     SIZING_EQUITY_MODE_ENV,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (
+    AlertOnly,
     AmendStop,
     BrokerView,
     CancelSellLegs,
@@ -42,6 +44,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     _exit_stop_ref,
     _exit_tp_ref,
     _reconcile_long,
+    reconcile_protection,
 )
 from alphalens_pipeline.brokers.automanager.safety import PORTFOLIO_GROSS_FRAC_ENV
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
@@ -268,7 +271,24 @@ class _ProtBroker:
         return list(self._positions)
 
     def get_long_positions(self) -> list[Position]:
-        return [p for p in self._positions if p.quantity > 0.5]
+        # Mirrors the SupportsNettedPositionReads contract (one NETTED row per
+        # uic, net-flat dropped) so a seeded round-trip pair reads as flat here
+        # exactly like on the real adapter (#1221).
+        net: dict[int, float] = {}
+        first: dict[int, Position] = {}
+        no_uic: list[Position] = []
+        for p in self._positions:
+            try:
+                uic = int(p.instrument.broker_instrument_id)
+            except (TypeError, ValueError):
+                no_uic.append(p)
+                continue
+            net[uic] = net.get(uic, 0.0) + p.quantity
+            first.setdefault(uic, p)
+        netted = [
+            dataclasses.replace(first[uic], quantity=qty) for uic, qty in net.items() if qty > 0.5
+        ]
+        return netted + [p for p in no_uic if p.quantity > 0.5]
 
     def list_working_sell_orders(self) -> list[OrderState]:
         return list(self._sells)
@@ -5134,6 +5154,86 @@ class TestFoldOcoUnsupported(unittest.TestCase):
                 _seed_planned(journal)
                 view = cl.build_protection_view(broker, [])  # type: ignore[arg-type]
         self.assertEqual(view.oco_unsupported, frozenset())
+
+
+class TestBuildProtectionViewNetsAllPositions(unittest.TestCase):
+    """#1221: an intraday round-trip on LIVE leaves TWO raw position rows for
+    one uic (long +N and short -N) until Saxo's end-of-day netting merges them.
+    ``all_positions`` must fold such same-uic rows to their NET quantity so a
+    netted pair reads as flat everywhere in the protection view and the
+    unexpected-SHORT alert fires only for a genuinely net-short book."""
+
+    def _view(self, positions: list[Position]) -> ProtectionView:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(positions=positions)
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                return cl.build_protection_view(broker, [])  # type: ignore[arg-type]
+
+    @staticmethod
+    def _short_alerts(view: ProtectionView) -> list[AlertOnly]:
+        return [
+            a
+            for a in reconcile_protection(view)
+            if isinstance(a, AlertOnly) and "SHORT" in a.reason
+        ]
+
+    def test_round_trip_pair_nets_flat_and_never_alerts_short(self) -> None:
+        view = self._view([_pos(16.0), _pos(-16.0)])
+        self.assertLessEqual(abs(view.all_positions[_UIC].quantity), 0.5)
+        self.assertNotIn(_UIC, view.long_positions)
+        self.assertEqual(self._short_alerts(view), [])
+
+    def test_partially_closed_long_nets_to_remainder(self) -> None:
+        view = self._view([_pos(16.0), _pos(-6.0)])
+        self.assertEqual(view.all_positions[_UIC].quantity, 10.0)
+        self.assertEqual(self._short_alerts(view), [])
+
+    def test_net_short_book_still_alerts(self) -> None:
+        view = self._view([_pos(2.0), _pos(-18.0)])
+        self.assertEqual(view.all_positions[_UIC].quantity, -16.0)
+        alerts = self._short_alerts(view)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn(f"uic {_UIC}", alerts[0].reason)
+
+    def test_multiple_same_sign_lots_sum(self) -> None:
+        view = self._view([_pos(8.0), _pos(8.0)])
+        self.assertEqual(view.all_positions[_UIC].quantity, 16.0)
+
+    def test_single_row_passes_through_unchanged(self) -> None:
+        row = _pos(16.0)
+        view = self._view([row])
+        self.assertIs(view.all_positions[_UIC], row)
+
+    def test_unresolvable_uic_row_absent(self) -> None:
+        broken = Position(
+            instrument=InstrumentRef(
+                ticker="???",
+                exchange_mic="XNYS",
+                asset_type="Stock",
+                broker_instrument_id="not-a-uic",
+                broker_symbol="???:xnys",
+            ),
+            quantity=7.0,
+            avg_price=1.0,
+            market_value=None,
+            unrealized_pnl=None,
+            position_id="pos-x",
+        )
+        view = self._view([broken])
+        self.assertEqual(view.all_positions, {})
+
+    def test_unreadable_quantity_row_excluded_from_multi_row_net(self) -> None:
+        nan_row = Position(
+            instrument=_instrument(),
+            quantity=float("nan"),
+            avg_price=296.0,
+            market_value=None,
+            unrealized_pnl=None,
+            position_id="pos-nan",
+        )
+        view = self._view([_pos(16.0), nan_row])
+        self.assertEqual(view.all_positions[_UIC].quantity, 16.0)
 
 
 class TestGenStampedRefChangesOnResize(unittest.TestCase):
