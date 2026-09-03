@@ -159,3 +159,34 @@ Reviewed pre-LOCK per repo doctrine: Perplexity (Saxo OpenAPI docs + microstruct
 7. Zen's claim that a closing-auction fill can exceed the cap was **rejected** (a limit order participates in the auction only at a clearing price within its limit); zen did not embed the memo file, so its generic findings were adjudicated individually.
 
 Implementation-time verification items (not design blockers): §3.5 marker additivity for legacy picks (test-plan pin above); §3.8 own-pick guard relaxation (confirm no scenario depends on the defer applying to the position's own pick before relaxing).
+
+## 7. Implementation addendum (PR-C, 2026-09-03)
+
+Decisions taken at implementation time, within the LOCKED envelope:
+
+- **Feed-off / no-quote behavior:** `ALPHALENS_SAXO_LIVE_PRICES` unset (or a
+  quote outage/halt/stale read) DEFERS the whole pick with a throttled page
+  naming the config lever — never a terminal refusal, never a silent
+  forever-defer. The per-uic `now-entry:<uic>` feed scope is KEPT on defer (a
+  fresh subscribe's snapshot arrives async; release-on-defer would starve the
+  gate) and released after placement/refusal. A pick disarmed mid-defer leaks
+  one scope until restart — bounded over-subscription, not a safety hazard.
+- **`--no-tp` picks:** the cost gate is vacuous (logged INFO) — a stop-only
+  plan has no TP1 to clear.
+- **Mixed-pick same-day re-arm limitation:** once the pullback siblings'
+  submission record joins, the pick does not re-drain the same day (sibling
+  semantics — "fresh date is the path back" — win). The §3.7 scenario fully
+  works for a now-ONLY pick: its cap-breach refusal marks the pick refused
+  and a fresh arm (new `armed_ts`, latest-wins) cleanly re-drains.
+- **Write-ahead crash-loss:** a crash between the now half's write-ahead
+  attempt record and the POST leaves an alertable non-retried attempt —
+  the same contract `_place_tiers` has always had; never a re-POST.
+- **Duration capability:** IOC is selected only when the adapter's fail-open
+  `SupportedOrderTypeSettings` read affirmatively reports it; unknown shape
+  ⇒ DayOrder. The wire shape is pinned on the SIM probe via the one-time
+  INFO log (PR-B).
+- **Acceptance-suite deferral:** the fake-broker acceptance world stubs
+  `place_pick`, so a drain-level now-entry acceptance scenario has no
+  existing harness; the drain is covered by 14 integration tests on the
+  real `_place_pick` closure (real entry-trail journals). Extending the
+  world to the real drain is follow-up work, not part of PR-C.
