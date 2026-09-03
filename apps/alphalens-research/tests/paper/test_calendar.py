@@ -92,6 +92,17 @@ class TestIsTradingDayMultiExchange(unittest.TestCase):
     def test_xwar_normal_tuesday_is_trading_day(self):
         self.assertTrue(is_trading_day(dt.date(2025, 1, 7), exchange="XWAR"))
 
+    def test_xetr_christmas_eve_is_not_trading_day(self):
+        # 2026-12-24 — Xetra shuts Christmas Eve entirely while XNYS runs a
+        # half-day (#1271 pin: the asymmetry a hard-coded-XNYS refactor hides).
+        self.assertFalse(is_trading_day(dt.date(2026, 12, 24), exchange="XETR"))
+        self.assertTrue(is_trading_day(dt.date(2026, 12, 24), exchange="XNYS"))
+
+    def test_xetr_trades_through_the_polish_epiphany(self):
+        # 2026-01-06: GPW closed (Polish public holiday), Xetra open — the
+        # per-venue holiday split the multi-venue stream hull relies on.
+        self.assertTrue(is_trading_day(dt.date(2026, 1, 6), exchange="XETR"))
+
 
 # ---------------------------------------------------------------- is_half_day
 
@@ -351,6 +362,21 @@ class TestSessionHelpersXWAR(unittest.TestCase):
     def test_advance_one_session_xwar(self):
         self.assertEqual(
             advance_trading_sessions(dt.date(2025, 1, 6), 1, exchange="XWAR"), dt.date(2025, 1, 8)
+        )
+
+
+class TestSessionHelpersXETR(unittest.TestCase):
+    def test_session_on_or_after_christmas_eve(self):
+        # Xetra closed 2026-12-24 (Thu) through the weekend -> next session
+        # Monday 2026-12-28.
+        self.assertEqual(
+            session_on_or_after(dt.date(2026, 12, 24), exchange="XETR"), dt.date(2026, 12, 28)
+        )
+
+    def test_advance_one_session_xetr(self):
+        self.assertEqual(
+            advance_trading_sessions(dt.date(2026, 12, 24), 1, exchange="XETR"),
+            dt.date(2026, 12, 29),
         )
 
 

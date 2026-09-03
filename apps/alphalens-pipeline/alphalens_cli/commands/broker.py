@@ -854,7 +854,7 @@ def resolve_command(
     exchange: str = typer.Option(
         "XNYS",
         "--exchange",
-        help="ISO 10383 MIC of the listing venue (XNYS, XNAS, XWAR).",
+        help="ISO 10383 MIC of the listing venue (XNYS, XNAS, XWAR, XETR).",
     ),
 ) -> None:
     """Resolve (ticker, MIC) to the broker instrument handle (Saxo: Uic)."""
@@ -1186,7 +1186,7 @@ def submit_command(
         None,
         "--exchange",
         help="Explicit ISO 10383 MIC; omit to probe US venues (XNYS then XNAS). "
-        "Non-US venues (XWAR) are explicit-only.",
+        "Non-US venues (XWAR, XETR) are explicit-only.",
     ),
     equity: float | None = typer.Option(
         None, "--equity", help="Sizing equity in account currency; default: broker total value."
@@ -1437,8 +1437,8 @@ def arm_manual_command(
     mic: str = typer.Option(
         _ARM_INSTRUMENT_MIC,
         "--mic",
-        help="ISO 10383 MIC; supported: XNYS / XNAS / XWAR (GPW). LIVE XWAR needs "
-        "the stream venue env + GPW market-data entitlement — see the runbook.",
+        help="ISO 10383 MIC; supported: XNYS / XNAS / XWAR (GPW) / XETR (Xetra). "
+        "LIVE on a European venue needs its market-data entitlement — see the runbook.",
     ),
     env: str = typer.Option(
         _DEFAULT_ARM_ENV,

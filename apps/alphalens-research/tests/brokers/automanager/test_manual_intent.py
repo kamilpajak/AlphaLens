@@ -313,6 +313,13 @@ class BuildManualIntentTest(unittest.TestCase):
         intent = _build(mic="XWAR")
         self.assertEqual(intent.instrument.mic, "XWAR")
 
+    def test_xetr_is_accepted(self) -> None:
+        # #1271 PR 4: Xetra opens after the arc's fee card (MIC-keyed,
+        # 0.08% min EUR 3), venue map + RHM alias, and the tracked stream
+        # venue window landed.
+        intent = _build(mic="XETR")
+        self.assertEqual(intent.instrument.mic, "XETR")
+
     def test_unsupported_mic_refuses_naming_the_supported_set(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "XAMS"):
             _build(mic="XAMS")
