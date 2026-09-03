@@ -164,6 +164,36 @@ class TestMultiVenueSessionWindow(unittest.TestCase):
             self._in_window("XNYS,XWAR", dt.datetime(2026, 7, 3, 18, 0, tzinfo=dt.UTC))
         )
 
+    def test_xetr_holds_the_hull_open_on_a_gpw_holiday(self):
+        # #1271: Tue 2026-01-06 (Epiphany) — XWAR closed, XETR trades
+        # 08:00-16:30 UTC (CET), XNYS 14:30-21:00 UTC. With XETR in the set
+        # the hull opens at 07:45; without it (the pre-#1271 pair) the same
+        # instant is outside the window — the case that DISCRIMINATES the new
+        # venue (on a plain summer Tuesday the XETR and XWAR hulls coincide).
+        at_0800 = dt.datetime(2026, 1, 6, 8, 0, tzinfo=dt.UTC)
+        self.assertTrue(self._in_window("XNYS,XWAR,XETR", at_0800))
+        self.assertFalse(self._in_window("XNYS,XWAR", at_0800))
+        self.assertFalse(
+            self._in_window("XNYS,XWAR,XETR", dt.datetime(2026, 1, 6, 7, 44, tzinfo=dt.UTC))
+        )
+        self.assertTrue(
+            self._in_window("XNYS,XWAR,XETR", dt.datetime(2026, 1, 6, 21, 9, tzinfo=dt.UTC))
+        )
+
+    def test_christmas_eve_drops_both_european_venues(self):
+        # 2026-12-24: XETR and XWAR are CLOSED (Xetra shuts Christmas Eve,
+        # unlike XNYS's half-day 14:30-18:00 UTC) — the hull collapses to the
+        # US half-day [14:15, 18:10].
+        self.assertFalse(
+            self._in_window("XNYS,XWAR,XETR", dt.datetime(2026, 12, 24, 9, 0, tzinfo=dt.UTC))
+        )
+        self.assertTrue(
+            self._in_window("XNYS,XWAR,XETR", dt.datetime(2026, 12, 24, 15, 0, tzinfo=dt.UTC))
+        )
+        self.assertFalse(
+            self._in_window("XNYS,XWAR,XETR", dt.datetime(2026, 12, 24, 18, 11, tzinfo=dt.UTC))
+        )
+
     def test_no_venue_trading_is_false_all_day(self):
         self.assertFalse(
             self._in_window("XNYS,XWAR", dt.datetime(2026, 8, 16, 12, 0, tzinfo=dt.UTC))

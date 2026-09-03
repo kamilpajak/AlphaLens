@@ -55,6 +55,13 @@ EnvironmentFile=/etc/alphalens/env
 # trading hours.
 Environment=ALPHALENS_SAXO_STREAM_SESSION_GATE=1
 
+# The venue set the gate's window is computed over — the per-day HULL of these
+# sessions (#1238 PR 5; first tracked value in #1271). Must stay in lockstep
+# with the broker-manager drop-ins (43-/52-stream-venues.conf): the reader
+# serves both daemons, and a narrower window here would hold the socket closed
+# exactly when a European watch needs quotes.
+Environment=ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR,XETR
+
 # Node_exporter textfile dir for the reader's own gauges (job "price-reader")
 # and the stream's (job "live-price-stream-reader").
 Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile
