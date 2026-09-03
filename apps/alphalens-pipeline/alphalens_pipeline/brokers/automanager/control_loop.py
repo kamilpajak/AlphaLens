@@ -5109,19 +5109,29 @@ def _latest_planned_by_crid(
         if kind != "planned":
             continue
         crid = line.get("client_request_id")
-        raw_uic = line.get("uic")
-        if not crid or raw_uic is None:
+        if not crid:
             continue
-        try:
-            gen = int(line.get("gen", _INITIAL_GEN))
-            int(raw_uic)
-            float(line["stop_price"])
-        except (KeyError, TypeError, ValueError):
+        gen = _planned_line_gen(line)
+        if gen is None:
             continue
         prev = latest.get(str(crid))
         if prev is None or gen >= prev[0]:
             latest[str(crid)] = (gen, line)
     return latest
+
+
+def _planned_line_gen(line: Mapping[str, Any]) -> int | None:
+    """The ``gen`` of a well-formed ``planned`` line; ``None`` for any
+    malformation (missing/bad uic or stop_price — the line is skipped)."""
+    if line.get("uic") is None:
+        return None
+    try:
+        gen = int(line.get("gen", _INITIAL_GEN))
+        int(line["uic"])
+        float(line["stop_price"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return gen
 
 
 def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, PlannedExit]:
@@ -5323,28 +5333,37 @@ def fold_tranche_plan_currencies(
     turns into the conservative legacy facts."""
     out: dict[int, tuple[str | None, str | None, str | None]] = {}
     for line in lines:
-        kind = line.get("kind")
-        if kind == _TRANCHE_PLAN_RETRACTED_KIND:
-            retracted_uic = _coerce(line, "uic", int)
-            if retracted_uic is not None:
-                out.pop(retracted_uic, None)
-            continue
-        if kind != _TRANCHE_PLAN_KIND:
-            continue
-        if _parse_tranche_plan_line(line) is None:
-            continue
-        uic = _coerce(line, "uic", int)
-        if uic is None:
-            continue
-        instrument_ccy = line.get("instrument_currency")
-        sizing_ccy = line.get("sizing_currency")
-        mic = line.get("exchange_mic")
-        out[uic] = (
-            str(instrument_ccy) if instrument_ccy else None,
-            str(sizing_ccy) if sizing_ccy else None,
-            str(mic) if mic else None,
-        )
+        _fold_currency_stamp_line(line, out)
     return out
+
+
+def _fold_currency_stamp_line(
+    line: Mapping[str, Any], out: dict[int, tuple[str | None, str | None, str | None]]
+) -> None:
+    """Fold one journal line into the currency-stamp map (in place): a
+    retraction pops the uic, a well-formed ``tranche_plan`` overwrites it
+    (last wins), everything else is ignored."""
+    kind = line.get("kind")
+    if kind == _TRANCHE_PLAN_RETRACTED_KIND:
+        retracted_uic = _coerce(line, "uic", int)
+        if retracted_uic is not None:
+            out.pop(retracted_uic, None)
+        return
+    if kind != _TRANCHE_PLAN_KIND:
+        return
+    if _parse_tranche_plan_line(line) is None:
+        return
+    uic = _coerce(line, "uic", int)
+    if uic is None:
+        return
+    instrument_ccy = line.get("instrument_currency")
+    sizing_ccy = line.get("sizing_currency")
+    mic = line.get("exchange_mic")
+    out[uic] = (
+        str(instrument_ccy) if instrument_ccy else None,
+        str(sizing_ccy) if sizing_ccy else None,
+        str(mic) if mic else None,
+    )
 
 
 def _parse_tranche_plan_line(
@@ -5515,6 +5534,18 @@ def _page_now_residuals(
     it); the throttle bounds repeats per ticker."""
     if alert_throttled is None:
         return
+    now_brackets = _fold_now_brackets(records)
+    if not now_brackets:
+        return
+    for verdict in verdicts:
+        _page_one_now_residual(verdict, now_brackets, alert_throttled)
+
+
+def _fold_now_brackets(
+    records: Iterable[Mapping[str, Any]],
+) -> dict[str, tuple[str, float | None]]:
+    """crid -> (ticker, planned qty) off the ``tranche == "now"`` submission
+    records' bracket rows."""
     now_brackets: dict[str, tuple[str, float | None]] = {}
     for record in records:
         if record.get("tranche") != "now":
@@ -5525,24 +5556,31 @@ def _page_now_residuals(
                 ticker = str(record.get("ticker") or "?")
                 qty = bracket.get("qty")
                 now_brackets[crid] = (ticker, float(qty) if qty is not None else None)
-    if not now_brackets:
+    return now_brackets
+
+
+def _page_one_now_residual(
+    verdict: Any,
+    now_brackets: Mapping[str, tuple[str, float | None]],
+    alert_throttled: Callable[[str, str], bool],
+) -> None:
+    """Page for ONE verdict iff it is a terminal-non-filled now bracket that
+    died PARTIALLY filled (a clean full cancel stays quiet)."""
+    if verdict.status not in _TERMINAL_NON_FILLED:
         return
-    for verdict in verdicts:
-        if verdict.status not in _TERMINAL_NON_FILLED:
-            continue
-        filled = verdict.details.get("filled_quantity")
-        if not filled:
-            continue
-        joined = now_brackets.get(str(verdict.details.get("client_request_id") or ""))
-        if joined is None:
-            continue
-        ticker, qty = joined
-        planned = f"{qty:g}" if qty is not None else "?"
-        alert_throttled(
-            f"now tranche {ticker}: order died at close partially filled "
-            f"({float(filled):g} of {planned}) — exits size to the filled quantity",
-            f"now-residual:{ticker}",
-        )
+    filled = verdict.details.get("filled_quantity")
+    if not filled:
+        return
+    joined = now_brackets.get(str(verdict.details.get("client_request_id") or ""))
+    if joined is None:
+        return
+    ticker, qty = joined
+    planned = f"{qty:g}" if qty is not None else "?"
+    alert_throttled(
+        f"now tranche {ticker}: order died at close partially filled "
+        f"({float(filled):g} of {planned}) — exits size to the filled quantity",
+        f"now-residual:{ticker}",
+    )
 
 
 def _retract_planned_for_verdicts(verdicts: Iterable[ReconcileVerdict]) -> None:
@@ -6200,6 +6238,17 @@ def _compact_tranche_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str,
                 closure_lines.setdefault(uic, {})[key] = line
         elif line.get("tag") or line.get("position_closed"):
             fired_lines.setdefault(uic, []).append(line)
+    return _emit_kept_tranche_lines(ladder_line, latest_plan, fired_lines, closure_lines)
+
+
+def _emit_kept_tranche_lines(
+    ladder_line: Mapping[int, Mapping[str, Any]],
+    latest_plan: Mapping[int, Mapping[str, Any]],
+    fired_lines: Mapping[int, list[Mapping[str, Any]]],
+    closure_lines: Mapping[int, dict[str | None, Mapping[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Emit the elected lines per uic in the fold-safe write order (plan lines
+    first, then fired, then closure fills — see :func:`_compact_tranche_lines`)."""
     kept: list[dict[str, Any]] = []
     for uic in sorted(set(latest_plan) | set(fired_lines) | set(closure_lines)):
         ladder = ladder_line.get(uic)
@@ -6267,40 +6316,9 @@ def _compact_standalone_stop_journal_lines(
         dict(planned_by_crid[crid][1]) for crid in sorted(planned_by_crid)
     ]
 
-    oco_unsupported: dict[int, dict[str, Any]] = {}
-    ttl_latest: dict[str, dict[int, tuple[float, dict[str, Any]]]] = {
-        "oco_placed": {},
-        "amend_failed": {},
-        "oco_too_far": {},
-        "stop_placed": {},
-        "amend_ok": {},
-    }
-    amend_seq: dict[int, tuple[float, dict[str, Any]]] = {}
-    # Newest stop_filled per ORDER ID (not uic): only the one matching a kept
-    # stop_placed matters for _fold_standing_stop_ids, elected below.
-    stop_filled_by_id: dict[str, tuple[float, dict[str, Any]]] = {}
-
-    for line in materialized:
-        kind = line.get("kind")
-        if kind == "oco_unsupported":
-            uic = _coerce(line, "uic", int)
-            if uic is not None:
-                oco_unsupported.setdefault(uic, dict(line))
-        elif kind in ttl_latest:
-            _keep_latest_marker(
-                ttl_latest[kind], _coerce(line, "uic", int), _coerce(line, "ts", float), line
-            )
-        elif kind == "amend_seq":
-            _keep_latest_marker(
-                amend_seq, _coerce(line, "uic", int), _coerce(line, "seq", int), line
-            )
-        elif kind == "stop_filled":
-            order_id = line.get("order_id")
-            ts = _coerce(line, "ts", float)
-            if isinstance(order_id, str) and order_id and ts is not None:
-                kept = stop_filled_by_id.get(order_id)
-                if kept is None or ts >= kept[0]:
-                    stop_filled_by_id[order_id] = (ts, dict(line))
+    oco_unsupported, ttl_latest, amend_seq, stop_filled_by_id = _classify_standalone_lines(
+        materialized
+    )
 
     compacted: list[dict[str, Any]] = list(planned)
     compacted.extend(oco_unsupported[uic] for uic in sorted(oco_unsupported))
@@ -6332,6 +6350,54 @@ def _compact_standalone_stop_journal_lines(
     compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
     compacted.extend(tranche_kept)
     return compacted
+
+
+def _classify_standalone_lines(
+    materialized: list[Mapping[str, Any]],
+) -> tuple[
+    dict[int, dict[str, Any]],
+    dict[str, dict[int, tuple[float, dict[str, Any]]]],
+    dict[int, tuple[float, dict[str, Any]]],
+    dict[str, tuple[float, dict[str, Any]]],
+]:
+    """One walk classifying the non-planned, non-tranche keeps for
+    :func:`_compact_standalone_stop_journal_lines`: ``(oco_unsupported,
+    ttl_latest, amend_seq, stop_filled_by_id)`` — first/newest-marker
+    elections exactly as the fold docstrings specify."""
+    oco_unsupported: dict[int, dict[str, Any]] = {}
+    ttl_latest: dict[str, dict[int, tuple[float, dict[str, Any]]]] = {
+        "oco_placed": {},
+        "amend_failed": {},
+        "oco_too_far": {},
+        "stop_placed": {},
+        "amend_ok": {},
+    }
+    amend_seq: dict[int, tuple[float, dict[str, Any]]] = {}
+    # Newest stop_filled per ORDER ID (not uic): only the one matching a kept
+    # stop_placed matters for _fold_standing_stop_ids, elected by the caller.
+    stop_filled_by_id: dict[str, tuple[float, dict[str, Any]]] = {}
+    for line in materialized:
+        kind = line.get("kind")
+        if kind == "oco_unsupported":
+            uic = _coerce(line, "uic", int)
+            if uic is not None:
+                oco_unsupported.setdefault(uic, dict(line))
+        elif kind in ttl_latest:
+            _keep_latest_marker(
+                ttl_latest[kind], _coerce(line, "uic", int), _coerce(line, "ts", float), line
+            )
+        elif kind == "amend_seq":
+            _keep_latest_marker(
+                amend_seq, _coerce(line, "uic", int), _coerce(line, "seq", int), line
+            )
+        elif kind == "stop_filled":
+            order_id = line.get("order_id")
+            ts = _coerce(line, "ts", float)
+            if isinstance(order_id, str) and order_id and ts is not None:
+                kept = stop_filled_by_id.get(order_id)
+                if kept is None or ts >= kept[0]:
+                    stop_filled_by_id[order_id] = (ts, dict(line))
+    return oco_unsupported, ttl_latest, amend_seq, stop_filled_by_id
 
 
 def _compact_standalone_stop_journal() -> None:
@@ -6900,40 +6966,63 @@ def _filled_positions_gross_acct(
     rates: dict[str, float] = {}
     total = 0.0
     for position in positions:
-        position_ccy = getattr(position.instrument, "currency", "") or ""
-        if position.market_value is None:
-            return 0.0, (
-                f"position {position.instrument.ticker} has no broker mark "
-                "(market_value=None) — cannot value gross exposure, failing closed"
-            )
-        value_instr = abs(float(position.market_value))
-        # Legacy path first, byte-identical: a candidate fx with no stamped
-        # instrument currency (or an unstamped/matching position) converts
-        # through the candidate rate exactly as before #1238; fx=None with an
-        # unstamped position folds raw.
-        if fx is not None and (not expected_ccy or position_ccy in ("", expected_ccy)):
-            total += value_instr / float(fx.rate)
-            continue
-        if fx is None and not position_ccy:
-            total += value_instr
-            continue
-        if account_currency and position_ccy == account_currency:
-            total += value_instr
-            continue
-        rate = rates.get(position_ccy)
-        if rate is None and rate_lookup is not None:
-            looked_up = rate_lookup(position_ccy)
-            if looked_up is not None and looked_up > 0.0:
-                rate = float(looked_up)
-                rates[position_ccy] = rate
-        if rate is None:
-            return 0.0, (
-                f"position {position.instrument.ticker} trades in {position_ccy} and no "
-                f"conversion into the account currency is available — cannot value gross "
-                "exposure through a foreign rate, failing closed"
-            )
-        total += value_instr / rate
+        value_acct, failure = _value_one_position(
+            position,
+            fx,
+            expected_ccy=expected_ccy,
+            account_currency=account_currency,
+            rates=rates,
+            rate_lookup=rate_lookup,
+        )
+        if failure is not None:
+            return 0.0, failure
+        total += value_acct
     return total, None
+
+
+def _value_one_position(
+    position: Any,
+    fx: Any,
+    *,
+    expected_ccy: str,
+    account_currency: str,
+    rates: dict[str, float],
+    rate_lookup: Callable[[str], float | None] | None,
+) -> tuple[float, str | None]:
+    """``(value in account currency, None)`` for one position, or
+    ``(0.0, failure)`` — the fail-closed cases and per-currency branch order of
+    :func:`_filled_positions_gross_acct` verbatim. ``rates`` memoizes lookups
+    across positions (ONE lookup per distinct currency per attempt)."""
+    position_ccy = getattr(position.instrument, "currency", "") or ""
+    if position.market_value is None:
+        return 0.0, (
+            f"position {position.instrument.ticker} has no broker mark "
+            "(market_value=None) — cannot value gross exposure, failing closed"
+        )
+    value_instr = abs(float(position.market_value))
+    # Legacy path first, byte-identical: a candidate fx with no stamped
+    # instrument currency (or an unstamped/matching position) converts
+    # through the candidate rate exactly as before #1238; fx=None with an
+    # unstamped position folds raw.
+    if fx is not None and (not expected_ccy or position_ccy in ("", expected_ccy)):
+        return value_instr / float(fx.rate), None
+    if fx is None and not position_ccy:
+        return value_instr, None
+    if account_currency and position_ccy == account_currency:
+        return value_instr, None
+    rate = rates.get(position_ccy)
+    if rate is None and rate_lookup is not None:
+        looked_up = rate_lookup(position_ccy)
+        if looked_up is not None and looked_up > 0.0:
+            rate = float(looked_up)
+            rates[position_ccy] = rate
+    if rate is None:
+        return 0.0, (
+            f"position {position.instrument.ticker} trades in {position_ccy} and no "
+            f"conversion into the account currency is available — cannot value gross "
+            "exposure through a foreign rate, failing closed"
+        )
+    return value_instr / rate, None
 
 
 def _make_position_rate_lookup(broker: Any, account_currency: str) -> Callable[[str], float | None]:
