@@ -67,6 +67,10 @@ class TierPlan:
     qty: int
     alloc_pct: float
     tag: str
+    # Mirrors EntryTierSpec.entry_mode (#1247) so the drain can partition the
+    # SIZED ladder (now vs pullback) without re-reading the spec. Trailing
+    # with a default: one suite constructs TierPlan positionally.
+    entry_mode: str = "pullback"
 
 
 @dataclass(frozen=True)
@@ -308,6 +312,9 @@ def compute_setup_plan(
                 qty=qty,
                 alloc_pct=alloc_pct,
                 tag=t.tag,
+                # getattr: some suites size duck-typed spec-tier stubs that
+                # carry only limit_price/alloc_pct (#1247).
+                entry_mode=getattr(t, "entry_mode", "pullback"),
             )
         )
 

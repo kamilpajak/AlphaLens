@@ -27,7 +27,9 @@ from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 
 # Wire schema version stamped on every TradeSpec / IntentMeta instance so a
 # future broker-manager can detect + reject stale client payloads.
-SCHEMA_VERSION = "1"
+# "2": EntryTierSpec.entry_mode added (#1247 immediate-entry tiers). Old "1"
+# payloads decode unchanged (absent key -> the dataclass default applies).
+SCHEMA_VERSION = "2"
 
 # Reserved multi-tenant dimension. A single account is live today; the field
 # exists so a future multi-account broker-manager does not need a schema
@@ -53,11 +55,19 @@ class EntryTierSpec:
     each tier as ``total_notional * (alloc_pct / 100)`` (paper/sizing.py).
     ``tag`` mirrors the brief entry tier's free-text label (e.g. "T1"); it
     carries no sizing semantics.
+
+    ``entry_mode`` (#1247): ``"pullback"`` is a resting rung below the market
+    (today's only shape); ``"immediate"`` marks an arm-manual "now" tranche —
+    for it ``limit_price`` is the operator's CAP (max acceptable fill), not a
+    pullback level. NOTE: the entry-trail journal's ``watch_open`` lines carry
+    an unrelated top-level ``entry_mode`` cohort tag — different JSON
+    namespace, name collision only.
     """
 
     limit_price: float
     alloc_pct: float
     tag: str = ""
+    entry_mode: Literal["pullback", "immediate"] = "pullback"
 
 
 @dataclass(frozen=True)

@@ -115,6 +115,14 @@ class TestDefaults(unittest.TestCase):
         tier = EntryTierSpec(limit_price=100.0, alloc_pct=50.0)
         self.assertEqual(tier.tag, "")
 
+    def test_entry_tier_spec_entry_mode_defaults_pullback(self):
+        tier = EntryTierSpec(limit_price=100.0, alloc_pct=50.0)
+        self.assertEqual(tier.entry_mode, "pullback")
+
+    def test_entry_tier_spec_accepts_immediate(self):
+        tier = EntryTierSpec(limit_price=100.0, alloc_pct=50.0, entry_mode="immediate")
+        self.assertEqual(tier.entry_mode, "immediate")
+
     def test_tp_tranche_spec_r_multiple_and_tag_default(self):
         tranche = TpTrancheSpec(price=110.0, tranche_pct=100.0)
         self.assertEqual(tranche.r_multiple, 0.0)

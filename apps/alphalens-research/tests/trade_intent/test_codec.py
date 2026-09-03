@@ -157,6 +157,39 @@ class TestMetaSource(unittest.TestCase):
         self.assertEqual(restored.meta.source, "brief")
 
 
+class TestEntryTierMode(unittest.TestCase):
+    """The immediate-entry tier marker for arm-manual "now" tranches (#1247)."""
+
+    def test_entry_mode_round_trips(self) -> None:
+        intent = TradeIntent(
+            intent_id="RHI:2026-09-03:manual",
+            instrument=InstrumentHint(ticker="RHI", mic="XNYS"),
+            spec=TradeSpec(
+                entry_tiers=(
+                    EntryTierSpec(
+                        limit_price=43.0, alloc_pct=40.0, tag="T1", entry_mode="immediate"
+                    ),
+                    EntryTierSpec(limit_price=41.0, alloc_pct=60.0, tag="T2"),
+                ),
+                disaster_stop=39.0,
+                tp_tranches=(),
+                suggested_size_pct=2.0,
+            ),
+            meta=_meta(),
+            exit=None,
+        )
+        restored = intent_from_jsonable(intent_to_jsonable(intent))
+        self.assertEqual(restored, intent)
+        self.assertEqual(restored.spec.entry_tiers[0].entry_mode, "immediate")
+        self.assertEqual(restored.spec.entry_tiers[1].entry_mode, "pullback")
+
+    def test_legacy_tier_without_entry_mode_decodes_to_pullback(self) -> None:
+        data = intent_to_jsonable(_intent_with_reanchor())
+        del data["spec"]["entry_tiers"][0]["entry_mode"]
+        restored = intent_from_jsonable(data)
+        self.assertEqual(restored.spec.entry_tiers[0].entry_mode, "pullback")
+
+
 class TestDecodeErrors(unittest.TestCase):
     def test_unknown_reaction_kind_raises(self) -> None:
         data = intent_to_jsonable(_intent_with_reanchor())
