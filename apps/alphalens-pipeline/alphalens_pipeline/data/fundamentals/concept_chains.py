@@ -22,7 +22,7 @@ from typing import Final
 
 # --- Duration concepts (P&L / cash flow) -----------------------------------
 
-REVENUE: Final[tuple[str, ...]] = (
+REVENUE_NET_OF_ASSESSED_TAX: Final[tuple[str, ...]] = (
     # ASC 606 contract revenue — modern SaaS / tech (SYM, post-2018 issuers).
     "RevenueFromContractWithCustomerExcludingAssessedTax",
     # Catch-all revenue — large-cap diversified (AAPL, GOOG).
@@ -30,6 +30,15 @@ REVENUE: Final[tuple[str, ...]] = (
     # Legacy industrial reporters who never adopted the ASC 606 tag.
     "SalesRevenueNet",
     "SalesRevenueGoodsNet",
+)
+REVENUE: Final[tuple[str, ...]] = (
+    *REVENUE_NET_OF_ASSESSED_TAX,
+    # ASC 606-10-32-2A gross-of-assessed-tax variant, LAST fallback: filers that
+    # migrated fully off the Excluding/Revenues tags (RGTI 2023, VRNS 2018, ...).
+    # Gross-vs-net gap is negligible in tech/manufacturing but 10-20% in
+    # tax-heavy sectors — the store's sector guard keeps those on the net-only
+    # chain (issue #924).
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
 )
 
 OPERATING_INCOME: Final[tuple[str, ...]] = ("OperatingIncomeLoss",)
@@ -170,6 +179,7 @@ __all__ = [
     "OPERATING_INCOME",
     "PRETAX_INCOME",
     "REVENUE",
+    "REVENUE_NET_OF_ASSESSED_TAX",
     "SHARES_OUTSTANDING_DEI",
     "SHARES_OUTSTANDING_US_GAAP",
     "SHORT_TERM_DEBT",

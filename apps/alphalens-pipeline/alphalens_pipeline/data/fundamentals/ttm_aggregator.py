@@ -557,6 +557,7 @@ def fcf_margin_rolling_median(
     window_quarters: int = 20,
     min_quarters: int = 8,
     tax_rate: float = 0.21,
+    revenue_chain: Sequence[str] | None = None,
 ) -> float | None:
     """5-year (20-quarter) rolling median FCF margin.
 
@@ -570,6 +571,11 @@ def fcf_margin_rolling_median(
     Returns ``None`` when fewer than ``min_quarters`` aligned quarters
     survive — too thin a sample for a stable median.
 
+    ``revenue_chain`` lets callers pass the same tax-heavy-sector-aware
+    revenue chain used for ``revenue_ttm`` (issue #924) so the FCF margin
+    is computed against the same revenue definition; defaults to
+    ``concept_chains.REVENUE`` when omitted.
+
     Local imports of the chain constants avoid a circular dependency:
     ``concept_chains`` imports from this module would invert the
     dependency arrow.
@@ -580,7 +586,11 @@ def fcf_margin_rolling_median(
     if not ocf_series:
         return None
     capex_series = dict(compute_per_quarter_series(reader, cik, chains.CAPEX, asof))
-    revenue_series = dict(compute_per_quarter_series(reader, cik, chains.REVENUE, asof))
+    revenue_series = dict(
+        compute_per_quarter_series(
+            reader, cik, revenue_chain if revenue_chain is not None else chains.REVENUE, asof
+        )
+    )
     interest_series = dict(compute_per_quarter_series(reader, cik, chains.INTEREST_EXPENSE, asof))
 
     common_ends = sorted(set(ocf_series) & set(capex_series) & set(revenue_series))
