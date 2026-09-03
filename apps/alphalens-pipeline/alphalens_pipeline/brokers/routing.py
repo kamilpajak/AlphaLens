@@ -84,7 +84,7 @@ def resolve_us_instrument(
         raise InstrumentNotFoundError(
             f"{ticker!r} resolved on none of the probed US venues "
             f"{US_MIC_PROBE_ORDER}; pass an explicit exchange MIC "
-            "(non-US venues like XWAR are explicit-only)"
+            "(non-US venues like XWAR or XETR are explicit-only)"
         )
     if len(matches) > 1:
         venues = [ref.exchange_mic for ref in matches]
