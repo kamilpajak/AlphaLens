@@ -86,25 +86,56 @@ def sessions_back(calendar_px: pd.DataFrame, day: dt.date, n: int) -> dt.date:
 
 
 # ------------------------------------------------------------ acceptance times
-def fetch_acceptance(accession: str, cik: str, client) -> dt.datetime | None:
-    """EDGAR <ACCEPTANCE-DATETIME> of a filing, cached per accession (raw header text persisted first)."""
+def _accession_urls(accession: str, ciks: list[str]) -> list[str]:
+    """Candidate full-submission URLs: EDGAR files a Form 4 under the issuer AND each reporter CIK,
+    but the Archives path is not always present under the issuer — try every CIK we know."""
+    acc = accession.replace("-", "")
+    seen, urls = set(), []
+    for cik in ciks:
+        if cik and str(cik) not in seen:
+            seen.add(str(cik))
+            urls.append(f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc}/{accession}.txt")
+    return urls
+
+
+def fetch_acceptance(
+    accession: str, cik: str, client, *, fallback_ciks: list[str] | None = None
+) -> dt.datetime | None:
+    """EDGAR <ACCEPTANCE-DATETIME> of a filing, cached per accession (raw header text persisted first).
+
+    Tries the issuer CIK path first, then the reporting-owner CIK paths. A cached
+    miss caused by a missing Archives key is retried when fallbacks are supplied.
+    """
     ACCEPT_CACHE.mkdir(parents=True, exist_ok=True)
     cache = ACCEPT_CACHE / f"{accession}.json"
     if cache.exists():
-        v = json.loads(cache.read_text()).get("acceptance")
-        return dt.datetime.strptime(v, "%Y%m%d%H%M%S") if v else None
-    url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession.replace('-', '')}/{accession}.txt"
-    try:
-        text = client.get_text(url)[:4000]
-    except Exception as exc:  # logged, treated as unknown (conservative arrival)
-        log.warning("acceptance fetch failed %s: %s", accession, exc)
-        cache.write_text(
-            json.dumps({"acceptance": None, "error": f"{type(exc).__name__}: {str(exc)[:200]}"})
+        payload = json.loads(cache.read_text())
+        v = payload.get("acceptance")
+        retryable = (
+            v is None
+            and fallback_ciks
+            and "NoSuchKey" in (payload.get("error") or "")
+            and not payload.get("fallback_tried")
         )
-        return None
-    m = ACCEPT_RE.search(text)
-    cache.write_text(json.dumps({"acceptance": m.group(1) if m else None, "header": text[:600]}))
-    return dt.datetime.strptime(m.group(1), "%Y%m%d%H%M%S") if m else None
+        if not retryable:
+            return dt.datetime.strptime(v, "%Y%m%d%H%M%S") if v else None
+    last_err = None
+    for url in _accession_urls(accession, [cik, *(fallback_ciks or [])]):
+        try:
+            text = client.get_text(url)[:4000]
+        except Exception as exc:  # logged, next candidate URL; unknown -> conservative arrival
+            last_err = f"{type(exc).__name__}: {str(exc)[:200]}"
+            continue
+        m = ACCEPT_RE.search(text)
+        cache.write_text(
+            json.dumps({"acceptance": m.group(1) if m else None, "header": text[:600], "url": url})
+        )
+        return dt.datetime.strptime(m.group(1), "%Y%m%d%H%M%S") if m else None
+    log.warning("acceptance fetch failed %s: %s", accession, last_err)
+    cache.write_text(
+        json.dumps({"acceptance": None, "error": last_err, "fallback_tried": bool(fallback_ciks)})
+    )
+    return None
 
 
 # -------------------------------------------------------------------- features

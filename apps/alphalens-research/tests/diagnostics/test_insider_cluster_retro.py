@@ -282,3 +282,41 @@ class TestParamsParity(unittest.TestCase):
         self.assertIn("10000 USD", params["event"]["leg"])
         self.assertIn("2 trading sessions", params["event"]["cluster"])
         self.assertIn("20 sessions", params["event"]["dedup"])
+
+
+class TestAcceptanceFetchFallback(unittest.TestCase):
+    """The runner's acceptance fetch tries the issuer CIK path, then the reporter CIK path."""
+
+    def test_falls_back_to_reporter_cik_and_caches_url(self):
+        import importlib.util
+        import json
+        import tempfile
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[4]
+        spec = importlib.util.spec_from_file_location(
+            "runner", root / "apps/alphalens-research/scripts/experiment_insider_cluster_retro.py"
+        )
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+
+        class FakeClient:
+            def __init__(self):
+                self.urls = []
+
+            def get_text(self, url):
+                self.urls.append(url)
+                if "/data/1/" in url:
+                    raise RuntimeError("NoSuchKey")
+                return "<SEC-HEADER>\n<ACCEPTANCE-DATETIME>20200304081500\nFILER:"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runner.ACCEPT_CACHE = Path(tmp)
+            client = FakeClient()
+            got = runner.fetch_acceptance("0000000002-20-000001", "1", client, fallback_ciks=["2"])
+            self.assertEqual(got, dt.datetime(2020, 3, 4, 8, 15))
+            self.assertEqual(len(client.urls), 2)
+            self.assertIn("/data/2/", client.urls[1])
+            cached = json.loads((Path(tmp) / "0000000002-20-000001.json").read_text())
+            self.assertEqual(cached["acceptance"], "20200304081500")
+            self.assertIn("/data/2/", cached["url"])
