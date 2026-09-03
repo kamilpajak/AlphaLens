@@ -4548,7 +4548,34 @@
         "look_kind": "EXPLORATORY ESTIMATION (no discovery claim)",
         "locked_at": "2026-09-03"
       },
-      "outcome": null,
+      "outcome": {
+        "kind": "ESTIMATION (no verdict; no discovery claim)",
+        "run_date": "2026-09-03",
+        "n_events": 3134,
+        "n_arrival_sessions": 1441,
+        "n_tickers": 1307,
+        "primary_d20_mean_pp": 0.76,
+        "primary_d20_ci90_pp": [
+          0.21,
+          1.31
+        ],
+        "primary_d20_ci95_pp": [
+          0.1,
+          1.42
+        ],
+        "treated_car20_pp": 1.1,
+        "control_car20_pp": 0.35,
+        "regression_beta_pp": 0.86,
+        "regression_t_cr2": 2.63,
+        "planning_rule": "BUILD (net mean +0.10 pp; net ci90_low -0.45 pp vs bound -0.50 pp — marginal)",
+        "retail_sim_cap3": {
+          "mean_net_pp": 0.52,
+          "median_net_pp": -0.48,
+          "share_negative": 0.54
+        },
+        "artifacts": "~/.alphalens/insider_cluster_retro_2026_09/{events,treated,controls}.parquet + summary.json",
+        "results_section": "docs/research/insider_cluster_retro_design_2026_09_03.md §13"
+      },
       "periods": {
         "inference_start": "2013-01-01",
         "inference_end": "2023-12-31",
@@ -4565,7 +4592,7 @@
         "abort_clause": "outcome-blind defects only"
       },
       "registered_at": "2026-09-03",
-      "status": "registered",
+      "status": "completed",
       "notes": "Owner decisions 2026-09-03: full Form-4 store universe (PIT yaml secondary), exploratory look without verdict, USD floor 100k (250k check), delisted prices not purchased at this stage."
     }
   ]
