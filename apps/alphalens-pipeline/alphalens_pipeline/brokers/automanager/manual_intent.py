@@ -55,6 +55,12 @@ class ManualIntentError(ValueError):
     """A manual pick's levels/sizing cannot be compiled into a TradeIntent."""
 
 
+# Immediate-entry tier prefix (#1247): ``now@<cap>[:alloc_pct]``. The cap is
+# the operator's max acceptable fill — the daemon places a capped LIMIT at
+# drain instead of a resting pullback rung.
+_NOW_PREFIX = "now@"
+
+
 def _parse_float(raw: str, *, what: str) -> float:
     try:
         value = float(raw)
@@ -73,11 +79,17 @@ def parse_entry_tiers(raw_tiers: list[str] | tuple[str, ...]) -> tuple[EntryTier
     the compiled-intent echo surfaces the split for verification. When any
     tier carries an explicit allocation, every tier must, and the allocations
     must sum to 100 (float-noise tolerance only — no silent rescaling).
+
+    A ``now@<cap>[:alloc_pct]`` tier (#1247) marks the immediate-entry
+    tranche: at most one per pick, and it must be listed FIRST (the day-1
+    gate and the watch router key on the first PULLBACK tier — a now tier
+    hiding mid-ladder would corrupt both). It participates in the allocation
+    arithmetic exactly like any other tier.
     """
     if not raw_tiers:
         raise ManualIntentError("at least one --tier is required")
 
-    parsed: list[tuple[float, float | None]] = []
+    parsed: list[tuple[float, float | None, bool]] = []
     for raw in raw_tiers:
         parts = raw.split(":")
         if len(parts) == 1:
@@ -86,6 +98,13 @@ def parse_entry_tiers(raw_tiers: list[str] | tuple[str, ...]) -> tuple[EntryTier
             price_raw, alloc_raw = parts
         else:
             raise ManualIntentError(f"cannot parse --tier: {raw!r} (expected price[:alloc_pct])")
+        is_now = price_raw.startswith(_NOW_PREFIX)
+        if is_now:
+            price_raw = price_raw[len(_NOW_PREFIX) :]
+            if not price_raw:
+                raise ManualIntentError(
+                    f"a now tier needs a cap price, got {raw!r} (expected now@<cap>[:alloc_pct])"
+                )
         price = _parse_float(price_raw, what=f"--tier price in {raw!r}")
         if price <= 0:
             raise ManualIntentError(f"--tier price must be positive, got {raw!r}")
@@ -94,31 +113,45 @@ def parse_entry_tiers(raw_tiers: list[str] | tuple[str, ...]) -> tuple[EntryTier
             alloc = _parse_float(alloc_raw, what=f"--tier alloc_pct in {raw!r}")
             if alloc <= 0:
                 raise ManualIntentError(f"--tier alloc_pct must be positive, got {raw!r}")
-        parsed.append((price, alloc))
+        parsed.append((price, alloc, is_now))
 
-    n_bare = sum(1 for _, alloc in parsed if alloc is None)
+    now_indexes = [index for index, (_, _, is_now) in enumerate(parsed) if is_now]
+    if len(now_indexes) > 1:
+        raise ManualIntentError(
+            "at most one now tier per pick — a second 'now' is a new signal, re-arm"
+        )
+    if now_indexes and now_indexes[0] != 0:
+        raise ManualIntentError("the now tier must be listed first")
+
+    n_bare = sum(1 for _, alloc, _ in parsed if alloc is None)
     if n_bare == len(parsed):
-        parsed = [(price, 100.0 / len(parsed)) for price, _ in parsed]
+        parsed = [(price, 100.0 / len(parsed), is_now) for price, _, is_now in parsed]
     elif n_bare:
         raise ManualIntentError(
             "either every --tier carries an explicit alloc_pct or none does "
             f"(equal split) — got a mix in {list(raw_tiers)!r}"
         )
     else:
-        alloc_sum = sum(alloc for _, alloc in parsed if alloc is not None)
+        alloc_sum = sum(alloc for _, alloc, _ in parsed if alloc is not None)
         if abs(alloc_sum - 100.0) > _PCT_SUM_TOL:
             raise ManualIntentError(
                 f"--tier allocations must sum to 100, got {alloc_sum:g} — no silent rescaling"
             )
 
-    prices = [price for price, _ in parsed]
+    prices = [price for price, _, _ in parsed]
     if len(set(prices)) != len(prices):
         # The same price twice is almost certainly a pasted-twice typo — the
-        # deeper rung of such a ladder can never fill separately.
+        # deeper rung of such a ladder can never fill separately (and a now
+        # cap colliding with a pullback rung is the same typo class).
         raise ManualIntentError(f"duplicate --tier price: {prices}")
     return tuple(
-        EntryTierSpec(limit_price=price, alloc_pct=alloc, tag=f"T{index + 1}")
-        for index, (price, alloc) in enumerate(parsed)
+        EntryTierSpec(
+            limit_price=price,
+            alloc_pct=alloc,
+            tag=f"T{index + 1}",
+            entry_mode="immediate" if is_now else "pullback",
+        )
+        for index, (price, alloc, is_now) in enumerate(parsed)
         if alloc is not None
     )
 
@@ -179,6 +212,12 @@ def planned_blended_entry_of(tiers: tuple[EntryTierSpec, ...], *, disaster_stop:
     path can never drift from the blend the daemon's geometry shadow and the
     replay lenses compute — blend divergence is exactly the SMG class of bug
     (issue #1114).
+
+    An immediate ("now") tier's cap participates in the blend like any other
+    tier: the cap is that allocation's worst-case PLANNED entry, the same
+    epistemic status as a pullback rung's limit (#1247 memo D2). Excluding it
+    would fork the blend arithmetic and leave a now-only pick with no blend
+    for R-form take-profits.
     """
     provisional = TradeSpec(
         entry_tiers=tiers,

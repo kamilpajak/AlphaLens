@@ -97,6 +97,61 @@ class ArmManualCommandTest(unittest.TestCase):
         self.assertIn("dry-run", result.output)
         self.assertIn("71.5", result.output)
 
+    def test_now_tier_echo_marks_immediate(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        args = [
+            "arm-manual",
+            "rhi",
+            "--tier",
+            "now@43.00:40",
+            "--tier",
+            "41:60",
+            "--stop",
+            "39",
+            "--tp",
+            "2R:100",
+            "--notional",
+            "10000",
+            "--frame",
+            "15000",
+            "--dry-run",
+        ]
+        with mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm:
+            result = self.runner.invoke(broker_app, args)
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        arm.assert_not_called()
+        self.assertIn("T1 now@43 (40%)", result.output)
+        self.assertIn("T2 41 (60%)", result.output)
+        self.assertIn("dry-run", result.output)
+
+    def test_now_tier_arms_and_persists_entry_mode(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        args = [
+            "arm-manual",
+            "rhi",
+            "--tier",
+            "now@43.00:40",
+            "--tier",
+            "41:60",
+            "--stop",
+            "39",
+            "--no-tp",
+            "--notional",
+            "10000",
+            "--frame",
+            "15000",
+        ]
+        with mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm:
+            result = self.runner.invoke(broker_app, args)
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        (intent,), _kwargs = arm.call_args
+        self.assertEqual(intent.spec.entry_tiers[0].entry_mode, "immediate")
+        self.assertEqual(intent.spec.entry_tiers[1].entry_mode, "pullback")
+
     def test_invalid_levels_refuse_before_any_append(self) -> None:
         from alphalens_cli.commands.broker import broker_app
 

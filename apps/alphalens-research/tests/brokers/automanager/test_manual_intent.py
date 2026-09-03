@@ -19,6 +19,7 @@ from alphalens_pipeline.brokers.automanager.manual_intent import (
     build_manual_intent,
     parse_entry_tiers,
     parse_tp_tranches,
+    planned_blended_entry_of,
     resolve_size_pct,
 )
 
@@ -111,6 +112,46 @@ class ParseEntryTiersTest(unittest.TestCase):
         # deeper rung of such a ladder can never fill separately.
         with self.assertRaisesRegex(ManualIntentError, "duplicate --tier price"):
             parse_entry_tiers(["72.5:60", "72.5:40"])
+
+    def test_now_tier_with_alloc_parses(self) -> None:
+        tiers = parse_entry_tiers(["now@43.00:40", "41:60"])
+        self.assertEqual(tiers[0].limit_price, 43.0)
+        self.assertEqual(tiers[0].alloc_pct, 40.0)
+        self.assertEqual(tiers[0].entry_mode, "immediate")
+        self.assertEqual(tiers[0].tag, "T1")
+        self.assertEqual(tiers[1].entry_mode, "pullback")
+
+    def test_bare_now_tier_joins_equal_split(self) -> None:
+        tiers = parse_entry_tiers(["now@43.00", "41", "40"])
+        self.assertEqual(tiers[0].entry_mode, "immediate")
+        for tier in tiers:
+            self.assertAlmostEqual(tier.alloc_pct, 100.0 / 3)
+
+    def test_second_now_tier_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "at most one now"):
+            parse_entry_tiers(["now@43:50", "now@42:50"])
+
+    def test_non_first_now_tier_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "listed first"):
+            parse_entry_tiers(["43:60", "now@42:40"])
+
+    def test_now_without_cap_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "needs a cap price"):
+            parse_entry_tiers(["now@:100"])
+        with self.assertRaisesRegex(ManualIntentError, "needs a cap price"):
+            parse_entry_tiers(["now@"])
+
+    def test_now_cap_non_positive_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "must be positive"):
+            parse_entry_tiers(["now@0:100"])
+
+    def test_now_cap_equal_to_pullback_price_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "duplicate --tier price"):
+            parse_entry_tiers(["now@43:50", "43:50"])
+
+    def test_garbage_after_now_prefix_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "cannot parse"):
+            parse_entry_tiers(["now@abc:100"])
 
 
 class ParseTpTranchesTest(unittest.TestCase):
@@ -245,6 +286,21 @@ class BuildManualIntentTest(unittest.TestCase):
     def test_stop_at_or_above_lowest_tier_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "below every entry tier"):
             _build(stop=70.0)
+
+    def test_now_only_cap_must_exceed_stop(self) -> None:
+        # A now-only pick's cap IS its lowest tier — the existing invariant
+        # covers the memo's "cap must exceed --stop" rule for free.
+        with self.assertRaisesRegex(ManualIntentError, "below every entry tier"):
+            _build(tiers_raw=["now@43.00:100"], stop=43.0, tps_raw=["2R:100"])
+
+    def test_planned_blend_includes_now_cap(self) -> None:
+        # Memo D2: the immediate cap participates in the alloc-weighted planned
+        # blend as that allocation's worst-case planned entry.
+        intent = _build(tiers_raw=["now@43.00:40", "41:60"], stop=39.0, tps_raw=["2R:100"])
+        blend = planned_blended_entry_of(
+            intent.spec.entry_tiers, disaster_stop=intent.spec.disaster_stop
+        )
+        self.assertAlmostEqual(blend, 0.4 * 43.0 + 0.6 * 41.0)
 
     def test_non_positive_stop_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "stop must be positive"):

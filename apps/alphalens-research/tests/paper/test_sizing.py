@@ -29,8 +29,10 @@ from broker_contract.sizing import (
     SetupPlan,
     TradeSetupNotPlannableError,
     compute_daily_scale_factor,
+    compute_setup_plan,
     setup_plan_gross_notional,
 )
+from broker_contract.trade_intent.schema import EntryTierSpec, TradeSpec
 
 from tests.paper.sizing_test_helpers import plan_from_brief
 
@@ -357,6 +359,43 @@ class TestPlanReturnsAFrozenDataclass(unittest.TestCase):
         self.assertIsInstance(plan, SetupPlan)
         with self.assertRaises(Exception):
             plan.disaster_stop = 999.0  # type: ignore[misc]
+
+
+class TestEntryModePropagation(unittest.TestCase):
+    """#1247: the spec tier's entry_mode survives into TierPlan so the drain
+    can partition the sized ladder without re-reading the spec."""
+
+    def test_entry_mode_propagates_to_tier_plan(self):
+        spec = TradeSpec(
+            entry_tiers=(
+                EntryTierSpec(limit_price=43.0, alloc_pct=40.0, tag="T1", entry_mode="immediate"),
+                EntryTierSpec(limit_price=41.0, alloc_pct=60.0, tag="T2"),
+            ),
+            disaster_stop=39.0,
+            tp_tranches=(),
+            suggested_size_pct=5.0,
+        )
+        plan = compute_setup_plan(spec, paper_equity=1_000_000.0, scale_factor=1.0)
+        self.assertEqual(plan.entry_tiers[0].entry_mode, "immediate")
+        self.assertEqual(plan.entry_tiers[1].entry_mode, "pullback")
+
+    def test_duck_typed_tier_without_entry_mode_defaults_pullback(self):
+        # Several suites build spec-tier stubs carrying only limit_price /
+        # alloc_pct — sizing must not require the new field.
+        stub = type("T", (), {"limit_price": 50.0, "alloc_pct": 100.0, "tag": ""})()
+        spec_stub = type(
+            "S",
+            (),
+            {
+                "entry_tiers": (stub,),
+                "disaster_stop": 45.0,
+                "tp_tranches": (),
+                "suggested_size_pct": 5.0,
+                "order_ttl_days": 0,
+            },
+        )()
+        plan = compute_setup_plan(spec_stub, paper_equity=1_000_000.0, scale_factor=1.0)
+        self.assertEqual(plan.entry_tiers[0].entry_mode, "pullback")
 
 
 if __name__ == "__main__":

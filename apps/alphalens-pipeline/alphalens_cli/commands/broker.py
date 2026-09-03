@@ -1404,7 +1404,9 @@ def arm_manual_command(
         "--tier",
         help="Entry tier as price[:alloc_pct]; repeatable. An all-bare ladder (prices only) "
         "splits equally; with explicit allocations every tier needs one and they must sum "
-        "to 100 (no silent rescaling).",
+        "to 100 (no silent rescaling). now@<cap>[:alloc_pct] marks an immediate-entry "
+        "tier (#1247): at most one, listed first; cap = max acceptable fill, executed by "
+        "the daemon at drain as a capped limit.",
     ),
     stop: float = typer.Option(..., "--stop", help="Disaster stop (absolute price)."),
     tp: list[str] = typer.Option(
@@ -1516,7 +1518,9 @@ def arm_manual_command(
     )
     risk = blend - intent.spec.disaster_stop
     tiers_echo = ", ".join(
-        f"{t.tag} {t.limit_price:g} ({t.alloc_pct:g}%)" for t in intent.spec.entry_tiers
+        f"{t.tag} {'now@' if t.entry_mode == 'immediate' else ''}{t.limit_price:g}"
+        f" ({t.alloc_pct:g}%)"
+        for t in intent.spec.entry_tiers
     )
     tp_echo = (
         ", ".join(
