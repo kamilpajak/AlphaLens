@@ -1115,6 +1115,7 @@ def _place_and_record(
 
     from alphalens_pipeline.brokers.execution import execution_config_version
     from alphalens_pipeline.brokers.submission_log import (
+        SizingStamp,
         append_submission_record,
         build_submission_record,
     )
@@ -1156,11 +1157,13 @@ def _place_and_record(
                 brackets=placed_records,
                 precheck=precheck_summaries,
                 note=failure_note,
-                sizing_currency=account_currency,
-                instrument_currency=instrument.currency,
-                sizing_equity=sizing_equity,
-                fx=fx,
-                precheck_conversion_rate=precheck_conversion_rate,
+                sizing=SizingStamp(
+                    sizing_currency=account_currency,
+                    instrument_currency=instrument.currency,
+                    sizing_equity=sizing_equity,
+                    fx=fx,
+                    precheck_conversion_rate=precheck_conversion_rate,
+                ),
             )
             path = append_submission_record(record)
             typer.echo(f"submission recorded: {path}")

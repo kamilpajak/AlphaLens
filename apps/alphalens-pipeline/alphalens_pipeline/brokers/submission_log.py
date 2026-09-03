@@ -56,6 +56,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,21 @@ from broker_contract.fx import FxConversion
 
 from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.execution import execution_config_version
+
+
+@dataclass(frozen=True)
+class SizingStamp:
+    """The sizing/FX provenance one placement stamps on a journal record
+    (the schema-2 fx keys + schema-3 fee estimate). The default instance
+    writes the same REAL nulls an explicit-qty caller (which never sized)
+    always wrote."""
+
+    sizing_currency: str | None = None
+    instrument_currency: str | None = None
+    sizing_equity: float | None = None
+    fx: FxConversion | None = None
+    precheck_conversion_rate: float | None = None
+    est_round_trip_fee_bps: float | None = None
 
 
 def build_submission_record(
@@ -74,29 +90,26 @@ def build_submission_record(
     brackets: list[dict[str, Any]],
     precheck: list[dict[str, Any]] | None = None,
     note: str | None = None,
-    sizing_currency: str | None = None,
-    instrument_currency: str | None = None,
-    sizing_equity: float | None = None,
-    fx: FxConversion | None = None,
-    precheck_conversion_rate: float | None = None,
-    est_round_trip_fee_bps: float | None = None,
+    sizing: SizingStamp | None = None,
     tranche: str | None = None,
     tranche_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble one journal record, stamping the token + a UTC timestamp.
 
-    Schema-2 shape: the fx keys are ALWAYS present. ``fx=None`` (the
+    Schema-2 shape: the fx keys are ALWAYS present. ``sizing.fx=None`` (the
     same-currency no-op, and explicit-qty callers that never sized) writes
     REAL nulls — never a fake 1.0 rate. Cross-currency callers pass the ONE
     :class:`FxConversion` their sizing used; the journal is the only place
     the sizing rate survives (ClosedPosition does not expose the settlement
     rate), so the fields are stamped verbatim.
 
-    Schema-3: ``est_round_trip_fee_bps`` (broker sizing memo §4.5) is ALWAYS
-    present — the honest per-tier round-trip fee estimate the placer
+    Schema-3: ``sizing.est_round_trip_fee_bps`` (broker sizing memo §4.5) is
+    ALWAYS present — the honest per-tier round-trip fee estimate the placer
     computed, or a REAL null when the caller has no sized plan (explicit-qty
     CLI submits, note records built outside ``_place_tiers``).
     """
+    stamp = sizing if sizing is not None else SizingStamp()
+    fx = stamp.fx
     record: dict[str, Any] = {
         "execution_config_version": execution_config_version(),
         "ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
@@ -106,17 +119,17 @@ def build_submission_record(
         "uic": uic,
         "brackets": brackets,
         "precheck": precheck or [],
-        "sizing_currency": sizing_currency,
-        "instrument_currency": instrument_currency,
-        "sizing_equity": sizing_equity,
+        "sizing_currency": stamp.sizing_currency,
+        "instrument_currency": stamp.instrument_currency,
+        "sizing_equity": stamp.sizing_equity,
         "fx_rate": fx.rate if fx is not None else None,
         "fx_rate_bid": fx.bid if fx is not None else None,
         "fx_rate_ask": fx.ask if fx is not None else None,
         "fx_rate_price_type": fx.price_type if fx is not None else None,
         "fx_rate_source": fx.source if fx is not None else None,
         "fx_rate_asof": fx.asof.isoformat(timespec="seconds") if fx is not None else None,
-        "precheck_conversion_rate": precheck_conversion_rate,
-        "est_round_trip_fee_bps": est_round_trip_fee_bps,
+        "precheck_conversion_rate": stamp.precheck_conversion_rate,
+        "est_round_trip_fee_bps": stamp.est_round_trip_fee_bps,
     }
     if note:
         record["note"] = note
