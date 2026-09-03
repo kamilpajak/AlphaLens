@@ -227,6 +227,11 @@ def submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, 
     catch."""
     keys: set[tuple[str, str]] = set()
     for record in records:
+        if record.get("tranche") == "now":
+            # #1247: the now half's records (write-ahead, per-tier, refusal)
+            # never retire the pick — the pullback half's record does. The
+            # now half's own idempotency is the armed_ts scan in the drain.
+            continue
         ticker = record.get("ticker")
         brief_date = record.get("brief_date")
         if ticker and brief_date:
