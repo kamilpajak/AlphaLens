@@ -2100,7 +2100,13 @@ class TestEntryWatchPassKillGate(unittest.TestCase):
         self.assertEqual(alerts, [])  # no alerts under KILL
         self.assertEqual(deps.entry_watchers, {})  # no watcher constructed
 
-    def test_flag_off_is_a_noop(self) -> None:
+    def test_flag_off_skips_the_watch_advance_but_still_runs_the_sweep(self) -> None:
+        # #1231: the sweep runs at flag-off now, so it would write into the
+        # REAL ~/.alphalens/broker_orders/standalone_stops.jsonl without this
+        # fixture pointing it at a temp file. The pinned assertion below (the
+        # entry-trails journal is unchanged) still holds — the sweep writes
+        # only to the standalone-stop journal, never the entry-trail one.
+        _planned_journal(self)
         path = _journal(self)
         _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
         before = _lines(path)
@@ -2691,6 +2697,20 @@ class TestStaleTranchePlanRetraction(unittest.TestCase):
         self._seed_plan()
         deps = _watch_deps(_FakeFeed({}), [])
         with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        self.assertEqual(len(self._retractions(stops_path)), 1)
+
+    def test_watch_pass_runs_the_sweep_with_the_trail_flag_off(self) -> None:
+        # #1231: the live-exits pass consumes fold_tranche_plans regardless of
+        # entry_trail_bps() — it is gated by ALPHALENS_LIVE_MARKET_EXITS
+        # instead — so a stale plan left by a terminal, unfired watch must
+        # retract even while entry trails are OFF, not just while ALLOWed.
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._seed_plan()
+        deps = _watch_deps(_FakeFeed({}), [])
+        with mock.patch.dict("os.environ", {}, clear=True):
             cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
         self.assertEqual(len(self._retractions(stops_path)), 1)
 
