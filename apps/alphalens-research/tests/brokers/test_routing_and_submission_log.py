@@ -220,7 +220,7 @@ class TestExplicitMicFromHint(unittest.TestCase):
 class TestSubmissionLog(unittest.TestCase):
     def _record(self, **overrides: object) -> dict:
         defaults: dict = {
-            "brief_date": "2026-07-16",
+            "trade_date": "2026-07-16",
             "ticker": "KO",
             "mic": "XNYS",
             "uic": "307",
@@ -338,7 +338,7 @@ class TestSubmissionLog(unittest.TestCase):
         v1_line = {
             "execution_config_version": "execution-v1-abcdef012345",
             "ts": "2026-07-17T18:00:00+00:00",
-            "brief_date": "2026-07-16",
+            "trade_date": "2026-07-16",
             "ticker": "KO",
             "mic": "XNYS",
             "uic": "307",
@@ -378,7 +378,7 @@ class TestIterSubmissionRecords(unittest.TestCase):
 
     def _sample_record(self) -> dict:
         return build_submission_record(
-            brief_date="2026-07-16",
+            trade_date="2026-07-16",
             ticker="KO",
             mic="XNYS",
             uic="307",

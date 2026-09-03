@@ -42,7 +42,7 @@ class _Fx:
 
 class _Intent:
     class meta:
-        brief_date = "2026-09-01"
+        trade_date = "2026-09-01"
 
 
 class _Tier:

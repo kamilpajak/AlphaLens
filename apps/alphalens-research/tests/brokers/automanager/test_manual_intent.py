@@ -257,7 +257,7 @@ class BuildManualIntentTest(unittest.TestCase):
         self.assertEqual(intent.instrument.ticker, "NVO")
         self.assertEqual(intent.instrument.mic, "XNYS")
         self.assertEqual(intent.meta.source, "manual")
-        self.assertEqual(intent.meta.brief_date, "2026-09-02")
+        self.assertEqual(intent.meta.trade_date, "2026-09-02")
         self.assertEqual(intent.meta.armed_ts, _ARMED_TS)
         self.assertIsNone(intent.exit)
         self.assertEqual(intent.spec.disaster_stop, 66.0)

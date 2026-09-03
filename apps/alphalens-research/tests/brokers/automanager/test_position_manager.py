@@ -59,7 +59,7 @@ _ENTRY = "5039287596"
 class TestAdvanceDecisionTable(unittest.TestCase):
     def _verdict(self, **over: Any) -> ReconcileVerdict:
         base: dict[str, Any] = {
-            "brief_date": "2026-07-20",
+            "trade_date": "2026-07-20",
             "ticker": "KO",
             "qty": 3,
             "entry_order_id": _ENTRY,

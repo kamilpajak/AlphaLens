@@ -75,7 +75,7 @@ def _record(**overrides: Any) -> dict[str, Any]:
     record: dict[str, Any] = {
         "execution_config_version": "execution-v1-test",
         "ts": _TS,
-        "brief_date": "2026-07-06",
+        "trade_date": "2026-07-06",
         "ticker": "KO",
         "mic": "XNYS",
         "uic": "307",
@@ -193,9 +193,22 @@ class TestJournalJoin(unittest.TestCase):
         self.assertEqual(verdict.verdict, "WORKING")
         self.assertFalse(verdict.divergence)
         self.assertEqual(verdict.ticker, "KO")
-        self.assertEqual(verdict.brief_date, "2026-07-06")
+        self.assertEqual(verdict.trade_date, "2026-07-06")
         self.assertEqual(verdict.entry_order_id, "E-1")
         self.assertEqual(verdict.qty, 10)
+
+    def test_legacy_record_with_only_brief_date_key_still_resolves_trade_date(self):
+        # #1252: the journal date key was renamed brief_date -> trade_date, but
+        # data on disk written before the rename still carries the old key
+        # (append-only journals are never rewritten). A missed rename here
+        # would silently swallow the date as "" (regression guard).
+        record = _record()
+        record["brief_date"] = record.pop("trade_date")
+        broker = _FullBroker(open_orders=[_order_state("E-1", OrderStatus.WORKING)])
+
+        verdict = _single(reconcile_brackets([record], broker, today=_TODAY_FRESH))
+
+        self.assertEqual(verdict.trade_date, "2026-07-06")
 
     def test_open_partially_filled_entry_keeps_partial_status(self):
         broker = _FullBroker(

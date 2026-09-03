@@ -48,7 +48,7 @@ _NETTED_NOTE = "position open (netted tier), matched by uic"
 
 def _verdict(**overrides) -> ReconcileVerdict:
     fields = {
-        "brief_date": "d",
+        "trade_date": "d",
         "ticker": "T",
         "qty": 1.0,
         "entry_order_id": "e",

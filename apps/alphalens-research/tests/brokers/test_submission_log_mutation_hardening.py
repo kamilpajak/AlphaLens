@@ -33,7 +33,7 @@ from hypothesis import strategies as st
 def _record(**overrides: Any) -> dict[str, Any]:
     """Minimal valid submission record, with per-test overrides."""
     kwargs: dict[str, Any] = {
-        "brief_date": "2026-07-22",
+        "trade_date": "2026-07-22",
         "ticker": "KO",
         "mic": "XNYS",
         "uic": "307",

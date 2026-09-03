@@ -41,7 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ticker", default="KO")
     parser.add_argument("--mic", default="XNYS")
     parser.add_argument("--ttl", type=int, default=1, help="Entry GTD TTL in trading days.")
-    parser.add_argument("--brief-date", default=today_iso(), help="Journal brief_date.")
+    parser.add_argument("--trade-date", default=today_iso(), help="Journal trade_date.")
     parser.add_argument("--note", default="first-fill experiment phase A")
     parser.add_argument("--out-name", default="10_entry_place", help="Scratch dump basename.")
     parser.add_argument("--scratch", default=None, help="Scratch dir (default: $SCRATCH).")
@@ -77,7 +77,7 @@ def main(
         stop=stop,
         tp=tp,
         ttl=args.ttl,
-        brief_date=args.brief_date,
+        trade_date=args.trade_date,
         note=args.note,
         scratch=scratch,
         out_name=args.out_name,

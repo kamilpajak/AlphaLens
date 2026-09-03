@@ -102,7 +102,7 @@ def _mk_pick(ticker: str, date: str, plan: Any, mic: str = "XNYS") -> Any:
         (),
         {
             "instrument": type("Hint", (), {"ticker": ticker, "mic": mic})(),
-            "meta": type("Meta", (), {"brief_date": date, "source": "brief"})(),
+            "meta": type("Meta", (), {"trade_date": date, "source": "brief"})(),
             "spec": spec,
             "exit": None,
         },
@@ -173,8 +173,8 @@ class TestEntryWatchMultiSessionSoak(unittest.TestCase):
             live_exits_feed_factory=lambda _u2i, *, scope: self.feed,
         )
 
-    def _record_refused(self, ticker: str, brief_date: Any, reason: str) -> None:
-        self.refused.append((ticker, brief_date, reason))
+    def _record_refused(self, ticker: str, trade_date: Any, reason: str) -> None:
+        self.refused.append((ticker, trade_date, reason))
 
     # --- invariants ----------------------------------------------------------
 

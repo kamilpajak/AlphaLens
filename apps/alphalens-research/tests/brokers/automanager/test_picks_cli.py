@@ -3,7 +3,7 @@
 The read-only view over the pick queue (#1197). ``picks.jsonl`` has no
 ``placed`` status — a pick submitted a month ago still reads ``armed`` as its
 latest line forever — so the queue is only readable by performing the SAME
-(ticker, brief_date) join against ``submissions.jsonl`` that
+(ticker, trade_date) join against ``submissions.jsonl`` that
 ``_run_placement_drain`` performs. This command does that join and nothing
 else: no broker, no auth, no mutation.
 
@@ -37,17 +37,17 @@ def _submissions_path(home: Path, env: str = "sim") -> Path:
     return home / ".alphalens" / "broker_orders" / env / "submissions.jsonl"
 
 
-def _arm(home: Path, ticker: str, brief_date: str, env: str = "sim") -> None:
+def _arm(home: Path, ticker: str, trade_date: str, env: str = "sim") -> None:
     from alphalens_pipeline.brokers.automanager.picks import arm_pick
 
-    arm_pick(_intent(ticker, brief_date), path=_picks_path(home, env))
+    arm_pick(_intent(ticker, trade_date), path=_picks_path(home, env))
 
 
-def _submit(home: Path, ticker: str, brief_date: str, env: str = "sim") -> None:
+def _submit(home: Path, ticker: str, trade_date: str, env: str = "sim") -> None:
     path = _submissions_path(home, env)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"ticker": ticker.upper(), "brief_date": brief_date}) + "\n")
+        fh.write(json.dumps({"ticker": ticker.upper(), "trade_date": trade_date}) + "\n")
 
 
 def _append_raw(path: Path, record: dict) -> None:

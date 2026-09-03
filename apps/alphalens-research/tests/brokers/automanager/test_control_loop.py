@@ -111,7 +111,7 @@ def _pick(ticker: str = "KO", date: str = "2026-07-20", source: str = "brief") -
         intent_id=f"{ticker}:{date}",
         instrument=InstrumentHint(ticker=ticker.upper(), mic="XNYS"),
         spec=spec,
-        meta=IntentMeta(armed_ts="2026-07-20T14:00:00+00:00", brief_date=date, source=source),
+        meta=IntentMeta(armed_ts="2026-07-20T14:00:00+00:00", trade_date=date, source=source),
     )
 
 
@@ -127,7 +127,7 @@ class _StubBroker:
 
 def _verdict(**over: Any) -> ReconcileVerdict:
     base: dict[str, Any] = {
-        "brief_date": "2026-07-20",
+        "trade_date": "2026-07-20",
         "ticker": "KO",
         "qty": 3,
         "entry_order_id": "E-1",
@@ -482,7 +482,7 @@ class TestPickSubmissionJoin(unittest.TestCase):
             deps = cl.LoopDeps(
                 **{
                     **deps.__dict__,
-                    "read_records": lambda: [{"ticker": "KO", "brief_date": "2026-07-20"}],
+                    "read_records": lambda: [{"ticker": "KO", "trade_date": "2026-07-20"}],
                 }
             )
             report = cl.run_once(deps)
@@ -504,7 +504,7 @@ class TestPickSubmissionJoin(unittest.TestCase):
             deps = cl.LoopDeps(
                 **{
                     **deps.__dict__,
-                    "read_records": lambda: [{"ticker": "KO", "brief_date": "2026-07-20"}],
+                    "read_records": lambda: [{"ticker": "KO", "trade_date": "2026-07-20"}],
                 }
             )
             report = cl.run_once(deps)
@@ -562,6 +562,25 @@ class TestPickSubmissionJoin(unittest.TestCase):
             self.assertEqual(report.picks_placed, 0)
 
 
+class TestNowAlreadyDoneLegacyBriefDateKey(unittest.TestCase):
+    """#1252: the journal date key was renamed brief_date -> trade_date, but
+    data on disk written before the rename still carries the old key
+    (append-only journals are never rewritten). A missed rename here would
+    silently mismatch the join and re-place a now tranche already done."""
+
+    def test_legacy_record_with_only_brief_date_key_still_matches(self) -> None:
+        intent = _pick("RHI", "2026-09-03")
+        records = [
+            {
+                "ticker": "RHI",
+                "brief_date": "2026-09-03",
+                "tranche": "now",
+                "tranche_meta": {"armed_ts": intent.meta.armed_ts},
+            }
+        ]
+        self.assertTrue(cl._now_already_done(records, "RHI", intent))
+
+
 class TestRefusedPickNotRetriedAcrossTicks(unittest.TestCase):
     """End-to-end queue semantics over a REAL picks.jsonl: once the placer
     journals a terminal refusal, the NEXT tick's drain never calls the placer
@@ -582,7 +601,7 @@ class TestRefusedPickNotRetriedAcrossTicks(unittest.TestCase):
                 attempts.append(pick)
                 picks_mod.mark_refused(
                     pick.instrument.ticker,
-                    dt.date.fromisoformat(pick.meta.brief_date),
+                    dt.date.fromisoformat(pick.meta.trade_date),
                     "portfolio cap exceeded",
                     path=picks_path,
                 )
@@ -669,7 +688,7 @@ class TestPlaceTiersNowParams(unittest.TestCase):
         instrument = type(
             "I", (), {"currency": "USD", "broker_instrument_id": 307, "exchange_mic": "XNYS"}
         )()
-        intent = type("N", (), {"meta": type("M", (), {"brief_date": "2026-09-03"})()})()
+        intent = type("N", (), {"meta": type("M", (), {"trade_date": "2026-09-03"})()})()
         pkg = "alphalens_pipeline.brokers"
         with (
             mock.patch(f"{pkg}.submission_log.append_submission_record", submitted.append),
@@ -765,7 +784,7 @@ class TestPlaceTiersNowParams(unittest.TestCase):
         # The additive tranche key must be inert to the working-gross join.
         record = {
             "ticker": "RHI",
-            "brief_date": "2026-09-03",
+            "trade_date": "2026-09-03",
             "tranche": "now",
             "fx_rate": None,
             "brackets": [{"client_request_id": "rid-1", "qty": 5, "entry": 43.0}],
@@ -1668,9 +1687,9 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
             self.assertFalse(placer(_pick()))
         self.assertEqual(broker.placed, [], "the fee floor must refuse BEFORE any bracket places")
         self.assertEqual(len(refusals), 1)
-        ticker, brief_date, reason = refusals[0]
+        ticker, trade_date, reason = refusals[0]
         self.assertEqual(ticker, "KO")
-        self.assertEqual(brief_date, dt.date(2026, 7, 20))
+        self.assertEqual(trade_date, dt.date(2026, 7, 20))
         self.assertIn("fee", reason.lower())
         self.assertEqual(len(alerts), 1)
         message, reason_key = alerts[0]
@@ -2195,9 +2214,9 @@ class TestPlacePickGrossCapIntegration(unittest.TestCase):
         self.assertEqual(broker.placed, [], "the gross cap must refuse BEFORE any bracket places")
         self.assertEqual(appended, [], "a refused pick must never journal a submission record")
         self.assertEqual(len(refusals), 1)
-        ticker, brief_date, reason = refusals[0]
+        ticker, trade_date, reason = refusals[0]
         self.assertEqual(ticker, "KO")
-        self.assertEqual(brief_date, dt.date(2026, 7, 20))
+        self.assertEqual(trade_date, dt.date(2026, 7, 20))
         self.assertIn("gross", reason.lower())
         self.assertEqual(len(alerts), 1)
         message, reason_key = alerts[0]
@@ -2452,9 +2471,9 @@ class TestPlacePickCashFloorIntegration(unittest.TestCase):
         self.assertEqual(broker.placed, [], "the cash floor must refuse BEFORE any bracket places")
         self.assertEqual(appended, [], "a refused pick must never journal a submission record")
         self.assertEqual(len(refusals), 1)
-        ticker, brief_date, reason = refusals[0]
+        ticker, trade_date, reason = refusals[0]
         self.assertEqual(ticker, "KO")
-        self.assertEqual(brief_date, dt.date(2026, 7, 20))
+        self.assertEqual(trade_date, dt.date(2026, 7, 20))
         self.assertIn("cash", reason.lower())
         self.assertEqual(len(alerts), 1)
         message, reason_key = alerts[0]
@@ -3330,7 +3349,7 @@ class TestPlaceTiersWriteAheadDedup(unittest.TestCase):
         from alphalens_pipeline.brokers.submission_log import build_submission_record
 
         note_record = build_submission_record(
-            brief_date="2026-07-20",
+            trade_date="2026-07-20",
             ticker="KO",
             mic="XNYS",
             uic="307",
@@ -8665,25 +8684,25 @@ class TestDay1GapGateSessionInfo(unittest.TestCase):
             result = cl._day1_gap_gate_session_info(dt.date(2026, 8, 10), "ZZZZ")
         self.assertIsNone(result)
 
-    # -- manual anchor (#1246): day1_includes_brief_date=True -> the session
-    # ON-OR-AFTER brief_date (a manual pick's arm date IS its day 1) --
+    # -- manual anchor (#1246): day1_includes_trade_date=True -> the session
+    # ON-OR-AFTER trade_date (a manual pick's arm date IS its day 1) --
 
-    def test_manual_anchor_session_brief_date_is_its_own_day1(self) -> None:
+    def test_manual_anchor_session_trade_date_is_its_own_day1(self) -> None:
         day1, day1_open = cl._day1_gap_gate_session_info(
-            dt.date(2026, 8, 10), "XNYS", day1_includes_brief_date=True
+            dt.date(2026, 8, 10), "XNYS", day1_includes_trade_date=True
         )
         self.assertEqual(day1, dt.date(2026, 8, 10))
         self.assertEqual(day1_open, dt.datetime(2026, 8, 10, 13, 30, tzinfo=dt.UTC))
 
-    def test_manual_anchor_saturday_brief_date_rolls_to_monday(self) -> None:
+    def test_manual_anchor_saturday_trade_date_rolls_to_monday(self) -> None:
         day1, _day1_open = cl._day1_gap_gate_session_info(
-            dt.date(2026, 8, 8), "XNYS", day1_includes_brief_date=True
+            dt.date(2026, 8, 8), "XNYS", day1_includes_trade_date=True
         )
         self.assertEqual(day1, dt.date(2026, 8, 10))
 
     def test_default_anchor_still_strictly_after(self) -> None:
         day1, _day1_open = cl._day1_gap_gate_session_info(
-            dt.date(2026, 8, 10), "XNYS", day1_includes_brief_date=False
+            dt.date(2026, 8, 10), "XNYS", day1_includes_trade_date=False
         )
         self.assertEqual(day1, dt.date(2026, 8, 11))
 
@@ -8748,25 +8767,25 @@ class TestDay1GapGateDecision(unittest.TestCase):
         verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 1.0, "ZZZZ")
         self.assertEqual(verdict, "pass")
 
-    # -- manual source (#1246): day 1 is the brief_date session ITSELF --
+    # -- manual source (#1246): day 1 is the trade_date session ITSELF --
 
     _BRIEF_OPEN = dt.datetime(2026, 8, 10, 13, 30, tzinfo=dt.UTC)  # Monday open
 
-    def test_manual_intraday_of_brief_date_open_at_or_above_e1_passes(self) -> None:
+    def test_manual_intraday_of_trade_date_open_at_or_above_e1_passes(self) -> None:
         now = self._BRIEF_OPEN + dt.timedelta(minutes=30)
         verdict = cl._day1_gap_gate_decision(
             now, self._BRIEF, self._E1, self._E1, "XNYS", source="manual"
         )
         self.assertEqual(verdict, "pass")
 
-    def test_manual_intraday_of_brief_date_open_below_e1_defers_below_e1(self) -> None:
+    def test_manual_intraday_of_trade_date_open_below_e1_defers_below_e1(self) -> None:
         now = self._BRIEF_OPEN + dt.timedelta(minutes=30)
         verdict = cl._day1_gap_gate_decision(
             now, self._BRIEF, self._E1, 99.99, "XNYS", source="manual"
         )
         self.assertEqual(verdict, "defer_below_e1")
 
-    def test_manual_preopen_on_brief_date_defers_preopen(self) -> None:
+    def test_manual_preopen_on_trade_date_defers_preopen(self) -> None:
         now = self._BRIEF_OPEN - dt.timedelta(minutes=10)
         verdict = cl._day1_gap_gate_decision(
             now, self._BRIEF, self._E1, 200.0, "XNYS", source="manual"
@@ -8880,9 +8899,9 @@ class TestEvaluateDay1GapGate(unittest.TestCase):
             verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, spec, "XNYS", lambda t, m: 99.0)
         self.assertEqual(verdict, "defer_below_e1")
 
-    def test_manual_probe_called_intraday_on_brief_date_itself(self) -> None:
+    def test_manual_probe_called_intraday_on_trade_date_itself(self) -> None:
         # #1246: a manual pick's arm date IS its day 1 — the probe must run
-        # during the brief_date session (where a brief pick is still pre-day1
+        # during the trade_date session (where a brief pick is still pre-day1
         # and must NOT probe, pinned by test_probe_not_called_before_day1).
         calls: list[tuple[str, str]] = []
 
@@ -9306,7 +9325,7 @@ class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
         self.assertEqual(alerts[0][1], "day1-gap:KO")
 
     def test_brief_pick_same_intraday_tick_still_defers_preopen(self) -> None:
-        # Byte-identical pin for the brief population: on the brief_date
+        # Byte-identical pin for the brief population: on the trade_date
         # itself a brief pick is pre-day1 — no probe call, no placement.
         broker = _RecordingBroker()
         with (
@@ -9500,7 +9519,7 @@ class TestPageNowResiduals(unittest.TestCase):
     def _now_record(crid: str = "rid-now") -> dict[str, Any]:
         return {
             "ticker": "RHI",
-            "brief_date": "2026-09-03",
+            "trade_date": "2026-09-03",
             "tranche": "now",
             "brackets": [{"client_request_id": crid, "qty": 5, "entry": 43.0}],
         }

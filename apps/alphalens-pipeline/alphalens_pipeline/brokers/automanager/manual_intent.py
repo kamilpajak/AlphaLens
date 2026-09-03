@@ -342,6 +342,6 @@ def build_manual_intent(
         intent_id=f"{ticker}:{arm_date.isoformat()}:manual",
         instrument=InstrumentHint(ticker=ticker, mic=mic),
         spec=spec,
-        meta=IntentMeta(armed_ts=armed_ts, brief_date=arm_date.isoformat(), source="manual"),
+        meta=IntentMeta(armed_ts=armed_ts, trade_date=arm_date.isoformat(), source="manual"),
         exit=None,
     )

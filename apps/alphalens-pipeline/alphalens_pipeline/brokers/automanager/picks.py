@@ -76,7 +76,7 @@ def arm_pick(intent: TradeIntent, *, path: Path | None = None) -> None:
     _append_record(
         {
             "ticker": intent.instrument.ticker.upper(),
-            "date": intent.meta.brief_date,
+            "date": intent.meta.trade_date,
             "armed_ts": intent.meta.armed_ts,
             "status": STATUS_ARMED,
             "intent": intent_to_jsonable(intent),
@@ -157,7 +157,7 @@ class PickRecord:
     """
 
     ticker: str
-    brief_date: dt.date
+    trade_date: dt.date
     status: str
     record: Mapping[str, Any]
 
@@ -203,7 +203,7 @@ def read_pick_fold(*, path: Path | None = None) -> PickFold:
     records = [
         PickRecord(
             ticker=ticker,
-            brief_date=parsed_date,
+            trade_date=parsed_date,
             status=str(record.get("status", "")),
             record=record,
         )
@@ -213,12 +213,12 @@ def read_pick_fold(*, path: Path | None = None) -> PickFold:
 
 
 def pick_key(intent: TradeIntent) -> tuple[str, str]:
-    """The (ticker, brief_date) join key for one armed intent."""
-    return (str(intent.instrument.ticker).upper(), str(intent.meta.brief_date))
+    """The (ticker, trade_date) join key for one armed intent."""
+    return (str(intent.instrument.ticker).upper(), str(intent.meta.trade_date))
 
 
 def submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
-    """The (ticker, brief_date) pairs already present in the submissions journal.
+    """The (ticker, trade_date) pairs already present in the submissions journal.
 
     Design section Data-flow step 4: the drain places only picks NOT yet
     joined to submissions.jsonl. Without this join every armed pick is
@@ -233,9 +233,12 @@ def submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, 
             # now half's own idempotency is the armed_ts scan in the drain.
             continue
         ticker = record.get("ticker")
-        brief_date = record.get("brief_date")
-        if ticker and brief_date:
-            keys.add((str(ticker).upper(), str(brief_date)))
+        # #1252: the journal date key was renamed brief_date -> trade_date.
+        # Legacy records on disk still carry the old key (append-only
+        # journals are never rewritten), so fall back to it.
+        trade_date = record.get("trade_date") or record.get("brief_date")
+        if ticker and trade_date:
+            keys.add((str(ticker).upper(), str(trade_date)))
     return keys
 
 
@@ -251,7 +254,7 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
     is skipped with a warning — no back-compat, re-arm is the human path
     back."""
     for pick in read_pick_fold(path=path).records:
-        ticker, parsed_date = pick.ticker, pick.brief_date
+        ticker, parsed_date = pick.ticker, pick.trade_date
         if pick.status != STATUS_ARMED:
             continue
         raw_intent = pick.record.get("intent")
