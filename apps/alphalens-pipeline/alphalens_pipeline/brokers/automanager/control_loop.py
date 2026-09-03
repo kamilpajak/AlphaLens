@@ -3595,23 +3595,34 @@ def _sweep_owed_sibling_retires(deps: LoopDeps, report: TickReport) -> None:
     sweep re-derives the owed picks from the journal every tick and calls the
     idempotent ``cancel_open_watches`` machinery; once a pick's tiers are all
     terminal the call matches nothing, writes nothing and alerts nothing, so
-    the steady state is a cheap no-op."""
+    the steady state is a cheap no-op.
+
+    Attribution (#1230): a parsed stop ref is generation-exact — it names the
+    pick that owned THAT stop, so the ref-first branch stays a whole-journal
+    walk (retiring an old pick's siblings off its own ref is correct even
+    after uic reuse; a fully-terminal pick matches nothing). KEYLESS evidence
+    (``tranche_fired[position_closed]`` and a ref-less ``stop_filled``) has
+    only the uic, and the governing fold is last-wins — so it is attributable
+    ONLY within the plan generation that wrote it. The generation-scoped
+    closures fold drops evidence a newer ``tranche_plan`` / retraction has
+    reset, and within an open generation the current governing pick IS the
+    pick that closed (both folds consume the same plan lines in the same
+    order), so the last-wins map becomes correct once scoped. This is the
+    same semantics the boot compactor already applies to these lines."""
     owed: dict[str, str] = {}
     lines = list(_iter_standalone_stop_journal())
-    plan_pick_keys = _fold_governing_plan_pick_keys(lines)
     for line in lines:
-        kind = line.get("kind")
-        if kind == "stop_filled" and not line.get("partial"):
+        if line.get("kind") == "stop_filled" and not line.get("partial"):
             ref = line.get("ref")
-            uic = _coerce(line, "uic", int)
-            pick_key = _pick_key_from_stop_ref(ref if isinstance(ref, str) else None) or (
-                plan_pick_keys.get(uic) if uic is not None else None
-            )
+            pick_key = _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
             if pick_key is not None:
                 owed.setdefault(pick_key, "stop fill on record")
-        elif kind == "tranche_fired" and line.get("position_closed"):
-            uic = _coerce(line, "uic", int)
-            pick_key = plan_pick_keys.get(uic) if uic is not None else None
+    plan_pick_keys = _fold_governing_plan_pick_keys(lines)
+    for uic, closure_keys in _fold_round_trip_closures_since_latest_plan(lines).items():
+        # str elements are parsed stop refs the ref-first walk above already
+        # collected; only the keyless None element needs the governing fold.
+        if None in closure_keys:
+            pick_key = plan_pick_keys.get(uic)
             if pick_key is not None:
                 owed.setdefault(pick_key, "position-closing tranche on record")
     for pick_key in sorted(owed):
