@@ -8654,6 +8654,50 @@ class TestEvaluateDay1GapGate(unittest.TestCase):
             verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, _day1_spec(), "XNYS", None)
         self.assertEqual(verdict, "defer_no_price")
 
+    def test_e1_anchors_on_the_first_pullback_tier_when_a_now_tier_leads(self) -> None:
+        # #1247: a leading now tier must NOT become the gate's E1 — the anchor
+        # is the first PULLBACK tier. Probe 110 sits between the now cap (120)
+        # and the pullback limit (100): pullback anchor -> pass; a wrong
+        # entry_tiers[0] anchor would defer_below_e1.
+        spec = TradeSpec(
+            entry_tiers=(
+                EntryTierSpec(limit_price=120.0, alloc_pct=40.0, tag="T1", entry_mode="immediate"),
+                EntryTierSpec(limit_price=100.0, alloc_pct=60.0, tag="T2"),
+            ),
+            disaster_stop=90.0,
+            tp_tranches=(),
+            suggested_size_pct=2.0,
+        )
+        with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
+            verdict = cl._evaluate_day1_gap_gate(
+                "KO", self._BRIEF, spec, "XNYS", lambda t, m: 110.0
+            )
+        self.assertEqual(verdict, "pass")
+
+    def test_now_only_pick_passes_without_probe(self) -> None:
+        # A now-only pick carries no pullback tier — the gate is not
+        # applicable and the (network) probe must never run.
+        spec = TradeSpec(
+            entry_tiers=(
+                EntryTierSpec(limit_price=120.0, alloc_pct=100.0, tag="T1", entry_mode="immediate"),
+            ),
+            disaster_stop=90.0,
+            tp_tranches=(),
+            suggested_size_pct=2.0,
+        )
+        with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
+            verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, spec, "XNYS", _RaisingProbe())
+        self.assertEqual(verdict, "pass")
+
+    def test_spec_tiers_without_entry_mode_still_evaluate(self) -> None:
+        # Duck-typed spec stubs carrying only limit_price exist in suites —
+        # absent entry_mode reads as pullback.
+        tier = type("T", (), {"limit_price": 100.0})()
+        spec = type("S", (), {"entry_tiers": (tier,)})()
+        with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
+            verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, spec, "XNYS", lambda t, m: 99.0)
+        self.assertEqual(verdict, "defer_below_e1")
+
     def test_manual_probe_called_intraday_on_brief_date_itself(self) -> None:
         # #1246: a manual pick's arm date IS its day 1 — the probe must run
         # during the brief_date session (where a brief pick is still pre-day1

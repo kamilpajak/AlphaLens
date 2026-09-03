@@ -7591,17 +7591,30 @@ def _evaluate_day1_gap_gate(
     *,
     source: str = "brief",
 ) -> Day1GapGateVerdict:
-    """Orchestrates the gate for one pick: resolves E1 (the highest/first
-    entry tier — ``ladder.build_entry_tiers`` returns tiers strictly
-    descending, so ``spec.entry_tiers[0]`` is always the shallowest/highest
-    limit), calls the price probe ONLY when the pick is within its day1
-    session at/after the open+grace window — every other phase (pre-day1,
-    pre-open, day 2+) needs no price at all, and the probe is a real network
-    round-trip — then delegates the full verdict to the pure
-    ``_day1_gap_gate_decision``. ``source`` threads the day-1 anchor choice
-    (#1246) into BOTH the probe-gating check here and the decision, so the
-    two can never disagree on what "day1" means."""
-    e1_limit = spec.entry_tiers[0].limit_price if spec.entry_tiers else None
+    """Orchestrates the gate for one pick: resolves E1 (the first PULLBACK
+    tier — ``ladder.build_entry_tiers`` returns tiers strictly descending, so
+    the first pullback tier is the shallowest/highest resting limit; a
+    leading immediate "now" tier (#1247) is EXCLUDED — its cap is not a
+    pullback rung and must not redefine the gate's threshold), calls the
+    price probe ONLY when the pick is within its day1 session at/after the
+    open+grace window — every other phase (pre-day1, pre-open, day 2+) needs
+    no price at all, and the probe is a real network round-trip — then
+    delegates the full verdict to the pure ``_day1_gap_gate_decision``.
+    ``source`` threads the day-1 anchor choice (#1246) into BOTH the
+    probe-gating check here and the decision, so the two can never disagree
+    on what "day1" means. A now-ONLY pick has no pullback rung: the gate is
+    not applicable (the group's decision IS the timing, memo §2) — pass
+    without probing."""
+    tiers = spec.entry_tiers or ()
+    e1_limit = next(
+        (t.limit_price for t in tiers if getattr(t, "entry_mode", "pullback") == "pullback"),
+        None,
+    )
+    if e1_limit is None and any(getattr(t, "entry_mode", "pullback") == "immediate" for t in tiers):
+        logger.info(
+            "day1 gap gate: %s carries only an immediate tier — gate not applicable", ticker
+        )
+        return "pass"
     now_utc = dt.datetime.now(dt.UTC)
     probe_price: float | None = None
     if e1_limit is not None and probe is not None:
