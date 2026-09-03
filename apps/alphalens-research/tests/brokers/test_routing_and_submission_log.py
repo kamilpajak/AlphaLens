@@ -17,6 +17,7 @@ from alphalens_pipeline.brokers.routing import (
     resolve_us_instrument,
 )
 from alphalens_pipeline.brokers.submission_log import (
+    SizingStamp,
     append_submission_record,
     build_submission_record,
     iter_submission_records,
@@ -271,14 +272,14 @@ class TestSubmissionLog(unittest.TestCase):
         # caller has no sized plan (explicit-qty CLI submits, note records
         # built outside _place_tiers), the verbatim figure otherwise.
         self.assertIsNone(self._record()["est_round_trip_fee_bps"])
-        stamped = self._record(est_round_trip_fee_bps=291.7)
+        stamped = self._record(sizing=SizingStamp(est_round_trip_fee_bps=291.7))
         self.assertEqual(stamped["est_round_trip_fee_bps"], 291.7)
 
     def test_schema_2_same_currency_writes_real_nulls_never_a_fake_rate(self):
         # The fx keys are ALWAYS present in a v2 record; same-currency (and
         # explicit-qty callers that never sized) carry REAL nulls — a fake
         # 1.0 would masquerade as a quote.
-        record = self._record(sizing_currency="USD", instrument_currency="USD")
+        record = self._record(sizing=SizingStamp(sizing_currency="USD", instrument_currency="USD"))
         for key in _FX_KEYS:
             self.assertIn(key, record, f"schema-2 record must carry {key}")
         self.assertEqual(record["sizing_currency"], "USD")
@@ -292,11 +293,13 @@ class TestSubmissionLog(unittest.TestCase):
 
     def test_schema_2_cross_currency_stamps_the_conversion_verbatim(self):
         record = self._record(
-            sizing_currency="EUR",
-            instrument_currency="PLN",
-            sizing_equity=1_000_000.0,
-            fx=_EURPLN_FX,
-            precheck_conversion_rate=0.2304,
+            sizing=SizingStamp(
+                sizing_currency="EUR",
+                instrument_currency="PLN",
+                sizing_equity=1_000_000.0,
+                fx=_EURPLN_FX,
+                precheck_conversion_rate=0.2304,
+            )
         )
         self.assertEqual(record["sizing_currency"], "EUR")
         self.assertEqual(record["instrument_currency"], "PLN")
@@ -314,11 +317,13 @@ class TestSubmissionLog(unittest.TestCase):
             target = Path(tmp) / "submissions.jsonl"
             append_submission_record(
                 self._record(
-                    sizing_currency="EUR",
-                    instrument_currency="PLN",
-                    sizing_equity=1_000_000.0,
-                    fx=_EURPLN_FX,
-                    precheck_conversion_rate=0.2304,
+                    sizing=SizingStamp(
+                        sizing_currency="EUR",
+                        instrument_currency="PLN",
+                        sizing_equity=1_000_000.0,
+                        fx=_EURPLN_FX,
+                        precheck_conversion_rate=0.2304,
+                    )
                 ),
                 path=target,
             )

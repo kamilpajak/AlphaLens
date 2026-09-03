@@ -2079,6 +2079,7 @@ def _route_pick_to_entry_watch(
     re-attempted next tick; the deterministic crid + the tranche_plan fold's
     last-wins semantics make any partial write idempotent on retry)."""
     from alphalens_pipeline.brokers.submission_log import (
+        SizingStamp,
         append_submission_record,
         build_submission_record,
     )
@@ -2149,15 +2150,17 @@ def _route_pick_to_entry_watch(
             uic=instrument.broker_instrument_id,
             brackets=[],
             note="entry-trail watch opened",
-            sizing_currency=account.currency,
-            instrument_currency=instrument.currency,
-            sizing_equity=_resolve_sizing_equity(account.total_value),
-            fx=fx,
-            est_round_trip_fee_bps=_estimate_round_trip_fee_bps(
-                plan,
-                fx,
+            sizing=SizingStamp(
+                sizing_currency=account.currency,
                 instrument_currency=instrument.currency,
-                exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
+                sizing_equity=_resolve_sizing_equity(account.total_value),
+                fx=fx,
+                est_round_trip_fee_bps=_estimate_round_trip_fee_bps(
+                    plan,
+                    fx,
+                    instrument_currency=instrument.currency,
+                    exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
+                ),
             ),
         )
     )
@@ -7357,13 +7360,23 @@ def _cancel_orders_best_effort(broker: Broker, order_ids: Iterable[str], *, tick
     return cancelled
 
 
+@dataclass(frozen=True)
+class _PickRefs:
+    """One pick's resolved placement identity: the broker session, the
+    drained intent, its ticker, and the instrument/account/fx triple off
+    ``_resolve_and_size``. Bundled because every placement helper consumes
+    the same six references together."""
+
+    broker: Broker
+    intent: Any
+    ticker: str
+    instrument: Any
+    account: Any
+    fx: Any
+
+
 def _place_tiers(
-    broker: Broker,
-    intent: Any,
-    ticker: str,
-    instrument: Any,
-    account: Any,
-    fx: Any,
+    refs: _PickRefs,
     placement: Any,
     spec: Any = None,
     exit_spec: Any = None,
@@ -7417,9 +7430,13 @@ def _place_tiers(
     from broker_contract.contract import BrokerError
 
     from alphalens_pipeline.brokers.submission_log import (
+        SizingStamp,
         append_submission_record,
         build_submission_record,
     )
+
+    broker, intent, ticker = refs.broker, refs.intent, refs.ticker
+    instrument, account, fx = refs.instrument, refs.account, refs.fx
 
     # Normalize the resolved-once cached policy (Task 4): the geometry-override
     # gate below reads ``exit_policy.applies_geometry`` — the retired env-string
@@ -7469,11 +7486,13 @@ def _place_tiers(
                 uic=instrument.broker_instrument_id,
                 brackets=[bracket_row],
                 note=None,
-                sizing_currency=account.currency,
-                instrument_currency=instrument.currency,
-                sizing_equity=_resolve_sizing_equity(account.total_value),
-                fx=fx,
-                est_round_trip_fee_bps=est_fee_bps,
+                sizing=SizingStamp(
+                    sizing_currency=account.currency,
+                    instrument_currency=instrument.currency,
+                    sizing_equity=_resolve_sizing_equity(account.total_value),
+                    fx=fx,
+                    est_round_trip_fee_bps=est_fee_bps,
+                ),
                 **_tranche_kwargs("placed"),
             )
         )
@@ -7528,11 +7547,13 @@ def _place_tiers(
             uic=instrument.broker_instrument_id,
             brackets=[],
             note=write_ahead_note,
-            sizing_currency=account.currency,
-            instrument_currency=instrument.currency,
-            sizing_equity=_resolve_sizing_equity(account.total_value),
-            fx=fx,
-            est_round_trip_fee_bps=est_fee_bps,
+            sizing=SizingStamp(
+                sizing_currency=account.currency,
+                instrument_currency=instrument.currency,
+                sizing_equity=_resolve_sizing_equity(account.total_value),
+                fx=fx,
+                est_round_trip_fee_bps=est_fee_bps,
+            ),
             **_tranche_kwargs("attempt"),
         )
     )
@@ -7590,11 +7611,13 @@ def _place_tiers(
                 uic=instrument.broker_instrument_id,
                 brackets=[],
                 note=failure_note,
-                sizing_currency=account.currency,
-                instrument_currency=instrument.currency,
-                sizing_equity=_resolve_sizing_equity(account.total_value),
-                fx=fx,
-                est_round_trip_fee_bps=est_fee_bps,
+                sizing=SizingStamp(
+                    sizing_currency=account.currency,
+                    instrument_currency=instrument.currency,
+                    sizing_equity=_resolve_sizing_equity(account.total_value),
+                    fx=fx,
+                    est_round_trip_fee_bps=est_fee_bps,
+                ),
                 **_tranche_kwargs(failure_outcome),
             )
         )
@@ -8209,6 +8232,7 @@ def _refuse_now_tranche(
     SKIPPED by ``picks.submitted_pick_keys`` (the siblings keep draining) and
     found by the arm-generation scan (the now half never retries)."""
     from alphalens_pipeline.brokers.submission_log import (
+        SizingStamp,
         append_submission_record,
         build_submission_record,
     )
@@ -8222,10 +8246,12 @@ def _refuse_now_tranche(
                 uic=instrument.broker_instrument_id,
                 brackets=[],
                 note=note,
-                sizing_currency=account.currency,
-                instrument_currency=instrument.currency,
-                sizing_equity=_resolve_sizing_equity(account.total_value),
-                fx=fx,
+                sizing=SizingStamp(
+                    sizing_currency=account.currency,
+                    instrument_currency=instrument.currency,
+                    sizing_equity=_resolve_sizing_equity(account.total_value),
+                    fx=fx,
+                ),
                 tranche="now",
                 tranche_meta=dict(meta),
             )
@@ -8243,13 +8269,8 @@ def _refuse_now_tranche(
 
 
 def _handle_now_tranche(
-    broker: Broker,
-    intent: Any,
-    ticker: str,
-    instrument: Any,
-    account: Any,
+    refs: _PickRefs,
     plan: Any,
-    fx: Any,
     *,
     now_tier: Any,
     records: Sequence[Mapping[str, Any]],
@@ -8265,6 +8286,8 @@ def _handle_now_tranche(
     ``classify`` + ``_place_tiers`` machinery (memo §3.2/§3.5/§3.6)."""
     from alphalens_pipeline.brokers.automanager.placement_planner import classify
 
+    broker, intent, ticker = refs.broker, refs.intent, refs.ticker
+    instrument, account, fx = refs.instrument, refs.account, refs.fx
     armed_ts = str(intent.meta.armed_ts)
     for record in records:
         # Idempotency / crash re-drive: ANY now record for this arm generation
@@ -8370,12 +8393,7 @@ def _handle_now_tranche(
         return "failed"
 
     placed = _place_tiers(
-        broker,
-        intent,
-        ticker,
-        instrument,
-        account,
-        fx,
+        refs,
         placement,
         spec,
         exit_spec,
@@ -8591,13 +8609,8 @@ def _place_pick(
         pick_key = f"{ticker}:{intent.meta.brief_date}"
         full_ladder_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
         outcome = _handle_now_tranche(
-            broker,
-            intent,
-            ticker,
-            instrument,
-            account,
+            _PickRefs(broker, intent, ticker, instrument, account, fx),
             plan,
-            fx,
             now_tier=now_tiers[0],
             records=records,
             spec=spec,
@@ -8680,12 +8693,7 @@ def _place_pick(
 
     return (
         _place_tiers(
-            broker,
-            intent,
-            ticker,
-            instrument,
-            account,
-            fx,
+            _PickRefs(broker, intent, ticker, instrument, account, fx),
             placement,
             spec,
             exit_spec,

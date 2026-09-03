@@ -81,6 +81,23 @@ _RID = "rid-KO"
 _UIC = 43070
 
 
+def _fake_build_record(**kw: Any) -> dict[str, Any]:
+    """Stub for ``build_submission_record`` that mirrors its flattening: the
+    ``sizing`` stamp's fields land as top-level record keys, so assertions on
+    ``sizing_equity`` / ``est_round_trip_fee_bps`` read like the real journal."""
+    sizing = kw.pop("sizing", None)
+    record: dict[str, Any] = dict(kw)
+    if sizing is not None:
+        record.update(
+            sizing_currency=sizing.sizing_currency,
+            instrument_currency=sizing.instrument_currency,
+            sizing_equity=sizing.sizing_equity,
+            precheck_conversion_rate=sizing.precheck_conversion_rate,
+            est_round_trip_fee_bps=sizing.est_round_trip_fee_bps,
+        )
+    return record
+
+
 def _pick(ticker: str = "KO", date: str = "2026-07-20", source: str = "brief") -> TradeIntent:
     """A minimal, structurally valid armed TradeIntent (PR-7: the daemon drains
     TradeIntent, never a bare (ticker, date) Pick)."""
@@ -659,12 +676,14 @@ class TestPlaceTiersNowParams(unittest.TestCase):
             mock.patch.object(cl, "_append_standalone_stop_journal", stop_lines.append),
         ):
             count = cl._place_tiers(
-                broker if broker is not None else _OkBroker(),
-                intent,
-                "RHI",
-                instrument,
-                account,
-                None,
+                cl._PickRefs(
+                    broker if broker is not None else _OkBroker(),
+                    intent,
+                    "RHI",
+                    instrument,
+                    account,
+                    None,
+                ),
                 placement,
                 **kwargs,
             )
@@ -945,7 +964,7 @@ class TestPlacePickBranches(unittest.TestCase):
             "compute_plan": lambda _spec, **_k: _fee_plan(10_000.0),
             "iter_records": lambda _p: [],
             "append": lambda _r: None,
-            "build_record": lambda **kw: dict(kw),
+            "build_record": _fake_build_record,
             # Default the terminal-refusal writer to a no-op (hermetic — the
             # real writer appends to ~/.alphalens picks.jsonl); tests override
             # with a capture to pin the refused-line append.
@@ -1602,7 +1621,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
             "compute_plan": lambda _spec, **_k: _fee_plan(notional),
             "iter_records": lambda _p: [],
             "append": lambda _r: None,
-            "build_record": lambda **kw: dict(kw),
+            "build_record": _fake_build_record,
             "mark_refused": lambda *a: refusals.append(a),
             **over,
         }
@@ -1685,7 +1704,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
         refusals: list[tuple[Any, ...]] = []
         p = stack.enter_context
         p(mock.patch(f"{pkg}.automanager.picks.mark_refused", lambda *a: refusals.append(a)))
-        p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+        p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
         p(mock.patch(f"{pkg}.submission_log.append_submission_record", lambda _r: None))
         p(mock.patch(f"{pkg}.submission_log.iter_submission_records", lambda _p: []))
         p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b, **_k: []))
@@ -2150,7 +2169,7 @@ class TestPlacePickGrossCapIntegration(unittest.TestCase):
             "compute_plan": lambda _spec, **_k: _fee_plan(notional),
             "iter_records": lambda _p: [],
             "append": appended.append,
-            "build_record": lambda **kw: dict(kw),
+            "build_record": _fake_build_record,
             "mark_refused": lambda *a: refusals.append(a),
             **over,
         }
@@ -2407,7 +2426,7 @@ class TestPlacePickCashFloorIntegration(unittest.TestCase):
             "compute_plan": lambda _spec, **_k: _fee_plan(notional),
             "iter_records": lambda _p: [],
             "append": appended.append,
-            "build_record": lambda **kw: dict(kw),
+            "build_record": _fake_build_record,
             "mark_refused": lambda *a: refusals.append(a),
             **over,
         }
@@ -2735,15 +2754,12 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", lambda _r: None))
-            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
             p(mock.patch.object(cl, "_append_standalone_stop_journal", journaled.append))
             count = cl._place_tiers(
-                _PlaceBroker(),
-                _pick("KO", "2026-07-20"),
-                "KO",
-                _instr(),
-                _acct(),
-                None,
+                cl._PickRefs(
+                    _PlaceBroker(), _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), None
+                ),
                 _placement(),
                 trade_setup,
                 exit_spec,
@@ -2857,15 +2873,12 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", lambda _r: None))
-            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
             p(mock.patch.object(cl, "_append_standalone_stop_journal", journaled.append))
             cl._place_tiers(
-                _PlaceBroker(),
-                _pick("KO", "2026-07-20"),
-                "KO",
-                _instr(),
-                _acct(),
-                None,
+                cl._PickRefs(
+                    _PlaceBroker(), _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), None
+                ),
                 _placement(),
                 None,
                 exit_spec,
@@ -3142,15 +3155,12 @@ class TestPlaceTiersFeeEstimateStamp(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
-            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
             p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
             cl._place_tiers(
-                _LadderBroker(),
-                _pick("KO", "2026-07-20"),
-                "KO",
-                _instr(),
-                _acct(),
-                fx,
+                cl._PickRefs(
+                    _LadderBroker(), _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), fx
+                ),
                 _placement(n_tiers=2),
                 plan=plan,
             )
@@ -3189,15 +3199,10 @@ class TestPlaceTiersInsufficientFundsRollback(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
-            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
             p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
             count = cl._place_tiers(
-                broker,
-                _pick("KO", "2026-07-20"),
-                "KO",
-                _instr(),
-                _acct(),
-                None,
+                cl._PickRefs(broker, _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), None),
                 _placement(n_tiers=n_tiers),
             )
         return count, appended
@@ -3270,16 +3275,13 @@ class TestPlaceTiersWriteAheadDedup(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
-            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
             p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
             with self.assertRaises(_CrashError):
                 cl._place_tiers(
-                    _CrashBroker(),
-                    _pick("KO", "2026-07-20"),
-                    "KO",
-                    _instr(),
-                    _acct(),
-                    None,
+                    cl._PickRefs(
+                        _CrashBroker(), _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), None
+                    ),
                     _placement(),
                 )
         return appended
@@ -3306,15 +3308,12 @@ class TestPlaceTiersWriteAheadDedup(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
-            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
             p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
             count = cl._place_tiers(
-                _LadderBroker(),
-                _pick("KO", "2026-07-20"),
-                "KO",
-                _instr(),
-                _acct(),
-                None,
+                cl._PickRefs(
+                    _LadderBroker(), _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), None
+                ),
                 _placement(),
             )
         self.assertEqual(count, 1)
@@ -9203,7 +9202,7 @@ class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
             "compute_plan": lambda _spec, **_k: _fee_plan(10_000.0),
             "iter_records": lambda _p: [],
             "append": lambda _r: None,
-            "build_record": lambda **kw: dict(kw),
+            "build_record": _fake_build_record,
             "mark_refused": lambda *a: refusals.append(a),
             **over,
         }
