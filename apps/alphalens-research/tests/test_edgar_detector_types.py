@@ -87,6 +87,34 @@ class TestEventDataclass(unittest.TestCase):
         self.assertEqual(FormType.from_sec_string("SC 13D/A"), FormType.FORM_13D_A)
         self.assertIsNone(FormType.from_sec_string("10-K"))
 
+    def test_form_type_from_sec_string_accepts_2024_schedule_names(self):
+        """SEC renamed beneficial-ownership forms in the Dec-2024 structured-data
+        rule: EDGAR now emits ``SCHEDULE 13D`` / ``SCHEDULE 13G`` (+ ``/A``) instead
+        of the legacy ``SC 13D`` / ``SC 13G``. Both spellings must map to the same
+        members, otherwise the detector silently drops every activist filing
+        (issue #1263)."""
+        from alphalens_pipeline.edgar_detector.types import FormType
+
+        self.assertEqual(FormType.from_sec_string("SCHEDULE 13D"), FormType.FORM_13D)
+        self.assertEqual(FormType.from_sec_string("SCHEDULE 13D/A"), FormType.FORM_13D_A)
+        self.assertEqual(FormType.from_sec_string("SCHEDULE 13G"), FormType.FORM_13G)
+        self.assertEqual(FormType.from_sec_string("SCHEDULE 13G/A"), FormType.FORM_13G_A)
+        # legacy spellings keep working (pre-2025 index rows, tests, fixtures)
+        self.assertEqual(FormType.from_sec_string("SC 13D"), FormType.FORM_13D)
+        self.assertEqual(FormType.from_sec_string("SC 13G/A"), FormType.FORM_13G_A)
+
+    def test_form_type_from_sec_string_rejects_unknown_schedule_names(self):
+        """Positive control: the alias table must not turn into a prefix match."""
+        from alphalens_pipeline.edgar_detector.types import FormType
+
+        self.assertIsNone(FormType.from_sec_string("SCHEDULE 13F"))
+        self.assertIsNone(FormType.from_sec_string("SCHEDULE 13D-A"))
+        self.assertIsNone(FormType.from_sec_string("schedule 13d"))
+        # exact match only: the Atom ``category/@term`` is machine-generated,
+        # so surrounding whitespace is a defect upstream, not something to absorb
+        self.assertIsNone(FormType.from_sec_string("SCHEDULE 13D "))
+        self.assertIsNone(FormType.from_sec_string(" SCHEDULE 13D"))
+
 
 if __name__ == "__main__":
     unittest.main()
