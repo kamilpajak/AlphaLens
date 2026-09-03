@@ -2159,6 +2159,10 @@ process-wide, so one delayed subscription degrades US exits too; (2) set
 LIVE daemon drop-in and the shared price-reader unit (the session gate ships
 ON for both); (3) confirm the account is on the Saxo Classic tier — the WSE
 fee card in `costs.py` (0.12% min 10 PLN) assumes it.
+Arming an XWAR pick on LIVE WITHOUT these is inert, not dangerous: the
+price feed carries no GPW quote, the daemon vetoes the uic every tick, and
+the pick stays armed but never places — the same quiet state as a
+master-arm refusal, never a crash or a blind fill.
 
 **Restart the daemons OUTSIDE the configured venue-set hours** (default XNYS
 13:30-20:00 UTC; with `ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR` the
