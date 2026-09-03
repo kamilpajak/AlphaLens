@@ -1013,7 +1013,7 @@ def _build_managed_exits(
     tranche_plans: Mapping[int, tuple[tuple[TpTranchePlan, ...], float, float]],
     fired: Mapping[int, frozenset[str]],
     trailed: Mapping[int, float],
-    plan_currencies: Mapping[int, tuple[str | None, str | None]] | None = None,
+    plan_currencies: Mapping[int, tuple[str | None, str | None, str | None]] | None = None,
 ) -> list[ManagedExit]:
     """Build this tick's managed-position list. Pure — no broker/journal I/O.
 
@@ -1044,7 +1044,9 @@ def _build_managed_exits(
         trailed_level = trailed.get(uic)
         if trailed_level is not None:
             stop_price = max(stop_price, trailed_level)
-        instrument_ccy, sizing_ccy = (plan_currencies or {}).get(uic, (None, None))
+        instrument_ccy, sizing_ccy, exchange_mic = (plan_currencies or {}).get(
+            uic, (None, None, None)
+        )
         managed.append(
             ManagedExit(
                 uic=uic,
@@ -1053,7 +1055,9 @@ def _build_managed_exits(
                 stop_price=stop_price,
                 already_fired=fired.get(uic, frozenset()),
                 cost_facts=cost_gate_facts(
-                    instrument_currency=instrument_ccy, sizing_currency=sizing_ccy
+                    instrument_currency=instrument_ccy,
+                    sizing_currency=sizing_ccy,
+                    exchange_mic=exchange_mic,
                 ),
             )
         )
@@ -2103,6 +2107,7 @@ def _route_pick_to_entry_watch(
             pick_key=f"{ticker}:{intent.meta.brief_date}",
             instrument_currency=str(getattr(instrument, "currency", "") or ""),
             sizing_currency=_sizing_currency_of(fx, instrument),
+            exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
         )
         # Same use_geometry decision _place_tiers makes for its planned lines:
         # the stamp rides every watch_open so the fire-arm planned writer can
@@ -2148,7 +2153,10 @@ def _route_pick_to_entry_watch(
             sizing_equity=_resolve_sizing_equity(account.total_value),
             fx=fx,
             est_round_trip_fee_bps=_estimate_round_trip_fee_bps(
-                plan, fx, instrument_currency=instrument.currency
+                plan,
+                fx,
+                instrument_currency=instrument.currency,
+                exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
             ),
         )
     )
@@ -2888,6 +2896,7 @@ def _inside_exit_region_note(
     facts = cost_gate_facts(
         instrument_currency=record.get("instrument_currency"),
         sizing_currency=record.get("sizing_currency"),
+        exchange_mic=record.get("exchange_mic"),
     )
     if not entry_trail_geometry.arms_inside_exit_region(
         fill_estimate=estimate, exit_target=target, qty=qty, facts=facts
@@ -3069,6 +3078,7 @@ def _brief_plan_arm_refusal(
     facts = cost_gate_facts(
         instrument_currency=record.get("instrument_currency"),
         sizing_currency=record.get("sizing_currency"),
+        exchange_mic=record.get("exchange_mic"),
     )
     if not entry_trail_geometry.arms_inside_exit_region(
         fill_estimate=estimate, exit_target=tranche.target_price, qty=tranche_qty, facts=facts
@@ -5141,6 +5151,7 @@ def _build_tranche_plan_line(
     pick_key: str | None = None,
     instrument_currency: str | None = None,
     sizing_currency: str | None = None,
+    exchange_mic: str | None = None,
 ) -> dict[str, Any]:
     """One append-only ``tranche_plan`` journal line -- the per-uic TP ladder the
     live-exit engine needs (INC-5) but the ``planned`` line does not carry.
@@ -5182,6 +5193,12 @@ def _build_tranche_plan_line(
         line["instrument_currency"] = str(instrument_currency)
     if sizing_currency:
         line["sizing_currency"] = str(sizing_currency)
+    # #1271: the venue MIC joins the currency stamps so the gates can pick the
+    # venue's OWN fee card (Xetra vs Euronext are both EUR with different
+    # minimums). Absent on legacy lines -> the currency fallback in
+    # ``fee_card_for`` governs, exactly like a pre-#1271 line.
+    if exchange_mic:
+        line["exchange_mic"] = str(exchange_mic)
     return line
 
 
@@ -5221,19 +5238,21 @@ def fold_tranche_plans(
 
 def fold_tranche_plan_currencies(
     lines: Iterable[Mapping[str, Any]],
-) -> dict[int, tuple[str | None, str | None]]:
+) -> dict[int, tuple[str | None, str | None, str | None]]:
     """Fold the ``tranche_plan`` lines into the newest journal-stamped
-    ``(instrument_currency, sizing_currency)`` per uic (#1238 PR 3).
+    ``(instrument_currency, sizing_currency, exchange_mic)`` per uic
+    (#1238 PR 3; the MIC joined in #1271 so the exit gate can price the
+    venue's own fee card).
 
     A SEPARATE fold from :func:`fold_tranche_plans` on purpose: the ladder
     fold's ``(tranches, reference_qty, stop_price)`` tuple is a shape many
     consumers key on, and the currency pair is consumed by exactly one
     (:func:`_build_managed_exits`). Same walk, same semantics: last
     well-formed line per uic wins, ``tranche_plan_retracted`` pops the uic,
-    and a legacy line without the stamps folds to ``(None, None)`` -- which
-    :func:`~alphalens_pipeline.brokers.automanager.costs.cost_gate_facts`
+    and a legacy line without the stamps folds to ``(None, None, None)`` --
+    which :func:`~alphalens_pipeline.brokers.automanager.costs.cost_gate_facts`
     turns into the conservative legacy facts."""
-    out: dict[int, tuple[str | None, str | None]] = {}
+    out: dict[int, tuple[str | None, str | None, str | None]] = {}
     for line in lines:
         kind = line.get("kind")
         if kind == _TRANCHE_PLAN_RETRACTED_KIND:
@@ -5250,9 +5269,11 @@ def fold_tranche_plan_currencies(
             continue
         instrument_ccy = line.get("instrument_currency")
         sizing_ccy = line.get("sizing_currency")
+        mic = line.get("exchange_mic")
         out[uic] = (
             str(instrument_ccy) if instrument_ccy else None,
             str(sizing_ccy) if sizing_ccy else None,
+            str(mic) if mic else None,
         )
     return out
 
@@ -6534,7 +6555,12 @@ def _resolve_and_size(
 
 
 def _check_fee_floor(
-    plan: Any, fx: Any, *, ticker: str, instrument_currency: str = "USD"
+    plan: Any,
+    fx: Any,
+    *,
+    ticker: str,
+    instrument_currency: str = "USD",
+    exchange_mic: str | None = None,
 ) -> str | None:
     """``None`` iff the pick clears the round-trip fee floor OR
     ``ALPHALENS_BROKER_MAX_FEE_BPS`` is unset (SIM — no fee floor, byte-
@@ -6580,7 +6606,9 @@ def _check_fee_floor(
     from broker_contract.sizing import setup_plan_gross_notional
 
     notional = setup_plan_gross_notional(plan)
-    fee_bps = _estimate_round_trip_fee_bps(plan, fx, instrument_currency=instrument_currency)
+    fee_bps = _estimate_round_trip_fee_bps(
+        plan, fx, instrument_currency=instrument_currency, exchange_mic=exchange_mic
+    )
     model = "per-tier"
     if fee_bps is None:
         # FAIL-OPEN, deliberately — and NOT the same class as the malformed-cap
@@ -6602,7 +6630,7 @@ def _check_fee_floor(
             ticker,
             notional,
         )
-        fallback_card = fee_card_for(instrument_currency)
+        fallback_card = fee_card_for(instrument_currency, exchange_mic=exchange_mic)
         fee_bps = round_trip_fee_bps(
             notional,
             fx_applies=fx is not None,
@@ -6618,7 +6646,7 @@ def _check_fee_floor(
 
 
 def _estimate_round_trip_fee_bps(
-    plan: Any, fx: Any, *, instrument_currency: str = "USD"
+    plan: Any, fx: Any, *, instrument_currency: str = "USD", exchange_mic: str | None = None
 ) -> float | None:
     """The HONEST per-tier round-trip fee estimate in bps of the plan's gross
     (broker sizing memo §4.5, amended by operator decision §7.3) — journaled
@@ -6665,9 +6693,10 @@ def _estimate_round_trip_fee_bps(
     if gross <= 0:
         return None
     # #1238 PR 3: price the venue's own card when one exists (WSE 0.12% min
-    # PLN 10); a currency with no verified card keeps the legacy shape (US
-    # rate, minimum only for USD).
-    card = fee_card_for(instrument_currency)
+    # PLN 10); MIC-first since #1271 (Xetra and Euronext are both EUR with
+    # different minimums); a currency with no verified card keeps the legacy
+    # shape (US rate, minimum only for USD).
+    card = fee_card_for(instrument_currency, exchange_mic=exchange_mic)
     commission_rate = card.commission_rate if card is not None else COMMISSION_RATE
     min_commission = card.min_commission if card is not None else MIN_COMMISSION_USD
     min_commission_applies = card is not None or instrument_currency == "USD"
@@ -7217,6 +7246,7 @@ def _journal_tranche_plan_core(
     pick_key: str | None = None,
     instrument_currency: str | None = None,
     sizing_currency: str | None = None,
+    exchange_mic: str | None = None,
 ) -> None:
     """The ladder-choice + line-build core shared by BOTH placement paths
     (bracket ``_journal_tranche_plan`` and the entry-trail watch routing).
@@ -7259,6 +7289,7 @@ def _journal_tranche_plan_core(
             pick_key=pick_key,
             instrument_currency=instrument_currency,
             sizing_currency=sizing_currency,
+            exchange_mic=exchange_mic,
         )
     )
 
@@ -7302,6 +7333,7 @@ def _journal_tranche_plan(
         pick_key=pick_key,
         instrument_currency=str(getattr(instrument, "currency", "") or ""),
         sizing_currency=_sizing_currency_of(fx, instrument),
+        exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
     )
 
 
@@ -7400,7 +7432,12 @@ def _place_tiers(
     # stamped on EVERY record this placement journals (write-ahead, per-tier,
     # failure note), so the calibration series survives whatever the ladder
     # outcome was. None (a real null) when no sized plan is in scope.
-    est_fee_bps = _estimate_round_trip_fee_bps(plan, fx, instrument_currency=instrument.currency)
+    est_fee_bps = _estimate_round_trip_fee_bps(
+        plan,
+        fx,
+        instrument_currency=instrument.currency,
+        exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
+    )
 
     def _tranche_kwargs(outcome: str) -> dict[str, Any]:
         # #1247: per-tranche markers on every record this placement journals.
@@ -8118,6 +8155,7 @@ def _now_cost_gate_violation(
     facts = cost_gate_facts(
         instrument_currency=str(getattr(instrument, "currency", "") or ""),
         sizing_currency=_sizing_currency_of(fx, instrument),
+        exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
     )
     if entry_trail_geometry.arms_inside_exit_region(
         fill_estimate=cap, exit_target=target, qty=qty, facts=facts
@@ -8478,7 +8516,11 @@ def _place_pick(
     # floor is refused terminal (never re-tried every tick) and NEVER placed;
     # ALPHALENS_BROKER_MAX_FEE_BPS unset (SIM) skips the check entirely.
     fee_violation = _check_fee_floor(
-        plan, fx, ticker=ticker, instrument_currency=instrument.currency
+        plan,
+        fx,
+        ticker=ticker,
+        instrument_currency=instrument.currency,
+        exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
     )
     if fee_violation is not None:
         _refuse_pick_terminal(

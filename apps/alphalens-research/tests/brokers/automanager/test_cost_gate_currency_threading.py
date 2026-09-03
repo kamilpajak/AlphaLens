@@ -16,7 +16,11 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails, live_exit_engine
-from alphalens_pipeline.brokers.automanager.costs import CostGateFacts, cost_gate_facts
+from alphalens_pipeline.brokers.automanager.costs import (
+    XAMS_FEE_CARD,
+    CostGateFacts,
+    cost_gate_facts,
+)
 from broker_contract.sizing import TpTranchePlan
 
 
@@ -126,7 +130,7 @@ class TestFoldTranchePlanCurrencies(unittest.TestCase):
     def test_latest_stamp_per_uic_wins_and_retraction_pops(self) -> None:
         stamped = dict(self._PLAN_LINE, instrument_currency="PLN", sizing_currency="PLN")
         out = cl.fold_tranche_plan_currencies([self._PLAN_LINE, stamped])
-        self.assertEqual(out[307], ("PLN", "PLN"))
+        self.assertEqual(out[307], ("PLN", "PLN", None))
 
         retracted = cl.fold_tranche_plan_currencies(
             [stamped, {"kind": "tranche_plan_retracted", "uic": 307}]
@@ -135,11 +139,24 @@ class TestFoldTranchePlanCurrencies(unittest.TestCase):
 
     def test_legacy_line_folds_to_unknown(self) -> None:
         out = cl.fold_tranche_plan_currencies([self._PLAN_LINE])
-        self.assertEqual(out[307], (None, None))
+        self.assertEqual(out[307], (None, None, None))
+
+    def test_stamped_mic_folds_through(self) -> None:
+        # #1271: the venue MIC joins the currency stamps in the same fold.
+        stamped = dict(
+            self._PLAN_LINE,
+            instrument_currency="EUR",
+            sizing_currency="EUR",
+            exchange_mic="XAMS",
+        )
+        out = cl.fold_tranche_plan_currencies([stamped])
+        self.assertEqual(out[307], ("EUR", "EUR", "XAMS"))
 
 
 class TestBuildManagedExitsDerivesFacts(unittest.TestCase):
-    def _managed(self, plan_currencies: dict[int, tuple[str | None, str | None]]) -> Any:
+    def _managed(
+        self, plan_currencies: dict[int, tuple[str | None, str | None, str | None]]
+    ) -> Any:
         class _Pos:
             def __init__(self) -> None:
                 self.uic = 307
@@ -169,7 +186,7 @@ class TestBuildManagedExitsDerivesFacts(unittest.TestCase):
         return managed[0]
 
     def test_stamped_currencies_become_real_facts(self) -> None:
-        exit_ = self._managed({307: ("PLN", "PLN")})
+        exit_ = self._managed({307: ("PLN", "PLN", None)})
         self.assertEqual(
             exit_.cost_facts,
             cost_gate_facts(instrument_currency="PLN", sizing_currency="PLN"),
@@ -178,6 +195,13 @@ class TestBuildManagedExitsDerivesFacts(unittest.TestCase):
     def test_unstamped_uic_keeps_legacy_facts(self) -> None:
         exit_ = self._managed({})
         self.assertEqual(exit_.cost_facts, CostGateFacts.legacy())
+
+    def test_stamped_mic_discriminates_the_eur_venues(self) -> None:
+        # #1271: with the MIC folded through, the exit gate prices Euronext's
+        # EUR 2 minimum, not the conservative Xetra EUR 3 the bare-currency
+        # fallback would give.
+        exit_ = self._managed({307: ("EUR", "EUR", "XAMS")})
+        self.assertIs(exit_.cost_facts.card, XAMS_FEE_CARD)
 
 
 class TestExitClearsCostUsesFacts(unittest.TestCase):
@@ -223,6 +247,103 @@ class TestInsideExitRegionNoteUsesStamps(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMicThreading(unittest.TestCase):
+    """#1271: the venue MIC joins the currency stamps end to end, so the cost
+    gates can discriminate the two EUR venues (Xetra min EUR 3 vs Euronext
+    Amsterdam min EUR 2) instead of pricing every EUR record on the
+    conservative currency fallback."""
+
+    def test_bracket_path_stamps_the_mic_on_the_tranche_plan_line(self) -> None:
+        lines: list[dict[str, Any]] = []
+
+        class _Placement:
+            disaster_stop_price = 90.0
+
+        with mock.patch.object(cl, "_append_standalone_stop_journal", lines.append):
+            cl._journal_tranche_plan(
+                plan=_Plan(),
+                exit_spec=None,
+                placement=_Placement(),
+                instrument=_Instrument("EUR", "XETR"),
+                use_geometry=False,
+                fx=None,
+            )
+        self.assertEqual(lines[0]["exchange_mic"], "XETR")
+
+    def test_note_gate_reads_the_record_mic(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def _spy(**kw: Any) -> CostGateFacts:
+            captured.update(kw)
+            return CostGateFacts.legacy()
+
+        record = {
+            "geometry": {"applied": True, "geometry_tp": 233.0},
+            "instrument_currency": "EUR",
+            "sizing_currency": "EUR",
+            "exchange_mic": "XETR",
+        }
+        with (
+            mock.patch.object(cl, "cost_gate_facts", _spy),
+            mock.patch.object(cl.entry_trail_geometry, "entry_fill_estimate", lambda **_kw: 231.0),
+        ):
+            cl._inside_exit_region_note(record, 50, 231.0, 230.0, 40.0)
+        self.assertEqual(captured["exchange_mic"], "XETR")
+
+    def test_now_gate_reads_the_instrument_mic(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def _spy(**kw: Any) -> CostGateFacts:
+            captured.update(kw)
+            return CostGateFacts.legacy()
+
+        with mock.patch.object(cl, "cost_gate_facts", _spy):
+            cl._now_cost_gate_violation(
+                cap=100.0,
+                plan=_Plan(),
+                exit_spec=None,
+                exit_policy=None,
+                instrument=_Instrument("EUR", "XAMS"),
+                fx=None,
+            )
+        self.assertEqual(captured.get("exchange_mic"), "XAMS")
+
+    def test_fee_estimator_discriminates_the_eur_venues(self) -> None:
+        # _Plan: one 10 x 100 tier, one 100% tranche at 110 -> per-fill
+        # ad-valorem 0.80/0.88 EUR, both under either minimum, so the round
+        # trip is 2 x the venue minimum on a 1000 EUR gross: Euronext (2+2)
+        # -> 40 bps, Xetra (3+3) -> 60 bps. Same inputs, different venue,
+        # different number — the discrimination the re-key exists for.
+        xams = cl._estimate_round_trip_fee_bps(
+            _Plan(), None, instrument_currency="EUR", exchange_mic="XAMS"
+        )
+        xetr = cl._estimate_round_trip_fee_bps(
+            _Plan(), None, instrument_currency="EUR", exchange_mic="XETR"
+        )
+        self.assertIsNotNone(xams)
+        self.assertIsNotNone(xetr)
+        self.assertAlmostEqual(xams, 40.0)
+        self.assertAlmostEqual(xetr, 60.0)
+
+    def test_fee_floor_prices_the_venue_card(self) -> None:
+        # Cap 50 bps sits BETWEEN the two venue estimates above: the Euronext
+        # plan clears, the Xetra plan is refused — the floor demonstrably
+        # prices the MIC, not just the currency.
+        from alphalens_pipeline.brokers.automanager.live_rails import MAX_FEE_BPS_ENV
+
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "50"}):
+            self.assertIsNone(
+                cl._check_fee_floor(
+                    _Plan(), None, ticker="ASML", instrument_currency="EUR", exchange_mic="XAMS"
+                )
+            )
+            self.assertIsNotNone(
+                cl._check_fee_floor(
+                    _Plan(), None, ticker="RHM", instrument_currency="EUR", exchange_mic="XETR"
+                )
+            )
 
 
 class TestBriefPlanArmRefusalUsesStamps(unittest.TestCase):
@@ -329,12 +450,12 @@ class TestCurrencyFoldParity(unittest.TestCase):
         self.assertEqual(
             set(cl.fold_tranche_plans(lines)), set(cl.fold_tranche_plan_currencies(lines))
         )
-        self.assertEqual(cl.fold_tranche_plan_currencies(lines), {307: ("PLN", "PLN")})
+        self.assertEqual(cl.fold_tranche_plan_currencies(lines), {307: ("PLN", "PLN", None)})
 
     def test_stamp_survives_journal_compaction(self) -> None:
         compacted = cl._compact_standalone_stop_journal_lines(self._lines())
         currencies = cl.fold_tranche_plan_currencies(compacted)
-        self.assertEqual(currencies, {307: ("PLN", "PLN")})
+        self.assertEqual(currencies, {307: ("PLN", "PLN", None)})
 
 
 if __name__ == "__main__":
