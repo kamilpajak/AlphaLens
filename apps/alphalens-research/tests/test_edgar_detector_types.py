@@ -110,6 +110,10 @@ class TestEventDataclass(unittest.TestCase):
         self.assertIsNone(FormType.from_sec_string("SCHEDULE 13F"))
         self.assertIsNone(FormType.from_sec_string("SCHEDULE 13D-A"))
         self.assertIsNone(FormType.from_sec_string("schedule 13d"))
+        # exact match only: the Atom ``category/@term`` is machine-generated,
+        # so surrounding whitespace is a defect upstream, not something to absorb
+        self.assertIsNone(FormType.from_sec_string("SCHEDULE 13D "))
+        self.assertIsNone(FormType.from_sec_string(" SCHEDULE 13D"))
 
 
 if __name__ == "__main__":
