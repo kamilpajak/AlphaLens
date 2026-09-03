@@ -162,3 +162,7 @@ From the same review round as the cluster memo §12 (Perplexity `reason` + zen `
 3. **13D regime split:** any 13D retrospective must separate pre-2024-02 (10-day deadline) from post-2024-02 (5-business-day deadline) and pre-register that ONLY the post-2024 estimate informs the forward stage. The 2024-2026 burn applies to Form-4 features, not to 13D.
 4. **Pre-filing run-up as a covariate** for 13D (return from -20 sessions to the filing date), so reversal of the activist's accumulation is not read as post-filing drift.
 5. **Retail-book simulation** (3- and 5-name caps) is a required descriptive output of every stage; the equal-weight basket remains the estimand, the simulation shows what a concentrated book would have seen.
+
+## 15. Stage-1 result — insider cluster (2026-09-03)
+
+Estimation stage complete (`insider_cluster_retro_design_2026_09_03.md` §13): treated − matched control car_20 = +0.76 pp, 90% CI [+0.21, +1.31], N = 3,134 / 1,441 arrival sessions; dose-response in the insider count (≥ 3 insiders +1.35 pp). **Planning rule: BUILD (marginal: net lower bound −0.45 pp vs −0.50 pp).** Retail 3-name simulation: mean net +0.5 pp, median −0.5 pp, 54% losing trades. Stage 2 (forward accrual under the live windows and the fee-bearing SIM basket) is the confirmatory test; the owner decides whether to start the build (§7) given the thin net margin.
