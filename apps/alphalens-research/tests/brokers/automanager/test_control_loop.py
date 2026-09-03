@@ -9019,6 +9019,23 @@ class TestDay1GapProbeVenueFallback(unittest.TestCase):
         self.assertEqual(holder["client"].resolved, ["XWAR"])
         holder["client"]._session.close.assert_called_once()
 
+    def test_xetr_hint_probes_only_xetr(self) -> None:
+        # #1271 PR 4: the Xetra mirror of the XWAR rule — the gate prices RHM
+        # on XETR (uic 16135) and never touches the US probe order.
+        class _XetrResolves(self._FakeClient):
+            def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:
+                self.resolved.append(exchange_mic)
+                return 16135 if exchange_mic == "XETR" else None
+
+            def get_stock_infoprice(self, uic: int, **_kw) -> dict[str, Any]:
+                assert uic == 16135
+                return {"PriceInfoDetails": {"Open": 1735.0}}
+
+        probe, holder = self._probe_with(_XetrResolves)
+        self.assertEqual(probe("RHM", "XETR"), 1735.0)
+        self.assertEqual(holder["client"].resolved, ["XETR"])
+        holder["client"]._session.close.assert_called_once()
+
     def test_non_us_hint_unresolvable_never_falls_back_to_us(self) -> None:
         class _NeverResolves(self._FakeClient):
             def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:

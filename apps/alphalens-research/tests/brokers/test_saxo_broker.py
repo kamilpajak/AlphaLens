@@ -140,6 +140,20 @@ _SEARCH_RESULTS: dict[str, dict[str, Any]] = {
             }
         ]
     },
+    # Rheinmetall on Xetra: Saxo root RHMG (market ticker RHM), uic 16135,
+    # EUR — live-verified on SIM 2026-09-03 (#1271). The RHM key is absent on
+    # purpose: the primary keyword search comes back empty and the alias
+    # re-search (RHM -> RHMG, uic pin 16135) is what resolves it.
+    "RHMG": {
+        "Data": [
+            {
+                "Symbol": "RHMG:xetr",
+                "Identifier": 16135,
+                "AssetType": "Stock",
+                "CurrencyCode": "EUR",
+            }
+        ]
+    },
     "LAC_NEW": {
         "Data": [
             {
@@ -373,6 +387,16 @@ class TestInstrumentResolution(unittest.TestCase):
     def test_resolve_stamps_pln_currency_for_wse_listing(self):
         ref = _make_broker().resolve_instrument("CDR", "XWAR")
         self.assertEqual(ref.currency, "PLN")
+
+    def test_resolve_stamps_eur_currency_for_xetr_listing_via_the_alias(self):
+        # #1271: Saxo lists Rheinmetall under the root RHMG, so resolving the
+        # MARKET ticker RHM exercises the alias + uic pin; the ref keeps the
+        # market ticker while uic / symbol / currency come from the RHMG row.
+        ref = _make_broker().resolve_instrument("RHM", "XETR")
+        self.assertEqual(ref.ticker, "RHM")
+        self.assertEqual(ref.broker_instrument_id, "16135")
+        self.assertEqual(ref.broker_symbol, "RHMG:xetr")
+        self.assertEqual(ref.currency, "EUR")
 
     def test_missing_currency_code_is_a_refusal_not_a_guess(self):
         # Authoritative instrument currency comes ONLY from Saxo's own row —

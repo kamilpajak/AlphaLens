@@ -201,6 +201,20 @@ class TestExplicitMicFromHint(unittest.TestCase):
         self.assertEqual(ref.exchange_mic, "XWAR")
         self.assertEqual(broker.resolve_calls, [("CDR", "XWAR")])
 
+    def test_xetr_hint_resolves_explicitly_without_touching_us_venues(self):
+        # #1271 PR 4: same authoritative-hint rule for Xetra — a same-ticker
+        # US listing must never price a European entry.
+        broker = _RoutingStubBroker({("RHM", "XETR"): _ref("RHM", "XETR")})
+
+        ref = resolve_us_instrument(
+            broker,  # type: ignore[arg-type]
+            "RHM",
+            exchange_mic=explicit_mic_from_hint("XETR"),
+        )
+
+        self.assertEqual(ref.exchange_mic, "XETR")
+        self.assertEqual(broker.resolve_calls, [("RHM", "XETR")])
+
 
 class TestSubmissionLog(unittest.TestCase):
     def _record(self, **overrides: object) -> dict:

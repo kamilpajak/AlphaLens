@@ -2167,6 +2167,16 @@ price feed carries no GPW quote, the daemon vetoes the uic every tick, and
 the pick stays armed but never places — the same quiet state as a
 master-arm refusal, never a crash or a blind fill.
 
+**Xetra (XETR) on LIVE — prerequisites** (#1271): before the first LIVE XETR
+arm, (1) verify the Xetra market-data entitlement on the LIVE account — the
+same delayed-quote veto as GPW applies, and `any_delayed` is process-wide;
+(2) confirm the account is on the Saxo Classic tier — the Xetra fee card in
+`costs.py` (0.08% min EUR 3) assumes it. The stream venue window already
+covers XETR by deploy (tracked drop-ins, #1271 PR 3). The same inert failure
+mode applies: without the entitlement the pick sits armed and vetoed, never
+a crash or a blind fill. A LIVE buy carries the 0.25% Saxo FX on the
+PLN->EUR leg.
+
 **Restart the daemons OUTSIDE the configured venue-set hours** (with the
 tracked `ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR,XETR` the union
 spans ~06:45-21:10 UTC in summer, ~07:45-21:10 in winter — in practice the
