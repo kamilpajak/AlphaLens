@@ -2046,6 +2046,7 @@ def _route_pick_to_entry_watch(
     *,
     d_bps: int,
     exit_policy: ExitPolicy | None = None,
+    reference_qty_override: float | None = None,
 ) -> bool:
     """The flag-ON drain tail: journal the pick's managed-exit state (ONE
     ``tranche_plan`` line per uic, exactly what the bracket path journals in
@@ -2082,7 +2083,14 @@ def _route_pick_to_entry_watch(
             plan=plan,
             exit_spec=exit_spec,
             stop_price=float(plan.disaster_stop),
-            reference_qty=sum(t.qty for t in plan.entry_tiers if t.qty > 0),
+            # #1247 split pick: the override carries the FULL ladder qty
+            # (now + pullback) so the TP ladder covers both halves' fills;
+            # default = today's pullback-only sum, byte-identical.
+            reference_qty=(
+                reference_qty_override
+                if reference_qty_override is not None
+                else sum(t.qty for t in plan.entry_tiers if t.qty > 0)
+            ),
             uic=int(instrument.broker_instrument_id),
             use_geometry=resolved_exit_policy.applies_geometry,
             # Trade identity (adjudication finding 4): a crash-recovery
@@ -7886,6 +7894,7 @@ def _entry_trail_intercept(
     exit_policy: ExitPolicy | None = None,
     *,
     positions: Iterable[Position] = (),
+    reference_qty_override: float | None = None,
 ) -> bool | None:
     """The _place_pick entry-trailing intercept outcome: ``None`` when the pick
     must fall through to classify + ``_place_tiers`` (flag off, ineligible plan,
@@ -7933,10 +7942,36 @@ def _entry_trail_intercept(
     # retirement record (its tranche_plan re-append is identity-idempotent).
     uic = int(instrument.broker_instrument_id)
     if not already_watching and _has_live_long_on_uic(positions, uic):
-        _log_live_uic_deferral(ticker, pick_key, uic)
-        return False
+        # #1247 memo §3.8 own-pick relaxation: a live long GOVERNED BY THIS
+        # PICK (its now tranche just filled) must not freeze its own
+        # pre-planned pullback tiers — the guard's purpose is a SECOND pick
+        # stacking onto an instrument another pick owns. Journal read only on
+        # this (rare) branch; mismatch, a keyless governing plan (classic-path
+        # fill) and an unreadable journal all stay the conservative defer.
+        try:
+            governing = _fold_governing_plan_pick_keys(_iter_standalone_stop_journal()).get(uic)
+        except OSError:
+            governing = None
+        if governing != pick_key:
+            _log_live_uic_deferral(ticker, pick_key, uic)
+            return False
+        logger.info(
+            "place_pick %s: live long on uic %d is governed by this pick — "
+            "routing its own pullback watches",
+            ticker,
+            uic,
+        )
     return _route_pick_to_entry_watch(
-        broker, intent, ticker, instrument, account, plan, fx, d_bps=d_bps, exit_policy=exit_policy
+        broker,
+        intent,
+        ticker,
+        instrument,
+        account,
+        plan,
+        fx,
+        d_bps=d_bps,
+        exit_policy=exit_policy,
+        reference_qty_override=reference_qty_override,
     )
 
 

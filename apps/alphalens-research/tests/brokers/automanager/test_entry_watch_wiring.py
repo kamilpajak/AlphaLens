@@ -1683,6 +1683,7 @@ def _route_watch(
     *,
     intent: Any = None,
     exit_policy: Any = None,
+    reference_qty_override: float | None = None,
 ) -> tuple[bool, list[dict[str, Any]], Path, Path]:
     """Drive ``_route_pick_to_entry_watch`` hermetically (temp journals, stubbed
     submission log) and return (verdict, tranche_plan lines, journal paths)."""
@@ -1705,9 +1706,27 @@ def _route_watch(
             None,
             d_bps=50,
             exit_policy=exit_policy,
+            reference_qty_override=reference_qty_override,
         )
     tranche_lines = [ln for ln in _lines(stops_path) if ln["kind"] == "tranche_plan"]
     return ok, tranche_lines, trails_path, stops_path
+
+
+class TestWatchRoutingReferenceQtyOverride(unittest.TestCase):
+    """#1247: a split pick's watch route re-appends the SAME keyed plan with
+    the FULL ladder qty (now + pullback), not the pullback-only sum."""
+
+    def test_route_journals_the_full_ladder_reference_qty_when_overridden(self) -> None:
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 1.0),))
+        ok, tranche_lines, _t, _s = _route_watch(self, plan, reference_qty_override=55.0)
+        self.assertTrue(ok)
+        self.assertEqual(tranche_lines[0]["reference_qty"], 55.0)
+
+    def test_no_override_keeps_todays_reference_qty(self) -> None:
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 1.0),))
+        ok, tranche_lines, _t, _s = _route_watch(self, plan)
+        self.assertTrue(ok)
+        self.assertEqual(tranche_lines[0]["reference_qty"], 100.0)
 
 
 class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
@@ -2463,6 +2482,59 @@ class TestRoutingDefersOnLiveSameUicLong(unittest.TestCase):
         self.assertEqual([r.levelname for r in records], ["WARNING", "DEBUG"])
         self.assertIn("KO", records[0].getMessage())
         self.assertIn("stays armed", records[0].getMessage())
+
+    def _seed_governing_plan(self, path: Path, pick_key: str | None) -> None:
+        line: dict[str, Any] = {"kind": "tranche_plan", "uic": 307, "reference_qty": 8.0}
+        if pick_key is not None:
+            line["pick_key"] = pick_key
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(line) + "\n")
+
+    def test_own_pick_governed_live_long_routes_its_pullback_watches(self) -> None:
+        # #1247 memo section 3.8: after the now tranche fills, the position's
+        # governing pick IS the routing pick — its own pullback watches must
+        # still route (the guard's purpose is a SECOND pick stacking).
+        path = _journal(self)
+        stops = _planned_journal(self)
+        self._seed_governing_plan(stops, "KO:2026-07-20")
+        broker = _BrokerWithPositions([_live_long(307)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertTrue(placer(_pick()))
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+
+    def test_different_pick_live_long_still_defers(self) -> None:
+        path = _journal(self)
+        stops = _planned_journal(self)
+        self._seed_governing_plan(stops, "OTHER:2026-07-19")
+        broker = _BrokerWithPositions([_live_long(307)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(_lines(path), [])
+
+    def test_keyless_governing_plan_still_defers(self) -> None:
+        path = _journal(self)
+        stops = _planned_journal(self)
+        self._seed_governing_plan(stops, None)
+        broker = _BrokerWithPositions([_live_long(307)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(_lines(path), [])
+
+    def test_unreadable_stop_journal_defers(self) -> None:
+        path = _journal(self)
+        _planned_journal(self)
+        broker = _BrokerWithPositions([_live_long(307)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with (
+            mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
+            mock.patch.object(cl, "_iter_standalone_stop_journal", side_effect=OSError("io")),
+        ):
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(_lines(path), [])
 
 
 # --------------------------------------------------------------------------
