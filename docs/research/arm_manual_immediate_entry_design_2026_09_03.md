@@ -190,3 +190,34 @@ Decisions taken at implementation time, within the LOCKED envelope:
   existing harness; the drain is covered by 14 integration tests on the
   real `_place_pick` closure (real entry-trail journals). Extending the
   world to the real drain is follow-up work, not part of PR-C.
+
+## 8. SIM probe results (2026-09-03, attended)
+
+Probe pick: `arm-manual RHI --tier now@43.75:40 --tier 42:60 --stop 40.5
+--tp 2R:100 --notional 10000 --frame 15000 --env sim` (armed 13:16 UTC).
+
+- **Pre-open defer:** first ticks paged `now-noprice` (no fresh tradable
+  quote) and the pick stayed armed — the §3.6 path, observed organically.
+- **Placement at 13:20 UTC (pre-market!):** Saxo served a fresh tradable
+  pre-market quote (ask 42.95, `saxo-live-l1`), the gate passed and the
+  DayOrder Limit 43.75 × 701 was placed. NOTE FOR OPERATORS: "now" can
+  execute in the pre-market session whenever a confirmed-undelayed
+  tradable quote flows — the DayOrder then lives through the day.
+- **Journals exactly as designed:** write-ahead + per-tier records with
+  `tranche:"now"` and the full `tranche_meta` stamp (operator/submitted
+  cap 43.75 — on-tick, floor a no-op; gate ask/bid/event_time/source;
+  `entry_duration:"day"`); ONE keyed `tranche_plan` (`RHI:2026-09-03`,
+  `reference_qty` 1796 = 701 now + 1095 pullback) with the benign
+  same-key re-append from the watch route; `watch_open` ONLY for T2.
+- **Never-naked:** the fill was covered by the protection pass's
+  standalone disaster stop (`stop_placed` qty 701, ref on the now
+  bracket's crid) with zero new protection code — the §3.9 contract.
+- **Wire-shape verdict (IOC):** SIM `instruments/details` for a Stock
+  carries NO `SupportedOrderTypeSettings` key at all (read directly,
+  authenticated). The fail-open read therefore always yields DayOrder —
+  IOC stays dormant on Saxo cash stock, as Perplexity's doc-reading
+  predicted (§6.1).
+- **Negative drill (cap below market):** now-only `KO now@87:100` vs ask
+  88.99 → tick 1 defer (fresh subscription awaits its async snapshot),
+  tick 2 `refused_cap` record + page + `mark_refused` retiring the
+  now-only pick — the §3.7 re-arm path stands ready.
