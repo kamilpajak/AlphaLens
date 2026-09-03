@@ -147,7 +147,6 @@ def intent_from_jsonable(data: Mapping[str, Any]) -> TradeIntent:
             # silently — no unknown-key WARNING, and trade_date wins if a line
             # somehow carries both.
             meta_map.setdefault("trade_date", meta_map.pop("brief_date"))
-            meta_map.pop("brief_date", None)
         meta = IntentMeta(**_filtered(IntentMeta, meta_map))
         exit_spec = _decode_exit(top.get("exit"))
         kwargs = _filtered(TradeIntent, top)
