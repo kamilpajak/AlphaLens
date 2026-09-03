@@ -8175,22 +8175,33 @@ def _refuse_now_tranche(
         build_submission_record,
     )
 
-    append_submission_record(
-        build_submission_record(
-            brief_date=intent.meta.brief_date,
-            ticker=ticker,
-            mic=instrument.exchange_mic,
-            uic=instrument.broker_instrument_id,
-            brackets=[],
-            note=note,
-            sizing_currency=account.currency,
-            instrument_currency=instrument.currency,
-            sizing_equity=_resolve_sizing_equity(account.total_value),
-            fx=fx,
-            tranche="now",
-            tranche_meta=dict(meta),
+    try:
+        append_submission_record(
+            build_submission_record(
+                brief_date=intent.meta.brief_date,
+                ticker=ticker,
+                mic=instrument.exchange_mic,
+                uic=instrument.broker_instrument_id,
+                brackets=[],
+                note=note,
+                sizing_currency=account.currency,
+                instrument_currency=instrument.currency,
+                sizing_equity=_resolve_sizing_equity(account.total_value),
+                fx=fx,
+                tranche="now",
+                tranche_meta=dict(meta),
+            )
         )
-    )
+    except OSError as exc:
+        # Mirror _refuse_pick_terminal: a journal-append failure must never
+        # crash the tick; without the marker the now half re-evaluates next
+        # tick (the page is throttled).
+        logger.warning(
+            "place_pick %s: now-tranche refusal record append failed "
+            "(now half retries next tick): %s",
+            ticker,
+            exc,
+        )
 
 
 def _handle_now_tranche(
@@ -8598,7 +8609,11 @@ def _place_pick(
         reference_qty_override=reference_qty_override,
     )
     if intercepted is not None:
-        return intercepted or now_placed
+        # Deliberately NOT `or now_placed`: a capacity-deferred sibling half
+        # must read as not-placed so the drain retries next tick (the
+        # armed_ts scan skips the now half); the pick counts as placed on
+        # the tick the siblings actually route.
+        return intercepted
 
     # The pick is about to take the CLASSIC bracket path, which carries neither
     # #1112 arm gate. Refuse a new entry while the geometry exit is active and

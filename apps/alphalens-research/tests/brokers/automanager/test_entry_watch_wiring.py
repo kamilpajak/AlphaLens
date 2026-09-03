@@ -3448,7 +3448,9 @@ class TestPlacePickNowTranche(unittest.TestCase):
             mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
             mock.patch.object(cl, "_entry_watch_capacity_reached", lambda _f: True),
         ):
-            placer(_pick())  # tick 1: now placed, siblings capacity-deferred
+            # Tick 1: now placed, siblings capacity-deferred — the pick reads
+            # NOT placed so the drain retries (zen HIGH on #1259).
+            self.assertFalse(placer(_pick()))
         self.assertEqual(len(broker.brackets), 1)
         # The pick must NOT be retired: only tranche=="now" records exist.
         from alphalens_pipeline.brokers.automanager import picks as picks_mod
