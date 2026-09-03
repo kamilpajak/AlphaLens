@@ -37,6 +37,7 @@ from broker_contract.contract import (
     OrderState,
     OrderStatus,
     PlacedOrder,
+    SupportsPriceTickFloor,
 )
 
 _ALLOW = {ALLOW_ORDERS_ENV: "1"}
@@ -280,6 +281,37 @@ class TestPlacementBody(unittest.TestCase):
         expected = advance_trading_sessions(fixed_today, 5, exchange="XNYS")
         self.assertEqual(duration["ExpirationDateTime"], expected.isoformat())
 
+    def test_day_entry_duration_omits_expiry_keys(self):
+        # #1247 PR-B: an immediate-entry bracket is DayOrder — no expiry keys,
+        # and the exits stay GoodTillCancel (exit lifetime is a position
+        # property, not an entry-order property).
+        body, _ = self._place(_request(entry_duration="day"))
+        self.assertEqual(body["OrderDuration"], {"DurationType": "DayOrder"})
+        for child in body["Orders"]:
+            self.assertEqual(child["OrderDuration"], {"DurationType": "GoodTillCancel"})
+
+    def test_ioc_entry_duration(self):
+        body, _ = self._place(_request(entry_duration="ioc"))
+        self.assertEqual(body["OrderDuration"], {"DurationType": "ImmediateOrCancel"})
+        for child in body["Orders"]:
+            self.assertEqual(child["OrderDuration"], {"DurationType": "GoodTillCancel"})
+
+    def test_default_entry_duration_is_gtd_byte_identical(self):
+        # Dormancy pin: a request without the field builds the exact
+        # three-key GTD block existing callers rely on.
+        fixed_today = dt.date(2026, 7, 10)
+        with mock.patch.object(broker_module, "_today", return_value=fixed_today):
+            body, _ = self._place(_request(entry_ttl_days=5))
+        expected = advance_trading_sessions(fixed_today, 5, exchange="XNYS")
+        self.assertEqual(
+            body["OrderDuration"],
+            {
+                "DurationType": "GoodTillDate",
+                "ExpirationDateTime": expected.isoformat(),
+                "ExpirationDateContainsTime": False,
+            },
+        )
+
     def test_stop_only_bracket_omits_tp_child(self):
         body, _ = self._place(_request(take_profit=None))
         (sl,) = body["Orders"]
@@ -291,6 +323,92 @@ class TestPlacementBody(unittest.TestCase):
         self.assertEqual(body["BuySell"], "Sell")
         for child in body["Orders"]:
             self.assertEqual(child["BuySell"], "Buy")
+
+
+class TestLimitOrderDurations(unittest.TestCase):
+    """#1247 PR-B: fail-open per-instrument read of the durations Saxo
+    supports for Limit orders. WIRE SHAPE ASSUMED (SupportedOrderTypeSettings
+    has never been parsed in this repo; T3 probe pending) — verify via the
+    one-time INFO log on the SIM probe before the drain trusts IOC."""
+
+    _PLAUSIBLE = {
+        "SupportedOrderTypeSettings": [
+            {
+                "OrderType": "Limit",
+                "DurationTypes": ["DayOrder", "GoodTillDate", "ImmediateOrCancel"],
+            },
+            {"OrderType": "Market", "DurationTypes": ["DayOrder"]},
+        ]
+    }
+
+    def test_limit_durations_parsed_from_plausible_fixture(self) -> None:
+        self.assertEqual(
+            broker_module._limit_order_durations(self._PLAUSIBLE),
+            frozenset({"DayOrder", "GoodTillDate", "ImmediateOrCancel"}),
+        )
+
+    def test_limit_durations_absent_returns_none(self) -> None:
+        self.assertIsNone(broker_module._limit_order_durations(dict(_DETAILS_KO)))
+
+    def test_limit_durations_malformed_returns_none(self) -> None:
+        for details in (
+            {"SupportedOrderTypeSettings": "nope"},
+            {"SupportedOrderTypeSettings": [{"OrderType": "Limit"}]},
+            {"SupportedOrderTypeSettings": [{"DurationTypes": ["DayOrder"]}]},
+            {"SupportedOrderTypeSettings": [{"OrderType": "Limit", "DurationTypes": "DayOrder"}]},
+        ):
+            with self.subTest(details=details):
+                self.assertIsNone(broker_module._limit_order_durations(details))
+
+    def test_limit_durations_logs_raw_settings(self) -> None:
+        with self.assertLogs(broker_module.logger, level="INFO") as logs:
+            broker_module._limit_order_durations(self._PLAUSIBLE)
+        self.assertTrue(any("SupportedOrderTypeSettings" in line for line in logs.output))
+
+
+class TestFloorPriceToTick(unittest.TestCase):
+    """#1247 PR-B: the operator's cap floors to the limit tick — NEVER up
+    (memo §3.2.3: rounding up could submit a cap above the operator's)."""
+
+    def test_floor_never_rounds_up(self) -> None:
+        broker, _ = _make_broker()
+        details = dict(_DETAILS_KO)
+        # KO tick above $50 is 0.01: nearest would round 49.9999 UP to 50.0;
+        # the floor must go DOWN to 49.99 — the discriminating case.
+        self.assertEqual(broker._floor_price_to_tick(49.9999, details, label="cap"), 49.99)
+        self.assertEqual(broker._floor_price_to_tick(50.0009, details, label="cap"), 50.0)
+
+    def test_floor_on_tick_price_is_identity(self) -> None:
+        broker, _ = _make_broker()
+        details = dict(_DETAILS_KO)
+        self.assertEqual(broker._floor_price_to_tick(50.0, details, label="cap"), 50.0)
+        self.assertEqual(broker._floor_price_to_tick(49.99, details, label="cap"), 49.99)
+
+    def test_floor_non_finite_and_non_positive_rejected(self) -> None:
+        broker, _ = _make_broker()
+        details = dict(_DETAILS_KO)
+        for bad in (float("nan"), float("inf"), 0.0, -1.0):
+            with self.subTest(bad=bad):
+                with self.assertRaises(OrderRejectedError):
+                    broker._floor_price_to_tick(bad, details, label="cap")
+
+    def test_floor_hard_fails_past_bps_cap(self) -> None:
+        broker, _ = _make_broker()
+        coarse = {"TickSize": 1.0, "Format": {"OrderDecimals": 2}}
+        # 50.4 floors a full 0.4 below (79 bps) — past the 25 bps policy cap.
+        with self.assertRaises(OrderRejectedError) as ctx:
+            broker._floor_price_to_tick(50.4, coarse, label="cap")
+        self.assertIn("bps", str(ctx.exception))
+
+    def test_public_floor_fetches_details_and_delegates(self) -> None:
+        broker, _stub = _make_broker()
+        result = broker.floor_limit_price_to_tick(1234, "Stock", 49.9999)
+        self.assertEqual(result, 49.99)
+
+    def test_saxo_broker_satisfies_supports_price_tick_floor(self) -> None:
+        broker, _ = _make_broker()
+        self.assertIsInstance(broker, SupportsPriceTickFloor)
+        self.assertNotIsInstance(object(), SupportsPriceTickFloor)
 
 
 class TestTickQuantization(unittest.TestCase):
@@ -616,6 +734,44 @@ class TestPlacementResponseHandling(unittest.TestCase):
                     with self.assertRaises(OrderRejectedError) as ctx:
                         broker.place_bracket_order(_request())
                 self.assertIn(expected_fragment, str(ctx.exception))
+
+    def test_placement_reject_carries_error_code(self) -> None:
+        # #1247 PR-B: the POST reject path must attach the structured ErrorCode
+        # like the precheck path does — safety branches classify on it.
+        payload = {"ErrorInfo": {"ErrorCode": "TooFarFromMarket", "Message": "too far"}}
+        broker, _ = _make_broker(_StubOrderClient(place_response=(400, payload)))
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError) as ctx:
+                broker.place_bracket_order(_request())
+        self.assertEqual(ctx.exception.error_code, "TooFarFromMarket")
+
+    def test_placement_reject_top_level_error_code_carries(self) -> None:
+        payload = {"ErrorCode": "PriceExceedsAggressiveTolerance", "Message": "px"}
+        broker, _ = _make_broker(_StubOrderClient(place_response=(400, payload)))
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError) as ctx:
+                broker.place_bracket_order(_request())
+        self.assertEqual(ctx.exception.error_code, "PriceExceedsAggressiveTolerance")
+
+    def test_placement_reject_after_partial_acceptance_carries_error_code(self) -> None:
+        payload = {
+            "OrderId": "E-500",
+            "ErrorInfo": {"ErrorCode": "TooFarFromMarket", "Message": "too far"},
+        }
+        broker, stub = _make_broker(_StubOrderClient(place_response=(400, payload)))
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError) as ctx:
+                broker.place_bracket_order(_request())
+        self.assertEqual(ctx.exception.error_code, "TooFarFromMarket")
+        self.assertEqual([ids for ids, _ in stub.cancel_calls], ["E-500"])
+
+    def test_placement_reject_without_error_info_has_none_error_code(self) -> None:
+        payload = {"ModelState": {"OrderPrice": ["Price not in tick increments"]}}
+        broker, _ = _make_broker(_StubOrderClient(place_response=(400, payload)))
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError) as ctx:
+                broker.place_bracket_order(_request())
+        self.assertIsNone(ctx.exception.error_code)
 
 
 class TestOrderReads(unittest.TestCase):
