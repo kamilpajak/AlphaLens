@@ -88,18 +88,29 @@ class _ResolvingBroker(_RecordingBroker):
         return state if state is not None else _os(order_id, OrderStatus.UNKNOWN)
 
 
-def _seed_armed(path: Any, *, crid: str = _CRID, order_id: str, limit: float = 10.0) -> None:
+def _seed_armed(
+    path: Any,
+    *,
+    crid: str = _CRID,
+    order_id: str,
+    limit: float = 10.0,
+    ceiling: float | None = 10.07,
+) -> None:
     """A watch_open + a REAL-id ``trail_armed`` line — a resting native order the
-    broker owns (excluded from the watch pass, owned by the reconcile pass)."""
+    broker owns (excluded from the watch pass, owned by the reconcile pass).
+
+    ``ceiling=None`` reproduces a tier armed before #1317 shipped: the line
+    carries no ceiling, so the fill has nothing to be measured against."""
     _seed_watch(path, crid=crid, limit=limit, next_tier_limit=None)
-    entry_trails.append_entry_trail_line(
-        {
-            "kind": entry_trails.KIND_TRAIL_ARMED,
-            "crid": crid,
-            "order_id": order_id,
-            "trigger": 10.05,
-        }
-    )
+    record: dict[str, Any] = {
+        "kind": entry_trails.KIND_TRAIL_ARMED,
+        "crid": crid,
+        "order_id": order_id,
+        "trigger": 10.05,
+    }
+    if ceiling is not None:
+        record[entry_trails.KEY_CEILING] = ceiling
+    entry_trails.append_entry_trail_line(record)
 
 
 def _run(deps: cl.LoopDeps, env: dict[str, str] | None = None) -> None:
@@ -151,6 +162,69 @@ class TestFilledArmedTierWritesFired(unittest.TestCase):
         self.assertEqual(after.tiers[_CRID].terminal_kind, entry_trails.KIND_FIRED)
         total_after, bad_after = entry_trails.watching_virtual_gross_acct(after)
         self.assertEqual((total_after, bad_after), (0.0, 0), "the reservation is released")
+
+
+class TestCeilingBreachIsMeasuredAndAnnounced(unittest.TestCase):
+    """#1317: a fire that executes ABOVE its own ceiling must leave a trace.
+
+    Before this, the armed ceiling existed only in a log line, so a breach was
+    invisible on disk and seven of them went unnoticed. The fire is still a
+    fire — nothing here changes the terminal, the reservation release or the
+    capacity accounting; it adds the measurement and one distinct alert."""
+
+    def _fire(self, *, ceiling: float | None, fill: float) -> tuple[dict[str, Any], list[Any]]:
+        path = _journal(self)
+        _seed_armed(path, order_id="TR-1", limit=10.0, ceiling=ceiling)
+        broker = _ResolvingBroker()
+        broker.resolutions["TR-1"] = _os(
+            "TR-1", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=fill
+        )
+        alerts: list[Any] = []
+        _run(_watch_deps(None, alerts, broker=broker))
+        fired = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED]
+        self.assertEqual(len(fired), 1)
+        return fired[0], alerts
+
+    def test_a_fill_above_the_ceiling_is_stamped_and_alerted_once(self) -> None:
+        fired, alerts = self._fire(ceiling=10.07, fill=10.12)
+        measurement = fired["measurement"]
+        self.assertEqual(measurement["ceiling"], 10.07)
+        breach = measurement["ceiling_breach"]
+        self.assertIsNotNone(breach)
+        self.assertAlmostEqual(breach["breach_abs"], 0.05, places=10)
+        self.assertAlmostEqual(breach["breach_bps"], 0.05 / 10.07 * 1e4, places=6)
+        reasons = [reason for _message, reason in alerts]
+        self.assertEqual(
+            reasons.count(f"entry-trail:ceiling-breach:{_CRID}"),
+            1,
+            "exactly one breach alert, on its own throttle key",
+        )
+        self.assertEqual(reasons.count(f"entry-trail:fired:{_CRID}"), 1, "the fired alert stands")
+
+    def test_a_fill_under_the_ceiling_is_stamped_clean_and_never_alerts(self) -> None:
+        fired, alerts = self._fire(ceiling=10.07, fill=10.05)
+        self.assertEqual(fired["measurement"]["ceiling"], 10.07)
+        self.assertIsNone(fired["measurement"]["ceiling_breach"])
+        reasons = [reason for _message, reason in alerts]
+        self.assertNotIn(f"entry-trail:ceiling-breach:{_CRID}", reasons)
+
+    def test_a_tier_armed_without_a_ceiling_yields_no_verdict_and_no_alert(self) -> None:
+        # NO VERDICT is not a pass: the stamp says the ceiling is unknown rather
+        # than recording a comparison that was never made.
+        fired, alerts = self._fire(ceiling=None, fill=10.12)
+        self.assertIsNone(fired["measurement"]["ceiling"])
+        self.assertIsNone(fired["measurement"]["ceiling_breach"])
+        reasons = [reason for _message, reason in alerts]
+        self.assertNotIn(f"entry-trail:ceiling-breach:{_CRID}", reasons)
+
+    def test_the_breach_alert_names_both_prices_and_the_issue(self) -> None:
+        _fired, alerts = self._fire(ceiling=10.07, fill=10.12)
+        message = next(
+            msg for msg, reason in alerts if reason == f"entry-trail:ceiling-breach:{_CRID}"
+        )
+        self.assertIn("10.12", message)
+        self.assertIn("10.07", message)
+        self.assertIn("#1317", message)
 
 
 class TestCapacityUnjammedByFired(unittest.TestCase):

@@ -156,6 +156,16 @@ KIND_EXPIRED = "expired"
 KIND_SUSPENDED = "suspended"
 KIND_CANCELLED = "cancelled"
 
+KEY_TRIGGER = "trigger"
+"""Field name on a ``trail_armed`` line: the initial trigger (``OrderPrice``)
+the order was armed with. Named beside :data:`KEY_CEILING` so the two arm-time
+prices are written and read through one spelling each."""
+
+KEY_CEILING = "ceiling"
+"""Field name on a ``trail_armed`` line: the G1 ceiling (``StopLimitPrice``)
+the order was armed with (#1317). Named here rather than spelled at the two
+write sites and the fold, so the journal key cannot drift."""
+
 ENTRY_TRAIL_TERMINAL_KINDS = frozenset({KIND_FIRED, KIND_EXPIRED, KIND_SUSPENDED, KIND_CANCELLED})
 ENTRY_TRAIL_KINDS = (
     frozenset({KIND_WATCH_OPEN, KIND_TOUCHED, KIND_TROUGH, KIND_TRAIL_ARMED})
@@ -163,11 +173,15 @@ ENTRY_TRAIL_KINDS = (
 )
 
 # Compaction growth bound: per crid the minimal fold-equivalent set is at most
-# the latest watch_open + the min-trough record + the latest non-terminal
-# state record + the latest terminal record (memo G4 "growth bound from day
-# one"). Unknown/malformed lines are preserved verbatim ON TOP of this bound —
-# they are an alarm state, not steady-state growth.
-COMPACTED_LINES_PER_CRID_BOUND = 4
+# the latest watch_open + the min-trough record + the latest trail_armed + the
+# latest non-terminal state record + the latest terminal record (memo G4
+# "growth bound from day one"). Unknown/malformed lines are preserved verbatim
+# ON TOP of this bound — they are an alarm state, not steady-state growth.
+#
+# 4 -> 5 on 2026-09-04: the latest trail_armed is kept in its own right, so a
+# later non-terminal line cannot evict the resting order's id and ceiling (see
+# _CompactionTracker.latest_trail_armed).
+COMPACTED_LINES_PER_CRID_BOUND = 5
 
 _CRID_KEY = "crid"
 
@@ -191,6 +205,20 @@ class EntryTrailTierState:
     # the broker owns it, excluded from the watch pass) from an unconfirmed POST
     # (null id -> re-drive to complete the arm) on this field.
     armed_order_id: str | None = None
+    # #1317: the ceiling (``StopLimitPrice``) the LATEST ``trail_armed`` line
+    # journaled — the write-ahead carries the geometry value, the post-POST line
+    # the tick-quantized value the adapter put on the wire, and latest wins.
+    # ``None`` when the tier is not armed, when the line predates this field
+    # (every fire before 2026-09-04), or when the journaled value is corrupt.
+    # NEVER a substitute for "the fill was fine": it means the comparison cannot
+    # be made, which is exactly the state that hid seven breaches.
+    armed_ceiling: float | None = None
+    # The trigger (``OrderPrice``) the SAME ``trail_armed`` line journaled. Folded
+    # for the same reason as the ceiling: the crash-window ADOPT path re-journals
+    # a line for an order a PREVIOUS tick POSTed, so both arm-time numbers must
+    # come from that tick. A record pairing an old ceiling with a freshly
+    # computed trigger describes no order that ever existed.
+    armed_trigger: float | None = None
 
 
 @dataclass(frozen=True)
@@ -258,11 +286,15 @@ def _fold_record_into_state(state: dict[str, Any], kind: str, record: Mapping[st
         # resting-order id lingers past the re-arm (harmless to the current
         # latest_kind-gated readers, but the fold must state the arm truth).
         state["armed_order_id"] = None
+        state["armed_ceiling"] = None
+        state["armed_trigger"] = None
     elif kind == KIND_TRAIL_ARMED:
         # The LATEST trail_armed wins (a real-id line overrides the earlier
         # null-id write-ahead); a missing/blank order id folds back to None.
         order_id = record.get("order_id")
         state["armed_order_id"] = str(order_id) if order_id else None
+        state["armed_ceiling"] = _finite_positive_float(record.get(KEY_CEILING))
+        state["armed_trigger"] = _finite_positive_float(record.get(KEY_TRIGGER))
     elif kind == KIND_TROUGH:
         trough = _finite_positive_float(record.get(KIND_TROUGH))
         if trough is not None and (state["min_trough"] is None or trough < state["min_trough"]):
@@ -299,6 +331,8 @@ def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
                 "min_trough": None,
                 "terminal_kind": None,
                 "armed_order_id": None,
+                "armed_ceiling": None,
+                "armed_trigger": None,
             },
         )
         _fold_record_into_state(state, kind, record)
@@ -514,6 +548,14 @@ class _CompactionTracker:
     min_trough: dict[str, tuple[float, int]] = field(default_factory=dict)
     latest_state: dict[str, int] = field(default_factory=dict)
     latest_terminal: dict[str, int] = field(default_factory=dict)
+    # The latest ``trail_armed``, kept for the SAME reason as latest_watch_open:
+    # electing only the latest NON-TERMINAL record preserves ``latest_kind`` but
+    # not the sticky fields a kind carries, so ANY later non-terminal line
+    # evicted the arm line — taking ``armed_order_id`` (which owns the resting
+    # broker order) and ``armed_ceiling`` with it. A ``watch_open`` after the arm
+    # legitimately CLEARS both, and it is kept too, so the fold still comes out
+    # right for the re-arm.
+    latest_trail_armed: dict[str, int] = field(default_factory=dict)
 
     def note(self, crid: str, kind: str, record: Mapping[str, Any], index: int) -> None:
         """Track one known-kind record at ``index`` (file order = time order)."""
@@ -523,6 +565,8 @@ class _CompactionTracker:
         self.latest_state[crid] = index
         if kind == KIND_WATCH_OPEN:
             self.latest_watch_open[crid] = index
+        elif kind == KIND_TRAIL_ARMED:
+            self.latest_trail_armed[crid] = index
         elif kind == KIND_TROUGH:
             trough = _finite_positive_float(record.get(KIND_TROUGH))
             if trough is not None:
@@ -534,6 +578,7 @@ class _CompactionTracker:
         """Every tracked index that must be preserved."""
         kept = set(self.latest_watch_open.values())
         kept.update(index for _trough, index in self.min_trough.values())
+        kept.update(self.latest_trail_armed.values())
         kept.update(self.latest_state.values())
         kept.update(self.latest_terminal.values())
         return kept
@@ -546,8 +591,9 @@ def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
 
     Kept per crid: the latest ``watch_open``, the record achieving the MIN
     trough (equals the latest under the ratchet invariant, but min is the
-    fold-equivalent choice), the latest non-terminal state record, and the
-    latest terminal record — :data:`COMPACTED_LINES_PER_CRID_BOUND` lines at
+    fold-equivalent choice), the latest ``trail_armed`` (it carries the resting
+    order id + its ceiling, which ``latest_state`` alone does not preserve), the
+    latest non-terminal state record, and the latest terminal record — :data:`COMPACTED_LINES_PER_CRID_BOUND` lines at
     most, however long the input. UNKNOWN kinds and malformed/missing-crid
     lines are PRESERVED VERBATIM (memo G4 — dropping a malformed line would
     silently clear the fold's fail-closed count; dropping an unknown kind is

@@ -150,6 +150,15 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
         self.assertIn(entry_trails.KIND_TRAIL_ARMED, kinds)
         # Native mode: no fabricated dry-run fired line (the server is the fire).
         self.assertNotIn(entry_trails.KIND_FIRED, kinds)
+        # #1317: the ceiling that went on the wire is on the armed line, so the
+        # fire it eventually produces can be measured against it. Journaling it
+        # here is the whole reason the AMBA breach was findable only by accident.
+        armed = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TRAIL_ARMED]
+        self.assertEqual(
+            armed[-1][entry_trails.KEY_CEILING],
+            order["ceiling_price"],
+            "the journaled ceiling is the one the order carries",
+        )
 
     def test_flag_on_suspended_tier_places_no_order(self) -> None:
         path = _journal(self)
