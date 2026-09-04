@@ -6154,8 +6154,10 @@ def _journal_envelope_clamped(
     envelope clamped (``position_manager._maybe_reanchor`` stamps the
     ``envelope_*`` facts on the action; a divergence-free reanchor carries
     ``None`` and never writes this). Read by nothing in the protection logic —
-    no fold consumes it (like ``amend_ok``), and the boot compactor drops it at
-    restart like the other telemetry markers (``reanchored`` / ``trailed``)."""
+    no fold consumes it (like ``amend_ok``), so the boot compactor drops it at
+    restart. It is the ONLY one of the three amend-outcome markers that is pure
+    telemetry: ``reanchored`` and ``trailed`` ARE fold-consumed and the
+    compactor keeps them (#1324)."""
     _append_standalone_stop_journal(
         {
             "kind": "envelope_clamped",
@@ -6466,6 +6468,82 @@ def _emit_kept_tranche_lines(
     return kept
 
 
+def _elect_trailed_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The kept ``trailed`` lines: per uic, the ONE marker still inside
+    ``_fold_trailed_since_latest_plan``'s END accumulator (#1324).
+
+    The election MIRRORS that fold line for line — same
+    ``_apply_generation_reset`` call, same ``float(line["level"])`` /
+    ``float(line["ts"])`` parse guard, same ``ts >= latest_ts[uic]`` tie rule —
+    but keeps the LINE instead of the level. Two properties make the mirror
+    load-bearing rather than cosmetic:
+
+      * GENERATION GATING. A plain newest-per-uic election (the shape
+        ``_keep_latest_marker`` provides for ``oco_placed`` / ``amend_ok``) is
+        generation-BLIND: on ``[plan(A), trailed 115, plan(B)]`` the fold
+        returns ``{}`` while a max-ts keep would resurrect 115 behind the kept
+        plan-B line — handing a fresh position a ratchet floor ABOVE its entry
+        and, through ``_build_managed_exits``, an absurdly high SL to place.
+      * THE PARSE GUARD BEFORE THE ts COMPARISON. The fold skips an unparsable
+        ``level`` WITHOUT advancing ``latest_ts``, so a malformed NEWER line
+        must not evict the good older one — which a bare ``(uic, ts)`` keep
+        would do, dropping the uic from the compacted fold entirely.
+
+    The original line object is kept (shallow-copied), not a synthesised stub,
+    so ``_journal_trailed``'s ``peak`` / ``last_price`` telemetry survives the
+    boot rewrite. Emitted sorted by uic for a deterministic file order; the
+    CALLER is responsible for writing these AFTER the tranche block (see
+    :func:`_compact_standalone_stop_journal_lines`)."""
+    latest_ts: dict[int, float] = {}
+    latest_line: dict[int, Mapping[str, Any]] = {}
+    governing_key: dict[int, str] = {}
+    for line in lines:
+        uic = _coerce(line, "uic", int)
+        if uic is None:
+            continue
+        kind = line.get("kind")
+        if _apply_generation_reset(kind, line, uic, governing_key, (latest_ts, latest_line)):
+            continue
+        if kind != "trailed":
+            continue
+        try:
+            float(line["level"])  # parse guard only — the fold reads the level
+            ts = float(line["ts"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if uic not in latest_ts or ts >= latest_ts[uic]:
+            latest_ts[uic] = ts
+            latest_line[uic] = line
+    return [dict(latest_line[uic]) for uic in sorted(latest_line)]
+
+
+def _elect_reanchored_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The kept ``reanchored`` lines: per uic, the NEWEST-by-ts marker
+    ``_fold_reanchored_markers`` folds into the permanent per-blend latch
+    (#1324 sibling).
+
+    Unlike the trailed election there is NO generation gating — the reanchor
+    fold is a flat latest-by-ts walk with no ``tranche_plan`` interaction — so
+    the kept line's position in the emitted file cannot change the fold. The
+    ``float(line["avg_price"])`` parse guard is still applied BEFORE the ts
+    comparison for the same reason as above: the fold skips a malformed line
+    without advancing its ``latest_ts``, so a junk newer line must not evict
+    the good older one (which is why ``_keep_latest_marker`` alone, keyed on
+    uic+ts, cannot serve this fold)."""
+    latest: dict[int, tuple[float, dict[str, Any]]] = {}
+    for line in lines:
+        if line.get("kind") != "reanchored":
+            continue
+        try:
+            uic = int(line["uic"])
+            float(line["avg_price"])  # parse guard only — the fold reads it
+            ts = float(line["ts"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        _keep_latest_marker(latest, uic, ts, line)
+    return [latest[uic][1] for uic in sorted(latest)]
+
+
 def _compact_standalone_stop_journal_lines(
     lines: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -6504,12 +6582,40 @@ def _compact_standalone_stop_journal_lines(
         ``planned_retracted`` markers (#1249) are consumed the same way — the
         per-crid election above runs through ``_latest_planned_by_crid``, so a
         fully retracted crid keeps neither its planned line nor the marker.
+      - the ``reanchored`` line ``_elect_reanchored_lines`` elects per uic — the
+        newest by ``ts`` among the parseable ones, so
+        ``_fold_reanchored_markers`` (the PERMANENT per-blend reanchor latch)
+        is unchanged (#1324);
+      - the ``trailed`` line ``_elect_trailed_lines`` elects per uic, written
+        LAST (#1324). This one is ORDER-SENSITIVE:
+        ``_fold_trailed_since_latest_plan`` is generation-reset by every
+        ``tranche_plan`` line and the folds walk lines in write order, so a
+        kept ``trailed`` line emitted BEFORE its uic's plan lines would be
+        erased by the very reset the compactor reordered it into. Appending
+        after the whole tranche block satisfies that for every uic at once; no
+        other fold reads kind ``trailed``, so nothing else is disturbed.
+        Dropping these markers was the #1324 defect: the fold feeds BOTH
+        ``ProtectionView.trailed_stop_by_uic`` (``_maybe_trail``'s never-DOWN
+        ratchet floor) and ``ManagedExit.stop_price`` via
+        ``_build_managed_exits``, so a boot compaction let the daemon PATCH a
+        stop BELOW the level it had already been trailed to.
 
-    Every other line — ``gen`` markers (read only by ``_read_persisted_gen``, whose
-    reset to the initial gen is harmless: post-restart re-emits are past Saxo's 15s
-    request-id dedup window, and protection is broker-state-truth not journal-derived),
-    unknown kinds, and malformed lines — is dropped; none contributes to the
-    folds above. Pure: no I/O, input never mutated (kept lines are shallow-copied)."""
+    ``gen`` markers are the one DELIBERATE exception to fold-identity: they are
+    read only by ``_read_persisted_gen``, and the reset to the initial gen is
+    harmless (post-restart re-emits are past Saxo's 15s request-id dedup window,
+    and protection is broker-state-truth not journal-derived). Every other line
+    — unknown kinds and malformed lines — is dropped; none contributes to the
+    folds above.
+
+    NOT deliberate, and NOT fixed here: ``_derive_owed_sibling_retires`` folds
+    differently on the compacted set. Its ``_owed_from_stop_fill_refs`` half
+    walks EVERY ref-bearing ``stop_filled``, while this function keeps such a
+    line only when it matches the newest kept ``stop_placed`` for the uic or is
+    elected as open-generation closure evidence; a fill satisfying neither is
+    dropped and the owed entry disappears. Reproduced, tracked separately —
+    do not read the paragraph above as "every other reader is identical".
+
+    Pure: no I/O, input never mutated (kept lines are shallow-copied)."""
     materialized = list(lines)
 
     # Newest planned per crid — reuse the fold's own selection so the compacted
@@ -6552,7 +6658,12 @@ def _compact_standalone_stop_journal_lines(
                 compacted.append(matched)
     compacted.extend(ttl_latest["amend_ok"][uic][1] for uic in sorted(ttl_latest["amend_ok"]))
     compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
+    compacted.extend(_elect_reanchored_lines(materialized))
     compacted.extend(tranche_kept)
+    # LAST, and it must stay last: the trailed fold's generation reset fires on
+    # every kept tranche_plan line, so a trailed marker written before the
+    # tranche block folds away for every uic that has a ladder (#1324).
+    compacted.extend(_elect_trailed_lines(materialized))
     return compacted
 
 
@@ -9930,11 +10041,15 @@ def _execute_amend_stop(
     )
     # Latch the post-fill move ONLY on this confirmed success — a failed amend
     # never reaches here (it returned above on the BrokerError branch, having
-    # journaled amend_failed like any other amend arm). Both markers are
-    # best-effort (like amend_ok): a dropped marker only costs one redundant,
-    # harmless re-PATCH next tick (absolute target price + qty, idempotent-in-
-    # effect), never a wrong or naked stop. Both a trail and a reanchor AmendStop
-    # carry ``reanchor_avg_price``, so the write is keyed on ``reason`` FIRST — a
+    # journaled amend_failed like any other amend arm). The write is best-effort
+    # (like amend_ok), but the two markers are NOT equally cheap to lose: a lost
+    # ``reanchored`` costs one redundant re-PATCH to the same deterministic
+    # clamped level, while a lost ``trailed`` costs the never-DOWN RATCHET FLOOR
+    # — and its other input, deps.peak_tracker, re-seeds on restart too, so the
+    # level is not recomputable and the stop can be PATCHed lower than it stood.
+    # That is why the boot compactor keeps both (#1324). Both a trail and a
+    # reanchor AmendStop carry ``reanchor_avg_price``, so the write is keyed on
+    # ``reason`` FIRST — a
     # trail must journal ``trailed`` (its ratchet floor + telemetry), NOT
     # ``reanchored`` (the per-blend reanchor latch).
     if action.reason == "trail":

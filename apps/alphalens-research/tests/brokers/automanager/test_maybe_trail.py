@@ -13,6 +13,7 @@ to ``_maybe_reanchor`` instead, so they stay byte-identical.
 from __future__ import annotations
 
 import unittest
+from typing import Any
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import position_manager as pm
@@ -571,6 +572,191 @@ class TestFoldTrailedMarkers(unittest.TestCase):
             {"kind": "tranche_plan", "uic": _UIC, "pick_key": "trade-1"},
         ]
         self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {})
+
+
+class TestCompactorKeepsTrailedRatchet(unittest.TestCase):
+    """#1324: the boot journal compactor must keep the ``trailed`` markers the
+    ratchet floor is folded from. It used to drop them wholesale, so every
+    daemon restart (23 LIVE / 34 SIM in 14 days) erased
+    ``ProtectionView.trailed_stop_by_uic`` and re-seeded ``deps.peak_tracker``
+    from the live price — leaving ``_maybe_trail`` free to PATCH the stop BELOW
+    the level it had already been trailed to.
+
+    The property under test is the compactor's own stated contract: the
+    compacted set must fold IDENTICALLY to the full journal. Kind-presence is
+    NOT enough — ``_fold_trailed_since_latest_plan`` is generation-reset by
+    ``tranche_plan``, and the compactor emits tranche lines late, so a kept
+    ``trailed`` line written BEFORE its uic's plan line still folds away."""
+
+    @staticmethod
+    def _trailed_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [line for line in lines if line.get("kind") == "trailed"]
+
+    def _assert_fold_identical(self, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        self.assertEqual(
+            cl._fold_trailed_since_latest_plan(lines),
+            cl._fold_trailed_since_latest_plan(compacted),
+        )
+        return compacted
+
+    def test_a_trailed_marker_survives_compaction(self) -> None:
+        lines: list[dict[str, Any]] = [
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "OLN:2026-08-14"},
+            {"kind": "trailed", "uic": _UIC, "level": 97.0, "ts": 30.0},
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        self.assertEqual(len(self._trailed_lines(compacted)), 1)
+
+    def test_the_compacted_set_folds_identically_with_a_governing_plan(self) -> None:
+        lines: list[dict[str, Any]] = [
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "OLN:2026-08-14"},
+            {"kind": "trailed", "uic": _UIC, "level": 97.0, "ts": 30.0},
+        ]
+        # Power check: the fold is non-empty on the full journal, so an empty
+        # fold on the compacted set is an observation this test CAN produce.
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {_UIC: 97.0})
+        self._assert_fold_identical(lines)
+
+    def test_a_trailed_marker_with_no_plan_line_survives(self) -> None:
+        # NOT the bracket path — that one DOES journal a plan line, keyless
+        # (``_journal_tranche_plan`` passes ``pick_key=None`` unless the #1247
+        # split override supplies one), and a keyless plan is an unconditional
+        # generation reset. This pins the pre-plan / adopted-position shape: a
+        # uic whose journal carries no ``tranche_plan`` at all. Gating the keep
+        # on "has a plan" would silently drop its ratchet floor.
+        lines: list[dict[str, Any]] = [{"kind": "trailed", "uic": 222, "level": 42.0, "ts": 5.0}]
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {222: 42.0})
+        self._assert_fold_identical(lines)
+
+    def test_a_new_pick_key_generation_is_not_resurrected_by_compaction(self) -> None:
+        # A generation-BLIND newest-per-uic keep would carry the dead trade's
+        # 115.0 behind the kept plan-B line and hand the fresh position an
+        # absurdly high ratchet floor (and, via _build_managed_exits, SL).
+        lines: list[dict[str, Any]] = [
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "A"},
+            {"kind": "trailed", "uic": _UIC, "level": 115.0, "ts": 1.0},
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "B"},
+        ]
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {})
+        compacted = self._assert_fold_identical(lines)
+        self.assertEqual(cl._fold_trailed_since_latest_plan(compacted), {})
+
+    def test_a_retracted_plan_leaves_no_trailed_line(self) -> None:
+        lines: list[dict[str, Any]] = [
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "A"},
+            {"kind": "trailed", "uic": _UIC, "level": 96.0, "ts": 1.0},
+            {"kind": "tranche_plan_retracted", "uic": _UIC},
+        ]
+        compacted = self._assert_fold_identical(lines)
+        self.assertEqual(cl._fold_trailed_since_latest_plan(compacted), {})
+        self.assertEqual(self._trailed_lines(compacted), [])
+
+    def test_only_the_newest_trailed_per_uic_is_kept(self) -> None:
+        lines: list[dict[str, Any]] = [
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "A"},
+            {"kind": "tranche_plan", "uic": 999, "pick_key": "B"},
+            {"kind": "trailed", "uic": _UIC, "level": 95.0, "ts": 1.0},
+            {"kind": "trailed", "uic": _UIC, "level": 97.0, "ts": 3.0},
+            {"kind": "trailed", "uic": _UIC, "level": 96.0, "ts": 2.0},
+            {"kind": "trailed", "uic": 999, "level": 50.0, "ts": 1.0},
+        ]
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {_UIC: 97.0, 999: 50.0})
+        compacted = self._assert_fold_identical(lines)
+        self.assertEqual(len(self._trailed_lines(compacted)), 2, "one kept marker per uic")
+
+    def test_an_equal_timestamp_tie_is_broken_by_the_later_line(self) -> None:
+        # The fold elects with ``ts >= latest_ts[uic]``; an election using a
+        # strict ``>`` would keep 95.0 and diverge on this input alone.
+        lines: list[dict[str, Any]] = [
+            {"kind": "trailed", "uic": _UIC, "level": 95.0, "ts": 7.0},
+            {"kind": "trailed", "uic": _UIC, "level": 98.0, "ts": 7.0},
+        ]
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {_UIC: 98.0})
+        self._assert_fold_identical(lines)
+
+    def test_a_malformed_newer_marker_does_not_evict_the_good_older_one(self) -> None:
+        # The fold SKIPS an unparsable level without touching its latest_ts, so
+        # an election keyed on (uic, ts) alone would let the junk line win and
+        # the uic would vanish from the compacted fold.
+        lines: list[dict[str, Any]] = [
+            {"kind": "trailed", "uic": _UIC, "level": 96.0, "ts": 1.0},
+            {"kind": "trailed", "uic": _UIC, "level": "oops", "ts": 9.0},
+        ]
+        self.assertEqual(cl._fold_trailed_since_latest_plan(lines), {_UIC: 96.0})
+        self._assert_fold_identical(lines)
+
+    def test_compaction_is_idempotent_with_trailed_lines(self) -> None:
+        lines: list[dict[str, Any]] = [
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "A"},
+            {"kind": "stop_placed", "uic": _UIC, "qty": 7.0, "ts": 10.0},
+            {"kind": "trailed", "uic": _UIC, "level": 96.0, "ts": 20.0},
+            {"kind": "trailed", "uic": _UIC, "level": 97.0, "ts": 30.0},
+        ]
+        once = cl._compact_standalone_stop_journal_lines(lines)
+        self.assertEqual(once, cl._compact_standalone_stop_journal_lines(once))
+        self.assertEqual(
+            cl._fold_trailed_since_latest_plan(lines),
+            cl._fold_trailed_since_latest_plan(once),
+        )
+
+    def test_the_kept_marker_is_written_after_its_uics_plan_lines(self) -> None:
+        # Ordering is the silent failure mode: the folds walk lines in write
+        # order and the FIRST kept tranche_plan for a uic always resets, so a
+        # marker emitted before the plan block folds to {} even though it is
+        # present in the file. Pin the index, not just the presence.
+        lines: list[dict[str, Any]] = [
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "A"},
+            {"kind": "trailed", "uic": _UIC, "level": 97.0, "ts": 30.0},
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        plan_idx = [
+            i
+            for i, line in enumerate(compacted)
+            if line.get("kind") == "tranche_plan" and line.get("uic") == _UIC
+        ]
+        trailed_idx = [
+            i
+            for i, line in enumerate(compacted)
+            if line.get("kind") == "trailed" and line.get("uic") == _UIC
+        ]
+        self.assertTrue(plan_idx and trailed_idx)
+        self.assertGreater(min(trailed_idx), max(plan_idx))
+
+    def test_the_kept_marker_carries_its_telemetry_fields(self) -> None:
+        # The kept line must be the ORIGINAL record, not a synthesised
+        # {kind,uic,level,ts} stub: peak / last_price are the substrate for the
+        # future /edge trailing lens and a stub would erase them every boot.
+        lines: list[dict[str, Any]] = [
+            {
+                "kind": "trailed",
+                "uic": _UIC,
+                "level": 96.0,
+                "ts": 20.0,
+                "peak": 104.0,
+                "last_price": 103.5,
+            }
+        ]
+        kept = self._trailed_lines(cl._compact_standalone_stop_journal_lines(lines))
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].get("peak"), 104.0)
+        self.assertEqual(kept[0].get("last_price"), 103.5)
+
+    def test_the_retention_check_can_actually_fail(self) -> None:
+        # Positive control: the fold-identity assertion above must be able to
+        # produce the disproving observation. Run it against a deliberately
+        # hobbled result and require it to raise.
+        lines: list[dict[str, Any]] = [
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "OLN:2026-08-14"},
+            {"kind": "trailed", "uic": _UIC, "level": 97.0, "ts": 30.0},
+        ]
+        compacted = self._assert_fold_identical(lines)
+        hobbled = [line for line in compacted if line.get("kind") != "trailed"]
+        with self.assertRaises(AssertionError):
+            self.assertEqual(
+                cl._fold_trailed_since_latest_plan(lines),
+                cl._fold_trailed_since_latest_plan(hobbled),
+            )
 
 
 if __name__ == "__main__":

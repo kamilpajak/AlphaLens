@@ -323,6 +323,65 @@ class TestCrossTickRatchet(unittest.TestCase):
         self.assertEqual(len(trailed), 1)
 
 
+class TestRatchetSurvivesDaemonRestart(unittest.TestCase):
+    """#1324: the ratchet floor must survive a daemon restart. A restart does two
+    things — it re-seeds ``deps.peak_tracker`` from the live price (deliberate),
+    and it runs ``_compact_standalone_stop_journal()`` over the journal. The
+    compactor used to drop every ``trailed`` marker, so the floor went with it
+    and the next tick was free to PATCH the stop BELOW the level it already
+    stood at.
+
+    Both arms are identical except for the compaction call, so the compactor —
+    not the fresh ``LoopDeps`` — is the discriminator."""
+
+    def _two_ticks(self, *, compact_between: bool) -> tuple[list, list[dict]]:
+        broker = _Broker(positions=[_pos()], sells=[_stop_leg()], by_uic={_UIC: _pos()})
+        sink: list[str] = []
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            _seed_planned(journal)
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                # Tick 1: peak 104 -> trail the stop to 104 - 2*4 = 96.0.
+                deps = _deps(
+                    broker,
+                    exit_policy=_TRAIL,
+                    feed_factory=_ScriptedFeedFactory([{_UIC: 104.0}]),
+                    sink=sink,
+                )
+                cl._run_protection_pass(deps, [], False, cl.TickReport())
+
+                if compact_between:
+                    cl._compact_standalone_stop_journal()  # the daemon's boot step
+
+                # Tick 2 on a FRESH LoopDeps == the restarted daemon: the peak
+                # tracker re-seeds from 103.5, so the proposal drops to 95.5.
+                # Only the journal's trailed marker can veto it.
+                restarted = _deps(
+                    broker,
+                    exit_policy=_TRAIL,
+                    feed_factory=_ScriptedFeedFactory([{_UIC: 103.5}]),
+                    sink=sink,
+                )
+                cl._run_protection_pass(restarted, [], False, cl.TickReport())
+                return broker.amended, _markers(journal, "trailed")
+
+    def test_control_no_compaction_keeps_the_ratchet(self) -> None:
+        # Control arm: fresh deps alone (peak tracker reset) do NOT loosen the
+        # stop — so a second amend in the other arm is caused by the compaction.
+        amended, trailed = self._two_ticks(compact_between=False)
+        self.assertEqual([round(a[5], 4) for a in amended], [96.0])
+        self.assertEqual([round(m["level"], 4) for m in trailed], [96.0])
+
+    def test_boot_compaction_does_not_loosen_the_trailed_stop(self) -> None:
+        amended, trailed = self._two_ticks(compact_between=True)
+        self.assertEqual(
+            [round(a[5], 4) for a in amended],
+            [96.0],
+            "the post-restart tick must stay vetoed by the folded ratchet floor",
+        )
+        self.assertEqual([round(m["level"], 4) for m in trailed], [96.0])
+
+
 class TestCarryover1PullbackLoosenDropped(unittest.TestCase):
     """CARRYOVER-1 (pure arm): a pullback whose PRE-clamp proposal clears the
     ratchet floor but whose POST-clamp level would land BELOW the trail history is

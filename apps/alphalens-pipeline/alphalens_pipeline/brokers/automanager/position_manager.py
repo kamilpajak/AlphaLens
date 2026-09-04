@@ -516,13 +516,21 @@ class ProtectionView:
     # journal marker, latest-by-ts), the live-history floor a new proposal must
     # clear by ``_TRAIL_STEP_EPS``. Default empty = no prior trail on record.
     # Like ``reanchored_by_uic`` above, the fold is JOURNAL-lifetime, not
-    # position-lifetime (latest-by-ts per uic across all history): if a uic
-    # trails to level X, fully exits, and a brand-new position on the same uic
-    # is later re-picked, the stale ``trailed`` marker still folds in as that
-    # uic's floor. This is benign — the ratchet in ``_maybe_trail`` only ever
-    # gates a NEW proposal against the inherited floor, so the worst case is
-    # the placed stop simply stays at its placement-time planned distance
-    # (never loosened relative to the stale floor, never left naked).
+    # position-lifetime. It is NOT unbounded, though:
+    # ``_fold_trailed_since_latest_plan`` resets on every new-generation
+    # ``tranche_plan``, so an ordinary re-pick of the same uic (a new pick_key)
+    # clears the stale level. What survives the reset is a refill inside the
+    # SAME generation, and a uic whose journal carries no ``tranche_plan`` at
+    # all — those inherit the prior fill's floor.
+    # NOT purely benign, and #1324 made the lifetime real by keeping the marker
+    # across boots (before that, boot compaction cleared it daily). There are
+    # TWO consumers, and they differ: ``_maybe_trail`` only GATES a new proposal
+    # against the floor, so an inherited level there merely keeps the stop at
+    # its placement-time distance (never loosened, never naked); but
+    # ``control_loop._build_managed_exits`` takes ``max(plan stop, trailed)``,
+    # so an inherited level is actively PLACED as that position's stop. The
+    # direction is fail-safe (a stop can only be raised), yet a level one fill
+    # earned is applied to a later one that did not.
     peak_by_uic: Mapping[int, float] = field(default_factory=dict)
     last_price_by_uic: Mapping[int, float] = field(default_factory=dict)
     trailed_stop_by_uic: Mapping[int, float] = field(default_factory=dict)

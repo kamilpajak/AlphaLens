@@ -6209,6 +6209,65 @@ class TestFoldReanchoredMarkers(unittest.TestCase):
         self.assertEqual(cl._fold_reanchored_markers([]), {})
 
 
+class TestCompactorKeepsReanchoredLatch(unittest.TestCase):
+    """#1324 sibling: the boot compactor used to drop the ``reanchored`` markers
+    too, so every restart lost ``ProtectionView.reanchored_by_uic`` — the
+    PERMANENT per-blend idempotence latch — and the daemon re-fired one
+    redundant reanchor PATCH per uic. Lower severity than the ``trailed`` loss
+    (the recomputed target is the same clamped level, so it is broker chatter,
+    not a loosening), but the same violation of the compactor's
+    "folds IDENTICALLY" contract.
+
+    Unlike the trailed fold there is NO generation reset here: the reanchor
+    latch is a flat latest-by-ts walk with no ``tranche_plan`` interaction, so
+    the kept line's position in the file cannot change the fold."""
+
+    def _assert_fold_identical(self, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        self.assertEqual(
+            cl._fold_reanchored_markers(lines),
+            cl._fold_reanchored_markers(compacted),
+        )
+        return compacted
+
+    def test_the_latch_survives_compaction(self) -> None:
+        lines: list[dict[str, Any]] = [
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 95.0, "ts": 100.0},
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 97.5, "ts": 200.0},
+        ]
+        self.assertEqual(cl._fold_reanchored_markers(lines), {_UIC: 97.5})  # power check
+        self._assert_fold_identical(lines)
+
+    def test_only_the_newest_reanchored_per_uic_is_kept(self) -> None:
+        lines: list[dict[str, Any]] = [
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 95.0, "ts": 100.0},
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 97.5, "ts": 200.0},
+            {"kind": "reanchored", "uic": 99999, "avg_price": 10.0, "ts": 50.0},
+        ]
+        compacted = self._assert_fold_identical(lines)
+        kept = [line for line in compacted if line.get("kind") == "reanchored"]
+        self.assertEqual(len(kept), 2, "one kept marker per uic")
+
+    def test_a_malformed_newer_marker_does_not_evict_the_good_older_one(self) -> None:
+        # The fold SKIPS an unparsable avg_price without touching latest_ts, so
+        # a bare (uic, ts) election would let the junk line win and the uic
+        # would drop out of the compacted fold entirely.
+        lines: list[dict[str, Any]] = [
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 95.0, "ts": 100.0},
+            {"kind": "reanchored", "uic": _UIC, "avg_price": "oops", "ts": 900.0},
+        ]
+        self.assertEqual(cl._fold_reanchored_markers(lines), {_UIC: 95.0})
+        self._assert_fold_identical(lines)
+
+    def test_compaction_is_idempotent_with_reanchored_lines(self) -> None:
+        lines: list[dict[str, Any]] = [
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 95.0, "ts": 100.0},
+            {"kind": "stop_placed", "uic": _UIC, "qty": 7.0, "ts": 120.0},
+        ]
+        once = cl._compact_standalone_stop_journal_lines(lines)
+        self.assertEqual(once, cl._compact_standalone_stop_journal_lines(once))
+
+
 class TestBuildProtectionViewWiresReanchoredByUic(unittest.TestCase):
     """PR-6b: build_protection_view wires ``reanchored_by_uic`` from the
     append-only ``reanchored`` journal markers into ``ProtectionView``."""
@@ -6748,6 +6807,14 @@ def _rich_standalone_stop_journal() -> list[dict[str, Any]]:
         {"kind": "amend_seq", "uic": uic_a, "seq": 1},
         {"kind": "amend_seq", "uic": uic_a, "seq": 2},
         {"kind": "amend_seq", "uic": uic_b, "seq": 0},
+        # reanchored / trailed (#1324) — both are fold-consumed, so the mixed-journal
+        # battery below must cover them: their ABSENCE from this fixture is what let
+        # the compactor drop them unnoticed. One redundant older entry each, so the
+        # newest-per-uic election has something to fold away.
+        {"kind": "reanchored", "uic": uic_a, "avg_price": 12.5, "ts": 100.0},
+        {"kind": "reanchored", "uic": uic_a, "avg_price": 13.5, "ts": 200.0},
+        {"kind": "trailed", "uic": uic_b, "level": 30.0, "ts": 100.0},
+        {"kind": "trailed", "uic": uic_b, "level": 31.0, "ts": 200.0},
         # malformed — a planned line with no client_request_id; every fold skips it.
         {"kind": "planned", "uic": uic_a, "stop_price": 1.0},
     ]
@@ -7091,21 +7158,34 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
                     cl._fold_ttl_markers(compacted, kind, now, 120.0),
                     msg=f"{kind} @ now={now}",
                 )
+        # #1324: the two fold-consumed markers the compactor used to drop. Asserted
+        # HERE, on the mixed journal, and not only on hand-built inputs — a kind
+        # missing from this battery is exactly how the defect stayed invisible.
+        self.assertEqual(
+            cl._fold_reanchored_markers(original),
+            cl._fold_reanchored_markers(compacted),
+        )
+        self.assertEqual(
+            cl._fold_trailed_since_latest_plan(original),
+            cl._fold_trailed_since_latest_plan(compacted),
+        )
 
     def test_compacted_set_is_minimal_one_line_per_key(self) -> None:
         compacted = cl._compact_standalone_stop_journal_lines(_rich_standalone_stop_journal())
         kinds = [line["kind"] for line in compacted]
         # 3 planned (crid-A0 newest, crid-A1, crid-B0), 1 oco_unsupported,
-        # 1 oco_placed, 1 amend_failed, 1 oco_too_far, 2 amend_seq (one per uic).
-        # No gen/malformed.
+        # 1 oco_placed, 1 amend_failed, 1 oco_too_far, 2 amend_seq (one per uic),
+        # 1 reanchored + 1 trailed (newest per uic, #1324). No gen/malformed.
         self.assertEqual(kinds.count("planned"), 3)
         self.assertEqual(kinds.count("oco_unsupported"), 1)
         self.assertEqual(kinds.count("oco_placed"), 1)
         self.assertEqual(kinds.count("amend_failed"), 1)
         self.assertEqual(kinds.count("oco_too_far"), 1)
         self.assertEqual(kinds.count("amend_seq"), 2)
+        self.assertEqual(kinds.count("reanchored"), 1)
+        self.assertEqual(kinds.count("trailed"), 1)
         self.assertNotIn("gen", kinds)
-        self.assertEqual(len(compacted), 9)
+        self.assertEqual(len(compacted), 11)
 
     def test_newest_planned_per_crid_survives(self) -> None:
         compacted = cl._compact_standalone_stop_journal_lines(_rich_standalone_stop_journal())
@@ -7251,6 +7331,33 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
             "tranche retention must not disturb the existing kept-kinds election",
         )
 
+    def test_managed_exit_stop_price_is_unchanged_by_compaction(self) -> None:
+        # #1324, the SECOND consumer of _fold_trailed_since_latest_plan: a
+        # tranche fire amends the SL to ManagedExit.stop_price, so losing the
+        # trailed level at boot pushes the SL back down to the brief disaster
+        # stop on the next TP1 fire — no _maybe_trail involvement at all.
+        original: list[dict[str, Any]] = [
+            _tranche_plan_line(333, pick_key="OLN:2026-08-14"),
+            {"kind": "trailed", "uic": 333, "level": 97.0, "ts": 30.0},
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(original)
+
+        def _stop_price(lines: list[dict[str, Any]]) -> float:
+            managed = cl._build_managed_exits(
+                long_positions=[_pos(10.0, 333)],
+                tranche_plans=cl.fold_tranche_plans(lines),
+                fired=cl._fold_fired_since_latest_plan(lines),
+                trailed=cl._fold_trailed_since_latest_plan(lines),
+            )
+            self.assertEqual(len(managed), 1)
+            return managed[0].stop_price
+
+        # Power check: uncompacted, the plan's 9.0 disaster stop is RAISED to
+        # the trailed 97.0 — so "it fell back to 9.0" is an observation this
+        # test can produce.
+        self.assertAlmostEqual(_stop_price(original), 97.0)
+        self.assertAlmostEqual(_stop_price(compacted), _stop_price(original))
+
 
 class TestCompactStandaloneStopJournalFile(unittest.TestCase):
     """Issue #895: the startup rewrite is atomic, a no-op on absent/empty files,
@@ -7310,6 +7417,37 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
             # No temp artifacts left behind in the journal dir.
             leftovers = [p.name for p in Path(d).iterdir() if p.name != journal.name]
             self.assertEqual(leftovers, [])
+
+    def test_rewrite_preserves_the_trailed_ratchet_floor(self) -> None:
+        # #1324 through the REAL boot path: the JSON round-trip plus the file
+        # rewrite, not just the pure line election.
+        import json
+
+        original: list[dict[str, Any]] = [
+            _tranche_plan_line(333, pick_key="OLN:2026-08-14"),
+            {"kind": "trailed", "uic": 333, "level": 97.0, "ts": 30.0},
+            {"kind": "reanchored", "uic": 333, "avg_price": 95.0, "ts": 20.0},
+        ]
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            journal.write_text(
+                "".join(json.dumps(line, sort_keys=True) + "\n" for line in original),
+                encoding="utf-8",
+            )
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                before = list(cl._iter_standalone_stop_journal())
+                trailed_before = cl._fold_trailed_since_latest_plan(before)
+                reanchored_before = cl._fold_reanchored_markers(before)
+
+                cl._compact_standalone_stop_journal()
+
+                after = list(cl._iter_standalone_stop_journal())
+        # Power checks: both folds are non-empty before, so "the boot wiped it"
+        # is an observation this test can produce.
+        self.assertEqual(trailed_before, {333: 97.0})
+        self.assertEqual(reanchored_before, {333: 95.0})
+        self.assertEqual(cl._fold_trailed_since_latest_plan(after), trailed_before)
+        self.assertEqual(cl._fold_reanchored_markers(after), reanchored_before)
 
 
 _AMEND_ON = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
