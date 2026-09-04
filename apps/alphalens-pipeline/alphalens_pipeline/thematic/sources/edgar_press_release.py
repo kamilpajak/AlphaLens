@@ -585,7 +585,16 @@ _JUNK_TOKEN_RE = re.compile(
 # collapses whitespace before this ever runs (_strip_junk_token_prefix does
 # split/join), so the quadratic shape is unreachable through _clean_candidate;
 # the pattern does not rely on that to hold.
-_EXHIBIT_SUFFIX_RE = re.compile(r"(?<!\s)\s*+(?:exhibit|ex)[-\s]*+99(?:\.\d+)?\s*+$", re.IGNORECASE)
+#
+# NOSONAR on the pattern: S8786 reports this shape as super-linear, and it is
+# not. Measured on a whitespace run, per call: 21us / 311us / 4725us at
+# 100/400/1600 chars before, 1us / 3us / 13us after, and 77ms -> 48us at 6400.
+# The rule started firing only once "(?<!\s)" was added -- the shape that made
+# it linear -- so the finding tracks the analyser's parse, not the runtime.
+_EXHIBIT_SUFFIX_RE = re.compile(
+    r"(?<!\s)\s*+(?:exhibit|ex)[-\s]*+99(?:\.\d+)?\s*+$",  # NOSONAR
+    re.IGNORECASE,
+)
 # 4+ literal spaces render as ONE space in HTML, so filers use such runs as
 # layout separators inside flat single-element documents (PCVX hidden-text
 # release). 3 spaces stay joined — observed INSIDE a real headline.
