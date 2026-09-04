@@ -52,7 +52,9 @@ LIVE_KEYS = frozenset(
 
 # Keys that are DEAD — present in the live .env but with zero source consumers.
 # GOOGLE_API_KEY: Gemini client removed (PR #416). ALPACA_*: broker chain
-# decommissioned (ADR 0012).
+# decommissioned (ADR 0012). SIMFIN_API_KEY / QUIVER_API_KEY: expired
+# subscriptions whose last consumers left the tree — the 2026-09-04 env-key
+# audit (#1101) grepped every os.environ / from_env site and found none.
 DEAD_KEYS = frozenset(
     {
         "GOOGLE_API_KEY",
@@ -61,6 +63,8 @@ DEAD_KEYS = frozenset(
         "ALPACA_API_SECRET",
         "ALPACA_TEST_API_KEY",
         "ALPACA_TEST_API_SECRET",
+        "SIMFIN_API_KEY",
+        "QUIVER_API_KEY",
     }
 )
 
@@ -100,6 +104,17 @@ class TestRootEnvExample(unittest.TestCase):
                 self.text,
                 f"dead key {key} not mentioned in root .env.example",
             )
+
+    def test_dead_keys_are_never_active_placeholder_lines(self) -> None:
+        # A dead key on an ACTIVE ``KEY=`` line invites the operator to fill it
+        # in on the next fresh setup, resurrecting a key nothing reads. Dead
+        # keys may only appear on commented lines (documentation of the grave).
+        active = self.keys & DEAD_KEYS
+        self.assertEqual(
+            sorted(active),
+            [],
+            f"dead key(s) documented as ACTIVE placeholder lines: {sorted(active)}",
+        )
 
     def test_no_real_secret_values(self) -> None:
         # Every active KEY=... line must have an empty or placeholder value —
