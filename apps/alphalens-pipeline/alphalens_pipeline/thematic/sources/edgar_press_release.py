@@ -58,6 +58,7 @@ from alphalens_pipeline.data.alt_data.sec_edgar_client import (
     get_default_sec_client,
 )
 from alphalens_pipeline.edgar_detector.sources.eightk import extract_8k_items
+from alphalens_pipeline.thematic.sources.gdelt import clean_title
 from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS, empty_news_frame
 
 logger = logging.getLogger(__name__)
@@ -475,22 +476,40 @@ def _enrich_filing(row: dict, *, client: SecEdgarClient) -> dict | None:
 
 # --- (4) pure transform: enriched hits -> NEWS_COLUMNS frame -----------------
 _BLOCK_TAG_RE = re.compile(r"</?(?:p|div|br|h[1-6]|li|tr)\s*/?>", re.IGNORECASE)
+# Leading boilerplate SEC serves ahead of the EX-99.1 narrative (#339): the
+# exhibit label ("EX-99.1"/"EXHIBIT 99.1"), the document sequence number, and
+# the bare exhibit filename. Foreign-listing preambles ("Stock code:",
+# "Announcement No.:") are a known remaining tail — filer-specific, needs
+# fixtures from several filer styles before it can be skipped safely.
+_BOILERPLATE_LINE_RES = (
+    re.compile(r"^(?:ex[-\s]?99|exhibit\s+99)", re.IGNORECASE),
+    re.compile(r"^\S+\.html?$", re.IGNORECASE),
+    re.compile(r"^\d+$"),
+)
 
 
 def _title_from_body(body: str) -> str:
-    """First non-empty stripped text line from the EX-99.1 narrative.
+    """First substantive text line from the EX-99.1 narrative.
 
     EX-99.1 exhibits are HTML with varied block structure (``<div>``,
     ``<h1>``-``<h6>``, ``<br>``, tables), not just ``<p>``. Convert every
     block-level boundary to a newline first so a headline wrapped in any of
     them becomes the first line, then strip the remaining inline tags.
+    Exhibit-label boilerplate lines are skipped so the headline, not the
+    literal ``EX-99.1``, becomes the title; a body that is ALL boilerplate
+    yields ``""`` and ``transform`` falls back to the synthetic title.
     """
     stripped = _BLOCK_TAG_RE.sub("\n", body)
     text = re.sub(r"<[^>]+>", " ", stripped)
     for line in text.splitlines():
-        candidate = line.strip()
-        if candidate:
-            return candidate
+        # clean_title first so entity noise ("&nbsp;" -> U+00A0) reduces to
+        # "" and gets skipped instead of shipping as the headline.
+        candidate = clean_title(line)
+        if not candidate:
+            continue
+        if any(pattern.match(candidate) for pattern in _BOILERPLATE_LINE_RES):
+            continue
+        return candidate
     return ""
 
 
