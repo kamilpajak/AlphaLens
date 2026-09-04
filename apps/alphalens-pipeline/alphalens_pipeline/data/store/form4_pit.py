@@ -290,7 +290,11 @@ class Form4PITStore:
 
     @staticmethod
     def _empty_frame() -> pd.DataFrame:
-        return pd.DataFrame(columns=list(FORM4_SCHEMA_COLUMNS))
+        df = pd.DataFrame(columns=list(FORM4_SCHEMA_COLUMNS))
+        # Same nullable dtype as _load_one_year stamps, so an empty result
+        # concats with a populated one without flipping is_other to object.
+        df["is_other"] = df["is_other"].astype("boolean")
+        return df
 
 
 def _to_date(value: object) -> date:

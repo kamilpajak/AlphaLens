@@ -725,6 +725,14 @@ class TestForm4PITStoreLegacyPartition(unittest.TestCase):
         self.assertTrue(pd.isna(by_acc["LEGACY-1"]))
         self.assertEqual(by_acc["NEW-1"], True)
 
+    def test_empty_result_carries_the_boolean_dtype_too(self):
+        # A no-match read must present the same is_other dtype as a populated
+        # one, or a later concat with a real frame silently flips to object.
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        result = store.records_as_of("AAPL", asof=date(2022, 3, 1), lookback_days=30)
+        self.assertEqual(len(result), 0)
+        self.assertEqual(str(result["is_other"].dtype), "boolean")
+
 
 if __name__ == "__main__":
     unittest.main()
