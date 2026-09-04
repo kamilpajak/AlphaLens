@@ -37,10 +37,15 @@ _REQUIRED = tuple(BRIEF_RESPONSE_SCHEMA["required"])
 
 # Non-blank ASCII text only: letters are never whitespace, so ``.strip()`` is
 # always truthy, and staying ASCII avoids tripping the separate CJK
-# LANGUAGE_DRIFT guard (which would confound the NONE assertion).
-_SUBSTANTIVE = st.text(alphabet=string.ascii_letters + string.digits + " .", min_size=1).filter(
-    lambda s: s.strip() != ""
-)
+# LANGUAGE_DRIFT guard (which would confound the NONE assertion). max_size
+# stays below the SECTION_COLLAPSE tldr threshold for the same reason — a
+# drawn tldr over that bar beside blank siblings is the collapse guard's
+# territory, tested directly in test_generator.py.
+_SUBSTANTIVE = st.text(
+    alphabet=string.ascii_letters + string.digits + " .",
+    min_size=1,
+    max_size=generator._COLLAPSE_TLDR_CHARS,
+).filter(lambda s: s.strip() != "")
 # Blank values: empty + whitespace-only variants that must all strip to "".
 _BLANK = st.sampled_from(["", " ", "   ", "\n", "\t", "  \n\t "])
 _FIELD_VALUE = st.one_of(_BLANK, _SUBSTANTIVE)

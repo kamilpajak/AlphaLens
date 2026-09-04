@@ -292,8 +292,12 @@ class TestVersionBumpAndDualStamp(unittest.TestCase):
         # truncated before succeeding at 4000 in the 2026-08-19 re-baseline) —
         # a bare glob("*.json") would crash json.loads on that draw's cut-off
         # content. See docs/research/golden_rebaseline_recorded_2026_08_20.md.
+        # 6, not 5, since the SECTION_COLLAPSE guard (#1079): ABUS's recorded
+        # first draw is a collapsed-but-parseable final answer the guard now
+        # rejects, and its recorded temperature-0 retry is a second final
+        # answer. Both parse cleanly, so both belong in this faithfulness scan.
         records = load_final_answer_cassette_records(_CASSETTES)
-        self.assertEqual(len(records), 5)
+        self.assertEqual(len(records), 6)
         for record in records:
             facts = parse_facts_index(record["contents"])
             brief_json = record["openrouter_response"]["choices"][0]["message"]["content"]

@@ -424,6 +424,7 @@ class TheGuardStatusNeverReportsAFireAsClean(unittest.TestCase):
             generator.BriefErrorKind.EMPTY,
             generator.BriefErrorKind.EMPTY_CONTENT,
             generator.BriefErrorKind.LANGUAGE_DRIFT,
+            generator.BriefErrorKind.SECTION_COLLAPSE,
         ):
             with self.subTest(kind=kind.value):
                 outcome = brief_orchestrator._guard_outcome(

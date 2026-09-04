@@ -766,6 +766,145 @@ class TestLanguageDriftRetry(unittest.TestCase):
         self.assertEqual(kind, generator.BriefErrorKind.LANGUAGE_DRIFT)
 
 
+# The ABUS shape (brief date 2026-08-19): the model wrote the WHOLE brief —
+# thesis, bear case, exit plan — into ``tldr`` and left the sibling fields
+# blank. Length modelled on the measured collapse population (7 rows over
+# 2026-05-19..2026-09-03, tldr 550-3062 chars).
+_COLLAPSED_TLDR = (
+    "QUBT is a pure-play quantum hardware vendor benefiting from NVIDIA's Ising tooling push. "
+    "Bear case: pre-revenue, dilution risk, zero insider open-market buying in 90d post-event, "
+    "valuation composite at the 1st percentile vs industry peers and heavy reliance on a single "
+    "photonic product line with no announced second customer. "
+    "Exit: exit if Q1 earnings shows wider cash burn, if NVIDIA drops quantum from its roadmap, "
+    "or if the QTUM ETF rebalance removes the name from the index basket."
+)
+
+_COLLAPSED_BRIEF = {
+    "tldr": _COLLAPSED_TLDR,
+    "supply_chain_reasoning": "",
+    "bear_summary": "",
+    "catalyst_failure_exit": "",
+    "entry_price_note": "",
+}
+
+
+class TestSectionCollapseGuard(unittest.TestCase):
+    """A brief whose sections collapsed into ``tldr`` is retryable ``SECTION_COLLAPSE``.
+
+    The detector fires only on the CONJUNCTION of an over-long tldr and blank
+    sibling fields — a verbose-but-complete brief and a terse-but-real brief
+    must both pass untouched (the deliberate ``_has_substantive_field`` bar).
+    """
+
+    def test_collapsed_brief_classified_as_section_collapse(self):
+        self.assertGreater(len(_COLLAPSED_TLDR), generator._COLLAPSE_TLDR_CHARS)
+        fake_response = SimpleNamespace(text=json.dumps(_COLLAPSED_BRIEF))
+        with patch.object(generator, "_call_llm", return_value=fake_response):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.SECTION_COLLAPSE)
+
+    def test_two_blank_siblings_are_enough(self):
+        # One sibling survived with real text — still a collapse: the bear case
+        # and the exit plan vanished into the tldr.
+        two_blank = dict(_COLLAPSED_BRIEF)
+        two_blank["supply_chain_reasoning"] = "NVIDIA Ising raises demand for photonic processors."
+        fake_response = SimpleNamespace(text=json.dumps(two_blank))
+        with patch.object(generator, "_call_llm", return_value=fake_response):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.SECTION_COLLAPSE)
+
+    def test_tldr_at_threshold_with_blanks_is_not_collapse(self):
+        # Calibration pin: the healthiest observed tldr was 394 chars (max over
+        # 998 healthy rows); the threshold sits above it. AT the threshold the
+        # guard stays quiet — one substantive field is still a valid brief.
+        at_threshold = dict(_COLLAPSED_BRIEF)
+        at_threshold["tldr"] = "a" * generator._COLLAPSE_TLDR_CHARS
+        fake_response = SimpleNamespace(text=json.dumps(at_threshold))
+        with patch.object(generator, "_call_llm", return_value=fake_response):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
+        self.assertIsNotNone(brief)
+
+    def test_one_char_over_threshold_with_blanks_is_collapse(self):
+        just_over = dict(_COLLAPSED_BRIEF)
+        just_over["tldr"] = "a" * (generator._COLLAPSE_TLDR_CHARS + 1)
+        fake_response = SimpleNamespace(text=json.dumps(just_over))
+        with patch.object(generator, "_call_llm", return_value=fake_response):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.SECTION_COLLAPSE)
+
+    def test_long_tldr_with_substantive_siblings_is_not_collapse(self):
+        # A verbose tldr beside three real sections is a style complaint, not a
+        # collapse — withholding it would discard a complete brief.
+        verbose = dict(_SAMPLE_BRIEF)
+        verbose["tldr"] = _COLLAPSED_TLDR
+        fake_response = SimpleNamespace(text=json.dumps(verbose))
+        with patch.object(generator, "_call_llm", return_value=fake_response):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
+        self.assertIsNotNone(brief)
+
+    def test_one_blank_sibling_is_not_collapse(self):
+        one_blank = dict(_SAMPLE_BRIEF)
+        one_blank["tldr"] = _COLLAPSED_TLDR
+        one_blank["bear_summary"] = ""
+        fake_response = SimpleNamespace(text=json.dumps(one_blank))
+        with patch.object(generator, "_call_llm", return_value=fake_response):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
+        self.assertIsNotNone(brief)
+
+
+class TestSectionCollapseRetry(unittest.TestCase):
+    def test_retry_recovers_section_collapse(self):
+        with patch.object(
+            generator,
+            "_call_llm",
+            side_effect=[
+                SimpleNamespace(text=json.dumps(_COLLAPSED_BRIEF)),
+                SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF)),
+            ],
+        ):
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+        self.assertIsNotNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
+        self.assertEqual(brief["tldr"], _SAMPLE_BRIEF["tldr"])
+        self.assertEqual(
+            brief[generator.FIRST_ATTEMPT_KIND_KEY],
+            generator.BriefErrorKind.SECTION_COLLAPSE.value,
+        )
+
+    def test_collapse_retry_uses_temperature_zero_and_base_tokens(self):
+        captured: list[dict] = []
+
+        def fake_call(client, prompt, *, model, max_output_tokens, temperature):
+            captured.append({"max_output_tokens": max_output_tokens, "temperature": temperature})
+            if len(captured) == 1:
+                return SimpleNamespace(text=json.dumps(_COLLAPSED_BRIEF))
+            return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
+
+        with patch.object(generator, "_call_llm", side_effect=fake_call):
+            generator.generate_brief_with_retry(
+                _facts(weighted_score=4), api_key="k", base_max_output_tokens=2000
+            )
+        # Collapse is not token exhaustion → keep the base cap (only TRUNCATED doubles).
+        self.assertEqual(captured[1]["max_output_tokens"], 2000)
+        self.assertEqual(captured[1]["temperature"], 0.0)
+
+    def test_two_collapses_give_up(self):
+        with patch.object(
+            generator,
+            "_call_llm",
+            return_value=SimpleNamespace(text=json.dumps(_COLLAPSED_BRIEF)),
+        ):
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.SECTION_COLLAPSE)
+
+
 if __name__ == "__main__":
     unittest.main()
 
