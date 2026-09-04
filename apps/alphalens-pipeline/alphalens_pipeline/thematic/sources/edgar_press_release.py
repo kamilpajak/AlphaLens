@@ -475,42 +475,234 @@ def _enrich_filing(row: dict, *, client: SecEdgarClient) -> dict | None:
 
 
 # --- (4) pure transform: enriched hits -> NEWS_COLUMNS frame -----------------
-_BLOCK_TAG_RE = re.compile(r"</?(?:p|div|br|h[1-6]|li|tr)\s*/?>", re.IGNORECASE)
-# Leading boilerplate SEC serves ahead of the EX-99.1 narrative (#339): the
-# exhibit label ("EX-99.1"/"EXHIBIT 99.1"), the document sequence number, and
-# the bare exhibit filename. Foreign-listing preambles ("Stock code:",
-# "Announcement No.:") are a known remaining tail — filer-specific, needs
-# fixtures from several filer styles before it can be skipped safely.
-_BOILERPLATE_LINE_RES = (
-    re.compile(r"^(?:ex[-\s]?99|exhibit\s+99)", re.IGNORECASE),
-    re.compile(r"^\S+\.html?$", re.IGNORECASE),
-    re.compile(r"^\d+$"),
+# Block-LEVEL tags delimit candidate lines. <br> is deliberately NOT here
+# (#1306): it is an in-block soft break filers routinely place INSIDE a
+# headline, so it joins as a space like a literal newline does.
+_BLOCK_TAG_RE = re.compile(r"</?(?:p|div|h[1-6]|li|tr)\s*/?>", re.IGNORECASE)
+_SOFT_BREAK_RE = re.compile(r"(?:<br\s*/?>|[\r\n])+", re.IGNORECASE)
+# A leading exhibit label sharing a line with real content (HLX shape) is
+# stripped, not dropped; a line that is ONLY the label strips to "".
+_EXHIBIT_PREFIX_RE = re.compile(
+    r"^(?:edgarfiling\s+)?(?:exhibit|ex)[-\s]*99(?:\.\d+)?\s*[.:\-]?\s*", re.IGNORECASE
 )
+# Hard-reject boilerplate. Every pattern is justified by a fixture in
+# tests/thematic/sources/fixtures/ex991/ (2026-09-03 live corpus, #1306):
+_BOILERPLATE_LINE_RES = (
+    re.compile(r"^(?:document|exhibit)$", re.IGNORECASE),  # iXBRL wrapper artifact
+    re.compile(r"^\S+\.html?$", re.IGNORECASE),  # bare document filename
+    re.compile(r"^\d+(?:\.\d+)?$"),  # sequence number / split label tail "99.1"
+    re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}$"),  # bare date (EQBK)
+    re.compile(r"^[\d\s()+.\-]{7,}$"),  # phone number (PDEX/ODFL contact blocks)
+    re.compile(r"^\S+@\S+$"),  # bare e-mail
+    re.compile(r"^for\s+immediate\s+release\s*[:.]?$", re.IGNORECASE),
+    # "PRESS RELEASE" / "EARNINGS RELEASE" / "FOURTH QUARTER ... PRESS
+    # RELEASE" / "PRESS RELEASE, DATED SEPTEMBER 3, 2026" label lines.
+    re.compile(
+        r"^.{0,60}?\b(?:press|news|earnings)\s+release(?:\s*,?\s*dated\b.{0,40})?$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^.{0,40}contacts?\s*:", re.IGNORECASE),  # "Media and Investor Contact:"
+    re.compile(r"filed\s+by\s+newsfilecorp\.com", re.IGNORECASE),  # newswire header
+    # Foreign-listing preamble (ACMR, #339).
+    re.compile(
+        r"^(?:stock\s+code|stock\s+abbreviation|securities\s+code|announcement\s+no)"
+        r"\s*\.?\s*[::]",
+        re.IGNORECASE,
+    ),
+    # Internal document-name token leaking as text (PCVX/RRBI/APOG).
+    re.compile(r"^(?=\S{8,}$)\S*\d\S*$"),
+)
+# A real headline is never longer than this; a longer "line" is flattened
+# prose (APOG) and is skipped like other junk.
+_MAX_HEADLINE_CHARS = 300
+# Scoring pass scope: the headline sits in the document head; scanning further
+# only risks picking body prose.
+_SCAN_LIMIT = 12
+# Reporting verbs that make a line headline-like on their own.
+_HEADLINE_VERB_RE = re.compile(
+    r"\b(?:announce[sd]?|report(?:s|ed)?|declare[sd]?|appoint(?:s|ed)?|complete[sd]?"
+    r"|acquire[sd]?|launch(?:es|ed)?|provide[sd]?|close[sd]?|name[sd]?|grant(?:s|ed)?"
+    r"|sign(?:s|ed)?|price[sd]?|approve[sd]?|receive[sd]?|intersect(?:s|ed)?"
+    r"|expand(?:s|ed)?|enter(?:s|ed)?|secure[sd]?|achieve[sd]?|post(?:s|ed)?"
+    r"|unveil(?:s|ed)?|introduce[sd]?)\b",
+    re.IGNORECASE,
+)
+# A verb-less candidate ending in one of these reads as a fragment or a list
+# label, not a complete headline.
+_TRAILING_CONNECTORS = frozenset(
+    {
+        "and",
+        "or",
+        "of",
+        "to",
+        "as",
+        "for",
+        "with",
+        "in",
+        "on",
+        "at",
+        "the",
+        "a",
+        "an",
+        "its",
+        "by",
+        "from",
+    }
+)
+# A short line ending in a corporate suffix is a letterhead / issuer-name
+# line (ACMR, EQBK), not the announcement title.
+_CORP_SUFFIXES = frozenset(
+    {"inc", "corp", "corporation", "ltd", "llc", "co", "company", "plc", "group", "sa", "nv", "ag"}
+)
+# >=2 hits of "single capital + capital-run" in one line = CSS letter-spaced
+# small-caps ("E QUITY B ANCSHARES"); a single hit ("A BIG DEAL") is left alone.
+_LETTER_SPACING_RE = re.compile(r"\b([A-Z]) ([A-Z]{2,})")
+
+
+def _repair_letter_spacing(line: str) -> str:
+    if len(_LETTER_SPACING_RE.findall(line)) >= 2:
+        return _LETTER_SPACING_RE.sub(r"\1\2", line)
+    return line
+
+
+# Wrapper tokens leak JOINED once soft wraps collapse ("2 ex99-1.htm EX-99.1
+# Document"); strip them token-by-token from the line start so pure-wrapper
+# lines empty out while "2 Reasons ..." only loses its number.
+_JUNK_TOKEN_RE = re.compile(
+    r"^(?:document|exhibit|edgarfiling|ex[-\s]?99(?:\.\d+)?|\d+(?:\.\d+)?"
+    r"|\S+\.html?|(?=\S*\d)\S{8,})$",
+    re.IGNORECASE,
+)
+# Trailing exhibit label on an otherwise-real line (RRBI investor deck).
+_EXHIBIT_SUFFIX_RE = re.compile(r"\s*(?:exhibit|ex)[-\s]*99(?:\.\d+)?\s*$", re.IGNORECASE)
+# 4+ literal spaces render as ONE space in HTML, so filers use such runs as
+# layout separators inside flat single-element documents (PCVX hidden-text
+# release). 3 spaces stay joined — observed INSIDE a real headline.
+_FLAT_RUN_SPLIT_RE = re.compile(r"\s{4,}")
+_IR_BLOCK_RE = re.compile(r"\b(?:investor|media|public)\s+relations\b", re.IGNORECASE)
+# A release-label PREFIX surviving a flat-run split ("Press Release FOR
+# RELEASE: September 2, 2026") is filing chrome, not a headline (APOG).
+_RELEASE_PREFIX_RE = re.compile(
+    r"^(?:(?:press|news|earnings)\s+release\b|for\s+release\b)", re.IGNORECASE
+)
+_MAX_JOINED_TITLE_CHARS = 200
+_MAX_CONTINUATION_JOINS = 2
+
+
+_NUMBER_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _strip_junk_token_prefix(line: str) -> str:
+    tokens = line.split()
+    while tokens and _JUNK_TOKEN_RE.match(tokens[0]):
+        # A bare number counts as wrapper chrome only inside a wrapper chain
+        # ("2 ex99-1.htm ..."); a number leading real text is content
+        # ("2026 Guidance Raised ..."). Review follow-up on #1308.
+        if (
+            _NUMBER_TOKEN_RE.fullmatch(tokens[0])
+            and len(tokens) > 1
+            and not _JUNK_TOKEN_RE.match(tokens[1])
+        ):
+            break
+        tokens.pop(0)
+    return " ".join(tokens)
+
+
+def _clean_candidate(raw_segment: str) -> str:
+    candidate = _EXHIBIT_PREFIX_RE.sub("", clean_title(raw_segment)).strip()
+    candidate = _strip_junk_token_prefix(candidate)
+    candidate = _EXHIBIT_SUFFIX_RE.sub("", candidate)
+    return _repair_letter_spacing(candidate)
+
+
+def _candidate_lines(body: str) -> list[str]:
+    """First ``_SCAN_LIMIT`` cleaned, non-boilerplate lines of the exhibit."""
+    stripped = _BLOCK_TAG_RE.sub("\n", _SOFT_BREAK_RE.sub(" ", body))
+    text = re.sub(r"<[^>]+>", " ", stripped)
+    survivors: list[str] = []
+    for line in text.splitlines():
+        for segment in _FLAT_RUN_SPLIT_RE.split(line):
+            # clean_title first so entity noise ("&nbsp;" -> U+00A0, ZWSP)
+            # reduces to "" and gets skipped instead of shipping as the title.
+            candidate = _clean_candidate(segment)
+            if not candidate or len(candidate) > _MAX_HEADLINE_CHARS:
+                continue
+            # "<" can only survive tag-stripping as an unterminated-tag
+            # residue (truncated document) — never headline text.
+            if candidate.startswith("<"):
+                continue
+            if any(pattern.search(candidate) for pattern in _BOILERPLATE_LINE_RES):
+                continue
+            survivors.append(candidate)
+            if len(survivors) >= _SCAN_LIMIT:
+                return survivors
+    return survivors
+
+
+def _looks_like_headline(line: str) -> bool:
+    # A row with 2+ layout bullets is a letterhead / highlights strip (APOG
+    # "Apogee Enterprises, Inc. • 4400 West 78th Street • ..."), and a
+    # release-label prefix is chrome — regardless of any verb inside.
+    if line.count("•") + line.count("●") >= 2 or _RELEASE_PREFIX_RE.match(line):
+        return False
+    if _HEADLINE_VERB_RE.search(line):
+        return True
+    words = line.split()
+    if len(words) < 4 or line[0].isdigit():
+        return False
+    if _IR_BLOCK_RE.search(line):
+        return False  # verb-less contact-block line ("Liz Sharp, VP, Investor Relations")
+    last = words[-1].lower().rstrip(".,;:")
+    if last in _TRAILING_CONNECTORS or line.endswith(","):
+        return False
+    # Short + corporate suffix = an issuer-name line, fallback at best.
+    return not (len(words) <= 6 and last in _CORP_SUFFIXES)
+
+
+def _needs_continuation(line: str) -> bool:
+    """A headline block-wrapped mid-phrase reads as incomplete: it ends with a
+    connector, a dangling reporting verb, or an open punctuation mark."""
+    if line.endswith((",", ";", ":")):
+        return True
+    last = line.rsplit(maxsplit=1)[-1].rstrip(".,;:")
+    return last.lower() in _TRAILING_CONNECTORS or bool(_HEADLINE_VERB_RE.fullmatch(last))
+
+
+def _join_continuations(survivors: list[str], index: int) -> str:
+    title = survivors[index]
+    joins = 0
+    while (
+        _needs_continuation(title)
+        and joins < _MAX_CONTINUATION_JOINS
+        and index + 1 < len(survivors)
+        and len(title) < _MAX_JOINED_TITLE_CHARS
+    ):
+        index += 1
+        joins += 1
+        title = f"{title} {survivors[index]}"
+    return title
 
 
 def _title_from_body(body: str) -> str:
-    """First substantive text line from the EX-99.1 narrative.
+    """Best headline-like text line from the EX-99.1 narrative (#339, #1306).
 
-    EX-99.1 exhibits are HTML with varied block structure (``<div>``,
-    ``<h1>``-``<h6>``, ``<br>``, tables), not just ``<p>``. Convert every
-    block-level boundary to a newline first so a headline wrapped in any of
-    them becomes the first line, then strip the remaining inline tags.
-    Exhibit-label boilerplate lines are skipped so the headline, not the
-    literal ``EX-99.1``, becomes the title; a body that is ALL boilerplate
-    yields ``""`` and ``transform`` falls back to the synthetic title.
+    Literal newlines and ``<br>`` are HTML soft wraps, so they join as spaces;
+    block-level boundaries and 4+ literal-space runs delimit candidate lines.
+    Candidates are cleaned, letter-spacing-repaired, stripped of exhibit-label
+    prefixes/suffixes and wrapper tokens, and hard-filtered against the
+    corpus-backed boilerplate patterns. The first candidate that looks like a
+    headline (reporting verb, or >=4 words that read as a complete line) wins,
+    pulling in following blocks while it visibly ends mid-phrase; with no such
+    candidate the first survivor is an honest fallback, and an all-junk body
+    yields ``""`` so ``transform`` uses the synthetic ``{ticker} 8-K Item ...``
+    title. Every rule is pinned by a real fixture under
+    ``tests/thematic/sources/fixtures/ex991/``.
     """
-    stripped = _BLOCK_TAG_RE.sub("\n", body)
-    text = re.sub(r"<[^>]+>", " ", stripped)
-    for line in text.splitlines():
-        # clean_title first so entity noise ("&nbsp;" -> U+00A0) reduces to
-        # "" and gets skipped instead of shipping as the headline.
-        candidate = clean_title(line)
-        if not candidate:
-            continue
-        if any(pattern.match(candidate) for pattern in _BOILERPLATE_LINE_RES):
-            continue
-        return candidate
-    return ""
+    survivors = _candidate_lines(body)
+    for i, candidate in enumerate(survivors):
+        if _looks_like_headline(candidate):
+            return _join_continuations(survivors, i)
+    return _join_continuations(survivors, 0) if survivors else ""
 
 
 def transform(

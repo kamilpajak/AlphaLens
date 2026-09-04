@@ -380,6 +380,12 @@ class TestGdeltTitleCleaning(unittest.TestCase):
         clean = "Apple unveils M5 chip (finally) — analysts cheer."
         self.assertEqual(gdelt.clean_title(clean), clean)
 
+    def test_zero_width_characters_removed(self):
+        # EX-99.1 exhibits (#1306, EGAN) pad lines with U+200B; a zero-width-only
+        # line must clean to "" and inline ZWSP/BOM must vanish, not become spaces.
+        self.assertEqual(gdelt.clean_title("\u200b"), "")
+        self.assertEqual(gdelt.clean_title("eG\u200bain Reports﻿ Results"), "eGain Reports Results")
+
     def test_empty_stays_empty(self):
         self.assertEqual(gdelt.clean_title(""), "")
 

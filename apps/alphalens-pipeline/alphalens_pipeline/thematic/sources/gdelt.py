@@ -58,6 +58,11 @@ _SPACE_AFTER_OPENER = re.compile(r"([(\[{]) ")
 # (\w = [A-Za-z0-9_]) joined by a single ASCII hyphen — sentence em-dash
 # separators use U+2014 ("—"), which doesn't match and stays untouched.
 _SPACE_AROUND_HYPHEN = re.compile(r"(\w) - (\w)")
+# Zero-width characters (ZWSP/ZWNJ/ZWJ/BOM/word-joiner). EX-99.1 exhibits pad
+# empty lines with U+200B (#1306); they are NOT str.split() whitespace, so a
+# zero-width-only line would otherwise survive as a non-empty "title". Removed
+# outright (never turned into spaces) so an inline ZWSP cannot split a word.
+_ZERO_WIDTH = re.compile("[\\u200b\\u200c\\u200d\\u2060\\ufeff]")
 
 
 def unescape_entities(title: str) -> str:
@@ -83,6 +88,7 @@ def clean_title(title: str) -> str:
     # Decode first so any entity that resolves to whitespace (``&nbsp;`` →
     # U+00A0) is then normalized by the whitespace collapse below.
     title = unescape_entities(title)
+    title = _ZERO_WIDTH.sub("", title)
     title = " ".join(title.split())  # collapse all whitespace runs + trim
     title = _SPACE_BEFORE_PUNCT.sub(r"\1", title)
     title = _SPACE_AFTER_OPENER.sub(r"\1", title)
