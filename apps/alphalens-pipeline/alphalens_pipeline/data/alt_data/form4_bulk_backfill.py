@@ -206,6 +206,7 @@ def write_records_to_parquet(records: Iterable[Form4Record], *, parquet_root: Pa
                 "is_director": r.is_director,
                 "is_officer": r.is_officer,
                 "is_ten_percent_owner": r.is_ten_percent_owner,
+                "is_other": r.is_other,
                 "acquired_disposed": r.acquired_disposed,
                 "is_amendment": r.is_amendment,
             }

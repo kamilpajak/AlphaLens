@@ -111,6 +111,7 @@ def _panels(draw: Any) -> list[dict[str, Any]]:
                 "is_director": False,
                 "is_officer": True,
                 "is_ten_percent_owner": False,
+                "is_other": False,
                 "acquired_disposed": "A",
                 "is_amendment": False,
             }

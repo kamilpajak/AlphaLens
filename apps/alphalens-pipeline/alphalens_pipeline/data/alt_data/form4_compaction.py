@@ -33,6 +33,28 @@ logger = logging.getLogger(__name__)
 _COMPACTED_NAME = "compacted.parquet"
 
 
+def _dedup_null_vs_concrete_is_other(df):
+    """Collapse rows identical except a null-vs-concrete ``is_other``.
+
+    A catch-up overlap re-fetches rows that already sit in a legacy compacted
+    file without the is_other column (null after schema unification). Full-row
+    dedup treats null != False and would keep BOTH copies, double-counting the
+    trade forever. Rows identical in accession+owner+tx come from the same XML
+    node, so the concrete value supersedes the unknown. No-op when the column
+    is absent or has no nulls (uniform-schema partitions keep today's exact
+    behavior).
+    """
+    if "is_other" not in df.columns or not df["is_other"].isna().any():
+        return df
+    subset = [c for c in df.columns if c != "is_other"]
+    deduped = (
+        df.sort_values("is_other", na_position="last", kind="stable")
+        .drop_duplicates(subset=subset, keep="first")
+        .sort_index()
+    )
+    return deduped
+
+
 def compact_partition(partition_dir: Path) -> None:
     """Merge all ``*.parquet`` files in ``partition_dir`` into ``compacted.parquet``.
 
@@ -49,10 +71,18 @@ def compact_partition(partition_dir: Path) -> None:
 
     logger.info("compacting %s: %d files", partition_dir, len(files))
 
+    # Unify schemas across fragments: without an explicit schema the dataset
+    # infers it from the FIRST fragment only, and "compacted.parquet" sorts
+    # before "part-*", so a column added to the writer (is_other, #82) would
+    # be silently projected away on every re-compaction of a legacy
+    # partition. Fragments missing a unified field read as nulls. The default
+    # promote mode still fails loudly on a genuine type conflict.
+    unified = pa.unify_schemas([pq.read_schema(f) for f in files])
     table = ds.dataset(
         [str(f) for f in files],
         partitioning=None,
         format="parquet",
+        schema=unified,
     ).to_table()
 
     # Dedup: a write appends part files before the run is marked done; a
@@ -61,6 +91,7 @@ def compact_partition(partition_dir: Path) -> None:
     # unique-row truth (accession_number is unique, so a re-fetch is identical).
     n_before = table.num_rows
     df = table.to_pandas().drop_duplicates()
+    df = _dedup_null_vs_concrete_is_other(df)
     if len(df) < n_before:
         logger.info("compact %s: deduped %d -> %d rows", partition_dir, n_before, len(df))
     table = pa.Table.from_pandas(df, schema=table.schema, preserve_index=False)

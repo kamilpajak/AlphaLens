@@ -18,13 +18,15 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pandas as pd
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 from alphalens_pipeline.data.alt_data.form4_bulk_backfill import write_records_to_parquet
 from alphalens_pipeline.data.alt_data.form4_records import Form4Record
 from scripts.compact_form4_parquet import compact_partition, compact_root
 
 
-def _mk_record(*, transaction_date: date, accession: str) -> Form4Record:
+def _mk_record(*, transaction_date: date, accession: str, is_other: bool = False) -> Form4Record:
     return Form4Record(
         issuer_cik="0000000001",
         ticker="TEST",
@@ -35,7 +37,7 @@ def _mk_record(*, transaction_date: date, accession: str) -> Form4Record:
         is_director=False,
         is_officer=True,
         is_ten_percent_owner=False,
-        is_other=False,
+        is_other=is_other,
         officer_title="VP",
         transaction_date=transaction_date,
         transaction_code="P",
@@ -163,6 +165,77 @@ class TestCompactPartition(unittest.TestCase):
         self.assertEqual(len(files_after), 1)
         df = ds.dataset(str(partition), partitioning=None, format="parquet").to_table().to_pandas()
         self.assertEqual(set(df["accession_number"]), {"OLD", "NEW-1", "NEW-2"})
+
+
+def _write_legacy_compacted(partition_dir: Path, records: list[Form4Record]) -> None:
+    """Write a pre-#82 ``compacted.parquet``: the is_other column is ABSENT.
+
+    Route through the real writer so every other column is byte-identical to
+    what a live write produces, then strip the column to reproduce the legacy
+    on-disk shape (the VPS seed + every pre-#82 incremental part).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        write_records_to_parquet(records, parquet_root=Path(tmp))
+        part = next((Path(tmp) / partition_dir.name).glob("part-*.parquet"))
+        table = pq.ParquetFile(part).read()
+    if "is_other" in table.column_names:
+        table = table.drop_columns(["is_other"])
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, partition_dir / "compacted.parquet")
+
+
+class TestCompactMixedSchemas(unittest.TestCase):
+    """#82: a legacy compacted.parquet (no is_other) + a new part must merge losslessly.
+
+    The naive dataset schema is inferred from the FIRST fragment only, and
+    "compacted.parquet" sorts before "part-*", so without schema unification
+    the compactor silently projects the new column away and re-pins the old
+    15-column schema — permanent data loss on the live store.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.partition = self.root / "transaction_year=2022"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_mixed_schema_compaction_preserves_is_other(self):
+        _write_legacy_compacted(
+            self.partition,
+            [_mk_record(transaction_date=date(2022, 1, 1), accession="LEGACY")],
+        )
+        write_records_to_parquet(
+            [_mk_record(transaction_date=date(2022, 2, 1), accession="NEW", is_other=True)],
+            parquet_root=self.root,
+        )
+
+        compact_partition(self.partition)
+
+        files = list(self.partition.glob("*.parquet"))
+        self.assertEqual([f.name for f in files], ["compacted.parquet"])
+        df = pq.ParquetFile(files[0]).read().to_pandas().set_index("accession_number")
+        self.assertIn("is_other", df.columns)
+        # Legacy truth is unknown -> null, never a fabricated False.
+        self.assertTrue(pd.isna(df.loc["LEGACY", "is_other"]))
+        self.assertEqual(bool(df.loc["NEW", "is_other"]), True)
+
+    def test_mixed_schema_dedup_prefers_concrete_is_other(self):
+        # Catch-up overlap: the SAME logical row exists once in the legacy
+        # compacted file (column absent -> null after unification) and once in
+        # a post-#82 part (is_other=False). Full-row dedup would keep BOTH
+        # (null != False), permanently double-counting the trade in every
+        # scorer — the concrete value must supersede the unknown.
+        rec = _mk_record(transaction_date=date(2022, 3, 1), accession="OVERLAP")
+        _write_legacy_compacted(self.partition, [rec])
+        write_records_to_parquet([rec], parquet_root=self.root)
+
+        compact_partition(self.partition)
+
+        df = pq.ParquetFile(self.partition / "compacted.parquet").read().to_pandas()
+        self.assertEqual(len(df), 1)
+        self.assertEqual(bool(df.iloc[0]["is_other"]), False)
 
 
 class TestCompactRoot(unittest.TestCase):

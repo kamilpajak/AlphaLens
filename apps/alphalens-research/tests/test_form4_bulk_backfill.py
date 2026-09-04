@@ -45,6 +45,7 @@ def _mk_record(
     is_director: bool = False,
     is_officer: bool = True,
     is_ten_percent_owner: bool = False,
+    is_other: bool = False,
     is_amendment: bool = False,
 ) -> Form4Record:
     return Form4Record(
@@ -57,7 +58,7 @@ def _mk_record(
         is_director=is_director,
         is_officer=is_officer,
         is_ten_percent_owner=is_ten_percent_owner,
-        is_other=False,
+        is_other=is_other,
         officer_title="VP",
         transaction_date=transaction_date,
         transaction_code=transaction_code,
@@ -114,6 +115,33 @@ class TestWriteRecordsToParquet(unittest.TestCase):
         )
         df = dataset.to_table().to_pandas()
         self.assertEqual(set(df.columns), set(FORM4_SCHEMA_COLUMNS))
+
+    def test_writer_persists_is_other_values(self):
+        # The name-set parity test above cannot catch a rows-dict key that was
+        # never populated (from_records materialises it as all-NaN), so pin
+        # the VALUES round-trip for both polarities (#82).
+        records = [
+            _mk_record(
+                transaction_date=date(2022, 5, 1),
+                accession_number="ACC-OTHER",
+                is_other=True,
+            ),
+            _mk_record(
+                transaction_date=date(2022, 5, 2),
+                accession_number="ACC-OFFICER",
+                is_other=False,
+            ),
+        ]
+        write_records_to_parquet(records, parquet_root=self.root)
+
+        dataset = ds.dataset(
+            str(self.root / "transaction_year=2022"),
+            partitioning=None,
+            format="parquet",
+        )
+        df = dataset.to_table().to_pandas().set_index("accession_number")
+        self.assertEqual(bool(df.loc["ACC-OTHER", "is_other"]), True)
+        self.assertEqual(bool(df.loc["ACC-OFFICER", "is_other"]), False)
 
     def test_decimal_shares_and_prices_persist_as_floats(self):
         records = [
