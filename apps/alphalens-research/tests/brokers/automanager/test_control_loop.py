@@ -6209,6 +6209,47 @@ class TestFoldReanchoredMarkers(unittest.TestCase):
         self.assertEqual(cl._fold_reanchored_markers([]), {})
 
 
+_INHERITED_TRAIL_MARKER = "raised by the journaled trailed level"
+
+
+class TestManagedExitAnnouncesInheritedTrailedLevel(unittest.TestCase):
+    """#1324: the trailed level now survives every boot, so a stop raised by a
+    level a PREVIOUS fill earned must be visible rather than silent. Nothing on
+    the trail path logs today — which is exactly why nobody could tell whether
+    trailing had ever fired on LIVE."""
+
+    def _stop_price_and_logs(self, *, trailed_level: float) -> tuple[float, list[str]]:
+        lines = [_tranche_plan_line(333, pick_key="OLN:2026-08-14")]
+        with self.assertLogs(cl.logger, level="INFO") as captured:
+            cl.logger.info("probe")  # floor so assertLogs never raises on silence
+            managed = cl._build_managed_exits(
+                long_positions=[_pos(10.0, 333)],
+                tranche_plans=cl.fold_tranche_plans(lines),
+                fired=cl._fold_fired_since_latest_plan(lines),
+                trailed={333: trailed_level},
+            )
+        self.assertEqual(len(managed), 1)
+        # Only the inherited-raise line matters; the pass already logs a
+        # per-tick "N position(s) managed" summary that is not this signal.
+        return managed[0].stop_price, [
+            line for line in captured.output if _INHERITED_TRAIL_MARKER in line
+        ]
+
+    def test_a_raise_by_the_trailed_level_is_announced(self) -> None:
+        stop, logs = self._stop_price_and_logs(trailed_level=97.0)
+        self.assertAlmostEqual(stop, 97.0)  # the plan's 9.0 stop was raised
+        self.assertEqual(len(logs), 1, msg=f"exactly one announcement; got {logs}")
+        self.assertIn("333", logs[0])
+        self.assertIn("97", logs[0])
+
+    def test_a_level_that_does_not_raise_stays_silent(self) -> None:
+        # Below the plan stop -> max() keeps the plan stop -> nothing was
+        # inherited, so nothing is announced. A line on every tick is noise.
+        stop, logs = self._stop_price_and_logs(trailed_level=1.0)
+        self.assertAlmostEqual(stop, 9.0)
+        self.assertEqual(logs, [])
+
+
 class TestCompactorKeepsReanchoredLatch(unittest.TestCase):
     """#1324 sibling: the boot compactor used to drop the ``reanchored`` markers
     too, so every restart lost ``ProtectionView.reanchored_by_uic`` — the

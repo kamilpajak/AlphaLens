@@ -1050,8 +1050,23 @@ def _build_managed_exits(
             continue
         tp_tranches, reference_qty, stop_price = plan
         trailed_level = trailed.get(uic)
-        if trailed_level is not None:
-            stop_price = max(stop_price, trailed_level)
+        if trailed_level is not None and trailed_level > stop_price:
+            # The journaled ratchet floor outranks the plan's disaster stop, so
+            # THIS is the level that gets placed. Announced because #1324 made
+            # the marker survive every boot: the level may have been earned by
+            # an EARLIER fill on this uic (the fold only resets on a
+            # new-generation tranche_plan), and nothing else on the trail path
+            # writes a log line — which is why nobody could tell whether
+            # trailing had ever fired. Logged only when it actually raises, so
+            # a steady state stays quiet.
+            logger.info(
+                "uic %s: managed-exit stop raised by the journaled trailed level "
+                "%.4f (plan stop %.4f)",
+                uic,
+                trailed_level,
+                stop_price,
+            )
+            stop_price = trailed_level
         instrument_ccy, sizing_ccy, exchange_mic = (plan_currencies or {}).get(
             uic, (None, None, None)
         )
