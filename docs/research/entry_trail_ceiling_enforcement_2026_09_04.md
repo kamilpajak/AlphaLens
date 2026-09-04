@@ -119,6 +119,17 @@ question is now answerable without a manual join:
 the cap. `ceiling: null` means the comparison could not be made — NO VERDICT,
 which is not a pass. Every fire before 2026-09-04 is in that state.
 
+**One caveat before counting breaches out of the journal.** There are TWO
+writers of a `fired` line. The reconcile pass resolves the disappeared order
+through the audit log, so it has an execution price and can produce a verdict.
+The G6 cancel-then-verify path — a tier that suspended or expired while its
+resting order turned out filled — learns the fill from the open-orders re-read,
+which carries a QUANTITY and no execution price. Those lines therefore stamp a
+known `ceiling` beside a permanently null `ceiling_breach`. They are real fills
+that the breach measurement cannot speak about, not clean ones, and a count over
+the journal must exclude them from the denominator rather than treat them as
+passes.
+
 ## Open decision (not taken here)
 
 1. Accept market fires, bounded by the mandatory DayOrder rule (no trailing
