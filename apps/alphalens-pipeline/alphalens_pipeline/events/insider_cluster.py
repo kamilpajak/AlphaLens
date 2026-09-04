@@ -164,6 +164,13 @@ def detect_clusters(
     return pd.DataFrame(rows, columns=list(CLUSTER_COLUMNS))
 
 
+def _insider_role(officer: bool, director: bool) -> str:
+    """Role label from the Form-4 filing flags; neither flag reads as ``director``."""
+    if officer and director:
+        return "officer_director"
+    return "officer" if officer else "director"
+
+
 def cluster_buyers(
     legs: pd.DataFrame, *, ticker: str, first_leg_date: dt.date, event_date: dt.date
 ) -> list[dict]:
@@ -183,9 +190,7 @@ def cluster_buyers(
     for cik, g in w.groupby("reporting_owner_cik", sort=False):
         officer = bool(g["is_officer"].fillna(False).astype(bool).any())
         director = bool(g["is_director"].fillna(False).astype(bool).any())
-        role = (
-            "officer_director" if officer and director else ("officer" if officer else "director")
-        )
+        role = _insider_role(officer, director)
         name = (
             str(g["reporting_owner_name"].dropna().iloc[0])
             if "reporting_owner_name" in g.columns and g["reporting_owner_name"].notna().any()
@@ -309,6 +314,33 @@ def accession_urls(accession: str, ciks: list[str | None]) -> list[str]:
     return urls
 
 
+def _cached_acceptance(
+    cache: Path, fallback_ciks: list[str | None] | None
+) -> tuple[bool, dt.datetime | None]:
+    """Acceptance already on disk, as ``(resolved, value)``.
+
+    ``resolved=True`` means the cache settles the question and ``value`` is the
+    answer -- including ``(True, None)``, an authoritative cached miss rather
+    than a lookup failure. ``resolved=False`` means the caller must go to the
+    network: either nothing is cached, or the cached miss is a
+    missing-Archives-key error that fallback CIKs have not been tried against
+    yet.
+    """
+    if not cache.exists():
+        return False, None
+    payload = json.loads(cache.read_text())
+    v = payload.get("acceptance")
+    retryable = (
+        v is None
+        and bool(fallback_ciks)
+        and "NoSuchKey" in (payload.get("error") or "")
+        and not payload.get("fallback_tried")
+    )
+    if retryable:
+        return False, None
+    return True, dt.datetime.strptime(v, "%Y%m%d%H%M%S") if v else None
+
+
 def fetch_acceptance(
     accession: str,
     cik: str,
@@ -328,17 +360,9 @@ def fetch_acceptance(
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache = cache_dir / f"{accession}.json"
-    if cache.exists():
-        payload = json.loads(cache.read_text())
-        v = payload.get("acceptance")
-        retryable = (
-            v is None
-            and bool(fallback_ciks)
-            and "NoSuchKey" in (payload.get("error") or "")
-            and not payload.get("fallback_tried")
-        )
-        if not retryable:
-            return dt.datetime.strptime(v, "%Y%m%d%H%M%S") if v else None
+    resolved, cached = _cached_acceptance(cache, fallback_ciks)
+    if resolved:
+        return cached
     last_err = None
     for url in accession_urls(accession, [cik, *(fallback_ciks or [])]):
         try:

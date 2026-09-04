@@ -264,6 +264,15 @@ class TestClusterBuyers(unittest.TestCase):
         self.assertAlmostEqual(buyers[1]["usd"], 70_000.0)
         self.assertEqual(json.loads(json.dumps(buyers)), buyers)  # JSON-serialisable
 
+    def test_role_covers_every_filing_flag_combination(self):
+        self.assertEqual(ic._insider_role(True, True), "officer_director")
+        self.assertEqual(ic._insider_role(True, False), "officer")
+        self.assertEqual(ic._insider_role(False, True), "director")
+        # Neither flag set reads as "director". Pinned on purpose: it is the
+        # behaviour the module shipped with, so a later "fix" has to be a
+        # deliberate one rather than a silent edit.
+        self.assertEqual(ic._insider_role(False, False), "director")
+
 
 class TestUrlsAndTitle(unittest.TestCase):
     def test_filing_index_url_shape(self):
@@ -334,9 +343,10 @@ class TestAcceptanceFetchFallback(unittest.TestCase):
             cached = json.loads((Path(tmp) / "0000000002-20-000001.json").read_text())
             self.assertEqual(cached["acceptance"], "20200304081500")
             self.assertIn("/data/2/", cached["url"])
-            ic.fetch_acceptance(
+            again = ic.fetch_acceptance(
                 "0000000002-20-000001", "1", client, cache_dir=Path(tmp), fallback_ciks=["2"]
             )
+            self.assertEqual(again, dt.datetime(2020, 3, 4, 8, 15))
             self.assertEqual(len(client.urls), 2)  # served from the cache
 
     def test_all_paths_missing_caches_the_error_and_returns_none(self):
@@ -354,6 +364,46 @@ class TestAcceptanceFetchFallback(unittest.TestCase):
             self.assertIsNone(cached["acceptance"])
             self.assertIn("NoSuchKey", cached["error"])
             self.assertTrue(cached["fallback_tried"])
+
+    def test_cached_retryable_miss_goes_back_to_the_network(self):
+        # A cached miss carrying a NoSuchKey error is not final while fallback
+        # CIKs exist that have not been tried yet.
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "0000000002-20-000003.json").write_text(
+                json.dumps({"acceptance": None, "error": "NoSuchKey", "fallback_tried": False})
+            )
+            client = self.FakeClient()
+            got = ic.fetch_acceptance(
+                "0000000002-20-000003", "1", client, cache_dir=Path(tmp), fallback_ciks=["2"]
+            )
+            self.assertEqual(got, dt.datetime(2020, 3, 4, 8, 15))
+            self.assertEqual(len(client.urls), 2)
+
+    def test_cached_miss_with_fallbacks_already_tried_is_final(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "0000000002-20-000004.json").write_text(
+                json.dumps({"acceptance": None, "error": "NoSuchKey", "fallback_tried": True})
+            )
+            client = self.FakeClient()
+            self.assertIsNone(
+                ic.fetch_acceptance(
+                    "0000000002-20-000004", "1", client, cache_dir=Path(tmp), fallback_ciks=["2"]
+                )
+            )
+            self.assertEqual(client.urls, [])  # never left the cache
+
+    def test_cached_miss_without_fallbacks_is_final(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "0000000002-20-000005.json").write_text(
+                json.dumps({"acceptance": None, "error": "NoSuchKey"})
+            )
+            client = self.FakeClient()
+            self.assertIsNone(
+                ic.fetch_acceptance(
+                    "0000000002-20-000005", "1", client, cache_dir=Path(tmp), fallback_ciks=None
+                )
+            )
+            self.assertEqual(client.urls, [])
 
     def test_accession_urls_dedups_and_skips_empty(self):
         urls = ic.accession_urls("0000000002-20-000001", ["1", None, "1", "2"])
