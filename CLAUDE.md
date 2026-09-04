@@ -276,8 +276,8 @@ Operator recipes: `deploy/systemd/README.md` (systemd units — includes the one
 
 - API keys in `.env` (root). Full operator catalogue with per-key purpose comments + placeholders lives in [`.env.example`](.env.example). Three tiers:
   - **Live** (wired to running code): `OPENROUTER_API_KEY`, `ALPHA_VANTAGE_API_KEY`, `POLYGON_API_KEY`, `FRED_API_KEY`, `PERPLEXITY_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `SEC_EDGAR_USER_AGENT` (the SEC contact has a built-in default UA so it is optional locally but required in production).
-  - **Research-only / optional** (ad-hoc scripts or expired subscriptions, no live consumer): `SIMFIN_API_KEY`, `QUIVER_API_KEY`, `IVOLATILITY_API_KEY`, `RUNPOD_API_KEY`.
-  - **Dead** (zero source consumers — slated for removal from live `.env` copies): `GOOGLE_API_KEY` (Gemini client removed, PR #416), `ALPACA_*` (paper-trade + broker chain decommissioned, [ADR 0012](docs/adr/0012-decommission-paper-trading-and-broker-chain.md)).
+  - **Research-only / optional** (ad-hoc Mac-side scripts, no live consumer — NOT present on the VPS since the 2026-09-04 audit): `IVOLATILITY_API_KEY`, `RUNPOD_API_KEY`.
+  - **Dead** (zero source consumers — REMOVED from both hosts' live copies by the 2026-09-04 env-key audit, #1101; documented as commented DEAD entries in `.env.example`): `GOOGLE_API_KEY` (Gemini client removed, PR #416), `ALPACA_*` (paper-trade + broker chain decommissioned, [ADR 0012](docs/adr/0012-decommission-paper-trading-and-broker-chain.md)), `SIMFIN_API_KEY` + `QUIVER_API_KEY` (expired subscriptions, last consumers left the tree).
 - LLM config: DeepSeek v4 Pro/Flash via OpenRouter (thematic pipeline + research `llm_scorers`)
 - Runtime data (outside repo, survives git ops):
   - `~/.alphalens/candidates.db` — Layer 1 candidate queue (historical log; no live drain)
