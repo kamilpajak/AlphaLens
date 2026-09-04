@@ -199,8 +199,9 @@ Environment=ALPHALENS_BROKER_MAX_FEE_BPS=100
 # become live again if this unit is ever put back on trailing_atr.
 Environment=ALPHALENS_BROKER_ENTRY_TRAIL_BPS=0
 # 9th pin (#1189): how many DISTINCT picks may hold an open entry-trail watch.
-# Bound [1, 2] for LIVE. 1 here is the conservative base value in the same
-# spirit as MAX_OPEN=1 above; production runs 2 via .d/40-entry-trail.conf.
+# Bound [1, 4] for LIVE (2 -> 4 on 2026-09-04). 1 here is the conservative
+# base value in the same spirit as MAX_OPEN=1 above; production runs 4 via
+# .d/40-entry-trail.conf.
 # This pin exists so the LIVE bound is asserted rather than merely inherited:
 # the shared runtime ceiling in code was raised to 25 for the SIM lab, and
 # without this pin that raise would have silently widened LIVE too.

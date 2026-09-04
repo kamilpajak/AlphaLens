@@ -193,7 +193,7 @@ insufficient:
 | `ALPHALENS_SAXO_LIVE_STANDING` | `<live account key>` | §1 grant, account-bound |
 | `SAXO_LIVE_ACCOUNT_KEY` | `<live account key>` | distinct from SIM's var |
 | `ALPHALENS_BROKER_ALLOW_ORDERS` | `0` at first deploy → `1` at attended arm | inert-first rollout (§7) |
-| `ALPHALENS_BROKER_MAX_OPEN` | `1` | boot-assert bound: ≤ 2 |
+| `ALPHALENS_BROKER_MAX_OPEN` | `1` | boot-assert bound: ≤ 2 (≤ 4 since 2026-09-04, §8 point 3 amendment) |
 | `ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC` | `0.25` | NOT 0.03 — a 100 zł-risk pick at a ~5% stop is ~2 000 zł notional ≈ 0.20 of the 10k frame; 0.03 would CAPACITY-refuse every pick. Bound: ≤ 0.5 |
 | `ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R` | `1.0` | bound: ≤ 2.0 |
 | `ALPHALENS_BROKER_SIZING_EQUITY` | `10000` (zł frame) | §4; bound: > 0 |
@@ -360,6 +360,15 @@ so silent demotion pages.
    effective = min(pin, snapshot). *(rec: as stated)*
 2. **Per-pick risk** — ~100 zł (1%). *(rec: as stated)*
 3. **MAX_OPEN** — 1 for the whole soak. *(rec: 1)*
+   **Amendment 2026-09-04:** raised to 2 on 2026-08-20 (two concurrent
+   positions) and to 4 on 2026-09-04, together with
+   `ENTRY_WATCH_MAX_PICKS` (one watch slot per position slot). Reason: the
+   WhatsApp manual flow (`broker arm-manual`, #1235) arms two or more picks
+   a day on top of the positions already held, and two slots forced a
+   disarm-to-arm trade every morning (NOV+AVTR retired for RHI on 09-02).
+   `PORTFOLIO_GROSS_FRAC` stays 0.5, so the implied per-position share of
+   real equity falls from 25% to 12.5% — more names, not more gross. The
+   boot-assert ceilings in `live_rails.py` moved with it.
 4. **DAILY_LOSS_LIMIT_R** — *(rec: 1.0R)*
 5. **Fee floor × frame (joint decision — §4 equation):** (a) 100 bps at
    the 10k zł frame (accept ~0.9% measured drag, soak validates

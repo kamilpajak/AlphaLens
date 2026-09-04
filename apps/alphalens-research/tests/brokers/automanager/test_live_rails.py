@@ -195,23 +195,47 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
         self.assertIn(MAX_OPEN_ENV, str(captured.exception))
 
     def test_max_open_above_cap_rejected(self):
-        env = dict(_VALID_ENV, **{MAX_OPEN_ENV: "3"})
+        # Ceiling widened 2 -> 4 on 2026-09-04 (operator decision): the
+        # WhatsApp flow arms 2+ manual picks a day on top of the two already
+        # held, and MAX_OPEN=2 forced a disarm-to-arm trade every morning.
+        # 5 is the first value above the new cap.
+        env = dict(_VALID_ENV, **{MAX_OPEN_ENV: "5"})
         with mock.patch.dict("os.environ", env, clear=True):
             with self.assertRaises(BrokerCapabilityError) as captured:
                 assert_live_rails()
         self.assertIn(MAX_OPEN_ENV, str(captured.exception))
 
-    def test_entry_watch_max_picks_above_two_rejected(self):
+    def test_max_open_at_the_widened_cap_passes(self):
+        # 4 is the value the LIVE drop-in (20-exposure.conf) runs since
+        # 2026-09-04; the cap is inclusive, so widening it must admit the
+        # deployed value, and 3 sits inside the new range too.
+        for raw in ("3", "4"):
+            with self.subTest(raw=raw):
+                env = dict(_VALID_ENV, **{MAX_OPEN_ENV: raw})
+                with mock.patch.dict("os.environ", env, clear=True):
+                    assert_live_rails()
+
+    def test_entry_watch_max_picks_above_four_rejected(self):
         """#1189: the SIM soak runs this rail at the shared code ceiling, so the
         ceiling alone can no longer be what protects LIVE — the LIVE bound has
-        to be its own assert. 10 was in bounds before this pin existed."""
-        for raw in ("3", "10", "25"):
+        to be its own assert. 10 was in bounds before this pin existed. The
+        bound moved 2 -> 4 with MAX_OPEN on 2026-09-04 (one watch slot per
+        position slot); 5 is the first value above it."""
+        for raw in ("5", "10", "25"):
             with self.subTest(raw=raw):
                 env = dict(_VALID_ENV, **{ENTRY_WATCH_MAX_PICKS_ENV: raw})
                 with mock.patch.dict("os.environ", env, clear=True):
                     with self.assertRaises(BrokerCapabilityError) as captured:
                         assert_live_rails()
                 self.assertIn(ENTRY_WATCH_MAX_PICKS_ENV, str(captured.exception))
+
+    def test_entry_watch_max_picks_at_the_widened_cap_passes(self):
+        # 4 is what 40-entry-trail.conf runs since 2026-09-04 (inclusive cap).
+        for raw in ("3", "4"):
+            with self.subTest(raw=raw):
+                env = dict(_VALID_ENV, **{ENTRY_WATCH_MAX_PICKS_ENV: raw})
+                with mock.patch.dict("os.environ", env, clear=True):
+                    assert_live_rails()
 
     def test_entry_watch_max_picks_below_one_rejected(self):
         env = dict(_VALID_ENV, **{ENTRY_WATCH_MAX_PICKS_ENV: "0"})

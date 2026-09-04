@@ -1875,7 +1875,7 @@ class TestEntryWatchCapacityEnvRail(unittest.TestCase):
     valid [1, 25]) and the FIRST deferral of a pick logs at INFO.
 
     The ceiling was 10 until #1189 raised it for the SIM soak; LIVE is held to
-    [1, 2] by its own boot-assert pin, not by this shared bound."""
+    [1, 4] by its own boot-assert pin, not by this shared bound."""
 
     def setUp(self) -> None:
         # Reset the process-lifetime observability state so tests are hermetic.
