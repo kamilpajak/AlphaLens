@@ -14,7 +14,11 @@ import pandas as pd
 import typer
 from alphalens_pipeline.data import rs_history
 from alphalens_pipeline.data.parquet_io import write_parquet_atomic
-from alphalens_pipeline.events import DEFAULT_EVENT_CANDIDATES_DIR, EVENT_LANE_ENV
+from alphalens_pipeline.events import (
+    DEFAULT_EVENT_CANDIDATES_DIR,
+    EVENT_LANE_ENV,
+    event_lane_enabled,
+)
 from alphalens_pipeline.observability.textfile import emit_domain_metrics
 from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
 from alphalens_pipeline.thematic import news_ingest
@@ -1064,7 +1068,7 @@ def score(
     # Event lane (epic #1293): merged in memory, never written into the
     # map-themes parquet (which is frozen across the six daily slots). Flag OFF
     # leaves the frame untouched, so the scored parquet stays byte-identical.
-    if os.environ.get(EVENT_LANE_ENV) == "1":
+    if event_lane_enabled():
         from alphalens_pipeline.events import merge as event_merge
 
         events = event_merge.load_event_candidates(

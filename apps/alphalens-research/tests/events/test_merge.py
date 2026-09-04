@@ -131,6 +131,13 @@ class TestMerge(unittest.TestCase):
         self.assertEqual(out.loc[2, "theme"], SOURCE_INSIDER_CLUSTER)
         self.assertEqual(out.loc[2, "event_n_insiders"], 2)
 
+    def test_nan_eligible_never_reads_as_eligible(self):
+        events = event_frame(("AAA",))
+        events["eligible"] = events["eligible"].astype(object)
+        events.loc[0, "eligible"] = None
+        out = merge.merge_event_candidates(thematic_frame(), events)
+        self.assertEqual(list(out.ticker), ["QUBT", "IONQ"])
+
     def test_ineligible_event_rows_are_not_appended(self):
         out = merge.merge_event_candidates(
             thematic_frame(), event_frame(("AAA",), eligible=False, reason="mcap_unknown")

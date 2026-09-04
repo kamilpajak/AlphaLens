@@ -26,13 +26,13 @@ on ``ticker`` and pandas would suffix the collision.
 from __future__ import annotations
 
 import logging
-import os
-from collections.abc import Mapping
 from pathlib import Path
 
 import pandas as pd
 
-from alphalens_pipeline.events import EVENT_LANE_ENV
+from alphalens_pipeline.events import (
+    event_lane_enabled,  # noqa: F401 — re-exported for callers/tests
+)
 from alphalens_pipeline.events.insider_cluster import SOURCE_INSIDER_CLUSTER
 
 logger = logging.getLogger(__name__)
@@ -50,12 +50,6 @@ EVENT_FACT_COLUMNS: tuple[str, ...] = (
     "event_gate_version",
 )
 _SHADOW_ONLY_COLUMNS = ("eligible", "exclusion_reason")
-
-
-def event_lane_enabled(environ: Mapping[str, str] | None = None) -> bool:
-    """True only for the literal ``"1"`` (any other value keeps the lane OFF)."""
-    env = os.environ if environ is None else environ
-    return env.get(EVENT_LANE_ENV) == "1"
 
 
 def load_event_candidates(path: Path) -> pd.DataFrame:
@@ -79,7 +73,8 @@ def merge_event_candidates(candidates: pd.DataFrame, events: pd.DataFrame) -> pd
     if events is None or events.empty or "eligible" not in events.columns:
         return out
 
-    eligible = events[events["eligible"].astype(bool)].copy()
+    # fillna(False): a NaN in a hand-authored parquet must never read as eligible.
+    eligible = events[events["eligible"].fillna(False).astype(bool)].copy()
     if eligible.empty:
         return out
     eligible["ticker"] = eligible["ticker"].astype(str).str.upper()
