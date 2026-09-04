@@ -156,6 +156,11 @@ KIND_EXPIRED = "expired"
 KIND_SUSPENDED = "suspended"
 KIND_CANCELLED = "cancelled"
 
+KEY_CEILING = "ceiling"
+"""Field name on a ``trail_armed`` line: the G1 ceiling (``StopLimitPrice``)
+the order was armed with (#1317). Named here rather than spelled at the two
+write sites and the fold, so the journal key cannot drift."""
+
 ENTRY_TRAIL_TERMINAL_KINDS = frozenset({KIND_FIRED, KIND_EXPIRED, KIND_SUSPENDED, KIND_CANCELLED})
 ENTRY_TRAIL_KINDS = (
     frozenset({KIND_WATCH_OPEN, KIND_TOUCHED, KIND_TROUGH, KIND_TRAIL_ARMED})
@@ -191,6 +196,14 @@ class EntryTrailTierState:
     # the broker owns it, excluded from the watch pass) from an unconfirmed POST
     # (null id -> re-drive to complete the arm) on this field.
     armed_order_id: str | None = None
+    # #1317: the ceiling (``StopLimitPrice``) the LATEST ``trail_armed`` line
+    # journaled — the write-ahead carries the geometry value, the post-POST line
+    # the tick-quantized value the adapter put on the wire, and latest wins.
+    # ``None`` when the tier is not armed, when the line predates this field
+    # (every fire before 2026-09-04), or when the journaled value is corrupt.
+    # NEVER a substitute for "the fill was fine": it means the comparison cannot
+    # be made, which is exactly the state that hid seven breaches.
+    armed_ceiling: float | None = None
 
 
 @dataclass(frozen=True)
@@ -258,11 +271,13 @@ def _fold_record_into_state(state: dict[str, Any], kind: str, record: Mapping[st
         # resting-order id lingers past the re-arm (harmless to the current
         # latest_kind-gated readers, but the fold must state the arm truth).
         state["armed_order_id"] = None
+        state["armed_ceiling"] = None
     elif kind == KIND_TRAIL_ARMED:
         # The LATEST trail_armed wins (a real-id line overrides the earlier
         # null-id write-ahead); a missing/blank order id folds back to None.
         order_id = record.get("order_id")
         state["armed_order_id"] = str(order_id) if order_id else None
+        state["armed_ceiling"] = _finite_positive_float(record.get(KEY_CEILING))
     elif kind == KIND_TROUGH:
         trough = _finite_positive_float(record.get(KIND_TROUGH))
         if trough is not None and (state["min_trough"] is None or trough < state["min_trough"]):
@@ -299,6 +314,7 @@ def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
                 "min_trough": None,
                 "terminal_kind": None,
                 "armed_order_id": None,
+                "armed_ceiling": None,
             },
         )
         _fold_record_into_state(state, kind, record)

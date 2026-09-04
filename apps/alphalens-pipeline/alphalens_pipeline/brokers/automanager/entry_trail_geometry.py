@@ -17,11 +17,15 @@ parameters the adapter POSTs:
   server keeps between the trigger and the falling low.
 - ``trailing_step`` = a COARSE ratchet step (memo G10, ``~10%`` of the distance)
   so a violent tape does not generate one server ratchet per tick.
-- ``ceiling_price`` = ``trough * (1 + d) * (1 + eps)`` — the G1 gap-through cap
-  (the ``StopLimitPrice`` on the same native order) so an overnight gap / halt
-  reopen can never fill above a fixed ceiling. Guarded to never sit below the
-  trigger (they are equal at touch, where ``reference == trough``; the ``max``
-  is defensive so the broker's directional clamp never rejects a valid arm).
+- ``ceiling_price`` = ``trough * (1 + d) * (1 + eps)`` — the INTENDED G1
+  gap-through cap (the ``StopLimitPrice`` on the same native order). **It does
+  not bind on Saxo** (#1317): the field is documented for
+  ``OrderType=StopLimit`` only, and 8 of the 23 fires on record executed above
+  it. Still computed, still sent, and now journaled at arm so every fire can be
+  measured against it — see :func:`observe_ceiling`. Guarded to never sit below
+  the trigger (they are equal at touch, where ``reference == trough``; the
+  ``max`` is defensive so the broker's directional clamp never rejects a valid
+  arm).
 
 NO tick alignment here — the Saxo adapter tick-aligns every price at placement
 (probe fact 3, ``SaxoBroker._build_trailing_stop_body``). NO I/O, no clock, no
@@ -94,16 +98,69 @@ def compute_trailing_order_geometry(
     )
 
 
-def entry_fill_estimate(*, reference: float, trough: float, d_bps: int) -> float | None:
-    """A realistic UPPER bound on the price this trail could fill at, or ``None``
-    on any degenerate input (issue #1112 step 1).
+@dataclass(frozen=True)
+class CeilingObservation:
+    """What one entry-trail fire did relative to the ceiling it was armed with."""
 
-    This is the armed order's own ``ceiling_price`` — the ``StopLimitPrice`` the
-    broker enforces, so no fill of that order can print above it. The tier LIMIT
-    is deliberately NOT used: on 2026-08-24 the SMG trail filled at 59.9261
-    against a tier limit of 59.786017 (23 bps above it), because the broker's
-    server-side trail ratcheted the trigger independently of our limit. A
-    validity check on the nominal limit would have seen nothing wrong.
+    ceiling: float
+    fill: float
+    breach_abs: float
+    """``fill - ceiling``. POSITIVE means the fire executed ABOVE its cap;
+    negative (the ordinary case) is how far under the cap it came in."""
+    breach_bps: float
+    """``breach_abs / ceiling * 1e4``, same sign convention."""
+    breached: bool
+    """``fill > ceiling``. Equality is NOT a breach — a limit fills AT its own
+    price, so an exactly-at-the-cap fill is the best an enforced clamp gives."""
+
+
+def observe_ceiling(*, ceiling: float | None, fill: float | None) -> CeilingObservation | None:
+    """Compare a realized entry-trail fill against the ceiling that order carried,
+    or ``None`` when there is NO VERDICT (issue #1317).
+
+    ``None`` means the question cannot be answered from what we stored — a fill
+    the audit read never resolved (``fill is None``), a tier armed before the
+    ceiling was journaled (``ceiling is None``), or a degenerate value. It must
+    NEVER be read as "clean": the whole reason this function exists is that the
+    absence of an observation was mistaken for the absence of a problem for
+    three weeks.
+
+    Pure: no I/O, no clock. Same finite-positive gate as
+    :func:`compute_trailing_order_geometry`."""
+    if ceiling is None or fill is None:
+        return None
+    for value in (ceiling, fill):
+        if not math.isfinite(value) or value <= 0.0:
+            return None
+    breach_abs = fill - ceiling
+    return CeilingObservation(
+        ceiling=ceiling,
+        fill=fill,
+        breach_abs=breach_abs,
+        breach_bps=breach_abs / ceiling * _BPS_DENOMINATOR,
+        breached=fill > ceiling,
+    )
+
+
+def entry_fill_estimate(*, reference: float, trough: float, d_bps: int) -> float | None:
+    """The ESTIMATED price this trail fills at, or ``None`` on any degenerate
+    input (issue #1112 step 1).
+
+    This is the armed order's own ``ceiling_price``. It was adopted as an UPPER
+    BOUND on the strength of the G1 ceiling clamp — and issue #1317 measured
+    that clamp not binding: 8 of the 23 entry-trail fires on record (1 of the 5
+    LIVE ones) executed ABOVE the ceiling their own order carried, by up to
+    47 bps. Saxo documents ``StopLimitPrice`` as applicable to
+    ``OrderType=StopLimit`` only, so on a ``TrailingStopIfTraded`` order the
+    field is stored and echoed but not applied. Read this as an estimate that is
+    right most of the time, NEVER as a price the fill cannot exceed.
+
+    Left in place as the arming estimate the #1112 cost gate prices against:
+    replacing it needs the G1 remedy decision, not a quiet swap here. The tier
+    LIMIT is still deliberately NOT used: on 2026-08-24 the SMG trail filled at
+    59.9261 against a tier limit of 59.786017 (23 bps above it), because the
+    broker's server-side trail ratcheted the trigger independently of our limit.
+    A validity check on the nominal limit would have seen nothing wrong.
     """
     geo = compute_trailing_order_geometry(reference=reference, trough=trough, d_bps=d_bps)
     return None if geo is None else geo.ceiling_price

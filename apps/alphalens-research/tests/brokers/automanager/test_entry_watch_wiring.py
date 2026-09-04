@@ -100,8 +100,18 @@ def _acct() -> Any:
     return type("A", (), {"total_value": 100_000.0, "currency": "USD"})()
 
 
-def _placed(order_id: str) -> Any:
-    return type("Placed", (), {"entry_order_id": order_id, "exit_order_ids": ()})()
+def _placed(order_id: str, *, stop_limit_price: float | None = None) -> Any:
+    return type(
+        "Placed",
+        (),
+        {
+            "entry_order_id": order_id,
+            "exit_order_ids": (),
+            # #1317: the wire ceiling the adapter reports back, so the arm can
+            # journal what was SENT rather than what it asked for.
+            "stop_limit_price": stop_limit_price,
+        },
+    )()
 
 
 class _RecordingBroker:
@@ -137,7 +147,7 @@ class _RecordingBroker:
 
     def amend_stop_amount(self, *a: Any, **k: Any) -> Any:
         self.amends.append((a, k))
-        return type("Placed", (), {"entry_order_id": "", "exit_order_ids": ()})()
+        return _placed("")
 
     def cancel_order(self, order_id: str) -> None:
         self.cancels.append(order_id)
@@ -168,7 +178,8 @@ class _RecordingBroker:
                 "order_id": order_id,
             }
         )
-        return _placed(order_id)
+        # Mirrors the adapter: it echoes back the (quantized) ceiling it sent.
+        return _placed(order_id, stop_limit_price=ceiling_price)
 
     def place_stop_limit(self, *a: Any, **k: Any) -> Any:
         self.stop_limits.append((a, k))

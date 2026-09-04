@@ -223,6 +223,50 @@ class TestFoldEntryTrailLines(unittest.TestCase):
         )
         self.assertIsNone(reverted.tiers[_CRID].armed_order_id)
 
+    def test_latest_trail_armed_ceiling_wins_and_a_legacy_line_folds_to_none(self) -> None:
+        # #1317: the ceiling the order was armed with is journaled, so a fill can
+        # be measured against it. Same latest-wins shape as the order id — the
+        # write-ahead carries the geometry value, the post-POST line the
+        # tick-quantized value the adapter actually put on the wire.
+        armed = et.fold_entry_trail_lines(
+            [
+                _watch_open(),
+                _line(et.KIND_TRAIL_ARMED, order_id=None, ceiling=58.9504),
+                _line(et.KIND_TRAIL_ARMED, order_id="O-9", ceiling=58.95),
+            ]
+        )
+        self.assertEqual(armed.tiers[_CRID].armed_ceiling, 58.95)
+        # Every tier armed before #1317 shipped has no ceiling on its line. That
+        # must read as "unknown", never as a usable number.
+        legacy = et.fold_entry_trail_lines(
+            [_watch_open(), _line(et.KIND_TRAIL_ARMED, order_id="O-9")]
+        )
+        self.assertIsNone(legacy.tiers[_CRID].armed_ceiling)
+
+    def test_a_corrupt_ceiling_folds_to_none_rather_than_a_bad_number(self) -> None:
+        # Same SEMANTIC gate as trough/limit/fx_rate: a zero or negative ceiling
+        # would make every fill look like a breach. (A numeric STRING is
+        # accepted, as it is for every other price on this journal — the gate is
+        # about the value, not its JSON type.)
+        for bad in (0, -1.5, float("nan"), float("inf"), True, None):
+            with self.subTest(ceiling=bad):
+                fold = et.fold_entry_trail_lines(
+                    [_watch_open(), _line(et.KIND_TRAIL_ARMED, order_id="O-9", ceiling=bad)]
+                )
+                self.assertIsNone(fold.tiers[_CRID].armed_ceiling)
+
+    def test_re_opening_a_watch_clears_the_armed_ceiling(self) -> None:
+        # The re-arm resets the arm state; a stale ceiling from the previous
+        # session's order must not be compared against the next fill.
+        fold = et.fold_entry_trail_lines(
+            [
+                _watch_open(),
+                _line(et.KIND_TRAIL_ARMED, order_id="O-1", trigger=10.05, ceiling=10.07),
+                _watch_open(awaiting_fresh_low=True),
+            ]
+        )
+        self.assertIsNone(fold.tiers[_CRID].armed_ceiling)
+
     def test_re_opening_a_watch_clears_the_armed_order_id(self) -> None:
         # Memo §5 CRITICAL-2 re-arm: a DayOrder-cancelled tier is re-admitted to
         # the watch pass by re-appending watch_open, which must reset the arm
@@ -352,7 +396,7 @@ def _rich_entry_trail_journal() -> list[str]:
         _line(et.KIND_TROUGH, "crid-a", trough=9.5),
         _line(et.KIND_TROUGH, "crid-a", trough=9.2),
         _line(et.KIND_TROUGH, "crid-a", trough=9.3),
-        _line(et.KIND_TRAIL_ARMED, "crid-a", order_id="O-1", trigger=9.25),
+        _line(et.KIND_TRAIL_ARMED, "crid-a", order_id="O-1", trigger=9.25, ceiling=9.27),
         _watch_open("crid-b", limit=5.0, qty=40),
         _line(et.KIND_TOUCHED, "crid-b"),
         _line(et.KIND_EXPIRED, "crid-b"),
@@ -364,7 +408,17 @@ def _rich_entry_trail_journal() -> list[str]:
 def _fold_data(fold: et.EntryTrailFold) -> tuple[Any, int]:
     return (
         {
-            crid: (s.crid, s.watch_open, s.latest_kind, s.min_trough, s.terminal_kind)
+            crid: (
+                s.crid,
+                s.watch_open,
+                s.latest_kind,
+                s.min_trough,
+                s.terminal_kind,
+                s.armed_order_id,
+                # #1317: in the equivalence tuple so a compactor that drops the
+                # armed ceiling fails here instead of going quiet.
+                s.armed_ceiling,
+            )
             for crid, s in fold.tiers.items()
         },
         fold.malformed,

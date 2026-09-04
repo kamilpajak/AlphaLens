@@ -208,7 +208,41 @@ class TestTrailingStopBody(unittest.TestCase):
         self.assertEqual(body["OrderPrice"], 16.05)
         self.assertEqual(body["TrailingStopDistanceToMarket"], 0.05)
         self.assertEqual(body["TrailingStopStep"], 0.01)
-        self.assertEqual(body["StopLimitPrice"], 16.20, "the G1 ceiling caps the fill")
+        self.assertEqual(body["StopLimitPrice"], 16.20, "the G1 ceiling rides on the same order")
+
+    def test_placed_order_reports_the_ceiling_that_went_on_the_wire(self):
+        # #1317: the caller journals what was SENT, not what it asked for. The
+        # adapter quantizes, so only it knows the wire value — 16.238 -> 16.24.
+        broker, stub = _make(_StubTrailingClient())
+        with mock.patch.dict("os.environ", _ALLOW):
+            placed = broker.place_trailing_stop(
+                uic=307,
+                side="BUY",
+                qty=2,
+                order_price=16.033,
+                trailing_distance=0.05,
+                trailing_step=0.01,
+                ceiling_price=16.238,
+            )
+        body, _ = stub.place_calls[0]
+        self.assertEqual(placed.stop_limit_price, 16.24)
+        self.assertEqual(placed.stop_limit_price, body["StopLimitPrice"])
+
+    def test_a_trail_without_a_ceiling_reports_none(self):
+        broker, stub = _make(_StubTrailingClient())
+        with mock.patch.dict("os.environ", _ALLOW):
+            placed = broker.place_trailing_stop(
+                uic=307,
+                side="BUY",
+                qty=2,
+                order_price=16.05,
+                trailing_distance=0.05,
+                trailing_step=0.01,
+                ceiling_price=None,
+            )
+        body, _ = stub.place_calls[0]
+        self.assertNotIn("StopLimitPrice", body)
+        self.assertIsNone(placed.stop_limit_price)
 
     def test_prices_and_distance_step_are_tick_aligned(self):
         # Probe fact 3: raw non-tick values -> 400 PriceNotInTickSizeIncrements.

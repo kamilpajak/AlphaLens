@@ -294,6 +294,17 @@ class BracketOrderRequest:
 class PlacedOrder:
     entry_order_id: str
     exit_order_ids: tuple[str, ...]
+    # The limit the adapter actually put on the wire (Saxo ``StopLimitPrice``),
+    # AFTER tick quantization — additive and defaulted, like the fields
+    # ``OrderState`` grew, so the frozen base ``Broker`` Protocol and every
+    # existing construction stay source-compatible. ``None`` when the placed
+    # order carries no limit, and on adapters that do not report one.
+    #
+    # It exists because the caller must journal what was SENT, not what it
+    # asked for: only the adapter knows the quantized value, and #1317 turned on
+    # exactly that difference — a fire measured against a re-derived ceiling
+    # reads its overshoot 45% too large on a real order (BAH, 2026-09-02).
+    stop_limit_price: float | None = None
 
 
 # --------------------------------------------------------------------------
@@ -517,13 +528,21 @@ class SupportsTrailingStop(Protocol):
       is the absolute price distance to the market and ``trailing_step`` the
       tick step the server ratchets by — BOTH REQUIRED. ``ceiling_price`` is
       the OPTIONAL G1 gap-clamp: probe fact 1 proved the SAME native order
-      retains a ``StopLimitPrice`` field, so ONE combined trailing-LIMIT order
-      carries both the trail fields and the ceiling (``None`` = a plain trail).
-      The adapter tick-aligns every price (probe fact 3).
+      RETAINS a ``StopLimitPrice`` field (``None`` = a plain trail). Retention
+      is NOT enforcement — #1317: Saxo documents that field for
+      ``OrderType=StopLimit``, and 8 of the 23 fires on record executed above
+      their ceiling. The order still carries it, and the returned
+      ``PlacedOrder.stop_limit_price`` reports the wire value so the caller can
+      measure each fire against it; do not describe the fire as capped. The
+      adapter tick-aligns every price (probe fact 3).
     - :meth:`place_stop_limit` — the G1 gap-through ceiling clamp (§3 G1): a
       stop-family BUY becomes a MARKET order on trigger, so an overnight gap /
       halt-reopen could fill with no ceiling; a ``StopLimit`` BUY (§4b P7,
       limit field ``StopLimitPrice``) caps the fill price.
+
+    (:meth:`place_stop_limit` uses the field on the order type Saxo documents it
+    for, so its cap is the real one — the #1317 finding is specific to the
+    trailing type.)
 
     Both are trailing-ENTRY primitives (the SELL disaster stop is
     :class:`SupportsStandaloneStop`); Saxo netting bites SELLS only, so the BUY

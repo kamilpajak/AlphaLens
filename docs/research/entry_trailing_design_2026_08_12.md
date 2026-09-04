@@ -24,7 +24,7 @@ Today a pick enters via three server-side resting Limit+GTD orders. With the fla
 
 ## 3. Money-critical guards (adversarial findings — NORMATIVE, each ships with its trigger test)
 
-- **G1 (CRITICAL) — gap-through pay-up.** A stop-family BUY becomes MARKET on trigger: an overnight gap-up / halt-reopen / reverse-split fills at the open with NO ceiling — the one place trailing is strictly worse than a limit by construction, unpriced by the replay. Guards: fire-price **ceiling clamp** `trough×(1+d)×(1+eps)` (entry-side sibling of `clamp_reanchor_target` — new pure leaf helper, never overload the exit one). **Achievable ON the native trail (option B), NOT a separate StopLimit** — the 2026-08-13 recon (§4b addendum) proved a `TrailingStopIfTraded` order RETAINS a `StopLimitPrice` field, so ONE combined trailing-LIMIT carries the ratcheting trigger AND the fixed ceiling: on the bounce the server fires a LIMIT capped at `StopLimitPrice`, never a naked market order through a gap. The clamp is implemented as `entry_trail_geometry.compute_trailing_order_geometry` (ceiling = `max(trough×(1+d), trigger) × (1+CEILING_EPS_FRAC)`, eps = 20 bps) passed as `place_trailing_stop(..., ceiling_price=)`; the broker tick-aligns it and rejects a BUY ceiling below the trigger. PLUS **DayOrder-only trail orders** — cancel at close, re-arm the watch next session, so no trailing order ever lives through an overnight/halt gap (pending the §4 auction probe, this is mandatory, not optional).
+- **G1 (CRITICAL) — gap-through pay-up.** A stop-family BUY becomes MARKET on trigger: an overnight gap-up / halt-reopen / reverse-split fills at the open with NO ceiling — the one place trailing is strictly worse than a limit by construction, unpriced by the replay. Guards: fire-price **ceiling clamp** `trough×(1+d)×(1+eps)` (entry-side sibling of `clamp_reanchor_target` — new pure leaf helper, never overload the exit one). **Achievable ON the native trail (option B), NOT a separate StopLimit** — the 2026-08-13 recon (§4b addendum) proved a `TrailingStopIfTraded` order RETAINS a `StopLimitPrice` field, so ONE combined trailing-LIMIT carries the ratcheting trigger AND the fixed ceiling: on the bounce the server fires a LIMIT capped at `StopLimitPrice`, never a naked market order through a gap. The clamp is implemented as `entry_trail_geometry.compute_trailing_order_geometry` (ceiling = `max(trough×(1+d), trigger) × (1+CEILING_EPS_FRAC)`, eps = 20 bps) passed as `place_trailing_stop(..., ceiling_price=)`; the broker tick-aligns it and rejects a BUY ceiling below the trigger. PLUS **DayOrder-only trail orders** — cancel at close, re-arm the watch next session, so no trailing order ever lives through an overnight/halt gap (pending the §4 auction probe, this is mandatory, not optional). **SUPERSEDED IN PART, 2026-09-04 (#1317) — read the §4c addendum before relying on the ceiling half of this guard: the clamp does NOT bind (8 of 23 fires executed above it, and Saxo documents `StopLimitPrice` for `OrderType=StopLimit` only). The DayOrder half stands; G1 is OPEN.**
 - **G2 (CRITICAL) — KILL must gate entries.** `_run_live_exits_pass` runs UNGATED by KILL (`control_loop.py:398` vs `:383`) — correct for exits, catastrophic if copied: the entry pass takes `kill` explicitly and no-ops fires/amends/placements under it (dedicated KILL test). KILL-transition additionally cancels working `-entry-` family orders (cancel is ungated); the manual-flatten recipe gains "cancel entry-trail stops".
 - **G3 (CRITICAL) — per-tier write-ahead BEFORE the POST.** A crash between fire-POST and journal both (a) re-fires on restart (Saxo's 15s x-request-id dedup is useless across a daemon death) and (b) **bricks the whole drain** — the unjoined WORKING verdict trips the gross cap's fail-closed (`control_loop.py:2737-2745`). Guard: append the bracket record with the deterministic `client_request_id` and `entry_order_id=null` BEFORE the POST (join key known pre-POST; fill the id in after), and on TOUCHED-resume query working orders by the `-entry-` ExternalReference family before placing. This deliberately INVERTS the existing POST-then-journal precedent (`:3168-3170`) — for orders the bot manufactures off its own state, journal-first is the safe direction.
 - **G4 (CRITICAL) — the startup compactor EATS unknown journal kinds** (`_compact_standalone_stop_journal_lines`, `control_loop.py:2095-2119`, runs every boot). Decision: trail state lives in a **new per-env journal `entry_trails.jsonl`** (sibling of `standalone_stops.jsonl`, latest-marker fold, its own compaction whitelist + growth bound from day one, round-trip compaction test per kind).
@@ -109,6 +109,59 @@ Probes run OUTSIDE the daemon (ad-hoc scripts → the daemon's fee floor/MAX_OPE
 - **`OrderPrice` is REQUIRED on the trailing body.** Without it Saxo returns 400 "OrderPrice must be set for orders that are not of type Market"; with it, 200. The T2a `_build_trailing_stop_body` omitted `OrderPrice` — a real bug fixed in PR-T2b (a T2a trailing order would have been rejected by real Saxo). The executor now passes the initial trigger as `order_price`.
 - **Tick-alignment mandatory.** All prices/distance/step must be tick-aligned or Saxo returns 400 `PriceNotInTickSizeIncrements`; distance/step are tick multiples too. The broker tick-aligns at placement (`_quantize_price` for trigger/ceiling; `_floor_to_whole_ticks` flooring at ≥ 1 tick for distance/step so a small d never rounds to zero).
 - **Residual (attended-LIVE, not blocking):** the read-back proves `StopLimitPrice` is STORED; the fire-as-limit behaviour is confirmed only at the first real fire (the attended LIVE rollout). Ratchet+fire dynamics were separately LIVE-confirmed (MARA probe, §4b above). Do not block the build on it.
+
+**2026-09-04 first-FIRE addendum (§4c) — G1's ceiling does NOT bind. Status: OPEN.**
+
+The §4b addendum above is correct about RETENTION and was mistaken for a
+guarantee about EXECUTION. The read-back it rests on never reached a fire; the
+first look at fires says the opposite.
+
+- **Measured: 8 of 23 entry-trail fires executed ABOVE the ceiling their own
+  order carried** — 1 of 5 on LIVE, 7 of 18 on SIM. Overshoots +6.6, +7.8, +8.4,
+  +13.8, +20.2, +25.1, +46.9, +53.5 bps. Built on 2026-09-04 by joining each
+  daemon's `armed native trailing order <id> @ trigger T (ceiling C)` journald
+  line to the terminal `fired` record in
+  `~/.alphalens/broker_orders/{sim,live}/entry_trails.jsonl`. The full table is
+  frozen in `apps/alphalens-research/tests/incident_1317_fixture.py` (journald
+  rotates; without that snapshot the measurement is unrepeatable) and replayed
+  by `tests/brokers/automanager/test_entry_trail_ceiling_breach.py`.
+- **Vendor documentation agrees.** Saxo documents `StopLimitPrice` as
+  "Secondary price level for StopLimit orders", available when
+  `OrderType = StopLimit`; `TrailingStopDistanceToMarket` is the field
+  documented for `TrailingStopIfTraded`, and no `TrailingStopLimit` appears in
+  the placeable-order-type schema. So the field is accepted, stored, echoed on
+  read-back — and not applied.
+- **Reading rule.** SIM fills are synthetic (2026-08-07 probe: a deep-through
+  limit and a near-touch limit both filled at the same reference price), so the
+  SIM rows show SIM's engine ignoring the field, not the real matching engine.
+  The LIVE AMBA row (ceiling 58.9504, fill 59.00) is the one that speaks about
+  the real engine, and it agrees. Neither line of evidence would be enough
+  alone; the documentation is not an observation either.
+- **§3 G1 is therefore OPEN again.** Option B's premise ("on the bounce the
+  server fires a LIMIT capped at `StopLimitPrice`, never a naked market order
+  through a gap") is not supported. What still holds is the OTHER half of the G1
+  mitigation: trail orders are DayOrder-only, so no trailing order lives through
+  an overnight or auction gap. The residual exposure is an intraday gap or
+  halt-reopen.
+- **What changed in code (2026-09-04), and what deliberately did not.** The
+  ceiling is now journaled on the `trail_armed` line — the wire value the
+  adapter reports via `PlacedOrder.stop_limit_price`, not a value re-derived at
+  read time (the obvious reconstruction, `would_be_trigger x (1+eps)`, is wrong
+  on BAH by 0.33 because `would_be_trigger` uses the minimum trough ever seen,
+  not the trough at arm). Each `fired` line carries `ceiling` plus a
+  `ceiling_breach` block, and a breach raises its own throttled alert. Placement
+  is UNCHANGED: the field is still sent, because it costs nothing and records
+  the intent, and picking the remedy is a separate decision.
+- **The remedy is not taken here.** (a) accept market fires bounded by the
+  DayOrder rule; (b) revisit V3' (a resting `StopLimit`, whose `StopLimitPrice`
+  IS the documented one, amended by the bot) — rejected in §2 for d_eff
+  inflation, a trade-off that was weighed against a ceiling that turns out not
+  to exist; (c) bound the pay-up some other way. Every future LIVE fire now
+  measures itself, so the decision gets more data at no risk.
+- **The method lesson**, recorded in `CLAUDE.md` (PR #1318): a PREPARED state
+  standing in for the TERMINAL one. The §4b probe read a resting order and was
+  read as a verdict about how it would FILL. Verify at the state the claim is
+  about.
 
 ## 9. Corrections to prior docs
 

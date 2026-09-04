@@ -116,6 +116,16 @@ _TRAILING_STOP_DISTANCE_FIELD = "TrailingStopDistanceToMarket"
 _TRAILING_STOP_STEP_FIELD = "TrailingStopStep"
 # G1 gap-through ceiling clamp: a StopLimit BUY whose ``StopLimitPrice`` caps
 # the fill so an overnight gap / halt-reopen cannot fill at any price.
+#
+# #1317 — READ THIS BEFORE RELYING ON THE FIELD: Saxo documents StopLimitPrice
+# as belonging to OrderType=StopLimit ("Secondary price level for StopLimit
+# orders"), and TrailingStopDistanceToMarket as the field for
+# TrailingStopIfTraded. On a TrailingStopIfTraded order the limit is ACCEPTED,
+# STORED and echoed on read-back — and not applied: 8 of the 23 entry-trail
+# fires on record executed above it, by up to 47 bps. It is still sent (harmless,
+# and it records the intent) and now journaled at arm so every fire is measured
+# against it, but the trailing path must NOT be described as ceiling-capped.
+# On a real StopLimit order (place_stop_limit) the field is the documented one.
 _STOP_LIMIT_ORDER_TYPE = "StopLimit"
 _STOP_LIMIT_PRICE_FIELD = "StopLimitPrice"
 # MANDATORY DayOrder on both (memo G1): a stop-family BUY that survived into an
@@ -785,9 +795,12 @@ class SaxoBroker:
         type Market"). ``trailing_distance`` is the absolute price distance to
         the market and ``trailing_step`` the tick step the server ratchets by —
         BOTH REQUIRED. ``ceiling_price`` is the OPTIONAL G1 gap-through clamp:
-        probe fact 1 proved the SAME native order retains a ``StopLimitPrice``
-        field, so passing it makes ONE combined trailing-LIMIT (the executor
-        always passes it; ``None`` leaves a plain trailing stop with no ceiling).
+        probe fact 1 proved the SAME native order RETAINS a ``StopLimitPrice``
+        field, and #1317 then measured that retention is not enforcement — the
+        limit does not bind on a fire (see the field comment above). The executor
+        still always passes it and the returned ``PlacedOrder.stop_limit_price``
+        reports the tick-quantized value that went on the wire, so the fire can
+        be measured against it; ``None`` leaves a plain trailing stop.
         Every price is tick-aligned here (probe fact 3): ``order_price`` /
         ``ceiling_price`` quantize to the nearest tick, ``trailing_distance`` /
         ``trailing_step`` round to whole ticks flooring at >= 1 tick so a small
@@ -818,7 +831,13 @@ class SaxoBroker:
             )
             self._precheck_or_raise(body, label=f"trailing-stop Uic {uic} {client_request_id}")
             status, payload = self._client.place_order(body, request_id=client_request_id)
-            return self._handle_placement_response(status, payload, client_request_id, account_key)
+            return self._handle_placement_response(
+                status,
+                payload,
+                client_request_id,
+                account_key,
+                stop_limit_price=body.get(_STOP_LIMIT_PRICE_FIELD),
+            )
 
     def _build_trailing_stop_body(
         self,
@@ -941,7 +960,13 @@ class SaxoBroker:
             )
             self._precheck_or_raise(body, label=f"stop-limit Uic {uic} {client_request_id}")
             status, payload = self._client.place_order(body, request_id=client_request_id)
-            return self._handle_placement_response(status, payload, client_request_id, account_key)
+            return self._handle_placement_response(
+                status,
+                payload,
+                client_request_id,
+                account_key,
+                stop_limit_price=body[_STOP_LIMIT_PRICE_FIELD],
+            )
 
     def _build_stop_limit_body(
         self,
@@ -2120,7 +2145,14 @@ class SaxoBroker:
         payload: dict[str, Any],
         request_id: str,
         account_key: str,
+        stop_limit_price: float | None = None,
     ) -> PlacedOrder:
+        """Turn one placement response into a ``PlacedOrder`` (or the right error).
+
+        ``stop_limit_price`` is the TICK-QUANTIZED limit the body carried, echoed
+        back so the caller journals what went on the wire rather than what it
+        asked for (#1317). Placement paths that send no limit leave it ``None``.
+        """
         if status in (200, 201):
             order_id = payload.get("OrderId")
             if not order_id:
@@ -2133,7 +2165,11 @@ class SaxoBroker:
                 for child in payload.get("Orders") or []
                 if isinstance(child, dict) and child.get("OrderId")
             )
-            return PlacedOrder(entry_order_id=str(order_id), exit_order_ids=exit_ids)
+            return PlacedOrder(
+                entry_order_id=str(order_id),
+                exit_order_ids=exit_ids,
+                stop_limit_price=stop_limit_price,
+            )
         if status == 202:
             order_id = self._find_order_id(payload)
             raise BrokerError(

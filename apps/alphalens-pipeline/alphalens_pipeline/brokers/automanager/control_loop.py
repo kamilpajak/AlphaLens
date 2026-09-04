@@ -2464,7 +2464,16 @@ def _advance_one_entry_watch(
     # there. Re-attempted every TOUCHED tick until it arms (idempotent, dedup on
     # the -entry- family per G3) or is terminal-refused (insufficient funds, G7).
     if result.state is entry_trail_watcher.WatchState.TOUCHED and price is not None:
-        _arm_native_trail(deps, crid, record, runtime, price, d_bps, report)
+        _arm_native_trail(
+            deps,
+            crid,
+            record,
+            runtime,
+            price,
+            d_bps,
+            report,
+            journaled_ceiling=None if tier_state is None else tier_state.armed_ceiling,
+        )
     for alert in result.alerts:
         if deps.alert_throttled(alert.message, alert.throttle_key):
             report.alerts += 1
@@ -2785,16 +2794,25 @@ def _cancel_working_entry_orders(deps: LoopDeps, report: TickReport) -> None:
         report.alerts += 1
 
 
-def _journal_trail_armed(crid: str, *, order_id: str | None, trigger: float) -> None:
+def _journal_trail_armed(
+    crid: str, *, order_id: str | None, trigger: float, ceiling: float | None
+) -> None:
     """Append one ``trail_armed`` line (the G3 write-ahead uses ``order_id=None``
     before the POST; the post-POST line fills the real id in — the fold's
-    latest-wins semantics adopt it)."""
+    latest-wins semantics adopt it).
+
+    ``ceiling`` rides the same latest-wins path (#1317): the write-ahead carries
+    the GEOMETRY value (all that is known before the POST) and the post-POST line
+    the TICK-QUANTIZED value the adapter put on the wire. Journaled rather than
+    left to be recomputed later, because the obvious later reconstruction is
+    wrong whenever the trough moved between the arm and the terminal."""
     entry_trails.append_entry_trail_line(
         {
             "kind": entry_trails.KIND_TRAIL_ARMED,
             "crid": crid,
             "order_id": order_id,
             "trigger": float(trigger),
+            entry_trails.KEY_CEILING: None if ceiling is None else float(ceiling),
         }
     )
 
@@ -3177,6 +3195,7 @@ def _arm_native_trail(
     reference: float,
     d_bps: int,
     report: TickReport,
+    journaled_ceiling: float | None = None,
 ) -> None:
     """Place ONE native Saxo trailing-LIMIT order at the TOUCH (memo §2 V1, §5).
 
@@ -3219,7 +3238,16 @@ def _arm_native_trail(
 
     lookup = _find_working_entry_order(broker, fire_rid)
     if lookup.order_id is not None:
-        _journal_trail_armed(crid, order_id=lookup.order_id, trigger=geo.order_price)
+        # ADOPT of an order a previous tick already POSTed: its ceiling is the
+        # one THAT tick journaled (``journaled_ceiling``), never this tick's
+        # freshly computed geometry — the resting order was priced off a
+        # different reference. ``None`` stays ``None``: unknown, not guessed.
+        _journal_trail_armed(
+            crid,
+            order_id=lookup.order_id,
+            trigger=geo.order_price,
+            ceiling=journaled_ceiling,
+        )
         runtime.watcher.mark_armed()
         return
 
@@ -3254,7 +3282,9 @@ def _arm_native_trail(
         _journal_entry_planned_disaster(record, uic, fire_rid)
     except _EntryArmAbortError:
         return
-    _journal_trail_armed(crid, order_id=None, trigger=geo.order_price)  # G3 write-ahead, pre-POST
+    # G3 write-ahead, pre-POST: the ceiling is the geometry value here — the
+    # wire value does not exist until the adapter has quantized it.
+    _journal_trail_armed(crid, order_id=None, trigger=geo.order_price, ceiling=geo.ceiling_price)
     try:
         placed = broker.place_trailing_stop(
             uic,
@@ -3269,7 +3299,16 @@ def _arm_native_trail(
     except BrokerError as exc:
         _handle_arm_failure(deps, crid, record, runtime, d_bps, exc, report)
         return
-    _journal_trail_armed(crid, order_id=placed.entry_order_id, trigger=geo.order_price)
+    _journal_trail_armed(
+        crid,
+        order_id=placed.entry_order_id,
+        trigger=geo.order_price,
+        # What the adapter actually sent, falling back to the geometry value on
+        # a broker that does not report it.
+        ceiling=(
+            placed.stop_limit_price if placed.stop_limit_price is not None else geo.ceiling_price
+        ),
+    )
     runtime.watcher.mark_armed()
     logger.info(
         "entry-trail %s: armed native trailing order %s @ trigger %.4f (ceiling %.4f)",
@@ -3875,6 +3914,38 @@ def _reconcile_one_armed_tier(
         f"entry-trail:fired:{crid}",
     ):
         report.alerts += 1
+    _announce_ceiling_breach(deps, crid, tier_state, outcome, report)
+
+
+def _announce_ceiling_breach(
+    deps: LoopDeps,
+    crid: str,
+    tier_state: entry_trails.EntryTrailTierState,
+    outcome: OrderState | None,
+    report: TickReport,
+) -> None:
+    """One throttled alert when a fire executed ABOVE its own ceiling (#1317).
+
+    Worded as a MEASUREMENT, not a surprise: the G1 clamp is known not to bind
+    on Saxo's ``TrailingStopIfTraded`` (the field is documented for
+    ``OrderType=StopLimit``), so this reports the size of the overshoot on this
+    fire. Its own throttle key, so a breach never displaces the ordinary
+    ``fired`` announcement and vice-versa. Silent whenever the comparison cannot
+    be made — an unknown is not a breach, and it is not a pass either (the
+    ``fired`` line records which of the two it was)."""
+    observation = entry_trail_geometry.observe_ceiling(
+        ceiling=tier_state.armed_ceiling,
+        fill=outcome.avg_fill_price if outcome is not None else None,
+    )
+    if observation is None or not observation.breached:
+        return
+    if deps.alert_throttled(
+        f"entry-trail {entry_label_from_crid(crid)}: filled {observation.fill:g} ABOVE its "
+        f"{observation.ceiling:g} ceiling (+{observation.breach_bps:.1f} bps) — "
+        "the G1 clamp is not enforced on this order type (#1317)",
+        f"entry-trail:ceiling-breach:{crid}",
+    ):
+        report.alerts += 1
 
 
 def _armed_order_is_gone(state: OrderState | None) -> bool:
@@ -3991,6 +4062,9 @@ def _entry_reconcile_measurement(
     trough = tier_state.min_trough
     trigger = None if trough is None else trough * (1.0 + d_bps / _ENTRY_BPS_DENOMINATOR)
     limit = record.get("limit")
+    observation = entry_trail_geometry.observe_ceiling(
+        ceiling=tier_state.armed_ceiling, fill=avg_price
+    )
     return {
         "tier_limit": None if limit is None else float(limit),
         "touch_price": None,
@@ -4001,6 +4075,16 @@ def _entry_reconcile_measurement(
         "avg_price": avg_price,
         "realized_qty": realized_qty,
         "entry_mode": record.get("entry_mode") or _entry_trail_mode_tag(d_bps),
+        # #1317 — the ceiling this order was armed with, and what the fill did
+        # against it. ``ceiling_breach`` is null both when the fill came in at or
+        # under the cap AND when the comparison could not be made (no journaled
+        # ceiling, unresolved fill); ``ceiling`` distinguishes the two.
+        "ceiling": tier_state.armed_ceiling,
+        "ceiling_breach": (
+            {"breach_abs": observation.breach_abs, "breach_bps": observation.breach_bps}
+            if observation is not None and observation.breached
+            else None
+        ),
     }
 
 
