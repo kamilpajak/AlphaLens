@@ -1914,6 +1914,46 @@ class TestFillCompleteReanchor(unittest.TestCase):
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
+    def test_envelope_clamp_divergence_is_carried_on_the_amendstop(self) -> None:
+        # #1015: a tiny ATR puts the proposed target (100.0 - 1.5*0.1 = 99.85)
+        # INSIDE the min-distance floor (100.0 * (1 - 0.002) = 99.8), so the
+        # envelope clamps without refusing. The divergence facts ride on the
+        # AmendStop so the executor can journal them on confirmed PATCH success.
+        pos, view = self._covered_view(
+            owned=7.0,
+            avg_price=100.0,
+            reanchor=self._facts(atr=0.1),
+            stop_price=85.0,
+            exit_policy=_ATR_POLICY,
+        )
+        actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        self.assertAlmostEqual(action.stop_price, 99.8)  # the clamped target
+        self.assertEqual(action.envelope_policy, _ATR_POLICY.name)
+        self.assertIsNotNone(action.envelope_proposed)
+        assert action.envelope_proposed is not None
+        self.assertAlmostEqual(action.envelope_proposed, 99.85)
+        self.assertIsNotNone(action.envelope_prior_stop)
+        assert action.envelope_prior_stop is not None
+        self.assertAlmostEqual(action.envelope_prior_stop, 85.0)
+
+    def test_no_envelope_divergence_leaves_envelope_fields_none(self) -> None:
+        # The common case (clamped == proposed) must not stamp divergence facts —
+        # the executor keys the envelope_clamped journal write on their presence.
+        pos, view = self._covered_view(
+            owned=7.0, avg_price=95.0, reanchor=self._facts(), exit_policy=_ATR_POLICY
+        )
+        actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        assert isinstance(action, AmendStop)
+        self.assertIsNone(action.envelope_policy)
+        self.assertIsNone(action.envelope_proposed)
+        self.assertIsNone(action.envelope_prior_stop)
+
 
 class TestGappedDeepFillReanchorGating(unittest.TestCase):
     """HEADLINE gating test: a 2-tier ladder with a gapped DEEP fill, now under

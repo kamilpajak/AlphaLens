@@ -302,6 +302,15 @@ class AmendStop:
     # stays byte-identical.
     trail_peak: float | None = None
     trail_last_price: float | None = None
+    # #1015: the never-below-brief-floor envelope CLAMPED the policy's proposed
+    # reanchor target (clamped != proposed; the clamped value is ``stop_price``,
+    # the anchor is ``reanchor_avg_price``). Carried so the executor can persist
+    # the divergence as an ``envelope_clamped`` journal record ONLY on confirmed
+    # PATCH success (INC-2 memo section 7). ``None`` on every divergence-free
+    # AmendStop — additive, every existing construction stays byte-identical.
+    envelope_policy: str | None = None
+    envelope_proposed: float | None = None
+    envelope_prior_stop: float | None = None
 
 
 Action = PlaceStop | UpgradeToOco | AmendStop | CancelSellLegs | CancelRemaining | AlertOnly | NoOp
@@ -758,6 +767,9 @@ def _maybe_reanchor(
             avg_price,
         )
         return None  # never-below-brief-floor (Decision 1) or degenerate -> keep the resting stop
+    envelope_policy: str | None = None
+    envelope_proposed: float | None = None
+    envelope_prior_stop: float | None = None
     if not math.isclose(clamped, proposed):
         logger.info(
             "reanchor envelope clamped: policy=%s proposed=%.4f clamped=%.4f prior_stop=%.4f",
@@ -766,8 +778,11 @@ def _maybe_reanchor(
             clamped,
             plan.stop_price,
         )
-        # Deferred (#1015): persist this divergence to the append-only journal
-        # (INC-2 memo section 7), not log-only.
+        # #1015: carry the divergence on the action so the executor persists it
+        # to the append-only journal (INC-2 memo section 7), not log-only.
+        envelope_policy = policy.name
+        envelope_proposed = proposed
+        envelope_prior_stop = plan.stop_price
     target = clamped
     owned = pos.quantity
     return AmendStop(
@@ -780,6 +795,9 @@ def _maybe_reanchor(
         _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
         reason="reanchor-on-fill",
         reanchor_avg_price=avg_price,
+        envelope_policy=envelope_policy,
+        envelope_proposed=envelope_proposed,
+        envelope_prior_stop=envelope_prior_stop,
     )
 
 

@@ -5889,6 +5889,107 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
         self.assertEqual(report.exits_placed, 0)
 
 
+class TestExecuteAmendStopJournalsEnvelopeClamped(unittest.TestCase):
+    """#1015 (INC-2 memo section 7): a CONFIRMED reanchor AmendStop whose
+    proposed target was clamped by the never-below-brief-floor envelope
+    journals an ``envelope_clamped`` telemetry record — keyed on the
+    ``envelope_*`` facts the decision layer stamped on the action. A
+    divergence-free reanchor (fields ``None``) never writes it."""
+
+    def _envelope_lines(self) -> list[dict[str, Any]]:
+        return [
+            line
+            for line in cl._iter_standalone_stop_journal()
+            if line.get("kind") == "envelope_clamped"
+        ]
+
+    def test_journal_envelope_clamped_record_shape_with_injected_clock(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                cl._journal_envelope_clamped(
+                    _UIC,
+                    policy="atr_bracket_1p5",
+                    proposed=99.85,
+                    clamped=99.8,
+                    prior_stop=85.0,
+                    avg_price=100.0,
+                    clock=lambda: 1234.5,
+                )
+                lines = self._envelope_lines()
+        self.assertEqual(
+            lines,
+            [
+                {
+                    "kind": "envelope_clamped",
+                    "uic": _UIC,
+                    "policy": "atr_bracket_1p5",
+                    "proposed": 99.85,
+                    "clamped": 99.8,
+                    "prior_stop": 85.0,
+                    "avg_price": 100.0,
+                    "ts": 1234.5,
+                }
+            ],
+        )
+
+    def test_confirmed_success_with_envelope_facts_journals_envelope_clamped(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)]
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                executor(
+                    _amend_action(
+                        reason="reanchor-on-fill",
+                        reanchor_avg_price=100.0,
+                        stop_price=99.8,
+                        envelope_policy="atr_bracket_1p5",
+                        envelope_proposed=99.85,
+                        envelope_prior_stop=85.0,
+                    ),
+                    False,
+                    report,
+                )
+                lines = self._envelope_lines()
+        self.assertEqual(report.exits_placed, 1)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["uic"], _UIC)
+        self.assertEqual(lines[0]["policy"], "atr_bracket_1p5")
+        self.assertEqual(lines[0]["proposed"], 99.85)
+        self.assertEqual(lines[0]["clamped"], 99.8)
+        self.assertEqual(lines[0]["prior_stop"], 85.0)
+        self.assertEqual(lines[0]["avg_price"], 100.0)
+        self.assertIsInstance(lines[0]["ts"], float)
+
+    def test_confirmed_success_without_envelope_facts_never_journals(self) -> None:
+        # A divergence-free reanchor (envelope_* None, the default) journals
+        # ``reanchored`` only — never an ``envelope_clamped`` record.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)]
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                executor(
+                    _amend_action(reason="reanchor-on-fill", reanchor_avg_price=95.0),
+                    False,
+                    report,
+                )
+                lines = self._envelope_lines()
+        self.assertEqual(report.exits_placed, 1)
+        self.assertEqual(lines, [], "no divergence facts -> no envelope_clamped record")
+
+
 def _oco_leg(
     order_id: str, order_type: str, amount: float, *, base: str = "crid-oco-0"
 ) -> OrderState:
