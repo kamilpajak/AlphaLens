@@ -16,5 +16,7 @@ from typing import Literal
 
 __status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"] = "ACTIVE"
 
+# The accrual switch: `thematic score` merges event rows only when this is "1".
+EVENT_LANE_ENV = "ALPHALENS_EVENT_LANE"
 DEFAULT_EVENT_CANDIDATES_DIR = Path.home() / ".alphalens" / "event_candidates"
 DEFAULT_ACCEPTANCE_CACHE_DIR = Path.home() / ".alphalens" / "edgar_acceptance"
