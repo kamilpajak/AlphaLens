@@ -2450,12 +2450,15 @@ def _advance_one_entry_watch(
     # depth terminal (the fill is already covered by the fire-arm planned line).
     if _terminal_leaves_a_resting_order(result):
         result = _finalize_entry_terminal_vs_broker(deps, crid, result, report)
-    _persist_entry_watch_result(crid, record, runtime, result, now, price, d_bps)
-    # Persist the open-check clearance ON THE TRANSITION tick, BEFORE the arm
-    # attempt below — the arm can fail transiently for many ticks, and only the
-    # journal survives a restart (see _persist_open_check_clearance).
+    # Persist the open-check clearance ON THE TRANSITION tick, BEFORE the tick's
+    # engine intents (a same-tick G9 terminal must never be followed by a
+    # markerless watch_open — the journal would read terminated-then-re-opened)
+    # and BEFORE the arm attempt below — the arm can fail transiently for many
+    # ticks, and only the journal survives a restart (see
+    # _persist_open_check_clearance).
     if was_awaiting_fresh_low and not runtime.watcher.awaiting_fresh_low:
         _persist_open_check_clearance(record)
+    _persist_entry_watch_result(crid, record, runtime, result, now, price, d_bps)
     # PR-T2b native arm: once TOUCHED (with a trustworthy price) PLACE the resting
     # Saxo trailing-LIMIT order out-of-band — the server ratchets + fires from
     # there. Re-attempted every TOUCHED tick until it arms (idempotent, dedup on
