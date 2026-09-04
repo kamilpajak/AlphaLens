@@ -114,6 +114,7 @@ Estimated 4-6 PRs. Nothing here touches selection or ordering of the thematic la
 1. Adversarial design review (zen `deepseek/deepseek-v4-pro` thinking=high + Perplexity `reason`), per the ">1h compute" doctrine — this lane accrues for months, so the review is mandatory before the first PR.
 2. Resolve §11, then flip Status to LOCKED in a follow-up doc PR with the frozen gate schema and N floors.
 3. Implementation plan (writing-plans) -> PRs per §7.
+4. **Done 2026-09-04:** stage-2 forward pre-registration LOCKED in [`insider_cluster_forward_prereg_2026_09.md`](insider_cluster_forward_prereg_2026_09.md) (ledger `insider_cluster_forward_2026_09`, epic #1293, PR #1294). Episode dedup is 20 sessions as measured in stage 1 (supersedes the "prior 5 sessions" line in §5).
 
 ## 11. Open questions for the owner
 
@@ -165,4 +166,4 @@ From the same review round as the cluster memo §12 (Perplexity `reason` + zen `
 
 ## 15. Stage-1 result — insider cluster (2026-09-03)
 
-Estimation stage complete (`insider_cluster_retro_design_2026_09_03.md` §13): treated − matched control car_20 = +0.76 pp, 90% CI [+0.21, +1.31], N = 3,134 / 1,441 arrival sessions; dose-response in the insider count (≥ 3 insiders +1.35 pp). **Planning rule: BUILD (marginal: net lower bound −0.45 pp vs −0.50 pp).** Retail 3-name simulation: mean net +0.5 pp, median −0.5 pp, 54% losing trades. Stage 2 (forward accrual under the live windows and the fee-bearing SIM basket) is the confirmatory test; the owner decides whether to start the build (§7) given the thin net margin.
+Estimation stage complete (`insider_cluster_retro_design_2026_09_03.md` §13): treated − matched control car_20 = +0.76 pp, 90% CI [+0.21, +1.31], N = 3,134 / 1,441 arrival sessions; dose-response in the insider count (≥ 3 insiders +1.35 pp). **Planning rule: BUILD (marginal: net lower bound −0.45 pp vs −0.50 pp).** Retail 3-name simulation: mean net +0.5 pp, median −0.5 pp, 54% losing trades. Stage 2 (forward accrual under the live windows and the fee-bearing SIM basket) is the confirmatory test; the owner decides whether to start the build (§7) given the thin net margin. **Owner decision 2026-09-04: build as a candidate source with logging (epic #1293); stage 2 pre-registered in `insider_cluster_forward_prereg_2026_09.md`.**
