@@ -6004,6 +6004,38 @@ def _journal_trailed(
     _append_standalone_stop_journal(marker)
 
 
+def _journal_envelope_clamped(
+    uic: int,
+    *,
+    policy: str,
+    proposed: float,
+    clamped: float,
+    prior_stop: float,
+    avg_price: float,
+    clock: Callable[[], float] = time.time,
+) -> None:
+    """Persist a timestamped ``envelope_clamped`` telemetry record (#1015, INC-2
+    memo section 7). Written by the executor ONLY on a CONFIRMED reanchor
+    AmendStop PATCH success whose proposed target the never-below-brief-floor
+    envelope clamped (``position_manager._maybe_reanchor`` stamps the
+    ``envelope_*`` facts on the action; a divergence-free reanchor carries
+    ``None`` and never writes this). Read by nothing in the protection logic —
+    no fold consumes it (like ``amend_ok``), and the boot compactor drops it at
+    restart like the other telemetry markers (``reanchored`` / ``trailed``)."""
+    _append_standalone_stop_journal(
+        {
+            "kind": "envelope_clamped",
+            "uic": int(uic),
+            "policy": str(policy),
+            "proposed": float(proposed),
+            "clamped": float(clamped),
+            "prior_stop": float(prior_stop),
+            "avg_price": float(avg_price),
+            "ts": float(clock()),
+        }
+    )
+
+
 def _fold_reanchored_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
     """Fold the append-only ``reanchored`` journal markers into the LATEST
     (by ``ts``) ``avg_price`` per uic (PR-6b). A DICT, not a TTL frozenset —
@@ -9793,6 +9825,32 @@ def _execute_amend_stop(
             uic=action.uic,
             kind="reanchored",
         )
+        # #1015: the decision layer stamped envelope-clamp divergence facts on
+        # the action — persist them alongside the latch, same confirmed-success
+        # gate, same best-effort containment.
+        if (
+            action.envelope_policy is not None
+            and action.envelope_proposed is not None
+            and action.envelope_prior_stop is not None
+        ):
+            envelope_policy = action.envelope_policy
+            envelope_proposed = action.envelope_proposed
+            envelope_prior_stop = action.envelope_prior_stop
+            envelope_clamped = action.stop_price
+            _journal_outcome_best_effort(
+                lambda: _journal_envelope_clamped(
+                    action.uic,
+                    policy=envelope_policy,
+                    proposed=envelope_proposed,
+                    clamped=envelope_clamped,
+                    prior_stop=envelope_prior_stop,
+                    avg_price=reanchor_avg_price,
+                ),
+                throttle,
+                report,
+                uic=action.uic,
+                kind="envelope_clamped",
+            )
 
 
 def _execute_place_stop(
