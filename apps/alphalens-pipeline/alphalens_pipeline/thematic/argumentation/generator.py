@@ -119,6 +119,12 @@ class BriefErrorKind(enum.Enum):
     # otherwise-valid output — and handled the same way: ONE greedy re-roll,
     # then withhold the prose while the ROW still ships.
     UNSUPPORTED_BENEFIT_CLAIM = "unsupported_benefit_claim"
+    # Parsed cleanly, but the model wrote the whole brief — thesis, bear case,
+    # exit plan — into ``tldr`` and left the sibling sections blank (ABUS,
+    # brief date 2026-08-19). Every required key is present and one field is
+    # substantive, so EMPTY_CONTENT cannot see it. Same SHAPE as
+    # LANGUAGE_DRIFT: ONE greedy re-roll, then withhold while the ROW ships.
+    SECTION_COLLAPSE = "section_collapse"
 
 
 # The model narrating its own length budget: a bare integer followed by
@@ -177,6 +183,37 @@ def _has_substantive_field(parsed: dict) -> bool:
         isinstance(parsed.get(key), str) and parsed[key].strip() != ""
         for key in BRIEF_RESPONSE_SCHEMA["required"]
     )
+
+
+# Section-collapse thresholds, chosen from the shipped corpus rather than the
+# prompt budgets (Postgres briefs_brief, 1005 rows with non-empty tldr,
+# 2026-05-19..2026-09-03, read 2026-09-04): the 7 collapsed rows had tldr
+# lengths 550-3062 with all three siblings blank; the 998 healthy rows topped
+# out at 394 (p99 = 262). 450 sits between the two populations with margin on
+# both sides; >=2 blank siblings is the issue's bar (every observed collapse
+# had 3, so 2 costs nothing observed and catches a partial collapse).
+_COLLAPSE_TLDR_CHARS = 450
+_COLLAPSE_MIN_BLANK_SIBLINGS = 2
+
+
+def _is_section_collapse(parsed: dict) -> bool:
+    """True when the brief collapsed into ``tldr`` with blank sibling sections.
+
+    Fires only on the CONJUNCTION: an over-budget tldr beside substantive
+    siblings is a verbose-but-complete brief, and a short tldr beside blank
+    siblings is a terse-but-real brief — both must ship (the deliberate
+    ``_has_substantive_field`` bar). Runs after ``_strip_length_annotations``
+    so an echoed budget marker cannot inflate the length measurement.
+    """
+    tldr = parsed.get("tldr")
+    if not isinstance(tldr, str) or len(tldr) <= _COLLAPSE_TLDR_CHARS:
+        return False
+    blank_siblings = sum(
+        1
+        for key in BRIEF_RESPONSE_SCHEMA["required"]
+        if key != "tldr" and (not isinstance(parsed.get(key), str) or parsed[key].strip() == "")
+    )
+    return blank_siblings >= _COLLAPSE_MIN_BLANK_SIBLINGS
 
 
 def _contains_cjk(parsed: dict) -> bool:
@@ -371,6 +408,21 @@ def generate_brief(
         logger.warning("brief parsed but every required field is blank for %s", facts.get("ticker"))
         return None, BriefErrorKind.EMPTY_CONTENT
 
+    # Collapse guard: the whole brief written into ``tldr`` with the sibling
+    # sections blank (ABUS, 2026-08-19). Passes EMPTY_CONTENT (one substantive
+    # field) yet renders as one overlong paragraph plus three blank sections —
+    # and the blank bear case is the worst kind of blank, because it reads as
+    # "the bear case was thin" on exactly the rows where the model was least
+    # disciplined. Surface SECTION_COLLAPSE so the retry wrapper drives one
+    # fresh greedy call.
+    if _is_section_collapse(parsed):
+        logger.warning(
+            "brief sections collapsed into tldr (len=%d) for %s",
+            len(parsed.get("tldr", "")),
+            facts.get("ticker"),
+        )
+        return None, BriefErrorKind.SECTION_COLLAPSE
+
     # Language guard: DeepSeek v4 (Chinese-developed) nondeterministically writes
     # the whole brief in Chinese. Such a brief parses cleanly but is unreadable
     # for the WhatsApp group (WK card 2026-06-12). Surface LANGUAGE_DRIFT so the
@@ -563,12 +615,14 @@ def generate_brief_with_retry(
         BriefErrorKind.EMPTY_CONTENT,
         BriefErrorKind.LANGUAGE_DRIFT,
         BriefErrorKind.UNSUPPORTED_BENEFIT_CLAIM,
+        BriefErrorKind.SECTION_COLLAPSE,
     ):
         return None, kind
 
     # TRUNCATED = the reasoning trace + JSON ran out of room -> escalate the cap
     # through the doubling ladder, stopping at the first success. EMPTY /
-    # EMPTY_CONTENT / LANGUAGE_DRIFT / UNSUPPORTED_BENEFIT_CLAIM were NOT
+    # EMPTY_CONTENT / LANGUAGE_DRIFT / UNSUPPORTED_BENEFIT_CLAIM /
+    # SECTION_COLLAPSE were NOT
     # token-exhaustion, so a single fresh greedy call at the base cap is the right
     # recovery (more tokens do nothing). The retry uses the SAME prompt — the
     # contract is already in it — so the model gets a clean greedy draw rather
