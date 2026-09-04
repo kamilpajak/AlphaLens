@@ -168,11 +168,15 @@ ENTRY_TRAIL_KINDS = (
 )
 
 # Compaction growth bound: per crid the minimal fold-equivalent set is at most
-# the latest watch_open + the min-trough record + the latest non-terminal
-# state record + the latest terminal record (memo G4 "growth bound from day
-# one"). Unknown/malformed lines are preserved verbatim ON TOP of this bound —
-# they are an alarm state, not steady-state growth.
-COMPACTED_LINES_PER_CRID_BOUND = 4
+# the latest watch_open + the min-trough record + the latest trail_armed + the
+# latest non-terminal state record + the latest terminal record (memo G4
+# "growth bound from day one"). Unknown/malformed lines are preserved verbatim
+# ON TOP of this bound — they are an alarm state, not steady-state growth.
+#
+# 4 -> 5 on 2026-09-04: the latest trail_armed is kept in its own right, so a
+# later non-terminal line cannot evict the resting order's id and ceiling (see
+# _CompactionTracker.latest_trail_armed).
+COMPACTED_LINES_PER_CRID_BOUND = 5
 
 _CRID_KEY = "crid"
 
@@ -530,6 +534,14 @@ class _CompactionTracker:
     min_trough: dict[str, tuple[float, int]] = field(default_factory=dict)
     latest_state: dict[str, int] = field(default_factory=dict)
     latest_terminal: dict[str, int] = field(default_factory=dict)
+    # The latest ``trail_armed``, kept for the SAME reason as latest_watch_open:
+    # electing only the latest NON-TERMINAL record preserves ``latest_kind`` but
+    # not the sticky fields a kind carries, so ANY later non-terminal line
+    # evicted the arm line — taking ``armed_order_id`` (which owns the resting
+    # broker order) and ``armed_ceiling`` with it. A ``watch_open`` after the arm
+    # legitimately CLEARS both, and it is kept too, so the fold still comes out
+    # right for the re-arm.
+    latest_trail_armed: dict[str, int] = field(default_factory=dict)
 
     def note(self, crid: str, kind: str, record: Mapping[str, Any], index: int) -> None:
         """Track one known-kind record at ``index`` (file order = time order)."""
@@ -539,6 +551,8 @@ class _CompactionTracker:
         self.latest_state[crid] = index
         if kind == KIND_WATCH_OPEN:
             self.latest_watch_open[crid] = index
+        elif kind == KIND_TRAIL_ARMED:
+            self.latest_trail_armed[crid] = index
         elif kind == KIND_TROUGH:
             trough = _finite_positive_float(record.get(KIND_TROUGH))
             if trough is not None:
@@ -550,6 +564,7 @@ class _CompactionTracker:
         """Every tracked index that must be preserved."""
         kept = set(self.latest_watch_open.values())
         kept.update(index for _trough, index in self.min_trough.values())
+        kept.update(self.latest_trail_armed.values())
         kept.update(self.latest_state.values())
         kept.update(self.latest_terminal.values())
         return kept
@@ -562,8 +577,9 @@ def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
 
     Kept per crid: the latest ``watch_open``, the record achieving the MIN
     trough (equals the latest under the ratchet invariant, but min is the
-    fold-equivalent choice), the latest non-terminal state record, and the
-    latest terminal record — :data:`COMPACTED_LINES_PER_CRID_BOUND` lines at
+    fold-equivalent choice), the latest ``trail_armed`` (it carries the resting
+    order id + its ceiling, which ``latest_state`` alone does not preserve), the
+    latest non-terminal state record, and the latest terminal record — :data:`COMPACTED_LINES_PER_CRID_BOUND` lines at
     most, however long the input. UNKNOWN kinds and malformed/missing-crid
     lines are PRESERVED VERBATIM (memo G4 — dropping a malformed line would
     silently clear the fold's fail-closed count; dropping an unknown kind is

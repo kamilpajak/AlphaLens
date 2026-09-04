@@ -511,6 +511,49 @@ class TestCompactEntryTrailLines(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
 
 
+class TestCompactionKeepsTheArmedLine(unittest.TestCase):
+    """The counterexample the rich-journal fixture LACKS (#1317 review).
+
+    ``_CompactionTracker`` elects the latest NON-TERMINAL record per crid, which
+    preserves ``latest_kind`` but NOT the sticky fields a ``trail_armed`` line
+    carries. Any non-terminal line landing after the arm therefore evicted the
+    arm line, and with it ``armed_order_id`` (which owns the resting broker
+    order) and ``armed_ceiling``. The state machine does not produce that
+    ordering today — the watch pass drops a tier once it holds a real order id —
+    so this was latent, not live. A latent way to lose the id of a resting BUY
+    order is still a way to lose it, and the compactor's own contract says the
+    output folds IDENTICALLY.
+    """
+
+    def test_a_line_after_the_arm_does_not_evict_the_arm(self) -> None:
+        lines = [
+            _watch_open(),
+            _line(et.KIND_TOUCHED),
+            _line(et.KIND_TROUGH, trough=9.5),
+            _line(et.KIND_TRAIL_ARMED, order_id="O-1", trigger=9.55, ceiling=9.57),
+            _line(et.KIND_TROUGH, trough=9.4),  # lands AFTER the arm
+        ]
+        compacted = et.compact_entry_trail_lines(lines)
+        before = et.fold_entry_trail_lines(lines).tiers[_CRID]
+        after = et.fold_entry_trail_lines(compacted).tiers[_CRID]
+        self.assertEqual(after.armed_order_id, before.armed_order_id)
+        self.assertEqual(after.armed_ceiling, before.armed_ceiling)
+        self.assertEqual(after.latest_kind, before.latest_kind)
+        self.assertEqual(after.min_trough, before.min_trough)
+
+    def test_the_arm_line_costs_at_most_one_extra_kept_line(self) -> None:
+        # The growth bound is a contract (memo G4 "growth bound from day one"),
+        # so the extra kept record must be counted, not smuggled in.
+        lines = [_watch_open()]
+        for i in range(30):
+            lines.append(_line(et.KIND_TROUGH, trough=9.9 - i * 0.01))
+            lines.append(_line(et.KIND_TRAIL_ARMED, order_id=f"O-{i}", trigger=9.5, ceiling=9.52))
+            lines.append(_line(et.KIND_TOUCHED))
+        self.assertLessEqual(
+            len(et.compact_entry_trail_lines(lines)), et.COMPACTED_LINES_PER_CRID_BOUND
+        )
+
+
 class TestCompactEntryTrailJournalFile(unittest.TestCase):
     def test_absent_file_is_noop_never_created(self) -> None:
         with TemporaryDirectory() as d:
