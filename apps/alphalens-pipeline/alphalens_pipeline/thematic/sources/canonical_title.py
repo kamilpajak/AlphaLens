@@ -275,6 +275,19 @@ def fetch_og_title(
     return title
 
 
+def _is_edgar_host(url: str) -> bool:
+    """sec.gov and its subdomains: never fetched here.
+
+    Every SEC EDGAR request must go through the canonical ``SecEdgarClient``
+    (rate limit + compliant User-Agent); this display-only og:title fetcher is
+    the one sanctioned raw fetch and it must not become a shadow EDGAR client.
+    An EDGAR filing page also has no publisher headline worth swapping in, so
+    the fallback (the fact-only title the lane composed) is the right answer.
+    """
+    host = (urlparse(url).hostname or "").lower()
+    return host == "sec.gov" or host.endswith(".sec.gov")
+
+
 def canonical_title_for(
     url: str | None,
     *,
@@ -291,7 +304,7 @@ def canonical_title_for(
     This confirms the same article even when the publisher reworded the headline
     — a Jaccard>=0.6 check would wrongly reject a heavy reword.
     """
-    if not url:
+    if not url or _is_edgar_host(url):
         return fallback
     try:
         og = fetch_og_title(url, cache_dir=cache_dir, fetcher=fetcher)
