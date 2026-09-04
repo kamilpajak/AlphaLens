@@ -255,5 +255,88 @@ class TestFeaturesAsOf(unittest.TestCase):
             self.assertIsNone(rec)
 
 
+class TestFeaturesAsOfStalenessRefresh(unittest.TestCase):
+    """#1269: the no-TTL disk cache needs an opt-in freshness rule.
+
+    Without it, the first fetch freezes a ticker's history forever and the
+    stamped si_settlement_date goes stale ~2 weeks after first touch.
+    """
+
+    _ASOF = date(2024, 6, 1)
+    _STALE_ROWS = [
+        {
+            "settlement_date": "2024-02-15",
+            "ticker": "AAPL",
+            "short_interest": 97_665_956,
+            "avg_daily_volume": 49_500_000,
+            "days_to_cover": 1.97,
+        }
+    ]
+    _FRESH_ROW = {
+        "settlement_date": "2024-05-15",
+        "ticker": "AAPL",
+        "short_interest": 95_000_000,
+        "avg_daily_volume": 48_000_000,
+        "days_to_cover": 1.98,
+    }
+
+    def _client(self, polygon_client):
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import (
+            PolygonShortInterestClient,
+        )
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        return PolygonShortInterestClient(
+            cache_dir=Path(self.tmp.name), polygon_client=polygon_client
+        )
+
+    def test_fresh_cache_is_not_refetched(self):
+        polygon_client = _mock_polygon_client(rows=[*self._STALE_ROWS, self._FRESH_ROW])
+        client = self._client(polygon_client)
+        client.fetch_ticker("AAPL")  # seed the cache (1 HTTP call)
+
+        rec = client.features_as_of("AAPL", self._ASOF, refresh_if_stale=True)
+
+        self.assertEqual(polygon_client.get_short_interest.call_count, 1)
+        self.assertEqual(rec.settlement_date, date(2024, 5, 15))
+
+    def test_stale_cache_triggers_exactly_one_refresh(self):
+        polygon_client = _mock_polygon_client()
+        polygon_client.get_short_interest.side_effect = [
+            self._STALE_ROWS,  # seed: newest settlement > 30d before asof
+            [*self._STALE_ROWS, self._FRESH_ROW],  # refresh sees the new print
+        ]
+        client = self._client(polygon_client)
+        client.fetch_ticker("AAPL")
+
+        rec = client.features_as_of("AAPL", self._ASOF, refresh_if_stale=True)
+
+        self.assertEqual(polygon_client.get_short_interest.call_count, 2)
+        self.assertEqual(rec.settlement_date, date(2024, 5, 15))
+
+    def test_refresh_yielding_nothing_returns_none_without_looping(self):
+        polygon_client = _mock_polygon_client(rows=[])
+        client = self._client(polygon_client)
+        client.fetch_ticker("AAPL")
+
+        rec = client.features_as_of("AAPL", self._ASOF, refresh_if_stale=True)
+
+        self.assertIsNone(rec)
+        self.assertEqual(polygon_client.get_short_interest.call_count, 2)
+
+    def test_default_never_refreshes(self):
+        # refresh_if_stale defaults to False — the pre-registered v2 research
+        # features keep their frozen-cache reproducibility.
+        polygon_client = _mock_polygon_client(rows=self._STALE_ROWS)
+        client = self._client(polygon_client)
+        client.fetch_ticker("AAPL")
+
+        rec = client.features_as_of("AAPL", self._ASOF)
+
+        self.assertEqual(polygon_client.get_short_interest.call_count, 1)
+        self.assertEqual(rec.settlement_date, date(2024, 2, 15))
+
+
 if __name__ == "__main__":
     unittest.main()

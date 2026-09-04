@@ -72,5 +72,35 @@ class TestPolygonAggRangeLive(unittest.TestCase):
         run_probes(self, {"AAPL/minute-bars": _probe}, label="polygon")
 
 
+@unittest.skipUnless(_LIVE, "set POLYGON_LIVE_TEST=1 to run the live Polygon probe")
+class TestPolygonShortInterestLive(unittest.TestCase):
+    def test_short_interest_rows_have_expected_shape(self):
+        # #1269 stamps si_* telemetry from /stocks/v1/short-interest. The
+        # entitlement was last hand-verified 2026-04-30; this probe keeps the
+        # claim honest weekly. Shape-only: keys present, never values.
+        from alphalens_pipeline.data.alt_data.polygon_client import get_default_polygon_client
+
+        def _probe() -> None:
+            try:
+                rows = get_default_polygon_client().get_short_interest(
+                    ticker="AAPL", limit=10, max_pages=1
+                )
+            except Exception as exc:  # classify any client error, don't leak it raw
+                raise _classify(exc) from exc
+
+            if not rows:
+                raise PermanentProbeError(
+                    "Polygon returned NO short-interest rows for AAPL — the plan "
+                    "likely lost the /stocks/v1/short-interest entitlement; the "
+                    "si_* telemetry stamp would silently go all-null."
+                )
+            required = {"settlement_date", "short_interest", "days_to_cover"}
+            missing = required - set(rows[0])
+            if missing:
+                raise PermanentProbeError(f"short-interest row missing keys: {sorted(missing)}")
+
+        run_probes(self, {"AAPL/short-interest": _probe}, label="polygon")
+
+
 if __name__ == "__main__":
     unittest.main()
