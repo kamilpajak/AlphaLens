@@ -66,6 +66,9 @@ class TestLayerVersionKeysExist(unittest.TestCase):
         from alphalens_pipeline.thematic.screening.selection_score import (
             SCORER_CONFIG_VERSION,
         )
+        from alphalens_pipeline.thematic.short_interest_telemetry.enrichment import (
+            SHORT_INTEREST_CONFIG_VERSION,
+        )
         from alphalens_pipeline.thematic.trade_setup.config_version import (
             setup_builder_config_version,
         )
@@ -74,6 +77,7 @@ class TestLayerVersionKeysExist(unittest.TestCase):
             SCORER_CONFIG_VERSION,
             MARKET_STATE_CONFIG_VERSION,
             OPTIONS_CONFIG_VERSION,
+            SHORT_INTEREST_CONFIG_VERSION,
             INSIDER_SIGNAL_VERSION,
             ladder_config_version(order_ttl_days=7),
             setup_builder_config_version(),

@@ -41,6 +41,11 @@ logger = logging.getLogger(__name__)
 
 _DISSEMINATION_LAG_BD = 8
 
+# Cache-freshness rule (#1269): a FINRA cycle is ~14 calendar days and the
+# 8 BD dissemination lag spans ~12 more, so a healthy ticker's newest record
+# is never older than ~26 days behind asof. Past 30 days the cache is stale.
+_STALE_AFTER_DAYS = 30
+
 
 # Re-exported under the historical names so existing callers and tests that
 # catch ``PolygonShortInterestError`` / ``PolygonShortInterestAuthError`` keep
@@ -149,9 +154,29 @@ class PolygonShortInterestClient:
         out["days_to_cover"] = out["days_to_cover"].astype(float)
         return out
 
-    def features_as_of(self, ticker: str, asof: date) -> ShortInterestRecord | None:
-        """Most recent record with `(settlement_date + 8 BD) <= asof`. None if none."""
-        df = self.fetch_ticker(ticker)
+    def features_as_of(
+        self, ticker: str, asof: date, *, refresh_if_stale: bool = False
+    ) -> ShortInterestRecord | None:
+        """Most recent record with `(settlement_date + 8 BD) <= asof`. None if none.
+
+        ``refresh_if_stale``: the per-ticker disk cache has no TTL, so a first
+        fetch freezes that ticker's history. When True and the newest eligible
+        record is missing or settled more than ``_STALE_AFTER_DAYS`` before
+        ``asof``, re-fetch the history once and re-evaluate (still may return
+        the stale record if Polygon has nothing newer — an honest stale stamp
+        beats None). Default False preserves the frozen-cache reproducibility
+        the pre-registered v2 research features rely on.
+        """
+        record = self._latest_available(self.fetch_ticker(ticker), ticker, asof)
+        if not refresh_if_stale:
+            return record
+        threshold = asof - timedelta(days=_STALE_AFTER_DAYS)
+        if record is not None and record.settlement_date >= threshold:
+            return record
+        return self._latest_available(self.fetch_ticker(ticker, refresh=True), ticker, asof)
+
+    @staticmethod
+    def _latest_available(df: pd.DataFrame, ticker: str, asof: date) -> ShortInterestRecord | None:
         if df.empty:
             return None
         # Eligible == settlement + 8 BD <= asof

@@ -559,6 +559,32 @@ def _apply_options_telemetry(
         return _carry_forward_options(enriched, out_path)
 
 
+def _apply_short_interest_telemetry(enriched: pd.DataFrame, *, target: dt.date) -> pd.DataFrame:
+    """Stamp the telemetry-only si_* short-interest columns (#1269).
+
+    Settlement-dated FINRA data via the Polygon domain wrapper — identical at
+    every run slot for a given asof, so unlike options telemetry there is no
+    post-close window, no freeze marker and no carry-forward. The enricher is
+    per-ticker fail-soft and stamps si_config_version even without a vendor
+    client; this outer boundary only guards against a wholesale failure
+    (import error, frame contract break), returning the frame unchanged
+    rather than aborting the score stage. Lazy import keeps the frequent-cron
+    `alphalens` startup cheap.
+    """
+    try:
+        from alphalens_pipeline.thematic.short_interest_telemetry import (
+            enrichment as si_enrichment,
+        )
+
+        return si_enrichment.enrich(enriched, asof=target)
+    except Exception:
+        logger.warning(
+            "short-interest telemetry pass failed; columns left absent",
+            exc_info=True,
+        )
+        return enriched
+
+
 def _parquet_num_rows(path: Path) -> int:
     """Row count of a parquet via its footer metadata (no full read).
 
@@ -1076,6 +1102,11 @@ def score(
     # Carry-forward read happens inside the helper's fail-soft boundary so a
     # corrupt previous parquet never aborts the score stage.
     enriched = _apply_options_telemetry(enriched, target=target, out_path=out_path)
+
+    # Short-interest telemetry (#1269): settlement-dated, so no window gate or
+    # carry-forward — every slot stamps the same value for the asof. Display /
+    # first-look only, NOT in the brief sort or selection (guard test pins it).
+    enriched = _apply_short_interest_telemetry(enriched, target=target)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     enriched.to_parquet(out_path, index=False)
