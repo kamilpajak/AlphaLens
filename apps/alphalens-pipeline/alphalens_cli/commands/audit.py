@@ -16,13 +16,17 @@ Usage::
     alphalens audit tri_factor \\
         --is-start 2019-01-08 --is-end 2022-12-31 \\
         --oos-start 2023-01-01 --oos-end 2023-06-30 \\
-        --rebalance-stride 5
+        --n-phases 5 --rebalance-stride 5
 
     alphalens audit insider_form4_opportunistic \\
         --is-start 2018-01-01 --is-end 2023-12-31
 
-Extra args after ``--rebalance-stride`` / ``--out`` are forwarded to the
-experiment script as positional arguments via ``ctx.args``.
+A quarterly-cadence audit is ``--n-phases 5 --rebalance-stride 63`` —
+since PRB v0.3.0 the sweep size and the cadence are independent kwargs,
+so no bespoke orchestrator script is needed to pin the phase count.
+
+Extra args after ``--n-phases`` / ``--rebalance-stride`` / ``--out`` are
+forwarded to the experiment script as positional arguments via ``ctx.args``.
 """
 
 from __future__ import annotations
@@ -71,10 +75,15 @@ def audit_command(
         ...,
         help="Strategy name; see scripts/experiment_*.py for the full list.",
     ),
+    n_phases: int = typer.Option(
+        5,
+        "--n-phases",
+        help="Phase offsets to sweep (default 5; must be <= --rebalance-stride).",
+    ),
     rebalance_stride: int = typer.Option(
         5,
         "--rebalance-stride",
-        help="Stride to sweep across (default 5 = weekly cadence).",
+        help="Rebalance cadence in trading days, forwarded to the experiment script.",
     ),
     out: Path = typer.Option(
         _WORKSPACE_ROOT / "docs/research/multi_phase_audit.json",
@@ -94,11 +103,17 @@ def audit_command(
         )
         raise typer.Exit(code=2)
 
-    raise typer.Exit(
-        run_audit(
+    try:
+        rc = run_audit(
             _SCRIPTS[strategy],
             ctx.args,
+            n_phases=n_phases,
             rebalance_stride=rebalance_stride,
             out=out,
         )
-    )
+    except ValueError as exc:
+        # e.g. n_phases > rebalance_stride — a usage error, not a crash:
+        # surface the driver's message without a traceback.
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from None
+    raise typer.Exit(rc)

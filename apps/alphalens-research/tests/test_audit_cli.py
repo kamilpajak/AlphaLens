@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import unittest
+from unittest import mock
 
 from alphalens_cli.commands.audit import _SCRIPTS
 from typer.testing import CliRunner
@@ -71,6 +72,43 @@ class TestAuditCliSurface(unittest.TestCase):
         result = self.runner.invoke(app, ["audit", "--help"])
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
         self.assertIn("Multi-phase audit", _plain(result.stdout))
+
+    def test_n_phases_and_stride_are_passed_as_separate_kwargs(self):
+        # PRB v0.3.0 decoupled the phase sweep from the rebalance cadence
+        # (upstream #110): a quarterly audit is n_phases=5 + stride=63, not a
+        # 63-phase sweep. The wrapper must forward BOTH kwargs — if --n-phases
+        # fell through to ctx.args it would reach the experiment script (which
+        # does not accept it) instead of the driver.
+        from alphalens_cli.main import app
+
+        with mock.patch("phase_robust_backtesting.audit_multi_phase.run_audit") as run_audit:
+            run_audit.return_value = 0
+            result = self.runner.invoke(
+                app,
+                ["audit", "tri_factor", "--n-phases", "3", "--rebalance-stride", "21"],
+            )
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        kwargs = run_audit.call_args.kwargs
+        self.assertEqual(kwargs["n_phases"], 3)
+        self.assertEqual(kwargs["rebalance_stride"], 21)
+        # And neither flag leaked into the forwarded extra args.
+        forwarded = run_audit.call_args.args[1]
+        self.assertNotIn("--n-phases", forwarded)
+        self.assertNotIn("--rebalance-stride", forwarded)
+
+    def test_invalid_phase_stride_combo_is_a_clean_usage_error(self):
+        # run_audit (PRB v0.3.0) raises ValueError when n_phases > stride —
+        # validated BEFORE any script/subprocess work, so this exercises the
+        # real driver. The CLI must surface the message as a usage error
+        # (stderr + exit 2), not a Python traceback.
+        from alphalens_cli.main import app
+
+        result = self.runner.invoke(
+            app,
+            ["audit", "tri_factor", "--n-phases", "6", "--rebalance-stride", "5"],
+        )
+        self.assertEqual(result.exit_code, 2, msg=result.output)
+        self.assertIn("n_phases", _plain(result.stderr or result.output))
 
     def test_unknown_strategy_lists_choices(self):
         from alphalens_cli.main import app

@@ -19,7 +19,7 @@ dependencies = [
     "lightgbm>=4.6.0",
     "stockstats>=0.6.5",
     # Methodology bundle (pre-registration ledger + multi-phase audit)
-    "phase-robust-backtesting @ git+https://github.com/kamilpajak/phase-robust-backtesting.git@v0.2.3",
+    "phase-robust-backtesting @ git+https://github.com/kamilpajak/phase-robust-backtesting.git@v0.3.0",
     # Live infrastructure (data clients, PIT store, core, scorers) lives in the
     # sibling workspace member and is consumed by screeners + backtest.
     "alphalens-pipeline",
