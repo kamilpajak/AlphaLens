@@ -86,7 +86,12 @@ def _seed_armed_with_trough(path: Any, *, crid: str = _CRID, order_id: str, trou
 
 
 def _rearm_watch_open(
-    path: Any, *, crid: str = _CRID, trough: float, window_end: str = _FUTURE_WINDOW
+    path: Any,
+    *,
+    crid: str = _CRID,
+    trough: float,
+    window_end: str = _FUTURE_WINDOW,
+    next_tier_limit: float | None = None,
 ) -> None:
     """Reproduce the fold state of a RE-ARMED tier directly: a carried trough
     (the running min from before the DayOrder-cancel) + a re-arm ``watch_open``
@@ -106,7 +111,7 @@ def _rearm_watch_open(
             "uic": _UIC,
             "ticker": "KO",
             "exchange_mic": "XNYS",
-            "next_tier_limit": None,
+            "next_tier_limit": next_tier_limit,
             "pick_key": "KO:2026-07-20",
             "entry_mode": "entry-trail-native-d50-testcfg",
             "disaster_stop": 8.0,
@@ -426,6 +431,46 @@ class TestOpenCheckClearanceSurvivesRestart(unittest.TestCase):
             {"kind": entry_trails.KIND_WATCH_OPEN, "crid": _CRID, "limit": 10.0}
         )
         self.assertEqual(_lines(path), [])
+
+
+class TestClearancePrecedesTheSameTickTerminal(unittest.TestCase):
+    """#1106 ordering invariant: when the open-check clearance and a terminal
+    land on the SAME tick (reachable via the G9 suspend — the fresh low that
+    clears the check is the same low that dips below the next tier), the
+    markerless ``watch_open`` clearance line must precede the terminal in the
+    journal. The fold is terminal-sticky today so the reversed order re-admits
+    nothing, but a journal that reads terminal-then-re-opened is a lie any
+    future last-line-wins reader would believe."""
+
+    def test_clearance_line_lands_before_the_same_tick_suspend(self) -> None:
+        path = _journal(self)
+        _planned_journal(self)
+        # Carried trough 9.70, open-check armed, next tier at 9.5: one tick at
+        # 9.40 both clears the open-check (fresh low) and trips the G9 suspend.
+        _rearm_watch_open(path, trough=9.70, next_tier_limit=9.5)
+        prices: dict[int, float | None] = {}
+        broker = _RecordingBroker()  # empty book: G6 finalize is a no-op
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+
+        _run_watch(deps, 9.40, prices)
+
+        kinds = [ln["kind"] for ln in _lines(path)]
+        self.assertIn(entry_trails.KIND_SUSPENDED, kinds, "the tick must suspend")
+        last_open = max(i for i, k in enumerate(kinds) if k == entry_trails.KIND_WATCH_OPEN)
+        self.assertEqual(
+            kinds.count(entry_trails.KIND_WATCH_OPEN), 2, "re-arm + exactly one clearance"
+        )
+        self.assertLess(
+            last_open,
+            kinds.index(entry_trails.KIND_SUSPENDED),
+            "the clearance watch_open must precede the same-tick terminal",
+        )
+
+        # The invariant the ordering protects: the tier stays terminal and is
+        # not re-admitted by the fold.
+        fold = entry_trails.read_entry_trail_fold()
+        self.assertEqual(fold.tiers[_CRID].terminal_kind, entry_trails.KIND_SUSPENDED)
+        self.assertNotIn(_CRID, cl._active_entry_watches(fold))
 
 
 if __name__ == "__main__":
