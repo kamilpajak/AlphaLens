@@ -125,6 +125,11 @@ class _RecordingBroker:
         self.amends: list[Any] = []
         self.cancels: list[str] = []
         self.trailing_orders: list[dict[str, Any]] = []
+        # #1317: what the adapter reports it put on the wire. ``"echo"`` mirrors
+        # SaxoBroker (it echoes the quantized ceiling it sent); a test sets a
+        # float to make the wire value differ from the request, or None to model
+        # a conforming broker that reports none.
+        self.wire_ceiling: Any = "echo"
         self.stop_limits: list[tuple] = []
         self.open_orders: list[Any] = []  # OrderState-like, for list_open_orders
         self.open_orders_error: Exception | None = None  # set to fail the book read
@@ -179,7 +184,8 @@ class _RecordingBroker:
             }
         )
         # Mirrors the adapter: it echoes back the (quantized) ceiling it sent.
-        return _placed(order_id, stop_limit_price=ceiling_price)
+        wire = ceiling_price if self.wire_ceiling == "echo" else self.wire_ceiling
+        return _placed(order_id, stop_limit_price=wire)
 
     def place_stop_limit(self, *a: Any, **k: Any) -> Any:
         self.stop_limits.append((a, k))
@@ -1964,6 +1970,54 @@ class TestEntryWatchCapacityEnvRail(unittest.TestCase):
         self.assertIn("cap=1", records[0].getMessage())
         self.assertIn("KO", records[0].getMessage())
         self.assertIn("stays armed", records[0].getMessage())
+
+
+class TestArmJournalsOnlyArmTimeFacts(unittest.TestCase):
+    """#1317 review: each ``trail_armed`` line must describe ONE real order.
+
+    Three writers, three sources: the G3 write-ahead knows only the geometry
+    (the wire value does not exist until the adapter quantizes it), the
+    post-POST line knows the wire value, and the crash-window ADOPT re-journals
+    an order a PREVIOUS tick POSTed — whose numbers are that tick's, not this
+    one's."""
+
+    def _arm(self, broker: Any) -> list[dict[str, Any]]:
+        path = _journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        _seed_healthy_plan()
+        deps = _watch_deps(_FakeFeed({307: 10.0}), [], broker=broker)
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        return [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TRAIL_ARMED]
+
+    def test_post_post_line_carries_the_wire_value_not_the_geometry(self) -> None:
+        # The stub reports a DIFFERENT (quantized) ceiling than the one asked
+        # for, so a fallback to the geometry value would be visible here.
+        broker = _RecordingBroker()
+        broker.wire_ceiling = 58.95
+        lines = self._arm(broker)
+        asked = broker.trailing_orders[0]["ceiling_price"]
+        self.assertEqual(lines[-1][entry_trails.KEY_CEILING], 58.95)
+        self.assertNotEqual(58.95, asked, "the fixture must differ from the request")
+
+    def test_a_broker_that_reports_no_wire_ceiling_journals_unknown(self) -> None:
+        # NO VERDICT beats a re-derived number: journaling the geometry here
+        # would record a ceiling the adapter never confirmed sending, which is
+        # the exact move #1317 exists to stop.
+        broker = _RecordingBroker()
+        broker.wire_ceiling = None  # a conforming broker that reports none
+        lines = self._arm(broker)
+        self.assertIsNone(lines[-1][entry_trails.KEY_CEILING])
+
+    def test_write_ahead_line_carries_the_geometry_value(self) -> None:
+        broker = _RecordingBroker()
+        broker.wire_ceiling = 58.95
+        lines = self._arm(broker)
+        self.assertIsNone(lines[0]["order_id"], "the write-ahead precedes the POST")
+        self.assertEqual(
+            lines[0][entry_trails.KEY_CEILING], broker.trailing_orders[0]["ceiling_price"]
+        )
+        self.assertEqual(lines[0][entry_trails.KEY_TRIGGER], lines[-1][entry_trails.KEY_TRIGGER])
 
 
 class TestWatchGeometryStampThroughToPlannedLine(unittest.TestCase):

@@ -58,13 +58,23 @@ def _order_state(
     )()
 
 
+_ARMED_CEILING = 10.07
+"""The ceiling the write-ahead line journals (#1317) — known even while the arm
+is still in progress, because the geometry exists before the POST."""
+
+
 def _seed_arm_in_progress(path: Any, *, next_tier_limit: float | None) -> None:
     """A watch_open + a NULL-id ``trail_armed`` write-ahead line — the G3
     arm-in-progress state that keeps the tier ACTIVE with a possibly-resting
     order at the broker."""
     _seed_watch(path, crid=_CRID, limit=10.0, next_tier_limit=next_tier_limit)
     entry_trails.append_entry_trail_line(
-        {"kind": entry_trails.KIND_TRAIL_ARMED, "crid": _CRID, "order_id": None}
+        {
+            "kind": entry_trails.KIND_TRAIL_ARMED,
+            "crid": _CRID,
+            "order_id": None,
+            entry_trails.KEY_CEILING: _ARMED_CEILING,
+        }
     )
 
 
@@ -123,6 +133,18 @@ class TestSuspendCancelsRestingTrail(unittest.TestCase):
         self.assertEqual(fired["realized_qty"], 100.0)
         # deliverable T1d: the terminal measurement joins the REAL order id.
         self.assertEqual(fired["measurement"]["order_id"], "TR-9")
+        # #1317 review: this is the SECOND writer of a `fired` line, and its
+        # measurement must carry the same ceiling keys as the reconcile path —
+        # otherwise a real fill is invisible to the breach detector, and a reader
+        # cannot tell a missing key from a null verdict. Here the ceiling IS
+        # known (the write-ahead journaled it) while the fill price is NOT: the
+        # open-orders re-read carries a quantity, never an execution price. So
+        # the honest stamp is a known ceiling with NO VERDICT beside it.
+        measurement = fired["measurement"]
+        self.assertIn("ceiling", measurement)
+        self.assertIn("ceiling_breach", measurement)
+        self.assertEqual(measurement["ceiling"], _ARMED_CEILING)
+        self.assertIsNone(measurement["ceiling_breach"])
 
     def test_no_resting_order_leaves_the_suspend_untouched(self) -> None:
         # The common case: no -entry- order rests, so nothing is cancelled and the

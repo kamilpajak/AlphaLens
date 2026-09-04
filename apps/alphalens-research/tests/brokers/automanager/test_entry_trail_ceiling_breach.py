@@ -124,7 +124,11 @@ class TestUnknownIsNotClean(unittest.TestCase):
         self.assertIsNone(observe_ceiling(ceiling=None, fill=100.0))
 
     def test_degenerate_inputs_yield_no_verdict(self) -> None:
-        bad = (math.nan, math.inf, -math.inf, 0.0, -1.0)
+        # ``True`` is in the list for the same reason entry_trails rejects it on
+        # every journaled price: it is finite and positive, so a bare isfinite
+        # gate lets it through and produces a 990000 bps "breach" out of a JSON
+        # true. Matches ``entry_trails._finite_positive_float``.
+        bad = (math.nan, math.inf, -math.inf, 0.0, -1.0, True, False)
         for value in bad:
             with self.subTest(value=value):
                 self.assertIsNone(observe_ceiling(ceiling=value, fill=100.0))

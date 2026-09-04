@@ -52,9 +52,12 @@ TRAILING_STEP_FRACTION = 0.10
 
 CEILING_EPS_FRAC = 0.002
 """The ``eps`` buffer in ``trough*(1+d)*(1+eps)`` (memo §3 G1): the gap-through
-fill may sit up to this fraction (20 bps) above the initial trigger before the
-StopLimit ceiling refuses it — tight enough to bound a gap-up, loose enough that
-tick rounding never drops the ceiling below the trigger."""
+fill was INTENDED to sit at most this fraction (20 bps) above the initial
+trigger before the ceiling refused it — tight enough to bound a gap-up, loose
+enough that tick rounding never drops the ceiling below the trigger. On the
+native trailing order that refusal does not happen (#1317): the field is
+retained but not enforced, so read this as the width of the band a fire is
+EXPECTED to land in, not a bound it cannot leave."""
 
 
 @dataclass(frozen=True)
@@ -130,7 +133,11 @@ def observe_ceiling(*, ceiling: float | None, fill: float | None) -> CeilingObse
     if ceiling is None or fill is None:
         return None
     for value in (ceiling, fill):
-        if not math.isfinite(value) or value <= 0.0:
+        # ``bool`` rejected explicitly, as on every journaled price
+        # (``entry_trails._finite_positive_float``): JSON ``true`` is finite and
+        # positive, so a bare isfinite gate would turn it into a 990000 bps
+        # "breach" instead of NO VERDICT.
+        if isinstance(value, bool) or not math.isfinite(value) or value <= 0.0:
             return None
     breach_abs = fill - ceiling
     return CeilingObservation(

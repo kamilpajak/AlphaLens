@@ -2458,7 +2458,16 @@ def _advance_one_entry_watch(
     # _persist_open_check_clearance).
     if was_awaiting_fresh_low and not runtime.watcher.awaiting_fresh_low:
         _persist_open_check_clearance(record)
-    _persist_entry_watch_result(crid, record, runtime, result, now, price, d_bps)
+    _persist_entry_watch_result(
+        crid,
+        record,
+        runtime,
+        result,
+        now,
+        price,
+        d_bps,
+        armed_ceiling=None if tier_state is None else tier_state.armed_ceiling,
+    )
     # PR-T2b native arm: once TOUCHED (with a trustworthy price) PLACE the resting
     # Saxo trailing-LIMIT order out-of-band — the server ratchets + fires from
     # there. Re-attempted every TOUCHED tick until it arms (idempotent, dedup on
@@ -2473,6 +2482,7 @@ def _advance_one_entry_watch(
             d_bps,
             report,
             journaled_ceiling=None if tier_state is None else tier_state.armed_ceiling,
+            journaled_trigger=None if tier_state is None else tier_state.armed_trigger,
         )
     for alert in result.alerts:
         if deps.alert_throttled(alert.message, alert.throttle_key):
@@ -2639,6 +2649,7 @@ def _persist_entry_watch_result(
     now: dt.datetime,
     price: float | None,
     d_bps: int,
+    armed_ceiling: float | None = None,
 ) -> None:
     """Persist one tick's journal intents (memo §5 journals) plus, at a terminal,
     the measurement blob (memo §5 Measurement / T1d). The running trough + touch
@@ -2668,7 +2679,11 @@ def _persist_entry_watch_result(
             # order id; every other terminal leaves it null (the offline reconcile
             # join fills it — memo §5 / T1d "join by order id").
             line["measurement"] = _entry_measurement_blob(
-                record, runtime, d_bps, order_id=payload.get("order_id")
+                record,
+                runtime,
+                d_bps,
+                order_id=payload.get("order_id"),
+                armed_ceiling=armed_ceiling,
             )
         entry_trails.append_entry_trail_line(line)
 
@@ -2702,6 +2717,7 @@ def _entry_measurement_blob(
     d_bps: int,
     *,
     order_id: str | None = None,
+    armed_ceiling: float | None = None,
 ) -> dict[str, Any]:
     """The per-tier terminal measurement stamp (memo §5 / T1d): the variant-A
     entry (``tier_limit``), the touch price/ts, the final trough, the would-be
@@ -2722,6 +2738,14 @@ def _entry_measurement_blob(
         "would_be_trigger": trigger,
         "order_id": order_id,
         "entry_mode": record.get("entry_mode") or _entry_trail_mode_tag(d_bps),
+        # #1317 — the SAME two keys the reconcile measurement carries, so both
+        # writers of a `fired` line produce one schema and a reader can tell a
+        # missing key from a null verdict. ``ceiling_breach`` is ALWAYS null
+        # here: this path learns the fill from the open-orders re-read, which
+        # carries a QUANTITY and no execution price, so the comparison cannot be
+        # made. A known ceiling beside a null verdict says exactly that.
+        "ceiling": armed_ceiling,
+        "ceiling_breach": None,
     }
 
 
@@ -2795,7 +2819,7 @@ def _cancel_working_entry_orders(deps: LoopDeps, report: TickReport) -> None:
 
 
 def _journal_trail_armed(
-    crid: str, *, order_id: str | None, trigger: float, ceiling: float | None
+    crid: str, *, order_id: str | None, trigger: float | None, ceiling: float | None
 ) -> None:
     """Append one ``trail_armed`` line (the G3 write-ahead uses ``order_id=None``
     before the POST; the post-POST line fills the real id in — the fold's
@@ -2811,7 +2835,7 @@ def _journal_trail_armed(
             "kind": entry_trails.KIND_TRAIL_ARMED,
             "crid": crid,
             "order_id": order_id,
-            "trigger": float(trigger),
+            entry_trails.KEY_TRIGGER: None if trigger is None else float(trigger),
             entry_trails.KEY_CEILING: None if ceiling is None else float(ceiling),
         }
     )
@@ -3195,9 +3219,17 @@ def _arm_native_trail(
     reference: float,
     d_bps: int,
     report: TickReport,
-    journaled_ceiling: float | None = None,
+    *,
+    journaled_ceiling: float | None,
+    journaled_trigger: float | None,
 ) -> None:
     """Place ONE native Saxo trailing-LIMIT order at the TOUCH (memo §2 V1, §5).
+
+    ``journaled_ceiling`` / ``journaled_trigger`` are what a PREVIOUS tick
+    journaled for this tier, used only by the crash-window ADOPT branch. Both are
+    REQUIRED (no default): the caller has to state whether they are known, since
+    the journal is append-only and latest-wins, so re-journaling ``None`` over a
+    known value silently erases it.
 
     Sequence (money-critical ORDER):
       1. capability + ALLOW_ORDERS gates -> place nothing when disabled;
@@ -3238,14 +3270,15 @@ def _arm_native_trail(
 
     lookup = _find_working_entry_order(broker, fire_rid)
     if lookup.order_id is not None:
-        # ADOPT of an order a previous tick already POSTed: its ceiling is the
-        # one THAT tick journaled (``journaled_ceiling``), never this tick's
-        # freshly computed geometry — the resting order was priced off a
-        # different reference. ``None`` stays ``None``: unknown, not guessed.
+        # ADOPT of an order a previous tick already POSTed. BOTH arm-time prices
+        # come from THAT tick, never from this tick's freshly computed geometry —
+        # the resting order was priced off a different reference, so a line
+        # pairing its ceiling with a fresh trigger would describe an order that
+        # never existed. ``None`` stays ``None``: unknown, not guessed.
         _journal_trail_armed(
             crid,
             order_id=lookup.order_id,
-            trigger=geo.order_price,
+            trigger=journaled_trigger,
             ceiling=journaled_ceiling,
         )
         runtime.watcher.mark_armed()
@@ -3303,11 +3336,11 @@ def _arm_native_trail(
         crid,
         order_id=placed.entry_order_id,
         trigger=geo.order_price,
-        # What the adapter actually sent, falling back to the geometry value on
-        # a broker that does not report it.
-        ceiling=(
-            placed.stop_limit_price if placed.stop_limit_price is not None else geo.ceiling_price
-        ),
+        # ONLY what the adapter reports it put on the wire. ``None`` (a broker
+        # that reports no limit) stays ``None`` — falling back to the geometry
+        # value would record a ceiling nobody confirmed sending, which is the
+        # move #1317 exists to stop.
+        ceiling=placed.stop_limit_price,
     )
     runtime.watcher.mark_armed()
     logger.info(
@@ -3899,6 +3932,13 @@ def _reconcile_one_armed_tier(
         # still-unresolved UNKNOWN defers (verify-before-terminal, memo §3 G6).
         _rearm_or_expire_gone_tier(deps, crid, tier_state, outcome, d_bps, now, report)
         return
+    avg_price = outcome.avg_fill_price if outcome is not None else None
+    # ONE observation, both consumers (the journal stamp and the alert). Two
+    # calls would agree today and could drift apart later with no test noticing —
+    # the stamped verdict and the announced one must be the same verdict.
+    observation = entry_trail_geometry.observe_ceiling(
+        ceiling=tier_state.armed_ceiling, fill=avg_price
+    )
     _journal_entry_fired(
         crid,
         tier_state,
@@ -3906,7 +3946,8 @@ def _reconcile_one_armed_tier(
         now,
         order_id=order_id,
         realized_qty=filled_qty,
-        avg_price=outcome.avg_fill_price if outcome is not None else None,
+        avg_price=avg_price,
+        observation=observation,
     )
     if deps.alert_throttled(
         f"entry-trail {entry_label_from_crid(crid)}: native trail {order_id} "
@@ -3914,14 +3955,13 @@ def _reconcile_one_armed_tier(
         f"entry-trail:fired:{crid}",
     ):
         report.alerts += 1
-    _announce_ceiling_breach(deps, crid, tier_state, outcome, report)
+    _announce_ceiling_breach(deps, crid, observation, report)
 
 
 def _announce_ceiling_breach(
     deps: LoopDeps,
     crid: str,
-    tier_state: entry_trails.EntryTrailTierState,
-    outcome: OrderState | None,
+    observation: entry_trail_geometry.CeilingObservation | None,
     report: TickReport,
 ) -> None:
     """One throttled alert when a fire executed ABOVE its own ceiling (#1317).
@@ -3933,10 +3973,6 @@ def _announce_ceiling_breach(
     ``fired`` announcement and vice-versa. Silent whenever the comparison cannot
     be made — an unknown is not a breach, and it is not a pass either (the
     ``fired`` line records which of the two it was)."""
-    observation = entry_trail_geometry.observe_ceiling(
-        ceiling=tier_state.armed_ceiling,
-        fill=outcome.avg_fill_price if outcome is not None else None,
-    )
     if observation is None or not observation.breached:
         return
     if deps.alert_throttled(
@@ -4017,6 +4053,7 @@ def _journal_entry_fired(
     order_id: str,
     realized_qty: float,
     avg_price: float | None,
+    observation: entry_trail_geometry.CeilingObservation | None,
 ) -> None:
     """Append the terminal ``fired`` line for a reconciled fill (memo §5
     ``fired{realized_qty}`` + measurement).
@@ -4036,7 +4073,12 @@ def _journal_entry_fired(
             "avg_price": avg_price,
             "ts": now.isoformat(),
             "measurement": _entry_reconcile_measurement(
-                tier_state, d_bps, order_id=order_id, realized_qty=realized_qty, avg_price=avg_price
+                tier_state,
+                d_bps,
+                order_id=order_id,
+                realized_qty=realized_qty,
+                avg_price=avg_price,
+                observation=observation,
             ),
         }
     )
@@ -4049,6 +4091,7 @@ def _entry_reconcile_measurement(
     order_id: str | None,
     realized_qty: float | None,
     avg_price: float | None,
+    observation: entry_trail_geometry.CeilingObservation | None,
 ) -> dict[str, Any]:
     """The terminal measurement stamp for a RECONCILED fill (memo §5 / T1d),
     mirroring :func:`_entry_measurement_blob` but sourced from the FOLD (the
@@ -4062,9 +4105,6 @@ def _entry_reconcile_measurement(
     trough = tier_state.min_trough
     trigger = None if trough is None else trough * (1.0 + d_bps / _ENTRY_BPS_DENOMINATOR)
     limit = record.get("limit")
-    observation = entry_trail_geometry.observe_ceiling(
-        ceiling=tier_state.armed_ceiling, fill=avg_price
-    )
     return {
         "tier_limit": None if limit is None else float(limit),
         "touch_price": None,
@@ -4208,8 +4248,15 @@ def _journal_entry_expired(
             "kind": entry_trails.KIND_EXPIRED,
             "crid": crid,
             "ts": now.isoformat(),
+            # No fill on an expiry, so there is nothing to compare against the
+            # ceiling: NO VERDICT, with the known ceiling still stamped.
             "measurement": _entry_reconcile_measurement(
-                tier_state, d_bps, order_id=None, realized_qty=None, avg_price=None
+                tier_state,
+                d_bps,
+                order_id=None,
+                realized_qty=None,
+                avg_price=None,
+                observation=None,
             ),
         }
     )

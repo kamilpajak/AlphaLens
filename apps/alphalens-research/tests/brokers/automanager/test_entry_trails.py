@@ -255,6 +255,23 @@ class TestFoldEntryTrailLines(unittest.TestCase):
                 )
                 self.assertIsNone(fold.tiers[_CRID].armed_ceiling)
 
+    def test_latest_trail_armed_trigger_wins_and_a_legacy_line_folds_to_none(self) -> None:
+        # The ADOPT path re-journals a line for an order a PREVIOUS tick POSTed,
+        # so both arm-time numbers must come from that tick, not this one — a
+        # record mixing an old ceiling with a fresh trigger describes no order
+        # that ever existed.
+        armed = et.fold_entry_trail_lines(
+            [
+                _watch_open(),
+                _line(et.KIND_TRAIL_ARMED, order_id="O-9", trigger=58.8327, ceiling=58.95),
+            ]
+        )
+        self.assertEqual(armed.tiers[_CRID].armed_trigger, 58.8327)
+        legacy = et.fold_entry_trail_lines(
+            [_watch_open(), _line(et.KIND_TRAIL_ARMED, order_id="O-9")]
+        )
+        self.assertIsNone(legacy.tiers[_CRID].armed_trigger)
+
     def test_re_opening_a_watch_clears_the_armed_ceiling(self) -> None:
         # The re-arm resets the arm state; a stale ceiling from the previous
         # session's order must not be compared against the next fill.
@@ -266,6 +283,7 @@ class TestFoldEntryTrailLines(unittest.TestCase):
             ]
         )
         self.assertIsNone(fold.tiers[_CRID].armed_ceiling)
+        self.assertIsNone(fold.tiers[_CRID].armed_trigger)
 
     def test_re_opening_a_watch_clears_the_armed_order_id(self) -> None:
         # Memo §5 CRITICAL-2 re-arm: a DayOrder-cancelled tier is re-admitted to
@@ -418,6 +436,7 @@ def _fold_data(fold: et.EntryTrailFold) -> tuple[Any, int]:
                 # #1317: in the equivalence tuple so a compactor that drops the
                 # armed ceiling fails here instead of going quiet.
                 s.armed_ceiling,
+                s.armed_trigger,
             )
             for crid, s in fold.tiers.items()
         },
