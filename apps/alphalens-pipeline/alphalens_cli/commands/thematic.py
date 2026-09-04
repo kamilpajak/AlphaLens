@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import typer
+from alphalens_pipeline.data import rs_history
 from alphalens_pipeline.data.parquet_io import write_parquet_atomic
 from alphalens_pipeline.observability.textfile import emit_domain_metrics
 from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
@@ -928,6 +929,10 @@ def map_themes_cmd(
         model=model,
         theme_novelty=theme_novelty,
         novelty_config_version=novelty_cfg,
+        # #1074: enable the deterministic listing pre-check against the
+        # grouped-daily store — production-only wiring, the library default
+        # keeps it off.
+        listing_store_root=rs_history.DEFAULT_RS_HISTORY_ROOT,
     )
     # Persist the FULL ranking — every theme in the window, all three scores, and
     # which ones were mapped — but ONLY when this slot really made the selection.

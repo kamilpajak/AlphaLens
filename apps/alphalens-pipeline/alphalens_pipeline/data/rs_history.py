@@ -42,6 +42,12 @@ DEFAULT_RS_HISTORY_ROOT = Path.home() / ".alphalens" / "grouped_daily_history"
 # 12-month trailing lookback for the RS-approx (pinned, UNVALIDATED config constant).
 RS_LOOKBACK_SESSIONS = 252
 
+# Max sessions the newest on-disk snapshot may lag ``asof`` before listing
+# membership is UNKNOWN rather than authoritative. Free-tier Polygon grouped-daily
+# publishes session D around D+2, plus weekends/holidays and the nightly top-up
+# cadence — a healthy store has been observed up to ~4 sessions behind.
+LISTING_STATUS_MAX_LAG_SESSIONS = 5
+
 # (date) -> {TICKER: {t,o,h,l,c,v,vw}}. Injected in tests; the default routes through
 # the canonical PolygonClient with adjusted=True (NO polygon.io URL literal in this file).
 GroupedFetch = Callable[[dt.date], dict[str, dict[str, Any]]]
@@ -136,6 +142,36 @@ def _close(bar: dict[str, Any]) -> float | None:
     return val if val > 0 else None
 
 
+def was_listed_on_or_before(
+    root: Path,
+    ticker: str,
+    asof: dt.date,
+    *,
+    max_lag_sessions: int = LISTING_STATUS_MAX_LAG_SESSIONS,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> bool | None:
+    """Tri-state listing membership from the on-disk store (never fetches).
+
+    ``True`` / ``False`` = the ticker was present / absent in the newest stored
+    whole-market session on or before ``asof`` — a present snapshot is the
+    ENTIRE market for that session, so absence means "did not trade that day".
+    ``None`` = unknown: no snapshot on or before ``asof``, an unreadable/empty
+    snapshot, or a snapshot more than ``max_lag_sessions`` sessions behind
+    ``asof``. Callers MUST treat ``None`` as "fall through to the live source" —
+    the staleness bound exists so an unhealed store gap never mass-classifies a
+    day and a recent IPO absent from an old snapshot never reads as delisted.
+    """
+    current = _newest_session_on_or_before(root, asof)
+    if current is None:
+        return None
+    if current < n_sessions_before(asof, max_lag_sessions, exchange):
+        return None
+    snapshot = read_grouped_day(root, current)
+    if not snapshot:  # None (unreadable) or {} (empty session): no evidence
+        return None
+    return ticker.upper() in snapshot
+
+
 def rs_percentile(
     root: Path,
     ticker: str,
@@ -186,9 +222,11 @@ def rs_percentile(
 
 __all__ = [
     "DEFAULT_RS_HISTORY_ROOT",
+    "LISTING_STATUS_MAX_LAG_SESSIONS",
     "RS_LOOKBACK_SESSIONS",
     "GroupedFetch",
     "read_grouped_day",
     "rs_percentile",
+    "was_listed_on_or_before",
     "write_grouped_day_atomic",
 ]

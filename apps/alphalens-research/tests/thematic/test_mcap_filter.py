@@ -168,6 +168,87 @@ class TestClassifyByMcap(unittest.TestCase):
         self.assertEqual(set(kept), {"GOOD", "ALSO"})
 
 
+class TestClassifyByMcapListingPrecheck(unittest.TestCase):
+    """#1074: a deterministic listing pre-check against the grouped-daily store
+    runs BEFORE the yfinance round-trip. A ticker absent from a fresh snapshot
+    is ``NOT_LISTED`` (no fetch, no ERROR-line storm); a present or UNKNOWN
+    ticker falls through to the existing fetch path. Default (no
+    ``listing_root``) keeps the pre-check off — hermetic for every caller that
+    does not opt in."""
+
+    MIN_CAP = 500_000_000
+    MAX_CAP = 10_000_000_000
+    ASOF = dt.date(2026, 6, 12)
+    FRESH_SESSION = dt.date(2026, 6, 10)
+
+    def _seeded_root(self, tmp: str, tickers: dict[str, float]) -> Path:
+        from alphalens_pipeline.data import rs_history
+
+        root = Path(tmp)
+        payload = {
+            t: {"t": 0, "o": c, "h": c, "l": c, "c": c, "v": 1000, "vw": c}
+            for t, c in tickers.items()
+        }
+        rs_history.write_grouped_day_atomic(root, self.FRESH_SESSION, payload)
+        return root
+
+    def _classify(self, tickers: list[str], mcaps: dict[str, float | None], root: Path | None):
+        with patch.object(mcap_filter, "fetch_mcap", side_effect=lambda t, **_: mcaps.get(t)):
+            return mcap_filter.classify_by_mcap(
+                tickers,
+                min_cap=self.MIN_CAP,
+                max_cap=self.MAX_CAP,
+                asof=self.ASOF,
+                listing_root=root,
+            )
+
+    def test_absent_ticker_is_not_listed_without_any_fetch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._seeded_root(tmp, {"GOOD": 100.0})
+            with patch.object(
+                mcap_filter,
+                "fetch_mcap",
+                side_effect=AssertionError("a not-listed ticker must never reach yfinance"),
+            ):
+                verdicts = mcap_filter.classify_by_mcap(
+                    ["GONE"],
+                    min_cap=self.MIN_CAP,
+                    max_cap=self.MAX_CAP,
+                    asof=self.ASOF,
+                    listing_root=root,
+                )
+        self.assertEqual(verdicts, [mcap_filter.McapVerdict("GONE", None, mcap_filter.NOT_LISTED)])
+
+    def test_present_ticker_falls_through_to_fetch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._seeded_root(tmp, {"GOOD": 100.0})
+            verdicts = self._classify(["GOOD"], {"GOOD": 1_780_000_000}, root)
+        self.assertEqual(
+            verdicts,
+            [mcap_filter.McapVerdict("GOOD", 1_780_000_000, mcap_filter.IN_BRACKET)],
+        )
+
+    def test_unknown_listing_status_falls_through_to_fetch(self):
+        # Empty store: the pre-check is unknown, never a drop — an unhealed
+        # store gap must not mass-classify a day.
+        with tempfile.TemporaryDirectory() as tmp:
+            verdicts = self._classify(["GOOD"], {"GOOD": 1_780_000_000}, Path(tmp))
+        self.assertEqual(verdicts[0].verdict, mcap_filter.IN_BRACKET)
+
+    def test_no_listing_root_disables_the_precheck(self):
+        # Default None: byte-identical to the pre-#1074 behavior — a dead
+        # ticker is NO_MCAP (priced-path failure), never NOT_LISTED.
+        verdicts = self._classify(["DEAD"], {"DEAD": None}, None)
+        self.assertEqual(verdicts[0].verdict, mcap_filter.NO_MCAP)
+
+    def test_not_listed_carries_none_market_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._seeded_root(tmp, {"GOOD": 100.0})
+            verdicts = self._classify(["GONE"], {}, root)
+        self.assertIsNone(verdicts[0].market_cap)
+        self.assertEqual(verdicts[0].verdict, mcap_filter.NOT_LISTED)
+
+
 class TestFetchMcapErrorPaths(unittest.TestCase):
     def setUp(self):
         # Isolate the persistent mcap cache so these "→ None" assertions are

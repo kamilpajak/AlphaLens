@@ -221,19 +221,38 @@ IN_BRACKET = "in_bracket"
 TOO_SMALL = "too_small"
 TOO_BIG = "too_big"
 NO_MCAP = "no_mcap"
+NOT_LISTED = "not_listed"
 
 
 class McapVerdict(NamedTuple):
     """One proposal's bracket outcome, and the reason for it.
 
-    ``market_cap`` is ``None`` exactly when ``verdict`` is :data:`NO_MCAP` — never
-    ``0.0``, which would read as :data:`TOO_SMALL` in any downstream aggregate and
-    silently turn a data outage into a fleet of tiny companies.
+    ``market_cap`` is ``None`` exactly when ``verdict`` is :data:`NO_MCAP` or
+    :data:`NOT_LISTED` — never ``0.0``, which would read as :data:`TOO_SMALL`
+    in any downstream aggregate and silently turn a data outage into a fleet of
+    tiny companies. :data:`NOT_LISTED` keeps :data:`NO_MCAP` meaning "priced
+    but the fetch failed / out of data", not "no longer exists" (#1074).
     """
 
     ticker: str
     market_cap: float | None
     verdict: str
+
+
+def _listing_status(ticker: str, asof: dt.date | None, root: Path | None) -> bool | None:
+    """The deterministic listing pre-check (#1074), or ``None`` when disabled.
+
+    ``root=None`` (the default everywhere below) disables the check entirely so
+    library callers and tests never read the operator's home store; the
+    production pipeline opts in by wiring the grouped-daily store root down from
+    the CLI. The live path (``asof is None``) has no PIT session to check
+    against and always falls through.
+    """
+    if root is None or asof is None:
+        return None
+    from alphalens_pipeline.data import rs_history
+
+    return rs_history.was_listed_on_or_before(root, ticker, asof)
 
 
 def classify_by_mcap(
@@ -242,6 +261,7 @@ def classify_by_mcap(
     min_cap: int,
     max_cap: int,
     asof: dt.date | None = None,
+    listing_root: Path | None = None,
 ) -> list[McapVerdict]:
     """Return one :class:`McapVerdict` per ticker, in input order.
 
@@ -255,9 +275,21 @@ def classify_by_mcap(
 
     Pass ``asof`` for historical replay so the bracket is evaluated against PIT
     mcap rather than today's mcap. Both bounds are inclusive.
+
+    Pass ``listing_root`` (the grouped-daily store root) to run the
+    deterministic listing pre-check BEFORE the yfinance round-trip (#1074): the
+    permissive stage-A proposer includes training-snapshot names that no longer
+    trade, and each one costs three failing yfinance calls plus three ERROR
+    journal lines before the bracket drops it as :data:`NO_MCAP`. A ticker
+    absent from a fresh whole-market snapshot is :data:`NOT_LISTED` with no
+    fetch; an unknown status (no store, stale snapshot, live path) falls
+    through to the fetch unchanged.
     """
     verdicts: list[McapVerdict] = []
     for t in tickers:
+        if _listing_status(t, asof, listing_root) is False:
+            verdicts.append(McapVerdict(ticker=t, market_cap=None, verdict=NOT_LISTED))
+            continue
         mc = fetch_mcap(t, asof=asof)
         if mc is None:
             verdict = NO_MCAP
@@ -277,6 +309,7 @@ def filter_by_mcap(
     min_cap: int,
     max_cap: int,
     asof: dt.date | None = None,
+    listing_root: Path | None = None,
 ) -> dict[str, float]:
     """Return ``{ticker: mcap}`` for tickers whose mcap is in bracket.
 
@@ -287,10 +320,13 @@ def filter_by_mcap(
     disagreeing with what the pipeline actually keeps.
 
     Pass ``asof`` for historical replay so the bracket is evaluated against
-    PIT mcap rather than today's mcap.
+    PIT mcap rather than today's mcap; ``listing_root`` as in
+    :func:`classify_by_mcap`.
     """
     kept: dict[str, float] = {}
-    for v in classify_by_mcap(tickers, min_cap=min_cap, max_cap=max_cap, asof=asof):
+    for v in classify_by_mcap(
+        tickers, min_cap=min_cap, max_cap=max_cap, asof=asof, listing_root=listing_root
+    ):
         if v.verdict == IN_BRACKET and v.market_cap is not None:
             kept[v.ticker] = v.market_cap
     return kept
@@ -298,6 +334,7 @@ def filter_by_mcap(
 
 __all__ = [
     "IN_BRACKET",
+    "NOT_LISTED",
     "NO_MCAP",
     "TOO_BIG",
     "TOO_SMALL",
