@@ -504,6 +504,110 @@ class TestTitleFromBodyCorpus(unittest.TestCase):
                 self.assertLessEqual(len(title), 300)
 
 
+def _is_boilerplate(line: str) -> bool:
+    """Exactly how ``_candidate_lines`` consults the boilerplate tuple."""
+    return any(pattern.search(line) for pattern in epr._BOILERPLATE_LINE_RES)
+
+
+class TestBoilerplatePatterns(unittest.TestCase):
+    """Accept/reject pins for the individual boilerplate patterns.
+
+    ``TestTitleFromBodyCorpus`` pins the end-to-end outcome; this class pins
+    the intent of each pattern separately, so a rewrite of one regex that
+    silently widens or narrows it fails here instead of hiding behind a
+    fixture that happens to still produce the same headline.
+    """
+
+    def test_bare_email_line_is_boilerplate(self):
+        self.assertTrue(_is_boilerplate("ir@apogee.com"))
+        self.assertTrue(_is_boilerplate("investor.relations@sub.example.co.uk"))
+
+    def test_email_inside_a_sentence_is_not_boilerplate(self):
+        # The pattern is anchored: only a line that is NOTHING but an address.
+        self.assertFalse(_is_boilerplate("Contact us at ir@apogee.com"))
+
+    def test_email_rule_wants_exactly_one_at_sign(self):
+        # A run of "@" is not an address. The corpus carries no line with an
+        # "@" at all, so nothing in the fixtures pins this either way — the
+        # rule is stated here on purpose.
+        self.assertFalse(_is_boilerplate("a@b@c"))
+        self.assertFalse(_is_boilerplate("@a@b"))
+        self.assertFalse(_is_boilerplate("@abc"))
+        self.assertFalse(_is_boilerplate("abc@"))
+
+    def test_release_label_lines_are_boilerplate(self):
+        for line in (
+            "PRESS RELEASE",
+            "Earnings Release",
+            "NEWS RELEASE",
+            "Fourth Quarter and Full Year 2026 Press Release",
+            "PRESS RELEASE, DATED SEPTEMBER 3, 2026",
+            "Press Release dated September 3, 2026",
+            # Whitespace around the comma. clean_title normalises this away
+            # before the scan, so the pipeline never shows it to the pattern —
+            # pinned anyway so the pattern does not quietly start depending on
+            # that normalisation.
+            "PRESS RELEASE , DATED SEPTEMBER 3, 2026",
+            "PRESS RELEASE  ,  DATED SEPTEMBER 3, 2026",
+        ):
+            with self.subTest(line=line):
+                self.assertTrue(_is_boilerplate(line))
+
+    def test_headline_merely_containing_release_is_not_boilerplate(self):
+        self.assertFalse(
+            _is_boilerplate("Apogee Enterprises Announces Fourth Quarter Fiscal 2026 Results")
+        )
+
+    def test_internal_document_token_is_boilerplate(self):
+        # One long space-free token carrying a digit = a leaked document name.
+        for line in ("rrbi-20260903x991g1", "a20260903ex991pcvx"):
+            with self.subTest(line=line):
+                self.assertTrue(_is_boilerplate(line))
+
+    def test_document_token_rule_needs_a_digit_and_no_spaces(self):
+        self.assertFalse(_is_boilerplate("Announcement"))  # 12 chars, no digit
+        self.assertFalse(_is_boilerplate("Vaxcyte Announces 2026 Guidance"))  # digits, but spaced
+
+
+class TestExhibitSuffixStripping(unittest.TestCase):
+    """``_clean_candidate`` drops a trailing exhibit label (RRBI deck shape)."""
+
+    def test_trailing_exhibit_label_is_stripped(self):
+        self.assertEqual(
+            epr._clean_candidate("Riverview Financial Reports Record Quarter Exhibit 99.1"),
+            "Riverview Financial Reports Record Quarter",
+        )
+        self.assertEqual(
+            epr._clean_candidate("Riverview Financial Reports Record Quarter EX-99"),
+            "Riverview Financial Reports Record Quarter",
+        )
+
+    def test_headline_without_an_exhibit_label_is_untouched(self):
+        for line in (
+            "Apogee Enterprises Announces Fourth Quarter Fiscal 2026 Results",
+            "Alaska Silver Announces Grant of Options",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(epr._clean_candidate(line), line)
+
+    def test_whitespace_only_segment_cleans_to_empty(self):
+        # The suffix pattern runs on segments that are not length-capped yet,
+        # so a long whitespace run is a shape it has to handle.
+        self.assertEqual(epr._clean_candidate("   " * 40), "")
+
+    def test_leading_whitespace_before_the_label_is_stripped_with_it(self):
+        self.assertEqual(
+            epr._clean_candidate("Riverview Financial Reports Record Quarter    Exhibit 99.1"),
+            "Riverview Financial Reports Record Quarter",
+        )
+
+    def test_a_trailing_number_that_is_not_an_exhibit_label_survives(self):
+        self.assertEqual(
+            epr._clean_candidate("Nordson Reports Record Backlog of 99"),
+            "Nordson Reports Record Backlog of 99",
+        )
+
+
 class TestParseFormIndex(unittest.TestCase):
     def test_only_8k_rows_returned(self):
         rows = epr.parse_form_index_8k(SAMPLE_IDX)

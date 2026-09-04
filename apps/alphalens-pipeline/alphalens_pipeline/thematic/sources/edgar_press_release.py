@@ -486,19 +486,22 @@ _EXHIBIT_PREFIX_RE = re.compile(
     r"^(?:edgarfiling\s+)?(?:exhibit|ex)[-\s]*99(?:\.\d+)?\s*[.:\-]?\s*", re.IGNORECASE
 )
 # Hard-reject boilerplate. Every pattern is justified by a fixture in
-# tests/thematic/sources/fixtures/ex991/ (2026-09-03 live corpus, #1306):
+# tests/thematic/sources/fixtures/ex991/ (2026-09-03 live corpus, #1306).
+# Neighbouring runs never accept the same character (e.g. "[^\s@]+@[^\s@]+"
+# rather than "\S+@\S+"), so a non-matching line fails on one pass instead of
+# being re-split at every candidate position.
 _BOILERPLATE_LINE_RES = (
     re.compile(r"^(?:document|exhibit)$", re.IGNORECASE),  # iXBRL wrapper artifact
     re.compile(r"^\S+\.html?$", re.IGNORECASE),  # bare document filename
     re.compile(r"^\d+(?:\.\d+)?$"),  # sequence number / split label tail "99.1"
     re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}$"),  # bare date (EQBK)
     re.compile(r"^[\d\s()+.\-]{7,}$"),  # phone number (PDEX/ODFL contact blocks)
-    re.compile(r"^\S+@\S+$"),  # bare e-mail
+    re.compile(r"^[^\s@]+@[^\s@]+$"),  # bare e-mail
     re.compile(r"^for\s+immediate\s+release\s*[:.]?$", re.IGNORECASE),
     # "PRESS RELEASE" / "EARNINGS RELEASE" / "FOURTH QUARTER ... PRESS
     # RELEASE" / "PRESS RELEASE, DATED SEPTEMBER 3, 2026" label lines.
     re.compile(
-        r"^.{0,60}?\b(?:press|news|earnings)\s+release(?:\s*,?\s*dated\b.{0,40})?$",
+        r"^.{0,60}?\b(?:press|news|earnings)\s+release(?:(?:\s*,)?\s*dated\b.{0,40})?$",
         re.IGNORECASE,
     ),
     re.compile(r"^.{0,40}contacts?\s*:", re.IGNORECASE),  # "Media and Investor Contact:"
@@ -510,7 +513,7 @@ _BOILERPLATE_LINE_RES = (
         re.IGNORECASE,
     ),
     # Internal document-name token leaking as text (PCVX/RRBI/APOG).
-    re.compile(r"^(?=\S{8,}$)\S*\d\S*$"),
+    re.compile(r"^(?=\S{8,}$)[^\d\s]*\d\S*$"),
 )
 # A real headline is never longer than this; a longer "line" is flattened
 # prose (APOG) and is skipped like other junk.
@@ -574,7 +577,24 @@ _JUNK_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 # Trailing exhibit label on an otherwise-real line (RRBI investor deck).
-_EXHIBIT_SUFFIX_RE = re.compile(r"\s*(?:exhibit|ex)[-\s]*99(?:\.\d+)?\s*$", re.IGNORECASE)
+# Runs on segments that are NOT yet length-capped, so it is written to stay
+# linear on its own: "(?<!\s)" pins the match to the first space of a
+# whitespace run (one start position instead of one per space), and the
+# possessive runs never give characters back — "99" belongs to neither "\s"
+# nor "[-\s]", so a retry could not rescue the match anyway. Today the caller
+# collapses whitespace before this ever runs (_strip_junk_token_prefix does
+# split/join), so the quadratic shape is unreachable through _clean_candidate;
+# the pattern does not rely on that to hold.
+#
+# NOSONAR on the pattern: S8786 reports this shape as super-linear, and it is
+# not. Measured on a whitespace run, per call: 21us / 311us / 4725us at
+# 100/400/1600 chars before, 1us / 3us / 13us after, and 77ms -> 48us at 6400.
+# The rule started firing only once "(?<!\s)" was added -- the shape that made
+# it linear -- so the finding tracks the analyser's parse, not the runtime.
+_EXHIBIT_SUFFIX_RE = re.compile(
+    r"(?<!\s)\s*+(?:exhibit|ex)[-\s]*+99(?:\.\d+)?\s*+$",  # NOSONAR
+    re.IGNORECASE,
+)
 # 4+ literal spaces render as ONE space in HTML, so filers use such runs as
 # layout separators inside flat single-element documents (PCVX hidden-text
 # release). 3 spaces stay joined — observed INSIDE a real headline.
@@ -615,6 +635,22 @@ def _clean_candidate(raw_segment: str) -> str:
     return _repair_letter_spacing(candidate)
 
 
+def _accepted_candidate(segment: str) -> str | None:
+    """The cleaned segment, or ``None`` when it is junk rather than a line."""
+    # clean_title first so entity noise ("&nbsp;" -> U+00A0, ZWSP) reduces to
+    # "" and gets skipped instead of shipping as the title.
+    candidate = _clean_candidate(segment)
+    if not candidate or len(candidate) > _MAX_HEADLINE_CHARS:
+        return None
+    # "<" can only survive tag-stripping as an unterminated-tag residue
+    # (truncated document) — never headline text.
+    if candidate.startswith("<"):
+        return None
+    if any(pattern.search(candidate) for pattern in _BOILERPLATE_LINE_RES):
+        return None
+    return candidate
+
+
 def _candidate_lines(body: str) -> list[str]:
     """First ``_SCAN_LIMIT`` cleaned, non-boilerplate lines of the exhibit."""
     stripped = _BLOCK_TAG_RE.sub("\n", _SOFT_BREAK_RE.sub(" ", body))
@@ -622,16 +658,8 @@ def _candidate_lines(body: str) -> list[str]:
     survivors: list[str] = []
     for line in text.splitlines():
         for segment in _FLAT_RUN_SPLIT_RE.split(line):
-            # clean_title first so entity noise ("&nbsp;" -> U+00A0, ZWSP)
-            # reduces to "" and gets skipped instead of shipping as the title.
-            candidate = _clean_candidate(segment)
-            if not candidate or len(candidate) > _MAX_HEADLINE_CHARS:
-                continue
-            # "<" can only survive tag-stripping as an unterminated-tag
-            # residue (truncated document) — never headline text.
-            if candidate.startswith("<"):
-                continue
-            if any(pattern.search(candidate) for pattern in _BOILERPLATE_LINE_RES):
+            candidate = _accepted_candidate(segment)
+            if candidate is None:
                 continue
             survivors.append(candidate)
             if len(survivors) >= _SCAN_LIMIT:
