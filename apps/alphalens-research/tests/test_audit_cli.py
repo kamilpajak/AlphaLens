@@ -96,6 +96,20 @@ class TestAuditCliSurface(unittest.TestCase):
         self.assertNotIn("--n-phases", forwarded)
         self.assertNotIn("--rebalance-stride", forwarded)
 
+    def test_invalid_phase_stride_combo_is_a_clean_usage_error(self):
+        # run_audit (PRB v0.3.0) raises ValueError when n_phases > stride —
+        # validated BEFORE any script/subprocess work, so this exercises the
+        # real driver. The CLI must surface the message as a usage error
+        # (stderr + exit 2), not a Python traceback.
+        from alphalens_cli.main import app
+
+        result = self.runner.invoke(
+            app,
+            ["audit", "tri_factor", "--n-phases", "6", "--rebalance-stride", "5"],
+        )
+        self.assertEqual(result.exit_code, 2, msg=result.output)
+        self.assertIn("n_phases", _plain(result.stderr or result.output))
+
     def test_unknown_strategy_lists_choices(self):
         from alphalens_cli.main import app
 

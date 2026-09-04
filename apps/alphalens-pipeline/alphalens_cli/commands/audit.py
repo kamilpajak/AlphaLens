@@ -103,12 +103,17 @@ def audit_command(
         )
         raise typer.Exit(code=2)
 
-    raise typer.Exit(
-        run_audit(
+    try:
+        rc = run_audit(
             _SCRIPTS[strategy],
             ctx.args,
             n_phases=n_phases,
             rebalance_stride=rebalance_stride,
             out=out,
         )
-    )
+    except ValueError as exc:
+        # e.g. n_phases > rebalance_stride — a usage error, not a crash:
+        # surface the driver's message without a traceback.
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from None
+    raise typer.Exit(rc)
