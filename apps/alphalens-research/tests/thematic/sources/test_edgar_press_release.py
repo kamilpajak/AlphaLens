@@ -254,6 +254,46 @@ class TestTitleFromBody(unittest.TestCase):
     def test_empty_body_returns_empty_string(self):
         self.assertEqual(epr._title_from_body(""), "")
 
+    def test_exhibit_label_and_filename_boilerplate_skipped(self):
+        # The common US shape (#339): SEC serves the exhibit label, the bare
+        # document filename, and the label again before the real headline.
+        body = (
+            "<p>EX-99.1</p><p>press99.htm</p><p>Exhibit 99.1</p><p>Company X Reports Q2 Results</p>"
+        )
+        self.assertEqual(epr._title_from_body(body), "Company X Reports Q2 Results")
+
+    def test_bare_sequence_number_skipped(self):
+        body = "<div>2</div><div>Gamma Ltd Completes Financing</div>"
+        self.assertEqual(epr._title_from_body(body), "Gamma Ltd Completes Financing")
+
+    def test_acmr_preamble_first_line_after_boilerplate(self):
+        # Real ACMR ef20075131_ex99-1.htm shape from #339. The minimal cut
+        # lands on the first non-boilerplate line; the foreign-listing
+        # preamble ("Stock code:" etc.) is a KNOWN remaining tail, out of
+        # scope until fixtures from several filer styles exist.
+        body = (
+            "<div>EX-99.1</div>"
+            "<div>2</div>"
+            "<div>ef20075131_ex99-1.htm</div>"
+            "<div>EXHIBIT 99.1</div>"
+            "<div>Exhibit 99.1</div>"
+            "<div>Stock code: 688082</div>"
+            "<div>ACM Research (Shanghai), Inc.</div>"
+        )
+        self.assertEqual(epr._title_from_body(body), "Stock code: 688082")
+
+    def test_all_boilerplate_body_returns_empty_string(self):
+        # Everything filtered -> "" so transform() falls back to the synthetic
+        # "{ticker} 8-K Item ..." title.
+        body = "<p>EX-99.1</p><p>2</p><p>ex991.htm</p><p>EXHIBIT 99.1</p>"
+        self.assertEqual(epr._title_from_body(body), "")
+
+    def test_nbsp_entities_and_space_runs_collapsed(self):
+        # A raw "&nbsp;" line is entity noise, not a headline; inside the
+        # headline, entity/space runs collapse to single spaces (clean_title).
+        body = "<p>&nbsp;</p><p>Apple&nbsp;&nbsp;Reports   Record&nbsp;Results</p>"
+        self.assertEqual(epr._title_from_body(body), "Apple Reports Record Results")
+
 
 class TestParseFormIndex(unittest.TestCase):
     def test_only_8k_rows_returned(self):
