@@ -531,6 +531,7 @@ class TestBoilerplatePatterns(unittest.TestCase):
         # "@" at all, so nothing in the fixtures pins this either way — the
         # rule is stated here on purpose.
         self.assertFalse(_is_boilerplate("a@b@c"))
+        self.assertFalse(_is_boilerplate("@a@b"))
         self.assertFalse(_is_boilerplate("@abc"))
         self.assertFalse(_is_boilerplate("abc@"))
 
@@ -542,6 +543,12 @@ class TestBoilerplatePatterns(unittest.TestCase):
             "Fourth Quarter and Full Year 2026 Press Release",
             "PRESS RELEASE, DATED SEPTEMBER 3, 2026",
             "Press Release dated September 3, 2026",
+            # Whitespace around the comma. clean_title normalises this away
+            # before the scan, so the pipeline never shows it to the pattern —
+            # pinned anyway so the pattern does not quietly start depending on
+            # that normalisation.
+            "PRESS RELEASE , DATED SEPTEMBER 3, 2026",
+            "PRESS RELEASE  ,  DATED SEPTEMBER 3, 2026",
         ):
             with self.subTest(line=line):
                 self.assertTrue(_is_boilerplate(line))

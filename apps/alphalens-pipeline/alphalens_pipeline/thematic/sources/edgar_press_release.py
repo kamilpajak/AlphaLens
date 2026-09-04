@@ -501,7 +501,7 @@ _BOILERPLATE_LINE_RES = (
     # "PRESS RELEASE" / "EARNINGS RELEASE" / "FOURTH QUARTER ... PRESS
     # RELEASE" / "PRESS RELEASE, DATED SEPTEMBER 3, 2026" label lines.
     re.compile(
-        r"^.{0,60}?\b(?:press|news|earnings)\s+release(?:,?\s*dated\b.{0,40})?$",
+        r"^.{0,60}?\b(?:press|news|earnings)\s+release(?:(?:\s*,)?\s*dated\b.{0,40})?$",
         re.IGNORECASE,
     ),
     re.compile(r"^.{0,40}contacts?\s*:", re.IGNORECASE),  # "Media and Investor Contact:"
@@ -577,11 +577,14 @@ _JUNK_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 # Trailing exhibit label on an otherwise-real line (RRBI investor deck).
-# This one runs on segments that are NOT yet length-capped, so its shape is
-# load-bearing: "(?<!\s)" pins the match to the first space of a whitespace
-# run (one start position instead of one per space), and the possessive runs
-# never give characters back — "99" belongs to neither "\s" nor "[-\s]", so a
-# retry could not rescue the match anyway.
+# Runs on segments that are NOT yet length-capped, so it is written to stay
+# linear on its own: "(?<!\s)" pins the match to the first space of a
+# whitespace run (one start position instead of one per space), and the
+# possessive runs never give characters back — "99" belongs to neither "\s"
+# nor "[-\s]", so a retry could not rescue the match anyway. Today the caller
+# collapses whitespace before this ever runs (_strip_junk_token_prefix does
+# split/join), so the quadratic shape is unreachable through _clean_candidate;
+# the pattern does not rely on that to hold.
 _EXHIBIT_SUFFIX_RE = re.compile(r"(?<!\s)\s*+(?:exhibit|ex)[-\s]*+99(?:\.\d+)?\s*+$", re.IGNORECASE)
 # 4+ literal spaces render as ONE space in HTML, so filers use such runs as
 # layout separators inside flat single-element documents (PCVX hidden-text
