@@ -1,168 +1,50 @@
 """Unit tests for the insider-cluster retrospective helpers (pre-registered spec
-`docs/research/preregistration/params_insider_cluster_retro_2026_09.json`)."""
+`docs/research/preregistration/params_insider_cluster_retro_2026_09.json`).
+
+The event rules moved to the pipeline tier with epic #1293 and are tested in
+``tests/events/test_insider_cluster.py``; this module keeps the retrospective's
+own machinery (event CAR, matching, bootstrap, planning rule) and pins that the
+promoted names still resolve through ``icr.*`` for the runner script.
+"""
 
 from __future__ import annotations
 
 import datetime as dt
+import json
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from alphalens_pipeline.events import insider_cluster as ic
 from alphalens_research.diagnostics import insider_cluster_retro as icr
 
 D = dt.date
 
 
-def _leg(
-    ticker, cik, filed, usd=60_000.0, tx=None, code="P", officer=True, amend=False, accession=None
-):
-    return {
-        "ticker": ticker,
-        "reporting_owner_cik": cik,
-        "filed_date": filed,
-        "transaction_date": tx or filed,
-        "transaction_code": code,
-        "acquired_disposed": "A",
-        "is_amendment": amend,
-        "is_officer": officer,
-        "is_director": False,
-        "is_ten_percent_owner": False,
-        "transaction_shares": usd / 10.0,
-        "transaction_price_per_share": 10.0,
-        "accession_number": accession or f"{cik}-{filed.isoformat()}",
-    }
-
-
-class TestQualifyingLegs(unittest.TestCase):
-    def test_keeps_open_market_officer_purchases_above_floor(self):
-        df = pd.DataFrame(
-            [
-                _leg("AAA", "1", D(2020, 3, 2)),
-                _leg("AAA", "2", D(2020, 3, 2), code="S"),  # sale
-                _leg("AAA", "3", D(2020, 3, 2), officer=False),  # 10% owner only
-                _leg("AAA", "4", D(2020, 3, 2), amend=True),  # amendment
-                _leg("AAA", "5", D(2020, 3, 2), usd=5_000.0),  # below 10k leg floor
-            ]
-        )
-        df.loc[2, "is_ten_percent_owner"] = True
-        out = icr.qualifying_legs(df, leg_min_usd=10_000.0)
-        self.assertEqual(list(out.reporting_owner_cik), ["1"])
-        self.assertAlmostEqual(float(out.usd.iloc[0]), 60_000.0)
-
-    def test_drops_legs_without_price(self):
-        df = pd.DataFrame([_leg("AAA", "1", D(2020, 3, 2))])
-        df.loc[0, "transaction_price_per_share"] = np.nan
-        self.assertTrue(icr.qualifying_legs(df, leg_min_usd=10_000.0).empty)
-
-
-class TestDetectClusters(unittest.TestCase):
-    def _legs(self, rows):
-        return icr.qualifying_legs(pd.DataFrame(rows), leg_min_usd=10_000.0)
-
-    def test_two_distinct_insiders_within_two_sessions_form_one_event(self):
-        legs = self._legs(
-            [
-                _leg("AAA", "1", D(2020, 3, 2)),  # Monday
-                _leg("AAA", "2", D(2020, 3, 4)),  # Wednesday = +2 sessions
-            ]
-        )
-        ev = icr.detect_clusters(
-            legs, window_sessions=2, min_insiders=2, min_usd=100_000.0, dedup_sessions=20
-        )
-        self.assertEqual(len(ev), 1)
-        self.assertEqual(ev.iloc[0].event_date, D(2020, 3, 4))  # completion = 2nd insider's filing
-        self.assertEqual(ev.iloc[0].first_leg_date, D(2020, 3, 2))
-        self.assertEqual(ev.iloc[0].n_insiders, 2)
-        self.assertAlmostEqual(ev.iloc[0].cluster_usd, 120_000.0)
-        self.assertEqual(ev.iloc[0].completing_accession, "2-2020-03-04")
-
-    def test_same_insider_twice_is_not_a_cluster(self):
-        legs = self._legs([_leg("AAA", "1", D(2020, 3, 2)), _leg("AAA", "1", D(2020, 3, 3))])
-        self.assertTrue(
-            icr.detect_clusters(
-                legs, window_sessions=2, min_insiders=2, min_usd=100_000.0, dedup_sessions=20
-            ).empty
-        )
-
-    def test_legs_three_sessions_apart_do_not_cluster(self):
-        legs = self._legs(
-            [_leg("AAA", "1", D(2020, 3, 2)), _leg("AAA", "2", D(2020, 3, 5))]
-        )  # Mon, Thu = +3
-        self.assertTrue(
-            icr.detect_clusters(
-                legs, window_sessions=2, min_insiders=2, min_usd=100_000.0, dedup_sessions=20
-            ).empty
-        )
-
-    def test_usd_floor_applies_to_the_cluster_sum(self):
-        legs = self._legs(
-            [
-                _leg("AAA", "1", D(2020, 3, 2), usd=40_000.0),
-                _leg("AAA", "2", D(2020, 3, 3), usd=40_000.0),
-            ]
-        )
-        self.assertTrue(
-            icr.detect_clusters(
-                legs, window_sessions=2, min_insiders=2, min_usd=100_000.0, dedup_sessions=20
-            ).empty
-        )
-
-    def test_three_in_five_definition_detects_three_distinct_insiders(self):
-        legs = self._legs(
-            [
-                _leg("AAA", "1", D(2020, 3, 2)),
-                _leg("AAA", "2", D(2020, 3, 5)),  # +3 sessions from leg 1
-                _leg("AAA", "3", D(2020, 3, 9)),  # +5 sessions from leg 1, +2 from leg 2
-            ]
-        )
-        two_in_two = icr.detect_clusters(
-            legs, window_sessions=2, min_insiders=2, min_usd=100_000.0, dedup_sessions=20
-        )
-        three_in_five = icr.detect_clusters(
-            legs, window_sessions=5, min_insiders=3, min_usd=100_000.0, dedup_sessions=20
-        )
-        # legs 2 and 3 are within 2 sessions -> one 2-in-2 event completing on 03-09 (2 insiders)
-        self.assertEqual(len(two_in_two), 1)
-        self.assertEqual(two_in_two.iloc[0].n_insiders, 2)
-        # the 3-in-5 definition sees all three insiders and completes at the 3rd filing
-        self.assertEqual(len(three_in_five), 1)
-        self.assertEqual(three_in_five.iloc[0].event_date, D(2020, 3, 9))
-        self.assertEqual(three_in_five.iloc[0].n_insiders, 3)
-
-    def test_dedup_keeps_first_event_per_ticker_per_window(self):
-        legs = self._legs(
-            [
-                _leg("AAA", "1", D(2020, 3, 2)),
-                _leg("AAA", "2", D(2020, 3, 3)),
-                _leg("AAA", "3", D(2020, 3, 10)),
-                _leg("AAA", "4", D(2020, 3, 11)),  # inside 20 sessions -> dropped
-                _leg("AAA", "5", D(2020, 6, 1)),
-                _leg("AAA", "6", D(2020, 6, 2)),  # far -> new event
-            ]
-        )
-        ev = icr.detect_clusters(
-            legs, window_sessions=2, min_insiders=2, min_usd=100_000.0, dedup_sessions=20
-        )
-        self.assertEqual(list(ev.event_date), [D(2020, 3, 3), D(2020, 6, 2)])
-
-
-class TestArrivalSession(unittest.TestCase):
-    def test_pre_open_acceptance_maps_to_same_session(self):
-        acc = dt.datetime(2020, 3, 4, 8, 15)  # ET, before 09:00
-        self.assertEqual(icr.arrival_session(D(2020, 3, 4), acc), D(2020, 3, 4))
-
-    def test_intraday_or_post_close_acceptance_maps_to_next_session(self):
-        self.assertEqual(
-            icr.arrival_session(D(2020, 3, 4), dt.datetime(2020, 3, 4, 10, 0)), D(2020, 3, 5)
-        )
-        self.assertEqual(
-            icr.arrival_session(D(2020, 3, 4), dt.datetime(2020, 3, 4, 17, 30)), D(2020, 3, 5)
-        )
-
-    def test_unknown_acceptance_is_conservative_next_session(self):
-        self.assertEqual(
-            icr.arrival_session(D(2020, 3, 6), None), D(2020, 3, 9)
-        )  # Friday -> Monday
+class TestReexports(unittest.TestCase):
+    def test_promoted_names_resolve_to_pipeline_module(self):
+        for name in (
+            "qualifying_legs",
+            "detect_clusters",
+            "arrival_session",
+            "fetch_acceptance",
+            "accession_urls",
+        ):
+            self.assertIs(getattr(icr, name), getattr(ic, name), name)
+        for name in (
+            "LEG_MIN_USD",
+            "CLUSTER_MIN_USD",
+            "CLUSTER_MIN_USD_CHECK",
+            "CLUSTER_WINDOW_SESSIONS",
+            "CLUSTER_MIN_INSIDERS",
+            "DEDUP_SESSIONS",
+            "PRE_OPEN_CUTOFF_ET",
+            "HORIZON_SESSIONS_PRIMARY",
+            "HORIZON_SESSIONS_SECONDARY",
+            "FEE_ROUND_TRIP",
+        ):
+            self.assertEqual(getattr(icr, name), getattr(ic, name), name)
 
 
 class TestEventCar(unittest.TestCase):
@@ -257,17 +139,10 @@ class TestPairedDifferenceCI(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestParamsParity(unittest.TestCase):
     """The frozen JSON and the module constants must agree (spec drift guard)."""
 
     def test_constants_match_frozen_params(self):
-        import json
-        from pathlib import Path
-
         root = Path(__file__).resolve().parents[4]
         params = json.loads(
             (
@@ -284,62 +159,5 @@ class TestParamsParity(unittest.TestCase):
         self.assertIn("20 sessions", params["event"]["dedup"])
 
 
-class TestAcceptanceFetchFallback(unittest.TestCase):
-    """The acceptance fetch tries the issuer CIK path, then the reporter CIK path, and caches the URL."""
-
-    class FakeClient:
-        def __init__(self):
-            self.urls = []
-
-        def get_text(self, url):
-            self.urls.append(url)
-            if "/data/1/" in url:
-                raise RuntimeError("NoSuchKey")
-            return "<SEC-HEADER>\n<ACCEPTANCE-DATETIME>20200304081500\nFILER:"
-
-    def test_falls_back_to_reporter_cik_and_caches_url(self):
-        import json
-        import tempfile
-        from pathlib import Path
-
-        with tempfile.TemporaryDirectory() as tmp:
-            client = self.FakeClient()
-            got = icr.fetch_acceptance(
-                "0000000002-20-000001", "1", client, cache_dir=Path(tmp), fallback_ciks=["2"]
-            )
-            self.assertEqual(got, dt.datetime(2020, 3, 4, 8, 15))
-            self.assertEqual(len(client.urls), 2)
-            self.assertIn("/data/2/", client.urls[1])
-            cached = json.loads((Path(tmp) / "0000000002-20-000001.json").read_text())
-            self.assertEqual(cached["acceptance"], "20200304081500")
-            self.assertIn("/data/2/", cached["url"])
-            # second call is served from the cache (no new request)
-            icr.fetch_acceptance(
-                "0000000002-20-000001", "1", client, cache_dir=Path(tmp), fallback_ciks=["2"]
-            )
-            self.assertEqual(len(client.urls), 2)
-
-    def test_all_paths_missing_caches_the_error_and_returns_none(self):
-        import json
-        import tempfile
-        from pathlib import Path
-
-        class Dead:
-            def get_text(self, url):
-                raise RuntimeError("NoSuchKey")
-
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertIsNone(
-                icr.fetch_acceptance(
-                    "0000000002-20-000002", "1", Dead(), cache_dir=Path(tmp), fallback_ciks=["2"]
-                )
-            )
-            cached = json.loads((Path(tmp) / "0000000002-20-000002.json").read_text())
-            self.assertIsNone(cached["acceptance"])
-            self.assertIn("NoSuchKey", cached["error"])
-            self.assertTrue(cached["fallback_tried"])
-
-    def test_accession_urls_dedups_and_skips_empty(self):
-        urls = icr.accession_urls("0000000002-20-000001", ["1", None, "1", "2"])
-        self.assertEqual(len(urls), 2)
-        self.assertTrue(urls[0].endswith("/data/1/000000000220000001/0000000002-20-000001.txt"))
+if __name__ == "__main__":
+    unittest.main()

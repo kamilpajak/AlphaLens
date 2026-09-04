@@ -9,6 +9,7 @@ Groups:
     broker/             — broker execution layer reads (SIM-only, ADR 0014)
     buffett/            — Buffett Mode-A observational lens over the brief (ad hoc)
     edgar/              — Layer 1 SEC EDGAR event detection (LIVE)
+    events/             — event-sourced candidate lane (epic #1293)
     literature/         — Perplexity scan via VPS systemd (LIVE)
     preregister/        — pre-registration ledger (multiple-testing accountability)
     thematic/           — Layer 2-5 thematic event pipeline (LIVE)
@@ -27,6 +28,7 @@ from alphalens_cli.commands.buffett import buffett_app
 from alphalens_cli.commands.cache import cache_app
 from alphalens_cli.commands.doctrine import audit_verdict_command
 from alphalens_cli.commands.edgar import edgar_app
+from alphalens_cli.commands.events import events_app
 from alphalens_cli.commands.experts import experts_app
 from alphalens_cli.commands.feedback import feedback_app
 from alphalens_cli.commands.literature import literature_app
@@ -61,6 +63,7 @@ app.add_typer(broker_app, name="broker")
 app.add_typer(buffett_app, name="buffett")
 app.add_typer(cache_app, name="cache")
 app.add_typer(edgar_app, name="edgar")
+app.add_typer(events_app, name="events")
 app.add_typer(experts_app, name="experts")
 app.add_typer(feedback_app, name="feedback")
 app.add_typer(literature_app, name="literature")
