@@ -728,6 +728,7 @@ def _propose_and_bracket(
     max_cap: int,
     asof: dt.date,
     model: str | None = None,
+    listing_root: Path | None = None,
 ) -> ThemeProposal:
     """Stage-A proposal → real-time mcap filter → keyword harvest.
 
@@ -793,6 +794,7 @@ def _propose_and_bracket(
         min_cap=min_cap,
         max_cap=max_cap,
         asof=asof,
+        listing_root=listing_root,
     )
     in_bracket = {
         v.ticker: v.market_cap
@@ -1165,6 +1167,7 @@ def _rows_for_theme(
     polygon_client: PolygonClient | None,
     press_df: pd.DataFrame | None,
     keep_unverified: bool,
+    listing_root: Path | None = None,
 ) -> ThemeResult:
     """Resolve → propose → bracket → assess → verify one theme.
 
@@ -1220,6 +1223,7 @@ def _rows_for_theme(
         max_cap=max_cap,
         asof=asof,
         model=model,
+        listing_root=listing_root,
     )
     if not proposal.candidates:
         # Nothing in bracket: no assessment to pay for, but the off-bracket
@@ -1378,8 +1382,15 @@ def map_themes(
     model: str | None = None,
     theme_novelty: Mapping[str, tuple[int, float]] | None = None,
     novelty_config_version: str | None = None,
+    listing_store_root: Path | None = None,
 ) -> pd.DataFrame:
     """For each theme, propose candidates, post-filter by real-time mcap, then verify.
+
+    ``listing_store_root`` (#1074): the grouped-daily store root for the
+    deterministic listing pre-check in the mcap bracket. ``None`` (default)
+    disables the check — the production CLI wires
+    ``rs_history.DEFAULT_RS_HISTORY_ROOT`` in, so library callers and tests
+    never read the operator's home store implicitly.
 
     The DeepSeek v4-pro client is built ONCE for the whole batch (avoid per-theme
     handshake), and the Polygon news window is fetched ONCE for all
@@ -1477,6 +1488,7 @@ def map_themes(
             polygon_client=polygon_client,
             press_df=press_df,
             keep_unverified=keep_unverified,
+            listing_root=listing_store_root,
         )
         rows.extend(result.rows)
         llm_proposals.extend(result.proposals)

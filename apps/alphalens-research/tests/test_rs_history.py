@@ -17,6 +17,7 @@ from alphalens_pipeline.data.rs_history import (
     DEFAULT_RS_HISTORY_ROOT,
     read_grouped_day,
     rs_percentile,
+    was_listed_on_or_before,
     write_grouped_day_atomic,
 )
 
@@ -179,6 +180,22 @@ class TestStoreSeparationAndDiskOnly(unittest.TestCase):
         finally:
             pc.get_default_polygon_client = orig
 
+    def test_was_listed_never_fetches(self):
+        # The listing pre-check shares the disk-only guarantee: a store miss is a
+        # clean None (unknown), never a live fetch.
+        import alphalens_pipeline.data.alt_data.polygon_client as pc
+
+        def _boom():
+            raise AssertionError("was_listed_on_or_before must not call the Polygon client")
+
+        orig = pc.get_default_polygon_client
+        pc.get_default_polygon_client = _boom  # type: ignore[assignment]
+        try:
+            with TemporaryDirectory() as tmp:
+                self.assertIsNone(was_listed_on_or_before(Path(tmp), "AAA", ASOF))
+        finally:
+            pc.get_default_polygon_client = orig
+
     def test_rs_percentile_never_fetches(self):
         # The score-stage read path must touch ONLY the disk store — a store miss is a
         # clean None, NEVER a live fetch (the no-in-pass-Polygon guarantee).
@@ -196,6 +213,67 @@ class TestStoreSeparationAndDiskOnly(unittest.TestCase):
                 )  # empty store -> None, no fetch
         finally:
             pc.get_default_polygon_client = orig
+
+
+class TestWasListedOnOrBefore(unittest.TestCase):
+    """The tri-state listing pre-check (#1074): membership in the newest FRESH
+    whole-market snapshot on or before ``asof``. ``None`` (unknown) on an empty
+    store or a stale snapshot — an unhealed store gap must never mass-classify
+    a day, and a recent IPO absent from an old snapshot must never read as
+    delisted."""
+
+    # ASOF 2026-06-12 is a Friday; 2026-06-10 is 2 sessions back (fresh at the
+    # default 5-session bound), 2026-05-15 is ~19 sessions back (stale).
+    FRESH_SESSION = dt.date(2026, 6, 10)
+    STALE_SESSION = dt.date(2026, 5, 15)
+
+    def test_present_in_fresh_snapshot_is_true(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_grouped_day_atomic(root, self.FRESH_SESSION, {"AAA": _bar(10.0)})
+            self.assertIs(was_listed_on_or_before(root, "AAA", ASOF), True)
+
+    def test_absent_from_fresh_snapshot_is_false(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_grouped_day_atomic(root, self.FRESH_SESSION, {"AAA": _bar(10.0)})
+            self.assertIs(was_listed_on_or_before(root, "GONE", ASOF), False)
+
+    def test_lookup_is_case_insensitive(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_grouped_day_atomic(root, self.FRESH_SESSION, {"AAA": _bar(10.0)})
+            self.assertIs(was_listed_on_or_before(root, "aaa", ASOF), True)
+
+    def test_empty_store_is_unknown(self):
+        with TemporaryDirectory() as tmp:
+            self.assertIsNone(was_listed_on_or_before(Path(tmp), "AAA", ASOF))
+
+    def test_stale_snapshot_is_unknown_not_false(self):
+        # The newest snapshot is ~19 sessions behind asof: membership evidence
+        # has expired — a ticker listed since then would be absent. Unknown.
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_grouped_day_atomic(root, self.STALE_SESSION, {"AAA": _bar(10.0)})
+            self.assertIsNone(was_listed_on_or_before(root, "GONE", ASOF))
+            self.assertIsNone(was_listed_on_or_before(root, "AAA", ASOF))
+
+    def test_snapshot_after_asof_is_ignored(self):
+        # PIT: only sessions on or before asof count — a future snapshot is not
+        # evidence about asof.
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_grouped_day_atomic(root, dt.date(2026, 6, 15), {"AAA": _bar(10.0)})
+            self.assertIsNone(was_listed_on_or_before(root, "AAA", ASOF))
+
+    def test_max_lag_bound_is_configurable(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_grouped_day_atomic(root, self.FRESH_SESSION, {"AAA": _bar(10.0)})
+            # 2026-06-10 is 2 sessions before the 2026-06-12 session: outside a
+            # 1-session bound, inside a 2-session bound.
+            self.assertIsNone(was_listed_on_or_before(root, "AAA", ASOF, max_lag_sessions=1))
+            self.assertIs(was_listed_on_or_before(root, "AAA", ASOF, max_lag_sessions=2), True)
 
 
 if __name__ == "__main__":

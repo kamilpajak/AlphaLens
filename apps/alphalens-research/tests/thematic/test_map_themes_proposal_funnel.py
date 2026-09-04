@@ -181,6 +181,64 @@ class ProposalFunnelSinkTests(unittest.TestCase):
             ],
         )
 
+    def test_a_delisted_proposal_records_not_listed_not_no_mcap(self):
+        # #1074: with a listing store wired in, a proposal absent from the fresh
+        # whole-market snapshot funnels as NOT_LISTED (deterministic pre-check,
+        # no yfinance round-trip) — NO_MCAP keeps meaning "priced-path failure".
+        import tempfile
+        from pathlib import Path
+
+        from alphalens_pipeline.data import rs_history
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bar = {"t": 0, "o": 1.0, "h": 1.0, "l": 1.0, "c": 1.0, "v": 1, "vw": 1.0}
+            rs_history.write_grouped_day_atomic(root, dt.date(2026, 8, 4), {"QUBT": bar})
+            sink: list[dict] = []
+            with (
+                mock.patch.object(
+                    orchestrator.theme_mapper,
+                    "propose_candidates",
+                    return_value=_proposal(
+                        [
+                            {"ticker": "QUBT", "confidence": 0.7},
+                            {"ticker": "GONE", "confidence": 0.5},
+                        ]
+                    ),
+                ),
+                mock.patch.object(
+                    orchestrator.mcap_filter,
+                    "fetch_mcap",
+                    side_effect=lambda t, **_: {"QUBT": 1_827_000_000}.get(t),
+                ),
+            ):
+                proposal = orchestrator._propose_and_bracket(
+                    theme="quantum_computing",
+                    catalyst=_catalyst(),
+                    api_key="k",
+                    pro_client=None,
+                    min_cap=MIN_CAP,
+                    max_cap=MAX_CAP,
+                    asof=ASOF,
+                    listing_root=root,
+                )
+                sink.extend(
+                    orchestrator._funnel_rows_for_theme(
+                        theme="quantum_computing",
+                        proposal=proposal,
+                        catalyst=_catalyst(),
+                        shadow=channel_assessor.ShadowVerdict(
+                            channel_assessor.SHADOW_REFUSE, 0, 0, 0
+                        ),
+                    )
+                )
+        self.assertEqual([c["ticker"] for c in proposal.candidates], ["QUBT"])
+        self.assertEqual(
+            [r["bracket_verdict"] for r in sink],
+            [mcap_filter.IN_BRACKET, mcap_filter.NOT_LISTED],
+        )
+        self.assertIsNone(sink[1]["market_cap"])
+
     def test_carries_the_catalyst_so_a_proposal_is_traceable_to_its_event(self):
         _kept, sink = self._run([{"ticker": "QUBT", "confidence": 0.7}], {"QUBT": 1_827_000_000})
         row = sink[0]
