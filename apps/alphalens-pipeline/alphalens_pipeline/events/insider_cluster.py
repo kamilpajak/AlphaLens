@@ -258,7 +258,13 @@ def acceptance_to_utc_iso(acceptance_et: dt.datetime | None) -> str | None:
 
 
 def filing_index_url(cik: str, accession: str) -> str:
-    """The EDGAR filing-index page of one accession (the human-readable landing page)."""
+    """The EDGAR filing-index page of one accession (the human-readable landing page).
+
+    Empty when the issuer CIK is unknown (a store row without ``issuer_cik``)
+    rather than raising: the brief then simply carries no catalyst link.
+    """
+    if not cik or not str(cik).strip():
+        return ""
     return (
         f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
         f"{accession.replace('-', '')}/{accession}-index.htm"

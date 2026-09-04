@@ -234,11 +234,27 @@ def apply_exclusions(
     return out
 
 
-def _empty_frame() -> pd.DataFrame:
-    df = pd.DataFrame(columns=list(EVENT_CANDIDATE_COLUMNS))
+def _stabilise_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Pin the dtypes that would otherwise drift with the day's data.
+
+    ``event_sic`` and ``market_cap`` are float64 whether or not any row is
+    unknown (pandas would infer int64 on an all-known day and float64 on a day
+    with one None, so the parquet schema would change day to day); the two
+    flags are real bools.
+    """
+    for col in ("event_sic", "market_cap", "event_cluster_usd"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").astype("float64")
+    df["event_n_insiders"] = pd.to_numeric(df["event_n_insiders"], errors="coerce").astype("Int64")
+    df["event_filing_lag_bdays"] = pd.to_numeric(
+        df["event_filing_lag_bdays"], errors="coerce"
+    ).astype("Int64")
     df["verified"] = df["verified"].astype(bool)
     df["eligible"] = df["eligible"].astype(bool)
     return df
+
+
+def _empty_frame() -> pd.DataFrame:
+    return _stabilise_dtypes(pd.DataFrame(columns=list(EVENT_CANDIDATE_COLUMNS)))
 
 
 def _row(ev: Mapping[Any, Any], legs: pd.DataFrame, names: Mapping[str, str]) -> dict[str, Any]:
@@ -376,9 +392,7 @@ def build_event_candidates(
     rows = [_row(ev, legs, names) for ev in facts.to_dict("records")]
     df = pd.DataFrame(rows, columns=list(EVENT_CANDIDATE_COLUMNS))
     df = df.sort_values("ticker", kind="stable").reset_index(drop=True)
-    df["verified"] = df["verified"].astype(bool)
-    df["eligible"] = df["eligible"].astype(bool)
-    return df
+    return _stabilise_dtypes(df)
 
 
 def write_event_candidates(df: pd.DataFrame, *, asof: dt.date, output_dir: Path) -> Path:

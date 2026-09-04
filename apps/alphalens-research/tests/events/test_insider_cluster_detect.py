@@ -277,6 +277,53 @@ class TestRowShape(_Fixture):
         self.assertEqual(det.load_company_names(path), {"AAA": "Alpha Corp"})
         self.assertEqual(det.load_company_names(path.with_name("missing.json")), {})
 
+    def test_event_sic_and_numeric_dtypes_are_stable_across_days(self):
+        _write_store(self.root, {2026: self._cluster()})
+        self.sic["AAA"] = 7900
+        known = self.build()
+        self.sic["AAA"] = None
+        unknown = self.build()
+        for out in (known, unknown):
+            self.assertEqual(str(out["event_sic"].dtype), "float64")
+            self.assertEqual(str(out["market_cap"].dtype), "float64")
+            self.assertEqual(str(out["event_n_insiders"].dtype), "Int64")
+            self.assertEqual(str(out["event_filing_lag_bdays"].dtype), "Int64")
+        self.assertEqual(str(self.build(asof=D(2020, 1, 2))["event_sic"].dtype), "float64")
+
+    def test_build_tolerates_store_without_reporting_owner_name(self):
+        rows = [
+            {k: v for k, v in r.items() if k != "reporting_owner_name"} for r in self._cluster()
+        ]
+        _write_store(self.root, {2026: rows})
+        out = self.build()
+        buyers = json.loads(out.iloc[0].event_buyers_json)
+        self.assertEqual([b["name"] for b in buyers], [None, None])
+        self.assertEqual([b["cik"] for b in buyers], ["1", "2"])
+
+    def test_default_acceptance_fn_lazily_builds_the_canonical_client_once(self):
+        class FakeClient:
+            def __init__(self):
+                self.urls = []
+
+            def get_text(self, url):
+                self.urls.append(url)
+                return "<SEC-HEADER>\n<ACCEPTANCE-DATETIME>20260304081500\nFILER:"
+
+        fake = FakeClient()
+        with mock.patch(
+            "alphalens_pipeline.data.alt_data.sec_edgar_client.get_default_sec_client",
+            return_value=fake,
+        ) as factory:
+            fn = det._default_acceptance_fn(None, Path(self._tmp.name) / "acc")
+            self.assertEqual(
+                fn("0000000002-26-000001", "99", ["2"]), dt.datetime(2026, 3, 4, 8, 15)
+            )
+            self.assertEqual(
+                fn("0000000002-26-000002", "99", ["2"]), dt.datetime(2026, 3, 4, 8, 15)
+            )
+        factory.assert_called_once()
+        self.assertEqual(len(fake.urls), 2)
+
 
 class TestWrite(unittest.TestCase):
     def test_write_event_candidates_uses_atomic_writer(self):

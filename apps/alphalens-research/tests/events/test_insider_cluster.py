@@ -274,6 +274,10 @@ class TestUrlsAndTitle(unittest.TestCase):
             "0000320193-20-000010-index.htm",
         )
 
+    def test_filing_index_url_empty_cik_returns_empty(self):
+        self.assertEqual(ic.filing_index_url("", "0000320193-20-000010"), "")
+        self.assertEqual(ic.filing_index_url("  ", "0000320193-20-000010"), "")
+
     def test_title_mentions_count_usd_and_dates(self):
         title = ic.cluster_title(
             n_insiders=2,
