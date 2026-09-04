@@ -317,11 +317,14 @@ def accession_urls(accession: str, ciks: list[str | None]) -> list[str]:
 def _cached_acceptance(
     cache: Path, fallback_ciks: list[str | None] | None
 ) -> tuple[bool, dt.datetime | None]:
-    """Acceptance already on disk, as ``(hit, value)``.
+    """Acceptance already on disk, as ``(resolved, value)``.
 
-    ``hit=False`` means the caller must go to the network: either nothing is
-    cached, or the cached miss is a missing-Archives-key error that fallback
-    CIKs have not been tried against yet.
+    ``resolved=True`` means the cache settles the question and ``value`` is the
+    answer -- including ``(True, None)``, an authoritative cached miss rather
+    than a lookup failure. ``resolved=False`` means the caller must go to the
+    network: either nothing is cached, or the cached miss is a
+    missing-Archives-key error that fallback CIKs have not been tried against
+    yet.
     """
     if not cache.exists():
         return False, None
@@ -357,8 +360,8 @@ def fetch_acceptance(
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache = cache_dir / f"{accession}.json"
-    hit, cached = _cached_acceptance(cache, fallback_ciks)
-    if hit:
+    resolved, cached = _cached_acceptance(cache, fallback_ciks)
+    if resolved:
         return cached
     last_err = None
     for url in accession_urls(accession, [cik, *(fallback_ciks or [])]):
