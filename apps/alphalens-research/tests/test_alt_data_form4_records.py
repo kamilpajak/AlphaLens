@@ -161,6 +161,39 @@ class TestParseHappyPath(unittest.TestCase):
         self.assertEqual(r.footnotes, ())
 
 
+class TestInstitutionalOtherFlag(unittest.TestCase):
+    def test_is_other_true_parsed_for_institutional_filer(self):
+        # Institutional Section 16 filers (advisors, partnerships, trusts —
+        # ~2% of the store, #82) tick ONLY the "Other" relationship box.
+        # Positive-coverage case: every other fixture in this file uses "0".
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
+
+        xml = _build_xml(
+            reporting_owners=[
+                {
+                    "cik": "0002222222",
+                    "name": "Calamos Advisors LLC",
+                    "is_director": "0",
+                    "is_officer": "0",
+                    "is_ten_percent_owner": "0",
+                    "is_other": "1",
+                }
+            ],
+        )
+        records = parse_form4_xml(
+            xml,
+            accession_number="0000320193-25-000002",
+            filing_date=date(2025, 3, 17),
+        )
+
+        self.assertEqual(len(records), 1)
+        r = records[0]
+        self.assertTrue(r.is_other)
+        self.assertFalse(r.is_director)
+        self.assertFalse(r.is_officer)
+        self.assertFalse(r.is_ten_percent_owner)
+
+
 class TestMultipleReportingOwners(unittest.TestCase):
     def test_joint_ceo_cfo_emits_two_records(self):
         from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml

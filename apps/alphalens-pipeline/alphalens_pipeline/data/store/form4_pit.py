@@ -55,6 +55,10 @@ FORM4_SCHEMA_COLUMNS: tuple[str, ...] = (
     "is_ten_percent_owner",
     "acquired_disposed",
     "is_amendment",
+    # Appended in #82 — partitions written before then lack this column on
+    # disk; _load_one_year backfills it as <NA> (unknown, never a fabricated
+    # False) on a nullable "boolean" dtype.
+    "is_other",
 )
 
 DEFAULT_DELISTING_EXCLUSION_DAYS: int = 180
@@ -255,8 +259,22 @@ class Form4PITStore:
             return None
 
         dataset = ds.dataset(str(part_dir), partitioning=None, format="parquet")
-        table = dataset.to_table(columns=list(FORM4_SCHEMA_COLUMNS))
+        # Legacy partitions (pre-#82) lack is_other on disk; selecting an
+        # absent column raises ArrowInvalid, so intersect first and backfill
+        # the miss as <NA> — the historical truth is unknown, never False.
+        available = set(dataset.schema.names)
+        present = [c for c in FORM4_SCHEMA_COLUMNS if c in available]
+        table = dataset.to_table(columns=present)
         df = table.to_pandas()
+        for col in FORM4_SCHEMA_COLUMNS:
+            if col not in df.columns:
+                df[col] = pd.NA
+        df = df[list(FORM4_SCHEMA_COLUMNS)]
+        # Nullable "boolean" keeps one stable dtype across a multi-year
+        # concat (plain bool for new years vs object for backfilled legacy
+        # years would flip per partition mix); <NA> also raises on a bare
+        # truthiness check instead of NaN being silently truthy.
+        df["is_other"] = df["is_other"].astype("boolean")
         # Normalise date columns once at cache fill (parquet may surface
         # them as pd.Timestamp); cache hits then skip the per-row apply.
         for col in ("filed_date", "transaction_date"):
@@ -272,7 +290,11 @@ class Form4PITStore:
 
     @staticmethod
     def _empty_frame() -> pd.DataFrame:
-        return pd.DataFrame(columns=list(FORM4_SCHEMA_COLUMNS))
+        df = pd.DataFrame(columns=list(FORM4_SCHEMA_COLUMNS))
+        # Same nullable dtype as _load_one_year stamps, so an empty result
+        # concats with a populated one without flipping is_other to object.
+        df["is_other"] = df["is_other"].astype("boolean")
+        return df
 
 
 def _to_date(value: object) -> date:

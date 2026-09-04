@@ -55,6 +55,7 @@ def _record(
     is_director: bool = False,
     is_officer: bool = True,
     is_ten_percent_owner: bool = False,
+    is_other: bool = False,
     acquired_disposed: str = "A",
     is_amendment: bool = False,
 ) -> dict:
@@ -72,6 +73,7 @@ def _record(
         "is_director": is_director,
         "is_officer": is_officer,
         "is_ten_percent_owner": is_ten_percent_owner,
+        "is_other": is_other,
         "acquired_disposed": acquired_disposed,
         "is_amendment": is_amendment,
     }
@@ -657,8 +659,79 @@ class TestForm4PITStoreSchema(unittest.TestCase):
             "is_ten_percent_owner",
             "acquired_disposed",
             "is_amendment",
+            "is_other",
         }
         self.assertEqual(set(FORM4_SCHEMA_COLUMNS), expected)
+
+
+# The 15-column shape every partition written before #82 has on disk — the
+# is_other column is ABSENT (not null-typed). The live VPS store's seed +
+# pre-#82 incremental parts all look like this.
+_LEGACY_SCHEMA_COLUMNS = tuple(c for c in FORM4_SCHEMA_COLUMNS if c != "is_other")
+
+
+def _write_legacy_partition(root: Path, year: int, records: list[dict]) -> None:
+    part_dir = root / f"transaction_year={year}"
+    part_dir.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame.from_records(records, columns=list(_LEGACY_SCHEMA_COLUMNS))
+    for col in ("filed_date", "transaction_date"):
+        df[col] = pd.to_datetime(df[col]).dt.date
+    pq.write_table(pa.Table.from_pandas(df, preserve_index=False), part_dir / "part-0000.parquet")
+
+
+class TestForm4PITStoreLegacyPartition(unittest.TestCase):
+    """Reads must span pre-#82 partitions (no is_other column) without raising."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.resolver = _StaticCikResolver({"AAPL": "0000320193"})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_read_spanning_legacy_and_new_partitions(self):
+        legacy = _record(
+            issuer_cik="0000320193",
+            ticker="AAPL",
+            accession_number="LEGACY-1",
+            filed_date=date(2021, 8, 1),
+            transaction_date=date(2021, 7, 15),
+        )
+        _write_legacy_partition(self.root, 2021, [legacy])
+        _write_partition(
+            self.root,
+            2022,
+            [
+                _record(
+                    issuer_cik="0000320193",
+                    ticker="AAPL",
+                    accession_number="NEW-1",
+                    filed_date=date(2022, 2, 1),
+                    transaction_date=date(2022, 1, 15),
+                    is_other=True,
+                )
+            ],
+        )
+
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        result = store.records_as_of("AAPL", asof=date(2022, 3, 1), lookback_days=365)
+
+        self.assertEqual(set(result["accession_number"]), {"LEGACY-1", "NEW-1"})
+        # Legacy truth is UNKNOWN, not False — surfaced as <NA> on a stable
+        # nullable-boolean dtype so a multi-year concat never flips dtypes.
+        self.assertEqual(str(result["is_other"].dtype), "boolean")
+        by_acc = result.set_index("accession_number")["is_other"]
+        self.assertTrue(pd.isna(by_acc["LEGACY-1"]))
+        self.assertEqual(by_acc["NEW-1"], True)
+
+    def test_empty_result_carries_the_boolean_dtype_too(self):
+        # A no-match read must present the same is_other dtype as a populated
+        # one, or a later concat with a real frame silently flips to object.
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        result = store.records_as_of("AAPL", asof=date(2022, 3, 1), lookback_days=30)
+        self.assertEqual(len(result), 0)
+        self.assertEqual(str(result["is_other"].dtype), "boolean")
 
 
 if __name__ == "__main__":
