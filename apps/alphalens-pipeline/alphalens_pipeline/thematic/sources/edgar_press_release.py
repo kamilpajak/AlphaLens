@@ -589,9 +589,21 @@ _MAX_JOINED_TITLE_CHARS = 200
 _MAX_CONTINUATION_JOINS = 2
 
 
+_NUMBER_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
 def _strip_junk_token_prefix(line: str) -> str:
     tokens = line.split()
     while tokens and _JUNK_TOKEN_RE.match(tokens[0]):
+        # A bare number counts as wrapper chrome only inside a wrapper chain
+        # ("2 ex99-1.htm ..."); a number leading real text is content
+        # ("2026 Guidance Raised ..."). Review follow-up on #1308.
+        if (
+            _NUMBER_TOKEN_RE.fullmatch(tokens[0])
+            and len(tokens) > 1
+            and not _JUNK_TOKEN_RE.match(tokens[1])
+        ):
+            break
         tokens.pop(0)
     return " ".join(tokens)
 

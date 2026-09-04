@@ -396,6 +396,14 @@ class TestTitleFromBody(unittest.TestCase):
         body = "<p>9/3/26</p><p>(949) 769-3200</p><p>Pro-Dex Announces Fiscal 2026 Results</p>"
         self.assertEqual(epr._title_from_body(body), "Pro-Dex Announces Fiscal 2026 Results")
 
+    def test_leading_number_before_real_text_is_kept(self):
+        # Review follow-up (#1308): the wrapper-token strip removes a leading
+        # number only when the NEXT token is also wrapper junk — a number
+        # leading real text is content ("2026 Guidance Raised"), while the
+        # joined wrapper line "2 ex99-1.htm EX-99.1 Document" still empties.
+        body = "<p>2 ex99-1.htm EX-99.1 Document</p><p>2026 Guidance Raised for Fiscal Year</p>"
+        self.assertEqual(epr._title_from_body(body), "2026 Guidance Raised for Fiscal Year")
+
 
 _FIXTURE_DIR = Path(__file__).parent / "fixtures" / "ex991"
 
@@ -491,6 +499,7 @@ class TestTitleFromBodyCorpus(unittest.TestCase):
         for path in sorted(_FIXTURE_DIR.glob("*.htm")):
             with self.subTest(fixture=path.stem):
                 title = epr._title_from_body(path.read_text(errors="replace"))
+                self.assertNotEqual(title, "", "every corpus fixture has a usable headline")
                 self.assertNotRegex(title, chrome)
                 self.assertLessEqual(len(title), 300)
 
