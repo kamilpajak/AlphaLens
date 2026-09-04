@@ -4594,6 +4594,162 @@
       "registered_at": "2026-09-03",
       "status": "completed",
       "notes": "Owner decisions 2026-09-03: full Form-4 store universe (PIT yaml secondary), exploratory look without verdict, USD floor 100k (250k check), delisted prices not purchased at this stage."
+    },
+    {
+      "id": "insider_cluster_forward_2026_09",
+      "signal_class": "informed_trader_flow_form4 (shares data with insider_form4_opportunistic_2026_05_08_v2 and insider_cluster_retro_2026_09 - NOT a fresh class; programme-level count)",
+      "hypothesis": "FORWARD, CONFIRMATORY (single look): the equal-weight basket of ALL eligible insider purchase clusters surfaced by the live event lane (>=2 distinct officers/directors, legs filed within 2 sessions, >=100k USD; hard exclusions: late filing, market cap outside 500M-10B, fund/SPAC SIC, earnings inside the first 10 sessions) earns a positive market-adjusted 20-session return from the arrival-session open (car_20_event > 0). Pre-registered secondary: >=3 insiders vs 2 (dose-response). Family bar one-sided 0.025 (2 event classes); three-way verdict language; single look, no second look, no interim peeks; pre-registered secondary car_20_reader (anchor = first session after the brief carrying the row exists) must also be net-positive for a cleared verdict.",
+      "scorer_path": "apps/alphalens-pipeline/alphalens_pipeline/events/insider_cluster.py (detection, PR #1295); look battery to be committed under apps/alphalens-research/scripts/ml/ >= 30 sessions before the look",
+      "params_frozen": {
+        "id": "insider_cluster_forward_2026_09",
+        "locked_at": "2026-09-04",
+        "look_kind": "CONFIRMATORY (single pre-registered look on the forward cohort; family bar one-sided 0.025; three-way verdict language; no second look)",
+        "design_memo": "docs/research/insider_cluster_forward_prereg_2026_09.md",
+        "parent_memo": "docs/research/event_sourced_lane_design_2026_09_03.md",
+        "stage_1": "docs/research/insider_cluster_retro_design_2026_09_03.md (ledger id insider_cluster_retro_2026_09; +0.76 pp, 90% CI [+0.21, +1.31]) - a DESIGN INPUT, not evidence in this test",
+        "epic": "#1293",
+        "detection_module": "apps/alphalens-pipeline/alphalens_pipeline/events/insider_cluster.py (PR #1295; constants below are pinned to this module by a parity test)",
+        "constants": {
+          "LEG_MIN_USD": 10000.0,
+          "CLUSTER_MIN_USD": 100000.0,
+          "CLUSTER_MIN_USD_CHECK": 250000.0,
+          "CLUSTER_WINDOW_SESSIONS": 2,
+          "CLUSTER_MIN_INSIDERS": 2,
+          "DEDUP_SESSIONS": 20,
+          "LATE_FILING_BDAYS": 10,
+          "PRE_OPEN_CUTOFF_ET": "09:00",
+          "EVENT_MCAP_RANGE": [
+            500000000,
+            10000000000
+          ],
+          "EARNINGS_EXCLUSION_SESSIONS": 10,
+          "EXCLUDED_SIC": [
+            6722,
+            6726,
+            6770
+          ],
+          "HORIZON_SESSIONS_PRIMARY": 19,
+          "HORIZON_SESSIONS_SECONDARY": 39,
+          "SPLIT_RATIO_LO": 0.55,
+          "SPLIT_RATIO_HI": 1.8,
+          "FEE_ROUND_TRIP": 0.0066,
+          "EVENT_GATE_VERSION": "insider_cluster_gate_v1",
+          "EVENT_CAR_VERSION": "event-car-v1"
+        },
+        "population": {
+          "unit": "ticker-episode (one event per ticker per 20 sessions, first wins; dedup runs on ALL detected clusters BEFORE the exclusions)",
+          "rows_counted": "eligible == True AND (source == insider_cluster OR event_overlap == True), brief_date >= accrual_start",
+          "shadow_arm": "eligible == False rows (exclusion_reason set), same arrival and outcome construction, descriptive only, can never affect the verdict",
+          "overlap_rule": "one card per ticker per day; thematic catalyst primary; the primary analysis is ALL eligible episodes; the two cohort labels overlap by design and are not additive; overlap share reported at episode and ticker level"
+        },
+        "event": {
+          "leg": "transaction_code P, acquired_disposed A, is_amendment False, is_officer or is_director AS FLAGGED ON THE FILING, price present, shares*price >= LEG_MIN_USD",
+          "cluster": ">= CLUSTER_MIN_INSIDERS distinct reporting_owner_cik with qualifying legs filed within CLUSTER_WINDOW_SESSIONS trading sessions INCLUSIVE of the first leg's filed_date (completing filed_date <= advance_trading_sessions(first filed_date, CLUSTER_WINDOW_SESSIONS)); cluster USD >= CLUSTER_MIN_USD (CLUSTER_MIN_USD_CHECK reported as a strength check)",
+          "event_date": "filed_date of the leg that completes the insider count; same-day ties ordered by accession_number; later amendments never retract or move an event",
+          "dedup": "DEDUP_SESSIONS per ticker, first wins (supersedes the parent memo's 5-session line)"
+        },
+        "arrival_and_brief_date": {
+          "acceptance": "EDGAR <ACCEPTANCE-DATETIME> of the completing filing via the canonical SEC client; unknown -> treated as after-hours",
+          "arrival": "acceptance before PRE_OPEN_CUTOFF_ET on filing date F -> session F; otherwise next session",
+          "brief_date": "D = F if accepted before PRE_OPEN_CUTOFF_ET else F + 1 calendar day; invariant session_on_or_after(D) == arrival",
+          "anchor_event": "arrival-session OPEN (first PUBLIC-INFORMATION price; the filing and the 22:30 ET store refresh precede it; stage-1 estimand and ladder anchor)",
+          "anchor_reader": "OPEN of session_on_or_after(D + 1 calendar day) - the first session after the brief carrying the row exists (its 04:30 UTC refresh precedes that open)",
+          "store_lag_failure": "brief D is (re)built only during calendar day D+1; an SEC daily-index lag > 1 day drops the event (never surfaced); counted and reported, not an exclusion"
+        },
+        "exclusions_in_order": [
+          "late_filing: completing leg filed > LATE_FILING_BDAYS business days after its transaction_date",
+          "mcap_unknown: no market cap obtainable at detection",
+          "mcap_out_of_bracket: market cap outside EVENT_MCAP_RANGE at detection",
+          "sic_excluded: SIC in EXCLUDED_SIC (unknown SIC not excluded; ADRs structurally absent from Form 4)",
+          "earnings_window: next confirmed earnings date <= arrival + (EARNINGS_EXCLUSION_SESSIONS - 1) sessions (unknown not excluded; value stamped)"
+        ],
+        "exclusion_inputs": "market cap, SIC, next earnings date and acceptance time are stamped AS OBSERVED AT DETECTION and never recomputed or revised",
+        "outcomes": {
+          "primary": "car_20_event = (close[arrival + HORIZON_SESSIONS_PRIMARY] / open[arrival] - 1) - same for SPY; UNADJUSTED daily open/close from the population monitor grouped-daily cache (Polygon adjusted=false, SPY from the same rows); dividends ignored; split guard [SPLIT_RATIO_LO, SPLIT_RATIO_HI] on consecutive closes -> null",
+          "secondary": [
+            "car_20_reader (anchor_reader open -> +HORIZON_SESSIONS_PRIMARY close, minus SPY, same guard)",
+            "car_40_event (arrival + HORIZON_SESSIONS_SECONDARY)",
+            "net variants car_20_event - FEE_ROUND_TRIP and car_20_reader - FEE_ROUND_TRIP (one round trip per episode, fixed ticket, a transformation not a simulation)"
+          ],
+          "denominator": "complete-case: eligible episodes with a non-null outcome for that horizon; null share and reasons reported; null share > 10% flagged in the verdict text; no delisting-return source exists",
+          "descriptive": [
+            "ladder realized_r",
+            "market_excess_return",
+            "fill rate inside the 7-session TTL"
+          ],
+          "never_pooled_with": [
+            "thematic market_excess_return",
+            "any other source or event_gate_version"
+          ]
+        },
+        "hypotheses": {
+          "H1_primary": "mean car_20_event of all eligible episodes > 0 (the ONLY confirmatory test)",
+          "H1b_secondary_dose_response": "mean car_20_event(n_insiders >= 3) > mean car_20_event(n_insiders == 2); descriptive; never replaces H1"
+        },
+        "floor_and_looks": {
+          "first_look_condition": "N >= 150 eligible episodes with matured car_20_event (arrival + 19 sessions closed) AND >= 50 distinct arrival sessions among them",
+          "second_look": "none; any later test of this lane is a new registration with its own programme charge",
+          "interim_peeks": "forbidden (no dashboard, no partial mean or median); the /edge source chip shows the row count only",
+          "battery_script": "committed under apps/alphalens-research/scripts/ml/ at least 30 sessions before the look, as an additive registration amendment"
+        },
+        "inference": {
+          "statistic": "episode-weighted mean of car_20_event",
+          "clusters": "arrival sessions (primary); ticker clusters and two-way ticker x arrival session as sensitivity",
+          "bootstrap": {
+            "method": "resample arrival-session clusters with replacement; recompute the episode-weighted mean each draw",
+            "n_boot": 9999,
+            "rng": "numpy.random.default_rng(0)",
+            "ci": "percentile (2.5th / 97.5th percentiles for the 95% CI)",
+            "one_sided_p": "(1 + count(mean_b - mean_obs >= mean_obs)) / (n_boot + 1), i.e. the bootstrap distribution re-centred at zero"
+          },
+          "alpha_one_sided": 0.025,
+          "family": "2 event classes in the lane (insider cluster; Schedule 13D reserved) x 1 primary test",
+          "smallest_actionable_effect": 0.005
+        },
+        "verdict_rules_in_order": {
+          "cleared": "one_sided_p < 0.025 for mean(car_20_event) > 0 AND mean(car_20_event) - FEE_ROUND_TRIP > 0 AND mean(car_20_reader) - FEE_ROUND_TRIP > 0 -> lane stays ON; SIM-basket decision (#1299) opened; selection/ordering promotion needs its own registration",
+          "evidence_against": "95% percentile-CI upper bound of mean(car_20_event) < smallest_actionable_effect -> flag OFF, lane retired, cohort frozen, postmortem row",
+          "inconclusive": "otherwise -> lane stays ON as display-only telemetry with no further test; operational retirement is an owner decision recorded in the ledger"
+        },
+        "verification_battery_if_cleared": [
+          "exact reproduce from the frozen parquets",
+          "leave-one-arrival-month-out worst-case p < 0.05",
+          "ticker-collapsed sign retained and >= 50% magnitude",
+          "event_car_version and event_gate_version single-valued in the sample"
+        ],
+        "descriptive_outputs": [
+          "shadow arm by exclusion_reason",
+          "overlap share (episode and ticker level) and overlap-subset mean",
+          "n_insiders >= 3 vs 2",
+          "USD floor 250k cut",
+          "car_20_reader",
+          "ladder fill rate and realized_r of filled episodes",
+          "retail simulation with 3- and 5-name caps, equal-dollar, fee model, first-come",
+          "car_40_event",
+          "per-month accrual counts",
+          "null-outcome share by reason",
+          "data-source failure rates (mcap_unknown, unknown acceptance, unknown earnings, store-lag drops)"
+        ],
+        "abort_clause": "abort uncharged only for outcome-blind defects found before the floor (detection bug, join integrity, store gaps); such a defect bumps event_gate_version and restarts the cohort; the moment any car_20_event aggregate is computed the look is spent",
+        "review_trail": "adversarial review 2026-09-04 (zen deepseek-v4-pro high, 4 findings + Perplexity reason, 25 findings); adjudication in the design memo section 12"
+      },
+      "periods": {
+        "accrual_start": "first VPS brief date produced with ALPHALENS_EVENT_LANE=1 (after #1297 is deployed); recorded in outcome.accrual_start when the flag is flipped",
+        "accrual_end": "the brief date at which N >= 150 eligible episodes have a matured car_20_event (arrival + 19 sessions closed) spanning >= 50 distinct arrival sessions; the look is computed once at that point",
+        "rationale": "forward = the single confirmatory test of the lane (stage 1 was estimation only); the floor is a condition, not a calendar date"
+      },
+      "success_criteria": {
+        "kind": "CONFIRMATORY three-way verdict on the frozen primary outcome (single look)",
+        "primary_statistic": "episode-weighted mean of car_20_event over eligible episodes with a non-null outcome (complete-case, null share reported); arrival-session cluster bootstrap (B=9999, numpy default_rng(0), percentile CI, re-centred one-sided p); CR2 t alongside",
+        "cleared": "one_sided_p < 0.025 for mean > 0 AND (mean(car_20_event) - 0.0066) > 0 AND (mean(car_20_reader) - 0.0066) > 0",
+        "evidence_against": "95% percentile-CI upper bound of mean(car_20_event) < +0.005",
+        "inconclusive": "otherwise; no second look (any later test = new registration); operational retirement is an owner decision",
+        "floor": "N >= 150 matured eligible episodes AND >= 50 distinct arrival sessions; no dashboard, no partial statistic before the floor",
+        "abort_clause": "outcome-blind defects only; a defect bumps event_gate_version and restarts the cohort"
+      },
+      "registered_at": "2026-09-04",
+      "status": "registered",
+      "notes": "Owner decision 2026-09-04: build as a candidate SOURCE with logging, not an automated strategy (epic #1293). Episode dedup 20 sessions as measured in stage 1 (supersedes the parent memo's 5-session line). Cohort keys: source, event_overlap, event_gate_version=insider_cluster_gate_v1, event_car_version=event-car-v1. Thematic aggregates exclude source != thematic from PR #1297 on; the flag is flipped ON only after #1297 is deployed."
     }
   ]
 }
