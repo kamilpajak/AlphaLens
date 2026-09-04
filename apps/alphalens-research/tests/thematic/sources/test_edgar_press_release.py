@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -243,9 +244,12 @@ class TestTitleFromBody(unittest.TestCase):
         body = "<html><body><h1>Apple Reports Q3 Earnings</h1><p>Details...</p></body></html>"
         self.assertEqual(epr._title_from_body(body), "Apple Reports Q3 Earnings")
 
-    def test_headline_split_by_br(self):
+    def test_br_inside_a_block_is_a_soft_wrap(self):
+        # #1306: <br> is an in-block soft break — filers routinely wrap a
+        # single visual headline across it. Joining beats truncating (the v1
+        # behavior returned just "Acme Corp").
         body = "Acme Corp<br/>announces merger with Beta Inc"
-        self.assertEqual(epr._title_from_body(body), "Acme Corp")
+        self.assertEqual(epr._title_from_body(body), "Acme Corp announces merger with Beta Inc")
 
     def test_headline_in_div(self):
         body = "<div>Gamma Ltd Completes Financing</div><div>The company...</div>"
@@ -266,11 +270,10 @@ class TestTitleFromBody(unittest.TestCase):
         body = "<div>2</div><div>Gamma Ltd Completes Financing</div>"
         self.assertEqual(epr._title_from_body(body), "Gamma Ltd Completes Financing")
 
-    def test_acmr_preamble_first_line_after_boilerplate(self):
-        # Real ACMR ef20075131_ex99-1.htm shape from #339. The minimal cut
-        # lands on the first non-boilerplate line; the foreign-listing
-        # preamble ("Stock code:" etc.) is a KNOWN remaining tail, out of
-        # scope until fixtures from several filer styles exist.
+    def test_acmr_preamble_skipped_company_name_is_the_fallback(self):
+        # Real ACMR ef20075131_ex99-1.htm shape from #339. The foreign-listing
+        # preamble is skipped (#1306); with no announcement line in this
+        # truncated shape the bare issuer name is the best remaining fallback.
         body = (
             "<div>EX-99.1</div>"
             "<div>2</div>"
@@ -280,7 +283,7 @@ class TestTitleFromBody(unittest.TestCase):
             "<div>Stock code: 688082</div>"
             "<div>ACM Research (Shanghai), Inc.</div>"
         )
-        self.assertEqual(epr._title_from_body(body), "Stock code: 688082")
+        self.assertEqual(epr._title_from_body(body), "ACM Research (Shanghai), Inc.")
 
     def test_all_boilerplate_body_returns_empty_string(self):
         # Everything filtered -> "" so transform() falls back to the synthetic
@@ -293,6 +296,203 @@ class TestTitleFromBody(unittest.TestCase):
         # headline, entity/space runs collapse to single spaces (clean_title).
         body = "<p>&nbsp;</p><p>Apple&nbsp;&nbsp;Reports   Record&nbsp;Results</p>"
         self.assertEqual(epr._title_from_body(body), "Apple Reports Record Results")
+
+    # --- #1306 corpus-driven rules -------------------------------------------
+
+    def test_literal_newlines_inside_a_block_are_soft_wraps(self):
+        # HTML renders a literal \n as a space; only block tags delimit visual
+        # lines. The 2026-09-03 corpus had 8 headlines fragmented this way
+        # (SWBI, RL, ORBS, LBRX, NPWR, HFFG, TVACW, BHLL).
+        body = "<p>Smith & Wesson Brands, Inc. Reports\nFirst Quarter Fiscal 2027 Financial Results</p>"
+        self.assertEqual(
+            epr._title_from_body(body),
+            "Smith & Wesson Brands, Inc. Reports First Quarter Fiscal 2027 Financial Results",
+        )
+
+    def test_release_label_lines_skipped(self):
+        body = (
+            "<p>EARNINGS RELEASE</p>"
+            "<p>Document</p>"
+            "<p>Exhibit 99.1</p>"
+            "<p>FOR IMMEDIATE RELEASE:</p>"
+            "<p>PRESS RELEASE, DATED SEPTEMBER 3, 2026</p>"
+            "<p>Acme Announces Record Results</p>"
+        )
+        self.assertEqual(epr._title_from_body(body), "Acme Announces Record Results")
+
+    def test_contact_block_not_chosen_over_the_headline(self):
+        # ODFL/PDEX/WDFC shape: contact label, person, role, phone precede the
+        # headline. None of them is headline-like; the verb line wins.
+        body = (
+            "<p>Contact:</p>"
+            "<p>Adam N. Satterfield</p>"
+            "<p>Executive Vice President and</p>"
+            "<p>Chief Financial Officer</p>"
+            "<p>(336) 822-5721</p>"
+            "<p>Old Dominion Freight Line Reports September Operating Metrics</p>"
+        )
+        self.assertEqual(
+            epr._title_from_body(body),
+            "Old Dominion Freight Line Reports September Operating Metrics",
+        )
+
+    def test_newsfile_header_line_skipped(self):
+        body = (
+            "<p>Alaska Silver Corp.: Exhibit 99.1-Filed by newsfilecorp.com</p>"
+            "<p>NEWS RELEASE</p>"
+            "<p>ALASKA SILVER ANNOUNCES GRANT OF OPTIONS</p>"
+        )
+        self.assertEqual(epr._title_from_body(body), "ALASKA SILVER ANNOUNCES GRANT OF OPTIONS")
+
+    def test_foreign_preamble_and_bare_company_name_not_chosen(self):
+        # The full ACMR shape (#339): preamble is skipped outright; the bare
+        # issuer-name line is a fallback at best, so the announcement title
+        # right after it wins.
+        body = (
+            "<div>EX-99.1</div>"
+            "<div>Stock code: 688082</div>"
+            "<div>Stock Abbreviation: ACM Shanghai</div>"
+            "<div>Announcement No.: 2026-021</div>"
+            "<div>ACM Research (Shanghai), Inc.</div>"
+            "<div>Announcement of Resolutions of the First Meeting of the Third Board</div>"
+        )
+        self.assertEqual(
+            epr._title_from_body(body),
+            "Announcement of Resolutions of the First Meeting of the Third Board",
+        )
+
+    def test_letter_spaced_smallcaps_line_is_repaired(self):
+        # EQBK letterhead: CSS small-caps emitted as "E QUITY B ANCSHARES".
+        # Repaired it becomes a bare company name (fallback-only); a lone
+        # occurrence like "A BIG DEAL" must NOT be joined.
+        self.assertEqual(
+            epr._repair_letter_spacing("E QUITY B ANCSHARES, I NC."),
+            "EQUITY BANCSHARES, INC.",
+        )
+        self.assertEqual(epr._repair_letter_spacing("A BIG DEAL"), "A BIG DEAL")
+
+    def test_overlong_prose_line_is_skipped(self):
+        # APOG shape: the whole release flattened into one line. A >300-char
+        # "line" is prose, not a headline — skip it; all-prose body falls back
+        # to the synthetic title via transform().
+        blob = "Apogee Enterprises, Inc. 4400 West 78th Street " + "word " * 100
+        self.assertEqual(epr._title_from_body(f"<p>{blob}</p>"), "")
+
+    def test_exhibit_label_prefix_is_stripped_not_dropping_the_line(self):
+        # HLX shape: the label shares a line with real content once soft wraps
+        # are joined. Strip the label, keep the rest.
+        body = "<p>Exhibit 99.1 Hornbeck Offshore Completes Merger With Helix</p>"
+        self.assertEqual(
+            epr._title_from_body(body),
+            "Hornbeck Offshore Completes Merger With Helix",
+        )
+
+    def test_internal_filename_token_skipped(self):
+        # PCVX/RRBI shape: a bare internal document name leaks as a text line.
+        body = "<p>a20260831-8xkxpressrelea</p><p>Vaxcyte Appoints Chief Medical Officer</p>"
+        self.assertEqual(epr._title_from_body(body), "Vaxcyte Appoints Chief Medical Officer")
+
+    def test_phone_and_date_lines_skipped(self):
+        body = "<p>9/3/26</p><p>(949) 769-3200</p><p>Pro-Dex Announces Fiscal 2026 Results</p>"
+        self.assertEqual(epr._title_from_body(body), "Pro-Dex Announces Fiscal 2026 Results")
+
+
+_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "ex991"
+
+# Head-truncated REAL exhibit bodies (see fixtures/ex991/SOURCES.md), one per
+# junk class observed on the 2026-09-03 live ingest. Every entry is the title
+# the CURRENT algorithm is expected to produce — adjudicated by reading the
+# fixture, not by accepting output blindly. "" means: no plausible headline
+# line exists (transform() then uses the synthetic fallback).
+_CORPUS_EXPECTED: dict[str, str] = {
+    "ACMR": "Announcement of Resolutions of the Fifth Meeting of the Third Board of Directors",
+    "AMBA": "Ambarella, Inc. Announces Second Quarter Fiscal Year 2027 Financial Results",
+    "AOUT": "American Outdoor Brands, Inc. Reports First Quarter Fiscal 2027 Financial Results",
+    # The hidden-headline recovery of the flattened letterhead blob: the
+    # flat-run split + letterhead/release-prefix disqualifiers land on the
+    # real announcement.
+    "APOG": "Apogee Enterprises to Acquire GroGlass",
+    "BHLL": (
+        "BUNKER HILL INTERSECTS ADDITIONAL HIGH-GRADE SILVER IN THE CATE-8 VEIN; "
+        "INDIVIDUAL DRILL SAMPLES TO 16.3 OZ/TON SILVER, 41.1% LEAD, 7.41% ZINC; "
+        "UNDERGROUND CHANNEL SAMPLING RETURNS 46 FEET OF 8.19% LEAD, 2.49 OZ/TON "
+        "SILVER, 1.18% ZINC (4.83 OZ/TON AgEq)"
+    ),
+    "BRC": "Brady Corporation Reports 2026 Fourth Quarter and Record Full Year Results",
+    "BSVN": (
+        "Bank7 Corp. Named Successful Bidder in the Auction for a Controlling "
+        "Interest in Century Financial Services Corporation"
+    ),
+    "CARG": "CarGurus Appoints Matthew Mandel as Chief Financial Officer",
+    "EGAN": (
+        "eGain Reports Fiscal 2026 Results: Total Revenue Up 3%, AI Customer "
+        "Revenue Up 20%, Company Named a Leader in Gartner's First Customer "
+        "Service Knowledge Management MQ"
+    ),
+    "EQBK": "Equity Bancshares, Inc. and Lincoln Bancorp Announce Plans to Merge",
+    "HFFG": "HF Foods Group Completes Acquisition of Searay Foods",
+    # Known tail: the letterhead strapline, not an announcement — still an
+    # accurate description of the deck-style exhibit and far above "EX-99.1".
+    "HLX": "Hornbeck Offshore Services A Premier Integrated Offshore Services Company",
+    "HOFT": "Hooker Furnishings Declares Quarterly Dividend",
+    "LBRX": "LB Pharmaceuticals Appoints Joseph Miller as Chief Financial Officer",
+    "LULU": "LULULEMON ATHLETICA INC. ANNOUNCES SECOND QUARTER FISCAL 2026 RESULTS",
+    # Known tail: ends mid-clause (next block starts with a noun, so the
+    # continuation join cannot detect the dangling phrase).
+    "NPWR_WT": "Net Power Closes Acquisition of EMPower’s Position Under EPC",
+    "ODFL": "OLD DOMINION FREIGHT LINE PROVIDES UPDATE FOR Third QUARTER 2026",
+    "ORBS": (
+        "Eightco Holdings (NASDAQ: ORBS) Reports Total Holdings of Approximately "
+        "$380 Million, Includes OpenAI, Beast Industries, More Than 16,000 ETH "
+        "and Nearly 302 Million WLD Tokens"
+    ),
+    "PCVX": (
+        "Vaxcyte Appoints Chief Medical Officer and Chief Legal Officer; Narrows "
+        "Guidance for Expected VAX-31 OPUS-1 Topline Data"
+    ),
+    # Known tail: ends on the year (digit-final incompleteness is undetectable).
+    "PDEX": "PRO-DEX, INC. ANNOUNCES FISCAL 2026",
+    "RL": "Ralph Lauren Announces Enterprise Leadership Updates",
+    # Known tail: the exhibit IS an investor deck, not a press release — the
+    # label line is an accurate title for it.
+    "RRBI": "INVESTOR PRESENTATION As of June 30, 2026 Nasdaq: RRBI",
+    "SWBI": "Smith & Wesson Brands, Inc. Reports First Quarter Fiscal 2027 Financial Results",
+    "TVACW": (
+        "PlusAI, a Leader in Physical AI Pioneering AI-Based Virtual Driver "
+        "Software For Factory-Built Autonomous Trucks, to Become Publicly Listed "
+        "Through Business Combination with Texas Ventures Acquisition III Corp"
+    ),
+    "WAMFF": "ALASKA SILVER ANNOUNCES GRANT OF OPTIONS",
+    "WDFC": (
+        "WD-40 Company Hires Keith Stauffer to Assume Role of Chief Financial "
+        "Officer Following a Transition Period"
+    ),
+}
+
+
+class TestTitleFromBodyCorpus(unittest.TestCase):
+    """#1306: every rule is justified by a real fixture it fixes AND the rest
+    of the corpus it must not break."""
+
+    def test_fixture_corpus_titles(self):
+        for name, expected in _CORPUS_EXPECTED.items():
+            with self.subTest(fixture=name):
+                body = (_FIXTURE_DIR / f"{name}.htm").read_text(errors="replace")
+                self.assertEqual(epr._title_from_body(body), expected)
+
+    def test_every_fixture_yields_no_boilerplate_title(self):
+        # Weaker invariant over the WHOLE corpus (including tail cases with no
+        # locked expectation): whatever comes out is never filing chrome.
+        chrome = re.compile(
+            r"^(?:ex[-\s]?99|exhibit\s*99|document$|exhibit$|for\s+immediate\s+release"
+            r"|(?:press|news|earnings)\s+release$|contact)",
+            re.IGNORECASE,
+        )
+        for path in sorted(_FIXTURE_DIR.glob("*.htm")):
+            with self.subTest(fixture=path.stem):
+                title = epr._title_from_body(path.read_text(errors="replace"))
+                self.assertNotRegex(title, chrome)
+                self.assertLessEqual(len(title), 300)
 
 
 class TestParseFormIndex(unittest.TestCase):
