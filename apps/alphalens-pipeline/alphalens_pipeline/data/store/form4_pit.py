@@ -27,7 +27,9 @@ from pathlib import Path
 from typing import Protocol
 
 import pandas as pd
+import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 
 from alphalens_pipeline.data.store.delisting import DelistingEvent
 
@@ -258,7 +260,32 @@ class Form4PITStore:
         if not part_dir.is_dir():
             return None
 
-        dataset = ds.dataset(str(part_dir), partitioning=None, format="parquet")
+        # Unify across fragments instead of letting the dataset infer from the
+        # FIRST one: a partition mid-cycle holds the legacy compacted.parquet
+        # (no is_other, `string` widths) beside fresh part files that carry the
+        # column as `large_string`. Inference reads only the compacted file, so
+        # is_other drops out of the schema and the backfill below nulls it for
+        # EVERY row — including the new ones whose real values sit on disk
+        # (measured on the live 2026 partition, #1329: 236834 rows read as
+        # all-null). Permissive for the same reason the compactor needs it:
+        # one writer owns every fragment, so a difference here is an arrow
+        # width artifact; a genuine type conflict still raises.
+        #
+        # Read the SAME explicit file list whose schemas were unified, exactly
+        # as the compactor does. Handing over the directory instead lets the
+        # dataset enumerate files the unification never saw — notably a
+        # `compacted.parquet.tmp` left behind by a compaction killed between
+        # write and rename, which pyarrow opens as parquet and which then
+        # takes down every read of that year.
+        fragments = sorted(part_dir.glob("*.parquet"))
+        if not fragments:
+            return None
+        unified = pa.unify_schemas(
+            [pq.read_schema(f) for f in fragments], promote_options="permissive"
+        )
+        dataset = ds.dataset(
+            [str(f) for f in fragments], partitioning=None, format="parquet", schema=unified
+        )
         # Legacy partitions (pre-#82) lack is_other on disk; selecting an
         # absent column raises ArrowInvalid, so intersect first and backfill
         # the miss as <NA> — the historical truth is unknown, never False.

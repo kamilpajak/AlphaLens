@@ -75,9 +75,25 @@ def compact_partition(partition_dir: Path) -> None:
     # infers it from the FIRST fragment only, and "compacted.parquet" sorts
     # before "part-*", so a column added to the writer (is_other, #82) would
     # be silently projected away on every re-compaction of a legacy
-    # partition. Fragments missing a unified field read as nulls. The default
-    # promote mode still fails loudly on a genuine type conflict.
-    unified = pa.unify_schemas([pq.read_schema(f) for f in files])
+    # partition. Fragments missing a unified field read as nulls.
+    #
+    # ``permissive`` because the live store mixes arrow WIDTHS for the same
+    # logical column: every legacy compacted.parquet carries `string` while
+    # the current writer emits `large_string` (measured on all 35 partitions,
+    # 2026-09-05). Both paths were measured on those files, not assumed: the
+    # pre-#82 inference reads them fine (it casts the wider parts down to
+    # `string`), while the strict default raises ArrowTypeError — which is
+    # what took the daily ingest down for a cycle (#1329).
+    #
+    # Permissive is right for THIS call site specifically: one writer owns
+    # every fragment here (the seed backfill and the daily incremental both
+    # go through ``write_records_to_parquet``), so a difference is an arrow
+    # width/nullability artifact, never two sources disagreeing about a
+    # column's meaning. It is not blanket-safe: permissive also widens
+    # int32->int64 and int64->double silently. That is unreachable today
+    # because the store has NO integer column (the only numerics are the two
+    # `double` transaction fields) — revisit this call site if one is added.
+    unified = pa.unify_schemas([pq.read_schema(f) for f in files], promote_options="permissive")
     table = ds.dataset(
         [str(f) for f in files],
         partitioning=None,

@@ -19,6 +19,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 from alphalens_pipeline.data.alt_data.form4_bulk_backfill import write_records_to_parquet
@@ -180,8 +181,24 @@ def _write_legacy_compacted(partition_dir: Path, records: list[Form4Record]) -> 
         table = pq.ParquetFile(part).read()
     if "is_other" in table.column_names:
         table = table.drop_columns(["is_other"])
+    table = table.cast(_narrow_string_schema(table.schema))
     partition_dir.mkdir(parents=True, exist_ok=True)
     pq.write_table(table, partition_dir / "compacted.parquet")
+
+
+def _narrow_string_schema(schema: pa.Schema) -> pa.Schema:
+    """Return ``schema`` with every ``large_string`` field narrowed to ``string``.
+
+    Reproduces the live store's legacy width. Measured on the VPS 2026-09-05:
+    every ``compacted.parquet`` carries ``issuer_cik: string`` while every
+    ``part-*.parquet`` the current writer emits carries ``large_string`` — the
+    pre-#82 compactor inferred its schema from the first fragment and pyarrow
+    cast the wider parts down, so the difference was silently absorbed on
+    every cycle and never reached the on-disk compacted file.
+    """
+    return pa.schema(
+        [pa.field(f.name, pa.string()) if f.type == pa.large_string() else f for f in schema]
+    )
 
 
 class TestCompactMixedSchemas(unittest.TestCase):
@@ -220,6 +237,31 @@ class TestCompactMixedSchemas(unittest.TestCase):
         # Legacy truth is unknown -> null, never a fabricated False.
         self.assertTrue(pd.isna(df.loc["LEGACY", "is_other"]))
         self.assertEqual(bool(df.loc["NEW", "is_other"]), True)
+
+    def test_mixed_string_width_partition_compacts(self):
+        # Live regression 2026-09-05 (#1329): the legacy compacted file carries
+        # `string` where the current writer emits `large_string`, so a strict
+        # unify_schemas raises ArrowTypeError and the daily ingest dies at
+        # compaction. Width is an arrow artifact of one writer, never semantic
+        # drift, so it must merge rather than abort the run.
+        legacy = _mk_record(transaction_date=date(2022, 1, 1), accession="LEGACY")
+        _write_legacy_compacted(self.partition, [legacy])
+        write_records_to_parquet(
+            [_mk_record(transaction_date=date(2022, 2, 1), accession="NEW")],
+            parquet_root=self.root,
+        )
+        # Guard the premise: the two fragments really do differ in width, so
+        # this test cannot rot into a no-op if the writer's types ever change.
+        widths = {
+            str(pq.read_schema(f).field("issuer_cik").type)
+            for f in self.partition.glob("*.parquet")
+        }
+        self.assertEqual(widths, {"string", "large_string"})
+
+        compact_partition(self.partition)
+
+        df = pq.ParquetFile(self.partition / "compacted.parquet").read().to_pandas()
+        self.assertEqual(sorted(df["accession_number"]), ["LEGACY", "NEW"])
 
     def test_mixed_schema_dedup_prefers_concrete_is_other(self):
         # Catch-up overlap: the SAME logical row exists once in the legacy
