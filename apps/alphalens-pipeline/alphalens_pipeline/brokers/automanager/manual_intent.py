@@ -7,12 +7,33 @@ normal form the wire contract already speaks (`TradeSpec` with absolute prices
 and 0-100 percentages). No I/O, no typer: the CLI command stays a thin shell
 and every rule here is testable without a runner.
 
-The intent arms with ``exit=None`` on purpose: the daemon's stop management is
-a daemon-wide policy (``ALPHALENS_BROKER_EXIT_POLICY``, `breakeven_trail`
-since #1183), and the ``exit`` geometry leaf only feeds geometry-applying
-policies. Placement falls back to the intent's own static disaster stop and
-tranche TP levels — exactly the manual pick's meaning. Per-pick policy
-override is #1236, not this module.
+The intent arms with ``exit=None`` on purpose, and that choice does MORE than
+pick the placed levels — issue #1325. The ``exit`` leaf feeds two consumers:
+the geometry actually placed (only for an ``applies_geometry`` policy), and the
+``geometry`` shadow stamp on the ``planned`` journal line, which is the only
+source of ``PlannedExit.reanchor``. Both post-fill stop-move arms
+(``position_manager._maybe_reanchor`` and ``_maybe_trail``) refuse when that is
+``None``, so a manual pick is POLICY-IMMUNE: whatever
+``ALPHALENS_BROKER_EXIT_POLICY`` names, the daemon places the intent's own
+static disaster stop and tranche TP levels and never moves the stop again.
+
+One route does NOT pass that guard, so it is worth naming here rather than
+leaving for someone to rediscover: ``ProtectionView.trailed_stop_by_uic`` is a
+journal-lifetime fold, and ``control_loop._build_managed_exits`` takes
+``max(plan stop, trailed)`` and PLACES it. A level earned by an earlier
+position on the same uic can therefore outlive it. It still cannot reach a
+manual pick, for two different reasons: a pick with TP tranches journals its
+own ``tranche_plan`` under a new ``pick_key``, which resets the fold; and a
+pick armed ``--no-tp`` journals no ``tranche_plan`` at all, so the builder
+skips its uic. Both are pinned in the test module named below.
+
+That is the intended behaviour, decided 2026-09-05 on #1325: the exit of a
+group-managed pick is a human decision, and the trail's 0.5R activation is
+meaningless across manual picks anyway because ``1R = avg_price - plan_stop``
+is a hand-set number (6.8% of entry on AMBA, 29% on RHI). Pinned end-to-end by
+``tests/brokers/automanager/test_manual_pick_no_stop_move.py`` — if this module
+ever starts building an exit spec, that suite goes red BEFORE real money starts
+trailing. Opting a single pick INTO a trailing policy is #1236, not this module.
 
 Every refusal raises :class:`ManualIntentError` with an operator-readable
 message. This command arms real money: a malformed level must explode loudly,

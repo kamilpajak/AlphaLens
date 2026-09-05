@@ -221,7 +221,13 @@ class BreakevenTrailPolicy:
     disaster stop are journaled verbatim, so profit realizes through the
     research TP levels while this policy manages ONLY the stop. 1R is the
     LENS risk unit — ``avg_price - plan_stop`` (filled blend minus the brief
-    disaster floor), NOT an ATR multiple — and ``atr`` is ignored entirely.
+    disaster floor), NOT an ATR multiple — and ``atr`` is ignored entirely
+    HERE. Read that narrowly: it means this method never reads ``atr``, NOT
+    that the value is irrelevant to whether this policy runs. The caller
+    (``position_manager._maybe_trail``) still refuses on a missing or
+    degenerate ``plan.reanchor.atr`` before it ever calls in, which is why a
+    pick armed without a geometry stamp never trails under this policy. That
+    mismatch is deliberate and load-bearing — see issue #1325.
     Dark until the peak reaches ``avg_price + activation_r*R``; once armed the
     target is ``max(avg_price, avg_price + trail_frac*(peak - avg_price))``,
     which at the arming instant already sits at

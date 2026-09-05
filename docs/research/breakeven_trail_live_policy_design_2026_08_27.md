@@ -123,3 +123,97 @@ No new pre-registration is created here. The `be_0p5r_trail0p6` lens keeps accru
 display-only telemetry under its existing registration. Any future head-to-head involving
 this policy is a NEW prereg with its own ledger row (the 2026-08-24 prereg's §11 item 1 void
 note records that nothing is pre-authorized).
+
+## 7. Addendum 2026-09-05 — the policy does not reach manual picks (#1325)
+
+The memo above was written as if one daemon-wide policy governs every position. It does
+not. A pick armed through `alphalens broker arm-manual` carries `exit=None`, so
+`control_loop._geometry_shadow_stamp` returns `None`, so its `planned` journal line has no
+`geometry` key, so `PlannedExit.reanchor` folds to `None` — and BOTH post-fill stop-move
+arms refuse on exactly that. A manual pick is therefore **policy-immune**: its stop is
+placed once and never moved, whatever `ALPHALENS_BROKER_EXIT_POLICY` names.
+
+Measured, not reasoned. Running the real `_reconcile_long` on the AMBA LIVE shape of
+2026-09-04 (8 @ 59.00, disaster stop 55.00 so 1R = 4.00 and the 0.5R activation sits at
+61.00, session peak 62.78, well above it):
+
+| policy | manual shape (no stamp) | same numbers WITH a stamp |
+|---|---|---|
+| `setup_static` | NoOp | NoOp |
+| `atr_bracket_1p5` | NoOp | AmendStop |
+| `trailing_atr` | NoOp | AmendStop |
+| `breakeven_trail` | NoOp | AmendStop |
+
+The right-hand column is the positive control: the check can produce the disproving
+observation, and did not.
+
+Scope of the gap, read off the two VPS journals on 2026-09-05. At the INTENT level the
+split is exact: every pick recorded with `source: manual` carries `exit = None`, and every
+brief pick that reached an armed position carries an exit spec (LIVE: OLN, SMG, GME). At
+the JOURNAL level the same split shows on the entry-trail-era rows — on LIVE the stamped
+`*-entry-tN-fire` lines are GME / OLN / SMG and the unstamped ones are AMBA / RHI.
+
+Two things that a coarser read would get wrong, both checked:
+
+* the `planned` rows with plain uuid `client_request_id` predate the entry-trail path and
+  are mixed (some stamped, some not, on SIM), so "unstamped implies manual" is FALSE as a
+  general statement about the file — it holds only within the entry-trail-era rows;
+* SIM carries GME twice, once as a brief pick (exit spec set) and separately as a manual
+  one (`exit = None`), so its single stamped `GME-2026-08-27-entry-t0-fire` line belongs to
+  the brief arming and is not a counterexample.
+
+So on today's population the policy governs brief picks only, and §5's "both instances now
+run one policy" is true of the resolved env var, not of the positions.
+
+**Decision (owner, 2026-09-05): manual picks keep this behaviour — the daemon holds their
+disaster stop and never tightens it.** The basis is NOT the counterfactual replay (n=2
+changed rows on LIVE, both worse, but the sample contains no reversal — the one scenario a
+trail exists for, so it cannot settle the question). It is:
+
+* the trail's risk unit is `avg_price - plan_stop`, and on a manual pick `plan_stop` is
+  hand-set, so 0.5R is a different quantity on every pick — 6.8% of entry on AMBA (inside
+  a single session's range), 29% on RHI (unreachable);
+* the exit of a group-managed pick is a human decision.
+
+Consequences recorded so the decision does not decay:
+
+1. The `plan.reanchor is None` guard is now LOAD-BEARING for this decision, not merely a
+   pre-PR-6a compatibility check. Relaxing it in isolation — e.g. to let `breakeven_trail`
+   through, which is defensible on its own terms since that policy discards `atr` entirely
+   — turns trailing ON for exactly the picks the decision excludes. Both arm docstrings say
+   so, and `tests/brokers/automanager/test_manual_pick_no_stop_move.py` goes red on it.
+2. The supported way to trail one manual pick is the per-pick policy override, issue #1236.
+   Nothing else should be built for it.
+3. Residual, named and NOT fixed: a BRIEF pick whose `exit_spec` fails to build (degenerate
+   ATR, no usable tiers) is also silently untrailed, even though `breakeven_trail` needs no
+   ATR. Measured blast radius on 2026-09-05: zero — all three LIVE brief `planned` lines
+   carry the stamp. It becomes real only if brief arming starts producing exit-less intents.
+4. §3's "1 Hz `_running_high`" follow-up (#1166) is not on the path to any of this: the
+   sampling rate moves the AMBA outcome by ~2 bps while trail-or-not moves it by ~364 bps.
+
+### 7.1 The second route to a moved stop, and why it is closed twice
+
+"Policy-immune" is a claim about `_reconcile_long`. There is a second route that does not
+pass through its guard: `trailed_stop_by_uic` is a JOURNAL-lifetime fold, so a level earned
+by an earlier position on the same uic can outlive it — and SIM really carries that shape
+(GME armed once from a brief and separately as a manual pick, same uic). Both consumers of
+that map were run, not reasoned about:
+
+* `_maybe_trail` only GATES a proposal against the floor; it never proposes the floor
+  itself. With an inherited level injected, all four policies still return `NoOp` on the
+  manual shape.
+* `control_loop._build_managed_exits` DOES take `max(plan stop, trailed)` and place it. It
+  is closed by two different mechanisms depending on the pick:
+  - a manual pick WITH TP tranches journals its own `tranche_plan` under a new `pick_key`,
+    so the generation reset clears the inherited marker (measured: the fold goes from
+    `{uic: 61.5}` to `{}` when the manual plan line is appended);
+  - a manual pick armed `--no-tp` journals NO `tranche_plan` at all
+    (`_journal_tranche_plan_core` returns early on an empty ladder), so the marker survives
+    the fold — but `_build_managed_exits` skips any uic with no tranche plan, so it is never
+    placed.
+
+The second bullet is the one worth remembering: that case is safe for a reason unrelated to
+the reset, so a future change that starts journaling a ladder for `--no-tp` picks, or that
+makes the builder tolerate a missing plan, reopens it. Both are pinned in
+`test_manual_pick_no_stop_move.py`, each with a positive control showing the level DOES
+come through when the plan is present.
