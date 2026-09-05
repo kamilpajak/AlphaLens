@@ -1,11 +1,12 @@
 # Options telemetry × EDGE — pre-registration of the cluster-19 first look
 
 **Status:** REGISTERED (frozen 2026-09-05, before any feature-vs-outcome statistic
-was computed on this panel)
+was computed on this panel) — **AMENDED 2026-09-05, see §9**
 **Cluster:** 19 (`options_*`), §3 of [`edge_hypothesis_budget_2026_07.md`](edge_hypothesis_budget_2026_07.md)
 **Looks:** 0 used, 1 charged by this study
 **Run trigger:** first of (a) primary panel ≥ 60 arrival-session clusters, or
-(b) 2026-12-15. See §2.
+(b) 2026-12-15 — **AND** a validated earnings-window indicator covering the panel
+(§9.A). See §2.
 **Sunset:** 2027-03
 
 This document upgrades the one-paragraph method note registered 2026-07-16 (§3
@@ -141,9 +142,10 @@ family. It enters only as a control (below). Admitting it later requires an
 amendment dated before that run, and it raises the family to 4.
 
 **Model.** Per member: `cluster_ols` of the outcome on
-`[const, member, technical_atr_pct, spread_bucket fixed effects]`, clustered on
-arrival session; restricted wild cluster bootstrap two-sided p, B = 10,000,
-complete-case per member. ATR is included because it is the anchor separator and
+`[const, member, technical_atr_pct, spread_bucket fixed effects]`, **plus the
+mandatory earnings-window control added by §9.A** — read that before
+implementing this line; clustered on arrival session; restricted wild cluster
+bootstrap two-sided p, B = 10,000, complete-case per member. ATR is included because it is the anchor separator and
 every prior sweep has found unconditioned effects to be ATR repackaging.
 `options_ivx30` enters as an additional control in a pre-specified sensitivity
 run, not in the primary.
@@ -249,3 +251,106 @@ top-up asks Polygon for the previous session and receives
 free tier, leaves a gap and fills it the next day. This is expected, not a stall,
 and it makes the maturity frontier — and therefore the cluster count — slightly
 conservative.
+
+## 9. Amendment 2026-09-05 — reconciling this plan with the design memo
+
+Written the same day as the registration, still before any outcome statistic. The
+trigger for it: #774 was read while triaging closeable issues, and it carries a
+checklist that `options_telemetry_design_2026_07_07.md` §6 marks **binding**. Four
+of its items were absent from §1-§8 above. This section folds them in and records
+one hard blocker found while checking whether the most important of them is even
+feasible.
+
+### 9.A Earnings-window control — MANDATORY, and its named source cannot serve it
+
+Design memo §6, verbatim: *"Analysis must control for an earnings-within-30d
+indicator (derivable at analysis time from the AV earnings cache) because
+pre-earnings IV ramp + post-earnings crush structurally dominate 30d IV and term
+slope in a catalyst-selected sample."*
+
+This is not optional and it is not cosmetic. **All three registered members are
+IV-derived**, so the confound reaches every one of them. Without the control, a
+positive result is uninterpretable: it could be measuring the earnings calendar.
+
+**Requirement (added to §4's model):** every per-member regression carries an
+`earnings_within_30d` indicator alongside `technical_atr_pct` and the spread-bucket
+fixed effects. This does not change the family size — it is a control, not a
+member.
+
+**Blocker — the named source is dead and was never the right universe.** Measured
+2026-09-05 against `~/.alphalens/av_cache/` (502 files):
+
+| check | result |
+|---|---|
+| newest `reportedDate` anywhere in the cache | **2026-06-02** |
+| tickers with any report on/after the panel start (2026-07-06) | **0** |
+| panel tickers covered (of 181 distinct) | **5 = 2.8%** |
+| panel rows whose ticker is covered | **3.8%** |
+| feeding unit `alphalens-av-earnings-backfill.timer` | **`disabled`** |
+
+Both failures are independent, and refreshing the cache fixes only one: it is an
+S&P-500 cache, while this panel is the $500M-$10B thematic universe. The job was
+built for paradigm 14 (PEAD) and was disabled when that paradigm closed in June —
+nothing is broken, the source simply belongs to a different study. No live consumer
+reads it (only research scripts), so the frozen cache is inert, not a defect.
+
+**Consequence, frozen:** a validated earnings-window indicator covering this panel
+is a **precondition of the run**, alongside the §2 trigger. Candidate sources, to
+be validated before the run and not chosen here:
+
+1. **yfinance historical earnings dates** — already a canonical client, keyless. A
+   past report date is a settled fact, so using it as an analysis-time control is
+   PIT-acceptable in the sense §6 intends ("derivable at analysis time"). Coverage
+   over the mid-cap universe must be measured, not assumed.
+2. **SEC 8-K Item 2.02** via the existing EDGAR client — more work, but PIT-clean
+   by construction and universe-complete.
+
+Whichever is chosen, its panel coverage must be reported next to the result. If no
+source reaches usable coverage, the study does not run on the IV-derived members;
+it is not run with the control quietly waived. **A pre-registration that mandates
+something infeasible and is then waived at run time is worse than one that never
+mandated it** — the waiver teaches that the plan is negotiable. That is why the
+blocker is recorded here rather than left for the run to discover.
+
+Tracked as its own issue (earnings-date source for the mid-cap universe).
+
+### 9.B This plan supersedes the design memo's `chain_quality=OK` gate
+
+`options_telemetry_design_2026_07_07.md` §6 states the first-look criterion as
+"at N ≥ 30 matured outcomes with `chain_quality=OK`". The 2026-07-16 ledger
+decision overrode that — the OK gate over-samples a few liquid names and would not
+reach power until 2027 — and this plan follows the ledger. Recorded explicitly so
+the three documents stop disagreeing: **the OK gate is not the entry condition for
+this study**, on any reading. #774, which tracks the memo's version, is superseded
+by this registration.
+
+### 9.C Weekend-snapshot dedup — VERIFIED already satisfied, now pinned
+
+Checklist item 5 warns that Friday / Saturday / Sunday `asof` rows share one Friday
+chain state, so two episodes could carry identical option features while sitting in
+different arrival-session clusters — which would inflate effective N.
+
+Measured on the current panel: 112 of 453 stamped rows do come from weekend
+`brief_date`s, and 36 of 405 `(arrival, ticker)` pairs (8.9%) are fed by more than
+one `brief_date`. But after `ticker_episode_dedup`, the number of episode pairs
+sharing a `(ticker, options_snapshot_utc)` is **0**.
+
+That is structural, not luck: two rows can only share a snapshot if they share the
+`asof` day, and rows sharing an `asof` day sit at most one session apart, well
+inside the 5-session collapse window. **No new rule is needed.** The script must
+nevertheless assert the count is zero, so a future change to the dedup window
+cannot silently reintroduce the collision.
+
+### 9.D Measurement-first skepticism, and P/C stays out
+
+Two remaining checklist items, adopted as frozen wording:
+
+- **Item 4** — an early strong correlation is treated first as a suspected
+  measurement artifact (chain-quality mix, earnings-in-window contamination, regime
+  clustering of the first N), not as signal. This generalises the §4 day-0 artifact
+  rule rather than replacing it: day-0 is the one artifact with a pre-committed
+  test; the others are read as priors on how to interpret a positive.
+- **Item 6** — raw put/call levels are a validated null (Pan-Poteshman), and an
+  abnormal-P/C construction needs per-ticker volume history (≥30 observations) that
+  has not been checked. P/C is **not** a member of this family and must not be added
+  to it without a dated amendment that pays the family-size cost.
