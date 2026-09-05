@@ -173,17 +173,41 @@ not on the width of the cohort.
 
 Since §4.1 shows this null is a candidate-data null, the jump is a coverage
 change in the EDGAR fundamentals store, unrelated to anything in #170. The
-September figure rests on 3 dates and is provisional.
+September figure rests on 4 dates and is provisional.
+
+Three explanations were tested and all three fail:
+
+- **Whole-day fetch failure.** `scorer.py::_build_feature_fetcher` returns
+  `lambda ticker, asof: None` for every ticker when
+  `EdgarFundamentalsStore.preload` raises, which would blank an entire run.
+  That would show as dates at 100% null. Across all 102 dates there are
+  **zero**; the per-date distribution is continuous (15 dates at 0%, 29 in
+  (0,25], 45 in (25,50], 10 in (50,75], 3 in (75,100)). The absence is
+  per-ticker, not per-run.
+- **Missing means small-cap.** Median `market_cap` is not systematically lower
+  for missing rows: 3.85bn vs 4.32bn in August, and in July the missing rows
+  were *larger* (6.91bn vs 4.56bn).
+- **An influx of never-seen tickers.** August's new-ticker share (60.7%) sits
+  between June (77.2%) and July (51.9%).
+
+What remains is a timing observation, not a cause: the sustained elevation
+begins around 2026-08-19/20, when the market-cap bracket became the binding
+candidate filter (#1075). A different candidate mix can carry different EDGAR
+coverage without differing in median market cap — foreign private issuers
+filing 20-F rather than 10-K, recent listings. Tracked in #1335.
 
 ## 7. What this measurement cannot support
 
 - **The 53.8% base rate does not transfer to the missing rows.** It assumes
   names without EDGAR fundamentals have the same FCFF-yield distribution as
-  covered names. That is likely false — missing coverage correlates with
-  earlier-stage companies, whose FCFF is more often negative and would not have
-  earned the point. Treat 53.8% as an upper bound on the share of missing rows
-  wrongly denied. The defect in §6.1 stands on the mechanism (absence can only
-  subtract), not on this number.
+  covered names, which is unverified. Treat 53.8% as an upper bound on the
+  share of missing rows wrongly denied. The defect in §6.1 stands on the
+  mechanism (absence can only subtract), not on this number.
+  An earlier draft of this memo justified the caveat by asserting that missing
+  coverage correlates with earlier-stage companies. **The store does not
+  support that**: median `market_cap` for missing rows is not systematically
+  lower, and in July it was higher (§6.3). The caveat survives as "the
+  distribution is unverified"; the mechanism offered for it does not.
 - **The 0.972 `selection_score` gap is not the bit's contribution.** Names
   without fundamentals plausibly score worse on other components too. It is an
   upper bound.
@@ -207,13 +231,15 @@ cardinality (§5).
 
 Two findings are carried out as their own issues:
 
-- **A** — `fcff_is_positive(None) → False` puts missing data into
+- **#1334** — `fcff_is_positive(None) → False` puts missing data into
   `selection_score` as a negative vote (§6.1), together with the 76.1%
   cross-cohort comparability result (§6.2), because both are fixed by changing
   how the percentile is consumed. This is a SELECTION change: it needs its own
-  design memo, a hypothesis-budget entry, and a `scorer_config_version` bump —
-  never a smuggled ordering tweak.
-- **B** — the August FCFF coverage regression (§6.3).
+  design memo, a hypothesis-budget entry, and a `SCORER_CONFIG_VERSION` bump —
+  never a smuggled ordering tweak. The same score already documents the
+  opposite default one term away: `selection_score.py:43` pins `atr_penalty` as
+  "never punish unknown ATR".
+- **#1335** — the late-August FCFF coverage regression (§6.3).
 
 ## 9. Reproduce
 
