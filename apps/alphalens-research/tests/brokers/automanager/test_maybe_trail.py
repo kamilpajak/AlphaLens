@@ -357,6 +357,41 @@ class TestMaybeTrailDark(unittest.TestCase):
         view = _view(pos=pos, plan=plan, legs=legs, peak_by_uic={_UIC: 104.0})
         self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
 
+    def test_degenerate_atr_is_veto_even_though_the_stamp_is_present(self) -> None:
+        """The OTHER half of the same guard pair, previously untested here: the
+        plan DOES carry a geometry stamp, but its ``atr`` is degenerate. The
+        sibling ``_maybe_reanchor`` has had this case pinned since PR-6b
+        (``test_degenerate_atr_is_noop``); the trailing arm had only the
+        ``reanchor is None`` half.
+
+        Worth pinning because #1325 declines to relax this guard: it vetoes
+        ``breakeven_trail`` for a value that policy discards entirely, which is
+        wrong on its own terms, yet relaxing it in isolation would start
+        trailing every manual pick. Pinning the current behaviour makes the
+        deliberate choice visible instead of latent."""
+        pos = _pos()
+        legs = (_stop_leg(),)
+        for atr in (0.0, -1.0, float("nan"), float("inf")):
+            with self.subTest(atr=atr):
+                plan = _plan(stop_price=90.0, atr=atr)
+                view = _view(pos=pos, plan=plan, legs=legs, peak_by_uic={_UIC: 104.0})
+                self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
+
+    def test_positive_control_a_finite_atr_on_the_same_shape_does_trail(self) -> None:
+        """Without this, the veto test above would pass even if nothing could
+        ever trail on this shape."""
+        pos = _pos()
+        legs = (_stop_leg(),)
+        plan = _plan(stop_price=90.0, atr=4.0)
+        view = _view(
+            pos=pos,
+            plan=plan,
+            legs=legs,
+            peak_by_uic={_UIC: 104.0},
+            last_price_by_uic={_UIC: 104.0},
+        )
+        self.assertIsNotNone(_maybe_trail(_UIC, pos, plan, legs, view))
+
 
 class TestNonTrailingPolicyNeverTrails(unittest.TestCase):
     """A non-trailing policy has ``trails=False``: ``_maybe_trail`` returns None,

@@ -17,6 +17,16 @@ source of ``PlannedExit.reanchor``. Both post-fill stop-move arms
 ``ALPHALENS_BROKER_EXIT_POLICY`` names, the daemon places the intent's own
 static disaster stop and tranche TP levels and never moves the stop again.
 
+One route does NOT pass that guard, so it is worth naming here rather than
+leaving for someone to rediscover: ``ProtectionView.trailed_stop_by_uic`` is a
+journal-lifetime fold, and ``control_loop._build_managed_exits`` takes
+``max(plan stop, trailed)`` and PLACES it. A level earned by an earlier
+position on the same uic can therefore outlive it. It still cannot reach a
+manual pick, for two different reasons: a pick with TP tranches journals its
+own ``tranche_plan`` under a new ``pick_key``, which resets the fold; and a
+pick armed ``--no-tp`` journals no ``tranche_plan`` at all, so the builder
+skips its uic. Both are pinned in the test module named below.
+
 That is the intended behaviour, decided 2026-09-05 on #1325: the exit of a
 group-managed pick is a human decision, and the trail's 0.5R activation is
 meaningless across manual picks anyway because ``1R = avg_price - plan_stop``
