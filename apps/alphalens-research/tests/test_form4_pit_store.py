@@ -670,13 +670,15 @@ class TestForm4PITStoreSchema(unittest.TestCase):
 _LEGACY_SCHEMA_COLUMNS = tuple(c for c in FORM4_SCHEMA_COLUMNS if c != "is_other")
 
 
-def _write_legacy_partition(root: Path, year: int, records: list[dict]) -> None:
+def _write_legacy_partition(
+    root: Path, year: int, records: list[dict], *, name: str = "part-0000.parquet"
+) -> None:
     part_dir = root / f"transaction_year={year}"
     part_dir.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame.from_records(records, columns=list(_LEGACY_SCHEMA_COLUMNS))
     for col in ("filed_date", "transaction_date"):
         df[col] = pd.to_datetime(df[col]).dt.date
-    pq.write_table(pa.Table.from_pandas(df, preserve_index=False), part_dir / "part-0000.parquet")
+    pq.write_table(pa.Table.from_pandas(df, preserve_index=False), part_dir / name)
 
 
 class TestForm4PITStoreLegacyPartition(unittest.TestCase):
@@ -724,6 +726,53 @@ class TestForm4PITStoreLegacyPartition(unittest.TestCase):
         by_acc = result.set_index("accession_number")["is_other"]
         self.assertTrue(pd.isna(by_acc["LEGACY-1"]))
         self.assertEqual(by_acc["NEW-1"], True)
+
+    def test_legacy_and_new_files_in_the_SAME_partition_keep_real_values(self):
+        # The live shape between an ingest and its compaction (#1329, measured
+        # on the VPS 2026-09-05): one partition holds the legacy
+        # compacted.parquet (no is_other) beside fresh part files that DO
+        # carry it. `ds.dataset(dir)` infers its schema from the first
+        # fragment alone, and "compacted.parquet" sorts first, so the column
+        # is absent from dataset.schema and every row — including the new
+        # ones — is backfilled <NA>. That is silent value loss, not a
+        # tolerated gap: the store read `is_other` as all-null across 236834
+        # rows of the live 2026 partition while real values sat on disk.
+        _write_legacy_partition(
+            self.root,
+            2022,
+            [
+                _record(
+                    issuer_cik="0000320193",
+                    ticker="AAPL",
+                    accession_number="LEGACY-SAME",
+                    filed_date=date(2022, 1, 5),
+                    transaction_date=date(2022, 1, 4),
+                )
+            ],
+            name="compacted.parquet",
+        )
+        _write_partition(
+            self.root,
+            2022,
+            [
+                _record(
+                    issuer_cik="0000320193",
+                    ticker="AAPL",
+                    accession_number="NEW-SAME",
+                    filed_date=date(2022, 2, 1),
+                    transaction_date=date(2022, 1, 15),
+                    is_other=True,
+                )
+            ],
+        )
+
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        result = store.records_as_of("AAPL", asof=date(2022, 3, 1), lookback_days=365)
+
+        by_acc = result.set_index("accession_number")["is_other"]
+        self.assertEqual(set(result["accession_number"]), {"LEGACY-SAME", "NEW-SAME"})
+        self.assertTrue(pd.isna(by_acc["LEGACY-SAME"]))
+        self.assertEqual(by_acc["NEW-SAME"], True)
 
     def test_empty_result_carries_the_boolean_dtype_too(self):
         # A no-match read must present the same is_other dtype as a populated
