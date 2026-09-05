@@ -717,7 +717,10 @@ def _maybe_reanchor(
         ``setup_static`` policy always returns ``None`` here, so the arm stays
         dark by default; no env sentinel is read in this pass.
       - ``plan.reanchor is not None`` — the governing planned line carried a
-        geometry shadow stamp (PR-6a); a pre-PR-6a plan never reanchors.
+        geometry shadow stamp (PR-6a); a pre-PR-6a plan never reanchors. Same
+        guard, same second meaning as in ``_maybe_trail`` (#1325): a manual
+        pick carries no stamp, so it is POLICY-IMMUNE — neither arm ever moves
+        its stop, whatever ``ALPHALENS_BROKER_EXIT_POLICY`` names.
       - ``pos.avg_price`` is finite and > 0 — never anchor on the SIM
         NoAccess ``<= 0`` sentinel or a NaN/inf blend.
       - ``plan.reanchor.atr`` is finite and > 0 — never divide the risk
@@ -840,6 +843,14 @@ def _maybe_trail(
         this arm never touches them.
       - ``plan.reanchor is not None`` — the governing planned line carried the
         geometry shadow stamp (its ``atr``); a pre-stamp plan never trails.
+        LOAD-BEARING beyond the ATR (#1325): a manual (``arm-manual``) pick is
+        armed with ``exit=None``, so it never carries the stamp and this guard
+        is what keeps the daemon from tightening a hand-set stop — the decided
+        behaviour for group-managed picks, pinned by
+        ``tests/brokers/automanager/test_manual_pick_no_stop_move.py``. Do NOT
+        relax it to let ``breakeven_trail`` (which discards ``atr``) through:
+        that turns trailing ON for exactly those picks. Opting one pick in is
+        the per-pick policy override, issue #1236.
       - ``pos.avg_price`` finite and > 0 — never anchor on the SIM NoAccess
         ``<= 0`` sentinel or a NaN/inf blend.
       - ``plan.reanchor.atr`` finite and > 0 — never a degenerate ATR.
