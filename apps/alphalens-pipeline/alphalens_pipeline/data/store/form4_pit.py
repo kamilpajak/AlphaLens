@@ -270,13 +270,22 @@ class Form4PITStore:
         # all-null). Permissive for the same reason the compactor needs it:
         # one writer owns every fragment, so a difference here is an arrow
         # width artifact; a genuine type conflict still raises.
+        #
+        # Read the SAME explicit file list whose schemas were unified, exactly
+        # as the compactor does. Handing over the directory instead lets the
+        # dataset enumerate files the unification never saw — notably a
+        # `compacted.parquet.tmp` left behind by a compaction killed between
+        # write and rename, which pyarrow opens as parquet and which then
+        # takes down every read of that year.
         fragments = sorted(part_dir.glob("*.parquet"))
-        unified = (
-            pa.unify_schemas([pq.read_schema(f) for f in fragments], promote_options="permissive")
-            if fragments
-            else None
+        if not fragments:
+            return None
+        unified = pa.unify_schemas(
+            [pq.read_schema(f) for f in fragments], promote_options="permissive"
         )
-        dataset = ds.dataset(str(part_dir), partitioning=None, format="parquet", schema=unified)
+        dataset = ds.dataset(
+            [str(f) for f in fragments], partitioning=None, format="parquet", schema=unified
+        )
         # Legacy partitions (pre-#82) lack is_other on disk; selecting an
         # absent column raises ArrowInvalid, so intersect first and backfill
         # the miss as <NA> — the historical truth is unknown, never False.

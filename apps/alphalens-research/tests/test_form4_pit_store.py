@@ -727,6 +727,37 @@ class TestForm4PITStoreLegacyPartition(unittest.TestCase):
         self.assertTrue(pd.isna(by_acc["LEGACY-1"]))
         self.assertEqual(by_acc["NEW-1"], True)
 
+    def test_interrupted_compaction_tempfile_does_not_break_reads(self):
+        # compact_partition writes `compacted.parquet.tmp` and then renames.
+        # A run killed between the two leaves the temp behind — the live
+        # thematic-build unit is SIGKILLed on a timeout most days (#1330), so
+        # this is not hypothetical. `ds.dataset(<dir>)` enumerates every file
+        # in the directory regardless of suffix and dies on the half-written
+        # one, taking down every read of that year. Reading the same explicit
+        # file list whose schemas were unified keeps the two provably in step
+        # and skips a file that is by definition not part of the store yet.
+        _write_partition(
+            self.root,
+            2022,
+            [
+                _record(
+                    issuer_cik="0000320193",
+                    ticker="AAPL",
+                    accession_number="REAL",
+                    filed_date=date(2022, 2, 1),
+                    transaction_date=date(2022, 1, 15),
+                )
+            ],
+        )
+        (self.root / "transaction_year=2022" / "compacted.parquet.tmp").write_bytes(
+            b"half-written parquet"
+        )
+
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        result = store.records_as_of("AAPL", asof=date(2022, 3, 1), lookback_days=365)
+
+        self.assertEqual(list(result["accession_number"]), ["REAL"])
+
     def test_legacy_and_new_files_in_the_SAME_partition_keep_real_values(self):
         # The live shape between an ingest and its compaction (#1329, measured
         # on the VPS 2026-09-05): one partition holds the legacy
