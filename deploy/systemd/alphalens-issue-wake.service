@@ -21,8 +21,10 @@
 #   0  ran; whatever was due was announced and unlabelled (usually nothing)
 #   1  something needs a human — the Telegram send failed (labels deliberately
 #      left ON so the next run repeats the whole set), or a label removal
-#      failed. Non-zero also holds the last_success clock still, which is what
-#      eventually pages.
+#      failed. A non-zero exit also drops the last_success line from the
+#      textfile (the emitter writes it only on success), so
+#      AlphalensJobMetricMissing + AlphalensJobFailed page within minutes;
+#      AlphalensJobStale covers the timer-never-fires case, not a failed run.
 #
 # Environment (all three already in /etc/alphalens/env): GH_TOKEN for the `gh`
 # CLI, TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID for the message. EnvironmentFile
