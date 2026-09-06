@@ -4749,7 +4749,12 @@
       },
       "registered_at": "2026-09-04",
       "status": "registered",
-      "notes": "Owner decision 2026-09-04: build as a candidate SOURCE with logging, not an automated strategy (epic #1293). Episode dedup 20 sessions as measured in stage 1 (supersedes the parent memo's 5-session line). Cohort keys: source, event_overlap, event_gate_version=insider_cluster_gate_v1, event_car_version=event-car-v1. Thematic aggregates exclude source != thematic from PR #1297 on; the flag is flipped ON only after #1297 is deployed."
+      "notes": "Owner decision 2026-09-04: build as a candidate SOURCE with logging, not an automated strategy (epic #1293). Episode dedup 20 sessions as measured in stage 1 (supersedes the parent memo's 5-session line). Cohort keys: source, event_overlap, event_gate_version=insider_cluster_gate_v1, event_car_version=event-car-v1. Thematic aggregates exclude source != thematic from PR #1297 on; the flag is flipped ON only after #1297 is deployed.",
+      "outcome": {
+        "accrual_start": "2026-09-05",
+        "accrual_start_recorded_at": "2026-09-06",
+        "notes": "Flag ALPHALENS_EVENT_LANE=1 set on the VPS on 2026-09-06 12:32 CEST after #1307 (day integration) and #1340 (outcomes + cohort separation, #1297) were deployed (pipeline image rebuilt, Django migration 0011 applied, host venv synced). The first brief produced with the flag ON is brief_date 2026-09-05 (manual thematic-build run at 12:32 CEST): 2 eligible clusters (ENOV, EQPT; both accepted after 09:00 ET on Friday 2026-09-04, arrival session 2026-09-08 after Labor Day). Status stays registered: the lane is accruing; the single look fires at N >= 150 matured eligible episodes over >= 50 arrival sessions."
+      }
     }
   ]
 }
