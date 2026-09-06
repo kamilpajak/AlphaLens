@@ -43,6 +43,10 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
                 "alphalens_pipeline.feedback.sector_excess.enrich_store_with_sector_excess",
                 return_value=0,
             ),
+            mock.patch(
+                "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
+                return_value=0,
+            ),
         ):
             result = self.runner.invoke(
                 app,
@@ -75,6 +79,10 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
                 "alphalens_pipeline.feedback.sector_excess.enrich_store_with_sector_excess",
                 return_value=3,
             ) as sector_excess,
+            mock.patch(
+                "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
+                return_value=0,
+            ),
         ):
             result = self.runner.invoke(
                 app,
@@ -84,6 +92,41 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.stdout)
         sector_excess.assert_called_once()
         self.assertIn("sector-excess", result.stdout)
+
+    def test_command_invokes_event_car_enrichment(self):
+        # The event-lane outcome pass (epic #1293, #1297) runs in the unconditional
+        # enrichment tail, right after benchmark-excess.
+        fake_report = mock.Mock(terminal=2, ongoing=1)
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                return_value=[fake_report],
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.enrich_store_with_size_fields",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.benchmark_excess.enrich_store_with_benchmark_excess",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.sector_excess.enrich_store_with_sector_excess",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
+                return_value=2,
+            ) as event_car,
+        ):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "backfill-shadow-returns", "--briefs-dir", "/tmp/does-not-matter"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        event_car.assert_called_once()
+        self.assertIn("event-car: 2 event row(s)", result.stdout)
 
     def test_population_failure_is_swallowed_command_still_exits_zero(self):
         # A Polygon outage / replay error must NOT change the command's exit
@@ -106,6 +149,10 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
             ),
             mock.patch(
                 "alphalens_pipeline.feedback.sector_excess.enrich_store_with_sector_excess",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
                 return_value=0,
             ),
         ):

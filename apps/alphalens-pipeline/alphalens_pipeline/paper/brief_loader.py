@@ -48,6 +48,23 @@ class CandidateBrief:
     # ceiling. ``None`` when the column is absent (old parquets) or the name has
     # <252 sessions of history.
     technical_pct_off_52w_high: float | None = None
+    # Candidate SOURCE lane (epic #1293): "thematic" | "insider_cluster". "" on
+    # parquets that predate the column — consumers treat "" as thematic.
+    source: str = ""
+    # A thematic card that ALSO carried an insider cluster that day; the episode
+    # is counted in both cohorts downstream.
+    event_overlap: bool = False
+
+
+def _bool_or_false(row: pd.Series, key: str) -> bool:
+    """Return ``bool(row[key])`` or ``False`` when the key is absent or null."""
+    if key not in row.index:
+        return False
+    val = row[key]
+    try:
+        return bool(val) if pd.notna(val) else False
+    except (TypeError, ValueError):
+        return False
 
 
 def _int_or_zero(row: pd.Series, key: str) -> int:
@@ -124,6 +141,8 @@ def _row_to_candidate(row: pd.Series, brief_date: dt.date) -> CandidateBrief:
         layer4_weighted_score=_float_or_none(row, "layer4_weighted_score"),
         scorer_config_version=_str_or_empty(row, "scorer_config_version"),
         technical_pct_off_52w_high=_float_or_none(row, "technical_pct_off_52w_high"),
+        source=_str_or_empty(row, "source"),
+        event_overlap=_bool_or_false(row, "event_overlap"),
     )
 
 

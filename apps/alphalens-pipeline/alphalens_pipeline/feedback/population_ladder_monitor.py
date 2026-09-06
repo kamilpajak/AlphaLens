@@ -285,7 +285,7 @@ _CONFIG_COLUMNS = ("ladder_config_version", "setup_builder_config_version")
 # Brief-provenance columns: stamped from the CandidateBrief, not computed by the
 # replay engine. Like ``theme``, they travel WITH the outcome record so they stay
 # queryable even after the brief is rebuilt or the candidate churns out.
-_PROVENANCE_COLUMNS = ("scorer_config_version",)
+_PROVENANCE_COLUMNS = ("scorer_config_version", "source", "event_overlap")
 
 # The alternate-exit-ladder grid (PR-2): a JSON map {config -> realized_r} from
 # re-replaying the SAME bars under each EXIT policy. Carried/back-filled like the
@@ -1164,14 +1164,24 @@ def _stamp_theme(row: dict[str, Any], theme: str | None) -> dict[str, Any]:
     return row
 
 
-def _stamp_scorer_version(row: dict[str, Any], scorer_config_version: str | None) -> dict[str, Any]:
-    """Stamp the scorer-config version onto a store row (provenance from the brief).
+THEMATIC_SOURCE = "thematic"
 
-    Like ``theme``, this value travels WITH the outcome record rather than being
-    re-joined downstream from the briefs cache.  An empty/absent brief value is
-    stored as ``None`` so the read side renders an em dash (mirrors ``_stamp_theme``).
+
+def _stamp_brief_provenance(row: dict[str, Any], c: CandidateBrief) -> dict[str, Any]:
+    """Stamp the brief's provenance (theme, scorer version, source lane, overlap) onto a row.
+
+    Like ``theme``, these values travel WITH the outcome record rather than being
+    re-joined downstream from the (mutable, 6x/day-rebuilt) briefs cache. An
+    empty/absent scorer version is stored as ``None`` (em dash on the read side);
+    ``source`` is normalised to ``"thematic"`` when the brief predates the column
+    so every store row carries an explicit lane — the Django cohort filter is an
+    allow-list on this value (epic #1293). The latest brief is the truth for
+    the (date, ticker), so the stamp overwrites.
     """
-    row["scorer_config_version"] = scorer_config_version or None
+    _stamp_theme(row, c.theme or None)
+    row["scorer_config_version"] = c.scorer_config_version or None
+    row["source"] = c.source or THEMATIC_SOURCE
+    row["event_overlap"] = bool(c.event_overlap)
     return row
 
 
@@ -1876,14 +1886,10 @@ def _screen_one(
 ) -> _ScreenOutcome:
     """Screen one candidate → a finished row, or a queued minute resolve."""
     ticker = c.ticker.upper()
-    theme = c.theme or None
-    scorer_version = c.scorer_config_version or None
     plannable, reason = _is_plannable(c)
     if not plannable:
         row = _nonplannable_row(brief_date, ticker, reason or "not plannable")
-        return _ScreenOutcome(
-            "nonplannable", _stamp_scorer_version(_stamp_theme(row, theme), scorer_version)
-        )
+        return _ScreenOutcome("nonplannable", _stamp_brief_provenance(row, c))
     assert c.trade_setup is not None
     prior = existing.get(ticker)
 
@@ -1891,7 +1897,7 @@ def _screen_one(
     if prior is not None and bool(prior.get("terminal")):
         return _ScreenOutcome(
             "terminal",
-            _stamp_scorer_version(_stamp_theme(_carry_prior(prior), theme), scorer_version),
+            _stamp_brief_provenance(_carry_prior(prior), c),
         )
 
     cutoffs = _engine_cutoffs(brief_date, c.trade_setup, exchange)
@@ -1904,7 +1910,7 @@ def _screen_one(
     if horizon < arrival_session:
         # Arrival not yet closed — carry prior (or retryable placeholder) without
         # consuming budget; nothing new to price.
-        return _carry_or_placeholder(c, brief_date, prior, cutoffs, theme, scorer_version)
+        return _carry_or_placeholder(c, brief_date, prior, cutoffs)
 
     start = last_priced_session if last_priced_session is not None else arrival_session
     new_sessions = _sessions_between(
@@ -1955,10 +1961,10 @@ def _screen_one(
         # Implausible cheap move (split guard) — carry prior verbatim.
         return _ScreenOutcome(
             "carried",
-            _stamp_scorer_version(_stamp_theme(_carry_prior(prior), theme), scorer_version),
+            _stamp_brief_provenance(_carry_prior(prior), c),
         )
     row, category = cheap
-    return _ScreenOutcome(category, _stamp_scorer_version(_stamp_theme(row, theme), scorer_version))
+    return _ScreenOutcome(category, _stamp_brief_provenance(row, c))
 
 
 def _carry_or_placeholder(
@@ -1966,19 +1972,15 @@ def _carry_or_placeholder(
     brief_date: dt.date,
     prior: dict[str, Any] | None,
     cutoffs: tuple[dt.date, dt.date, dt.date, int, int, int, int],
-    theme: str | None,
-    scorer_version: str | None = None,
 ) -> _ScreenOutcome:
     """Carry the prior row (or a retryable placeholder for a brand-new ticker)."""
     if prior is not None:
         return _ScreenOutcome(
             "carried",
-            _stamp_scorer_version(_stamp_theme(_carry_prior(prior), theme), scorer_version),
+            _stamp_brief_provenance(_carry_prior(prior), c),
         )
     row = _placeholder_row(brief_date, c.ticker.upper(), cutoffs)
-    return _ScreenOutcome(
-        "carried", _stamp_scorer_version(_stamp_theme(row, theme), scorer_version)
-    )
+    return _ScreenOutcome("carried", _stamp_brief_provenance(row, c))
 
 
 def _apply_cheap_open_update(
@@ -2196,8 +2198,6 @@ def _carry_deferred(
     rows_by_ticker: dict[str, dict[str, Any]],
     counts: dict[str, int],
     deferred_ages: list[int],
-    theme: str | None,
-    scorer_version: str | None,
     last_closed_session: dt.date,
 ) -> None:
     """Persist a carried-forward row for an unresolved item and record its age.
@@ -2207,9 +2207,7 @@ def _carry_deferred(
     append the deferred-touch age for the dead-man switch.
     """
     ticker = item.candidate.ticker.upper()
-    rows_by_ticker[ticker] = _stamp_scorer_version(
-        _stamp_theme(_carried_row(item), theme), scorer_version
-    )
+    rows_by_ticker[ticker] = _stamp_brief_provenance(_carried_row(item), item.candidate)
     counts["carried"] += 1
     age = _deferred_age(item, last_closed_session)
     if age is not None:
@@ -2244,8 +2242,6 @@ def _resolve_queue(
 
     for item in ordered:
         ticker = item.candidate.ticker.upper()
-        theme = item.candidate.theme or None
-        scorer_version = item.candidate.scorer_config_version or None
         if deadline is not None and deadline.should_stop():
             counts["stopped_for_deadline"] = counts.get("stopped_for_deadline", 0) + 1
             _carry_deferred(
@@ -2253,8 +2249,6 @@ def _resolve_queue(
                 rows_by_ticker=rows_by_ticker,
                 counts=counts,
                 deferred_ages=deferred_ages,
-                theme=theme,
-                scorer_version=scorer_version,
                 last_closed_session=last_closed_session,
             )
             continue
@@ -2282,8 +2276,6 @@ def _resolve_queue(
                 rows_by_ticker=rows_by_ticker,
                 counts=counts,
                 deferred_ages=deferred_ages,
-                theme=theme,
-                scorer_version=scorer_version,
                 last_closed_session=last_closed_session,
             )
             continue
@@ -2295,8 +2287,6 @@ def _resolve_queue(
                 rows_by_ticker=rows_by_ticker,
                 counts=counts,
                 deferred_ages=deferred_ages,
-                theme=theme,
-                scorer_version=scorer_version,
                 last_closed_session=last_closed_session,
             )
             _stamp_guard(rows_by_ticker[ticker], result.disposition, counts)
@@ -2306,8 +2296,6 @@ def _resolve_queue(
             item,
             result,
             ticker=ticker,
-            theme=theme,
-            scorer_version=scorer_version,
             rows_by_ticker=rows_by_ticker,
             counts=counts,
             last_closed_session=last_closed_session,
@@ -2320,8 +2308,6 @@ def _commit_resolved_row(
     result: _ResolveResult,
     *,
     ticker: str,
-    theme: str | None,
-    scorer_version: str | None,
     rows_by_ticker: dict[str, dict[str, Any]],
     counts: dict[str, int],
     last_closed_session: dt.date,
@@ -2347,7 +2333,7 @@ def _commit_resolved_row(
         _stamp_guard(row, result.guard_disposition, counts)
         if result.guard_disposition == DISPOSITION_SPLIT_INVALIDATED:
             row = _apply_split_invalidation(row, last_closed_session)
-    rows_by_ticker[ticker] = _stamp_scorer_version(_stamp_theme(row, theme), scorer_version)
+    rows_by_ticker[ticker] = _stamp_brief_provenance(row, item.candidate)
     counts["terminal" if row["terminal"] else "ongoing"] += 1
 
 

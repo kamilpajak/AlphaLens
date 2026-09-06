@@ -34,11 +34,25 @@ from __future__ import annotations
 
 from django.db import models
 
+# Sources the thematic aggregates pool over. An ALLOW-list on purpose: a lane
+# added later (13d_initial, ...) is excluded from the thematic dashboards until
+# someone decides otherwise, never pooled by accident. "" = a row mirrored before
+# the column existed (thematic by construction).
+THEMATIC_SOURCES = ("", "thematic")
+
+
+class LadderOutcomeQuerySet(models.QuerySet):
+    def thematic(self):
+        """Rows of the thematic lane only (the event lane is never pooled in)."""
+        return self.filter(source__in=THEMATIC_SOURCES)
+
 
 class LadderOutcome(models.Model):
     """One population-ladder outcome — keyed by (brief_date, ticker)."""
 
     pk = models.CompositePrimaryKey("brief_date", "ticker")
+
+    objects = LadderOutcomeQuerySet.as_manager()
 
     brief_date = models.DateField(db_index=True)
     ticker = models.CharField(max_length=12)
@@ -128,6 +142,17 @@ class LadderOutcome(models.Model):
     # analyst to GROUP BY scorer_config_version to avoid blending runs produced
     # by different scoring configs. Empty for rows predating the stamp.
     scorer_config_version = models.CharField(max_length=128, blank=True, default="")
+
+    # Candidate SOURCE lane (epic #1293): "thematic" or "insider_cluster". The
+    # monitor normalises a pre-lane brief to "thematic", so "" only survives on
+    # rows mirrored before the column existed; both read as thematic. The two
+    # lanes are NEVER pooled: every aggregate view goes through
+    # ``LadderOutcome.objects.thematic()`` (an allow-list, so a future lane is
+    # excluded by default), the outcomes listing carries the value for the SPA
+    # facet. ``event_overlap`` marks a thematic card that ALSO carried an insider
+    # cluster that day — counted in both cohorts, reported, never a filter here.
+    source = models.CharField(max_length=32, blank=True, default="")
+    event_overlap = models.BooleanField(default=False)
 
     # Alternate-exit-ladder grid (PR-2): JSON map {config -> realized_r} from
     # re-replaying the SAME bars under each exit policy (single_tp_first /

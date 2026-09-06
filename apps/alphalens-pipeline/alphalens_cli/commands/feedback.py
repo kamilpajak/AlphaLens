@@ -170,6 +170,7 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     # upstream trio shares the reduced deadline; the chart pass runs on its own
     # full-total deadline so the reserve withheld above is guaranteed to it.
     _enrich_population_benchmark_excess(deadline=deadline)
+    _enrich_population_event_car(deadline=deadline)
     _enrich_population_sector_excess(deadline=deadline)
     _enrich_population_size_fields(briefs_dir, deadline=deadline)
     _enrich_population_chart_payloads(briefs_dir, deadline=chart_deadline)
@@ -184,6 +185,22 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     # internally-failed-but-completed pass are honestly degraded by that pass's own
     # guard (benchmark -> NULL/#847 pending; chart -> last-good), NOT withheld.
     _write_ingest_watermark(_ALPHALENS_HOME / "population_ladders")
+
+
+def _enrich_population_event_car(*, deadline: Any = None) -> None:
+    """Stamp the event-lane outcome (car_20_event / car_40_event) on event rows. Never raises.
+
+    Disk-first over the monitor's grouped-daily cache, so in steady state it
+    costs no vendor call; runs right after benchmark-excess so a starved night
+    cannot skip it behind the size / chart passes (epic #1293, #1297).
+    """
+    try:
+        from alphalens_pipeline.feedback.event_car import enrich_store_with_event_car
+
+        n = enrich_store_with_event_car(_ALPHALENS_HOME / "population_ladders", deadline=deadline)
+        typer.echo(f"event-car: {n} event row(s) carry a matured car_20_event.")
+    except Exception:
+        logger.exception("event-car enrichment failed; continuing")
 
 
 def _emit_guard_metrics(reports: Any) -> None:

@@ -2096,6 +2096,12 @@
                         "type": "string",
                         "nullable": true
                     },
+                    "source": {
+                        "type": "string"
+                    },
+                    "event_overlap": {
+                        "type": "boolean"
+                    },
                     "ladder_classification": {
                         "type": "string"
                     },
@@ -2148,6 +2154,7 @@
                 "required": [
                     "benchmark_window_return",
                     "brief_date",
+                    "event_overlap",
                     "forward_return",
                     "holding_days_elapsed",
                     "ladder_classification",
@@ -2155,6 +2162,7 @@
                     "open_r",
                     "realized_r",
                     "realized_return_pct_of_book",
+                    "source",
                     "terminal",
                     "ticker"
                 ]

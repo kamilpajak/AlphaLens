@@ -28,7 +28,9 @@
 			forward_return: 0.05,
 			benchmark_window_return: 0.02,
 			holding_days_elapsed: 10,
-			realized_return_pct_of_book: 0.15
+			realized_return_pct_of_book: 0.15,
+			source: 'thematic',
+			event_overlap: false
 		};
 	}
 
@@ -38,6 +40,16 @@
 		mk('IONQ', 'quantum_computing', 'TIME_STOP'),
 		mk('PLTR', 'enterprise AI', 'PARTIAL_TP_THEN_SL'),
 		mk('BBAI', null, 'TP_FULL')
+	];
+
+	// The event lane (epic #1293): the fixture has no insider row yet (the lane
+	// accrues from its VPS flag flip), so ONE lane row is synthesised here from the
+	// first real cluster the detection smoke produced on the 2026-09-02 Form-4 store
+	// (LUCK, 2 directors, $691k) — labelled as such; its outcome numbers are the
+	// neutral placeholders every row in this file carries.
+	const LANE_ROWS: EdgeOutcome[] = [
+		...ROWS,
+		{ ...mk('LUCK', 'insider_cluster', 'TP_FULL'), source: 'insider_cluster' }
 	];
 
 	// The server-truth window facets from tests/fixtures/api-mock/edge-outcomes.json,
@@ -74,6 +86,46 @@
 		expect(canvas.getByTestId('outcomes-match-count')).not.toHaveTextContent('in window');
 		expect(canvas.queryByTestId('outcomes-clear-all')).toBeNull();
 		expect(canvas.getByText(/^TP_FULL/)).toBeVisible();
+	}}
+>
+	{#snippet template()}
+		<div style="padding: 2rem;">
+			<EdgeOutcomesFilter rows={ROWS} matched={ROWS.length} view="terminal" state={emptyFilterState()} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Two lanes present — a third "source" chip row renders (thematic 5 / insider
+     cluster 1); selecting the lane narrows the count to the lane's rows. The
+     summary panels stay thematic-only server-side; this facet only keeps the
+     listing's lanes apart. -->
+<Story
+	name="Source facet (two lanes)"
+	play={async ({ canvas }) => {
+		await waitFor(() => expect(canvas.getByText('source', { exact: true })).toBeVisible());
+		expect(canvas.getByRole('button', { name: /^insider cluster 1/ })).toBeVisible();
+		expect(canvas.getByTestId('outcomes-match-count')).toHaveTextContent('1 shown of 6');
+	}}
+>
+	{#snippet template()}
+		{@const state = { ...emptyFilterState(), sources: new Set(['insider_cluster']) }}
+		<div style="padding: 2rem;">
+			<EdgeOutcomesFilter
+				rows={LANE_ROWS}
+				matched={filterOutcomes(LANE_ROWS, state).length}
+				view="terminal"
+				{state}
+			/>
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Thematic only (today's real data) — no source bar at all. -->
+<Story
+	name="Source facet hidden (thematic only)"
+	play={async ({ canvas }) => {
+		await waitFor(() => expect(canvas.getByTestId('outcomes-match-count')).toBeVisible());
+		expect(canvas.queryByText('source', { exact: true })).toBeNull();
 	}}
 >
 	{#snippet template()}

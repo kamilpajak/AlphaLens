@@ -155,6 +155,77 @@ def test_outcomes_expose_tp_capture_counts(tmp_path: Path):
 
 
 @pytest.mark.django_db
+def test_outcomes_expose_source_and_overlap_with_empty_normalised_to_thematic(tmp_path: Path):
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [
+            {**_terminal("LUCK", excess=0.04, realized_r=1.2), "source": "insider_cluster"},
+            {
+                **_terminal("QUBT", excess=0.02, realized_r=0.5),
+                "source": "thematic",
+                "event_overlap": True,
+            },
+            {**_terminal("OLD", excess=0.01, realized_r=0.1)},  # no lane columns
+        ],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    rows = {r["ticker"]: r for r in APIClient().get("/v1/edge/outcomes").json()["data"]}
+    assert rows["LUCK"]["source"] == "insider_cluster"
+    assert rows["LUCK"]["event_overlap"] is False
+    assert rows["QUBT"]["source"] == "thematic"
+    assert rows["QUBT"]["event_overlap"] is True
+    assert rows["OLD"]["source"] == "thematic"
+    assert rows["OLD"]["event_overlap"] is False
+
+
+@pytest.mark.django_db
+def test_summary_and_telemetry_exclude_insider_cluster_rows(tmp_path: Path):
+    """The event lane is never pooled: 29 thematic + 5 insider rows must NOT clear the N-gate,
+    and the telemetry point count sees only the thematic 29."""
+    thematic = [
+        _terminal(f"T{i}", excess=0.01, realized_r=0.5) for i in range(N_GATE_THRESHOLD - 1)
+    ]
+    insider = [
+        {**_terminal(f"I{i}", excess=0.05, realized_r=2.0), "source": "insider_cluster"}
+        for i in range(5)
+    ]
+    _write_parquet(tmp_path, "2026-05-27", thematic + insider)
+    rebuild_from_parquet(tmp_path)
+
+    summary = APIClient().get("/v1/edge/summary").json()
+    assert summary["edge"]["status"] == "insufficient"
+    assert summary["edge"]["n_matured"] == N_GATE_THRESHOLD - 1
+    assert summary["n_brief"] == N_GATE_THRESHOLD - 1
+    assert "thematic lane only" in summary["metric_note"]
+    telemetry = APIClient().get("/v1/edge/excess-telemetry").json()
+    assert telemetry["n_total"] == N_GATE_THRESHOLD - 1
+    # the listing still carries every row, with the lane on each
+    listing = APIClient().get("/v1/edge/outcomes").json()
+    assert listing["total"] == N_GATE_THRESHOLD - 1 + 5
+    assert sum(r["source"] == "insider_cluster" for r in listing["data"]) == 5
+
+
+@pytest.mark.django_db
+def test_summary_keeps_overlap_thematic_rows(tmp_path: Path):
+    rows = [
+        {
+            **_terminal(f"T{i}", excess=0.01, realized_r=0.5),
+            "source": "thematic",
+            "event_overlap": True,
+        }
+        for i in range(N_GATE_THRESHOLD)
+    ]
+    _write_parquet(tmp_path, "2026-05-27", rows)
+    rebuild_from_parquet(tmp_path)
+
+    summary = APIClient().get("/v1/edge/summary").json()
+    assert summary["edge"]["n_matured"] == N_GATE_THRESHOLD
+    assert summary["edge"]["status"] != "insufficient"
+
+
+@pytest.mark.django_db
 def test_outcomes_scorer_config_version(tmp_path: Path):
     # scorer_config_version is stamped at the brief by the population monitor and
     # carried on the outcome record — no re-join required.  A row with a version

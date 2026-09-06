@@ -99,7 +99,9 @@ class EdgeSummaryView(APIView):
     )
     def get(self, request: Request) -> Response:
         window = _parse_window(request)
-        qs = LadderOutcome.objects.all()
+        # Thematic lane only: the event lane (epic #1293) is never pooled into
+        # the aggregates; its rows are listed by the outcomes view with `source`.
+        qs = LadderOutcome.objects.thematic()
         floor = _window_floor(window)
         if floor is not None:
             qs = qs.filter(brief_date__gte=floor)
@@ -223,6 +225,11 @@ class EdgeOutcomesView(APIView):
                 # an em dash.
                 "theme": o.theme or None,
                 "scorer_config_version": o.scorer_config_version or None,
+                # Candidate source lane + same-day overlap flag (epic #1293). "" (rows
+                # mirrored before the column) normalises to thematic so the SPA facet
+                # never shows an empty chip.
+                "source": o.source or "thematic",
+                "event_overlap": bool(o.event_overlap),
                 "ladder_classification": o.ladder_classification,
                 # TP levels touched vs tranches actually sold: captured < touched
                 # flags that TP_FULL / the chart's green arrows overstate capture
@@ -270,7 +277,9 @@ class EdgeExcessTelemetryView(APIView):
     )
     def get(self, request: Request) -> Response:
         window = _parse_window(request)
-        qs = LadderOutcome.objects.all()
+        # Thematic lane only: the event lane (epic #1293) is never pooled into
+        # the aggregates; its rows are listed by the outcomes view with `source`.
+        qs = LadderOutcome.objects.thematic()
         floor = _window_floor(window)
         if floor is not None:
             qs = qs.filter(brief_date__gte=floor)

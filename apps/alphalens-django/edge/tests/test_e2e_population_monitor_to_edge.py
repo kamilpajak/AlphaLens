@@ -41,6 +41,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from alphalens_pipeline.feedback.benchmark_excess import enrich_store_with_benchmark_excess
+from alphalens_pipeline.feedback.event_car import enrich_store_with_event_car
 from alphalens_pipeline.feedback.ladder_chart import enrich_store_with_chart_payloads
 from alphalens_pipeline.feedback.population_ladder_monitor import (
     enrich_store_with_size_fields,
@@ -175,6 +176,10 @@ def _build_real_store(root: Path) -> Path:
     # index, offline). Reuse the same synthetic bar path — the contract test only
     # needs the columns present, not a specific excess value.
     enrich_store_with_sector_excess(store_dir, bar_fetch=_spy_bars, now=_NOW)
+    # Event-lane outcome (epic #1293): stamps only event rows, but the pass runs
+    # in production right after benchmark excess, so it runs here too (grouped
+    # fetch stubbed — a thematic-only day needs no session).
+    enrich_store_with_event_car(store_dir, grouped_fetch=lambda _d: {}, now=_NOW)
     # Chart payload (reads the monitor's per-(ticker, arrival) bar cache the real
     # replay just wrote under store_dir/bars/, NOT the host ~/.alphalens default,
     # so inject the cache reader bound to this test's store_dir).

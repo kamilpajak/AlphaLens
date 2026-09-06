@@ -22,7 +22,9 @@ from edge.models import LadderOutcome
 
 def get_edge_base_rate() -> dict[str, Any]:
     """Live edge base rate over ALL dates (same default window as ``/edge``)."""
-    rows = LadderOutcome.objects.filter(plannable=True, terminal=True).values(
-        "plannable", "terminal", "realized_r", "matured_at"
+    rows = (
+        LadderOutcome.objects.thematic()
+        .filter(plannable=True, terminal=True)
+        .values("plannable", "terminal", "realized_r", "matured_at")
     )
     return build_validation_base_rate(rows)

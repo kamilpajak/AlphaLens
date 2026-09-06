@@ -444,6 +444,13 @@ export interface EdgeOutcome {
 	matured_at: string | null;
 	theme: string | null;
 	scorer_config_version: string | null;
+	/** Candidate source lane (`thematic` | `insider_cluster`, epic #1293). The server
+	 *  normalises pre-lane rows to `thematic`. The two lanes are separate cohorts and
+	 *  are never pooled; the summary panels are thematic-only. */
+	source: string;
+	/** A thematic card that ALSO carried an insider cluster that day (counted in both
+	 *  cohorts). */
+	event_overlap: boolean;
 	ladder_classification: string;
 	/** TP price levels the path TOUCHED (`touched_tp_count`) vs TP tranches that
 	 *  actually SOLD (`captured_tp_count`). captured < touched means a partial entry

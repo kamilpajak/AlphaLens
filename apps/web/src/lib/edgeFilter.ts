@@ -17,15 +17,21 @@ export interface EdgeFilterState {
 	classes: Set<string>;
 	/** Selected `scorer_config_version` cohorts; empty = all. */
 	cohorts: Set<string>;
+	/** Selected candidate `source` lanes (thematic / insider_cluster); empty = all.
+	 *  The lanes are separate cohorts — this facet is how a reader keeps them apart
+	 *  in the listing (the summary panels are thematic-only server-side). */
+	sources: Set<string>;
 }
 
 export function emptyFilterState(): EdgeFilterState {
-	return { query: '', classes: new Set(), cohorts: new Set() };
+	return { query: '', classes: new Set(), cohorts: new Set(), sources: new Set() };
 }
 
 /** Any dimension narrowing the list (drives the "clear" affordance + count line). */
 export function isFilterActive(s: EdgeFilterState): boolean {
-	return s.query.trim() !== '' || s.classes.size > 0 || s.cohorts.size > 0;
+	return (
+		s.query.trim() !== '' || s.classes.size > 0 || s.cohorts.size > 0 || s.sources.size > 0
+	);
 }
 
 /** Apply the text query + the classification/cohort facet selections. Each facet
@@ -41,6 +47,7 @@ export function filterOutcomes(rows: EdgeOutcome[], s: EdgeFilterState): EdgeOut
 		}
 		if (!facetMatches(s.classes, o.ladder_classification)) return false;
 		if (!facetMatches(s.cohorts, o.scorer_config_version)) return false;
+		if (!facetMatches(s.sources, o.source)) return false;
 		return true;
 	});
 }
@@ -84,12 +91,13 @@ export function windowDenominator(
 }
 
 // ── URL (de)serialization ────────────────────────────────────────────────────
-// Deep-linkable filter state: `?q=`, `?class=A,B`, `?cohort=X,Y`. Sets are
+// Deep-linkable filter state: `?q=`, `?class=A,B`, `?cohort=X,Y`, `?source=S`. Sets are
 // serialized sorted so the URL is stable regardless of click order.
 
 const PARAM_QUERY = 'q';
 const PARAM_CLASSES = 'class';
 const PARAM_COHORTS = 'cohort';
+const PARAM_SOURCES = 'source';
 
 /** Write the active dimensions into a URLSearchParams (omitting empty ones so a
  *  cleared filter yields a clean URL). Mutates + returns `into` when given, so
@@ -103,6 +111,8 @@ export function filterToParams(s: EdgeFilterState, into?: URLSearchParams): URLS
 	else p.delete(PARAM_CLASSES);
 	if (s.cohorts.size > 0) p.set(PARAM_COHORTS, setToParam(s.cohorts));
 	else p.delete(PARAM_COHORTS);
+	if (s.sources.size > 0) p.set(PARAM_SOURCES, setToParam(s.sources));
+	else p.delete(PARAM_SOURCES);
 	return p;
 }
 
@@ -110,6 +120,7 @@ export function filterFromParams(p: URLSearchParams): EdgeFilterState {
 	return {
 		query: p.get(PARAM_QUERY) ?? '',
 		classes: paramToSet(p.get(PARAM_CLASSES)),
-		cohorts: paramToSet(p.get(PARAM_COHORTS))
+		cohorts: paramToSet(p.get(PARAM_COHORTS)),
+		sources: paramToSet(p.get(PARAM_SOURCES))
 	};
 }
