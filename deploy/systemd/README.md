@@ -102,7 +102,14 @@ AlphaLens systemd units load secrets via
   VIXCLS so the feedback POST path can stamp a real market regime; the step
   is best-effort, so a missing key only degrades regime stamps to "unknown"),
   **plus the optional `ALPHALENS_OPENROUTER_*` provider pin** — see
-  "OpenRouter provider pin" below
+  "OpenRouter provider pin" below, **plus the optional `ALPHALENS_EVENT_LANE=1`
+  accrual switch** (epic #1293): when set, `run_thematic_day.sh` runs
+  `alphalens events insider-clusters` before `score` and `score` merges the
+  eligible insider-cluster rows into the day's candidates under
+  `source=insider_cluster`. Leave it UNSET until the cohort separation on the
+  outcome path (#1297) is deployed — with the flag on before that, the thematic
+  `/edge` aggregates would absorb the lane's rows. Unset = byte-identical to the
+  pre-lane pipeline.
 - `alphalens-form4-backfill.service` — `SEC_EDGAR_USER_AGENT`
 - `alphalens-form4-incremental.service` — `SEC_EDGAR_USER_AGENT` (the
   residential-VPS IP must carry the operator contact UA; the canonical client

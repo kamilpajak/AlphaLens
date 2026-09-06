@@ -14,6 +14,11 @@ import pandas as pd
 import typer
 from alphalens_pipeline.data import rs_history
 from alphalens_pipeline.data.parquet_io import write_parquet_atomic
+from alphalens_pipeline.events import (
+    DEFAULT_EVENT_CANDIDATES_DIR,
+    EVENT_LANE_ENV,
+    event_lane_enabled,
+)
 from alphalens_pipeline.observability.textfile import emit_domain_metrics
 from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
 from alphalens_pipeline.thematic import news_ingest
@@ -1043,6 +1048,11 @@ def score(
         "--output-dir",
         help="Phase D scored parquet root.",
     ),
+    event_candidates_dir: Path = typer.Option(
+        DEFAULT_EVENT_CANDIDATES_DIR,
+        "--event-candidates-dir",
+        help=f"Event-lane parquet root; read only when {EVENT_LANE_ENV}=1.",
+    ),
 ) -> None:
     """Layer 4 quantitative screen — enrich Phase C candidates with 4 signals."""
     target = (
@@ -1055,6 +1065,21 @@ def score(
         raise typer.BadParameter(f"Phase C parquet missing: {src}")
 
     candidates = pd.read_parquet(src)
+    # Event lane (epic #1293): merged in memory, never written into the
+    # map-themes parquet (which is frozen across the six daily slots). Flag OFF
+    # leaves the frame untouched, so the scored parquet stays byte-identical.
+    if event_lane_enabled():
+        from alphalens_pipeline.events import merge as event_merge
+
+        events = event_merge.load_event_candidates(
+            event_candidates_dir / f"{target.isoformat()}.parquet"
+        )
+        before = len(candidates)
+        candidates = event_merge.merge_event_candidates(candidates, events)
+        typer.echo(
+            f"Event lane ON: {len(candidates) - before} event row(s) appended, "
+            f"{int(candidates['event_overlap'].sum())} overlap(s)"
+        )
     typer.echo(f"Scoring {len(candidates)} candidates from {src} (asof={target.isoformat()})...")
     enriched = screening_scorer.score_candidates(candidates, asof=target)
 

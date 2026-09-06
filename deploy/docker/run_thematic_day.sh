@@ -47,6 +47,20 @@ alphalens thematic map-themes
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic shadow-map (measurement, best-effort)"
 alphalens thematic shadow-map || echo "shadow-map failed; continuing (measurement only)"
 
+# Event lane (epic #1293). Detects insider purchase clusters for the brief date
+# and writes ~/.alphalens/event_candidates/<date>.parquet, which `thematic score`
+# merges into the day's candidates ONLY when ALPHALENS_EVENT_LANE=1 (the accrual
+# switch, set in /etc/alphalens/env after #1297 is deployed — never before, or the
+# thematic /edge aggregates would absorb the lane). Gated here as well so an
+# unflagged build never touches EDGAR/yfinance for it. Best-effort: a candidate
+# SOURCE must never fail the pipeline that produces the thematic product; when
+# it fails, `score` merges the previous slot's parquet or nothing.
+if [ "${ALPHALENS_EVENT_LANE:-0}" = "1" ]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] events insider-clusters (event lane, best-effort)"
+    alphalens events insider-clusters \
+        || echo "WARN: events insider-clusters failed; event lane absent or stale this slot" >&2
+fi
+
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic score"
 alphalens thematic score
 
