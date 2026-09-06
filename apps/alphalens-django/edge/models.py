@@ -32,6 +32,8 @@ predate the size / benchmark columns ingest those as NULL by design.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from django.db import models
 
 # Sources the thematic aggregates pool over. An ALLOW-list on purpose: a lane
@@ -42,9 +44,25 @@ THEMATIC_SOURCES = ("", "thematic")
 
 
 class LadderOutcomeQuerySet(models.QuerySet):
-    def thematic(self):
+    def thematic(self) -> LadderOutcomeQuerySet:
         """Rows of the thematic lane only (the event lane is never pooled in)."""
         return self.filter(source__in=THEMATIC_SOURCES)
+
+
+class LadderOutcomeManager(models.Manager):
+    """Explicit manager so ``LadderOutcome.objects.thematic()`` resolves statically.
+
+    ``QuerySet.as_manager()`` builds the manager class at runtime, which pyright
+    types as a bare ``BaseManager`` — the CI basic gate then rejects every
+    ``.thematic()`` call site. Not ``use_in_migrations``: the manager carries no
+    schema.
+    """
+
+    def get_queryset(self) -> LadderOutcomeQuerySet:
+        return LadderOutcomeQuerySet(self.model, using=self._db)
+
+    def thematic(self) -> LadderOutcomeQuerySet:
+        return self.get_queryset().thematic()
 
 
 class LadderOutcome(models.Model):
@@ -52,7 +70,7 @@ class LadderOutcome(models.Model):
 
     pk = models.CompositePrimaryKey("brief_date", "ticker")
 
-    objects = LadderOutcomeQuerySet.as_manager()
+    objects: ClassVar[LadderOutcomeManager] = LadderOutcomeManager()
 
     brief_date = models.DateField(db_index=True)
     ticker = models.CharField(max_length=12)
