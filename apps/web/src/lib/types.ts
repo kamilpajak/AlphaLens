@@ -165,6 +165,36 @@ export interface Candidate {
 	market_state_vix_decile: number | null;
 	market_state_squeeze_on: boolean | null;
 	market_state_config_version: string | null;
+
+	/**
+	 * Candidate source lane (epic #1293, #1298) — `thematic` | `insider_cluster`;
+	 * empty string on rows ingested before the lane existed (read as thematic —
+	 * the same allow-list the edge aggregates use). `event_overlap` marks a
+	 * thematic row whose ticker ALSO completed an insider cluster that day: one
+	 * card, thematic catalyst primary, member of BOTH lanes (see `$lib/lane`).
+	 * The `event_*` facts are null on every row that is not (or does not overlap)
+	 * an insider cluster. Display-only: never read by ordering.
+	 */
+	source: string;
+	event_overlap: boolean;
+	event_n_insiders: number | null;
+	event_cluster_usd: number | null;
+	event_buyers: InsiderBuyer[] | null;
+	event_arrival_session: string | null;
+	event_filing_lag_bdays: number | null;
+	event_gate_version: string;
+}
+
+/** One insider behind a purchase cluster, as reported on the Form 4 filing
+ *  (`alphalens_pipeline.events.insider_cluster.cluster_buyers`). `role` is
+ *  `officer` | `director` | `officer_director`; `usd` sums that insider's
+ *  qualifying legs; `filed_date` is the first filing date (ISO). */
+export interface InsiderBuyer {
+	cik: string;
+	name: string | null;
+	role: string;
+	usd: number;
+	filed_date: string;
 }
 
 /**

@@ -4,6 +4,7 @@
 	import MarketContextBanner from '$lib/components/MarketContextBanner.svelte';
 	import LedgerFilterBar from '$lib/components/LedgerFilterBar.svelte';
 	import { buildFilterChips, facetMatches } from '$lib/faceting';
+	import { LANE_INSIDER_CLUSTER, laneFacet, laneLabel, matchesLanes } from '$lib/lane';
 	import { setToParam, paramToSet } from '$lib/urlFilters';
 	import { syncParamsToUrl } from '$lib/urlFilterSync.svelte';
 	import { page } from '$app/state';
@@ -22,6 +23,10 @@
 	// the URL (`?theme=a,b`, `?verified=1`) so a filtered day is deep-linkable.
 	let selectedThemes = $state<Set<string>>(paramToSet(page.url.searchParams.get('theme')));
 	let onlyVerified = $state(page.url.searchParams.get('verified') === '1');
+	// Source-lane facet (epic #1293, #1298): thematic / insider cluster, seeded from
+	// `?source=` (the same param /edge uses). Lane MEMBERSHIP, not the raw
+	// `source` string — an overlap row belongs to both lanes (see $lib/lane).
+	let selectedLanes = $state<Set<string>>(paramToSet(page.url.searchParams.get('source')));
 
 	// SvelteKit reuses this component across /brief/[date] navigations (same
 	// route, changed param), so the filter $state would bleed onto the next day —
@@ -38,6 +43,7 @@
 			lastDate = data.brief.date;
 			selectedThemes = new Set();
 			onlyVerified = false;
+			selectedLanes = new Set();
 		}
 	});
 
@@ -49,6 +55,9 @@
 		else params.delete('theme');
 		if (onlyVerified) params.set('verified', '1');
 		else params.delete('verified');
+		const source = setToParam(selectedLanes);
+		if (source) params.set('source', source);
+		else params.delete('source');
 		return params;
 	});
 
@@ -60,6 +69,7 @@
 	const filtered = $derived(
 		data.brief.candidates.filter((c) => {
 			if (!facetMatches(selectedThemes, c.theme)) return false;
+			if (!matchesLanes(selectedLanes, c)) return false;
 			if (onlyVerified && !c.verified) return false;
 			return true;
 		})
@@ -81,6 +91,27 @@
 				tone: () => 'text-fg-muted border-grid'
 			}
 		)
+	);
+
+	// Source-lane chips, derived from the FULL day like the theme chips above (a
+	// chip must not change its own count when clicked). On an overlap day the lane
+	// counts sum to more than "all" — the def says so. The bar is rendered only when
+	// the day has more than one lane (the /edge rule), so ~every day stays unchanged.
+	const laneOptions = $derived(laneFacet(data.brief.candidates));
+	const laneChips = $derived(
+		buildFilterChips(laneOptions, {
+			all: {
+				count: data.brief.n_candidates,
+				tone: 'text-fg-muted border-grid',
+				def: 'Every candidate on this day, whatever lane surfaced it.'
+			},
+			label: laneLabel,
+			tone: () => 'text-fg-muted border-grid',
+			def: (k) =>
+				k === LANE_INSIDER_CLUSTER
+					? 'Surfaced by the insider purchase cluster event lane (SEC Form 4), a pre-registered lane whose outcomes accrue separately on /edge. A thematic card whose ticker also completed a cluster counts here too, so lane counts can exceed "all". Display-only: the lane never changes the ranking.'
+					: 'Surfaced by the thematic news pipeline (theme mapping + scoring). A card that also completed an insider cluster counts in both lanes. Display-only: the lane never changes the ranking.'
+		})
 	);
 
 	const currentIdx = $derived(data.days.findIndex((d) => d.date === data.brief.date));
@@ -212,6 +243,9 @@
 	     toggle (a boolean, not a facet, so it stays its own control). -->
 	<div class="mb-5 flex flex-col gap-2 fade-up" style="animation-delay: 0.1s">
 		<LedgerFilterBar label="theme" chips={themeChips} bind:selected={selectedThemes} />
+		{#if laneOptions.length > 1}
+			<LedgerFilterBar label="source" chips={laneChips} bind:selected={selectedLanes} />
+		{/if}
 		{#if verifiedCount < data.brief.n_candidates}
 			<label class="flex items-center justify-end gap-2 text-[10px] uppercase tracking-widest text-fg-dim cursor-pointer">
 				<input type="checkbox" bind:checked={onlyVerified} class="accent-amber" />

@@ -4,6 +4,9 @@
 	import { expect, waitFor } from 'storybook/test';
 	import type { Candidate } from '$lib/types';
 	import CandidateCard from './CandidateCard.svelte';
+	// The first real insider-cluster day (2026-09-05), captured through the Django
+	// serializer — see InsiderClusterChip.stories for the chip on its own.
+	import laneDay from '../../../tests/fixtures/api-mock/days/2026-09-05.json';
 
 	type CandidateCardProps = ComponentProps<typeof CandidateCard>;
 
@@ -149,7 +152,16 @@
 		channel_evidence: null,
 		channel_falsifier: null,
 		channel_grounding_quote: null,
-		channel_grounding_reason: null
+		channel_grounding_reason: null,
+		// Event-lane provenance (#1298) — serializer defaults on a pre-lane row.
+		source: '',
+		event_overlap: false,
+		event_n_insiders: null,
+		event_cluster_usd: null,
+		event_buyers: null,
+		event_arrival_session: null,
+		event_filing_lag_bdays: null,
+		event_gate_version: ''
 	};
 
 	// Story 2 — PIPR (rank 3/16):
@@ -284,7 +296,16 @@
 		channel_evidence: null,
 		channel_falsifier: null,
 		channel_grounding_quote: null,
-		channel_grounding_reason: null
+		channel_grounding_reason: null,
+		// Event-lane provenance (#1298) — serializer defaults on a pre-lane row.
+		source: '',
+		event_overlap: false,
+		event_n_insiders: null,
+		event_cluster_usd: null,
+		event_buyers: null,
+		event_arrival_session: null,
+		event_filing_lag_bdays: null,
+		event_gate_version: ''
 	};
 
 	// Story 3 — empty narrative: FOUR with the three bottom sections blanked to
@@ -450,7 +471,16 @@
 		channel_evidence: null,
 		channel_falsifier: null,
 		channel_grounding_quote: null,
-		channel_grounding_reason: null
+		channel_grounding_reason: null,
+		// Event-lane provenance (#1298) — serializer defaults on a pre-lane row.
+		source: '',
+		event_overlap: false,
+		event_n_insiders: null,
+		event_cluster_usd: null,
+		event_buyers: null,
+		event_arrival_session: null,
+		event_filing_lag_bdays: null,
+		event_gate_version: ''
 	};
 
 	// Story 6 — PAR again, the support guard's WITHHELD state:
@@ -610,6 +640,14 @@
 		channel_type: '',
 		channel_grounding_reason: ''
 	};
+
+	const candidateEQPT: Candidate = (() => {
+		const c = (laneDay as unknown as { candidates: Candidate[] }).candidates.find(
+			(x) => x.ticker === 'EQPT'
+		);
+		if (!c) throw new Error('fixture row missing: EQPT');
+		return c;
+	})();
 
 	const { Story } = defineMeta({
 		title: 'Composites/CandidateCard',
@@ -802,6 +840,25 @@
 	{#snippet template()}
 		<div style="width: 56rem; padding: 2rem;">
 			<CandidateCard candidate={candidateNoRecord} index={0} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Insider-cluster lane row (epic #1293, #1298): the header carries the
+     "insiders · 2 buyers · $610k" chip; no gate pills (the lane runs no
+     thematic gates), conf "—" (no LLM confidence), and the catalyst link is
+     the SEC filing index. Real row from the first day the lane ran. -->
+<Story
+	name="EQPT Insider Cluster Lane"
+	play={async ({ canvas }) => {
+		await waitFor(() => expect(canvas.getByText('EQPT')).toBeVisible());
+		await waitFor(() => expect(canvas.getByText('insiders · 2 buyers · $610k')).toBeVisible());
+		await waitFor(() => expect(canvas.getByText('#insider_cluster')).toBeVisible());
+	}}
+>
+	{#snippet template()}
+		<div style="width: 56rem; padding: 2rem;">
+			<CandidateCard candidate={candidateEQPT} index={6} />
 		</div>
 	{/snippet}
 </Story>

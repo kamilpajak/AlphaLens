@@ -36,3 +36,58 @@ def test_scorer_config_version_field_exists() -> None:
     assert field.max_length == 128
     assert field.blank is True
     assert field.default == ""
+
+
+# Event-lane provenance (epic #1293, issue #1298): the eight columns the SPA
+# card / day-list source filter read. Defaults mirror the parquet writer
+# (alphalens_pipeline.events.merge): NOT-NULL text/bool with a safe default so
+# the AddField migration is safe over a populated table; the event facts are
+# nullable because they are None on every thematic row.
+def test_source_field_exists() -> None:
+    field = _field_by_name("source")
+    assert isinstance(field, m.CharField)
+    assert field.blank is True
+    assert field.default == ""
+
+
+def test_event_overlap_field_exists() -> None:
+    field = _field_by_name("event_overlap")
+    assert isinstance(field, m.BooleanField)
+    assert field.default is False
+
+
+def test_event_n_insiders_field_exists() -> None:
+    field = _field_by_name("event_n_insiders")
+    assert isinstance(field, m.IntegerField)
+    assert field.null is True
+
+
+def test_event_cluster_usd_field_exists() -> None:
+    field = _field_by_name("event_cluster_usd")
+    assert isinstance(field, m.FloatField)
+    assert field.null is True
+
+
+def test_event_buyers_field_exists() -> None:
+    field = _field_by_name("event_buyers")
+    assert isinstance(field, m.JSONField)
+    assert field.null is True
+
+
+def test_event_arrival_session_field_exists() -> None:
+    field = _field_by_name("event_arrival_session")
+    assert isinstance(field, m.DateField)
+    assert field.null is True
+
+
+def test_event_filing_lag_bdays_field_exists() -> None:
+    field = _field_by_name("event_filing_lag_bdays")
+    assert isinstance(field, m.IntegerField)
+    assert field.null is True
+
+
+def test_event_gate_version_field_exists() -> None:
+    field = _field_by_name("event_gate_version")
+    assert isinstance(field, m.CharField)
+    assert field.blank is True
+    assert field.default == ""

@@ -8,6 +8,7 @@ FastAPI it replaces.
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -840,3 +841,70 @@ class TestChannelRecordOnAPI:
         for name in self._RECORD_FIELDS:
             assert name in list_fields, f"{name} missing from the bulk-list serializer"
             assert name in detail_fields, f"{name} missing from the detail serializer"
+
+
+@pytest.mark.django_db
+class TestEventLaneOnTheWire:
+    """Issue #1298: the day brief carries the lane provenance the SPA card +
+    source filter read — ``source`` as a string and ``event_buyers`` as a real
+    JSON list (not the json.dumps string the parquet stores)."""
+
+    def test_day_candidate_carries_source_and_buyers_list(self, client, tmp_path):
+        buyers = [
+            {
+                "cik": "0002091677",
+                "name": "Schlacks Jabbok",
+                "role": "officer_director",
+                "usd": 432350.0,
+                "filed_date": "2026-09-03",
+            },
+            {
+                "cik": "0002091309",
+                "name": "Schlacks William J.",
+                "role": "officer_director",
+                "usd": 177900.0,
+                "filed_date": "2026-09-04",
+            },
+        ]
+        _write_parquet(
+            tmp_path,
+            "2026-09-05",
+            [
+                {
+                    "ticker": "EQPT",
+                    "theme": "insider_cluster",
+                    "layer4_weighted_score": 1,
+                    "source": "insider_cluster",
+                    "event_overlap": False,
+                    "event_n_insiders": 2.0,
+                    "event_cluster_usd": 610250.0,
+                    "event_buyers_json": json.dumps(buyers),
+                    "event_arrival_session": "2026-09-08",
+                    "event_filing_lag_bdays": 2.0,
+                    "event_gate_version": "insider_cluster_gate_v1",
+                },
+                {
+                    "ticker": "WFRD",
+                    "theme": "oil_services",
+                    "layer4_weighted_score": 3,
+                    "source": "thematic",
+                    "event_overlap": False,
+                },
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        body = client.get("/v1/days/2026-09-05").json()
+        by_ticker = {c["ticker"]: c for c in body["candidates"]}
+        eqpt, wfrd = by_ticker["EQPT"], by_ticker["WFRD"]
+        assert eqpt["source"] == "insider_cluster"
+        assert eqpt["event_overlap"] is False
+        assert eqpt["event_n_insiders"] == 2
+        assert eqpt["event_cluster_usd"] == 610250.0
+        assert eqpt["event_buyers"] == buyers
+        assert eqpt["event_arrival_session"] == "2026-09-08"
+        assert eqpt["event_filing_lag_bdays"] == 2
+        assert eqpt["event_gate_version"] == "insider_cluster_gate_v1"
+        assert wfrd["source"] == "thematic"
+        assert wfrd["event_buyers"] is None
+        assert wfrd["event_n_insiders"] is None

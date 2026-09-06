@@ -126,7 +126,16 @@ const TS_CANDIDATE_KEYS = [
 	'market_state_vix',
 	'market_state_vix_decile',
 	'market_state_squeeze_on',
-	'market_state_config_version'
+	'market_state_config_version',
+	// Event-lane provenance (epic #1293, #1298): source lane + insider-cluster facts.
+	'source',
+	'event_overlap',
+	'event_n_insiders',
+	'event_cluster_usd',
+	'event_buyers',
+	'event_arrival_session',
+	'event_filing_lag_bdays',
+	'event_gate_version'
 ] as const satisfies readonly (keyof Candidate)[];
 
 // Exhaustiveness guard: if the interface gains a key not listed above, this

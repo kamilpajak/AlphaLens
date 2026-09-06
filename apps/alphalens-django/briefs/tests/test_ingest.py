@@ -907,3 +907,105 @@ class TestChannelRecordIngest:
         assert aaa.channel_falsifier == ""
         assert aaa.channel_grounding_quote == ""
         assert aaa.channel_grounding_reason == ""
+
+
+# Event-lane provenance (epic #1293, issue #1298). The row mirrors the REAL EQPT
+# row of the 2026-09-05 brief parquet (the first day the lane ran on the VPS):
+# ``event_buyers_json`` is a json.dumps string of a list of dicts, the integer
+# facts arrive as float64 (NaN on thematic rows), the arrival session as an ISO
+# string. Column names are the parquet's; the model renames only ``event_buyers``.
+_EQPT_BUYERS = [
+    {
+        "cik": "0002091677",
+        "name": "Schlacks Jabbok",
+        "role": "officer_director",
+        "usd": 432350.0,
+        "filed_date": "2026-09-03",
+    },
+    {
+        "cik": "0002091309",
+        "name": "Schlacks William J.",
+        "role": "officer_director",
+        "usd": 177900.0,
+        "filed_date": "2026-09-04",
+    },
+]
+
+
+def _event_lane_rows() -> list[dict]:
+    return [
+        {
+            "ticker": "EQPT",
+            "theme": "insider_cluster",
+            "company_name": "EquipmentShare.com Inc",
+            "verified": True,
+            "layer4_weighted_score": 1,
+            "source": "insider_cluster",
+            "event_overlap": False,
+            "event_n_insiders": 2.0,
+            "event_cluster_usd": 610250.0,
+            "event_buyers_json": json.dumps(_EQPT_BUYERS),
+            "event_arrival_session": "2026-09-08",
+            "event_filing_lag_bdays": 2.0,
+            "event_gate_version": "insider_cluster_gate_v1",
+        },
+        {
+            "ticker": "WFRD",
+            "theme": "oil_services",
+            "company_name": "Weatherford",
+            "verified": True,
+            "layer4_weighted_score": 3,
+            "source": "thematic",
+            "event_overlap": False,
+            "event_n_insiders": float("nan"),
+            "event_cluster_usd": float("nan"),
+            "event_buyers_json": None,
+            "event_arrival_session": None,
+            "event_filing_lag_bdays": float("nan"),
+            "event_gate_version": None,
+        },
+    ]
+
+
+@pytest.mark.django_db
+class TestEventLaneIngest:
+    def test_insider_cluster_row_round_trips_all_lane_columns(self, tmp_path: Path):
+        _write_parquet(tmp_path, "2026-09-05", _event_lane_rows())
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        eqpt = Brief.objects.get(ticker="EQPT")
+        assert eqpt.source == "insider_cluster"
+        assert eqpt.event_overlap is False
+        assert eqpt.event_n_insiders == 2
+        assert eqpt.event_cluster_usd == 610250.0
+        assert eqpt.event_buyers == _EQPT_BUYERS
+        assert eqpt.event_arrival_session == dt.date(2026, 9, 8)
+        assert eqpt.event_filing_lag_bdays == 2
+        assert eqpt.event_gate_version == "insider_cluster_gate_v1"
+
+    def test_thematic_row_on_a_lane_day_has_null_event_facts(self, tmp_path: Path):
+        _write_parquet(tmp_path, "2026-09-05", _event_lane_rows())
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        wfrd = Brief.objects.get(ticker="WFRD")
+        assert wfrd.source == "thematic"
+        assert wfrd.event_overlap is False
+        assert wfrd.event_n_insiders is None
+        assert wfrd.event_cluster_usd is None
+        assert wfrd.event_buyers is None
+        assert wfrd.event_arrival_session is None
+        assert wfrd.event_filing_lag_bdays is None
+        assert wfrd.event_gate_version == ""
+
+    def test_legacy_parquet_without_lane_columns_lands_on_defaults(self, tmp_path: Path):
+        """A pre-#1293 parquet (no ``source`` column at all) must ingest unchanged:
+        empty source (the thematic allow-list value), no overlap, null facts."""
+        _write_parquet(tmp_path, "2026-05-22", _sample_rows())
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        nvda = Brief.objects.get(ticker="NVDA")
+        assert nvda.source == ""
+        assert nvda.event_overlap is False
+        assert nvda.event_n_insiders is None
+        assert nvda.event_buyers is None
+        assert nvda.event_gate_version == ""

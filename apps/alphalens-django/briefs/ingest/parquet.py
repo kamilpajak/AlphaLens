@@ -39,6 +39,7 @@ from briefs.ingest.coerce import (
     coerce_expert_blob,
     coerce_float,
     coerce_int,
+    coerce_json_list,
     coerce_json_obj,
     coerce_list_str,
     coerce_optional_bool,
@@ -65,6 +66,10 @@ REQUIRED_PARQUET_COLUMNS: frozenset[str] = frozenset({"ticker", "theme"})
 # JSONFields that hold a dict (parsed from a json.dumps string), NOT a list[str].
 # Anything not listed here is coerced as a list of strings.
 _OBJECT_JSON_FIELDS: frozenset[str] = frozenset({"brief_trade_setup", "brief_template_facts"})
+# JSONFields that hold a LIST of dicts (parsed from a json.dumps string). Checked
+# before the object/list-str branches: ``event_buyers`` (epic #1293) would be
+# rejected by coerce_json_obj and mangled by coerce_list_str.
+_LIST_JSON_OBJECT_FIELDS: frozenset[str] = frozenset({"event_buyers"})
 
 # Django-local mirror of the pipeline registry's per-expert column set (slim image
 # must NOT import alphalens_pipeline). Mirrors
@@ -130,6 +135,10 @@ _EXPERT_COLUMNS: dict[str, tuple[str, ...]] = {
 # ingest. Listing the rename here keeps both sides documented in one place.
 _PARQUET_COLUMN_ALIASES: dict[str, str] = {
     "brief_template_facts": "brief_template_facts_json",
+    # Event lane (#1293): the pipeline persists the buyers list as
+    # ``event_buyers_json`` (a json.dumps string); the model field is the
+    # parsed list.
+    "event_buyers": "event_buyers_json",
 }
 
 # Mtime equality tolerance: float seconds, sub-microsecond stability across
@@ -171,6 +180,8 @@ def _coerce_json_field(field: django_models.Field, raw):
     # list[str] (gates_*, also_in_themes, …). A NEW object field must be
     # added to _OBJECT_JSON_FIELDS or it will be silently corrupted by
     # coerce_list_str (which would iterate the dict's keys).
+    if field.name in _LIST_JSON_OBJECT_FIELDS:
+        return coerce_json_list(raw)
     if field.name in _OBJECT_JSON_FIELDS:
         return coerce_json_obj(raw)
     return coerce_list_str(raw)

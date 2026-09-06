@@ -9,6 +9,14 @@
   },
   "candidates": [
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "quantum_computing",
       "ticker": "RGTI",
       "company_name": "Rigetti Computing, Inc.",
@@ -114,6 +122,14 @@
       "brief_generated_at": "2026-05-18T15:49:10.700261+00:00"
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "quantum_computing",
       "ticker": "QBTS",
       "company_name": "D-Wave Quantum Inc.",
@@ -217,6 +233,14 @@
       "brief_generated_at": "2026-05-18T15:49:43.007998+00:00"
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "quantum_computing",
       "ticker": "QUBT",
       "company_name": "Quantum Computing Inc.",
@@ -320,6 +344,14 @@
       "brief_generated_at": "2026-05-18T15:50:17.515463+00:00"
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "AI_models",
       "ticker": "AI",
       "company_name": "C3.ai, Inc.",
@@ -424,6 +456,14 @@
       "brief_generated_at": "2026-05-18T15:50:24.105102+00:00"
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "AI_models",
       "ticker": "SOUN",
       "company_name": "SoundHound AI, Inc.",
@@ -528,6 +568,14 @@
       "brief_generated_at": "2026-05-18T15:50:30.239138+00:00"
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "quantum_computing",
       "ticker": "FORM",
       "company_name": "FormFactor, Inc.",

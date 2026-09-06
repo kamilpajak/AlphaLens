@@ -16,6 +16,7 @@
 		type EdgeFilterState
 	} from '$lib/edgeFilter';
 	import { buildFilterChips, deriveFacet } from '$lib/faceting';
+	import { laneLabel } from '$lib/lane';
 
 	interface Props {
 		/** The current terminal/ongoing view — the facet universe + counts. */
@@ -77,10 +78,10 @@
 	const sourceChips = $derived(
 		buildFilterChips(sourceFacet, {
 			all: allCfg,
-			label: (k) => sourceLabel(k),
+			label: (k) => laneLabel(k),
 			tone: () => NEUTRAL,
 			def: (k) =>
-				`Candidate source lane ${sourceLabel(k)}. Thematic and insider-cluster outcomes are separate cohorts and are never pooled; the summary panels above are the thematic lane only. Row count here is the sanctioned accrual indicator — no lane statistic is shown before its pre-registered floor.`
+				`Candidate source lane ${laneLabel(k)}. Thematic and insider-cluster outcomes are separate cohorts and are never pooled; the summary panels above are the thematic lane only. Row count here is the sanctioned accrual indicator — no lane statistic is shown before its pre-registered floor.`
 		})
 	);
 
@@ -100,9 +101,6 @@
 		state.sources = new Set();
 	}
 
-	function sourceLabel(k: string): string {
-		return k === 'insider_cluster' ? 'insider cluster' : k;
-	}
 </script>
 
 <div class="mb-3 flex flex-col gap-2" data-testid="outcomes-filter">

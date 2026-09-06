@@ -128,6 +128,33 @@ def coerce_json_obj(value: Any) -> dict | None:
     return None
 
 
+def coerce_json_list(value: Any) -> list[dict] | None:
+    """List-of-objects JSONField cell → ``list[dict]`` (or ``None``).
+
+    Accepts a list of dicts (passthrough) or a JSON string of one (the pipeline
+    persists ``event_buyers_json`` via ``json.dumps``); missing / unparseable /
+    not-a-list / a list with a non-dict element → ``None``. An empty list is a
+    VALUE and survives. Distinct from :func:`coerce_json_obj` (a single dict) and
+    :func:`coerce_list_str` (which would wrap the whole JSON string as one
+    element).
+    """
+    if is_missing(value):
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            value = json.loads(text)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(value, list):
+        return None
+    if not all(isinstance(item, dict) for item in value):
+        return None
+    return value
+
+
 def coerce_date(value: Any) -> dt.date | None:
     """ISO date string or pandas Timestamp → ``date``; bad input → None."""
     if is_missing(value):
