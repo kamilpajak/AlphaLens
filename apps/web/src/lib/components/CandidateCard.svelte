@@ -34,6 +34,7 @@
 	import TradeSetup from './TradeSetup.svelte';
 	import TemplateFacts from './TemplateFacts.svelte';
 	import ChannelRecord from './ChannelRecord.svelte';
+	import InsiderClusterChip from './InsiderClusterChip.svelte';
 	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
 
 	// Same tipProps pattern as /experiments — looks up term in shared glossary.
@@ -203,9 +204,17 @@
 				class="order-2 sm:order-none max-sm:max-w-[calc(100%-8rem)] max-sm:truncate px-2 py-0.5 bg-violet/15 border border-violet/40 text-violet text-[10px] lowercase tracking-widest"
 				>#{c.theme}</span
 			>
+			<!-- Source-lane provenance (epic #1293, #1298): the insider-cluster chip
+			     renders only on rows that carry cluster facts (a pure event row, or a
+			     thematic row that overlaps one). Same wrapper pattern as the REVERSAL
+			     chip below (ChipTip exposes no class prop). It is provenance, not a
+			     pattern tag, so it stays outside any future `patterns:` group. -->
+			<span class="order-4 sm:order-none inline-flex">
+				<InsiderClusterChip candidate={c} />
+			</span>
 			<!-- Pattern tags: REVERSAL is currently the only one. When a 2nd pattern -->
-			<!-- (e.g. BREAKOUT, INSIDER_CLUSTER, PRE_EARNINGS_DRIFT) arrives, extract -->
-			<!-- to a `patterns: …` group with shared color-coding + a small label. -->
+			<!-- (e.g. BREAKOUT, PRE_EARNINGS_DRIFT) arrives, extract to a -->
+			<!-- `patterns: …` group with shared color-coding + a small label. -->
 			{#if c.deep_drawdown_reversal}
 				<!-- Wrapper span carries the mobile flex-order (ChipTip exposes no
 				     class prop); inline-flex keeps it a normal flex item. Safe to

@@ -136,6 +136,28 @@ class Brief(models.Model):
     # different scorer versions.  Blank for pre-atr-tilt dates.
     scorer_config_version = models.CharField(max_length=128, blank=True, default="")
 
+    # Event-lane provenance (epic #1293, issue #1298). Stamped by
+    # ``alphalens_pipeline.events.merge``: ``source`` is "thematic" or
+    # "insider_cluster"; ``event_overlap`` marks a thematic row whose ticker ALSO
+    # completed an insider cluster that day (one card, thematic catalyst primary,
+    # counted in both lanes downstream). The ``event_*`` facts are None on every
+    # thematic row. Pre-#1293 parquets have none of these columns and ingest on
+    # the defaults — empty ``source`` is the thematic allow-list value (mirrors
+    # ``edge.models.THEMATIC_SOURCES``). NOT-NULL text/bool carry a default so
+    # the AddField migration is safe over the populated table (the
+    # ``peer_cohort_level`` precedent). Display-only: never read by ordering.
+    source = models.CharField(max_length=32, blank=True, default="")
+    event_overlap = models.BooleanField(default=False)
+    event_n_insiders = models.IntegerField(null=True, blank=True)
+    event_cluster_usd = models.FloatField(null=True, blank=True)
+    # The buyers behind the cluster: a JSON LIST of {cik, name, role, usd,
+    # filed_date} dicts, ingested from the parquet's ``event_buyers_json`` string
+    # (see ``_PARQUET_COLUMN_ALIASES`` / ``_LIST_JSON_OBJECT_FIELDS`` in ingest).
+    event_buyers = models.JSONField(null=True, blank=True)
+    event_arrival_session = models.DateField(null=True, blank=True)
+    event_filing_lag_bdays = models.IntegerField(null=True, blank=True)
+    event_gate_version = models.CharField(max_length=64, blank=True, default="")
+
     # Index-level market-state regime label (PR-2). Computed once per date (SPY
     # regime) and broadcast to every candidate row; display-only, held out of the
     # brief sort + selection. ``market_state_config_version`` is the poolability

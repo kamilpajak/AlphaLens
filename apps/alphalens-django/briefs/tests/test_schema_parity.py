@@ -166,6 +166,21 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "channel_falsifier",
     "channel_grounding_quote",
     "channel_grounding_reason",
+    # Post-legacy extension (2026-09-06, epic #1293 / #1298): event-lane
+    # provenance stamped by alphalens_pipeline.events.merge — source
+    # ("thematic" | "insider_cluster"), the both-lanes overlap flag and the
+    # insider-cluster facts the SPA card chip renders (event_buyers is the
+    # parsed list of the parquet's event_buyers_json). Defaults on pre-#1293
+    # rows: "" / False / NULL. Auto-served via exclude=("pk",); additive,
+    # non-breaking; display-only (never read by ordering).
+    "source",
+    "event_overlap",
+    "event_n_insiders",
+    "event_cluster_usd",
+    "event_buyers",
+    "event_arrival_session",
+    "event_filing_lag_bdays",
+    "event_gate_version",
 )
 
 # Columns the legacy contract exposed that Django deliberately does not model.

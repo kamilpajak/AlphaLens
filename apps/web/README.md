@@ -140,10 +140,14 @@ Django app (it needs the workspace packages on `PYTHONPATH`):
 ```sh
 cd apps/alphalens-django
 PYTHONPATH=../alphalens-feedback:../alphalens-pipeline:../alphalens-research \
-  DJANGO_SETTINGS_MODULE=config.settings.base \
   python manage.py spectacular --file ../web/openapi/schema.yaml
 cd ../web && pnpm run gen:api-types   # refresh the generated DTOs
 ```
+
+Keep `manage.py`'s default settings module (`config.settings.dev`): the committed
+schema was generated with it, and it declares the anonymous `- {}` security
+alternative on every path. Forcing `config.settings.base` drops those 13 lines
+and produces a noisy, unrelated diff.
 
 Then update `src/lib/types.ts` + the `TS_CANDIDATE_KEYS` list in the contract
 test to match.

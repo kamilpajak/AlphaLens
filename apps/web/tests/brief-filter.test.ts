@@ -82,3 +82,96 @@ test('clicking a theme mirrors it into ?theme=, and a deep link seeds the filter
 	await page.goto(`/brief/${DATE}?theme=retail`);
 	await expect(cards(page)).toHaveCount(3);
 });
+
+// ---------------------------------------------------------------------------
+// Source lane (epic #1293, #1298). The 2026-09-05 fixture is the FIRST real day
+// the insider-cluster lane ran: 8 candidates, 6 thematic + 2 `insider_cluster`
+// (ENOV, EQPT). It is deliberately NOT in days.json (smoke.test takes days[0]
+// as the latest day and pins its counts), so it is routed here explicitly.
+const LANE_DATE = '2026-09-05';
+const LANE_DAY_BODY = readFileSync(resolve(FIXTURES, `days/${LANE_DATE}.json`), 'utf-8');
+
+function installLaneMock(page: Page) {
+	return page.route('**/api/v1/**', (route) => {
+		const url = new URL(route.request().url());
+		if (url.pathname === '/api/v1/market/status') {
+			return route.fulfill({
+				json: {
+					is_trading_day: false,
+					is_half_day: false,
+					is_open_now: false,
+					next_open_iso: '2099-01-01T13:30:00+00:00',
+					next_close_iso: '2099-01-01T20:00:00+00:00',
+					exchange: 'XNYS'
+				}
+			});
+		}
+		if (url.pathname === '/api/v1/days') {
+			return route.fulfill({ contentType: 'application/json', body: DAYS_INDEX });
+		}
+		if (url.pathname === `/api/v1/days/${DATE}`) {
+			return route.fulfill({ contentType: 'application/json', body: DAY_BODY });
+		}
+		if (url.pathname === `/api/v1/days/${LANE_DATE}`) {
+			return route.fulfill({ contentType: 'application/json', body: LANE_DAY_BODY });
+		}
+		return route.fulfill({ status: 404, json: { detail: `unhandled: ${url.pathname}` } });
+	});
+}
+
+const sourceBar = (page: Page) => page.getByText('source', { exact: true });
+const insiderChip = (page: Page) => page.getByRole('button', { name: /^insider cluster\b/ });
+
+test('a thematic-only day shows no source bar and no insider chips', async ({ page }) => {
+	await installLaneMock(page);
+	await page.goto(`/brief/${DATE}`);
+	await expect(cards(page)).toHaveCount(16);
+	await expect(sourceBar(page)).toHaveCount(0);
+	await expect(insiderChip(page)).toHaveCount(0);
+	await expect(page.getByText(/^insiders · /)).toHaveCount(0);
+});
+
+test('a two-lane day shows the source bar with per-lane counts and filters by lane', async ({
+	page
+}) => {
+	await installLaneMock(page);
+	await page.goto(`/brief/${LANE_DATE}`);
+	await expect(cards(page)).toHaveCount(8);
+
+	// The bar: all 8 / thematic 6 / insider cluster 2 (count-desc).
+	await expect(sourceBar(page)).toBeVisible();
+	await expect(page.getByRole('button', { name: /^thematic\b/ })).toHaveText(/6$/);
+	await expect(insiderChip(page)).toHaveText(/2$/);
+
+	await insiderChip(page).click();
+	await expect(cards(page)).toHaveCount(2);
+	await expect(page.locator('article#EQPT')).toBeVisible();
+	await expect(page.locator('article#ENOV')).toBeVisible();
+	await expect.poll(() => new URL(page.url()).searchParams.get('source')).toBe('insider_cluster');
+
+	// The lane facet intersects with the theme facet: an oil theme has no insider rows.
+	await page.getByRole('button', { name: /^#oil_reserves\b/ }).click();
+	await expect(cards(page)).toHaveCount(0);
+
+	// Deep link restores the lane selection on a fresh load.
+	await page.goto(`/brief/${LANE_DATE}?source=insider_cluster`);
+	await expect(cards(page)).toHaveCount(2);
+});
+
+test('an insider-cluster card carries the buyers chip; a thematic card does not', async ({
+	page
+}) => {
+	await installLaneMock(page);
+	await page.goto(`/brief/${LANE_DATE}`);
+	await expect(cards(page)).toHaveCount(8);
+
+	const eqpt = page.locator('article#EQPT');
+	await expect(eqpt.getByText('insiders · 2 buyers · $610k')).toBeVisible();
+	await expect(page.locator('article#ENOV').getByText('insiders · 2 buyers · $400k')).toBeVisible();
+	await expect(page.locator('article#WFRD').getByText(/^insiders · /)).toHaveCount(0);
+
+	// The hover body lists the buyers as filed (facts only).
+	await eqpt.getByTestId('chip-tip').filter({ hasText: 'insiders · 2 buyers' }).focus();
+	await expect(eqpt.getByText('Schlacks Jabbok', { exact: false })).toBeVisible();
+	await expect(eqpt.getByText('Schlacks William J.', { exact: false })).toBeVisible();
+});

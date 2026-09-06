@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import math
 
 import numpy as np
@@ -17,6 +18,7 @@ from briefs.ingest.coerce import (
     coerce_finite_float,
     coerce_float,
     coerce_int,
+    coerce_json_list,
     coerce_json_obj,
     coerce_list_str,
     coerce_optional_bool,
@@ -239,3 +241,42 @@ class TestCoerceExpertBlob:
         assert blob["buffett_owner_earnings_yield_pct"] == 5.0
         assert blob["buffett_understandable"] is True
         assert "buffett_roic_latest" not in blob  # absent column skipped, not None-filled
+
+
+# ``event_buyers_json`` (epic #1293) is a json.dumps STRING of a LIST of dicts —
+# neither coerce_json_obj (dict-only) nor coerce_list_str (would wrap the whole
+# string as one element) can carry it.
+_BUYERS = [
+    {"cik": "0002091677", "name": "Schlacks Jabbok", "role": "officer_director", "usd": 432350.0},
+    {
+        "cik": "0002091309",
+        "name": "Schlacks William J.",
+        "role": "officer_director",
+        "usd": 177900.0,
+    },
+]
+
+
+class TestCoerceJsonList:
+    def test_json_string_of_dicts_parses_to_list(self):
+        assert coerce_json_list(json.dumps(_BUYERS)) == _BUYERS
+
+    def test_list_passthrough(self):
+        assert coerce_json_list(list(_BUYERS)) == _BUYERS
+
+    def test_dict_input_is_none(self):
+        assert coerce_json_list({"cik": "1"}) is None
+
+    def test_json_string_of_a_dict_is_none(self):
+        assert coerce_json_list(json.dumps({"cik": "1"})) is None
+
+    def test_list_with_a_non_dict_element_is_none(self):
+        assert coerce_json_list(json.dumps([{"cik": "1"}, "junk"])) is None
+
+    @pytest.mark.parametrize("value", [None, float("nan"), pd.NaT, "", "   ", "not json"])
+    def test_missing_or_garbage_is_none(self, value):
+        assert coerce_json_list(value) is None
+
+    def test_empty_list_stays_empty_list(self):
+        # A cluster always has >= 2 buyers, but an empty list is a VALUE, not missing.
+        assert coerce_json_list("[]") == []

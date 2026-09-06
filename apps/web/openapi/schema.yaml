@@ -682,6 +682,36 @@ components:
         scorer_config_version:
           type: string
           maxLength: 128
+        source:
+          type: string
+          maxLength: 32
+        event_overlap:
+          type: boolean
+        event_n_insiders:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        event_cluster_usd:
+          type: number
+          format: double
+          nullable: true
+        event_buyers:
+          nullable: true
+        event_arrival_session:
+          type: string
+          format: date
+          nullable: true
+        event_filing_lag_bdays:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        event_gate_version:
+          type: string
+          maxLength: 64
         market_state:
           type: string
           maxLength: 32
@@ -999,6 +1029,36 @@ components:
         scorer_config_version:
           type: string
           maxLength: 128
+        source:
+          type: string
+          maxLength: 32
+        event_overlap:
+          type: boolean
+        event_n_insiders:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        event_cluster_usd:
+          type: number
+          format: double
+          nullable: true
+        event_buyers:
+          nullable: true
+        event_arrival_session:
+          type: string
+          format: date
+          nullable: true
+        event_filing_lag_bdays:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        event_gate_version:
+          type: string
+          maxLength: 64
         market_state:
           type: string
           maxLength: 32

@@ -15,6 +15,14 @@
   },
   "candidates": [
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "retail",
       "ticker": "FOUR",
       "company_name": "Shift4 Payments, Inc.",
@@ -142,6 +150,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "IPO",
       "ticker": "DFIN",
       "company_name": "Donnelley Financial Solutions, Inc.",
@@ -239,6 +255,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "IPO",
       "ticker": "PIPR",
       "company_name": "Piper Sandler Companies",
@@ -354,6 +378,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "pharmaceuticals",
       "ticker": "CRL",
       "company_name": "Charles River Laboratories International, Inc.",
@@ -469,6 +501,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "retail",
       "ticker": "MANH",
       "company_name": "Manhattan Associates, Inc.",
@@ -584,6 +624,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "retail",
       "ticker": "SYM",
       "company_name": "Symbotic Inc.",
@@ -699,6 +747,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "disease prevention",
       "ticker": "NVAX",
       "company_name": "Novavax, Inc.",
@@ -816,6 +872,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "Ontario",
       "ticker": "OTEX",
       "company_name": "Open Text Corporation",
@@ -931,6 +995,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "promotions",
       "ticker": "BRZE",
       "company_name": "Braze, Inc.",
@@ -1046,6 +1118,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "IPO",
       "ticker": "WK",
       "company_name": "Workiva Inc.",
@@ -1161,6 +1241,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "public health",
       "ticker": "QDEL",
       "company_name": "QuidelOrtho Corporation",
@@ -1278,6 +1366,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "discounts",
       "ticker": "OLLI",
       "company_name": "Ollie's Bargain Outlet Holdings, Inc.",
@@ -1393,6 +1489,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "promotions",
       "ticker": "IBTA",
       "company_name": "Ibotta, Inc.",
@@ -1508,6 +1612,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "discounts",
       "ticker": "GO",
       "company_name": "Grocery Outlet Holding Corp.",
@@ -1623,6 +1735,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "promotions",
       "ticker": "CMPR",
       "company_name": "Cimpress plc",
@@ -1738,6 +1858,14 @@
       "channel_grounding_reason": null
     },
     {
+      "source": "",
+      "event_overlap": false,
+      "event_n_insiders": null,
+      "event_cluster_usd": null,
+      "event_buyers": null,
+      "event_arrival_session": null,
+      "event_filing_lag_bdays": null,
+      "event_gate_version": "",
       "theme": "promotions",
       "ticker": "PAR",
       "company_name": "PAR Technology Corporation",

@@ -340,6 +340,18 @@ export interface components {
             /** Format: double */
             atr_penalty?: number | null;
             scorer_config_version?: string;
+            source?: string;
+            event_overlap?: boolean;
+            /** Format: int64 */
+            event_n_insiders?: number | null;
+            /** Format: double */
+            event_cluster_usd?: number | null;
+            event_buyers?: unknown;
+            /** Format: date */
+            event_arrival_session?: string | null;
+            /** Format: int64 */
+            event_filing_lag_bdays?: number | null;
+            event_gate_version?: string;
             market_state?: string;
             /** Format: double */
             market_state_atr_pct?: number | null;
@@ -483,6 +495,18 @@ export interface components {
             /** Format: double */
             atr_penalty?: number | null;
             scorer_config_version?: string;
+            source?: string;
+            event_overlap?: boolean;
+            /** Format: int64 */
+            event_n_insiders?: number | null;
+            /** Format: double */
+            event_cluster_usd?: number | null;
+            event_buyers?: unknown;
+            /** Format: date */
+            event_arrival_session?: string | null;
+            /** Format: int64 */
+            event_filing_lag_bdays?: number | null;
+            event_gate_version?: string;
             market_state?: string;
             /** Format: double */
             market_state_atr_pct?: number | null;
