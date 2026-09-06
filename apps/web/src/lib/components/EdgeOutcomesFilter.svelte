@@ -53,6 +53,7 @@
 			: deriveFacet(rows, (o) => o.ladder_classification)
 	);
 	const cohortFacet = $derived(deriveFacet(rows, (o) => o.scorer_config_version));
+	const sourceFacet = $derived(deriveFacet(rows, (o) => o.source));
 
 	const classChips = $derived(
 		buildFilterChips(classFacet, {
@@ -73,6 +74,16 @@
 		})
 	);
 
+	const sourceChips = $derived(
+		buildFilterChips(sourceFacet, {
+			all: allCfg,
+			label: (k) => sourceLabel(k),
+			tone: () => NEUTRAL,
+			def: (k) =>
+				`Candidate source lane ${sourceLabel(k)}. Thematic and insider-cluster outcomes are separate cohorts and are never pooled; the summary panels above are the thematic lane only. Row count here is the sanctioned accrual indicator — no lane statistic is shown before its pre-registered floor.`
+		})
+	);
+
 	const active = $derived(isFilterActive(state));
 
 	// "N shown of M in window": M is the server-truth window population the
@@ -86,6 +97,11 @@
 		state.query = '';
 		state.classes = new Set();
 		state.cohorts = new Set();
+		state.sources = new Set();
+	}
+
+	function sourceLabel(k: string): string {
+		return k === 'insider_cluster' ? 'insider cluster' : k;
 	}
 </script>
 
@@ -124,5 +140,8 @@
 	<LedgerFilterBar label="status" chips={classChips} bind:selected={state.classes} />
 	{#if cohortFacet.length > 1}
 		<LedgerFilterBar label="cohort" chips={cohortChips} bind:selected={state.cohorts} />
+	{/if}
+	{#if sourceFacet.length > 1}
+		<LedgerFilterBar label="source" chips={sourceChips} bind:selected={state.sources} />
 	{/if}
 </div>

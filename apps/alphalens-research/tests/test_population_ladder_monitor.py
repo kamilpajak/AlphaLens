@@ -38,12 +38,13 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     _engine_cutoffs,
     _RunDeadline,
     _screen_decision,
-    _stamp_scorer_version,
+    _stamp_brief_provenance,
     _stamp_theme,
     _terminal_row,
     replay_population_ladders,
     summarize_population_ladders,
 )
+from alphalens_pipeline.paper.brief_loader import CandidateBrief
 from alphalens_pipeline.paper.calendar import (
     advance_trading_sessions,
     previous_trading_day,
@@ -99,6 +100,9 @@ def _write_brief(briefs_dir: Path, brief_date: dt.date, rows: list[dict]) -> Non
         }
         if "technical_pct_off_52w_high" in r:
             frame_row["technical_pct_off_52w_high"] = r["technical_pct_off_52w_high"]
+        for key in ("source", "event_overlap", "scorer_config_version"):
+            if key in r:
+                frame_row[key] = r[key]
         frame_rows.append(frame_row)
     df = pd.DataFrame(frame_rows)
     df.to_parquet(briefs_dir / f"{brief_date.isoformat()}.parquet")
@@ -544,23 +548,50 @@ class TestThemeProvenance(_MonitorTestBase):
         self.assertEqual(row["theme"], "defense")
 
 
-class TestScorerVersionUnit(unittest.TestCase):
-    def test_stamp_scorer_version_sets_column(self):
-        # _stamp_scorer_version writes scorer_config_version onto the row.
-        row = _stamp_scorer_version({}, "scorer-v1-test")
+class TestBriefProvenanceUnit(unittest.TestCase):
+    def _brief(self, **over):
+        base = {
+            "brief_date": dt.date(2026, 5, 1),
+            "ticker": "NVDA",
+            "theme": "ai",
+            "verified": True,
+            "suggested_size_pct": None,
+            "trade_setup": None,
+            "n_gates_passed": 0,
+            "n_gates_failed": 0,
+            "layer4_weighted_score": None,
+            "scorer_config_version": "scorer-v1-test",
+        }
+        base.update(over)
+        return CandidateBrief(**base)
+
+    def test_stamp_sets_scorer_source_and_overlap(self):
+        row = _stamp_brief_provenance({}, self._brief(source="insider_cluster", event_overlap=True))
         self.assertEqual(row["scorer_config_version"], "scorer-v1-test")
+        self.assertEqual(row["source"], "insider_cluster")
+        self.assertIs(row["event_overlap"], True)
+        self.assertEqual(row["theme"], "ai")
 
-    def test_stamp_scorer_version_none_when_falsy(self):
-        # A falsy version (empty string / None) stores None, not "".
-        self.assertIsNone(_stamp_scorer_version({}, None)["scorer_config_version"])
-        self.assertIsNone(_stamp_scorer_version({}, "")["scorer_config_version"])
+    def test_stamp_normalises_empty_source_to_thematic(self):
+        # A brief that predates the column stamps an explicit lane, never "".
+        row = _stamp_brief_provenance({}, self._brief(source=""))
+        self.assertEqual(row["source"], "thematic")
+        self.assertIs(row["event_overlap"], False)
 
-    def test_carry_prior_backfills_scorer_config_version(self):
-        # _carry_prior must back-fill scorer_config_version to None for rows that
-        # predate the column (old-format parquets).
+    def test_stamp_none_scorer_when_falsy(self):
+        self.assertIsNone(
+            _stamp_brief_provenance({}, self._brief(scorer_config_version=""))[
+                "scorer_config_version"
+            ]
+        )
+
+    def test_carry_prior_backfills_provenance_columns(self):
+        # _carry_prior must back-fill every provenance column to None for rows
+        # that predate it (old-format parquets).
         carried = _carry_prior({"ticker": "X"})
-        self.assertIn("scorer_config_version", carried)
-        self.assertIsNone(carried["scorer_config_version"])
+        for col in ("scorer_config_version", "source", "event_overlap"):
+            self.assertIn(col, carried)
+            self.assertIsNone(carried[col])
 
 
 class TestScorerVersionProvenance(_MonitorTestBase):

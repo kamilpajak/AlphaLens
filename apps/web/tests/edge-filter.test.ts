@@ -32,7 +32,7 @@ const OUTCOMES = {
 	}
 };
 
-function mk(ticker: string, theme: string, cls: string, cohort: string) {
+function mk(ticker: string, theme: string, cls: string, cohort: string, source = 'thematic') {
 	return {
 		ticker,
 		brief_date: '2026-05-18',
@@ -47,7 +47,9 @@ function mk(ticker: string, theme: string, cls: string, cohort: string) {
 		benchmark_window_return: 0.02,
 		holding_days_elapsed: 10,
 		realized_return_pct_of_book: 0.15,
-		scorer_config_version: cohort
+		scorer_config_version: cohort,
+		source,
+		event_overlap: false
 	};
 }
 
@@ -299,4 +301,44 @@ test('race guard: deselecting back to ALL mid-flight still restores the full lis
 	await page.waitForTimeout(400);
 	await expect(rowLinks(page)).toHaveCount(6);
 	await expect.poll(() => new URL(page.url()).searchParams.has('class')).toBe(false);
+});
+
+// The event lane (epic #1293): a `source` chip row appears only when both lanes
+// are present, narrows the table to one lane and round-trips through ?source=.
+const OUTCOMES_TWO_LANES = {
+	...OUTCOMES,
+	data: [
+		...OUTCOMES.data,
+		mk('LUCK', 'insider_cluster', 'TP_FULL', 'v1', 'insider_cluster'),
+		mk('HWKN', 'insider_cluster', 'SL_HIT', 'v1', 'insider_cluster')
+	],
+	total: 8,
+	returned: 8,
+	facets: {
+		status: { terminal: 8, ongoing: 0 },
+		classification: { terminal: { SL_HIT: 4, TP_FULL: 3, TIME_STOP: 1 }, ongoing: {} }
+	}
+};
+
+test('source chip narrows to the insider-cluster lane and syncs ?source=', async ({ page }) => {
+	await stub(page);
+	await page.route('**/v1/edge/outcomes**', (r) => r.fulfill({ json: OUTCOMES_TWO_LANES }));
+	await page.goto('/edge');
+	await expect(rowLinks(page)).toHaveCount(8);
+
+	const bar = page.getByTestId('outcomes-filter');
+	await bar.getByRole('button', { name: /^insider cluster/ }).click();
+	await expect(rowLinks(page)).toHaveCount(2);
+	await expect.poll(() => new URL(page.url()).searchParams.get('source')).toBe('insider_cluster');
+
+	await page.getByTestId('outcomes-clear-all').click();
+	await expect(rowLinks(page)).toHaveCount(8);
+	await expect.poll(() => new URL(page.url()).searchParams.has('source')).toBe(false);
+});
+
+test('source bar is hidden when every row is thematic', async ({ page }) => {
+	await stub(page);
+	await page.goto('/edge');
+	await expect(rowLinks(page)).toHaveCount(6);
+	await expect(page.getByTestId('outcomes-filter').getByText('source', { exact: true })).toHaveCount(0);
 });

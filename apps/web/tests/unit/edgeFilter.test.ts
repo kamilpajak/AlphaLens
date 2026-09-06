@@ -31,6 +31,8 @@ function row(over: Partial<EdgeOutcome>): EdgeOutcome {
 		holding_days_elapsed: 10,
 		realized_return_pct_of_book: 0.15,
 		scorer_config_version: 'v1',
+		source: 'thematic',
+		event_overlap: false,
 		...over
 	} as EdgeOutcome;
 }
@@ -48,6 +50,7 @@ describe('isFilterActive', () => {
 		expect(isFilterActive({ ...emptyFilterState(), query: 'nv' })).toBe(true);
 		expect(isFilterActive({ ...emptyFilterState(), classes: new Set(['SL_HIT']) })).toBe(true);
 		expect(isFilterActive({ ...emptyFilterState(), cohorts: new Set(['v2']) })).toBe(true);
+		expect(isFilterActive({ ...emptyFilterState(), sources: new Set(['insider_cluster']) })).toBe(true);
 		// whitespace-only query does not count as active
 		expect(isFilterActive({ ...emptyFilterState(), query: '   ' })).toBe(false);
 	});
@@ -73,11 +76,28 @@ describe('filterOutcomes', () => {
 		expect(filterOutcomes(ROWS, s).map((r) => r.ticker).sort()).toEqual(['NVDA', 'PLUG', 'SNAP']);
 	});
 
+	it('source facet keeps the lanes apart and intersects with the other facets', () => {
+		const lanes = [
+			...ROWS,
+			row({ ticker: 'LUCK', theme: 'insider_cluster', ladder_classification: 'TP_FULL', source: 'insider_cluster' }),
+			row({ ticker: 'HWKN', theme: 'insider_cluster', ladder_classification: 'SL_HIT', source: 'insider_cluster' })
+		];
+		const onlyInsider: EdgeFilterState = { ...emptyFilterState(), sources: new Set(['insider_cluster']) };
+		expect(filterOutcomes(lanes, onlyInsider).map((r) => r.ticker).sort()).toEqual(['HWKN', 'LUCK']);
+		const insiderSl: EdgeFilterState = { ...onlyInsider, classes: new Set(['SL_HIT']) };
+		expect(filterOutcomes(lanes, insiderSl).map((r) => r.ticker)).toEqual(['HWKN']);
+		// an overlap row is a THEMATIC card — it stays in the thematic lane facet
+		const overlap = [row({ ticker: 'QUBT', source: 'thematic', event_overlap: true })];
+		expect(filterOutcomes(overlap, onlyInsider)).toHaveLength(0);
+		expect(filterOutcomes(overlap, { ...emptyFilterState(), sources: new Set(['thematic']) })).toHaveLength(1);
+	});
+
 	it('facets intersect across dimensions (class AND cohort AND query)', () => {
 		const s: EdgeFilterState = {
 			query: 'ai-infra',
 			classes: new Set(['SL_HIT']),
-			cohorts: new Set(['v1'])
+			cohorts: new Set(['v1']),
+			sources: new Set()
 		};
 		// ai-infra → SNAP, NVDA; SL_HIT → SNAP, PLUG; v1 → SNAP, AMPL → intersection SNAP
 		expect(filterOutcomes(ROWS, s).map((r) => r.ticker)).toEqual(['SNAP']);
@@ -189,7 +209,12 @@ describe('windowDenominator', () => {
 
 describe('URL round-trip', () => {
 	it('serializes active dimensions and omits empty ones', () => {
-		const p = filterToParams({ query: 'nv', classes: new Set(['b', 'a']), cohorts: new Set() });
+		const p = filterToParams({
+			query: 'nv',
+			classes: new Set(['b', 'a']),
+			cohorts: new Set(),
+			sources: new Set()
+		});
 		expect(p.get('q')).toBe('nv');
 		expect(p.get('class')).toBe('a,b'); // sorted regardless of insertion order
 		expect(p.has('cohort')).toBe(false);
@@ -203,11 +228,18 @@ describe('URL round-trip', () => {
 	});
 
 	it('round-trips through params', () => {
-		const s: EdgeFilterState = { query: 'ai', classes: new Set(['SL_HIT']), cohorts: new Set(['v2']) };
+		const s: EdgeFilterState = {
+			query: 'ai',
+			classes: new Set(['SL_HIT']),
+			cohorts: new Set(['v2']),
+			sources: new Set(['insider_cluster'])
+		};
 		const back = filterFromParams(filterToParams(s));
 		expect(back.query).toBe('ai');
 		expect([...back.classes]).toEqual(['SL_HIT']);
 		expect([...back.cohorts]).toEqual(['v2']);
+		expect([...back.sources]).toEqual(['insider_cluster']);
+		expect(filterToParams(s).get('source')).toBe('insider_cluster');
 	});
 
 	it('deletes a stale param when the dimension is cleared', () => {

@@ -244,7 +244,8 @@ class TestFullPayloadCharacterization:
             "metric_note": (
                 "market_excess_return = forward_return − benchmark_window_return "
                 "(same window, raw return units); gross / pre-cost; telemetry / "
-                "exploratory only — not confirmatory."
+                "exploratory only — not confirmatory; thematic lane only — "
+                "event-lane rows (source != thematic) are excluded, never pooled."
             ),
             "edge": {
                 "status": "early",

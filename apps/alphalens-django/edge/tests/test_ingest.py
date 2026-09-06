@@ -206,6 +206,39 @@ def test_ingest_scorer_config_version_defaults_to_empty_when_column_absent(tmp_p
 
 
 @pytest.mark.django_db
+def test_ingest_persists_source_and_event_overlap(tmp_path: Path):
+    """Event-lane provenance (epic #1293) flows through to the DB row."""
+    row = _terminal_row("LUCK", excess=0.03)
+    row["source"] = "insider_cluster"
+    row["event_overlap"] = False
+    other = _terminal_row("QUBT", excess=0.01)
+    other["source"] = "thematic"
+    other["event_overlap"] = True
+    _write_parquet(tmp_path, "2026-05-27", [row, other])
+    rebuild_from_parquet(tmp_path)
+
+    assert LadderOutcome.objects.get(ticker="LUCK").source == "insider_cluster"
+    assert LadderOutcome.objects.get(ticker="LUCK").event_overlap is False
+    assert LadderOutcome.objects.get(ticker="QUBT").source == "thematic"
+    assert LadderOutcome.objects.get(ticker="QUBT").event_overlap is True
+
+
+@pytest.mark.django_db
+def test_ingest_source_defaults_to_empty_and_overlap_false_when_absent(tmp_path: Path):
+    """A parquet WITHOUT the lane columns ingests as '' / False (read as thematic)."""
+    row = _terminal_row("OLDLANE", excess=0.01)
+    row.pop("source", None)
+    row.pop("event_overlap", None)
+    _write_parquet(tmp_path, "2026-05-27", [row])
+    rebuild_from_parquet(tmp_path)
+
+    outcome = LadderOutcome.objects.get(ticker="OLDLANE")
+    assert outcome.source == ""
+    assert outcome.event_overlap is False
+    assert LadderOutcome.objects.thematic().count() == 1
+
+
+@pytest.mark.django_db
 def test_ingest_persists_sector_excess_columns(tmp_path: Path):
     """A parquet WITH the sector-excess columns (PR-2b) flows through to the DB.
 

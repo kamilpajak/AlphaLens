@@ -30,6 +30,10 @@ class EdgeOutcomeRowSerializer(serializers.Serializer):
     matured_at = serializers.DateField(allow_null=True, required=False)
     theme = serializers.CharField(allow_null=True, required=False)
     scorer_config_version = serializers.CharField(allow_null=True, required=False)
+    # Candidate source lane ("thematic" | "insider_cluster") + the same-day
+    # overlap flag; the two lanes are separate cohorts and are never pooled.
+    source = serializers.CharField()
+    event_overlap = serializers.BooleanField()
     ladder_classification = serializers.CharField(allow_blank=True)
     # TP levels touched vs tranches actually sold: captured < touched flags that
     # TP_FULL / the chart's green arrows overstate capture (partial entry fill).

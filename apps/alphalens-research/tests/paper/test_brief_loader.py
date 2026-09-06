@@ -242,6 +242,55 @@ class TestLoadBrief(unittest.TestCase):
         candidates = load_brief(d, self.tmpdir)
         self.assertEqual(candidates[0].scorer_config_version, "")
 
+    def test_source_and_event_overlap_populated_when_present(self):
+        """Event-lane rows (epic #1293) pass source + event_overlap through."""
+        d = dt.date(2026, 9, 2)
+        _write_brief(
+            self.tmpdir,
+            d,
+            [
+                {
+                    "ticker": "LUCK",
+                    "theme": "insider_cluster",
+                    "verified": True,
+                    "source": "insider_cluster",
+                    "event_overlap": False,
+                },
+                {
+                    "ticker": "QUBT",
+                    "theme": "quantum",
+                    "verified": True,
+                    "source": "thematic",
+                    "event_overlap": True,
+                },
+            ],
+        )
+        by = {c.ticker: c for c in load_brief(d, self.tmpdir)}
+        self.assertEqual(by["LUCK"].source, "insider_cluster")
+        self.assertIs(by["LUCK"].event_overlap, False)
+        self.assertEqual(by["QUBT"].source, "thematic")
+        self.assertIs(by["QUBT"].event_overlap, True)
+
+    def test_source_defaults_to_empty_and_overlap_false_when_columns_absent(self):
+        """Legacy rows without the lane columns read as '' / False (thematic)."""
+        d = dt.date(2026, 6, 25)
+        _write_brief(self.tmpdir, d, [{"ticker": "MSFT", "theme": "cloud"}])
+        candidates = load_brief(d, self.tmpdir)
+        self.assertEqual(candidates[0].source, "")
+        self.assertIs(candidates[0].event_overlap, False)
+
+    def test_source_nan_and_overlap_nan_coerce_to_defaults(self):
+        import numpy as np
+
+        d = dt.date(2026, 6, 25)
+        path = self.tmpdir / f"{d.isoformat()}.parquet"
+        pd.DataFrame(
+            [{"ticker": "TSLA", "theme": "ev", "source": np.nan, "event_overlap": np.nan}]
+        ).to_parquet(path, index=False)
+        candidates = load_brief(d, self.tmpdir)
+        self.assertEqual(candidates[0].source, "")
+        self.assertIs(candidates[0].event_overlap, False)
+
 
 if __name__ == "__main__":
     unittest.main()

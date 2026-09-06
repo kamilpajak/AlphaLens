@@ -35,6 +35,8 @@ function o(p: Partial<EdgeOutcome>): EdgeOutcome {
 		benchmark_window_return: null,
 		holding_days_elapsed: null,
 		realized_return_pct_of_book: null,
+		source: 'thematic',
+		event_overlap: false,
 		...p
 	};
 }

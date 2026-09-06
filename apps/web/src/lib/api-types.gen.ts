@@ -734,6 +734,8 @@ export interface components {
             matured_at?: string | null;
             theme?: string | null;
             scorer_config_version?: string | null;
+            source: string;
+            event_overlap: boolean;
             ladder_classification: string;
             captured_tp_count?: number | null;
             touched_tp_count?: number | null;
