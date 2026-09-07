@@ -1,6 +1,8 @@
 """Deploy contract of the event lane (#1296): the day script runs the detector
-only behind the flag, best-effort, between shadow-map and score; the systemd
-unit forwards the flag into the container."""
+only behind the flag, best-effort, before score; the systemd unit forwards the
+flag into the container. The shadow-map collection no longer lives in the day
+script (#1330: its own OnSuccess-activated unit), so this file also pins its
+absence."""
 
 from __future__ import annotations
 
@@ -50,12 +52,19 @@ class TestRunThematicDayEventLane(unittest.TestCase):
         self.assertIn("||", line, line)
         self.assertRegex(line, r"\|\|\s*echo .*WARN")
 
-    def test_event_stage_runs_after_shadow_map_and_before_score(self):
-        shadow = self.text.index("alphalens thematic shadow-map")
+    def test_event_stage_runs_after_map_themes_and_before_score(self):
+        mapping = self.text.index("alphalens thematic map-themes")
         events = self.text.index("alphalens events insider-clusters")
         score = self.text.index("alphalens thematic score")
-        self.assertLess(shadow, events)
+        self.assertLess(mapping, events)
         self.assertLess(events, score)
+
+    def test_runner_no_longer_calls_shadow_map(self):
+        # #1330: the 65-73 min collection sat before score/brief and timed
+        # the 00:30 UTC slot out 12 days of 13. It runs in
+        # alphalens-thematic-shadow-map.service (OnSuccess= on the build).
+        calls = [ln for ln in self.logical if ln.startswith("alphalens thematic shadow-map")]
+        self.assertEqual(calls, [])
 
 
 class TestThematicBuildUnitEventLane(unittest.TestCase):

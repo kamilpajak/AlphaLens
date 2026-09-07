@@ -11,6 +11,7 @@ hosts where launchd is unavailable.
 | `alphalens-literature-scan-weekly.{service,timer}` | Sun 18:00 Europe/Warsaw | Perplexity weekly RSS scan + Telegram digest + auto-commit to `main` (migrated 2026-05-30) |
 | `alphalens-literature-scan-monthly.{service,timer}` | 1st of month 09:00 Europe/Warsaw | Perplexity deep scan + Telegram digest + auto-commit to `main` (migrated 2026-05-30) |
 | `alphalens-thematic-build.{service,timer}` | 6× daily at HH:30 UTC (00/04/08/12/16/20) | docker-run thematic pipeline + verify-cache + Django rebuild-cache (PR-F, epic #295 #300) |
+| `alphalens-thematic-shadow-map.service` | `OnSuccess=` of every successful thematic-build (no timer) | docker-run `alphalens thematic shadow-map` — the shadow-arm collection (#1330), once per day (idempotent; skips in seconds on the other slots). Carved out of `run_thematic_day.sh` because its 65-73 min sat in front of `score`/`brief` and timed the 00:30 UTC slot out 12 days of 13 |
 | `alphalens-feedback-shadow-returns.{service,timer}` | daily 06:30 UTC | host-venv `alphalens feedback backfill-shadow-returns` — runs the broker-free population monitor over its own ~42-session window (price-path replay over Polygon minute bars) and the benchmark-excess + size-field enrichment tail. `Persistent=true` catch-up; idempotent re-stamp. Needs `POLYGON_API_KEY`. NOT trading-day-gated (the per-date maturity guard handles non-trading dates). The unit + command name are retained for the existing timer; the per-decision ladder replay (Track A click ledger) was removed (#465), so the command now drives only the population monitor — a rename is a deferred follow-up. Replay mechanics: `apps/alphalens-pipeline/alphalens_pipeline/feedback/README.md`. |
 | `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) — the one-time historical seed (DONE 2026-05-08) |
 | `alphalens-form4-incremental.{service,timer}` | daily 02:30 UTC | Form-4 daily incremental ingest — keeps `~/.alphalens/form4_parquet/` fresh after the seed froze. Self-sizing lookback (min 3 days, auto-extends to the store's newest filing, capped at `--max-catchup-days`) via the SEC daily form index; overlap dedups on `accession_number`. Needs `SEC_EDGAR_USER_AGENT`. **First run auto-catches-up the seed→today gap — no manual step** (see section below). |
@@ -704,6 +705,49 @@ than silently refreshing Django from incomplete data. The dashboard
 then keeps serving the previous day's snapshot until the operator
 investigates.
 
+### Shadow-map lives in its own unit (#1330, 2026-09-07)
+
+`alphalens thematic shadow-map` (the shadow-arm collection,
+`docs/research/theme_shadow_arm_contract_2026_08_23.md`) is NOT in
+`run_thematic_day.sh` any more. It draws once per day and takes 65-73 min —
+four times the whole product pipeline — and it sat between `map-themes` and
+`score`, so on 12 of 13 days the 00:30 UTC slot hit `TimeoutStartSec` before
+`brief` and neither ExecStartPost ran. It now runs in
+`alphalens-thematic-shadow-map.service`, activated by `OnSuccess=` on this
+unit (see that section below). `TimeoutStartSec` was raised 110 → 150 min at
+the same time: the 14-day journal read showed the product stages alone
+reaching 100 min on a heavy `map-themes` day, and ExecStartPost counts
+toward the budget on a oneshot.
+
+### The unit supervises the container, not the docker client (#1330)
+
+Until 2026-09-07 a timeout on this unit did not stop the work. systemd's
+SIGTERM reaches the `docker` CLIENT (the only process in the unit's
+cgroup); the client proxies it to the container's PID 1, which was `bash`,
+and a PID 1 with default signal disposition ignores SIGTERM. After
+`TimeoutStopSec` systemd SIGKILLed the client, marked the unit
+`Result=timeout`, skipped both ExecStartPost steps — and the container kept
+running: on 2026-09-05 it wrote `theme_shadow` at 04:39, `thematic_ohlcv`
+at 04:41-44 and `buffett_qual` at 04:56-05:00 CEST after being "killed" at
+04:27. Three pieces fix that, on this unit and on the shadow-map unit:
+
+- `docker run --init` — tini is PID 1 and forwards SIGTERM to bash; bash
+  exits and the PID namespace tears every child down, so the FIRST SIGTERM
+  ends the run (hard, like the old SIGKILL, but immediate and visible; all
+  parquet writes go through `write_parquet_atomic`, so no partial files).
+- `--name alphalens-thematic-build` — a fixed name so the container can be
+  addressed.
+- `ExecStartPre=-docker rm -f <name>` and `ExecStopPost=-docker rm -f <name>`
+  — the first so a stale named container (daemon restart, a pre-fix orphan)
+  cannot make `docker run --name` refuse; the second as the belt for the
+  path where the client is SIGKILLed before it proxies anything. The
+  leading `-` tolerates "no such container", the normal case after a clean
+  `--rm` run.
+
+After this change `Result=timeout` describes the fate of the work. Before
+it, read artifact mtimes (`find ~/.alphalens -newermt '<kill time>'`)
+before concluding a slot "produced nothing".
+
 ### Install
 
 ```bash
@@ -724,6 +768,57 @@ systemctl --user enable --now alphalens-thematic-build.timer
 systemctl --user list-timers alphalens-thematic-build
 journalctl --user -u alphalens-thematic-build.service --since today
 systemctl --user start alphalens-thematic-build.service     # manual fire
+```
+
+## alphalens-thematic-shadow-map.service (OnSuccess of thematic-build)
+
+The shadow-arm collector (#1330): `alphalens thematic shadow-map` in the
+pipeline image, same `docker run` shape as the build unit (same `-e` list —
+pinned by `test_deploy_systemd_units.py` as a set equality, so a new `-e`
+line on the build unit must be mirrored here — same bind mounts, same
+`--init` / `--name` / `docker rm -f` supervision, `TimeoutStartSec=150min`).
+
+There is **no timer and no `[Install]` section**. The unit is activated by
+`OnSuccess=alphalens-thematic-shadow-map.service` on
+`alphalens-thematic-build.service`: the draw needs the day's `map-themes`
+funnel (`proposal_funnel/<asof>.parquet`, the CLI exits 1 without it), and
+"right after a successful build" is that ordering without clock
+arithmetic. The CLI is idempotent per asof, so the first successful build
+of the day pays the 65-73 min draw and the other five slots skip in
+seconds; a failed build slot leaves the draw to the next successful one.
+`systemctl start` on an already-active unit is a no-op, so a later slot
+cannot start a second collection while one is running. Overlap with the
+NEXT build slot needs a >2h build and a >1.5h draw on the same day; even
+then the collector writes only under `~/.alphalens/theme_shadow/`, so the
+cost would be API contention, never a shared store.
+
+Monitoring: the standard `alphalens-emit-job-metrics thematic-shadow-map`
+hook (`AlphalensJobStale` at 48h = 2× the daily cadence + the
+`MetricMissing` pair). The CLI's own `emit_domain_metrics(job=
+"thematic-shadow-map")` gauges land in `alphalens_domain_*.prom`, a separate
+file from the hook's `alphalens_job_*.prom`.
+
+### Install / deploy
+
+The runner script is baked into the pipeline image
+(`/app/deploy/docker/run_thematic_day.sh`), so the split needs BOTH the
+units and an image rebuild; until the image is rebuilt the old in-script
+collection still runs (and still times out), and `OnSuccess=` then never
+fires because the build ends in failure.
+
+```bash
+cp deploy/systemd/alphalens-thematic-build.service      ~/.config/systemd/user/
+cp deploy/systemd/alphalens-thematic-shadow-map.service ~/.config/systemd/user/
+systemctl --user daemon-reload          # nothing to enable: OnSuccess= activates it
+# then rebuild alphalens-pipeline:latest (deploy/docker/README.md)
+```
+
+### Inspect
+
+```bash
+journalctl --user -u alphalens-thematic-shadow-map.service --since today
+systemctl --user start alphalens-thematic-shadow-map.service   # manual draw (skips if collected)
+docker ps --filter name=alphalens-thematic-                    # must be empty between runs
 ```
 
 ## Edge mirror (decoupled) — alphalens-edge-mirror.service + .timer

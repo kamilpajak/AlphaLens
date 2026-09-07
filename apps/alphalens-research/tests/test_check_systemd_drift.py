@@ -233,6 +233,7 @@ DRIFT_EXEMPT_UNITS: dict[str, str] = {
     ),
     "alphalens-systemd-drift-check.service": "the checker itself; watching it here is circular",
     "alphalens-thematic-build.service": "Docker pipeline wrapper; no broker env",
+    "alphalens-thematic-shadow-map.service": "Docker measurement wrapper; no broker env",
 }
 
 

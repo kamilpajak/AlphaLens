@@ -22,6 +22,15 @@ Description=AlphaLens thematic build (daily)
 After=network-online.target docker.service
 Wants=network-online.target
 
+# Shadow-arm collection (#1330) hangs off a SUCCESSFUL build, not a timer:
+# it needs this run's map-themes funnel, and "after the build succeeded" is
+# that ordering without clock arithmetic. The collector is idempotent per
+# asof (draws once, skips in seconds on the other five slots), so a slot
+# that fails simply leaves the draw to the next successful one. It used to
+# run INSIDE run_thematic_day.sh between map-themes and score, where its
+# 65-73 min put the 00:30 UTC slot past TimeoutStartSec on 12 of 13 days.
+OnSuccess=alphalens-thematic-shadow-map.service
+
 [Service]
 Type=oneshot
 WorkingDirectory=%h/AlphaLens
@@ -63,7 +72,30 @@ EnvironmentFile=/etc/alphalens/env
 # only makes /etc/alphalens/env able to. All four unset = today's unpinned
 # behaviour, byte for byte: docker forwards nothing and the client sends no
 # `provider` block.
+# Supervise the CONTAINER, not the docker client (#1330). systemd's
+# TimeoutStartSec SIGTERM reaches only the client in this unit's cgroup;
+# the client proxies it to the container's PID 1, which was bash — and a
+# PID 1 with default signal disposition ignores SIGTERM — so nothing
+# stopped: after TimeoutStopSec systemd SIGKILLed the client, the unit was
+# marked failed, and the workload kept writing for 30+ min (2026-09-05:
+# theme_shadow 04:39, buffett_qual 05:00, unit killed 04:27) while both
+# ExecStartPost steps were skipped. Three pieces, each covering a path the
+# others do not:
+#   --init            tini as PID 1 forwards SIGTERM to bash, bash exits,
+#                     the PID namespace tears down every child — the first
+#                     SIGTERM now ends the run.
+#   --name <unit>     a fixed name so the container can be addressed by
+#                     the two docker rm lines below.
+#   ExecStartPre rm   a stale named container (daemon restart, an orphan
+#                     from before this fix) would make `docker run --name`
+#                     refuse and fail the slot; `-` tolerates "no such
+#                     container", the normal case after a clean `--rm` run.
+#   ExecStopPost rm   the belt for the client-SIGKILLed-before-proxying
+#                     path; runs on every stop including timeout, BEFORE
+#                     the metrics hook.
+ExecStartPre=-/usr/bin/docker rm -f alphalens-thematic-build
 ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
+    --init --name alphalens-thematic-build \
     --user %U:%G \
     -e HOME=/app/home \
     -e OPENROUTER_API_KEY \
@@ -141,6 +173,7 @@ ExecStartPost=/usr/bin/docker compose \
 # the pattern). Runs unconditionally so a failed pipeline run or
 # verify-cache halt also updates the exit code gauge — Alertmanager
 # (PR-3) then fires on the non-zero exit.
+ExecStopPost=-/usr/bin/docker rm -f alphalens-thematic-build
 ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics thematic-build
 
 # Keep stdout/stderr in journald.
@@ -181,7 +214,18 @@ TasksMax=512
 # brief stages never run and the slot produces no brief. The next slot then
 # restarts from zero and can fail the same way, which is a permanent stall
 # rather than one missed slot. 110min still leaves ~2h of slot spacing.
-TimeoutStartSec=110min
+#
+# Bumped 110→150min on 2026-09-07 (#1330). The shadow-map collection left
+# this unit (see OnSuccess= above), but the 14-day journal read that
+# motivated the split showed the PRODUCT stages alone (ingest → map-themes,
+# then score → vix) reaching 100 min on a heavy map-themes day (2026-08-26;
+# 91 min on 08-24, 83 on 08-27, 81 on 08-25 — the stage-B channel
+# assessment is the variable part), and on a Type=oneshot the two
+# ExecStartPost steps count toward TimeoutStartSec too. 110 would have left
+# such a day on the edge; 150 is 1.4× the observed max and still leaves 90
+# min of the 4h slot spacing. With --init above, a timeout now actually
+# stops the container, so a wedged run no longer survives its own verdict.
+TimeoutStartSec=150min
 
 # Oneshot doesn't auto-restart on success. On real failures (Polygon 5xx,
 # OpenRouter quota, OOM) systemd surfaces non-zero exit in journalctl + status.
