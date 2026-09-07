@@ -95,11 +95,19 @@ LIVE_BROKER_MANAGER_SERVICE = SYSTEMD_DIR / "alphalens-broker-manager-live.servi
 SAXO_MARKETDATA_REFRESH_SERVICE = SYSTEMD_DIR / "alphalens-saxo-marketdata-refresh.service"
 SAXO_MARKETDATA_REFRESH_TIMER = SYSTEMD_DIR / "alphalens-saxo-marketdata-refresh.timer"
 
+# Shadow-arm collector (#1330). Carved out of run_thematic_day.sh into its own
+# oneshot, activated by ``OnSuccess=`` on thematic-build — NOT a timer: the
+# collection needs the day's map-themes funnel, and "after the build succeeded"
+# is that ordering without clock arithmetic. Same docker-run shape as the
+# build unit, same emit-hook contract, no timer file.
+SHADOW_MAP_SERVICE = SYSTEMD_DIR / "alphalens-thematic-shadow-map.service"
+
 ACTIVE_SERVICES = (
     EDGAR_SERVICE,
     LIT_WEEKLY_SERVICE,
     LIT_MONTHLY_SERVICE,
     SYSTEMD_DIR / "alphalens-thematic-build.service",
+    SHADOW_MAP_SERVICE,
     SHADOW_SERVICE,
     SYSTEMD_DIR / "alphalens-form4-incremental.service",
     EDGE_MIRROR_SERVICE,
@@ -927,11 +935,20 @@ class TestThematicBuildCadence(unittest.TestCase):
         # the hang-blocks-queue class as the real pipeline-overlap
         # risk (the surface concern of "two runs in parallel" doesn't
         # actually occur on Type=oneshot).
+        #
+        # Bumped 110→150min on 2026-09-07 (#1330). The shadow-map collection
+        # (65-73 min, once per day) moved out to its own unit, but the 14-day
+        # journal read showed the PRODUCT stages alone reaching 100 min on a
+        # heavy map-themes day (2026-08-26; 91 min on 08-24), and the two
+        # ExecStartPost steps count toward TimeoutStartSec on a oneshot. 110
+        # would have left such a day on the edge; 150 is 1.4× the observed
+        # max and still leaves 90 min of the 4h slot spacing.
         self.assertRegex(
             SERVICE_PATH.read_text(),
-            re.compile(r"^TimeoutStartSec=110min\s*$", re.MULTILINE),
-            "Service must carry TimeoutStartSec=110min or a wedged run "
-            "blocks every subsequent timer fire indefinitely.",
+            re.compile(r"^TimeoutStartSec=150min\s*$", re.MULTILINE),
+            "Service must carry TimeoutStartSec=150min: a wedged run blocks "
+            "every subsequent timer fire, and a heavy map-themes day needs "
+            "more than 110min for the product stages alone (#1330).",
         )
 
     def test_run_thematic_day_passes_force_to_ingest(self) -> None:
@@ -2475,3 +2492,163 @@ class TestStreamVenueWindowIsInLockstep(unittest.TestCase):
             "price reader": self._reader_environment()["ALPHALENS_SAXO_STREAM_SESSION_VENUES"],
         }
         self.assertEqual(values, dict.fromkeys(values, self.VENUES))
+
+
+# One ExecStart directive with its backslash-continued lines: every line that
+# ends in ``\`` is absorbed by the group, the final line is the one that does
+# not. Anchoring on that last line is what makes the block extend past the
+# first line at all — a pattern ending in the group alone matches zero
+# continuations and silently returns just ``ExecStart=... \``.
+_EXECSTART_BLOCK = re.compile(r"^ExecStart=(?:[^\n]*\\\n)*[^\n]*", re.MULTILINE)
+
+
+def _execstart_block(unit_text: str) -> str:
+    match = _EXECSTART_BLOCK.search(unit_text)
+    if match is None:
+        raise AssertionError("no ExecStart directive found")
+    return match.group(0)
+
+
+def _docker_env_flags(unit_text: str) -> set[str]:
+    """Return the ``-e KEY[=value]`` flags of the unit's ExecStart docker run.
+
+    Joins the backslash-continued ExecStart directive into one logical line
+    first, so a flag on any continuation line counts. ExecStartPost lines are
+    excluded on purpose: only the arm-defining ``docker run`` is compared.
+    """
+    logical: list[str] = []
+    buf = ""
+    for raw in unit_text.splitlines():
+        if raw.rstrip().endswith("\\"):
+            buf += raw.rstrip()[:-1] + " "
+            continue
+        logical.append(buf + raw)
+        buf = ""
+    starts = [ln for ln in logical if ln.startswith("ExecStart=")]
+    if len(starts) != 1:
+        raise AssertionError(f"expected exactly one ExecStart, got {starts!r}")
+    return set(re.findall(r"(?:^|\s)-e\s+(\S+)", starts[0]))
+
+
+class TestThematicShadowMapUnit(unittest.TestCase):
+    """The shadow-arm collector unit (#1330) and the supervision fix on both
+    docker-run units.
+
+    Why a unit of its own: the collection is ~65-73 min once per day and sat
+    BEFORE score/brief inside run_thematic_day.sh, so the 00:30 UTC slot
+    timed out 12 days out of 13 and the product never reached Postgres. Why
+    ``--init`` + ``--name`` + ``docker rm -f``: systemd only ever killed the
+    docker CLIENT (the container's PID 1 was bash, which ignores SIGTERM as
+    PID 1), so the workload kept writing for 30+ min after the unit was
+    declared failed and the ExecStartPost chain never ran.
+    """
+
+    def setUp(self) -> None:
+        self.build = SERVICE_PATH.read_text()
+        self.shadow = SHADOW_MAP_SERVICE.read_text()
+
+    def test_build_unit_activates_shadow_map_on_success(self) -> None:
+        self.assertRegex(
+            self.build,
+            re.compile(r"^OnSuccess=alphalens-thematic-shadow-map\.service\s*$", re.MULTILINE),
+        )
+
+    def test_shadow_map_has_no_timer(self) -> None:
+        # OnSuccess is the only trigger: a timer would either race the
+        # build (no funnel yet -> exit 1, day lost) or need clock arithmetic.
+        self.assertFalse((SYSTEMD_DIR / "alphalens-thematic-shadow-map.timer").exists())
+        # Section header anchored to a line so the unit's own comment that
+        # explains the absence cannot trip it.
+        self.assertNotRegex(self.shadow, re.compile(r"^\[Install\]", re.MULTILINE))
+
+    def test_shadow_map_is_oneshot_with_fail_loud_env_file(self) -> None:
+        self.assertIn("Type=oneshot", self.shadow)
+        self.assertIn("WorkingDirectory=%h/AlphaLens", self.shadow)
+        self.assertRegex(
+            self.shadow,
+            re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE),
+        )
+
+    def test_shadow_map_execstart_runs_the_cli_without_entrypoint_override(self) -> None:
+        # The image ENTRYPOINT already is the alphalens CLI, so the tokens
+        # after the image name are the subcommand — no ``--entrypoint`` and
+        # no leading ``alphalens`` token (the 2026-05-29 verify-cache trap).
+        block = _execstart_block(self.shadow)
+        self.assertRegex(
+            block,
+            re.compile(r"alphalens-pipeline:latest\s*\\\s*\n\s*thematic\s+shadow-map\s*$"),
+        )
+        # Directive-scoped: the unit's comment names the trap in prose.
+        self.assertNotIn("--entrypoint", block)
+        self.assertNotRegex(block, re.compile(r"alphalens-pipeline:latest\s*\\\s*\n\s*alphalens\s"))
+
+    def test_shadow_map_timeout_is_generous(self) -> None:
+        # map_themes writes its parquet ONCE after the whole theme loop, so a
+        # killed collection pays the LLM again from zero on the next slot.
+        # 150min = ~2× the 65-73 min observed 2026-09-05..07.
+        self.assertRegex(self.shadow, re.compile(r"^TimeoutStartSec=150min\s*$", re.MULTILINE))
+
+    def test_shadow_map_wires_emit_hook_and_mounts(self) -> None:
+        self.assertRegex(
+            self.shadow,
+            re.compile(
+                r"^ExecStopPost=%h/AlphaLens/deploy/systemd/bin/"
+                r"alphalens-emit-job-metrics\s+thematic-shadow-map\s*$",
+                re.MULTILINE,
+            ),
+        )
+        self.assertIn("-v %h/.alphalens:/app/home/.alphalens", self.shadow)
+        self.assertIn(
+            "-v /var/lib/node_exporter/textfile:/var/lib/node_exporter/textfile", self.shadow
+        )
+
+    def test_shadow_map_forwards_the_same_env_as_the_build(self) -> None:
+        # Contract (theme_shadow_arm_contract_2026_08_23.md): the two mapper
+        # calls stay mechanically identical. A variable present in one
+        # container and not the other would be invisible in the read, so
+        # the whole ``-e`` set is compared — including keys shadow-map does
+        # not consume (a set equality is simpler than an exception list).
+        build_env = _docker_env_flags(self.build)
+        self.assertGreater(len(build_env), 5, build_env)
+        self.assertEqual(_docker_env_flags(self.shadow), build_env)
+
+    def test_both_units_run_the_container_under_init_with_a_fixed_name(self) -> None:
+        for path, text in ((SERVICE_PATH, self.build), (SHADOW_MAP_SERVICE, self.shadow)):
+            name = path.stem
+            with self.subTest(unit=name):
+                block = _execstart_block(text)
+                self.assertRegex(block, r"docker run\s+--rm\b")
+                self.assertRegex(block, r"(?:^|\s)--init(?:\s|\\)")
+                self.assertRegex(block, r"(?:^|\s)--name " + re.escape(name) + r"(?:\s|\\)")
+
+    def test_both_units_remove_the_named_container_before_start_and_after_stop(self) -> None:
+        # ExecStartPre: a stale named container (docker daemon restart, a
+        # pre-fix orphan) would otherwise make ``docker run --name`` refuse
+        # and fail the slot. ExecStopPost: the belt for the SIGKILL-before-
+        # proxy path — the client dies, ``--init`` never sees a SIGTERM, and
+        # only an explicit stop by name ends the workload. Must run BEFORE
+        # the metrics hook so the hook's exit-status read sees a settled
+        # unit. Leading ``-`` on both: "no such container" is the normal
+        # case after a clean run (``--rm`` already removed it).
+        for path, text in ((SERVICE_PATH, self.build), (SHADOW_MAP_SERVICE, self.shadow)):
+            name = path.stem
+            with self.subTest(unit=name):
+                pre = re.compile(
+                    r"^ExecStartPre=-/usr/bin/docker rm -f " + re.escape(name) + r"\s*$",
+                    re.MULTILINE,
+                )
+                post = re.compile(
+                    r"^ExecStopPost=-/usr/bin/docker rm -f " + re.escape(name) + r"\s*$",
+                    re.MULTILINE,
+                )
+                hook = re.compile(
+                    r"^ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics",
+                    re.MULTILINE,
+                )
+                self.assertRegex(text, pre)
+                post_match = post.search(text)
+                hook_match = hook.search(text)
+                self.assertIsNotNone(post_match)
+                self.assertIsNotNone(hook_match)
+                assert post_match is not None and hook_match is not None
+                self.assertLess(post_match.start(), hook_match.start())

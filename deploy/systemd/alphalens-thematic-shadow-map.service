@@ -1,0 +1,106 @@
+[Unit]
+# AlphaLens shadow-arm collector (#1330) — `alphalens thematic shadow-map`
+# in the pipeline image. Asks the mapper about themes the selector did NOT
+# pick and records the answer under ~/.alphalens/theme_shadow/ (contract:
+# docs/research/theme_shadow_arm_contract_2026_08_23.md). Measurement only:
+# nothing here reaches a brief, a card, or the candidate parquet.
+#
+# Activated by `OnSuccess=` on alphalens-thematic-build.service — there is
+# NO timer and no [Install] section on purpose. The collection needs the
+# day's map-themes funnel (proposal_funnel/<asof>.parquet; without it the
+# CLI exits 1), and "right after the build succeeded" is that ordering
+# without clock arithmetic. The CLI is idempotent per asof: the first
+# successful build of the day pays the 65-73 min draw, the other five
+# slots skip in seconds ("already collected"), and a failed build slot
+# simply leaves the draw to the next successful one. `systemctl start` on
+# an already-active unit is a no-op, so a later slot cannot start a second
+# collection while one is running.
+#
+# Why its own unit: inside run_thematic_day.sh the draw sat between
+# map-themes and score, and its 65-73 min pushed the 00:30 UTC slot past
+# TimeoutStartSec on 12 of 13 days — the measurement was gating the product.
+#
+# Install (as the user; nothing to enable):
+#
+#   cp deploy/systemd/alphalens-thematic-shadow-map.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#
+# Inspect:           journalctl --user -u alphalens-thematic-shadow-map.service -f
+# Trigger manually:  systemctl --user start alphalens-thematic-shadow-map.service
+Description=AlphaLens thematic shadow-arm collector (after a successful thematic build)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+
+# Same fail-loud env file as the build unit: the mapper needs
+# OPENROUTER_API_KEY and POLYGON_API_KEY, and a missing file must fail the
+# unit rather than draw a sample with a different provider configuration.
+EnvironmentFile=/etc/alphalens/env
+
+# The `-e` list is IDENTICAL to alphalens-thematic-build.service, including
+# keys shadow-map does not read (TELEGRAM_*, ALPHALENS_EVENT_LANE). The
+# contract requires the two mapper calls to stay mechanically identical; a
+# variable present in one container and not the other would be invisible in
+# the read. Pinned by test_deploy_systemd_units.py (set equality), so a new
+# `-e` line on the build unit must be mirrored here.
+#
+# Container supervision (--init / --name / the two docker rm lines) is the
+# same three-piece pattern as the build unit — see the comment there for
+# the PID-1 mechanism that left orphan containers writing after a timeout.
+ExecStartPre=-/usr/bin/docker rm -f alphalens-thematic-shadow-map
+ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
+    --init --name alphalens-thematic-shadow-map \
+    --user %U:%G \
+    -e HOME=/app/home \
+    -e OPENROUTER_API_KEY \
+    -e ALPHA_VANTAGE_API_KEY \
+    -e POLYGON_API_KEY \
+    -e PERPLEXITY_API_KEY \
+    -e TELEGRAM_BOT_TOKEN \
+    -e TELEGRAM_CHAT_ID \
+    -e SEC_EDGAR_USER_AGENT \
+    -e FRED_API_KEY \
+    -e ALPHALENS_OPENROUTER_PROVIDER_ORDER \
+    -e ALPHALENS_OPENROUTER_ALLOW_FALLBACKS \
+    -e ALPHALENS_OPENROUTER_QUANTIZATIONS \
+    -e ALPHALENS_OPENROUTER_REQUIRE_PARAMETERS \
+    -e ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile \
+    -e ALPHALENS_CANONICAL_TITLE=1 \
+    -e ALPHALENS_PERPLEXITY_SOURCE=1 \
+    -e ALPHALENS_EVENT_LANE \
+    -v %h/.alphalens:/app/home/.alphalens \
+    -v /var/lib/node_exporter/textfile:/var/lib/node_exporter/textfile \
+    alphalens-pipeline:latest \
+    thematic shadow-map
+# ^ No `--entrypoint` and no leading `alphalens` token: the image ENTRYPOINT
+# already IS the alphalens CLI, so the tokens after the image name are the
+# subcommand (the 2026-05-29 verify-cache trap, pinned by test).
+
+ExecStopPost=-/usr/bin/docker rm -f alphalens-thematic-shadow-map
+# Prometheus textfile metrics, same hook as every timer-driven unit. The
+# job label matches the `emit_domain_metrics(job="thematic-shadow-map")`
+# gauges the CLI already writes (alphalens_domain_*.prom, a separate file
+# from the hook's alphalens_job_*.prom).
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics thematic-shadow-map
+
+StandardOutput=journal
+StandardError=journal
+
+# Same caps as the build unit: one mapper run over 20 themes, LLM- and
+# network-bound.
+MemoryMax=4G
+TasksMax=512
+
+# Generous on purpose. Observed 65-73 min (2026-09-05..07); earlier days
+# are unknown because the in-script collection was killed every time.
+# map_themes writes its parquet ONCE after the whole theme loop, so a
+# collection killed at minute 100 has paid the LLM for nothing and the
+# next successful build pays again from zero — a tight budget is a paying
+# loop, not a saving. 150min = ~2× the observed max. Overlap with the next
+# build slot needs a >2h build AND a >1.5h draw on the same day; even then
+# the collector writes only under ~/.alphalens/theme_shadow/, so the cost
+# is API contention, never a shared store.
+TimeoutStartSec=150min

@@ -162,6 +162,37 @@ groups:
           summary: "thematic-build success metric missing"
           description: "No success metric for thematic-build. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
 
+      # thematic-shadow-map (#1330): the shadow-arm collector, activated by
+      # OnSuccess= on thematic-build (no timer of its own). It draws once
+      # per day and exits 0 with "already collected" on the other slots, so
+      # last_success follows every successful build (up to 6×/day). 172800s
+      # = 48h = 2× the daily collection cadence, the form4-incremental /
+      # feedback-shadow-returns precedent: 48h of silence means the build
+      # has not succeeded for two days (thematic-build stale pages first)
+      # or the OnSuccess hand-off itself is gone — the case only this rule
+      # sees.
+      - alert: AlphalensJobStale
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="thematic-shadow-map"} > 172800
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-shadow-map
+        annotations:
+          summary: "thematic-shadow-map stale > 48h (expected daily collection after a successful thematic-build)"
+          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="thematic-shadow-map"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-shadow-map
+        annotations:
+          summary: "thematic-shadow-map success metric missing"
+          description: "No success metric for thematic-shadow-map. The unit has not run since it was installed (it is activated by OnSuccess= on thematic-build, so it needs one successful build first), or the textfile collector / node_exporter scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+
       # edge-mirror fires on a successful compute run (OnSuccess=) PLUS an
       # hourly self-heal timer that also covers the failure/timeout path. It is
       # the Postgres mirror for the /edge dashboard. 36h = 1.5× the 24h daily

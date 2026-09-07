@@ -11,6 +11,16 @@
 #   4. score      — Layer 4 quant scorer → ~/.alphalens/thematic_scored/
 #   5. brief      — Layer 5 brief generator → ~/.alphalens/thematic_briefs/
 #
+# NOT here: `alphalens thematic shadow-map` (the shadow-arm collection,
+# docs/research/theme_shadow_arm_contract_2026_08_23.md). It draws once per
+# day and takes 65-73 min — 4× this whole script — and until #1330 it sat
+# between map-themes and score, so the 00:30 UTC slot timed out 12 days of
+# 13 before the brief was written. It now runs in
+# deploy/systemd/alphalens-thematic-shadow-map.service, activated by
+# `OnSuccess=` on the build unit: after map-themes by construction, retried
+# on every later slot until the day is collected, never in front of the
+# product.
+#
 # The cache rebuild (parquet → Postgres) lives in the Django stack and is
 # invoked by systemd as a separate ExecStartPost step:
 #     docker compose -f deploy/docker/django-prod/docker-compose.yaml \
@@ -38,14 +48,6 @@ alphalens thematic extract
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic map-themes"
 alphalens thematic map-themes
-
-# Shadow arm (contract: docs/research/theme_shadow_arm_contract_2026_08_23.md).
-# Asks the mapper about themes the selector did NOT pick and records the answer;
-# the output never reaches a brief or a card. Idempotent per asof, so the six
-# daily slots draw once. Best-effort: a measurement must never fail the pipeline
-# that produces the actual product.
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic shadow-map (measurement, best-effort)"
-alphalens thematic shadow-map || echo "shadow-map failed; continuing (measurement only)"
 
 # Event lane (epic #1293). Detects insider purchase clusters for the brief date
 # and writes ~/.alphalens/event_candidates/<date>.parquet, which `thematic score`

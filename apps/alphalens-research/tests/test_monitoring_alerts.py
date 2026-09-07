@@ -54,6 +54,11 @@ ACTIVE_JOBS = (
     "literature-scan-weekly",
     "literature-scan-monthly",
     "thematic-build",
+    # Shadow-arm collector (#1330): OnSuccess-activated after every successful
+    # thematic-build, draws once per day and skips in seconds otherwise, so
+    # last_success refreshes up to 6×/day — staleness catches "the build has
+    # not succeeded for two days" and "the OnSuccess hand-off broke".
+    "thematic-shadow-map",
     "feedback-shadow-returns",
     "form4-incremental",
     "grouped-daily-topup",
@@ -222,6 +227,12 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             # alongside the 6×/day timer in
             # docs/research/polygon_quota_6x_per_day_2026_05_30.md.
             "thematic-build": 43200,
+            # 48h = 2× the daily collection cadence (#1330). The unit is
+            # activated by OnSuccess= on thematic-build and exits 0 on the
+            # "already collected" skips too, so last_success follows every
+            # successful build; 48h of silence means the build has not
+            # succeeded for two days or the OnSuccess hand-off is gone.
+            "thematic-shadow-map": 172800,
             # 48h = 2× the nightly cadence (Track A v2 PR-T). The job runs
             # every night at 06:30 UTC and exits 0 even on nights that price
             # 0 dates (per-ticker resilience), so last_success refreshes
