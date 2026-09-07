@@ -60,7 +60,7 @@ Environment=ALPHALENS_SAXO_STREAM_SESSION_GATE=1
 # with the broker-manager drop-ins (43-/52-stream-venues.conf): the reader
 # serves both daemons, and a narrower window here would hold the socket closed
 # exactly when a European watch needs quotes.
-Environment=ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR,XETR
+Environment=ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR,XETR,XPAR
 
 # Node_exporter textfile dir for the reader's own gauges (job "price-reader")
 # and the stream's (job "live-price-stream-reader").

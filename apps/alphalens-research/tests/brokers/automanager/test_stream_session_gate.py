@@ -194,6 +194,24 @@ class TestMultiVenueSessionWindow(unittest.TestCase):
             self._in_window("XNYS,XWAR,XETR", dt.datetime(2026, 12, 24, 18, 11, tzinfo=dt.UTC))
         )
 
+    def test_xpar_holds_the_hull_open_on_christmas_eve(self):
+        # #1355: 2026-12-24 — XETR and XWAR closed, Euronext Paris runs a half
+        # session 08:00-13:05 UTC (CET), XNYS 14:30-18:00 UTC. With XPAR in
+        # the set the hull opens at 07:45 and spans the European-to-US gap;
+        # without it the same morning instant is outside — the case that
+        # DISCRIMINATES the new venue (on a plain summer Tuesday the XPAR and
+        # XETR hulls coincide). The evening bound is untouched: XPAR closes
+        # long before the US half-day close + grace.
+        venues = "XNYS,XWAR,XETR,XPAR"
+        self.assertFalse(self._in_window(venues, dt.datetime(2026, 12, 24, 7, 44, tzinfo=dt.UTC)))
+        self.assertTrue(self._in_window(venues, dt.datetime(2026, 12, 24, 7, 46, tzinfo=dt.UTC)))
+        self.assertTrue(self._in_window(venues, dt.datetime(2026, 12, 24, 9, 0, tzinfo=dt.UTC)))
+        self.assertFalse(
+            self._in_window("XNYS,XWAR,XETR", dt.datetime(2026, 12, 24, 9, 0, tzinfo=dt.UTC))
+        )
+        self.assertTrue(self._in_window(venues, dt.datetime(2026, 12, 24, 13, 30, tzinfo=dt.UTC)))
+        self.assertFalse(self._in_window(venues, dt.datetime(2026, 12, 24, 18, 11, tzinfo=dt.UTC)))
+
     def test_no_venue_trading_is_false_all_day(self):
         self.assertFalse(
             self._in_window("XNYS,XWAR", dt.datetime(2026, 8, 16, 12, 0, tzinfo=dt.UTC))
