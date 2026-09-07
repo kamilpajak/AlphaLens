@@ -101,10 +101,61 @@ be calibrated from these numbers. LIVE XWAR remains gated on the #1235
 prerequisites (P1 entitlement, `ALPHALENS_SAXO_STREAM_SESSION_VENUES`, fee
 confirmation).
 
+## T+2 settlement re-poll (2026-09-07, #1253)
+
+Read-only re-poll of the closed CDR pair on the SIM client (T+2 was
+2026-09-05; the read ran on the next attended session, 2026-09-07 ~11:00
+CEST). Endpoints: `/port/v1/closedpositions`, `/port/v1/balances`,
+`/port/v1/exposure/currency/me`. Two reads exist (2026-09-03 pre-settlement,
+2026-09-07), so every "flipped" below means "between those two reads", not
+"at T+2".
+
+| Check | 2026-09-03 | 2026-09-07 |
+|-------|------------|------------|
+| `ConversionRateInstrumentToBaseSettledOpening` | `false` | **`true`** |
+| `ConversionRateInstrumentToBaseSettledClosing` | `false` | **`true`** |
+| PLN line on `/exposure/currency/me` | −151.00 PLN | **gone** (EUR line only) |
+| `CostOpeningInBaseCurrency` / `CostClosingInBaseCurrency` | not recorded in the 09-03 read | −17.36 EUR each (75 PLN per side) |
+| `ProfitLossOnTradeInBaseCurrency` | −0.231007 EUR (= open-time rate 4.3289) | −0.23145 EUR |
+| `ProfitLossCurrencyConversion` | 0.0 | 0.0 |
+
+**Effective settlement conversion rate: EURPLN ≈ 4.3206, reconstructed
+only.** The `closedpositions` payload carries NO numeric conversion-rate
+field (full-row dump checked: the two `Settled*` booleans are the only
+conversion keys), so the rate comes from 1 PLN / 0.23145 EUR = 4.3206
+(cross-check 75 PLN / 17.36 EUR = 4.3203, commission rounded to cents).
+Magnitude sanity: the SIM EURPLN mid was 4.32795 on 09-03 and 4.30913 on
+09-07 (`get_fx_rate`), and 4.3206 sits between — consistent with a fixing on
+or around 09-05. Whether Saxo used the T+2 fixing or a close-day EOD rate is
+NOT observable from the payload. `ProfitLossCurrencyConversion` stays 0.0
+because that field measures the open→close FX move (same session here); it
+says nothing about the settlement rate.
+
+Settled EUR debit implied by the closed row: 2 × 17.36 + 0.23145 =
+**34.95 EUR** (the estimate was ~34.9 EUR). It could NOT be isolated in
+`CashBalance` (977 302.79 → 909 370.49 EUR; the account had 14 net positions
+and 12 working orders at read time, so the balance delta is not attributable
+to this pair from the balance alone). The evidence that the conversion
+booked is therefore: both `Settled*` booleans `true` + base-currency cost
+stamps present + the PLN exposure line gone — not a cash-ledger entry.
+
+Two SIM gotchas met while looking for a ledger entry:
+
+- `/hist/v1/transactions` returned `__count: 0` for 2026-09-01..07 on SIM
+  (with `$top=500`) — the SIM account does not expose a transaction ledger.
+- `/cs/v1/reports/{trades,closedpositions}/{ClientKey}` on SIM return
+  **canned fixture rows from other accounts** (an AUD FX spot trade dated
+  2015, DKK CFD closes dated 2017) — unusable for reconciliation on SIM;
+  `/cs/v1/reports/bookedamounts/…` is a 404.
+- Caution on reading the booleans as "T+2 happened": the other closed pair
+  on the account (uic 16135, an EUR-denominated instrument closed on Friday
+  2026-09-04, i.e. T+1 at read time) also shows both `Settled*` booleans
+  `true` — a same-currency pair is trivially settled, so the flag is a
+  conversion-state marker, not a settlement-date clock.
+
 ## Follow-ups
 
-- Re-poll the closed CDR pair on/after 2026-09-05 (T+2): confirm the
-  `ConversionRateInstrumentToBaseSettled*` booleans flip and the EUR cash
-  debit books.
+- ~~Re-poll the closed CDR pair on/after 2026-09-05 (T+2)~~ — done
+  2026-09-07, see the settlement section above (#1253).
 - #1252: rename the journal `brief_date` key to `trade_date` (operator
   confusion observed live during this session).
