@@ -1,0 +1,3 @@
+🔥 <b>[FIRING]</b> <b>AlphalensJobMetricMissing</b> — render fixture: &lt;34% &amp; brief_status=unavailable
+No success metric for thematic-build. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run.
+Check `journalctl --user -u alphalens-smoke.service` on the VPS; stayed &gt; 0 *ok* [x]

@@ -125,12 +125,62 @@ echo "$TELEGRAM_BOT_TOKEN" | sudo tee /etc/alphalens/telegram_bot_token >/dev/nu
 sudo chmod 640 /etc/alphalens/telegram_bot_token
 sudo chown root:"$(id -gn)" /etc/alphalens/telegram_bot_token
 
-# 2. Replace the placeholder chat_id in the committed config with the
-#    real value. NOT a secret; leaking a chat_id without the bot
-#    token does nothing.
-sed -i "s/-1001234567890/$TELEGRAM_CHAT_ID/" \
-    ~/AlphaLens/deploy/monitoring/alertmanager/config.yaml
+# 2. The committed config carries a placeholder chat_id; the deploy
+#    recipe below substitutes the real value (from /etc/alphalens/env)
+#    into the LIVE copy. NOT a secret; leaking a chat_id without the
+#    bot token does nothing. Never sed the repo copy in place — it
+#    shows up as a permanent local diff.
 ```
+
+### Deploy the Alertmanager config (live path is OUTSIDE the repo)
+
+The container mounts the DIRECTORY `~/monitoring/alertmanager` at
+`/etc/alertmanager` (verify with `docker inspect alertmanager`), so the
+live files are `~/monitoring/alertmanager/alertmanager.yml` +
+`telegram.tmpl` + `telegram_bot_token` — hand-copied from the repo, not
+bind-mounted from it. Every change to `config.yaml` or `telegram.tmpl`
+is deployed like this (both files travel together: the config names the
+template by its in-container path `/etc/alertmanager/telegram.tmpl`):
+
+```bash
+D=~/monitoring/alertmanager; R=~/AlphaLens/deploy/monitoring/alertmanager
+set -a; . /etc/alphalens/env; set +a          # TELEGRAM_CHAT_ID
+cd ~/AlphaLens && git pull --ff-only
+cp "$D/alertmanager.yml" "$D/alertmanager.yml.bak-$(date +%F)"
+cp "$R/telegram.tmpl" "$D/telegram.tmpl"
+sed "s/-1001234567890/$TELEGRAM_CHAT_ID/" "$R/config.yaml" > "$D/alertmanager.yml.new"
+mv "$D/alertmanager.yml.new" "$D/alertmanager.yml"   # same directory: atomic rename
+docker exec alertmanager amtool check-config /etc/alertmanager/alertmanager.yml   # expect "1 templates"
+docker exec alertmanager kill -HUP 1
+docker logs --since 2m alertmanager | grep -i -E "Completed loading|error"
+```
+
+A failed reload keeps the OLD config running (Alertmanager logs the
+error and carries on), so always read the log line after the HUP.
+
+### Annotations are free text — the template does the escaping (#1345)
+
+The receiver sends with `parse_mode: HTML`. In that mode Alertmanager
+renders `telegram.tmpl` through Go `html/template`, which escapes
+`<`, `>` and `&` on insertion, so a rule description may say
+"stayed > 0" or name `node_exporter` as-is. Rules:
+
+- Write annotations as plain prose. Backtick pairs and `*` show up
+  literally (no code spans, no bold) — that is deliberate.
+- Never add `safeHtml`, `reReplaceAll` or hand-built tags to the
+  template; the only HTML in it is the static `<b>` around the status
+  and alertname. `safeHtml` switches the escaping off and re-opens the
+  failure this replaced: with the old `parse_mode: Markdown`, every
+  bare `_` in a description started an unterminated italic and Telegram
+  rejected the whole message ("can't parse entities") — 7191 failed
+  notify attempts for `AlphalensJobMetricMissing` alone, no page.
+- Telegram truncates at 4096 runes. A group of many alerts under one
+  alertname can be cut mid-entity; keep descriptions short.
+- Gate: `just lint-alertmanager` (or the CI `prom-rules` job) runs
+  `amtool check-config` plus `amtool template render --template.type=html`
+  on `render_fixture.json` and diffs against `render_expected.txt`. After
+  an intended template change, regenerate the expectation with the
+  render command minus `| diff` and commit it.
 
 ### Wire the configs into the existing containers
 
@@ -155,11 +205,12 @@ docker run -d --name prometheus \
 # Reload after editing the YAML in place:
 docker exec prometheus kill -HUP 1
 
-# Alertmanager — bind mount both the config + the bot_token file.
+# Alertmanager — bind mount the config DIRECTORY (alertmanager.yml +
+# telegram.tmpl + telegram_bot_token live there; see "Deploy the
+# Alertmanager config" above for how the repo files get into it).
 docker run -d --name alertmanager \
-    --restart always --net host \
-    -v ~/AlphaLens/deploy/monitoring/alertmanager/config.yaml:/etc/alertmanager/alertmanager.yml:ro \
-    -v /etc/alphalens/telegram_bot_token:/etc/alertmanager/telegram_bot_token:ro \
+    --restart unless-stopped --net host \
+    -v ~/monitoring/alertmanager:/etc/alertmanager:ro \
     prom/alertmanager:latest \
     --config.file=/etc/alertmanager/alertmanager.yml \
     --web.listen-address=:9093

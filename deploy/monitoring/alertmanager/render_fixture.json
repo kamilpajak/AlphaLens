@@ -1,0 +1,17 @@
+{
+  "status": "firing",
+  "commonLabels": {"alertname": "AlphalensJobMetricMissing"},
+  "commonAnnotations": {"summary": "render fixture: <34% & brief_status=unavailable"},
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {"job": "thematic-build"},
+      "annotations": {"description": "No success metric for thematic-build. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."}
+    },
+    {
+      "status": "firing",
+      "labels": {"job": "smoke"},
+      "annotations": {"description": "Check `journalctl --user -u alphalens-smoke.service` on the VPS; stayed > 0 *ok* [x]"}
+    }
+  ]
+}

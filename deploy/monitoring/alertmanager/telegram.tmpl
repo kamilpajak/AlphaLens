@@ -1,0 +1,21 @@
+{{/*
+Telegram message body for the `telegram` receiver in config.yaml
+(parse_mode: HTML). Loaded through `templates:`, so amtool can lint and
+render it straight from this file — see `just lint-alertmanager` and the
+prom-rules CI job.
+
+Annotations are FREE TEXT. In HTML mode Alertmanager renders through Go
+html/template, which escapes `<`, `>` and `&` on insertion, so a
+description may say "stayed > 0" or name `node_exporter` safely. Keep it
+that way (#1345):
+  - never pipe a value through `safeHtml` — it switches the escaping off;
+  - never build tags from annotation text (reReplaceAll and friends) —
+    the output is escaped anyway and shows up as literal `&lt;code&gt;`;
+  - the only HTML here is the static <b> around the status and alertname.
+Backtick pairs in descriptions render literally by design (legacy
+Markdown, which made them code spans, is what rejected every message
+containing an unpaired `_` — 7191 failed notify attempts).
+*/}}
+{{ define "alphalens.telegram.message" }}{{ if eq .Status "firing" }}🔥 <b>[FIRING]</b>{{ else }}✅ <b>[RESOLVED]</b>{{ end }} <b>{{ .CommonLabels.alertname }}</b> — {{ .CommonAnnotations.summary }}
+{{ range .Alerts }}{{ .Annotations.description }}
+{{ end }}{{ end }}

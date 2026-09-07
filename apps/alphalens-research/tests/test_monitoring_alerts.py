@@ -40,6 +40,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 MONITORING_DIR = REPO_ROOT / "deploy" / "monitoring"
 RULES_PATH = MONITORING_DIR / "prometheus" / "rules" / "alphalens.yaml"
 ALERTMANAGER_PATH = MONITORING_DIR / "alertmanager" / "config.yaml"
+TELEGRAM_TEMPLATE_PATH = MONITORING_DIR / "alertmanager" / "telegram.tmpl"
+# The Alertmanager container mounts the config directory at this path, so the
+# ``templates:`` entry names the template by its IN-CONTAINER location.
+TELEGRAM_TEMPLATE_CONTAINER_PATH = "/etc/alertmanager/telegram.tmpl"
+TELEGRAM_TEMPLATE_NAME = "alphalens.telegram.message"
 DASHBOARD_PATH = MONITORING_DIR / "grafana" / "dashboards" / "alphalens-cron-health.json"
 
 # Active jobs that emit alphalens_job_* metrics from PR-2. Form-4 is
@@ -112,6 +117,19 @@ def _load_rules() -> dict:
 
 def _load_alertmanager() -> dict:
     return yaml.safe_load(ALERTMANAGER_PATH.read_text())
+
+
+_GO_TEMPLATE_COMMENT_RE = re.compile(r"\{\{/\*.*?\*/\}\}", re.DOTALL)
+
+
+def _load_telegram_template() -> str:
+    """The template with its ``{{/* ... */}}`` comments stripped.
+
+    The header comment names the constructs the tests forbid (so the next
+    editor learns why they are forbidden); only executable template text
+    counts.
+    """
+    return _GO_TEMPLATE_COMMENT_RE.sub("", TELEGRAM_TEMPLATE_PATH.read_text())
 
 
 def _load_dashboard() -> dict:
@@ -497,17 +515,73 @@ class TestAlertmanagerConfig(unittest.TestCase):
         # alert status. Caught during VPS cutover 2026-05-30 smoke
         # test — first resolved notification read identically to the
         # original firing one.
-        cfg = _load_alertmanager()
-        tg = cfg["receivers"][0]["telegram_configs"][0]
-        msg = tg.get("message", "")
+        tmpl = _load_telegram_template()
         self.assertIn(
             'eq .Status "firing"',
-            msg,
+            tmpl,
             "Telegram message template must branch on .Status so resolved "
             "notifications are visually distinct from firing ones.",
         )
-        self.assertIn("[FIRING]", msg)
-        self.assertIn("[RESOLVED]", msg)
+        self.assertIn("[FIRING]", tmpl)
+        self.assertIn("[RESOLVED]", tmpl)
+
+    # ------------------------------------------------------------------
+    # #1345 — the receiver used ``parse_mode: Markdown`` (legacy) and pasted
+    # annotations verbatim. Legacy Markdown reads a bare ``_`` as the start of
+    # italic, so every description mentioning ``node_exporter`` made Telegram
+    # reject the whole message ("can't parse entities") — 7191 failed notify
+    # attempts for AlphalensJobMetricMissing alone, first seen 2026-05-31.
+    # In ``parse_mode: HTML`` Alertmanager renders through Go html/template,
+    # which escapes ``< > &`` on insertion; the template therefore needs NO
+    # escaping logic of its own, and must not add any (``safeHtml`` would
+    # switch the auto-escape off and re-open the same failure class).
+    # ------------------------------------------------------------------
+    def test_parse_mode_is_html(self) -> None:
+        cfg = _load_alertmanager()
+        tg = cfg["receivers"][0]["telegram_configs"][0]
+        self.assertEqual(
+            tg.get("parse_mode"),
+            "HTML",
+            "Telegram receiver must use parse_mode HTML: only that mode "
+            "escapes annotation text on insertion (#1345).",
+        )
+
+    def test_message_delegates_to_the_versioned_template_file(self) -> None:
+        # The message body lives in telegram.tmpl so amtool can lint AND render
+        # it in CI straight from the file (no YAML extraction step to rot).
+        cfg = _load_alertmanager()
+        self.assertIn(
+            TELEGRAM_TEMPLATE_CONTAINER_PATH,
+            cfg.get("templates", []),
+            "config.yaml must load the Telegram template file via `templates:`.",
+        )
+        tg = cfg["receivers"][0]["telegram_configs"][0]
+        self.assertEqual(
+            tg.get("message"),
+            f'{{{{ template "{TELEGRAM_TEMPLATE_NAME}" . }}}}',
+            "message: must delegate to the named template and carry no body of its own.",
+        )
+        self.assertIn(
+            f'define "{TELEGRAM_TEMPLATE_NAME}"',
+            _load_telegram_template(),
+        )
+
+    def test_template_inserts_annotations_bare_and_never_disables_escaping(self) -> None:
+        tmpl = _load_telegram_template()
+        self.assertIn("{{ .CommonAnnotations.summary }}", tmpl)
+        self.assertIn("{{ .Annotations.description }}", tmpl)
+        for forbidden in ("safeHtml", "reReplaceAll"):
+            self.assertNotIn(
+                forbidden,
+                tmpl,
+                f"{forbidden} would bypass or duplicate html/template escaping (#1345).",
+            )
+
+    def test_template_uses_html_bold_not_markdown(self) -> None:
+        tmpl = _load_telegram_template()
+        self.assertIn("<b>[FIRING]</b>", tmpl)
+        self.assertIn("<b>[RESOLVED]</b>", tmpl)
+        self.assertNotIn("*[FIRING]*", tmpl)
 
     def test_group_by_includes_alertname_and_job(self) -> None:
         # Without job in group_by, two stale alerts on different jobs

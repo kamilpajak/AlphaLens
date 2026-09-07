@@ -10,16 +10,22 @@
 # Alertmanager container + drop the bot token into
 # ``/etc/alphalens/telegram_bot_token`` (chmod 640, root:operator).
 #
-# Lint locally:
-#     amtool check-config deploy/monitoring/alertmanager/config.yaml
+# Lint + render locally (same pinned amtool image as CI):
+#     just lint-alertmanager
 #
 # Pre-merge test coverage at
 # ``apps/alphalens-research/tests/test_monitoring_alerts.py`` —
 # YAML well-formed, telegram_configs present, bot_token sourced from
-# file (not inline).
+# file (not inline), parse_mode HTML + message delegated to telegram.tmpl.
 
 global:
   resolve_timeout: 5m
+
+# The message body lives in telegram.tmpl next to this file. The container
+# mounts the whole config directory at /etc/alertmanager, so the path below
+# is the IN-CONTAINER one (deploy copies both files, see the README).
+templates:
+  - /etc/alertmanager/telegram.tmpl
 
 route:
   # Default receiver — every alert lands here. Group by job so a
@@ -49,13 +55,16 @@ receivers:
         # the runbook in ``deploy/monitoring/README.md`` §"Alertmanager
         # wiring" for the one-line ``sed`` to substitute the real ID.
         chat_id: -1001234567890  # OPERATOR: replace with TELEGRAM_CHAT_ID
-        # Prefix the message with the alert STATUS so the operator can
-        # tell firing from resolved at a glance — the same Telegram
-        # chat carries both. Without the prefix every resolved
-        # notification reads identically to the original firing one
-        # (caught during VPS cutover 2026-05-30 smoke test).
-        message: |
-          {{ if eq .Status "firing" }}🔥 *[FIRING]*{{ else }}✅ *[RESOLVED]*{{ end }} *{{ .CommonLabels.alertname }}* — {{ .CommonAnnotations.summary }}
-          {{ range .Alerts }}{{ .Annotations.description }}
-          {{ end }}
-        parse_mode: Markdown
+        # Body in telegram.tmpl (status prefix so firing and resolved
+        # read differently — caught during the 2026-05-30 cutover smoke
+        # test — plus alertname, summary, one description per alert).
+        message: '{{ template "alphalens.telegram.message" . }}'
+        # HTML, not Markdown (#1345). Legacy Markdown read every bare `_`
+        # in a description (node_exporter, brief_status, ...) as the start
+        # of italic and Telegram rejected the whole message — the pages
+        # for thematic-build / form4-incremental MetricMissing never
+        # arrived. In HTML mode Alertmanager renders via html/template,
+        # which escapes < > & on insertion, so annotations stay free text
+        # and the template carries no escaping logic. MarkdownV2 was not
+        # chosen: it also needs `.`, `-` and `(` escaped.
+        parse_mode: HTML

@@ -418,6 +418,35 @@ jobs:
             -v "$PWD/deploy/monitoring/prometheus/rules:/r:ro" -w /r \
             prom/prometheus:v3.3.1 test rules /r/alphalens_test.yaml /r/alphalens_broker_test.yaml
 
+      # Alertmanager side of the same gate (#1345). `check-config` proves the
+      # config + telegram.tmpl LOAD (Alertmanager keeps the old config on a
+      # failed SIGHUP reload, silently). `template render --template.type=html`
+      # proves what Telegram will RECEIVE: it runs the same Go html/template
+      # path as the notifier, so the diff against render_expected.txt pins
+      # that annotations with `_ < > & *` and backticks come out escaped and
+      # intact. Legacy Markdown had rejected every message with a bare `_`
+      # (7191 failed notify attempts, no page). Image pinned to the VPS
+      # Alertmanager version; parity pinned by
+      # tests/test_amtool_render_parity.py.
+      - name: amtool check-config
+        run: |
+          docker run --rm \
+            --entrypoint amtool \
+            -v "$PWD/deploy/monitoring/alertmanager:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.28.1 check-config /etc/alertmanager/config.yaml
+
+      - name: amtool template render
+        run: |
+          docker run --rm \
+            --entrypoint amtool \
+            -v "$PWD/deploy/monitoring/alertmanager:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.28.1 template render \
+              --template.type=html \
+              --template.glob=/etc/alertmanager/telegram.tmpl \
+              --template.data=/etc/alertmanager/render_fixture.json \
+              --template.text='{{ template "alphalens.telegram.message" . }}' \
+            | diff - deploy/monitoring/alertmanager/render_expected.txt
+
   sonar:
     name: sonarcloud
     needs: [research, django, web]

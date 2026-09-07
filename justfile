@@ -50,6 +50,25 @@ test-rules:
         -v "$PWD/deploy/monitoring/prometheus/rules:/r:ro" -w /r \
         prom/prometheus:v3.3.1 test rules /r/alphalens_test.yaml /r/alphalens_broker_test.yaml
 
+# Lint the Alertmanager config + RENDER the Telegram template through the same
+# html/template path the notifier uses, diffing against render_expected.txt
+# (#1345: legacy Markdown rejected every message with a bare `_`). Same pinned
+# image as the CI prom-rules job; parity pinned by
+# tests/test_amtool_render_parity.py. To refresh the expectation after an
+# intended template change: rerun the render without `| diff` and commit it.
+lint-alertmanager:
+    docker run --rm --entrypoint amtool \
+        -v "$PWD/deploy/monitoring/alertmanager:/etc/alertmanager:ro" \
+        prom/alertmanager:v0.28.1 check-config /etc/alertmanager/config.yaml
+    docker run --rm --entrypoint amtool \
+        -v "$PWD/deploy/monitoring/alertmanager:/etc/alertmanager:ro" \
+        prom/alertmanager:v0.28.1 template render \
+            --template.type=html \
+            --template.glob=/etc/alertmanager/telegram.tmpl \
+            --template.data=/etc/alertmanager/render_fixture.json \
+            --template.text='{{ template "alphalens.telegram.message" . }}' \
+        | diff - deploy/monitoring/alertmanager/render_expected.txt
+
 # Format Python (all members)
 fmt:
     uv run ruff format apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
