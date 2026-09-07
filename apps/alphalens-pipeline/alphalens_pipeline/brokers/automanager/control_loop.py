@@ -391,6 +391,11 @@ class LoopDeps:
     # (one extra clean tick, fail-safe). Frozen forbids REBINDING the field,
     # not mutating the set it points at.
     pending_plan_retractions: set[tuple[str, int]] = field(default_factory=set)
+    # #1315: the placement drain's owner of the pass-level ``now-entry`` feed
+    # scope (see _NowEntryScope). The SAME object is baked into the
+    # ``place_pick`` closure (which holds picks on it) and carried here (the
+    # drain commits / releases it per tick). None = no now-tranche feed.
+    now_entry_scope: _NowEntryScope | None = None
     # Entry-trailing watcher runtimes (PR-T1, DRY-RUN): crid -> the daemon-
     # lifetime state for ONE open entry-tier watch (the stateful engine watcher
     # + its measurement marks). A MUTABLE dict on the (frozen-field) deps — built
@@ -697,8 +702,7 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # inline retire self-heals here; idempotent, quiet in steady state).
     _sweep_owed_sibling_retires(deps, report)
 
-    if not kill and alive:
-        _run_placement_drain(deps, report)
+    _run_placement_drain(deps, report, enabled=not kill and alive)
 
     # Entry-trailing watcher pass (PR-T1, DRY-RUN): advance each open watch's
     # state machine off the shared INC-2 price stream. KILL-GATED internally
@@ -768,7 +772,20 @@ def _run_orphan_sweep(deps: LoopDeps, report: TickReport) -> None:
         report.orphans += 1
 
 
-def _run_placement_drain(deps: LoopDeps, report: TickReport) -> None:
+def _run_placement_drain(deps: LoopDeps, report: TickReport, *, enabled: bool) -> None:
+    # #1315: the drain OWNS the pass-level now-entry feed scope. Gated (KILL /
+    # dead chain) releases it — the precedent every other pass follows on its
+    # early returns (_release_feed_scope); otherwise the tick's visits hold
+    # their picks on it and the commit below writes the still-pending union,
+    # dropping any pick retired outside the now-tranche code (disarm, a
+    # pre-routing terminal refusal) at THIS tick end, not at restart.
+    scope = deps.now_entry_scope
+    if not enabled:
+        if scope is not None:
+            scope.release()
+        return
+    if scope is not None:
+        scope.begin_tick()
     # Drain only picks NOT yet joined to submissions.jsonl (design §Data-flow
     # step 4). Read the journal ONCE before the drain — this snapshot is the
     # CROSS-tick join (an out-of-tick placement is caught by the next tick's
@@ -787,6 +804,8 @@ def _run_placement_drain(deps: LoopDeps, report: TickReport) -> None:
         placed_this_tick.add(key)
         if deps.place_pick(pick):
             report.picks_placed += 1
+    if scope is not None:
+        scope.commit()
 
 
 def _run_verdict_advance(
@@ -4930,6 +4949,10 @@ def build_default_deps(
     # below (mirroring build_protection_view) and carried on LoopDeps for the
     # entry-trail reconcile pass; run_once resets it at every tick start.
     audit_budget = OutcomeAuditBudget()
+    # #1315: ONE now-entry scope owner shared by the place_pick closure (holds)
+    # and the drain (commit / release), over the same live feed factory the
+    # exit / entry-watch passes use.
+    now_entry_scope = _NowEntryScope(_default_live_exits_feed_factory)
 
     return LoopDeps(
         broker=broker,
@@ -4944,8 +4967,8 @@ def build_default_deps(
             day1_gap_price_probe=day1_gap_probe,
             audit_budget=audit_budget,
             # #1247: the now tranche's marketability gate reads the SAME live
-            # feed the exit/entry-watch passes use (per-uic now-entry scope).
-            now_entry_feed_factory=_default_live_exits_feed_factory,
+            # feed the exit/entry-watch passes use (pass-level now-entry scope).
+            now_entry_scope=now_entry_scope,
         ),
         read_records=_read_records,
         verdicts_fn=functools.partial(reconcile_bridge.verdicts, audit_budget=audit_budget),
@@ -4968,6 +4991,7 @@ def build_default_deps(
         live_exits_feed_factory=_default_live_exits_feed_factory,
         day1_gap_price_probe=day1_gap_probe,
         audit_budget=audit_budget,
+        now_entry_scope=now_entry_scope,
     )
 
 
@@ -6816,7 +6840,7 @@ def _make_place_pick(
     alert_throttled: Callable[[str, str], bool] | None = None,
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
     audit_budget: OutcomeAuditBudget | None = None,
-    now_entry_feed_factory: Callable[..., Any] | None = None,
+    now_entry_scope: _NowEntryScope | None = None,
 ) -> Callable[[Any], bool]:
     """Compose safety.check -> placement_planner.classify -> placer loop over
     place_bracket_order + the submissions journal for one armed pick, plus the
@@ -6855,7 +6879,7 @@ def _make_place_pick(
             alert_throttled=alert_throttled,
             day1_gap_price_probe=day1_gap_price_probe,
             audit_budget=audit_budget,
-            now_entry_feed_factory=now_entry_feed_factory,
+            now_entry_scope=now_entry_scope,
         )
 
     return _place
@@ -8620,11 +8644,80 @@ def _entry_trail_intercept(
 # --- Immediate ("now") tranche (#1247, memo docs/research/
 # arm_manual_immediate_entry_design_2026_09_03.md) ---------------------------
 
-# Per-uic feed scope for the now tranche's marketability gate. Per-uic so two
-# concurrent now picks never clobber each other's subscription slice; a DEFER
-# deliberately KEEPS the subscription (a fresh subscribe's snapshot arrives
-# async — release-on-defer would starve the gate forever).
-_FEED_SCOPE_NOW_ENTRY_PREFIX = "now-entry"
+# The now tranche's marketability gate reads the shared price feed under ONE
+# pass-level scope, owned by the placement drain (#1315). It used to be one
+# scope PER uic, released only on the now tranche's own placed/refused paths —
+# so a pick retired anywhere else (disarm, a pre-routing terminal refusal) kept
+# its uic subscribed until the daemon restarted, and one delayed uic pinned
+# ``any_delayed`` on the shared reader (a false demotion page + reclaim burn).
+_FEED_SCOPE_NOW_ENTRY = "now-entry"
+
+
+class _NowEntryScope:
+    """Owner of the pass-level ``now-entry`` slice of the shared price feed.
+
+    Keyed by PICK (``"TICKER:trade_date"``), not by uic: two armed picks on
+    the same ticker with different dates share a uic, and placing one must
+    not unsubscribe the other's still-deferred now tranche.
+
+    Tick protocol (the drain drives it): ``begin_tick`` → the now-tranche
+    code calls ``feed_for`` for every pick it visits (a DEFER deliberately
+    keeps the pick held — a fresh subscribe's snapshot arrives async, so
+    release-on-defer would starve the gate) and ``drop`` for one it placed
+    or refused → ``commit`` writes the union of picks still pending. A pick
+    that left the queue is never visited, so it falls out at the commit.
+    ``release`` (drain gated by KILL / dead chain) writes the empty set.
+
+    Mid-tick writes carry the previous commit's picks too, so an earlier
+    pick's write never clobbers a later pick's subscription (the reason the
+    per-uic scopes existed). ``begin_tick`` MERGES rather than replaces the
+    carry: a tick aborted by an exception before its commit must not forget
+    the picks it never reached.
+
+    Every factory call is best-effort (``_release_feed_scope`` precedent): a
+    failed write is retried by the next tick's writes, never a tick-killer;
+    a failed ``feed_for`` returns ``None`` so the caller defers as it does
+    for any unreadable quote."""
+
+    def __init__(self, feed_factory: Callable[..., Any]) -> None:
+        self._factory = feed_factory
+        # pick_key -> (uic, ticker, exchange_mic)
+        self._carry: dict[str, tuple[int, str, str]] = {}
+        self._held: dict[str, tuple[int, str, str]] = {}
+
+    def begin_tick(self) -> None:
+        self._carry = {**self._carry, **self._held}
+        self._held = {}
+
+    def feed_for(self, pick_key: str, uic: int, ticker: str, exchange_mic: str) -> Any | None:
+        self._held[pick_key] = (uic, ticker, exchange_mic)
+        return self._write({**self._carry, **self._held})
+
+    def drop(self, pick_key: str) -> None:
+        self._held.pop(pick_key, None)
+        self._carry.pop(pick_key, None)
+
+    def commit(self) -> None:
+        self._write(self._held)
+        self._carry = {}
+
+    def release(self) -> None:
+        self._held = {}
+        self._carry = {}
+        self._write({})
+
+    def _write(self, picks: Mapping[str, tuple[int, str, str]]) -> Any | None:
+        import contextlib
+
+        uic_to_instrument = {uic: (ticker, mic) for uic, ticker, mic in picks.values()}
+        with contextlib.suppress(Exception):
+            return self._factory(uic_to_instrument, scope=_FEED_SCOPE_NOW_ENTRY)
+        return None
+
+
+def _drop_now_scope(now_entry_scope: _NowEntryScope | None, pick_key: str) -> None:
+    if now_entry_scope is not None:
+        now_entry_scope.drop(pick_key)
 
 
 class _NowOutcome(enum.Enum):
@@ -8803,7 +8896,7 @@ def _handle_now_tranche(
     exit_spec: Any,
     exit_policy: ExitPolicy | None,
     alert_throttled: Callable[[str, str], bool] | None,
-    now_entry_feed_factory: Callable[..., Any] | None,
+    now_entry_scope: _NowEntryScope | None,
     tranche_plan_override: tuple[str, float],
 ) -> _NowOutcome:
     """The immediate tranche's drain: idempotency scan → cap floor → cost
@@ -8833,13 +8926,13 @@ def _handle_now_tranche(
         )
         return _NowOutcome.REFUSED_PICK
     uic = int(instrument.broker_instrument_id)
-    scope = f"{_FEED_SCOPE_NOW_ENTRY_PREFIX}:{uic}"
-    point = _read_now_quote(now_entry_feed_factory, uic, ticker, instrument.exchange_mic, scope)
+    pick_key = tranche_plan_override[0]
+    point = _read_now_quote(now_entry_scope, pick_key, uic, ticker, instrument.exchange_mic)
     if point is None:
         # Feed off / outage / halt / stale (memo §3.6): non-terminal — the
         # whole pick stays armed and retries next tick; the page names the
-        # config lever so a mis-set env is visible. Subscription kept (see
-        # _FEED_SCOPE_NOW_ENTRY_PREFIX).
+        # config lever so a mis-set env is visible. The pick stays HELD on
+        # the now-entry scope (see _NowEntryScope).
         if alert_throttled is not None:
             alert_throttled(
                 f"now tranche {ticker}: no real-time quote (feed off/outage/halt/stale) — "
@@ -8847,16 +8940,6 @@ def _handle_now_tranche(
                 f"now-noprice:{ticker}",
             )
         return _NowOutcome.DEFER
-
-    factory = now_entry_feed_factory
-
-    def _release_scope() -> None:
-        import contextlib
-
-        if factory is None:
-            return
-        with contextlib.suppress(Exception):
-            factory({}, scope=scope)
 
     if float(point.ask) > submitted_cap:
         _refuse_now_above_cap(
@@ -8866,7 +8949,7 @@ def _handle_now_tranche(
             submitted_cap=submitted_cap,
             alert_throttled=alert_throttled,
         )
-        _release_scope()
+        _drop_now_scope(now_entry_scope, pick_key)
         return _NowOutcome.REFUSED_NOW
     duration = "ioc" if _now_ioc_supported(broker, instrument) else "day"
     # cast, not an annotation: replace() preserves its input type at runtime,
@@ -8877,7 +8960,7 @@ def _handle_now_tranche(
     placement = classify(now_plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:
         logger.warning("place_pick %s: now tranche sized to zero shares", ticker)
-        _release_scope()
+        _drop_now_scope(now_entry_scope, pick_key)
         return _NowOutcome.REFUSED_NOW
 
     def _classify_error(exc: Any) -> str:
@@ -8897,7 +8980,7 @@ def _handle_now_tranche(
         tranche_plan_override=tranche_plan_override,
         on_broker_error=_classify_error,
     )
-    _release_scope()
+    _drop_now_scope(now_entry_scope, pick_key)
     return _NowOutcome.PLACED if placed > 0 else _NowOutcome.REFUSED_NOW
 
 
@@ -8921,19 +9004,20 @@ def _now_already_done(records: Sequence[Mapping[str, Any]], ticker: str, intent:
 
 
 def _read_now_quote(
-    now_entry_feed_factory: Callable[..., Any] | None,
+    now_entry_scope: _NowEntryScope | None,
+    pick_key: str,
     uic: int,
     ticker: str,
     exchange_mic: Any,
-    scope: str,
 ) -> Any | None:
     """The now tranche's real-time quote off the shared feed, or ``None``
-    (feed off / read failure — the caller defers, subscription kept)."""
-    if now_entry_feed_factory is None:
+    (feed off / read failure — the caller defers, the pick stays held on
+    the now-entry scope)."""
+    if now_entry_scope is None:
         return None
     try:
-        feed = now_entry_feed_factory({uic: (ticker, exchange_mic)}, scope=scope)
-        return feed.latest(uic)
+        feed = now_entry_scope.feed_for(pick_key, uic, ticker, exchange_mic)
+        return None if feed is None else feed.latest(uic)
     except Exception:
         logger.warning("place_pick %s: now quote read failed — deferred", ticker, exc_info=True)
         return None
@@ -8995,7 +9079,7 @@ def _place_pick(
     alert_throttled: Callable[[str, str], bool] | None = None,
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
     audit_budget: OutcomeAuditBudget | None = None,
-    now_entry_feed_factory: Callable[..., Any] | None = None,
+    now_entry_scope: _NowEntryScope | None = None,
 ) -> bool:
     """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
@@ -9185,7 +9269,7 @@ def _place_pick(
         exit_spec=exit_spec,
         exit_policy=exit_policy,
         alert_throttled=alert_throttled,
-        now_entry_feed_factory=now_entry_feed_factory,
+        now_entry_scope=now_entry_scope,
     )
     if routing.early_result is not None:
         return routing.early_result
@@ -9266,7 +9350,7 @@ def _route_now_tranche(
     exit_spec: Any,
     exit_policy: ExitPolicy | None,
     alert_throttled: Callable[[str, str], bool] | None,
-    now_entry_feed_factory: Callable[..., Any] | None,
+    now_entry_scope: _NowEntryScope | None,
 ) -> _NowRouting:
     """Drain the immediate tranche (if any) and split off the pullback
     remainder — the #1247 memo §3.2/§3.5/§3.7 routing, verbatim."""
@@ -9287,7 +9371,7 @@ def _route_now_tranche(
         exit_spec=exit_spec,
         exit_policy=exit_policy,
         alert_throttled=alert_throttled,
-        now_entry_feed_factory=now_entry_feed_factory,
+        now_entry_scope=now_entry_scope,
         tranche_plan_override=(pick_key, full_ladder_qty),
     )
     if outcome in (_NowOutcome.DEFER, _NowOutcome.REFUSED_PICK):

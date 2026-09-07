@@ -167,10 +167,16 @@ Decisions taken at implementation time, within the LOCKED envelope:
 - **Feed-off / no-quote behavior:** `ALPHALENS_SAXO_LIVE_PRICES` unset (or a
   quote outage/halt/stale read) DEFERS the whole pick with a throttled page
   naming the config lever — never a terminal refusal, never a silent
-  forever-defer. The per-uic `now-entry:<uic>` feed scope is KEPT on defer (a
+  forever-defer. The now tranche's feed subscription is KEPT on defer (a
   fresh subscribe's snapshot arrives async; release-on-defer would starve the
-  gate) and released after placement/refusal. A pick disarmed mid-defer leaks
-  one scope until restart — bounded over-subscription, not a safety hazard.
+  gate). Since #1315 the subscription is ONE pass-level `now-entry` scope
+  owned by the placement drain: each tick's visits hold their picks on it,
+  placement/refusal drops the pick, and the drain's tick-end commit writes
+  the union of picks still pending — so a pick retired anywhere else
+  (disarm, a pre-routing terminal refusal) is released at that tick end,
+  never held until restart. (The original PR-C shape was one scope PER uic
+  released only on the now tranche's own paths; a disarm mid-defer then
+  pinned `any_delayed` on the shared reader — the #1315 incident.)
 - **`--no-tp` picks:** the cost gate is vacuous (logged INFO) — a stop-only
   plan has no TP1 to clear.
 - **Mixed-pick same-day re-arm limitation:** once the pullback siblings'
