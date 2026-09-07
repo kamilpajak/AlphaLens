@@ -2450,3 +2450,28 @@ class TestBothDaemonsPointAtTheReader(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStreamVenueWindowIsInLockstep(unittest.TestCase):
+    """#1355 (zen finding on PR-B): the stream session window's venue set is
+    tracked in THREE places — the SIM daemon drop-in, the LIVE daemon drop-in
+    and the shared price-reader unit — and the reader computes the hull that
+    both daemons' subscriptions live inside. Only the SIM composition had a
+    CI pin; a LIVE drop-in or reader unit drifting from it would surface
+    first on the host (the hourly drift-check), an hour late. Pin the value
+    once and the lockstep explicitly."""
+
+    VENUES = "XNYS,XWAR,XETR,XPAR"
+
+    def _reader_environment(self) -> dict[str, str]:
+        return _environment_assignments(
+            (SYSTEMD_DIR / "alphalens-saxo-price-reader.service").read_text()
+        )
+
+    def test_every_carrier_ships_the_same_venue_set(self) -> None:
+        values = {
+            "sim daemon": _sim_composed_environment()["ALPHALENS_SAXO_STREAM_SESSION_VENUES"],
+            "live daemon": _composed_environment()["ALPHALENS_SAXO_STREAM_SESSION_VENUES"],
+            "price reader": self._reader_environment()["ALPHALENS_SAXO_STREAM_SESSION_VENUES"],
+        }
+        self.assertEqual(values, dict.fromkeys(values, self.VENUES))
