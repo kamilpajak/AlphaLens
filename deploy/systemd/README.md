@@ -2164,8 +2164,8 @@ delayed GPW quote is vetoed by the live feed and `any_delayed` is
 process-wide, so one delayed subscription degrades US exits too; (2) confirm
 the account is on the Saxo Classic tier — the WSE fee card in `costs.py`
 (0.12% min 10 PLN) assumes it. The former step "set the stream venue env"
-is DONE by deploy since #1271: `ALPHALENS_SAXO_STREAM_SESSION_VENUES=
-XNYS,XWAR,XETR` ships as TRACKED config (`43-stream-venues.conf` on the SIM
+is DONE by deploy since #1271 (XPAR joined in #1355): `ALPHALENS_SAXO_STREAM_SESSION_VENUES=
+XNYS,XWAR,XETR,XPAR` ships as TRACKED config (`43-stream-venues.conf` on the SIM
 daemon, `52-stream-venues.conf` on the LIVE daemon, an `Environment=` line
 on the shared price-reader unit) — never hand-set it on the host and never
 put it in `/etc/alphalens/env`; the drift-check pages on either.
@@ -2189,7 +2189,7 @@ subscription at the next tick end (#1315). A LIVE buy carries the 0.25% Saxo
 FX on the PLN->EUR leg.
 
 **Restart the daemons OUTSIDE the configured venue-set hours** (with the
-tracked `ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR,XETR` the union
+tracked `ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR,XETR,XPAR` the union
 spans ~06:45-21:10 UTC in summer, ~07:45-21:10 in winter — in practice the
 pre-06:45 UTC window): a restart resets the in-memory trailing peaks.
 

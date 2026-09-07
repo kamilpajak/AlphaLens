@@ -2245,7 +2245,8 @@ class TestSimBrokerManagerDropIns(unittest.TestCase):
                 # #1271: the stream session window's venue set — the first
                 # TRACKED value of this env (it existed only as runbook prose
                 # through the XWAR arc; the code default is XNYS-only).
-                "ALPHALENS_SAXO_STREAM_SESSION_VENUES": "XNYS,XWAR,XETR",
+                # #1355: XPAR joins the hull (Euronext Paris arc).
+                "ALPHALENS_SAXO_STREAM_SESSION_VENUES": "XNYS,XWAR,XETR,XPAR",
             },
         )
 

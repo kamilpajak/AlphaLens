@@ -1186,7 +1186,7 @@ def _make_stream_session_window(
     European close and the US open — reconnect churn in that gap is exactly
     what the gate exists to avoid overnight, and the gap is bounded.
 
-    UTC-date note: every supported hull (the European venues XWAR/XETR open
+    UTC-date note: every supported hull (the European venues XWAR/XETR/XPAR open
     06:45 UTC at the earliest in summer, 07:45 in winter, to XNYS 21:10 UTC
     at the latest) never crosses UTC midnight, so ``now.date()`` in UTC is
     always the session date being asked about.
