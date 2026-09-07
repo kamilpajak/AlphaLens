@@ -56,6 +56,8 @@ test-rules:
 # image as the CI prom-rules job; parity pinned by
 # tests/test_amtool_render_parity.py. To refresh the expectation after an
 # intended template change: rerun the render without `| diff` and commit it.
+# Each recipe line runs in its own `sh -c`, so no pipefail here: `diff` is the
+# last pipeline stage and fails on an empty render (amtool error) as well.
 lint-alertmanager:
     docker run --rm --entrypoint amtool \
         -v "$PWD/deploy/monitoring/alertmanager:/etc/alertmanager:ro" \
