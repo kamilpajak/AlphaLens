@@ -106,10 +106,12 @@ XPAR_FEE_CARD = VenueFeeCard(
     commission_rate=0.0008, min_commission=2.0, label="saxo-pl-classic-xpar"
 )
 """Saxo LIVE Polish schedule, Euronext Paris: 0.08% min EUR 2 per fill (Saxo
-Classic tier, read from the GLOBAL home.saxo stock-commission page 2026-09-07 —
-the pl-pl page renders its tables dynamically and states prices vary by
-country of residence). A PRIOR, not a verified fact: the #1355 arc verifies it
-with a read-only LIVE bracket precheck before the venue opens in arm-manual.
+Classic tier). Source: the Classic column of the GLOBAL home.saxo
+stock-commission page, read 2026-09-07, taken as the PL Classic prior because
+the pl-pl page renders its tables dynamically (a static fetch shows only error
+placeholders) and states prices vary by country of residence. A PRIOR, not a
+verified fact: the #1355 arc verifies it with a read-only LIVE bracket precheck
+before the venue opens in arm-manual.
 Same numbers as Euronext Amsterdam, kept as its OWN card so the journal label
 names the venue that was priced. ASSUMES the Classic tier."""
 
