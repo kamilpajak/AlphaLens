@@ -297,7 +297,7 @@ def _placer(
     broker: Any,
     plan: SetupPlan,
     *,
-    now_entry_feed_factory: Any = None,
+    now_entry_scope: Any = None,
     submission_records: list[dict[str, Any]] | None = None,
     alerts: list[str] | None = None,
     refused_marks: list[tuple] | None = None,
@@ -336,7 +336,7 @@ def _placer(
     placer = cl._make_place_pick(
         broker,
         alert_throttled=_throttled,
-        now_entry_feed_factory=now_entry_feed_factory,
+        now_entry_scope=now_entry_scope,
     )
     return placer, submissions
 
@@ -3326,13 +3326,16 @@ class TestPlacePickNowTranche(unittest.TestCase):
         calls: list[tuple[dict, str]] = []
         alerts: list[str] = []
         the_broker = broker if broker is not None else _RecordingBroker()
+        # Kept on the test instance so the two commit-asserting tests below can
+        # drive the drain-owned scope past what _place_pick does on its own.
+        self.scope = cl._NowEntryScope(
+            _now_feed(points if points is not None else {307: _point()}, calls)
+        )
         placer, submissions = _placer(
             self,
             the_broker,
             plan,
-            now_entry_feed_factory=_now_feed(
-                points if points is not None else {307: _point()}, calls
-            ),
+            now_entry_scope=self.scope,
             submission_records=records,
             alerts=alerts,
         )
@@ -3349,7 +3352,7 @@ class TestPlacePickNowTranche(unittest.TestCase):
         self.assertTrue(any(r["tranche_meta"]["outcome"] == "placed" for r in now_records))
         opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
         self.assertEqual(len(opens), 1)  # the pullback sibling watches
-        self.assertEqual(calls[0][1], "now-entry:307")
+        self.assertEqual(calls[0][1], "now-entry")  # ONE pass-level scope (#1315)
 
     def test_price_above_cap_refuses_now_only_pages_and_still_routes_siblings(self) -> None:
         broker = _RecordingBroker()
@@ -3379,12 +3382,25 @@ class TestPlacePickNowTranche(unittest.TestCase):
         self.assertEqual(_lines(path), [])  # siblings NOT routed before the now half
         self.assertTrue(any("no real-time quote" in a for a in alerts))
 
+    def test_no_quote_keeps_the_pick_in_the_now_entry_scope_until_commit(self) -> None:
+        """#1315: a DEFER does NOT drop the scope (release-on-defer would starve
+        the gate, memo §3.6) — the drain's tick-end commit still carries it."""
+        _verdict, _submissions, _alerts, calls, _path = self._drain(_now_plan(), points={})
+        self.scope.commit()
+        self.assertIn(307, calls[-1][0])
+        self.assertEqual(calls[-1][1], "now-entry")
+
+    def test_placed_now_tranche_is_dropped_from_the_scope_at_commit(self) -> None:
+        _verdict, _submissions, _alerts, calls, _path = self._drain(_now_plan())
+        self.scope.commit()
+        self.assertEqual(calls[-1], ({}, "now-entry"))
+
     def test_none_factory_defers_with_a_page(self) -> None:
         path = _journal(self)
         _planned_journal(self)
         alerts: list[str] = []
         placer, submissions = _placer(
-            self, _RecordingBroker(), _now_plan(), now_entry_feed_factory=None, alerts=alerts
+            self, _RecordingBroker(), _now_plan(), now_entry_scope=None, alerts=alerts
         )
         with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
             self.assertFalse(placer(_pick()))
@@ -3466,7 +3482,7 @@ class TestPlacePickNowTranche(unittest.TestCase):
             self,
             broker,
             _now_plan(cap=10.5, pullback=False),
-            now_entry_feed_factory=_now_feed({307: _point(ask=11.0)}, []),
+            now_entry_scope=cl._NowEntryScope(_now_feed({307: _point(ask=11.0)}, [])),
             alerts=alerts,
             refused_marks=refused,
         )
@@ -3503,12 +3519,13 @@ class TestPlacePickNowTranche(unittest.TestCase):
         opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
         self.assertEqual(len(opens), 1)
 
-    def test_scope_kept_on_defer_released_after_placement(self) -> None:
+    def test_placement_path_subscribes_the_pick_and_never_writes_empty_itself(self) -> None:
+        # #1315: the now-tranche code HOLDS / DROPS the pick on the drain-owned
+        # scope; the empty-set release is the drain's commit, never _place_pick's.
         broker = _RecordingBroker()
         _verdict, _submissions, _alerts, calls, _path = self._drain(_now_plan(), broker=broker)
-        # placement path: one subscribe call + one release (empty map) call
         self.assertEqual(calls[0][0], {307: ("KO", "XNYS")})
-        self.assertEqual(calls[-1][0], {})
+        self.assertTrue(all(c[0] != {} for c in calls))
         broker2 = _RecordingBroker()
         _v, _s, _a, defer_calls, _p = self._drain(_now_plan(), points={}, broker=broker2)
         self.assertTrue(all(c[0] != {} for c in defer_calls))  # DEFER keeps the subscription
@@ -3526,7 +3543,7 @@ class TestPlacePickNowTranche(unittest.TestCase):
             self,
             broker,
             _now_plan(),
-            now_entry_feed_factory=_now_feed({307: _point()}, []),
+            now_entry_scope=cl._NowEntryScope(_now_feed({307: _point()}, [])),
             submission_records=submissions_seen,
         )
         with (
@@ -3558,7 +3575,7 @@ class TestPlacePickNowTranche(unittest.TestCase):
             self,
             broker,
             _plan((0, 10.0, 100)),
-            now_entry_feed_factory=_now_feed({}, calls),
+            now_entry_scope=cl._NowEntryScope(_now_feed({}, calls)),
         )
         with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
             self.assertTrue(placer(_pick()))
@@ -3567,3 +3584,94 @@ class TestPlacePickNowTranche(unittest.TestCase):
             self.assertNotIn("tranche", record)
         opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
         self.assertEqual(len(opens), 1)
+
+
+class TestNowEntryScope(unittest.TestCase):
+    """#1315: the placement drain OWNS the pass-level ``now-entry`` feed scope.
+    Its commit writes the union of picks still pending after the tick, so a
+    pick retired outside the now-tranche code (disarm, a pre-routing terminal
+    refusal) is released at the next tick end — never held until restart."""
+
+    def _scope(self) -> tuple[Any, list[tuple[dict, str]]]:
+        calls: list[tuple[dict, str]] = []
+        return cl._NowEntryScope(_now_feed({}, calls)), calls
+
+    def test_pick_deferred_then_never_visited_again_is_released_at_next_commit(self) -> None:
+        scope, calls = self._scope()
+        scope.begin_tick()
+        scope.feed_for("KO:2026-07-20", 307, "KO", "XNYS")
+        scope.commit()
+        self.assertEqual(calls[-1], ({307: ("KO", "XNYS")}, "now-entry"))
+        scope.begin_tick()  # tick 2: the pick left the queue — no visit
+        scope.commit()
+        self.assertEqual(calls[-1], ({}, "now-entry"))
+
+    def test_deferred_pick_stays_subscribed_between_ticks(self) -> None:
+        scope, calls = self._scope()
+        scope.begin_tick()
+        scope.feed_for("KO:2026-07-20", 307, "KO", "XNYS")
+        scope.commit()
+        scope.begin_tick()
+        scope.feed_for("KO:2026-07-20", 307, "KO", "XNYS")
+        self.assertTrue(all(307 in mapping for mapping, _scope_name in calls))
+
+    def test_two_picks_in_one_tick_never_clobber_each_other(self) -> None:
+        scope, calls = self._scope()
+        scope.begin_tick()
+        scope.feed_for("KO:2026-07-20", 307, "KO", "XNYS")
+        scope.feed_for("PEP:2026-07-20", 308, "PEP", "XNYS")
+        scope.commit()
+        self.assertEqual([set(m) for m, _s in calls], [{307}, {307, 308}, {307, 308}])
+        scope.begin_tick()
+        scope.feed_for("PEP:2026-07-20", 308, "PEP", "XNYS")  # B visited FIRST next tick
+        self.assertEqual(set(calls[-1][0]), {307, 308})  # A carried, not dropped mid-tick
+
+    def test_dropped_pick_is_absent_from_the_commit(self) -> None:
+        scope, calls = self._scope()
+        scope.begin_tick()
+        scope.feed_for("KO:2026-07-20", 307, "KO", "XNYS")
+        scope.feed_for("PEP:2026-07-20", 308, "PEP", "XNYS")
+        scope.drop("KO:2026-07-20")
+        scope.commit()
+        self.assertEqual(calls[-1], ({308: ("PEP", "XNYS")}, "now-entry"))
+
+    def test_two_picks_on_the_same_uic_keep_it_while_one_is_still_held(self) -> None:
+        scope, calls = self._scope()
+        scope.begin_tick()
+        scope.feed_for("KO:2026-07-20", 307, "KO", "XNYS")
+        scope.feed_for("KO:2026-07-21", 307, "KO", "XNYS")
+        scope.drop("KO:2026-07-20")
+        scope.commit()
+        self.assertIn(307, calls[-1][0])
+
+    def test_tick_aborted_before_commit_still_carries_its_picks(self) -> None:
+        scope, calls = self._scope()
+        scope.begin_tick()
+        scope.feed_for("KO:2026-07-20", 307, "KO", "XNYS")
+        scope.commit()
+        scope.begin_tick()  # tick 2 aborts after visiting only PEP (no commit)
+        scope.feed_for("PEP:2026-07-20", 308, "PEP", "XNYS")
+        scope.begin_tick()  # tick 3
+        scope.feed_for("PEP:2026-07-20", 308, "PEP", "XNYS")
+        self.assertEqual(set(calls[-1][0]), {307, 308})
+
+    def test_release_writes_empty_and_forgets_carried_picks(self) -> None:
+        scope, calls = self._scope()
+        scope.begin_tick()
+        scope.feed_for("KO:2026-07-20", 307, "KO", "XNYS")
+        scope.commit()
+        scope.release()
+        self.assertEqual(calls[-1], ({}, "now-entry"))
+        scope.begin_tick()
+        scope.feed_for("PEP:2026-07-20", 308, "PEP", "XNYS")
+        self.assertEqual(set(calls[-1][0]), {308})
+
+    def test_factory_failure_on_commit_or_release_never_propagates(self) -> None:
+        def _boom(_uic_map: Any, *, scope: str) -> Any:
+            raise RuntimeError("reader down")
+
+        scope = cl._NowEntryScope(_boom)
+        scope.begin_tick()
+        self.assertIsNone(scope.feed_for("KO:2026-07-20", 307, "KO", "XNYS"))
+        scope.commit()
+        scope.release()

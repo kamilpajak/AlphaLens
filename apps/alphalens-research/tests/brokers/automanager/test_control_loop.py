@@ -9845,3 +9845,75 @@ class TestPageNowResiduals(unittest.TestCase):
                 [self._verdict("CANCELLED")]  # partial fill present
             )
         self.assertEqual(retracted, [])
+
+
+class TestRunOnceNowEntryScope(unittest.TestCase):
+    """#1315: the placement drain owns the ``now-entry`` feed scope — released
+    when the drain is gated, committed to the still-pending picks otherwise."""
+
+    @staticmethod
+    def _recording_scope() -> tuple[Any, list[tuple[dict, str]]]:
+        calls: list[tuple[dict, str]] = []
+
+        def factory(uic_map: Any, *, scope: str) -> Any:
+            calls.append((dict(uic_map), scope))
+            return type("F", (), {"latest": lambda _self, _uic: None})()
+
+        return cl._NowEntryScope(factory), calls
+
+    def test_kill_releases_the_now_entry_scope(self) -> None:
+        with TemporaryDirectory() as d:
+            kill = Path(d) / "KILL"
+            kill.write_text("stop")
+            scope, calls = self._recording_scope()
+            deps = dataclasses.replace(
+                _deps(_StubBroker(), kill_file=kill, verdicts=[], place_calls=[], alerts=[]),
+                now_entry_scope=scope,
+            )
+            cl.run_once(deps)
+            self.assertEqual(calls, [({}, "now-entry")])
+
+    def test_pick_deferred_then_gone_is_released_on_the_next_tick(self) -> None:
+        with TemporaryDirectory() as d:
+            scope, calls = self._recording_scope()
+            pick = _pick("KO", "2026-07-20")
+            queue: list = [pick]
+
+            def _defer(_pick: Any) -> bool:
+                # begin_tick has already run: _run_placement_drain opens the tick
+                # before it visits any pick.
+                scope.feed_for("KO:2026-07-20", 307, "KO", "XNYS")
+                return False
+
+            deps = dataclasses.replace(
+                _deps(
+                    _StubBroker(),
+                    kill_file=Path(d) / "KILL",
+                    verdicts=[],
+                    place_calls=[],
+                    alerts=[],
+                ),
+                iter_picks=lambda: iter(queue),
+                place_pick=_defer,
+                now_entry_scope=scope,
+            )
+            cl.run_once(deps)
+            self.assertEqual(calls[-1], ({307: ("KO", "XNYS")}, "now-entry"))
+            queue.clear()  # disarmed between ticks
+            cl.run_once(deps)
+            self.assertEqual(calls[-1], ({}, "now-entry"))
+
+    def test_deps_without_a_scope_drain_unchanged(self) -> None:
+        with TemporaryDirectory() as d:
+            place_calls: list = []
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=place_calls,
+                alerts=[],
+                picks=[_pick("KO", "2026-07-20")],
+            )
+            self.assertIsNone(deps.now_entry_scope)
+            cl.run_once(deps)
+            self.assertEqual(len(place_calls), 1)

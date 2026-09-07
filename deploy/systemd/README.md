@@ -2172,7 +2172,10 @@ put it in `/etc/alphalens/env`; the drift-check pages on either.
 Arming an XWAR pick on LIVE WITHOUT these is inert, not dangerous: the
 price feed carries no GPW quote, the daemon vetoes the uic every tick, and
 the pick stays armed but never places — the same quiet state as a
-master-arm refusal, never a crash or a blind fill.
+master-arm refusal, never a crash or a blind fill. A deferred `now` tranche's
+feed subscription is released by the drain at the tick end once the pick
+leaves the queue (#1315), so disarming such a pick no longer pins
+`any_delayed` on the shared price reader.
 
 **Xetra (XETR) on LIVE — prerequisites** (#1271): before the first LIVE XETR
 arm, (1) verify the Xetra market-data entitlement on the LIVE account — the
@@ -2181,8 +2184,9 @@ same delayed-quote veto as GPW applies, and `any_delayed` is process-wide;
 `costs.py` (0.08% min EUR 3) assumes it. The stream venue window already
 covers XETR by deploy (tracked drop-ins, #1271 PR 3). The same inert failure
 mode applies: without the entitlement the pick sits armed and vetoed, never
-a crash or a blind fill. A LIVE buy carries the 0.25% Saxo FX on the
-PLN->EUR leg.
+a crash or a blind fill, and a disarmed `now` tranche releases its feed
+subscription at the next tick end (#1315). A LIVE buy carries the 0.25% Saxo
+FX on the PLN->EUR leg.
 
 **Restart the daemons OUTSIDE the configured venue-set hours** (with the
 tracked `ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR,XETR` the union
