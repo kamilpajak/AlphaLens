@@ -124,14 +124,9 @@ def _default_client_factory() -> Any:
 
 
 def _close(client: Any) -> None:
+    # Best-effort: a teardown failure must not turn a computed verdict into a crash.
     with contextlib.suppress(Exception):
-        closer = getattr(client, "close", None)
-        if closer is not None:
-            closer()
-            return
-        session = getattr(client, "_session", None)
-        if session is not None:
-            session.close()
+        client.close()
 
 
 def _build_parser() -> argparse.ArgumentParser:

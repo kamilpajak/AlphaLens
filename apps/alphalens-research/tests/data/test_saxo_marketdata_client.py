@@ -308,3 +308,22 @@ class TestGetStockInfoprice(unittest.TestCase):
         session = _Session(_Resp(400))
         with self.assertRaises(RuntimeError):
             _client(session).get_stock_infoprice(6820)
+
+
+class TestClose(unittest.TestCase):
+    """#1355: one-shot callers (the entitlement probe, the day-1 gap gate)
+    release the connection pool through a public ``close()`` instead of
+    reaching into the private session."""
+
+    def test_close_releases_the_session(self):
+        class _ClosableSession(_Session):
+            def __init__(self):
+                super().__init__()
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        session = _ClosableSession()
+        _client(session).close()
+        self.assertTrue(session.closed)
