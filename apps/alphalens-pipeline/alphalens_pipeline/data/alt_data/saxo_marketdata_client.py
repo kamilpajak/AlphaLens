@@ -53,6 +53,12 @@ class SaxoMarketDataClient:
         self._tokens = token_provider
         self._session = session or requests.Session()
 
+    def close(self) -> None:
+        """Release the HTTP connection pool. One-shot callers (the day-1 gap
+        gate's per-tick client, the entitlement probe script) call this in
+        their ``finally`` so a failing probe never leaks a session."""
+        self._session.close()
+
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._tokens.access_token()}"}
 

@@ -57,15 +57,17 @@ from broker_contract.trade_intent.schema import (
 
 from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
 
-# US venues plus GPW (#1238 PR 7) plus Xetra (#1271 PR 4 — XETR opens after
-# the arc landed the venue map + RHM alias, the MIC-keyed fee cards with the
-# Xetra EUR 3 minimum, and the tracked stream venue window XNYS,XWAR,XETR).
-# XAMS stays refused until its own validation arc (map entry + fee card only).
-# LIVE on a European venue additionally needs a verified market-data
-# entitlement for that venue — a delayed quote is vetoed by the live feed and
-# `any_delayed` is process-wide — see the runbook notes in
-# deploy/systemd/README.md.
-SUPPORTED_MICS = ("XNYS", "XNAS", "XWAR", "XETR")
+# US venues plus GPW (#1238 PR 7) plus Xetra (#1271 PR 4) plus Euronext
+# Paris (#1355 PR-C — XPAR opens after the arc landed the venue map entry
+# XPAR -> PAR, the MIC-keyed EUR 2 Euronext fee card and the tracked stream
+# venue window XNYS,XWAR,XETR,XPAR). XAMS stays refused until its own
+# validation arc (map entry + fee card only). LIVE on a European venue
+# additionally needs a verified market-data entitlement for that venue — a
+# delayed quote is vetoed by the live feed and `any_delayed` is process-wide
+# (Euronext Paris: MISSING as of 2026-09-07, KER/ALO delayed-15 during the
+# open session; `scripts/probe_saxo_live_entitlement.py` re-reads it) — see
+# the runbook notes in deploy/systemd/README.md.
+SUPPORTED_MICS = ("XNYS", "XNAS", "XWAR", "XETR", "XPAR")
 
 # Percentage sums are validated against float noise only (33.3+33.3+33.4 !=
 # 100.0 exactly) — NEVER against sloppy input; 60+30 is a refusal, not a
