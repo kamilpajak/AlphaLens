@@ -3326,6 +3326,8 @@ class TestPlacePickNowTranche(unittest.TestCase):
         calls: list[tuple[dict, str]] = []
         alerts: list[str] = []
         the_broker = broker if broker is not None else _RecordingBroker()
+        # Kept on the test instance so the two commit-asserting tests below can
+        # drive the drain-owned scope past what _place_pick does on its own.
         self.scope = cl._NowEntryScope(
             _now_feed(points if points is not None else {307: _point()}, calls)
         )

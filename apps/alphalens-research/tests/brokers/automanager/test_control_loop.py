@@ -9880,6 +9880,8 @@ class TestRunOnceNowEntryScope(unittest.TestCase):
             queue: list = [pick]
 
             def _defer(_pick: Any) -> bool:
+                # begin_tick has already run: _run_placement_drain opens the tick
+                # before it visits any pick.
                 scope.feed_for("KO:2026-07-20", 307, "KO", "XNYS")
                 return False
 

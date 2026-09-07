@@ -8707,12 +8707,19 @@ class _NowEntryScope:
         self._write({})
 
     def _write(self, picks: Mapping[str, tuple[int, str, str]]) -> Any | None:
-        import contextlib
-
+        # uic-keyed like the factory's contract: at Saxo one uic IS one
+        # (instrument, venue), so two picks sharing a uic share its (ticker,
+        # mic) too and the collapse loses nothing.
         uic_to_instrument = {uic: (ticker, mic) for uic, ticker, mic in picks.values()}
-        with contextlib.suppress(Exception):
+        try:
             return self._factory(uic_to_instrument, scope=_FEED_SCOPE_NOW_ENTRY)
-        return None
+        except Exception:  # best-effort like _release_feed_scope; retried by the next write
+            logger.debug(
+                "now-entry scope: feed write failed for %d uic(s)",
+                len(uic_to_instrument),
+                exc_info=True,
+            )
+            return None
 
 
 def _drop_now_scope(now_entry_scope: _NowEntryScope | None, pick_key: str) -> None:
