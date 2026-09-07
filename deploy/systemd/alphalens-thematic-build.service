@@ -81,9 +81,12 @@ EnvironmentFile=/etc/alphalens/env
 # theme_shadow 04:39, buffett_qual 05:00, unit killed 04:27) while both
 # ExecStartPost steps were skipped. Three pieces, each covering a path the
 # others do not:
-#   --init            tini as PID 1 forwards SIGTERM to bash, bash exits,
-#                     the PID namespace tears down every child — the first
-#                     SIGTERM now ends the run.
+#   --init            tini as PID 1 forwards SIGTERM to bash. bash is no
+#                     longer PID 1 and sets no trap, so it dies at once
+#                     (it defers only TRAPPED signals while a foreground
+#                     child runs); tini then exits, and with PID 1 gone the
+#                     kernel SIGKILLs every process left in the container's
+#                     PID namespace. The first SIGTERM now ends the run.
 #   --name <unit>     a fixed name so the container can be addressed by
 #                     the two docker rm lines below.
 #   ExecStartPre rm   a stale named container (daemon restart, an orphan

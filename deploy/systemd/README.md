@@ -731,10 +731,13 @@ running: on 2026-09-05 it wrote `theme_shadow` at 04:39, `thematic_ohlcv`
 at 04:41-44 and `buffett_qual` at 04:56-05:00 CEST after being "killed" at
 04:27. Three pieces fix that, on this unit and on the shadow-map unit:
 
-- `docker run --init` — tini is PID 1 and forwards SIGTERM to bash; bash
-  exits and the PID namespace tears every child down, so the FIRST SIGTERM
-  ends the run (hard, like the old SIGKILL, but immediate and visible; all
-  parquet writes go through `write_parquet_atomic`, so no partial files).
+- `docker run --init` — tini is PID 1 and forwards SIGTERM to bash. bash is
+  no longer PID 1 and sets no trap, so it dies at once (bash defers only
+  TRAPPED signals while a foreground child runs); tini then exits, and with
+  PID 1 gone the kernel SIGKILLs every process left in the container's PID
+  namespace. So the FIRST SIGTERM ends the run — hard, like the old SIGKILL,
+  but immediate and visible; all parquet writes go through
+  `write_parquet_atomic`, so no partial files.
 - `--name alphalens-thematic-build` — a fixed name so the container can be
   addressed.
 - `ExecStartPre=-docker rm -f <name>` and `ExecStopPost=-docker rm -f <name>`
