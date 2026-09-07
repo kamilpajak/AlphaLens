@@ -2188,6 +2188,25 @@ a crash or a blind fill, and a disarmed `now` tranche releases its feed
 subscription at the next tick end (#1315). A LIVE buy carries the 0.25% Saxo
 FX on the PLN->EUR leg.
 
+**Euronext Paris (XPAR) on LIVE — prerequisites** (#1355): before the first
+LIVE XPAR arm, (1) verify the Euronext Paris market-data entitlement on the
+LIVE account — **MISSING as of 2026-09-07** (KER and ALO reported
+`DelayedByMinutes: 15` during the open Paris session); after the Saxo-side
+subscription re-read it with the tracked read-only probe, which never
+elevates the session:
+`.venv/bin/python apps/alphalens-research/scripts/probe_saxo_live_entitlement.py KER@XPAR`
+(exit 0 = entitled, 4 = still delayed, 8 = inconclusive / market closed);
+(2) confirm the account is on the Saxo Classic tier — the Euronext Paris fee
+card in `costs.py` (0.08% min EUR 2) assumes it and is a prior until a
+read-only LIVE bracket precheck confirms the commission line. The stream
+venue window covers XPAR by deploy (tracked drop-ins + the reader unit,
+#1355 PR-B). The same inert failure mode applies: without the entitlement
+the pick sits armed and vetoed, never a crash or a blind fill. Prefer
+pullback tiers over a `now@` tier while the entitlement is missing: a
+deferred now tranche keeps its delayed uic subscribed and burns reader
+session reclaims while pending (#1354). A LIVE buy carries the 0.25% Saxo FX
+on the PLN->EUR leg.
+
 **Restart the daemons OUTSIDE the configured venue-set hours** (with the
 tracked `ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR,XETR` the union
 spans ~06:45-21:10 UTC in summer, ~07:45-21:10 in winter — in practice the

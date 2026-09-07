@@ -216,6 +216,20 @@ class TestExplicitMicFromHint(unittest.TestCase):
         self.assertEqual(ref.exchange_mic, "XETR")
         self.assertEqual(broker.resolve_calls, [("RHM", "XETR")])
 
+    def test_xpar_hint_resolves_explicitly_without_touching_us_venues(self):
+        # #1355 PR-C: the Euronext Paris mirror of the rule — KER resolves on
+        # XPAR alone; a same-ticker US listing must never price a Paris entry.
+        broker = _RoutingStubBroker({("KER", "XPAR"): _ref("KER", "XPAR")})
+
+        ref = resolve_us_instrument(
+            broker,  # type: ignore[arg-type]
+            "KER",
+            exchange_mic=explicit_mic_from_hint("XPAR"),
+        )
+
+        self.assertEqual(ref.exchange_mic, "XPAR")
+        self.assertEqual(broker.resolve_calls, [("KER", "XPAR")])
+
 
 class TestSubmissionLog(unittest.TestCase):
     def _record(self, **overrides: object) -> dict:

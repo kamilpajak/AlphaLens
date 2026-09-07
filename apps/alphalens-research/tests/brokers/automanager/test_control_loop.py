@@ -9345,6 +9345,23 @@ class TestDay1GapProbeVenueFallback(unittest.TestCase):
         self.assertEqual(holder["client"].resolved, ["XETR"])
         holder["client"]._session.close.assert_called_once()
 
+    def test_xpar_hint_probes_only_xpar(self) -> None:
+        # #1355 PR-C: the Euronext Paris mirror — the gate prices KER on XPAR
+        # (uic 398681) and never touches the US probe order.
+        class _XparResolves(self._FakeClient):
+            def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:
+                self.resolved.append(exchange_mic)
+                return 398681 if exchange_mic == "XPAR" else None
+
+            def get_stock_infoprice(self, uic: int, **_kw) -> dict[str, Any]:
+                assert uic == 398681
+                return {"PriceInfoDetails": {"Open": 240.6}}
+
+        probe, holder = self._probe_with(_XparResolves)
+        self.assertEqual(probe("KER", "XPAR"), 240.6)
+        self.assertEqual(holder["client"].resolved, ["XPAR"])
+        holder["client"]._session.close.assert_called_once()
+
     def test_non_us_hint_unresolvable_never_falls_back_to_us(self) -> None:
         class _NeverResolves(self._FakeClient):
             def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:

@@ -320,6 +320,13 @@ class BuildManualIntentTest(unittest.TestCase):
         intent = _build(mic="XETR")
         self.assertEqual(intent.instrument.mic, "XETR")
 
+    def test_xpar_is_accepted(self) -> None:
+        # #1355 PR-C: Euronext Paris opens after the arc's venue map entry
+        # (XPAR -> PAR), the MIC-keyed EUR 2 fee card and the tracked stream
+        # venue window XNYS,XWAR,XETR,XPAR landed.
+        intent = _build(mic="XPAR")
+        self.assertEqual(intent.instrument.mic, "XPAR")
+
     def test_unsupported_mic_refuses_naming_the_supported_set(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "XAMS"):
             _build(mic="XAMS")
