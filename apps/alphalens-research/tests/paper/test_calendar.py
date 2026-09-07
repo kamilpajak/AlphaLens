@@ -103,6 +103,18 @@ class TestIsTradingDayMultiExchange(unittest.TestCase):
         # per-venue holiday split the multi-venue stream hull relies on.
         self.assertTrue(is_trading_day(dt.date(2026, 1, 6), exchange="XETR"))
 
+    def test_xpar_labour_day_is_not_trading_day(self):
+        # 2026-05-01 (Friday): Euronext Paris closed (Fete du Travail), XNYS
+        # open — the #1355 pin that a hard-coded-XNYS refactor would hide.
+        self.assertFalse(is_trading_day(dt.date(2026, 5, 1), exchange="XPAR"))
+        self.assertTrue(is_trading_day(dt.date(2026, 5, 1), exchange="XNYS"))
+
+    def test_xpar_trades_a_half_day_on_christmas_eve(self):
+        # 2026-12-24: Euronext Paris runs a half session while Xetra shuts —
+        # the per-venue split the stream hull discriminates on (#1355 PR-B).
+        self.assertTrue(is_trading_day(dt.date(2026, 12, 24), exchange="XPAR"))
+        self.assertFalse(is_trading_day(dt.date(2026, 12, 24), exchange="XETR"))
+
 
 # ---------------------------------------------------------------- is_half_day
 
