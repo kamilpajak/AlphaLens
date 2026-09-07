@@ -133,6 +133,24 @@ class TestSaxoSimLive(unittest.TestCase):
                     "(expected the pinned 16135 — Saxo may have renamed RHMG)"
                 )
 
+        def _probe_resolve_xpar() -> None:
+            # Euronext-Paris-on-SIM coverage (#1355 PR-A) — same stance as the
+            # WSE / XAMS / XETR probes; no alias (KER is Saxo's own root), and
+            # the uic pin (398681, same on LIVE) is the shape assertion.
+            try:
+                ref = broker.resolve_instrument("KER", "XPAR")
+            except InstrumentNotFoundError as exc:
+                raise PermanentProbeError(
+                    f"XPAR-on-SIM coverage gap: KER @ XPAR did not resolve ({exc})"
+                ) from exc
+            except Exception as exc:
+                raise _classify(exc) from exc
+            if str(ref.broker_instrument_id) != "398681":
+                raise PermanentProbeError(
+                    f"KER resolved to unexpected Uic {ref.broker_instrument_id!r} "
+                    "(expected the pinned 398681 — Saxo may have relisted Kering)"
+                )
+
         run_probes(
             self,
             {
@@ -142,6 +160,7 @@ class TestSaxoSimLive(unittest.TestCase):
                 "resolve CDR@XWAR (WSE-on-SIM validation)": _probe_resolve_wse,
                 "resolve ASML@XAMS (Euronext-on-SIM validation)": _probe_resolve_xams,
                 "resolve RHM@XETR (alias + FSE-on-SIM validation)": _probe_resolve_xetr,
+                "resolve KER@XPAR (PAR-on-SIM validation)": _probe_resolve_xpar,
             },
             label="saxo",
         )

@@ -22,6 +22,7 @@ from alphalens_pipeline.brokers.automanager.costs import (
     WSE_FEE_CARD,
     XAMS_FEE_CARD,
     XETR_FEE_CARD,
+    XPAR_FEE_CARD,
     CostGateFacts,
     cost_gate_facts,
     fee_card_for,
@@ -59,6 +60,22 @@ class TestFeeCards(unittest.TestCase):
         self.assertEqual(XAMS_FEE_CARD.commission_rate, 0.0008)
         self.assertEqual(XAMS_FEE_CARD.min_commission, 2.0)
 
+    def test_xpar_card_is_the_saxo_pl_classic_schedule(self) -> None:
+        # Euronext Paris 0.08% min EUR 2 (Saxo Classic tier, global home.saxo
+        # page read 2026-09-07; the pl-pl page renders its tables dynamically
+        # and says prices vary by country, so this is a PRIOR verified by a
+        # read-only LIVE precheck before the venue opens — #1355).
+        self.assertEqual(XPAR_FEE_CARD.commission_rate, 0.0008)
+        self.assertEqual(XPAR_FEE_CARD.min_commission, 2.0)
+
+    def test_xpar_and_xams_cards_are_distinct_objects_with_equal_numbers(self) -> None:
+        # Same Euronext schedule, but each venue keeps its OWN card so the
+        # journal label names the venue that was priced.
+        self.assertIsNot(XPAR_FEE_CARD, XAMS_FEE_CARD)
+        self.assertEqual(XPAR_FEE_CARD.commission_rate, XAMS_FEE_CARD.commission_rate)
+        self.assertEqual(XPAR_FEE_CARD.min_commission, XAMS_FEE_CARD.min_commission)
+        self.assertNotEqual(XPAR_FEE_CARD.label, XAMS_FEE_CARD.label)
+
     def test_fee_card_lookup_by_mic_covers_the_whole_venue_map(self) -> None:
         for mic, card in (
             ("XNYS", US_FEE_CARD),
@@ -67,6 +84,7 @@ class TestFeeCards(unittest.TestCase):
             ("XWAR", WSE_FEE_CARD),
             ("XETR", XETR_FEE_CARD),
             ("XAMS", XAMS_FEE_CARD),
+            ("XPAR", XPAR_FEE_CARD),
         ):
             with self.subTest(mic=mic):
                 self.assertIs(fee_card_for(None, exchange_mic=mic), card)

@@ -50,6 +50,18 @@ class TestMicToSaxoExchangeId(unittest.TestCase):
         arm-manual's SUPPORTED_MICS."""
         self.assertEqual(MIC_TO_SAXO_EXCHANGE_ID["XETR"], "FSE")
 
+    def test_xpar_maps_to_par(self) -> None:
+        """Euronext Paris cash equities — live-verified against SIM
+        /ref/v1/exchanges (ExchangeId "PAR", Mic XPAR, FR, EUR) and by
+        resolving KER:xpar / uic 398681 and ALO:xpar / uic 111922
+        (2026-09-07, same uics on LIVE). CAUTION, same shape as XETR: several
+        ExchangeIds share Mic XPAR (PAR, EGP, PAR_ACCESS, PAR_BONDS, PAR_SP,
+        EUR_PAR1/2, PAR_MC_ETF); cash equities live on PAR, and the ``:xpar``
+        display-symbol suffix both resolvers match on is MIC-based, so it
+        covers them all. Map entry only until #1355 PR-C opens the venue in
+        arm-manual's SUPPORTED_MICS."""
+        self.assertEqual(MIC_TO_SAXO_EXCHANGE_ID["XPAR"], "PAR")
+
 
 class TestSaxoTickerAliases(unittest.TestCase):
     def test_map_is_well_formed(self) -> None:
