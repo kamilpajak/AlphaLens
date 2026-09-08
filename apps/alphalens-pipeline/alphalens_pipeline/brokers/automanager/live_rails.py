@@ -26,7 +26,7 @@ against the exit-policy registry HERE, at boot — a copy-paste unit with a
 typo'd policy name must never reach the per-tick protection pass, where a
 ``ValueError`` would starve every position that tick.
 
-The numeric bounds (MAX_OPEN <= 10, PORTFOLIO_GROSS_FRAC <= 0.5,
+The numeric bounds (MAX_OPEN <= 10, PORTFOLIO_GROSS_FRAC <= 1.0,
 DAILY_LOSS_LIMIT_R <= 2.0, SIZING_EQUITY <= 15000, MAX_FEE_BPS <= 1000,
 ENTRY_TRAIL_BPS <= 150, and ENTRY_WATCH_MAX_PICKS <= 10) are the
 operator-decided §8 caps for the soak — NOT a mechanism for widening risk
@@ -42,6 +42,13 @@ a four-pick signal day arrived with one slot free, and the group flow now
 arms whole daily lists rather than one or two names. GROSS_FRAC still 0.5,
 so the implied per-position share falls to 5%; the account is bounded by the
 gross and cash rails, the slot count only bounds the NUMBER of names.
+PORTFOLIO_GROSS_FRAC widened 0.5 -> 1.0 later on 2026-09-08 (operator
+decision, same memo §8 point 3): with ten slots the operator bounds risk by
+DIVERSIFICATION across names, not by a fraction of equity held back; at 1.0
+the whole account may be committed across the slots, never more (1.0 is the
+no-leverage line — the account carries no margin agreement). The cash floor
+(candidate x 1.04 + resting entries <= margin available) and the fee floor
+keep binding per pick.
 
 ENTRY_WATCH_MAX_PICKS is the newest pin and exists for a reason worth stating:
 it was the one rail whose LIVE ceiling came from a constant SHARED with the SIM
@@ -106,7 +113,7 @@ _VALID_SIZING_MODES = (SIZING_MODE_CLAMPED, SIZING_MODE_DECLARED)
 # is a design-memo decision, not a silent constant edit here.
 _MAX_OPEN_LOWER = 1
 _MAX_OPEN_UPPER = 10  # 2 -> 4 on 2026-09-04, 4 -> 10 on 2026-09-08, see the module docstring
-_PORTFOLIO_GROSS_FRAC_UPPER = 0.5
+_PORTFOLIO_GROSS_FRAC_UPPER = 1.0  # 0.5 -> 1.0 on 2026-09-08, see the module docstring
 _DAILY_LOSS_LIMIT_R_UPPER = 2.0
 
 # Operator-locked §8 soak bounds exactly like the three above — PRESCRIPTIVE,

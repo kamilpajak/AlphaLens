@@ -1900,8 +1900,8 @@ Three LIVE-only rules (SIM never sets the pin, so its ratio is identically 1):
 knowingly run near 7.5 since the declared frame shipped, so a rule that paged on
 that state would be noise. Lower it to about 2 once the account is funded — that
 is where the worst-case frame draw (`MAX_OPEN` x max suggested weight = 0.5 of
-the frame) meets the gross cap (`GROSS_FRAC` x `total_value` = 0.5 of the
-balance), and every declared rail then means what it says.
+the frame) meets the gross cap (`GROSS_FRAC` x `total_value` — 0.5 of the
+balance until 2026-09-08, 1.0 since), and every declared rail then means what it says.
 
 **The reader carries the nine LIVE rails, and needs its own grant.** It places
 nothing, but `create_saxo_broker_live_from_env` runs `assert_live_rails()` before
