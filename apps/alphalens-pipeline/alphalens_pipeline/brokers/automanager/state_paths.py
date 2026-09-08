@@ -88,7 +88,7 @@ def _alphalens_home() -> Path:
     return Path.home() / _ALPHALENS_HOME_DIRNAME
 
 
-def _validate_environment(value: str) -> str:
+def validate_environment(value: str) -> str:
     if value not in _VALID_ENVIRONMENTS:
         raise ValueError(
             f"{BROKER_ENVIRONMENT_ENV}={value!r} is not a supported broker "
@@ -104,7 +104,7 @@ def broker_environment() -> str:
     :data:`ENV_SIM`. Any other value fails loud with a ``ValueError`` naming
     both the env var and the offending value (D1).
     """
-    return _validate_environment(os.environ.get(BROKER_ENVIRONMENT_ENV, ENV_SIM))
+    return validate_environment(os.environ.get(BROKER_ENVIRONMENT_ENV, ENV_SIM))
 
 
 def _resolve_env(env: str | None) -> str:
@@ -116,7 +116,7 @@ def _resolve_env(env: str | None) -> str:
     """
     if env is None:
         return broker_environment()
-    return _validate_environment(env)
+    return validate_environment(env)
 
 
 # --- Per-instance journal + KILL paths ---------------------------------------

@@ -39,6 +39,62 @@ _GAUGE_VALUES = {
 }
 
 
+class TestStreamStatusEnvDefault(unittest.TestCase):
+    """#1377: a bare invocation reads the instance the shell names.
+
+    Before this the default was a hardcoded ``sim`` while ``picks`` and
+    ``watches`` followed ``$ALPHALENS_BROKER_ENVIRONMENT``, so in a live shell
+    the three commands described different instances.
+    """
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.textfile_dir = Path(self._tmp.name)
+        patcher = mock.patch.dict(
+            "os.environ", {"ALPHALENS_TEXTFILE_DIR": str(self.textfile_dir)}, clear=False
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _seed(self, env: str) -> None:
+        path = self.textfile_dir / f"alphalens_domain_broker-manager-{env}-stream.prom"
+        lines = [
+            f'{name}{{job="broker-manager-{env}"}} {value}' for name, value in _GAUGE_VALUES.items()
+        ]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _invoke(self, *args: str):
+        from alphalens_cli.commands.broker import broker_app
+
+        return self.runner.invoke(broker_app, ["stream-status", "--format", "json", *args])
+
+    def test_the_environment_variable_selects_the_instance(self) -> None:
+        self._seed("live")
+        with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ENVIRONMENT": "live"}):
+            result = self._invoke()
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(json.loads(result.stdout)["env"], "live")
+
+    def test_the_option_still_wins_over_the_variable(self) -> None:
+        self._seed("sim")
+        with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ENVIRONMENT": "live"}):
+            result = self._invoke("--env", "sim")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(json.loads(result.stdout)["env"], "sim")
+
+    def test_an_unset_variable_still_means_sim(self) -> None:
+        self._seed("sim")
+        with mock.patch.dict("os.environ", {}, clear=False):
+            import os
+
+            os.environ.pop("ALPHALENS_BROKER_ENVIRONMENT", None)
+            result = self._invoke()
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(json.loads(result.stdout)["env"], "sim")
+
+
 class TestStreamStatusCommand(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()

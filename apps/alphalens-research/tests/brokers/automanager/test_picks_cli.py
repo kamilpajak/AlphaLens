@@ -261,6 +261,19 @@ class PicksCommandEnvTest(unittest.TestCase):
         self.runner = CliRunner()
         self.home = _isolate_home(self)
 
+    def test_without_the_option_the_environment_variable_selects_the_instance(self) -> None:
+        # #1377: the default flipped from a hardcoded "sim" to the shared
+        # $ALPHALENS_BROKER_ENVIRONMENT seam, so `picks` and `watches` can no
+        # longer disagree about which instance a bare invocation reads.
+        from unittest import mock
+
+        _arm(self.home, "SIMONLY", "2026-07-20", env="sim")
+        _arm(self.home, "LIVEONLY", "2026-08-27", env="live")
+        with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ENVIRONMENT": "live"}):
+            payload = json.loads(_run(self.runner, "--format", "json").stdout)
+        self.assertEqual(payload["env"], "live")
+        self.assertEqual([row["ticker"] for row in payload["picks"]], ["LIVEONLY"])
+
     def test_env_live_reads_the_live_journals_only(self) -> None:
         _arm(self.home, "SIMONLY", "2026-07-20", env="sim")
         _arm(self.home, "LIVEONLY", "2026-08-27", env="live")

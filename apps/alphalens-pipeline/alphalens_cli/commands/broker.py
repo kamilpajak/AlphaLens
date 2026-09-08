@@ -44,6 +44,16 @@ the same seam the per-env journal paths use — and echoes one
 into the ADR 0017 LIVE factory and ad-hoc placement (``submit``) refuses
 (the daemon is the only LIVE placement path).
 
+``--env sim|live`` on the read commands (account / positions / orders /
+reconcile / cancel, plus picks / watches / stream-status over the journals)
+names the instance without exporting anything; ``--env live`` additionally
+COMPOSES the process environment from the installed LIVE unit (rails +
+``EnvironmentFile=``, see ``brokers/automanager/unit_env.py``), so a LIVE read
+runs in a plain shell and the one-off process is never armed. The arming
+commands (arm / arm-manual / disarm) keep defaulting to ``sim`` and REFUSE when
+``ALPHALENS_BROKER_ENVIRONMENT`` names another instance — a write must never be
+steered by an ambient variable (#1377).
+
 All ``brokers`` imports are lazy inside command bodies — the ``alphalens``
 binary's startup time is paid by the 15-min Layer-1 edgar-detect cron
 (+913ms precedent; see CLAUDE.md lazy-CLI convention).
@@ -135,6 +145,109 @@ def _guard_state_layout() -> None:
         raise _fail(str(exc)) from exc
 
 
+_ENV_OPTION = typer.Option(
+    None,
+    "--env",
+    help="Broker instance to target: 'sim' or 'live' (ADR 0016). Default: "
+    "$ALPHALENS_BROKER_ENVIRONMENT, else sim. 'live' additionally composes the "
+    "rails + EnvironmentFile of the installed LIVE unit, so the command works "
+    "in a plain shell.",
+)
+"""One shared option object for every read command that takes ``--env``.
+
+Typer builds a fresh click Parameter per command from this info object, so
+sharing it keeps the five help texts from drifting apart (verified by running
+it across several commands).
+"""
+
+
+def _apply_env_option(env: str | None) -> None:
+    """Point this process at the instance named by ``--env`` (#1377).
+
+    ``None`` (no option) does NOTHING: the process keeps whatever
+    ``ALPHALENS_BROKER_ENVIRONMENT`` it was given, which is what the
+    hand-composed runbook shell and the 15-minute edgar-detect cron rely on.
+    ``sim`` only sets the instance — it never shells out, so a developer Mac
+    with no user manager is unaffected.
+
+    ``live`` composes the environment from the INSTALLED unit
+    (:func:`unit_env.compose_live_environment`) and applies it OVER the
+    caller's shell: what a LIVE read reports must be the daemon's own
+    configuration, not a value someone exported earlier. Two keys are then
+    forced, in this order, LAST:
+
+    * ``ALPHALENS_BROKER_ENVIRONMENT`` — the option is the operator's explicit
+      intent, and systemd's own precedence puts the EnvironmentFile last, so a
+      stray instance pin in that shared file would otherwise turn ``--env
+      live`` into a SIM read;
+    * ``ALPHALENS_BROKER_ALLOW_ORDERS=0`` — load-bearing, not cosmetic: the
+      composed production environment carries ``1`` from the arming drop-in, so
+      without this the one-off process would be ARMED.
+
+    Warnings and one ``composed unit=… dropins=… env-file=… keys=…`` line go to
+    stderr; no composed VALUE is ever printed.
+    """
+    from alphalens_pipeline.brokers.automanager import state_paths, unit_env
+    from alphalens_pipeline.brokers.automanager.safety import ALLOW_ORDERS_ENV
+
+    if env is None:
+        return
+    try:
+        target = state_paths.validate_environment(env)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+
+    if target != state_paths.ENV_LIVE:
+        os.environ[state_paths.BROKER_ENVIRONMENT_ENV] = target
+        return
+
+    try:
+        composed = unit_env.compose_live_environment(env=target)
+    except unit_env.UnitEnvError as exc:
+        raise _fail(f"--env {target}: {exc}") from exc
+
+    os.environ.update(composed.values)
+    os.environ[state_paths.BROKER_ENVIRONMENT_ENV] = target
+    os.environ[ALLOW_ORDERS_ENV] = "0"
+    for warning in composed.warnings:
+        typer.secho(warning, err=True, fg=typer.colors.YELLOW)
+    env_file = "none" if composed.env_file is None else str(composed.env_file)
+    typer.secho(
+        f"composed unit={composed.unit} dropins={composed.dropins} "
+        f"env-file={env_file} keys={len(composed.values)}",
+        err=True,
+    )
+
+
+def _guard_ambient_instance(env: str | None, *, default: str) -> str:
+    """Resolve ``--env`` for a MUTATING command, refusing an ambiguous shell.
+
+    The read commands follow ``ALPHALENS_BROKER_ENVIRONMENT`` when no option is
+    given; the arming commands default to ``sim`` so an ambient variable can
+    never steer a WRITE. Those two rules disagree inside a shell that exports
+    ``live``: ``arm`` would write to SIM while ``picks`` showed LIVE, and the
+    pick would look like it vanished. Rather than pick a winner silently, an
+    unaccompanied write in such a shell refuses and asks for an explicit
+    ``--env`` (#1377 review). An explicit option always wins, including
+    ``--env sim`` inside a live shell.
+    """
+    from alphalens_pipeline.brokers.automanager import state_paths
+
+    if env is not None:
+        try:
+            return state_paths.validate_environment(env)
+        except ValueError as exc:
+            raise _fail(str(exc)) from exc
+    ambient = os.environ.get(state_paths.BROKER_ENVIRONMENT_ENV)
+    if ambient and ambient != default:
+        raise _fail(
+            f"{state_paths.BROKER_ENVIRONMENT_ENV}={ambient!r} in this shell, but this "
+            f"command defaults to {default!r} and writes to the queue — pass --env "
+            f"{ambient} or --env {default} explicitly so the target is unambiguous."
+        )
+    return default
+
+
 def _cli_broker(*, mutating: bool) -> Broker:
     """Resolve the broker for a one-off command per ``ALPHALENS_BROKER_ENVIRONMENT``.
 
@@ -211,8 +324,9 @@ def _cli_broker(*, mutating: bool) -> Broker:
         raise _fail(
             f"env=live: LIVE broker construction failed — missing env var {exc}. "
             "Ad-hoc LIVE commands need the daemon's full LIVE boot surface "
-            "(rail pins + SAXO_LIVE_* auth env); source the daemon "
-            "EnvironmentFile first."
+            "(rail pins + SAXO_LIVE_* auth env); re-run with `--env live`, which "
+            "composes the installed unit's rails and its EnvironmentFile for you "
+            "(#1377), or source the daemon EnvironmentFile by hand first."
         ) from exc
     except RuntimeError as exc:
         # Covers BrokerError (the rails' BrokerCapabilityError) AND SaxoError
@@ -783,10 +897,11 @@ def price_reader_command(
 
 
 @broker_app.command(name="account")
-def account_command() -> None:
+def account_command(env: str | None = _ENV_OPTION) -> None:
     """Print the broker account snapshot (cash, total value, margin)."""
     from broker_contract.contract import BrokerError
 
+    _apply_env_option(env)
     try:
         snapshot = _cli_broker(mutating=False).get_account()
     except BrokerError as exc:
@@ -829,10 +944,11 @@ def capital_reader_command() -> None:
 
 
 @broker_app.command(name="positions")
-def positions_command() -> None:
+def positions_command(env: str | None = _ENV_OPTION) -> None:
     """List open positions (signed quantity, avg price, market value, PnL)."""
     from broker_contract.contract import BrokerError
 
+    _apply_env_option(env)
     try:
         positions = _cli_broker(mutating=False).get_positions()
     except BrokerError as exc:
@@ -1323,10 +1439,11 @@ def arm_command(
     briefs_dir: Path = typer.Option(
         _DEFAULT_BRIEFS_DIR, "--briefs-dir", help="Thematic briefs parquet directory."
     ),
-    env: str = typer.Option(
-        _DEFAULT_ARM_ENV,
+    env: str | None = typer.Option(
+        None,
         "--env",
-        help="Broker instance inbox to arm into: 'sim' or 'live' (ADR 0016). Default: sim.",
+        help="Broker instance inbox to arm into: 'sim' or 'live' (ADR 0016). Default: sim; an explicit value is REQUIRED when "
+        "ALPHALENS_BROKER_ENVIRONMENT names another instance (#1377).",
     ),
 ) -> None:
     """Arm a picked candidate — parse the brief into a TradeIntent client-side
@@ -1357,6 +1474,8 @@ def arm_command(
     from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, parse_brief_to_spec
     from broker_contract.sizing import TradeSetupNotPlannableError
     from broker_contract.trade_intent.schema import InstrumentHint, IntentMeta, TradeIntent
+
+    env = _guard_ambient_instance(env, default=_DEFAULT_ARM_ENV)
 
     try:
         trade_date = dt.date.fromisoformat(date)
@@ -1501,10 +1620,11 @@ def arm_manual_command(
         "XPAR (Euronext Paris). LIVE on a European venue needs its market-data "
         "entitlement — see the runbook.",
     ),
-    env: str = typer.Option(
-        _DEFAULT_ARM_ENV,
+    env: str | None = typer.Option(
+        None,
         "--env",
-        help="Broker instance inbox to arm into: 'sim' or 'live' (ADR 0016). Default: sim.",
+        help="Broker instance inbox to arm into: 'sim' or 'live' (ADR 0016). Default: sim; an explicit value is REQUIRED when "
+        "ALPHALENS_BROKER_ENVIRONMENT names another instance (#1377).",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Compile and echo the intent, append nothing."
@@ -1531,6 +1651,9 @@ def arm_manual_command(
     would be superseded.
     """
     from alphalens_pipeline.brokers.automanager import state_paths
+
+    env = _guard_ambient_instance(env, default=_DEFAULT_ARM_ENV)
+
     from alphalens_pipeline.brokers.automanager.manual_intent import (
         ManualIntentError,
         build_manual_intent,
@@ -1614,10 +1737,11 @@ def arm_manual_command(
 def disarm_command(
     ticker: str = typer.Argument(..., help="Plain ticker of the armed pick, e.g. KO."),
     date: str = typer.Option(..., "--date", help="Brief date of the pick (YYYY-MM-DD)."),
-    env: str = typer.Option(
-        _DEFAULT_ARM_ENV,
+    env: str | None = typer.Option(
+        None,
         "--env",
-        help="Broker instance whose pick is disarmed: 'sim' or 'live' (ADR 0016). Default: sim.",
+        help="Broker instance whose pick is disarmed: 'sim' or 'live' (ADR 0016). Default: sim; an explicit value is REQUIRED when "
+        "ALPHALENS_BROKER_ENVIRONMENT names another instance (#1377).",
     ),
     note: str = typer.Option(
         "operator disarm", "--note", help="Reason recorded on both journal lines."
@@ -1668,6 +1792,7 @@ def disarm_command(
         pick_key_str,
     )
 
+    env = _guard_ambient_instance(env, default=_DEFAULT_ARM_ENV)
     if len(note) > _DISARM_NOTE_MAX_CHARS:
         raise _fail(
             f"--note is {len(note)} chars; max {_DISARM_NOTE_MAX_CHARS} — the note is "
@@ -1787,11 +1912,7 @@ def _render_picks_human(result: dict[str, Any]) -> None:
 
 @broker_app.command(name="picks")
 def picks_command(
-    env: str = typer.Option(
-        _DEFAULT_ARM_ENV,
-        "--env",
-        help="Broker instance whose queue to read: 'sim' or 'live' (ADR 0016). Default: sim.",
-    ),
+    env: str | None = _ENV_OPTION,
     output_format: str = typer.Option(
         "human",
         "--format",
@@ -1840,8 +1961,11 @@ def picks_command(
     if limit < 1:
         raise _fail(f"--limit must be >= 1, got {limit}")
     try:
-        picks_target = state_paths.picks_path(env=env)
-        submissions_target = state_paths.submissions_path(env=env)
+        # `None` resolves through the shared seam (#1377), so a bare invocation
+        # reads the same instance every other read command does.
+        resolved_env = env if env is not None else state_paths.broker_environment()
+        picks_target = state_paths.picks_path(env=resolved_env)
+        submissions_target = state_paths.submissions_path(env=resolved_env)
     except ValueError as exc:
         raise _fail(str(exc)) from exc
 
@@ -1894,7 +2018,7 @@ def picks_command(
 
     result = {
         "schema": _PICKS_SCHEMA,
-        "env": env,
+        "env": resolved_env,
         "picks_journal": str(picks_target),
         "submissions_journal": str(submissions_target),
         "counts": counts,
@@ -1992,6 +2116,7 @@ def _render_orders_human(result: Mapping[str, Any]) -> None:
 
 @broker_app.command(name="orders")
 def orders_command(
+    env: str | None = _ENV_OPTION,
     output_format: str = typer.Option(
         "human",
         "--format",
@@ -2011,6 +2136,7 @@ def orders_command(
     if output_format not in ("human", "json"):
         raise _fail(f"unknown --format {output_format!r} (expected human|json)")
 
+    _apply_env_option(env)
     try:
         states = _cli_broker(mutating=False).list_open_orders()
     except BrokerError as exc:
@@ -2160,6 +2286,7 @@ def watches_command(
 
 @broker_app.command(name="reconcile")
 def reconcile_command(
+    env: str | None = _ENV_OPTION,
     journal: Path | None = typer.Option(
         None,
         "--journal",
@@ -2182,6 +2309,8 @@ def reconcile_command(
     Exit code 0 when clean, 1 when any UNRESOLVED or divergent row exists
     (scriptable; a still-working entry PAST its TTL is a divergence).
     """
+    _apply_env_option(env)
+
     from alphalens_pipeline.brokers.automanager import state_paths
     from alphalens_pipeline.brokers.reconcile import (
         has_failures,
@@ -2346,10 +2475,12 @@ def reconcile_fills_command(
 @broker_app.command(name="cancel")
 def cancel_command(
     order_id: str = typer.Argument(..., help="Broker OrderId (entry cancel cascades exits)."),
+    env: str | None = _ENV_OPTION,
 ) -> None:
     """Cancel an order. Deliberately usable without the placement env gate."""
     from broker_contract.contract import BrokerError
 
+    _apply_env_option(env)
     try:
         _cli_broker(mutating=False).cancel_order(order_id)
     except BrokerError as exc:
@@ -2423,11 +2554,7 @@ _PROM_LINE_RE = re.compile(
 
 @broker_app.command(name="stream-status")
 def stream_status_command(
-    env: str = typer.Option(
-        _DEFAULT_ARM_ENV,
-        "--env",
-        help="Broker instance whose stream gauges to read (sim|live).",
-    ),
+    env: str | None = _ENV_OPTION,
     output_format: str = typer.Option(
         "human",
         "--format",
@@ -2445,6 +2572,9 @@ def stream_status_command(
     from alphalens_pipeline.brokers.automanager import state_paths
     from alphalens_pipeline.observability import textfile
 
+    # `None` resolves through the shared seam (#1377): a bare invocation reads
+    # the same instance `picks` / `watches` do, never a hardcoded sim.
+    env = env if env is not None else state_paths.broker_environment()
     if output_format not in ("human", "json"):
         raise _fail(f"unknown --format {output_format!r} (expected human|json)")
     try:
