@@ -205,6 +205,13 @@ groups:
       # compute job itself succeeded — the key blind spot this alert closes
       # (the original incident: compute job SIGKILL-timed-out, ExecStartPost never
       # fired, /edge frozen 2+ days with no page).
+      #
+      # This rule is DISARMED whenever the series does not exist: ``max()``
+      # over an absent series returns nothing, so the expression never crosses
+      # the threshold and the alert sits ``inactive`` looking healthy. That was
+      # the state from 2026-07 to 2026-09 (#1366): the edge-mirror unit wrote
+      # its metric to an unscraped directory. The AlphalensEdgeMetricMissing
+      # guard right below is what makes this rule honest.
       - alert: AlphalensEdgeStale
         expr: time() - max(alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}) > 129600  # 36h
         for: 15m
@@ -215,6 +222,26 @@ groups:
         annotations:
           summary: "/edge Postgres mirror has not refreshed in >36h"
           description: "alphalens-edge-mirror has not succeeded for {{ $value | humanizeDuration }} — /edge is stale regardless of whether the compute job 'succeeded'."
+
+      # absent() guard for AlphalensEdgeStale, the same pairing the generic
+      # AlphalensJobStale family gets from AlphalensJobMetricMissing (and
+      # AlphalensBrokerCapitalReadStale gets from ...ReadMissing). Fires when
+      # the edge-mirror series is missing outright: unit never fired since
+      # install, hook routed to an unscraped directory (#1366), textfile
+      # collector / node_exporter scrape broken, or the last run FAILED (the
+      # emitter rewrites the textfile without the success line on a non-zero
+      # exit). Pinned by test_prometheus_rule_unit_parity.py
+      # (DEDICATED_STALE_RULES).
+      - alert: AlphalensEdgeMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="edge-mirror"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: edge-mirror
+        annotations:
+          summary: "edge-mirror success metric missing — AlphalensEdgeStale is disarmed"
+          description: "No alphalens_job_last_success_timestamp_seconds{job=\"edge-mirror\"} series exists, so the 36h /edge staleness rule cannot fire. Causes: the unit has not succeeded since install, its hook writes outside /var/lib/node_exporter/textfile (ALPHALENS_TEXTFILE_DIR unset — check the unit's journal for the hook's WARN line), the textfile collector / node_exporter scrape is broken, or the last run failed. Clears after the first successful, correctly routed run."
 
       # feedback-shadow-returns runs nightly at 06:30 UTC (Track A v2
       # PR-T). 172800s = 48h = 2× the daily cadence, matching the other

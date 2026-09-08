@@ -14,6 +14,18 @@ StartLimitBurst=3
 
 [Service]
 Type=oneshot
+
+# Route the metrics hook to the directory node_exporter actually scrapes
+# (#1366). This unit loads no /etc/alphalens/env (it needs no secret), so
+# without this pin the ExecStopPost hook below fell back to its default
+# ~/.alphalens/metrics — written every hour, read by nobody. Prometheus
+# had no job="edge-mirror" series, and AlphalensEdgeStale (``time() -
+# max(...) > 36h``) sat `inactive` from the day the unit went live: ``max()``
+# over an absent series returns nothing, so the alert meant to catch a
+# frozen /edge could not fire. Explicit pin rather than EnvironmentFile=:
+# the only thing this unit needs from that file is this one non-secret path
+# (the broker-manager / price-reader / capital-reader precedent).
+Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile
 TimeoutStartSec=20min
 # The mgmt command is mtime-gated + idempotent, so redundant runs are ~free.
 ExecStart=/usr/bin/docker compose \

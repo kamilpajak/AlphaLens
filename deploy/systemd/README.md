@@ -855,6 +855,34 @@ re-syncs whatever parquets exist — including any partial output a timed-out ru
 wrote before the kill — within ≤1h, so this is a latency-only trade-off that
 stays well inside the 36h `AlphalensEdgeStale` budget.
 
+### Metrics routing (#1366, 2026-09-08)
+
+The mirror unit carries the standard `alphalens-emit-job-metrics edge-mirror`
+hook but loads no `/etc/alphalens/env` (it needs no secret). Until #1366 it
+therefore gave the hook no `ALPHALENS_TEXTFILE_DIR`, and the hook fell back to
+`~/.alphalens/metrics/` — a file rewritten every hour that node_exporter never
+reads. Prometheus had no `job="edge-mirror"` series at all, and
+`AlphalensEdgeStale` (`time() - max(...) > 36h`) sat `inactive` from the day
+the unit went live: `max()` over an absent series returns nothing, so the
+alert meant to catch a frozen `/edge` could not fire, and nothing else paged
+because the dedicated rule had no `absent()` guard. Three things changed:
+
+- the unit pins `Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile`
+  (the daemon units' precedent; `EnvironmentFile=` would pull the whole secrets
+  file for one non-secret path);
+- `AlphalensEdgeMetricMissing` (`absent(...)`) now guards `AlphalensEdgeStale`,
+  the same pairing every `AlphalensJobStale` has — pinned by
+  `test_prometheus_rule_unit_parity.py::DEDICATED_STALE_RULES`;
+- the hook warns on stderr (→ the unit's journal) whenever it falls back, and
+  `test_systemd_metrics_hook_completeness.py` refuses a hooked unit that routes
+  neither via `EnvironmentFile=/etc/alphalens/env` nor via the explicit pin.
+  `ALPHALENS_TEXTFILE_DIR` is documented as REQUIRED in `.env.example`.
+
+One-time cleanup after deploying the pinned unit: the stale, never-scraped
+files under `~/.alphalens/metrics/` (`alphalens_job_edge-mirror.prom` plus the
+June `alphalens_domain_*.prom` leftovers from before the #373/#374 routing
+fix) can be deleted; nothing reads them.
+
 ### Install (ATOMIC DEPLOY REQUIREMENT)
 
 The compute-unit edit and both new unit files **must land together** in a
@@ -874,6 +902,12 @@ systemctl --user enable --now alphalens-edge-mirror.timer
 
 # Step 3: Verify the timer is active.
 systemctl --user list-timers alphalens-edge-mirror.timer
+
+# Step 4 (#1366): after the next fire, the metric must land in the scraped dir
+# and the journal must carry NO hook WARN line.
+ls -l /var/lib/node_exporter/textfile/alphalens_job_edge-mirror.prom
+journalctl --user -u alphalens-edge-mirror.service --since -2h | grep -c "ALPHALENS_TEXTFILE_DIR unset"   # expect 0
+rm -f ~/.alphalens/metrics/alphalens_job_edge-mirror.prom              # never scraped; dead after the pin
 ```
 
 **CRITICAL:** Do NOT deploy the compute-unit edit alone. The `OnSuccess=`

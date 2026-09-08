@@ -1201,6 +1201,22 @@ class TestEdgeMirrorUnit(unittest.TestCase):
             "maintenance one-shot from the django-prod compose stack.",
         )
 
+    def test_mirror_service_pins_the_scraped_textfile_dir(self) -> None:
+        # #1366: the unit carried the emit hook with no EnvironmentFile and no
+        # pin, so the hook wrote alphalens_job_edge-mirror.prom to
+        # ~/.alphalens/metrics (unscraped) every hour and Prometheus never had
+        # a job="edge-mirror" series; AlphalensEdgeStale stayed inactive for
+        # two months. Explicit pin, not EnvironmentFile: the unit needs one
+        # non-secret path from that file and nothing else (the daemon units'
+        # precedent).
+        self.assertRegex(
+            EDGE_MIRROR_SERVICE.read_text(),
+            re.compile(
+                r"^Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile\s*$",
+                re.MULTILINE,
+            ),
+        )
+
     def test_mirror_timer_exists_and_targets_mirror_service(self) -> None:
         self.assertTrue(
             EDGE_MIRROR_TIMER.is_file(),
