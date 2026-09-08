@@ -87,6 +87,24 @@ class _CliFakeBroker:
         self.place_error: BrokerError | None = None
         self.account_currency = "USD"
         self.precheck_payload: dict = {"PreCheckResult": "Ok", "EstimatedCashRequired": 3_000.0}
+        # The default open-orders view carries every per-uic accounting field
+        # the Saxo adapter maps (#1375) so the renderer tests read real shapes;
+        # a test overrides the list to exercise the missing-field branches.
+        self.open_orders: list[OrderState] = [
+            OrderState(
+                "E-1",
+                OrderStatus.WORKING,
+                _instrument(),
+                0.0,
+                "Working",
+                uic=307,
+                side="BUY",
+                order_type="Limit",
+                amount=12.0,
+                external_reference="KO-2026-07-16-entry-t0",
+                order_relation="StandAlone",
+            )
+        ]
 
     def get_account(self) -> AccountSnapshot:
         return AccountSnapshot(
@@ -121,7 +139,7 @@ class _CliFakeBroker:
         return OrderState(order_id, OrderStatus.WORKING, None, 0.0, "Working")
 
     def list_open_orders(self) -> list[OrderState]:
-        return [OrderState("E-1", OrderStatus.WORKING, _instrument(), 0.0, "Working")]
+        return list(self.open_orders)
 
     def cancel_order(self, order_id: str) -> None:
         self.cancel_calls.append(order_id)
@@ -525,6 +543,130 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertIn("E-1", result.output)
         self.assertIn("WORKING", result.output)
         self.assertEqual(harness.broker.place_calls, [])
+
+    def test_orders_json_is_one_value_carrying_every_order_state_field(self):
+        harness = _SubmitHarness(self)
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["orders", "--format", "json"])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        envelope = json.loads(result.stdout)
+        self.assertEqual(envelope["schema"], "alphalens.broker.orders/v1")
+        self.assertEqual(len(envelope["orders"]), 1)
+        row = envelope["orders"][0]
+        self.assertEqual(
+            row,
+            {
+                "order_id": "E-1",
+                "status": "WORKING",
+                "raw_status": "Working",
+                "side": "BUY",
+                "order_type": "Limit",
+                "amount": 12.0,
+                "filled_quantity": 0.0,
+                "instrument": "ko:xnys",
+                "uic": 307,
+                "external_reference": "KO-2026-07-16-entry-t0",
+                "label": "KO E1",
+                "order_relation": "StandAlone",
+            },
+        )
+        self.assertEqual(harness.broker.place_calls, [])
+
+    def test_orders_human_row_carries_side_type_amount_ref_and_label(self):
+        _SubmitHarness(self)
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["orders"])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        (row,) = [line for line in result.stdout.splitlines() if line.startswith("E-1")]
+        for token in (
+            "BUY",
+            "Limit",
+            "12",
+            "ko:xnys",
+            "KO-2026-07-16-entry-t0",
+            "KO E1",
+            "WORKING",
+        ):
+            self.assertIn(token, row, row)
+
+    def test_orders_without_resolved_instrument_renders_the_uic_never_a_question_mark(self):
+        # Positive control for the #1375 defect: a one-shot CLI process has an
+        # empty resolve cache, so the adapter hands back instrument=None while
+        # the uic is known. The old renderer printed `?` for exactly this row.
+        harness = _SubmitHarness(self)
+        harness.broker.open_orders = [
+            OrderState(
+                "S-1",
+                OrderStatus.WORKING,
+                None,
+                0.0,
+                "Working",
+                uic=211,
+                side="SELL",
+                order_type="StopIfTraded",
+                amount=4.0,
+                external_reference="KO-2026-07-16-entry-t0-stop-1",
+            )
+        ]
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["orders"])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIn("uic 211", result.stdout)
+        self.assertIn("SELL", result.stdout)
+        self.assertIn("StopIfTraded", result.stdout)
+        self.assertNotIn("?", result.stdout)
+        # A stop ref has no human label; the raw ref stands alone in the row.
+        self.assertIn("KO-2026-07-16-entry-t0-stop-1", result.stdout)
+
+    def test_orders_row_without_ref_or_uic_renders_dashes_and_a_null_label(self):
+        # The minimal OrderState shape (every additive field defaulted) must
+        # render — the label helper raises TypeError on None, so the renderer
+        # has to guard it rather than pass the field through.
+        harness = _SubmitHarness(self)
+        harness.broker.open_orders = [OrderState("X-1", OrderStatus.WORKING, None, 0.0, "Working")]
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["orders", "--format", "json"])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        row = json.loads(result.stdout)["orders"][0]
+        self.assertIsNone(row["label"])
+        self.assertIsNone(row["instrument"])
+        self.assertIsNone(row["uic"])
+
+        human = self.runner.invoke(broker_app, ["orders"])
+        self.assertEqual(human.exit_code, 0, msg=human.output)
+        self.assertNotIn("?", human.stdout)
+        self.assertIn("X-1", human.stdout)
+
+    def test_orders_rejects_an_unknown_format_before_any_broker_call(self):
+        harness = _SubmitHarness(self)
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["orders", "--format", "xml"])
+
+        self.assertEqual(result.exit_code, 1, msg=result.output)
+        self.assertIn("--format", result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(harness.broker.place_calls, [])
+
+    def test_orders_empty_book_reads_no_open_orders(self):
+        harness = _SubmitHarness(self)
+        harness.broker.open_orders = []
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["orders"])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIn("no open orders", result.stdout)
+        as_json = self.runner.invoke(broker_app, ["orders", "--format", "json"])
+        self.assertEqual(json.loads(as_json.stdout)["orders"], [])
 
     def test_cancel_happy_path(self):
         harness = _SubmitHarness(self)

@@ -14,7 +14,9 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker arm KO --date 2026-07-20 [--env sim|live]   — validate
         against the brief, append an "armed" pick to <env>/picks.jsonl (the
         auto-manager hand-off seam; --env selects the instance, default sim)
-    alphalens broker orders                  — open orders
+    alphalens broker orders [--format json]  — open orders with side, type,
+        resting amount, instrument (symbol, else `uic <n>`), ExternalReference
+        + its human label (#1375)
     alphalens broker cancel <order_id>       — cancel (entry cancel cascades the bracket)
     alphalens broker reconcile [--json]      — READ-ONLY journal vs broker verdicts (P3):
         WORKING / PAST-TTL divergence / FILLED (+closed r) / CANCELLED / REJECTED /
@@ -50,7 +52,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -62,7 +64,7 @@ if TYPE_CHECKING:
     # `from __future__ import annotations` keeps the annotations as strings.
     from alphalens_pipeline.brokers.automanager.picks import PickRecord
     from alphalens_pipeline.brokers.notifications import NotificationPort
-    from broker_contract.contract import Broker, InstrumentRef
+    from broker_contract.contract import Broker, InstrumentRef, OrderState
     from broker_contract.fx import FxConversion
 
 logger = logging.getLogger(__name__)
@@ -1904,25 +1906,113 @@ def picks_command(
     _render_picks_human(result)
 
 
+_ORDERS_SCHEMA = "alphalens.broker.orders/v1"
+# Human-table placeholder for an absent optional field. Deliberately not `?`:
+# the pre-#1375 renderer printed `?` for the instrument of EVERY row a one-shot
+# process listed (empty resolve cache -> instrument=None), which read as an
+# unknown instrument when the uic was known all along.
+_ORDERS_ABSENT = "-"
+
+
+def _order_row(state: OrderState) -> dict[str, Any]:
+    """One open order as the JSON row — every field ``OrderState`` carries
+    (#1375), plus the human label of its ``ExternalReference``.
+
+    ``instrument`` is the resolved ``broker_symbol`` or ``None``: the Saxo
+    adapter's reverse lookup is cache-only, and a one-shot CLI process starts
+    with an empty cache, so ``uic`` is the identifier that is always present
+    on a Saxo row. ``label`` is ``None`` when there is no reference (the label
+    helper does not accept ``None``); a reference outside the crid / TP
+    families (a ``-stop-<gen>`` disaster stop) labels as itself."""
+    from alphalens_pipeline.brokers.automanager.labels import human_label_from_external_reference
+
+    ref = state.external_reference
+    return {
+        "order_id": state.order_id,
+        "status": state.status.value,
+        "raw_status": state.raw_status,
+        "side": state.side,
+        "order_type": state.order_type,
+        "amount": state.amount,
+        "filled_quantity": state.filled_quantity,
+        "instrument": state.instrument.broker_symbol if state.instrument else None,
+        "uic": state.uic,
+        "external_reference": ref,
+        "label": human_label_from_external_reference(ref) if ref else None,
+        "order_relation": state.order_relation,
+    }
+
+
+def _order_instrument_cell(row: Mapping[str, Any]) -> str:
+    """The human instrument cell: symbol, else ``uic <n>``, else the placeholder."""
+    if row["instrument"]:
+        return str(row["instrument"])
+    if row["uic"] is not None:
+        return f"uic {row['uic']}"
+    return _ORDERS_ABSENT
+
+
+def _render_orders_human(result: Mapping[str, Any]) -> None:
+    """Render the open orders as the human table (same facts as the JSON)."""
+    rows = result["orders"]
+    if not rows:
+        typer.echo("no open orders")
+        return
+
+    def _cell(value: Any) -> str:
+        return _ORDERS_ABSENT if value is None else str(value)
+
+    def _qty(value: Any) -> str:
+        return _ORDERS_ABSENT if value is None else f"{float(value):g}"
+
+    typer.echo(
+        f"{'order_id':12s} {'side':4s} {'type':20s} {'amount':>8s} {'filled':>8s}  "
+        f"{'instrument':16s} {'ref':44s} status  raw"
+    )
+    for row in rows:
+        ref = _cell(row["external_reference"])
+        # The label only adds information when it differs from the raw ref
+        # (a stop ref labels as itself — see _order_row).
+        if row["label"] and row["label"] != row["external_reference"]:
+            ref = f"{ref} ({row['label']})"
+        typer.echo(
+            f"{row['order_id']:12s} {_cell(row['side']):4s} {_cell(row['order_type']):20s} "
+            f"{_qty(row['amount']):>8s} {_qty(row['filled_quantity']):>8s}  "
+            f"{_order_instrument_cell(row):16s} {ref:44s} {row['status']}  raw={row['raw_status']}"
+        )
+
+
 @broker_app.command(name="orders")
-def orders_command() -> None:
-    """List open orders (entry + exit children; UNKNOWN never guessed)."""
+def orders_command(
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="Output format: human|json (json = exactly one JSON value on stdout).",
+    ),
+) -> None:
+    """List open orders (entry + exit children; UNKNOWN never guessed).
+
+    Every row carries what the broker returned for it (#1375): side, order
+    type, resting amount, filled quantity, the instrument (symbol when the
+    adapter could resolve it, else the uic), the ``ExternalReference`` with
+    its human label (``KO E1`` / ``KO TP1``; a disaster stop's ``-stop-<gen>``
+    ref stands as itself), and the OCO relation. One internal result object
+    rendered two ways (repo CLI doctrine)."""
     from broker_contract.contract import BrokerError
+
+    if output_format not in ("human", "json"):
+        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
 
     try:
         states = _cli_broker(mutating=False).list_open_orders()
     except BrokerError as exc:
         raise _fail(f"broker orders failed: {exc}") from exc
 
-    if not states:
-        typer.echo("no open orders")
+    result = {"schema": _ORDERS_SCHEMA, "orders": [_order_row(state) for state in states]}
+    if output_format == "json":
+        typer.echo(json.dumps(result))
         return
-    for state in states:
-        symbol = state.instrument.broker_symbol if state.instrument else "?"
-        typer.echo(
-            f"{state.order_id:12s} {state.status.value:16s} "
-            f"filled {state.filled_quantity:10.2f}  {symbol:16s} raw={state.raw_status}"
-        )
+    _render_orders_human(result)
 
 
 @broker_app.command(name="reconcile")
