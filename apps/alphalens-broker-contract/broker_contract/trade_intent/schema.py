@@ -187,6 +187,14 @@ class IntentMeta:
     # #1235). Journals and later measurement separate the two populations on
     # this marker; legacy payloads without the key decode to "brief".
     source: Literal["brief", "manual"] = "brief"
+    # Same-day re-arm counter (#1371). The pick identity everywhere downstream
+    # (queue fold, submissions join, entry-watch crids, stop refs) is
+    # (ticker, trade_date, generation); generation 1 keeps the pre-#1371
+    # identity strings byte-for-byte, so every journal line written before the
+    # field existed — and every payload that omits it — is generation 1.
+    # `broker arm-manual` assigns 1 + the highest generation already queued
+    # for (ticker, trade_date); a disarmed generation never comes back.
+    generation: int = 1
 
 
 @dataclass(frozen=True)

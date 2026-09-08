@@ -86,6 +86,28 @@ class PicksCommandStateTest(unittest.TestCase):
         result = _run(self.runner, "--format", "json")
         self.assertEqual(_rows(result)["KO"]["state"], "PENDING")
 
+    def test_generations_of_one_ticker_are_separate_rows(self) -> None:
+        # #1371: generation 1 disarmed, generation 2 armed and not yet joined —
+        # two rows, two states; the human view renders the identity token in
+        # the date column so the operator can tell them apart.
+        from alphalens_pipeline.brokers.automanager.picks import arm_pick, mark_disarmed
+
+        path = _picks_path(self.home)
+        _arm(self.home, "KO", "2026-07-20")
+        mark_disarmed("KO", dt.date(2026, 7, 20), note="wrong size", path=path)
+        arm_pick(_intent("KO", "2026-07-20", generation=2), path=path)
+        _submit(self.home, "KO", "2026-07-20")  # generation 1's record
+        result = _run(self.runner, "--format", "json")
+        self.assertEqual(result.exit_code, 0, result.output)
+        rows = sorted(
+            (row["generation"], row["trade_date"], row["state"])
+            for row in json.loads(result.stdout)["picks"]
+            if row["ticker"] == "KO"
+        )
+        self.assertEqual(rows, [(1, "2026-07-20", "DISARMED"), (2, "2026-07-20", "PENDING")])
+        human = _run(self.runner)
+        self.assertIn("2026-07-20-g2  PENDING", human.output)
+
     def test_refused_carries_its_reason_as_detail(self) -> None:
         from alphalens_pipeline.brokers.automanager.picks import mark_refused
 

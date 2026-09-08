@@ -173,7 +173,7 @@ class TestEntryWatchMultiSessionSoak(unittest.TestCase):
             live_exits_feed_factory=lambda _u2i, *, scope: self.feed,
         )
 
-    def _record_refused(self, ticker: str, trade_date: Any, reason: str) -> None:
+    def _record_refused(self, ticker: str, trade_date: Any, reason: str, **_kw: Any) -> None:
         self.refused.append((ticker, trade_date, reason))
 
     # --- invariants ----------------------------------------------------------

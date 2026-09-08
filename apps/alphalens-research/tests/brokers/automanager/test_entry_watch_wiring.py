@@ -55,18 +55,26 @@ _REAL_SAFETY_CHECK = _safety.check
 # --------------------------------------------------------------------------
 
 
-def _pick(ticker: str = "KO", date: str = "2026-07-20", source: str = "brief") -> Any:
+def _pick(
+    ticker: str = "KO", date: str = "2026-07-20", source: str = "brief", generation: int = 1
+) -> Any:
     return type(
         "Intent",
         (),
         {
             "instrument": type("Hint", (), {"ticker": ticker, "mic": "XNYS"})(),
             # `source` mirrors IntentMeta's field (#1246: _place_pick threads it
-            # into the day-1 gap gate's anchor choice).
+            # into the day-1 gap gate's anchor choice); `generation` mirrors the
+            # #1371 same-day re-arm counter.
             "meta": type(
                 "Meta",
                 (),
-                {"trade_date": date, "source": source, "armed_ts": "2026-07-20T14:00:00+00:00"},
+                {
+                    "trade_date": date,
+                    "source": source,
+                    "armed_ts": "2026-07-20T14:00:00+00:00",
+                    "generation": generation,
+                },
             )(),
             "spec": type("Spec", (), {"entry_tiers": ("t",)})(),
             "exit": None,
@@ -373,6 +381,89 @@ class TestDrainInterceptRoutesToWatch(unittest.TestCase):
         self.assertEqual(len(submissions), 1)
         self.assertEqual(submissions[0]["brackets"], [])
         self.assertIn("watch", submissions[0]["note"])
+
+    def test_generation_two_opens_its_own_watches_beside_the_terminal_first_generation(
+        self,
+    ) -> None:
+        # #1371 — the 2026-09-08 shape: generation 1 was armed, routed and
+        # disarmed (crids cancelled, submission recorded). The corrected
+        # generation-2 pick must open NEW watches under `-g2` crids with its own
+        # pick_key, while the generation-1 crids stay terminal untouched.
+        path = _journal(self)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "".join(
+                json.dumps(line) + "\n"
+                for line in (
+                    {
+                        "kind": "watch_open",
+                        "crid": "KO-2026-07-20-entry-t0",
+                        "pick_key": "KO:2026-07-20",
+                        "limit": 10.0,
+                        "qty": 100.0,
+                    },
+                    {"kind": "cancelled", "crid": "KO-2026-07-20-entry-t0", "note": "wrong size"},
+                )
+            ),
+            encoding="utf-8",
+        )
+        broker = _RecordingBroker()
+        placer, submissions = _placer(
+            self,
+            broker,
+            _plan((0, 10.0, 100), (1, 9.0, 100)),
+            submission_records=[{"ticker": "KO", "trade_date": "2026-07-20"}],
+        )
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertTrue(placer(_pick(generation=2)))
+        watch_opens = [
+            line for line in _lines(path) if line["kind"] == entry_trails.KIND_WATCH_OPEN
+        ]
+        self.assertEqual(
+            [(w["crid"], w["pick_key"]) for w in watch_opens[1:]],
+            [
+                ("KO-2026-07-20-g2-entry-t0", "KO:2026-07-20-g2"),
+                ("KO-2026-07-20-g2-entry-t1", "KO:2026-07-20-g2"),
+            ],
+        )
+        fold = entry_trails.read_entry_trail_fold(path=path)
+        self.assertEqual(fold.tiers["KO-2026-07-20-entry-t0"].terminal_kind, "cancelled")
+        self.assertIsNone(fold.tiers["KO-2026-07-20-g2-entry-t0"].terminal_kind)
+        # The retiring submission record carries the generation the drain's
+        # join reads back, so this pick never joins to generation 1's record.
+        self.assertEqual(submissions[0]["generation"], 2)
+
+    def test_generation_one_re_route_cannot_revive_a_cancelled_crid(self) -> None:
+        # Positive control for the test above (today's behaviour, unchanged):
+        # the SAME identity re-routed re-appends watch_open on the terminal
+        # crid, and the fold keeps it terminal — no live watch comes back.
+        path = _journal(self)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "kind": "watch_open",
+                    "crid": "KO-2026-07-20-entry-t0",
+                    "pick_key": "KO:2026-07-20",
+                    "limit": 10.0,
+                    "qty": 100.0,
+                }
+            )
+            + "\n"
+            + json.dumps({"kind": "cancelled", "crid": "KO-2026-07-20-entry-t0"})
+            + "\n",
+            encoding="utf-8",
+        )
+        broker = _RecordingBroker()
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        fold = entry_trails.read_entry_trail_fold(path=path)
+        self.assertEqual(fold.tiers["KO-2026-07-20-entry-t0"].terminal_kind, "cancelled")
+        # The stubbed record builder echoes its kwargs: generation 1 reaches
+        # it (the real builder then omits the key — pinned in
+        # test_routing_and_submission_log).
+        self.assertEqual(submissions[0]["generation"], 1)
 
     def test_flag_off_is_byte_identical_places_order_and_writes_no_watch(self) -> None:
         path = _journal(self)
@@ -1759,6 +1850,30 @@ def _route_watch(
         )
     tranche_lines = [ln for ln in _lines(stops_path) if ln["kind"] == "tranche_plan"]
     return ok, tranche_lines, trails_path, stops_path
+
+
+class TestEntryWatchCridGeneration(unittest.TestCase):
+    """#1371: the crid carries the same-day re-arm generation after the date,
+    and NOTHING for generation 1 (every crid that exists today)."""
+
+    def test_generation_one_crid_is_unchanged(self) -> None:
+        self.assertEqual(cl._entry_watch_crid("ENPH", "2026-09-08", 0), "ENPH-2026-09-08-entry-t0")
+        self.assertEqual(
+            cl._entry_watch_crid("ENPH", "2026-09-08", 1, generation=1),
+            "ENPH-2026-09-08-entry-t1",
+        )
+
+    def test_later_generation_suffixes_the_date(self) -> None:
+        self.assertEqual(
+            cl._entry_watch_crid("ENPH", "2026-09-08", 0, generation=2),
+            "ENPH-2026-09-08-g2-entry-t0",
+        )
+
+    def test_intent_without_the_field_reads_as_generation_one(self) -> None:
+        # Test doubles and pre-#1371 payloads carry no `generation`; the drain
+        # must treat them as the first generation, never crash on the attribute.
+        self.assertEqual(cl._pick_generation(type("I", (), {"meta": type("M", (), {})()})()), 1)
+        self.assertEqual(cl._pick_generation(_pick(generation=3)), 3)
 
 
 class TestWatchRoutingReferenceQtyOverride(unittest.TestCase):

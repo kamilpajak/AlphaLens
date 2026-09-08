@@ -12,6 +12,7 @@ CLI wiring only: option plumbing, the echo, the env-frame fallback, the
 
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from pathlib import Path
@@ -54,6 +55,63 @@ class ArmManualCommandTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
         self.home = _isolate_home(self)
+
+    def test_re_arm_after_disarm_gets_the_next_generation(self) -> None:
+        # #1371 — the 2026-09-08 shape: a pick armed in the wrong geometry,
+        # disarmed, and armed again the same day must be a NEW pick (generation
+        # 2), not a replacement the drain would never place.
+        import datetime as dt
+
+        from alphalens_cli.commands.broker import broker_app
+
+        today = dt.datetime.now(dt.UTC).date().isoformat()
+        first = self.runner.invoke(broker_app, _HAPPY_ARGS)
+        self.assertEqual(first.exit_code, 0, first.output)
+        self.assertNotIn("generation", first.output)
+        disarm = self.runner.invoke(broker_app, ["disarm", "nvo", "--date", today])
+        self.assertEqual(disarm.exit_code, 0, disarm.output)
+        second = self.runner.invoke(broker_app, _HAPPY_ARGS)
+        self.assertEqual(second.exit_code, 0, second.output)
+        self.assertIn("generation: 2", second.output)
+        self.assertNotIn("REPLACE", second.output)
+        picks = self.home / ".alphalens" / "broker_orders" / "sim" / "picks.jsonl"
+        last = json.loads(picks.read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(last["generation"], 2)
+        self.assertEqual(last["intent"]["meta"]["generation"], 2)
+        self.assertTrue(last["intent"]["intent_id"].endswith(":manual-g2"))
+
+    def test_dry_run_shows_the_next_generation_without_spending_it(self) -> None:
+        import datetime as dt
+
+        from alphalens_cli.commands.broker import broker_app
+
+        today = dt.datetime.now(dt.UTC).date().isoformat()
+        self.assertEqual(self.runner.invoke(broker_app, _HAPPY_ARGS).exit_code, 0)
+        self.assertEqual(
+            self.runner.invoke(broker_app, ["disarm", "nvo", "--date", today]).exit_code, 0
+        )
+        picks = self.home / ".alphalens" / "broker_orders" / "sim" / "picks.jsonl"
+        before = picks.read_text(encoding="utf-8")
+        for _ in range(2):
+            result = self.runner.invoke(broker_app, [*_HAPPY_ARGS, "--dry-run"])
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("generation: 2", result.output)
+        self.assertEqual(picks.read_text(encoding="utf-8"), before)
+
+    def test_re_arm_beside_a_still_armed_generation_is_refused(self) -> None:
+        # Two live generations of one ticker would be two live picks on one
+        # instrument (the live-long guard only defers after a FILL); the
+        # operator must disarm first. Nothing is appended on the refusal.
+        from alphalens_cli.commands.broker import broker_app
+
+        self.assertEqual(self.runner.invoke(broker_app, _HAPPY_ARGS).exit_code, 0)
+        picks = self.home / ".alphalens" / "broker_orders" / "sim" / "picks.jsonl"
+        before = picks.read_text(encoding="utf-8")
+        result = self.runner.invoke(broker_app, _HAPPY_ARGS)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("still armed", result.output)
+        self.assertIn("alphalens broker disarm NVO", result.output)
+        self.assertEqual(picks.read_text(encoding="utf-8"), before)
 
     def test_happy_path_appends_compiled_intent(self) -> None:
         from alphalens_cli.commands.broker import broker_app
@@ -220,21 +278,6 @@ class ArmManualEchoWarningsTest(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertNotIn("uncovered", result.output)
-
-    def test_rearm_same_ticker_same_day_warns_about_replacement(self) -> None:
-        # Real appends (no arm_pick mock): the picks fold keys on
-        # (ticker, date) latest-wins, so the second arm REPLACES the first —
-        # including a brief-armed pick that happens to share the date. The
-        # operator must be told, on the arming run itself.
-        from alphalens_cli.commands.broker import broker_app
-
-        first = self.runner.invoke(broker_app, _HAPPY_ARGS)
-        self.assertEqual(first.exit_code, 0, first.output)
-        self.assertNotIn("REPLACE", first.output)
-
-        second = self.runner.invoke(broker_app, _HAPPY_ARGS)
-        self.assertEqual(second.exit_code, 0, second.output)
-        self.assertIn("REPLACE", second.output)
 
 
 class ArmManualFrameFallbackTest(unittest.TestCase):

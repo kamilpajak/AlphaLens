@@ -1076,7 +1076,7 @@ class TestPlacePickBranches(unittest.TestCase):
         placer = self._placer(
             _PlaceBroker(),
             safety_check=lambda *_a, **_k: Refuse(reason="portfolio cap exceeded", terminal=True),
-            mark_refused=lambda *a: refusals.append(a),
+            mark_refused=lambda *a, **_kw: refusals.append(a),
         )
         self.assertFalse(placer(_pick()))
         self.assertEqual(refusals, [("KO", dt.date(2026, 7, 20), "portfolio cap exceeded")])
@@ -1099,7 +1099,7 @@ class TestPlacePickBranches(unittest.TestCase):
                 placer = self._placer(
                     _PlaceBroker(),
                     safety_check=lambda *_a, _r=reason, **_k: Refuse(reason=_r, terminal=False),
-                    mark_refused=lambda *a, _acc=refusals: _acc.append(a),
+                    mark_refused=lambda *a, _acc=refusals, **_kw: _acc.append(a),
                 )
                 self.assertFalse(placer(_pick()))
                 self.assertEqual(refusals, [])
@@ -1113,7 +1113,7 @@ class TestPlacePickBranches(unittest.TestCase):
             raise BrokerError("exchange rejected")
 
         placer = self._placer(
-            _PlaceBroker(on_place=_boom), mark_refused=lambda *a: refusals.append(a)
+            _PlaceBroker(on_place=_boom), mark_refused=lambda *a, **_kw: refusals.append(a)
         )
         self.assertFalse(placer(_pick()))
         self.assertEqual(refusals, [])
@@ -1125,7 +1125,7 @@ class TestPlacePickBranches(unittest.TestCase):
             raise BrokerError("account read down")
 
         placer = self._placer(
-            _PlaceBroker(on_account=_boom), mark_refused=lambda *a: refusals.append(a)
+            _PlaceBroker(on_account=_boom), mark_refused=lambda *a, **_kw: refusals.append(a)
         )
         self.assertFalse(placer(_pick()))
         self.assertEqual(refusals, [])
@@ -1641,7 +1641,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
             "iter_records": lambda _p: [],
             "append": lambda _r: None,
             "build_record": _fake_build_record,
-            "mark_refused": lambda *a: refusals.append(a),
+            "mark_refused": lambda *a, **_kw: refusals.append(a),
             **over,
         }
         p = stack.enter_context
@@ -1722,7 +1722,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
         self.addCleanup(stack.close)
         refusals: list[tuple[Any, ...]] = []
         p = stack.enter_context
-        p(mock.patch(f"{pkg}.automanager.picks.mark_refused", lambda *a: refusals.append(a)))
+        p(mock.patch(f"{pkg}.automanager.picks.mark_refused", lambda *a, **_kw: refusals.append(a)))
         p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
         p(mock.patch(f"{pkg}.submission_log.append_submission_record", lambda _r: None))
         p(mock.patch(f"{pkg}.submission_log.iter_submission_records", lambda _p: []))
@@ -2189,7 +2189,7 @@ class TestPlacePickGrossCapIntegration(unittest.TestCase):
             "iter_records": lambda _p: [],
             "append": appended.append,
             "build_record": _fake_build_record,
-            "mark_refused": lambda *a: refusals.append(a),
+            "mark_refused": lambda *a, **_kw: refusals.append(a),
             **over,
         }
         p = stack.enter_context
@@ -2446,7 +2446,7 @@ class TestPlacePickCashFloorIntegration(unittest.TestCase):
             "iter_records": lambda _p: [],
             "append": appended.append,
             "build_record": _fake_build_record,
-            "mark_refused": lambda *a: refusals.append(a),
+            "mark_refused": lambda *a, **_kw: refusals.append(a),
             **over,
         }
         p = stack.enter_context
@@ -9519,7 +9519,7 @@ class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
             "iter_records": lambda _p: [],
             "append": lambda _r: None,
             "build_record": _fake_build_record,
-            "mark_refused": lambda *a: refusals.append(a),
+            "mark_refused": lambda *a, **_kw: refusals.append(a),
             **over,
         }
         p = stack.enter_context

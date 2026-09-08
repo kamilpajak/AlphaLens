@@ -1473,10 +1473,26 @@ journalctl --user -u alphalens-broker-manager.service -f      # per-tick loop
 | Resume after kill | `rm` the KILL file you created |
 | **Disarm placement** (softer than kill) | `rm ~/.config/systemd/user/alphalens-broker-manager.service.d/10-allow-orders.conf` → `systemctl --user daemon-reload && systemctl --user restart alphalens-broker-manager.service` (runs inert). Re-arm by re-copying the tracked file. NEVER via `/etc/alphalens/env` — `EnvironmentFile=` overrides every `Environment=` line, in-unit and drop-in |
 | Arm a new pick | `.venv/bin/alphalens broker arm TICKER --date YYYY-MM-DD` (daemon picks it up next tick, joined to `submissions.jsonl` so it places once) (`--env sim\|live` selects the instance inbox; default sim — LIVE twin: §9.4) |
+| **Correct a pick armed today** (wrong geometry / size) | `.venv/bin/alphalens broker disarm TICKER --date <today> --env sim\|live` (refused while a native entry trail rests — `broker cancel <order_id>` first), then `broker arm-manual TICKER ... --env sim\|live` again: the new pick is the NEXT **generation** (#1371) — own watch crids, own submissions key; the disarmed generation stays retired |
 | Inspect | `journalctl --user -u alphalens-broker-manager.service -f` |
 | State files | picks: `~/.alphalens/broker_orders/sim/picks.jsonl`; placements: `~/.alphalens/broker_orders/sim/submissions.jsonl` (both append-only; LIVE twin under `broker_orders/live/`) |
 | Stop the daemon | `systemctl --user disable --now alphalens-broker-manager.service` |
 | Full flat check | `.venv/bin/alphalens broker positions` + `... orders` |
+
+**Same-day correction (#1371, 2026-09-08):** a pick's identity is
+`(ticker, trade_date, generation)`. `arm-manual` assigns the next generation for
+a `(ticker, date)` the inbox has already seen and REFUSES while an earlier
+generation is still armed (pending or with a live watch) — disarm first, or two
+live picks would run on one instrument. `broker picks` shows a generation ≥ 2
+as `2026-09-08-g2` in the date column (`generation` in the JSON row); the
+entry-trail crids read `TICKER-2026-09-08-g2-entry-tN` and the submissions
+record carries `"generation": 2`. `broker disarm --generation N` targets one
+generation (default: the highest queued). Limit that stays by design: a new
+generation on a ticker whose earlier generation already FILLED defers until
+that position is flat (the live-long guard). Deploy order after upgrading
+across #1371: pull → restart both daemons → only then arm a generation ≥ 2 (an
+old daemon reads the new key as unknown and would treat the pick as
+generation 1).
 
 **OAuth outage caveat:** if the VPS is down (or the keep-alive stops) for **>40 min**, the refresh chain dies → a `_chain_lost` Telegram alert fires and the daemon stops placing. Recovery = re-do §2 (attended browser login via SSH-forward). This is the one un-automatable step.
 

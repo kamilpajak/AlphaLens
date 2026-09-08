@@ -136,6 +136,16 @@ class TestDefaults(unittest.TestCase):
         meta = IntentMeta(armed_ts="2026-09-02T12:00:00Z", trade_date="2026-09-02", source="manual")
         self.assertEqual(meta.source, "manual")
 
+    def test_intent_meta_generation_defaults_to_one(self):
+        # #1371: generation 1 is every pick that exists today — the field is
+        # additive, so a meta built without it must read as the first generation.
+        meta = IntentMeta(armed_ts="2026-09-08T12:00:00Z", trade_date="2026-09-08")
+        self.assertEqual(meta.generation, 1)
+
+    def test_intent_meta_generation_accepts_a_same_day_re_arm(self):
+        meta = IntentMeta(armed_ts="2026-09-08T12:00:00Z", trade_date="2026-09-08", generation=2)
+        self.assertEqual(meta.generation, 2)
+
 
 class TestReactionPrimitiveDiscriminatedUnion(unittest.TestCase):
     def test_each_primitive_carries_its_distinct_kind_tag(self):

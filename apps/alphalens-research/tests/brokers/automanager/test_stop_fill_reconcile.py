@@ -614,6 +614,26 @@ class TestPickKeyFromStopRef(unittest.TestCase):
 
     def test_malformed_date_returns_none(self) -> None:
         self.assertIsNone(cl._pick_key_from_stop_ref("GME-notadate-entry-t0-stop-1"))
+
+    def test_generation_suffix_survives_the_round_trip(self) -> None:
+        # #1371: a same-day re-arm's crid carries `-g<N>` after the date; the
+        # recovered key must be the SAME colon form the watch_open lines carry,
+        # or the sibling-retire fold would look up the wrong generation.
+        self.assertEqual(
+            cl._pick_key_from_stop_ref("GME-2026-08-27-g2-entry-t0-stop-1"), "GME:2026-08-27-g2"
+        )
+        self.assertEqual(
+            cl._pick_key_from_stop_ref("BRK-B-2026-08-27-g3-entry-t1-stop-2"),
+            "BRK-B:2026-08-27-g3",
+        )
+
+    def test_non_generation_tail_is_not_a_generation(self) -> None:
+        # `-g0` / `-gx` are not generations (>= 1, digits only): the tail then
+        # sits where the day should be and the date parse fails -> None, never
+        # a made-up key.
+        for ref in ("GME-2026-08-27-g0-entry-t0-stop-1", "GME-2026-08-27-gx-entry-t0-stop-1"):
+            with self.subTest(ref=ref):
+                self.assertIsNone(cl._pick_key_from_stop_ref(ref))
         self.assertIsNone(cl._pick_key_from_stop_ref(None))
 
 

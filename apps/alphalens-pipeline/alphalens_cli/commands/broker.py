@@ -1530,7 +1530,12 @@ def arm_manual_command(
         build_manual_intent,
         planned_blended_entry_of,
     )
-    from alphalens_pipeline.brokers.automanager.picks import arm_pick, read_pick_fold
+    from alphalens_pipeline.brokers.automanager.picks import (
+        STATUS_ARMED,
+        arm_pick,
+        next_generation,
+        read_pick_fold,
+    )
 
     try:
         picks_target = state_paths.picks_path(env=env)
@@ -1543,6 +1548,24 @@ def arm_manual_command(
         frame = _frame_from_sizing_equity_env()
 
     now = dt.datetime.now(dt.UTC)
+    # #1371: a same-day re-arm is a NEW generation of the (ticker, date) pick.
+    # An earlier generation that is still ARMED (pending, or placed with a live
+    # watch) must be disarmed first — arming beside it would run two live
+    # picks on one instrument (the live-long guard only defers after a FILL).
+    earlier = [
+        p
+        for p in read_pick_fold(path=picks_target).records
+        if p.ticker.upper() == ticker.strip().upper() and p.trade_date == now.date()
+    ]
+    still_armed = [p for p in earlier if p.status == STATUS_ARMED]
+    if still_armed:
+        live = max(still_armed, key=lambda p: p.generation)
+        raise _fail(
+            f"{live.ticker} @ {live.token} is still armed (generation {live.generation}) — "
+            f"run `alphalens broker disarm {live.ticker} --date {live.trade_date.isoformat()} "
+            f"--env {env}` first; a same-day re-arm then gets the next generation"
+        )
+    generation = next_generation(ticker, now.date(), path=picks_target)
     try:
         intent = build_manual_intent(
             ticker=ticker,
@@ -1557,6 +1580,7 @@ def arm_manual_command(
             ttl_days=ttl_days,
             arm_date=now.date(),
             armed_ts=now.isoformat(timespec="seconds"),
+            generation=generation,
         )
     except ManualIntentError as exc:
         raise _fail(str(exc)) from exc
@@ -1565,22 +1589,13 @@ def arm_manual_command(
         intent.spec.entry_tiers, disaster_stop=intent.spec.disaster_stop
     )
     _echo_manual_intent(intent, blend=blend, frame=frame, notional=notional)
-    superseded = next(
-        (
-            p
-            for p in read_pick_fold(path=picks_target).records
-            if p.ticker.upper() == intent.instrument.ticker
-            and p.trade_date.isoformat() == intent.meta.trade_date
-        ),
-        None,
-    )
-    if superseded is not None:
-        typer.secho(
-            f"warning: a pick line for {intent.instrument.ticker} @ "
-            f"{intent.meta.trade_date} already exists in this inbox (status "
-            f"{superseded.status!r}) — arming will REPLACE it (the fold keys on "
-            "ticker+date, latest wins), even if it came from a brief",
-            fg=typer.colors.YELLOW,
+    if generation > 1:
+        retired = ", ".join(
+            f"g{p.generation} {p.status}" for p in sorted(earlier, key=lambda p: p.generation)
+        )
+        typer.echo(
+            f"  generation: {generation} (earlier line(s) on {intent.instrument.ticker} @ "
+            f"{intent.meta.trade_date}: {retired}) — new watch crids, own submissions key"
         )
     if dry_run:
         typer.echo("dry-run: nothing armed")
@@ -1600,6 +1615,12 @@ def disarm_command(
     ),
     note: str = typer.Option(
         "operator disarm", "--note", help="Reason recorded on both journal lines."
+    ),
+    generation: int | None = typer.Option(
+        None,
+        "--generation",
+        help="Same-day re-arm generation to disarm (#1371). Default: the highest "
+        "generation queued for (ticker, date).",
     ),
 ) -> None:
     """Disarm a picked candidate — retire the (ticker, date) pick from the
@@ -1622,9 +1643,10 @@ def disarm_command(
     Watch-refusal-first means a refused disarm leaves BOTH journals
     untouched; a repeated disarm is idempotent (zero open tiers -> zero
     cancelled lines, one more terminal queue line). Re-arming the SAME
-    (ticker, date) works queue-side but will NOT re-open its watch tiers
-    (deterministic crids stay terminal) — a fresh brief date is the real
-    path back. Best-effort vs the running daemon: it can arm a native trail
+    (ticker, date, generation) works queue-side but will NOT re-open its watch
+    tiers (deterministic crids stay terminal); the path back is
+    `broker arm-manual`, which assigns the NEXT generation (#1371) with its
+    own crids, or a fresh brief date. Best-effort vs the running daemon: it can arm a native trail
     between the read and the write; rerun after `broker cancel` if refused.
 
     Crash recovery: dying between the two writes leaves the watch cancelled
@@ -1634,7 +1656,11 @@ def disarm_command(
     watch existed to cancel) — rerun disarm to finish the queue half.
     """
     from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
-    from alphalens_pipeline.brokers.automanager.picks import mark_disarmed
+    from alphalens_pipeline.brokers.automanager.picks import (
+        mark_disarmed,
+        next_generation,
+        pick_key_str,
+    )
 
     if len(note) > _DISARM_NOTE_MAX_CHARS:
         raise _fail(
@@ -1656,13 +1682,19 @@ def disarm_command(
     _guard_state_layout()
 
     wanted = ticker.upper()
-    pick_key = f"{wanted}:{trade_date.isoformat()}"
+    if generation is None:
+        # The highest generation queued for the key; 1 when the queue has
+        # never seen it (next_generation is 1 + highest, hence the - 1).
+        generation = max(next_generation(wanted, trade_date, path=picks_target) - 1, 1)
+    elif generation < 1:
+        raise _fail(f"--generation must be >= 1, got {generation}")
+    pick_key = pick_key_str(wanted, trade_date.isoformat(), generation)
     try:
         cancelled = entry_trails.cancel_open_watches(pick_key, note=note, path=trails_target)
     except entry_trails.DisarmRestingOrderError as exc:
         raise _fail(f"disarm refused — resting entry order: {exc}") from exc
 
-    mark_disarmed(wanted, trade_date, note=note, path=picks_target)
+    mark_disarmed(wanted, trade_date, note=note, generation=generation, path=picks_target)
     watch_note = f"cancelled {len(cancelled)} watch tier(s)" if cancelled else "no open watch"
     typer.echo(f"disarmed {pick_key} (queue) + {watch_note} -> {picks_target.parent}")
 
@@ -1700,7 +1732,9 @@ def _pick_state(
         # refused / disarmed, and verbatim for any status added later — never
         # silently folded into one of the states above.
         return record.status.upper() or "UNKNOWN"
-    key = (record.ticker, record.trade_date.isoformat())
+    # (ticker, identity token): generation 1 = the bare date, a same-day
+    # re-arm = `<date>-g<N>` — the SAME pair picks.pick_key renders (#1371).
+    key = (record.ticker, record.token)
     if key in submitted:
         return _PICK_STATE_PLACED
     if key not in decodable:
@@ -1724,11 +1758,16 @@ def _render_picks_human(result: dict[str, Any]) -> None:
     if not rows:
         typer.echo(f"no picks in {result['picks_journal']}")
         return
+    from alphalens_pipeline.brokers.automanager.picks import identity_token
+
     width = max(len(row["ticker"]) for row in rows)
     for row in rows:
         detail = f"  {row['detail']}" if row["detail"] else ""
         # rstrip: a row with no detail must not trail the state-column padding.
-        line = f"{row['ticker']:<{width}}  {row['trade_date']}  {row['state']:<10}{detail}"
+        # The date column carries the identity token (`<date>-g<N>` for a
+        # same-day re-arm, #1371) so two generations of one ticker read apart.
+        token = identity_token(row["trade_date"], row["generation"])
+        line = f"{row['ticker']:<{width}}  {token}  {row['state']:<10}{detail}"
         typer.echo(line.rstrip())
     counts = result["counts"]
     # Iterate the counts THEMSELVES, not the known-state tuple: a status this
@@ -1812,6 +1851,7 @@ def picks_command(
         {
             "ticker": record.ticker,
             "trade_date": record.trade_date.isoformat(),
+            "generation": record.generation,
             "state": _pick_state(record, submitted=submitted, decodable=decodable),
             "armed_ts": record.record.get("armed_ts"),
             "detail": _pick_detail(record),
