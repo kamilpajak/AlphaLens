@@ -437,6 +437,10 @@ def _fold_data(fold: et.EntryTrailFold) -> tuple[Any, int]:
                 # armed ceiling fails here instead of going quiet.
                 s.armed_ceiling,
                 s.armed_trigger,
+                # #1376: the latest terminal record rides the fold (fired avg
+                # price / realized qty, cancel note) — a compactor that kept
+                # the marker but lost the record must fail here.
+                s.terminal_record,
             )
             for crid, s in fold.tiers.items()
         },
@@ -662,6 +666,265 @@ class TestAppendEntryTrailLine(unittest.TestCase):
                     {"kind": et.KIND_TROUGH, "crid": _CRID, "at": dt.datetime(2026, 8, 12)}
                 )
             self.assertIn("2026-08-12", journal.read_text(encoding="utf-8"))
+
+
+class TestTerminalRecord(unittest.TestCase):
+    """#1376: the fold keeps the LATEST terminal record verbatim (the ``fired``
+    line carries ``avg_price`` / ``realized_qty``, ``cancelled`` its note) —
+    before this the fold reduced every terminal line to its kind marker."""
+
+    def test_terminal_record_is_none_while_non_terminal(self) -> None:
+        fold = et.fold_entry_trail_lines([_watch_open(), _line(et.KIND_TOUCHED)])
+        self.assertIsNone(fold.tiers[_CRID].terminal_record)
+
+    def test_fired_record_is_kept_verbatim(self) -> None:
+        fold = et.fold_entry_trail_lines(
+            [
+                _watch_open(),
+                _line(et.KIND_FIRED, order_id="O-9", realized_qty=42, avg_price=42.5),
+            ]
+        )
+        state = fold.tiers[_CRID]
+        self.assertEqual(state.terminal_kind, et.KIND_FIRED)
+        self.assertEqual(state.terminal_record["avg_price"], 42.5)
+        self.assertEqual(state.terminal_record["realized_qty"], 42)
+        self.assertEqual(state.terminal_record["order_id"], "O-9")
+
+    def test_latest_terminal_record_wins(self) -> None:
+        fold = et.fold_entry_trail_lines(
+            [
+                _watch_open(),
+                _line(et.KIND_SUSPENDED, trough=9.0),
+                _line(et.KIND_FIRED, realized_qty=42),
+            ]
+        )
+        state = fold.tiers[_CRID]
+        self.assertEqual(state.terminal_kind, et.KIND_FIRED)
+        self.assertEqual(state.terminal_record["realized_qty"], 42)
+
+    def test_terminal_record_survives_compaction(self) -> None:
+        # Independent of _fold_data: a compactor that keeps the terminal
+        # marker but drops the record's payload must fail HERE too.
+        lines = [
+            _watch_open(),
+            _line(et.KIND_TOUCHED),
+            _line(et.KIND_TROUGH, trough=9.4),
+            _line(et.KIND_FIRED, order_id="O-9", realized_qty=42, avg_price=42.5),
+        ]
+        compacted = et.compact_entry_trail_lines(lines)
+        for label, source in (("original", lines), ("compacted", compacted)):
+            with self.subTest(source=label):
+                record = et.fold_entry_trail_lines(source).tiers[_CRID].terminal_record
+                self.assertEqual(record["realized_qty"], 42)
+                self.assertEqual(record["avg_price"], 42.5)
+
+
+class TestTierReservationAcct(unittest.TestCase):
+    """The per-record valuation behind ``watching_virtual_gross_acct`` (#1376):
+    ONE function values a watch_open for the gate and for the ``watches`` row,
+    so the CLI's reservation column cannot drift from the money gate."""
+
+    def test_limit_times_qty_same_currency(self) -> None:
+        self.assertEqual(et.tier_reservation_acct({"limit": 10.0, "qty": 5}), 50.0)
+
+    def test_fx_rate_divides_into_account_currency(self) -> None:
+        self.assertEqual(et.tier_reservation_acct({"limit": 20.0, "qty": 2, "fx_rate": 4.0}), 10.0)
+
+    def test_unvaluable_records_are_none(self) -> None:
+        for record in (
+            None,
+            {},
+            {"limit": 10.0},
+            {"limit": 0.0, "qty": 5},
+            {"limit": -1.0, "qty": 5},
+            {"limit": True, "qty": 5},
+            {"limit": "abc", "qty": 5},
+            {"limit": 10.0, "qty": 5, "fx_rate": 0.0},
+            {"limit": 10.0, "qty": 5, "fx_rate": "nan"},
+        ):
+            with self.subTest(record=record):
+                self.assertIsNone(et.tier_reservation_acct(record))
+
+    def test_gate_total_equals_the_sum_of_valued_tiers(self) -> None:
+        fold = et.fold_entry_trail_lines(_rich_entry_trail_journal())
+        total, _bad = et.watching_virtual_gross_acct(fold)
+        valued = [
+            et.tier_reservation_acct(s.watch_open)
+            for s in fold.tiers.values()
+            if s.terminal_kind is None
+        ]
+        self.assertEqual(total, sum(v for v in valued if v is not None))
+
+
+def _rows_by_crid(lines: list[str], *, include_terminal: bool = False) -> dict[str, dict]:
+    rows = et.tier_rows(et.fold_entry_trail_lines(lines), include_terminal=include_terminal)
+    return {row["crid"]: row for row in rows}
+
+
+class TestTierRows(unittest.TestCase):
+    """``tier_rows`` (#1376): one row per tier, the ``stage`` mirroring the
+    daemon's OWN sets (``_active_entry_watches`` / ``_resting_armed_tiers``):
+    a resting native arm is ``latest_kind == trail_armed`` WITH an order id; the
+    null-id write-ahead is ``arming``; a later non-terminal line after an arm
+    puts the tier back under the watch pass, whatever id the fold still holds."""
+
+    def _watch(self, crid: str, **extra: Any) -> str:
+        return _watch_open(
+            crid,
+            pick_key="KO:2026-08-12",
+            ticker="KO",
+            tier_index=0,
+            uic=211,
+            exchange_mic="XNYS",
+            instrument_currency="USD",
+            **extra,
+        )
+
+    def test_stage_open_touched_trail_armed_arming(self) -> None:
+        rows = _rows_by_crid(
+            [
+                self._watch("KO-2026-08-12-entry-t0"),
+                self._watch("KO-2026-08-12-entry-t1"),
+                _line(et.KIND_TROUGH, "KO-2026-08-12-entry-t1", trough=8.8),
+                self._watch("KO-2026-08-12-entry-t2"),
+                _line(
+                    et.KIND_TRAIL_ARMED,
+                    "KO-2026-08-12-entry-t2",
+                    order_id="O-1",
+                    trigger=9.2,
+                    ceiling=9.3,
+                ),
+                self._watch("KO-2026-08-12-entry-t3"),
+                _line(et.KIND_TRAIL_ARMED, "KO-2026-08-12-entry-t3", order_id=None, trigger=8.5),
+            ]
+        )
+        stages = {crid: row["stage"] for crid, row in rows.items()}
+        self.assertEqual(
+            stages,
+            {
+                "KO-2026-08-12-entry-t0": "open",
+                "KO-2026-08-12-entry-t1": "touched",
+                "KO-2026-08-12-entry-t2": "trail_armed",
+                "KO-2026-08-12-entry-t3": "arming",
+            },
+        )
+        # The compacted real-journal shape: NO `touched` line survives, the
+        # `trough` after the touch is what marks a touched tier.
+        touched = rows["KO-2026-08-12-entry-t1"]
+        self.assertEqual(touched["latest_kind"], et.KIND_TROUGH)
+        self.assertEqual(touched["min_trough"], 8.8)
+        armed = rows["KO-2026-08-12-entry-t2"]
+        self.assertEqual(
+            (armed["armed_order_id"], armed["armed_trigger"], armed["armed_ceiling"]),
+            ("O-1", 9.2, 9.3),
+        )
+        arming = rows["KO-2026-08-12-entry-t3"]
+        self.assertIsNone(arming["armed_order_id"])
+        self.assertEqual(arming["armed_trigger"], 8.5)
+
+    def test_a_trough_after_the_arm_is_touched_and_keeps_the_stale_id(self) -> None:
+        # The daemon's watch pass drives this tier (it excludes only
+        # latest_kind == trail_armed WITH an id) and `disarm` refuses on the
+        # id defensively — the row must show BOTH facts, not pick one.
+        rows = _rows_by_crid(
+            [
+                self._watch("KO-2026-08-12-entry-t0"),
+                _line(et.KIND_TRAIL_ARMED, "KO-2026-08-12-entry-t0", order_id="O-1", trigger=9.2),
+                _line(et.KIND_TROUGH, "KO-2026-08-12-entry-t0", trough=9.0),
+            ]
+        )
+        row = rows["KO-2026-08-12-entry-t0"]
+        self.assertEqual(row["stage"], "touched")
+        self.assertEqual(row["armed_order_id"], "O-1")
+
+    def test_every_terminal_kind_is_its_own_stage_and_hidden_by_default(self) -> None:
+        for kind in sorted(et.ENTRY_TRAIL_TERMINAL_KINDS):
+            with self.subTest(kind=kind):
+                lines = [
+                    self._watch("KO-2026-08-12-entry-t0"),
+                    _line(kind, "KO-2026-08-12-entry-t0"),
+                ]
+                self.assertEqual(_rows_by_crid(lines), {})
+                row = _rows_by_crid(lines, include_terminal=True)["KO-2026-08-12-entry-t0"]
+                self.assertEqual(row["stage"], kind)
+                self.assertEqual(row["terminal_kind"], kind)
+
+    def test_fired_row_carries_avg_price_and_realized_qty(self) -> None:
+        rows = _rows_by_crid(
+            [
+                self._watch("KO-2026-08-12-entry-t0"),
+                _line(
+                    et.KIND_FIRED,
+                    "KO-2026-08-12-entry-t0",
+                    order_id="O-1",
+                    realized_qty=3,
+                    avg_price=42.5,
+                ),
+                self._watch("KO-2026-08-12-entry-t1"),
+                _line(et.KIND_CANCELLED, "KO-2026-08-12-entry-t1", note="operator disarm"),
+            ],
+            include_terminal=True,
+        )
+        fired = rows["KO-2026-08-12-entry-t0"]
+        self.assertEqual((fired["fired_avg_price"], fired["fired_realized_qty"]), (42.5, 3))
+        self.assertIsNone(fired["terminal_note"])
+        cancelled = rows["KO-2026-08-12-entry-t1"]
+        self.assertEqual(cancelled["terminal_note"], "operator disarm")
+        self.assertIsNone(cancelled["fired_avg_price"])
+
+    def test_row_carries_the_watch_open_facts_and_the_reservation(self) -> None:
+        row = _rows_by_crid(
+            [self._watch("KO-2026-08-12-entry-t0", fx_rate=4.0, limit=20.0, qty=2)]
+        )["KO-2026-08-12-entry-t0"]
+        self.assertEqual(row["tier"], "E1")
+        self.assertEqual(row["pick_key"], "KO:2026-08-12")
+        self.assertEqual(row["ticker"], "KO")
+        self.assertEqual(row["tier_index"], 0)
+        self.assertEqual(row["uic"], 211)
+        self.assertEqual(row["exchange_mic"], "XNYS")
+        self.assertEqual(row["instrument_currency"], "USD")
+        self.assertEqual((row["limit"], row["qty"], row["fx_rate"]), (20.0, 2, 4.0))
+        self.assertEqual(row["reservation_acct"], 10.0)
+        self.assertEqual(row["window_end"], "2026-08-21")
+
+    def test_generation_crid_labels_the_tier_from_its_index(self) -> None:
+        row = _rows_by_crid([_watch_open("ENPH-2026-09-08-g2-entry-t1")])[
+            "ENPH-2026-09-08-g2-entry-t1"
+        ]
+        self.assertEqual(row["tier"], "E2")
+
+    def test_tier_without_watch_open_is_unvaluable_not_absent(self) -> None:
+        row = _rows_by_crid([_line(et.KIND_TOUCHED, "KO-2026-08-12-entry-t0")])[
+            "KO-2026-08-12-entry-t0"
+        ]
+        self.assertEqual(row["stage"], "touched")
+        self.assertIsNone(row["reservation_acct"])
+        self.assertIsNone(row["pick_key"])
+        self.assertIsNone(row["limit"])
+
+    def test_rows_sort_by_pick_then_tier_index(self) -> None:
+        rows = et.tier_rows(
+            et.fold_entry_trail_lines(
+                [
+                    _watch_open("ZZ-2026-08-12-entry-t1", pick_key="ZZ:2026-08-12", tier_index=1),
+                    _watch_open("AA-2026-08-12-entry-t0", pick_key="AA:2026-08-12", tier_index=0),
+                    _watch_open("ZZ-2026-08-12-entry-t0", pick_key="ZZ:2026-08-12", tier_index=0),
+                ]
+            ),
+            include_terminal=False,
+        )
+        self.assertEqual(
+            [row["crid"] for row in rows],
+            ["AA-2026-08-12-entry-t0", "ZZ-2026-08-12-entry-t0", "ZZ-2026-08-12-entry-t1"],
+        )
+
+    def test_reservation_sum_equals_the_gate_total(self) -> None:
+        fold = et.fold_entry_trail_lines(_rich_entry_trail_journal())
+        rows = et.tier_rows(fold, include_terminal=False)
+        total, _bad = et.watching_virtual_gross_acct(fold)
+        self.assertEqual(
+            sum(r["reservation_acct"] for r in rows if r["reservation_acct"] is not None), total
+        )
 
 
 if __name__ == "__main__":
