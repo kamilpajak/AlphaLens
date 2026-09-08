@@ -872,6 +872,26 @@ class TestTierRows(unittest.TestCase):
         self.assertEqual(cancelled["terminal_note"], "operator disarm")
         self.assertIsNone(cancelled["fired_avg_price"])
 
+    def test_corrupt_fill_facts_fold_to_none_never_raw(self) -> None:
+        # A non-numeric avg_price / realized_qty on a fired line is journal
+        # corruption; the row must carry None (rendered as absent), never the
+        # raw value a numeric formatter would choke on.
+        row = _rows_by_crid(
+            [
+                self._watch("KO-2026-08-12-entry-t0"),
+                _line(
+                    et.KIND_FIRED,
+                    "KO-2026-08-12-entry-t0",
+                    avg_price="oops",
+                    realized_qty=[1],
+                ),
+            ],
+            include_terminal=True,
+        )["KO-2026-08-12-entry-t0"]
+        self.assertEqual(row["stage"], et.KIND_FIRED)
+        self.assertIsNone(row["fired_avg_price"])
+        self.assertIsNone(row["fired_realized_qty"])
+
     def test_row_carries_the_watch_open_facts_and_the_reservation(self) -> None:
         row = _rows_by_crid(
             [self._watch("KO-2026-08-12-entry-t0", fx_rate=4.0, limit=20.0, qty=2)]

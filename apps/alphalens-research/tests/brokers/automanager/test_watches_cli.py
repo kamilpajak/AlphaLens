@@ -312,6 +312,32 @@ class WatchesCommandTest(unittest.TestCase):
         # The summary counts the same non-terminal tiers as without --all.
         self.assertIn("watching 6 tier(s) / 4 pick(s)", lines[-1])
 
+    def test_human_renders_a_corrupt_fired_record_without_crashing(self) -> None:
+        # Zen finding on #1381: the fill facts reached the `:g` formatter raw,
+        # so a corrupt journal value crashed human mode while JSON succeeded.
+        _seed(
+            self.home,
+            "sim",
+            [
+                _watch_open(
+                    "KO-2026-09-08-entry-t0", "KO:2026-09-08", "KO", 0, limit="x", qty=None
+                ),
+                {
+                    "kind": "fired",
+                    "crid": "KO-2026-09-08-entry-t0",
+                    "avg_price": "oops",
+                    "realized_qty": [1],
+                },
+            ],
+        )
+        result = self._invoke("--all")
+        self.assertEqual(result.exit_code, 0, result.output)
+        line = next(line for line in result.stdout.splitlines() if "KO:2026-09-08" in line)
+        self.assertIn("fired", line)
+        self.assertNotIn("avg", line)
+        self.assertNotIn("oops", line)
+        self.assertIn("resv -", line)
+
     def test_human_footer_omits_zero_counts(self) -> None:
         _seed(self.home, "sim", [_JOURNAL[0]])
         result = self._invoke()

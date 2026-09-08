@@ -438,7 +438,12 @@ def tier_stage(state: EntryTrailTierState) -> str:
 def _tier_row(state: EntryTrailTierState) -> dict[str, Any]:
     record = state.watch_open or {}
     terminal = state.terminal_record or {}
+    # The fill facts are validated like the arm-time prices above: a corrupt
+    # journal value folds to None (rendered as absent) instead of reaching a
+    # numeric format in the human renderer.
     fired = state.terminal_kind == KIND_FIRED
+    fired_avg_price = _finite_positive_float(terminal.get("avg_price")) if fired else None
+    fired_realized_qty = _finite_positive_float(terminal.get("realized_qty")) if fired else None
     return {
         "crid": state.crid,
         "pick_key": record.get("pick_key"),
@@ -460,8 +465,8 @@ def _tier_row(state: EntryTrailTierState) -> dict[str, Any]:
         "armed_ceiling": state.armed_ceiling,
         "min_trough": state.min_trough,
         "window_end": record.get("window_end"),
-        "fired_avg_price": terminal.get("avg_price") if fired else None,
-        "fired_realized_qty": terminal.get("realized_qty") if fired else None,
+        "fired_avg_price": fired_avg_price,
+        "fired_realized_qty": fired_realized_qty,
         "terminal_note": terminal.get("note"),
     }
 
