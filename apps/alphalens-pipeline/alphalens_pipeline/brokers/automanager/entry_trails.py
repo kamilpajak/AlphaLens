@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any
 
 from alphalens_pipeline.brokers.automanager import state_paths
+from alphalens_pipeline.brokers.automanager.labels import entry_label_from_crid
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,13 @@ class EntryTrailTierState:
     # come from that tick. A record pairing an old ceiling with a freshly
     # computed trigger describes no order that ever existed.
     armed_trigger: float | None = None
+    # #1376: the LATEST terminal record verbatim (mirror of ``watch_open``).
+    # ``terminal_kind`` alone reduced a ``fired`` line to its marker while the
+    # journal carries the fill (``avg_price`` / ``realized_qty``) and a
+    # ``cancelled`` line its note — the ``watches`` view renders them from
+    # here. The compactor keeps the latest terminal line, so this survives
+    # compaction unchanged. ``None`` while the tier is non-terminal.
+    terminal_record: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -276,6 +284,7 @@ def _fold_record_into_state(state: dict[str, Any], kind: str, record: Mapping[st
     (the mutable per-crid accumulator behind :func:`fold_entry_trail_lines`)."""
     if kind in ENTRY_TRAIL_TERMINAL_KINDS:
         state["terminal_kind"] = kind
+        state["terminal_record"] = dict(record)
         return
     state["latest_kind"] = kind
     if kind == KIND_WATCH_OPEN:
@@ -333,6 +342,7 @@ def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
                 "armed_order_id": None,
                 "armed_ceiling": None,
                 "armed_trigger": None,
+                "terminal_record": None,
             },
         )
         _fold_record_into_state(state, kind, record)
@@ -363,26 +373,127 @@ def watching_virtual_gross_acct(fold: EntryTrailFold) -> tuple[float, int]:
     for state in fold.tiers.values():
         if state.terminal_kind is not None:
             continue
-        record = state.watch_open
-        if record is None:
+        reservation = tier_reservation_acct(state.watch_open)
+        if reservation is None:
             bad += 1
             continue
-        limit = _finite_positive_float(record.get("limit"))
-        qty = _finite_positive_float(record.get("qty"))
-        if limit is None or qty is None:
-            bad += 1
-            continue
-        notional = limit * qty
-        fx_rate = record.get("fx_rate")
-        if fx_rate is not None:
-            rate = _finite_positive_float(fx_rate)
-            if rate is None:
-                bad += 1
-                continue
-            # rate is instrument-ccy per 1 account-ccy -> acct = instr / rate.
-            notional /= rate
-        total += notional
+        total += reservation
     return total, bad
+
+
+def tier_reservation_acct(record: Mapping[str, Any] | None) -> float | None:
+    """The ACCOUNT-currency reservation of ONE ``watch_open`` record —
+    ``limit x qty`` through the record's own ``fx_rate`` — or ``None`` when it
+    cannot be valued (no record, or an uncastable / non-positive limit, qty or
+    fx_rate).
+
+    The single valuation behind :func:`watching_virtual_gross_acct` (the money
+    gates) AND the per-row ``reservation_acct`` of the ``watches`` view
+    (#1376), so the operator's column can never disagree with the gate's sum.
+    ``None`` is the gate's fail-closed signal (counted into ``bad``)."""
+    if record is None:
+        return None
+    limit = _finite_positive_float(record.get("limit"))
+    qty = _finite_positive_float(record.get("qty"))
+    if limit is None or qty is None:
+        return None
+    notional = limit * qty
+    fx_rate = record.get("fx_rate")
+    if fx_rate is not None:
+        rate = _finite_positive_float(fx_rate)
+        if rate is None:
+            return None
+        # rate is instrument-ccy per 1 account-ccy -> acct = instr / rate.
+        notional /= rate
+    return notional
+
+
+# --- Operator view of the fold (#1376) ---------------------------------------
+#
+# The ``stage`` names mirror the daemon's OWN partition of the fold, never a
+# presentation heuristic: ``_resting_armed_tiers`` owns a tier whose latest kind
+# is ``trail_armed`` WITH an order id (the broker holds the order; the
+# reconcile pass watches its fill), ``_active_entry_watches`` drives everything
+# else that is non-terminal — including the null-id ``trail_armed`` write-ahead
+# (``arming``: the executor re-drives the unconfirmed POST) and a tier whose
+# fold still holds a stale ``armed_order_id`` under a later non-terminal line.
+
+STAGE_OPEN = "open"
+STAGE_TOUCHED = "touched"
+STAGE_ARMING = "arming"
+STAGE_TRAIL_ARMED = "trail_armed"
+
+
+def tier_stage(state: EntryTrailTierState) -> str:
+    """The daemon-partition stage of one tier (see the section comment)."""
+    if state.terminal_kind is not None:
+        return state.terminal_kind
+    if state.latest_kind == KIND_TRAIL_ARMED:
+        return STAGE_TRAIL_ARMED if state.armed_order_id is not None else STAGE_ARMING
+    if state.latest_kind in (KIND_TOUCHED, KIND_TROUGH):
+        return STAGE_TOUCHED
+    return STAGE_OPEN
+
+
+def _tier_row(state: EntryTrailTierState) -> dict[str, Any]:
+    record = state.watch_open or {}
+    terminal = state.terminal_record or {}
+    # The fill facts are validated like the arm-time prices above: a corrupt
+    # journal value folds to None (rendered as absent) instead of reaching a
+    # numeric format in the human renderer.
+    fired = state.terminal_kind == KIND_FIRED
+    fired_avg_price = _finite_positive_float(terminal.get("avg_price")) if fired else None
+    fired_realized_qty = _finite_positive_float(terminal.get("realized_qty")) if fired else None
+    return {
+        "crid": state.crid,
+        "pick_key": record.get("pick_key"),
+        "ticker": record.get("ticker"),
+        "tier": entry_label_from_crid(state.crid),
+        "tier_index": record.get("tier_index"),
+        "uic": record.get("uic"),
+        "exchange_mic": record.get("exchange_mic"),
+        "limit": record.get("limit"),
+        "qty": record.get("qty"),
+        "instrument_currency": record.get("instrument_currency"),
+        "fx_rate": record.get("fx_rate"),
+        "reservation_acct": tier_reservation_acct(state.watch_open),
+        "stage": tier_stage(state),
+        "latest_kind": state.latest_kind,
+        "terminal_kind": state.terminal_kind,
+        "armed_order_id": state.armed_order_id,
+        "armed_trigger": state.armed_trigger,
+        "armed_ceiling": state.armed_ceiling,
+        "min_trough": state.min_trough,
+        "window_end": record.get("window_end"),
+        "fired_avg_price": fired_avg_price,
+        "fired_realized_qty": fired_realized_qty,
+        "terminal_note": terminal.get("note"),
+    }
+
+
+def _tier_sort_key(row: Mapping[str, Any]) -> tuple[str, int, str]:
+    tier_index = row["tier_index"]
+    return (
+        str(row["pick_key"] or row["crid"]),
+        tier_index if isinstance(tier_index, int) and not isinstance(tier_index, bool) else 0,
+        row["crid"],
+    )
+
+
+def tier_rows(fold: EntryTrailFold, *, include_terminal: bool) -> list[dict[str, Any]]:
+    """One row per tier of ``fold`` for the ``watches`` view (#1376) — pure,
+    no I/O. Non-terminal tiers only unless ``include_terminal``. Rows carry the
+    ``watch_open`` facts verbatim (``None`` when the tier has none), the
+    reservation from :func:`tier_reservation_acct`, the stage from
+    :func:`tier_stage`, the arm facts whenever the fold holds them, and the
+    terminal record's fill / note. Sorted by (pick key, tier index, crid) so
+    the tiers of one pick read together."""
+    rows = [
+        _tier_row(state)
+        for state in fold.tiers.values()
+        if include_terminal or state.terminal_kind is None
+    ]
+    return sorted(rows, key=_tier_sort_key)
 
 
 # --- Journal path + read seam ------------------------------------------------

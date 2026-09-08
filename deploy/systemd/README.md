@@ -1454,6 +1454,7 @@ export ALPHALENS_BROKER_ALLOW_ORDERS=1
 set -a && source /etc/alphalens/env && set +a
 .venv/bin/alphalens broker manage --once
 .venv/bin/alphalens broker orders      # entry bracket + (after fill) standalone StopIfTraded
+.venv/bin/alphalens broker watches --env sim [--all]   # entry-trail tiers: open / touched / arming / trail_armed (+ terminal with --all), reservation per tier (#1376)
 .venv/bin/alphalens broker reconcile --json   # FILLED once filled; realized_r when closed
 ```
 

@@ -17,6 +17,10 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker orders [--format json]  — open orders with side, type,
         resting amount, instrument (symbol, else `uic <n>`), ExternalReference
         + its human label (#1375)
+    alphalens broker watches [--env sim|live] [--all] [--format json]  — READ-ONLY
+        entry-trail fold per tier: open / touched / arming / trail_armed (+ the
+        terminal fired / expired / suspended / cancelled with --all), the
+        reservation each watch holds and the total the money gates see (#1376)
     alphalens broker cancel <order_id>       — cancel (entry cancel cascades the bracket)
     alphalens broker reconcile [--json]      — READ-ONLY journal vs broker verdicts (P3):
         WORKING / PAST-TTL divergence / FILLED (+closed r) / CANCELLED / REJECTED /
@@ -2017,6 +2021,141 @@ def orders_command(
         typer.echo(json.dumps(result))
         return
     _render_orders_human(result)
+
+
+_WATCHES_SCHEMA = "alphalens.broker.watches/v1"
+_WATCHES_ABSENT = "-"
+
+
+def _watch_cell(value: Any) -> str:
+    return _WATCHES_ABSENT if value is None or value == "" else str(value)
+
+
+def _watch_detail(row: Mapping[str, Any]) -> str:
+    """The stage-specific facts of one row, as ``key value`` pairs."""
+    from alphalens_pipeline.brokers.automanager import entry_trails
+
+    parts: list[str] = []
+    stage = row["stage"]
+    if row["armed_order_id"] is not None:
+        parts.append(f"order {row['armed_order_id']}")
+    elif stage == entry_trails.STAGE_ARMING:
+        parts.append("order pending")
+    if row["armed_trigger"] is not None:
+        parts.append(f"trigger {row['armed_trigger']:g}")
+    if row["armed_ceiling"] is not None:
+        parts.append(f"ceiling {row['armed_ceiling']:g}")
+    if stage == entry_trails.STAGE_TOUCHED and row["min_trough"] is not None:
+        parts.append(f"trough {row['min_trough']:g}")
+    if stage == entry_trails.KIND_FIRED:
+        if row["fired_avg_price"] is not None:
+            parts.append(f"avg {row['fired_avg_price']:g}")
+        if row["fired_realized_qty"] is not None:
+            parts.append(f"qty {row['fired_realized_qty']:g}")
+    if row["terminal_note"]:
+        parts.append(str(row["terminal_note"]))
+    return " ".join(parts)
+
+
+def _render_watches_human(result: Mapping[str, Any]) -> None:
+    """Render the watches table as the human view (same facts as the JSON)."""
+    typer.echo(f"env  {result['env']}")
+    rows = result["watches"]
+    if not rows:
+        typer.echo(f"no watches in {result['journal']}")
+        return
+    width = max(len(_watch_cell(row["pick_key"] or row["crid"])) for row in rows)
+    for row in rows:
+        resv = row["reservation_acct"]
+        size = f"{_watch_cell(row['limit'])}x{_watch_cell(row['qty'])}"
+        line = (
+            f"{_watch_cell(row['pick_key'] or row['crid']):<{width}}  {row['tier']:<3} "
+            f"{size:<12} {_watch_cell(row['instrument_currency']):<4} "
+            f"{row['stage']:<11} {_watch_detail(row)}  "
+            f"ttl {_watch_cell(row['window_end'])}  "
+            f"resv {_WATCHES_ABSENT if resv is None else f'{resv:.2f}'}"
+        )
+        typer.echo(line)
+    watching = result["watching"]
+    footer = (
+        f"watching {watching['tiers']} tier(s) / {watching['picks']} pick(s)  "
+        f"reserved {watching['reserved_acct']:.2f} acct"
+    )
+    if watching["unvaluable_tiers"]:
+        footer += f"  unvaluable {watching['unvaluable_tiers']}"
+    if result["malformed"]:
+        footer += f"  malformed {result['malformed']}"
+    typer.echo(footer)
+
+
+@broker_app.command(name="watches")
+def watches_command(
+    env: str | None = typer.Option(
+        None,
+        "--env",
+        help="Broker instance whose entry-trail journal to read: 'sim' or 'live' "
+        "(ADR 0016). Default: $ALPHALENS_BROKER_ENVIRONMENT, else sim.",
+    ),
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="Output format: human|json (json = exactly one JSON value on stdout).",
+    ),
+    show_all: bool = typer.Option(
+        False, "--all", help="Also list terminal tiers (fired / expired / suspended / cancelled)."
+    ),
+) -> None:
+    """Show the entry-trail watch state per tier — READ-ONLY (issue #1376).
+
+    One row per NON-terminal tier of the per-env ``entry_trails.jsonl`` fold
+    (``--all`` adds the terminal ones): the pick key, the tier label, the
+    watched limit x qty, the stage the DAEMON would put the tier in (open /
+    touched / arming / trail_armed, or its terminal kind), the arm facts
+    (order id, trigger, ceiling), the running trough, the TTL end, and the
+    virtual reservation in account currency. The reservation column and the
+    ``reserved_acct`` total come from the SAME valuation the gross cap and
+    cash floor use (``entry_trails.watching_virtual_gross_acct``), so what the
+    operator reads is what the gates subtract; ``unvaluable_tiers`` +
+    ``malformed`` is the count those gates fail closed on.
+
+    No broker, no auth, no mutation; safe while the daemon runs. Exit 0 for
+    any successful read, including a missing journal.
+    """
+    from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
+
+    if output_format not in ("human", "json"):
+        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
+    try:
+        resolved_env = env if env is not None else state_paths.broker_environment()
+        journal = state_paths.entry_trails_path(env=resolved_env)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+
+    _guard_state_layout()
+
+    fold = entry_trails.read_entry_trail_fold(path=journal)
+    rows = entry_trails.tier_rows(fold, include_terminal=show_all)
+    # The summary counts EVERY non-terminal tier, whatever --all renders.
+    open_rows = entry_trails.tier_rows(fold, include_terminal=False)
+    reserved_acct, _bad = entry_trails.watching_virtual_gross_acct(fold)
+    result = {
+        "schema": _WATCHES_SCHEMA,
+        "env": resolved_env,
+        "journal": str(journal),
+        "watches": rows,
+        "watching": {
+            "tiers": len(open_rows),
+            # The daemon's MAX_OPEN fold counts a keyless tier by its crid.
+            "picks": len({row["pick_key"] or row["crid"] for row in open_rows}),
+            "reserved_acct": reserved_acct,
+            "unvaluable_tiers": sum(1 for row in open_rows if row["reservation_acct"] is None),
+        },
+        "malformed": fold.malformed,
+    }
+    if output_format == "json":
+        typer.echo(json.dumps(result))
+        return
+    _render_watches_human(result)
 
 
 @broker_app.command(name="reconcile")
