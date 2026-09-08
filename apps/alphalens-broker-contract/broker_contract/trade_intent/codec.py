@@ -148,6 +148,13 @@ def intent_from_jsonable(data: Mapping[str, Any]) -> TradeIntent:
             # somehow carries both.
             meta_map.setdefault("trade_date", meta_map.pop("brief_date"))
         meta = IntentMeta(**_filtered(IntentMeta, meta_map))
+        # _filtered() checks key NAMES, not value types. `generation` feeds the
+        # identity helpers (crid / pick_key / journal join), where a str, bool,
+        # float or non-positive value would fail deep inside a daemon tick; a
+        # malformed line must be a decode error the drain skips instead (#1371).
+        generation = meta.generation
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+            raise TradeIntentDecodeError(f"meta.generation must be an int >= 1, got {generation!r}")
         exit_spec = _decode_exit(top.get("exit"))
         kwargs = _filtered(TradeIntent, top)
         kwargs["instrument"] = instrument

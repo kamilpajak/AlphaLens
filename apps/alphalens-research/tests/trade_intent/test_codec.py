@@ -157,6 +157,48 @@ class TestMetaSource(unittest.TestCase):
         self.assertEqual(restored.meta.source, "brief")
 
 
+class TestMetaGeneration(unittest.TestCase):
+    """#1371: the same-day re-arm counter. Generation 1 is the implicit
+    generation of every journal line written before the field existed."""
+
+    def _intent(self, **meta_kwargs) -> TradeIntent:
+        return TradeIntent(
+            intent_id="ENPH:2026-09-08:manual-g2",
+            instrument=InstrumentHint(ticker="ENPH", mic="XNAS"),
+            spec=_spec(),
+            meta=IntentMeta(
+                armed_ts="2026-09-08T14:00:00+00:00",
+                trade_date="2026-09-08",
+                source="manual",
+                **meta_kwargs,
+            ),
+            exit=None,
+        )
+
+    def test_generation_round_trips(self) -> None:
+        intent = self._intent(generation=2)
+        restored = intent_from_jsonable(intent_to_jsonable(intent))
+        self.assertEqual(restored, intent)
+        self.assertEqual(restored.meta.generation, 2)
+
+    def test_legacy_payload_without_generation_decodes_to_one(self) -> None:
+        data = intent_to_jsonable(_intent_with_reanchor())
+        del data["meta"]["generation"]
+        restored = intent_from_jsonable(data)
+        self.assertEqual(restored.meta.generation, 1)
+
+    def test_non_int_or_non_positive_generation_is_a_decode_error(self) -> None:
+        # _filtered() checks key names, not value types; a hand-edited journal
+        # line must be SKIPPED by the drain (decode error) rather than reach the
+        # identity helpers with a str / bool / zero and fail deep inside a tick.
+        for bad in ("2", 0, -1, True, 2.0, None):
+            with self.subTest(generation=bad):
+                data = intent_to_jsonable(self._intent(generation=2))
+                data["meta"]["generation"] = bad
+                with self.assertRaises(TradeIntentDecodeError):
+                    intent_from_jsonable(data)
+
+
 class TestMetaTradeDateLegacyDecode(unittest.TestCase):
     """The journal date key rename (#1252): the field is ``IntentMeta.trade_date``,
     but data on disk written before the rename carries the old ``brief_date``

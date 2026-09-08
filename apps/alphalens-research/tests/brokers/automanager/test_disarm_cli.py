@@ -9,6 +9,7 @@ patches target the SOURCE modules, exactly like test_arm_cli.py.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import unittest
 from pathlib import Path
@@ -52,6 +53,87 @@ class DisarmCommandTest(unittest.TestCase):
             (record["ticker"], record["date"], record["status"]),
             ("IBRX", "2026-08-26", "disarmed"),
         )
+
+    def test_disarm_defaults_to_the_latest_generation(self) -> None:
+        # #1371: with generation 1 already retired and generation 2 live, a
+        # bare disarm must retire generation 2 and leave generation 1's tier
+        # (already terminal) alone; the queue line carries the generation.
+        from alphalens_cli.commands.broker import broker_app
+        from alphalens_pipeline.brokers.automanager.picks import arm_pick, mark_disarmed
+
+        from tests.brokers.automanager.test_picks import _intent
+
+        journal = _seed_watch(
+            self.home,
+            "sim",
+            "IBRX-2026-08-26-entry-t0",
+            "IBRX:2026-08-26",
+            json.dumps({"kind": "cancelled", "crid": "IBRX-2026-08-26-entry-t0"}),
+            json.dumps(
+                {
+                    "kind": "watch_open",
+                    "crid": "IBRX-2026-08-26-g2-entry-t0",
+                    "pick_key": "IBRX:2026-08-26-g2",
+                    "limit": 10.0,
+                    "qty": 5,
+                }
+            ),
+        )
+        picks = self.home / ".alphalens" / "broker_orders" / "sim" / "picks.jsonl"
+        arm_pick(_intent("IBRX", "2026-08-26"), path=picks)
+        mark_disarmed("IBRX", dt.date(2026, 8, 26), note="wrong size", path=picks)
+        arm_pick(_intent("IBRX", "2026-08-26", generation=2), path=picks)
+        result = self.runner.invoke(broker_app, ["disarm", "ibrx", "--date", "2026-08-26"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("disarmed IBRX:2026-08-26-g2", result.output)
+        self.assertIn("cancelled 1 watch tier", result.output)
+        cancelled = [
+            json.loads(x)["crid"]
+            for x in journal.read_text().splitlines()
+            if json.loads(x)["kind"] == "cancelled"
+        ]
+        self.assertEqual(cancelled, ["IBRX-2026-08-26-entry-t0", "IBRX-2026-08-26-g2-entry-t0"])
+        record = json.loads(picks.read_text().splitlines()[-1])
+        self.assertEqual((record["status"], record["generation"]), ("disarmed", 2))
+
+    def test_disarm_generation_option_targets_that_generation_only(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+        from alphalens_pipeline.brokers.automanager.picks import arm_pick
+
+        from tests.brokers.automanager.test_picks import _intent
+
+        journal = _seed_watch(
+            self.home,
+            "sim",
+            "IBRX-2026-08-26-entry-t0",
+            "IBRX:2026-08-26",
+            json.dumps(
+                {
+                    "kind": "watch_open",
+                    "crid": "IBRX-2026-08-26-g2-entry-t0",
+                    "pick_key": "IBRX:2026-08-26-g2",
+                    "limit": 10.0,
+                    "qty": 5,
+                }
+            ),
+        )
+        picks = self.home / ".alphalens" / "broker_orders" / "sim" / "picks.jsonl"
+        arm_pick(_intent("IBRX", "2026-08-26"), path=picks)
+        arm_pick(_intent("IBRX", "2026-08-26", generation=2), path=picks)
+        result = self.runner.invoke(
+            broker_app, ["disarm", "ibrx", "--date", "2026-08-26", "--generation", "1"]
+        )
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("disarmed IBRX:2026-08-26 ", result.output)
+        cancelled = [
+            json.loads(x)["crid"]
+            for x in journal.read_text().splitlines()
+            if json.loads(x)["kind"] == "cancelled"
+        ]
+        self.assertEqual(cancelled, ["IBRX-2026-08-26-entry-t0"])
+        record = json.loads(picks.read_text().splitlines()[-1])
+        self.assertEqual(record["status"], "disarmed")
+        self.assertNotIn("generation", record)
 
     def test_disarm_without_open_watch_still_retires_queue(self) -> None:
         from alphalens_cli.commands.broker import broker_app

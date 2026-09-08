@@ -106,6 +106,7 @@ Known trap: crids are deterministic (`{ticker}-{brief_date}-entry-t{i}`), termin
 - The now tranche never opens a WATCH tier (it is a direct order), so its refusal writes no entry-trail terminal. A same-day re-arm re-drains the now tranche cleanly as long as the submissions join treats the previous terminal refusal as "not submitted" for a NEW arm generation.
 - Concretely: the now-tranche dedup key includes the pick line's `armed_ts` (already present in `IntentMeta`), so re-arming mints a fresh dedup identity without touching the crid scheme. Pullback siblings keep today's semantics (re-arm same day does NOT reopen terminal watch tiers — fresh date is the path back), unchanged by this feature.
 - NOTE: #1252 renames `brief_date` → `trade_date` across the journal; this memo uses the current name and the implementation follows whichever lands first. Do not couple the two PRs.
+- **Superseded for the pullback siblings by §9 (#1371, 2026-09-08):** a same-day re-arm now mints a new pick GENERATION with its own crids, so the "fresh date is the path back" rule above no longer applies.
 
 ### 3.8 Rails interactions
 
@@ -227,3 +228,55 @@ Probe pick: `arm-manual RHI --tier now@43.75:40 --tier 42:60 --stop 40.5
   88.99 → tick 1 defer (fresh subscription awaits its async snapshot),
   tick 2 `refused_cap` record + page + `mark_refused` retiring the
   now-only pick — the §3.7 re-arm path stands ready.
+
+## 9. Pick generation — same-day re-arm (#1371, 2026-09-08)
+
+**Trigger.** On 2026-09-08 three group signals (ENPH, ALB, LULU) were armed
+in the wrong geometry (50/50 instead of probe:mass 1:3), disarmed, and could
+not be armed again that day: the pick identity was `(ticker, trade_date)`
+only, so the submissions join (`picks.submitted_pick_keys`) saw the pair as
+already placed and the deterministic crids (`TICKER-DATE-entry-tN`) kept their
+sticky `cancelled` markers. A re-arm would have shown PLACED in the queue with
+no live watch — silent, worse than a refusal.
+
+**Identity now = (ticker, trade_date, generation).** `IntentMeta.generation`
+(default 1, additive — no schema bump, same precedent as `source`). One
+renderer, `picks.identity_token(trade_date, generation)`, feeds every
+identity string:
+
+| form | generation 1 (every pre-#1371 line) | generation ≥ 2 |
+|---|---|---|
+| `pick_key` (watch_open / tranche_plan / disarm) | `ENPH:2026-09-08` | `ENPH:2026-09-08-g2` |
+| entry-watch crid (and the stop refs built on it) | `ENPH-2026-09-08-entry-t0` | `ENPH-2026-09-08-g2-entry-t0` |
+| `intent_id` (manual) | `ENPH:2026-09-08:manual` | `ENPH:2026-09-08:manual-g2` |
+| `picks.jsonl` / `submissions.jsonl` field | key absent | `"generation": 2` |
+
+`-g<N>` rather than `#N`: the crid travels to Saxo as an `ExternalReference`,
+and `[A-Za-z0-9-]` is the charset it already carries. The date half of every
+calendar computation (day-1 gate, TTL) still reads the bare
+`intent.meta.trade_date`; the token never reaches `date.fromisoformat`.
+
+**Assignment.** `broker arm-manual` assigns `1 + max(generation)` over every
+line of `(ticker, arm_date)` in the target inbox — a disarmed or refused
+generation is spent. It REFUSES while an earlier generation is still `armed`
+(pending, or placed with a live watch): two live generations would be two
+live picks on one instrument, and the live-long guard only defers after a
+FILL. `broker disarm --generation N` (default: the highest queued) retires
+one generation; `broker picks` renders the token in the date column and
+carries `generation` in the JSON row. `broker arm` (brief) stays on
+generation 1.
+
+**Journal compatibility.** Generation-1 lines and records are byte-identical
+to before (the key is emitted only above 1; `intent_to_jsonable` does add
+`generation: 1` inside the nested intent, as it did for `source`). Readers
+fold an absent field to 1; the codec refuses a non-int / non-positive value
+(`TradeIntentDecodeError`), so a hand-edited line is skipped by the drain
+instead of failing inside a tick. A pre-#1371 daemon reading a generation-2
+line drops the unknown key with a WARNING and treats it as generation 1 —
+hence the deploy order: merge → restart both daemons → only then arm a
+generation ≥ 2.
+
+**Unchanged by design.** The live-long guard: a generation-2 pick on a ticker
+whose generation 1 already FILLED defers until the uic is flat. `_pick_key_from_stop_ref`
+recovers `-g<N>` from a stop ref so the sibling-retire fold finds the right
+generation.

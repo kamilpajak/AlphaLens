@@ -17,7 +17,16 @@ the ``"intent"`` key, or carrying an undecodable one, is skipped exactly like
 any other malformed line — re-arming via `alphalens broker arm` is the
 explicit human path back.
 
-Queue semantics: the LATEST status line per (ticker, date) wins. A terminal
+Pick identity (#1371) is (ticker, date, generation). ``generation`` is the
+same-day re-arm counter: 1 for every line written before the field existed
+(the key is OMITTED on generation-1 lines, so today's journal shape is
+unchanged) and 1 + the highest generation already queued for (ticker, date)
+on a later `alphalens broker arm-manual`. :func:`identity_token` renders the
+generation into every downstream identity string — ``pick_key`` (colon form),
+the entry-watch crid, the stop refs — so a disarmed generation's terminal
+markers never shadow its successor.
+
+Queue semantics: the LATEST status line per (ticker, date, generation) wins. A terminal
 ``refused`` line (capacity/cap safety refusal) retires the pick so the drain
 never retries it — re-arming via `alphalens broker arm` appends a fresh armed
 line and is the explicit human path back.
@@ -56,6 +65,53 @@ STATUS_ARMED = "armed"
 STATUS_REFUSED = "refused"
 STATUS_DISARMED = "disarmed"
 
+FIRST_GENERATION = 1
+_GENERATION_KEY = "generation"
+_GENERATION_SUFFIX = "-g"
+
+
+def _validate_generation(generation: object) -> int:
+    """``generation`` as an int >= 1; ``ValueError`` for anything else (a bool
+    is not a generation even though it is an int)."""
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+        raise ValueError(f"generation must be an int >= 1, got {generation!r}")
+    return generation
+
+
+def identity_token(trade_date: str, generation: int) -> str:
+    """The date half of every pick identity string: the bare ``trade_date`` for
+    generation 1 (byte-identical to the pre-#1371 identity), ``<date>-g<N>``
+    for a same-day re-arm. Only ``[A-Za-z0-9-]`` so the token is safe inside
+    a Saxo ``ExternalReference`` (the entry-watch crid and stop refs carry it)."""
+    generation = _validate_generation(generation)
+    if generation == FIRST_GENERATION:
+        return str(trade_date)
+    return f"{trade_date}{_GENERATION_SUFFIX}{generation}"
+
+
+def pick_key_str(ticker: str, trade_date: str, generation: int) -> str:
+    """The colon-form pick key the daemon journals on ``watch_open`` /
+    ``tranche_plan`` lines and `disarm` matches: ``TICKER:<identity_token>``."""
+    return f"{str(ticker).upper()}:{identity_token(trade_date, generation)}"
+
+
+def generation_of(record: Mapping[str, Any]) -> int:
+    """The generation a journal record carries: absent / null = 1 (every line
+    written before #1371); otherwise validated as an int >= 1 (``ValueError``
+    for a malformed value — the caller decides whether that makes the record
+    malformed or folds it conservatively)."""
+    raw = record.get(_GENERATION_KEY)
+    if raw is None:
+        return FIRST_GENERATION
+    return _validate_generation(raw)
+
+
+def _generation_fields(generation: int) -> dict[str, int]:
+    """The journal-line fields for ``generation``: NOTHING for generation 1
+    (today's line shape stays byte-identical), the key for any later one."""
+    generation = _validate_generation(generation)
+    return {} if generation == FIRST_GENERATION else {_GENERATION_KEY: generation}
+
 
 def _append_record(record: dict, path: Path | None) -> None:
     """Append one JSON line (append-only; never rewrites)."""
@@ -70,8 +126,8 @@ def arm_pick(intent: TradeIntent, *, path: Path | None = None) -> None:
     """Append one 'armed' intent line (append-only; never rewrites).
 
     Persists the full ``intent`` under the ``"intent"`` key (PR-7) plus the
-    top-level ``ticker``/``date`` the latest-per-(ticker,date) fold + refused
-    correlation key on.
+    top-level ``ticker``/``date`` (and ``generation`` when > 1, #1371) the
+    latest-per-(ticker, date, generation) fold + refused correlation key on.
     """
     _append_record(
         {
@@ -80,13 +136,21 @@ def arm_pick(intent: TradeIntent, *, path: Path | None = None) -> None:
             "armed_ts": intent.meta.armed_ts,
             "status": STATUS_ARMED,
             "intent": intent_to_jsonable(intent),
+            **_generation_fields(intent.meta.generation),
         },
         path,
     )
 
 
-def mark_refused(ticker: str, date: dt.date, reason: str, *, path: Path | None = None) -> None:
-    """Append one TERMINAL 'refused' line retiring the (ticker, date) pick.
+def mark_refused(
+    ticker: str,
+    date: dt.date,
+    reason: str,
+    *,
+    generation: int = FIRST_GENERATION,
+    path: Path | None = None,
+) -> None:
+    """Append one TERMINAL 'refused' line retiring the (ticker, date, generation) pick.
 
     Written when safety.check refuses placement (open-legs cap / portfolio
     gross cap) — without it the armed pick retries every tick and self-places
@@ -99,24 +163,30 @@ def mark_refused(ticker: str, date: dt.date, reason: str, *, path: Path | None =
             "refused_ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
             "reason": reason,
             "status": STATUS_REFUSED,
+            **_generation_fields(generation),
         },
         path,
     )
 
 
 def mark_disarmed(
-    ticker: str, date: dt.date, *, note: str | None = None, path: Path | None = None
+    ticker: str,
+    date: dt.date,
+    *,
+    note: str | None = None,
+    generation: int = FIRST_GENERATION,
+    path: Path | None = None,
 ) -> None:
-    """Append one TERMINAL 'disarmed' line retiring the (ticker, date) pick.
+    """Append one TERMINAL 'disarmed' line retiring the (ticker, date, generation) pick.
 
     The OPERATOR terminal (`alphalens broker disarm`), sibling of the daemon's
     ``mark_refused``: latest-wins retires the pick from ``iter_picks`` with no
     daemon change. Re-arming via `alphalens broker arm` is the explicit human
     path back QUEUE-side — but note the entry-trail side is stickier: a
     ``cancelled`` crid never leaves the terminal state and crids are
-    deterministic per (ticker, date, tier), so a re-armed pick for the SAME
-    (ticker, date) will not re-open its watch. A fresh brief date is the real
-    path back."""
+    deterministic per (ticker, date, generation, tier), so a re-armed pick for
+    the SAME identity will not re-open its watch. The path back is a NEW
+    generation (`arm-manual` assigns it, #1371) or a fresh brief date."""
     _append_record(
         {
             "ticker": ticker.upper(),
@@ -124,13 +194,19 @@ def mark_disarmed(
             "disarmed_ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
             "note": note,
             "status": STATUS_DISARMED,
+            **_generation_fields(generation),
         },
         path,
     )
 
 
-def _parse_record(raw_line: str) -> tuple[tuple[str, dt.date], dict] | None:
-    """One well-formed status line -> ((TICKER, date), record); None if malformed."""
+_PickFoldKey = tuple[str, dt.date, int]
+
+
+def _parse_record(raw_line: str) -> tuple[_PickFoldKey, dict] | None:
+    """One well-formed status line -> ((TICKER, date, generation), record);
+    None if malformed (non-JSON, non-object, undated, or a generation that is
+    not an int >= 1)."""
     line = raw_line.strip()
     if not line:
         return None
@@ -142,9 +218,10 @@ def _parse_record(raw_line: str) -> tuple[tuple[str, dt.date], dict] | None:
         return None
     try:
         parsed_date = dt.date.fromisoformat(str(record["date"]))
+        generation = generation_of(record)
     except (KeyError, ValueError):
         return None
-    return (str(record.get("ticker", "")).upper(), parsed_date), record
+    return (str(record.get("ticker", "")).upper(), parsed_date, generation), record
 
 
 @dataclass(frozen=True)
@@ -160,11 +237,18 @@ class PickRecord:
     trade_date: dt.date
     status: str
     record: Mapping[str, Any]
+    generation: int = FIRST_GENERATION
+
+    @property
+    def token(self) -> str:
+        """The identity token (``2026-09-08`` / ``2026-09-08-g2``) — the
+        second half of the join key and what the CLI renders as the date."""
+        return identity_token(self.trade_date.isoformat(), self.generation)
 
 
 @dataclass(frozen=True)
 class PickFold:
-    """Latest-per-(ticker, date) records + the count of malformed lines.
+    """Latest-per-(ticker, date, generation) records + the count of malformed lines.
 
     Mirrors the sibling :class:`~alphalens_pipeline.brokers.automanager.entry_trails.EntryTrailFold`:
     ``malformed`` counts non-JSON / non-object / undated lines and is
@@ -178,7 +262,7 @@ class PickFold:
 
 
 def read_pick_fold(*, path: Path | None = None) -> PickFold:
-    """Fold the journal to one :class:`PickRecord` per (ticker, date).
+    """Fold the journal to one :class:`PickRecord` per (ticker, date, generation).
 
     The LATEST status line per key wins — the same rule :func:`iter_picks`
     applies, computed here ONCE so the queue view and the drain can never
@@ -188,7 +272,7 @@ def read_pick_fold(*, path: Path | None = None) -> PickFold:
     target = path or state_paths.picks_path()
     if not target.exists():
         return PickFold(records=[], malformed=0)
-    latest: dict[tuple[str, dt.date], dict] = {}
+    latest: dict[_PickFoldKey, dict] = {}
     malformed = 0
     with target.open("r", encoding="utf-8") as fh:
         for raw_line in fh:
@@ -206,19 +290,42 @@ def read_pick_fold(*, path: Path | None = None) -> PickFold:
             trade_date=parsed_date,
             status=str(record.get("status", "")),
             record=record,
+            generation=generation,
         )
-        for (ticker, parsed_date), record in latest.items()
+        for (ticker, parsed_date, generation), record in latest.items()
     ]
     return PickFold(records=records, malformed=malformed)
 
 
+def next_generation(ticker: str, date: dt.date, *, path: Path | None = None) -> int:
+    """The generation `arm-manual` assigns to a new pick on (ticker, date):
+    1 + the highest generation on ANY line of that key (whatever its status —
+    a disarmed or refused generation is spent, it never comes back), 1 for a
+    key the queue has never seen."""
+    wanted = ticker.upper()
+    highest = 0
+    for record in read_pick_fold(path=path).records:
+        if record.ticker == wanted and record.trade_date == date:
+            highest = max(highest, record.generation)
+    return highest + 1
+
+
 def pick_key(intent: TradeIntent) -> tuple[str, str]:
-    """The (ticker, trade_date) join key for one armed intent."""
-    return (str(intent.instrument.ticker).upper(), str(intent.meta.trade_date))
+    """The (ticker, identity token) join key for one armed intent — the token
+    is the bare trade_date for generation 1, ``<date>-g<N>`` after a same-day
+    re-arm (#1371), so two generations of one ticker never join to each
+    other's submission."""
+    # getattr: a pre-#1371 payload or a structural test double carries no
+    # `generation` — the first generation, never an AttributeError in the drain.
+    generation = getattr(intent.meta, "generation", FIRST_GENERATION)
+    return (
+        str(intent.instrument.ticker).upper(),
+        identity_token(str(intent.meta.trade_date), generation),
+    )
 
 
 def submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
-    """The (ticker, trade_date) pairs already present in the submissions journal.
+    """The (ticker, identity token) pairs already present in the submissions journal.
 
     Design section Data-flow step 4: the drain places only picks NOT yet
     joined to submissions.jsonl. Without this join every armed pick is
@@ -238,13 +345,30 @@ def submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, 
         # journals are never rewritten), so fall back to it.
         trade_date = record.get("trade_date") or record.get("brief_date")
         if ticker and trade_date:
-            keys.add((str(ticker).upper(), str(trade_date)))
+            # #1371: a malformed generation on a record that exists still
+            # proves SOMETHING was submitted for the key — fold it to
+            # generation 1 rather than drop it (never under-count the join).
+            try:
+                generation = generation_of(record)
+            except ValueError:
+                # DEBUG, not WARNING: the drain re-reads the journal every
+                # ~45 s tick, and this line is a durable fact of the file —
+                # a WARNING per tick would flood journald (iter_picks precedent).
+                logger.debug(
+                    "submitted_pick_keys %s/%s: malformed generation %r — folded to "
+                    "generation 1 (the queue fold treats the same value as malformed)",
+                    ticker,
+                    trade_date,
+                    record.get(_GENERATION_KEY),
+                )
+                generation = FIRST_GENERATION
+            keys.add((str(ticker).upper(), identity_token(str(trade_date), generation)))
     return keys
 
 
 def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
     """Yield ARMED picks as decoded :class:`TradeIntent`; the LATEST status
-    line per (ticker, date) wins.
+    line per (ticker, date, generation) wins.
 
     Malformed/undated lines are skipped, and a pick whose latest line is
     non-armed (refused / cancelled / filled / expired) is never yielded — the
@@ -284,16 +408,21 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
 
 
 __all__ = [
+    "FIRST_GENERATION",
     "STATUS_ARMED",
     "STATUS_DISARMED",
     "STATUS_REFUSED",
     "PickFold",
     "PickRecord",
     "arm_pick",
+    "generation_of",
+    "identity_token",
     "iter_picks",
     "mark_disarmed",
     "mark_refused",
+    "next_generation",
     "pick_key",
+    "pick_key_str",
     "read_pick_fold",
     "submitted_pick_keys",
 ]

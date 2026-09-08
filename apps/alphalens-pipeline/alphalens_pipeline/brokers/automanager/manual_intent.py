@@ -315,12 +315,15 @@ def build_manual_intent(
     ttl_days: int | None,
     arm_date: dt.date,
     armed_ts: str,
+    generation: int = 1,
 ) -> TradeIntent:
     """Compile operator-provided levels into a full manual :class:`TradeIntent`.
 
-    ``intent_id`` is ``TICKER:<arm_date>:manual`` — the picks fold keys on
-    (ticker, date) with latest-wins, so re-arming the same ticker the same day
-    REPLACES the pending intent (the typo-fix path), it never duplicates it.
+    ``intent_id`` is ``TICKER:<arm_date>:manual`` for the first generation and
+    ``TICKER:<arm_date>:manual-g<N>`` for a same-day re-arm (#1371): the picks
+    fold keys on (ticker, date, generation), so a corrected pick armed after a
+    `disarm` is a NEW pick with new watch crids — never a replacement the drain
+    would join to the retired generation's submission and skip.
     """
     ticker = ticker.strip().upper()
     if not ticker:
@@ -338,6 +341,8 @@ def build_manual_intent(
         raise ManualIntentError("either --tp or --no-tp is required")
     if ttl_days is not None and ttl_days <= 0:
         raise ManualIntentError(f"ttl_days must be positive, got {ttl_days}")
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+        raise ManualIntentError(f"generation must be an int >= 1, got {generation!r}")
 
     tiers = parse_entry_tiers(tiers_raw)
     lowest_tier = min(t.limit_price for t in tiers)
@@ -361,10 +366,16 @@ def build_manual_intent(
         suggested_size_pct=resolved_size_pct,
         **spec_kwargs,
     )
+    generation_suffix = "" if generation == 1 else f"-g{generation}"
     return TradeIntent(
-        intent_id=f"{ticker}:{arm_date.isoformat()}:manual",
+        intent_id=f"{ticker}:{arm_date.isoformat()}:manual{generation_suffix}",
         instrument=InstrumentHint(ticker=ticker, mic=mic),
         spec=spec,
-        meta=IntentMeta(armed_ts=armed_ts, trade_date=arm_date.isoformat(), source="manual"),
+        meta=IntentMeta(
+            armed_ts=armed_ts,
+            trade_date=arm_date.isoformat(),
+            source="manual",
+            generation=generation,
+        ),
         exit=None,
     )

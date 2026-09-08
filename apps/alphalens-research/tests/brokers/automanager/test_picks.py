@@ -21,10 +21,14 @@ from alphalens_pipeline.brokers.automanager.picks import (
     STATUS_DISARMED,
     STATUS_REFUSED,
     arm_pick,
+    generation_of,
+    identity_token,
     iter_picks,
     mark_disarmed,
     mark_refused,
+    next_generation,
     pick_key,
+    pick_key_str,
     read_pick_fold,
     submitted_pick_keys,
 )
@@ -41,7 +45,7 @@ from broker_contract.trade_intent.schema import (
 )
 
 
-def _intent(ticker: str = "KO", trade_date: str = "2026-07-20") -> TradeIntent:
+def _intent(ticker: str = "KO", trade_date: str = "2026-07-20", generation: int = 1) -> TradeIntent:
     spec = TradeSpec(
         entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=50.0, tag="T1"),),
         disaster_stop=90.0,
@@ -56,7 +60,11 @@ def _intent(ticker: str = "KO", trade_date: str = "2026-07-20") -> TradeIntent:
         intent_id=f"{ticker}:{trade_date}",
         instrument=InstrumentHint(ticker=ticker.upper(), mic="XNYS"),
         spec=spec,
-        meta=IntentMeta(armed_ts=f"{trade_date}T14:00:00+00:00", trade_date=trade_date),
+        meta=IntentMeta(
+            armed_ts=f"{trade_date}T14:00:00+00:00",
+            trade_date=trade_date,
+            generation=generation,
+        ),
         exit=exit_spec,
     )
 
@@ -484,6 +492,146 @@ class JoinHelperTest(unittest.TestCase):
         # (append-only journals are never rewritten).
         records = [{"ticker": "KO", "brief_date": "2026-07-20"}]
         self.assertEqual(submitted_pick_keys(records), {("KO", "2026-07-20")})
+
+
+class IdentityHelperTest(unittest.TestCase):
+    """#1371: the ONE place the (ticker, trade_date, generation) identity is
+    rendered. Generation 1 renders exactly the pre-#1371 strings, so every
+    journal line written before the field existed keeps its identity."""
+
+    def test_generation_one_token_is_the_bare_date(self) -> None:
+        self.assertEqual(identity_token("2026-09-08", 1), "2026-09-08")
+
+    def test_later_generations_suffix_the_date(self) -> None:
+        self.assertEqual(identity_token("2026-09-08", 2), "2026-09-08-g2")
+        self.assertEqual(identity_token("2026-09-08", 12), "2026-09-08-g12")
+
+    def test_pick_key_str_is_upper_ticker_colon_token(self) -> None:
+        self.assertEqual(pick_key_str("enph", "2026-09-08", 1), "ENPH:2026-09-08")
+        self.assertEqual(pick_key_str("enph", "2026-09-08", 2), "ENPH:2026-09-08-g2")
+
+    def test_generation_below_one_is_rejected(self) -> None:
+        for bad in (0, -1):
+            with self.subTest(generation=bad):
+                with self.assertRaises(ValueError):
+                    identity_token("2026-09-08", bad)
+
+    def test_generation_of_reads_absent_or_null_as_one(self) -> None:
+        self.assertEqual(generation_of({}), 1)
+        self.assertEqual(generation_of({"generation": None}), 1)
+        self.assertEqual(generation_of({"generation": 3}), 3)
+
+    def test_generation_of_rejects_non_int_or_non_positive(self) -> None:
+        for bad in ("2", 0, True, 2.0):
+            with self.subTest(generation=bad):
+                with self.assertRaises(ValueError):
+                    generation_of({"generation": bad})
+
+
+class GenerationQueueTest(unittest.TestCase):
+    """#1371: a same-day re-arm is a NEW pick, distinguishable from the one it
+    follows in every reader of the queue."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "picks.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_generation_one_armed_line_carries_no_generation_key(self) -> None:
+        # Positive control on the journal shape: today's lines stay as they are.
+        arm_pick(_intent("KO", "2026-09-08"), path=self.path)
+        record = json.loads(self.path.read_text(encoding="utf-8").splitlines()[0])
+        self.assertNotIn("generation", record)
+
+    def test_later_generation_armed_line_carries_the_key(self) -> None:
+        arm_pick(_intent("KO", "2026-09-08", generation=2), path=self.path)
+        record = json.loads(self.path.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(record["generation"], 2)
+
+    def test_fold_keeps_each_generation_as_its_own_record(self) -> None:
+        arm_pick(_intent("KO", "2026-09-08"), path=self.path)
+        mark_disarmed("KO", dt.date(2026, 9, 8), note="wrong geometry", path=self.path)
+        arm_pick(_intent("KO", "2026-09-08", generation=2), path=self.path)
+        records = read_pick_fold(path=self.path).records
+        self.assertEqual(
+            [(r.ticker, r.trade_date.isoformat(), r.generation, r.status) for r in records],
+            [("KO", "2026-09-08", 1, STATUS_DISARMED), ("KO", "2026-09-08", 2, STATUS_ARMED)],
+        )
+
+    def test_iter_picks_yields_only_the_live_generation(self) -> None:
+        arm_pick(_intent("KO", "2026-09-08"), path=self.path)
+        mark_disarmed("KO", dt.date(2026, 9, 8), note="wrong geometry", path=self.path)
+        arm_pick(_intent("KO", "2026-09-08", generation=2), path=self.path)
+        intents = list(iter_picks(path=self.path))
+        self.assertEqual([i.meta.generation for i in intents], [2])
+
+    def test_terminal_lines_are_scoped_to_their_generation(self) -> None:
+        arm_pick(_intent("KO", "2026-09-08"), path=self.path)
+        arm_pick(_intent("KO", "2026-09-08", generation=2), path=self.path)
+        mark_refused("KO", dt.date(2026, 9, 8), "gross cap", generation=2, path=self.path)
+        mark_disarmed("KO", dt.date(2026, 9, 8), note="x", generation=2, path=self.path)
+        live = [(i.meta.generation) for i in iter_picks(path=self.path)]
+        self.assertEqual(live, [1])
+        lines = [json.loads(line) for line in self.path.read_text().splitlines()]
+        self.assertEqual([line.get("generation") for line in lines[2:]], [2, 2])
+
+    def test_pick_key_renders_the_generation_token(self) -> None:
+        self.assertEqual(
+            pick_key(_intent("ko", "2026-09-08", generation=2)), ("KO", "2026-09-08-g2")
+        )
+        self.assertEqual(pick_key(_intent("ko", "2026-09-08")), ("KO", "2026-09-08"))
+
+    def test_submitted_pick_keys_separate_generations(self) -> None:
+        records = [
+            {"ticker": "KO", "trade_date": "2026-09-08"},
+            {"ticker": "KO", "trade_date": "2026-09-08", "generation": 2},
+        ]
+        self.assertEqual(
+            submitted_pick_keys(records), {("KO", "2026-09-08"), ("KO", "2026-09-08-g2")}
+        )
+
+    def test_submitted_pick_keys_folds_a_malformed_generation_to_one(self) -> None:
+        # Conservative: a record that exists but carries garbage in the field
+        # still proves generation 1 was submitted — never under-count the join.
+        records = [{"ticker": "KO", "trade_date": "2026-09-08", "generation": "2"}]
+        self.assertEqual(submitted_pick_keys(records), {("KO", "2026-09-08")})
+
+    def test_malformed_generation_fold_is_logged_at_debug(self) -> None:
+        # The asymmetry with the queue fold (which drops the line) is deliberate;
+        # it must be visible on demand, and never a per-tick WARNING flood.
+        records = [{"ticker": "KO", "trade_date": "2026-09-08", "generation": "2"}]
+        with self.assertLogs("alphalens_pipeline.brokers.automanager.picks", level="DEBUG") as cm:
+            submitted_pick_keys(records)
+        self.assertTrue(any("malformed generation" in line for line in cm.output))
+        self.assertFalse(any(line.startswith("WARNING") for line in cm.output))
+
+    def test_queue_line_with_malformed_generation_is_malformed(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(
+            json.dumps({"ticker": "KO", "date": "2026-09-08", "status": "armed", "generation": "2"})
+            + "\n",
+            encoding="utf-8",
+        )
+        fold = read_pick_fold(path=self.path)
+        self.assertEqual(fold.records, [])
+        self.assertEqual(fold.malformed, 1)
+
+    def test_next_generation_counts_every_line_of_the_key(self) -> None:
+        day = dt.date(2026, 9, 8)
+        self.assertEqual(next_generation("KO", day, path=self.path), 1)
+        arm_pick(_intent("KO", "2026-09-08"), path=self.path)
+        self.assertEqual(next_generation("ko", day, path=self.path), 2)
+        mark_disarmed("KO", day, note="x", path=self.path)
+        self.assertEqual(next_generation("KO", day, path=self.path), 2)
+        arm_pick(_intent("KO", "2026-09-08", generation=2), path=self.path)
+        self.assertEqual(next_generation("KO", day, path=self.path), 3)
+
+    def test_next_generation_is_scoped_to_ticker_and_date(self) -> None:
+        arm_pick(_intent("KO", "2026-09-08", generation=2), path=self.path)
+        self.assertEqual(next_generation("KO", dt.date(2026, 9, 9), path=self.path), 1)
+        self.assertEqual(next_generation("MU", dt.date(2026, 9, 8), path=self.path), 1)
 
 
 if __name__ == "__main__":

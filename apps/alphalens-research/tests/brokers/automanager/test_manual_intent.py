@@ -48,6 +48,26 @@ def _build(**overrides):
     return build_manual_intent(**kwargs)
 
 
+class GenerationTest(unittest.TestCase):
+    """#1371: the same-day re-arm counter rides the intent (meta + intent_id)."""
+
+    def test_default_is_the_first_generation_with_the_bare_intent_id(self) -> None:
+        intent = _build()
+        self.assertEqual(intent.meta.generation, 1)
+        self.assertTrue(intent.intent_id.endswith(":manual"), intent.intent_id)
+
+    def test_later_generation_suffixes_the_intent_id(self) -> None:
+        intent = _build(generation=2)
+        self.assertEqual(intent.meta.generation, 2)
+        self.assertTrue(intent.intent_id.endswith(":manual-g2"), intent.intent_id)
+
+    def test_generation_below_one_refuses(self) -> None:
+        for bad in (0, -1):
+            with self.subTest(generation=bad):
+                with self.assertRaises(ManualIntentError):
+                    _build(generation=bad)
+
+
 class ParseEntryTiersTest(unittest.TestCase):
     def test_single_bare_tier_implies_full_allocation(self) -> None:
         tiers = parse_entry_tiers(["72.5"])

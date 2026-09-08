@@ -93,6 +93,7 @@ def build_submission_record(
     sizing: SizingStamp | None = None,
     tranche: str | None = None,
     tranche_meta: dict[str, Any] | None = None,
+    generation: int = 1,
 ) -> dict[str, Any]:
     """Assemble one journal record, stamping the token + a UTC timestamp.
 
@@ -141,6 +142,11 @@ def build_submission_record(
         record["tranche"] = tranche
     if tranche_meta is not None:
         record["tranche_meta"] = dict(tranche_meta)
+    # #1371: the same-day re-arm generation the drain's submissions join
+    # (picks.submitted_pick_keys) reads back. Emitted only above 1 so every
+    # legacy caller's record — and every generation-1 pick — keeps its shape.
+    if generation > 1:
+        record["generation"] = int(generation)
     return record
 
 

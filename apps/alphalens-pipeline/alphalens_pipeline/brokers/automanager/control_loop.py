@@ -17,6 +17,7 @@ import functools
 import logging
 import math
 import os
+import re
 import time
 from collections import deque
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
@@ -1855,15 +1856,30 @@ class _EntryWatchRuntime:
     touch_ts: str | None = None
 
 
-def _entry_watch_crid(ticker: str, trade_date: str, tier_index: int) -> str:
+def _entry_watch_crid(
+    ticker: str, trade_date: str, tier_index: int, *, generation: int = picks.FIRST_GENERATION
+) -> str:
     """Deterministic per-tier watch id in the ``-entry-`` request-id family
     (memo §5 — parallel to the exit ids so entry/exit ids can never collide on
     one uic). DETERMINISTIC, not a uuid: a crash between the journal-first
     watch_open and the note-only pick retirement re-opens the SAME crid on the
     next drain, and the fold's latest-watch_open-wins semantics make that
     re-open idempotent (no double reservation) where a fresh uuid would leak a
-    second watch."""
-    return f"{ticker}-{trade_date}-entry-t{tier_index}"
+    second watch.
+
+    ``generation`` (#1371) is the same-day re-arm counter: 1 renders exactly
+    the pre-#1371 crid, so every crid on disk keeps its identity; a later
+    generation carries ``-g<N>`` after the date (``picks.identity_token``),
+    so a disarmed generation's sticky terminal markers never shadow its
+    successor's watches."""
+    return f"{ticker}-{picks.identity_token(trade_date, generation)}-entry-t{tier_index}"
+
+
+def _pick_generation(intent: Any) -> int:
+    """The intent's same-day re-arm generation (#1371). A meta without the
+    field — a pre-#1371 payload, or a test double — is the first generation;
+    the codec already refuses a malformed value at decode time."""
+    return int(getattr(intent.meta, "generation", picks.FIRST_GENERATION))
 
 
 def _entry_trail_mode_tag(d_bps: int) -> str:
@@ -2053,6 +2069,7 @@ def _open_entry_watches(
     from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_close_utc
 
     trade_date = intent.meta.trade_date
+    generation = _pick_generation(intent)
     mic = instrument.exchange_mic
     uic = int(instrument.broker_instrument_id)
     ttl_date = advance_trading_sessions(
@@ -2061,7 +2078,7 @@ def _open_entry_watches(
     window_end = session_close_utc(ttl_date, exchange=mic).isoformat()
     fx_rate = float(fx.rate) if fx is not None else None
     mode_tag = _entry_trail_mode_tag(d_bps)
-    pick_key = f"{ticker}:{trade_date}"
+    pick_key = picks.pick_key_str(ticker, trade_date, generation)
 
     tiers = tuple(plan.entry_tiers)
     opened = 0
@@ -2071,7 +2088,7 @@ def _open_entry_watches(
         next_limit = tiers[index + 1].limit_price if index + 1 < len(tiers) else None
         line: dict[str, Any] = {
             "kind": entry_trails.KIND_WATCH_OPEN,
-            "crid": _entry_watch_crid(ticker, trade_date, tier.tier_index),
+            "crid": _entry_watch_crid(ticker, trade_date, tier.tier_index, generation=generation),
             "limit": float(tier.limit_price),
             "qty": float(tier.qty),
             "d_bps": int(d_bps),
@@ -2164,7 +2181,7 @@ def _route_pick_to_entry_watch(
             # Trade identity (adjudication finding 4): a crash-recovery
             # re-drive re-appends this line — the SAME pick_key keeps the
             # fired-tranche fold from resetting on the re-append.
-            pick_key=f"{ticker}:{intent.meta.trade_date}",
+            pick_key=picks.pick_key_str(ticker, intent.meta.trade_date, _pick_generation(intent)),
             instrument_currency=str(getattr(instrument, "currency", "") or ""),
             sizing_currency=_sizing_currency_of(fx, instrument),
             exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
@@ -2203,6 +2220,7 @@ def _route_pick_to_entry_watch(
     append_submission_record(
         build_submission_record(
             trade_date=intent.meta.trade_date,
+            generation=_pick_generation(intent),
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -3843,6 +3861,11 @@ def _derive_owed_sibling_retires(lines: list[Mapping[str, Any]]) -> dict[str, st
     return owed
 
 
+_GENERATION_TAIL_RE = re.compile(r"-g[1-9]\d*$")
+"""The ``-g<N>`` generation tail of a same-day re-arm's crid prefix (#1371);
+``-g0`` / ``-gx`` are not generations and fall through to the date parse."""
+
+
 def _pick_key_from_stop_ref(ref: str | None) -> str | None:
     """Recover the colon-form pick key from a stop ref (fallback when the uic
     has no ``tranche_plan`` ``pick_key`` on record).
@@ -3853,7 +3876,15 @@ def _pick_key_from_stop_ref(ref: str | None) -> str | None:
     that as "no entry-trail siblings exist", which is true by construction."""
     if not ref or "-entry-t" not in ref:
         return None
-    prefix = ref.split("-entry-t", 1)[0]  # "<ticker>-<YYYY-MM-DD>"
+    prefix = ref.split("-entry-t", 1)[0]  # "<ticker>-<YYYY-MM-DD>[-g<N>]"
+    # #1371: a same-day re-arm's crid carries `-g<N>` (N >= 1, digits) after
+    # the date. Peel it before the date walk and put it back on the key, so
+    # the recovered key is the SAME string the watch_open lines carry.
+    generation_suffix = ""
+    generation_match = _GENERATION_TAIL_RE.search(prefix)
+    if generation_match:
+        generation_suffix = generation_match.group(0)
+        prefix = prefix[: generation_match.start()]
     # rpartition: the DATE is the fixed-shape tail; the ticker may itself carry
     # a hyphen (yfinance-style class shares, e.g. BRK-B) — zen LOW on #1222.
     head, sep, day = prefix.rpartition("-")
@@ -3866,7 +3897,7 @@ def _pick_key_from_stop_ref(ref: str | None) -> str | None:
         dt.date.fromisoformat(trade_date)
     except ValueError:
         return None
-    return f"{ticker}:{trade_date}"
+    return f"{ticker}:{trade_date}{generation_suffix}"
 
 
 def _retire_sibling_watches(
@@ -7630,6 +7661,8 @@ def _refuse_pick_terminal(
     violation: str,
     alert_key: str,
     alert_throttled: Callable[[str, str], bool] | None,
+    *,
+    generation: int = picks.FIRST_GENERATION,
 ) -> None:
     """The shared terminal-refusal tail for the post-sizing ``_place_pick``
     gates (fee floor, gross cap): warn, page the operator (throttled, only
@@ -7641,7 +7674,7 @@ def _refuse_pick_terminal(
     if alert_throttled is not None:
         alert_throttled(violation, alert_key)
     try:
-        picks.mark_refused(ticker, trade_date, violation)
+        picks.mark_refused(ticker, trade_date, violation, generation=generation)
     except OSError as exc:
         logger.warning(
             "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc
@@ -7997,6 +8030,7 @@ def _place_tiers(
         append_submission_record(
             build_submission_record(
                 trade_date=intent.meta.trade_date,
+                generation=_pick_generation(intent),
                 ticker=ticker,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,
@@ -8054,6 +8088,7 @@ def _place_tiers(
     append_submission_record(
         build_submission_record(
             trade_date=intent.meta.trade_date,
+            generation=_pick_generation(intent),
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -8146,6 +8181,7 @@ def _handle_tier_placement_failure(
     append_submission_record(
         build_submission_record(
             trade_date=intent.meta.trade_date,
+            generation=_pick_generation(intent),
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -8592,7 +8628,7 @@ def _entry_trail_intercept(
     # Match _open_entry_watches' pick_key byte-for-byte: the string
     # trade_date, not the caller's parsed date (str(date) happens to agree,
     # but pin the exact form the watch_open records actually carry).
-    pick_key = f"{ticker}:{intent.meta.trade_date}"
+    pick_key = picks.pick_key_str(ticker, intent.meta.trade_date, _pick_generation(intent))
     already_watching = pick_key in _open_watch_pick_keys(entry_trail_fold)
     if not already_watching and _entry_watch_capacity_reached(entry_trail_fold):
         # Pick-denominated capacity (memo decision #4): stay ARMED (not a
@@ -8866,6 +8902,7 @@ def _refuse_now_tranche(
         append_submission_record(
             build_submission_record(
                 trade_date=intent.meta.trade_date,
+                generation=_pick_generation(intent),
                 ticker=ticker,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,
@@ -8930,6 +8967,7 @@ def _handle_now_tranche(
             violation,
             f"now-cost:{ticker}",
             alert_throttled,
+            generation=_pick_generation(intent),
         )
         return _NowOutcome.REFUSED_PICK
     uic = int(instrument.broker_instrument_id)
@@ -9169,7 +9207,7 @@ def _place_pick(
     net_position_uics, unresolvable_position_rows = _net_open_position_uics(positions)
     open_watch_picks = _open_watch_picks_for_max_open(
         entry_trail_fold,
-        own_pick_key=f"{ticker}:{intent.meta.trade_date}",
+        own_pick_key=picks.pick_key_str(ticker, intent.meta.trade_date, _pick_generation(intent)),
         position_uics=net_position_uics,
     )
 
@@ -9189,7 +9227,7 @@ def _place_pick(
         _AlreadyGatedSessionState(),
     )
     if isinstance(decision, safety.Refuse):
-        _handle_safety_refusal(decision, ticker, trade_date)
+        _handle_safety_refusal(decision, ticker, trade_date, generation=_pick_generation(intent))
         return False
 
     resolved = _resolve_and_size(broker, ticker, account, spec, hint_mic=intent.instrument.mic)
@@ -9210,7 +9248,12 @@ def _place_pick(
     )
     if fee_violation is not None:
         _refuse_pick_terminal(
-            ticker, trade_date, fee_violation, f"fee-floor:{ticker}", alert_throttled
+            ticker,
+            trade_date,
+            fee_violation,
+            f"fee-floor:{ticker}",
+            alert_throttled,
+            generation=_pick_generation(intent),
         )
         return False
 
@@ -9239,7 +9282,12 @@ def _place_pick(
     )
     if gross_violation is not None:
         _refuse_pick_terminal(
-            ticker, trade_date, gross_violation, f"gross-cap:{ticker}", alert_throttled
+            ticker,
+            trade_date,
+            gross_violation,
+            f"gross-cap:{ticker}",
+            alert_throttled,
+            generation=_pick_generation(intent),
         )
         return False
 
@@ -9258,7 +9306,12 @@ def _place_pick(
     )
     if cash_violation is not None:
         _refuse_pick_terminal(
-            ticker, trade_date, cash_violation, f"cash-floor:{ticker}", alert_throttled
+            ticker,
+            trade_date,
+            cash_violation,
+            f"cash-floor:{ticker}",
+            alert_throttled,
+            generation=_pick_generation(intent),
         )
         return False
 
@@ -9367,7 +9420,7 @@ def _route_now_tranche(
     )
     if not now_tiers:
         return _NowRouting(None, plan, False, None, None)
-    pick_key = f"{ticker}:{intent.meta.trade_date}"
+    pick_key = picks.pick_key_str(ticker, intent.meta.trade_date, _pick_generation(intent))
     full_ladder_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
     outcome = _handle_now_tranche(
         refs,
@@ -9393,7 +9446,12 @@ def _route_now_tranche(
             # fresh arm (new armed_ts, latest-wins) is the path back
             # (memo §3.7). The refusal detail is in the submissions
             # journal's tranche record.
-            picks.mark_refused(ticker, trade_date, "now tranche refused (see submissions journal)")
+            picks.mark_refused(
+                ticker,
+                trade_date,
+                "now tranche refused (see submissions journal)",
+                generation=_pick_generation(intent),
+            )
         return _NowRouting(now_placed, plan, now_placed, None, None)
     plan = replace(plan, entry_tiers=pullback_tiers)
     if now_placed:
@@ -9427,7 +9485,9 @@ def _refuse_geometry_without_trail(
     return True
 
 
-def _handle_safety_refusal(decision: Any, ticker: str, trade_date: dt.date) -> None:
+def _handle_safety_refusal(
+    decision: Any, ticker: str, trade_date: dt.date, *, generation: int = picks.FIRST_GENERATION
+) -> None:
     """Log a ``safety.Refuse`` and journal it when terminal.
 
     Terminal refusal (queue-semantics fix 2026-07-30): ONLY a capacity
@@ -9445,7 +9505,7 @@ def _handle_safety_refusal(decision: Any, ticker: str, trade_date: dt.date) -> N
     logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
     if decision.terminal:
         try:
-            picks.mark_refused(ticker, trade_date, decision.reason)
+            picks.mark_refused(ticker, trade_date, decision.reason, generation=generation)
         except OSError as exc:
             logger.warning(
                 "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc

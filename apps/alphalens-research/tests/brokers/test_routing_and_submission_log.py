@@ -280,6 +280,17 @@ class TestSubmissionLog(unittest.TestCase):
         self.assertNotIn("tranche", record)
         self.assertNotIn("tranche_meta", record)
 
+    def test_generation_one_keeps_the_legacy_record_shape(self):
+        # #1371: generation 1 is every record written before the field existed;
+        # emitting it would change the shape of every legacy caller's record.
+        self.assertNotIn("generation", self._record())
+        self.assertNotIn("generation", self._record(generation=1))
+
+    def test_later_generation_is_stamped_on_the_record(self):
+        # The drain's submissions join (picks.submitted_pick_keys) reads it back
+        # so a same-day re-arm never joins to its predecessor's record.
+        self.assertEqual(self._record(generation=2)["generation"], 2)
+
     def test_schema_3_est_round_trip_fee_bps_always_present(self):
         # Schema-3 shape (broker sizing memo §4.5): the honest per-tier
         # round-trip estimate key is ALWAYS present — a REAL null when the
