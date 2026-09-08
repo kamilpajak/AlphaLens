@@ -268,12 +268,28 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
                 assert_live_rails()
         self.assertIn(PORTFOLIO_GROSS_FRAC_ENV, str(captured.exception))
 
+    def test_portfolio_gross_frac_at_the_widened_cap_passes(self):
+        # 1.0 is what 20-exposure.conf runs since 2026-09-08 (operator
+        # decision: exposure is bounded by diversification across the ten
+        # slots, not by a fraction of equity); the cap is inclusive, so the
+        # deployed value must be admitted, and the old cap 0.5 sits inside.
+        for raw in ("0.5", "0.75", "1.0"):
+            with self.subTest(raw=raw):
+                env = dict(_VALID_ENV, **{PORTFOLIO_GROSS_FRAC_ENV: raw})
+                with mock.patch.dict("os.environ", env, clear=True):
+                    assert_live_rails()
+
     def test_portfolio_gross_frac_above_cap_rejected(self):
-        env = dict(_VALID_ENV, **{PORTFOLIO_GROSS_FRAC_ENV: "1.0"})
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(PORTFOLIO_GROSS_FRAC_ENV, str(captured.exception))
+        # Above 1.0 the cap would admit MORE gross than the account holds —
+        # leverage the account has no margin agreement for. Ceiling 0.5 -> 1.0
+        # on 2026-09-08; 1.01 is the first value above it.
+        for raw in ("1.01", "1.5", "2"):
+            with self.subTest(raw=raw):
+                env = dict(_VALID_ENV, **{PORTFOLIO_GROSS_FRAC_ENV: raw})
+                with mock.patch.dict("os.environ", env, clear=True):
+                    with self.assertRaises(BrokerCapabilityError) as captured:
+                        assert_live_rails()
+                self.assertIn(PORTFOLIO_GROSS_FRAC_ENV, str(captured.exception))
 
     def test_daily_loss_limit_r_zero_rejected(self):
         env = dict(_VALID_ENV, **{DAILY_LOSS_LIMIT_R_ENV: "0"})

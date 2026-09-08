@@ -194,7 +194,7 @@ insufficient:
 | `SAXO_LIVE_ACCOUNT_KEY` | `<live account key>` | distinct from SIM's var |
 | `ALPHALENS_BROKER_ALLOW_ORDERS` | `0` at first deploy → `1` at attended arm | inert-first rollout (§7) |
 | `ALPHALENS_BROKER_MAX_OPEN` | `1` | boot-assert bound: ≤ 2 (≤ 4 since 2026-09-04, ≤ 10 since 2026-09-08, §8 point 3 amendments) |
-| `ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC` | `0.25` | NOT 0.03 — a 100 zł-risk pick at a ~5% stop is ~2 000 zł notional ≈ 0.20 of the 10k frame; 0.03 would CAPACITY-refuse every pick. Bound: ≤ 0.5 |
+| `ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC` | `0.25` | NOT 0.03 — a 100 zł-risk pick at a ~5% stop is ~2 000 zł notional ≈ 0.20 of the 10k frame; 0.03 would CAPACITY-refuse every pick. Bound: ≤ 0.5 (≤ 1.0 since 2026-09-08, §8 point 3 amendment) |
 | `ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R` | `1.0` | bound: ≤ 2.0 |
 | `ALPHALENS_BROKER_SIZING_EQUITY` | `10000` (zł frame) | §4; bound: > 0 |
 | `ALPHALENS_BROKER_EXIT_POLICY` | `trailing_atr` (§6) | startup-once; boot-assert: explicit-set |
@@ -378,6 +378,14 @@ so silent demotion pages.
    1 500 zł per-pick notional the group uses, ten names are ~15 000 zł of
    gross against a ~12 000 zł cap, so the gross rail — not the slot count —
    is what binds first. The boot-assert ceilings moved with it.
+   **Amendment 2026-09-08 (later the same day):** `PORTFOLIO_GROSS_FRAC`
+   raised 0.5 → 1.0. Operator decision: with ten slots, risk is bounded by
+   diversification across names, not by a fraction of equity held back;
+   the whole account may be committed across the slots, never more (1.0 is
+   the no-leverage line and the new boot-assert ceiling). The cash floor
+   and the fee floor keep binding per pick. At the 6 000 zł probe:mass
+   notional the group flow uses, ~4 names fill the cap at ~24 000 zł of
+   equity.
 4. **DAILY_LOSS_LIMIT_R** — *(rec: 1.0R)*
 5. **Fee floor × frame (joint decision — §4 equation):** (a) 100 bps at
    the 10k zł frame (accept ~0.9% measured drag, soak validates
