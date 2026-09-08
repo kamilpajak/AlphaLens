@@ -131,6 +131,35 @@ def _discover_services() -> list[Path]:
     return sorted(SYSTEMD_DIR.glob("alphalens-*.service"))
 
 
+# Where node_exporter actually scrapes (memory: the live
+# --collector.textfile.directory). The hook writes to
+# ${ALPHALENS_TEXTFILE_DIR:-$HOME/.alphalens/metrics}; a unit that gives it
+# neither of the two routings below lets it fall back to ~/.alphalens/metrics,
+# which node_exporter never reads — every metric the hook emits is then
+# written hourly and scraped by nobody. That is how AlphalensEdgeStale sat
+# `inactive` for two months (#1366): alphalens-edge-mirror.service carried the
+# hook and no routing, Prometheus had no job="edge-mirror" series, and
+# ``max()`` over an absent series never crosses any threshold.
+TEXTFILE_DIR = "/var/lib/node_exporter/textfile"
+# Form A: the shared env file (defines ALPHALENS_TEXTFILE_DIR; documented as
+# REQUIRED in .env.example). No leading ``-``: a missing file must fail loud.
+_ENV_FILE_RE = re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE)
+# Form B: an explicit in-unit pin (the daemon units' precedent).
+_EXPLICIT_PIN_RE = re.compile(
+    r"^Environment=ALPHALENS_TEXTFILE_DIR=" + re.escape(TEXTFILE_DIR) + r"\s*$",
+    re.MULTILINE,
+)
+_ANY_HOOK_RE = re.compile(
+    r"^-?ExecStopPost=%h/AlphaLens/" + re.escape(EMIT_HOOK_REL) + r"\s+\S+\s*$",
+    re.MULTILINE,
+)
+
+
+def _routes_textfile_dir(unit_text: str) -> bool:
+    """True when the unit gives the hook a scraped textfile dir (form A or B)."""
+    return bool(_ENV_FILE_RE.search(unit_text) or _EXPLICIT_PIN_RE.search(unit_text))
+
+
 class TestMetricsHookCompleteness(unittest.TestCase):
     """Glob-derived: every non-exempt unit wires the emit hook."""
 
@@ -192,6 +221,27 @@ class TestMetricsHookCompleteness(unittest.TestCase):
             "its short job name to EXEMPT_JOBS in this file with a reason.",
         )
 
+    def test_every_hooked_unit_routes_the_textfile_dir(self) -> None:
+        # A hook without a routed ALPHALENS_TEXTFILE_DIR is worse than no
+        # hook: it looks wired, exits 0 every run, and writes to a directory
+        # node_exporter never scrapes. Both forms are accepted; a unit that
+        # has neither is the #1366 shape.
+        unrouted: list[str] = []
+        for service_path in _discover_services():
+            text = service_path.read_text()
+            if _ANY_HOOK_RE.search(text) and not _routes_textfile_dir(text):
+                unrouted.append(service_path.name)
+
+        self.assertEqual(
+            unrouted,
+            [],
+            "These units wire the metrics hook but give it no ALPHALENS_TEXTFILE_DIR, "
+            "so it writes to ~/.alphalens/metrics, which node_exporter never scrapes "
+            "(#1366): " + ", ".join(unrouted) + ". Add "
+            "`EnvironmentFile=/etc/alphalens/env` or "
+            "`Environment=ALPHALENS_TEXTFILE_DIR=" + TEXTFILE_DIR + "`.",
+        )
+
 
 class TestMetricsHookCompletenessPositiveControl(unittest.TestCase):
     """Feed deliberately-broken inputs; assert the check FAILS on them.
@@ -249,6 +299,41 @@ class TestMetricsHookCompletenessPositiveControl(unittest.TestCase):
             _emit_hook_regex("newjob").search(body),
             "A comment mentioning the hook MUST NOT satisfy the directive-line-anchored regex.",
         )
+
+    def test_hooked_unit_without_routing_is_flagged(self) -> None:
+        # The #1366 shape: hook present, no EnvironmentFile, no explicit pin.
+        body = (
+            "[Service]\n"
+            "Type=oneshot\n"
+            "ExecStart=/usr/bin/docker compose run --rm something\n"
+            "ExecStopPost=%h/AlphaLens/" + EMIT_HOOK_REL + " newjob\n"
+        )
+        self.assertIsNotNone(_ANY_HOOK_RE.search(body))
+        self.assertFalse(
+            _routes_textfile_dir(body),
+            "A hooked unit with neither routing form MUST be flagged, or the "
+            "routing check is a no-op.",
+        )
+
+    def test_routing_in_a_comment_or_with_a_dash_is_not_routing(self) -> None:
+        # Directive-anchored: prose, and the fail-soft ``EnvironmentFile=-``
+        # form, must not count.
+        body = (
+            "[Service]\n"
+            "# add EnvironmentFile=/etc/alphalens/env later\n"
+            "EnvironmentFile=-/etc/alphalens/env\n"
+            "ExecStopPost=%h/AlphaLens/" + EMIT_HOOK_REL + " newjob\n"
+        )
+        self.assertFalse(_routes_textfile_dir(body))
+
+    def test_both_routing_forms_pass(self) -> None:
+        for line in (
+            "EnvironmentFile=/etc/alphalens/env",
+            "Environment=ALPHALENS_TEXTFILE_DIR=" + TEXTFILE_DIR,
+        ):
+            with self.subTest(line=line):
+                body = "[Service]\nType=oneshot\n" + line + "\n"
+                self.assertTrue(_routes_textfile_dir(body))
 
     def test_correctly_wired_unit_passes(self) -> None:
         # The other half of the control: a properly wired body MUST match,

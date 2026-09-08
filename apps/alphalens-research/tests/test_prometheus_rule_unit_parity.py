@@ -93,6 +93,49 @@ STALENESS_EXEMPT_JOBS: frozenset[str] = frozenset(
 )
 
 
+# Every exempt job replaces the generic AlphalensJobStale with a DEDICATED
+# staleness alert — and a staleness alert on its own is disarmable: an
+# expression like ``time() - max(series) > N`` simply returns nothing when
+# the series does not exist, so the rule sits ``inactive`` forever and looks
+# healthy. The generic family pairs each stale rule with an ``absent()``
+# guard (AlphalensJobMetricMissing); the dedicated ones must too. Named
+# pairs, not job-label matching: broker-capital-reader deliberately watches
+# a series labelled job="broker-manager-live", not its own.
+#
+# #1366: AlphalensEdgeStale had no guard while the edge-mirror unit wrote its
+# metric to an unscraped directory — two months of ``inactive`` with no page.
+DEDICATED_STALE_RULES: dict[str, tuple[str, str]] = {
+    "edge-mirror": ("AlphalensEdgeStale", "AlphalensEdgeMetricMissing"),
+    "broker-capital-reader": (
+        "AlphalensBrokerCapitalReadStale",
+        "AlphalensBrokerCapitalReadMissing",
+    ),
+}
+
+
+def _all_rules() -> list[dict]:
+    doc = yaml.safe_load(RULES_PATH.read_text())
+    return [rule for group in doc["groups"] for rule in group.get("rules", [])]
+
+
+def _missing_dedicated_pairs(rules: list[dict], table: dict[str, tuple[str, str]]) -> list[str]:
+    """Pure helper: problems with the dedicated stale/absent pairs, as messages."""
+    by_name = {rule.get("alert"): rule for rule in rules if rule.get("alert")}
+    problems: list[str] = []
+    for job, (stale_name, missing_name) in sorted(table.items()):
+        stale = by_name.get(stale_name)
+        missing = by_name.get(missing_name)
+        if stale is None:
+            problems.append(f"{job}: dedicated stale rule {stale_name!r} not found")
+        elif "absent(" in stale.get("expr", ""):
+            problems.append(f"{job}: {stale_name!r} must be threshold-only (no absent())")
+        if missing is None:
+            problems.append(f"{job}: absent() guard {missing_name!r} not found")
+        elif "absent(" not in missing.get("expr", ""):
+            problems.append(f"{job}: {missing_name!r} must wrap absent(...)")
+    return problems
+
+
 def _emitting_jobs() -> set[str]:
     """Job names emitted by ANY systemd unit's metrics ExecStopPost hook."""
     jobs: set[str] = set()
@@ -208,6 +251,41 @@ class TestPrometheusRuleUnitParity(unittest.TestCase):
                 "the exemption contradicts reality. Drop it from "
                 "STALENESS_EXEMPT_JOBS or remove the rule.",
             )
+
+
+class TestDedicatedStaleRulePairs(unittest.TestCase):
+    """Every STALENESS_EXEMPT_JOBS entry names a dedicated stale rule AND an
+    absent() guard, and the table is the exemption set — bidirectional."""
+
+    def test_dedicated_table_matches_exempt_set(self) -> None:
+        self.assertEqual(set(DEDICATED_STALE_RULES), set(STALENESS_EXEMPT_JOBS))
+
+    def test_exempt_jobs_have_named_dedicated_rule_pairs(self) -> None:
+        problems = _missing_dedicated_pairs(_all_rules(), DEDICATED_STALE_RULES)
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_pair_check_flags_a_stale_rule_without_its_guard(self) -> None:
+        # Positive control: a dedicated stale rule with no absent() sibling
+        # (the #1366 shape) must be reported.
+        synthetic = [
+            {"alert": "SyntheticStale", "expr": 'time() - max(x{job="s"}) > 1'},
+        ]
+        problems = _missing_dedicated_pairs(
+            synthetic, {"synthetic": ("SyntheticStale", "SyntheticMissing")}
+        )
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("SyntheticMissing", problems[0])
+
+    def test_pair_check_flags_a_guard_that_does_not_use_absent(self) -> None:
+        synthetic = [
+            {"alert": "SyntheticStale", "expr": 'time() - max(x{job="s"}) > 1'},
+            {"alert": "SyntheticMissing", "expr": 'x{job="s"} == 0'},
+        ]
+        problems = _missing_dedicated_pairs(
+            synthetic, {"synthetic": ("SyntheticStale", "SyntheticMissing")}
+        )
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("absent", problems[0])
 
 
 class TestParityPositiveControls(unittest.TestCase):

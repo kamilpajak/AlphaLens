@@ -14,6 +14,15 @@ set -euo pipefail
 # Writes ${ALPHALENS_TEXTFILE_DIR:-$HOME/.alphalens/metrics}/
 # alphalens_job_${JOB}.prom containing:
 #
+# ROUTING: node_exporter scrapes ONLY /var/lib/node_exporter/textfile, so a
+# unit must set ALPHALENS_TEXTFILE_DIR (via EnvironmentFile=/etc/alphalens/env
+# or an explicit Environment= pin). The $HOME fallback exists for an operator
+# running the hook by hand; inside a unit it means every metric written here
+# is scraped by nobody — which is how AlphalensEdgeStale stayed `inactive`
+# for two months (#1366). The hook now warns on stderr (-> journal) whenever
+# it falls back, and test_systemd_metrics_hook_completeness.py refuses a
+# hooked unit that routes neither way.
+#
 #   alphalens_job_last_run_timestamp_seconds{job="..."} <epoch now>
 #   alphalens_job_last_duration_seconds{job="..."}      <wall seconds>
 #   alphalens_job_last_exit_code{job="..."}             <exit status>
@@ -41,6 +50,11 @@ set -euo pipefail
 
 JOB="${1:?usage: $0 <job-short-name>}"
 TEXTFILE_DIR="${ALPHALENS_TEXTFILE_DIR:-$HOME/.alphalens/metrics}"
+# ``${VAR:-}`` — under ``set -u`` a bare reference to an unset variable
+# would abort the hook in exactly the case this line is meant to report.
+if [ -z "${ALPHALENS_TEXTFILE_DIR:-}" ]; then
+    echo "WARN: ALPHALENS_TEXTFILE_DIR unset — writing ${TEXTFILE_DIR}, which node_exporter does not scrape; pin it in the unit (see #1366)" >&2
+fi
 mkdir -p "$TEXTFILE_DIR"
 
 # systemd ExecStopPost exports these (man systemd.service §
