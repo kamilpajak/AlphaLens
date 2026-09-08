@@ -26,9 +26,9 @@ against the exit-policy registry HERE, at boot — a copy-paste unit with a
 typo'd policy name must never reach the per-tick protection pass, where a
 ``ValueError`` would starve every position that tick.
 
-The numeric bounds (MAX_OPEN <= 4, PORTFOLIO_GROSS_FRAC <= 0.5,
+The numeric bounds (MAX_OPEN <= 10, PORTFOLIO_GROSS_FRAC <= 0.5,
 DAILY_LOSS_LIMIT_R <= 2.0, SIZING_EQUITY <= 15000, MAX_FEE_BPS <= 1000,
-ENTRY_TRAIL_BPS <= 150, and ENTRY_WATCH_MAX_PICKS <= 4) are the
+ENTRY_TRAIL_BPS <= 150, and ENTRY_WATCH_MAX_PICKS <= 10) are the
 operator-decided §8 caps for the soak — NOT a mechanism for widening risk
 later without also widening this assert. MAX_OPEN and ENTRY_WATCH_MAX_PICKS
 were widened 2 -> 4 on 2026-09-04 (operator decision, memo
@@ -37,7 +37,11 @@ amendment): the WhatsApp manual flow arms two or more picks a day on top of
 the positions already held, and a 2-slot cap forced a disarm-to-arm trade
 every morning. PORTFOLIO_GROSS_FRAC stays 0.5, so the implied per-position
 share of real equity falls from 25% to 12.5% — the widening adds names, not
-gross.
+gross. Widened again 4 -> 10 on 2026-09-08 (same memo, same amendment):
+a four-pick signal day arrived with one slot free, and the group flow now
+arms whole daily lists rather than one or two names. GROSS_FRAC still 0.5,
+so the implied per-position share falls to 5%; the account is bounded by the
+gross and cash rails, the slot count only bounds the NUMBER of names.
 
 ENTRY_WATCH_MAX_PICKS is the newest pin and exists for a reason worth stating:
 it was the one rail whose LIVE ceiling came from a constant SHARED with the SIM
@@ -101,7 +105,7 @@ _VALID_SIZING_MODES = (SIZING_MODE_CLAMPED, SIZING_MODE_DECLARED)
 # Operator-decided §8 soak bounds (design memo §3 table). Widening risk later
 # is a design-memo decision, not a silent constant edit here.
 _MAX_OPEN_LOWER = 1
-_MAX_OPEN_UPPER = 4  # 2 -> 4 on 2026-09-04, see the module docstring
+_MAX_OPEN_UPPER = 10  # 2 -> 4 on 2026-09-04, 4 -> 10 on 2026-09-08, see the module docstring
 _PORTFOLIO_GROSS_FRAC_UPPER = 0.5
 _DAILY_LOSS_LIMIT_R_UPPER = 2.0
 
@@ -123,8 +127,9 @@ _MAX_FEE_BPS_UPPER = 1_000.0
 # one place the LIVE bounds table lives, and a bound kept elsewhere is a bound a
 # future "what limits LIVE?" audit misses. The shared runtime ceiling
 # (ENTRY_WATCH_MAX_PICKS_MAX, 25) exists for the SIM lab and does not gate LIVE.
-# Moves with MAX_OPEN (one watch slot per position slot): 2 -> 4 on 2026-09-04.
-_ENTRY_WATCH_MAX_PICKS_UPPER = 4
+# Moves with MAX_OPEN (one watch slot per position slot): 2 -> 4 on 2026-09-04,
+# 4 -> 10 on 2026-09-08.
+_ENTRY_WATCH_MAX_PICKS_UPPER = 10
 
 
 def _missing_or_blank(raw: str | None) -> bool:
@@ -209,7 +214,7 @@ def assert_live_rails() -> None:
     are explicitly set and within the live-soak bounds (design memo §3 point
     2 / ADR 0017 point 4; the 8th pin is the entry-trailing distance per the
     entry-trailing design memo §6 — explicit ``"0"`` = trailing off; the 9th is
-    the entry-watch capacity, pinned to [1, 4] since #1189 so the shared code
+    the entry-watch capacity, pinned to [1, 10] since #1189 so the shared code
     ceiling can be raised for the SIM lab without widening LIVE).
 
     Call ONCE, at LIVE composition-root time, BEFORE any broker/network I/O —
@@ -252,7 +257,7 @@ def assert_live_rails() -> None:
                 hi=ENTRY_TRAIL_BPS_MAX,
                 unset_reason="explicit 0 = trailing off; the pin must still be stated",
             ),
-            # Entry-watch capacity (#1189): [1, 4] for LIVE. The runtime reader
+            # Entry-watch capacity (#1189): [1, 10] for LIVE. The runtime reader
             # in control_loop accepts up to ENTRY_WATCH_MAX_PICKS_MAX (25) so the
             # SIM lab can hold many concurrent watches; that shared ceiling used
             # to be the ONLY code-level bound on LIVE's watch capacity, which
