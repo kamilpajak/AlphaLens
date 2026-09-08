@@ -90,6 +90,7 @@ class _CliFakeBroker:
         # The default open-orders view carries every per-uic accounting field
         # the Saxo adapter maps (#1375) so the renderer tests read real shapes;
         # a test overrides the list to exercise the missing-field branches.
+        self.list_open_orders_calls = 0
         self.open_orders: list[OrderState] = [
             OrderState(
                 "E-1",
@@ -139,6 +140,7 @@ class _CliFakeBroker:
         return OrderState(order_id, OrderStatus.WORKING, None, 0.0, "Working")
 
     def list_open_orders(self) -> list[OrderState]:
+        self.list_open_orders_calls += 1
         return list(self.open_orders)
 
     def cancel_order(self, order_id: str) -> None:
@@ -589,6 +591,7 @@ class TestOrdersAndCancel(unittest.TestCase):
             "ko:xnys",
             "KO-2026-07-16-entry-t0",
             "KO E1",
+            "StandAlone",
             "WORKING",
         ):
             self.assertIn(token, row, row)
@@ -643,7 +646,12 @@ class TestOrdersAndCancel(unittest.TestCase):
         human = self.runner.invoke(broker_app, ["orders"])
         self.assertEqual(human.exit_code, 0, msg=human.output)
         self.assertNotIn("?", human.stdout)
-        self.assertIn("X-1", human.stdout)
+        self.assertNotIn("None", human.stdout)
+        (line,) = [line for line in human.stdout.splitlines() if line.startswith("X-1")]
+        # side, type, amount, instrument, ref, relation -> six explicit `-`
+        # placeholders; filled_quantity is a real 0.0 and renders as `0`.
+        self.assertEqual(line.split().count("-"), 6, line)
+        self.assertIn("raw=Working", line)
 
     def test_orders_rejects_an_unknown_format_before_any_broker_call(self):
         harness = _SubmitHarness(self)
@@ -654,7 +662,34 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertEqual(result.exit_code, 1, msg=result.output)
         self.assertIn("--format", result.stderr)
         self.assertEqual(result.stdout, "")
-        self.assertEqual(harness.broker.place_calls, [])
+        self.assertEqual(harness.broker.list_open_orders_calls, 0)
+
+    def test_orders_empty_reference_renders_the_placeholder_not_a_blank_cell(self):
+        harness = _SubmitHarness(self)
+        harness.broker.open_orders = [
+            OrderState(
+                "R-1",
+                OrderStatus.WORKING,
+                None,
+                0.0,
+                "Working",
+                uic=5,
+                side="BUY",
+                order_type="Limit",
+                amount=1.0,
+                external_reference="",
+            )
+        ]
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["orders", "--format", "json"])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIsNone(json.loads(result.stdout)["orders"][0]["label"])
+        human = self.runner.invoke(broker_app, ["orders"])
+        (line,) = [line for line in human.stdout.splitlines() if line.startswith("R-1")]
+        # ref and relation are absent -> two placeholders, never a blank cell.
+        self.assertEqual(line.split().count("-"), 2, line)
 
     def test_orders_empty_book_reads_no_open_orders(self):
         harness = _SubmitHarness(self)

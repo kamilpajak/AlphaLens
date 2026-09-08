@@ -1935,7 +1935,8 @@ def _order_row(state: OrderState) -> dict[str, Any]:
         "order_type": state.order_type,
         "amount": state.amount,
         "filled_quantity": state.filled_quantity,
-        "instrument": state.instrument.broker_symbol if state.instrument else None,
+        # `or None`: an unstamped symbol ("") must not surface as an empty string.
+        "instrument": (state.instrument.broker_symbol or None) if state.instrument else None,
         "uic": state.uic,
         "external_reference": ref,
         "label": human_label_from_external_reference(ref) if ref else None,
@@ -1960,14 +1961,16 @@ def _render_orders_human(result: Mapping[str, Any]) -> None:
         return
 
     def _cell(value: Any) -> str:
-        return _ORDERS_ABSENT if value is None else str(value)
+        # "" counts as absent like None: Saxo omits a reference by leaving the
+        # field empty, and an empty cell would read as a rendering defect.
+        return _ORDERS_ABSENT if value is None or value == "" else str(value)
 
     def _qty(value: Any) -> str:
         return _ORDERS_ABSENT if value is None else f"{float(value):g}"
 
     typer.echo(
         f"{'order_id':12s} {'side':4s} {'type':20s} {'amount':>8s} {'filled':>8s}  "
-        f"{'instrument':16s} {'ref':44s} status  raw"
+        f"{'instrument':16s} {'ref':44s} {'rel':12s} status  raw"
     )
     for row in rows:
         ref = _cell(row["external_reference"])
@@ -1978,7 +1981,8 @@ def _render_orders_human(result: Mapping[str, Any]) -> None:
         typer.echo(
             f"{row['order_id']:12s} {_cell(row['side']):4s} {_cell(row['order_type']):20s} "
             f"{_qty(row['amount']):>8s} {_qty(row['filled_quantity']):>8s}  "
-            f"{_order_instrument_cell(row):16s} {ref:44s} {row['status']}  raw={row['raw_status']}"
+            f"{_order_instrument_cell(row):16s} {ref:44s} {_cell(row['order_relation']):12s} "
+            f"{row['status']}  raw={row['raw_status']}"
         )
 
 
