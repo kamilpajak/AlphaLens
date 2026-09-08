@@ -1478,7 +1478,8 @@ journalctl --user -u alphalens-broker-manager.service -f      # per-tick loop
 | Inspect | `journalctl --user -u alphalens-broker-manager.service -f` |
 | State files | picks: `~/.alphalens/broker_orders/sim/picks.jsonl`; placements: `~/.alphalens/broker_orders/sim/submissions.jsonl` (both append-only; LIVE twin under `broker_orders/live/`) |
 | Stop the daemon | `systemctl --user disable --now alphalens-broker-manager.service` |
-| Full flat check | `.venv/bin/alphalens broker positions` + `... orders` |
+| Full flat check | `.venv/bin/alphalens broker positions --env sim` + `... orders --env sim` (LIVE twin: `--env live`, which composes the LIVE unit's rails + its `EnvironmentFile` itself, so a plain shell is enough — #1377) |
+| Entry watches | `.venv/bin/alphalens broker watches --env sim\|live [--all]` — which tiers still watch / are armed at the broker / fired (#1376) |
 
 **Same-day correction (#1371, 2026-09-08):** a pick's identity is
 `(ticker, trade_date, generation)`. `arm-manual` assigns the next generation for
@@ -1692,6 +1693,22 @@ ls ~/.alphalens/broker_orders/live/
 # journals exist, empty of placements
 ```
 
+Read the LIVE instance directly (#1377). `--env live` composes the installed
+unit's rails plus its `EnvironmentFile=`, forces `ALLOW_ORDERS=0` for the
+one-off process, and prints one `composed unit=... dropins=... env-file=...
+keys=...` line to stderr — no `set -a`, no `env $(systemctl ...)`, and no
+secret values in either stream:
+```bash
+.venv/bin/alphalens broker account --env live     # LIVE balance + margin
+.venv/bin/alphalens broker positions --env live   # flat before the first arm
+.venv/bin/alphalens broker orders --env live      # resting entries / stops
+.venv/bin/alphalens broker watches --env live     # entry-trail tiers (#1376)
+```
+The composition describes the LOADED unit configuration. After a
+`daemon-reload` without a `restart` it can differ from what the running daemon
+holds; a pending reload is reported as a `NeedDaemonReload` warning, and the
+hourly drift check is what compares the two properly.
+
 **`DelayedByMinutes==0`** confirms the elevated (`FullTradingAndChat`)
 session is genuinely real-time, not silently demoted (§5 "Single-holder
 rule" of "Saxo LIVE market data" below). Confirm the app/chain CAN reach
@@ -1810,10 +1827,12 @@ upward past where you already are.
    resting risks the stop firing AFTER the flatten and double-selling into
    an unintended SHORT. Do the three steps in this exact order:
    ```bash
-   # 1. cancel every resting StopIfTraded / OCO leg FIRST — check
-   #    saxotrader.com or the daemon's own journal for the resting order
-   #    IDs; there is no LIVE-targeted `broker orders` CLI yet, so this
-   #    step is done on the Saxo web UI or via the daemon's own logs.
+   # 1. cancel every resting StopIfTraded / OCO leg FIRST. List them with
+   #    the LIVE-targeted CLI (#1375/#1377) — it composes the unit's rails
+   #    and EnvironmentFile itself, so a plain shell is enough:
+   #      .venv/bin/alphalens broker orders --env live
+   #      .venv/bin/alphalens broker cancel <order_id> --env live
+   #    saxotrader.com stays the cross-check, not the only source.
    # 2. market SELL the position, summed per-lot owned.
    # 3. cancel any still-resting entry buys.
    ```
