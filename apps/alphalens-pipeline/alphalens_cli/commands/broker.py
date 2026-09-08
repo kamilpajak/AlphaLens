@@ -2554,11 +2554,7 @@ _PROM_LINE_RE = re.compile(
 
 @broker_app.command(name="stream-status")
 def stream_status_command(
-    env: str = typer.Option(
-        _DEFAULT_ARM_ENV,
-        "--env",
-        help="Broker instance whose stream gauges to read (sim|live).",
-    ),
+    env: str | None = _ENV_OPTION,
     output_format: str = typer.Option(
         "human",
         "--format",
@@ -2576,6 +2572,9 @@ def stream_status_command(
     from alphalens_pipeline.brokers.automanager import state_paths
     from alphalens_pipeline.observability import textfile
 
+    # `None` resolves through the shared seam (#1377): a bare invocation reads
+    # the same instance `picks` / `watches` do, never a hardcoded sim.
+    env = env if env is not None else state_paths.broker_environment()
     if output_format not in ("human", "json"):
         raise _fail(f"unknown --format {output_format!r} (expected human|json)")
     try:
