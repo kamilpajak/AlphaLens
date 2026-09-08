@@ -193,7 +193,7 @@ insufficient:
 | `ALPHALENS_SAXO_LIVE_STANDING` | `<live account key>` | §1 grant, account-bound |
 | `SAXO_LIVE_ACCOUNT_KEY` | `<live account key>` | distinct from SIM's var |
 | `ALPHALENS_BROKER_ALLOW_ORDERS` | `0` at first deploy → `1` at attended arm | inert-first rollout (§7) |
-| `ALPHALENS_BROKER_MAX_OPEN` | `1` | boot-assert bound: ≤ 2 (≤ 4 since 2026-09-04, §8 point 3 amendment) |
+| `ALPHALENS_BROKER_MAX_OPEN` | `1` | boot-assert bound: ≤ 2 (≤ 4 since 2026-09-04, ≤ 10 since 2026-09-08, §8 point 3 amendments) |
 | `ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC` | `0.25` | NOT 0.03 — a 100 zł-risk pick at a ~5% stop is ~2 000 zł notional ≈ 0.20 of the 10k frame; 0.03 would CAPACITY-refuse every pick. Bound: ≤ 0.5 |
 | `ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R` | `1.0` | bound: ≤ 2.0 |
 | `ALPHALENS_BROKER_SIZING_EQUITY` | `10000` (zł frame) | §4; bound: > 0 |
@@ -369,6 +369,15 @@ so silent demotion pages.
    `PORTFOLIO_GROSS_FRAC` stays 0.5, so the implied per-position share of
    real equity falls from 25% to 12.5% — more names, not more gross. The
    boot-assert ceilings in `live_rails.py` moved with it.
+   **Amendment 2026-09-08:** raised to 10, again together with
+   `ENTRY_WATCH_MAX_PICKS`. Reason: the group flow now arms whole daily
+   signal lists (four US names on 2026-09-08: ENPH, ALB, UBER, LULU) on top
+   of the positions and watches already held (QUBT, RHI, CIEN), and four
+   slots left room for one of them. `PORTFOLIO_GROSS_FRAC` stays 0.5, so
+   the implied per-position share of real equity falls to 5%; with the
+   1 500 zł per-pick notional the group uses, ten names are ~15 000 zł of
+   gross against a ~12 000 zł cap, so the gross rail — not the slot count —
+   is what binds first. The boot-assert ceilings moved with it.
 4. **DAILY_LOSS_LIMIT_R** — *(rec: 1.0R)*
 5. **Fee floor × frame (joint decision — §4 equation):** (a) 100 bps at
    the 10k zł frame (accept ~0.9% measured drag, soak validates
