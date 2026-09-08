@@ -351,6 +351,16 @@ def submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, 
             try:
                 generation = generation_of(record)
             except ValueError:
+                # DEBUG, not WARNING: the drain re-reads the journal every
+                # ~45 s tick, and this line is a durable fact of the file —
+                # a WARNING per tick would flood journald (iter_picks precedent).
+                logger.debug(
+                    "submitted_pick_keys %s/%s: malformed generation %r — folded to "
+                    "generation 1 (the queue fold treats the same value as malformed)",
+                    ticker,
+                    trade_date,
+                    record.get(_GENERATION_KEY),
+                )
                 generation = FIRST_GENERATION
             keys.add((str(ticker).upper(), identity_token(str(trade_date), generation)))
     return keys

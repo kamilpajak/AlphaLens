@@ -598,6 +598,15 @@ class GenerationQueueTest(unittest.TestCase):
         records = [{"ticker": "KO", "trade_date": "2026-09-08", "generation": "2"}]
         self.assertEqual(submitted_pick_keys(records), {("KO", "2026-09-08")})
 
+    def test_malformed_generation_fold_is_logged_at_debug(self) -> None:
+        # The asymmetry with the queue fold (which drops the line) is deliberate;
+        # it must be visible on demand, and never a per-tick WARNING flood.
+        records = [{"ticker": "KO", "trade_date": "2026-09-08", "generation": "2"}]
+        with self.assertLogs("alphalens_pipeline.brokers.automanager.picks", level="DEBUG") as cm:
+            submitted_pick_keys(records)
+        self.assertTrue(any("malformed generation" in line for line in cm.output))
+        self.assertFalse(any(line.startswith("WARNING") for line in cm.output))
+
     def test_queue_line_with_malformed_generation_is_malformed(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
