@@ -74,7 +74,7 @@ import os
 import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import typer
 
@@ -167,7 +167,20 @@ it across several commands).
 """
 
 
-def _apply_env_option(env: str | None, *, required: bool = True) -> str | None:
+class EnvOption(NamedTuple):
+    """What ``_apply_env_option`` actually did, for callers that report it.
+
+    ``state`` distinguishes four outcomes a bare ``unit or None`` conflated:
+    ``untouched`` (no option), ``pinned`` (instance set, nothing composed),
+    ``composed`` (rails + EnvironmentFile applied), ``failed`` (best-effort
+    composition refused — the process env stands, so anything read from it may
+    be ambient rather than the unit's)."""
+
+    state: str
+    unit: str | None = None
+
+
+def _apply_env_option(env: str | None, *, required: bool = True) -> EnvOption:
     """Point this process at the instance named by ``--env`` (#1377).
 
     ``None`` (no option) does NOTHING: the process keeps whatever
@@ -205,7 +218,7 @@ def _apply_env_option(env: str | None, *, required: bool = True) -> str | None:
     from alphalens_pipeline.brokers.automanager.safety import ALLOW_ORDERS_ENV
 
     if env is None:
-        return None
+        return EnvOption("untouched")
     try:
         target = state_paths.validate_environment(env)
     except ValueError as exc:
@@ -213,7 +226,7 @@ def _apply_env_option(env: str | None, *, required: bool = True) -> str | None:
 
     if target != state_paths.ENV_LIVE:
         os.environ[state_paths.BROKER_ENVIRONMENT_ENV] = target
-        return None
+        return EnvOption("pinned")
 
     try:
         composed = unit_env.compose_live_environment(env=target)
@@ -222,9 +235,12 @@ def _apply_env_option(env: str | None, *, required: bool = True) -> str | None:
             raise _fail(f"--env {target}: {exc}") from exc
         # Best-effort: the instance is still honoured, only the unit's paths
         # and rails are missing, and the caller reports that in its output.
+        # ALLOW_ORDERS is forced HERE too — "a live one-off is never armed" is
+        # an invariant of this helper, not of the branch that happened to run.
         os.environ[state_paths.BROKER_ENVIRONMENT_ENV] = target
+        os.environ[ALLOW_ORDERS_ENV] = "0"
         typer.secho(f"WARN --env {target}: {exc}", err=True, fg=typer.colors.YELLOW)
-        return None
+        return EnvOption("failed")
 
     os.environ.update(composed.values)
     os.environ[state_paths.BROKER_ENVIRONMENT_ENV] = target
@@ -237,7 +253,7 @@ def _apply_env_option(env: str | None, *, required: bool = True) -> str | None:
         f"env-file={env_file} keys={len(composed.values)}",
         err=True,
     )
-    return composed.unit
+    return EnvOption("composed", composed.unit)
 
 
 def _guard_ambient_instance(env: str | None, *, default: str) -> str:
@@ -2474,7 +2490,7 @@ def _render_status_human(snapshot: Any, *, limits_source: str) -> None:
         typer.echo("no open watches")
 
 
-def _status_payload(snapshot: Any, *, limits_source: str) -> dict[str, Any]:
+def _status_payload(snapshot: Any, *, limits_source: str, applied: EnvOption) -> dict[str, Any]:
     """The JSON envelope — the same facts the human view renders."""
     from dataclasses import asdict
 
@@ -2484,6 +2500,7 @@ def _status_payload(snapshot: Any, *, limits_source: str) -> dict[str, Any]:
         "env": snapshot.env,
         "offline": snapshot.offline,
         "limits_source": limits_source,
+        "composition": applied.state,
         "account": None
         if account is None
         else {
@@ -2504,6 +2521,25 @@ def _status_payload(snapshot: Any, *, limits_source: str) -> dict[str, Any]:
     }
 
 
+def _limits_source(applied: EnvOption, *, offline: bool) -> str:
+    """Where the limits came from, per what actually happened.
+
+    A FAILED best-effort composition must not read like an intentional skip:
+    the process env still stands, so the health half may be reading an ambient
+    value (a hand-composed shell) rather than the unit's."""
+    detail = {
+        "composed": f"env composed from {applied.unit}",
+        "failed": "composition FAILED — values may be ambient, not the unit's",
+        "pinned": "instance pinned, nothing composed",
+        "untouched": "env not composed",
+    }[applied.state]
+    if offline:
+        return f"n/a (--offline); {detail}"
+    if applied.state == "composed":
+        return f"unit {applied.unit} (loaded config)"
+    return f"process env ({detail})"
+
+
 @broker_app.command(name="status")
 def status_command(
     env: str | None = _ENV_OPTION,
@@ -2515,8 +2551,9 @@ def status_command(
     offline: bool = typer.Option(
         False,
         "--offline",
-        help="Skip every broker call and render only what needs no gateway — the half "
-        "a broker outage leaves available.",
+        help="Skip every BROKER call and render only the half a broker outage leaves "
+        "available. Local sources are still read: the journals, the textfiles, the "
+        "token stores, and systemctl for the unit's paths (best-effort).",
     ),
 ) -> None:
     """One read-only snapshot of a broker instance — READ-ONLY (issue #1378).
@@ -2542,7 +2579,7 @@ def status_command(
     # does need the unit's ALPHALENS_TEXTFILE_DIR to find the heartbeat and
     # the price-frame age it exists to show (#1387). A broken user manager
     # therefore degrades the offline half instead of refusing it.
-    composed_unit = _apply_env_option(env, required=not offline)
+    applied = _apply_env_option(env, required=not offline)
     try:
         resolved_env = state_paths.broker_environment()
     except ValueError as exc:
@@ -2553,16 +2590,7 @@ def status_command(
     # "process env" is literal, not a hedge: without an explicit `--env live`
     # nothing is composed, so the rails really are whatever the process was
     # given. Claiming the unit here would be the lie (pre-merge review).
-    if offline:
-        limits_source = (
-            f"n/a (--offline); env composed from {composed_unit}"
-            if composed_unit
-            else "n/a (--offline); env not composed"
-        )
-    elif composed_unit:
-        limits_source = f"unit {composed_unit} (loaded config)"
-    else:
-        limits_source = "process env (not composed)"
+    limits_source = _limits_source(applied, offline=offline)
 
     broker = None if offline else _cli_broker(mutating=False)
     try:
@@ -2576,7 +2604,12 @@ def status_command(
         raise _fail(f"broker status failed: {exc}") from exc
 
     if output_format == "json":
-        typer.echo(json.dumps(_status_payload(snapshot, limits_source=limits_source), default=str))
+        typer.echo(
+            json.dumps(
+                _status_payload(snapshot, limits_source=limits_source, applied=applied),
+                default=str,
+            )
+        )
         return
     _render_status_human(snapshot, limits_source=limits_source)
 
