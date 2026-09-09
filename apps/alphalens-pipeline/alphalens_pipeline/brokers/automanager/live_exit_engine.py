@@ -556,9 +556,23 @@ DISPOSITION_NO_SOLE_SL = "no_sole_sl"
 
 
 def _record(dispositions: dict[int, str] | None, uic: int, disposition: str) -> None:
-    """Stamp one uic's outcome, when the caller asked to be told."""
-    if dispositions is not None:
-        dispositions[uic] = disposition
+    """Stamp one uic's outcome, when the caller asked to be told.
+
+    A SKIP IS NEVER OVERWRITTEN BY A LATER ``managed``. ``managed`` may hold
+    several entries for one uic — Saxo keeps a position row per fill under
+    EndOfDay netting, and ``_build_managed_exits`` appends one ``ManagedExit``
+    per ROW, so a uic re-armed across days is evaluated once per row (measured:
+    3 rows on uic 641 produce 3 entries). Keying this report by uic therefore
+    collapses those evaluations, and letting the last one win would let a
+    "managed" hide an earlier veto — the same blind spot this report exists to
+    remove, one layer up. If any evaluation of a uic was skipped, the uic reads
+    as skipped, because part of that position went unevaluated.
+    """
+    if dispositions is None:
+        return
+    if dispositions.get(uic, DISPOSITION_MANAGED) != DISPOSITION_MANAGED:
+        return  # an earlier skip on this uic stands
+    dispositions[uic] = disposition
 
 
 def run_live_exits(
