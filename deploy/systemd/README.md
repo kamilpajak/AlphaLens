@@ -1693,6 +1693,18 @@ ls ~/.alphalens/broker_orders/live/
 # journals exist, empty of placements
 ```
 
+**Start here (#1378).** One command answers "is the daemon alive, what is
+resting, how much room is left", with the headroom computed by the daemon's own
+folds rather than by the CLI:
+```bash
+.venv/bin/alphalens broker status --env live            # one screen
+.venv/bin/alphalens broker status --env live --offline  # during a broker outage
+```
+An unhealthy instance still exits 0 — the output carries the facts, the
+Prometheus rules own the thresholds. `--offline` skips every gateway call,
+which matters because one Saxo read can block for minutes under the client's
+retry policy exactly when the gateway is the problem.
+
 Read the LIVE instance directly (#1377). `--env live` composes the installed
 unit's rails plus its `EnvironmentFile=`, forces `ALLOW_ORDERS=0` for the
 one-off process, and prints one `composed unit=... dropins=... env-file=...
