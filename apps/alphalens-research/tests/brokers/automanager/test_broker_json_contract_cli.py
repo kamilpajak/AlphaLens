@@ -66,21 +66,40 @@ _UNIT_PROPERTIES = {
     "NeedDaemonReload": "no",
 }
 
-# Every command that can render JSON today, with whether it takes `--env`.
+# Every command that can render JSON today: the argv that runs it, whether it
+# takes `--env`, and the body keys its envelope must carry beyond schema/env.
 # `account`, `positions`, `resolve` and the five mutators are text-only by
-# decision (#1389, deferred until a consumer needs them) — adding one here
-# without an envelope fails the table. `reconcile-fills` carries no `--env`
-# because it WRITES the execution-quality parquet, so #1377 left it out of the
-# read-command option; its envelope still names the instance it read.
-_JSON_COMMANDS: tuple[tuple[str, list[str], bool], ...] = (
-    ("orders", ["orders"], True),
-    ("picks", ["picks"], True),
-    ("watches", ["watches"], True),
-    ("status", ["status", "--offline"], True),
-    ("stream-status", ["stream-status"], True),
-    ("reconcile", ["reconcile"], True),
-    ("reconcile-fills", ["reconcile-fills"], False),
+# decision (#1389, deferred until a consumer needs them). `reconcile-fills`
+# carries no `--env` because it WRITES the execution-quality parquet, so #1377
+# left it out of the read-command option; its envelope still names the
+# instance it read.
+#
+# The table is checked against the app itself in `TableCoversEveryJsonCommand`
+# — a new command with `--format` that is not listed here fails, so this file
+# cannot silently stop covering the group.
+_JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
+    ("orders", ["orders"], True, ("orders",)),
+    ("picks", ["picks"], True, ("picks", "counts", "picks_journal")),
+    ("watches", ["watches"], True, ("watches", "watching", "journal")),
+    ("status", ["status", "--offline"], True, ("exposure", "slots", "health", "orders")),
+    ("stream-status", ["stream-status"], True, ("gauges", "job", "source")),
+    ("reconcile", ["reconcile"], True, ("verdicts", "journal")),
+    ("reconcile-fills", ["reconcile-fills"], False, ("fills", "out", "written")),
 )
+
+
+def _reject_json_constant(token: str) -> None:
+    """`json.loads` accepts NaN / Infinity; a strict reader does not.
+
+    Passed as ``parse_constant`` so the contract tests below fail on output
+    Python can read but the rest of the world cannot.
+    """
+    raise ValueError(f"non-strict JSON constant {token!r} on stdout")
+
+
+def _strict_json(text: str) -> Any:
+    return json.loads(text, parse_constant=_reject_json_constant)
+
 
 _STREAM_GAUGES = {
     "alphalens_broker_manager_stream_reader_up": 1.0,
@@ -197,11 +216,11 @@ class JsonEnvelopeContractTest(_BrokerCliCase):
     """Every JSON-emitting broker command answers with the same envelope."""
 
     def test_stdout_is_exactly_one_json_object_carrying_schema_and_env(self) -> None:
-        for name, argv, _ in _JSON_COMMANDS:
+        for name, argv, _, _keys in _JSON_COMMANDS:
             with self.subTest(command=name):
                 result = self.invoke([*argv, "--format", "json"])
                 self.assertEqual(result.exit_code, 0, result.output)
-                payload = json.loads(result.stdout)
+                payload = _strict_json(result.stdout)
                 self.assertIsInstance(payload, dict, f"{name} must answer with an object")
                 self.assertEqual(
                     list(payload)[:2],
@@ -216,14 +235,22 @@ class JsonEnvelopeContractTest(_BrokerCliCase):
                 self.assertEqual(payload["env"], "sim")
 
     def test_the_schema_names_the_command(self) -> None:
-        for name, argv, _ in _JSON_COMMANDS:
+        for name, argv, _, _keys in _JSON_COMMANDS:
             with self.subTest(command=name):
                 result = self.invoke([*argv, "--format", "json"])
-                payload = json.loads(result.stdout)
+                payload = _strict_json(result.stdout)
                 self.assertEqual(payload["schema"], f"alphalens.broker.{name}/v1")
 
+    def test_each_envelope_carries_its_own_body(self) -> None:
+        """schema + env alone is an empty answer, not a contract."""
+        for name, argv, _, keys in _JSON_COMMANDS:
+            with self.subTest(command=name):
+                payload = _strict_json(self.invoke([*argv, "--format", "json"]).stdout)
+                for key in keys:
+                    self.assertIn(key, payload, f"{name} must carry {key}")
+
     def test_json_is_compact_so_one_value_is_one_line(self) -> None:
-        for name, argv, _ in _JSON_COMMANDS:
+        for name, argv, _, _keys in _JSON_COMMANDS:
             with self.subTest(command=name):
                 result = self.invoke([*argv, "--format", "json"])
                 self.assertEqual(
@@ -234,31 +261,92 @@ class JsonEnvelopeContractTest(_BrokerCliCase):
 
     def test_the_env_option_reaches_the_envelope(self) -> None:
         self._seed_stream_gauges("live")
-        for name, argv, has_env_option in _JSON_COMMANDS:
+        for name, argv, has_env_option, _keys in _JSON_COMMANDS:
             if not has_env_option:
                 continue
             with self.subTest(command=name):
                 result = self.invoke([*argv, "--env", "live", "--format", "json"])
                 self.assertEqual(result.exit_code, 0, result.output)
-                self.assertEqual(json.loads(result.stdout)["env"], "live")
+                self.assertEqual(_strict_json(result.stdout)["env"], "live")
 
     def test_the_instance_variable_reaches_the_envelope(self) -> None:
         """The commands without `--env` still name the instance they read."""
         self._seed_stream_gauges("live")
         with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ENVIRONMENT": "live"}):
-            for name, argv, _ in _JSON_COMMANDS:
+            for name, argv, _, _keys in _JSON_COMMANDS:
                 with self.subTest(command=name):
                     result = self.invoke([*argv, "--format", "json"])
                     self.assertEqual(result.exit_code, 0, result.output)
-                    self.assertEqual(json.loads(result.stdout)["env"], "live")
+                    self.assertEqual(_strict_json(result.stdout)["env"], "live")
 
     def test_unknown_format_is_refused_everywhere(self) -> None:
-        for name, argv, _ in _JSON_COMMANDS:
+        for name, argv, _, _keys in _JSON_COMMANDS:
             with self.subTest(command=name):
                 result = self.invoke([*argv, "--format", "xml"])
                 self.assertEqual(result.exit_code, 1)
                 self.assertEqual(result.stdout, "")
                 self.assertIn("--format", result.stderr)
+
+
+class StrictJsonTest(_BrokerCliCase):
+    """Python's `json.dumps` emits bare NaN / Infinity; the contract does not.
+
+    Reachable through `stream-status`: `_PROM_LINE_RE` accepts a lowercase
+    ``nan`` / ``inf`` value and `float()` parses it, so before this the
+    envelope carried a token no reader outside Python accepts, with exit 0.
+    And the spelling is OUR OWN: `observability.textfile` writes a gauge as
+    ``f"{expr} {value}"``, and `str()` on a non-finite float gives exactly
+    ``nan`` / ``inf``. (Prometheus' ``NaN`` / ``+Inf`` would be skipped by the
+    regex — the accepted spelling is the one our writer produces.)
+    """
+
+    def _seed_gauge(self, value: float) -> None:
+        """Write through the REAL emitter, not a hand-authored line.
+
+        The point under test is that our own writer spells a non-finite float
+        the way the reader accepts; a string literal here would test my typing
+        instead of the code.
+        """
+        from alphalens_pipeline.observability import textfile
+
+        textfile.emit_domain_metrics(
+            "broker-manager-sim-stream", {'a_up{job="broker-manager-sim"}': value}
+        )
+
+    def test_a_non_finite_gauge_is_refused_not_printed(self) -> None:
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                self._seed_gauge(value)
+                result = self.invoke(["stream-status", "--format", "json"])
+                self.assertEqual(result.exit_code, 1, result.output)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("JSON", result.stderr)
+
+    def test_a_finite_gauge_still_renders(self) -> None:
+        self._seed_gauge(1.5)
+        payload = _strict_json(self.invoke(["stream-status", "--format", "json"]).stdout)
+        self.assertEqual(payload["gauges"]["a_up"], 1.5)
+
+
+class TableCoversEveryJsonCommand(unittest.TestCase):
+    """The table is checked against the APP, not maintained by hope.
+
+    Without this, the contract above degrades silently: a new command with
+    ``--format`` that nobody adds to ``_JSON_COMMANDS`` is simply never tested,
+    and the file keeps passing while covering less of the group every quarter.
+    """
+
+    def test_every_command_declaring_format_is_in_the_table(self) -> None:
+        import typer.main
+        from alphalens_cli.commands.broker import broker_app
+
+        group = typer.main.get_command(broker_app)
+        declaring = {
+            name
+            for name, command in group.commands.items()  # type: ignore[attr-defined]
+            if any("--format" in param.opts for param in command.params)
+        }
+        self.assertEqual(declaring, {name for name, _argv, _env, _keys in _JSON_COMMANDS})
 
 
 class ReconcileEmptyJournalTest(_BrokerCliCase):
@@ -267,7 +355,7 @@ class ReconcileEmptyJournalTest(_BrokerCliCase):
     def test_json_mode_answers_with_an_empty_verdict_envelope(self) -> None:
         result = self.invoke(["reconcile", "--format", "json"])
         self.assertEqual(result.exit_code, 0, result.output)
-        payload = json.loads(result.stdout)
+        payload = _strict_json(result.stdout)
         self.assertEqual(payload["verdicts"], [])
 
     def test_human_mode_still_says_there_is_nothing_to_reconcile(self) -> None:
@@ -285,7 +373,7 @@ class JsonAliasTest(_BrokerCliCase):
                 alias = self.invoke([name, "--json"])
                 option = self.invoke([name, "--format", "json"])
                 self.assertEqual(alias.exit_code, 0, alias.output)
-                self.assertEqual(json.loads(alias.stdout), json.loads(option.stdout))
+                self.assertEqual(_strict_json(alias.stdout), _strict_json(option.stdout))
 
     def test_a_conflicting_pair_is_refused_rather_than_resolved(self) -> None:
         for name in ("reconcile", "reconcile-fills"):

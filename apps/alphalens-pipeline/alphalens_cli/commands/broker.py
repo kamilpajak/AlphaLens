@@ -194,9 +194,14 @@ def _resolve_format(output_format: str | None, *, json_alias: bool = False) -> s
 
     ``--json`` shipped on ``reconcile`` / ``reconcile-fills`` before the group
     had ``--format``, and the runbook plus the first-fill memo call it, so it
-    stays as a documented alias (the CLI doctrine allows exactly that). A
-    caller that passes BOTH with different meanings is refused rather than
-    resolved by a precedence rule nobody would remember.
+    stays as a documented alias (the CLI doctrine allows exactly that).
+    ``--json`` together with ``--format human`` is refused rather than resolved
+    by a precedence rule nobody would remember.
+
+    Scope of that refusal: click collapses a repeated scalar option to its LAST
+    value before this function runs, so ``--format human --format json --json``
+    is accepted and renders JSON — the earlier ``human`` is already gone. Only
+    the effective ``--format`` can be checked here.
     """
     if output_format is not None and output_format not in (_FORMAT_HUMAN, _FORMAT_JSON):
         raise _fail(f"unknown --format {output_format!r} (expected human|json)")
@@ -210,16 +215,38 @@ def _resolve_format(output_format: str | None, *, json_alias: bool = False) -> s
 def _envelope(schema: str, env: str, **payload: Any) -> dict[str, Any]:
     """The broker group's JSON envelope: ``schema`` and ``env``, then the body.
 
-    ``env`` names the instance the command actually read. It is the one field
-    a machine consumer cannot reconstruct from the rest, and getting SIM and
-    LIVE the wrong way round is the expensive mistake this group can make.
+    ``env`` names the BROKER INSTANCE the command read. It is the one field a
+    machine consumer cannot reconstruct from the rest, and getting SIM and
+    LIVE the wrong way round is the expensive mistake this group can make. A
+    command pointed at an explicit file (``reconcile --journal <path>``)
+    reports that path separately as ``journal``: the instance and the source
+    file are two facts, and only the operator can make them disagree.
     """
     return {"schema": schema, "env": env, **payload}
 
 
 def _emit_json(payload: Mapping[str, Any]) -> None:
-    """Write the envelope as exactly one compact JSON value on stdout."""
-    typer.echo(json.dumps(payload, default=str))
+    """Write the envelope as exactly one STRICT JSON value on stdout.
+
+    ``allow_nan=False`` because Python's default emits bare ``NaN`` /
+    ``Infinity``, which are not JSON and are rejected by readers outside
+    Python. That is reachable from OUR OWN writer, not only from a hand-edited
+    file: ``observability.textfile`` renders a gauge as ``f"{expr} {value}"``,
+    and ``str()`` on a non-finite float gives lowercase ``nan`` / ``inf`` —
+    exactly the spelling ``_PROM_LINE_RE`` accepts and ``float()`` parses. (The
+    regex has no capital ``N`` or ``I``, so Prometheus' own ``NaN`` / ``+Inf``
+    would be skipped; ours would not.) Such a value used to land in the
+    ``stream-status`` envelope with exit 0.
+
+    A payload that cannot be rendered strictly is REFUSED, so stdout is either
+    one valid JSON value or empty. Serialising half-valid output would defeat
+    the contract the rest of this module exists to hold.
+    """
+    try:
+        body = json.dumps(payload, default=str, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise _fail(f"cannot render this result as JSON: {exc}") from exc
+    typer.echo(body)
 
 
 class EnvOption(NamedTuple):
@@ -2784,6 +2811,10 @@ def reconcile_fills_command(
     broker's audit-log capability, computes the implementation shortfall, and
     (over)writes the execution-quality parquet. Places / cancels / amends
     NOTHING — the only side effect is the parquet write.
+
+    No ``--env``: this command WRITES the parquet, so #1377 kept it out of the
+    read-command option. The instance comes from
+    ``$ALPHALENS_BROKER_ENVIRONMENT`` and is reported as the envelope's ``env``.
     """
     from dataclasses import asdict
 
