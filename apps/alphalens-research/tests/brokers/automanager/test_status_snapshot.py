@@ -506,6 +506,32 @@ class TestHealth(unittest.TestCase):
         health = self.h.build(_FakeBroker()).health
         self.assertAlmostEqual(health.last_refusal_age_s, 27 * 86_400, delta=2)
 
+    def test_a_naive_refused_ts_is_read_as_utc_not_dropped(self) -> None:
+        # Every line the daemon writes today carries an offset (22/22 on the
+        # VPS), but subtracting a naive datetime from an aware one raises, and
+        # silently losing the age would restore the very bug the age fixes.
+        from alphalens_pipeline.brokers.automanager.status_snapshot import _refusal_age_s
+
+        naive = (_NOW - dt.timedelta(hours=5)).replace(tzinfo=None).isoformat(timespec="seconds")
+        self.assertAlmostEqual(_refusal_age_s(naive, _NOW), 5 * 3600, delta=2)
+
+    def test_a_malformed_refused_ts_degrades_to_no_age(self) -> None:
+        from alphalens_pipeline.brokers.automanager.status_snapshot import _refusal_age_s
+
+        for raw in ("not a date", "", None, 17300000, [1], {"a": 1}):
+            with self.subTest(raw=raw):
+                self.assertIsNone(_refusal_age_s(raw, _NOW))
+
+    def test_a_health_read_that_raises_degrades_to_an_unknown_section(self) -> None:
+        from alphalens_pipeline.brokers.automanager import status_snapshot as mod
+
+        with mock.patch.object(mod, "_token_health", side_effect=RuntimeError("store blew up")):
+            snapshot = self.h.build(_FakeBroker())
+        self.assertEqual(snapshot.health.unit_state, "unknown")
+        self.assertIsNone(snapshot.health.heartbeat_age_s)
+        # The broker half still rendered.
+        self.assertIsNotNone(snapshot.exposure.used)
+
     def test_a_refusal_without_a_timestamp_has_no_age_rather_than_a_guessed_one(self) -> None:
         picks_path = self.h.root / "picks.jsonl"
         picks_path.write_text(

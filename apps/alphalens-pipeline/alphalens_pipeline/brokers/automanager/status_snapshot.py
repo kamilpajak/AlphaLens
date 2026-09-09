@@ -493,6 +493,24 @@ def _price_stream(env: str, now: dt.datetime) -> tuple[float | None, str | None]
     return (None, None)
 
 
+def _refusal_age_s(raw_ts: Any, now: dt.datetime) -> float | None:
+    """Seconds since ``refused_ts``; ``None`` when it cannot be read.
+
+    A timestamp WITHOUT an offset is read as UTC rather than dropped: every
+    line the daemon writes today carries one (22/22 on the VPS, 2026-09-09),
+    but subtracting a naive datetime from an aware one raises, and silently
+    losing the age would restore exactly the bug this age exists to fix."""
+    if not raw_ts:
+        return None
+    try:
+        stamp = dt.datetime.fromisoformat(str(raw_ts))
+    except (TypeError, ValueError):
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=dt.UTC)
+    return (now - stamp).total_seconds()
+
+
 def _last_refusal(env: str, now: dt.datetime) -> tuple[str | None, float | None]:
     """``(rendered refusal, age in seconds)`` for the latest refused pick.
 
@@ -507,15 +525,26 @@ def _last_refusal(env: str, now: dt.datetime) -> tuple[str | None, float | None]
             continue
         reason = record.record.get("reason") or record.record.get("note") or ""
         text = f"{record.ticker} {record.trade_date.isoformat()}: {reason}".strip()
-        raw_ts = record.record.get("refused_ts")
-        age: float | None = None
-        if raw_ts:
-            try:
-                age = (now - dt.datetime.fromisoformat(str(raw_ts))).total_seconds()
-            except (TypeError, ValueError):
-                age = None
-        return (text, age)
+        return (text, _refusal_age_s(record.record.get("refused_ts"), now))
     return (None, None)
+
+
+def _unknown_health(env: str, now: dt.datetime) -> Health:
+    """A health section that states it could not be read."""
+    return Health(
+        unit="unknown",
+        unit_state="unknown",
+        unit_since=None,
+        heartbeat_age_s=None,
+        kill_instance=False,
+        kill_global=False,
+        kill_active_gauge=None,
+        price_stream_age_s=None,
+        price_stream_source=None,
+        tokens=[],
+        last_refusal=f"health could not be read for env={env}",
+        as_of=_iso(now),
+    )
 
 
 def _health(env: str, now: dt.datetime) -> Health:
@@ -573,7 +602,14 @@ def build_snapshot(
     # daemon's PR-T1 anti-torn-read rule between its two money gates).
     fold = entry_trails.read_entry_trail_fold(path=trails_path)
     records = list(iter_submission_records(submissions_path))
-    health = _health(env, now)
+    try:
+        health = _health(env, now)
+    except Exception:
+        # Same containment as the money folds below: the health half reads
+        # five independent sources, and none of them may abort a snapshot the
+        # operator is reading mid-incident.
+        logger.warning("status: health read failed", exc_info=True)
+        health = _unknown_health(env, now)
     watches = entry_trails.tier_rows(fold, include_terminal=False)
 
     if offline:

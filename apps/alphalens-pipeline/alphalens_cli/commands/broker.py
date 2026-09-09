@@ -2314,11 +2314,17 @@ def _age_phrase(seconds: float | None) -> str:
     An absent age yields an empty prefix rather than a guess."""
     if seconds is None:
         return ""
-    seconds = max(0.0, float(seconds))
+    value = float(seconds)
+    if value < 0:
+        # Clamping to "0s ago" would turn evidence of a clock disagreement
+        # between the writing host and this one into a benign-looking age.
+        return "ts ahead of now  "
     for unit_seconds, suffix in ((86_400, "d"), (3_600, "h"), (60, "m")):
-        if seconds >= unit_seconds:
-            return f"{seconds / unit_seconds:.0f}{suffix} ago  "
-    return f"{seconds:.0f}s ago  "
+        if value >= unit_seconds:
+            # Floor, not round: a bucket must not flip a unit early (86,399s
+            # is still "23h", never "1d").
+            return f"{int(value // unit_seconds)}{suffix} ago  "
+    return f"{int(value)}s ago  "
 
 
 def _render_status_health(health: Any, skewed: list[str]) -> None:
@@ -2338,8 +2344,14 @@ def _render_status_health(health: Any, skewed: list[str]) -> None:
         if flag
     ]
     kill_state = f"PRESENT: {', '.join(present)}" if present else "none"
+    # "@ last tick" and not a staleness verdict: the heartbeat age is printed
+    # two lines above, and importing an alert threshold into a status command
+    # is exactly what this surface refuses to do. Without the qualifier, a
+    # gauge left behind by a dead daemon reads as "the daemon agrees, now".
     gauge = (
-        "" if health.kill_active_gauge is None else f"  (daemon view {health.kill_active_gauge:g})"
+        ""
+        if health.kill_active_gauge is None
+        else f"  (daemon view {health.kill_active_gauge:g} @ last tick)"
     )
     typer.echo(f"kill      {kill_state}{gauge}")
     stream = (

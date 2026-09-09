@@ -284,7 +284,7 @@ class StatusCommandTest(unittest.TestCase):
         human = self._invoke(broker=self._seed_book()).stdout
         kill_line = next(line for line in human.splitlines() if line.startswith("kill"))
         self.assertIn("none", kill_line)
-        self.assertIn("daemon view 0", kill_line)
+        self.assertIn("daemon view 0 @ last tick", kill_line)
 
     def test_a_present_kill_file_is_named_before_the_gauge(self) -> None:
         (self.root / "KILL").write_text("", encoding="utf-8")
@@ -319,6 +319,38 @@ class StatusCommandTest(unittest.TestCase):
         refusal = next(line for line in human.splitlines() if line.startswith("refused"))
         self.assertIn("27d ago", refusal)
         self.assertIn("2026-08-13", refusal)
+        # The age must PREFIX the text: appended, it reads as part of the
+        # reason and the brief date still leads the line.
+        self.assertLess(refusal.index("27d ago"), refusal.index("OLN"))
+
+    def test_a_refusal_without_a_timestamp_renders_no_age_and_no_none(self) -> None:
+        picks = self.root / "picks.jsonl"
+        picks.write_text(
+            json.dumps(
+                {"ticker": "OLN", "date": "2026-08-13", "reason": "gross cap", "status": "refused"}
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        human = self._invoke(broker=self._seed_book()).stdout
+        refusal = next(line for line in human.splitlines() if line.startswith("refused"))
+        self.assertIn("OLN 2026-08-13", refusal)
+        self.assertNotIn("ago", refusal)
+        self.assertNotIn("None", refusal)
+
+    def test_a_timestamp_ahead_of_now_is_not_rendered_as_just_now(self) -> None:
+        # Clamping a negative age to "0s ago" would hide a clock disagreement
+        # between the writing host and this one behind a plausible number.
+        from alphalens_cli.commands.broker import _age_phrase
+
+        self.assertNotIn("0s ago", _age_phrase(-7200.0))
+        self.assertIn("ahead", _age_phrase(-7200.0))
+
+    def test_the_age_floors_the_unit_rather_than_rounding_it_up(self) -> None:
+        from alphalens_cli.commands.broker import _age_phrase
+
+        self.assertIn("23h ago", _age_phrase(86_399.9))
+        self.assertIn("1d ago", _age_phrase(86_400.0))
 
     def test_no_token_value_ever_reaches_the_output(self) -> None:
         payload = self._json(broker=self._seed_book())
