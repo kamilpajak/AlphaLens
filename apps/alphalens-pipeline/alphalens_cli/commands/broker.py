@@ -28,10 +28,10 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
         terminal fired / expired / suspended / cancelled with --all), the
         reservation each watch holds and the total the money gates see (#1376)
     alphalens broker cancel <order_id>       — cancel (entry cancel cascades the bracket)
-    alphalens broker reconcile [--json]      — READ-ONLY journal vs broker verdicts (P3):
+    alphalens broker reconcile [--format json]  — READ-ONLY journal vs broker verdicts (P3):
         WORKING / PAST-TTL divergence / FILLED (+closed r) / CANCELLED / REJECTED /
         EXPIRED / UNRESOLVED(reason); exit 1 on any unresolved or divergent row
-    alphalens broker reconcile-fills [--out P] [--json]  — READ-ONLY offline fill
+    alphalens broker reconcile-fills [--out P] [--format json]  — READ-ONLY offline fill
         reconciler (build-seq 1b-ii): joins each fired TP tranche to its ACTUAL
         broker fill by sell_order_id, computes implementation shortfall, writes
         the exec-quality parquet (places/cancels/amends NOTHING)
@@ -41,6 +41,13 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker marketdata-auth         — LIVE ``saxo_auth_live`` OAuth
         bootstrap / --status / --refresh (since ADR 0017 the same chain also
         feeds the LIVE order rail)
+
+JSON output is one contract across the group (#1379): ``--format human|json``
+everywhere (``--json`` stays as an alias on ``reconcile`` / ``reconcile-fills``,
+which shipped before the option existed), and in JSON mode stdout carries
+EXACTLY one compact object whose first two fields are ``schema`` and ``env``.
+``account`` / ``positions`` / ``resolve`` and the mutators render text only —
+deferred with the failure contract until a consumer needs them (#1389).
 
 Every one-off broker-touching command (account / positions / resolve /
 submit / orders / reconcile / reconcile-fills / cancel) resolves its broker
@@ -165,6 +172,54 @@ Typer builds a fresh click Parameter per command from this info object, so
 sharing it keeps the five help texts from drifting apart (verified by running
 it across several commands).
 """
+
+_FORMAT_HUMAN = "human"
+_FORMAT_JSON = "json"
+
+_FORMAT_OPTION = typer.Option(
+    None,
+    "--format",
+    help="Output format: human|json (json = exactly one JSON value on stdout). [default: human]",
+)
+"""One shared option object for every command that can render JSON (#1379).
+
+The default is ``None`` rather than ``"human"`` so ``_resolve_format`` can tell
+"the caller asked for human" from "the caller said nothing" — which is what
+makes the ``--json`` alias below refusable instead of silently overridden.
+"""
+
+
+def _resolve_format(output_format: str | None, *, json_alias: bool = False) -> str:
+    """Settle ``--format`` and the legacy ``--json`` alias into one value.
+
+    ``--json`` shipped on ``reconcile`` / ``reconcile-fills`` before the group
+    had ``--format``, and the runbook plus the first-fill memo call it, so it
+    stays as a documented alias (the CLI doctrine allows exactly that). A
+    caller that passes BOTH with different meanings is refused rather than
+    resolved by a precedence rule nobody would remember.
+    """
+    if output_format is not None and output_format not in (_FORMAT_HUMAN, _FORMAT_JSON):
+        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
+    if json_alias:
+        if output_format == _FORMAT_HUMAN:
+            raise _fail("--json and --format human ask for different things — pass one")
+        return _FORMAT_JSON
+    return output_format or _FORMAT_HUMAN
+
+
+def _envelope(schema: str, env: str, **payload: Any) -> dict[str, Any]:
+    """The broker group's JSON envelope: ``schema`` and ``env``, then the body.
+
+    ``env`` names the instance the command actually read. It is the one field
+    a machine consumer cannot reconstruct from the rest, and getting SIM and
+    LIVE the wrong way round is the expensive mistake this group can make.
+    """
+    return {"schema": schema, "env": env, **payload}
+
+
+def _emit_json(payload: Mapping[str, Any]) -> None:
+    """Write the envelope as exactly one compact JSON value on stdout."""
+    typer.echo(json.dumps(payload, default=str))
 
 
 class EnvOption(NamedTuple):
@@ -1950,11 +2005,7 @@ def _render_picks_human(result: dict[str, Any]) -> None:
 @broker_app.command(name="picks")
 def picks_command(
     env: str | None = _ENV_OPTION,
-    output_format: str = typer.Option(
-        "human",
-        "--format",
-        help="Output format: human|json (json = exactly one JSON value on stdout).",
-    ),
+    output_format: str | None = _FORMAT_OPTION,
     state: str = typer.Option(
         _PICK_STATE_FILTER_ALL,
         "--state",
@@ -1988,8 +2039,7 @@ def picks_command(
     from alphalens_pipeline.brokers.automanager import state_paths
     from alphalens_pipeline.brokers.submission_log import iter_submission_records
 
-    if output_format not in ("human", "json"):
-        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
+    resolved_format = _resolve_format(output_format)
     if state != _PICK_STATE_FILTER_ALL and state not in _PICK_STATES:
         raise _fail(
             f"unknown --state {state!r} "
@@ -2053,19 +2103,19 @@ def picks_command(
             err=True,
         )
 
-    result = {
-        "schema": _PICKS_SCHEMA,
-        "env": resolved_env,
-        "picks_journal": str(picks_target),
-        "submissions_journal": str(submissions_target),
-        "counts": counts,
-        "malformed": fold.malformed,
-        "truncated": truncated,
-        "picks": selected[:limit],
-    }
+    result = _envelope(
+        _PICKS_SCHEMA,
+        resolved_env,
+        picks_journal=str(picks_target),
+        submissions_journal=str(submissions_target),
+        counts=counts,
+        malformed=fold.malformed,
+        truncated=truncated,
+        picks=selected[:limit],
+    )
 
-    if output_format == "json":
-        typer.echo(json.dumps(result))
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(result)
         return
 
     _render_picks_human(result)
@@ -2154,11 +2204,7 @@ def _render_orders_human(result: Mapping[str, Any]) -> None:
 @broker_app.command(name="orders")
 def orders_command(
     env: str | None = _ENV_OPTION,
-    output_format: str = typer.Option(
-        "human",
-        "--format",
-        help="Output format: human|json (json = exactly one JSON value on stdout).",
-    ),
+    output_format: str | None = _FORMAT_OPTION,
 ) -> None:
     """List open orders (entry + exit children; UNKNOWN never guessed).
 
@@ -2168,20 +2214,25 @@ def orders_command(
     its human label (``KO E1`` / ``KO TP1``; a disaster stop's ``-stop-<gen>``
     ref stands as itself), and the OCO relation. One internal result object
     rendered two ways (repo CLI doctrine)."""
+    from alphalens_pipeline.brokers.automanager import state_paths
     from broker_contract.contract import BrokerError
 
-    if output_format not in ("human", "json"):
-        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
+    resolved_format = _resolve_format(output_format)
 
     _apply_env_option(env)
+    resolved_env = env if env is not None else state_paths.broker_environment()
     try:
         states = _cli_broker(mutating=False).list_open_orders()
     except BrokerError as exc:
         raise _fail(f"broker orders failed: {exc}") from exc
 
-    result = {"schema": _ORDERS_SCHEMA, "orders": [_order_row(state) for state in states]}
-    if output_format == "json":
-        typer.echo(json.dumps(result))
+    result = _envelope(
+        _ORDERS_SCHEMA,
+        resolved_env,
+        orders=[_order_row(state) for state in states],
+    )
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(result)
         return
     _render_orders_human(result)
 
@@ -2268,11 +2319,7 @@ def watches_command(
         help="Broker instance whose entry-trail journal to read: 'sim' or 'live' "
         "(ADR 0016). Default: $ALPHALENS_BROKER_ENVIRONMENT, else sim.",
     ),
-    output_format: str = typer.Option(
-        "human",
-        "--format",
-        help="Output format: human|json (json = exactly one JSON value on stdout).",
-    ),
+    output_format: str | None = _FORMAT_OPTION,
     show_all: bool = typer.Option(
         False, "--all", help="Also list terminal tiers (fired / expired / suspended / cancelled)."
     ),
@@ -2295,8 +2342,7 @@ def watches_command(
     """
     from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
 
-    if output_format not in ("human", "json"):
-        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
+    resolved_format = _resolve_format(output_format)
     try:
         resolved_env = env if env is not None else state_paths.broker_environment()
         journal = state_paths.entry_trails_path(env=resolved_env)
@@ -2310,22 +2356,22 @@ def watches_command(
     # The summary counts EVERY non-terminal tier, whatever --all renders.
     open_rows = entry_trails.tier_rows(fold, include_terminal=False)
     reserved_acct, _bad = entry_trails.watching_virtual_gross_acct(fold)
-    result = {
-        "schema": _WATCHES_SCHEMA,
-        "env": resolved_env,
-        "journal": str(journal),
-        "watches": rows,
-        "watching": {
+    result = _envelope(
+        _WATCHES_SCHEMA,
+        resolved_env,
+        journal=str(journal),
+        watches=rows,
+        watching={
             "tiers": len(open_rows),
             # The daemon's MAX_OPEN fold counts a keyless tier by its crid.
             "picks": len({row["pick_key"] or row["crid"] for row in open_rows}),
             "reserved_acct": reserved_acct,
             "unvaluable_tiers": sum(1 for row in open_rows if row["reservation_acct"] is None),
         },
-        "malformed": fold.malformed,
-    }
-    if output_format == "json":
-        typer.echo(json.dumps(result))
+        malformed=fold.malformed,
+    )
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(result)
         return
     _render_watches_human(result)
 
@@ -2495,13 +2541,13 @@ def _status_payload(snapshot: Any, *, limits_source: str, applied: EnvOption) ->
     from dataclasses import asdict
 
     account = snapshot.account
-    return {
-        "schema": _STATUS_SCHEMA,
-        "env": snapshot.env,
-        "offline": snapshot.offline,
-        "limits_source": limits_source,
-        "composition": applied.state,
-        "account": None
+    return _envelope(
+        _STATUS_SCHEMA,
+        snapshot.env,
+        offline=snapshot.offline,
+        limits_source=limits_source,
+        composition=applied.state,
+        account=None
         if account is None
         else {
             "account_id": account.account_id,
@@ -2511,14 +2557,14 @@ def _status_payload(snapshot: Any, *, limits_source: str, applied: EnvOption) ->
             "margin_available": account.margin_available,
             "asof": account.asof.isoformat(),
         },
-        "exposure": asdict(snapshot.exposure),
-        "slots": asdict(snapshot.slots),
-        "cash_floor": asdict(snapshot.cash_floor),
-        "orders": [_order_row(state) for state in snapshot.orders],
-        "watches": snapshot.watches,
-        "health": asdict(snapshot.health),
-        "skewed": snapshot.skewed,
-    }
+        exposure=asdict(snapshot.exposure),
+        slots=asdict(snapshot.slots),
+        cash_floor=asdict(snapshot.cash_floor),
+        orders=[_order_row(state) for state in snapshot.orders],
+        watches=snapshot.watches,
+        health=asdict(snapshot.health),
+        skewed=snapshot.skewed,
+    )
 
 
 def _limits_source(applied: EnvOption, *, offline: bool) -> str:
@@ -2543,11 +2589,7 @@ def _limits_source(applied: EnvOption, *, offline: bool) -> str:
 @broker_app.command(name="status")
 def status_command(
     env: str | None = _ENV_OPTION,
-    output_format: str = typer.Option(
-        "human",
-        "--format",
-        help="Output format: human|json (json = exactly one JSON value on stdout).",
-    ),
+    output_format: str | None = _FORMAT_OPTION,
     offline: bool = typer.Option(
         False,
         "--offline",
@@ -2572,8 +2614,7 @@ def status_command(
     from alphalens_pipeline.brokers.automanager import state_paths, status_snapshot
     from broker_contract.contract import BrokerError
 
-    if output_format not in ("human", "json"):
-        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
+    resolved_format = _resolve_format(output_format)
     # Composition is REQUIRED online (the LIVE factory needs the rails) and
     # BEST-EFFORT offline: `--offline` needs no rails to be correct, but it
     # does need the unit's ALPHALENS_TEXTFILE_DIR to find the heartbeat and
@@ -2603,15 +2644,14 @@ def status_command(
     except BrokerError as exc:
         raise _fail(f"broker status failed: {exc}") from exc
 
-    if output_format == "json":
-        typer.echo(
-            json.dumps(
-                _status_payload(snapshot, limits_source=limits_source, applied=applied),
-                default=str,
-            )
-        )
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(_status_payload(snapshot, limits_source=limits_source, applied=applied))
         return
     _render_status_human(snapshot, limits_source=limits_source)
+
+
+_RECONCILE_SCHEMA = "alphalens.broker.reconcile/v1"
+_RECONCILE_FILLS_SCHEMA = "alphalens.broker.reconcile-fills/v1"
 
 
 @broker_app.command(name="reconcile")
@@ -2624,11 +2664,11 @@ def reconcile_command(
         "~/.alphalens/broker_orders/<env>/submissions.jsonl) "
         "(<env> = $ALPHALENS_BROKER_ENVIRONMENT, default sim).",
     ),
+    output_format: str | None = _FORMAT_OPTION,
     as_json: bool = typer.Option(
         False,
         "--json",
-        help="Emit the verdict dicts as JSON (incl. raw Status/SubStatus diagnostics, "
-        "reason codes, realized r) for scripting.",
+        help="Alias for --format json (kept: the runbook and the first-fill memo use it).",
     ),
 ) -> None:
     """Reconcile journaled brackets against the broker — STRICTLY READ-ONLY.
@@ -2639,6 +2679,7 @@ def reconcile_command(
     Exit code 0 when clean, 1 when any UNRESOLVED or divergent row exists
     (scriptable; a still-working entry PAST its TTL is a divergence).
     """
+    resolved_format = _resolve_format(output_format, json_alias=as_json)
     _apply_env_option(env)
 
     from alphalens_pipeline.brokers.automanager import state_paths
@@ -2664,14 +2705,19 @@ def reconcile_command(
             fg=typer.colors.YELLOW,
             err=True,
         )
+    resolved_env = env if env is not None else state_paths.broker_environment()
     if not records:
         # No broker is resolved on this path, but the operator still deserves
         # the env line every other broker-touching invocation prints — an empty
         # LIVE journal reading as "nothing to reconcile" with no env context
         # is exactly the ambiguity the echo exists to remove (zen review).
-        from alphalens_pipeline.brokers.automanager import state_paths
-
-        typer.secho(f"env={state_paths.broker_environment()} gateway=none", err=True)
+        typer.secho(f"env={resolved_env} gateway=none", err=True)
+        if resolved_format == _FORMAT_JSON:
+            # An empty journal is a RESULT, not a message: this branch used to
+            # print prose on stdout, and the first-fill runbook redirects that
+            # stdout into a .json file (#1379).
+            _emit_json(_envelope(_RECONCILE_SCHEMA, resolved_env, journal=str(path), verdicts=[]))
+            return
         typer.echo(f"no submission records in {path} — nothing to reconcile")
         return
 
@@ -2680,8 +2726,15 @@ def reconcile_command(
     except BrokerError as exc:
         raise _fail(f"broker reconcile failed: {exc}") from exc
 
-    if as_json:
-        typer.echo(json.dumps([v.as_dict() for v in verdicts], indent=2, default=str))
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(
+            _envelope(
+                _RECONCILE_SCHEMA,
+                resolved_env,
+                journal=str(path),
+                verdicts=[v.as_dict() for v in verdicts],
+            )
+        )
         if has_failures(verdicts):
             # Silent nonzero exit keeps stdout pure JSON for scripting.
             raise typer.Exit(code=1)
@@ -2717,10 +2770,11 @@ def reconcile_fills_command(
         "~/.alphalens/exec_quality/<env>/tranche_fills.parquet) "
         "(<env> = $ALPHALENS_BROKER_ENVIRONMENT, default sim).",
     ),
+    output_format: str | None = _FORMAT_OPTION,
     as_json: bool = typer.Option(
         False,
         "--json",
-        help="Emit the reconciled records as JSON (one dict per fire) for scripting.",
+        help="Alias for --format json (kept: it shipped before the group had --format).",
     ),
 ) -> None:
     """Join each fired TP tranche to its ACTUAL broker fill (OFFLINE) — READ-ONLY.
@@ -2732,6 +2786,8 @@ def reconcile_fills_command(
     NOTHING — the only side effect is the parquet write.
     """
     from dataclasses import asdict
+
+    resolved_format = _resolve_format(output_format, json_alias=as_json)
 
     from alphalens_pipeline.brokers.automanager import control_loop, state_paths
     from alphalens_pipeline.brokers.automanager.exec_quality import (
@@ -2762,10 +2818,18 @@ def reconcile_fills_command(
 
     written = write_exec_quality_parquet(records, out_path)
 
-    if as_json:
+    if resolved_format == _FORMAT_JSON:
         # stdout stays exactly one JSON value for scripting (sibling `reconcile`
         # pattern) — the parquet is still written above regardless of format.
-        typer.echo(json.dumps([asdict(r) for r in records], indent=2, default=str))
+        _emit_json(
+            _envelope(
+                _RECONCILE_FILLS_SCHEMA,
+                state_paths.broker_environment(),
+                out=str(out_path),
+                written=written,
+                fills=[asdict(r) for r in records],
+            )
+        )
         return
 
     total = len(records)
@@ -2885,11 +2949,7 @@ _PROM_LINE_RE = re.compile(
 @broker_app.command(name="stream-status")
 def stream_status_command(
     env: str | None = _ENV_OPTION,
-    output_format: str = typer.Option(
-        "human",
-        "--format",
-        help="Output format: human|json (json = exactly one JSON value on stdout).",
-    ),
+    output_format: str | None = _FORMAT_OPTION,
 ) -> None:
     """Read-only snapshot of the SIM order-stream breaker/liveness gauges.
 
@@ -2905,8 +2965,7 @@ def stream_status_command(
     # `None` resolves through the shared seam (#1377): a bare invocation reads
     # the same instance `picks` / `watches` do, never a hardcoded sim.
     env = env if env is not None else state_paths.broker_environment()
-    if output_format not in ("human", "json"):
-        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
+    resolved_format = _resolve_format(output_format)
     try:
         job = state_paths.stream_metrics_job(env)
     except ValueError as exc:
@@ -2919,16 +2978,16 @@ def stream_status_command(
 
     gauges = _parse_prom_gauges(path)
 
-    result = {
-        "schema": _STREAM_STATUS_SCHEMA,
-        "env": env,
-        "job": state_paths.metrics_job(env),
-        "source": str(path),
-        "gauges": gauges,
-    }
+    result = _envelope(
+        _STREAM_STATUS_SCHEMA,
+        env,
+        job=state_paths.metrics_job(env),
+        source=str(path),
+        gauges=gauges,
+    )
 
-    if output_format == "json":
-        typer.echo(json.dumps(result))
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(result)
         return
 
     _render_stream_status_human(env, gauges)

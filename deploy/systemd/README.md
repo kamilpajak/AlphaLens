@@ -1455,7 +1455,10 @@ set -a && source /etc/alphalens/env && set +a
 .venv/bin/alphalens broker manage --once
 .venv/bin/alphalens broker orders      # entry bracket + (after fill) standalone StopIfTraded
 .venv/bin/alphalens broker watches --env sim [--all]   # entry-trail tiers: open / touched / arming / trail_armed (+ terminal with --all), reservation per tier (#1376)
-.venv/bin/alphalens broker reconcile --json   # FILLED once filled; realized_r when closed
+.venv/bin/alphalens broker reconcile --format json   # FILLED once filled; realized_r when closed
+# JSON is one envelope across the group (#1379): one compact object per call,
+# `schema` + `env` first. `--json` still works on reconcile / reconcile-fills.
+# An empty journal answers with `"verdicts": []`, never with prose on stdout.
 ```
 
 Watch it on **saxotrader.com/sim** (same SIM login). Confirm the entry + standalone disaster stop appear and match the brief geometry.

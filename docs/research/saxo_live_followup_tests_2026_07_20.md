@@ -35,6 +35,11 @@ checkout carries the fix, `PositionNettingProfile=FifoRealTime`, stock
 it only manifests against REAL SIM audit responses (always-present `__nextPoll`).
 This is the one test that can only be done live, and it closes today's loop.
 
+> Note (#1379, 2026-09-09): `reconcile --json` (still accepted; `--format json`
+> is the canonical spelling now) returns ONE object, not a bare array — the
+> verdicts are under `.verdicts`, beside `schema` and `env`. An empty journal
+> answers `"verdicts": []` instead of printing prose on stdout.
+
 **Steps:**
 1. Place a marketable BUY bracket, qty=2 (Phase-A driver):
    `step_a_entry.py --qty 2 --entry <e> --stop <s> --tp <t>` → wait for fill.
