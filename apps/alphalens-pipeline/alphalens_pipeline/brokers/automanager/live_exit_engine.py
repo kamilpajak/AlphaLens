@@ -546,12 +546,28 @@ class FiredTranche:
     position_closed: bool = False
 
 
+# Why a uic did or did not get an exit evaluation this pass (#1392). Named
+# constants rather than bare strings: the caller renders them into its summary
+# line and a test pins each one, so a typo cannot read as a new state.
+DISPOSITION_MANAGED = "managed"
+DISPOSITION_NO_PRICE = "no_price"
+DISPOSITION_BID_NOT_DECIDABLE = "bid_not_decidable"
+DISPOSITION_NO_SOLE_SL = "no_sole_sl"
+
+
+def _record(dispositions: dict[int, str] | None, uic: int, disposition: str) -> None:
+    """Stamp one uic's outcome, when the caller asked to be told."""
+    if dispositions is not None:
+        dispositions[uic] = disposition
+
+
 def run_live_exits(
     broker: LiveExitBroker,
     feed: PriceFeed,
     managed: list[ManagedExit],
     *,
     lattice: QuantityLattice,
+    dispositions: dict[int, str] | None = None,
 ) -> list[FiredTranche]:
     """One live-exit pass over managed positions. Stale/absent price -> veto (skip).
     Returns one :class:`FiredTranche` per tranche fired (fired count = its length).
@@ -572,6 +588,19 @@ def run_live_exits(
     point, ``saxo_live_price_feed`` builds the point and then returns it only if
     ``price_feed.is_fresh`` passes, which vetoes a non-finite, non-positive or
     crossed side. Neither is a rule this engine owns, so it states its own.
+
+    ``dispositions`` is an OPTIONAL out-param (the repo's
+    ``iter_submission_records(path, *, malformed=...)`` shape): given a dict, it
+    receives one ``DISPOSITION_*`` entry per uic considered. It exists because
+    SILENCE HERE WAS AMBIGUOUS (#1392) — the price veto below used to
+    ``continue`` with no log, and a pass that fires nothing because the price
+    sits far from TP1 logs nothing either, so "no line for this uic" meant
+    either "managed, nothing to do" or "never evaluated". Measured overnight on
+    LIVE, EVERY uic took the silent branch while the caller's summary line
+    still read "N position(s) managed".
+
+    Omitting the argument leaves behaviour byte-identical: this runs on a
+    live-money loop, so the reporting must not be able to change a decision.
     """
     # Once per pass, before any per-position work: a lattice the rail cannot
     # reason about ends the pass rather than being re-checked per position.
@@ -580,21 +609,33 @@ def run_live_exits(
     for m in managed:
         point = feed.latest(m.uic)
         if point is None:
-            continue  # stream-health veto
+            # Stream-health veto. Reported, deliberately NOT logged per uic:
+            # outside the session this is every uic on every tick, and the
+            # caller's one summary line carries the same fact without ~1700
+            # journal lines a night.
+            _record(dispositions, m.uic, DISPOSITION_NO_PRICE)
+            continue
         if not _is_decidable_price(point.bid):
+            # Keeps its WARNING as well as a disposition: an infinite, negative
+            # or crossed bid is an anomaly, not a normal quiet state.
             logger.warning(
                 "uic %s: bid %r is not a decidable price — skipping live exits this pass",
                 m.uic,
                 point.bid,
             )
+            _record(dispositions, m.uic, DISPOSITION_BID_NOT_DECIDABLE)
             continue
         live = broker.get_positions_by_uic(m.uic)
         legs = tuple(broker.list_working_sell_orders())
         legs = tuple(leg for leg in legs if leg.uic == m.uic)
         sl = _sole_standalone_stop(legs)
         if sl is None:
-            logger.info("uic %s: no sole standalone SL — skipping live exits this pass", m.uic)
+            # The per-uic INFO that used to sit here moved into the caller's
+            # summary line (#1392): the uic's identity travels in the dict, and
+            # one line per pass beats one line per uic per tick.
+            _record(dispositions, m.uic, DISPOSITION_NO_SOLE_SL)
             continue
+        _record(dispositions, m.uic, DISPOSITION_MANAGED)
         exits = plan_tranche_exits(
             price=point.bid,  # selling a long: the executable side is the BID
             tp_tranches=m.tp_tranches,
