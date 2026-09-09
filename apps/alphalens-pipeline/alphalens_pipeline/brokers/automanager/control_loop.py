@@ -77,6 +77,10 @@ from alphalens_pipeline.brokers.automanager.labels import (
     tp_label_from_tag,
 )
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
+    DISPOSITION_BID_NOT_DECIDABLE,
+    DISPOSITION_MANAGED,
+    DISPOSITION_NO_PRICE,
+    DISPOSITION_NO_SOLE_SL,
     LiveExitBroker,
     ManagedExit,
     apportion_tranche_quantities,
@@ -1546,19 +1550,64 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     # lattice is policy, and policy lives in `execution`.
     from alphalens_pipeline.brokers.execution import RAIL_LATTICE
 
+    dispositions: dict[int, str] = {}
     try:
-        fired = run_live_exits(broker, feed, managed, lattice=RAIL_LATTICE)
+        fired = run_live_exits(
+            broker, feed, managed, lattice=RAIL_LATTICE, dispositions=dispositions
+        )
     except BrokerError as exc:
+        # The report is deliberately NOT logged here: a pass that died midway
+        # holds a partial picture, and a partial picture presented as the
+        # pass's outcome is exactly the misreading this reporting exists to end.
         if deps.alert_throttled(
             f"live-exits: pass failed (broker error) — skipped: {exc}",
             "live-exits-run-fail",
         ):
             report.alerts += 1
         return
+    if (line := _render_exit_dispositions(fired=len(fired), dispositions=dispositions)) is not None:
+        logger.info("%s", line)
     if fired:
         report.exits_placed += len(fired)
         report.actions.append(("live-exits", f"fired={len(fired)}"))
         _announce_fired_tranches(deps, fired, uic_to_instrument, journal_lines, report)
+
+
+def _render_exit_dispositions(*, fired: int, dispositions: Mapping[int, str]) -> str | None:
+    """One line naming every uic the pass did NOT evaluate, or ``None`` (#1392).
+
+    ``None`` when every uic was evaluated: a healthy pass adds no line, so the
+    line's PRESENCE is itself the signal. When something was skipped, ONE line
+    carries the count and the uics for each reason — the engine used to log one
+    INFO per skipped uic per tick, and one of its three skip branches logged
+    nothing at all, which made "no line for this uic" unreadable.
+
+    The known reasons render in a fixed order so two passes are comparable by
+    eye, and ``managed`` is a bare count: naming the uics that WORKED is what
+    the next line (a fired tranche) already does. Any reason this function does
+    not know about is rendered LAST rather than dropped — a skip that the
+    engine reports and the renderer silently swallows would recreate exactly
+    the blind spot this line exists to close.
+    """
+    if not dispositions:
+        return None
+    managed = sum(1 for state in dispositions.values() if state == DISPOSITION_MANAGED)
+    if managed == len(dispositions):
+        return None
+    known = (DISPOSITION_NO_PRICE, DISPOSITION_BID_NOT_DECIDABLE, DISPOSITION_NO_SOLE_SL)
+    unknown = sorted(
+        {
+            state
+            for state in dispositions.values()
+            if state != DISPOSITION_MANAGED and state not in known
+        }
+    )
+    parts = [f"fired={fired}", f"managed={managed}"]
+    for reason in (*known, *unknown):
+        uics = sorted(uic for uic, state in dispositions.items() if state == reason)
+        if uics:
+            parts.append(f"{reason}={len(uics)} ({', '.join(str(uic) for uic in uics)})")
+    return "live-exits: " + " ".join(parts)
 
 
 def _live_exits_broker_or_none(deps: LoopDeps, report: TickReport) -> LiveExitBroker | None:

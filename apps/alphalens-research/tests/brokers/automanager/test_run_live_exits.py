@@ -122,13 +122,15 @@ class TestRunLiveExits(unittest.TestCase):
                 already_fired=frozenset(),
             )
         ]
-        with self.assertLogs(
-            "alphalens_pipeline.brokers.automanager.live_exit_engine", level="INFO"
-        ) as logs:
-            fired = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
+        # Visibility moved from a per-uic INFO line to the dispositions report
+        # (#1392) — the #1249 guarantee is unchanged: this skip is never
+        # silent, and never a market sell. The caller renders the uic into one
+        # summary line per pass instead of one line per uic per tick.
+        dispositions: dict[int, str] = {}
+        fired = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE, dispositions=dispositions)
         self.assertEqual(fired, [])
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 100.0)
-        self.assertTrue(any("no sole standalone SL" in line for line in logs.output))
+        self.assertEqual(dispositions, {uic: "no_sole_sl"})
 
     def test_partial_fire_does_not_mark_position_closed(self):
         b, uic, feed, managed = self._mk(price=16.5)
@@ -142,6 +144,91 @@ class TestRunLiveExits(unittest.TestCase):
         n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(n, [])
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 100.0)
+
+    def test_the_stale_price_veto_says_so_in_the_dispositions(self):
+        # #1392 — the twin of `test_no_standalone_sl_skips_the_uic_and_says_so`.
+        # This branch used to `continue` with NO log at all, so a vetoed uic
+        # and a healthy no-op looked identical in the journal: at night EVERY
+        # uic takes this branch while the pre-engine line still says "managed".
+        b, uic, feed, managed = self._mk(price=None)
+        dispositions: dict[int, str] = {}
+        fired = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE, dispositions=dispositions)
+        self.assertEqual(fired, [])
+        self.assertEqual(dispositions, {uic: "no_price"})
+
+    def test_a_healthy_no_op_is_reported_as_managed(self):
+        # The other half of the ambiguity: price far below TP1 fires nothing,
+        # and that must read as "managed, nothing to do", not as a skip.
+        b, uic, feed, managed = self._mk(price=10.0)
+        dispositions: dict[int, str] = {}
+        fired = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE, dispositions=dispositions)
+        self.assertEqual(fired, [])
+        self.assertEqual(dispositions, {uic: "managed"})
+
+    def test_a_fired_tranche_is_still_reported_as_managed(self):
+        b, uic, feed, managed = self._mk(price=16.5)
+        dispositions: dict[int, str] = {}
+        fired = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE, dispositions=dispositions)
+        self.assertEqual(len(fired), 1)
+        self.assertEqual(dispositions, {uic: "managed"})
+
+    def test_a_skip_on_one_row_is_not_hidden_by_a_managed_sibling_row(self):
+        # Found by adversarial review of my own diff: `managed` holds one entry
+        # per POSITION ROW, and Saxo keeps a row per fill under EndOfDay
+        # netting, so a uic re-armed across days is evaluated several times
+        # (measured: 3 rows on uic 641 -> 3 ManagedExit entries). The report is
+        # keyed by uic, so letting the last evaluation win would let a
+        # "managed" bury an earlier veto.
+        b = FakeBroker()
+        uic = b.uic_of("KO")
+        b.set_position("KO", 100, avg_price=15.0)  # zero sell legs -> no_sole_sl
+        feed = _FakeFeed({uic: 16.5})
+        one = ManagedExit(
+            uic=uic,
+            tp_tranches=(_tr(0, 16.0, 0.5),),
+            reference_qty=100,
+            stop_price=13.0,
+            already_fired=frozenset(),
+        )
+        dispositions: dict[int, str] = {}
+        run_live_exits(b, feed, [one, one], lattice=RAIL_LATTICE, dispositions=dispositions)
+        self.assertEqual(dispositions, {uic: "no_sole_sl"})
+
+    def test_two_rows_that_both_evaluate_read_as_managed(self):
+        # The other direction: nothing was skipped, so nothing must look skipped.
+        b, uic, feed, managed = self._mk(price=10.0)  # far below TP1
+        dispositions: dict[int, str] = {}
+        run_live_exits(
+            b, feed, [managed[0], managed[0]], lattice=RAIL_LATTICE, dispositions=dispositions
+        )
+        self.assertEqual(dispositions, {uic: "managed"})
+
+    def test_omitting_the_out_param_changes_nothing(self):
+        # The parameter is optional on purpose: the engine runs on a live-money
+        # loop, so a caller that does not want the report must get exactly the
+        # old behaviour. Asserting a count would pass even if the two paths
+        # diverged, so run BOTH on identical state and compare every
+        # observable: the fires, the position, and the resting legs.
+        without_b, without_uic, without_feed, without_managed = self._mk(price=16.5)
+        with_b, with_uic, with_feed, with_managed = self._mk(price=16.5)
+
+        without = run_live_exits(without_b, without_feed, without_managed, lattice=RAIL_LATTICE)
+        with_report = run_live_exits(
+            with_b, with_feed, with_managed, lattice=RAIL_LATTICE, dispositions={}
+        )
+
+        self.assertEqual(
+            [(f.tag, f.qty, f.position_closed) for f in without],
+            [(f.tag, f.qty, f.position_closed) for f in with_report],
+        )
+        self.assertEqual(
+            without_b.get_positions_by_uic(without_uic).quantity,
+            with_b.get_positions_by_uic(with_uic).quantity,
+        )
+        self.assertEqual(
+            [(o.order_id, o.amount) for o in without_b.list_working_sell_orders()],
+            [(o.order_id, o.amount) for o in with_b.list_working_sell_orders()],
+        )
 
     def test_gap_through_fires_both_and_sl_tracks_remaining_owned(self):
         # price crosses tp1(16, 50%) AND tp2(18, 30%) of ref 100 in ONE pass.

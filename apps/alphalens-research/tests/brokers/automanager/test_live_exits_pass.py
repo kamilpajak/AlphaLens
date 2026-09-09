@@ -121,6 +121,65 @@ class TestLiveMarketExitsEnabledGate(unittest.TestCase):
             self.assertFalse(cl._live_market_exits_enabled())
 
 
+class TestRenderExitDispositions(unittest.TestCase):
+    """The one summary line that makes a skipped uic readable (#1392).
+
+    Before this, the price veto in ``run_live_exits`` skipped a uic with no log
+    at all, and a pass that fires nothing because the price is far from TP1
+    logs nothing either — so silence meant either "managed, nothing to do" or
+    "never evaluated". Overnight on LIVE every uic took the silent branch while
+    the pre-engine line still said "N position(s) managed".
+    """
+
+    def test_a_fully_managed_pass_has_nothing_to_say(self) -> None:
+        line = cl._render_exit_dispositions(
+            fired=0, dispositions={641: "managed", 13697176: "managed"}
+        )
+        self.assertIsNone(line)
+
+    def test_a_skipped_uic_is_named_with_its_reason(self) -> None:
+        line = cl._render_exit_dispositions(
+            fired=0, dispositions={641: "no_sole_sl", 13697176: "managed"}
+        )
+        self.assertIsNotNone(line)
+        assert line is not None
+        self.assertIn("no_sole_sl=1", line)
+        self.assertIn("641", line)
+        self.assertIn("managed=1", line)
+
+    def test_two_skipped_uics_still_produce_ONE_line(self) -> None:
+        # The line budget is the point: today the engine logged one INFO per
+        # skipped uic per tick. One line per pass, whatever the count.
+        line = cl._render_exit_dispositions(
+            fired=0, dispositions={641: "no_price", 13697176: "no_price"}
+        )
+        assert line is not None
+        self.assertEqual(len(line.splitlines()), 1)
+        self.assertIn("no_price=2", line)
+        self.assertIn("641", line)
+        self.assertIn("13697176", line)
+
+    def test_the_fired_count_travels_with_it(self) -> None:
+        line = cl._render_exit_dispositions(fired=2, dispositions={641: "no_price"})
+        assert line is not None
+        self.assertIn("fired=2", line)
+
+    def test_a_reason_the_renderer_does_not_know_is_still_named(self) -> None:
+        # Found by reading my own diff: the renderer walked a FIXED tuple of
+        # three reasons, so a fourth disposition added to the engine later
+        # would produce a line that mentions neither it nor its uic — the same
+        # silent-skip blind spot this whole change removes.
+        line = cl._render_exit_dispositions(
+            fired=0, dispositions={641: "some_future_reason", 13697176: "managed"}
+        )
+        assert line is not None
+        self.assertIn("some_future_reason=1", line)
+        self.assertIn("641", line)
+
+    def test_an_empty_report_says_nothing(self) -> None:
+        self.assertIsNone(cl._render_exit_dispositions(fired=0, dispositions={}))
+
+
 class TestBuildManagedExits(unittest.TestCase):
     def test_a_uic_with_a_tranche_plan_and_a_live_long_becomes_one_managed_exit(self) -> None:
         pos = _mk_pos(uic=486, qty=100.0)
