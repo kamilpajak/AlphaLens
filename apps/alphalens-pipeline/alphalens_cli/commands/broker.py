@@ -167,7 +167,7 @@ it across several commands).
 """
 
 
-def _apply_env_option(env: str | None) -> None:
+def _apply_env_option(env: str | None, *, required: bool = True) -> str | None:
     """Point this process at the instance named by ``--env`` (#1377).
 
     ``None`` (no option) does NOTHING: the process keeps whatever
@@ -190,6 +190,14 @@ def _apply_env_option(env: str | None) -> None:
       composed production environment carries ``1`` from the arming drop-in, so
       without this the one-off process would be ARMED.
 
+    Returns the unit it composed from, or ``None`` when nothing was composed.
+
+    ``required=False`` makes the composition BEST-EFFORT: a ``UnitEnvError``
+    warns and returns ``None`` instead of refusing. That is for a caller which
+    needs the unit's PATHS but not its rails — `status --offline` reports no
+    limits, yet without the composed ``ALPHALENS_TEXTFILE_DIR`` it cannot find
+    the heartbeat it exists to show (#1387).
+
     Warnings and one ``composed unit=… dropins=… env-file=… keys=…`` line go to
     stderr; no composed VALUE is ever printed.
     """
@@ -197,7 +205,7 @@ def _apply_env_option(env: str | None) -> None:
     from alphalens_pipeline.brokers.automanager.safety import ALLOW_ORDERS_ENV
 
     if env is None:
-        return
+        return None
     try:
         target = state_paths.validate_environment(env)
     except ValueError as exc:
@@ -205,12 +213,18 @@ def _apply_env_option(env: str | None) -> None:
 
     if target != state_paths.ENV_LIVE:
         os.environ[state_paths.BROKER_ENVIRONMENT_ENV] = target
-        return
+        return None
 
     try:
         composed = unit_env.compose_live_environment(env=target)
     except unit_env.UnitEnvError as exc:
-        raise _fail(f"--env {target}: {exc}") from exc
+        if required:
+            raise _fail(f"--env {target}: {exc}") from exc
+        # Best-effort: the instance is still honoured, only the unit's paths
+        # and rails are missing, and the caller reports that in its output.
+        os.environ[state_paths.BROKER_ENVIRONMENT_ENV] = target
+        typer.secho(f"WARN --env {target}: {exc}", err=True, fg=typer.colors.YELLOW)
+        return None
 
     os.environ.update(composed.values)
     os.environ[state_paths.BROKER_ENVIRONMENT_ENV] = target
@@ -223,6 +237,7 @@ def _apply_env_option(env: str | None) -> None:
         f"env-file={env_file} keys={len(composed.values)}",
         err=True,
     )
+    return composed.unit
 
 
 def _guard_ambient_instance(env: str | None, *, default: str) -> str:
@@ -2522,16 +2537,12 @@ def status_command(
 
     if output_format not in ("human", "json"):
         raise _fail(f"unknown --format {output_format!r} (expected human|json)")
-    # `--offline` reports no limits, so it must not need systemctl either: the
-    # promise is that this half still answers the question when the gateway —
-    # or the user manager itself — is the thing that is broken.
-    if offline and env is not None:
-        try:
-            os.environ[state_paths.BROKER_ENVIRONMENT_ENV] = state_paths.validate_environment(env)
-        except ValueError as exc:
-            raise _fail(str(exc)) from exc
-    else:
-        _apply_env_option(env)
+    # Composition is REQUIRED online (the LIVE factory needs the rails) and
+    # BEST-EFFORT offline: `--offline` needs no rails to be correct, but it
+    # does need the unit's ALPHALENS_TEXTFILE_DIR to find the heartbeat and
+    # the price-frame age it exists to show (#1387). A broken user manager
+    # therefore degrades the offline half instead of refusing it.
+    composed_unit = _apply_env_option(env, required=not offline)
     try:
         resolved_env = state_paths.broker_environment()
     except ValueError as exc:
@@ -2542,13 +2553,16 @@ def status_command(
     # "process env" is literal, not a hedge: without an explicit `--env live`
     # nothing is composed, so the rails really are whatever the process was
     # given. Claiming the unit here would be the lie (pre-merge review).
-    limits_source = "process env (not composed)"
     if offline:
-        limits_source = "skipped (--offline)"
-    elif env == state_paths.ENV_LIVE:
-        from alphalens_pipeline.brokers.automanager import unit_env
-
-        limits_source = f"unit {unit_env.unit_for_env(resolved_env)} (loaded config)"
+        limits_source = (
+            f"n/a (--offline); env composed from {composed_unit}"
+            if composed_unit
+            else "n/a (--offline); env not composed"
+        )
+    elif composed_unit:
+        limits_source = f"unit {composed_unit} (loaded config)"
+    else:
+        limits_source = "process env (not composed)"
 
     broker = None if offline else _cli_broker(mutating=False)
     try:

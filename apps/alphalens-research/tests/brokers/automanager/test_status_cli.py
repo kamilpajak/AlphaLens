@@ -217,6 +217,39 @@ class StatusCommandTest(unittest.TestCase):
         self.assertIsNone(payload["account"])
         self.assertIsNotNone(payload["health"])
 
+    def test_offline_live_still_gets_the_units_textfile_dir(self) -> None:
+        # #1387: composition is where ALPHALENS_TEXTFILE_DIR comes from, so
+        # skipping it offline blanked heartbeat, prices and the kill gauge —
+        # the three lines the offline half exists to show.
+        from alphalens_cli.commands.broker import broker_app
+
+        metrics = self.home / "unit-textfiles"
+        metrics.mkdir()
+        job = "broker-manager-live"
+        stamp = dt.datetime.now(dt.UTC).timestamp() - 30
+        (metrics / f"alphalens_domain_{job}.prom").write_text(
+            f'alphalens_broker_manager_last_tick_timestamp_seconds{{job="{job}"}} {stamp}\n'
+            f'alphalens_broker_manager_kill_active{{job="{job}"}} 0\n',
+            encoding="utf-8",
+        )
+        payload = _UNIT_PAYLOAD + f" ALPHALENS_TEXTFILE_DIR={metrics}"
+
+        def show(unit: str, prop: str) -> str:
+            return _show(unit, prop) if prop != "Environment" else payload
+
+        with (
+            mock.patch(SHOW_SEAM, show),
+            mock.patch(READ_SEAM, lambda _path: "SAXO_LIVE_APP_KEY=k\n"),
+        ):
+            result = self.runner.invoke(
+                broker_app, ["status", "--env", "live", "--offline", "--format", "json"]
+            )
+        self.assertEqual(result.exit_code, 0, result.output)
+        health = json.loads(result.stdout)["health"]
+        self.assertIsNotNone(health["heartbeat_age_s"])
+        self.assertAlmostEqual(health["heartbeat_age_s"], 30, delta=5)
+        self.assertEqual(health["kill_active_gauge"], 0.0)
+
     def test_offline_live_survives_a_broken_systemctl(self) -> None:
         # The offline promise covers a broken user manager too: `--offline
         # --env live` must not COMPOSE the unit (it reports no limits anyway),
@@ -236,7 +269,9 @@ class StatusCommandTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["env"], "live")
-        self.assertEqual(payload["limits_source"], "skipped (--offline)")
+        # Composition is BEST-EFFORT offline: it degrades, it does not refuse.
+        self.assertIn("--offline", payload["limits_source"])
+        self.assertIn("not composed", payload["limits_source"])
         self.assertEqual(payload["health"]["unit_state"], "unknown")
 
     # --- env + provenance ---------------------------------------------------
