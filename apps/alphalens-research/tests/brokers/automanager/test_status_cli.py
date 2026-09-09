@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -217,6 +218,69 @@ class StatusCommandTest(unittest.TestCase):
         self.assertIsNone(payload["account"])
         self.assertIsNotNone(payload["health"])
 
+    def test_offline_live_still_gets_the_units_textfile_dir(self) -> None:
+        # #1387: composition is where ALPHALENS_TEXTFILE_DIR comes from, so
+        # skipping it offline blanked heartbeat, prices and the kill gauge —
+        # the three lines the offline half exists to show.
+        from alphalens_cli.commands.broker import broker_app
+
+        metrics = self.home / "unit-textfiles"
+        metrics.mkdir()
+        job = "broker-manager-live"
+        stamp = dt.datetime.now(dt.UTC).timestamp() - 30
+        (metrics / f"alphalens_domain_{job}.prom").write_text(
+            f'alphalens_broker_manager_last_tick_timestamp_seconds{{job="{job}"}} {stamp}\n'
+            f'alphalens_broker_manager_kill_active{{job="{job}"}} 0\n',
+            encoding="utf-8",
+        )
+        payload = _UNIT_PAYLOAD + f" ALPHALENS_TEXTFILE_DIR={metrics}"
+
+        def show(unit: str, prop: str) -> str:
+            return _show(unit, prop) if prop != "Environment" else payload
+
+        with (
+            mock.patch(SHOW_SEAM, show),
+            mock.patch(READ_SEAM, lambda _path: "SAXO_LIVE_APP_KEY=k\n"),
+        ):
+            result = self.runner.invoke(
+                broker_app, ["status", "--env", "live", "--offline", "--format", "json"]
+            )
+        self.assertEqual(result.exit_code, 0, result.output)
+        payload = json.loads(result.stdout)
+        health = payload["health"]
+        self.assertIsNotNone(health["heartbeat_age_s"])
+        self.assertAlmostEqual(health["heartbeat_age_s"], 30, delta=5)
+        self.assertEqual(health["kill_active_gauge"], 0.0)
+        # The provenance must report the success, not just the numbers.
+        self.assertEqual(payload["composition"], "composed")
+        self.assertIn(
+            "env composed from alphalens-broker-manager-live.service", payload["limits_source"]
+        )
+
+    def test_without_the_dir_in_the_payload_the_heartbeat_stays_absent(self) -> None:
+        # Negative control for the test above: it must prove the MECHANISM (the
+        # composed variable is what finds the metrics), not just that a seeded
+        # fixture happened to be readable. setUp clears the environment, so the
+        # only route in is the unit payload.
+        from alphalens_cli.commands.broker import broker_app
+
+        metrics = self.home / "unit-textfiles"
+        metrics.mkdir()
+        job = "broker-manager-live"
+        (metrics / f"alphalens_domain_{job}.prom").write_text(
+            f'alphalens_broker_manager_last_tick_timestamp_seconds{{job="{job}"}} 1\n',
+            encoding="utf-8",
+        )
+        with (
+            mock.patch(SHOW_SEAM, _show),  # payload WITHOUT ALPHALENS_TEXTFILE_DIR
+            mock.patch(READ_SEAM, lambda _path: "SAXO_LIVE_APP_KEY=k\n"),
+        ):
+            result = self.runner.invoke(
+                broker_app, ["status", "--env", "live", "--offline", "--format", "json"]
+            )
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIsNone(json.loads(result.stdout)["health"]["heartbeat_age_s"])
+
     def test_offline_live_survives_a_broken_systemctl(self) -> None:
         # The offline promise covers a broken user manager too: `--offline
         # --env live` must not COMPOSE the unit (it reports no limits anyway),
@@ -236,8 +300,53 @@ class StatusCommandTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["env"], "live")
-        self.assertEqual(payload["limits_source"], "skipped (--offline)")
+        # Composition is BEST-EFFORT offline: it degrades, it does not refuse.
+        # A FAILED attempt must not read like an intentional skip — the process
+        # env still stands, so what health reads may be ambient.
+        self.assertEqual(payload["composition"], "failed")
+        self.assertIn("--offline", payload["limits_source"])
+        self.assertIn("FAILED", payload["limits_source"])
         self.assertEqual(payload["health"]["unit_state"], "unknown")
+
+    def test_a_failed_offline_composition_still_disarms_the_process(self) -> None:
+        # "A live one-off is never armed" is an invariant of the helper, not of
+        # whichever branch ran: the failure path must force ALLOW_ORDERS too.
+        import os
+
+        from alphalens_cli.commands.broker import _apply_env_option
+
+        def explode(*_args, **_kwargs):
+            raise subprocess.TimeoutExpired(cmd="systemctl", timeout=30)
+
+        with (
+            mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ALLOW_ORDERS": "1"}, clear=False),
+            mock.patch(SHOW_SEAM, explode),
+        ):
+            applied = _apply_env_option("live", required=False)
+            self.assertEqual(applied.state, "failed")
+            self.assertEqual(os.environ["ALPHALENS_BROKER_ALLOW_ORDERS"], "0")
+            self.assertEqual(os.environ["ALPHALENS_BROKER_ENVIRONMENT"], "live")
+
+    def test_a_hung_user_manager_costs_one_probe_not_five(self) -> None:
+        # The reviewer put the offline hang at ~150s (five properties x a 30s
+        # timeout). The five reads share ONE try block, so the first failure
+        # aborts the rest — measured: exactly one probe.
+        from alphalens_pipeline.brokers.automanager import unit_env
+
+        probes: list[str] = []
+
+        def hung(_unit: str, prop: str) -> str:
+            probes.append(prop)
+            raise subprocess.TimeoutExpired(cmd="systemctl", timeout=30)
+
+        with self.assertRaises(unit_env.UnitEnvError):
+            unit_env.compose_live_environment(run=hung, read_text=lambda _p: "")
+        self.assertEqual(len(probes), 1)
+
+    def test_env_sim_reports_a_pinned_instance_not_a_bare_process_env(self) -> None:
+        payload = self._json("--env", "sim", broker=self._seed_book())
+        self.assertEqual(payload["composition"], "pinned")
+        self.assertIn("instance pinned", payload["limits_source"])
 
     # --- env + provenance ---------------------------------------------------
 
@@ -257,7 +366,7 @@ class StatusCommandTest(unittest.TestCase):
 
     def test_without_the_option_the_limits_come_from_the_process(self) -> None:
         human = self._invoke().stdout
-        self.assertIn("limits from process env (not composed)", human)
+        self.assertIn("limits from process env (env not composed)", human)
 
     # --- health content -----------------------------------------------------
 
