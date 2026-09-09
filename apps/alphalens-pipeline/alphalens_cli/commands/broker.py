@@ -2306,6 +2306,27 @@ def _status_money(value: float | None) -> str:
     return "-" if value is None else f"{value:,.2f}"
 
 
+def _age_phrase(seconds: float | None) -> str:
+    """``"27d ago  "`` / ``"4m ago  "`` / ``""`` — a compact age prefix.
+
+    The refusal line renders the BRIEF date, which says nothing about when the
+    daemon refused; without this a month-old refusal reads as fresh (#1385).
+    An absent age yields an empty prefix rather than a guess."""
+    if seconds is None:
+        return ""
+    value = float(seconds)
+    if value < 0:
+        # Clamping to "0s ago" would turn evidence of a clock disagreement
+        # between the writing host and this one into a benign-looking age.
+        return "ts ahead of now  "
+    for unit_seconds, suffix in ((86_400, "d"), (3_600, "h"), (60, "m")):
+        if value >= unit_seconds:
+            # Floor, not round: a bucket must not flip a unit early (86,399s
+            # is still "23h", never "1d").
+            return f"{int(value // unit_seconds)}{suffix} ago  "
+    return f"{int(value)}s ago  "
+
+
 def _render_status_health(health: Any, skewed: list[str]) -> None:
     """The half that needs no gateway (daemon, kill, prices, tokens)."""
     typer.echo(
@@ -2314,14 +2335,25 @@ def _render_status_health(health: Any, skewed: list[str]) -> None:
     )
     heartbeat = "-" if health.heartbeat_age_s is None else f"{health.heartbeat_age_s:,.0f}s ago"
     typer.echo(f"heartbeat {heartbeat}")
-    kill_bits = []
-    if health.kill_instance:
-        kill_bits.append("KILL instance")
-    if health.kill_global:
-        kill_bits.append("KILL global")
-    if health.kill_active_gauge is not None:
-        kill_bits.append(f"daemon view {health.kill_active_gauge:g}")
-    typer.echo("kill      " + (", ".join(kill_bits) if kill_bits else "none"))
+    # The FILES decide the word, the gauge only annotates it: folding both into
+    # one list printed "kill  daemon view 0" and left "no KILL file" implied on
+    # the one line an operator scans during an emergency stop (#1385).
+    present = [
+        name
+        for name, flag in (("instance", health.kill_instance), ("global", health.kill_global))
+        if flag
+    ]
+    kill_state = f"PRESENT: {', '.join(present)}" if present else "none"
+    # "@ last tick" and not a staleness verdict: the heartbeat age is printed
+    # two lines above, and importing an alert threshold into a status command
+    # is exactly what this surface refuses to do. Without the qualifier, a
+    # gauge left behind by a dead daemon reads as "the daemon agrees, now".
+    gauge = (
+        ""
+        if health.kill_active_gauge is None
+        else f"  (daemon view {health.kill_active_gauge:g} @ last tick)"
+    )
+    typer.echo(f"kill      {kill_state}{gauge}")
     stream = (
         "-"
         if health.price_stream_age_s is None
@@ -2349,7 +2381,8 @@ def _render_status_health(health: Any, skewed: list[str]) -> None:
                 "(as of the last refresh, not a live probe)"
             )
     if health.last_refusal:
-        typer.echo(f"refused   {health.last_refusal}")
+        age = _age_phrase(health.last_refusal_age_s)
+        typer.echo(f"refused   {age}{health.last_refusal}")
     if skewed:
         typer.echo(f"WARN      journal changed while reading the broker: {', '.join(skewed)}")
 
