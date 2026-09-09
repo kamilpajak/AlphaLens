@@ -17,6 +17,12 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker orders [--format json]  — open orders with side, type,
         resting amount, instrument (symbol, else `uic <n>`), ExternalReference
         + its human label (#1375)
+    alphalens broker status [--env sim|live] [--offline] [--format json]  — READ-ONLY
+        ONE snapshot: account, gross / slot / cash-floor headroom computed with
+        the daemon's own folds, the resting orders, the open entry-trail tiers
+        and daemon health. Unhealthy exits 0 (health is content); only a failed
+        broker read exits 1. --offline renders the half that needs no gateway
+        (#1378)
     alphalens broker watches [--env sim|live] [--all] [--format json]  — READ-ONLY
         entry-trail fold per tier: open / touched / arming / trail_armed (+ the
         terminal fired / expired / suspended / cancelled with --all), the
@@ -2183,6 +2189,25 @@ def _watch_detail(row: Mapping[str, Any]) -> str:
     return " ".join(parts)
 
 
+def _watch_row_lines(rows: list[dict[str, Any]]) -> list[str]:
+    """One rendered line per watch row — shared by `watches` and `status`."""
+    if not rows:
+        return []
+    width = max(len(_watch_cell(row["pick_key"] or row["crid"])) for row in rows)
+    lines: list[str] = []
+    for row in rows:
+        resv = row["reservation_acct"]
+        size = f"{_watch_cell(row['limit'])}x{_watch_cell(row['qty'])}"
+        lines.append(
+            f"{_watch_cell(row['pick_key'] or row['crid']):<{width}}  {row['tier']:<3} "
+            f"{size:<12} {_watch_cell(row['instrument_currency']):<4} "
+            f"{row['stage']:<11} {_watch_detail(row)}  "
+            f"ttl {_watch_cell(row['window_end'])}  "
+            f"resv {_WATCHES_ABSENT if resv is None else f'{resv:.2f}'}"
+        )
+    return lines
+
+
 def _render_watches_human(result: Mapping[str, Any]) -> None:
     """Render the watches table as the human view (same facts as the JSON)."""
     typer.echo(f"env  {result['env']}")
@@ -2190,17 +2215,7 @@ def _render_watches_human(result: Mapping[str, Any]) -> None:
     if not rows:
         typer.echo(f"no watches in {result['journal']}")
         return
-    width = max(len(_watch_cell(row["pick_key"] or row["crid"])) for row in rows)
-    for row in rows:
-        resv = row["reservation_acct"]
-        size = f"{_watch_cell(row['limit'])}x{_watch_cell(row['qty'])}"
-        line = (
-            f"{_watch_cell(row['pick_key'] or row['crid']):<{width}}  {row['tier']:<3} "
-            f"{size:<12} {_watch_cell(row['instrument_currency']):<4} "
-            f"{row['stage']:<11} {_watch_detail(row)}  "
-            f"ttl {_watch_cell(row['window_end'])}  "
-            f"resv {_WATCHES_ABSENT if resv is None else f'{resv:.2f}'}"
-        )
+    for line in _watch_row_lines(rows):
         typer.echo(line)
     watching = result["watching"]
     footer = (
@@ -2282,6 +2297,222 @@ def watches_command(
         typer.echo(json.dumps(result))
         return
     _render_watches_human(result)
+
+
+_STATUS_SCHEMA = "alphalens.broker.status/v1"
+
+
+def _status_money(value: float | None) -> str:
+    return "-" if value is None else f"{value:,.2f}"
+
+
+def _render_status_human(snapshot: Any, *, limits_source: str) -> None:
+    """One screen: provenance, health, exposure, slots, then the rows.
+
+    The OFFLINE half is printed first on purpose — one Saxo read can block for
+    minutes under the client's retry policy, and during an outage the offline
+    half is what answers the operator's question.
+    """
+    typer.echo(f"env  {snapshot.env}   limits from {limits_source}")
+    health = snapshot.health
+    typer.echo(
+        f"daemon    {health.unit} {health.unit_state}"
+        + (f" since {health.unit_since}" if health.unit_since else "")
+    )
+    heartbeat = "-" if health.heartbeat_age_s is None else f"{health.heartbeat_age_s:,.0f}s ago"
+    typer.echo(f"heartbeat {heartbeat}")
+    kill_bits = []
+    if health.kill_instance:
+        kill_bits.append("KILL instance")
+    if health.kill_global:
+        kill_bits.append("KILL global")
+    if health.kill_active_gauge is not None:
+        kill_bits.append(f"daemon view {health.kill_active_gauge:g}")
+    typer.echo("kill      " + (", ".join(kill_bits) if kill_bits else "none"))
+    stream = (
+        "-"
+        if health.price_stream_age_s is None
+        else f"{health.price_stream_age_s:,.0f}s ago ({health.price_stream_source})"
+    )
+    typer.echo(f"prices    {stream}")
+    for token in health.tokens:
+        if token.error is not None:
+            typer.echo(f"token     {token.role}: unreadable ({token.error})")
+        elif not token.present:
+            typer.echo(f"token     {token.role}: absent")
+        else:
+            access = (
+                "-"
+                if token.access_expires_in_s is None
+                else f"{token.access_expires_in_s / 60:,.0f}m"
+            )
+            refresh = (
+                "-"
+                if token.refresh_expires_in_s is None
+                else f"{token.refresh_expires_in_s / 60:,.0f}m"
+            )
+            typer.echo(
+                f"token     {token.role}: access {access} left, refresh {refresh} left "
+                "(as of the last refresh, not a live probe)"
+            )
+    if health.last_refusal:
+        typer.echo(f"refused   {health.last_refusal}")
+    if snapshot.skewed:
+        typer.echo(
+            f"WARN      journal changed while reading the broker: {', '.join(snapshot.skewed)}"
+        )
+
+    if snapshot.offline:
+        typer.echo("account   skipped (--offline)")
+    else:
+        account = snapshot.account
+        typer.echo(
+            f"account   {account.currency} cash {account.cash:,.2f}  "
+            f"total {account.total_value:,.2f}  "
+            f"margin {_status_money(account.margin_available)}"
+        )
+        exposure = snapshot.exposure
+        if exposure.blocked:
+            for reason in exposure.blocked:
+                typer.echo(f"gross     BLOCKED: {reason}")
+        else:
+            typer.echo(
+                f"gross     used {_status_money(exposure.used)} / "
+                f"limit {_status_money(exposure.limit)} {exposure.currency}  "
+                f"headroom {_status_money(exposure.headroom)}"
+                + ("  (upper bound)" if exposure.headroom_is_upper_bound else "")
+            )
+            typer.echo(
+                f"          working {_status_money(exposure.committed)} + "
+                f"filled {_status_money(exposure.filled)} + "
+                f"watching {_status_money(exposure.watching)}"
+            )
+        if exposure.unstamped_positions:
+            typer.echo(
+                f"WARN      {exposure.unstamped_positions} position(s) carry no stamped "
+                "currency and fold RAW — gross may be understated"
+            )
+        slots = snapshot.slots
+        typer.echo(
+            f"slots {slots.used}/{slots.limit}  free {slots.free}  "
+            f"(brackets {slots.brackets} + positions {slots.positions} + "
+            f"watch picks {slots.watch_picks})"
+        )
+        cash_floor = snapshot.cash_floor
+        if not cash_floor.applies:
+            typer.echo(f"cash      floor inert (sizing mode {cash_floor.mode})")
+        elif cash_floor.blocked:
+            for reason in cash_floor.blocked:
+                typer.echo(f"cash      BLOCKED: {reason}")
+        else:
+            typer.echo(
+                f"cash      reserved {_status_money(cash_floor.reserved)} / "
+                f"available {_status_money(cash_floor.available)}  "
+                f"headroom {_status_money(cash_floor.headroom)}"
+            )
+        typer.echo("")
+        _render_orders_human({"orders": [_order_row(state) for state in snapshot.orders]})
+
+    typer.echo("")
+    if snapshot.watches:
+        for line in _watch_row_lines(snapshot.watches):
+            typer.echo(line)
+    else:
+        typer.echo("no open watches")
+
+
+def _status_payload(snapshot: Any, *, limits_source: str) -> dict[str, Any]:
+    """The JSON envelope — the same facts the human view renders."""
+    from dataclasses import asdict
+
+    account = snapshot.account
+    return {
+        "schema": _STATUS_SCHEMA,
+        "env": snapshot.env,
+        "offline": snapshot.offline,
+        "limits_source": limits_source,
+        "account": None
+        if account is None
+        else {
+            "account_id": account.account_id,
+            "currency": account.currency,
+            "cash": account.cash,
+            "total_value": account.total_value,
+            "margin_available": account.margin_available,
+            "asof": account.asof.isoformat(),
+        },
+        "exposure": asdict(snapshot.exposure),
+        "slots": asdict(snapshot.slots),
+        "cash_floor": asdict(snapshot.cash_floor),
+        "orders": [_order_row(state) for state in snapshot.orders],
+        "watches": snapshot.watches,
+        "health": asdict(snapshot.health),
+        "skewed": snapshot.skewed,
+    }
+
+
+@broker_app.command(name="status")
+def status_command(
+    env: str | None = _ENV_OPTION,
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="Output format: human|json (json = exactly one JSON value on stdout).",
+    ),
+    offline: bool = typer.Option(
+        False,
+        "--offline",
+        help="Skip every broker call and render only what needs no gateway — the half "
+        "a broker outage leaves available.",
+    ),
+) -> None:
+    """One read-only snapshot of a broker instance — READ-ONLY (issue #1378).
+
+    Account, gross / slot / cash-floor headroom, the resting orders, the open
+    entry-trail tiers and the daemon's health, in one invocation. The headroom
+    numbers come from the DAEMON'S OWN folds with the candidate set to zero, so
+    what is printed is what the gate will subtract; a state the gate could not
+    value is rendered as ``BLOCKED`` with that reason rather than as a number.
+
+    An unhealthy instance still exits 0 — health is content, and a Prometheus
+    rule must not be duplicated in a CLI. Only a failed broker read exits 1.
+    """
+    import datetime as _dt
+
+    from alphalens_pipeline.brokers.automanager import state_paths, status_snapshot
+    from broker_contract.contract import BrokerError
+
+    if output_format not in ("human", "json"):
+        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
+    _apply_env_option(env)
+    try:
+        resolved_env = state_paths.broker_environment()
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+
+    _guard_state_layout()
+
+    limits_source = "process env"
+    if env == state_paths.ENV_LIVE:
+        from alphalens_pipeline.brokers.automanager import unit_env
+
+        limits_source = f"unit {unit_env.unit_for_env(resolved_env)} (loaded config)"
+
+    broker = None if offline else _cli_broker(mutating=False)
+    try:
+        snapshot = status_snapshot.build_snapshot(
+            broker=broker,
+            env=resolved_env,
+            now=_dt.datetime.now(_dt.UTC),
+            offline=offline,
+        )
+    except BrokerError as exc:
+        raise _fail(f"broker status failed: {exc}") from exc
+
+    if output_format == "json":
+        typer.echo(json.dumps(_status_payload(snapshot, limits_source=limits_source), default=str))
+        return
+    _render_status_human(snapshot, limits_source=limits_source)
 
 
 @broker_app.command(name="reconcile")
