@@ -2306,15 +2306,8 @@ def _status_money(value: float | None) -> str:
     return "-" if value is None else f"{value:,.2f}"
 
 
-def _render_status_human(snapshot: Any, *, limits_source: str) -> None:
-    """One screen: provenance, health, exposure, slots, then the rows.
-
-    The OFFLINE half is printed first on purpose — one Saxo read can block for
-    minutes under the client's retry policy, and during an outage the offline
-    half is what answers the operator's question.
-    """
-    typer.echo(f"env  {snapshot.env}   limits from {limits_source}")
-    health = snapshot.health
+def _render_status_health(health: Any, skewed: list[str]) -> None:
+    """The half that needs no gateway (daemon, kill, prices, tokens)."""
     typer.echo(
         f"daemon    {health.unit} {health.unit_state}"
         + (f" since {health.unit_since}" if health.unit_since else "")
@@ -2357,11 +2350,12 @@ def _render_status_human(snapshot: Any, *, limits_source: str) -> None:
             )
     if health.last_refusal:
         typer.echo(f"refused   {health.last_refusal}")
-    if snapshot.skewed:
-        typer.echo(
-            f"WARN      journal changed while reading the broker: {', '.join(snapshot.skewed)}"
-        )
+    if skewed:
+        typer.echo(f"WARN      journal changed while reading the broker: {', '.join(skewed)}")
 
+
+def _render_status_money(snapshot: Any) -> None:
+    """Account, gross, slots, cash floor and the resting-order rows."""
     if snapshot.offline:
         typer.echo("account   skipped (--offline)")
     else:
@@ -2413,6 +2407,17 @@ def _render_status_human(snapshot: Any, *, limits_source: str) -> None:
         typer.echo("")
         _render_orders_human({"orders": [_order_row(state) for state in snapshot.orders]})
 
+
+def _render_status_human(snapshot: Any, *, limits_source: str) -> None:
+    """One screen: provenance, then the OFFLINE half, then the broker half.
+
+    The offline half is printed first on purpose — one Saxo read can block for
+    minutes under the client's retry policy, and during an outage that half is
+    what answers the operator's question.
+    """
+    typer.echo(f"env  {snapshot.env}   limits from {limits_source}")
+    _render_status_health(snapshot.health, snapshot.skewed)
+    _render_status_money(snapshot)
     typer.echo("")
     if snapshot.watches:
         for line in _watch_row_lines(snapshot.watches):
@@ -2484,7 +2489,16 @@ def status_command(
 
     if output_format not in ("human", "json"):
         raise _fail(f"unknown --format {output_format!r} (expected human|json)")
-    _apply_env_option(env)
+    # `--offline` reports no limits, so it must not need systemctl either: the
+    # promise is that this half still answers the question when the gateway —
+    # or the user manager itself — is the thing that is broken.
+    if offline and env is not None:
+        try:
+            os.environ[state_paths.BROKER_ENVIRONMENT_ENV] = state_paths.validate_environment(env)
+        except ValueError as exc:
+            raise _fail(str(exc)) from exc
+    else:
+        _apply_env_option(env)
     try:
         resolved_env = state_paths.broker_environment()
     except ValueError as exc:
@@ -2492,8 +2506,13 @@ def status_command(
 
     _guard_state_layout()
 
-    limits_source = "process env"
-    if env == state_paths.ENV_LIVE:
+    # "process env" is literal, not a hedge: without an explicit `--env live`
+    # nothing is composed, so the rails really are whatever the process was
+    # given. Claiming the unit here would be the lie (pre-merge review).
+    limits_source = "process env (not composed)"
+    if offline:
+        limits_source = "skipped (--offline)"
+    elif env == state_paths.ENV_LIVE:
         from alphalens_pipeline.brokers.automanager import unit_env
 
         limits_source = f"unit {unit_env.unit_for_env(resolved_env)} (loaded config)"

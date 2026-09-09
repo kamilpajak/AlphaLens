@@ -50,12 +50,15 @@ a journal that changes during the broker reads sets ``skewed``.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from alphalens_pipeline.brokers.automanager import entry_trails, safety, state_paths
+
+logger = logging.getLogger(__name__)
 
 _PROM_LINE_RE = re.compile(r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{[^}]*\})?\s+(?P<value>\S+)$")
 
@@ -193,16 +196,35 @@ def _filter_open_records(records: list[dict[str, Any]], open_ids: set[str]) -> l
     fan-out entirely. Filtering per BRACKET, not per record: a record with one
     open and one closed bracket would otherwise still send the closed one to the
     audit endpoint."""
+    # A FALSY id on either side must never match: a broker row with an empty
+    # order_id would otherwise put "" in the open set and admit every bracket
+    # that carries no entry_order_id, sending it to the audit path as "open".
+    real_ids = {order_id for order_id in open_ids if order_id}
     filtered: list[dict[str, Any]] = []
     for record in records:
         brackets = [
             bracket
             for bracket in (record.get("brackets") or [])
-            if str(bracket.get("entry_order_id") or "") in open_ids
+            if str(bracket.get("entry_order_id") or "") in real_ids
         ]
         if brackets:
             filtered.append({**record, "brackets": brackets})
     return filtered
+
+
+def _blocked_exposure(reason: str, now: dt.datetime) -> Exposure:
+    """An exposure section with no numbers and one stated reason."""
+    return Exposure(
+        committed=None,
+        filled=None,
+        watching=None,
+        used=None,
+        limit=None,
+        headroom=None,
+        currency="",
+        blocked=[reason],
+        as_of=_iso(now),
+    )
 
 
 def _exposure(
@@ -339,21 +361,25 @@ def _cash_floor(
             f"{unvaluable} entry-trail record(s) could not be valued; the watching "
             "reservation cannot be valued, failing closed"
         )
-    available = getattr(account, "margin_available", None)
-    if available is None:
+    raw_available = getattr(account, "margin_available", None)
+    if raw_available is None:
         blocked.append(
             "margin_available is None (SIM NoAccess or an account without the field) — "
             "the cash floor fails closed"
         )
-    if blocked:
+    # `raw_available is None` is re-tested here rather than relied on through
+    # `blocked`: the early return has to narrow the type for the float() below,
+    # and a checker cannot infer that from a list being non-empty.
+    if blocked or raw_available is None:
         return CashFloor(applies=True, mode=mode, blocked=blocked, as_of=_iso(now))
+    available = float(raw_available)
     total = reserved + watching
     return CashFloor(
         applies=True,
         mode=mode,
         reserved=total,
-        available=float(available),
-        headroom=float(available) - total,
+        available=available,
+        headroom=available - total,
         as_of=_iso(now),
     )
 
@@ -437,7 +463,13 @@ def _unit_health(env: str) -> tuple[str, str, str | None]:
     try:
         state = unit_env._systemctl_show(unit, "ActiveState").strip() or "unknown"
         since = unit_env._systemctl_show(unit, "ActiveEnterTimestamp").strip() or None
-    except (OSError, ValueError):
+    except Exception:
+        # DELIBERATELY broad. This is the one section declared best-effort, and
+        # a status command must survive anything the probe throws: a hung
+        # systemctl raises SubprocessError (NOT an OSError), which would
+        # otherwise abort the whole snapshot — during exactly the incident the
+        # command exists for.
+        logger.warning("status: unit state probe failed for %s", unit, exc_info=True)
         return (unit, "unknown", None)
     return (unit, state, since)
 
@@ -528,17 +560,7 @@ def build_snapshot(
             env=env,
             offline=True,
             account=None,
-            exposure=Exposure(
-                committed=None,
-                filled=None,
-                watching=None,
-                used=None,
-                limit=None,
-                headroom=None,
-                currency="",
-                blocked=["skipped: --offline"],
-                as_of=_iso(now),
-            ),
+            exposure=_blocked_exposure("skipped: --offline", now),
             slots=Slots(
                 brackets=0, positions=0, watch_picks=0, used=0, limit=0, free=0, as_of=_iso(now)
             ),
@@ -554,19 +576,43 @@ def build_snapshot(
     open_ids = {str(state.order_id) for state in open_orders}
     open_verdicts = reconcile_brackets(_filter_open_records(records, open_ids), broker)
 
-    exposure = _exposure(
-        account=account,
-        open_verdicts=open_verdicts,
-        records=records,
-        positions=positions,
-        fold=fold,
-        broker=broker,
-        now=now,
-    )
-    slots = _slots(open_verdicts=open_verdicts, positions=positions, fold=fold, now=now)
-    cash_floor = _cash_floor(
-        account=account, open_verdicts=open_verdicts, records=records, fold=fold, now=now
-    )
+    # The design promise is "fail-closed is CONTENT, not an exception": an
+    # unexpected error inside a daemon fold (a malformed journal record, a
+    # shape change) must degrade the SECTION, never abort a snapshot the
+    # operator is reading mid-incident. The gates keep their own behaviour;
+    # this containment is display-side only.
+    try:
+        exposure = _exposure(
+            account=account,
+            open_verdicts=open_verdicts,
+            records=records,
+            positions=positions,
+            fold=fold,
+            broker=broker,
+            now=now,
+        )
+    except Exception as exc:
+        logger.warning("status: exposure fold failed", exc_info=True)
+        exposure = _blocked_exposure(f"exposure could not be computed: {exc}", now)
+    try:
+        slots = _slots(open_verdicts=open_verdicts, positions=positions, fold=fold, now=now)
+    except Exception:
+        logger.warning("status: slot fold failed", exc_info=True)
+        slots = Slots(
+            brackets=-1, positions=-1, watch_picks=-1, used=-1, limit=-1, free=-1, as_of=_iso(now)
+        )
+    try:
+        cash_floor = _cash_floor(
+            account=account, open_verdicts=open_verdicts, records=records, fold=fold, now=now
+        )
+    except Exception as exc:
+        logger.warning("status: cash-floor fold failed", exc_info=True)
+        cash_floor = CashFloor(
+            applies=True,
+            mode="unknown",
+            blocked=[f"cash floor could not be computed: {exc}"],
+            as_of=_iso(now),
+        )
     after = _mtimes(watched)
     skewed = [name for name, stamp in before.items() if after.get(name) != stamp]
     return StatusSnapshot(

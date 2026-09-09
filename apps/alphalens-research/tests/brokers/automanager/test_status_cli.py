@@ -214,6 +214,28 @@ class StatusCommandTest(unittest.TestCase):
         self.assertIsNone(payload["account"])
         self.assertIsNotNone(payload["health"])
 
+    def test_offline_live_survives_a_broken_systemctl(self) -> None:
+        # The offline promise covers a broken user manager too: `--offline
+        # --env live` must not COMPOSE the unit (it reports no limits anyway),
+        # and the best-effort unit probe must degrade rather than abort. A hung
+        # systemctl raises SubprocessError, which is not an OSError.
+        import subprocess
+
+        from alphalens_cli.commands.broker import broker_app
+
+        def explode(*_args, **_kwargs):
+            raise subprocess.TimeoutExpired(cmd="systemctl", timeout=30)
+
+        with mock.patch(SHOW_SEAM, explode):
+            result = self.runner.invoke(
+                broker_app, ["status", "--env", "live", "--offline", "--format", "json"]
+            )
+        self.assertEqual(result.exit_code, 0, result.output)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["env"], "live")
+        self.assertEqual(payload["limits_source"], "skipped (--offline)")
+        self.assertEqual(payload["health"]["unit_state"], "unknown")
+
     # --- env + provenance ---------------------------------------------------
 
     def test_env_live_composes_the_rails_and_names_the_source(self) -> None:
@@ -232,7 +254,7 @@ class StatusCommandTest(unittest.TestCase):
 
     def test_without_the_option_the_limits_come_from_the_process(self) -> None:
         human = self._invoke().stdout
-        self.assertIn("limits from process env", human)
+        self.assertIn("limits from process env (not composed)", human)
 
     # --- health content -----------------------------------------------------
 

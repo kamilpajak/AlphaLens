@@ -365,6 +365,29 @@ class TestCostContract(unittest.TestCase):
         self.assertEqual(broker.calls.get("resolve_order_outcome", 0), 0)
         self.assertEqual(snapshot.slots.brackets, 1)
 
+    def test_an_empty_order_id_never_admits_an_id_less_bracket(self) -> None:
+        # Positive control for the filter: a broker row with an empty order_id
+        # would otherwise put "" in the open set and admit every bracket that
+        # carries no entry_order_id, sending it to the audit path as "open".
+        from alphalens_pipeline.brokers.automanager.status_snapshot import _filter_open_records
+
+        self.assertEqual(_filter_open_records([{"brackets": [{"qty": 1}]}], {""}), [])
+        self.assertEqual(
+            _filter_open_records([{"brackets": [{"entry_order_id": ""}]}], {"", "O-1"}), []
+        )
+
+    def test_only_the_open_bracket_of_a_multi_bracket_record_survives(self) -> None:
+        from alphalens_pipeline.brokers.automanager.status_snapshot import _filter_open_records
+
+        record = {
+            "ticker": "KO",
+            "brackets": [{"entry_order_id": "O-1"}, {"entry_order_id": "O-2"}],
+        }
+        self.assertEqual(
+            _filter_open_records([record], {"O-1"}),
+            [{"ticker": "KO", "brackets": [{"entry_order_id": "O-1"}]}],
+        )
+
     def test_the_broker_is_read_a_bounded_number_of_times(self) -> None:
         broker = _FakeBroker(orders=[_working_order("O-1")])
         self.h.build(broker)
@@ -380,6 +403,54 @@ class TestCostContract(unittest.TestCase):
         self.assertIsNone(snapshot.account)
         # The offline half is exactly what a broker outage needs.
         self.assertIsNotNone(snapshot.health)
+
+
+class TestContainmentAndSkew(unittest.TestCase):
+    """Two promises that had no test until the pre-merge review said so."""
+
+    def setUp(self) -> None:
+        self.h = _SnapshotHarness(self)
+
+    def test_a_fold_that_raises_degrades_the_section_not_the_command(self) -> None:
+        # "Fail-closed is CONTENT, not an exception" must hold for an
+        # UNEXPECTED error too — a malformed record mid-incident cannot be
+        # allowed to abort the snapshot the operator is reading.
+        from alphalens_pipeline.brokers.automanager import control_loop
+
+        with mock.patch.object(
+            control_loop, "_committed_working_gross_acct", side_effect=KeyError("shape drift")
+        ):
+            snapshot = self.h.build(_FakeBroker())
+        self.assertIsNone(snapshot.exposure.used)
+        self.assertTrue(snapshot.exposure.blocked)
+        self.assertIn("shape drift", " ".join(snapshot.exposure.blocked))
+        # The rest of the snapshot still renders.
+        self.assertIsNotNone(snapshot.health)
+
+    def test_a_journal_written_during_the_broker_reads_is_flagged_as_skewed(self) -> None:
+        journal = self.h.root / "submissions.jsonl"
+        journal.write_text(json.dumps(_submission("O-1")) + "\n", encoding="utf-8")
+        broker = _FakeBroker(orders=[_working_order("O-1")])
+        original = broker.get_positions
+
+        def touch_then_read():
+            # The daemon appends between the snapshot's two mtime reads.
+            journal.write_text(
+                json.dumps(_submission("O-1")) + "\n" + json.dumps(_submission("O-2")) + "\n",
+                encoding="utf-8",
+            )
+            return original()
+
+        broker.get_positions = touch_then_read
+        snapshot = self.h.build(broker)
+        self.assertIn("submissions", snapshot.skewed)
+
+    def test_an_untouched_journal_is_not_flagged(self) -> None:
+        (self.h.root / "submissions.jsonl").write_text(
+            json.dumps(_submission("O-1")) + "\n", encoding="utf-8"
+        )
+        snapshot = self.h.build(_FakeBroker(orders=[_working_order("O-1")]))
+        self.assertEqual(snapshot.skewed, [])
 
 
 class TestHealth(unittest.TestCase):
