@@ -485,6 +485,40 @@ class TestHealth(unittest.TestCase):
         self.assertIsNotNone(health.last_refusal)
         self.assertIn("gross cap", health.last_refusal)
 
+    def test_the_refusal_age_comes_from_refused_ts_never_from_the_brief_date(self) -> None:
+        # #1385: the rendered date is the BRIEF date. A month-old refusal read
+        # as fresh in the first LIVE run, so the age must come from the
+        # journal's own `refused_ts`.
+        picks_path = self.h.root / "picks.jsonl"
+        picks_path.write_text(
+            json.dumps(
+                {
+                    "ticker": "KO",
+                    "date": "2026-08-13",
+                    "refused_ts": (_NOW - dt.timedelta(days=27)).isoformat(timespec="seconds"),
+                    "reason": "gross cap",
+                    "status": "refused",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        health = self.h.build(_FakeBroker()).health
+        self.assertAlmostEqual(health.last_refusal_age_s, 27 * 86_400, delta=2)
+
+    def test_a_refusal_without_a_timestamp_has_no_age_rather_than_a_guessed_one(self) -> None:
+        picks_path = self.h.root / "picks.jsonl"
+        picks_path.write_text(
+            json.dumps(
+                {"ticker": "KO", "date": "2026-08-13", "reason": "gross cap", "status": "refused"}
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        health = self.h.build(_FakeBroker()).health
+        self.assertIsNotNone(health.last_refusal)
+        self.assertIsNone(health.last_refusal_age_s)
+
 
 class TestGateParity(unittest.TestCase):
     """The headroom the snapshot reports must be the headroom the gate leaves.

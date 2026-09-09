@@ -156,6 +156,11 @@ class Health:
     price_stream_source: str | None
     tokens: list[TokenStoreHealth]
     last_refusal: str | None
+    # #1385: the refusal line renders the BRIEF date, so a month-old refusal
+    # read as fresh. The age comes from the journal's own ``refused_ts`` and is
+    # None when that field is absent — never inferred from the brief date,
+    # which says nothing about when the daemon refused.
+    last_refusal_age_s: float | None = None
     as_of: str = ""
 
 
@@ -488,15 +493,29 @@ def _price_stream(env: str, now: dt.datetime) -> tuple[float | None, str | None]
     return (None, None)
 
 
-def _last_refusal(env: str) -> str | None:
+def _last_refusal(env: str, now: dt.datetime) -> tuple[str | None, float | None]:
+    """``(rendered refusal, age in seconds)`` for the latest refused pick.
+
+    The age is derived from the line's own ``refused_ts`` — the moment the
+    daemon refused — never from the brief date the text renders, which is a
+    different thing entirely."""
     from alphalens_pipeline.brokers.automanager import picks as picks_mod
 
     fold = picks_mod.read_pick_fold(path=state_paths.picks_path(env=env))
     for record in reversed(fold.records):
-        if record.status == "refused":
-            reason = record.record.get("reason") or record.record.get("note") or ""
-            return f"{record.ticker} {record.trade_date.isoformat()}: {reason}".strip()
-    return None
+        if record.status != "refused":
+            continue
+        reason = record.record.get("reason") or record.record.get("note") or ""
+        text = f"{record.ticker} {record.trade_date.isoformat()}: {reason}".strip()
+        raw_ts = record.record.get("refused_ts")
+        age: float | None = None
+        if raw_ts:
+            try:
+                age = (now - dt.datetime.fromisoformat(str(raw_ts))).total_seconds()
+            except (TypeError, ValueError):
+                age = None
+        return (text, age)
+    return (None, None)
 
 
 def _health(env: str, now: dt.datetime) -> Health:
@@ -508,6 +527,7 @@ def _health(env: str, now: dt.datetime) -> Health:
     heartbeat = gauges.get(_HEARTBEAT_GAUGE)
     stream_age, stream_source = _price_stream(env, now)
     unit, unit_state, unit_since = _unit_health(env)
+    last_refusal, last_refusal_age_s = _last_refusal(env, now)
     return Health(
         unit=unit,
         unit_state=unit_state,
@@ -522,7 +542,8 @@ def _health(env: str, now: dt.datetime) -> Health:
         price_stream_age_s=stream_age,
         price_stream_source=stream_source,
         tokens=_token_health(now),
-        last_refusal=_last_refusal(env),
+        last_refusal=last_refusal,
+        last_refusal_age_s=last_refusal_age_s,
         as_of=_iso(now),
     )
 

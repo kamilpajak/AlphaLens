@@ -176,7 +176,10 @@ class StatusCommandTest(unittest.TestCase):
         (self.root / "KILL").write_text("", encoding="utf-8")
         result = self._invoke(broker=self._seed_book())
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("KILL", result.stdout)
+        # The unhealth must be VISIBLE, not merely survivable (#1385 reworded
+        # the line, so this asserts the state rather than the word "KILL").
+        kill_line = next(line for line in result.stdout.splitlines() if line.startswith("kill"))
+        self.assertIn("PRESENT: instance", kill_line)
 
     def test_a_failed_broker_read_exits_one_with_empty_stdout(self) -> None:
         from alphalens_cli.commands.broker import broker_app
@@ -269,6 +272,53 @@ class StatusCommandTest(unittest.TestCase):
         self.assertGreater(payload["health"]["heartbeat_age_s"], 3_000)
         # An age, never a "STALE" verdict: the Prometheus rule owns thresholds.
         self.assertNotIn("STALE", json.dumps(payload["health"]).upper())
+
+    def test_the_kill_line_states_the_absence_not_only_the_gauge(self) -> None:
+        # #1385: with the gauge present the line used to read
+        # "kill      daemon view 0", leaving "no KILL file" implied. The one
+        # line an operator scans during an emergency stop must SAY it.
+        job = "broker-manager-sim"
+        (self.textfile_dir / f"alphalens_domain_{job}.prom").write_text(
+            f'alphalens_broker_manager_kill_active{{job="{job}"}} 0\n', encoding="utf-8"
+        )
+        human = self._invoke(broker=self._seed_book()).stdout
+        kill_line = next(line for line in human.splitlines() if line.startswith("kill"))
+        self.assertIn("none", kill_line)
+        self.assertIn("daemon view 0", kill_line)
+
+    def test_a_present_kill_file_is_named_before_the_gauge(self) -> None:
+        (self.root / "KILL").write_text("", encoding="utf-8")
+        job = "broker-manager-sim"
+        (self.textfile_dir / f"alphalens_domain_{job}.prom").write_text(
+            f'alphalens_broker_manager_kill_active{{job="{job}"}} 0\n', encoding="utf-8"
+        )
+        human = self._invoke(broker=self._seed_book()).stdout
+        kill_line = next(line for line in human.splitlines() if line.startswith("kill"))
+        self.assertIn("PRESENT", kill_line)
+        self.assertIn("instance", kill_line)
+        self.assertNotIn("none", kill_line)
+
+    def test_the_refusal_line_carries_its_age(self) -> None:
+        picks = self.root / "picks.jsonl"
+        picks.write_text(
+            json.dumps(
+                {
+                    "ticker": "OLN",
+                    "date": "2026-08-13",
+                    "refused_ts": (dt.datetime.now(dt.UTC) - dt.timedelta(days=27)).isoformat(
+                        timespec="seconds"
+                    ),
+                    "reason": "gross cap",
+                    "status": "refused",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        human = self._invoke(broker=self._seed_book()).stdout
+        refusal = next(line for line in human.splitlines() if line.startswith("refused"))
+        self.assertIn("27d ago", refusal)
+        self.assertIn("2026-08-13", refusal)
 
     def test_no_token_value_ever_reaches_the_output(self) -> None:
         payload = self._json(broker=self._seed_book())

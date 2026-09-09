@@ -2306,6 +2306,21 @@ def _status_money(value: float | None) -> str:
     return "-" if value is None else f"{value:,.2f}"
 
 
+def _age_phrase(seconds: float | None) -> str:
+    """``"27d ago  "`` / ``"4m ago  "`` / ``""`` — a compact age prefix.
+
+    The refusal line renders the BRIEF date, which says nothing about when the
+    daemon refused; without this a month-old refusal reads as fresh (#1385).
+    An absent age yields an empty prefix rather than a guess."""
+    if seconds is None:
+        return ""
+    seconds = max(0.0, float(seconds))
+    for unit_seconds, suffix in ((86_400, "d"), (3_600, "h"), (60, "m")):
+        if seconds >= unit_seconds:
+            return f"{seconds / unit_seconds:.0f}{suffix} ago  "
+    return f"{seconds:.0f}s ago  "
+
+
 def _render_status_health(health: Any, skewed: list[str]) -> None:
     """The half that needs no gateway (daemon, kill, prices, tokens)."""
     typer.echo(
@@ -2314,14 +2329,19 @@ def _render_status_health(health: Any, skewed: list[str]) -> None:
     )
     heartbeat = "-" if health.heartbeat_age_s is None else f"{health.heartbeat_age_s:,.0f}s ago"
     typer.echo(f"heartbeat {heartbeat}")
-    kill_bits = []
-    if health.kill_instance:
-        kill_bits.append("KILL instance")
-    if health.kill_global:
-        kill_bits.append("KILL global")
-    if health.kill_active_gauge is not None:
-        kill_bits.append(f"daemon view {health.kill_active_gauge:g}")
-    typer.echo("kill      " + (", ".join(kill_bits) if kill_bits else "none"))
+    # The FILES decide the word, the gauge only annotates it: folding both into
+    # one list printed "kill  daemon view 0" and left "no KILL file" implied on
+    # the one line an operator scans during an emergency stop (#1385).
+    present = [
+        name
+        for name, flag in (("instance", health.kill_instance), ("global", health.kill_global))
+        if flag
+    ]
+    kill_state = f"PRESENT: {', '.join(present)}" if present else "none"
+    gauge = (
+        "" if health.kill_active_gauge is None else f"  (daemon view {health.kill_active_gauge:g})"
+    )
+    typer.echo(f"kill      {kill_state}{gauge}")
     stream = (
         "-"
         if health.price_stream_age_s is None
@@ -2349,7 +2369,8 @@ def _render_status_health(health: Any, skewed: list[str]) -> None:
                 "(as of the last refresh, not a live probe)"
             )
     if health.last_refusal:
-        typer.echo(f"refused   {health.last_refusal}")
+        age = _age_phrase(health.last_refusal_age_s)
+        typer.echo(f"refused   {age}{health.last_refusal}")
     if skewed:
         typer.echo(f"WARN      journal changed while reading the broker: {', '.join(skewed)}")
 
