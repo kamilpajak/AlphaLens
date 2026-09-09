@@ -18,6 +18,8 @@ Groups:
 from __future__ import annotations
 
 import logging
+import sys
+from typing import Literal
 
 import typer
 from dotenv import load_dotenv
@@ -38,11 +40,28 @@ from alphalens_cli.commands.status import status
 from alphalens_cli.commands.templates import templates_app
 from alphalens_cli.commands.thematic import thematic_app
 
+
+def _help_markup_mode() -> Literal["rich"] | None:
+    """Rich frames for a terminal, plain text for everything else (#1379).
+
+    Rich boxes every help block and pads each line to the terminal width, so a
+    piped or captured ``--help`` pays for drawing characters it cannot use —
+    measured on the broker group, 5995 bytes with the frames against 1918
+    without. ``None`` makes Typer fall back to Click's plain renderer.
+
+    Set on the ROOT app only: every sub-group inherits the mode through the
+    Click group build, so a per-group setting would be a second source of
+    truth. Evaluated at import, which is where the process learns what its
+    stdout is; the CLI never changes it mid-run.
+    """
+    return "rich" if sys.stdout.isatty() else None
+
+
 app = typer.Typer(
     name="alphalens",
     help="AlphaLens stock analysis pipeline CLI.",
     no_args_is_help=True,
-    rich_markup_mode="rich",
+    rich_markup_mode=_help_markup_mode(),
 )
 
 

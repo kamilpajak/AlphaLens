@@ -844,11 +844,13 @@ class TestReconcileCommand(unittest.TestCase):
         # stdout must stay EXACTLY one JSON value (the env/gateway echo line
         # goes to stderr) — parse stdout, not the mixed output.
         payload = json.loads(result.stdout)
-        self.assertEqual(len(payload), 2)
-        self.assertEqual(payload[0]["entry_order_id"], "E-1")
-        self.assertEqual(payload[1]["verdict"], "FILLED(closed r=+1.00)")
+        self.assertEqual(payload["schema"], "alphalens.broker.reconcile/v1")
+        verdicts = payload["verdicts"]
+        self.assertEqual(len(verdicts), 2)
+        self.assertEqual(verdicts[0]["entry_order_id"], "E-1")
+        self.assertEqual(verdicts[1]["verdict"], "FILLED(closed r=+1.00)")
         for key in ("status", "reason", "divergence", "details"):
-            self.assertIn(key, payload[0])
+            self.assertIn(key, verdicts[0])
 
     def test_json_divergence_still_emits_parseable_output_and_exit_1(self):
         _ReconcileHarness(self)
@@ -858,7 +860,7 @@ class TestReconcileCommand(unittest.TestCase):
 
         self.assertNotEqual(result.exit_code, 0)
         payload = json.loads(result.stdout)
-        self.assertEqual(len(payload), 5)
+        self.assertEqual(len(payload["verdicts"]), 5)
 
     def test_empty_journal_reports_and_exits_zero(self):
         _ReconcileHarness(self, records=[])

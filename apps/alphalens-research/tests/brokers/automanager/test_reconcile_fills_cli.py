@@ -230,8 +230,9 @@ class TestReconcileFillsCommand(unittest.TestCase):
         # stdout must stay EXACTLY one JSON value (the env/gateway echo line
         # goes to stderr) — parse stdout, not the mixed output.
         payload = json.loads(result.stdout)
-        self.assertEqual(len(payload), 3)
-        by_id = {row["sell_order_id"]: row for row in payload}
+        self.assertEqual(payload["schema"], "alphalens.broker.reconcile-fills/v1")
+        self.assertEqual(len(payload["fills"]), 3)
+        by_id = {row["sell_order_id"]: row for row in payload["fills"]}
         self.assertEqual(by_id["S-FILL"]["fill_status"], "filled")
         self.assertAlmostEqual(by_id["S-FILL"]["fill_price"], _FILL_PRICE)
         self.assertEqual(by_id["S-PEND"]["fill_status"], "pending")
