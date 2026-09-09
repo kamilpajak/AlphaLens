@@ -1696,8 +1696,12 @@ ls ~/.alphalens/broker_orders/live/
 Read the LIVE instance directly (#1377). `--env live` composes the installed
 unit's rails plus its `EnvironmentFile=`, forces `ALLOW_ORDERS=0` for the
 one-off process, and prints one `composed unit=... dropins=... env-file=...
-keys=...` line to stderr — no `set -a`, no `env $(systemctl ...)`, and no
-secret values in either stream:
+keys=...` line to stderr — no `set -a`, no `env $(systemctl ...)`. The
+composition itself echoes names and counts only, never a value from either
+source. The account snapshot is the one place a composed value is printed as a
+RESULT: `broker account` renders the account key, the same identifier §9.1 says
+must never leave this VPS, so treat that output the way you treat the grant
+drop-in when pasting it anywhere:
 ```bash
 .venv/bin/alphalens broker account --env live     # LIVE balance + margin
 .venv/bin/alphalens broker positions --env live   # flat before the first arm
