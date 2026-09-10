@@ -100,6 +100,12 @@ _RECV_TIMEOUT_S = 45.0
 #     reconnect a half-open socket triggers anyway.
 # It only ever has to catch a HALF-OPEN socket: a failed connection, a sleeping
 # session and a stopped reader are known immediately and answer before it.
+# Control-frame logging is observability for the #1397 follow-up, not a gate.
+# One line per interval: a heartbeat lands about every 30 s PER SUBSCRIPTION,
+# so an unthrottled line would bury the journal on a 19-uic stream.
+_CONTROL_LOG_INTERVAL_S = 300.0
+_CONTROL_LOG_PAYLOAD_CHARS = 300
+
 _MAX_FRAME_SILENCE_S = 40.0
 
 # With zero desired uics the reader holds no WebSocket (idle connections get
@@ -665,6 +671,8 @@ class SaxoPriceStream:
         self._consecutive_failures = 0
         self._live_uic_cache: dict[tuple[str, str], int] = {}
         self._last_frame_ts = 0
+        # Throttle anchor for control-frame logging (observability only).
+        self._last_control_log_ts: dt.datetime | None = None
         self._last_gauge_emit = 0.0
 
         self._stop = False
@@ -1094,9 +1102,41 @@ class SaxoPriceStream:
                 self._sub_dirty.set()
                 continue
             if msg.reference_id.startswith(self._CONTROL_REF_PREFIX):
+                self._note_control_frame(msg, now)
                 continue  # heartbeat / disconnect: liveness only, never a quote row
             self._apply_quote_message(msg, allowed, now)
         self._maybe_reclaim()
+
+    def _note_control_frame(self, msg: StreamMessage, now: dt.datetime) -> None:
+        """Log a control frame's ref and payload, throttled to one per interval.
+
+        OBSERVABILITY ONLY — nothing branches on this, deliberately. Saxo
+        documents that ``_heartbeat`` carries ``OriginatingReferenceId`` and a
+        ``Reason`` in {NoNewData, SubscriptionTemporarilyDisabled,
+        SubscriptionPermanentlyDisabled}. If that holds on real traffic it is a
+        STRONGER liveness signal than any timer, because the venue says outright
+        that the subscription is alive with nothing new — and, more importantly,
+        a DISABLED subscription currently looks exactly like a quiet market.
+
+        Building a gate on a payload nobody here has seen is how a plausible
+        story becomes a real-money bug, so this prints the shape and stops. The
+        gate is a separate ticket, once the shape is confirmed.
+
+        Throttled because a heartbeat arrives about every 30 s per subscription
+        and an unthrottled line per control frame would bury the journal.
+        """
+        last = self._last_control_log_ts
+        if last is not None and (now - last).total_seconds() < _CONTROL_LOG_INTERVAL_S:
+            return
+        self._last_control_log_ts = now
+        # Payload is raw bytes and may be any shape; truncate and never decode
+        # strictly, because a logging path must not be able to raise.
+        preview = msg.payload[:_CONTROL_LOG_PAYLOAD_CHARS]
+        logger.info(
+            "saxo price stream: control frame ref=%r payload=%r (observability only, #1397)",
+            msg.reference_id,
+            preview,
+        )
 
     def _apply_quote_message(self, msg: StreamMessage, allowed: set[int], now: dt.datetime) -> None:
         """Decode one quote-bearing stream message and fold its rows into the

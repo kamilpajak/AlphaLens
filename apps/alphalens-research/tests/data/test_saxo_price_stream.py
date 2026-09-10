@@ -2073,6 +2073,40 @@ class TestStreamIsReceiving(unittest.TestCase):
         stream._apply_frame(_px_frame(1))
         self.assertTrue(stream.is_receiving())
 
+    def test_a_control_frame_is_logged_once_per_interval_not_once_per_frame(self):
+        """Observability for the #1397 follow-up: Saxo's `_heartbeat` is said to
+        carry a `Reason` telling a disabled subscription apart from a quiet
+        market — a distinction our timer cannot make. Nothing branches on it
+        yet, because a gate built on a payload nobody has seen is how a
+        plausible story becomes a real-money bug.
+
+        A heartbeat lands about every 30 s PER SUBSCRIPTION, so the line is
+        throttled; the second frame in the same interval must stay silent.
+        """
+        _, stream = self._stream()
+        payload = b'[{"ReferenceId":"_heartbeat","Heartbeats":[{"OriginatingReferenceId":"P1","Reason":"NoNewData"}]}]'
+
+        with self.assertLogs(
+            "alphalens_pipeline.data.alt_data.saxo_price_stream", level="INFO"
+        ) as caught:
+            stream._apply_frame(_build_frame(1, "_heartbeat", payload))
+            stream._apply_frame(_build_frame(2, "_heartbeat", payload))
+
+        control_lines = [line for line in caught.output if "control frame" in line]
+        self.assertEqual(len(control_lines), 1, caught.output)
+        self.assertIn("NoNewData", control_lines[0])
+
+    def test_a_control_frame_with_an_unreadable_payload_still_does_not_raise(self):
+        """A logging path must never be able to break the stream. The payload is
+        raw bytes of whatever Saxo sent, so it is truncated and repr'd, never
+        decoded."""
+        _, stream = self._stream()
+
+        with self.assertLogs("alphalens_pipeline.data.alt_data.saxo_price_stream", level="INFO"):
+            stream._apply_frame(_build_frame(1, "_heartbeat", b"\xff\xfe not json at all"))
+
+        self.assertTrue(stream.is_receiving())
+
     def test_a_control_frame_also_counts_as_hearing_from_the_venue(self):
         """Saxo sends ``_heartbeat`` on a subscription with no new data, so a
         quiet market keeps proving the socket is alive. Counting only quote
