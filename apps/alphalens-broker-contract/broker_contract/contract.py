@@ -23,7 +23,7 @@ from __future__ import annotations
 import datetime as dt
 import enum
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import ClassVar, Literal, Protocol, runtime_checkable
 
 from broker_contract.constants import QTY_PRECISION
 
@@ -34,19 +34,65 @@ from broker_contract.constants import QTY_PRECISION
 
 
 class BrokerError(RuntimeError):
-    """Base: permanent / unclassified broker failure."""
+    """Base: permanent / unclassified broker failure.
+
+    ``failure_code`` names the published code this class reports through
+    :mod:`broker_contract.failure` (#1389). It is a ``ClassVar``, so every
+    subclass inherits one and a ``BrokerError`` raised outside an adapter's
+    translation boundary still carries a code the CLI can emit — there is no
+    "exception without a code" case to special-case.
+    """
+
+    failure_code: ClassVar[str] = "broker_failed"
 
 
 class BrokerAuthError(BrokerError):
     """Credentials invalid or expired — no retry, operator action required."""
 
+    failure_code: ClassVar[str] = "broker_auth"
+
 
 class BrokerRateLimitError(BrokerError):
     """Throttle exhausted after retries — soft-fail eligible."""
 
+    failure_code: ClassVar[str] = "broker_rate_limited"
+
+
+class BrokerTransientError(BrokerError):
+    """The request provably never landed, and re-running it is safe (#1389).
+
+    Network retries exhausted on a connection that never reached the broker, or
+    a 5xx on an idempotent verb. Split out of the base class because the base
+    docstring calls itself *permanent*, so the 2026-09-08 DNS outage — the one
+    that motivated the failure contract — would otherwise be reported to a
+    client as ``retryable: false``.
+
+    NOT for a write whose outcome is unknown; that is
+    :class:`WriteOutcomeUnknownError`. The distinction is the adapter's own
+    (``never blind-retry a POST``) and this class must never blur it.
+    """
+
+    failure_code: ClassVar[str] = "broker_transient"
+
+
+class WriteOutcomeUnknownError(BrokerError):
+    """A write failed after it may already have reached the broker (#1389).
+
+    A 5xx or a network error on a non-idempotent verb that was not provably
+    unsent. The cause is transient; re-running is NOT safe, because the order
+    may already rest at the broker. Mirrors the daemon's own vocabulary for this
+    state (``control_loop`` calls it an AMBIGUOUS write: *"it MAY have landed"*).
+    Recovery is mechanical but is a RECONCILE, never a retry — which is why the
+    published code demands a ``suggestions`` argv.
+    """
+
+    failure_code: ClassVar[str] = "write_outcome_unknown"
+
 
 class InstrumentNotFoundError(BrokerError):
     """Instrument resolution failed for (ticker, exchange_mic) — miss or ambiguity."""
+
+    failure_code: ClassVar[str] = "instrument_not_found"
 
 
 class OrderRejectedError(BrokerError):
@@ -62,6 +108,8 @@ class OrderRejectedError(BrokerError):
     string parsing is brittle and rots silently.
     """
 
+    failure_code: ClassVar[str] = "order_rejected"
+
     def __init__(self, *args: object, error_code: str | None = None) -> None:
         super().__init__(*args)
         self.error_code = error_code
@@ -69,6 +117,8 @@ class OrderRejectedError(BrokerError):
 
 class BrokerCapabilityError(BrokerError):
     """Method not supported by this broker or in this increment (e.g. P1 placement)."""
+
+    failure_code: ClassVar[str] = "broker_unsupported"
 
 
 # Float-quantity comparison tolerance (saxo-oco memo). Owned share quantities

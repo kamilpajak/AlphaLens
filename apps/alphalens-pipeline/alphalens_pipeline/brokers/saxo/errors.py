@@ -31,6 +31,29 @@ class SaxoRateLimitError(SaxoError):
     """429 persisted after all retries. Distinct so callers can soft-fail."""
 
 
+class SaxoTransientError(SaxoError):
+    """The request provably never landed; re-running it is safe (#1389).
+
+    Network retries exhausted on a connection that never reached Saxo, or a 5xx
+    ladder exhausted on an idempotent verb. Named so the adapter can report it
+    as retryable: the base ``SaxoError`` translates to a bare ``BrokerError``,
+    whose contract meaning is *permanent*, which would have described the
+    2026-09-08 DNS outage as something not worth retrying.
+    """
+
+
+class SaxoWriteOutcomeUnknownError(SaxoError):
+    """A write failed after it may already have reached Saxo (#1389).
+
+    The counterpart to :class:`SaxoTransientError`, and the reason that class
+    cannot simply mean "the cause was transient": a connection aborted mid-body
+    or a 5xx on a non-idempotent verb has a transient CAUSE and a forbidden
+    remedy. The client already refuses to retry these ("never blind-retry a
+    POST"); this class carries that refusal out to the caller instead of leaving
+    it in the message text.
+    """
+
+
 class SaxoNotFoundError(SaxoError):
     """404 on a read. Distinct because for order-status reads an absent order
     is an EXPECTED outcome (the open-orders endpoint drops filled/cancelled/
@@ -54,4 +77,6 @@ __all__ = [
     "SaxoLiveEnvironmentBlockedError",
     "SaxoNotFoundError",
     "SaxoRateLimitError",
+    "SaxoTransientError",
+    "SaxoWriteOutcomeUnknownError",
 ]

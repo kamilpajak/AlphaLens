@@ -35,6 +35,8 @@ from alphalens_pipeline.brokers.saxo.client import (
     SaxoClient,
     SaxoError,
     SaxoRateLimitError,
+    SaxoTransientError,
+    SaxoWriteOutcomeUnknownError,
 )
 from alphalens_pipeline.brokers.saxo.tokens import TOKEN_ENV, StaticTokenProvider
 
@@ -1029,6 +1031,91 @@ class TestProvablyUnsentClassifier(unittest.TestCase):
         self.assertFalse(
             self._classify(requests.exceptions.ConnectionError("Connection aborted mid-body"))
         )
+
+
+class TestTransientVsAmbiguousClassification(unittest.TestCase):
+    """The client says WHICH kind of failure it was, not just that one happened (#1389).
+
+    Until now every one of these raised a bare ``SaxoError``, which the adapter
+    translates to a bare ``BrokerError`` — a class whose own docstring says
+    *permanent*. So a DNS outage and an account-model violation reached a caller
+    as the same thing, and the failure contract would have reported the outage as
+    ``retryable: false``.
+
+    The split is the client's existing one, given names: a request that provably
+    never landed is transient (safe to re-run); a write that may already have
+    landed is ambiguous (must be reconciled, never blind-retried). The tests
+    below cover BOTH sides for BOTH shapes (network and 5xx), because a rule that
+    only ever produces one answer has classified nothing.
+    """
+
+    _BODY = {"Uic": 307, "AssetType": "Stock", "Amount": 1}
+
+    def test_exhausted_network_retries_on_a_read_are_transient(self):
+        session = _RecordingSession([requests.exceptions.ConnectionError("dns fail")])
+        client, _, _ = _make_client(session)
+
+        with self.assertRaises(SaxoTransientError) as ctx:
+            client.get_json("/port/v1/balances")
+
+        self.assertNotIsInstance(ctx.exception, SaxoWriteOutcomeUnknownError)
+        self.assertNotIsInstance(ctx.exception, SaxoRateLimitError)
+
+    def test_a_post_that_provably_never_left_is_transient_not_ambiguous(self):
+        """ConnectTimeout means the TCP connection never opened. Nothing was
+        sent, so this is safe to re-run even though it was a write."""
+        session = _RecordingSession(
+            [
+                requests.exceptions.ConnectTimeout("connect timed out"),
+                requests.exceptions.ConnectTimeout("connect timed out"),
+                requests.exceptions.ConnectTimeout("connect timed out"),
+            ]
+        )
+        client, _, _ = _make_client(session)
+
+        with self.assertRaises(SaxoTransientError):
+            client.place_order(self._BODY, request_id="rid-unsent-exhausted")
+
+    def test_a_post_aborted_mid_body_is_ambiguous(self):
+        """The counterexample that gives the rule its power: same transport, same
+        transient cause, opposite verdict — because this one may have landed."""
+        session = _RecordingSession(
+            [requests.exceptions.ConnectionError("Connection aborted mid-body")]
+        )
+        client, _, _ = _make_client(session)
+
+        with self.assertRaises(SaxoWriteOutcomeUnknownError) as ctx:
+            client.place_order(self._BODY, request_id="rid-ambig-typed")
+
+        self.assertNotIsInstance(ctx.exception, SaxoTransientError)
+        self.assertIn("rid-ambig-typed", str(ctx.exception))
+
+    def test_a_5xx_after_a_post_is_ambiguous(self):
+        session = _RecordingSession([_FakeResponse(500, text="server error")])
+        client, _, _ = _make_client(session)
+
+        with self.assertRaises(SaxoWriteOutcomeUnknownError) as ctx:
+            client.place_order(self._BODY, request_id="rid-post-5xx-typed")
+
+        self.assertIn("rid-post-5xx-typed", str(ctx.exception))
+
+    def test_a_5xx_that_persists_on_an_idempotent_verb_is_transient(self):
+        """DELETE follows the server-error backoff ladder, so exhausting it means
+        the request kept failing cleanly — a retry later is the right advice."""
+        session = _RecordingSession([_FakeResponse(500, text="server error")])
+        client, _, _ = _make_client(session)
+
+        with self.assertRaises(SaxoTransientError) as ctx:
+            client.cancel_order_ids("O-1", account_key="acct-1")
+
+        self.assertNotIsInstance(ctx.exception, SaxoWriteOutcomeUnknownError)
+
+    def test_both_new_classes_are_still_saxo_errors(self):
+        """Existing ``except SaxoError`` sites must keep catching them; this is a
+        naming of failures, not a new escape route out of the adapter."""
+        for exc_type in (SaxoTransientError, SaxoWriteOutcomeUnknownError):
+            with self.subTest(exc=exc_type.__name__):
+                self.assertIsInstance(exc_type("boom"), SaxoError)
 
 
 if __name__ == "__main__":
