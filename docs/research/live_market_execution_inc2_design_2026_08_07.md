@@ -1,6 +1,6 @@
 # Live-Market Execution — INC-2: Saxo LIVE price feed — design
 
-**Status:** LOCKED
+**Status:** LOCKED — §6/§7 AMENDED 2026-09-10, see the annex at the end (#1397)
 **Date:** 2026-08-07
 **Parent memo:** `live_market_execution_model_design_2026_08_05.md` §3.3 + §5 INC-2 (the "price streaming" gap).
 **Related:** [ADR 0014](../adr/0014-broker-agnostic-execution-layer.md) (broker-agnostic execution + the SIM-only rail), `live_market_execution_inc3_plan_2026_08_05.md` (the engine this feeds).
@@ -280,3 +280,120 @@ veto.
 
 **yfinance kept but unused — operator decision (§4).** Updated to the new
 contract, wired to nothing.
+
+---
+
+## Annex — 2026-09-10: the freshness gate's premise was wrong (#1397)
+
+§6 sized the 3 s age bound "against a 1 Hz push", and §7 concluded that "no
+separate 'disconnected' flag is needed — the age already says it". Both rest on
+one premise: that Saxo pushes this instrument roughly every second, so an old
+quote means a broken stream. **The premise is false, and it was measurable.**
+
+`RefreshRate` = 1000 ms is a CEILING on the push rate, not a pulse. Saxo sends
+deltas, and `event_time` comes from `LastUpdated`, so a quote's age measures how
+often Saxo restates THAT instrument — not the health of the connection and not
+whether the book moved.
+
+### What was measured
+
+Full US session 2026-09-09 (441 daemon ticks), from the disposition line added
+in #1392: uic 641 (RHI) was vetoed by the price gate on **123 ticks (28%)** and
+evaluated on only 114 (26%). uic 13697176 (UBER) was vetoed on 10 (2%).
+
+A 1 Hz read-only probe over the reader socket, US open 2026-09-10, 899 samples
+per uic:
+
+| uic | vetoed by age | age median | p90 | p99 | max | restatement p99 / max |
+|---|---|---|---|---|---|---|
+| 641 | **70%** | 4.7 s | 14.2 s | 32.7 s | **41.7 s** | 23 s / 41.1 s |
+| 13697176 | 5% | 1.4 s | 2.5 s | 4.0 s | 5.4 s | 4 s / 5 s |
+| 19756014 | 8% | 1.6 s | 2.9 s | 4.6 s | 7.4 s | 4 s / 6 s |
+
+Two controls that make the reading trustworthy rather than merely suggestive:
+
+- Across 2697 samples, the price changed while `event_time` stood still **zero**
+  times, and `received_at` advanced while `event_time` stood still only 3 times.
+  The timestamp is honest — the alternative explanation (a fresh price wearing a
+  stale label, which would have made this a measurement bug rather than a gate
+  bug) is refuted.
+- Over 200 rounds pre-market the bid/ask never changed while `event_time`
+  advanced 4 / 39 / 41 times, so Saxo restates UNCHANGED quotes. Age is a
+  vendor-cadence property, not a market-activity one.
+
+### What replaces it
+
+The two questions are separated, and each is asked where its answer lives:
+
+- **The source owns "am I hearing from the venue".** `QuoteSource.is_receiving()`
+  (`SaxoPriceStream`, and over the wire via the reader's `is_receiving` op).
+  Its constants are stream mechanics: Saxo's ~30 s heartbeat on a subscription
+  with no new data sets the floor below which a quiet market would read as a
+  dead socket, and `_RECV_TIMEOUT_S` (45 s) sets the ceiling.
+- **The decision layer keeps owning "how old may a price be".**
+  `DEFAULT_MAX_AGE_S`, now sized from the distribution above rather than from an
+  assumed push rate.
+
+It is deliberately NOT a bare silence timer. A quiet instrument (41.7 s) and a
+dead socket (~40 s before it can be called) are the same size in seconds, so no
+threshold separates them. The conditions the stream KNOWS answer first — a
+failed connection attempt, a sleeping session, a stopped reader — and the timer
+is left covering only what none of them can see, a half-open socket. That makes
+the new arrangement strictly better than the 3 s bound on a clean disconnect
+(immediate, versus 3 s) and worse only on a half-open socket and on a halted
+instrument.
+
+### The cost this accepts
+
+Saxo documents no reliable halt indicator for `/trade/v1/infoprices` —
+`MarketState`, `PriceTypeBid` and a null `Bid` are not documented as halt
+signals. The only symptom of a halt is a quote that stops updating, which is
+exactly what the looser bound tolerates. Exposure to a frozen pre-halt price
+therefore rises from 3 s to the new bound. Bounded harm: one tranche fires
+(`plan_tranche_exits` plus the `_exit_clears_cost` gate), the disaster stop
+still covers the rest, and a LULD pause is normally 5 minutes so the bound still
+catches the halt — just not in its first seconds. The same exposure reaches the
+entry-trailing path, which shares this feed.
+
+### The number, and where it came from
+
+Three 15-minute 1 Hz windows on LIVE 2026-09-10 — open (13:30 UTC), midmorning
+(~16:00) and lull (17:30) — about 4,500 samples each, read-only (`op: "quote"`
+on already-subscribed uics; never `drain_low`, which is a POP that would eat the
+daemon's touch latch, and never `subscribe`, which mutates a shared subscription
+on a real-money path).
+
+Pooled per-sample veto rate for the slowest held name (uic 641), by candidate
+bound:
+
+| bound | 3 s | 15 s | 20 s | 30 s | 45 s | 60 s | 92 s | 120 s |
+|---|---|---|---|---|---|---|---|---|
+| uic 641 | 57.9% | 3.9% | 1.8% | 0.4% | **0.0%** | 0.0% | 0.0% | 0.0% |
+
+Its pooled tail: p99 23.0 s, p99.9 39.7 s, max 41.7 s (at the open). Every other
+subscribed name was already at 0.0% by 15 s; the fastest (uic 13697176) sat at
+2.5% even under the 3 s bound, which is why one constant could not serve both.
+
+**`DEFAULT_MAX_AGE_S = 45.0`** — the smallest bound that clears the measured
+tail.
+
+The pre-registered widening rule said "≥ 4 × the p99 restatement interval of the
+slowest held name", which with p99 = 23 s would have given 92 s. That floor is
+not applied, and the departure is recorded rather than quietly taken: the ≥4×
+term was a PROXY for "clear the tail", and these windows measure the tail
+directly. Going from 45 s to 92 s adds 47 seconds of exposure to a frozen price
+during a halt and returns exactly zero coverage. The rule's own instruction was
+to take the low end of the admissible range; 45 s is the low end of what
+actually satisfies it. The departure moves the bound toward LESS risk on the one
+dimension the rule named, not toward more permissiveness.
+
+One measurement that could have refuted the whole framing, and did not: across
+all three windows, the count of samples where `received_at` advanced while
+`event_time` stayed frozen was 0, 3 and 3 out of ~4,500 — and the count where
+the PRICE changed while `event_time` was frozen was **0** in every window. So
+`event_time` is honest, and the age it reports is the venue's cadence about that
+instrument, not a broken clock. Had that count been large, the right fix would
+have been the age measurement, not the gate.
+
+§6's "no separate disconnected flag is needed" is superseded. §7's failure
+behaviour is otherwise unchanged.

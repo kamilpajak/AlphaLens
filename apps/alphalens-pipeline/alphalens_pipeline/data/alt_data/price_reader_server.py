@@ -34,6 +34,11 @@ per line, in order::
     <- {"ok": true, "result": {...}}
     <- {"ok": false, "error": "bad_request"}
 
+``is_receiving`` takes no arguments and answers whether the stream is hearing
+from the venue at all — a question about the CONNECTION, kept apart from any
+quote because a quote's ``null`` already means "nothing cached for this uic"
+(#1397).
+
 Error codes are stable and never renamed: ``bad_version``, ``bad_request``,
 ``unknown_op``, ``internal``. A bad request NEVER drops the connection — a bug
 in one client must not disconnect the other daemon.
@@ -763,6 +768,17 @@ class PriceReaderServer:
         low = _as_float(request.get("low"), field="low")
         self._stream.reseed_running_low(uic, low, consumer=state.consumer)  # type: ignore[call-arg]
 
+    def _op_is_receiving(self, state: _ConnectionState, request: dict[str, Any]) -> bool:
+        """Is the underlying stream currently hearing from the venue? (#1397)
+
+        Its OWN op rather than a field on the quote reply, for the same reason
+        the stream keeps it off ``get``: a quote's ``null`` already means "no
+        such quote cached", so a remote daemon could not tell a dark stream
+        from an unknown uic if the two shared one answer. Takes no ``uic`` —
+        this is a property of the connection to the venue, not of an
+        instrument."""
+        return bool(self._stream.is_receiving())
+
     def _op_resolve_uic(self, state: _ConnectionState, request: dict[str, Any]) -> int | None:
         ticker = _as_str(request.get("ticker"), field="ticker")
         mic = _as_str(request.get("exchange_mic"), field="exchange_mic")
@@ -775,4 +791,5 @@ class PriceReaderServer:
         "drain_low": _op_drain_low,
         "reseed_low": _op_reseed_low,
         "resolve_uic": _op_resolve_uic,
+        "is_receiving": _op_is_receiving,
     }

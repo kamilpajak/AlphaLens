@@ -18,9 +18,43 @@ import math
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-DEFAULT_MAX_AGE_S = 3.0
-"""Roughly twice the worst event lag measured on the Saxo LIVE stream (1.4 s),
-and still detects a dead 1 Hz push within seconds."""
+DEFAULT_MAX_AGE_S = 45.0
+"""How old a quote may be under a decision. NOT a halt detector, and NOT a
+dead-stream detector — that second job moved to ``QuoteSource.is_receiving()``
+(#1397), because one number cannot answer both questions honestly.
+
+The retired 3.0 s rested on a premise that measurement refuted: the memo argued
+it "still detects a dead stream within seconds **against a 1 Hz push**". Saxo's
+``RefreshRate`` is a CEILING on how often it may speak about an instrument, not
+a pulse, so a quiet name simply goes unmentioned. On LIVE 2026-09-09 that vetoed
+28% of ladder evaluations for uic 641 while the stream was demonstrably alive.
+
+Set from three 15-minute 1 Hz windows on LIVE 2026-09-10 (open 13:30, midmorning
+~16:00, lull 17:30 UTC; ~4.5k samples each). Pooled per-sample veto rate for the
+SLOWEST held name (uic 641), by candidate bound:
+
+    3 s -> 57.9%    15 s -> 3.9%    20 s -> 1.8%    30 s -> 0.4%
+    45 s -> 0.0%    60 s -> 0.0%    92 s -> 0.0%   120 s -> 0.0%
+
+Its pooled tail: p99 23.0 s, p99.9 39.7 s, max 41.7 s (at the open). Every other
+subscribed name was already at 0.0% by 15 s.
+
+45 s is the smallest bound that clears the measured tail. The pre-registered
+widening rule said ">= 4x the p99 restatement interval", which would have given
+92 s — but that floor was a PROXY for "clear the tail", and the windows measure
+the tail directly. Buying 92 s over 45 s adds 47 seconds of exposure to a frozen
+price during a halt and returns exactly zero coverage. The rule's own
+instruction was to take the low end, and the low end of what actually satisfies
+it is 45.
+
+The cost is stated rather than hidden: Saxo publishes no reliable halt signal
+for ``/trade/v1/infoprices``, so the only symptom of a halt is a frozen quote —
+precisely what a looser bound tolerates. Exposure in the first seconds of a halt
+grows from 3 s to 45 s. A LULD halt is normally 5 minutes, so the bound still
+catches one, just not instantly. What burns is ONE tranche (``plan_tranche_exits``
+behind the ``_exit_clears_cost`` gate), never the position: the disaster stop
+stays on the remainder. The entry-watch scope inherits the same exposure, since
+``control_loop`` builds this feed for ``_FEED_SCOPE_ENTRY_WATCH`` too."""
 
 DEFAULT_MAX_RELATIVE_SPREAD = 0.02
 """(ask-bid)/mid ceiling. Liquid US names measured 0.003-0.03%, so 2% catches a

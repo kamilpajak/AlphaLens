@@ -10,13 +10,22 @@ Everything ambiguous returns ``None``. There is no path here that guesses.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from collections.abc import Callable
 
 from broker_contract.price_feed import PricePoint, is_fresh
 
 from alphalens_pipeline.data.alt_data.quote_source import QuoteSource
 
+logger = logging.getLogger(__name__)
+
 SOURCE = "saxo-live-l1"
+
+# One line per this many seconds while the source is dark. The daemon polls
+# every ~45s and asks per uic, so an untrottled warning would be ~19 lines a
+# tick; silence, though, is what #1392 had to undo. One line per outage-ish
+# window is the middle the journal can actually be read at.
+_DARK_WARN_INTERVAL_S = 300.0
 
 
 class SaxoLivePriceFeed:
@@ -42,8 +51,39 @@ class SaxoLivePriceFeed:
         self._stream = stream
         self._resolve_live_uic = resolve_live_uic
         self._clock = clock or (lambda: dt.datetime.now(dt.UTC))
+        self._last_dark_warn: dt.datetime | None = None
+
+    def _warn_dark(self) -> None:
+        """Name the veto, throttled. Which of the two conditions withheld the
+        price has to be legible: `no_price` alone in the daemon's disposition
+        line cannot tell "the source is dark" from "this quote is too old",
+        and that ambiguity is what #1392 spent a ticket removing one layer
+        up."""
+        now = self._clock()
+        last = self._last_dark_warn
+        if last is not None and (now - last).total_seconds() < _DARK_WARN_INTERVAL_S:
+            return
+        self._last_dark_warn = now
+        logger.warning(
+            "saxo live price feed: the quote source is not receiving from the venue — "
+            "withholding every price until it does"
+        )
 
     def latest(self, uic: int) -> PricePoint | None:
+        # TWO questions, deliberately separated (#1397). This one is about the
+        # SOURCE — is it hearing from the venue at all — and it is asked here
+        # rather than once per tick by the caller because a precondition
+        # somebody has to remember is a precondition that gets forgotten; the
+        # round trip is a local UNIX call.
+        #
+        # It used to be asked by proxy, through the quote's own age: a 3s bound
+        # whose docstring called itself a dead-stream detector. Measured in
+        # session on 2026-09-10, that vetoed uic 641 on 70% of samples with the
+        # stream demonstrably alive, because quote age really measures how
+        # often Saxo restates THAT instrument (its interval reached 41.7s).
+        if not self._stream.is_receiving():
+            self._warn_dark()
+            return None
         live_uic = self._resolve_live_uic(uic)
         if live_uic is None:
             return None

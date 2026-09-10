@@ -3,7 +3,12 @@ from __future__ import annotations
 import datetime as dt
 import unittest
 
-from broker_contract.price_feed import PriceFeed, PricePoint, is_fresh
+from broker_contract.price_feed import (
+    DEFAULT_MAX_AGE_S,
+    PriceFeed,
+    PricePoint,
+    is_fresh,
+)
 
 _NOW = dt.datetime(2026, 8, 7, 14, 0, 0, tzinfo=dt.UTC)
 
@@ -47,12 +52,37 @@ class TestIsFresh(unittest.TestCase):
         self.assertFalse(is_fresh(_point(event_time=None), now=_NOW))
 
     def test_too_old_is_vetoed(self):
-        old = _point(event_time=_NOW - dt.timedelta(seconds=3.5))
+        old = _point(event_time=_NOW - dt.timedelta(seconds=DEFAULT_MAX_AGE_S + 0.5))
         self.assertFalse(is_fresh(old, now=_NOW))
 
     def test_boundary_age_passes(self):
-        edge = _point(event_time=_NOW - dt.timedelta(seconds=3.0))
+        edge = _point(event_time=_NOW - dt.timedelta(seconds=DEFAULT_MAX_AGE_S))
         self.assertTrue(is_fresh(edge, now=_NOW))
+
+    def test_the_bound_clears_the_measured_tail_of_the_slowest_live_name(self):
+        """The number is set FROM data, so the data is what pins it (#1397).
+
+        Three 15-minute 1 Hz windows on LIVE 2026-09-10 put uic 641's worst
+        observed quote age at 41.7 s (p99 23.0, p99.9 39.7). A bound that did
+        not clear 41.7 s would keep vetoing the ladder for the name the ticket
+        is about.
+        """
+        worst_observed = _point(event_time=_NOW - dt.timedelta(seconds=41.7))
+
+        self.assertTrue(is_fresh(worst_observed, now=_NOW))
+
+    def test_the_bound_is_not_simply_wide_enough_to_accept_anything(self):
+        """The counterexample that gives the test above its power: widening the
+        bound buys ladder coverage, and it is paid for with exposure to a frozen
+        price during a halt. A minute-old quote must still be refused."""
+        minute_old = _point(event_time=_NOW - dt.timedelta(seconds=60.0))
+
+        self.assertFalse(is_fresh(minute_old, now=_NOW))
+
+    def test_the_constant_is_the_value_the_windows_settled_on(self):
+        """Pinned by value: a later edit that quietly widens or narrows it has
+        to come back to the measurement in the docstring first."""
+        self.assertEqual(DEFAULT_MAX_AGE_S, 45.0)
 
     def test_future_event_time_is_vetoed(self):
         """Clock skew must not read as extra freshness."""

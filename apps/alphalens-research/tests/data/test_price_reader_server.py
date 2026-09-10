@@ -61,6 +61,7 @@ class _FakeStream:
         self.reseeds: list[tuple[str, int, float]] = []
         self.resolved: list[tuple[str, str]] = []
         self.raise_on_get = False
+        self.receiving = True
 
     # --- QuoteSource ---
     def get(self, uic: int):
@@ -81,6 +82,9 @@ class _FakeStream:
 
     def ensure_subscribed(self, uics, *, scope: str = "default") -> None:
         self.subscribed[scope] = set(uics)
+
+    def is_receiving(self) -> bool:
+        return self.receiving
 
     # --- latch consumer surface ---
     def register_latch_consumer(self, consumer: str) -> None:
@@ -164,6 +168,24 @@ class TestQuoteOps(PriceReaderServerTestCase):
         result = self.connect().call("quote", uic=211)["result"]
         self.assertIsNone(result["bid"])
         self.assertIsNone(result["delayed_by_minutes"])
+
+    def test_stream_health_crosses_the_wire_both_ways(self):
+        """The whole point of a separate op: a remote daemon must be able to
+        tell "the stream is dark" from "no quote for this uic", which one
+        nullable quote reply cannot express (#1397)."""
+        client = self.connect()
+        self.assertIs(client.call("is_receiving")["result"], True)
+        self.stream.receiving = False
+        self.assertIs(client.call("is_receiving")["result"], False)
+
+    def test_stream_health_is_answered_independently_of_any_quote(self):
+        """A dark stream still holds its last quotes; the two answers are
+        separate facts and the server must not couple them."""
+        self.stream.quotes[211] = _FakeQuote(211, 18.61, 18.62)
+        self.stream.receiving = False
+        client = self.connect()
+        self.assertIsNotNone(client.call("quote", uic=211)["result"])
+        self.assertIs(client.call("is_receiving")["result"], False)
 
     def test_resolve_uic_delegates_to_the_stream(self):
         client = self.connect()

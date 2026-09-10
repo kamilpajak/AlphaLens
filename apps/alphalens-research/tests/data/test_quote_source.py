@@ -1,9 +1,14 @@
 """The ``QuoteSource`` structural contract (#1172).
 
-The feed factory and ``SaxoLivePriceFeed`` reach for exactly five methods on
+The feed factory and ``SaxoLivePriceFeed`` reach for exactly six methods on
 the quote source. Naming that set as a Protocol is what lets the cross-process
 reader client stand in for the in-process ``SaxoPriceStream`` without either
 side importing the other.
+
+``is_receiving`` is a REQUIRED member rather than an optional capability
+(the ``SupportsSessionLow`` shape) on purpose: a source that cannot answer it
+would have to be treated as live, and failing OPEN on a stream-health question
+that gates real-money orders is the one direction this must never take.
 """
 
 from __future__ import annotations
@@ -25,6 +30,29 @@ class _FakeTokenProvider:
 
 class _FullQuoteSource:
     """A structurally complete stand-in — what the remote client will be."""
+
+    def get(self, uic):  # pragma: no cover - shape only
+        return None
+
+    def drain_running_low(self, uic):  # pragma: no cover - shape only
+        return None
+
+    def reseed_running_low(self, uic, low):  # pragma: no cover - shape only
+        return None
+
+    def live_uic_for(self, ticker, *, exchange_mic):  # pragma: no cover - shape only
+        return None
+
+    def ensure_subscribed(self, uics, *, scope="default"):  # pragma: no cover - shape only
+        return None
+
+    def is_receiving(self):  # pragma: no cover - shape only
+        return True
+
+
+class _MissingIsReceiving:
+    """Positive control for the member added in #1397 — without it the check
+    could pass on a source that cannot answer the stream-health question."""
 
     def get(self, uic):  # pragma: no cover - shape only
         return None
@@ -72,6 +100,9 @@ class TestQuoteSourceProtocol(unittest.TestCase):
 
     def test_a_partial_implementation_does_not_satisfy_the_protocol(self):
         self.assertNotIsInstance(_MissingEnsureSubscribed(), QuoteSource)
+
+    def test_a_source_that_cannot_answer_stream_health_does_not_satisfy_it(self):
+        self.assertNotIsInstance(_MissingIsReceiving(), QuoteSource)
 
 
 if __name__ == "__main__":

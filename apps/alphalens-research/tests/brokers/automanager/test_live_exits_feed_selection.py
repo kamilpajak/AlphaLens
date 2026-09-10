@@ -40,7 +40,8 @@ class TestFeedSelection(unittest.TestCase):
 
 class _FakeSharedStream:
     """Stand-in for the module-level SaxoPriceStream singleton -- exposes only
-    the three methods _default_live_exits_feed_factory calls, no network."""
+    the four methods _default_live_exits_feed_factory and the adapter call, no
+    network."""
 
     def __init__(self, live_uic_map: dict[tuple[str, str], int]) -> None:
         self._live_uic_map = live_uic_map
@@ -55,6 +56,12 @@ class _FakeSharedStream:
 
     def get(self, uic: int) -> Quote | None:
         return self.quotes.get(uic)
+
+    def is_receiving(self) -> bool:
+        # Wiring tests are about which uic reaches the source, not about
+        # stream health (#1397) — a source that never says it is receiving
+        # would veto before the question under test is reached.
+        return True
 
 
 def _patched_shared_stream(fake_stream: _FakeSharedStream):
