@@ -564,6 +564,18 @@ class TestOrdersAndCancel(unittest.TestCase):
         # value assertion stays because a derived key set alone degrades
         # "surfaced" to "the key exists": a field mapped to None would satisfy
         # it while carrying nothing.
+        #
+        # SCOPE: this guards the JSON row ONLY. A field can be mapped here and
+        # still never reach a human column, and this test would pass. That gap
+        # is left open deliberately, because the mechanical version of it would
+        # be WRONG: several contract fields have no column of their own on
+        # purpose — `uic` is folded into the `instrument` cell, `label` is
+        # appended to `ref`, and `avg_fill_price` does not belong to the
+        # open-orders view at all. A "every field has a column" assertion would
+        # need an exclusion list, and an exclusion list is how an anti-rot test
+        # rots. Human rendering is covered per field, where it matters, by
+        # `test_a_resting_price_reaches_both_renderings` and the sibling
+        # placeholder tests.
         import dataclasses
 
         contract_fields = {f.name for f in dataclasses.fields(OrderState)}
@@ -590,6 +602,42 @@ class TestOrdersAndCancel(unittest.TestCase):
             },
         )
         self.assertEqual(harness.broker.place_calls, [])
+
+    def test_a_resting_price_reaches_both_renderings(self):
+        # Found reviewing my own PR (#1393): the dash-count tests prove a
+        # column EXISTS, and the exact-dict test pins `resting_price: None`
+        # because the default fake carries no price — so nothing exercised a
+        # REAL level through either rendering. "The column is there" is not
+        # "the number arrives".
+        harness = _SubmitHarness(self)
+        harness.broker.open_orders = [
+            OrderState(
+                "S-1",
+                OrderStatus.WORKING,
+                _instrument(),
+                0.0,
+                "Working",
+                uic=641,
+                side="SELL",
+                order_type="StopIfTraded",
+                amount=1.0,
+                external_reference="RHI-2026-09-02-entry-t0-fire-stop-0",
+                order_relation="StandAlone",
+                resting_price=30.39,
+            )
+        ]
+        from alphalens_cli.commands.broker import broker_app
+
+        as_json = self.runner.invoke(broker_app, ["orders", "--format", "json"])
+        self.assertEqual(as_json.exit_code, 0, msg=as_json.output)
+        self.assertEqual(json.loads(as_json.stdout)["orders"][0]["resting_price"], 30.39)
+
+        human = self.runner.invoke(broker_app, ["orders"])
+        self.assertEqual(human.exit_code, 0, msg=human.output)
+        (line,) = [line for line in human.stdout.splitlines() if line.startswith("S-1")]
+        # A whole field, not a substring: `assertIn` on the raw line would also
+        # pass if the digits turned up inside some other cell.
+        self.assertIn("30.39", line.split(), line)
 
     def test_orders_human_row_carries_side_type_amount_ref_and_label(self):
         _SubmitHarness(self)
