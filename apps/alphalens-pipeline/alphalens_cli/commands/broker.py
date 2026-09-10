@@ -2194,7 +2194,11 @@ def arm_manual_command(
             generation=generation,
         )
     except ManualIntentError as exc:
-        raise _fail_with("intent_invalid", str(exc)) from exc
+        # `details` carries the contract's `reason` (plus a tier/tranche index
+        # for an element-wise rule) so a machine consumer branches on a stable
+        # field instead of matching the message text (#1404).
+        details = exc.failure.details if exc.failure is not None else None
+        raise _fail_with("intent_invalid", str(exc), details=details) from exc
 
     blend = planned_blended_entry_of(
         intent.spec.entry_tiers, disaster_stop=intent.spec.disaster_stop

@@ -65,6 +65,33 @@ breaking change, so `unclassified` must never be a branch condition. Read it as
 | `stream_metrics_missing` | CLI | no | The stream gauge textfile does not exist for this instance. Carries a `suggestions` argv. |
 | `unclassified` | CLI | no | Not yet given a code. Never branch on it. |
 
+#### `intent_invalid` publishes its `details` keys
+
+`intent_invalid` covers every way a document can be internally inconsistent, so
+the code alone does not say which rule broke. Rather than one top-level code per
+rule, the discriminator is a
+**published** `details` key — the escape the rule above names ("unless the row
+below names them for that code"). For this code, and only this code, these keys
+are part of the contract:
+
+| key | meaning |
+|---|---|
+| `reason` | Closed vocabulary naming the broken rule, e.g. `entry_alloc_sum`, `stop_above_entry`, `tp_price_below_blend`. Defined in `broker_contract.trade_intent.validate.INTENT_INVALID_REASONS`. |
+| `violations` | **Every** broken rule, not just the first: a list of `{reason, message}` objects, each carrying its index key when it is element-wise. A generated document can be fixed in one pass instead of a submit-fix-submit loop. |
+| `tier_index` | 0-based index of the offending entry tier, for a rule about one rung. |
+| `tranche_index` | 0-based index of the offending take-profit tranche. |
+
+`message` carries the FIRST violation in the published order — identity, entry
+ladder, stop, size, take-profits — so the operator's text is stable while a
+machine reads the whole list.
+
+**What `validate_intent` does NOT check** is as much part of the contract as what
+it does. Rules about the *invocation* rather than the document stay with the CLI:
+`order_ttl_days == 0` is LEGAL (the planner resolves that sentinel to a default),
+and the supported-venue list is broker-deployment knowledge. Single-field shape
+and format — `meta.trade_date` parsing as a date, `schema_version` bounds — belong
+to the JSON Schema layer. A door onto this contract is expected to apply both.
+
 **Owner** says where the code is DEFINED, not who emits it: the contract package
 holds the codes any consumer of the broker taxonomy needs, and the CLI holds the
 ones only a command-line program can raise. The split follows the #1122

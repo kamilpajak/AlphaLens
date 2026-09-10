@@ -38,9 +38,18 @@ Broker-manager extraction 2A-4a (design memo
 §2.1/§2.3) relocated this money-math half into the shared, dependency-free
 ``broker_contract`` leaf. The brief-parsing / arm-time half
 (``parse_brief_to_spec``, ``validate_trade_setup``, ``build_exit_geometry_spec``,
-``planned_blended_entry``/``planned_blended_entry_from_spec``) stays client-side
-in ``alphalens_pipeline.paper.sizing`` — it reads a thematic brief dict, a
-client concern that must not leak into this leaf.
+``planned_blended_entry``) stays client-side in ``alphalens_pipeline.paper.sizing``
+— it reads a thematic brief dict, a client concern that must not leak into this
+leaf.
+
+``planned_blended_entry_from_spec`` was originally listed alongside its
+dict-reading sibling as client-side, but the reason given never applied to it:
+it takes a ``TradeSpec``, a type this module already imports and consumes. It
+moved here for #1404, where the intent validator needs the planned blend to
+refuse a take-profit at or below it. Re-implementing the arithmetic there would
+have FORKED it from the dict path — the divergence class of issue #1114 — so the
+function moved instead, and ``paper.sizing`` re-exports it: every existing caller
+imports it from the same place as before.
 """
 
 from __future__ import annotations
@@ -56,6 +65,43 @@ from broker_contract.constants import (
 )
 from broker_contract.fx import FxConversion
 from broker_contract.trade_intent.schema import TpTrancheSpec, TradeSpec
+
+
+def _blend_priced_tiers(priced: list[tuple[float, float]]) -> float | None:
+    """Shared alloc-weighted-mean arithmetic for the dict and spec blend paths.
+
+    Weighted by the second element (alloc weight); equal-weight fallback when
+    weights sum to 0; ``None`` for an empty ``priced`` list. Extracted so
+    ``alphalens_pipeline.paper.sizing.planned_blended_entry`` and
+    :func:`planned_blended_entry_from_spec` cannot drift — both must produce
+    identical results for ``parse_brief_to_spec(setup)`` vs ``setup`` (PR-7).
+    """
+    if not priced:
+        return None
+    wsum = sum(w for _, w in priced)
+    if wsum > 0:
+        return sum(p * w for p, w in priced) / wsum
+    return sum(p for p, _ in priced) / len(priced)
+
+
+def planned_blended_entry_from_spec(spec: TradeSpec) -> float | None:
+    """Alloc-weighted mean price over an already-parsed :class:`TradeSpec`.
+
+    The arm-time (PR-7) mirror of
+    ``alphalens_pipeline.paper.sizing.planned_blended_entry``: the daemon's
+    geometry SHADOW stamp no longer has the raw brief dict at drain time (the
+    parse moved to arm time), only the already-parsed ``TradeSpec`` carried on
+    the :class:`~broker_contract.trade_intent.schema.TradeIntent`. Must
+    return the SAME value ``planned_blended_entry(setup)`` would for the
+    equivalent ``setup`` -- both routes share :func:`_blend_priced_tiers`.
+
+    Returns ``None`` when there are no usable entry tiers (all non-positive
+    ``limit_price``, or ``spec.entry_tiers`` is empty) -- never raises. The
+    intent validator relies on that: a ladder it is about to refuse for having
+    a non-positive price must not make the blend rule explode first.
+    """
+    priced = [(t.limit_price, t.alloc_pct) for t in spec.entry_tiers if t.limit_price > 0]
+    return _blend_priced_tiers(priced)
 
 
 @dataclass(frozen=True)

@@ -39,6 +39,36 @@ Every refusal raises :class:`ManualIntentError` with an operator-readable
 message. This command arms real money: a malformed level must explode loudly,
 never be silently normalized (no alloc rescaling, no tolerance beyond float
 noise).
+
+Since #1404 the refusals are split by WHOSE invariant each one is, and only two
+of the three kinds live here:
+
+* **This module owns the operator's VOCABULARY** — the ``price[:alloc]`` and
+  ``<N>R:pct`` mini-DSLs, the ``now@`` prefix, ``--no-tp`` against ``--tp``, the
+  ``--size-pct``/``--notional`` XOR. None of it is representable in a
+  ``TradeIntent``: after compilation ``alloc_pct`` is always set, so "a mix of
+  bare and explicit allocations" is a fact about the command line, not the
+  document.
+* **This module also owns rules about the INVOCATION** — ``--ttl-days`` and
+  :data:`SUPPORTED_MICS`. ``order_ttl_days == 0`` is a LEGAL document value
+  (``brokers/execution.py`` resolves that sentinel to a default), so refusing the
+  flag is right and refusing the document would be wrong. The venue list is Saxo
+  deployment knowledge and stays with the adapter (the #1122 decision).
+* **The DOCUMENT's own invariants moved to**
+  :func:`broker_contract.trade_intent.validate.validate_intent` — allocations
+  summing to 100, at most one immediate tier and it listed first, duplicate
+  levels, the stop below the ladder, an unlevered size, take-profits above the
+  planned blend. They are checked on the assembled intent at the end of
+  :func:`build_manual_intent`, and their wording now lives in the contract so
+  each message exists in exactly one place.
+
+Three of those rules are ALSO checked here, and not as a duplicated policy: a
+positive tier price, a non-empty ladder, and a stop below the lowest tier are
+preconditions of this module's own compilation. The planned blend is computed —
+and ``<N>R`` take-profits are priced off it — before the intent exists, so
+without them ``min()`` would raise on an empty ladder, the blend would go
+``None``, or ``risk = blend - stop`` would go non-positive and an R-form
+take-profit would be silently priced BELOW the blend.
 """
 
 from __future__ import annotations
@@ -46,6 +76,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 
+from broker_contract.failure import Failure
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     InstrumentHint,
@@ -54,6 +85,7 @@ from broker_contract.trade_intent.schema import (
     TradeIntent,
     TradeSpec,
 )
+from broker_contract.trade_intent.validate import IntentInvalidError, validate_intent
 
 from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
 
@@ -69,14 +101,19 @@ from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
 # the runbook notes in deploy/systemd/README.md.
 SUPPORTED_MICS = ("XNYS", "XNAS", "XWAR", "XETR", "XPAR")
 
-# Percentage sums are validated against float noise only (33.3+33.3+33.4 !=
-# 100.0 exactly) — NEVER against sloppy input; 60+30 is a refusal, not a
-# rescale.
-_PCT_SUM_TOL = 1e-6
-
 
 class ManualIntentError(ValueError):
-    """A manual pick's levels/sizing cannot be compiled into a TradeIntent."""
+    """A manual pick's levels/sizing cannot be compiled into a TradeIntent.
+
+    ``failure`` carries the contract's :class:`~broker_contract.failure.Failure`
+    when the refusal came from :func:`validate_intent`, so the CLI can publish
+    its ``details["reason"]`` instead of handing a machine a sentence to parse.
+    It is ``None`` for the vocabulary refusals this module still owns.
+    """
+
+    def __init__(self, message: str, *, failure: Failure | None = None) -> None:
+        super().__init__(message)
+        self.failure = failure
 
 
 # Immediate-entry tier prefix (#1247): ``now@<cap>[:alloc_pct]``. The cap is
@@ -118,8 +155,6 @@ def _parse_one_tier(raw: str) -> tuple[float, float | None, bool]:
     alloc: float | None = None
     if alloc_raw is not None:
         alloc = _parse_float(alloc_raw, what=f"--tier alloc_pct in {raw!r}")
-        if alloc <= 0:
-            raise ManualIntentError(f"--tier alloc_pct must be positive, got {raw!r}")
     return price, alloc, is_now
 
 
@@ -135,11 +170,6 @@ def _resolve_tier_allocations(
             "either every --tier carries an explicit alloc_pct or none does "
             f"(equal split) — got a mix in {list(raw_tiers)!r}"
         )
-    alloc_sum = sum(alloc for _, alloc, _ in parsed if alloc is not None)
-    if abs(alloc_sum - 100.0) > _PCT_SUM_TOL:
-        raise ManualIntentError(
-            f"--tier allocations must sum to 100, got {alloc_sum:g} — no silent rescaling"
-        )
     return parsed
 
 
@@ -149,36 +179,23 @@ def parse_entry_tiers(raw_tiers: list[str] | tuple[str, ...]) -> tuple[EntryTier
     An ALL-BARE ladder (prices only — the WhatsApp signal shape
     ``t1:GME@17.90 t2:GME@17.00 t3:GME@16.20``) splits the allocation equally;
     the compiled-intent echo surfaces the split for verification. When any
-    tier carries an explicit allocation, every tier must, and the allocations
-    must sum to 100 (float-noise tolerance only — no silent rescaling).
+    tier carries an explicit allocation, every tier must — that mix is a fact
+    about the command line and so is refused here.
 
-    A ``now@<cap>[:alloc_pct]`` tier (#1247) marks the immediate-entry
-    tranche: at most one per pick, and it must be listed FIRST (the day-1
-    gate and the watch router key on the first PULLBACK tier — a now tier
-    hiding mid-ladder would corrupt both). It participates in the allocation
-    arithmetic exactly like any other tier.
+    A ``now@<cap>[:alloc_pct]`` tier (#1247) marks the immediate-entry tranche
+    and participates in the allocation arithmetic exactly like any other tier.
+
+    What this function no longer checks, because it is true of the DOCUMENT and
+    is enforced by ``validate_intent`` on the assembled intent (#1404): the
+    allocations summing to 100, at most one immediate tier and it listed first,
+    and duplicate tier prices. A non-empty ladder and a positive price stay,
+    because the blend arithmetic downstream depends on both.
     """
     if not raw_tiers:
         raise ManualIntentError("at least one --tier is required")
 
     parsed = [_parse_one_tier(raw) for raw in raw_tiers]
-
-    now_indexes = [index for index, (_, _, is_now) in enumerate(parsed) if is_now]
-    if len(now_indexes) > 1:
-        raise ManualIntentError(
-            "at most one now tier per pick — a second 'now' is a new signal, re-arm"
-        )
-    if now_indexes and now_indexes[0] != 0:
-        raise ManualIntentError("the now tier must be listed first")
-
     parsed = _resolve_tier_allocations(parsed, raw_tiers)
-
-    prices = [price for price, _, _ in parsed]
-    if len(set(prices)) != len(prices):
-        # The same price twice is almost certainly a pasted-twice typo — the
-        # deeper rung of such a ladder can never fill separately (and a now
-        # cap colliding with a pullback rung is the same typo class).
-        raise ManualIntentError(f"duplicate --tier price: {prices}")
     return tuple(
         EntryTierSpec(
             limit_price=price,
@@ -201,8 +218,6 @@ def _parse_one_tp(raw: str, *, index: int, blend: float, risk: float) -> TpTranc
         raise ManualIntentError(f"cannot parse --tp: {raw!r} (expected price:pct or <N>R:pct)")
     level_raw, pct_raw = parts
     pct = _parse_float(pct_raw, what=f"--tp tranche_pct in {raw!r}")
-    if pct <= 0:
-        raise ManualIntentError(f"--tp tranche_pct must be positive, got {raw!r}")
     if level_raw and level_raw[-1] in ("R", "r"):
         r_multiple = _parse_float(level_raw[:-1], what=f"--tp R-multiple in {raw!r}")
         if r_multiple <= 0:
@@ -210,11 +225,7 @@ def _parse_one_tp(raw: str, *, index: int, blend: float, risk: float) -> TpTranc
         price = blend + r_multiple * risk
     else:
         price = _parse_float(level_raw, what=f"--tp price in {raw!r}")
-        if price <= blend:
-            raise ManualIntentError(
-                f"--tp price must be above the planned blend entry {blend:g}, got {raw!r}"
-            )
-        r_multiple = (price - blend) / risk
+        r_multiple = (price - blend) / risk if risk else 0.0
     return TpTrancheSpec(price=price, tranche_pct=pct, r_multiple=r_multiple, tag=f"TP{index + 1}")
 
 
@@ -227,21 +238,16 @@ def parse_tp_tranches(
     anchored on the PLANNED alloc-weighted blend entry (consistent with the
     ``atr_bracket_1p5_planned`` replay convention): one R is
     ``blend - stop``. Forms can be mixed across tranches.
+
+    Percentages summing over 100, duplicate targets and a target at or below the
+    blend are invariants of the DOCUMENT and moved to ``validate_intent`` (#1404);
+    what stays here is the parse and the R-form's own positivity rule.
     """
     risk = blend - stop
     tranches = [
         _parse_one_tp(raw, index=index, blend=blend, risk=risk) for index, raw in enumerate(raw_tps)
     ]
 
-    pct_sum = sum(t.tranche_pct for t in tranches)
-    if pct_sum - 100.0 > _PCT_SUM_TOL:
-        raise ManualIntentError(f"--tp tranche percentages exceed 100, got {pct_sum:g}")
-    prices = [t.price for t in tranches]
-    if len(set(prices)) != len(prices):
-        # Two tranches at one target are one bigger tranche at best and a
-        # pasted-twice typo at worst (an R-form can land exactly on a given
-        # absolute target) — refuse either way.
-        raise ManualIntentError(f"duplicate --tp price: {prices}")
     return tuple(tranches)
 
 
@@ -278,8 +284,12 @@ def resolve_size_pct(
     """Resolve the two sizing vocabularies into one ``suggested_size_pct``.
 
     Exactly one of ``size_pct`` (percent of the declared frame) or
-    ``notional`` (account currency; divided by ``frame``) must be given. The
-    result must land in (0, 100] — a manual pick is never levered.
+    ``notional`` (account currency; divided by ``frame``) must be given.
+
+    The resolved value must land in (0, 100] — a pick is never levered — but that
+    is an invariant of the DOCUMENT, so ``validate_intent`` enforces it on the
+    assembled intent (#1404) rather than this function. What stays here is the
+    vocabulary: which flags may be combined, and that a notional needs a frame.
     """
     if (size_pct is None) == (notional is None):
         raise ManualIntentError("exactly one of --size-pct or --notional is required")
@@ -294,10 +304,6 @@ def resolve_size_pct(
         if frame <= 0:
             raise ManualIntentError(f"--frame must be positive, got {frame:g}")
         size_pct = 100.0 * notional / frame
-    if not 0.0 < size_pct <= 100.0:
-        raise ManualIntentError(
-            f"resolved sizing must satisfy 0 < size_pct <= 100, got {size_pct:g}"
-        )
     return size_pct
 
 
@@ -326,8 +332,6 @@ def build_manual_intent(
     would join to the retired generation's submission and skip.
     """
     ticker = ticker.strip().upper()
-    if not ticker:
-        raise ManualIntentError("ticker must be non-empty")
     if mic not in SUPPORTED_MICS:
         raise ManualIntentError(
             f"MIC {mic!r} is not supported (supported: {', '.join(SUPPORTED_MICS)}; "
@@ -367,7 +371,7 @@ def build_manual_intent(
         **spec_kwargs,
     )
     generation_suffix = "" if generation == 1 else f"-g{generation}"
-    return TradeIntent(
+    intent = TradeIntent(
         intent_id=f"{ticker}:{arm_date.isoformat()}:manual{generation_suffix}",
         instrument=InstrumentHint(ticker=ticker, mic=mic),
         spec=spec,
@@ -379,3 +383,11 @@ def build_manual_intent(
         ),
         exit=None,
     )
+    try:
+        validate_intent(intent)
+    except IntentInvalidError as exc:
+        # The contract owns the rule AND its wording, so the operator message
+        # exists in exactly one place. `ManualIntentError` stays the CLI-facing
+        # type so `broker.py` keeps reporting `intent_invalid` unchanged.
+        raise ManualIntentError(exc.failure.message, failure=exc.failure) from exc
+    return intent
