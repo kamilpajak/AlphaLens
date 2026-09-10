@@ -269,6 +269,70 @@ class TakeProfitRulesTest(unittest.TestCase):
         self.assertEqual(ctx.exception.failure.details["tranche_index"], 1)
 
 
+class NonFiniteNumbersTest(unittest.TestCase):
+    """A NaN passes every comparison silently, so it must be refused first.
+
+    Reachable: `json.loads` accepts a bare `NaN` literal by default and the codec
+    carries it through unchanged, so a document arriving at a door really can hold
+    one. The CLI path never could — `_parse_float` checks `math.isfinite` — which
+    is exactly why the corpus of real intents could not have surfaced this.
+    """
+
+    def _refuses(self, **spec_overrides) -> str:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(**spec_overrides))
+        return _reason_of(ctx.exception)
+
+    def test_nan_tier_price_refuses(self) -> None:
+        tiers = (EntryTierSpec(limit_price=float("nan"), alloc_pct=100.0),)
+        self.assertEqual(self._refuses(entry_tiers=tiers), "numeric_not_finite")
+
+    def test_infinite_tier_price_refuses(self) -> None:
+        tiers = (EntryTierSpec(limit_price=float("inf"), alloc_pct=100.0),)
+        self.assertEqual(self._refuses(entry_tiers=tiers), "numeric_not_finite")
+
+    def test_nan_allocation_refuses(self) -> None:
+        tiers = (EntryTierSpec(limit_price=70.0, alloc_pct=float("nan")),)
+        self.assertEqual(self._refuses(entry_tiers=tiers), "numeric_not_finite")
+
+    def test_nan_stop_refuses(self) -> None:
+        self.assertEqual(self._refuses(disaster_stop=float("nan")), "numeric_not_finite")
+
+    def test_nan_size_refuses(self) -> None:
+        self.assertEqual(self._refuses(suggested_size_pct=float("nan")), "numeric_not_finite")
+
+    def test_nan_tp_price_refuses(self) -> None:
+        tranches = (TpTrancheSpec(price=float("nan"), tranche_pct=50.0),)
+        self.assertEqual(self._refuses(tp_tranches=tranches), "numeric_not_finite")
+
+    def test_the_offending_field_is_named(self) -> None:
+        tiers = (
+            EntryTierSpec(limit_price=70.0, alloc_pct=60.0),
+            EntryTierSpec(limit_price=float("nan"), alloc_pct=40.0),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=tiers))
+        details = ctx.exception.failure.details
+        self.assertEqual(details["field"], "entry_tiers[1].limit_price")
+        self.assertEqual(details["tier_index"], 1)
+
+    def test_a_nan_document_really_does_decode_first(self) -> None:
+        """Positive control: without this the rule could be unreachable in practice."""
+        raw = (
+            '{"intent_id":"X:2026-09-10:m","instrument":{"ticker":"X","mic":"XNYS"},'
+            '"spec":{"entry_tiers":[{"limit_price":NaN,"alloc_pct":100.0}],'
+            '"disaster_stop":5.0,"tp_tranches":[],"suggested_size_pct":10.0},'
+            '"meta":{"armed_ts":"t","trade_date":"2026-09-10"}}'
+        )
+        decoded = intent_from_jsonable(json.loads(raw))
+        self.assertNotEqual(
+            decoded.spec.entry_tiers[0].limit_price, decoded.spec.entry_tiers[0].limit_price
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(decoded)
+        self.assertEqual(_reason_of(ctx.exception), "numeric_not_finite")
+
+
 class TheFailureShapeTest(unittest.TestCase):
     def test_the_code_is_the_registered_contract_code(self) -> None:
         with self.assertRaises(IntentInvalidError) as ctx:

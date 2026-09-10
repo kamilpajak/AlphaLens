@@ -128,8 +128,19 @@ class TheContractPackageStaysStdlibOnlyTest(unittest.TestCase):
                 roots.add(node.module.split(".")[0])
             elif isinstance(node, ast.Import):
                 roots.update(alias.name.split(".")[0] for alias in node.names)
-        allowed = {"broker_contract", "collections", "dataclasses", "types", "typing", "__future__"}
+        allowed = {
+            "__future__",
+            "broker_contract",
+            "collections",
+            "dataclasses",
+            "math",
+            "types",
+            "typing",
+        }
         self.assertEqual(roots - allowed, set())
+        # Positive control: a module that imported nothing would satisfy the
+        # assertion above vacuously.
+        self.assertIn("broker_contract", roots)
 
 
 if __name__ == "__main__":

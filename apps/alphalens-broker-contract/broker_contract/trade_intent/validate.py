@@ -53,7 +53,8 @@ Stdlib only, like the rest of the package (``dependencies = []`` on purpose).
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import math
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Final
@@ -100,6 +101,8 @@ class IntentInvalidError(ContractError):
 
 INTENT_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
     {
+        "numeric_not_finite": "A numeric field is NaN or infinite; every comparison on it "
+        "would silently pass.",
         "intent_id_empty": "The client-authored idempotency key is missing or blank.",
         "ticker_empty": "The instrument carries no ticker.",
         "side_not_long": "Only long entries are armed today.",
@@ -120,6 +123,42 @@ INTENT_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         "tp_price_below_blend": "A take-profit sits at or below the planned blend entry.",
     }
 )
+
+
+def _numeric_fields(spec: TradeSpec) -> Iterator[tuple[str, float, dict[str, Any]]]:
+    """Every float the rules below compare, with the pointer to where it came from."""
+    for index, tier in enumerate(spec.entry_tiers):
+        where = {"tier_index": index}
+        yield f"entry_tiers[{index}].limit_price", tier.limit_price, where
+        yield f"entry_tiers[{index}].alloc_pct", tier.alloc_pct, where
+    yield "disaster_stop", spec.disaster_stop, {}
+    yield "suggested_size_pct", spec.suggested_size_pct, {}
+    for index, tranche in enumerate(spec.tp_tranches):
+        where = {"tranche_index": index}
+        yield f"tp_tranches[{index}].price", tranche.price, where
+        yield f"tp_tranches[{index}].tranche_pct", tranche.tranche_pct, where
+        yield f"tp_tranches[{index}].r_multiple", tranche.r_multiple, where
+
+
+def _finiteness_violations(spec: TradeSpec) -> list[Violation]:
+    """Refuse NaN / infinity BEFORE any rule compares against it.
+
+    A NaN answers False to every ordering comparison, so `limit_price <= 0`,
+    `stop >= lowest` and the duplicate check all pass it silently — the document
+    would look valid and reach the placement path. This cannot arrive through the
+    CLI (`_parse_float` requires `math.isfinite`), but it can arrive through a
+    submitted document: `json.loads` accepts a bare `NaN` literal by default and
+    the codec carries it through untouched.
+    """
+    return [
+        Violation(
+            "numeric_not_finite",
+            f"{name} must be a finite number, got {value!r}",
+            {"field": name, **where},
+        )
+        for name, value, where in _numeric_fields(spec)
+        if not math.isfinite(value)
+    ]
 
 
 def _identity_violations(intent: TradeIntent) -> list[Violation]:
@@ -291,6 +330,12 @@ def _collect(intent: TradeIntent) -> list[Violation]:
     breaking two rules reports the same one it reported before.
     """
     spec = intent.spec
+    # Finiteness comes FIRST: every rule below is a comparison, and a NaN makes
+    # each one silently answer "fine". Reporting a downstream rule on a NaN would
+    # describe a consequence rather than the cause.
+    non_finite = _finiteness_violations(spec)
+    if non_finite:
+        return non_finite
     return [
         *_identity_violations(intent),
         *_entry_tier_violations(spec),
