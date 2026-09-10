@@ -557,6 +557,20 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertEqual(envelope["schema"], "alphalens.broker.orders/v1")
         self.assertEqual(len(envelope["orders"]), 1)
         row = envelope["orders"][0]
+        # TWO assertions, not one (#1393). The key set is DERIVED from the
+        # contract, so a field added to `OrderState` and never mapped fails
+        # here instead of passing quietly — which is exactly how
+        # `resting_price` stayed invisible until an operator needed it. The
+        # value assertion stays because a derived key set alone degrades
+        # "surfaced" to "the key exists": a field mapped to None would satisfy
+        # it while carrying nothing.
+        import dataclasses
+
+        contract_fields = {f.name for f in dataclasses.fields(OrderState)}
+        # `avg_fill_price` belongs to the audit path (a FILL price), not to the
+        # open-orders view; `label` is this renderer's own decoration of the
+        # external reference, not a contract field.
+        self.assertEqual(set(row), (contract_fields - {"avg_fill_price"}) | {"label"})
         self.assertEqual(
             row,
             {
@@ -572,6 +586,7 @@ class TestOrdersAndCancel(unittest.TestCase):
                 "external_reference": "KO-2026-07-16-entry-t0",
                 "label": "KO E1",
                 "order_relation": "StandAlone",
+                "resting_price": None,
             },
         )
         self.assertEqual(harness.broker.place_calls, [])
@@ -648,9 +663,10 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertNotIn("?", human.stdout)
         self.assertNotIn("None", human.stdout)
         (line,) = [line for line in human.stdout.splitlines() if line.startswith("X-1")]
-        # side, type, amount, instrument, ref, relation -> six explicit `-`
-        # placeholders; filled_quantity is a real 0.0 and renders as `0`.
-        self.assertEqual(line.split().count("-"), 6, line)
+        # side, type, amount, price, instrument, ref, relation -> seven explicit
+        # `-` placeholders; filled_quantity is a real 0.0 and renders as `0`.
+        # (Six before #1393 added the resting-price column.)
+        self.assertEqual(line.split().count("-"), 7, line)
         self.assertIn("raw=Working", line)
 
     def test_orders_rejects_an_unknown_format_before_any_broker_call(self):
@@ -688,8 +704,9 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertIsNone(json.loads(result.stdout)["orders"][0]["label"])
         human = self.runner.invoke(broker_app, ["orders"])
         (line,) = [line for line in human.stdout.splitlines() if line.startswith("R-1")]
-        # ref and relation are absent -> two placeholders, never a blank cell.
-        self.assertEqual(line.split().count("-"), 2, line)
+        # ref, relation and the resting price are absent -> three placeholders,
+        # never a blank cell. (Two before #1393 added the price column.)
+        self.assertEqual(line.split().count("-"), 3, line)
 
     def test_orders_empty_book_reads_no_open_orders(self):
         harness = _SubmitHarness(self)

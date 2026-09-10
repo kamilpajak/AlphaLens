@@ -260,6 +260,18 @@ class OrderState:
     # unparseable (HONEST — never fabricated); it rides ALONGSIDE
     # ``filled_quantity`` and never changes the FILLED / UNRESOLVED outcome.
     avg_fill_price: float | None = None  # row["ExecutionPrice"] (fallback "AveragePrice")
+    # The price the order RESTS at — distinct from ``avg_fill_price`` above,
+    # which is where a fill HAPPENED. Its meaning follows ``order_type``: the
+    # TRIGGER of a ``StopIfTraded``, the LIMIT of a ``Limit``. Saxo ships one
+    # ``Price`` field and lets the type give it meaning, so this mirrors the
+    # vendor rather than inventing per-type fields the response does not carry.
+    # Additive, defaulted, mapped in ``_to_order_state`` from a field Saxo
+    # already returns (no new HTTP surface); the frozen base ``Broker``
+    # Protocol is untouched. ``None`` when the row has no price (a market
+    # order) — NEVER 0.0, which is a legal price and would misstate where the
+    # order sits. Without it no command could answer "where is my disaster
+    # stop", which is the number an operator wants during a session (#1393).
+    resting_price: float | None = None  # row["Price"]
 
 
 @dataclass(frozen=True)

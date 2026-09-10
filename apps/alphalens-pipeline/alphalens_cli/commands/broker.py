@@ -2180,6 +2180,9 @@ def _order_row(state: OrderState) -> dict[str, Any]:
         # `or None`: an unstamped symbol ("") must not surface as an empty string.
         "instrument": (state.instrument.broker_symbol or None) if state.instrument else None,
         "uic": state.uic,
+        # Where the order RESTS: the trigger of a stop, the limit of a limit
+        # (#1393). `None` when the row carries no price, never 0.0.
+        "resting_price": state.resting_price,
         "external_reference": ref,
         "label": human_label_from_external_reference(ref) if ref else None,
         "order_relation": state.order_relation,
@@ -2210,9 +2213,14 @@ def _render_orders_human(result: Mapping[str, Any]) -> None:
     def _qty(value: Any) -> str:
         return _ORDERS_ABSENT if value is None else f"{float(value):g}"
 
+    def _price(value: Any) -> str:
+        # Same absent rule as the other cells: a market order has no resting
+        # price, and an empty cell would read as a rendering defect (#1393).
+        return _ORDERS_ABSENT if value is None else f"{float(value):g}"
+
     typer.echo(
-        f"{'order_id':12s} {'side':4s} {'type':20s} {'amount':>8s} {'filled':>8s}  "
-        f"{'instrument':16s} {'ref':44s} {'rel':12s} status  raw"
+        f"{'order_id':12s} {'side':4s} {'type':20s} {'amount':>8s} {'filled':>8s} "
+        f"{'price':>9s}  {'instrument':16s} {'ref':44s} {'rel':12s} status  raw"
     )
     for row in rows:
         ref = _cell(row["external_reference"])
@@ -2222,7 +2230,8 @@ def _render_orders_human(result: Mapping[str, Any]) -> None:
             ref = f"{ref} ({row['label']})"
         typer.echo(
             f"{row['order_id']:12s} {_cell(row['side']):4s} {_cell(row['order_type']):20s} "
-            f"{_qty(row['amount']):>8s} {_qty(row['filled_quantity']):>8s}  "
+            f"{_qty(row['amount']):>8s} {_qty(row['filled_quantity']):>8s} "
+            f"{_price(row['resting_price']):>9s}  "
             f"{_order_instrument_cell(row):16s} {ref:44s} {_cell(row['order_relation']):12s} "
             f"{row['status']}  raw={row['raw_status']}"
         )

@@ -1183,6 +1183,58 @@ class TestToOrderStateSurfacesFields(unittest.TestCase):
         self.assertEqual(state.order_relation, "Oco")
 
 
+class TestToOrderStateSurfacesRestingPrice(unittest.TestCase):
+    """`_to_order_state` maps the RESTING price (#1393).
+
+    Measured on the LIVE book 2026-09-09 (read-only GET on the orders
+    endpoint, not audit): every open order row carried ``Price`` — 6/6 — and
+    the value matched the journaled intent for that uic (30.3864 planned,
+    30.39 resting after Saxo's tick rounding). Saxo ships ONE ``Price`` whose
+    meaning follows ``OpenOrderType``: the trigger for a stop, the limit for a
+    limit.
+    """
+
+    def test_a_stop_row_surfaces_its_trigger(self):
+        row = {
+            "OrderId": "5441062670",
+            "Uic": 641,
+            "BuySell": "Sell",
+            "OpenOrderType": "StopIfTraded",
+            "Amount": 1.0,
+            "Price": 30.39,
+            "Status": "Working",
+            "FilledAmount": 0.0,
+        }
+        self.assertEqual(_make_broker()._to_order_state(row).resting_price, 30.39)
+
+    def test_a_limit_row_surfaces_its_limit_through_the_same_field(self):
+        row = {
+            "OrderId": "2",
+            "Uic": 43070,
+            "BuySell": "Sell",
+            "OpenOrderType": "Limit",
+            "Amount": 4.0,
+            "Price": 75.8,
+            "Status": "Working",
+            "FilledAmount": 0.0,
+        }
+        self.assertEqual(_make_broker()._to_order_state(row).resting_price, 75.8)
+
+    def test_a_row_without_a_price_is_None_never_zero(self):
+        # 0.0 is a LEGAL price, so defaulting to it would be a lie about where
+        # the order rests. Absent must stay absent.
+        row = {
+            "OrderId": "3",
+            "Uic": 43070,
+            "BuySell": "Sell",
+            "OpenOrderType": "Market",
+            "Amount": 4.0,
+            "Status": "Working",
+            "FilledAmount": 0.0,
+        }
+        self.assertIsNone(_make_broker()._to_order_state(row).resting_price)
+
+
 class TestPrecheckSetsErrorCode(unittest.TestCase):
     """Rejection carries the verbatim Saxo ErrorCode (structured, not parsed)."""
 

@@ -28,7 +28,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import entry_trails, safety, status_snapshot
-from broker_contract.contract import AccountSnapshot, InstrumentRef, Position
+from broker_contract.contract import AccountSnapshot, InstrumentRef, OrderState, Position
 
 _NOW = dt.datetime(2026, 9, 9, 12, 0, tzinfo=dt.UTC)
 _ACCOUNT_CCY = "PLN"
@@ -74,19 +74,11 @@ def _position(
     )
 
 
-@dataclass
-class _FakeOrder:
-    order_id: str
-    status: Any
-    instrument: InstrumentRef | None
-    filled_quantity: float
-    raw_status: str
-    uic: int | None = None
-    side: str | None = None
-    order_type: str | None = None
-    amount: float | None = None
-    external_reference: str | None = None
-    order_relation: str | None = None
+# There is no fake order type here on purpose. A hand-rolled stand-in that
+# mirrors `OrderState` field-for-field drifts SILENTLY the moment the contract
+# grows one — which is exactly what happened when #1393 added `resting_price`
+# and every status test failed with an AttributeError from the renderer. The
+# real frozen dataclass costs nothing to construct and cannot drift.
 
 
 class _FakeBroker:
@@ -143,10 +135,10 @@ def _submission(order_id: str, *, ticker: str = "KO", entry: float = 100.0, qty:
     }
 
 
-def _working_order(order_id: str) -> _FakeOrder:
+def _working_order(order_id: str) -> OrderState:
     from broker_contract.contract import OrderStatus
 
-    return _FakeOrder(
+    return OrderState(
         order_id=order_id,
         status=OrderStatus.WORKING,
         instrument=_instrument(),
