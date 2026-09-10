@@ -27,10 +27,11 @@
 	} from '$lib/edge';
 	import {
 		defaultDir,
-		isSortKeyVisible,
+		sortOnViewChange,
 		sortOutcomes,
 		type SortDir,
-		type SortKey
+		type SortKey,
+		type SortState
 	} from '$lib/edgeSort';
 	import { createRowWindow } from '$lib/virtualRows.svelte';
 	import EdgeOutcomesFilter from '$lib/components/EdgeOutcomesFilter.svelte';
@@ -112,7 +113,17 @@
 	let sortDir = $state<SortDir>('desc');
 	const valueLabel = $derived(filter === 'terminal' ? 'excess return' : 'open R');
 
+	// The sort a view switch stepped aside, held for the return trip (see
+	// `setFilter`); null when nothing is held. A plain non-reactive `let` — it is
+	// written and read only inside these two handlers, never in a `$derived`, an
+	// `$effect` or the template, so it needs no place in the reactive graph (same
+	// reasoning as `requestedClassKey` / `outcomesSeq` below).
+	let stashedSort: SortState | null = null;
+
 	function toggleSort(key: SortKey) {
+		// A sort the reader picks by hand supersedes anything the view switch
+		// stepped aside, so the return trip must not undo this choice.
+		stashedSort = null;
 		if (sortKey === key) {
 			sortDir = sortDir === 'asc' ? 'desc' : 'asc';
 		} else {
@@ -122,14 +133,18 @@
 	}
 
 	// Switching the view can hide the active sort column (terminal-only `closed`
-	// / `book` have no ongoing column). Fall back to `brief` so the sort indicator
-	// never lands on an invisible header.
+	// / `book` have no ongoing column), so the sort steps aside onto `brief` and
+	// is held here until the reader returns to a view that can show it. Holding
+	// it matters: without the restore the terminal table came back on `brief`
+	// desc, and that ordering buries every TIME_STOP row (old brief_date, recent
+	// matured_at) below the quickly-resolved ones. `sortOnViewChange` owns the
+	// rule; a hand-picked sort clears the held one in `toggleSort`.
 	function setFilter(next: Filter) {
 		filter = next;
-		if (!isSortKeyVisible(sortKey, next)) {
-			sortKey = 'brief';
-			sortDir = defaultDir('brief');
-		}
+		const outcome = sortOnViewChange({ key: sortKey, dir: sortDir }, stashedSort, next);
+		sortKey = outcome.sort.key;
+		sortDir = outcome.sort.dir;
+		stashedSort = outcome.stashed;
 	}
 
 	// Full table width: the leading expand chevron + 8 sortable headers (ticker,
