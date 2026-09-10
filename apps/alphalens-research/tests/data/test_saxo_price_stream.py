@@ -2044,5 +2044,121 @@ class TestSessionWindowGate(unittest.TestCase):
         self.assertEqual(values[-1], 0, "the final reader-down emit must report awake")
 
 
+class TestStreamIsReceiving(unittest.TestCase):
+    """``is_receiving()`` answers ONE question — is this stream currently
+    hearing from the venue — kept separate from "how old may a price be"
+    (#1397).
+
+    Measured 2026-09-10 in session: uic 641 legitimately went 41.7 s between
+    restatements while the stream was demonstrably alive, so per-instrument
+    quote age cannot double as a stream-health test. It is also why this is
+    NOT merely a silence timer: a quiet instrument and a dead socket look the
+    same for tens of seconds, so the conditions that are known IMMEDIATELY
+    (a failed connection, a sleeping session, a stopped reader) must answer
+    before the timer, which is left covering only a half-open socket.
+    """
+
+    def _stream(self):
+        clock = _SteppingClock(_T0)
+        stream = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider(), clock=clock)
+        stream.ensure_subscribed({5}, scope="t")
+        return clock, stream
+
+    def test_a_stream_that_never_heard_anything_is_not_receiving(self):
+        _, stream = self._stream()
+        self.assertFalse(stream.is_receiving())
+
+    def test_a_quote_frame_makes_it_receiving(self):
+        _, stream = self._stream()
+        stream._apply_frame(_px_frame(1))
+        self.assertTrue(stream.is_receiving())
+
+    def test_a_control_frame_is_logged_once_per_interval_not_once_per_frame(self):
+        """Observability for the #1397 follow-up: Saxo's `_heartbeat` is said to
+        carry a `Reason` telling a disabled subscription apart from a quiet
+        market — a distinction our timer cannot make. Nothing branches on it
+        yet, because a gate built on a payload nobody has seen is how a
+        plausible story becomes a real-money bug.
+
+        A heartbeat lands about every 30 s PER SUBSCRIPTION, so the line is
+        throttled; the second frame in the same interval must stay silent.
+        """
+        _, stream = self._stream()
+        payload = b'[{"ReferenceId":"_heartbeat","Heartbeats":[{"OriginatingReferenceId":"P1","Reason":"NoNewData"}]}]'
+
+        with self.assertLogs(
+            "alphalens_pipeline.data.alt_data.saxo_price_stream", level="INFO"
+        ) as caught:
+            stream._apply_frame(_build_frame(1, "_heartbeat", payload))
+            stream._apply_frame(_build_frame(2, "_heartbeat", payload))
+
+        control_lines = [line for line in caught.output if "control frame" in line]
+        self.assertEqual(len(control_lines), 1, caught.output)
+        self.assertIn("NoNewData", control_lines[0])
+
+    def test_a_control_frame_with_an_unreadable_payload_still_does_not_raise(self):
+        """A logging path must never be able to break the stream. The payload is
+        raw bytes of whatever Saxo sent, so it is truncated and repr'd, never
+        decoded."""
+        _, stream = self._stream()
+
+        with self.assertLogs("alphalens_pipeline.data.alt_data.saxo_price_stream", level="INFO"):
+            stream._apply_frame(_build_frame(1, "_heartbeat", b"\xff\xfe not json at all"))
+
+        self.assertTrue(stream.is_receiving())
+
+    def test_a_control_frame_also_counts_as_hearing_from_the_venue(self):
+        """Saxo sends ``_heartbeat`` on a subscription with no new data, so a
+        quiet market keeps proving the socket is alive. Counting only quote
+        rows would leave a silent-but-healthy stream indistinguishable from a
+        dead one — the confusion this ticket exists to remove."""
+        _, stream = self._stream()
+        stream._apply_frame(_build_frame(1, "_heartbeat", b"[]"))
+        self.assertTrue(stream.is_receiving())
+
+    def test_silence_inside_the_bound_still_counts_as_receiving(self):
+        clock, stream = self._stream()
+        stream._apply_frame(_px_frame(1))
+        clock.advance(sps._MAX_FRAME_SILENCE_S - 1.0)
+        self.assertTrue(stream.is_receiving())
+
+    def test_silence_past_the_bound_stops_it_receiving(self):
+        clock, stream = self._stream()
+        stream._apply_frame(_px_frame(1))
+        clock.advance(sps._MAX_FRAME_SILENCE_S + 1.0)
+        self.assertFalse(stream.is_receiving())
+
+    def test_a_failed_connection_stops_it_receiving_immediately(self):
+        """The reason this is not a bare silence timer. A dropped connection is
+        KNOWN the instant the attempt fails, so it must not wait out the bound
+        — this is the one place the new design beats the 3 s age gate it
+        replaces rather than merely trading against it."""
+        _, stream = self._stream()
+        stream._apply_frame(_px_frame(1))
+        stream._consecutive_failures = 1
+        self.assertFalse(stream.is_receiving())
+
+    def test_a_sleeping_session_is_not_receiving(self):
+        _, stream = self._stream()
+        stream._apply_frame(_px_frame(1))
+        stream._session_asleep = True
+        self.assertFalse(stream.is_receiving())
+
+    def test_a_stopped_stream_is_not_receiving(self):
+        _, stream = self._stream()
+        stream._apply_frame(_px_frame(1))
+        stream._stop = True
+        self.assertFalse(stream.is_receiving())
+
+    def test_the_create_snapshot_counts_as_hearing_from_the_venue(self):
+        """The create response's ``Snapshot.Data`` is a fresh restatement of
+        every subscribed uic straight from the venue. Withholding it because
+        the WebSocket has not spoken YET would discard the newest data we
+        hold; a genuinely dead socket just starts its silence from here."""
+        _, stream = self._stream()
+        stream._apply_create_snapshot({"Snapshot": {"Data": [_row(Uic=5)]}})
+        self.assertTrue(stream.is_receiving())
+
+
 if __name__ == "__main__":
     unittest.main()

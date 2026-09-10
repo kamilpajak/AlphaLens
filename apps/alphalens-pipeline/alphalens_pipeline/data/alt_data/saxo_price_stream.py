@@ -91,6 +91,23 @@ _BACKOFF_CEILING_S = 30.0
 # so 45s of TOTAL silence on an open socket means half-open — reconnect.
 _RECV_TIMEOUT_S = 45.0
 
+# How long TOTAL silence may last before `is_receiving` stops vouching for the
+# stream. Bounded on BOTH sides, and neither bound is free to move (#1397):
+#   * ABOVE Saxo's ~30s heartbeat on a subscription with no new data — below it
+#     a genuinely quiet market reads as a dead socket, which is the exact
+#     confusion this mechanism exists to end;
+#   * BELOW _RECV_TIMEOUT_S, so the answer turns honest no later than the
+#     reconnect a half-open socket triggers anyway.
+# It only ever has to catch a HALF-OPEN socket: a failed connection, a sleeping
+# session and a stopped reader are known immediately and answer before it.
+# Control-frame logging is observability for the #1397 follow-up, not a gate.
+# One line per interval: a heartbeat lands about every 30 s PER SUBSCRIPTION,
+# so an unthrottled line would bury the journal on a 19-uic stream.
+_CONTROL_LOG_INTERVAL_S = 300.0
+_CONTROL_LOG_PAYLOAD_CHARS = 300
+
+_MAX_FRAME_SILENCE_S = 40.0
+
 # With zero desired uics the reader holds no WebSocket (idle connections get
 # killed by the venue and turn into failure storms); poll the desired set at
 # this cadence instead.
@@ -654,6 +671,8 @@ class SaxoPriceStream:
         self._consecutive_failures = 0
         self._live_uic_cache: dict[tuple[str, str], int] = {}
         self._last_frame_ts = 0
+        # Throttle anchor for control-frame logging (observability only).
+        self._last_control_log_ts: dt.datetime | None = None
         self._last_gauge_emit = 0.0
 
         self._stop = False
@@ -663,6 +682,34 @@ class SaxoPriceStream:
 
     def get(self, uic: int) -> Quote | None:
         return self.cache.get(uic)
+
+    def is_receiving(self) -> bool:
+        """Is this stream currently hearing from the venue? (#1397)
+
+        Deliberately NOT folded into :meth:`get`: that answers a PER-UIC
+        question, and a caller asking about one instrument must not silently
+        receive a verdict about the whole connection — the reader server would
+        then serve a ``null`` indistinguishable from "no such quote cached".
+
+        Deliberately NOT a bare silence timer either. Measured in session on
+        2026-09-10, uic 641 went 41.7s between restatements with the stream
+        demonstrably alive, while Saxo's heartbeat puts the floor for calling a
+        socket dead at ~30s: a quiet instrument and a dead stream are the same
+        size in seconds, and no threshold separates them. So the conditions the
+        stream KNOWS answer first, and the timer is left covering only what
+        none of them can see — a half-open socket.
+
+        The split of ownership this creates is the point of the ticket: the
+        stream owns "is my connection healthy" (heartbeat cadence, recv
+        timeout — its own mechanics), and the decision layer keeps owning "how
+        old may a price be" (``DEFAULT_MAX_AGE_S``).
+        """
+        if self._stop or self._session_asleep or self._consecutive_failures > 0:
+            return False
+        last = self._last_frame_ts
+        if not last:  # nothing has ever arrived — there is nothing to vouch for
+            return False
+        return (self._clock().timestamp() - last) <= _MAX_FRAME_SILENCE_S
 
     def drain_running_low(
         self, uic: int, *, consumer: str = _DEFAULT_LATCH_CONSUMER
@@ -834,6 +881,10 @@ class SaxoPriceStream:
         if not isinstance(rows, list):
             return
         received_at = self._clock()
+        # The venue restating every subscribed uic is at least as good a proof
+        # of life as one delta, so it stamps liveness like a frame does. If the
+        # socket really is dead the silence simply starts counting from here.
+        self._last_frame_ts = int(received_at.timestamp())
         for row in rows:
             if isinstance(row, dict):
                 self.cache.apply(row, received_at=received_at)
@@ -970,9 +1021,8 @@ class SaxoPriceStream:
             self._recreate_subscription()
             while not self._stop:
                 frame = await asyncio.wait_for(conn.recv(), timeout=_RECV_TIMEOUT_S)
-                self._apply_frame(frame)
+                self._apply_frame(frame)  # stamps _last_frame_ts
                 self._consecutive_failures = 0  # a delivered frame proves the connection is live
-                self._last_frame_ts = int(time.time())
                 self._emit_stream_gauge(reader_up=True)
                 if self._sub_dirty.is_set():
                     # ensure_subscribed changed the desired set, or the server
@@ -1032,6 +1082,11 @@ class SaxoPriceStream:
         if isinstance(frame, str):
             frame = frame.encode("utf-8")
         now = self._clock()
+        # Liveness is stamped HERE, not at the call site, because "a frame
+        # arrived" is exactly what this method means — and it must count a
+        # CONTROL frame too (`_heartbeat` is how a subscription with no new
+        # data proves the socket is alive), which the rows loop below drops.
+        self._last_frame_ts = int(now.timestamp())
         # One desired-set snapshot per frame: a late delta racing past
         # _recreate_subscription's final prune must not resurrect a uic
         # ensure_subscribed removed (no dirty flag would be left to prune it
@@ -1047,9 +1102,41 @@ class SaxoPriceStream:
                 self._sub_dirty.set()
                 continue
             if msg.reference_id.startswith(self._CONTROL_REF_PREFIX):
+                self._note_control_frame(msg, now)
                 continue  # heartbeat / disconnect: liveness only, never a quote row
             self._apply_quote_message(msg, allowed, now)
         self._maybe_reclaim()
+
+    def _note_control_frame(self, msg: StreamMessage, now: dt.datetime) -> None:
+        """Log a control frame's ref and payload, throttled to one per interval.
+
+        OBSERVABILITY ONLY — nothing branches on this, deliberately. Saxo
+        documents that ``_heartbeat`` carries ``OriginatingReferenceId`` and a
+        ``Reason`` in {NoNewData, SubscriptionTemporarilyDisabled,
+        SubscriptionPermanentlyDisabled}. If that holds on real traffic it is a
+        STRONGER liveness signal than any timer, because the venue says outright
+        that the subscription is alive with nothing new — and, more importantly,
+        a DISABLED subscription currently looks exactly like a quiet market.
+
+        Building a gate on a payload nobody here has seen is how a plausible
+        story becomes a real-money bug, so this prints the shape and stops. The
+        gate is a separate ticket, once the shape is confirmed.
+
+        Throttled because a heartbeat arrives about every 30 s per subscription
+        and an unthrottled line per control frame would bury the journal.
+        """
+        last = self._last_control_log_ts
+        if last is not None and (now - last).total_seconds() < _CONTROL_LOG_INTERVAL_S:
+            return
+        self._last_control_log_ts = now
+        # Payload is raw bytes and may be any shape; truncate and never decode
+        # strictly, because a logging path must not be able to raise.
+        preview = msg.payload[:_CONTROL_LOG_PAYLOAD_CHARS]
+        logger.info(
+            "saxo price stream: control frame ref=%r payload=%r (observability only, #1397)",
+            msg.reference_id,
+            preview,
+        )
 
     def _apply_quote_message(self, msg: StreamMessage, allowed: set[int], now: dt.datetime) -> None:
         """Decode one quote-bearing stream message and fold its rows into the

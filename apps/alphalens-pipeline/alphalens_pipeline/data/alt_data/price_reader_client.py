@@ -62,6 +62,21 @@ _RECV_CHUNK = 65536
 _MAX_REPLY_BYTES = 64 * 1024
 
 
+class _ReaderRefusedError(Exception):
+    """The reader ANSWERED and declined (a well-formed ``ok:false``).
+
+    Distinct from every transport doubt on purpose (#1397): a refusal proves
+    the socket works and the reader is alive, so it must not close the
+    connection or open the down-cooldown. Without that distinction one op the
+    reader does not know — the expectable state while a new daemon runs in
+    front of a not-yet-restarted reader, since both share one host venv —
+    would take the QUOTE path down with it."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 @dataclass(frozen=True)
 class RemoteQuote:
     """The wire form of a quote, shaped like the in-process ``Quote``.
@@ -118,6 +133,7 @@ class RemoteQuoteSource:
         self.connect_attempts = 0
         self.failures = 0
         self._down_logged = False
+        self._refusals_logged: set[str] = set()
 
     # ----- QuoteSource -----
 
@@ -163,6 +179,15 @@ class RemoteQuoteSource:
     def ensure_subscribed(self, uics: set[int] | list[int], *, scope: str = "default") -> None:
         self._call("subscribe", scope=scope, uics=sorted(set(uics)))
 
+    def is_receiving(self) -> bool:
+        """Is the reader's stream hearing from the venue? (#1397)
+
+        Anything short of an explicit ``true`` is ``False``: a reader that is
+        down, wedged, or too old to know the op cannot vouch for a stream, and
+        this answer gates real-money orders — so the doubt resolves to "do not
+        act", never to "assume live"."""
+        return self._call("is_receiving") is True
+
     # ----- transport -----
 
     def close(self) -> None:
@@ -191,6 +216,11 @@ class RemoteQuoteSource:
                 return None
             try:
                 return self._exchange(sock, op, args)
+            except _ReaderRefusedError as refusal:
+                # Answered, just not with a result. The connection is proven
+                # good, so it is kept and no cooldown starts — see the class.
+                self._log_refusal(op, refusal.code)
+                return None
             # Deliberately broad: every transport doubt is a veto, never a raise
             # into the tick (see the module docstring).
             except Exception as exc:
@@ -208,10 +238,19 @@ class RemoteQuoteSource:
         if not isinstance(reply, dict):
             raise ValueError("reply is not an object")
         if not reply.get("ok"):
-            # A refusal is a FAILURE (it means the reader could not answer),
-            # unlike `ok: true, result: null`, which is a legitimate no-data.
-            raise ValueError(f"reader refused {op}: {reply.get('error')}")
+            # A refusal is NOT a transport failure: `ok:false` arrived over a
+            # working socket. It is still "no result" for the caller, exactly
+            # like `ok: true, result: null`.
+            raise _ReaderRefusedError(str(reply.get("error")))
         return reply.get("result")
+
+    def _log_refusal(self, op: str, code: str) -> None:
+        """One warning per distinct error code, so a refused op is visible
+        without a line per tick per uic."""
+        if code in self._refusals_logged:
+            return
+        self._refusals_logged.add(code)
+        logger.warning("price-reader client: reader refused %s (%s)", op, code)
 
     def _read_line(self, sock: socket.socket) -> bytes:
         """Read one newline-terminated reply, BOUNDED.

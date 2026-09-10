@@ -62,7 +62,7 @@ class Quotelike(Protocol):
 
 @runtime_checkable
 class QuoteSource(Protocol):
-    """The five calls a price feed makes against its quote source."""
+    """The six calls a price feed makes against its quote source."""
 
     def get(self, uic: int) -> Quotelike | None:
         """The latest merged quote for ``uic``, or ``None`` when none is cached."""
@@ -91,4 +91,23 @@ class QuoteSource(Protocol):
     def ensure_subscribed(self, uics: set[int] | list[int], *, scope: str = "default") -> None:
         """Declare the caller's desired uic set for ``scope``; the source owns
         the wire-level subscription (the union across scopes)."""
+        ...
+
+    def is_receiving(self) -> bool:
+        """Is this source currently hearing from the venue? (#1397)
+
+        A WHOLE-SOURCE question, kept off :meth:`get` on purpose: a per-uic
+        read must not smuggle back a verdict about the connection, because the
+        ``None`` it would return is indistinguishable from "no such quote".
+        Answering it separately is what lets the decision layer stop using
+        per-instrument quote AGE as a proxy for stream health — a proxy the
+        measurements in #1397 showed cannot work, since a quiet instrument and
+        a dead socket both go silent for tens of seconds.
+
+        REQUIRED, not an optional capability like
+        :class:`~broker_contract.price_feed.SupportsSessionLow`: a source that
+        could not answer would have to be assumed live, and failing open on a
+        question that gates real-money orders is the one direction forbidden
+        here. Every implementation answers ``False`` on any doubt.
+        """
         ...

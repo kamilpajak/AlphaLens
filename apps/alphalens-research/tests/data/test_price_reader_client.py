@@ -20,6 +20,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from alphalens_pipeline.data.alt_data.price_reader_client import RemoteQuoteSource
 from alphalens_pipeline.data.alt_data.price_reader_server import PriceReaderServer
@@ -47,6 +48,7 @@ class _FakeStream:
         self.reseeds: list[tuple[str, int, float]] = []
         self.resolve_calls: list[tuple[str, str]] = []
         self.registered: list[str] = []
+        self.receiving = True
 
     def get(self, uic: int):
         return self.quotes.get(uic)
@@ -63,6 +65,9 @@ class _FakeStream:
 
     def ensure_subscribed(self, uics, *, scope: str = "default") -> None:
         self.subscribed[scope] = set(uics)
+
+    def is_receiving(self) -> bool:
+        return self.receiving
 
     def register_latch_consumer(self, consumer: str) -> None:
         self.registered.append(consumer)
@@ -163,6 +168,25 @@ class TestRoundTrip(_ServedTestCase):
         self.assertEqual(len(set(self.stream.registered)), 1)
 
 
+class TestStreamHealthOverTheWire(_ServedTestCase):
+    """#1397: the remote daemon must be able to ask about the CONNECTION, not
+    only about a uic — a quote's ``null`` cannot express "the stream is dark"."""
+
+    def test_stream_health_survives_the_wire_both_ways(self):
+        self.assertTrue(self.client.is_receiving())
+        self.stream.receiving = False
+        self.assertFalse(self.client.is_receiving())
+
+    def test_a_dark_stream_still_serves_its_last_quote(self):
+        """The two answers stay independent on the wire, so the DECISION layer
+        is what combines them — the whole point of not folding health into
+        ``get``."""
+        self.stream.quotes[211] = _FakeQuote(211, 18.61, 18.62)
+        self.stream.receiving = False
+        self.assertIsNotNone(self.client.get(211))
+        self.assertFalse(self.client.is_receiving())
+
+
 class TestEveryFailureIsAVeto(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -182,6 +206,7 @@ class TestEveryFailureIsAVeto(unittest.TestCase):
         self.assertIsNone(client.get(211))
         self.assertIsNone(client.drain_running_low(211))
         self.assertIsNone(client.live_uic_for("MRVI", exchange_mic="XNAS"))
+        self.assertFalse(client.is_receiving())  # unknown health is never "live"
         client.reseed_running_low(211, 1.0)  # must not raise
         client.ensure_subscribed([211], scope="exits")  # must not raise
 
@@ -212,6 +237,27 @@ class TestEveryFailureIsAVeto(unittest.TestCase):
         self.addCleanup(server.stop)
         client = self._client()
         self.assertIsNone(client.get(211))
+
+    def test_a_reader_too_old_to_know_the_op_still_serves_quotes(self):
+        """The deploy-ordering hazard, closed in code instead of left as a
+        runbook rule. The reader and both daemons share one host venv, so a
+        restart order that puts a NEW daemon in front of an OLD reader is
+        expectable. A refusal is the reader ANSWERING — the transport
+        demonstrably works — so it must not tear the connection down or open a
+        cooldown, or one unknown op would take the quote path down with it and
+        the ladder would stop for a reason that has nothing to do with the
+        market."""
+        stream = _FakeStream()
+        stream.quotes[211] = _FakeQuote(211, 18.61, 18.62)
+        older = {k: v for k, v in PriceReaderServer._OPS.items() if k != "is_receiving"}
+        with mock.patch.object(PriceReaderServer, "_OPS", older):
+            server = PriceReaderServer(stream, self.path, heartbeat_interval_s=3600)
+            server.start()
+            self.addCleanup(server.stop)
+            client = self._client()
+            self.assertFalse(client.is_receiving())
+            self.assertIsNotNone(client.get(211))
+            self.assertEqual(client.failures, 0, "an answered refusal is not a transport failure")
 
     def test_a_wedged_reader_times_out_instead_of_stalling_the_tick(self):
         """A reader that accepts and never answers must not pin the daemon: the

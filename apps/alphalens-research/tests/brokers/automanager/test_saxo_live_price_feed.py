@@ -5,6 +5,7 @@ import unittest
 
 from alphalens_pipeline.brokers.automanager.saxo_live_price_feed import SaxoLivePriceFeed
 from alphalens_pipeline.data.alt_data.saxo_price_stream import Quote
+from broker_contract import price_feed
 
 _NOW = dt.datetime(2026, 8, 7, 13, 48, 0, tzinfo=dt.UTC)
 
@@ -15,6 +16,12 @@ class _Stream:
         self.subscribed: list[int] = []
         self._running_low = dict(running_low or {})
         self.reseed_calls: list[tuple[int, float]] = []
+        self.receiving = True
+        self.receiving_calls = 0
+
+    def is_receiving(self) -> bool:
+        self.receiving_calls += 1
+        return self.receiving
 
     def ensure_subscribed(self, uics):
         self.subscribed = list(uics)
@@ -45,10 +52,10 @@ def _quote(**over) -> Quote:
     return Quote(**base)
 
 
-def _feed(quote, *, sim_to_live=None):
+def _feed(quote, *, sim_to_live=None, stream=None):
     mapping = sim_to_live if sim_to_live is not None else {211: 211}
     return SaxoLivePriceFeed(
-        stream=_Stream(quote),
+        stream=stream if stream is not None else _Stream(quote),
         resolve_live_uic=mapping.get,
         clock=lambda: _NOW,
     )
@@ -67,8 +74,18 @@ class TestSaxoLivePriceFeed(unittest.TestCase):
         self.assertIsNone(_feed(_quote(delayed_by_minutes=15)).latest(211))
 
     def test_stale_quote_is_vetoed(self):
-        stale = _quote(event_time=_NOW - dt.timedelta(seconds=10))
+        """Past the bound the veto still fires. The age used to be 10 s, which
+        the retired 3 s bound rejected and the measured 45 s bound accepts —
+        uic 641 spent 54% of the lull window above 3 s while the stream was
+        demonstrably alive, which is the whole reason the bound moved (#1397)."""
+        stale = _quote(event_time=_NOW - dt.timedelta(seconds=price_feed.DEFAULT_MAX_AGE_S + 15.0))
         self.assertIsNone(_feed(stale).latest(211))
+
+    def test_a_ten_second_quote_now_passes_because_that_was_the_defect(self):
+        """The counterexample to the test above, and the behaviour change
+        itself: a name that simply had nothing new to say is not a stale price."""
+        quiet = _quote(event_time=_NOW - dt.timedelta(seconds=10))
+        self.assertIsNotNone(_feed(quiet).latest(211))
 
     def test_missing_side_is_vetoed(self):
         self.assertIsNone(_feed(_quote(bid=None)).latest(211))
@@ -154,6 +171,69 @@ class TestSaxoLivePriceFeedSessionLow(unittest.TestCase):
         feed = SaxoLivePriceFeed(stream=stream, resolve_live_uic={}.get, clock=lambda: _NOW)
         feed.reseed_session_low(211, 313.70)  # must not raise
         self.assertEqual(stream.reseed_calls, [])
+
+
+class TestStreamHealthIsItsOwnCondition(unittest.TestCase):
+    """#1397. The adapter asks TWO questions that used to be one: is the source
+    hearing from the venue, and is this quote young enough to trade on.
+
+    They were conflated in a single 3 s age bound, whose docstring justified
+    itself as a dead-stream detector. Measured in session on 2026-09-10, uic
+    641 was vetoed on 70% of samples with the stream demonstrably alive (its
+    own restatement interval reaching 41.7 s), because the bound was really
+    measuring how often Saxo speaks about THAT instrument.
+    """
+
+    def _parts(self, **quote_over):
+        stream = _Stream(_quote(**quote_over))
+        return stream, _feed(None, stream=stream)
+
+    def test_a_live_stream_and_a_young_quote_produce_a_point(self):
+        _, feed = self._parts()
+        self.assertIsNotNone(feed.latest(211))
+
+    def test_a_dark_stream_vetoes_even_a_perfectly_young_quote(self):
+        """The condition the age bound used to stand in for, now asked
+        directly — and answered immediately on a failed connection rather than
+        after a timeout."""
+        stream, feed = self._parts()
+        stream.receiving = False
+        self.assertIsNone(feed.latest(211))
+
+    def test_a_live_stream_does_not_rescue_a_quote_past_the_age_bound(self):
+        """The other half: liveness is not a licence to trade on any price.
+        The bound still owns "how old may a price be"."""
+        _, feed = self._parts(
+            event_time=_NOW - dt.timedelta(seconds=price_feed.DEFAULT_MAX_AGE_S + 1.0)
+        )
+        self.assertIsNone(feed.latest(211))
+
+    def test_a_quote_older_than_the_retired_three_second_bound_now_passes(self):
+        """The behaviour change this ticket exists for, pinned against the
+        MEASURED distribution rather than a round number: uic 641's median age
+        in session was 4.7 s, which the old bound rejected."""
+        _, feed = self._parts(event_time=_NOW - dt.timedelta(seconds=4.7))
+        self.assertIsNotNone(feed.latest(211))
+
+    def test_health_is_asked_per_call_rather_than_trusted_from_the_caller(self):
+        """A precondition a caller must remember is a precondition that gets
+        forgotten; the round trip is a local UNIX call."""
+        stream, feed = self._parts()
+        feed.latest(211)
+        feed.latest(211)
+        self.assertEqual(stream.receiving_calls, 2)
+
+    def test_a_dark_stream_is_reported_once_rather_than_per_uic_per_tick(self):
+        """Silence was the #1392 lesson; a line per uic per tick is the
+        opposite failure. One throttled line names the veto."""
+        stream, feed = self._parts()
+        stream.receiving = False
+        with self.assertLogs(
+            "alphalens_pipeline.brokers.automanager.saxo_live_price_feed", level="WARNING"
+        ) as caught:
+            for _ in range(5):
+                feed.latest(211)
+        self.assertEqual(len(caught.records), 1, caught.output)
 
 
 if __name__ == "__main__":
