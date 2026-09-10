@@ -2240,6 +2240,11 @@ class SaxoBroker:
             amount=_opt_float(row.get("Amount")),
             external_reference=_opt_str(row.get("ExternalReference")),
             order_relation=_opt_str(row.get("OrderRelation")),
+            # Where the order RESTS (#1393). Measured on the LIVE book
+            # 2026-09-09: 6/6 open rows carried `Price`, matching the journaled
+            # intent for that uic after Saxo's tick rounding. `_opt_float`
+            # keeps an absent price absent instead of collapsing it to 0.0.
+            resting_price=_opt_float(row.get("Price")),
         )
 
     def _cache_instrument(self, key: tuple[str, str], ref: InstrumentRef) -> None:

@@ -557,6 +557,32 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertEqual(envelope["schema"], "alphalens.broker.orders/v1")
         self.assertEqual(len(envelope["orders"]), 1)
         row = envelope["orders"][0]
+        # TWO assertions, not one (#1393). The key set is DERIVED from the
+        # contract, so a field added to `OrderState` and never mapped fails
+        # here instead of passing quietly — which is exactly how
+        # `resting_price` stayed invisible until an operator needed it. The
+        # value assertion stays because a derived key set alone degrades
+        # "surfaced" to "the key exists": a field mapped to None would satisfy
+        # it while carrying nothing.
+        #
+        # SCOPE: this guards the JSON row ONLY. A field can be mapped here and
+        # still never reach a human column, and this test would pass. That gap
+        # is left open deliberately, because the mechanical version of it would
+        # be WRONG: several contract fields have no column of their own on
+        # purpose — `uic` is folded into the `instrument` cell, `label` is
+        # appended to `ref`, and `avg_fill_price` does not belong to the
+        # open-orders view at all. A "every field has a column" assertion would
+        # need an exclusion list, and an exclusion list is how an anti-rot test
+        # rots. Human rendering is covered per field, where it matters, by
+        # `test_a_resting_price_reaches_both_renderings` and the sibling
+        # placeholder tests.
+        import dataclasses
+
+        contract_fields = {f.name for f in dataclasses.fields(OrderState)}
+        # `avg_fill_price` belongs to the audit path (a FILL price), not to the
+        # open-orders view; `label` is this renderer's own decoration of the
+        # external reference, not a contract field.
+        self.assertEqual(set(row), (contract_fields - {"avg_fill_price"}) | {"label"})
         self.assertEqual(
             row,
             {
@@ -572,9 +598,46 @@ class TestOrdersAndCancel(unittest.TestCase):
                 "external_reference": "KO-2026-07-16-entry-t0",
                 "label": "KO E1",
                 "order_relation": "StandAlone",
+                "resting_price": None,
             },
         )
         self.assertEqual(harness.broker.place_calls, [])
+
+    def test_a_resting_price_reaches_both_renderings(self):
+        # Found reviewing my own PR (#1393): the dash-count tests prove a
+        # column EXISTS, and the exact-dict test pins `resting_price: None`
+        # because the default fake carries no price — so nothing exercised a
+        # REAL level through either rendering. "The column is there" is not
+        # "the number arrives".
+        harness = _SubmitHarness(self)
+        harness.broker.open_orders = [
+            OrderState(
+                "S-1",
+                OrderStatus.WORKING,
+                _instrument(),
+                0.0,
+                "Working",
+                uic=641,
+                side="SELL",
+                order_type="StopIfTraded",
+                amount=1.0,
+                external_reference="RHI-2026-09-02-entry-t0-fire-stop-0",
+                order_relation="StandAlone",
+                resting_price=30.39,
+            )
+        ]
+        from alphalens_cli.commands.broker import broker_app
+
+        as_json = self.runner.invoke(broker_app, ["orders", "--format", "json"])
+        self.assertEqual(as_json.exit_code, 0, msg=as_json.output)
+        self.assertEqual(json.loads(as_json.stdout)["orders"][0]["resting_price"], 30.39)
+
+        human = self.runner.invoke(broker_app, ["orders"])
+        self.assertEqual(human.exit_code, 0, msg=human.output)
+        (line,) = [line for line in human.stdout.splitlines() if line.startswith("S-1")]
+        # A whole field, not a substring: `assertIn` on the raw line would also
+        # pass if the digits turned up inside some other cell.
+        self.assertIn("30.39", line.split(), line)
 
     def test_orders_human_row_carries_side_type_amount_ref_and_label(self):
         _SubmitHarness(self)
@@ -648,9 +711,10 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertNotIn("?", human.stdout)
         self.assertNotIn("None", human.stdout)
         (line,) = [line for line in human.stdout.splitlines() if line.startswith("X-1")]
-        # side, type, amount, instrument, ref, relation -> six explicit `-`
-        # placeholders; filled_quantity is a real 0.0 and renders as `0`.
-        self.assertEqual(line.split().count("-"), 6, line)
+        # side, type, amount, price, instrument, ref, relation -> seven explicit
+        # `-` placeholders; filled_quantity is a real 0.0 and renders as `0`.
+        # (Six before #1393 added the resting-price column.)
+        self.assertEqual(line.split().count("-"), 7, line)
         self.assertIn("raw=Working", line)
 
     def test_orders_rejects_an_unknown_format_before_any_broker_call(self):
@@ -688,8 +752,9 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertIsNone(json.loads(result.stdout)["orders"][0]["label"])
         human = self.runner.invoke(broker_app, ["orders"])
         (line,) = [line for line in human.stdout.splitlines() if line.startswith("R-1")]
-        # ref and relation are absent -> two placeholders, never a blank cell.
-        self.assertEqual(line.split().count("-"), 2, line)
+        # ref, relation and the resting price are absent -> three placeholders,
+        # never a blank cell. (Two before #1393 added the price column.)
+        self.assertEqual(line.split().count("-"), 3, line)
 
     def test_orders_empty_book_reads_no_open_orders(self):
         harness = _SubmitHarness(self)
