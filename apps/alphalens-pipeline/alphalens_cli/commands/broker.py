@@ -264,7 +264,10 @@ _SUGGESTIONS_BY_CODE: Mapping[str, tuple[Suggestion, ...]] = {
     ),
 }
 
-# How this invocation renders a failure. A module handle rather than a parameter
+# How this invocation renders a failure. CLI-ONLY: `broker manage` imports this
+# module, and the daemon must never set this — it has no `--format`, its output
+# is the journal and the log, and a daemon that flipped this would change how
+# every subsequent in-process refusal renders. A module handle rather than a parameter
 # because `_fail` is reached from helpers that never see the command's options
 # (`_guard_state_layout`, `_apply_env_option`), and threading it through 81 call
 # sites would be a worse trade. Set by `_resolve_format`, which every command
@@ -316,8 +319,13 @@ def _fail_with(
     # Never raise from the error path: a code that is somehow not registered
     # must still produce a readable refusal rather than a KeyError traceback on
     # top of whatever already went wrong. The AST gate in
-    # `test_broker_failure_contract_cli.py` is what keeps this from happening.
-    entry = _FAILURE_CODES.get(code) or _FAILURE_CODES["unclassified"]
+    # `test_broker_failure_contract_cli.py` is what keeps this from happening —
+    # but the gate only runs in CI, so the fallback also says so out loud rather
+    # than quietly publishing `unclassified` for what is really a typo.
+    entry = _FAILURE_CODES.get(code)
+    if entry is None:
+        logger.warning("unregistered failure code %r — reporting it as unclassified", code)
+        entry = _FAILURE_CODES["unclassified"]
     failure = Failure(
         code=entry.name,
         message=message,

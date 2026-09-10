@@ -464,6 +464,21 @@ class TheRegistryHonoursItsOwnRules(unittest.TestCase):
         self.assertIn("unclassified", _FAILURE_CODES)
         self.assertFalse(_FAILURE_CODES["unclassified"].retryable)
 
+    def test_an_unregistered_code_is_reported_and_logged_rather_than_raising(self) -> None:
+        """The error path must never crash — but a typo must not vanish either.
+
+        The AST gate below catches an unregistered code in CI. This is what
+        happens on the operator's machine if one ever slips past: the refusal
+        still renders, and the log says the code was not registered.
+        """
+        from alphalens_cli.commands.broker import _fail_with
+
+        with self.assertLogs("alphalens_cli.commands.broker", level="WARNING") as logs:
+            exit_exc = _fail_with("not_a_registered_code", "boom")
+
+        self.assertEqual(exit_exc.exit_code, 1)
+        self.assertIn("not_a_registered_code", logs.output[0])
+
     def test_a_plain_fail_reports_unclassified_and_keeps_exit_one(self) -> None:
         """``_fail`` stays, so the long tail of refusals is classified over time
         instead of being a precondition — and a machine still gets an object
