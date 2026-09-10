@@ -2999,11 +2999,12 @@ def stream_status_command(
     mutation, safe while the daemon runs. One internal result object rendered
     two ways (repo CLI doctrine); exit 4 when the textfile is absent (the
     daemon never ticked with streaming on, or the wrong --env)."""
-    from alphalens_pipeline.brokers.automanager import state_paths
+    from alphalens_pipeline.brokers.automanager import state_paths, unit_env
     from alphalens_pipeline.observability import textfile
 
     # `None` resolves through the shared seam (#1377): a bare invocation reads
     # the same instance `picks` / `watches` do, never a hardcoded sim.
+    requested = env
     env = env if env is not None else state_paths.broker_environment()
     resolved_format = _resolve_format(output_format)
     try:
@@ -3011,7 +3012,19 @@ def stream_status_command(
     except ValueError as exc:
         raise _fail(str(exc)) from exc
 
-    path = textfile._resolve_dir() / f"alphalens_domain_{job}.prom"
+    # Naming an instance selects WHOSE textfile directory to read (#1394).
+    # Without this the command resolved the instance but kept THIS shell's
+    # directory, so in a plain shell both instances looked under
+    # ~/.alphalens/metrics while the files sit in the units' own directory —
+    # and for SIM that file exists, so it reported "not found" about it.
+    # `_apply_env_option` cannot serve this: it never shells out for sim by
+    # design. A BARE invocation keeps its documented meaning (whatever this
+    # process's environment says) and shells out to nothing.
+    # `env` is already validated above, so the helper cannot hit its
+    # unknown-instance refusal here; `None` from it means "the host could not
+    # answer", and then this falls back exactly as before.
+    unit_dir = unit_env.textfile_dir_for_env(env) if requested is not None else None
+    path = Path(unit_dir or textfile._resolve_dir()) / f"alphalens_domain_{job}.prom"
     if not path.is_file():
         _emit_stream_status_missing(path, env=env, job=job)
         raise typer.Exit(code=_STREAM_STATUS_EXIT_NOT_FOUND)

@@ -18,6 +18,7 @@ suffix; a missing unit answering with an EMPTY payload and exit code 0).
 
 from __future__ import annotations
 
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -137,6 +138,63 @@ class TestParseEnvironmentFilesProperty(unittest.TestCase):
 
     def test_empty_property_is_no_files(self) -> None:
         self.assertEqual(unit_env.parse_environment_files_property(""), [])
+
+
+class TestTextfileDirForEnv(unittest.TestCase):
+    """The metrics directory the named instance's unit publishes (#1394).
+
+    `stream-status --env <x>` needs ONE path from the unit, not the whole
+    environment. Measured on the VPS 2026-09-10: `ALPHALENS_TEXTFILE_DIR` is in
+    the `Environment=` of BOTH units, while the shared `EnvironmentFile=`
+    carries keys (`ALPHA_VANTAGE_API_KEY` and friends) that this narrow read
+    deliberately never touches — `systemctl show -p Environment` returned 16
+    keys against the file's 19, and the file-only keys were absent from it.
+    """
+
+    _WITH_DIR = _UNIT_PAYLOAD + " ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile"
+
+    def test_both_instances_resolve_their_own_unit(self) -> None:
+        # sim is the case `_apply_env_option` cannot serve: it never shells out
+        # for sim by design (#1377), which is why this helper exists.
+        for env in ("sim", "live"):
+            with self.subTest(env=env):
+                seen: list[str] = []
+
+                def run(unit: str, prop: str, _seen: list[str] = seen) -> str:
+                    _seen.append(unit)
+                    return {"LoadState": "loaded", "Environment": self._WITH_DIR}[prop]
+
+                self.assertEqual(
+                    unit_env.textfile_dir_for_env(env, run=run),
+                    "/var/lib/node_exporter/textfile",
+                )
+                self.assertEqual(set(seen), {unit_env.unit_for_env(env)})
+
+    def test_no_systemctl_is_a_None_not_a_raise(self) -> None:
+        # A developer Mac has no user manager; the caller falls back to the
+        # process env, exactly as it behaves today.
+        self.assertIsNone(unit_env.textfile_dir_for_env("sim", run=_fake_run(missing=True)))
+
+    def test_a_hung_systemctl_is_a_None_not_a_raise(self) -> None:
+        # TimeoutExpired is a SubprocessError and NOT an OSError — the #1384
+        # lesson, where catching OSError alone let a hung probe abort a read.
+        def run(_unit: str, _prop: str) -> str:
+            raise subprocess.TimeoutExpired(cmd="systemctl", timeout=30)
+
+        self.assertIsNone(unit_env.textfile_dir_for_env("sim", run=run))
+
+    def test_a_unit_that_is_not_loaded_yields_None(self) -> None:
+        run = _fake_run(payload=self._WITH_DIR, load_state="not-found")
+        self.assertIsNone(unit_env.textfile_dir_for_env("live", run=run))
+
+    def test_a_unit_without_the_key_yields_None(self) -> None:
+        # The payload is a REAL one (the live rails), just without the metrics
+        # dir — so this cannot pass by accident on an empty payload.
+        self.assertIsNone(unit_env.textfile_dir_for_env("live", run=_fake_run()))
+
+    def test_an_unknown_instance_is_refused_not_silently_None(self) -> None:
+        with self.assertRaises(unit_env.UnitEnvError):
+            unit_env.textfile_dir_for_env("staging", run=_fake_run())
 
 
 class TestComposeLiveEnvironment(unittest.TestCase):
