@@ -95,7 +95,7 @@ export interface SortState {
 /** The shared column a stepped-aside sort falls back to. `brief` is the only
  *  date column both views render, so the fallback never lands on a hidden
  *  header. */
-export const VIEW_FALLBACK_SORT_KEY: SortKey = 'brief';
+const VIEW_FALLBACK_SORT_KEY: SortKey = 'brief';
 
 /** What a view switch does to the sort: the selection to apply now, plus the
  *  one held aside for the return trip (null when nothing is held). */

@@ -114,8 +114,11 @@
 	const valueLabel = $derived(filter === 'terminal' ? 'excess return' : 'open R');
 
 	// The sort a view switch stepped aside, held for the return trip (see
-	// `setFilter`); null when nothing is held.
-	let stashedSort = $state<SortState | null>(null);
+	// `setFilter`); null when nothing is held. A plain non-reactive `let` — it is
+	// written and read only inside these two handlers, never in a `$derived`, an
+	// `$effect` or the template, so it needs no place in the reactive graph (same
+	// reasoning as `requestedClassKey` / `outcomesSeq` below).
+	let stashedSort: SortState | null = null;
 
 	function toggleSort(key: SortKey) {
 		// A sort the reader picks by hand supersedes anything the view switch
