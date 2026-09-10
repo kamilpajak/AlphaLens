@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -191,6 +192,53 @@ def _systemctl_show(unit: str, prop: str) -> str:
 def _read_text(path: Path) -> str:
     """Read one environment file (the filesystem seam)."""
     return path.read_text(encoding="utf-8")
+
+
+def textfile_dir_for_env(env: str, *, run: Callable[[str, str], str] | None = None) -> str | None:
+    """The metrics directory the named instance's unit publishes, or ``None``.
+
+    Answers ONE question — "where does THIS instance write its textfiles" —
+    for a caller that must not inherit the instance's whole environment.
+    ``stream-status`` is that caller (#1394): it renders a Prometheus textfile
+    whose directory comes from ``ALPHALENS_TEXTFILE_DIR``, so naming an
+    instance without consulting its unit made it read ``~/.alphalens/metrics``
+    while the files sit in the unit's directory. That hit BOTH instances, and
+    the SIM one reported "not found" about a file that exists.
+
+    Reads ONLY ``LoadState`` and ``Environment`` — never the unit's
+    ``EnvironmentFile=``. That narrowness is load-bearing, not tidiness:
+    measured on the VPS 2026-09-10, ``systemctl show -p Environment`` returned
+    16 keys for the SIM unit against the shared file's 19, and the file-only
+    keys are credentials (``ALPHA_VANTAGE_API_KEY`` and friends). So this read
+    finds what it needs and provably leaves the secrets where they are, unlike
+    :func:`compose_live_environment`, which must read both because the LIVE
+    factory needs the credentials too.
+
+    ``None`` on ANY doubt — no systemctl, a unit that is not loaded, an empty
+    payload, or the key absent — so the caller can fall back to its own
+    resolution instead of failing. An UNKNOWN instance is a different thing and
+    still raises :class:`UnitEnvError`: that is a typo in the argument, not a
+    host that cannot answer.
+
+    The ``(OSError, subprocess.SubprocessError)`` pair matches
+    :func:`compose_live_environment` deliberately: ``TimeoutExpired`` is a
+    ``SubprocessError`` and NOT an ``OSError``, and catching only the latter is
+    what let a hung ``systemctl`` abort a read in #1384.
+    """
+    # Lazy, mirroring every other `brokers` -> `observability` import in this
+    # package (`status_snapshot`, `control_loop`): the constant is imported
+    # rather than spelled out so the directory's name has ONE definition.
+    from alphalens_pipeline.observability.textfile import ENV_VAR as TEXTFILE_DIR_ENV
+
+    unit = unit_for_env(env)  # a bad instance name raises, and should
+    run = run if run is not None else _systemctl_show
+    try:
+        if run(unit, "LoadState").strip() != "loaded":
+            return None
+        payload = run(unit, "Environment")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_environment_payload(payload).get(TEXTFILE_DIR_ENV) or None
 
 
 def compose_live_environment(
