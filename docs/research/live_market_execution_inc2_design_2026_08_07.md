@@ -351,9 +351,23 @@ signals. The only symptom of a halt is a quote that stops updating, which is
 exactly what the looser bound tolerates. Exposure to a frozen pre-halt price
 therefore rises from 3 s to the new bound. Bounded harm: one tranche fires
 (`plan_tranche_exits` plus the `_exit_clears_cost` gate), the disaster stop
-still covers the rest, and a LULD pause is normally 5 minutes so the bound still
-catches the halt — just not in its first seconds. The same exposure reaches the
-entry-trailing path, which shares this feed.
+still covers the rest, and an INITIAL LULD pause carries a hard 5-minute floor
+so the bound still catches that halt — just not in its first seconds. The same
+exposure reaches the entry-trailing path, which shares this feed.
+
+**Correction to an over-claim this project has repeated (checked 2026-09-10
+against NYSE/Nasdaq rule material, not assumed):** "a halt lasts >= 5 min" is
+true only of the INITIAL LULD Trading Pause. Nasdaq's T1/T2 (news pending /
+news released), T12 (additional information requested), operational halts and
+M (opening/closing imbalance) are CONDITION-based and carry no minimum
+duration; a later LULD extension past the first 10 minutes may also reopen as
+soon as the criteria are met. So a short news halt can begin and end inside the
+5-minute `STALE_FIRE_GAP` the entry path leans on. That gap is PRE-EXISTING —
+it does not depend on this bound — but the 3 s -> 45 s widening shrinks the
+LULD margin from ~5 min of slack to ~4m15s, and the same comment in
+`control_loop._reseed_unused_session_lows` had asserted the stronger claim.
+Both are corrected; the halt-class gap itself is tracked separately rather than
+fixed here.
 
 ### The number, and where it came from
 

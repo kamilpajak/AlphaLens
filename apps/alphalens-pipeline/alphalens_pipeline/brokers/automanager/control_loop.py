@@ -2450,14 +2450,36 @@ def _reseed_vetoed_point_lows(
     ``STALE_FIRE_GAP`` of the watcher's last fresh tick
     (:meth:`EntryTierWatcher.latch_low_trusted`), and a recovery beyond it
     discards the low FINALLY (a fresh-point tick never re-enters this reseed).
-    A market discontinuity cannot hide inside that window for US equities: an
-    LULD pause lasts >= 5 min (== ``STALE_FIRE_GAP``) and starts AFTER the last
-    fresh sample, so every halt-spanning recovery arrives beyond the gate; the
-    pre-open quiet spell is the overnight gap, far beyond it. Deliberately NO
-    tick-count cap on the reseed chain: with the 3s point freshness bound vs
-    the 45s tick, a thin change-driven stream (the OLN incident profile)
-    point-vetoes MOST drain instants, so a multi-tick veto chain is the normal
-    path a real touch survives — capping it would reintroduce the incident."""
+    A LULD pause cannot hide inside that window: the INITIAL pause is a hard
+    5 min (== ``STALE_FIRE_GAP``) and starts AFTER the last fresh sample, so an
+    LULD-spanning recovery arrives beyond the gate; the pre-open quiet spell is
+    the overnight gap, far beyond it.
+
+    TWO CORRECTIONS to what this comment used to claim, both recorded rather
+    than left implicit:
+
+    1. The claim was "a market discontinuity cannot hide inside that window for
+       US equities". That over-reaches. Only the INITIAL LULD pause carries the
+       5 min floor. Nasdaq's T1/T2 (news pending / news released), T12
+       (additional information requested), operational halts and M (opening or
+       closing imbalance) are CONDITION-based and carry no minimum duration at
+       all — a short news halt can end well inside ``STALE_FIRE_GAP`` and let a
+       pre-halt low look actionable. That gap is PRE-EXISTING, not introduced
+       here; it is tracked separately rather than re-buried in this docstring.
+    2. #1397 NARROWED the margin. "The last fresh sample" is now a quote up to
+       ``DEFAULT_MAX_AGE_S`` (45 s) old rather than 3 s, so an LULD-spanning
+       recovery clears the gate by roughly 4m15s of slack instead of ~5 min.
+       It still clears, but the headroom is no longer an order of magnitude,
+       and it shrinks further if the bound is ever widened again.
+
+    Deliberately NO tick-count cap on the reseed chain. The ORIGINAL reason was
+    that a 3 s point bound against a 45 s tick point-vetoed MOST drain instants
+    on a thin change-driven stream (the OLN incident profile), making a
+    multi-tick veto chain the normal path a real touch survives. #1397 removes
+    that premise: at a 45 s bound most drains now carry a fresh point, so the
+    chain becomes rare. The absence of a cap is kept anyway, for the reason that
+    outlived the arithmetic — a cap discards a real touch on exactly the ticks
+    where the stream is degraded, which is when the evidence matters most."""
     if not isinstance(feed, SupportsSessionLow):
         return
     for uic, low in uic_lows.items():
