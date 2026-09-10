@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { defaultDir, isSortKeyVisible, sortOutcomes, type SortKey } from '../../src/lib/edgeSort';
+import {
+	defaultDir,
+	isSortKeyVisible,
+	sortOnViewChange,
+	sortOutcomes,
+	type SortKey
+} from '../../src/lib/edgeSort';
 import type { EdgeOutcome } from '../../src/lib/types';
 
 const ALL_KEYS: SortKey[] = [
@@ -153,5 +159,66 @@ describe('sortOutcomes', () => {
 		const rows = [o({ ticker: 'B' }), o({ ticker: 'A' })];
 		sortOutcomes(rows, 'ticker', 'asc');
 		expect(tk(rows)).toEqual(['B', 'A']);
+	});
+});
+
+// The view toggle (terminal ↔ ongoing) hides the terminal-only columns, so an
+// active sort on one of them has to step aside. `sortOnViewChange` is the whole
+// rule: step aside, hold the sort, put it back on the return trip.
+describe('sortOnViewChange', () => {
+	const CLOSED_DESC = { key: 'closed', dir: 'desc' } as const;
+	const BRIEF_DESC = { key: 'brief', dir: 'desc' } as const;
+
+	it('steps a terminal-only sort aside and holds it when leaving for ongoing', () => {
+		const r = sortOnViewChange(CLOSED_DESC, null, 'ongoing');
+		expect(r.sort).toEqual(BRIEF_DESC);
+		expect(r.stashed).toEqual(CLOSED_DESC);
+	});
+
+	it('puts the held sort back when returning to terminal', () => {
+		// The bug this pins: without the restore the table came back on `brief`
+		// desc, which pushes every TIME_STOP row (old brief_date, recent
+		// matured_at) to the bottom of the list.
+		const r = sortOnViewChange(BRIEF_DESC, CLOSED_DESC, 'terminal');
+		expect(r.sort).toEqual(CLOSED_DESC);
+		expect(r.stashed).toBeNull();
+	});
+
+	it('holds the direction too, not just the column', () => {
+		const closedAsc = { key: 'closed', dir: 'asc' } as const;
+		const away = sortOnViewChange(closedAsc, null, 'ongoing');
+		const back = sortOnViewChange(away.sort, away.stashed, 'terminal');
+		expect(back.sort).toEqual(closedAsc);
+	});
+
+	it('holds the other terminal-only column (% book) the same way', () => {
+		const bookDesc = { key: 'book', dir: 'desc' } as const;
+		const away = sortOnViewChange(bookDesc, null, 'ongoing');
+		expect(away.sort).toEqual(BRIEF_DESC);
+		const back = sortOnViewChange(away.sort, away.stashed, 'terminal');
+		expect(back.sort).toEqual(bookDesc);
+	});
+
+	it('leaves a sort on a shared column alone in both directions', () => {
+		const tickerAsc = { key: 'ticker', dir: 'asc' } as const;
+		const away = sortOnViewChange(tickerAsc, null, 'ongoing');
+		expect(away).toEqual({ sort: tickerAsc, stashed: null });
+		const back = sortOnViewChange(tickerAsc, null, 'terminal');
+		expect(back).toEqual({ sort: tickerAsc, stashed: null });
+	});
+
+	it('keeps holding a sort whose column the next view still cannot show', () => {
+		// Defensive: a held terminal-only sort must not be restored INTO ongoing.
+		const r = sortOnViewChange(BRIEF_DESC, CLOSED_DESC, 'ongoing');
+		expect(r.sort).toEqual(BRIEF_DESC);
+		expect(r.stashed).toEqual(CLOSED_DESC);
+	});
+
+	it('has nothing to restore once the caller drops the held sort', () => {
+		// The page clears the held sort when the reader picks a sort by hand —
+		// that hand-picked sort must survive the return trip untouched.
+		const themeAsc = { key: 'theme', dir: 'asc' } as const;
+		const r = sortOnViewChange(themeAsc, null, 'terminal');
+		expect(r).toEqual({ sort: themeAsc, stashed: null });
 	});
 });

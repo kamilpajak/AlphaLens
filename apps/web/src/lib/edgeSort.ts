@@ -85,3 +85,53 @@ export function sortOutcomes(rows: EdgeOutcome[], key: SortKey, dir: SortDir): E
 		return primary === 0 ? secondary(x, y) : primary;
 	});
 }
+
+/** A sort selection: the column and its direction. */
+export interface SortState {
+	key: SortKey;
+	dir: SortDir;
+}
+
+/** The shared column a stepped-aside sort falls back to. `brief` is the only
+ *  date column both views render, so the fallback never lands on a hidden
+ *  header. */
+export const VIEW_FALLBACK_SORT_KEY: SortKey = 'brief';
+
+/** What a view switch does to the sort: the selection to apply now, plus the
+ *  one held aside for the return trip (null when nothing is held). */
+export interface ViewChangeSort {
+	sort: SortState;
+	stashed: SortState | null;
+}
+
+/**
+ * The sort to apply when the outcomes table switches view, and what to hold.
+ *
+ * Switching to `ongoing` hides the terminal-only columns (`closed`, `% book`),
+ * so a sort on one of them must step aside — but the step BACK has to restore
+ * it, otherwise the terminal table silently comes back on `brief` desc. That
+ * ordering has a class bias: a TIME_STOP always carries an old `brief_date`
+ * (the position aged to its TTL) with a recent `matured_at`, so "newest brief
+ * first" buries every TIME_STOP row below the quickly-resolved ones — the same
+ * starvation the API already fixed server-side by ordering on recency
+ * (`edge/api/views.py`).
+ *
+ * `stashed` is dropped by the caller as soon as the reader picks a sort by
+ * hand, so a deliberate choice always wins over a restore.
+ */
+export function sortOnViewChange(
+	current: SortState,
+	stashed: SortState | null,
+	next: 'terminal' | 'ongoing'
+): ViewChangeSort {
+	if (stashed && isSortKeyVisible(stashed.key, next)) {
+		return { sort: stashed, stashed: null };
+	}
+	if (!isSortKeyVisible(current.key, next)) {
+		return {
+			sort: { key: VIEW_FALLBACK_SORT_KEY, dir: defaultDir(VIEW_FALLBACK_SORT_KEY) },
+			stashed: current
+		};
+	}
+	return { sort: current, stashed };
+}
