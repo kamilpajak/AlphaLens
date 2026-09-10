@@ -723,7 +723,8 @@ class TestOrdersAndCancel(unittest.TestCase):
 
         result = self.runner.invoke(broker_app, ["orders", "--format", "xml"])
 
-        self.assertEqual(result.exit_code, 1, msg=result.output)
+        # exit 2 = usage, per the failure contract's exit-status set (#1389).
+        self.assertEqual(result.exit_code, 2, msg=result.output)
         self.assertIn("--format", result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertEqual(harness.broker.list_open_orders_calls, 0)

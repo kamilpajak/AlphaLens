@@ -80,10 +80,17 @@ import logging
 import os
 import re
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import typer
+
+# Top-level rather than lazy (module docstring's lazy-CLI doctrine): the whole
+# of `broker_contract` costs ~2.6ms to import, nearly all of it `datetime`,
+# which this module imports anyway. The doctrine exists for the ~913ms
+# research tier, and `_fail` needs the registry on every refusal path.
+from broker_contract.failure import CONTRACT_FAILURE_CODES, Failure, FailureCode, Suggestion
 
 if TYPE_CHECKING:
     # Type-only imports for the extracted submit helpers. Guarded by
@@ -130,9 +137,225 @@ _DEFAULT_ARM_ENV = "sim"
 _DISARM_NOTE_MAX_CHARS = 500
 
 
+# The two `--format` values, defined here because the failure emitter below is
+# the first thing in the module that needs them (the `_FORMAT_OPTION` help
+# text further down is their other consumer).
+_FORMAT_HUMAN = "human"
+_FORMAT_JSON = "json"
+
+# Exit statuses, from the repo CLI doctrine (0 ok / 2 usage / 4 not found /
+# 7 transient). They live CLI-side, not in `broker_contract`: a process status is
+# a property of running a command, not of the contract (#1122 split, #1389).
+_EXIT_FAILED = 1
+_EXIT_USAGE = 2
+_EXIT_NOT_FOUND = 4
+_EXIT_TRANSIENT = 7
+
+# Codes this CLI owns. The broker taxonomy's own codes come from the contract
+# package; these are the refusals a CLI makes and a library never would.
+_CLI_FAILURE_CODES: Mapping[str, FailureCode] = {
+    code.name: code
+    for code in (
+        FailureCode(
+            name="usage",
+            retryable=False,
+            meaning="The invocation is malformed (unknown option value, bad date, bad bound).",
+        ),
+        FailureCode(
+            name="env_ambiguous",
+            retryable=False,
+            meaning=(
+                "The shell names one broker instance and the command defaults to another, "
+                "and the command writes to a queue. Pass --env explicitly."
+            ),
+        ),
+        FailureCode(
+            name="live_refused",
+            retryable=False,
+            meaning=(
+                "A LIVE operation was refused: ad-hoc placement on LIVE is forbidden "
+                "(ADR 0017), or the LIVE rails / auth surface are not present."
+            ),
+        ),
+        FailureCode(
+            name="state_layout",
+            retryable=False,
+            meaning=(
+                "Durable broker state is still in the pre-migration flat layout "
+                "(ADR 0016 D4); the command refuses rather than treat itself as having "
+                "no prior state."
+            ),
+        ),
+        FailureCode(
+            name="pick_already_armed",
+            retryable=False,
+            meaning=(
+                "A live earlier generation of this (ticker, trade date) is still armed. "
+                "Disarm it first; a same-day re-arm then takes the next generation."
+            ),
+            needs_suggestion=True,
+        ),
+        FailureCode(
+            name="policy_refused",
+            retryable=False,
+            meaning=(
+                "A safety policy refused the operation (gross guard, FX divergence, "
+                "unverifiable instrument currency, a resting order in the way). The "
+                "specific reason is in details, which is diagnostic and unstable."
+            ),
+        ),
+        FailureCode(
+            name="stream_metrics_missing",
+            retryable=False,
+            meaning=(
+                "The stream gauge textfile does not exist for this instance — the daemon "
+                "never ticked with streaming on, or --env names another instance."
+            ),
+            needs_suggestion=True,
+        ),
+        FailureCode(
+            name="unclassified",
+            retryable=False,
+            meaning=(
+                "A refusal that has not been given a code yet. NOT a branch condition: "
+                "a site graduating out of this to a specific code is expected and is not "
+                "a breaking change. Treat it as 'a human must look'."
+            ),
+        ),
+    )
+}
+
+_FAILURE_CODES: Mapping[str, FailureCode] = {**CONTRACT_FAILURE_CODES, **_CLI_FAILURE_CODES}
+
+# The runnable recovery for every code that declares `needs_suggestion`. Held
+# here rather than at the call sites so the guarantee is structural: a machine
+# reads `retryable: false` as "drop it", and a code that promises a way out must
+# not depend on each emitter remembering to attach one.
+_SUGGESTIONS_BY_CODE: Mapping[str, tuple[Suggestion, ...]] = {
+    "write_outcome_unknown": (
+        Suggestion(
+            argv=("alphalens", "broker", "orders", "--format", "json"),
+            why=(
+                "the write may already rest at the broker; read live order state before "
+                "re-running, never blind-retry"
+            ),
+        ),
+    ),
+    "broker_auth": (
+        Suggestion(
+            argv=("alphalens", "broker", "auth"),
+            why="the OAuth refresh chain is dead or absent; re-authenticate",
+        ),
+    ),
+    "pick_already_armed": (
+        Suggestion(
+            argv=("alphalens", "broker", "picks", "--format", "json"),
+            why="read which generation is still armed, then disarm it before re-arming",
+        ),
+    ),
+    "stream_metrics_missing": (
+        Suggestion(
+            argv=("systemctl", "--user", "status", "alphalens-broker-manager.service"),
+            why=(
+                "the daemon writes the gauges every tick only while it runs with "
+                "ALPHALENS_BROKER_STREAMING_ENABLED=1"
+            ),
+        ),
+    ),
+}
+
+# How this invocation renders a failure. A module handle rather than a parameter
+# because `_fail` is reached from helpers that never see the command's options
+# (`_guard_state_layout`, `_apply_env_option`), and threading it through 81 call
+# sites would be a worse trade. Set by `_resolve_format`, which every command
+# with `--format` calls BEFORE anything that can fail; reset per invocation by
+# the group callback so one command's JSON mode cannot leak into the next
+# in-process caller.
+_OUTPUT_FORMAT: ContextVar[str] = ContextVar("broker_output_format", default=_FORMAT_HUMAN)
+
+
+@broker_app.callback()
+def _broker_callback() -> None:
+    """Reset per-invocation state before routing to any broker subcommand.
+
+    Only the output-format handle today. Without the reset, a command that never
+    declares `--format` would inherit whatever the previous in-process
+    invocation left behind — which is every `CliRunner` test and any embedding
+    caller.
+    """
+    _OUTPUT_FORMAT.set(_FORMAT_HUMAN)
+
+
+def _exit_code_for(entry: FailureCode) -> int:
+    """Map a failure code onto the small documented exit-status set.
+
+    Deliberately COARSE: the domain detail belongs in `error.code`, so this set
+    does not grow one status per code. `retryable` picks 7 because "wait and
+    run it again" is the one thing a shell caller can act on without parsing.
+    """
+    if entry.name == "usage":
+        return _EXIT_USAGE
+    if entry.name == "stream_metrics_missing":
+        return _EXIT_NOT_FOUND
+    return _EXIT_TRANSIENT if entry.retryable else _EXIT_FAILED
+
+
+def _fail_with(
+    code: str,
+    message: str,
+    *,
+    details: Mapping[str, Any] | None = None,
+    suggestions: tuple[Suggestion, ...] = (),
+) -> typer.Exit:
+    """Report a classified failure and return the Exit the caller raises.
+
+    Rendering follows the resolved `--format` and nothing else: prose for a
+    human, exactly the failure object on stderr for a machine. stdout is
+    untouched either way, so a failed JSON-mode command leaves it empty.
+    """
+    # Never raise from the error path: a code that is somehow not registered
+    # must still produce a readable refusal rather than a KeyError traceback on
+    # top of whatever already went wrong. The AST gate in
+    # `test_broker_failure_contract_cli.py` is what keeps this from happening.
+    entry = _FAILURE_CODES.get(code) or _FAILURE_CODES["unclassified"]
+    failure = Failure(
+        code=entry.name,
+        message=message,
+        retryable=entry.retryable,
+        details=dict(details or {}),
+        suggestions=suggestions or _SUGGESTIONS_BY_CODE.get(entry.name, ()),
+    )
+    if _OUTPUT_FORMAT.get() == _FORMAT_JSON:
+        typer.echo(json.dumps(failure.to_jsonable()), err=True)
+    else:
+        typer.secho(message, fg=typer.colors.RED, err=True)
+    return typer.Exit(code=_exit_code_for(entry))
+
+
 def _fail(message: str) -> typer.Exit:
-    typer.secho(message, fg=typer.colors.RED, err=True)
-    return typer.Exit(code=1)
+    """A refusal that has not been given a code yet.
+
+    Kept so classification stays incremental instead of being a precondition for
+    the contract to exist. A machine caller still gets an object rather than
+    prose; it just gets `unclassified`, which the published table tells it never
+    to branch on.
+    """
+    return _fail_with("unclassified", message)
+
+
+def _fail_from_broker_error(exc: Exception, context: str) -> typer.Exit:
+    """Classify a broker-taxonomy exception by its class, not by the call site.
+
+    Most refusals in this module are `_fail(str(exc))` pass-throughs, so the code
+    is a property of what was raised. `failure_code` is a ClassVar on the base,
+    so an exception raised outside an adapter boundary still classifies.
+    """
+    code = getattr(type(exc), "failure_code", "unclassified")
+    details: dict[str, Any] = {}
+    vendor_code = getattr(exc, "error_code", None)
+    if vendor_code is not None:
+        details["error_code"] = vendor_code
+    return _fail_with(code, f"{context}: {exc}", details=details)
 
 
 def _guard_state_layout() -> None:
@@ -155,7 +378,7 @@ def _guard_state_layout() -> None:
     try:
         assert_no_legacy_flat_state()
     except BrokerStateLayoutError as exc:
-        raise _fail(str(exc)) from exc
+        raise _fail_with("state_layout", str(exc)) from exc
 
 
 _ENV_OPTION = typer.Option(
@@ -172,9 +395,6 @@ Typer builds a fresh click Parameter per command from this info object, so
 sharing it keeps the five help texts from drifting apart (verified by running
 it across several commands).
 """
-
-_FORMAT_HUMAN = "human"
-_FORMAT_JSON = "json"
 
 _FORMAT_OPTION = typer.Option(
     None,
@@ -204,12 +424,26 @@ def _resolve_format(output_format: str | None, *, json_alias: bool = False) -> s
     the effective ``--format`` can be checked here.
     """
     if output_format is not None and output_format not in (_FORMAT_HUMAN, _FORMAT_JSON):
-        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
+        # Rendered as PROSE even though the caller may have meant JSON: the value
+        # they passed is not a format this CLI knows, so there is no format to
+        # honour. The only place in the group where that is the right answer.
+        raise _fail_with(
+            "usage",
+            f"unknown --format {output_format!r} (expected human|json)",
+            details={"option": "--format", "value": output_format},
+        )
     if json_alias:
         if output_format == _FORMAT_HUMAN:
-            raise _fail("--json and --format human ask for different things — pass one")
+            raise _fail_with(
+                "usage", "--json and --format human ask for different things — pass one"
+            )
+        _OUTPUT_FORMAT.set(_FORMAT_JSON)
         return _FORMAT_JSON
-    return output_format or _FORMAT_HUMAN
+    resolved = output_format or _FORMAT_HUMAN
+    # Every failure after this point renders the way the caller asked. The
+    # commands that take `--format` all call this before anything that can fail.
+    _OUTPUT_FORMAT.set(resolved)
+    return resolved
 
 
 def _envelope(schema: str, env: str, **payload: Any) -> dict[str, Any]:
@@ -223,6 +457,21 @@ def _envelope(schema: str, env: str, **payload: Any) -> dict[str, Any]:
     file are two facts, and only the operator can make them disagree.
     """
     return {"schema": schema, "env": env, **payload}
+
+
+def _render_json(payload: Mapping[str, Any]) -> str:
+    """Serialise the envelope strictly, or refuse.
+
+    Split out of :func:`_emit_json` so a command that MUTATES can render before
+    it writes. Rendering after the write would mean an unrenderable payload
+    reports a failure for something that already happened — which is exactly the
+    ``write_outcome_unknown`` shape this ticket exists to keep out of a client's
+    hands.
+    """
+    try:
+        return json.dumps(payload, default=str, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise _fail_with("unclassified", f"cannot render this result as JSON: {exc}") from exc
 
 
 def _emit_json(payload: Mapping[str, Any]) -> None:
@@ -242,11 +491,7 @@ def _emit_json(payload: Mapping[str, Any]) -> None:
     one valid JSON value or empty. Serialising half-valid output would defeat
     the contract the rest of this module exists to hold.
     """
-    try:
-        body = json.dumps(payload, default=str, allow_nan=False)
-    except (TypeError, ValueError) as exc:
-        raise _fail(f"cannot render this result as JSON: {exc}") from exc
-    typer.echo(body)
+    typer.echo(_render_json(payload))
 
 
 class EnvOption(NamedTuple):
@@ -304,7 +549,7 @@ def _apply_env_option(env: str | None, *, required: bool = True) -> EnvOption:
     try:
         target = state_paths.validate_environment(env)
     except ValueError as exc:
-        raise _fail(str(exc)) from exc
+        raise _fail_with("usage", str(exc)) from exc
 
     if target != state_paths.ENV_LIVE:
         os.environ[state_paths.BROKER_ENVIRONMENT_ENV] = target
@@ -356,13 +601,15 @@ def _guard_ambient_instance(env: str | None, *, default: str) -> str:
         try:
             return state_paths.validate_environment(env)
         except ValueError as exc:
-            raise _fail(str(exc)) from exc
+            raise _fail_with("usage", str(exc)) from exc
     ambient = os.environ.get(state_paths.BROKER_ENVIRONMENT_ENV)
     if ambient and ambient != default:
-        raise _fail(
+        raise _fail_with(
+            "env_ambiguous",
             f"{state_paths.BROKER_ENVIRONMENT_ENV}={ambient!r} in this shell, but this "
             f"command defaults to {default!r} and writes to the queue — pass --env "
-            f"{ambient} or --env {default} explicitly so the target is unambiguous."
+            f"{ambient} or --env {default} explicitly so the target is unambiguous.",
+            details={"ambient": ambient, "default": default},
         )
     return default
 
@@ -412,7 +659,7 @@ def _cli_broker(*, mutating: bool) -> Broker:
     try:
         env = state_paths.broker_environment()
     except ValueError as exc:
-        raise _fail(str(exc)) from exc
+        raise _fail_with("usage", str(exc)) from exc
 
     if env != state_paths.ENV_LIVE:
         typer.secho(f"env={env} gateway=sim", err=True)
@@ -422,14 +669,15 @@ def _cli_broker(*, mutating: bool) -> Broker:
 
     if mutating:
         typer.secho(f"env={env} gateway=none", err=True)
-        raise _fail(
+        raise _fail_with(
+            "live_refused",
             "env=live: ad-hoc placement on LIVE is forbidden by design "
             "(ADR 0017) — the `alphalens broker manage` daemon is the only "
             "LIVE placement path, and `submit` has no broker-free preview "
             "(the dry-run still reads the account and prechecks server-side), "
             "so the whole command refuses. Re-run with "
             "ALPHALENS_BROKER_ENVIRONMENT=sim, or hand the pick to the live "
-            "daemon via `alphalens broker arm ... --env live`."
+            "daemon via `alphalens broker arm ... --env live`.",
         )
 
     from alphalens_pipeline.brokers.saxo.broker import create_saxo_broker_live_from_env
@@ -440,12 +688,13 @@ def _cli_broker(*, mutating: bool) -> Broker:
         # ``gateway=refused``: no live gateway was ever constructed — the echo
         # must not claim one (zen review: emit the success label only on success).
         typer.secho(f"env={env} gateway=refused", err=True)
-        raise _fail(
+        raise _fail_with(
+            "live_refused",
             f"env=live: LIVE broker construction failed — missing env var {exc}. "
             "Ad-hoc LIVE commands need the daemon's full LIVE boot surface "
             "(rail pins + SAXO_LIVE_* auth env); re-run with `--env live`, which "
             "composes the installed unit's rails and its EnvironmentFile for you "
-            "(#1377), or source the daemon EnvironmentFile by hand first."
+            "(#1377), or source the daemon EnvironmentFile by hand first.",
         ) from exc
     except RuntimeError as exc:
         # Covers BrokerError (the rails' BrokerCapabilityError) AND SaxoError
@@ -460,7 +709,9 @@ def _cli_broker(*, mutating: bool) -> Broker:
             type(exc).__name__,
             exc_info=True,
         )
-        raise _fail(f"env=live: LIVE broker construction refused — {exc}") from exc
+        raise _fail_with(
+            "live_refused", f"env=live: LIVE broker construction refused — {exc}"
+        ) from exc
     typer.secho(f"env={env} gateway=live", err=True)
     return broker
 
@@ -528,7 +779,9 @@ def _auth_status() -> None:
     typer.echo(f"store        {store.path}")
     if state is None:
         typer.echo("refresh      ABSENT — no OAuth session yet")
-        raise _fail("no token store — run `alphalens broker auth` to bootstrap OAuth")
+        raise _fail_with(
+            "broker_auth", "no token store — run `alphalens broker auth` to bootstrap OAuth"
+        )
     now = _dt.datetime.now(_dt.UTC)
     access_left = (state.access_token_expires_at - now).total_seconds() / 60
     refresh_left = (state.refresh_token_expires_at - now).total_seconds() / 60
@@ -543,7 +796,7 @@ def _auth_status() -> None:
         typer.echo(f"refresh      ALIVE, ~{refresh_left:.0f} min remaining")
         return
     typer.echo(_REFRESH_DEAD_LINE)
-    raise _fail("refresh chain is dead — re-run `alphalens broker auth`")
+    raise _fail_with("broker_auth", "refresh chain is dead — re-run `alphalens broker auth`")
 
 
 def _telegram_chain_loss_notify() -> NotificationPort:
@@ -797,9 +1050,10 @@ def _marketdata_auth_status() -> None:
     typer.echo(f"store        {state.store_path}")
     if not state.present:
         typer.echo("refresh      ABSENT — no LIVE market-data OAuth session yet")
-        raise _fail(
+        raise _fail_with(
+            "broker_auth",
             "no token store — run `alphalens broker marketdata-auth` to bootstrap the "
-            "LIVE market-data OAuth session"
+            "LIVE market-data OAuth session",
         )
     now = dt.datetime.now(dt.UTC)
     if state.access_expires_at is not None:
@@ -818,14 +1072,18 @@ def _marketdata_auth_status() -> None:
             typer.echo(f"refresh      ALIVE, ~{refresh_left:.0f} min remaining")
             return
         typer.echo(_REFRESH_DEAD_LINE)
-        raise _fail("refresh chain is dead — re-run `alphalens broker marketdata-auth`")
+        raise _fail_with(
+            "broker_auth", "refresh chain is dead — re-run `alphalens broker marketdata-auth`"
+        )
     if state.refresh_present:
         # Legacy store without a recorded refresh expiry: unknown window, fall
         # back to reporting the present single-use rotating token as alive.
         typer.echo("refresh      ALIVE — single-use rotating token present")
         return
     typer.echo(_REFRESH_DEAD_LINE)
-    raise _fail("refresh chain is dead — re-run `alphalens broker marketdata-auth`")
+    raise _fail_with(
+        "broker_auth", "refresh chain is dead — re-run `alphalens broker marketdata-auth`"
+    )
 
 
 def _marketdata_auth_refresh(cfg: object) -> None:
@@ -1016,15 +1274,35 @@ def price_reader_command(
 
 
 @broker_app.command(name="account")
-def account_command(env: str | None = _ENV_OPTION) -> None:
+def account_command(
+    env: str | None = _ENV_OPTION,
+    output_format: str | None = _FORMAT_OPTION,
+) -> None:
     """Print the broker account snapshot (cash, total value, margin)."""
+    from alphalens_pipeline.brokers.automanager import state_paths
     from broker_contract.contract import BrokerError
 
+    resolved_format = _resolve_format(output_format)
     _apply_env_option(env)
     try:
         snapshot = _cli_broker(mutating=False).get_account()
     except BrokerError as exc:
-        raise _fail(f"broker account failed: {exc}") from exc
+        raise _fail_from_broker_error(exc, "broker account failed") from exc
+
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(
+            _envelope(
+                _ACCOUNT_SCHEMA,
+                env if env is not None else state_paths.broker_environment(),
+                account_id=snapshot.account_id,
+                currency=snapshot.currency,
+                cash=snapshot.cash,
+                total_value=snapshot.total_value,
+                margin_available=snapshot.margin_available,
+                asof=snapshot.asof.isoformat(timespec="seconds"),
+            )
+        )
+        return
 
     margin = "n/a" if snapshot.margin_available is None else f"{snapshot.margin_available:,.2f}"
     typer.echo(f"account   {snapshot.account_id}")
@@ -1057,21 +1335,53 @@ def capital_reader_command() -> None:
 
     try:
         balance = emit_capital_reader_gauges(_cli_broker(mutating=False))
-    except (BrokerError, OSError, ValueError) as exc:
+    except BrokerError as exc:
+        raise _fail_from_broker_error(exc, "capital-reader failed") from exc
+    except (OSError, ValueError) as exc:
+        # Not a broker failure: a textfile write or a malformed balance.
         raise _fail(f"capital-reader failed: {exc}") from exc
     typer.echo(f"balance {balance:,.2f}")
 
 
 @broker_app.command(name="positions")
-def positions_command(env: str | None = _ENV_OPTION) -> None:
+def positions_command(
+    env: str | None = _ENV_OPTION,
+    output_format: str | None = _FORMAT_OPTION,
+) -> None:
     """List open positions (signed quantity, avg price, market value, PnL)."""
+    from alphalens_pipeline.brokers.automanager import state_paths
     from broker_contract.contract import BrokerError
 
+    resolved_format = _resolve_format(output_format)
     _apply_env_option(env)
     try:
         positions = _cli_broker(mutating=False).get_positions()
     except BrokerError as exc:
-        raise _fail(f"broker positions failed: {exc}") from exc
+        raise _fail_from_broker_error(exc, "broker positions failed") from exc
+
+    if resolved_format == _FORMAT_JSON:
+        # An empty list is an honest answer, not a special case: a machine
+        # caller must not have to tell "no positions" from "the read failed".
+        _emit_json(
+            _envelope(
+                _POSITIONS_SCHEMA,
+                env if env is not None else state_paths.broker_environment(),
+                positions=[
+                    {
+                        "ticker": position.instrument.ticker,
+                        "symbol": position.instrument.broker_symbol,
+                        "exchange_mic": position.instrument.exchange_mic,
+                        "position_id": position.position_id,
+                        "quantity": position.quantity,
+                        "avg_price": position.avg_price,
+                        "market_value": position.market_value,
+                        "unrealized_pnl": position.unrealized_pnl,
+                    }
+                    for position in positions
+                ],
+            )
+        )
+        return
 
     if not positions:
         typer.echo("no open positions")
@@ -1097,14 +1407,32 @@ def resolve_command(
         "--exchange",
         help="ISO 10383 MIC of the listing venue (XNYS, XNAS, XWAR, XETR, XPAR).",
     ),
+    output_format: str | None = _FORMAT_OPTION,
 ) -> None:
     """Resolve (ticker, MIC) to the broker instrument handle (Saxo: Uic)."""
+    from alphalens_pipeline.brokers.automanager import state_paths
     from broker_contract.contract import BrokerError
 
+    resolved_format = _resolve_format(output_format)
     try:
         ref = _cli_broker(mutating=False).resolve_instrument(ticker, exchange)
     except BrokerError as exc:
-        raise _fail(f"broker resolve failed: {exc}") from exc
+        raise _fail_from_broker_error(exc, "broker resolve failed") from exc
+
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(
+            _envelope(
+                _RESOLVE_SCHEMA,
+                state_paths.broker_environment(),
+                ticker=ref.ticker,
+                exchange_mic=ref.exchange_mic,
+                asset_type=ref.asset_type,
+                broker_instrument_id=ref.broker_instrument_id,
+                broker_symbol=ref.broker_symbol,
+                currency=ref.currency,
+            )
+        )
+        return
 
     typer.echo(f"ticker        {ref.ticker}")
     typer.echo(f"exchange_mic  {ref.exchange_mic}")
@@ -1257,7 +1585,7 @@ def _resolve_instrument_and_plan(
     except TradeSetupNotPlannableError as exc:
         raise _fail(f"{wanted} is not plannable: {exc}") from exc
     except BrokerError as exc:
-        raise _fail(f"broker submit failed: {exc}") from exc
+        raise _fail_from_broker_error(exc, "broker submit failed") from exc
     return broker, account, sizing_equity, instrument, fx, plan
 
 
@@ -1293,7 +1621,9 @@ def _run_prechecks(
         try:
             payload = precheck_fn(bracket)
         except BrokerError as exc:
-            raise _fail(f"precheck failed for entry tier {entry_label}: {exc}") from exc
+            raise _fail_from_broker_error(
+                exc, f"precheck failed for entry tier {entry_label}"
+            ) from exc
         est_cash_currency = payload.get("EstimatedCashRequiredCurrency")
         summary = {
             "client_request_id": bracket.client_request_id,
@@ -1465,7 +1795,7 @@ def submit_command(
     try:
         trade_date = dt.date.fromisoformat(date)
     except ValueError as exc:
-        raise _fail(f"invalid --date {date!r}: {exc}") from exc
+        raise _fail_with("usage", f"invalid --date {date!r}: {exc}") from exc
 
     try:
         candidates = load_brief(trade_date, briefs_dir)
@@ -1490,11 +1820,12 @@ def submit_command(
     gross = setup_plan_gross_notional(plan)
     gross_limit = setup_plan_gross_guard_limit(plan)
     if gross > gross_limit:
-        raise _fail(
+        raise _fail_with(
+            "policy_refused",
             f"{wanted}: planned gross {gross:,.2f} {instrument.currency} exceeds the "
             f"gross safety guard {gross_limit:,.2f} {instrument.currency} "
             "(GROSS_SAFETY_FRAC x equity, one currency through the sizing rate) — "
-            "nothing submitted"
+            "nothing submitted",
         )
 
     brackets = decompose_setup_plan(plan, instrument)
@@ -1564,6 +1895,7 @@ def arm_command(
         help="Broker instance inbox to arm into: 'sim' or 'live' (ADR 0016). Default: sim; an explicit value is REQUIRED when "
         "ALPHALENS_BROKER_ENVIRONMENT names another instance (#1377).",
     ),
+    output_format: str | None = _FORMAT_OPTION,
 ) -> None:
     """Arm a picked candidate — parse the brief into a TradeIntent client-side
     and append it to the picks queue.
@@ -1594,17 +1926,18 @@ def arm_command(
     from broker_contract.sizing import TradeSetupNotPlannableError
     from broker_contract.trade_intent.schema import InstrumentHint, IntentMeta, TradeIntent
 
+    resolved_format = _resolve_format(output_format)
     env = _guard_ambient_instance(env, default=_DEFAULT_ARM_ENV)
 
     try:
         trade_date = dt.date.fromisoformat(date)
     except ValueError as exc:
-        raise _fail(f"invalid --date {date!r}: {exc}") from exc
+        raise _fail_with("usage", f"invalid --date {date!r}: {exc}") from exc
 
     try:
         picks_target = state_paths.picks_path(env=env)
     except ValueError as exc:
-        raise _fail(str(exc)) from exc
+        raise _fail_with("usage", str(exc)) from exc
 
     _guard_state_layout()
 
@@ -1639,6 +1972,25 @@ def arm_command(
             trade_date=trade_date.isoformat(),
         ),
     )
+    if resolved_format == _FORMAT_JSON:
+        # Render BEFORE the append: an unrenderable payload must refuse without
+        # having armed anything.
+        body = _render_json(
+            _envelope(
+                _ARM_SCHEMA,
+                env,
+                armed=True,
+                ticker=wanted,
+                trade_date=trade_date.isoformat(),
+                generation=intent.meta.generation,
+                intent_id=intent.intent_id,
+                picks_journal=str(picks_target),
+            )
+        )
+        arm_pick(intent, path=picks_target)
+        typer.echo(body)
+        return
+
     arm_pick(intent, path=picks_target)
     typer.echo(f"armed {wanted} @ {trade_date.isoformat()} -> {picks_target}")
 
@@ -1748,6 +2100,7 @@ def arm_manual_command(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Compile and echo the intent, append nothing."
     ),
+    output_format: str | None = _FORMAT_OPTION,
 ) -> None:
     """Arm an off-brief manual pick (#1235) — compile operator-provided levels
     into a full TradeIntent and append it to the selected instance inbox.
@@ -1771,6 +2124,7 @@ def arm_manual_command(
     """
     from alphalens_pipeline.brokers.automanager import state_paths
 
+    resolved_format = _resolve_format(output_format)
     env = _guard_ambient_instance(env, default=_DEFAULT_ARM_ENV)
 
     from alphalens_pipeline.brokers.automanager.manual_intent import (
@@ -1788,7 +2142,7 @@ def arm_manual_command(
     try:
         picks_target = state_paths.picks_path(env=env)
     except ValueError as exc:
-        raise _fail(str(exc)) from exc
+        raise _fail_with("usage", str(exc)) from exc
 
     _guard_state_layout()
 
@@ -1808,10 +2162,11 @@ def arm_manual_command(
     still_armed = [p for p in earlier if p.status == STATUS_ARMED]
     if still_armed:
         live = max(still_armed, key=lambda p: p.generation)
-        raise _fail(
+        raise _fail_with(
+            "pick_already_armed",
             f"{live.ticker} @ {live.token} is still armed (generation {live.generation}) — "
             f"run `alphalens broker disarm {live.ticker} --date {live.trade_date.isoformat()} "
-            f"--env {env}` first; a same-day re-arm then gets the next generation"
+            f"--env {env}` first; a same-day re-arm then gets the next generation",
         )
     generation = next_generation(ticker, now.date(), path=picks_target)
     try:
@@ -1831,11 +2186,41 @@ def arm_manual_command(
             generation=generation,
         )
     except ManualIntentError as exc:
-        raise _fail(str(exc)) from exc
+        raise _fail_with("intent_invalid", str(exc)) from exc
 
     blend = planned_blended_entry_of(
         intent.spec.entry_tiers, disaster_stop=intent.spec.disaster_stop
     )
+
+    if resolved_format == _FORMAT_JSON:
+        # The ARTEFACT, not a description of it. `--dry-run` promised "compile
+        # and echo the intent" and printed prose, so there was nothing a
+        # producer could feed back in. The intent rides inside the group's
+        # standard envelope (#1379) rather than replacing it: one command
+        # answering in a different shape from its eleven siblings is a worse
+        # trade than a consumer unwrapping one key.
+        from broker_contract.trade_intent.codec import intent_to_jsonable
+
+        body = _render_json(
+            _envelope(
+                _ARM_MANUAL_SCHEMA,
+                env,
+                armed=not dry_run,
+                dry_run=dry_run,
+                ticker=intent.instrument.ticker,
+                trade_date=intent.meta.trade_date,
+                generation=generation,
+                intent_id=intent.intent_id,
+                planned_blend=blend,
+                intent=intent_to_jsonable(intent),
+                picks_journal=str(picks_target),
+            )
+        )
+        if not dry_run:
+            arm_pick(intent, path=picks_target)
+        typer.echo(body)
+        return
+
     _echo_manual_intent(intent, blend=blend, frame=frame, notional=notional)
     if generation > 1:
         retired = ", ".join(
@@ -1871,6 +2256,7 @@ def disarm_command(
         help="Same-day re-arm generation to disarm (#1371). Default: the highest "
         "generation queued for (ticker, date).",
     ),
+    output_format: str | None = _FORMAT_OPTION,
 ) -> None:
     """Disarm a picked candidate — retire the (ticker, date) pick from the
     queue AND cancel its open entry-trail watch tiers.
@@ -1911,23 +2297,25 @@ def disarm_command(
         pick_key_str,
     )
 
+    resolved_format = _resolve_format(output_format)
     env = _guard_ambient_instance(env, default=_DEFAULT_ARM_ENV)
     if len(note) > _DISARM_NOTE_MAX_CHARS:
-        raise _fail(
+        raise _fail_with(
+            "usage",
             f"--note is {len(note)} chars; max {_DISARM_NOTE_MAX_CHARS} — the note is "
-            "written verbatim to two append-only journals"
+            "written verbatim to two append-only journals",
         )
 
     try:
         trade_date = dt.date.fromisoformat(date)
     except ValueError as exc:
-        raise _fail(f"invalid --date {date!r}: {exc}") from exc
+        raise _fail_with("usage", f"invalid --date {date!r}: {exc}") from exc
 
     try:
         picks_target = state_paths.picks_path(env=env)
         trails_target = state_paths.entry_trails_path(env=env)
     except ValueError as exc:
-        raise _fail(str(exc)) from exc
+        raise _fail_with("usage", str(exc)) from exc
 
     _guard_state_layout()
 
@@ -1937,7 +2325,7 @@ def disarm_command(
         # never seen it (next_generation is 1 + highest, hence the - 1).
         generation = max(next_generation(wanted, trade_date, path=picks_target) - 1, 1)
     elif generation < 1:
-        raise _fail(f"--generation must be >= 1, got {generation}")
+        raise _fail_with("usage", f"--generation must be >= 1, got {generation}")
     pick_key = pick_key_str(wanted, trade_date.isoformat(), generation)
     try:
         cancelled = entry_trails.cancel_open_watches(pick_key, note=note, path=trails_target)
@@ -1945,6 +2333,23 @@ def disarm_command(
         raise _fail(f"disarm refused — resting entry order: {exc}") from exc
 
     mark_disarmed(wanted, trade_date, note=note, generation=generation, path=picks_target)
+
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(
+            _envelope(
+                _DISARM_SCHEMA,
+                env,
+                disarmed=True,
+                pick_key=pick_key,
+                ticker=wanted,
+                trade_date=trade_date.isoformat(),
+                generation=generation,
+                watches_cancelled=len(cancelled),
+                picks_journal=str(picks_target),
+            )
+        )
+        return
+
     watch_note = f"cancelled {len(cancelled)} watch tier(s)" if cancelled else "no open watch"
     typer.echo(f"disarmed {pick_key} (queue) + {watch_note} -> {picks_target.parent}")
 
@@ -2073,7 +2478,7 @@ def picks_command(
             f"(expected {_PICK_STATE_FILTER_ALL}|{'|'.join(_PICK_STATES)})"
         )
     if limit < 1:
-        raise _fail(f"--limit must be >= 1, got {limit}")
+        raise _fail_with("usage", f"--limit must be >= 1, got {limit}")
     try:
         # `None` resolves through the shared seam (#1377), so a bare invocation
         # reads the same instance every other read command does.
@@ -2260,7 +2665,7 @@ def orders_command(
     try:
         states = _cli_broker(mutating=False).list_open_orders()
     except BrokerError as exc:
-        raise _fail(f"broker orders failed: {exc}") from exc
+        raise _fail_from_broker_error(exc, "broker orders failed") from exc
 
     result = _envelope(
         _ORDERS_SCHEMA,
@@ -2678,7 +3083,7 @@ def status_command(
             offline=offline,
         )
     except BrokerError as exc:
-        raise _fail(f"broker status failed: {exc}") from exc
+        raise _fail_from_broker_error(exc, "broker status failed") from exc
 
     if resolved_format == _FORMAT_JSON:
         _emit_json(_status_payload(snapshot, limits_source=limits_source, applied=applied))
@@ -2760,7 +3165,7 @@ def reconcile_command(
     try:
         verdicts = reconcile_brackets(records, _cli_broker(mutating=False))
     except BrokerError as exc:
-        raise _fail(f"broker reconcile failed: {exc}") from exc
+        raise _fail_from_broker_error(exc, "broker reconcile failed") from exc
 
     if resolved_format == _FORMAT_JSON:
         _emit_json(
@@ -2854,7 +3259,7 @@ def reconcile_fills_command(
     try:
         records = reconcile_fills(lines, broker)
     except BrokerError as exc:
-        raise _fail(f"broker reconcile-fills failed: {exc}") from exc
+        raise _fail_from_broker_error(exc, "broker reconcile-fills failed") from exc
 
     written = write_exec_quality_parquet(records, out_path)
 
@@ -2910,15 +3315,31 @@ def reconcile_fills_command(
 def cancel_command(
     order_id: str = typer.Argument(..., help="Broker OrderId (entry cancel cascades exits)."),
     env: str | None = _ENV_OPTION,
+    output_format: str | None = _FORMAT_OPTION,
 ) -> None:
     """Cancel an order. Deliberately usable without the placement env gate."""
+    from alphalens_pipeline.brokers.automanager import state_paths
     from broker_contract.contract import BrokerError
 
+    resolved_format = _resolve_format(output_format)
     _apply_env_option(env)
     try:
         _cli_broker(mutating=False).cancel_order(order_id)
     except BrokerError as exc:
-        raise _fail(f"broker cancel failed: {exc}") from exc
+        raise _fail_from_broker_error(exc, "broker cancel failed") from exc
+
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(
+            _envelope(
+                _CANCEL_SCHEMA,
+                env if env is not None else state_paths.broker_environment(),
+                order_id=order_id,
+                cancelled=True,
+                cascades_to_children=True,
+            )
+        )
+        return
+
     typer.echo(f"cancelled {order_id} (an entry cancel cascades to its bracket children)")
 
 
@@ -2962,21 +3383,26 @@ def manage_command(
             if deps.stream_trigger is not None:
                 deps.stream_trigger.stop()
     except BrokerError as exc:
-        raise _fail(f"broker manage failed: {exc}") from exc
+        raise _fail_from_broker_error(exc, "broker manage failed") from exc
     if once:
         typer.echo("manage: single tick complete")
 
 
 # ``stream-status`` result contract version (rearm design memo §6 INC-6).
 # Within this major version fields are only ever ADDED, never renamed/retyped.
+_ACCOUNT_SCHEMA = "alphalens.broker.account/v1"
+_ARM_SCHEMA = "alphalens.broker.arm/v1"
+_ARM_MANUAL_SCHEMA = "alphalens.broker.arm-manual/v1"
+_CANCEL_SCHEMA = "alphalens.broker.cancel/v1"
+_DISARM_SCHEMA = "alphalens.broker.disarm/v1"
+_POSITIONS_SCHEMA = "alphalens.broker.positions/v1"
+_RESOLVE_SCHEMA = "alphalens.broker.resolve/v1"
 _STREAM_STATUS_SCHEMA = "alphalens.broker.stream-status/v1"
 
 # Stable machine-readable error code for a missing stream textfile — never
 # renamed (CLI doctrine: domain detail lives in error.code, the process exit
 # stays on the small documented set; 4 = not found).
-_STREAM_STATUS_MISSING_CODE = "stream_metrics_missing"
 
-_STREAM_STATUS_EXIT_NOT_FOUND = 4
 
 # Full PromQL line: ``name{labels} value`` (labels optional). The daemon
 # writes labels into the metric key (textfile.py doctrine), so parsing strips
@@ -3039,8 +3465,11 @@ def stream_status_command(
         )
     path = Path(unit_dir or textfile._resolve_dir()) / f"alphalens_domain_{job}.prom"
     if not path.is_file():
-        _emit_stream_status_missing(path, env=env, job=job)
-        raise typer.Exit(code=_STREAM_STATUS_EXIT_NOT_FOUND)
+        raise _fail_with(
+            "stream_metrics_missing",
+            f"no stream gauge textfile at {path}",
+            details={"path": str(path), "env": env, "job": job},
+        )
 
     gauges = _parse_prom_gauges(path)
 
@@ -3057,31 +3486,6 @@ def stream_status_command(
         return
 
     _render_stream_status_human(env, gauges)
-
-
-def _emit_stream_status_missing(path: Path, *, env: str, job: str) -> None:
-    """Write the structured not-found error for ``stream status`` to stderr."""
-    error = {
-        "code": _STREAM_STATUS_MISSING_CODE,
-        "message": f"no stream gauge textfile at {path}",
-        "retryable": False,
-        "details": {"path": str(path), "env": env, "job": job},
-        "suggestions": [
-            {
-                "argv": [
-                    "systemctl",
-                    "--user",
-                    "status",
-                    "alphalens-broker-manager.service",
-                ],
-                "why": (
-                    "the daemon writes the gauges every tick only while it "
-                    "runs with ALPHALENS_BROKER_STREAMING_ENABLED=1"
-                ),
-            }
-        ],
-    }
-    typer.secho(json.dumps(error), err=True)
 
 
 def _parse_prom_gauges(path: Path) -> dict[str, float]:

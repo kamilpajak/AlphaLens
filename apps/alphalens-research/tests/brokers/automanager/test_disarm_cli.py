@@ -163,14 +163,14 @@ class DisarmCommandTest(unittest.TestCase):
         result = self.runner.invoke(
             broker_app, ["disarm", "KO", "--date", "2026-08-26", "--env", "prod"]
         )
-        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.exit_code, 2)
         self.assertIn("prod", result.output)
 
     def test_disarm_bad_date_refuses(self) -> None:
         from alphalens_cli.commands.broker import broker_app
 
         result = self.runner.invoke(broker_app, ["disarm", "KO", "--date", "not-a-date"])
-        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.exit_code, 2)
         self.assertIn("invalid --date", result.output)
 
     def test_disarm_legacy_flat_layout_refuses(self) -> None:
@@ -187,7 +187,7 @@ class DisarmCommandTest(unittest.TestCase):
         result = self.runner.invoke(
             broker_app, ["disarm", "KO", "--date", "2026-08-26", "--note", "x" * 501]
         )
-        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.exit_code, 2)
         self.assertIn("note", result.output)
         picks = self.home / ".alphalens" / "broker_orders" / "sim" / "picks.jsonl"
         self.assertFalse(picks.exists())
