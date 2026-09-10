@@ -60,6 +60,8 @@ from alphalens_pipeline.brokers.saxo.errors import (
     SaxoLiveEnvironmentBlockedError,
     SaxoNotFoundError,
     SaxoRateLimitError,
+    SaxoTransientError,
+    SaxoWriteOutcomeUnknownError,
 )
 from alphalens_pipeline.brokers.saxo.tokens import (
     TOKEN_ENV,
@@ -817,12 +819,18 @@ class SaxoClient:
                 backoff,
             )
             return backoff
+        # The SAME transport failure gets opposite verdicts here, and that is the
+        # point (#1389): `retriable` already encodes "idempotent verb, or provably
+        # never sent". Exhausting the ladder under it means nothing landed, so a
+        # later re-run is safe; failing it means the write MAY rest at Saxo, and
+        # the caller must reconcile rather than retry.
         detail = (
             "network retries exhausted"
             if retriable
             else "request may have been sent — NOT retried (never blind-retry a POST)"
         )
-        raise SaxoError(
+        error_type = SaxoTransientError if retriable else SaxoWriteOutcomeUnknownError
+        raise error_type(
             f"saxo {method.upper()} {path} network failure "
             f"(x-request-id={request_id}; {detail}): {exc}"
         ) from exc
@@ -844,7 +852,7 @@ class SaxoClient:
         normal server-error backoff ladder.
         """
         if not idempotent:
-            raise SaxoError(
+            raise SaxoWriteOutcomeUnknownError(
                 f"Saxo {resp.status_code} on {method.upper()} {path} "
                 f"(x-request-id={request_id}; write outcome ambiguous — "
                 f"reconcile via 'broker orders' before re-running): "
@@ -887,13 +895,17 @@ class SaxoClient:
                 f"on {method.upper()} {path}"
             )
         if not idempotent and 500 <= resp.status_code < 600:
-            raise SaxoError(
+            raise SaxoWriteOutcomeUnknownError(
                 f"Saxo {resp.status_code} on {method.upper()} {path} "
                 f"(x-request-id={request_id}; write outcome ambiguous — reconcile "
                 f"via 'broker orders' before re-running): {resp.text[:200]}"
             )
         if idempotent and 500 <= resp.status_code < 600:
-            raise SaxoError(f"Saxo {resp.status_code} on {method.upper()} {path} persisted")
+            # The ladder ran and the server kept failing cleanly on an idempotent
+            # verb: nothing is ambiguous, so re-running later is safe (#1389).
+            raise SaxoTransientError(
+                f"Saxo {resp.status_code} on {method.upper()} {path} persisted"
+            )
 
     def _send_write(
         self,
@@ -1034,7 +1046,9 @@ class SaxoClient:
                     self._sleep(backoff)
                     continue
                 break
-        raise SaxoError(f"exhausted network retries: {last_exc}") from last_exc
+        # A read that never reached Saxo: nothing landed, so re-running later is
+        # the right advice (#1389).
+        raise SaxoTransientError(f"exhausted network retries: {last_exc}") from last_exc
 
 
 # Module-level lazy singleton — single SaxoClient shared by every caller that

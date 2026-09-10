@@ -146,7 +146,7 @@ class ArmCommandTest(unittest.TestCase):
         from alphalens_cli.commands.broker import broker_app
 
         result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "not-a-date"])
-        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.exit_code, 2)
         self.assertIn("invalid --date", result.output)
 
     def test_arm_missing_brief_parquet_refuses(self) -> None:
@@ -304,7 +304,7 @@ class ArmEnvOptionTest(unittest.TestCase):
             result = self.runner.invoke(
                 broker_app, ["arm", "KO", "--date", "2026-07-20", "--env", "prod"]
             )
-        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.exit_code, 2)
         self.assertIn("ALPHALENS_BROKER_ENVIRONMENT", result.output)
         self.assertIn("prod", result.output)
         arm.assert_not_called()

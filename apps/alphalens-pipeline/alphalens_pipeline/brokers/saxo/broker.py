@@ -38,6 +38,7 @@ from broker_contract.contract import (
     BrokerCapabilityError,
     BrokerError,
     BrokerRateLimitError,
+    BrokerTransientError,
     InstrumentNotFoundError,
     InstrumentRef,
     OrderRejectedError,
@@ -45,6 +46,7 @@ from broker_contract.contract import (
     OrderStatus,
     PlacedOrder,
     Position,
+    WriteOutcomeUnknownError,
 )
 from broker_contract.fx import FxRateQuote
 from broker_contract.quantity import InstrumentQuantityRules, quantity_refusal
@@ -61,6 +63,8 @@ from alphalens_pipeline.brokers.saxo.client import (
     SaxoError,
     SaxoLiveEnvironmentBlockedError,
     SaxoRateLimitError,
+    SaxoTransientError,
+    SaxoWriteOutcomeUnknownError,
     get_default_saxo_client,
 )
 from alphalens_pipeline.brokers.saxo.live_tokens import LiveOrderTokenProvider
@@ -186,6 +190,12 @@ def _translate_saxo_errors() -> Iterator[None]:
         raise BrokerAuthError(str(exc)) from exc
     except SaxoRateLimitError as exc:
         raise BrokerRateLimitError(str(exc)) from exc
+    # ORDER MATTERS: both classes below subclass SaxoError, so the bare arm at
+    # the end would swallow them and report the wrong contract code (#1389).
+    except SaxoWriteOutcomeUnknownError as exc:
+        raise WriteOutcomeUnknownError(str(exc)) from exc
+    except SaxoTransientError as exc:
+        raise BrokerTransientError(str(exc)) from exc
     except SaxoError as exc:
         raise BrokerError(str(exc)) from exc
 

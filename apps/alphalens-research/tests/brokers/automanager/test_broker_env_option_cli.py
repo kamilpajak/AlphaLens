@@ -325,7 +325,7 @@ class EnvOptionTest(unittest.TestCase):
         from alphalens_cli.commands.broker import broker_app
 
         result = self.runner.invoke(broker_app, ["orders", "--env", "bogus"])
-        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.exit_code, 2)
         self.assertEqual(result.stdout, "")
         self.assertIn("bogus", result.stderr)
 

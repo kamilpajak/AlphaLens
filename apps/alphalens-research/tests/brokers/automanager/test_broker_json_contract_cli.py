@@ -42,6 +42,47 @@ REGISTRY_SEAM = "alphalens_pipeline.brokers.registry.get_default_broker"
 LIVE_FACTORY_SEAM = "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env"
 SHOW_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._systemctl_show"
 READ_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._read_text"
+BRIEF_SEAM = "alphalens_pipeline.paper.brief_loader.load_brief"
+
+_ARM_TRADE_DATE = dt.date(2026, 7, 20)
+
+
+def _brief_candidate():
+    """One plannable brief candidate, so `arm` has something to arm.
+
+    Values mirror `test_arm_cli._plannable_trade_setup()` — the point here is the
+    ENVELOPE, not the sizing, and inventing different numbers would make two
+    fixtures drift apart for no gain.
+    """
+    from alphalens_pipeline.paper.brief_loader import CandidateBrief
+
+    return CandidateBrief(
+        brief_date=_ARM_TRADE_DATE,
+        ticker="KO",
+        theme="test-theme",
+        verified=True,
+        suggested_size_pct=3.0,
+        trade_setup={
+            "schema_version": "1.0.0",
+            "status": "OK",
+            "asof_close": 100.0,
+            "atr": 1.5,
+            "disaster_stop": 90.0,
+            "suggested_size_pct": 3.0,
+            "entry_tiers": [
+                {"limit": 100.0, "alloc_pct": 60.0, "tag": "T1"},
+                {"limit": 98.0, "alloc_pct": 40.0, "tag": "T2"},
+            ],
+            "tp_tranches": [
+                {"target": 110.0, "tranche_pct": 100.0, "r_multiple": 2.0, "tag": "TP1"}
+            ],
+        },
+        n_gates_passed=3,
+        n_gates_failed=0,
+        layer4_weighted_score=1.0,
+        scorer_config_version="scorer-v1-test",
+    )
+
 
 # The nine rails the LIVE boot-assert requires (ADR 0017), so an `--env live`
 # read composes and resolves a gateway the way it does on the VPS. Values are
@@ -68,17 +109,62 @@ _UNIT_PROPERTIES = {
 
 # Every command that can render JSON today: the argv that runs it, whether it
 # takes `--env`, and the body keys its envelope must carry beyond schema/env.
-# `account`, `positions`, `resolve` and the five mutators are text-only by
-# decision (#1389, deferred until a consumer needs them). `reconcile-fills`
-# carries no `--env` because it WRITES the execution-quality parquet, so #1377
-# left it out of the read-command option; its envelope still names the
-# instance it read.
+# The three reads joined in #1389, when the failure contract gave the group a
+# machine caller; `submit` stays text-only on purpose (it is LIVE-forbidden by
+# ADR 0017, carries the module's only interactive confirmation, and `arm` is
+# what a client drives instead). `resolve` carries no `--env` because it names
+# an instrument, not an instance; `reconcile-fills` carries none because it
+# WRITES the execution-quality parquet, so #1377 left it out of the
+# read-command option — its envelope still names the instance it read.
 #
 # The table is checked against the app itself in `TableCoversEveryJsonCommand`
 # — a new command with `--format` that is not listed here fails, so this file
 # cannot silently stop covering the group.
 _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
+    (
+        "account",
+        ["account"],
+        True,
+        ("account_id", "currency", "cash", "total_value", "margin_available", "asof"),
+    ),
+    ("positions", ["positions"], True, ("positions",)),
+    (
+        "resolve",
+        ["resolve", "KO"],
+        False,
+        ("ticker", "exchange_mic", "asset_type", "broker_instrument_id", "broker_symbol"),
+    ),
     ("orders", ["orders"], True, ("orders",)),
+    (
+        "arm",
+        ["arm", "KO", "--date", "2026-07-20"],
+        True,
+        ("armed", "ticker", "trade_date", "generation", "intent_id", "picks_journal"),
+    ),
+    (
+        "arm-manual",
+        [
+            "arm-manual",
+            "NVO",
+            "--tier",
+            "100",
+            "--stop",
+            "90",
+            "--no-tp",
+            "--size-pct",
+            "3",
+            "--dry-run",
+        ],
+        True,
+        ("armed", "dry_run", "ticker", "generation", "intent", "picks_journal"),
+    ),
+    (
+        "disarm",
+        ["disarm", "KO", "--date", "2026-07-20"],
+        True,
+        ("disarmed", "pick_key", "generation", "watches_cancelled", "picks_journal"),
+    ),
+    ("cancel", ["cancel", "O-1"], True, ("order_id", "cancelled")),
     ("picks", ["picks"], True, ("picks", "counts", "picks_journal")),
     ("watches", ["watches"], True, ("watches", "watching", "journal")),
     ("status", ["status", "--offline"], True, ("exposure", "slots", "health", "orders")),
@@ -86,6 +172,14 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
     ("reconcile", ["reconcile"], True, ("verdicts", "journal")),
     ("reconcile-fills", ["reconcile-fills"], False, ("fills", "out", "written")),
 )
+
+
+# The three commands that APPEND to an instance inbox. They refuse an ambient
+# ALPHALENS_BROKER_ENVIRONMENT that disagrees with their default instead of
+# following it (#1377) — a write must not choose SIM or LIVE off a variable the
+# operator forgot was set. `cancel` is not among them: it resolves the instance
+# the way the read commands do.
+_AMBIENT_REFUSING_COMMANDS = frozenset({"arm", "arm-manual", "disarm"})
 
 
 def _reject_json_constant(token: str) -> None:
@@ -150,14 +244,29 @@ class _ContractFakeBroker:
             asof=dt.datetime.now(dt.UTC),
         )
 
+    cancelled: list[str] = []
+
     def get_positions(self) -> list[Any]:
         return []
+
+    def resolve_instrument(self, ticker: str, exchange_mic: str) -> InstrumentRef:
+        return InstrumentRef(
+            ticker=ticker,
+            exchange_mic=exchange_mic,
+            asset_type="Stock",
+            broker_instrument_id="307",
+            broker_symbol=f"{ticker}:xnys",
+            currency="USD",
+        )
 
     def list_open_orders(self) -> list[OrderState]:
         return list(self.open_orders)
 
     def get_order(self, order_id: str) -> OrderState:
         return self.open_orders[0]
+
+    def cancel_order(self, order_id: str) -> None:
+        self.cancelled.append(order_id)
 
     def resolve_order_outcome(self, order_id: str) -> OrderState:
         return self.open_orders[0]
@@ -197,6 +306,10 @@ class _BrokerCliCase(unittest.TestCase):
     def invoke(self, argv: list[str]):
         """Run one broker command with the SIM and LIVE gateways both faked.
 
+        `arm` additionally reads a brief; the loader is patched to one plannable
+        candidate so the table below can exercise its envelope without a parquet
+        fixture. Inert for every other command.
+
         The unit-composition seams are installed for every call, not just the
         LIVE ones: patching them is inert on a SIM read, and it keeps a single
         entry point for the table-driven tests below.
@@ -208,6 +321,7 @@ class _BrokerCliCase(unittest.TestCase):
             mock.patch(READ_SEAM, lambda _path: ""),
             mock.patch(LIVE_FACTORY_SEAM, return_value=(self.broker, mock.Mock())),
             mock.patch(REGISTRY_SEAM, return_value=self.broker),
+            mock.patch(BRIEF_SEAM, return_value=[_brief_candidate()]),
         ):
             return self.runner.invoke(broker_app, argv)
 
@@ -274,16 +388,37 @@ class JsonEnvelopeContractTest(_BrokerCliCase):
         self._seed_stream_gauges("live")
         with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ENVIRONMENT": "live"}):
             for name, argv, _, _keys in _JSON_COMMANDS:
+                if name in _AMBIENT_REFUSING_COMMANDS:
+                    continue
                 with self.subTest(command=name):
                     result = self.invoke([*argv, "--format", "json"])
                     self.assertEqual(result.exit_code, 0, result.output)
                     self.assertEqual(_strict_json(result.stdout)["env"], "live")
 
+    def test_the_queue_writers_refuse_the_ambient_variable_instead_of_following_it(self) -> None:
+        """The exclusion above is a BEHAVIOUR, not a gap, so it is asserted.
+
+        A command that appends to an instance inbox must not pick the instance
+        off an environment variable the operator may have forgotten about
+        (#1377); it demands an explicit `--env`. Without this test the skip in
+        the loop above would quietly excuse a command that had simply stopped
+        naming its instance.
+        """
+        with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ENVIRONMENT": "live"}):
+            for name, argv, _, _keys in _JSON_COMMANDS:
+                if name not in _AMBIENT_REFUSING_COMMANDS:
+                    continue
+                with self.subTest(command=name):
+                    result = self.invoke([*argv, "--format", "json"])
+                    self.assertEqual(result.exit_code, 1, result.output)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("--env", result.stderr)
+
     def test_unknown_format_is_refused_everywhere(self) -> None:
         for name, argv, _, _keys in _JSON_COMMANDS:
             with self.subTest(command=name):
                 result = self.invoke([*argv, "--format", "xml"])
-                self.assertEqual(result.exit_code, 1)
+                self.assertEqual(result.exit_code, 2)
                 self.assertEqual(result.stdout, "")
                 self.assertIn("--format", result.stderr)
 
@@ -379,7 +514,7 @@ class JsonAliasTest(_BrokerCliCase):
         for name in ("reconcile", "reconcile-fills"):
             with self.subTest(command=name):
                 result = self.invoke([name, "--json", "--format", "human"])
-                self.assertEqual(result.exit_code, 1)
+                self.assertEqual(result.exit_code, 2)
                 self.assertEqual(result.stdout, "")
                 self.assertIn("--json", result.stderr)
                 self.assertIn("--format", result.stderr)

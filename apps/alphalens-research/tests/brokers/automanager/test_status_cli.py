@@ -196,7 +196,7 @@ class StatusCommandTest(unittest.TestCase):
 
     def test_an_unknown_format_refuses(self) -> None:
         result = self._invoke("--format", "xml")
-        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.exit_code, 2)
         self.assertEqual(result.stdout, "")
 
     # --- offline ------------------------------------------------------------

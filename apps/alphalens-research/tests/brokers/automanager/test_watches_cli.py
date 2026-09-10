@@ -251,7 +251,7 @@ class WatchesCommandTest(unittest.TestCase):
     def test_unknown_format_fails_with_empty_stdout(self) -> None:
         _seed(self.home, "sim")
         result = self._invoke("--format", "xml")
-        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.exit_code, 2)
         self.assertEqual(result.stdout, "")
         self.assertIn("--format", result.stderr)
 

@@ -38,6 +38,8 @@ from alphalens_pipeline.brokers.saxo.client import (
     SaxoAuthError,
     SaxoError,
     SaxoRateLimitError,
+    SaxoTransientError,
+    SaxoWriteOutcomeUnknownError,
 )
 from broker_contract.contract import (
     AccountSnapshot,
@@ -45,11 +47,13 @@ from broker_contract.contract import (
     BrokerAuthError,
     BrokerError,
     BrokerRateLimitError,
+    BrokerTransientError,
     InstrumentNotFoundError,
     InstrumentRef,
     OrderRejectedError,
     OrderStatus,
     Position,
+    WriteOutcomeUnknownError,
 )
 
 from tests.brokers.test_broker_contract import BrokerConformanceMixin
@@ -603,6 +607,33 @@ class TestErrorTranslationBoundary(unittest.TestCase):
                     broker.get_account()
                 # The vendor exception must never escape raw.
                 self.assertNotIsInstance(ctx.exception, SaxoError)
+
+    def test_the_two_classification_errors_translate_to_their_contract_twins(self):
+        """#1389: the adapter must carry the client's own transient/ambiguous
+        split across the boundary. Mapping either to a bare ``BrokerError``
+        would put the DNS outage and the may-have-landed write back into the
+        same bucket the contract exists to separate."""
+        cases = [
+            (SaxoTransientError("dns"), BrokerTransientError),
+            (SaxoWriteOutcomeUnknownError("500 on POST"), WriteOutcomeUnknownError),
+        ]
+        for saxo_exc, broker_exc_type in cases:
+            with self.subTest(saxo=type(saxo_exc).__name__):
+                broker = SaxoBroker(_StubSaxoClient(fail_with=saxo_exc))  # type: ignore[arg-type]
+                with self.assertRaises(broker_exc_type) as ctx:
+                    broker.get_account()
+                self.assertNotIsInstance(ctx.exception, SaxoError)
+
+    def test_the_new_arms_are_matched_before_the_bare_saxo_error_arm(self):
+        """Both new classes subclass ``SaxoError``, so an arm order that put the
+        base first would silently swallow them — the failure would still be
+        reported, just with the wrong code and the wrong retryability."""
+        for saxo_exc in (SaxoTransientError("dns"), SaxoWriteOutcomeUnknownError("500")):
+            with self.subTest(saxo=type(saxo_exc).__name__):
+                broker = SaxoBroker(_StubSaxoClient(fail_with=saxo_exc))  # type: ignore[arg-type]
+                with self.assertRaises(BrokerError) as ctx:
+                    broker.get_account()
+                self.assertIsNot(type(ctx.exception), BrokerError)
 
     def test_translation_covers_positions_and_resolve(self):
         broker = SaxoBroker(_StubSaxoClient(fail_with=SaxoAuthError("401")))  # type: ignore[arg-type]

@@ -355,5 +355,86 @@ class ArmManualLegacyLayoutGuardTest(unittest.TestCase):
         arm.assert_not_called()
 
 
+class TheJsonFormEmitsTheArtefactNotADescriptionOfIt(unittest.TestCase):
+    """`--format json` prints the intent a producer can feed back (#1389).
+
+    `--dry-run` promised "compile and echo the intent" and printed a human
+    summary, so nothing downstream could consume what it produced. The door in
+    #1406 needs the emitted document to decode back into the same intent, so the
+    property is proven HERE, where the document is produced.
+
+    Identity is asserted on the SERIALISED form, not on the decoded dict:
+    `intent_to_jsonable` emits tuples where `json.loads` gives lists, so the two
+    Python objects compare unequal while the JSON text is byte-identical. The
+    contract is the document.
+    """
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patcher = mock.patch("pathlib.Path.home", return_value=Path(tmp.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _emit(self, *extra: str) -> dict:
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(
+            broker_app,
+            [
+                "arm-manual",
+                "NVO",
+                "--tier",
+                "100:60",
+                "--tier",
+                "98:40",
+                "--stop",
+                "90",
+                "--tp",
+                "110:100",
+                "--size-pct",
+                "3",
+                "--format",
+                "json",
+                *extra,
+            ],
+        )
+        self.assertEqual(result.exit_code, 0, result.output)
+        return json.loads(result.stdout)
+
+    def test_the_emitted_intent_decodes_back_into_the_same_document(self) -> None:
+        from broker_contract.trade_intent.codec import intent_from_jsonable, intent_to_jsonable
+
+        emitted = self._emit("--dry-run")["intent"]
+        again = intent_to_jsonable(intent_from_jsonable(emitted))
+
+        self.assertEqual(json.dumps(emitted, sort_keys=True), json.dumps(again, sort_keys=True))
+
+    def test_the_envelope_names_the_pick_a_client_would_have_to_read_from_prose(self) -> None:
+        """The generation (#1371) was only ever printed as prose."""
+        payload = self._emit("--dry-run")
+
+        self.assertEqual(payload["ticker"], "NVO")
+        self.assertEqual(payload["generation"], 1)
+        self.assertFalse(payload["armed"])
+        self.assertTrue(payload["dry_run"])
+
+    def test_a_dry_run_appends_nothing_even_in_json_mode(self) -> None:
+        """The flag's promise, checked against the journal rather than the word."""
+        payload = self._emit("--dry-run")
+
+        self.assertFalse(Path(payload["picks_journal"]).exists())
+
+    def test_a_real_arm_says_so_and_writes_the_queue(self) -> None:
+        """Positive control for the test above: without it, a broken arm path
+        would make the dry-run assertion pass for the wrong reason."""
+        payload = self._emit()
+
+        self.assertTrue(payload["armed"])
+        self.assertFalse(payload["dry_run"])
+        self.assertTrue(Path(payload["picks_journal"]).exists())
+
+
 if __name__ == "__main__":
     unittest.main()

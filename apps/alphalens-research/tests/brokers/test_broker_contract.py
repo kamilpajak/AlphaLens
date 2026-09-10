@@ -36,6 +36,7 @@ from broker_contract.contract import (
     BrokerCapabilityError,
     BrokerError,
     BrokerRateLimitError,
+    BrokerTransientError,
     InstrumentNotFoundError,
     InstrumentRef,
     OrderRejectedError,
@@ -43,11 +44,13 @@ from broker_contract.contract import (
     OrderStatus,
     PlacedOrder,
     Position,
+    WriteOutcomeUnknownError,
     _is_price_tolerance_reject,
     _is_sell_orders_already_exist,
     _is_too_far_from_entry,
     _is_too_far_from_market,
 )
+from broker_contract.failure import CONTRACT_FAILURE_CODES
 
 
 def _instrument(ticker: str = "KO", mic: str = "XNYS") -> InstrumentRef:
@@ -278,6 +281,75 @@ class TestErrorTaxonomy(unittest.TestCase):
         """Catching one leaf must not swallow a sibling leaf."""
         self.assertNotIsInstance(BrokerAuthError("x"), BrokerRateLimitError)
         self.assertNotIsInstance(InstrumentNotFoundError("x"), BrokerAuthError)
+
+    def test_the_two_classes_added_for_the_failure_contract_are_broker_errors(self):
+        """#1389 split the base class in two directions the old taxonomy could
+        not express: a failure that provably never landed (safe to re-run) and a
+        write that MAY have landed (must be reconciled first). Both stay
+        ``BrokerError`` so the seven production ``except BrokerError`` sites keep
+        catching them."""
+        for exc_type in (BrokerTransientError, WriteOutcomeUnknownError):
+            with self.subTest(exc=exc_type.__name__):
+                exc = exc_type("boom")
+                self.assertIsInstance(exc, BrokerError)
+                self.assertIsInstance(exc, RuntimeError)
+
+    def test_the_new_classes_are_distinct_from_each_other_and_from_rate_limit(self):
+        """The whole point is that a caller can tell them apart; sharing a
+        branch with ``BrokerRateLimitError`` would re-merge what #1389 split."""
+        self.assertNotIsInstance(BrokerTransientError("x"), WriteOutcomeUnknownError)
+        self.assertNotIsInstance(WriteOutcomeUnknownError("x"), BrokerTransientError)
+        self.assertNotIsInstance(BrokerTransientError("x"), BrokerRateLimitError)
+
+
+class TestFailureCodeBinding(unittest.TestCase):
+    """Each taxonomy class names its published failure code (#1389).
+
+    The code is a ``ClassVar``, so the base carries one too and there is no
+    "exception without a code" case for the CLI emitter to handle — including a
+    ``BrokerError`` raised by pipeline code outside the adapter boundary.
+    """
+
+    # Pinned by name rather than derived: deriving the mapping from the classes
+    # would make this test agree with whatever the code says.
+    EXPECTED = {
+        BrokerError: "broker_failed",
+        BrokerAuthError: "broker_auth",
+        BrokerRateLimitError: "broker_rate_limited",
+        BrokerTransientError: "broker_transient",
+        WriteOutcomeUnknownError: "write_outcome_unknown",
+        InstrumentNotFoundError: "instrument_not_found",
+        OrderRejectedError: "order_rejected",
+        BrokerCapabilityError: "broker_unsupported",
+    }
+
+    def test_every_class_names_its_code(self):
+        for exc_type, code in self.EXPECTED.items():
+            with self.subTest(exc=exc_type.__name__):
+                self.assertEqual(exc_type.failure_code, code)
+
+    def test_every_named_code_is_published_by_the_contract_registry(self):
+        """A class naming a code the registry does not publish would emit a code
+        no client can look up."""
+        for exc_type, code in self.EXPECTED.items():
+            with self.subTest(exc=exc_type.__name__):
+                self.assertIn(code, CONTRACT_FAILURE_CODES)
+
+    def test_no_two_classes_share_a_code(self):
+        """Two classes on one code would make the code unable to say which
+        failure happened — the exact ambiguity #1389 exists to remove."""
+        codes = [exc_type.failure_code for exc_type in self.EXPECTED]
+        self.assertEqual(len(codes), len(set(codes)))
+
+    def test_an_instance_reports_the_same_code_as_its_class(self):
+        """The emitter reads it off the caught instance, not off the class."""
+        self.assertEqual(BrokerTransientError("boom").failure_code, "broker_transient")
+
+    def test_retryability_matches_the_registry_for_each_class(self):
+        """Positive control tying the two halves together: the class the adapter
+        raises decides what the client is told it may re-run."""
+        self.assertTrue(CONTRACT_FAILURE_CODES[BrokerTransientError.failure_code].retryable)
+        self.assertFalse(CONTRACT_FAILURE_CODES[WriteOutcomeUnknownError.failure_code].retryable)
 
 
 class TestErrorClassifiersPositiveControl(unittest.TestCase):
