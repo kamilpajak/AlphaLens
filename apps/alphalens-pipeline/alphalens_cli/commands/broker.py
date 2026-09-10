@@ -3024,6 +3024,19 @@ def stream_status_command(
     # unknown-instance refusal here; `None` from it means "the host could not
     # answer", and then this falls back exactly as before.
     unit_dir = unit_env.textfile_dir_for_env(env) if requested is not None else None
+    if requested is not None and unit_dir is None:
+        # SAY the degradation. The operator asked about an instance and is
+        # getting this shell's directory instead; if a stale file happens to
+        # sit there under the expected name, the command would otherwise
+        # SUCCEED while the --env intent went unhonoured. Mirrors the
+        # `WARN --env …` line `_apply_env_option` prints when its composition
+        # fails. Gated on an explicit --env, so a bare invocation stays silent.
+        typer.secho(
+            f"WARN --env {env}: could not read {unit_env.unit_for_env(env)} through "
+            "systemctl — falling back to this shell's ALPHALENS_TEXTFILE_DIR",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
     path = Path(unit_dir or textfile._resolve_dir()) / f"alphalens_domain_{job}.prom"
     if not path.is_file():
         _emit_stream_status_missing(path, env=env, job=job)

@@ -144,9 +144,13 @@ class TestStreamStatusReadsTheUnitsDirectory(unittest.TestCase):
                 with mock.patch(self._SHOW_SEAM, self._show(payload)):
                     result = self._invoke("--env", env)
                 self.assertEqual(result.exit_code, 0, result.output)
+                # The FULL path, not a prefix: a prefix would also pass if the
+                # filename were wrong.
                 self.assertEqual(
-                    json.loads(result.stdout)["source"].startswith(str(self.unit_dir)), True
+                    json.loads(result.stdout)["source"],
+                    str(self.unit_dir / f"alphalens_domain_broker-manager-{env}-stream.prom"),
                 )
+                self.assertNotIn("WARN", result.stderr)
 
     def test_a_bare_invocation_never_touches_systemctl(self) -> None:
         # Positive control: the seam EXPLODES if used. A bare call keeps its
@@ -172,6 +176,33 @@ class TestStreamStatusReadsTheUnitsDirectory(unittest.TestCase):
             result = self._invoke("--env", "live")
         self.assertEqual(result.exit_code, 4)
         self.assertIn(str(self.process_dir), result.stderr)
+        # And it SAYS so: the operator asked about an instance and got this
+        # shell's directory. Without the line, a stale file sitting there under
+        # the expected name would let the command SUCCEED while the --env
+        # intent went unhonoured.
+        self.assertIn("WARN --env live", result.stderr)
+
+    def test_the_fallback_warning_is_silent_when_the_unit_answers(self) -> None:
+        # The other direction: no noise on the healthy path.
+        self._seed(self.unit_dir, "sim")
+        payload = f"ALPHALENS_TEXTFILE_DIR={self.unit_dir}"
+        with mock.patch(self._SHOW_SEAM, self._show(payload)):
+            result = self._invoke("--env", "sim")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertNotIn("WARN", result.stderr)
+
+    def test_a_bare_invocation_never_warns_either(self) -> None:
+        # The warning is gated on an explicit --env, so the documented bare
+        # behaviour stays byte-identical — including its silence.
+        self._seed(self.process_dir, "sim")
+
+        def explode(_unit: str, _prop: str) -> str:
+            raise AssertionError("a bare stream-status must not shell out")
+
+        with mock.patch(self._SHOW_SEAM, explode):
+            result = self._invoke()
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertNotIn("WARN", result.stderr)
 
 
 class TestStreamStatusCommand(unittest.TestCase):
