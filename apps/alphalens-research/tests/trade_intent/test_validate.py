@@ -1,0 +1,351 @@
+"""Unit tests for ``broker_contract/trade_intent/validate.py`` — the semantic
+validation of a :class:`TradeIntent` (#1404).
+
+Every rule here used to live in the CLI-layer builder behind `alphalens broker
+arm-manual`, so nothing that did not invoke our Typer command could reach it.
+These tests exercise the rules with NO CLI in the picture — that is the property
+#1406's `arm --from-intent` door depends on.
+"""
+
+from __future__ import annotations
+
+import json
+import unittest
+
+from broker_contract.failure import CONTRACT_FAILURE_CODES
+from broker_contract.trade_intent.codec import intent_from_jsonable, intent_to_jsonable
+from broker_contract.trade_intent.schema import (
+    EntryTierSpec,
+    InstrumentHint,
+    IntentMeta,
+    TpTrancheSpec,
+    TradeIntent,
+    TradeSpec,
+)
+from broker_contract.trade_intent.validate import (
+    INTENT_INVALID_REASONS,
+    IntentInvalidError,
+    validate_intent,
+)
+
+
+def _intent(**spec_overrides) -> TradeIntent:
+    """A valid two-tier manual intent; override any ``TradeSpec`` field."""
+    spec_kwargs = {
+        "entry_tiers": (
+            EntryTierSpec(limit_price=72.5, alloc_pct=60.0, tag="T1"),
+            EntryTierSpec(limit_price=70.0, alloc_pct=40.0, tag="T2"),
+        ),
+        "disaster_stop": 66.0,
+        "tp_tranches": (
+            TpTrancheSpec(price=80.0, tranche_pct=50.0, r_multiple=1.5, tag="TP1"),
+            TpTrancheSpec(price=90.0, tranche_pct=50.0, r_multiple=3.0, tag="TP2"),
+        ),
+        "suggested_size_pct": 10.0,
+    }
+    spec_kwargs.update(spec_overrides)
+    return TradeIntent(
+        intent_id="NVO:2026-09-10:manual",
+        instrument=InstrumentHint(ticker="NVO", mic="XNYS"),
+        spec=TradeSpec(**spec_kwargs),
+        meta=IntentMeta(armed_ts="2026-09-10T12:00:00+00:00", trade_date="2026-09-10"),
+    )
+
+
+def _reason_of(exc: IntentInvalidError) -> str:
+    return str(exc.failure.details["reason"])
+
+
+class ValidIntentPassesTest(unittest.TestCase):
+    def test_the_baseline_intent_is_accepted(self) -> None:
+        self.assertIsNone(validate_intent(_intent()))
+
+
+class IdentityRulesTest(unittest.TestCase):
+    def test_blank_intent_id_refuses(self) -> None:
+        intent = _intent()
+        blank = TradeIntent(
+            intent_id="  ",
+            instrument=intent.instrument,
+            spec=intent.spec,
+            meta=intent.meta,
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(blank)
+        self.assertEqual(_reason_of(ctx.exception), "intent_id_empty")
+
+    def test_blank_ticker_refuses(self) -> None:
+        intent = _intent()
+        blank = TradeIntent(
+            intent_id=intent.intent_id,
+            instrument=InstrumentHint(ticker="   ", mic="XNYS"),
+            spec=intent.spec,
+            meta=intent.meta,
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(blank)
+        self.assertEqual(_reason_of(ctx.exception), "ticker_empty")
+
+
+class LiteralIsNotAGateTest(unittest.TestCase):
+    """``Literal`` annotates; it does not enforce. Measured, not assumed.
+
+    Each test asserts BOTH halves: that the bad document really does decode (the
+    positive control — without it the test would also pass if ``Literal`` were
+    enforced and the rule were dead code), and that ``validate_intent`` refuses it.
+    """
+
+    def _document(self, **spec_overrides) -> dict:
+        doc = intent_to_jsonable(_intent())
+        doc["spec"].update(spec_overrides)
+        return doc
+
+    def test_side_short_decodes_and_is_then_refused(self) -> None:
+        doc = self._document(side="short")
+        decoded = intent_from_jsonable(doc)
+        self.assertEqual(decoded.spec.side, "short")  # positive control
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(decoded)
+        self.assertEqual(_reason_of(ctx.exception), "side_not_long")
+
+    def test_unknown_entry_mode_decodes_and_is_then_refused(self) -> None:
+        doc = intent_to_jsonable(_intent())
+        doc["spec"]["entry_tiers"][0]["entry_mode"] = "sideways"
+        decoded = intent_from_jsonable(doc)
+        self.assertEqual(decoded.spec.entry_tiers[0].entry_mode, "sideways")
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(decoded)
+        self.assertEqual(_reason_of(ctx.exception), "entry_mode_unknown")
+
+
+class EntryLadderRulesTest(unittest.TestCase):
+    def test_empty_ladder_refuses(self) -> None:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=()))
+        self.assertEqual(_reason_of(ctx.exception), "entry_tiers_empty")
+
+    def test_allocations_off_100_refuse_without_rescaling(self) -> None:
+        tiers = (
+            EntryTierSpec(limit_price=72.5, alloc_pct=60.0),
+            EntryTierSpec(limit_price=70.0, alloc_pct=30.0),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=tiers))
+        self.assertEqual(_reason_of(ctx.exception), "entry_alloc_sum")
+        self.assertIn("no silent rescaling", ctx.exception.failure.message)
+
+    def test_float_noise_in_an_equal_split_is_tolerated(self) -> None:
+        third = 100.0 / 3
+        tiers = tuple(
+            EntryTierSpec(limit_price=70.0 + index, alloc_pct=third) for index in range(3)
+        )
+        self.assertIsNone(validate_intent(_intent(entry_tiers=tiers)))
+
+    def test_non_positive_tier_price_refuses_and_names_the_tier(self) -> None:
+        tiers = (
+            EntryTierSpec(limit_price=72.5, alloc_pct=50.0),
+            EntryTierSpec(limit_price=0.0, alloc_pct=50.0),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=tiers))
+        self.assertEqual(_reason_of(ctx.exception), "entry_price_non_positive")
+        self.assertEqual(ctx.exception.failure.details["tier_index"], 1)
+
+    def test_non_positive_allocation_refuses(self) -> None:
+        tiers = (
+            EntryTierSpec(limit_price=72.5, alloc_pct=100.0),
+            EntryTierSpec(limit_price=70.0, alloc_pct=0.0),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=tiers))
+        self.assertEqual(_reason_of(ctx.exception), "entry_alloc_non_positive")
+
+    def test_duplicate_tier_price_refuses(self) -> None:
+        tiers = (
+            EntryTierSpec(limit_price=70.0, alloc_pct=50.0),
+            EntryTierSpec(limit_price=70.0, alloc_pct=50.0),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=tiers))
+        self.assertEqual(_reason_of(ctx.exception), "entry_price_duplicate")
+
+    def test_two_immediate_tiers_refuse(self) -> None:
+        tiers = (
+            EntryTierSpec(limit_price=75.0, alloc_pct=50.0, entry_mode="immediate"),
+            EntryTierSpec(limit_price=74.0, alloc_pct=50.0, entry_mode="immediate"),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=tiers))
+        self.assertEqual(_reason_of(ctx.exception), "immediate_tier_count")
+
+    def test_immediate_tier_not_listed_first_refuses(self) -> None:
+        tiers = (
+            EntryTierSpec(limit_price=70.0, alloc_pct=50.0),
+            EntryTierSpec(limit_price=75.0, alloc_pct=50.0, entry_mode="immediate"),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=tiers))
+        self.assertEqual(_reason_of(ctx.exception), "immediate_tier_not_first")
+
+    def test_a_leading_immediate_tier_is_accepted(self) -> None:
+        tiers = (
+            EntryTierSpec(limit_price=75.0, alloc_pct=50.0, entry_mode="immediate"),
+            EntryTierSpec(limit_price=70.0, alloc_pct=50.0),
+        )
+        self.assertIsNone(validate_intent(_intent(entry_tiers=tiers)))
+
+
+class StopAndSizeRulesTest(unittest.TestCase):
+    def test_non_positive_stop_refuses(self) -> None:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(disaster_stop=0.0))
+        self.assertEqual(_reason_of(ctx.exception), "stop_non_positive")
+
+    def test_stop_at_or_above_the_lowest_tier_refuses(self) -> None:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(disaster_stop=70.0))
+        self.assertEqual(_reason_of(ctx.exception), "stop_above_entry")
+
+    def test_a_levered_size_refuses(self) -> None:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(suggested_size_pct=100.1))
+        self.assertEqual(_reason_of(ctx.exception), "size_pct_out_of_range")
+
+    def test_a_full_frame_size_is_accepted(self) -> None:
+        self.assertIsNone(validate_intent(_intent(suggested_size_pct=100.0)))
+
+    def test_zero_size_refuses(self) -> None:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(suggested_size_pct=0.0))
+        self.assertEqual(_reason_of(ctx.exception), "size_pct_out_of_range")
+
+
+class TakeProfitRulesTest(unittest.TestCase):
+    def test_tranche_percentages_under_100_are_LEGAL_a_runner_is_left(self) -> None:
+        """The TP rule is ONE-SIDED, unlike the entry ladder's.
+
+        Summing to less than 100 means the pick deliberately leaves a runner. If
+        this ever becomes a refusal, a real strategy stops being expressible.
+        """
+        tranches = (TpTrancheSpec(price=80.0, tranche_pct=60.0),)
+        self.assertIsNone(validate_intent(_intent(tp_tranches=tranches)))
+
+    def test_tranche_percentages_over_100_refuse(self) -> None:
+        tranches = (
+            TpTrancheSpec(price=80.0, tranche_pct=60.0),
+            TpTrancheSpec(price=90.0, tranche_pct=41.0),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(tp_tranches=tranches))
+        self.assertEqual(_reason_of(ctx.exception), "tp_pct_sum_exceeds_100")
+
+    def test_no_tp_tranches_at_all_is_accepted(self) -> None:
+        self.assertIsNone(validate_intent(_intent(tp_tranches=())))
+
+    def test_non_positive_tranche_pct_refuses(self) -> None:
+        tranches = (TpTrancheSpec(price=80.0, tranche_pct=0.0),)
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(tp_tranches=tranches))
+        self.assertEqual(_reason_of(ctx.exception), "tp_pct_non_positive")
+
+    def test_duplicate_tp_price_refuses(self) -> None:
+        tranches = (
+            TpTrancheSpec(price=80.0, tranche_pct=50.0),
+            TpTrancheSpec(price=80.0, tranche_pct=50.0),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(tp_tranches=tranches))
+        self.assertEqual(_reason_of(ctx.exception), "tp_price_duplicate")
+
+    def test_tp_at_or_below_the_planned_blend_refuses_and_names_the_tranche(self) -> None:
+        # Blend over 72.5@60 / 70.0@40 is 71.5.
+        tranches = (
+            TpTrancheSpec(price=80.0, tranche_pct=50.0),
+            TpTrancheSpec(price=71.0, tranche_pct=50.0),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(tp_tranches=tranches))
+        self.assertEqual(_reason_of(ctx.exception), "tp_price_below_blend")
+        self.assertEqual(ctx.exception.failure.details["tranche_index"], 1)
+
+
+class TheFailureShapeTest(unittest.TestCase):
+    def test_the_code_is_the_registered_contract_code(self) -> None:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(disaster_stop=0.0))
+        failure = ctx.exception.failure
+        self.assertEqual(failure.code, "intent_invalid")
+        self.assertIn(failure.code, CONTRACT_FAILURE_CODES)
+        self.assertFalse(failure.retryable)
+
+    def test_the_failure_renders_as_json(self) -> None:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(disaster_stop=0.0))
+        rendered = json.loads(json.dumps(ctx.exception.failure.to_jsonable()))
+        self.assertEqual(rendered["code"], "intent_invalid")
+        self.assertEqual(rendered["details"]["reason"], "stop_non_positive")
+
+    def test_every_violation_is_reported_not_only_the_first(self) -> None:
+        """A generated document must be fixable in one pass, not by a submit loop.
+
+        Both halves matter: the complete list is what a machine consumer needs,
+        and ``message`` still carrying the FIRST violation is what keeps the
+        operator's text unchanged.
+        """
+        tiers = (
+            EntryTierSpec(limit_price=72.5, alloc_pct=60.0),
+            EntryTierSpec(limit_price=70.0, alloc_pct=30.0),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=tiers, disaster_stop=0.0, suggested_size_pct=250.0))
+        details = ctx.exception.failure.details
+        reasons = [v["reason"] for v in details["violations"]]
+        self.assertEqual(reasons, ["entry_alloc_sum", "stop_non_positive", "size_pct_out_of_range"])
+        self.assertEqual(details["reason"], "entry_alloc_sum")
+        self.assertIn("sum to 100", ctx.exception.failure.message)
+
+    def test_every_reason_raised_is_in_the_published_registry(self) -> None:
+        """Positive control: the registry is not allowed to rot into a tautology."""
+        self.assertIn("stop_non_positive", INTENT_INVALID_REASONS)
+        self.assertNotIn("a_reason_nobody_registered", INTENT_INVALID_REASONS)
+
+
+class BlendDependentRulesAreSkippedWhenTheBlendIsUncomputableTest(unittest.TestCase):
+    def test_an_all_zero_ladder_reports_the_price_rule_not_a_blend_crash(self) -> None:
+        tiers = (EntryTierSpec(limit_price=0.0, alloc_pct=100.0),)
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=tiers))
+        self.assertEqual(_reason_of(ctx.exception), "entry_price_non_positive")
+        reasons = [v["reason"] for v in ctx.exception.failure.details["violations"]]
+        self.assertNotIn("tp_price_below_blend", reasons)
+
+
+class LegalDocumentShapesTest(unittest.TestCase):
+    def test_a_zero_order_ttl_is_LEGAL_it_is_the_planner_field_absent_sentinel(self) -> None:
+        """``order_ttl_days == 0`` is a rule about the CLI flag, not the document.
+
+        ``brokers/execution.py`` resolves the 0 sentinel to a default on purpose.
+        Refusing it here would make a document the brief path legitimately emits
+        un-submittable.
+        """
+        self.assertIsNone(validate_intent(_intent(order_ttl_days=0)))
+
+
+class RoundTripTest(unittest.TestCase):
+    def test_a_validated_intent_survives_encode_decode_and_validates_again(self) -> None:
+        intent = _intent()
+        validate_intent(intent)
+        emitted = json.loads(json.dumps(intent_to_jsonable(intent)))
+        decoded = intent_from_jsonable(emitted)
+        validate_intent(decoded)
+        # Compare the SERIALISED documents: intent_to_jsonable emits tuples where
+        # json.loads gives lists, so comparing the decoded objects is False for a
+        # reason that has nothing to do with the contract.
+        self.assertEqual(
+            json.dumps(emitted, sort_keys=True),
+            json.dumps(intent_to_jsonable(decoded), sort_keys=True),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

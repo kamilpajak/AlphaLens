@@ -22,6 +22,14 @@ from alphalens_pipeline.brokers.automanager.manual_intent import (
     planned_blended_entry_of,
     resolve_size_pct,
 )
+from broker_contract.trade_intent.schema import (
+    EntryTierSpec,
+    InstrumentHint,
+    IntentMeta,
+    TradeIntent,
+    TradeSpec,
+)
+from broker_contract.trade_intent.validate import validate_intent
 
 _BLEND = 100.0
 _STOP = 90.0
@@ -103,21 +111,9 @@ class ParseEntryTiersTest(unittest.TestCase):
         with self.assertRaisesRegex(ManualIntentError, "either every --tier"):
             parse_entry_tiers(["72.5:60", "70"])
 
-    def test_alloc_sum_off_100_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "sum to 100"):
-            parse_entry_tiers(["72.5:60", "70:30"])
-
-    def test_single_tier_with_partial_alloc_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "sum to 100"):
-            parse_entry_tiers(["72.5:60"])
-
     def test_non_positive_price_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "price must be positive"):
             parse_entry_tiers(["0:100"])
-
-    def test_non_positive_alloc_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "alloc_pct must be positive"):
-            parse_entry_tiers(["72.5:100", "70:0"])
 
     def test_garbage_tier_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "cannot parse --tier"):
@@ -126,12 +122,6 @@ class ParseEntryTiersTest(unittest.TestCase):
     def test_too_many_colons_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "cannot parse --tier"):
             parse_entry_tiers(["72.5:60:1"])
-
-    def test_duplicate_tier_price_refuses(self) -> None:
-        # The same price twice is almost certainly a pasted-twice typo: the
-        # deeper rung of such a ladder can never fill separately.
-        with self.assertRaisesRegex(ManualIntentError, "duplicate --tier price"):
-            parse_entry_tiers(["72.5:60", "72.5:40"])
 
     def test_now_tier_with_alloc_parses(self) -> None:
         tiers = parse_entry_tiers(["now@43.00:40", "41:60"])
@@ -147,14 +137,6 @@ class ParseEntryTiersTest(unittest.TestCase):
         for tier in tiers:
             self.assertAlmostEqual(tier.alloc_pct, 100.0 / 3)
 
-    def test_second_now_tier_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "at most one now"):
-            parse_entry_tiers(["now@43:50", "now@42:50"])
-
-    def test_non_first_now_tier_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "listed first"):
-            parse_entry_tiers(["43:60", "now@42:40"])
-
     def test_now_without_cap_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "needs a cap price"):
             parse_entry_tiers(["now@:100"])
@@ -164,10 +146,6 @@ class ParseEntryTiersTest(unittest.TestCase):
     def test_now_cap_non_positive_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "must be positive"):
             parse_entry_tiers(["now@0:100"])
-
-    def test_now_cap_equal_to_pullback_price_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "duplicate --tier price"):
-            parse_entry_tiers(["now@43:50", "43:50"])
 
     def test_garbage_after_now_prefix_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "cannot parse"):
@@ -196,10 +174,6 @@ class ParseTpTranchesTest(unittest.TestCase):
         self.assertEqual([t.tag for t in tranches], ["TP1", "TP2"])
         self.assertAlmostEqual(tranches[1].price, 130.0)
 
-    def test_price_at_or_below_blend_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "above the planned blend"):
-            parse_tp_tranches(["100:50"], blend=_BLEND, stop=_STOP)
-
     def test_non_positive_r_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "R-multiple must be positive"):
             parse_tp_tranches(["0R:50"], blend=_BLEND, stop=_STOP)
@@ -208,23 +182,9 @@ class ParseTpTranchesTest(unittest.TestCase):
         with self.assertRaisesRegex(ManualIntentError, "cannot parse --tp"):
             parse_tp_tranches(["110"], blend=_BLEND, stop=_STOP)
 
-    def test_tranche_pct_sum_over_100_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "exceed 100"):
-            parse_tp_tranches(["110:60", "120:50"], blend=_BLEND, stop=_STOP)
-
-    def test_non_positive_tranche_pct_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "tranche_pct must be positive"):
-            parse_tp_tranches(["110:0"], blend=_BLEND, stop=_STOP)
-
     def test_garbage_tp_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "cannot parse --tp"):
             parse_tp_tranches(["2X:50"], blend=_BLEND, stop=_STOP)
-
-    def test_duplicate_tp_price_refuses(self) -> None:
-        # Two tranches at one target are one bigger tranche at best and a
-        # pasted-twice typo at worst — refuse either way (fail-loud doctrine).
-        with self.assertRaisesRegex(ManualIntentError, "duplicate --tp price"):
-            parse_tp_tranches(["110:50", "1R:50"], blend=_BLEND, stop=_STOP)
 
 
 class ResolveSizePctTest(unittest.TestCase):
@@ -247,18 +207,6 @@ class ResolveSizePctTest(unittest.TestCase):
     def test_notional_without_frame_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "needs the declared frame"):
             resolve_size_pct(size_pct=None, notional=10000.0, frame=None)
-
-    def test_size_pct_over_100_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "0 < size_pct <= 100"):
-            resolve_size_pct(size_pct=101.0, notional=None, frame=None)
-
-    def test_notional_over_frame_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "0 < size_pct <= 100"):
-            resolve_size_pct(size_pct=None, notional=16000.0, frame=15000.0)
-
-    def test_non_positive_size_pct_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "0 < size_pct <= 100"):
-            resolve_size_pct(size_pct=0.0, notional=None, frame=None)
 
     def test_non_positive_notional_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "notional must be positive"):
@@ -368,6 +316,151 @@ class BuildManualIntentTest(unittest.TestCase):
     def test_blank_ticker_refuses(self) -> None:
         with self.assertRaisesRegex(ManualIntentError, "ticker must be non-empty"):
             _build(ticker="  ")
+
+
+class MovedDocumentRulesStillRefuseTest(unittest.TestCase):
+    """The rules that moved into ``broker_contract.trade_intent.validate`` (#1404).
+
+    Each one used to be raised by the parse helper it sat in, so these tests used
+    to call ``parse_entry_tiers`` / ``parse_tp_tranches`` / ``resolve_size_pct``
+    directly. The rule is now an invariant of the assembled document, so the
+    operator-facing behaviour it protects is exercised through
+    ``build_manual_intent`` — the same inputs, refused at the same command.
+
+    Three refusal texts lost their flag token, because the contract must not
+    speak the CLI's vocabulary (the #1122 decision): ``--tier price`` ->
+    ``entry tier price``, ``at most one now`` -> ``at most one immediate entry
+    tier``, ``--tp price`` -> ``take-profit price``. The loud clauses ("no silent
+    rescaling") survive verbatim.
+    """
+
+    def test_alloc_sum_off_100_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "sum to 100"):
+            _build(tiers_raw=["72.5:60", "70:30"])
+
+    def test_single_tier_with_partial_alloc_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "sum to 100"):
+            _build(tiers_raw=["72.5:60"])
+
+    def test_no_silent_rescaling_is_still_said_out_loud(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "no silent rescaling"):
+            _build(tiers_raw=["72.5:60", "70:30"])
+
+    def test_non_positive_alloc_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "alloc_pct must be positive"):
+            _build(tiers_raw=["72.5:100", "70:0"])
+
+    def test_duplicate_tier_price_refuses(self) -> None:
+        # The same price twice is almost certainly a pasted-twice typo: the
+        # deeper rung of such a ladder can never fill separately.
+        with self.assertRaisesRegex(ManualIntentError, "duplicate entry tier price"):
+            _build(tiers_raw=["72.5:60", "72.5:40"])
+
+    def test_second_now_tier_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "at most one immediate entry tier"):
+            _build(tiers_raw=["now@43:50", "now@42:50"], stop=40.0, tps_raw=["50:100"])
+
+    def test_non_first_now_tier_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "listed first"):
+            _build(tiers_raw=["43:60", "now@42:40"], stop=40.0, tps_raw=["50:100"])
+
+    def test_now_cap_equal_to_pullback_price_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "duplicate entry tier price"):
+            _build(tiers_raw=["now@43:50", "43:50"], stop=40.0, tps_raw=["50:100"])
+
+    def test_tp_price_at_or_below_blend_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "above the planned blend"):
+            _build(tps_raw=["70:100"])
+
+    def test_tranche_pct_sum_over_100_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "exceed 100"):
+            _build(tps_raw=["80:60", "90:50"])
+
+    def test_non_positive_tranche_pct_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "tranche_pct must be positive"):
+            _build(tps_raw=["80:0"])
+
+    def test_duplicate_tp_price_refuses(self) -> None:
+        # Two tranches at one target are one bigger tranche at best and a
+        # pasted-twice typo at worst — refuse either way (fail-loud doctrine).
+        with self.assertRaisesRegex(ManualIntentError, "duplicate take-profit price"):
+            _build(tps_raw=["80:50", "80:50"])
+
+    def test_size_pct_over_100_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "0 < size_pct <= 100"):
+            _build(size_pct=101.0, notional=None, frame=None)
+
+    def test_notional_over_frame_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "0 < size_pct <= 100"):
+            _build(size_pct=None, notional=16000.0, frame=15000.0)
+
+    def test_non_positive_size_pct_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "0 < size_pct <= 100"):
+            _build(size_pct=0.0, notional=None, frame=None)
+
+
+class RulesThatDeliberatelyStayInTheCliTest(unittest.TestCase):
+    """Refusals that are NOT invariants of the document, and why.
+
+    ``order_ttl_days == 0`` is a LEGAL ``TradeSpec`` value — the daemon resolves
+    that sentinel to a default on purpose — so refusing ``--ttl-days 0`` is a rule
+    about the flag. The venue list is Saxo deployment knowledge. Both would be
+    wrong to move; these tests are what makes that a fact about the code rather
+    than a sentence in a design memo.
+    """
+
+    def test_zero_ttl_days_is_refused_by_the_flag_but_legal_in_a_document(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "ttl_days must be positive"):
+            _build(ttl_days=0)
+        # The same value, reached as a document, is accepted by the contract.
+        spec = TradeSpec(
+            entry_tiers=(EntryTierSpec(limit_price=10.0, alloc_pct=100.0),),
+            disaster_stop=5.0,
+            tp_tranches=(),
+            suggested_size_pct=10.0,
+            order_ttl_days=0,
+        )
+        validate_intent(
+            TradeIntent(
+                intent_id="X:2026-09-02:manual",
+                instrument=InstrumentHint(ticker="X", mic="XNYS"),
+                spec=spec,
+                meta=IntentMeta(armed_ts=_ARMED_TS, trade_date="2026-09-02"),
+            )
+        )
+
+    def test_the_venue_list_stays_a_cli_rule(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "is not supported"):
+            _build(mic="XAMS")
+
+
+class EveryAcceptedManualIntentAlsoValidatesTest(unittest.TestCase):
+    """No rule was GAINED: what the CLI accepts, the contract accepts.
+
+    This is the direction that can actually catch something — an over-strict
+    validator would refuse a pick the operator has always been able to arm. The
+    opposite direction ("what the CLI refuses, the contract refuses") is NOT
+    asserted, because it is false by design: `--ttl-days 0`, an unsupported MIC
+    and `--no-tp` with `--tp` are all refused by the CLI while the document
+    itself stays valid.
+    """
+
+    def test_accepted_inputs_pass_the_validator(self) -> None:
+        accepted = [
+            {},
+            {"tiers_raw": ["72.5", "70.0", "68.0"]},
+            {"tiers_raw": ["now@73:40", "70.0:60"]},
+            {"tps_raw": ["80:50"]},
+            {"tps_raw": ["2R:50", "3R:25"]},
+            {"no_tp": True, "tps_raw": []},
+            {"size_pct": 100.0, "notional": None, "frame": None},
+            {"ttl_days": 3},
+            {"mic": "XWAR"},
+            {"generation": 4},
+        ]
+        for overrides in accepted:
+            with self.subTest(overrides=overrides):
+                validate_intent(_build(**overrides))
 
 
 if __name__ == "__main__":
