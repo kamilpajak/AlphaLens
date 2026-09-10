@@ -55,10 +55,13 @@ class TheBriefPathIsNotValidatedTest(unittest.TestCase):
     tolerance into a refusal on the real-money path — the one thing #1404 says
     would be a defect rather than a feature.
 
-    Concretely, such a brief would be refused TWICE over: a zero-limit tier makes
-    `min(limit_price)` zero, so `stop_above_entry` fires as well as
-    `entry_price_non_positive`. Dropping a single rule would not restore it,
-    which is why the answer is "do not wire it", not "soften the rule".
+    Concretely, a brief carrying a zero-limit tier is refused by
+    `entry_price_non_positive`. (An earlier version of this note claimed it was
+    refused twice over, because `min(limit_price)` was zero and `stop_above_entry`
+    fired too. That second refusal was a DEFECT, not a safety margin — it also
+    fired for a stop sitting correctly below every real tier — and it was removed
+    in review. The conclusion is unchanged: one refusal is still one more than a
+    tolerated shape should get on the real-money path.)
     """
 
     def test_arm_command_does_not_call_validate_intent(self) -> None:

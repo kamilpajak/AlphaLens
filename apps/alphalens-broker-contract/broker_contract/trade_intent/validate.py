@@ -250,8 +250,13 @@ def _stop_and_size_violations(spec: TradeSpec) -> list[Violation]:
                 f"disaster stop must be positive, got {spec.disaster_stop:g}",
             )
         )
-    if spec.entry_tiers:
-        lowest = min(t.limit_price for t in spec.entry_tiers)
+    # Judge the stop against the REAL rungs only. A tier with a non-positive
+    # price is already refused by `entry_price_non_positive`, and letting it into
+    # `min()` would report a stop that sits correctly below every real tier as
+    # `stop_above_entry` — a false entry in a `violations` list a client acts on.
+    real_prices = [t.limit_price for t in spec.entry_tiers if t.limit_price > 0]
+    if real_prices:
+        lowest = min(real_prices)
         if spec.disaster_stop >= lowest:
             found.append(
                 Violation(

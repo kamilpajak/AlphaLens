@@ -333,6 +333,44 @@ class NonFiniteNumbersTest(unittest.TestCase):
         self.assertEqual(_reason_of(ctx.exception), "numeric_not_finite")
 
 
+class StopIsJudgedAgainstREALTiersOnlyTest(unittest.TestCase):
+    """A bogus tier must not manufacture a second, false violation.
+
+    `violations` now carries the complete list, so a spurious entry is not
+    cosmetic: it would send a client to "fix" a stop that was never wrong.
+    """
+
+    def test_a_zero_tier_does_not_make_a_valid_stop_look_too_high(self) -> None:
+        tiers = (
+            EntryTierSpec(limit_price=70.0, alloc_pct=50.0),
+            EntryTierSpec(limit_price=0.0, alloc_pct=50.0),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            # 60 sits below the only REAL tier; only the bogus 0 makes min() 0.
+            validate_intent(_intent(entry_tiers=tiers, disaster_stop=60.0))
+        reasons = [v["reason"] for v in ctx.exception.failure.details["violations"]]
+        self.assertIn("entry_price_non_positive", reasons)
+        self.assertNotIn("stop_above_entry", reasons)
+
+    def test_a_genuinely_high_stop_is_still_caught_beside_a_bogus_tier(self) -> None:
+        """The positive control: the filter must not disable the rule."""
+        tiers = (
+            EntryTierSpec(limit_price=70.0, alloc_pct=50.0),
+            EntryTierSpec(limit_price=0.0, alloc_pct=50.0),
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=tiers, disaster_stop=75.0))
+        reasons = [v["reason"] for v in ctx.exception.failure.details["violations"]]
+        self.assertIn("stop_above_entry", reasons)
+
+    def test_an_all_bogus_ladder_reports_only_the_price_rule(self) -> None:
+        tiers = (EntryTierSpec(limit_price=0.0, alloc_pct=100.0),)
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(entry_tiers=tiers, disaster_stop=5.0))
+        reasons = [v["reason"] for v in ctx.exception.failure.details["violations"]]
+        self.assertNotIn("stop_above_entry", reasons)
+
+
 class TheFailureShapeTest(unittest.TestCase):
     def test_the_code_is_the_registered_contract_code(self) -> None:
         with self.assertRaises(IntentInvalidError) as ctx:
