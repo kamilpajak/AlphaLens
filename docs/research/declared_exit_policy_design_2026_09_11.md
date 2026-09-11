@@ -79,13 +79,25 @@ The consequence is not a bad stop: `_build_managed_exits` skips a uic with no
 `tranche_plan`, so nothing wrong gets placed. The consequence is that **the opt-in is
 silently dark** until the high-water mark clears the previous position's level.
 
-### 2.5 Compaction would disarm a reset keyed on `planned`
+### 2.5 A compaction check that had no power to refute me
 
 `_compact_standalone_stop_journal_lines` returns the order
 `planned(A), planned(B), tranche_plan(A), trailed` — the marker lands *after* both
-`planned` lines, and the stale level survives compaction unchanged. A reset driven by
-`planned` lines would therefore fire before the marker is read and achieve nothing. The
-identity has to live **on the marker**, not in a reset.
+`planned` lines, and in that run the stale level survived compaction unchanged. I read
+that as "a reset driven by `planned` lines fires before the marker and achieves nothing,
+so the identity must live on the marker".
+
+**That conclusion was wrong, and the check is why.** It folded a list compacted by the
+*existing* election, which knew nothing about `planned` lines. The election is part of the
+mechanism and it runs on the journal in **write order, before the rewrite**: a marker the
+election drops is simply absent from the compacted file. Re-run once the election also
+observes `planned` lines, the same scenario keeps no `trailed` line at all and the fold
+returns `{}` before and after compaction.
+
+The lesson is the one this project keeps paying for: the check ran, and still could not
+produce the observation that would have refuted the claim, because it exercised the old
+half of the pair. Recorded here rather than quietly corrected, because the wrong design it
+produced was two-thirds built before the existing tests refuted it.
 
 ### 2.6 The ATR capability
 
@@ -247,26 +259,38 @@ on a never-naked path is worth the boundary.
 
 ### 4.7 Trailed-level identity
 
-The `trailed` marker carries the governing `pick_key`: `planned` lines gain the field,
-`PlannedExit` carries it, `_maybe_trail` puts it on the `AmendStop`, and the executor
-journals it. `_fold_trailed_since_latest_plan` becomes two-pass and **order-insensitive** —
-it first establishes the governing key per uic from the newest `planned` / `tranche_plan`
-line anywhere in the file, then keeps a marker only when the keys agree.
-`_build_managed_exits` compares the same way. A missing key on both sides counts as a
-match, so lines written before this change keep their behaviour instead of being dropped.
+The `planned` line gains `pick_key` — the same `ticker:trade_date[-gN]` string
+`tranche_plan` lines have always carried — and `planned` / `planned_retracted` lines join
+the generation reset that `tranche_plan` already drives. Every pick journals `planned`
+lines, including a `--no-tp` one, which is what closes §2.4. A multi-tier pick writes
+several of them under one key, so its tiers do not reset each other.
 
-Order-insensitivity is not elegance. A reset keyed on `planned` lines would be reordered
-into uselessness by the compactor (§2.5); an identity carried on the marker cannot be. The
-compaction election `_elect_trailed_lines` must mirror the new fold — the trap recorded in
+The reset stays opt-in per fold. The fired-tranche and round-trip-closure folds keep the
+tranche-only rule: they are about a TP ladder, which only a `tranche_plan` line describes,
+and widening their reset would change what counts as an already-fired tranche. Only the
+trailed selection passes `include_planned=True`.
+
+The fold and the compaction election now **share one selection** rather than running the
+same logic twice. That is what makes the ordering argument hold: the election runs on the
+journal in write order, before the compactor reorders anything, so a marker it drops never
+reaches the rewritten file. Two hand-mirrored copies could disagree, and a compaction that
+elects a different set from the fold either drops a live ratchet floor or resurrects a dead
+one — which is #1324, and the trap recorded in
 `reference_journal_compaction_evicts_sticky_fields`.
+
+An earlier draft put the identity on the `trailed` marker itself and made the fold
+order-insensitive. It was rejected after the existing suite refuted its premise (§2.5): it
+was strictly larger, it broke sixteen tests that encode promises rather than mechanism, and
+one of those promises — a marker on a uic with no plan line survives — it broke outright.
 
 ## 5. Scope
 
 Two pull requests on this issue.
 
 **PR-1 — identity and capability.** The `decide_reanchor(atr: float | None)` move, with the
-ATR family refusing cleanly; the `trailed` marker's pick identity with its two-pass fold and
-mirrored compaction election.
+ATR family refusing cleanly; `pick_key` on the `planned` line, `planned` lines joining the
+trailed selection's generation reset, and that selection shared between the fold and the
+compaction election.
 
 PR-1 is often described as behaviour-neutral. Half of it is: the capability move is neutral
 by construction, because the callers still veto on a missing stamp. The identity fix is
@@ -310,7 +334,11 @@ manual pick declares nothing.
 - **A manual pick may now carry a non-null `exit`**, which the 2026-09-05 analysis ruled
   out. The `_places_client_geometry` predicate is what keeps that from reaching a geometry
   ladder under an `applies_geometry` policy.
-- **Compaction must mirror the new fold**, or the identity fix is undone at the next boot.
+- **A legacy keyless `planned` line resets the trailed level.** `_apply_generation_reset`
+  treats an absent key as a new generation, so a pre-#1236 `planned` line appended *after*
+  a trail — an entry-trail tier firing late, for instance — drops the level. No live
+  impact: there is not a single `trailed` marker in either instance, and every line written
+  from now on carries a key. Worth knowing rather than rediscovering.
 - **SIM carries 21 geometry-bearing `planned` lines.** Harmless, but not empty — SIM is not
   the non-event LIVE is.
 - **Removing `PlannedExit.reanchor` touches many trailing-arm tests.** That is the cost of
