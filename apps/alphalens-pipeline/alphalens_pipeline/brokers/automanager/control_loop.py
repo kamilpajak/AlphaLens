@@ -5339,7 +5339,10 @@ def _build_planned_line(
     }
     if geometry_stamp is not None:
         record["geometry"] = geometry_stamp
-    if pick_key is not None:
+    # A BLANK key is absent, not an identity: `_apply_generation_reset` compares
+    # keys as strings, so stamping "" would make two unrelated picks match each
+    # other while still failing to match a genuinely keyless line.
+    if pick_key:
         record["pick_key"] = str(pick_key)
     return record
 

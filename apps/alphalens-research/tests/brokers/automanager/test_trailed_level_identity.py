@@ -29,6 +29,7 @@ argument cannot rot.
 
 from __future__ import annotations
 
+import itertools
 import unittest
 
 from alphalens_pipeline.brokers.automanager.control_loop import (
@@ -84,6 +85,30 @@ class ThePlannedLineCarriesTheTradeIdentityTest(unittest.TestCase):
         # Byte-identical to every line written before this change.
         self.assertNotIn("pick_key", _planned("crid-1"))
 
+    def test_a_blank_key_is_absent_rather_than_an_identity(self):
+        """The reset compares keys as strings. Stamping `""` would make two
+        unrelated picks match each other while still failing to match a
+        genuinely keyless line — an identity that is worse than none."""
+        self.assertNotIn("pick_key", _planned("crid-1", pick_key=""))
+
+    def test_the_reset_only_reads_planned_lines_when_asked_to(self):
+        """`include_planned` is the seam, so it is asserted directly: with it
+        off, a `planned` line is not a generation marker at all. Without this,
+        deleting the flag's effect would look like a passing suite from the
+        other direction — every scenario here would still reset, via the
+        `tranche_plan` line most of them happen to contain."""
+        import alphalens_pipeline.brokers.automanager.control_loop as cl
+
+        line = _planned("KO-2026-09-08-entry-t0", pick_key=_B)
+        for include, consumed in ((False, False), (True, True)):
+            with self.subTest(include_planned=include):
+                self.assertIs(
+                    cl._apply_generation_reset(
+                        "planned", line, _UIC, {}, ({},), include_planned=include
+                    ),
+                    consumed,
+                )
+
 
 class ALevelDoesNotOutliveThePickThatEarnedItTest(unittest.TestCase):
     def test_a_no_tp_pick_does_not_inherit_the_previous_picks_level(self):
@@ -117,6 +142,24 @@ class ALevelDoesNotOutliveThePickThatEarnedItTest(unittest.TestCase):
             _trailed(ts=110.0),
             _planned("KO-2026-09-01-entry-t1", pick_key=_A, tier=1),
         ]
+        self.assertEqual(_fold_trailed_since_latest_plan(lines), {_UIC: _LEVEL})
+
+    def test_neither_pick_having_a_tranche_plan_is_also_covered(self):
+        """Both picks `--no-tp`: no `tranche_plan` line anywhere, so the old rule
+        had nothing at all to reset on."""
+        lines = [
+            _planned("KO-2026-09-01-entry-t0", pick_key=_A),
+            _trailed(ts=110.0),
+            _planned("KO-2026-09-08-entry-t0", pick_key=_B),
+        ]
+        self.assertEqual(_fold_trailed_since_latest_plan(lines), {})
+
+    def test_a_legacy_keyless_plan_keeps_a_keyless_markers_level(self):
+        """MIGRATION. Journals written before this change carry no key on either
+        side, and the writer has nothing to stamp for them. Such a marker must
+        keep its level: `_build_managed_exits` places `max(plan stop, trailed)`,
+        so dropping it would LOOSEN a stop that had already been trailed."""
+        lines = [_planned("legacy-crid"), _trailed(ts=110.0)]
         self.assertEqual(_fold_trailed_since_latest_plan(lines), {_UIC: _LEVEL})
 
     def test_a_retracted_plan_drops_the_level(self):
@@ -165,10 +208,15 @@ class TheElectionRunsBeforeTheCompactorReordersTest(unittest.TestCase):
         self.assertEqual(_fold_trailed_since_latest_plan(compacted), {_UIC: _LEVEL})
 
     def test_the_election_and_the_fold_cannot_disagree(self):
-        """They share one selection since #1236. Asserted directly so a future
-        split shows up here rather than as a stop placed at the wrong level."""
-        for lines in (self._superseded(), [_planned("c", pick_key=_A), _trailed(ts=1.0)]):
-            with self.subTest(lines=len(lines)):
+        """They share one selection since #1236, so this is structural — which
+        is exactly why it is checked over EVERY ordering of the scenario rather
+        than one fixture. A future author who re-introduces a mirrored copy will
+        almost certainly get some interleaving wrong, and that is the shape of
+        #1324: a compaction electing a different set from the fold either drops a
+        live ratchet floor or resurrects a dead one."""
+        for order in itertools.permutations(self._superseded()):
+            lines = list(order)
+            with self.subTest(order=[line.get("kind") for line in lines]):
                 elected = {line["uic"] for line in _elect_trailed_lines(lines)}
                 self.assertEqual(elected, set(_fold_trailed_since_latest_plan(lines)))
 
