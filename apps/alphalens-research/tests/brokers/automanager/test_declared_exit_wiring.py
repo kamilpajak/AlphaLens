@@ -14,6 +14,7 @@ stop 55.00, so 1R is 4.00 and a 0.5R trail arms at 61.00; session peak 62.78.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from alphalens_pipeline.brokers.automanager.control_loop import (
     _build_planned_line,
@@ -37,6 +38,57 @@ _QTY = 8.0
 _PEAK = 62.78
 _LAST = 62.40
 _ATR = 0.4674
+
+
+def _instrument():
+    return InstrumentRef(
+        ticker="AMBA",
+        exchange_mic="XNAS",
+        asset_type="Stock",
+        broker_instrument_id=str(_UIC),
+        broker_symbol="AMBA:xnas",
+    )
+
+
+def _intent(*, reaction):
+    from broker_contract.trade_intent.schema import (
+        EntryTierSpec,
+        ExitGeometrySpec,
+        InstrumentHint,
+        IntentMeta,
+        TradeIntent,
+        TradeSpec,
+    )
+
+    return TradeIntent(
+        intent_id="AMBA:2026-09-04",
+        instrument=InstrumentHint(ticker="AMBA", mic="XNAS"),
+        spec=TradeSpec(
+            entry_tiers=(EntryTierSpec(limit_price=_AVG, alloc_pct=100.0),),
+            disaster_stop=_STOP,
+            tp_tranches=(),
+            suggested_size_pct=3.0,
+        ),
+        exit=None if reaction is None else ExitGeometrySpec(reaction_plan=(reaction,)),
+        meta=IntentMeta(armed_ts="2026-09-04T12:00:00+00:00", trade_date="2026-09-04"),
+    )
+
+
+class _Tier:
+    def __init__(self) -> None:
+        self.tier_index = 0
+        self.limit_price = _AVG
+        self.qty = _QTY
+
+
+class _PlanForWatch:
+    def __init__(self) -> None:
+        self.entry_tiers = [_Tier()]
+        self.disaster_stop = _STOP
+
+
+def _plan_for_watch() -> _PlanForWatch:
+    return _PlanForWatch()
 
 
 def _position() -> Position:
@@ -224,3 +276,146 @@ class TheDeclarationDecides(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class TheDeclarationSurvivesTheEntryTrailPathTest(unittest.TestCase):
+    """The path with the most hops, and the one production actually uses.
+
+    With ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` above zero a pick does NOT rest
+    limit orders: it opens a per-tier ``watch_open`` line and the ``planned``
+    disaster line is written later, at the fire arm, from that record. Anything
+    the ``planned`` line needs therefore has to ride through the watch —
+    ``geometry`` and ``pick_key`` already do.
+
+    If the declaration does not, a pick routed this way silently loses it: the
+    fold sees no declaration, and a position whose document asked for a trail is
+    never managed. That is the failure this whole issue exists to remove, so it
+    is pinned at the hop where it would happen.
+    """
+
+    def _watch_open(self, *, reaction) -> dict:
+        from alphalens_pipeline.brokers.automanager import control_loop as cl
+
+        opened: list[dict] = []
+        with mock.patch.object(cl.entry_trails, "append_entry_trail_line", opened.append):
+            cl._open_entry_watches(
+                _intent(reaction=reaction),
+                "AMBA",
+                _instrument(),
+                _plan_for_watch(),
+                None,
+                d_bps=50,
+                geometry_stamp=None,
+                reaction=reaction,
+            )
+        return opened[0]
+
+    def test_the_watch_carries_the_declaration(self) -> None:
+        line = self._watch_open(reaction=TrailingStop(arm_trigger_r=0.5, trail_frac=0.6))
+        self.assertEqual(line["reaction"]["kind"], "trailing_stop")
+
+    def test_a_pick_declaring_nothing_leaves_the_key_off(self) -> None:
+        self.assertNotIn("reaction", self._watch_open(reaction=None))
+
+    def test_the_fire_arm_passes_it_on_to_the_planned_line(self) -> None:
+        from alphalens_pipeline.brokers.automanager import control_loop as cl
+
+        written: list[dict] = []
+        record = self._watch_open(reaction=TrailingStop(arm_trigger_r=0.5, trail_frac=0.6))
+        with mock.patch.object(cl, "_append_standalone_stop_journal", written.append):
+            cl._journal_entry_planned_disaster(record, _UIC, "AMBA-2026-09-04-entry-t0")
+        folded = _fold_planned_exits(written)[_UIC].reaction
+        self.assertIsInstance(folded, TrailingStop)
+
+
+class TheBracketPathCarriesTheDeclarationTooTest(unittest.TestCase):
+    """The OTHER production writer. With the entry trail off, a pick rests limit
+    orders and `_place_tiers` writes the `planned` line directly — a separate
+    call site from the fire arm, and therefore a separate chance to drop the
+    declaration on the floor."""
+
+    def test_the_planned_line_written_at_placement_carries_it(self) -> None:
+        from alphalens_pipeline.brokers.automanager import control_loop as cl
+
+        declared = TrailingStop(arm_trigger_r=0.5, trail_frac=0.6)
+        line = cl._build_planned_line(
+            entry_crid="AMBA-2026-09-04-entry-t0",
+            uic=_UIC,
+            side="SELL",
+            stop_price=_STOP,
+            take_profit=None,
+            tier_index=0,
+            reaction=cl._declared_reaction(_intent(reaction=declared).exit),
+        )
+        self.assertEqual(line["reaction"]["kind"], "trailing_stop")
+
+    def test_both_writers_read_the_declaration_the_same_way(self) -> None:
+        """`_declared_reaction` is the single answer to "what does this document
+        declare", so the two call sites cannot disagree about it."""
+        from alphalens_pipeline.brokers.automanager import control_loop as cl
+
+        declared = TrailingStop(arm_trigger_r=0.5, trail_frac=0.6)
+        self.assertEqual(cl._declared_reaction(_intent(reaction=declared).exit), declared)
+        self.assertIsNone(cl._declared_reaction(_intent(reaction=None).exit))
+
+    def test_a_journaled_declaration_round_trips_through_the_codec(self) -> None:
+        """The journal is written with ``dataclasses.asdict`` and read with the
+        codec's decoder — two different functions. A codec change that renamed a
+        wire key would break the read while the write kept emitting the old one,
+        and the reader degrades to "declared nothing", so every pick after that
+        deploy would quietly lose its stop management. This is the check that
+        turns that into a red test instead of a log line."""
+        from alphalens_pipeline.brokers.automanager import control_loop as cl
+
+        for declared in (
+            TrailingStop(arm_trigger_r=0.5, trail_frac=0.6),
+            ReanchorOnFill(k_atr=1.5, atr=_ATR),
+        ):
+            with self.subTest(kind=declared.kind):
+                line = cl._build_planned_line(
+                    entry_crid="c",
+                    uic=_UIC,
+                    side="SELL",
+                    stop_price=_STOP,
+                    take_profit=None,
+                    tier_index=0,
+                    reaction=declared,
+                )
+                self.assertEqual(_fold_planned_exits([line])[_UIC].reaction, declared)
+
+
+class EveryProductionWriterPassesTheDeclarationTest(unittest.TestCase):
+    """An anti-rot gate over the SOURCE, because the behavioural tests cannot
+    catch this class of defect.
+
+    A `planned` line is written at two call sites — the bracket placement path
+    and the entry-trail fire arm. Every scenario test seeds the journal directly,
+    so a writer that forgets `reaction=` leaves them all green while every pick
+    in production silently loses its stop management. That is exactly what the
+    first draft of this PR did: the fold, the arms, the door and the acceptance
+    suite were all wired, and neither writer passed the declaration.
+
+    A third writer added later would be the same defect again, so the check reads
+    the call sites out of the source rather than listing them."""
+
+    def test_no_call_site_omits_it(self) -> None:
+        import ast
+        import inspect
+
+        from alphalens_pipeline.brokers.automanager import control_loop as cl
+
+        tree = ast.parse(inspect.getsource(cl))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_build_planned_line"
+        ]
+        self.assertGreaterEqual(len(calls), 2, "expected both production writers")
+        missing = [
+            node.lineno for node in calls if not any(kw.arg == "reaction" for kw in node.keywords)
+        ]
+        self.assertEqual(
+            missing, [], f"_build_planned_line called without reaction= at lines {missing}"
+        )

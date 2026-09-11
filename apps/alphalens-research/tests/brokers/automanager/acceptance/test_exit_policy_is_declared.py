@@ -101,7 +101,7 @@ class TestWhereAPickCameFromIsNotHowItIsManaged(unittest.TestCase):
         """Provenance is not policy. A pick parsed from a research brief and one
         typed in by a human are managed by what they ASK FOR, and nothing in the
         manager may branch on which it was."""
-        placed = {}
+        stops = {}
         for source in ("brief", "manual"):
             with self.subTest(source=source):
                 world = ManagerWorld(self)
@@ -112,8 +112,12 @@ class TestWhereAPickCameFromIsNotHowItIsManaged(unittest.TestCase):
                 world.price_rises_to("KO", 80.0)
                 world.run_tick()
                 world.assert_stop_at("KO", 68.0)
-                placed[source] = world.resting_stop_qty("KO")
-        self.assertEqual(placed["brief"], placed["manual"])
+                stops[source] = world.stop_price("KO")
+        # Compare the STOP PRICE, which is the thing provenance could have
+        # changed. The first version compared the resting sell quantity — a
+        # constant 100 either way, so it could not fail for the reason the test
+        # names.
+        self.assertEqual(stops["brief"], stops["manual"])
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -1723,7 +1723,9 @@ def _fetch_protection_peaks(
     boundary whose ENTIRE job is that NOTHING here can starve the never-naked
     protection pass that runs immediately after.
 
-    Called ONLY when ``deps.exit_policy.trails``. Reads the live long positions
+    Called ONLY for the uics whose plans DECLARE a trail (#1236); it used to be
+    called when one env var said this deployment trailed, and then fetched for
+    every long. Reads the live long positions
     (an EXTRA ``get_long_positions`` beyond the one ``build_protection_view`` does
     internally — a known minor inefficiency on the trailing path only, acceptable
     for this cut; fold into a shared per-tick read later) and hands them to
@@ -1788,14 +1790,17 @@ def _run_protection_pass(
     never aborts the tick or the other uics. This is the ONLY path that places /
     resizes protective stops now (advance no longer does).
 
-    On the trailing path only (``deps.exit_policy.trails`` — ``trailing_atr``) this
-    first fetches the per-uic high-water peaks and threads them into the view so the
-    pure ``_maybe_trail`` arm can ratchet the stop UP. The peak fetch is behind its
-    OWN boundary (``_fetch_protection_peaks``): a fetch failure degrades trailing to
-    dark (empty maps) but the view build + reconcile ALWAYS run, so the never-naked
-    backstop can never be starved. Every non-trailing policy takes the exact call
-    ``deps.build_protection_view(deps.broker, records)`` with no peak fetch — zero
-    new behaviour, byte-identical to today."""
+    When any pick DECLARES a trail (#1236) this first fetches the high-water peaks
+    for THOSE uics and threads them into the view so the pure ``_maybe_trail`` arm
+    can ratchet the stop UP. Which picks those are is a cheap pre-fold of the same
+    journal the view build reads — deliberately not a callback inside
+    ``build_protection_view``, which is a pure assembler whose only boundary
+    catches ``BrokerError``; a feed failure there would skip the whole protection
+    pass. The peak fetch keeps its OWN boundary (``_fetch_protection_peaks``): a
+    failure degrades trailing to dark (empty maps) while the view build + reconcile
+    ALWAYS run, so the never-naked backstop can never be starved. With no pick
+    declaring a trail the pass takes the exact 2-arg build call and fetches
+    nothing."""
     try:
         trailing_uics = _uics_declaring_a_trail(_iter_standalone_stop_journal())
         if trailing_uics:
@@ -2148,6 +2153,7 @@ def _open_entry_watches(
     *,
     d_bps: int,
     geometry_stamp: dict[str, Any] | None = None,
+    reaction: Any = None,
 ) -> int:
     """Journal one ``watch_open`` line per positive-quantity entry tier (memo
     §5, G3 journal-FIRST) and return the count opened.
@@ -2217,6 +2223,12 @@ def _open_entry_watches(
         }
         if geometry_stamp is not None:
             line["geometry"] = geometry_stamp
+        # #1236: the declaration has to ride through too. The `planned` line is
+        # written LATER, at the fire arm, from this record — so anything that
+        # line needs and the watch does not carry is simply lost, and a pick
+        # whose document asked for its stop to be managed would never be.
+        if reaction is not None:
+            line["reaction"] = dataclasses.asdict(reaction)
         entry_trails.append_entry_trail_line(line)
         opened += 1
     return opened
@@ -2306,6 +2318,7 @@ def _route_pick_to_entry_watch(
                 use_geometry=use_geometry,
                 exit_policy=resolved_exit_policy,
             ),
+            reaction=_declared_reaction(exit_spec),
         )
     # Broad on purpose: an unrecognised MIC (calendar ValueError) or a journal
     # I/O error must degrade to "pick stays armed", never abort the tick before
@@ -3054,6 +3067,10 @@ def _journal_entry_planned_disaster(record: Mapping[str, Any], uic: int, entry_c
             # #1236: the watch_open already carries the trade identity; passing
             # it through is what lets a trailed level be scoped to this pick.
             pick_key=record.get("pick_key"),
+            # ...and the declaration, which decides whether this stop is managed
+            # at all. Re-decoded from the watch rather than carried as an object
+            # because the watch is JSON on disk between the two hops.
+            reaction=_reaction_from_governing(record),
         )
     )
 
@@ -5383,8 +5400,15 @@ def _build_planned_line(
         record["geometry"] = geometry_stamp
     # #1236: what the DOCUMENT declared about managing this stop. The protection
     # pass never sees the intent, so the declaration has to travel on the line the
-    # pass DOES read. Encoded with the codec's own encoder so the wire form and
-    # the journal form cannot drift.
+    # pass DOES read.
+    #
+    # Written with ``dataclasses.asdict`` and read back with the CODEC's decoder —
+    # two different functions, which is a drift risk worth naming rather than
+    # papering over: a codec change that renamed a wire key would keep this write
+    # emitting the old one, the read would fail, and the fold degrades to
+    # "declared nothing", silently disarming every pick after that deploy.
+    # ``test_a_journaled_declaration_round_trips_through_the_codec`` is what turns
+    # that into a red test instead of a log line.
     if reaction is not None:
         record["reaction"] = dataclasses.asdict(reaction)
     # A BLANK key is absent, not an identity: `_apply_generation_reset` compares
@@ -7869,6 +7893,17 @@ _GEOMETRY_STAMP_ANCHOR_MODE = "planned"
 _GEOMETRY_STAMP_TP_FLOOR_FRAC = resolve_policy(_GEOMETRY_STAMP_POLICY_NAME).tp_floor_frac
 
 
+def _declared_reaction(exit_spec: Any) -> Any:
+    """The stop-management primitive a document declares, or ``None`` (#1236).
+
+    The door refuses more than one, so the first is the only one. ``None`` for a
+    spec that carries no reaction plan, and for no spec at all — both mean the
+    same thing downstream: this pick's stop is never moved."""
+    if exit_spec is None:
+        return None
+    return next(iter(exit_spec.reaction_plan), None)
+
+
 def _places_client_geometry(exit_policy: ExitPolicy | None, exit_spec: Any) -> bool:
     """Whether the CLIENT's own stop/TP levels are the ones to place (#1236).
 
@@ -7946,6 +7981,9 @@ def _geometry_shadow_stamp(
         # on every row already written; this is the behavioural policy the
         # daemon resolved from ALPHALENS_BROKER_EXIT_POLICY. Read off the
         # already-resolved instance -- no registry lookup on the drain path.
+        # SINCE #1236 this names the PLACEMENT policy only. How the stop is
+        # managed after fill is per-pick and lives in the sibling ``reaction``
+        # stamp, so this field no longer answers "what moved the stop".
         "exit_policy_name": exit_policy.name,
     }
 
@@ -8264,6 +8302,11 @@ def _place_tiers(
                 pick_key=picks.pick_key_str(
                     ticker, intent.meta.trade_date, _pick_generation(intent)
                 ),
+                # ...and what the document declares about managing this stop. The
+                # fire-arm path carries it through the watch; this is the other
+                # writer, and a declaration missing from EITHER is a pick that
+                # asked for management and silently never gets it.
+                reaction=_declared_reaction(exit_spec),
             )
         )
 

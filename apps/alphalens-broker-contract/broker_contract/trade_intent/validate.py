@@ -135,6 +135,8 @@ INTENT_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         "arm_trigger_r_non_positive": "The trailing arm trigger is zero or negative.",
         "trail_frac_out_of_range": "The trailing giveback fraction is outside (0, 1].",
         "k_atr_non_positive": "The re-anchor ATR multiple is zero or negative.",
+        "atr_non_positive": "The declared ATR snapshot is zero or negative.",
+        "initial_level_non_positive": "An initial level is zero or negative.",
     }
 )
 
@@ -344,6 +346,10 @@ def _tp_violations(spec: TradeSpec) -> list[Violation]:
 
 def _declared_numeric_fields(exit_spec: Any) -> Iterator[tuple[str, float, dict[str, Any]]]:
     """Every float a declaration rule compares, with its pointer."""
+    levels = exit_spec.initial_levels
+    if levels is not None:
+        yield "exit.initial_levels.stop", levels.stop, {}
+        yield "exit.initial_levels.tp", levels.tp, {}
     for index, primitive in enumerate(exit_spec.reaction_plan):
         where = {"reaction_index": index}
         if isinstance(primitive, TrailingStop):
@@ -366,6 +372,7 @@ def _exit_violations(intent: TradeIntent) -> list[Violation]:
     exit_spec = intent.exit
     if exit_spec is None:
         return []
+    levels = exit_spec.initial_levels
 
     # Finiteness first, for the reason `_finiteness_violations` gives: a NaN
     # answers False to every ordering comparison, so the bounds rules below would
@@ -383,6 +390,16 @@ def _exit_violations(intent: TradeIntent) -> list[Violation]:
         return non_finite
 
     violations: list[Violation] = []
+    if levels is not None:
+        violations.extend(
+            Violation(
+                reason="initial_level_non_positive",
+                message=f"exit.initial_levels.{name} {value} must be > 0",
+                where={},
+            )
+            for name, value in (("stop", levels.stop), ("tp", levels.tp))
+            if value <= 0
+        )
     managing = [p for p in exit_spec.reaction_plan if isinstance(p, ReanchorOnFill | TrailingStop)]
     unsupported = [
         index
@@ -438,6 +455,18 @@ def _exit_violations(intent: TradeIntent) -> list[Violation]:
                     )
                 )
         elif isinstance(primitive, ReanchorOnFill):
+            if primitive.atr <= 0:
+                violations.append(
+                    Violation(
+                        reason="atr_non_positive",
+                        message=(
+                            f"atr {primitive.atr} must be > 0 — it is the distance the "
+                            "re-anchor multiplies, and the daemon refuses a degenerate one "
+                            "silently"
+                        ),
+                        where=where,
+                    )
+                )
             if primitive.k_atr <= 0:
                 violations.append(
                     Violation(

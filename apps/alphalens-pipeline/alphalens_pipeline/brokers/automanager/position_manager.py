@@ -723,20 +723,17 @@ def _maybe_reanchor(
     executor's own re-check).
 
     Fires ONLY when ALL hold:
-      - ``view.exit_policy.decide_reanchor`` returns a non-None target — the
-        cached behavioral policy (resolved ONCE at startup by
-        ``build_protection_view``) is an active geometry policy. The inert
-        ``setup_static`` policy always returns ``None`` here, so the arm stays
-        dark by default; no env sentinel is read in this pass.
-      - ``plan.reanchor is not None`` — the governing planned line carried a
-        geometry shadow stamp (PR-6a); a pre-PR-6a plan never reanchors. Same
-        guard, same second meaning as in ``_maybe_trail`` (#1325): a manual
-        pick carries no stamp, so it is POLICY-IMMUNE — neither arm ever moves
-        its stop, whatever ``ALPHALENS_BROKER_EXIT_POLICY`` names.
+      - the pick DECLARED a re-anchor (#1236). The policy comes from
+        ``plan.reaction``, not from the process-wide env var, so two positions in
+        one account can be managed differently. A pick that declares nothing
+        resolves to the inert policy and this arm returns immediately — which is
+        the migration rule, and what makes a manual pick policy-immune by a
+        GUARD rather than by the side effect of an absent geometry stamp (#1325).
+      - ``plan.reaction.atr`` is what the declaration carried. Whether an absent
+        one is fatal is the POLICY's answer now (``policy._usable_atr``), not
+        this caller's: the ATR family refuses, a trail never looks.
       - ``pos.avg_price`` is finite and > 0 — never anchor on the SIM
         NoAccess ``<= 0`` sentinel or a NaN/inf blend.
-      - ``plan.reanchor.atr`` is finite and > 0 — never divide the risk
-        distance by a degenerate ATR.
       - ``_sole_standalone_stop(legs)`` is not ``None`` — SCOPE: a clean
         resting standalone stop only. An OCO pair or a multi-stop shape is
         left to its own arms; this never touches them.
@@ -847,23 +844,17 @@ def _maybe_trail(
     PURE oracle: reads the peak from the ``ProtectionView`` snapshot only — never
     fetches a feed, never holds state. Fires ONLY when ALL hold (same guard order
     as ``_maybe_reanchor`` for the shared preconditions):
-      - ``view.exit_policy.trails`` — a trailing policy is cached (resolved ONCE
-        at startup). ``setup_static`` / ``atr_bracket_1p5`` have ``trails=False``
-        and are routed to ``_maybe_reanchor`` by ``_reconcile_long`` instead, so
-        this arm never touches them.
-      - ``plan.reanchor is not None`` — the governing planned line carried the
-        geometry shadow stamp (its ``atr``); a pre-stamp plan never trails.
-        LOAD-BEARING beyond the ATR (#1325): a manual (``arm-manual``) pick is
-        armed with ``exit=None``, so it never carries the stamp and this guard
-        is what keeps the daemon from tightening a hand-set stop — the decided
-        behaviour for group-managed picks, pinned by
-        ``tests/brokers/automanager/test_manual_pick_no_stop_move.py``. Do NOT
-        relax it to let ``breakeven_trail`` (which discards ``atr``) through:
-        that turns trailing ON for exactly those picks. Opting one pick in is
-        the per-pick policy override, issue #1236.
+      - the pick DECLARED a trail (#1236) — ``resolve_declared_policy(plan.reaction).trails``.
+        A declaration of any other kind is routed to ``_maybe_reanchor`` by
+        ``_reconcile_long``, and no declaration at all resolves to the inert
+        policy, so this arm never touches either. That is what keeps the daemon
+        from tightening a hand-set stop: a manual (``arm-manual``) pick declares
+        nothing, the decided behaviour for group-managed picks, pinned by
+        ``tests/brokers/automanager/test_manual_pick_no_stop_move.py``. It used to
+        rest on the ABSENCE of a geometry stamp, which also vetoed
+        ``breakeven_trail`` for an ATR that policy discards.
       - ``pos.avg_price`` finite and > 0 — never anchor on the SIM NoAccess
         ``<= 0`` sentinel or a NaN/inf blend.
-      - ``plan.reanchor.atr`` finite and > 0 — never a degenerate ATR.
       - ``_sole_standalone_stop(legs)`` is not ``None`` — a clean resting
         standalone stop only; an OCO pair / multi-stop shape is left to its arms.
       - ``uic`` not in ``view.amend_recently_failed`` — the shared amend backoff.
@@ -1017,13 +1008,13 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
     # on a fresh naked fill. A position that already has a resting rung-1 stop (or a
     # covering OCO stop leg without a full TP) therefore stays stop-only for its whole
     # life; the system converges to full OCO coverage purely by turnover.
-    # (PR-6b / Task 2) POST-FILL STOP MOVE on a covered standalone stop. The two
-    # arms are MUTUALLY EXCLUSIVE by the cached policy's ``trails`` flag so they
-    # never both fire: a trailing policy (``trailing_atr``) trails the stop UP to
-    # ``peak - k*atr`` (``_maybe_trail``); every other policy reanchors the stop
-    # onto the realized fill blend (``_maybe_reanchor``). Both are dark by default
-    # (the inert ``setup_static`` returns None) and never fire on the OCO-healthy
-    # branch above (standalone stop only, by construction).
+    # POST-FILL STOP MOVE on a covered standalone stop. Which arm runs comes from
+    # what THIS PICK declared (#1236), not from a process-wide setting, so two
+    # positions in one account can be managed differently. The two arms are
+    # mutually exclusive by the declared policy's ``trails`` flag; a pick that
+    # declared nothing resolves to the inert policy and neither fires. Neither
+    # fires on the OCO-healthy branch above either (standalone stop only, by
+    # construction).
     if resolve_declared_policy(plan.reaction).trails:
         action = _maybe_trail(uic, pos, plan, legs, view)
     else:

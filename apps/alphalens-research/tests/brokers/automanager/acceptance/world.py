@@ -390,6 +390,13 @@ class ManagerWorld:
                 "a pick that declared nothing must keep the stop it was given"
             )
 
+    def stop_price(self, ticker: str) -> float:
+        """Where the single resting protective stop sits."""
+        resting = self._resting_stop_prices(ticker)
+        if len(resting) != 1:
+            raise AssertionError(f"{ticker}: expected one resting stop, found {resting}")
+        return resting[0]
+
     def owned(self, ticker: str) -> float:
         return self._owned(ticker)
 

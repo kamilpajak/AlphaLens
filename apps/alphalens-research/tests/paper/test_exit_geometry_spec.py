@@ -147,16 +147,29 @@ class TestBuildExitGeometrySpec(unittest.TestCase):
         self.assertAlmostEqual(declared.arm_trigger_r, 0.5)
         self.assertAlmostEqual(declared.trail_frac, 0.6)
 
-    def test_the_declaration_matches_the_deployed_policy(self) -> None:
-        """The anti-drift check: the brief's declaration and the registry entry
-        the deployment runs must not diverge silently."""
-        deployed = resolve_exit_policy("breakeven_trail")
+    def test_the_declaration_carries_the_deployed_numbers(self) -> None:
+        """Pinned to LITERALS on purpose.
+
+        The first version of this test read `resolve_exit_policy("breakeven_trail")`
+        and compared it to what the builder produced — but the builder reads that
+        same entry, so it compared the registry to itself and would have followed
+        any change to it rather than catching one. These are the numbers the LIVE
+        unit has run since 2026-08-27; changing them is a research decision, and
+        this test is where it has to be made deliberately."""
         spec = build_exit_geometry_spec(_setup(entries=[(100.0, 100.0)], atr=2.0))
         assert spec is not None
         declared = spec.reaction_plan[0]
         assert isinstance(declared, TrailingStop)
-        self.assertAlmostEqual(declared.arm_trigger_r, deployed.activation_r)
-        self.assertAlmostEqual(declared.trail_frac, deployed.trail_frac)
+        self.assertAlmostEqual(declared.arm_trigger_r, 0.5)
+        self.assertAlmostEqual(declared.trail_frac, 0.6)
+
+    def test_the_registry_entry_still_carries_those_numbers(self) -> None:
+        """The other half: the declaration above is only faithful while the
+        registry entry it names agrees with it. Split from the check above so a
+        divergence says WHICH side moved."""
+        deployed = resolve_exit_policy("breakeven_trail")
+        self.assertAlmostEqual(deployed.activation_r, 0.5)
+        self.assertAlmostEqual(deployed.trail_frac, 0.6)
 
     def test_ceiling_derived_from_pct_off_52w_high_kwarg_not_the_setup_dict(self) -> None:
         # technical_pct_off_52w_high is NOT a key inside brief_trade_setup (it is

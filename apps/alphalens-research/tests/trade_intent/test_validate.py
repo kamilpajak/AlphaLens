@@ -577,3 +577,50 @@ class TheDeclarationRulesTest(unittest.TestCase):
             self._reason(ExitGeometrySpec(reaction_plan=(TrailingStop(float("nan"), 0.6),))),
             "numeric_not_finite",
         )
+
+    def test_a_degenerate_declared_atr_is_refused(self):
+        """The daemon refuses a non-positive ATR silently (the policy cannot size
+        a risk distance from one), so the door must refuse it loudly — a
+        declaration accepted and then quietly not honoured is the failure a door
+        exists to prevent."""
+        for atr in (0.0, -1.0):
+            with self.subTest(atr=atr):
+                self.assertEqual(
+                    self._reason(
+                        ExitGeometrySpec(
+                            initial_levels=InitialLevels(stop=90.0, tp=130.0),
+                            reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=atr),),
+                        )
+                    ),
+                    "atr_non_positive",
+                )
+
+    def test_a_non_positive_initial_level_is_refused(self):
+        for levels in (
+            InitialLevels(stop=0.0, tp=130.0),
+            InitialLevels(stop=90.0, tp=-1.0),
+        ):
+            with self.subTest(levels=levels):
+                self.assertEqual(
+                    self._reason(
+                        ExitGeometrySpec(
+                            initial_levels=levels,
+                            reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=2.0),),
+                        )
+                    ),
+                    "initial_level_non_positive",
+                )
+
+    def test_a_non_finite_initial_level_is_caught_first(self):
+        """Levels became optional, so they are numbers the door now accepts and
+        must therefore check — finiteness before bounds, since NaN answers False
+        to every comparison."""
+        self.assertEqual(
+            self._reason(
+                ExitGeometrySpec(
+                    initial_levels=InitialLevels(stop=float("nan"), tp=130.0),
+                    reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=2.0),),
+                )
+            ),
+            "numeric_not_finite",
+        )
