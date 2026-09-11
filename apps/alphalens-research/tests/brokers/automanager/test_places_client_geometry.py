@@ -208,5 +208,40 @@ class TheStampIsTheRecordOfWhatWasPlacedTest(unittest.TestCase):
         self.assertIsNone(cl._stamped_exit_target({"geometry": stamp}))
 
 
+class PlacingADocumentsOwnLevelsIsAnnouncedTest(unittest.TestCase):
+    """#1414 removed the fleet-wide veto over client geometry, so the first pick
+    to place its own levels is announced rather than discovered afterwards. No
+    pick has taken that path since 2026-08-19."""
+
+    def _alerts(self, exit_spec: Any) -> list[tuple[str, str]]:
+        seen: list[tuple[str, str]] = []
+
+        def _throttled(message: str, reason: str) -> bool:
+            seen.append((message, reason))
+            return True
+
+        cl._announce_client_geometry(exit_spec, "KO", _throttled)
+        return seen
+
+    def test_a_document_with_levels_pages_once_naming_them(self):
+        alerts = self._alerts(_with_levels())
+        self.assertEqual(len(alerts), 1)
+        message, reason = alerts[0]
+        self.assertIn("90.0", message)
+        self.assertIn("110.0", message)
+        self.assertEqual(reason, "client-geometry-placed:KO")
+
+    def test_a_declaration_only_document_is_silent(self):
+        self.assertEqual(self._alerts(_levels_less()), [])
+
+    def test_no_exit_spec_is_silent(self):
+        self.assertEqual(self._alerts(None), [])
+
+    def test_a_missing_alert_sink_is_tolerated(self):
+        """Direct calls and second brokers carry none; this must never raise on
+        the money path."""
+        cl._announce_client_geometry(_with_levels(), "KO", None)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

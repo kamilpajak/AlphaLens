@@ -8710,6 +8710,33 @@ def _day1_gap_gate_defers(
 
 _GEOMETRY_WITHOUT_TRAIL_ALERT_PREFIX = "geometry-without-entry-trail"
 
+# #1414: placing a DOCUMENT's own levels is a path no pick has taken since
+# 2026-08-19 — the deployed policy vetoed it for every one, which is exactly the
+# veto #1414 removed. So the first pick to take it deserves to be announced
+# rather than discovered in a journal afterwards. Throttled per ticker, like
+# every other operator alert here; it is an observation, never a refusal.
+_CLIENT_GEOMETRY_ALERT_PREFIX = "client-geometry-placed"
+
+
+def _announce_client_geometry(
+    exit_spec: Any, ticker: str, alert_throttled: Callable[[str, str], bool] | None
+) -> None:
+    """Page once per ticker when a pick places the levels its document supplied.
+
+    Deliberately NOT a gate: the document is the authority on what is placed
+    (#1414), and a rail that could refuse here would be the fleet-wide veto that
+    change removed, reintroduced under another name."""
+    if not _places_client_geometry(exit_spec):
+        return
+    levels = exit_spec.initial_levels
+    message = (
+        f"place_pick {ticker}: placing the DOCUMENT's own exit levels "
+        f"(stop {levels.stop}, tp {levels.tp}) rather than the brief ladder"
+    )
+    logger.info(message)
+    if alert_throttled is not None:
+        alert_throttled(message, f"{_CLIENT_GEOMETRY_ALERT_PREFIX}:{ticker}")
+
 
 def _geometry_without_entry_trail_note(
     exit_spec: Any,
@@ -9307,6 +9334,7 @@ def _place_pick(
     trade_date = dt.date.fromisoformat(intent.meta.trade_date)
     spec = intent.spec
     exit_spec = intent.exit
+    _announce_client_geometry(exit_spec, ticker, alert_throttled)
 
     # Day-1 gap gate (execution-quality placement discipline): evaluated FIRST,
     # before any broker/safety/sizing I/O — a deferral must be cheap. Never

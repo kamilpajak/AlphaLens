@@ -1499,6 +1499,38 @@ across #1371: pull → restart both daemons → only then arm a generation ≥ 2
 old daemon reads the new key as unknown and would treat the pick as
 generation 1).
 
+**Deploy check before the #1414 upgrade — run it on the VPS, both environments.**
+Since #1414 a document that carries `exit.initial_levels` has them PLACED; before
+it, the daemon's own policy ignored them for every pick. So a pick armed by the
+old CLI and still drainable when the new daemon starts would place a bracket
+nobody intended. Measured 2026-09-11: zero such picks in either queue. Check it
+again on the day, with the drain's own two calls rather than by reading the
+journal by eye:
+
+```bash
+cd ~/AlphaLens && .venv/bin/python - <<'EOF'
+import pathlib
+from alphalens_pipeline.brokers.automanager import picks as P
+from alphalens_pipeline.brokers import submission_log as SL
+
+for env in ("sim", "live"):
+    base = pathlib.Path.home() / ".alphalens/broker_orders" / env
+    done = P.submitted_pick_keys(list(SL.iter_submission_records(base / "submissions.jsonl")))
+    at_risk = [
+        P.pick_key(i)
+        for i in P.iter_picks(path=base / "picks.jsonl")
+        if P.pick_key(i) not in done
+        and getattr(getattr(i, "exit", None), "initial_levels", None) is not None
+    ]
+    print(env, "picks that would place their own levels:", at_risk or "none")
+EOF
+```
+
+Anything listed is `broker disarm`-ed and re-armed after the upgrade, not left in
+the queue. The daemon also pages once per ticker (`client-geometry-placed:<TICKER>`)
+the first time it places a document's own levels, so a missed one is still
+announced rather than silent.
+
 **OAuth outage caveat:** if the VPS is down (or the keep-alive stops) for **>40 min**, the refresh chain dies → a `_chain_lost` Telegram alert fires and the daemon stops placing. Recovery = re-do §2 (attended browser login via SSH-forward). This is the one un-automatable step.
 
 ### 8. Safety recap
