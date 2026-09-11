@@ -135,19 +135,27 @@ another — so the choice has to be the document's.
 Refusals specific to the declaration: `reaction_plan_ambiguous` (more than one
 stop-management primitive — the daemon manages one stop, and a precedence rule
 invented server-side is one no client can read off the document),
-`reaction_kind_unsupported`, `reanchor_without_levels`, `k_atr_non_positive`,
-`arm_trigger_r_non_positive`, `trail_frac_out_of_range`, and
-`ceiling_price_unsupported`.
+`reaction_kind_unsupported`, `k_atr_non_positive`, `arm_trigger_r_non_positive`,
+`trail_frac_out_of_range`, and `ceiling_price_unsupported`.
 
 That last one is worth a sentence, because the field reads like a stop-side cap
 and is not: `ceiling_price` applies as `tp = min(tp, ceiling_price)` and never
 touches the stop. It is a take-profit — that is, a *placement* — instruction, and
-placement is not yet something this contract carries. Refusing it is better than
-accepting a field that would be silently discarded.
+nothing on the daemon side computes a take-profit: the re-anchor returns a stop,
+and the only code that reads `ceiling_price` is the producer that builds the
+bracket before sending it. So the refusal is permanent, not a "not yet".
 
-**`initial_levels` is optional**, and its presence is not a formality: a document
-may declare how its stop is MANAGED without supplying a bracket to PLACE. The two
-halves are independent.
+**`initial_levels` is optional, and its presence is the placement instruction.**
+Supply the levels and they are what gets placed; omit them and the ladder from
+`spec` is. A document may therefore declare how its stop is MANAGED without
+supplying a bracket to PLACE, and a re-anchor beside no levels is a coherent
+document: it re-anchors the stop off the fill price while the `spec` ladder is
+what rests at the broker.
+
+Because those two numbers are placed, the door checks them: both finite, both
+`> 0`, and `tp` strictly above `stop` (`take_profit_not_above_stop`). Nothing on
+this side can veto levels a document supplies — there is no server-side switch
+that ignores them — so an incoherent pair has to be refused here.
 
 **What `validate_intent` does NOT check** is as much part of the contract as what
 it does. Rules about the *invocation* rather than the document stay with the CLI:

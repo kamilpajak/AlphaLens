@@ -37,7 +37,7 @@ Broker-manager extraction 2A-4a (design memo
 ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``
 §2.1/§2.3) relocated this money-math half into the shared, dependency-free
 ``broker_contract`` leaf. The brief-parsing / arm-time half
-(``parse_brief_to_spec``, ``validate_trade_setup``, ``build_exit_geometry_spec``,
+(``parse_brief_to_spec``, ``validate_trade_setup``, ``build_exit_declaration``,
 ``planned_blended_entry``) stays client-side in ``alphalens_pipeline.paper.sizing``
 — it reads a thematic brief dict, a client concern that must not leak into this
 leaf.

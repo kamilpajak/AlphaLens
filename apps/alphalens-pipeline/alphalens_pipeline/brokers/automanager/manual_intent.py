@@ -9,13 +9,19 @@ and every rule here is testable without a runner.
 
 The intent arms with ``exit=None`` on purpose, and that choice does MORE than
 pick the placed levels — issue #1325. The ``exit`` leaf feeds two consumers:
-the geometry actually placed (only for an ``applies_geometry`` policy), and the
-``geometry`` shadow stamp on the ``planned`` journal line, which is the only
-source of ``PlannedExit.reanchor``. Both post-fill stop-move arms
-(``position_manager._maybe_reanchor`` and ``_maybe_trail``) refuse when that is
-``None``, so a manual pick is POLICY-IMMUNE: whatever
-``ALPHALENS_BROKER_EXIT_POLICY`` names, the daemon places the intent's own
-static disaster stop and tranche TP levels and never moves the stop again.
+the levels actually placed, and the reaction primitive that says how the stop is
+managed after fill. Both post-fill stop-move arms
+(``position_manager._maybe_reanchor`` and ``_maybe_trail``) refuse when nothing
+is declared, so a manual pick is IMMUNE to every exit policy: the daemon places
+the intent's own static disaster stop and tranche TP levels and never moves the
+stop again.
+
+Since #1414 that immunity no longer depends on how this deployment is
+configured. A process-wide ``ALPHALENS_BROKER_EXIT_POLICY`` used to decide
+whether a document's levels were placed at all, so the sentence above used to
+have to say "whatever that variable names". Now the document decides, and a
+document with no ``exit`` decides both halves by supplying neither — which is
+a stronger guarantee than the one it replaces, from the same line of code.
 
 One route does NOT pass that guard, so it is worth naming here rather than
 leaving for someone to rediscover: ``ProtectionView.trailed_stop_by_uic`` is a

@@ -41,7 +41,7 @@ import unittest
 from alphalens_pipeline.brokers.automanager.control_loop import (
     _build_managed_exits,
     _fold_trailed_since_latest_plan,
-    _geometry_shadow_stamp,
+    _placed_geometry_stamp,
 )
 from alphalens_pipeline.brokers.automanager.control_loop import (
     _build_planned_line as _planned_line,
@@ -168,37 +168,25 @@ def _manual_intent():
 
 class TestManualPickCarriesNoGeometryStamp(unittest.TestCase):
     """The joint the decision hangs on: ``arm-manual`` -> ``exit=None`` -> no
-    ``geometry`` stamp on the journal line, whatever policy the daemon resolved."""
+    ``geometry`` stamp on the journal line. Since #1414 that holds by the shape
+    of the document alone — there is no policy left that could change it."""
 
     def test_arm_manual_builds_an_intent_without_an_exit_spec(self) -> None:
         self.assertIsNone(_manual_intent().exit)
 
     def test_no_geometry_stamp_is_journaled_for_a_manual_pick(self) -> None:
-        intent = _manual_intent()
-        for name, policy in exit_policy_registry().items():
-            with self.subTest(policy=name):
-                stamp = _geometry_shadow_stamp(
-                    intent.exit,
-                    intent.spec,
-                    use_geometry=policy.applies_geometry,
-                    exit_policy=policy,
-                )
-                self.assertIsNone(stamp)
+        self.assertIsNone(_placed_geometry_stamp(_manual_intent().exit))
 
-    def test_positive_control_an_exit_spec_does_produce_a_stamped_atr(self) -> None:
-        """Guards the check above against rotting to vacuous: the same call on an
-        intent that DOES carry an exit spec stamps a usable ``atr``."""
-        intent = _manual_intent()
+    def test_positive_control_an_exit_spec_does_produce_a_stamp(self) -> None:
+        """Guards the check above against rotting to vacuous: the same call on a
+        document that DOES carry levels stamps them as placed."""
         exit_spec = ExitGeometrySpec(
             initial_levels=InitialLevels(stop=_PLAN_STOP, tp=62.5),
             reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=_ATR),),
         )
-        policy = exit_policy_registry()["breakeven_trail"]
-        stamp = _geometry_shadow_stamp(
-            exit_spec, intent.spec, use_geometry=policy.applies_geometry, exit_policy=policy
-        )
+        stamp = _placed_geometry_stamp(exit_spec)
         assert stamp is not None
-        self.assertEqual(stamp["atr"], _ATR)
+        self.assertEqual((stamp["geometry_tp"], stamp["applied"]), (62.5, True))
 
 
 class TestManualPickIsPolicyImmune(unittest.TestCase):

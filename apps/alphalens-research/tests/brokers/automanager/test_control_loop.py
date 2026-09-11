@@ -58,10 +58,6 @@ from broker_contract.contract import (
     PlacedOrder,
     Position,
 )
-from broker_contract.exit_geometry import (
-    SetupStaticPolicy,
-    resolve_exit_policy,
-)
 from broker_contract.sizing import SetupPlan, TierPlan, TpTranchePlan
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
@@ -2755,18 +2751,13 @@ def _exit_spec(*, stop: float, tp: float, atr: float, ceiling: float | None = No
 
 
 class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
-    """``_place_tiers`` journals the geometry SHADOW STAMP unconditionally
-    (memo §4.3 — the dark shadow measures anchor divergence before any flip), but
-    only OVERRIDES the journaled stop/TP prices when the CACHED ``exit_policy``
-    reports ``applies_geometry`` AND a buildable ``exit_spec`` exists. The inert
-    ``SetupStaticPolicy`` (``applies_geometry=False``) path must stay
-    BYTE-IDENTICAL to pre-PR-6a. The gate reads the resolved-once policy object,
-    NOT the ``ALPHALENS_BROKER_EXIT_POLICY`` env var (Task 4 — name→registry
-    refactor of WHICH policy decides placement geometry)."""
+    """``_place_tiers`` journals a geometry stamp whenever an ``exit_spec``
+    exists, and OVERRIDES the journaled stop/TP prices exactly when that
+    document supplies ``initial_levels`` (#1414). A document that supplies none
+    keeps the brief's static ``placement.disaster_stop_price`` / ``tier.tp``.
+    No environment is consulted — placement is the document's answer."""
 
-    def _run(
-        self, *, exit_spec: Any, trade_setup: Any = None, exit_policy: Any = None
-    ) -> tuple[int, list[dict[str, Any]]]:
+    def _run(self, *, exit_spec: Any, trade_setup: Any = None) -> tuple[int, list[dict[str, Any]]]:
         journaled: list[dict[str, Any]] = []
         pkg = "alphalens_pipeline.brokers"
         with contextlib.ExitStack() as stack:
@@ -2781,60 +2772,37 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
                 _placement(),
                 trade_setup,
                 exit_spec,
-                exit_policy=exit_policy if exit_policy is not None else SetupStaticPolicy(),
             )
         return count, journaled
 
-    def test_setup_static_policy_planned_line_byte_identical_to_pre_pr6a(self) -> None:
-        spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
-        count, journaled = self._run(exit_spec=spec, exit_policy=SetupStaticPolicy())
+    def test_a_declaration_only_exit_keeps_the_briefs_static_levels(self) -> None:
+        spec = ExitGeometrySpec(reaction_plan=(TrailingStop(arm_trigger_r=0.5, trail_frac=0.6),))
+        count, journaled = self._run(exit_spec=spec)
         self.assertEqual(count, 1)
         line = journaled[0]
-        self.assertAlmostEqual(line["stop_price"], 9.0)  # placement.disaster_stop_price, unchanged
-        self.assertAlmostEqual(line["take_profit"], 12.0)  # tier.tp, unchanged
+        self.assertAlmostEqual(line["stop_price"], 9.0)  # placement.disaster_stop_price
+        self.assertAlmostEqual(line["take_profit"], 12.0)  # tier.tp
 
-    def test_setup_static_policy_still_journals_the_geometry_shadow_stamp(self) -> None:
-        spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0, ceiling=20.0)
-        _count, journaled = self._run(exit_spec=spec, exit_policy=SetupStaticPolicy())
+    def test_a_declaration_only_exit_still_journals_a_stamp_saying_so(self) -> None:
+        spec = ExitGeometrySpec(reaction_plan=(TrailingStop(arm_trigger_r=0.5, trail_frac=0.6),))
+        _count, journaled = self._run(exit_spec=spec)
         stamp = journaled[0]["geometry"]
-        self.assertEqual(stamp["policy_name"], "atr_bracket_1p5")
-        self.assertEqual(stamp["policy_version"], 1)
-        self.assertAlmostEqual(stamp["geometry_stop"], 8.5)
-        self.assertAlmostEqual(stamp["geometry_tp"], 13.0)
-        self.assertAlmostEqual(stamp["k_atr"], 1.5)  # PR-6b: reanchor.k_atr (see _exit_spec)
-        self.assertAlmostEqual(stamp["atr"], 1.0)
-        self.assertAlmostEqual(stamp["ceiling_price"], 20.0)
+        self.assertIsNone(stamp["geometry_stop"])
+        self.assertIsNone(stamp["geometry_tp"])
         self.assertFalse(stamp["applied"])
 
-    def test_the_journaled_stamp_names_the_policy_THIS_CALL_SITE_was_given(self) -> None:
-        # The bracket path is the REAL-ORDER one, and it was the untested half of
-        # the pair (#1139 adversarial review): the new stamp tests pinned the
-        # FUNCTION, and its entry-trail sibling is pinned by a whole-dict
-        # equality, but nothing read exit_policy_name off a line journaled HERE.
-        # A hardcoded inert policy at this call site therefore survived the whole
-        # broker suite. Asserting the value per policy is what closes it.
+    def test_supplied_levels_override_the_journaled_prices(self) -> None:
         spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
-        for key in ("trailing_atr", "atr_bracket_1p5", "setup_static", "breakeven_trail"):
-            with self.subTest(exit_policy=key):
-                _count, journaled = self._run(exit_spec=spec, exit_policy=resolve_exit_policy(key))
-                self.assertEqual(journaled[0]["geometry"]["exit_policy_name"], key)
-                # ...while the geometry stays the geometry on every one of them.
-                self.assertEqual(journaled[0]["geometry"]["policy_name"], "atr_bracket_1p5")
-
-    def test_geometry_policy_overrides_the_journaled_prices(self) -> None:
-        spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
-        _count, journaled = self._run(
-            exit_spec=spec, exit_policy=resolve_exit_policy("atr_bracket_1p5")
-        )
+        _count, journaled = self._run(exit_spec=spec)
         line = journaled[0]
         self.assertAlmostEqual(line["stop_price"], 8.5)
         self.assertAlmostEqual(line["take_profit"], 13.0)
         self.assertTrue(line["geometry"]["applied"])
+        self.assertAlmostEqual(line["geometry"]["geometry_stop"], 8.5)
+        self.assertAlmostEqual(line["geometry"]["geometry_tp"], 13.0)
 
-    def test_exit_spec_none_never_overrides_even_when_policy_applies_geometry(self) -> None:
-        _count, journaled = self._run(
-            exit_spec=None, exit_policy=resolve_exit_policy("atr_bracket_1p5")
-        )
+    def test_exit_spec_none_never_overrides(self) -> None:
+        _count, journaled = self._run(exit_spec=None)
         line = journaled[0]
         self.assertAlmostEqual(line["stop_price"], 9.0)
         self.assertAlmostEqual(line["take_profit"], 12.0)
@@ -2846,27 +2814,25 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
 
     def test_empty_reaction_plan_stamps_without_crashing(self) -> None:
         # PR-7 opened a decode boundary (iter_picks -> codec): the schema permits
-        # a non-None exit with an EMPTY reaction_plan (reserved kind="levels", or a
-        # future policy-only client). Pre-PR-7 exit was always built in-process with
-        # a 1-element reaction_plan, so reaction_plan[0] was safe; a decoded
-        # empty-plan intent must stamp the geometry LEVELS and leave the reanchor
-        # facts None, never IndexError-crash the unattended drain.
+        # a non-None exit with an EMPTY reaction_plan (reserved kind="levels", or
+        # a future policy-only client). The stamp used to index reaction_plan[0]
+        # for the reanchor facts it carried, which IndexError-crashed the
+        # unattended drain on such a document; #1414 dropped those facts, so the
+        # stamp no longer reads the reaction plan at all. Kept as the regression
+        # that says a levels-only document still stamps its levels.
         spec = ExitGeometrySpec(initial_levels=InitialLevels(stop=8.5, tp=13.0))
         count, journaled = self._run(exit_spec=spec)
         self.assertEqual(count, 1)
         stamp = journaled[0]["geometry"]
         self.assertAlmostEqual(stamp["geometry_stop"], 8.5)
         self.assertAlmostEqual(stamp["geometry_tp"], 13.0)
-        self.assertIsNone(stamp["k_atr"])
-        self.assertIsNone(stamp["atr"])
-        self.assertIsNone(stamp["ceiling_price"])
+        self.assertTrue(stamp["applied"])
 
-    def test_non_reanchor_primitive_first_stamps_none_reanchor_facts(self) -> None:
-        # The "reaction_plan[0] is always ReanchorOnFill" assumption also breaks at
-        # the decode boundary when a non-reanchor primitive (TrailingStop / ModelPush)
-        # sits first. The stamp's k_atr/atr/ceiling are ReanchorOnFill-specific, so
-        # they must resolve by TYPE (not position) and stay None when absent —
-        # blind attribute access on a TrailingStop would AttributeError-crash.
+    def test_a_non_reanchor_primitive_first_still_stamps_the_levels(self) -> None:
+        # The sibling of the case above: a non-reanchor primitive first used to
+        # AttributeError on blind attribute access. What must hold now is that
+        # the two halves of the document are independent — the levels are
+        # stamped whatever the reaction plan says.
         spec = ExitGeometrySpec(
             initial_levels=InitialLevels(stop=8.5, tp=13.0),
             reaction_plan=(TrailingStop(arm_trigger_r=1.0, trail_frac=0.6),),
@@ -2875,7 +2841,7 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
         self.assertEqual(count, 1)
         stamp = journaled[0]["geometry"]
         self.assertAlmostEqual(stamp["geometry_stop"], 8.5)
-        self.assertIsNone(stamp["k_atr"])
+        self.assertTrue(stamp["applied"])
 
 
 class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
@@ -2883,9 +2849,7 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
     when a sized ``SetupPlan`` with a non-empty ``tp_tranches`` is passed —
     ADDITIVE to (never replacing) the existing per-tier ``planned`` journaling."""
 
-    def _run(
-        self, *, plan: Any, exit_spec: Any = None, exit_policy: Any = None
-    ) -> list[dict[str, Any]]:
+    def _run(self, *, plan: Any, exit_spec: Any = None) -> list[dict[str, Any]]:
         journaled: list[dict[str, Any]] = []
         pkg = "alphalens_pipeline.brokers"
         with contextlib.ExitStack() as stack:
@@ -2900,7 +2864,6 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
                 _placement(),
                 None,
                 exit_spec,
-                exit_policy=exit_policy if exit_policy is not None else SetupStaticPolicy(),
                 plan=plan,
             )
         return journaled
@@ -2963,18 +2926,16 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
         journaled = self._run(plan=self._plan(tp_tranches=()))
         self.assertEqual([line for line in journaled if line["kind"] == "tranche_plan"], [])
 
-    def test_geometry_policy_journals_one_tranche_plan_from_exit_spec_tp(self) -> None:
-        # INC-5 production bug: under the geometry policy (atr_bracket_1p5) the
-        # brief's static plan.tp_tranches is EMPTY -- the TP lives in exit_spec
-        # instead -- so real picks never got a tranche_plan line and the
-        # live-exit engine skipped every real position. The geometry TP must
-        # journal as a single 100% tranche, sourced from exit_spec, not from
-        # the (empty) static plan.tp_tranches.
+    def test_supplied_levels_journal_one_tranche_plan_from_exit_spec_tp(self) -> None:
+        # INC-5 production bug: a document that supplies its own levels has an
+        # EMPTY brief plan.tp_tranches -- the TP lives in exit_spec instead --
+        # so such picks never got a tranche_plan line and the live-exit engine
+        # skipped every one of them. The supplied TP must journal as a single
+        # 100% tranche, sourced from exit_spec, not from the static ladder.
         spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
         journaled = self._run(
             plan=self._plan(tp_tranches=()),
             exit_spec=spec,
-            exit_policy=resolve_exit_policy("atr_bracket_1p5"),
         )
         tranche_plan_lines = [line for line in journaled if line["kind"] == "tranche_plan"]
         self.assertEqual(len(tranche_plan_lines), 1)
@@ -2988,14 +2949,13 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
 
     def test_a_non_finite_geometry_level_journals_no_tranche_plan_line(self) -> None:
         # _build_tranche_plan_line writes both levels verbatim (float(...)), so a
-        # NaN/zero level from a future geometry policy must skip the line rather
-        # than poison the journal the live-exit engine folds.
+        # NaN/zero level in a document must skip the line rather than poison the
+        # journal the live-exit engine folds.
         for stop, tp in ((float("nan"), 13.0), (8.5, float("nan")), (0.0, 13.0), (8.5, 0.0)):
             with self.subTest(stop=stop, tp=tp):
                 journaled = self._run(
                     plan=self._plan(tp_tranches=()),
                     exit_spec=_exit_spec(stop=stop, tp=tp, atr=1.0),
-                    exit_policy=resolve_exit_policy("atr_bracket_1p5"),
                 )
                 self.assertEqual([ln for ln in journaled if ln["kind"] == "tranche_plan"], [])
 
@@ -3008,16 +2968,15 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
             self._run(
                 plan=self._plan(tp_tranches=()),
                 exit_spec=_exit_spec(stop=float("nan"), tp=13.0, atr=1.0),
-                exit_policy=resolve_exit_policy("atr_bracket_1p5"),
             )
         logged = "\n".join(caught.output)
         self.assertIn("tranche_plan", logged)
         self.assertIn(str(_instr().broker_instrument_id), logged)
 
     def test_a_non_finite_geometry_level_does_not_fall_back_to_the_static_ladder(self) -> None:
-        # Under the geometry policy the static plan.tp_tranches is NOT the active
-        # ladder, so an unusable geometry level must journal nothing -- silently
-        # falling back would arm the engine on a ladder the policy never placed.
+        # When the document supplies levels the static plan.tp_tranches is NOT
+        # the active ladder, so an unusable level must journal nothing --
+        # falling back would arm the engine on a ladder nobody placed.
         tranches = (
             TpTranchePlan(
                 tranche_index=0, target_price=11.0, tranche_frac=1.0, r_multiple=1.0, tag="tp1"
@@ -3026,7 +2985,6 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
         journaled = self._run(
             plan=self._plan(tp_tranches=tranches),
             exit_spec=_exit_spec(stop=float("nan"), tp=13.0, atr=1.0),
-            exit_policy=resolve_exit_policy("atr_bracket_1p5"),
         )
         self.assertEqual([ln for ln in journaled if ln["kind"] == "tranche_plan"], [])
 

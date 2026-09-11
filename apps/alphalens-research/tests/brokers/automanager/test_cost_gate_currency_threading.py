@@ -102,7 +102,6 @@ class TestTranchePlanLineStampsCurrencies(unittest.TestCase):
                 exit_spec=None,
                 placement=_Placement(),
                 instrument=_Instrument("PLN", "XWAR"),
-                use_geometry=False,
                 fx=_Fx("EUR"),
             )
         self.assertEqual(len(lines), 1)
@@ -267,7 +266,6 @@ class TestMicThreading(unittest.TestCase):
                 exit_spec=None,
                 placement=_Placement(),
                 instrument=_Instrument("EUR", "XETR"),
-                use_geometry=False,
                 fx=None,
             )
         self.assertEqual(lines[0]["exchange_mic"], "XETR")
@@ -304,7 +302,6 @@ class TestMicThreading(unittest.TestCase):
                 cap=100.0,
                 plan=_Plan(),
                 exit_spec=None,
-                exit_policy=None,
                 instrument=_Instrument("EUR", "XAMS"),
                 fx=None,
             )

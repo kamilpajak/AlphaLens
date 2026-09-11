@@ -23,7 +23,8 @@ from alphalens_pipeline.brokers.automanager.entry_trail_geometry import (
     compute_trailing_order_geometry,
     entry_fill_estimate,
 )
-from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, planned_blended_entry
+from alphalens_pipeline.paper.sizing import planned_blended_entry
+from alphalens_research.diagnostics.exit_policy_replay import arm_b_initial_levels
 from broker_contract.exit_geometry import resolve_exit_policy
 
 from tests.incident_1112_fixture import (
@@ -250,7 +251,8 @@ class TestValidityAcrossEveryPartialFillSubset(unittest.TestCase):
 
     Table-driven over all seven non-empty subsets of the SMG three-tier ladder.
     Each subset's target comes from the REAL
-    :func:`alphalens_pipeline.paper.sizing.build_exit_geometry_spec` over a brief
+    :func:`alphalens_research.diagnostics.exit_policy_replay.arm_b_initial_levels`
+    (the composition the live builder used until #1414) over a brief
     whose ``entry_tiers`` are that subset — the same builder the router stamps
     ``geometry_tp`` from — so the table follows any change to how production
     picks a target instead of re-deriving one of its own.
@@ -293,11 +295,11 @@ class TestValidityAcrossEveryPartialFillSubset(unittest.TestCase):
     def test_every_partial_fill_subset_is_valid_as_production_builds_it(self) -> None:
         invalid = []
         for indices in self._subsets():
-            spec = build_exit_geometry_spec(self._setup_for(indices))
-            assert spec is not None
+            levels = arm_b_initial_levels(self._setup_for(indices), pct_off_52w_high=None)
+            assert levels is not None
             if arms_inside_exit_region(
                 fill_estimate=self._shallowest_estimate(indices),
-                exit_target=spec.initial_levels.tp,
+                exit_target=levels.tp,
                 qty=1.0,
             ):
                 invalid.append(indices)

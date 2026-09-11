@@ -2170,11 +2170,11 @@ def _open_entry_watches(
     ``None`` on the deepest tier.
 
     ``geometry_stamp`` (2026-08-19 incident fix) is the exact
-    :func:`_geometry_shadow_stamp` blob the bracket path journals on its
+    :func:`_placed_geometry_stamp` blob the bracket path journals on its
     ``planned`` lines — stamped on every watch_open here so the fire-arm
-    ``planned`` writer can pass it through and the trailing-SL pass has its
-    (k_atr, atr) reanchor facts. ``None`` omits the key entirely, keeping the
-    line byte-identical to a pre-stamp watch_open."""
+    ``planned`` writer can pass it through, and so the #1112 arm gates can read
+    off a journal line which exit was actually placed. ``None`` omits the key
+    entirely, keeping the line byte-identical to a pre-stamp watch_open."""
     from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_close_utc
 
     trade_date = intent.meta.trade_date
@@ -2244,7 +2244,6 @@ def _route_pick_to_entry_watch(
     fx: Any,
     *,
     d_bps: int,
-    exit_policy: ExitPolicy | None = None,
     reference_qty_override: float | None = None,
 ) -> bool:
     """The flag-ON drain tail: journal the pick's managed-exit state (ONE
@@ -2259,10 +2258,10 @@ def _route_pick_to_entry_watch(
     when at least one watch opened. No broker order is placed here — the
     native trail rests later, at TOUCH.
 
-    ``exit_policy`` is the same resolved-once cached policy ``_place_tiers``
-    receives; the geometry gate below mirrors its ``use_geometry`` decision
-    (``applies_geometry`` + a buildable ``exit_spec``) so the two paths can
-    never disagree on which ladder is journaled.
+    Which ladder is journaled is the document's own answer (#1414), asked
+    through ``_places_client_geometry`` here and inside
+    ``_journal_tranche_plan_core``, so the watch path and the bracket path
+    cannot disagree about it.
 
     A calendar/journal failure inside the journal writes must never crash the
     drain: it is contained to a logged False (the pick stays armed and is
@@ -2274,9 +2273,6 @@ def _route_pick_to_entry_watch(
         build_submission_record,
     )
 
-    resolved_exit_policy: ExitPolicy = (
-        exit_policy if exit_policy is not None else SetupStaticPolicy()
-    )
     exit_spec = intent.exit
     try:
         _journal_tranche_plan_core(
@@ -2292,7 +2288,6 @@ def _route_pick_to_entry_watch(
                 else sum(t.qty for t in plan.entry_tiers if t.qty > 0)
             ),
             uic=int(instrument.broker_instrument_id),
-            use_geometry=resolved_exit_policy.applies_geometry,
             # Trade identity (adjudication finding 4): a crash-recovery
             # re-drive re-appends this line — the SAME pick_key keeps the
             # fired-tranche fold from resetting on the re-append.
@@ -2301,10 +2296,6 @@ def _route_pick_to_entry_watch(
             sizing_currency=_sizing_currency_of(fx, instrument),
             exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
         )
-        # Same use_geometry decision _place_tiers makes for its planned lines:
-        # the stamp rides every watch_open so the fire-arm planned writer can
-        # hand the (k_atr, atr) reanchor facts to the trailing-SL pass.
-        use_geometry = _places_client_geometry(resolved_exit_policy, exit_spec)
         opened = _open_entry_watches(
             intent,
             ticker,
@@ -2312,12 +2303,9 @@ def _route_pick_to_entry_watch(
             plan,
             fx,
             d_bps=d_bps,
-            geometry_stamp=_geometry_shadow_stamp(
-                exit_spec,
-                intent.spec,
-                use_geometry=use_geometry,
-                exit_policy=resolved_exit_policy,
-            ),
+            # The stamp rides every watch_open so the later fire-arm planned
+            # writer can say what was placed without the intent in scope.
+            geometry_stamp=_placed_geometry_stamp(exit_spec),
             reaction=_declared_reaction(exit_spec),
         )
     # Broad on purpose: an unrecognised MIC (calendar ValueError) or a journal
@@ -3119,7 +3107,7 @@ def _stamped_exit_target(record: Mapping[str, Any]) -> float | None:
     ``None`` when there is none to compare against (issue #1112 step 1).
 
     Reads ONLY data already in scope — the ``geometry`` blob
-    :func:`_geometry_shadow_stamp` wrote at routing time, whose ``geometry_tp``
+    :func:`_placed_geometry_stamp` wrote at routing time, whose ``geometry_tp``
     is the very number :func:`_geometry_tranche_ladder` turns into the single
     tranche the live exit engine fires on. No policy is resolved and no
     environment is read here (that would reintroduce the per-tick resolve the
@@ -3300,12 +3288,11 @@ def _brief_plan_arm_refusal(
     """Why this tier must not arm against the BRIEF's own take-profit ladder,
     else ``None`` (issue #1112, breakeven_trail follow-up).
 
-    Since #1183 both daemons run a no-geometry exit policy
-    (``applies_geometry=False``): the placed exit is the brief's multi-tranche
-    ladder, ``_stamped_exit_target`` returns ``None``, and the two geometry-
-    scoped gates above price nothing. This gate closes that hole with the same
-    issue-#1112 condition, evaluated against the plan that will ACTUALLY govern
-    the position:
+    A brief pick supplies no ``initial_levels`` (#1414), so the placed exit is
+    its multi-tranche ladder, ``_stamped_exit_target`` returns ``None``, and the
+    two geometry-scoped gates above price nothing. This gate closes that hole
+    with the same issue-#1112 condition, evaluated against the plan that will
+    ACTUALLY govern the position:
 
         refuse unless  tp1 > fill_estimate + round_trip_cost + E_min
 
@@ -5145,7 +5132,6 @@ def build_default_deps(
         iter_picks=picks.iter_picks,
         place_pick=_make_place_pick(
             broker,
-            exit_policy,
             alert_throttled=_throttled,
             day1_gap_price_probe=day1_gap_probe,
             audit_budget=audit_budget,
@@ -5367,12 +5353,12 @@ def _build_planned_line(
     reads these back per-uic into PlannedExit; NO line here confers protection —
     protection is derived from live broker state only (design memo §7).
 
-    ``geometry_stamp`` (PR-6a dark shadow, exit-geometry memo §4.1/§4.3) is
-    TELEMETRY ONLY — namespaced under a single ``"geometry"`` key so it can
-    never collide with a field `_fold_planned_exits` reads, and it is never
-    read by the fold (measures anchor divergence; confers no protection).
-    ``None`` (the default) omits the key entirely, so a caller that never
-    passes it keeps a byte-identical record to pre-PR-6a.
+    ``geometry_stamp`` records WHICH exit was placed (#1414) — namespaced under
+    a single ``"geometry"`` key so it can never collide with a field
+    `_fold_planned_exits` reads, and it is never read by the fold (it confers no
+    protection; the #1112 arm gates are what read it). ``None`` (the default)
+    omits the key entirely, so a caller that never passes it keeps a
+    byte-identical record to pre-PR-6a.
 
     ``pick_key`` (#1236) is the plan's TRADE identity — the same
     ``ticker:trade_date[-gN]`` string ``tranche_plan`` lines already carry. It is
@@ -7044,7 +7030,6 @@ def _journaled_alert(send: Callable[[str], None]) -> Callable[[str], None]:
 
 def _make_place_pick(
     broker: Broker,
-    exit_policy: ExitPolicy | None = None,
     *,
     alert_throttled: Callable[[str, str], bool] | None = None,
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
@@ -7058,14 +7043,6 @@ def _make_place_pick(
     _make_position_view_builder to fold back later). A safety refusal or a
     resolve/size/placement failure logs and returns False rather than raising —
     one bad pick must never crash a tick.
-
-    ``exit_policy`` is the resolved-once cached ExitPolicy (Task 4): it decides
-    WHETHER the journaled planned stop/TP use the ``atr_bracket_1p5`` geometry
-    (``applies_geometry``) instead of the brief's static levels. It is threaded
-    down to ``_place_tiers`` because that gate lives in the nested
-    ``_journal_tier``, which has no LoopDeps in scope. Defaults to the inert
-    ``SetupStaticPolicy`` (dark) so non-geometry call sites/tests keep the
-    pre-Task-4 behavior.
 
     ``alert_throttled`` (design memo §4 fee floor) is the same throttled-alert
     sink ``LoopDeps.alert_throttled`` wraps — the composition root threads its
@@ -7084,7 +7061,6 @@ def _make_place_pick(
         return _place_pick(
             broker,
             pick,
-            exit_policy,
             alert_throttled=alert_throttled,
             day1_gap_price_probe=day1_gap_price_probe,
             audit_budget=audit_budget,
@@ -7898,87 +7874,58 @@ def _declared_reaction(exit_spec: Any) -> Any:
     return next(iter(exit_spec.reaction_plan), None)
 
 
-def _places_client_geometry(exit_policy: ExitPolicy | None, exit_spec: Any) -> bool:
-    """Whether the CLIENT's own stop/TP levels are the ones to place (#1236).
+def _places_client_geometry(exit_spec: Any) -> bool:
+    """Whether the CLIENT's own stop/TP levels are the ones to place (#1414).
 
-    Two questions that used to be one. The policy must apply geometry at all
-    (``applies_geometry``; under the inert / trail-only policies the brief's own
-    ladder is placed and ``initial_levels`` are telemetry), AND the document must
-    actually carry levels — which it need not, since ``initial_levels`` became
-    optional so a document could declare how its stop is MANAGED without
-    supplying a bracket to PLACE.
+    The document answers alone: supply ``initial_levels`` and they are placed,
+    omit them and the brief's own ladder is. Until #1414 a process-wide
+    environment variable answered half of it (``policy.applies_geometry``), so a
+    producer could declare how its stop was MANAGED but not what was PLACED —
+    and the deployed value said "never place the client's levels", which is why
+    the brief path computed a bracket for months that no broker ever saw.
 
     One predicate rather than a guard at each call site: there are several sites,
     each dereferencing ``initial_levels.stop`` / ``.tp``, and a forgotten one is
     an ``AttributeError`` inside the unattended placement drain. Callers that
     dereference the levels after this returns True can do so unconditionally.
+
+    Note what is NOT here any more: a fleet-wide veto. Nothing lets this
+    deployment ignore levels a document supplies. The refusals that remain are
+    the door (``validate_intent``, the only producer of levels besides the brief
+    path), ``_refuse_geometry_without_trail`` and the #1112 arm gates — plus
+    KILL and ALLOW_ORDERS, which stop everything rather than the geometry.
     """
-    return (
-        exit_policy is not None
-        and exit_policy.applies_geometry
-        and exit_spec is not None
-        and exit_spec.initial_levels is not None
-    )
+    return exit_spec is not None and exit_spec.initial_levels is not None
 
 
-def _geometry_shadow_stamp(
-    exit_spec: Any, spec: Any, *, use_geometry: bool, exit_policy: ExitPolicy
-) -> dict[str, Any] | None:
-    """The ``"geometry"`` stamp journaled alongside a ``planned`` line (memo §4.3).
+def _placed_geometry_stamp(exit_spec: Any) -> dict[str, Any] | None:
+    """The ``"geometry"`` stamp journaled alongside a ``planned`` line.
 
-    Telemetry only — it rides along whenever an ``exit_spec`` is buildable,
-    whatever the active policy, so the dark shadow can measure anchor divergence
-    before any flip; ``use_geometry`` only records whether the stamped levels were
-    the ones actually placed. ``None`` when no ``exit_spec`` exists, which keeps
-    the journaled line byte-identical to pre-PR-6a.
+    A RECORD OF WHAT WAS PLACED, and since #1414 nothing else. It is written at
+    routing time and re-read off disk on a later hop (the fire-arm planned
+    writer), which is why it exists at all: the intent is not in scope there.
 
-    PR-7 opened a decode boundary (iter_picks -> codec): the schema permits a
-    non-None exit whose reaction_plan is empty (reserved kind="levels", or a
-    future policy-only client) or whose first primitive is NOT a reanchor
-    (TrailingStop / ModelPush). Pre-PR-7 the exit was always built in-process with
-    a single ReanchorOnFill, so reaction_plan[0] was safe; now resolve the
-    reanchor BY TYPE and leave the reanchor-specific k_atr/atr/ceiling facts None
-    when absent — never index [0] / attribute-access blindly, or a
-    valid-but-reanchor-less intent would crash the unattended drain every tick."""
-    from broker_contract.trade_intent.schema import ReanchorOnFill
+    It used to carry ten more fields — ``planned_blend``, ``k_atr``, ``atr``,
+    ``ceiling_price``, ``anchor_mode``, ``tp_floor_frac``, ``policy_name``,
+    ``policy_version``, ``exit_policy_name``. Those were the shadow of the
+    2026-08-24 exit-policy comparison, which was voided on 2026-08-27 before its
+    cohort opened; no row was ever produced under it. Grepped before removal:
+    nothing in the tree read any of them — not the daemon, not a lens, not a
+    dashboard, not a script. ``applied`` and ``geometry_tp`` are different, and
+    are why the stamp survives: ``_stamped_exit_target`` reads them to choose
+    WHICH family of #1112 arm gates prices a tier.
 
-    from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
-
+    ``None`` when no ``exit_spec`` exists, which keeps that line byte-identical.
+    """
     if exit_spec is None:
         return None
-    reanchor = next((p for p in exit_spec.reaction_plan if isinstance(p, ReanchorOnFill)), None)
     levels = exit_spec.initial_levels
-    blend = planned_blended_entry_from_spec(spec) if spec is not None else None
     return {
-        "policy_name": _GEOMETRY_STAMP_POLICY_NAME,
-        "policy_version": 1,
-        "planned_blend": blend,
-        # #1236: a declaration-only exit carries no levels. The stamp records
-        # their ABSENCE rather than refusing, so the reaction facts below and the
-        # policy name still reach the journal.
+        # A declaration-only exit carries no levels. The stamp records their
+        # ABSENCE rather than refusing, so the line still says what happened.
         "geometry_stop": None if levels is None else levels.stop,
         "geometry_tp": None if levels is None else levels.tp,
-        "k_atr": reanchor.k_atr if reanchor is not None else None,
-        "atr": reanchor.atr if reanchor is not None else None,
-        "ceiling_price": reanchor.ceiling_price if reanchor is not None else None,
-        "applied": use_geometry,
-        # Issue #1114: the two facts that made the divergence unreadable. The
-        # stamp already carried the planned blend as a VALUE, but nothing said
-        # the levels came from the planned anchor, and the /edge lens sharing
-        # this policy_name used the realised one. It also never named the
-        # take-profit floor, which is why the floor looked one-sided when in
-        # fact both sides reach it through the same atr_bracket_levels leaf.
-        "anchor_mode": _GEOMETRY_STAMP_ANCHOR_MODE,
-        "tp_floor_frac": _GEOMETRY_STAMP_TP_FLOOR_FRAC,
-        # Issue #1138: which POLICY ran, as distinct from which geometry it
-        # placed. ``policy_name`` above is the geometry and keeps that meaning
-        # on every row already written; this is the behavioural policy the
-        # daemon resolved from ALPHALENS_BROKER_EXIT_POLICY. Read off the
-        # already-resolved instance -- no registry lookup on the drain path.
-        # SINCE #1236 this names the PLACEMENT policy only. How the stop is
-        # managed after fill is per-pick and lives in the sibling ``reaction``
-        # stamp, so this field no longer answers "what moved the stop".
-        "exit_policy_name": exit_policy.name,
+        "applied": _places_client_geometry(exit_spec),
     }
 
 
@@ -8016,7 +7963,6 @@ def _journal_tranche_plan_core(
     stop_price: float,
     reference_qty: float,
     uic: int,
-    use_geometry: bool,
     pick_key: str | None = None,
     instrument_currency: str | None = None,
     sizing_currency: str | None = None,
@@ -8026,19 +7972,18 @@ def _journal_tranche_plan_core(
     (bracket ``_journal_tranche_plan`` and the entry-trail watch routing).
     ``pick_key`` is the optional trade identity stamped into the line (watch
     path only — see :func:`_build_tranche_plan_line`).
-    Source the ladder from whatever the ACTIVE exit policy actually places the
-    TP from: under the geometry policy (atr_bracket_1p5) that is the single
-    ``exit_spec.initial_levels.tp`` level (and the passed ``stop_price`` is
-    REPLACED by the geometry stop); under the static policy the ladder IS
-    ``plan.tp_tranches`` and ``stop_price`` is journaled verbatim. Takes
+    Source the ladder from whatever is actually placed: a document that supplies
+    ``initial_levels`` places its single ``.tp`` level (and the passed
+    ``stop_price`` is REPLACED by its ``.stop``); one that supplies none places
+    ``plan.tp_tranches`` with ``stop_price`` journaled verbatim. Takes
     explicit ``stop_price``/``reference_qty``/``uic`` so the caller decides the
     plan-vs-placement source of each — the bracket path reads
     ``placement.disaster_stop_price`` and sums ALL entry tiers, the watch path
     reads ``plan.disaster_stop`` and sums only the tiers that actually watch."""
-    # The two callers below pass `applies_geometry` ALONE, so the document half
-    # of the question (#1236: are there levels at all?) is re-asked here rather
-    # than trusted from the caller.
-    if use_geometry and exit_spec is not None and exit_spec.initial_levels is not None:
+    # #1414: the document is the whole answer, so this asks it directly rather
+    # than taking a `use_geometry` its callers used to compute from a
+    # process-wide policy and half-compute at that.
+    if _places_client_geometry(exit_spec):
         geometry = _geometry_tranche_ladder(exit_spec)
         if geometry is None:
             # Otherwise this skip is invisible: the live-exit engine finds no
@@ -8077,13 +8022,12 @@ def _journal_tranche_plan(
     exit_spec: Any,
     placement: Any,
     instrument: Any,
-    use_geometry: bool,
     fx: Any = None,
     override: tuple[str, float] | None = None,
 ) -> None:
     """INC-5: journal ONE ``tranche_plan`` line per uic so the live-exit engine can
     rebuild the TP ladder from the journal alone — see
-    :func:`_journal_tranche_plan_core` for which ladder the ACTIVE policy
+    :func:`_journal_tranche_plan_core` for which ladder the DOCUMENT
     sources it from. This is the BRACKET-path wrapper: gating on
     ``plan.tp_tranches`` alone silently dropped every geometry pick (the brief
     expresses a geometry exit as ``exit_spec``, not static tranches), so the
@@ -8106,7 +8050,6 @@ def _journal_tranche_plan(
         stop_price=placement.disaster_stop_price,
         reference_qty=reference_qty,
         uic=int(instrument.broker_instrument_id),
-        use_geometry=use_geometry,
         pick_key=pick_key,
         instrument_currency=str(getattr(instrument, "currency", "") or ""),
         sizing_currency=_sizing_currency_of(fx, instrument),
@@ -8154,7 +8097,6 @@ def _place_tiers(
     placement: Any,
     spec: Any = None,
     exit_spec: Any = None,
-    exit_policy: ExitPolicy | None = None,
     plan: Any = None,
     *,
     entry_duration: str | None = None,
@@ -8170,28 +8112,13 @@ def _place_tiers(
     placed; a BrokerError stops the loop and writes a note-only trace record so the
     failure is auditable and an all-fail pick is not retried forever.
 
-    ``exit_spec`` (PR-6a; PR-7: read off ``intent.exit``) is the
-    ``atr_bracket_1p5`` geometry. ``exit_policy`` (Task 4) is the resolved-once
-    cached :class:`~broker_contract.exit_geometry.ExitPolicy` — the geometry
-    override gate reads ``exit_policy.applies_geometry`` (NOT the old
-    ``ALPHALENS_BROKER_EXIT_POLICY`` env sentinel). With the inert
-    ``SetupStaticPolicy`` (``applies_geometry=False``, the default), the
-    journaled ``planned`` line's stop/TP stay the brief's static
-    ``placement.disaster_stop_price`` / ``tier.tp`` — BYTE IDENTICAL to
-    pre-PR-6a. A geometry policy (``atr_bracket_1p5``) overrides the journaled
-    stop/TP with ``exit_spec.initial_levels`` instead (safe now that PR-6b's
-    fill-complete avg_price reanchor — ``position_manager._maybe_reanchor`` —
-    ships; ``build_default_deps`` no longer fail-fasts on the flag).
-    Either way, whenever ``exit_spec`` is buildable a ``"geometry"`` shadow
-    stamp is journaled alongside the plan prices (telemetry only, memo §4.3) —
-    this is unconditional on the policy so the dark shadow can measure
-    anchor divergence before any flip.
-
-    ``spec`` (PR-7) is the already-parsed
-    :class:`~broker_contract.trade_intent.schema.TradeSpec` off the drained
-    ``TradeIntent`` — the geometry shadow stamp's ``planned_blend`` reads it
-    via :func:`~alphalens_pipeline.paper.sizing.planned_blended_entry_from_spec`
-    (the daemon no longer has the raw brief dict at drain time).
+    ``exit_spec`` is read off ``intent.exit``. Since #1414 it alone decides the
+    journaled ``planned`` line's stop/TP: a document that supplies
+    ``initial_levels`` has them journaled, and one that does not keeps the
+    brief's static ``placement.disaster_stop_price`` / ``tier.tp``. Whenever an
+    ``exit_spec`` exists at all, a ``"geometry"`` stamp is journaled alongside
+    the plan prices recording which of the two was placed — the later fire-arm
+    hop reads it back off disk, where the intent is no longer in scope.
 
     ``plan`` (INC-5 Task 1) is the raw sized
     :class:`~broker_contract.sizing.SetupPlan` off ``_resolve_and_size`` —
@@ -8211,13 +8138,6 @@ def _place_tiers(
 
     broker, intent, ticker = refs.broker, refs.intent, refs.ticker
     instrument, account, fx = refs.instrument, refs.account, refs.fx
-
-    # Normalize the resolved-once cached policy (Task 4): the geometry-override
-    # gate below reads ``exit_policy.applies_geometry`` — the retired env-string
-    # sentinel is gone. Default inert (dark) when no policy was threaded in.
-    resolved_exit_policy: ExitPolicy = (
-        exit_policy if exit_policy is not None else SetupStaticPolicy()
-    )
 
     # Honest per-tier round-trip fee estimate (memo §4.5) — computed ONCE and
     # stamped on EVERY record this placement journals (write-ahead, per-tier,
@@ -8271,9 +8191,7 @@ def _place_tiers(
                 **_tranche_kwargs("placed"),
             )
         )
-        use_geometry, stop_price, take_profit = _planned_exit_levels(
-            resolved_exit_policy, exit_spec, placement, tier
-        )
+        stop_price, take_profit = _planned_exit_levels(exit_spec, placement, tier)
         _append_standalone_stop_journal(
             _build_planned_line(
                 entry_crid=bracket.client_request_id,
@@ -8282,12 +8200,7 @@ def _place_tiers(
                 stop_price=stop_price,
                 take_profit=take_profit,
                 tier_index=tier.tier_index,
-                geometry_stamp=_geometry_shadow_stamp(
-                    exit_spec,
-                    spec,
-                    use_geometry=use_geometry,
-                    exit_policy=resolved_exit_policy,
-                ),
+                geometry_stamp=_placed_geometry_stamp(exit_spec),
                 # #1236: the same trade identity the watch path stamps. The
                 # bracket path's ``tranche_plan`` line is deliberately keyless
                 # (its always-reset semantics), but the trailed level is scoped
@@ -8309,7 +8222,6 @@ def _place_tiers(
         exit_spec=exit_spec,
         placement=placement,
         instrument=instrument,
-        use_geometry=resolved_exit_policy.applies_geometry,
         fx=fx,
         override=tranche_plan_override,
     )
@@ -8438,17 +8350,19 @@ def _handle_tier_placement_failure(
     return failure_note
 
 
-def _planned_exit_levels(
-    resolved_exit_policy: ExitPolicy, exit_spec: Any, placement: Any, tier: Any
-) -> tuple[bool, float, float | None]:
-    """``(use_geometry, stop_price, take_profit)`` for the journaled
-    ``planned`` line: geometry levels under an applying policy, else the
-    brief's static disaster stop / tier TP (byte-identical to pre-PR-6a)."""
-    use_geometry = _places_client_geometry(resolved_exit_policy, exit_spec)
-    if use_geometry:
+def _planned_exit_levels(exit_spec: Any, placement: Any, tier: Any) -> tuple[float, float | None]:
+    """``(stop_price, take_profit)`` for the journaled ``planned`` line: the
+    document's own levels when it supplies them, else the brief's static
+    disaster stop / tier TP.
+
+    It used to return the ``use_geometry`` flag as well, for the stamp to
+    record. Since #1414 the stamp asks the document the same question directly,
+    and a flag carried between two callers that can both ask is a chance for
+    them to disagree."""
+    if _places_client_geometry(exit_spec):
         levels = exit_spec.initial_levels
-        return use_geometry, levels.stop, levels.tp
-    return use_geometry, placement.disaster_stop_price, tier.tp
+        return levels.stop, levels.tp
+    return placement.disaster_stop_price, tier.tp
 
 
 # --- Day-1 gap gate (execution-quality placement discipline) -----------------
@@ -8787,9 +8701,50 @@ def _day1_gap_gate_defers(
 
 _GEOMETRY_WITHOUT_TRAIL_ALERT_PREFIX = "geometry-without-entry-trail"
 
+# #1414: placing a DOCUMENT's own levels is a path no pick has taken since
+# 2026-08-19 — the deployed policy vetoed it for every one, which is exactly the
+# veto #1414 removed. So the first pick to take it deserves to be announced
+# rather than discovered in a journal afterwards. Throttled per ticker, like
+# every other operator alert here; it is an observation, never a refusal.
+_CLIENT_GEOMETRY_ALERT_PREFIX = "client-geometry-placed"
+
+
+def _announce_client_geometry(
+    placed: bool,
+    exit_spec: Any,
+    ticker: str,
+    alert_throttled: Callable[[str, str], bool] | None,
+) -> bool:
+    """Page once per ticker when a pick HAS PLACED the levels its document
+    supplied, and pass the verdict through unchanged.
+
+    Takes the verdict rather than sitting at the top of ``_place_pick`` for two
+    reasons, both found in review. The message says "placing", and at the top it
+    said that about picks the fee floor, the gross cap or the exit-region gate
+    then refused. And the drain re-decodes every armed pick each ~45 s tick, so a
+    pick held by a NON-terminal refusal — `_refuse_geometry_without_trail` is
+    exactly one, and it fires only on levels-carrying documents — would repeat
+    the unthrottled ``logger.info`` forever.
+
+    Deliberately NOT a gate: the document is the authority on what is placed
+    (#1414), and a rail that could refuse here would be the fleet-wide veto that
+    change removed, reintroduced under another name. Hence the pass-through
+    return — it wraps a verdict, it never changes one."""
+    if not placed or not _places_client_geometry(exit_spec):
+        return placed
+    levels = exit_spec.initial_levels
+    message = (
+        f"place_pick {ticker}: placed the DOCUMENT's own exit levels "
+        f"(stop {levels.stop}, tp {levels.tp}) rather than the brief ladder"
+    )
+    logger.info(message)
+    if alert_throttled is not None:
+        alert_throttled(message, f"{_CLIENT_GEOMETRY_ALERT_PREFIX}:{ticker}")
+    return placed
+
 
 def _geometry_without_entry_trail_note(
-    exit_policy: ExitPolicy | None, exit_spec: Any
+    exit_spec: Any,
 ) -> str | None:
     """Why a NEW entry must not be armed right now, or ``None`` when it may be
     (issue #1112 round 2, point 4).
@@ -8808,11 +8763,11 @@ def _geometry_without_entry_trail_note(
     stop re-anchor — which is far worse than the defect being prevented. The
     live-exits and protection passes are untouched by this.
 
-    ``None`` when the geometry exit is not active: under the static policy the
-    placed exit IS the brief's own ladder, and the arm gate never priced
-    anything, so the classic path is no worse than it has always been.
+    ``None`` when the document places no geometry: the placed exit IS the
+    brief's own ladder, and the arm gate never priced anything, so the classic
+    path is no worse than it has always been.
     """
-    if exit_policy is None or not exit_policy.applies_geometry or exit_spec is None:
+    if not _places_client_geometry(exit_spec):
         return None
     if entry_trails.entry_trail_bps() > 0:
         return None
@@ -8832,18 +8787,14 @@ def _entry_trail_intercept(
     plan: Any,
     fx: Any,
     entry_trail_fold: entry_trails.EntryTrailFold,
-    exit_policy: ExitPolicy | None = None,
     *,
     positions: Iterable[Position] = (),
     reference_qty_override: float | None = None,
 ) -> bool | None:
     """The _place_pick entry-trailing intercept outcome: ``None`` when the pick
     must fall through to classify + ``_place_tiers`` (flag off, ineligible plan,
-    or no native trailing-stop capability), else the drain verdict.
-    ``exit_policy`` is threaded through to the watch routing so its journaled
-    managed-exit state (tranche_plan ladder + geometry stamp) mirrors what
-    ``_place_tiers`` would have journaled for the same pick. ``positions`` is
-    the caller's already-fetched broker snapshot (zero extra I/O) feeding the
+    or no native trailing-stop capability), else the drain verdict. ``positions``
+    is the caller's already-fetched broker snapshot (zero extra I/O) feeding the
     live-uic routing guard below.
 
     PR-T2b: the whole feature needs the native trailing-stop capability; a
@@ -8911,7 +8862,6 @@ def _entry_trail_intercept(
         plan,
         fx,
         d_bps=d_bps,
-        exit_policy=exit_policy,
         reference_qty_override=reference_qty_override,
     )
 
@@ -9044,7 +8994,6 @@ def _now_cost_gate_violation(
     fx: Any,
     instrument: Any,
     exit_spec: Any,
-    exit_policy: ExitPolicy | None,
     *,
     cap: float,
 ) -> str | None:
@@ -9052,9 +9001,8 @@ def _now_cost_gate_violation(
     cost at the CAP (the worst-case fill). Mirrors ``_brief_plan_arm_refusal``
     with ``fill_estimate = cap``; a ``--no-tp`` pick has no TP1 to gate —
     vacuous by design (stop-only plan, the group manages exits)."""
-    resolved = exit_policy if exit_policy is not None else SetupStaticPolicy()
     reference_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
-    if _places_client_geometry(resolved, exit_spec):
+    if _places_client_geometry(exit_spec):
         target = float(exit_spec.initial_levels.tp)
         qty = reference_qty
     else:
@@ -9177,7 +9125,6 @@ def _handle_now_tranche(
     records: Sequence[Mapping[str, Any]],
     spec: Any,
     exit_spec: Any,
-    exit_policy: ExitPolicy | None,
     alert_throttled: Callable[[str, str], bool] | None,
     now_entry_scope: _NowEntryScope | None,
     tranche_plan_override: tuple[str, float],
@@ -9196,9 +9143,7 @@ def _handle_now_tranche(
         return _NowOutcome.REFUSED_NOW
     operator_cap = float(now_tier.limit_price)
     submitted_cap = _now_submitted_cap(broker, instrument, operator_cap)
-    violation = _now_cost_gate_violation(
-        plan, fx, instrument, exit_spec, exit_policy, cap=submitted_cap
-    )
+    violation = _now_cost_gate_violation(plan, fx, instrument, exit_spec, cap=submitted_cap)
     if violation is not None:
         _refuse_pick_terminal(
             ticker,
@@ -9255,7 +9200,6 @@ def _handle_now_tranche(
         placement,
         spec,
         exit_spec,
-        exit_policy=exit_policy,
         plan=now_plan,
         entry_duration=duration,
         record_tranche="now",
@@ -9358,7 +9302,6 @@ def _refuse_now_above_cap(
 def _place_pick(
     broker: Broker,
     intent: Any,
-    exit_policy: ExitPolicy | None = None,
     *,
     alert_throttled: Callable[[str, str], bool] | None = None,
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
@@ -9369,10 +9312,6 @@ def _place_pick(
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
     keep the tick logic flat; every failure path logs and returns False
     rather than raising.
-
-    ``exit_policy`` (Task 4) is the resolved-once cached policy passed straight
-    through to ``_place_tiers`` (whose nested ``_journal_tier`` owns the
-    geometry-override gate).
 
     ``alert_throttled`` (design memo §4 fee floor) pages the operator when the
     fee floor refuses a pick; ``None`` is tolerated (refuse + journal, no page).
@@ -9566,12 +9505,11 @@ def _place_pick(
         records=records,
         spec=spec,
         exit_spec=exit_spec,
-        exit_policy=exit_policy,
         alert_throttled=alert_throttled,
         now_entry_scope=now_entry_scope,
     )
     if routing.early_result is not None:
-        return routing.early_result
+        return _announce_client_geometry(routing.early_result, exit_spec, ticker, alert_throttled)
     plan = routing.plan
     now_placed = routing.now_placed
     reference_qty_override = routing.reference_qty_override
@@ -9593,7 +9531,6 @@ def _place_pick(
         plan,
         fx,
         entry_trail_fold,
-        exit_policy,
         positions=positions,
         reference_qty_override=reference_qty_override,
     )
@@ -9602,9 +9539,9 @@ def _place_pick(
         # must read as not-placed so the drain retries next tick (the
         # armed_ts scan skips the now half); the pick counts as placed on
         # the tick the siblings actually route.
-        return intercepted
+        return _announce_client_geometry(intercepted, exit_spec, ticker, alert_throttled)
 
-    if _refuse_geometry_without_trail(exit_policy, exit_spec, ticker, alert_throttled):
+    if _refuse_geometry_without_trail(exit_spec, ticker, alert_throttled):
         return False
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
@@ -9612,18 +9549,23 @@ def _place_pick(
         logger.warning("place_pick %s: every entry tier sized to zero shares", ticker)
         return now_placed
 
-    return (
-        _place_tiers(
-            _PickRefs(broker, intent, ticker, instrument, account, fx),
-            placement,
-            spec,
-            exit_spec,
-            exit_policy=exit_policy,
-            plan=plan,
-            tranche_plan_override=tranche_plan_override,
+    return _announce_client_geometry(
+        (
+            _place_tiers(
+                _PickRefs(broker, intent, ticker, instrument, account, fx),
+                placement,
+                spec,
+                exit_spec,
+                plan=plan,
+                tranche_plan_override=tranche_plan_override,
+            )
+            > 0
         )
-        > 0
-    ) or now_placed
+        or now_placed,
+        exit_spec,
+        ticker,
+        alert_throttled,
+    )
 
 
 class _NowRouting(NamedTuple):
@@ -9647,7 +9589,6 @@ def _route_now_tranche(
     records: Sequence[Mapping[str, Any]],
     spec: Any,
     exit_spec: Any,
-    exit_policy: ExitPolicy | None,
     alert_throttled: Callable[[str, str], bool] | None,
     now_entry_scope: _NowEntryScope | None,
 ) -> _NowRouting:
@@ -9668,7 +9609,6 @@ def _route_now_tranche(
         records=records,
         spec=spec,
         exit_spec=exit_spec,
-        exit_policy=exit_policy,
         alert_throttled=alert_throttled,
         now_entry_scope=now_entry_scope,
         tranche_plan_override=(pick_key, full_ladder_qty),
@@ -9701,7 +9641,6 @@ def _route_now_tranche(
 
 
 def _refuse_geometry_without_trail(
-    exit_policy: ExitPolicy | None,
     exit_spec: Any,
     ticker: str,
     alert_throttled: Callable[[str, str], bool] | None,
@@ -9712,7 +9651,7 @@ def _refuse_geometry_without_trail(
     this is a configuration rail like KILL / ALLOW_ORDERS, so the pick stays
     armed and places itself once the trail is on — a terminal refusal would
     destroy the armed queue over an operator setting."""
-    no_trail_note = _geometry_without_entry_trail_note(exit_policy, exit_spec)
+    no_trail_note = _geometry_without_entry_trail_note(exit_spec)
     if no_trail_note is None:
         return False
     logger.warning("place_pick %s: refused — %s", ticker, no_trail_note)

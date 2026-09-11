@@ -104,10 +104,9 @@ class AReanchorDeclarationCarriesItsOwnMultipleTest(unittest.TestCase):
 
     def test_it_places_no_geometry_of_its_own(self):
         """A declared re-anchor MANAGES a stop; it does not decide what is
-        placed. Placement stays with the env-selected policy until the follow-up
-        issue moves it into the document as well."""
+        placed. Since #1414 nothing in the policy layer does — placement is the
+        document's own ``initial_levels``."""
         policy = resolve_declared_policy(ReanchorOnFill(k_atr=1.5, atr=2.0))
-        self.assertFalse(policy.applies_geometry)
         self.assertIsNone(policy.decide_placement_geometry(100.0, 2.0, ceiling_price=None))
 
     def test_a_degenerate_atr_is_refused_not_raised(self):

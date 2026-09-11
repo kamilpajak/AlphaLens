@@ -17,8 +17,13 @@ from __future__ import annotations
 import math
 import unittest
 
+from alphalens_pipeline.paper.sizing import first_brief_tp_target, planned_blended_entry
 from alphalens_research.diagnostics import exit_policy_replay as epr
-from broker_contract.exit_geometry.levels import atr_bracket_levels, clamp_reanchor_target
+from broker_contract.exit_geometry.levels import (
+    atr_bracket_levels,
+    ceiling_from_52w_high,
+    clamp_reanchor_target,
+)
 
 from tests.incident_1112_fixture import (
     SMG_ATR,
@@ -451,23 +456,38 @@ class TestFallbackIndexClampedLast(unittest.TestCase):
 
 
 class TestSmgIncidentPin(unittest.TestCase):
-    """Memo §10.1: pinned on the SMG 2026-08-24 numbers via the shared fixture,
-    and parity with the LIVE build_exit_geometry_spec. Historical note: while
-    the 2026-08-24 pre-registration was live this was its §11 item 4 HALT
-    tripwire; the prereg was voided 2026-08-27 before its cohort opened (see
-    the memo's status note), so this is now an ordinary regression test —
-    red means the replay and the live geometry composition drifted apart."""
+    """Memo §10.1: pinned on the SMG 2026-08-24 numbers via the shared fixture.
 
-    def test_arm_b_levels_equal_the_live_spec_with_the_step3_clamp(self):
-        from alphalens_pipeline.paper.sizing import build_exit_geometry_spec
+    Historical note, because this class has lost two different jobs. While the
+    2026-08-24 pre-registration was live it was that memo's §11 item 4 HALT
+    tripwire; the prereg was voided 2026-08-27 before its cohort opened. Until
+    #1414 it then pinned parity with the LIVE ``build_exit_geometry_spec``; that
+    builder stopped computing a bracket, so there is no live caller left to
+    compare against. What it pins now is the DEFINITION — that the replay
+    composes the shared ``atr_bracket_levels`` leaf with the same ceiling and
+    the same never-below-brief-TP1 clamp the live builder used. Red means the
+    ``/edge`` arm-B geometry drifted from the leaf it claims to be."""
 
+    def test_arm_b_levels_are_the_shared_leaf_with_the_step3_clamp(self):
         setup = smg_brief_trade_setup()
-        spec = build_exit_geometry_spec(setup, pct_off_52w_high=None)
-        assert spec is not None
+        blended = planned_blended_entry(setup)
+        assert blended is not None
+        leaf = atr_bracket_levels(
+            blended,
+            SMG_ATR,
+            stop_atr_mult=1.5,
+            tp_atr_mult=1.5,
+            tp_floor_frac=0.006,
+            ceiling_price=ceiling_from_52w_high(setup, None),
+        )
+        assert leaf is not None
+        leaf_stop, leaf_tp = leaf
+        first_target = first_brief_tp_target(setup)
+        assert first_target is not None
         levels = epr.arm_b_initial_levels(setup, pct_off_52w_high=None)
         assert levels is not None
-        self.assertAlmostEqual(levels.stop, spec.initial_levels.stop, places=9)
-        self.assertAlmostEqual(levels.tp, spec.initial_levels.tp, places=9)
+        self.assertAlmostEqual(levels.stop, leaf_stop, places=9)
+        self.assertAlmostEqual(levels.tp, max(leaf_tp, first_target), places=9)
         # The clamp is live on SMG: bracket tp (blend + 1.5*ATR = 59.6277) sits
         # BELOW the first tranche 65.25, so the spec tp IS the tranche.
         self.assertAlmostEqual(levels.tp, SMG_TP_TRANCHES[0], places=9)

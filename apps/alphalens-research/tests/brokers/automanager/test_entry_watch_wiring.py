@@ -32,7 +32,6 @@ from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_trails
 from alphalens_pipeline.brokers.automanager import safety as _safety
 from broker_contract.contract import OrderRejectedError
-from broker_contract.exit_geometry.registry import resolve_exit_policy
 from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import SetupPlan, TierPlan
 
@@ -1105,8 +1104,8 @@ class TestGeometryActiveWithTheTrailDisabled(unittest.TestCase):
     _GEOMETRY_TP = 12.0
 
     def _geometry_pick(self) -> Any:
-        """A pick carrying a buildable ``exit`` spec, which is the second half of
-        ``use_geometry`` (the first is the policy's ``applies_geometry``)."""
+        """A pick carrying a buildable ``exit`` spec — since #1414 that is the
+        whole of the placement question."""
         pick = _pick()
         pick.spec = type(
             "Spec",
@@ -1132,8 +1131,6 @@ class TestGeometryActiveWithTheTrailDisabled(unittest.TestCase):
     def _place(
         self, *, trail_bps: str | None, geometry: bool
     ) -> tuple[_RecordingBroker, bool, list[tuple[str, str]]]:
-        from broker_contract.exit_geometry.registry import resolve_exit_policy
-
         _journal(self)
         broker = _RecordingBroker()
         _placer(self, broker, _plan((0, self._TIER_LIMIT, 100)))
@@ -1143,14 +1140,13 @@ class TestGeometryActiveWithTheTrailDisabled(unittest.TestCase):
             alerts.append((message, reason))
             return True
 
-        placer = cl._make_place_pick(
-            broker,
-            resolve_exit_policy("atr_bracket_1p5" if geometry else "setup_static"),
-            alert_throttled=_throttled,
-        )
+        placer = cl._make_place_pick(broker, alert_throttled=_throttled)
         env = {} if trail_bps is None else {_ENV: trail_bps}
+        pick = self._geometry_pick()
+        if not geometry:
+            pick.exit = None
         with mock.patch.dict("os.environ", env, clear=True):
-            placed = placer(self._geometry_pick())
+            placed = placer(pick)
         return broker, placed, alerts
 
     def test_geometry_active_and_the_trail_off_refuses_the_new_entry(self) -> None:
@@ -1809,20 +1805,11 @@ def _blend_spec() -> Any:
     return type("Spec", (), {"entry_tiers": (tier,)})()
 
 
-# A real registry policy, not a one-attribute duck type. The stamp reads
-# ``exit_policy.name`` (#1138) and the watch-open path degrades to "pick stays
-# armed" on ANY exception, so a stub missing a protocol attribute turns a
-# behaviour test into a silent False. `atr_bracket_1p5` is the non-trailing
-# bracket, which is what this suite exercised all along.
-_GEOMETRY_POLICY = resolve_exit_policy("atr_bracket_1p5")
-
-
 def _route_watch(
     test: unittest.TestCase,
     plan: SetupPlan,
     *,
     intent: Any = None,
-    exit_policy: Any = None,
     reference_qty_override: float | None = None,
 ) -> tuple[bool, list[dict[str, Any]], Path, Path]:
     """Drive ``_route_pick_to_entry_watch`` hermetically (temp journals, stubbed
@@ -1845,7 +1832,6 @@ def _route_watch(
             plan,
             None,
             d_bps=50,
-            exit_policy=exit_policy,
             reference_qty_override=reference_qty_override,
         )
     tranche_lines = [ln for ln in _lines(stops_path) if ln["kind"] == "tranche_plan"]
@@ -1904,9 +1890,8 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         plan: SetupPlan,
         *,
         intent: Any = None,
-        exit_policy: Any = None,
     ) -> tuple[bool, list[dict[str, Any]], Path, Path]:
-        return _route_watch(self, plan, intent=intent, exit_policy=exit_policy)
+        return _route_watch(self, plan, intent=intent)
 
     def test_static_policy_journals_the_plan_ladder_with_watch_reference_qty(self) -> None:
         # A zero-qty tier opens NO watch — reference_qty counts only the tiers
@@ -1923,14 +1908,12 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         self.assertEqual(line["reference_qty"], 100.0)  # positive-qty WATCH tiers only
         self.assertEqual([t["target_price"] for t in line["tp_tranches"]], [14.0, 16.0])
 
-    def test_geometry_policy_journals_the_single_geometry_tranche(self) -> None:
+    def test_supplied_levels_journal_the_single_geometry_tranche(self) -> None:
         plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 1.0),))
         intent = _pick()
         intent.exit = _exit_spec(stop=9.1, tp=13.5)
         intent.spec = _blend_spec()
-        ok, tranche_lines, _trails, _stops = self._route(
-            plan, intent=intent, exit_policy=_GEOMETRY_POLICY
-        )
+        ok, tranche_lines, _trails, _stops = self._route(plan, intent=intent)
         self.assertTrue(ok)
         self.assertEqual(len(tranche_lines), 1)
         line = tranche_lines[0]
@@ -1954,9 +1937,7 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         intent.exit = _exit_spec(stop=None, tp=13.5)
         intent.spec = _blend_spec()
         with self.assertLogs(cl.logger, level="WARNING") as captured:
-            ok, tranche_lines, trails_path, _stops = self._route(
-                plan, intent=intent, exit_policy=_GEOMETRY_POLICY
-            )
+            ok, tranche_lines, trails_path, _stops = self._route(plan, intent=intent)
         self.assertTrue(ok)  # the watch itself still opens (stop-only, like brackets)
         self.assertEqual(tranche_lines, [])
         self.assertTrue(any("geometry levels unusable" in msg for msg in captured.output))
@@ -2146,12 +2127,8 @@ class TestWatchGeometryStampThroughToPlannedLine(unittest.TestCase):
         intent = _pick()
         intent.exit = _exit_spec(stop=9.1, tp=13.5)
         intent.spec = _blend_spec()
-        expected = cl._geometry_shadow_stamp(
-            intent.exit, intent.spec, use_geometry=True, exit_policy=_GEOMETRY_POLICY
-        )
-        ok, _tranche_lines, trails_path, _stops = _route_watch(
-            self, plan, intent=intent, exit_policy=_GEOMETRY_POLICY
-        )
+        expected = cl._placed_geometry_stamp(intent.exit)
+        ok, _tranche_lines, trails_path, _stops = _route_watch(self, plan, intent=intent)
         self.assertTrue(ok)
         opens = [ln for ln in _lines(trails_path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
         self.assertEqual(len(opens), 2)

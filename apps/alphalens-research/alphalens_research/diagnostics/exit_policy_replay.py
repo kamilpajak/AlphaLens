@@ -77,8 +77,10 @@ _ARMS: frozenset[str] = frozenset({ARM_A, ARM_B})
 # The live behavioral policy arm B mirrors. Resolved from the registry so the
 # bracket parameters (stop/tp ATR multiples, cost floor) and the reanchor
 # semantics (decide_reanchor + min_stop_distance_frac) are the LIVE objects,
-# never constants retyped here. Parity with build_exit_geometry_spec is pinned
-# by a test that is a HALT tripwire during accrual (memo §11 item 4). Resolved
+# never constants retyped here. The DEFINITION is pinned
+# against the shared atr_bracket_levels leaf (tests/diagnostics/
+# test_exit_policy_replay.py::TestSmgIncidentPin); it was a HALT tripwire during
+# the 2026-08-24 accrual, which was voided before its cohort opened. Resolved
 # once at import: the registry is static configuration, and the parity test
 # breaks loudly if the resolved object ever drifts from the live composition.
 _LIVE_POLICY = resolve_exit_policy("atr_bracket_1p5")
@@ -217,7 +219,8 @@ def arm_b_initial_levels(
     """The placement-time (stop, tp) of the live policy, WITH the step-3 clamp.
 
     ``None`` means the bracket is not constructible and arm B takes the §5.3
-    fallback. Mirrors ``build_exit_geometry_spec`` exactly (pinned by the SMG
+    fallback. Composes the same leaf the live builder used before #1414 removed
+    it from the placement path (pinned by the SMG
     parity test): bracket levels off the planned blend, then
     ``tp = max(tp, first_brief_tp_target)`` — the floor outranks the ceiling.
     """

@@ -129,7 +129,8 @@ INTENT_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         # The exit declaration (#1236).
         "reaction_plan_ambiguous": "More than one stop-management primitive is declared.",
         "reaction_kind_unsupported": "A declared reaction primitive cannot be honoured.",
-        "reanchor_without_levels": "A re-anchor is declared with no initial levels beside it.",
+        "take_profit_not_above_stop": "The initial levels are inverted — the take-profit "
+        "does not sit above the stop.",
         "ceiling_price_unsupported": "ceiling_price caps a take-profit, which this contract "
         "does not yet place.",
         "arm_trigger_r_non_positive": "The trailing arm trigger is zero or negative.",
@@ -391,7 +392,7 @@ def _exit_violations(intent: TradeIntent) -> list[Violation]:
 
     violations: list[Violation] = []
     if levels is not None:
-        violations.extend(
+        non_positive = [
             Violation(
                 reason="initial_level_non_positive",
                 message=f"exit.initial_levels.{name} {value} must be > 0",
@@ -399,7 +400,23 @@ def _exit_violations(intent: TradeIntent) -> list[Violation]:
             )
             for name, value in (("stop", levels.stop), ("tp", levels.tp))
             if value <= 0
-        )
+        ]
+        violations.extend(non_positive)
+        # Ordering is only meaningful once both are real prices: a negative stop
+        # sits "below" every take-profit, so this rule would pass it and the
+        # reader would be told the wrong thing about the document.
+        if not non_positive and levels.tp <= levels.stop:
+            violations.append(
+                Violation(
+                    reason="take_profit_not_above_stop",
+                    message=(
+                        f"exit.initial_levels.tp {levels.tp} must sit above .stop "
+                        f"{levels.stop} — since #1414 these are PLACED, and an inverted "
+                        "pair journals a take-profit below its own stop"
+                    ),
+                    where={},
+                )
+            )
     managing = [p for p in exit_spec.reaction_plan if isinstance(p, ReanchorOnFill | TrailingStop)]
     unsupported = [
         index
@@ -472,17 +489,6 @@ def _exit_violations(intent: TradeIntent) -> list[Violation]:
                     Violation(
                         reason="k_atr_non_positive",
                         message=f"k_atr {primitive.k_atr} must be > 0",
-                        where=where,
-                    )
-                )
-            if exit_spec.initial_levels is None:
-                violations.append(
-                    Violation(
-                        reason="reanchor_without_levels",
-                        message=(
-                            "a re-anchor is declared with no initial levels — the two "
-                            "halves of the document disagree about what is placed"
-                        ),
                         where=where,
                     )
                 )
