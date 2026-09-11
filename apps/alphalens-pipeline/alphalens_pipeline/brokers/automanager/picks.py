@@ -357,6 +357,28 @@ def _submission_join_key(record: Mapping[str, Any]) -> tuple[str, str] | None:
     return (str(ticker).upper(), identity_token(str(trade_date), generation))
 
 
+# `tranche_meta.outcome` values that mean NOTHING reached the broker. The
+# vocabulary the placement path writes is `attempt` (write-ahead, before the
+# POST), `placed`, and `refused_cap` (the ask sat above the operator's cap, so
+# the tranche was never submitted). Only the last one is evidence of ABSENCE —
+# and an outcome this set does not know still counts, because a record whose
+# meaning we cannot read must be treated as "an order may exist".
+_NO_ORDER_OUTCOMES: frozenset[str] = frozenset({"refused_cap"})
+
+
+def _records_an_order(record: Mapping[str, Any]) -> bool:
+    """Could this record mean an order reached the broker?
+
+    Deliberately generous. A terminal refusal is the one shape that proves
+    nothing was submitted, and it matters because the alert beside it tells the
+    operator to "re-arm with a fresh cap if the signal stands" — treating it as
+    an order would close the path the system just asked them to take.
+    """
+    meta = record.get("tranche_meta")
+    outcome = meta.get("outcome") if isinstance(meta, Mapping) else None
+    return outcome not in _NO_ORDER_OUTCOMES
+
+
 def keys_with_any_submission(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
     """Every key the broker has seen an order for — the now half INCLUDED.
 
@@ -371,7 +393,11 @@ def keys_with_any_submission(records: Iterable[Mapping[str, Any]]) -> set[tuple[
     Measured 2026-09-11: the SIM journal holds one key whose ONLY submission
     record is the now half, so this is a state that occurs, not a race window.
     """
-    return {key for record in records if (key := _submission_join_key(record)) is not None}
+    return {
+        key
+        for record in records
+        if _records_an_order(record) and (key := _submission_join_key(record)) is not None
+    }
 
 
 def submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:

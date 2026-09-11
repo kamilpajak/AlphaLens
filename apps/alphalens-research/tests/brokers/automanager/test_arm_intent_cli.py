@@ -503,6 +503,7 @@ class ThePickKeyMustBeWritable(_DoorCase):
                     "ticker": "NVO",
                     "trade_date": "2026-09-11",
                     "tranche": "now",
+                    "tranche_meta": {"outcome": "placed"},
                     "brackets": [{"entry_order_id": "O-77"}],
                 }
             )
@@ -515,6 +516,34 @@ class ThePickKeyMustBeWritable(_DoorCase):
 
         self.assert_refused(result, "pick_not_writable", "already_placed")
         self.assertEqual(self.inbox_bytes(), before)
+
+    def test_a_now_half_REFUSED_above_its_cap_stays_replaceable(self) -> None:
+        """Positive control for the refusal above, and the case that matters most.
+
+        When the ask is above the operator's cap the daemon journals a terminal
+        refusal, places nothing, and alerts "re-arm with a fresh cap if the
+        signal stands". A door that read that record as an order would refuse
+        the very re-arm the system asked for.
+        """
+        document = self._arm_once()
+        self.inbox.with_name("submissions.jsonl").write_text(
+            json.dumps(
+                {
+                    "ticker": "NVO",
+                    "trade_date": "2026-09-11",
+                    "tranche": "now",
+                    "tranche_meta": {"outcome": "refused_cap"},
+                    "brackets": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = self.arm(document)
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(len(self.fold_records()), 1)
 
     def test_a_second_live_generation_on_one_instrument_is_refused(self) -> None:
         self._arm_once()

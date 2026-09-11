@@ -485,6 +485,45 @@ class JoinHelperTest(unittest.TestCase):
         self.assertEqual(submitted_pick_keys(records), set())
         self.assertEqual(keys_with_any_submission(records), {("KO", "2026-07-20")})
 
+    def test_a_terminal_refusal_is_not_an_order(self) -> None:
+        """The operator's correction path must stay open.
+
+        `now refused: ask above cap` journals a record with NOTHING at the
+        broker, and the alert beside it tells the operator to "re-arm with a
+        fresh cap if the signal stands". Counting that record as an order would
+        make the door refuse exactly the re-arm the system just asked for.
+        Measured 2026-09-11: the SIM journal holds one such key (KO @ 2026-09-03)
+        and it is the ONLY key whose records are all `tranche: now`.
+        """
+        refused = [
+            {
+                "ticker": "KO",
+                "trade_date": "2026-09-03",
+                "tranche": "now",
+                "tranche_meta": {"outcome": "refused_cap"},
+            }
+        ]
+
+        self.assertEqual(keys_with_any_submission(refused), set())
+
+    def test_an_attempt_counts_because_its_outcome_is_unknown(self) -> None:
+        """The write-ahead record exists precisely because the POST's outcome is
+        not yet known, so it must count — the safe direction."""
+        for outcome in ("attempt", "placed", "some_future_value", None):
+            with self.subTest(outcome=outcome):
+                meta = {} if outcome is None else {"outcome": outcome}
+                records = [
+                    {
+                        "ticker": "QUBT",
+                        "trade_date": "2026-09-03",
+                        "tranche": "now",
+                        "tranche_meta": meta,
+                    }
+                ]
+                self.assertEqual(
+                    keys_with_any_submission(records), {("QUBT", "2026-09-03")}, outcome
+                )
+
     def test_any_submission_keys_the_same_way_as_retirement_otherwise(self) -> None:
         """Positive control: the only difference is the now half. A generation
         and the legacy date key must key identically through both."""
