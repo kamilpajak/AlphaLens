@@ -259,6 +259,20 @@ class TheDocumentMustBeTheRightShape(_DoorCase):
         self.assertEqual(failure["details"]["keys"], ["limit_price"])
         self.assertEqual(self.inbox_bytes(), b"")
 
+    def test_every_repeated_key_in_one_object_is_named(self) -> None:
+        """Not just the first: a producer fixing its serialiser wants the whole
+        list in one pass, the same reason `intent_invalid` carries every
+        violation rather than the first."""
+        text = (
+            json.dumps(_document())
+            .replace('"limit_price": 72.5', '"limit_price": 72.5, "limit_price": 5.0', 1)
+            .replace('"alloc_pct": 60.0', '"alloc_pct": 60.0, "alloc_pct": 1.0', 1)
+        )
+        result = self.invoke(["arm-intent", "-", "--format", "json"], stdin=text)
+
+        failure = self.assert_refused(result, "intent_malformed", "duplicate_key")
+        self.assertEqual(failure["details"]["keys"], ["alloc_pct", "limit_price"])
+
     def test_an_envelope_we_do_not_publish_is_refused_rather_than_guessed(self) -> None:
         envelope = {"schema": "someone.else/v1", "env": "sim", "intent": _document()}
         result = self.invoke(["arm-intent", "-", "--format", "json"], stdin=json.dumps(envelope))

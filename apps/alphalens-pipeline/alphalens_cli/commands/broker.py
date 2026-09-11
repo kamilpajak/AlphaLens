@@ -81,6 +81,7 @@ import math
 import os
 import re
 import sys
+from collections import Counter
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from pathlib import Path
@@ -2313,8 +2314,14 @@ class _DuplicateJsonKeyError(ValueError):
 
 
 def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    keys = [key for key, _ in pairs]
-    duplicated = sorted({key for key in keys if keys.count(key) > 1})
+    """Every repeated key in ONE object, not just the first.
+
+    Counted in a single pass: the hook runs for every object at every depth of
+    every document this door parses, so the obvious `keys.count(key)` inside a
+    comprehension would be quadratic per object for no gain.
+    """
+    counts = Counter(key for key, _ in pairs)
+    duplicated = sorted(key for key, count in counts.items() if count > 1)
     if duplicated:
         raise _DuplicateJsonKeyError(duplicated)
     return dict(pairs)
@@ -2627,6 +2634,11 @@ def arm_intent_command(
             paths=discarded,
         )
 
+    # Still a SHAPE complaint, so it belongs with the gates above rather than
+    # after the semantic ones: a date the journal cannot parse is a malformed
+    # document, not an incoherent trade.
+    trade_date = _trade_date_of(intent)
+
     try:
         validate_intent(intent)
     except IntentInvalidError as exc:
@@ -2641,7 +2653,6 @@ def arm_intent_command(
             "venue_unsupported", str(exc), details={"mic": intent.instrument.mic}
         ) from exc
 
-    trade_date = _trade_date_of(intent)
     _assert_key_is_writable(intent, trade_date, env=env, picks_target=picks_target)
 
     if resolved_format == _FORMAT_JSON:
