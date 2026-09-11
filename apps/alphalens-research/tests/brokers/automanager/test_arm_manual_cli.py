@@ -113,6 +113,41 @@ class ArmManualCommandTest(unittest.TestCase):
         self.assertIn("alphalens broker disarm NVO", result.output)
         self.assertEqual(picks.read_text(encoding="utf-8"), before)
 
+    def test_a_failed_append_reports_a_failure_object_not_a_traceback(self) -> None:
+        """#1421, and the human branch matters here more than elsewhere: this is
+        the one arming command that printed the compiled intent BEFORE the
+        append, so a failure left the operator looking at a pick description
+        with no "armed" line and a traceback under it."""
+        import json as _j
+
+        from alphalens_cli.commands.broker import broker_app
+        from alphalens_pipeline.brokers.journal import JournalWriteError
+
+        with mock.patch(
+            "alphalens_pipeline.brokers.automanager.picks.arm_pick",
+            side_effect=JournalWriteError("No space left on device"),
+        ):
+            result = self.runner.invoke(broker_app, [*_HAPPY_ARGS, "--format", "json"])
+
+        self.assertEqual(result.exit_code, 7, result.output)
+        self.assertEqual(result.stdout, "")
+        failure = _j.loads(result.stderr.strip().splitlines()[-1])
+        self.assertEqual(failure["code"], "queue_write_failed")
+
+    def test_the_human_echo_comes_after_the_append(self) -> None:
+        """Nothing about the pick is printed when it was not queued."""
+        from alphalens_cli.commands.broker import broker_app
+        from alphalens_pipeline.brokers.journal import JournalWriteError
+
+        with mock.patch(
+            "alphalens_pipeline.brokers.automanager.picks.arm_pick",
+            side_effect=JournalWriteError("No space left on device"),
+        ):
+            result = self.runner.invoke(broker_app, _HAPPY_ARGS)
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+
     def test_happy_path_appends_compiled_intent(self) -> None:
         from alphalens_cli.commands.broker import broker_app
 

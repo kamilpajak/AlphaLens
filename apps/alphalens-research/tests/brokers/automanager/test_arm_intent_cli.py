@@ -213,6 +213,27 @@ class TheHappyPath(_DoorCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertEqual(self.inbox_bytes(), b"")
 
+    def test_a_failed_append_reports_a_failure_object_not_a_traceback(self) -> None:
+        """#1421: the contract promises exactly one JSON object on stderr in
+        JSON mode. A disk-full append used to escape as a traceback, leaving a
+        machine caller with exit 1 and nothing to parse. `retryable` is true
+        because this command writes only to the queue — no broker order can be
+        in flight — and the shared appender repairs a torn predecessor, so a
+        retry lands cleanly."""
+        from alphalens_pipeline.brokers.journal import JournalWriteError
+
+        with mock.patch(
+            "alphalens_pipeline.brokers.automanager.picks.arm_pick",
+            side_effect=JournalWriteError("No space left on device"),
+        ):
+            result = self.arm(_document(), "--format", "json")
+
+        self.assertEqual(result.exit_code, 7, result.output)
+        self.assertEqual(result.stdout, "")
+        failure = json.loads(result.stderr.strip().splitlines()[-1])
+        self.assertEqual(failure["code"], "queue_write_failed")
+        self.assertTrue(failure["retryable"])
+
     def test_stdin_is_a_source_like_any_other(self) -> None:
         result = self.invoke(["arm-intent", "-"], stdin=json.dumps(_document()))
 

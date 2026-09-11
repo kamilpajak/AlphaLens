@@ -38,6 +38,7 @@ CLI_OWNED_CODES = frozenset(
         "state_layout",
         "pick_already_armed",
         "pick_not_writable",
+        "queue_write_failed",
         "intent_malformed",
         "venue_unsupported",
         "policy_refused",

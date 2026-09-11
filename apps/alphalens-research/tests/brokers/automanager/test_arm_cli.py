@@ -24,6 +24,7 @@ from __future__ import annotations
 import ast
 import datetime as dt
 import inspect
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -106,6 +107,36 @@ class ArmCommandTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
         self.home = _isolate_home(self)
+
+    def test_a_failed_append_reports_a_failure_object_not_a_traceback(self) -> None:
+        """#1421: the contract promises exactly one JSON object on stderr in
+        JSON mode. A disk-full append used to escape as a traceback, leaving a
+        machine caller with exit 1 and nothing to parse. `retryable` is true
+        because this command writes only to the queue — no broker order can be
+        in flight — and the shared appender repairs a torn predecessor, so the
+        retry lands cleanly."""
+        from alphalens_cli.commands.broker import broker_app
+        from alphalens_pipeline.brokers.journal import JournalWriteError
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.paper.brief_loader.load_brief",
+                return_value=[_candidate("KO")],
+            ),
+            mock.patch(
+                "alphalens_pipeline.brokers.automanager.picks.arm_pick",
+                side_effect=JournalWriteError("No space left on device"),
+            ),
+        ):
+            result = self.runner.invoke(
+                broker_app, ["arm", "ko", "--date", "2026-07-20", "--format", "json"]
+            )
+
+        self.assertEqual(result.exit_code, 7, result.output)
+        self.assertEqual(result.stdout, "")
+        failure = json.loads(result.stderr.strip().splitlines()[-1])
+        self.assertEqual(failure["code"], "queue_write_failed")
+        self.assertTrue(failure["retryable"])
 
     def test_arm_valid_pick_appends_and_exits_zero(self) -> None:
         from alphalens_cli.commands.broker import broker_app

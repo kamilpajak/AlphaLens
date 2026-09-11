@@ -64,6 +64,7 @@ breaking change, so `unclassified` must never be a branch condition. Read it as
 | `pick_not_writable` | CLI | no | This pick key cannot take a write: the generation was disarmed or refused, or the daemon has already placed it. `details.reason` is `generation_spent` or `already_placed`. Carries a `suggestions` argv. |
 | `intent_malformed` | CLI | no | The submitted document does not match the published wire contract. `details.reason` names which gate refused it (see below). Nothing was queued. |
 | `venue_unsupported` | CLI | no | The document is well formed; this deployment does not trade that MIC. `details.mic` carries the venue. A venue list is deployment knowledge, never a document rule (#1122, #1404). |
+| `queue_write_failed` | CLI | **yes** | Appending to a broker journal failed (disk full, permissions). Nothing was queued and no broker order can be in flight — the commands that report this write only to the queue — so the same command may be re-run once the cause clears. `details.journal` names the file. |
 | `policy_refused` | CLI | no | A safety policy refused the operation (gross guard, FX divergence, unverifiable instrument currency, a resting order in the way). |
 | `stream_metrics_missing` | CLI | no | The stream gauge textfile does not exist for this instance. Carries a `suggestions` argv. |
 | `unclassified` | CLI | no | Not yet given a code. Never branch on it. |

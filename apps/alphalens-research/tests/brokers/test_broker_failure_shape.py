@@ -137,8 +137,13 @@ class TestContractCodeRegistry(unittest.TestCase):
         self.assertEqual(leaked, set(), f"CLI-only codes leaked into the contract: {leaked}")
 
     def test_the_two_retryable_codes_are_the_ones_that_are_safe_to_re_run(self) -> None:
-        """Pinned by name, not counted: the whole point of #1389 is that a
-        client can re-run on these two and must not on any other."""
+        """Pinned by name, not counted: a client may re-run on these two
+        CONTRACT codes and must not on any other contract code.
+
+        Scoped to the contract half deliberately. The CLI half owns its own
+        retryable code (`queue_write_failed`, #1421) — a queue append that
+        failed placed nothing and can simply be repeated — so a sentence about
+        "no other code anywhere" would be false the moment it was written."""
         retryable = {name for name, entry in CONTRACT_FAILURE_CODES.items() if entry.retryable}
 
         self.assertEqual(retryable, {"broker_transient", "broker_rate_limited"})
