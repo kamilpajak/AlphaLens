@@ -2170,11 +2170,11 @@ def _open_entry_watches(
     ``None`` on the deepest tier.
 
     ``geometry_stamp`` (2026-08-19 incident fix) is the exact
-    :func:`_geometry_shadow_stamp` blob the bracket path journals on its
+    :func:`_placed_geometry_stamp` blob the bracket path journals on its
     ``planned`` lines — stamped on every watch_open here so the fire-arm
-    ``planned`` writer can pass it through and the trailing-SL pass has its
-    (k_atr, atr) reanchor facts. ``None`` omits the key entirely, keeping the
-    line byte-identical to a pre-stamp watch_open."""
+    ``planned`` writer can pass it through, and so the #1112 arm gates can read
+    off a journal line which exit was actually placed. ``None`` omits the key
+    entirely, keeping the line byte-identical to a pre-stamp watch_open."""
     from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_close_utc
 
     trade_date = intent.meta.trade_date
@@ -3107,7 +3107,7 @@ def _stamped_exit_target(record: Mapping[str, Any]) -> float | None:
     ``None`` when there is none to compare against (issue #1112 step 1).
 
     Reads ONLY data already in scope — the ``geometry`` blob
-    :func:`_geometry_shadow_stamp` wrote at routing time, whose ``geometry_tp``
+    :func:`_placed_geometry_stamp` wrote at routing time, whose ``geometry_tp``
     is the very number :func:`_geometry_tranche_ladder` turns into the single
     tranche the live exit engine fires on. No policy is resolved and no
     environment is read here (that would reintroduce the per-tick resolve the
@@ -5353,12 +5353,12 @@ def _build_planned_line(
     reads these back per-uic into PlannedExit; NO line here confers protection —
     protection is derived from live broker state only (design memo §7).
 
-    ``geometry_stamp`` (PR-6a dark shadow, exit-geometry memo §4.1/§4.3) is
-    TELEMETRY ONLY — namespaced under a single ``"geometry"`` key so it can
-    never collide with a field `_fold_planned_exits` reads, and it is never
-    read by the fold (measures anchor divergence; confers no protection).
-    ``None`` (the default) omits the key entirely, so a caller that never
-    passes it keeps a byte-identical record to pre-PR-6a.
+    ``geometry_stamp`` records WHICH exit was placed (#1414) — namespaced under
+    a single ``"geometry"`` key so it can never collide with a field
+    `_fold_planned_exits` reads, and it is never read by the fold (it confers no
+    protection; the #1112 arm gates are what read it). ``None`` (the default)
+    omits the key entirely, so a caller that never passes it keeps a
+    byte-identical record to pre-PR-6a.
 
     ``pick_key`` (#1236) is the plan's TRADE identity — the same
     ``ticker:trade_date[-gN]`` string ``tranche_plan`` lines already carry. It is
@@ -8115,19 +8115,10 @@ def _place_tiers(
     ``exit_spec`` is read off ``intent.exit``. Since #1414 it alone decides the
     journaled ``planned`` line's stop/TP: a document that supplies
     ``initial_levels`` has them journaled, and one that does not keeps the
-    brief's static ``placement.disaster_stop_price`` / ``tier.tp`` (safe now that PR-6b's
-    fill-complete avg_price reanchor — ``position_manager._maybe_reanchor`` —
-    ships; ``build_default_deps`` no longer fail-fasts on the flag).
-    Either way, whenever ``exit_spec`` is buildable a ``"geometry"`` shadow
-    stamp is journaled alongside the plan prices (telemetry only, memo §4.3) —
-    this is unconditional on the policy so the dark shadow can measure
-    anchor divergence before any flip.
-
-    ``spec`` (PR-7) is the already-parsed
-    :class:`~broker_contract.trade_intent.schema.TradeSpec` off the drained
-    ``TradeIntent`` — the geometry shadow stamp's ``planned_blend`` reads it
-    via :func:`~alphalens_pipeline.paper.sizing.planned_blended_entry_from_spec`
-    (the daemon no longer has the raw brief dict at drain time).
+    brief's static ``placement.disaster_stop_price`` / ``tier.tp``. Whenever an
+    ``exit_spec`` exists at all, a ``"geometry"`` stamp is journaled alongside
+    the plan prices recording which of the two was placed — the later fire-arm
+    hop reads it back off disk, where the intent is no longer in scope.
 
     ``plan`` (INC-5 Task 1) is the raw sized
     :class:`~broker_contract.sizing.SetupPlan` off ``_resolve_and_size`` —
@@ -8788,9 +8779,8 @@ def _entry_trail_intercept(
 ) -> bool | None:
     """The _place_pick entry-trailing intercept outcome: ``None`` when the pick
     must fall through to classify + ``_place_tiers`` (flag off, ineligible plan,
-    or no native trailing-stop capability), else the drain verdict.
-    ``positions`` is
-    the caller's already-fetched broker snapshot (zero extra I/O) feeding the
+    or no native trailing-stop capability), else the drain verdict. ``positions``
+    is the caller's already-fetched broker snapshot (zero extra I/O) feeding the
     live-uic routing guard below.
 
     PR-T2b: the whole feature needs the native trailing-stop capability; a
