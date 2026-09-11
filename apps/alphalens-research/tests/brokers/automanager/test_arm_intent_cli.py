@@ -189,6 +189,30 @@ class TheHappyPath(_DoorCase):
         self.assertFalse(json.loads(result.stdout.strip())["armed"])
         self.assertEqual(self.inbox_bytes(), b"")
 
+    def test_dry_run_still_runs_every_gate(self) -> None:
+        """`--dry-run` is not a way past the rules — the README says it runs
+        them all, so a document that would be refused is refused."""
+        document = _document()
+        document["spec"]["suggested_size_pct"] = 180.0
+
+        result = self.arm(document, "--dry-run", "--format", "json")
+
+        self.assert_refused(result, "intent_invalid")
+        self.assertEqual(self.inbox_bytes(), b"")
+
+    def test_an_unrenderable_envelope_refuses_without_arming(self) -> None:
+        """The `arm` precedent: render BEFORE the append, so a payload that
+        cannot be serialised strictly reports a failure for something that has
+        NOT happened. Rendering afterwards would hand a client the
+        `write_outcome_unknown` shape this group exists to keep out."""
+        from alphalens_cli.commands import broker as broker_cli
+
+        with mock.patch.object(broker_cli, "_render_json", side_effect=broker_cli._fail("boom")):
+            result = self.arm(_document(), "--format", "json")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(self.inbox_bytes(), b"")
+
     def test_stdin_is_a_source_like_any_other(self) -> None:
         result = self.invoke(["arm-intent", "-"], stdin=json.dumps(_document()))
 

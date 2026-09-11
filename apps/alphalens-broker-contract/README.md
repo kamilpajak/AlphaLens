@@ -211,9 +211,13 @@ producer must send `trade_date`. That gap is a decision, pinned by a test.
 
 **Identity, because a retry depends on it.** The queue folds picks on
 `(ticker, trade_date, generation)` and keeps the LATEST, so re-submitting a pick
-**replaces** it rather than adding a second one. `generation` is assigned when
-the pick is armed — `1 +` the highest already recorded for that ticker and date,
-whatever became of it — and a document that omits it is generation 1.
+**replaces** it rather than adding a second one. A document that omits
+`generation` is generation 1. Who assigns it depends on the producer:
+`arm-manual` takes `1 +` the highest already recorded for that ticker and date
+(whatever became of it), while a document submitted to the door carries its own
+— and the door then checks that the key it names still takes a write. The rules
+are in the next section, and they are the difference between "your retry landed"
+and "you replaced someone else's pick".
 
 **Which `schema_version` to read, and what it does.** `meta.schema_version` is
 the document's version; `spec.schema_version` is the same constant duplicated in
@@ -230,3 +234,74 @@ claim that v1 is unreadable; it is a claim about what a NEW producer may send.
 The compatibility promise on top is a promise about what we EMIT — within a
 major version, fields are only ADDED and only as optional — and the CI gate on
 the generated artefact is what enforces it.
+
+
+## The door: submitting a ready document (#1406)
+
+```
+alphalens broker arm-intent <path|-> [--env sim|live] [--dry-run] [--format human|json]
+```
+
+A producer that can write JSON does not need a command of its own. `arm` parses
+a brief, `arm-manual` compiles operator levels, and both then build the same
+artefact; this takes that artefact directly. Either a bare `TradeIntent` or one
+of this group's own envelopes is accepted — `arm-manual --format json` pipes
+straight in — and both roads queue the same bytes. An envelope this door does
+not publish is refused rather than peeled hopefully.
+
+**Four gates on the document, in order.** Each answers a different question, and
+none of them is implied by another:
+
+| gate | question | refusal |
+|---|---|---|
+| JSON Schema | is it the published SHAPE? | `intent_malformed` / `schema_violation` |
+| the codec | can it be decoded? | `intent_malformed` / `undecodable` |
+| the fixed point | does every key you sent survive decoding? | `intent_malformed` / `key_discarded` |
+| `validate_intent` | is the document COHERENT? | `intent_invalid` |
+
+The third gate is the one a reader is most likely to think redundant. It is not:
+the decoder drops keys it does not model with only a log line, which is sensible
+forward compatibility for a daemon reading its own journal and wrong for a door
+that arms money. Without it a typo'd `limit_pirce` is discarded and the pick
+arms at the price you did NOT send. The parser refuses a repeated JSON key for
+the same reason — `json.loads` keeps the last silently.
+
+The second gate is not redundant either, and the reason is worth stating because
+it cannot be fixed: JSON Schema defines `integer` as any number with zero
+fractional part, so `"generation": 1.0` passes the schema, while the identity
+strings built from that field require a real integer (#1371).
+
+**Then two questions about the deployment, not the document.** Is the venue one
+this deployment trades (`venue_unsupported`), and does the pick key still take a
+write:
+
+| state of `(ticker, trade_date, generation)` | what happens |
+|---|---|
+| the queue has never seen it | armed — a new pick |
+| armed, and the daemon has not placed it | armed — **this is the idempotent replace**, the retry-after-timeout path |
+| armed, but already placed | refused, `pick_not_writable` / `already_placed` |
+| disarmed or refused | refused, `pick_not_writable` / `generation_spent` |
+| a DIFFERENT generation of that key is still armed | refused, `pick_already_armed` |
+
+The last three are refusals for reasons that were measured rather than assumed.
+Re-sending a document after `disarm` used to bring a cancelled pick back to
+life. Re-sending it after placement used to rewrite a queue line the drain never
+reads again, because it skips keys already joined to `submissions.jsonl` — so
+the queue would say one thing and the market another.
+
+Because the journal is append-only, a successful replace leaves **two lines and
+one folded pick**. That is the shape to assert against, not the line count.
+
+**Nothing is appended unless every gate passed**, and in `--format json` the
+envelope is rendered before the append, so a payload that cannot be serialised
+refuses without having armed anything. `--dry-run` runs every gate and appends
+nothing.
+
+**What the door does NOT do.** It applies no selection filter and never
+normalises or rescales — same pure-executor doctrine as its siblings. It also
+does not refuse a LIVE `--env` when the LIVE rails are absent, because arming is
+not placing: the rails gate the daemon, and the guard that does exist here is
+the refusal to take the instance off an ambient environment variable (#1377).
+Concurrent submitters are not serialised; the key check reads the fold and then
+appends, so two processes racing on one key can both pass it — the same shape
+`arm-manual` has.
