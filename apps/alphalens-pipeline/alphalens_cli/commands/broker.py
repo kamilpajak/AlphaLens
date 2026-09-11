@@ -2519,10 +2519,13 @@ def _assert_key_is_writable(
             },
         )
     if current is not None:
-        submitted = picks_mod.submitted_pick_keys(
+        # NOT `submitted_pick_keys`: that one answers the DRAIN's question and
+        # deliberately ignores the now half, so a pick whose immediate tier
+        # already rests at the broker would look unplaced here (#1247/#1406).
+        placed = picks_mod.keys_with_any_submission(
             iter_submission_records(state_paths.submissions_path(env=env))
         )
-        if (ticker, current.token) in submitted:
+        if (ticker, current.token) in placed:
             raise _fail_with(
                 "pick_not_writable",
                 f"{ticker} @ {current.token} is already placed — the drain skips keys it has "

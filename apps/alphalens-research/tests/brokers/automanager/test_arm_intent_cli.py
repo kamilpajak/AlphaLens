@@ -484,6 +484,38 @@ class ThePickKeyMustBeWritable(_DoorCase):
         self.assert_refused(result, "pick_not_writable", "already_placed")
         self.assertEqual(self.inbox_bytes(), before)
 
+    def test_a_pick_whose_now_half_rests_at_the_broker_is_not_rewritten(self) -> None:
+        """The hole the first version of this table had.
+
+        An immediate-entry tier is placed as its own submission record, and that
+        record deliberately does NOT retire the pick (#1247) — the pullback
+        half's does. So `submitted_pick_keys`, which answers the drain's
+        question, reports nothing for the key while a real order rests at the
+        broker. Measured 2026-09-11: the SIM journal holds a key in exactly that
+        state. The door asks a different question and must use the helper that
+        answers it.
+        """
+        document = self._arm_once()
+        submissions = self.inbox.with_name("submissions.jsonl")
+        submissions.write_text(
+            json.dumps(
+                {
+                    "ticker": "NVO",
+                    "trade_date": "2026-09-11",
+                    "tranche": "now",
+                    "brackets": [{"entry_order_id": "O-77"}],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        before = self.inbox_bytes()
+
+        result = self.arm(document, "--format", "json")
+
+        self.assert_refused(result, "pick_not_writable", "already_placed")
+        self.assertEqual(self.inbox_bytes(), before)
+
     def test_a_second_live_generation_on_one_instrument_is_refused(self) -> None:
         self._arm_once()
         second = _document()
