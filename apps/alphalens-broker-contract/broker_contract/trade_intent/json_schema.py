@@ -194,7 +194,9 @@ def generate_schema() -> dict[str, Any]:
             "The schema pins SHAPE; a schema-valid document can still be refused by the "
             "door's semantic rules (see intent_invalid in the package README). Within a "
             "major version only optional fields are added: a field is never renamed, "
-            "retyped, or given a new unit. An older schema_version is accepted."
+            "retyped, or given a new unit. NOTE: no gate reads schema_version today — "
+            "it is stamped and carried, and a document declaring any version decodes, "
+            "so treat it as provenance rather than as version negotiation."
         ),
         **root,
         "$defs": definitions,

@@ -188,12 +188,15 @@ producer must send `trade_date`. That gap is a decision, pinned by a test.
 
 **Identity, because a retry depends on it.** The queue folds picks on
 `(ticker, trade_date, generation)` and keeps the LATEST, so re-submitting a pick
-**replaces** it rather than adding a second one. `generation` is assigned by the
-receiving side (`1 +` the highest already queued for that ticker and date); a
-document that omits it is generation 1.
+**replaces** it rather than adding a second one. `generation` is assigned when
+the pick is armed — `1 +` the highest already recorded for that ticker and date,
+whatever became of it — and a document that omits it is generation 1.
 
-**Which `schema_version` to read.** `meta.schema_version` is the document's
-version. `spec.schema_version` is the same constant duplicated in a second
-class, not an independent dial. Older versions are accepted — only an unknown
-future one would be refused — and within a major version fields are only ever
-ADDED, and always optional.
+**Which `schema_version` to read, and what it does.** `meta.schema_version` is
+the document's version; `spec.schema_version` is the same constant duplicated in
+a second class, not an independent dial. **No gate reads either one today** —
+not the codec, not `validate_intent`, not the schema, which is why v1 documents
+still decode. It is provenance, not version negotiation: a document declaring
+version 99 is accepted exactly like one declaring 2. The compatibility promise
+is therefore a promise about what we EMIT — within a major version, fields are
+only ADDED and only as optional — and the CI gate is what enforces it.

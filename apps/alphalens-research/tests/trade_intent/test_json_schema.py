@@ -429,6 +429,22 @@ class TestTheKnownDivergencesArePinned(unittest.TestCase):
             "different entry point and is not schema-gated",
         )
 
+    def test_no_gate_reads_the_schema_version_at_all(self) -> None:
+        """Pins the fact the published README states, because the claim it
+        replaced ("only an unknown future version would be refused") was copied
+        from the issue and was false: nothing in this path reads the field.
+
+        If version gating is ever added, this test goes red and the README
+        paragraph must be rewritten in the same commit.
+        """
+        for version in ("1", "2", "99", "not-a-version"):
+            document = _brief_like()
+            document["meta"]["schema_version"] = version
+            document["spec"]["schema_version"] = version
+            with self.subTest(version=version):
+                self.assertTrue(_accepts(document))
+                self.assertTrue(_decodes(document))
+
     def test_an_old_schema_version_is_still_accepted(self) -> None:
         """Older is accepted, only unknown-and-future would be refused — and the
         version is not an enum, so v1 payloads pass on shape."""
