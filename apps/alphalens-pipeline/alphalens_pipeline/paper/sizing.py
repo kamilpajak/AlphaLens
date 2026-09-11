@@ -25,6 +25,7 @@ from typing import Any
 
 from broker_contract.exit_geometry import AtrBracketPolicy, resolve_exit_policy
 from broker_contract.exit_geometry.levels import ceiling_from_52w_high
+from broker_contract.exit_geometry.policy import BreakevenTrailPolicy
 from broker_contract.sizing import (
     TradeSetupNotPlannableError,
     _blend_priced_tiers,
@@ -34,9 +35,9 @@ from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     ExitGeometrySpec,
     InitialLevels,
-    ReanchorOnFill,
     TpTrancheSpec,
     TradeSpec,
+    TrailingStop,
 )
 
 
@@ -217,6 +218,19 @@ def first_brief_tp_target(brief_trade_setup: Mapping[str, Any]) -> float | None:
     return target
 
 
+def _deployed_trail() -> BreakevenTrailPolicy:
+    """The stop-management policy this deployment runs, and therefore the one the
+    brief path declares.
+
+    Read off the registry rather than retyped, so the declaration cannot drift
+    from the policy an operator reads in a log line. The narrowing assert is what
+    makes that read type-safe: the registry is declared as returning the
+    ``ExitPolicy`` protocol, and the parameters below belong to this family."""
+    policy = resolve_exit_policy("breakeven_trail")
+    assert isinstance(policy, BreakevenTrailPolicy)
+    return policy
+
+
 def build_exit_geometry_spec(
     brief_trade_setup: dict, pct_off_52w_high: float | None = None
 ) -> ExitGeometrySpec | None:
@@ -304,8 +318,28 @@ def build_exit_geometry_spec(
         tp = max(tp, first_target)
     return ExitGeometrySpec(
         initial_levels=InitialLevels(stop=stop, tp=tp),
+        # #1236: the document DECLARES how it wants its stop managed, and what it
+        # declares is what actually runs. It used to declare ``ReanchorOnFill``
+        # while the daemon did whatever ``ALPHALENS_BROKER_EXIT_POLICY`` said —
+        # since 2026-08-27 the break-even trail — so the document described one
+        # thing and the executor did another.
+        #
+        # The parameters are the deployed ones, read off the registry rather than
+        # retyped, so the declaration and the policy cannot drift apart silently.
+        # Changing the trail is now a change here plus a deploy, not an env flip:
+        # that is the rollback path recorded in
+        # ``breakeven_trail_live_policy_design_2026_08_27.md``, and the LIVE unit
+        # file says so.
+        #
+        # ``ceiling`` is NOT declared. It caps the take-profit, so it is a
+        # placement instruction, and this contract does not yet carry one — the
+        # door refuses a field it would discard. It is still applied, to the
+        # levels above.
         reaction_plan=(
-            ReanchorOnFill(k_atr=exit_policy.geom.stop_atr_mult, atr=atr, ceiling_price=ceiling),
+            TrailingStop(
+                arm_trigger_r=_deployed_trail().activation_r,
+                trail_frac=_deployed_trail().trail_frac,
+            ),
         ),
     )
 

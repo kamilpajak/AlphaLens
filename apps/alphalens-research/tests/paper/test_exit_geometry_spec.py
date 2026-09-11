@@ -22,11 +22,11 @@ import unittest
 
 from alphalens_pipeline.feedback.ladder_replay import replay_ladder_atr_bracket
 from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, planned_blended_entry
-from broker_contract.exit_geometry.registry import resolve_policy
-from broker_contract.trade_intent.schema import ExitGeometrySpec, ReanchorOnFill
+from broker_contract.exit_geometry.levels import ceiling_from_52w_high
+from broker_contract.exit_geometry.registry import resolve_exit_policy, resolve_policy
+from broker_contract.trade_intent.schema import ExitGeometrySpec, TrailingStop
 
 from tests.incident_1112_fixture import (
-    SMG_ATR,
     SMG_GEOMETRY_STOP,
     SMG_GEOMETRY_TP,
     SMG_PLANNED_BLEND,
@@ -126,19 +126,50 @@ class TestBuildExitGeometrySpec(unittest.TestCase):
         assert spec is not None
         self.assertAlmostEqual(spec.initial_levels.stop, expected_stop)
         self.assertAlmostEqual(spec.initial_levels.tp, expected_tp)
-        self.assertAlmostEqual(spec.reaction_plan[0].k_atr, numeric.stop_atr_mult)
-        self.assertAlmostEqual(spec.reaction_plan[0].k_atr, 1.5)
+        # The levels still come from the ATR bracket; what the document now
+        # DECLARES about managing the stop is the trail that actually runs.
 
-    def test_reaction_plan_carries_a_single_reanchor_on_fill(self) -> None:
+    def test_reaction_plan_declares_the_trail_that_actually_runs(self) -> None:
+        """#1236: the brief path states how it wants its stop managed.
+
+        It declared ``ReanchorOnFill`` until now, and the daemon ignored that and
+        did whatever ``ALPHALENS_BROKER_EXIT_POLICY`` said — which since
+        2026-08-27 is the break-even trail. So the document described one thing
+        and the daemon did another. The parameters here are the deployed ones, so
+        behaviour is unchanged; what changed is that the document now says so."""
         setup = _setup(entries=[(100.0, 100.0)], atr=2.0)
         spec = build_exit_geometry_spec(setup)
         assert spec is not None
         self.assertEqual(len(spec.reaction_plan), 1)
-        reanchor = spec.reaction_plan[0]
-        self.assertIsInstance(reanchor, ReanchorOnFill)
-        self.assertAlmostEqual(reanchor.k_atr, 1.5)  # atr_bracket_1p5 pinned stop_atr_mult
-        self.assertAlmostEqual(reanchor.atr, 2.0)
-        self.assertIsNone(reanchor.ceiling_price)
+        declared = spec.reaction_plan[0]
+        self.assertIsInstance(declared, TrailingStop)
+        assert isinstance(declared, TrailingStop)
+        self.assertAlmostEqual(declared.arm_trigger_r, 0.5)
+        self.assertAlmostEqual(declared.trail_frac, 0.6)
+
+    def test_the_declaration_carries_the_deployed_numbers(self) -> None:
+        """Pinned to LITERALS on purpose.
+
+        The first version of this test read `resolve_exit_policy("breakeven_trail")`
+        and compared it to what the builder produced — but the builder reads that
+        same entry, so it compared the registry to itself and would have followed
+        any change to it rather than catching one. These are the numbers the LIVE
+        unit has run since 2026-08-27; changing them is a research decision, and
+        this test is where it has to be made deliberately."""
+        spec = build_exit_geometry_spec(_setup(entries=[(100.0, 100.0)], atr=2.0))
+        assert spec is not None
+        declared = spec.reaction_plan[0]
+        assert isinstance(declared, TrailingStop)
+        self.assertAlmostEqual(declared.arm_trigger_r, 0.5)
+        self.assertAlmostEqual(declared.trail_frac, 0.6)
+
+    def test_the_registry_entry_still_carries_those_numbers(self) -> None:
+        """The other half: the declaration above is only faithful while the
+        registry entry it names agrees with it. Split from the check above so a
+        divergence says WHICH side moved."""
+        deployed = resolve_exit_policy("breakeven_trail")
+        self.assertAlmostEqual(deployed.activation_r, 0.5)
+        self.assertAlmostEqual(deployed.trail_frac, 0.6)
 
     def test_ceiling_derived_from_pct_off_52w_high_kwarg_not_the_setup_dict(self) -> None:
         # technical_pct_off_52w_high is NOT a key inside brief_trade_setup (it is
@@ -155,9 +186,13 @@ class TestBuildExitGeometrySpec(unittest.TestCase):
 
         spec_capped = build_exit_geometry_spec(setup, pct_off_52w_high=-2.0)
         assert spec_capped is not None
-        ceiling = spec_capped.reaction_plan[0].ceiling_price
-        self.assertIsNotNone(ceiling)
+        # The ceiling is applied to the LEVELS and no longer travels in the
+        # document: it caps a take-profit, so it is a placement instruction, and
+        # the door refuses one it cannot honour (#1236).
+        ceiling = ceiling_from_52w_high(setup, -2.0)
+        assert ceiling is not None
         self.assertAlmostEqual(spec_capped.initial_levels.tp, min(103.0, ceiling))
+        self.assertLess(spec_capped.initial_levels.tp, 103.0)
 
     def test_multi_tier_blend_and_stop_match_replay_but_the_take_profit_does_not(self) -> None:
         # Mirrors TestAtrBracketWhatIf.test_multi_tier_fills_anchor_bracket_at_blended_entry:
@@ -257,10 +292,7 @@ class TestTargetNeverBelowFirstBriefTranche(unittest.TestCase):
         assert spec is not None
         self.assertAlmostEqual(spec.initial_levels.stop, SMG_GEOMETRY_STOP, places=9)
         self.assertEqual(len(spec.reaction_plan), 1)
-        reanchor = spec.reaction_plan[0]
-        self.assertIsInstance(reanchor, ReanchorOnFill)
-        self.assertAlmostEqual(reanchor.k_atr, 1.5)
-        self.assertAlmostEqual(reanchor.atr, SMG_ATR)
+        self.assertIsInstance(spec.reaction_plan[0], TrailingStop)
 
     def test_a_first_tranche_below_the_atr_target_leaves_it_unchanged(self) -> None:
         # max() semantics: the clamp is a FLOOR, never a cap. Pinned fixture:
@@ -302,7 +334,9 @@ class TestTargetNeverBelowFirstBriefTranche(unittest.TestCase):
         setup["asof_close"] = 100.0
         spec = build_exit_geometry_spec(setup, pct_off_52w_high=-2.0)
         assert spec is not None
-        ceiling = spec.reaction_plan[0].ceiling_price
+        # The ceiling no longer travels in the document (#1236); recompute it
+        # from the same leaf the builder used.
+        ceiling = ceiling_from_52w_high(setup, -2.0)
         assert ceiling is not None
         self.assertGreater(120.0, ceiling)
         self.assertAlmostEqual(spec.initial_levels.tp, 120.0)

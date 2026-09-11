@@ -36,6 +36,7 @@ from broker_contract.contract import (
     Position,
 )
 from broker_contract.exit_geometry import resolve_exit_policy
+from broker_contract.trade_intent.schema import TrailingStop
 
 _UIC = 43070
 
@@ -182,9 +183,13 @@ class _ScriptedFeedFactory:
 
 
 def _seed_planned(journal: Path) -> None:
-    """A ``planned`` line with the geometry shadow stamp so ``plan.reanchor``
-    is non-None (the trail arm's guard requires a finite atr even though this
-    policy never reads it) — brief disaster floor 90, avg 100."""
+    """A ``planned`` line DECLARING the trail — brief disaster floor 90, avg 100.
+
+    This used to carry a geometry shadow stamp instead, with the comment "the
+    trail arm's guard requires a finite atr even though this policy never reads
+    it". That workaround is gone: since #1236 the permission to move a stop is
+    the declaration itself, so a policy whose risk unit is ``avg_price -
+    plan_stop`` no longer has to be handed an ATR it discards."""
     with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
         cl._append_standalone_stop_journal(
             cl._build_planned_line(
@@ -194,7 +199,7 @@ def _seed_planned(journal: Path) -> None:
                 stop_price=90.0,
                 take_profit=None,
                 tier_index=0,
-                geometry_stamp={"k_atr": 2.0, "atr": 4.0},
+                reaction=TrailingStop(arm_trigger_r=0.5, trail_frac=0.6),
             )
         )
 

@@ -12,7 +12,7 @@ human alias (the betlejem5-inspired bracket doctrine, memo §2 /
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from broker_contract.exit_geometry.levels import atr_bracket_levels
 
@@ -111,3 +111,47 @@ def resolve_exit_policy(name: str) -> ExitPolicy:
         return exit_policy_registry()[name]
     except KeyError:
         raise ValueError(f"unknown exit policy: {name!r}") from None
+
+
+def resolve_declared_policy(reaction: Any) -> ExitPolicy:
+    """The exit policy a DOCUMENT's reaction primitive asks for (#1236).
+
+    The counterpart to :func:`resolve_exit_policy`, which answers the same
+    question from a process-wide environment variable. Here the answer comes from
+    the intent itself, so an external producer states what it wants instead of
+    inheriting whatever this deployment is configured for — and the #1406 door
+    has something concrete to accept and to refuse.
+
+    ``None`` -> the inert policy. That is THE MIGRATION RULE, not a default:
+    every pick armed before this existed declares nothing, and a manual pick
+    declares nothing by design (#1325). Falling back to the daemon-wide policy
+    would start trailing all of them the moment this deploys.
+
+    Parameters are taken from the primitive, never from the registry's own entry.
+    A declaration whose numbers the executor silently replaced with its own would
+    be a field accepted and not honoured. The resolved policy still reports the
+    registry FAMILY name, so a log line and the journal stamp name something an
+    operator can look up.
+
+    An unhonourable primitive (``ModelPush``, whose levels would arrive through an
+    ``amend_exit`` call that does not exist) degrades to the inert policy rather
+    than raising. The door refuses it loudly; THIS function is reached from a
+    journal stamp inside the protection pass, where a raise would starve the
+    never-naked backstop.
+    """
+    from broker_contract.exit_geometry.policy import (
+        BreakevenTrailPolicy,
+        ReanchorOnFillPolicy,
+        SetupStaticPolicy,
+    )
+    from broker_contract.trade_intent.schema import ReanchorOnFill, TrailingStop
+
+    if isinstance(reaction, TrailingStop):
+        return BreakevenTrailPolicy(
+            activation_r=reaction.arm_trigger_r,
+            trail_frac=reaction.trail_frac,
+            name="breakeven_trail",
+        )
+    if isinstance(reaction, ReanchorOnFill):
+        return ReanchorOnFillPolicy(k_atr=reaction.k_atr, name="reanchor_on_fill")
+    return SetupStaticPolicy()

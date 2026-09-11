@@ -80,10 +80,50 @@ are part of the contract:
 | `violations` | **Every** broken rule, not just the first: a list of `{reason, message}` objects, each carrying its index key when it is element-wise. A generated document can be fixed in one pass instead of a submit-fix-submit loop. |
 | `tier_index` | 0-based index of the offending entry tier, for a rule about one rung. |
 | `tranche_index` | 0-based index of the offending take-profit tranche. |
+| `reaction_index` | 0-based index of the offending `exit.reaction_plan` entry. |
 
 `message` carries the FIRST violation in the published order — identity, entry
-ladder, stop, size, take-profits — so the operator's text is stable while a
-machine reads the whole list.
+ladder, stop, size, take-profits, exit declaration — so the operator's text is
+stable while a machine reads the whole list.
+
+#### The exit declaration, and what it may say
+
+`exit.reaction_plan` is how a document states **how its stop is managed** after
+fill. It is a declaration the daemon honours, so the door refuses anything it
+cannot honour rather than quietly doing something else:
+
+| declaration | the daemon |
+|---|---|
+| absent, or an `exit` with an empty plan | never moves the stop |
+| `TrailingStop(arm_trigger_r, trail_frac)` | arms a break-even trail at `arm_trigger_r` R of favourable excursion, then gives back `trail_frac` of it |
+| `ReanchorOnFill(k_atr, atr)` | re-anchors the stop once, on fill-complete, to `avg_price - k_atr*atr` |
+
+Absent means **the stop is never moved**, not "use this deployment's default".
+That is deliberate: a document that says nothing about its exit has not asked for
+one to be managed, and inheriting a server-side policy would move real stops that
+nobody asked to move.
+
+Parameters are yours to choose within the rules below; they are used as declared,
+never replaced by this deployment's own numbers. `0.5R` is not a comparable
+quantity across hand-set stops — 1R is 6.8% of entry on one instrument and 29% on
+another — so the choice has to be the document's.
+
+Refusals specific to the declaration: `reaction_plan_ambiguous` (more than one
+stop-management primitive — the daemon manages one stop, and a precedence rule
+invented server-side is one no client can read off the document),
+`reaction_kind_unsupported`, `reanchor_without_levels`, `k_atr_non_positive`,
+`arm_trigger_r_non_positive`, `trail_frac_out_of_range`, and
+`ceiling_price_unsupported`.
+
+That last one is worth a sentence, because the field reads like a stop-side cap
+and is not: `ceiling_price` applies as `tp = min(tp, ceiling_price)` and never
+touches the stop. It is a take-profit — that is, a *placement* — instruction, and
+placement is not yet something this contract carries. Refusing it is better than
+accepting a field that would be silently discarded.
+
+**`initial_levels` is optional**, and its presence is not a formality: a document
+may declare how its stop is MANAGED without supplying a bracket to PLACE. The two
+halves are independent.
 
 **What `validate_intent` does NOT check** is as much part of the contract as what
 it does. Rules about the *invocation* rather than the document stay with the CLI:

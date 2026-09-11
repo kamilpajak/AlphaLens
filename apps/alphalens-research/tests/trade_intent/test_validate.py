@@ -9,6 +9,7 @@ These tests exercise the rules with NO CLI in the picture — that is the proper
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import unittest
 
@@ -16,11 +17,16 @@ from broker_contract.failure import CONTRACT_FAILURE_CODES
 from broker_contract.trade_intent.codec import intent_from_jsonable, intent_to_jsonable
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
+    ExitGeometrySpec,
+    InitialLevels,
     InstrumentHint,
     IntentMeta,
+    ModelPush,
+    ReanchorOnFill,
     TpTrancheSpec,
     TradeIntent,
     TradeSpec,
+    TrailingStop,
 )
 from broker_contract.trade_intent.validate import (
     INTENT_INVALID_REASONS,
@@ -451,3 +457,170 @@ class RoundTripTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheDeclarationRulesTest(unittest.TestCase):
+    """#1236: the exit's reaction plan is a DECLARATION the daemon honours, so the
+    door has to refuse anything it cannot honour — loudly, at arm time, rather
+    than by quietly doing something else.
+
+    Three refusals, each for a different reason:
+
+    * **More than one stop-management primitive.** The daemon manages one stop;
+      two declarations would need a precedence rule, and a precedence rule
+      invented here is a rule no client can read off the document.
+    * **``ReanchorOnFill`` without ``initial_levels``.** That primitive is the
+      brief-geometry shape: 936 of 936 plannable brief rows carry both. A
+      re-anchor declared with no levels beside it is a document whose two halves
+      disagree.
+    * **``ceiling_price``**, which reads like a stop-side cap and is not. In
+      ``atr_bracket_levels`` it applies as ``tp = min(tp, ceiling_price)`` and
+      never touches the stop — it is a take-profit, that is, a PLACEMENT
+      parameter. This work has nothing to honour it with, and a door must not
+      accept a field it discards. The placement issue lifts this refusal.
+    """
+
+    def _with(self, exit_spec):
+        return dataclasses.replace(_intent(), exit=exit_spec)
+
+    def _reason(self, exit_spec) -> str:
+        with self.assertRaises(IntentInvalidError) as caught:
+            validate_intent(self._with(exit_spec))
+        return caught.exception.failure.details["reason"]
+
+    def test_a_trailing_declaration_with_no_levels_is_accepted(self):
+        """The shape the whole change exists for — asserted first, so the
+        refusals below cannot be passing by refusing everything."""
+        validate_intent(self._with(ExitGeometrySpec(reaction_plan=(TrailingStop(0.5, 0.6),))))
+
+    def test_a_reanchor_beside_its_levels_is_accepted(self):
+        validate_intent(
+            self._with(
+                ExitGeometrySpec(
+                    initial_levels=InitialLevels(stop=90.0, tp=130.0),
+                    reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=2.0),),
+                )
+            )
+        )
+
+    def test_two_stop_management_primitives_are_refused(self):
+        self.assertEqual(
+            self._reason(
+                ExitGeometrySpec(
+                    initial_levels=InitialLevels(stop=90.0, tp=130.0),
+                    reaction_plan=(TrailingStop(0.5, 0.6), ReanchorOnFill(k_atr=1.5, atr=2.0)),
+                )
+            ),
+            "reaction_plan_ambiguous",
+        )
+
+    def test_a_reanchor_without_levels_is_refused(self):
+        self.assertEqual(
+            self._reason(ExitGeometrySpec(reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=2.0),))),
+            "reanchor_without_levels",
+        )
+
+    def test_a_ceiling_price_is_refused(self):
+        self.assertEqual(
+            self._reason(
+                ExitGeometrySpec(
+                    initial_levels=InitialLevels(stop=90.0, tp=130.0),
+                    reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=2.0, ceiling_price=140.0),),
+                )
+            ),
+            "ceiling_price_unsupported",
+        )
+
+    def test_an_unhonourable_primitive_is_refused(self):
+        self.assertEqual(
+            self._reason(ExitGeometrySpec(reaction_plan=(ModelPush(),))),
+            "reaction_kind_unsupported",
+        )
+
+    def test_the_declared_parameters_are_bounded(self):
+        for exit_spec, reason in (
+            (
+                ExitGeometrySpec(reaction_plan=(TrailingStop(0.0, 0.6),)),
+                "arm_trigger_r_non_positive",
+            ),
+            (
+                ExitGeometrySpec(reaction_plan=(TrailingStop(-1.0, 0.6),)),
+                "arm_trigger_r_non_positive",
+            ),
+            (ExitGeometrySpec(reaction_plan=(TrailingStop(0.5, 0.0),)), "trail_frac_out_of_range"),
+            (ExitGeometrySpec(reaction_plan=(TrailingStop(0.5, 1.5),)), "trail_frac_out_of_range"),
+        ):
+            with self.subTest(reason=reason):
+                self.assertEqual(self._reason(exit_spec), reason)
+
+    def test_a_trail_frac_of_exactly_one_is_legal(self):
+        """The boundary is inclusive on purpose: giving back 100% of the
+        excursion is "trail at the peak", a coherent instruction."""
+        validate_intent(self._with(ExitGeometrySpec(reaction_plan=(TrailingStop(0.5, 1.0),))))
+
+    def test_a_reanchor_multiple_must_be_positive(self):
+        self.assertEqual(
+            self._reason(
+                ExitGeometrySpec(
+                    initial_levels=InitialLevels(stop=90.0, tp=130.0),
+                    reaction_plan=(ReanchorOnFill(k_atr=0.0, atr=2.0),),
+                )
+            ),
+            "k_atr_non_positive",
+        )
+
+    def test_a_non_finite_declared_parameter_is_caught_before_any_comparison(self):
+        """NaN answers False to every ordering comparison, so a bounds rule built
+        from `<= 0` would pass it in full. Finiteness is checked first — the same
+        discipline the spec's own numbers get."""
+        self.assertEqual(
+            self._reason(ExitGeometrySpec(reaction_plan=(TrailingStop(float("nan"), 0.6),))),
+            "numeric_not_finite",
+        )
+
+    def test_a_degenerate_declared_atr_is_refused(self):
+        """The daemon refuses a non-positive ATR silently (the policy cannot size
+        a risk distance from one), so the door must refuse it loudly — a
+        declaration accepted and then quietly not honoured is the failure a door
+        exists to prevent."""
+        for atr in (0.0, -1.0):
+            with self.subTest(atr=atr):
+                self.assertEqual(
+                    self._reason(
+                        ExitGeometrySpec(
+                            initial_levels=InitialLevels(stop=90.0, tp=130.0),
+                            reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=atr),),
+                        )
+                    ),
+                    "atr_non_positive",
+                )
+
+    def test_a_non_positive_initial_level_is_refused(self):
+        for levels in (
+            InitialLevels(stop=0.0, tp=130.0),
+            InitialLevels(stop=90.0, tp=-1.0),
+        ):
+            with self.subTest(levels=levels):
+                self.assertEqual(
+                    self._reason(
+                        ExitGeometrySpec(
+                            initial_levels=levels,
+                            reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=2.0),),
+                        )
+                    ),
+                    "initial_level_non_positive",
+                )
+
+    def test_a_non_finite_initial_level_is_caught_first(self):
+        """Levels became optional, so they are numbers the door now accepts and
+        must therefore check — finiteness before bounds, since NaN answers False
+        to every comparison."""
+        self.assertEqual(
+            self._reason(
+                ExitGeometrySpec(
+                    initial_levels=InitialLevels(stop=float("nan"), tp=130.0),
+                    reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=2.0),),
+                )
+            ),
+            "numeric_not_finite",
+        )

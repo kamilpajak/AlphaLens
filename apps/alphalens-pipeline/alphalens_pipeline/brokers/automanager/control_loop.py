@@ -11,6 +11,7 @@ real modules.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import enum
 import functools
@@ -49,8 +50,12 @@ from broker_contract.exit_geometry import (
     SetupStaticPolicy,
     resolve_exit_policy,
 )
-from broker_contract.exit_geometry.registry import resolve_policy
+from broker_contract.exit_geometry.registry import resolve_declared_policy, resolve_policy
 from broker_contract.price_feed import SupportsSessionLow
+from broker_contract.trade_intent.codec import (
+    TradeIntentDecodeError,
+    _decode_reaction_primitive,
+)
 
 from alphalens_pipeline.brokers.automanager import (
     entry_trail_geometry,
@@ -99,7 +104,6 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlaceStop,
     PlannedExit,
     ProtectionView,
-    ReanchorFacts,
     UpgradeToOco,
     _amend_enabled,
     _exit_oco_ref,
@@ -1690,14 +1694,38 @@ def _announce_fired_tranches(
             )
 
 
+def _uics_declaring_a_trail(journal_lines: Iterable[Mapping[str, Any]]) -> frozenset[int]:
+    """The uics whose governing plan DECLARES a trailing stop (#1236).
+
+    The peak fetch used to be gated on the daemon-wide policy: one env var said
+    "this deployment trails", and peaks were fetched for every long. Trailing is
+    now a property of an individual pick, so the gate has to ask the plans.
+
+    Deliberately a SEPARATE, cheap fold rather than a peaks callback threaded into
+    ``build_protection_view``: that function is a pure assembler, and putting a
+    network call inside it would move I/O under a boundary that catches only
+    ``BrokerError`` — a feed failure would then skip the whole protection pass
+    instead of degrading trailing to dark. ``_fetch_protection_peaks`` keeps its
+    own boundary, and the cost is a second read of a journal that is compacted at
+    boot and small.
+    """
+    return frozenset(
+        uic
+        for uic, plan in _fold_planned_exits(journal_lines).items()
+        if resolve_declared_policy(plan.reaction).trails
+    )
+
+
 def _fetch_protection_peaks(
-    deps: LoopDeps, report: TickReport
+    deps: LoopDeps, report: TickReport, *, uics: frozenset[int] | None = None
 ) -> tuple[dict[int, float], dict[int, float]]:
     """Task 4: fetch this tick's high-water peaks for the trailing arm, behind a
     boundary whose ENTIRE job is that NOTHING here can starve the never-naked
     protection pass that runs immediately after.
 
-    Called ONLY when ``deps.exit_policy.trails``. Reads the live long positions
+    Called ONLY for the uics whose plans DECLARE a trail (#1236); it used to be
+    called when one env var said this deployment trailed, and then fetched for
+    every long. Reads the live long positions
     (an EXTRA ``get_long_positions`` beyond the one ``build_protection_view`` does
     internally — a known minor inefficiency on the trailing path only, acceptable
     for this cut; fold into a shared per-tick read later) and hands them to
@@ -1734,6 +1762,11 @@ def _fetch_protection_peaks(
         return {}, {}
     try:
         long_positions = broker.get_long_positions()
+        if uics is not None:
+            # Only the picks that DECLARE a trail need a peak (#1236). Previously
+            # the whole deployment trailed or none of it did, so every long was
+            # fetched; now a feed is built for the positions that asked for one.
+            long_positions = [pos for pos in long_positions if _position_uic(pos) in uics]
         return _update_peaks(deps, long_positions)
     # Broad on purpose (mirrors _build_live_exits_feed): a feed/network/auth error
     # must not propagate into the protection pass. Trailing goes dark, protection
@@ -1757,17 +1790,23 @@ def _run_protection_pass(
     never aborts the tick or the other uics. This is the ONLY path that places /
     resizes protective stops now (advance no longer does).
 
-    On the trailing path only (``deps.exit_policy.trails`` — ``trailing_atr``) this
-    first fetches the per-uic high-water peaks and threads them into the view so the
-    pure ``_maybe_trail`` arm can ratchet the stop UP. The peak fetch is behind its
-    OWN boundary (``_fetch_protection_peaks``): a fetch failure degrades trailing to
-    dark (empty maps) but the view build + reconcile ALWAYS run, so the never-naked
-    backstop can never be starved. Every non-trailing policy takes the exact call
-    ``deps.build_protection_view(deps.broker, records)`` with no peak fetch — zero
-    new behaviour, byte-identical to today."""
+    When any pick DECLARES a trail (#1236) this first fetches the high-water peaks
+    for THOSE uics and threads them into the view so the pure ``_maybe_trail`` arm
+    can ratchet the stop UP. Which picks those are is a cheap pre-fold of the same
+    journal the view build reads — deliberately not a callback inside
+    ``build_protection_view``, which is a pure assembler whose only boundary
+    catches ``BrokerError``; a feed failure there would skip the whole protection
+    pass. The peak fetch keeps its OWN boundary (``_fetch_protection_peaks``): a
+    failure degrades trailing to dark (empty maps) while the view build + reconcile
+    ALWAYS run, so the never-naked backstop can never be starved. With no pick
+    declaring a trail the pass takes the exact 2-arg build call and fetches
+    nothing."""
     try:
-        if deps.exit_policy.trails:
-            peak_by_uic, last_price_by_uic = _fetch_protection_peaks(deps, report)
+        trailing_uics = _uics_declaring_a_trail(_iter_standalone_stop_journal())
+        if trailing_uics:
+            peak_by_uic, last_price_by_uic = _fetch_protection_peaks(
+                deps, report, uics=trailing_uics
+            )
             protection_view = deps.build_protection_view(
                 deps.broker,
                 records,
@@ -2114,6 +2153,7 @@ def _open_entry_watches(
     *,
     d_bps: int,
     geometry_stamp: dict[str, Any] | None = None,
+    reaction: Any = None,
 ) -> int:
     """Journal one ``watch_open`` line per positive-quantity entry tier (memo
     §5, G3 journal-FIRST) and return the count opened.
@@ -2183,6 +2223,12 @@ def _open_entry_watches(
         }
         if geometry_stamp is not None:
             line["geometry"] = geometry_stamp
+        # #1236: the declaration has to ride through too. The `planned` line is
+        # written LATER, at the fire arm, from this record — so anything that
+        # line needs and the watch does not carry is simply lost, and a pick
+        # whose document asked for its stop to be managed would never be.
+        if reaction is not None:
+            line["reaction"] = dataclasses.asdict(reaction)
         entry_trails.append_entry_trail_line(line)
         opened += 1
     return opened
@@ -2258,7 +2304,7 @@ def _route_pick_to_entry_watch(
         # Same use_geometry decision _place_tiers makes for its planned lines:
         # the stamp rides every watch_open so the fire-arm planned writer can
         # hand the (k_atr, atr) reanchor facts to the trailing-SL pass.
-        use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
+        use_geometry = _places_client_geometry(resolved_exit_policy, exit_spec)
         opened = _open_entry_watches(
             intent,
             ticker,
@@ -2272,6 +2318,7 @@ def _route_pick_to_entry_watch(
                 use_geometry=use_geometry,
                 exit_policy=resolved_exit_policy,
             ),
+            reaction=_declared_reaction(exit_spec),
         )
     # Broad on purpose: an unrecognised MIC (calendar ValueError) or a journal
     # I/O error must degrade to "pick stays armed", never abort the tick before
@@ -3020,6 +3067,10 @@ def _journal_entry_planned_disaster(record: Mapping[str, Any], uic: int, entry_c
             # #1236: the watch_open already carries the trade identity; passing
             # it through is what lets a trailed level be scoped to this pick.
             pick_key=record.get("pick_key"),
+            # ...and the declaration, which decides whether this stop is managed
+            # at all. Re-decoded from the watch rather than carried as an object
+            # because the watch is JSON on disk between the two hops.
+            reaction=_reaction_from_governing(record),
         )
     )
 
@@ -5002,12 +5053,19 @@ def build_default_deps(
     # _amend_enabled(): the reanchor is part of the geometry feature, not the Stage-3
     # grow/downsize amend that ALPHALENS_BROKER_AMEND_ENABLED gates — requiring that
     # flag too would let geometry go live WITHOUT the reanchor, the exact unsafe combo.
-    if exit_policy.requires_amend_stop and not isinstance(broker, SupportsAmendStop):
+    # #1236 widened this from the DAEMON's policy to the capability itself. Stop
+    # management is declared per pick now, so a document can ask for a re-anchor
+    # or a trail on a deployment whose env policy needs no amend rail — and the
+    # old gate, which only asked about ``exit_policy``, would have waved it
+    # through. Every declarable policy needs the rail, so the requirement is
+    # unconditional: a broker that cannot amend cannot honour a declaration, and
+    # finding that out at boot is the point.
+    if not isinstance(broker, SupportsAmendStop):
         raise BrokerCapabilityError(
-            f"exit policy {exit_policy.name!r} needs the AmendStop rail for "
-            f"the PR-6b fill-complete reanchor, but broker {broker.name!r} does not implement "
-            "amend_stop_amount (SupportsAmendStop) — geometry-live would leave a wrong-distance "
-            "stop. Wire an amend-capable broker or unset the flag (setup_static)."
+            f"broker {broker.name!r} does not implement amend_stop_amount "
+            "(SupportsAmendStop), so no pick's declared stop management can be "
+            "honoured — a declared re-anchor or trail would be silently ignored. "
+            "Wire an amend-capable broker."
         )
     # Live-exits capability gate (#1141), mirroring the _amend_enabled() gate
     # above: when the flag is on, the pass amends the SL and market-sells
@@ -5307,6 +5365,7 @@ def _build_planned_line(
     gen: int = _INITIAL_GEN,
     geometry_stamp: dict[str, Any] | None = None,
     pick_key: str | None = None,
+    reaction: Any = None,
 ) -> dict[str, Any]:
     """One append-only `planned` journal line — the plan PRICES the broker cannot
     know (disaster stop + in-band TP), keyed to the entry client_request_id and
@@ -5339,6 +5398,19 @@ def _build_planned_line(
     }
     if geometry_stamp is not None:
         record["geometry"] = geometry_stamp
+    # #1236: what the DOCUMENT declared about managing this stop. The protection
+    # pass never sees the intent, so the declaration has to travel on the line the
+    # pass DOES read.
+    #
+    # Written with ``dataclasses.asdict`` and read back with the CODEC's decoder —
+    # two different functions, which is a drift risk worth naming rather than
+    # papering over: a codec change that renamed a wire key would keep this write
+    # emitting the old one, the read would fail, and the fold degrades to
+    # "declared nothing", silently disarming every pick after that deploy.
+    # ``test_a_journaled_declaration_round_trips_through_the_codec`` is what turns
+    # that into a red test instead of a log line.
+    if reaction is not None:
+        record["reaction"] = dataclasses.asdict(reaction)
     # A BLANK key is absent, not an identity: `_apply_generation_reset` compares
     # keys as strings, so stamping "" would make two unrelated picks match each
     # other while still failing to match a genuinely keyless line.
@@ -5502,28 +5574,38 @@ def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, Planned
             n_plans=n_plans,
             next_gen=_make_next_gen(uic),
             next_amend_seq=_make_next_amend_seq(uic),
-            reanchor=_reanchor_facts_from_governing(governing),
+            reaction=_reaction_from_governing(governing),
         )
     return result
 
 
-def _reanchor_facts_from_governing(governing: Mapping[str, Any]) -> ReanchorFacts | None:
-    """PR-6b: fold the governing planned line's ``"geometry"`` shadow stamp
-    (PR-6a's ``_geometry_shadow_stamp``) into ``ReanchorFacts(k_atr, atr)``, or
-    ``None`` when the blob is absent / malformed. ``None`` for every
-    pre-PR-6a journal line (no ``"geometry"`` key) — so ``_fold_planned_exits``
-    stays BYTE-IDENTICAL for the whole pre-PR-6a journal history."""
-    geo = governing.get("geometry")
-    if not isinstance(geo, dict):
+def _reaction_from_governing(governing: Mapping[str, Any]) -> Any:
+    """Fold the governing planned line's ``"reaction"`` stamp (#1236) into the
+    declared reaction primitive, or ``None`` when the key is absent or will not
+    decode.
+
+    A malformed optional key must NOT take the line with it. ``_fold_planned_exits``
+    is called inside ``build_protection_view``, and ``_run_protection_pass``
+    catches only ``BrokerError`` — so an unguarded decoder here would escape the
+    whole protection pass and leave every position unmanaged for that tick. The
+    line still carries the disaster stop, which is the never-naked guarantee, so
+    losing the declaration is survivable and losing the line is not.
+
+    ``None`` for every line written before #1236, which is why those plans resolve
+    to "the stop is never moved"."""
+    raw = governing.get("reaction")
+    if not isinstance(raw, dict):
         return None
     try:
-        k_atr = float(geo["k_atr"])
-        atr = float(geo["atr"])
-    except (KeyError, TypeError, ValueError):
+        return _decode_reaction_primitive(raw)
+    except (TradeIntentDecodeError, TypeError, ValueError):
+        logger.warning(
+            "planned line for uic %s carries an undecodable reaction stamp %r — "
+            "treating the pick as declaring nothing (its stop will not be moved)",
+            governing.get("uic"),
+            raw,
+        )
         return None
-    if not (math.isfinite(k_atr) and math.isfinite(atr)):
-        return None
-    return ReanchorFacts(k_atr=k_atr, atr=atr)
 
 
 # --- Live-exit TP-tranche ladder persistence (INC-5 Task 1) ------------------
@@ -7811,6 +7893,40 @@ _GEOMETRY_STAMP_ANCHOR_MODE = "planned"
 _GEOMETRY_STAMP_TP_FLOOR_FRAC = resolve_policy(_GEOMETRY_STAMP_POLICY_NAME).tp_floor_frac
 
 
+def _declared_reaction(exit_spec: Any) -> Any:
+    """The stop-management primitive a document declares, or ``None`` (#1236).
+
+    The door refuses more than one, so the first is the only one. ``None`` for a
+    spec that carries no reaction plan, and for no spec at all — both mean the
+    same thing downstream: this pick's stop is never moved."""
+    if exit_spec is None:
+        return None
+    return next(iter(exit_spec.reaction_plan), None)
+
+
+def _places_client_geometry(exit_policy: ExitPolicy | None, exit_spec: Any) -> bool:
+    """Whether the CLIENT's own stop/TP levels are the ones to place (#1236).
+
+    Two questions that used to be one. The policy must apply geometry at all
+    (``applies_geometry``; under the inert / trail-only policies the brief's own
+    ladder is placed and ``initial_levels`` are telemetry), AND the document must
+    actually carry levels — which it need not, since ``initial_levels`` became
+    optional so a document could declare how its stop is MANAGED without
+    supplying a bracket to PLACE.
+
+    One predicate rather than a guard at each call site: there are several sites,
+    each dereferencing ``initial_levels.stop`` / ``.tp``, and a forgotten one is
+    an ``AttributeError`` inside the unattended placement drain. Callers that
+    dereference the levels after this returns True can do so unconditionally.
+    """
+    return (
+        exit_policy is not None
+        and exit_policy.applies_geometry
+        and exit_spec is not None
+        and exit_spec.initial_levels is not None
+    )
+
+
 def _geometry_shadow_stamp(
     exit_spec: Any, spec: Any, *, use_geometry: bool, exit_policy: ExitPolicy
 ) -> dict[str, Any] | None:
@@ -7837,13 +7953,17 @@ def _geometry_shadow_stamp(
     if exit_spec is None:
         return None
     reanchor = next((p for p in exit_spec.reaction_plan if isinstance(p, ReanchorOnFill)), None)
+    levels = exit_spec.initial_levels
     blend = planned_blended_entry_from_spec(spec) if spec is not None else None
     return {
         "policy_name": _GEOMETRY_STAMP_POLICY_NAME,
         "policy_version": 1,
         "planned_blend": blend,
-        "geometry_stop": exit_spec.initial_levels.stop,
-        "geometry_tp": exit_spec.initial_levels.tp,
+        # #1236: a declaration-only exit carries no levels. The stamp records
+        # their ABSENCE rather than refusing, so the reaction facts below and the
+        # policy name still reach the journal.
+        "geometry_stop": None if levels is None else levels.stop,
+        "geometry_tp": None if levels is None else levels.tp,
         "k_atr": reanchor.k_atr if reanchor is not None else None,
         "atr": reanchor.atr if reanchor is not None else None,
         "ceiling_price": reanchor.ceiling_price if reanchor is not None else None,
@@ -7861,6 +7981,9 @@ def _geometry_shadow_stamp(
         # on every row already written; this is the behavioural policy the
         # daemon resolved from ALPHALENS_BROKER_EXIT_POLICY. Read off the
         # already-resolved instance -- no registry lookup on the drain path.
+        # SINCE #1236 this names the PLACEMENT policy only. How the stop is
+        # managed after fill is per-pick and lives in the sibling ``reaction``
+        # stamp, so this field no longer answers "what moved the stop".
         "exit_policy_name": exit_policy.name,
     }
 
@@ -7873,8 +7996,11 @@ def _geometry_tranche_ladder(exit_spec: Any) -> tuple[tuple[TpTranchePlan, ...],
     geometry policy never placed."""
     from broker_contract.sizing import TpTranchePlan
 
-    geo_stop = exit_spec.initial_levels.stop
-    geo_tp = exit_spec.initial_levels.tp
+    levels = exit_spec.initial_levels
+    if levels is None:
+        return None  # a declaration-only exit places no ladder of its own
+    geo_stop = levels.stop
+    geo_tp = levels.tp
     if not (_is_journalable_price(geo_stop) and _is_journalable_price(geo_tp)):
         return None
     ladder = (
@@ -7915,7 +8041,10 @@ def _journal_tranche_plan_core(
     plan-vs-placement source of each — the bracket path reads
     ``placement.disaster_stop_price`` and sums ALL entry tiers, the watch path
     reads ``plan.disaster_stop`` and sums only the tiers that actually watch."""
-    if use_geometry and exit_spec is not None:
+    # The two callers below pass `applies_geometry` ALONE, so the document half
+    # of the question (#1236: are there levels at all?) is re-asked here rather
+    # than trusted from the caller.
+    if use_geometry and exit_spec is not None and exit_spec.initial_levels is not None:
         geometry = _geometry_tranche_ladder(exit_spec)
         if geometry is None:
             # Otherwise this skip is invisible: the live-exit engine finds no
@@ -7925,8 +8054,8 @@ def _journal_tranche_plan_core(
                 "tranche_plan uic %d: geometry levels unusable (stop=%r, tp=%r) — "
                 "no TP ladder journaled, the position stays stop-only",
                 uic,
-                exit_spec.initial_levels.stop,
-                exit_spec.initial_levels.tp,
+                getattr(exit_spec.initial_levels, "stop", None),
+                getattr(exit_spec.initial_levels, "tp", None),
             )
             return
         ladder, stop_price = geometry
@@ -8173,6 +8302,11 @@ def _place_tiers(
                 pick_key=picks.pick_key_str(
                     ticker, intent.meta.trade_date, _pick_generation(intent)
                 ),
+                # ...and what the document declares about managing this stop. The
+                # fire-arm path carries it through the watch; this is the other
+                # writer, and a declaration missing from EITHER is a pick that
+                # asked for management and silently never gets it.
+                reaction=_declared_reaction(exit_spec),
             )
         )
 
@@ -8316,9 +8450,10 @@ def _planned_exit_levels(
     """``(use_geometry, stop_price, take_profit)`` for the journaled
     ``planned`` line: geometry levels under an applying policy, else the
     brief's static disaster stop / tier TP (byte-identical to pre-PR-6a)."""
-    use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
-    if use_geometry and exit_spec is not None:  # 2nd clause restated to narrow exit_spec
-        return use_geometry, exit_spec.initial_levels.stop, exit_spec.initial_levels.tp
+    use_geometry = _places_client_geometry(resolved_exit_policy, exit_spec)
+    if use_geometry:
+        levels = exit_spec.initial_levels
+        return use_geometry, levels.stop, levels.tp
     return use_geometry, placement.disaster_stop_price, tier.tp
 
 
@@ -8925,7 +9060,7 @@ def _now_cost_gate_violation(
     vacuous by design (stop-only plan, the group manages exits)."""
     resolved = exit_policy if exit_policy is not None else SetupStaticPolicy()
     reference_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
-    if resolved.applies_geometry and exit_spec is not None:
+    if _places_client_geometry(resolved, exit_spec):
         target = float(exit_spec.initial_levels.tp)
         qty = reference_qty
     else:
@@ -10233,7 +10368,22 @@ def _execute_amend_stop(
     primitive, and escalate via ``record_place_failure`` — NO permanent capability
     latch (a benign fill-race 400 self-clears after the TTL and amend retries)."""
     if amend_stop is None:
-        return  # broker lacks SupportsAmendStop -> the pure arm never emits this
+        # Until #1236 this was a bare return, with the comment "the pure arm never
+        # emits this" — true while the boot gate covered the one policy the daemon
+        # resolved. Stop management is declared per pick now, so reaching here
+        # means a document asked for something this broker cannot do, and a
+        # SILENT return is exactly the failure a declaration must not have. The
+        # boot gate above makes it unreachable in a composed daemon; this is the
+        # backstop that says so out loud rather than dropping the instruction.
+        _emit_alert(
+            throttle,
+            report,
+            f"uic {action.uic}: declared stop management needs the amend rail, "
+            "which this broker does not implement — the stop was NOT moved",
+            uic=action.uic,
+            reason="amend-rail-missing",
+        )
+        return
 
     target = action.target_qty
     if isinstance(broker, SupportsNettedPositionReads):

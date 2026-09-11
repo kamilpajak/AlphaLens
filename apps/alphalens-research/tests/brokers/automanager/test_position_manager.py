@@ -51,6 +51,7 @@ from broker_contract.exit_geometry import (
     SetupStaticPolicy,
     resolve_exit_policy,
 )
+from broker_contract.trade_intent.schema import ReanchorOnFill
 
 _RID = "87e0ab88-c1f2-4e88-b5b8-8fbbbb6e1a6d"
 _ENTRY = "5039287596"
@@ -204,7 +205,7 @@ def _plan(
     conflicting: bool = False,
     n_plans: int = 1,
     next_amend_seq: Callable[[], int] | None = None,
-    reanchor: pm.ReanchorFacts | None = None,
+    reaction: Any = None,
 ) -> PlannedExit:
     kwargs: dict[str, Any] = {}
     if next_amend_seq is not None:
@@ -217,7 +218,7 @@ def _plan(
         tp_price=tp_price,
         conflicting=conflicting,
         n_plans=n_plans,
-        reanchor=reanchor,
+        reaction=reaction,
         **kwargs,
     )
 
@@ -1714,15 +1715,18 @@ class TestFillCompleteReanchor(unittest.TestCase):
     placement; ``_maybe_reanchor`` PATCHes it onto the REALIZED avg_price once
     the fill is complete — dark by default (``_exit_policy() == "setup_static"``)."""
 
-    def _facts(self, *, k_atr: float = 1.5, atr: float = 4.0) -> pm.ReanchorFacts:
-        return pm.ReanchorFacts(k_atr=k_atr, atr=atr)
+    def _facts(self, *, k_atr: float = 1.5, atr: float = 4.0) -> ReanchorOnFill:
+        """What the DOCUMENT declares. Since #1236 the re-anchor arm runs because
+        the pick asked for it, not because a geometry stamp happened to carry a
+        finite ATR, and the multiple is the declared one."""
+        return ReanchorOnFill(k_atr=k_atr, atr=atr)
 
     def _covered_view(
         self,
         owned: float = 7.0,
         *,
         avg_price: float = 95.0,
-        reanchor: pm.ReanchorFacts | None,
+        reaction: Any,
         amend_recently_failed: frozenset[int] = frozenset(),
         reanchored_by_uic: dict[int, float] | None = None,
         stop_price: float = 85.0,
@@ -1737,23 +1741,29 @@ class TestFillCompleteReanchor(unittest.TestCase):
         view = _pview(
             long_positions={_UIC: pos},
             sell_legs_by_uic={_UIC: (stop,)},
-            planned_by_uic={_UIC: _plan(stop_price=stop_price, reanchor=reanchor)},
+            planned_by_uic={_UIC: _plan(stop_price=stop_price, reaction=reaction)},
             amend_recently_failed=amend_recently_failed,
             reanchored_by_uic=reanchored_by_uic,
             exit_policy=exit_policy,
         )
         return pos, view
 
-    def test_policy_off_is_noop_byte_identical_even_with_reanchor_facts(self) -> None:
-        pos, view = self._covered_view(reanchor=self._facts())
-        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_EXIT_POLICY"}
-        with patch.dict(os.environ, env, clear=True):
-            actions = reconcile_long(_UIC, pos, view)
-        self.assertEqual(actions, [NoOp()])
+    def test_no_declaration_is_a_noop_whatever_the_env_says(self) -> None:
+        """The migration rule (#1236), replacing "the env flag is off".
+
+        Inertness used to come from the process-wide policy; it now comes from
+        the document declaring nothing. That is what makes a pick armed before
+        this existed — and a manual pick, which declares nothing by design
+        (#1325) — keep its stop where the operator put it."""
+        pos, view = self._covered_view(reaction=None)
+        for policy_name in ("setup_static", "atr_bracket_1p5", "breakeven_trail"):
+            with self.subTest(env_policy=policy_name):
+                with patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": policy_name}):
+                    self.assertEqual(reconcile_long(_UIC, pos, view), [NoOp()])
 
     def test_policy_on_covered_sole_stop_valid_avg_price_emits_amendstop(self) -> None:
         pos, view = self._covered_view(
-            owned=7.0, avg_price=95.0, reanchor=self._facts(), exit_policy=_ATR_POLICY
+            owned=7.0, avg_price=95.0, reaction=self._facts(), exit_policy=_ATR_POLICY
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
@@ -1771,7 +1781,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         pos, view = self._covered_view(
             owned=7.0,
             avg_price=95.0,
-            reanchor=self._facts(),
+            reaction=self._facts(),
             reanchored_by_uic={_UIC: 95.0},
             exit_policy=_ATR_POLICY,
         )
@@ -1782,7 +1792,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         pos, view = self._covered_view(
             owned=7.0,
             avg_price=95.0,
-            reanchor=self._facts(),
+            reaction=self._facts(),
             reanchored_by_uic={_UIC: 90.0},  # a prior, DIFFERENT blend
             exit_policy=_ATR_POLICY,
         )
@@ -1794,7 +1804,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         self.assertEqual(action.reanchor_avg_price, 95.0)
 
     def test_plan_reanchor_none_is_noop(self) -> None:
-        pos, view = self._covered_view(reanchor=None, exit_policy=_ATR_POLICY)
+        pos, view = self._covered_view(reaction=None, exit_policy=_ATR_POLICY)
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
@@ -1805,7 +1815,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         view = _pview(
             long_positions={_UIC: pos},
             sell_legs_by_uic={_UIC: (stop, tp)},
-            planned_by_uic={_UIC: _plan(tp_price=306.72, reanchor=self._facts())},
+            planned_by_uic={_UIC: _plan(tp_price=306.72, reaction=self._facts())},
             exit_policy=_ATR_POLICY,
         )
         actions = reconcile_long(_UIC, pos, view)
@@ -1813,7 +1823,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
 
     def test_avg_price_sentinel_le_zero_is_noop(self) -> None:
         pos, view = self._covered_view(
-            avg_price=0.0, reanchor=self._facts(), exit_policy=_ATR_POLICY
+            avg_price=0.0, reaction=self._facts(), exit_policy=_ATR_POLICY
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
@@ -1821,14 +1831,14 @@ class TestFillCompleteReanchor(unittest.TestCase):
     def test_computed_target_le_zero_is_noop(self) -> None:
         # avg_price 5.0 - 1.5*4.0 = -1.0 <= 0 -> the policy refuses (never a bad stop).
         pos, view = self._covered_view(
-            avg_price=5.0, reanchor=self._facts(k_atr=1.5, atr=4.0), exit_policy=_ATR_POLICY
+            avg_price=5.0, reaction=self._facts(k_atr=1.5, atr=4.0), exit_policy=_ATR_POLICY
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     def test_amend_recently_failed_is_noop(self) -> None:
         pos, view = self._covered_view(
-            reanchor=self._facts(),
+            reaction=self._facts(),
             amend_recently_failed=frozenset({_UIC}),
             exit_policy=_ATR_POLICY,
         )
@@ -1837,18 +1847,20 @@ class TestFillCompleteReanchor(unittest.TestCase):
 
     # ----- Task 5: cached-policy routing + never-below-brief-floor envelope -----
 
-    def test_setup_static_cached_policy_is_inert(self) -> None:
-        # The cached ``view.exit_policy`` is the inert SetupStaticPolicy: even with
-        # a realized fill ABOVE the planned blend (a would-be tighten), the null
-        # policy's ``decide_reanchor`` returns None so the arm never fires.
+    def test_the_cached_daemon_policy_no_longer_makes_the_arm_inert(self) -> None:
+        """The inversion #1236 performs, asserted in the direction that can catch
+        a regression: the cached ``view.exit_policy`` is the INERT one, and the
+        arm fires anyway, because the pick declared a re-anchor. Before this, the
+        daemon-wide policy could silence a pick that had asked for management."""
         pos, view = self._covered_view(
             avg_price=102.0,
-            reanchor=self._facts(),
+            reaction=self._facts(),
             stop_price=94.0,
             exit_policy=SetupStaticPolicy(),
         )
         actions = reconcile_long(_UIC, pos, view)
-        self.assertEqual(actions, [NoOp()])
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], AmendStop)
 
     def test_above_blend_reanchor_tightens_and_is_preserved(self) -> None:
         # Realized avg_price 102.0 ABOVE the planned blend -> reanchor target
@@ -1857,7 +1869,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         pos, view = self._covered_view(
             owned=7.0,
             avg_price=102.0,
-            reanchor=self._facts(),
+            reaction=self._facts(),
             stop_price=94.0,
             exit_policy=_ATR_POLICY,
         )
@@ -1879,7 +1891,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         pos, view = self._covered_view(
             owned=7.0,
             avg_price=95.0,
-            reanchor=self._facts(),
+            reaction=self._facts(),
             stop_price=94.0,
             exit_policy=_ATR_POLICY,
         )
@@ -1892,7 +1904,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         pos, view = self._covered_view(
             owned=7.0,
             avg_price=95.0,
-            reanchor=self._facts(),
+            reaction=self._facts(),
             stop_price=94.0,
             exit_policy=_ATR_POLICY,
         )
@@ -1907,7 +1919,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         # A degenerate ATR (0.0) yields no reanchor target -> NoOp, never a bad stop.
         pos, view = self._covered_view(
             avg_price=95.0,
-            reanchor=self._facts(atr=0.0),
+            reaction=self._facts(atr=0.0),
             stop_price=94.0,
             exit_policy=_ATR_POLICY,
         )
@@ -1922,7 +1934,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         pos, view = self._covered_view(
             owned=7.0,
             avg_price=100.0,
-            reanchor=self._facts(atr=0.1),
+            reaction=self._facts(atr=0.1),
             stop_price=85.0,
             exit_policy=_ATR_POLICY,
         )
@@ -1932,7 +1944,9 @@ class TestFillCompleteReanchor(unittest.TestCase):
         self.assertIsInstance(action, AmendStop)
         assert isinstance(action, AmendStop)
         self.assertAlmostEqual(action.stop_price, 99.8)  # the clamped target
-        self.assertEqual(action.envelope_policy, _ATR_POLICY.name)
+        # The policy that ran is the one the DOCUMENT declared, not the one the
+        # env selected — which is the whole point of #1236.
+        self.assertEqual(action.envelope_policy, "reanchor_on_fill")
         self.assertIsNotNone(action.envelope_proposed)
         assert action.envelope_proposed is not None
         self.assertAlmostEqual(action.envelope_proposed, 99.85)
@@ -1944,7 +1958,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         # The common case (clamped == proposed) must not stamp divergence facts —
         # the executor keys the envelope_clamped journal write on their presence.
         pos, view = self._covered_view(
-            owned=7.0, avg_price=95.0, reanchor=self._facts(), exit_policy=_ATR_POLICY
+            owned=7.0, avg_price=95.0, reaction=self._facts(), exit_policy=_ATR_POLICY
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
@@ -1986,7 +2000,7 @@ class TestGappedDeepFillReanchorGating(unittest.TestCase):
         pos = _pos(owned, avg_price=realized_avg_price)
         # The resting standalone stop, still at the PLANNED price (placement-time).
         stop = _leg("stop-1", "StopIfTraded", owned)
-        plan = _plan(stop_price=planned_stop, reanchor=pm.ReanchorFacts(k_atr=k_atr, atr=atr))
+        plan = _plan(stop_price=planned_stop, reaction=ReanchorOnFill(k_atr=k_atr, atr=atr))
         view = _pview(
             long_positions={_UIC: pos},
             sell_legs_by_uic={_UIC: (stop,)},

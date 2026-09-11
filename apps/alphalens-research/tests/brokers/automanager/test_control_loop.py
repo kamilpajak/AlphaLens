@@ -37,7 +37,6 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlaceStop,
     PlannedExit,
     ProtectionView,
-    ReanchorFacts,
     UpgradeToOco,
     _exit_amend_ref,
     _exit_oco_ref,
@@ -2715,7 +2714,7 @@ class TestBuildDefaultDepsBootCompactsJournals(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
             mock.patch.object(cl, "_compact_standalone_stop_journal", standalone),
@@ -2736,7 +2735,7 @@ class TestBuildDefaultDepsThreadsAuditBudgetIntoPlacement(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
             mock.patch.object(cl, "_make_place_pick", wraps=cl._make_place_pick) as factory,
@@ -3436,13 +3435,22 @@ class TestFoldPlannedExitsIgnoresGeometryStamp(unittest.TestCase):
         )
 
 
-class TestFoldPlannedExitsBuildsReanchorFacts(unittest.TestCase):
-    """PR-6b: ``_fold_planned_exits`` folds the governing line's geometry stamp
-    (when it carries ``k_atr`` + ``atr``) into ``PlannedExit.reanchor``. Every
-    pre-PR-6a journal line (no ``"geometry"`` key at all) still folds to
-    ``reanchor=None`` — BYTE-IDENTICAL to before this PR for that history."""
+class TestAGeometryStampAloneGrantsNoPermission(unittest.TestCase):
+    """#1236 at the fold: a ``geometry`` stamp no longer means "you may move this
+    stop".
 
-    def test_geometry_blob_with_k_atr_and_atr_builds_reanchor_facts(self) -> None:
+    It used to. ``_fold_planned_exits`` read the stamp's ``k_atr``/``atr`` into
+    ``PlannedExit.reanchor``, and both stop-move arms treated a non-None value as
+    the permission — so the permission was a side effect of a telemetry blob. The
+    permission is the DECLARATION now, and the stamp is what its own docstring
+    always claimed it was: telemetry.
+
+    This is the migration rule at its most load-bearing point. Every ``planned``
+    line in both live journals predates the declaration, so if a stamp still
+    granted permission, deploying this would start managing stops nobody asked to
+    have managed."""
+
+    def test_a_stamped_line_with_no_declaration_folds_to_no_declaration(self) -> None:
         stamped = cl._build_planned_line(
             entry_crid="crid-0",
             uic=_UIC,
@@ -3463,43 +3471,26 @@ class TestFoldPlannedExitsBuildsReanchorFacts(unittest.TestCase):
             },
         )
         planned = cl._fold_planned_exits([stamped])[_UIC]
-        self.assertEqual(planned.reanchor, ReanchorFacts(k_atr=1.5, atr=4.0))
+        self.assertIsNone(planned.reaction)
+        # ...while the prices the line exists for are untouched.
+        self.assertEqual(planned.stop_price, 216.48)
+        self.assertEqual(planned.tp_price, 306.72)
 
-    def test_geometry_absent_folds_reanchor_none_byte_identical(self) -> None:
-        plain = cl._build_planned_line(
+    def test_positive_control_a_declaration_on_the_same_line_does_fold(self) -> None:
+        """Without this the check above would pass even if the fold ignored the
+        ``reaction`` key entirely."""
+        both = cl._build_planned_line(
             entry_crid="crid-0",
             uic=_UIC,
             side="SELL",
             stop_price=216.48,
             take_profit=306.72,
             tier_index=0,
+            geometry_stamp={"k_atr": 1.5, "atr": 4.0},
+            reaction=ReanchorOnFill(k_atr=2.0, atr=3.0),
         )
-        planned = cl._fold_planned_exits([plain])[_UIC]
-        self.assertIsNone(planned.reanchor)
-
-    def test_geometry_missing_k_atr_folds_reanchor_none(self) -> None:
-        # A stamp journaled before PR-6b added "k_atr" to _geometry_shadow_stamp: the
-        # key is absent -> the fold must never KeyError, just fold to None.
-        stamped = cl._build_planned_line(
-            entry_crid="crid-0",
-            uic=_UIC,
-            side="SELL",
-            stop_price=216.48,
-            take_profit=306.72,
-            tier_index=0,
-            geometry_stamp={
-                "policy_name": "atr_bracket_1p5",
-                "policy_version": 1,
-                "planned_blend": 100.0,
-                "geometry_stop": 94.0,
-                "geometry_tp": 112.0,
-                "atr": 4.0,
-                "ceiling_price": None,
-                "applied": False,
-            },
-        )
-        planned = cl._fold_planned_exits([stamped])[_UIC]
-        self.assertIsNone(planned.reanchor)
+        planned = cl._fold_planned_exits([both])[_UIC]
+        self.assertEqual(planned.reaction, ReanchorOnFill(k_atr=2.0, atr=3.0))
 
 
 class TestRunOnceAlertsEachOrphan(unittest.TestCase):
@@ -6416,6 +6407,29 @@ class _StopOnlyBroker:
         return _pos(0.0, uic)
 
 
+class _AmendCapableBroker(_StopOnlyBroker):
+    """``_StopOnlyBroker`` plus the amend rail.
+
+    Since #1236 every composed daemon must be able to amend a stop: management is
+    declared per pick, so a broker without the rail could accept a pick whose
+    declaration it cannot honour. Boot-wiring tests whose subject is NOT the
+    capability therefore reach for this one; ``_StopOnlyBroker`` stays for the
+    tests that assert the refusal."""
+
+    name = "amendcapable"
+
+    def amend_stop_amount(
+        self,
+        order_id: str,
+        *,
+        amount: float,
+        stop_price: float,
+        order_type: str,
+        request_id: str | None = None,
+    ) -> None:
+        return None
+
+
 class _NoPositionReadsBroker:
     """SupportsStandaloneStop but NO netted position reads — the pre-#1141
     silent shape. build_default_deps must refuse it at boot: the protection
@@ -6467,7 +6481,7 @@ class TestBuildDefaultDepsPositionReadsGate(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
         ):
@@ -6592,7 +6606,7 @@ class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
             mock.patch.dict(os.environ, env, clear=True),
@@ -6634,7 +6648,7 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
         ):
@@ -6652,7 +6666,7 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(
                 cl, "_default_oauth_provider", return_value=mock.Mock()
@@ -6708,7 +6722,7 @@ class TestBuildDefaultDepsStateGuards(unittest.TestCase):
             _isolated_home() as home,
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
         ):

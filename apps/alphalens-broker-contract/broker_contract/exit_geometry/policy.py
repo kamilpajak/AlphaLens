@@ -16,7 +16,11 @@ import math
 from dataclasses import dataclass, field
 from typing import Protocol, TypeGuard, runtime_checkable
 
-from broker_contract.exit_geometry.levels import chandelier_target, fractional_giveback_target
+from broker_contract.exit_geometry.levels import (
+    chandelier_target,
+    fractional_giveback_target,
+    reanchor_target,
+)
 from broker_contract.exit_geometry.registry import ExitGeometryPolicy
 
 
@@ -161,14 +165,53 @@ class AtrBracketPolicy:
         last_price: float | None = None,
         plan_stop: float | None = None,
     ) -> float | None:
-        if not math.isfinite(avg_price) or avg_price <= 0:
-            return None
         if not _usable_atr(atr):
             return None
-        target = avg_price - self.geom.stop_atr_mult * atr
-        if not math.isfinite(target) or target <= 0:
+        return reanchor_target(avg_price, atr, k=self.geom.stop_atr_mult)
+
+
+@dataclass(frozen=True)
+class ReanchorOnFillPolicy:
+    """A ``ReanchorOnFill`` primitive declared by the DOCUMENT (#1236).
+
+    Sibling of ``AtrBracketPolicy``: the same one-shot re-anchor to
+    ``avg_price - k_atr*atr`` on fill-complete, through the same
+    ``levels.reanchor_target`` leaf — but its multiplier is the one the intent
+    DECLARED, not the one the registry's wrapped geometry happens to pin. A
+    declaration the executor silently overrode with its own number would be a
+    door that accepts a field it does not honour.
+
+    It places NO geometry. A declared reaction says how a stop is MANAGED; what
+    gets PLACED is still the env-selected policy's business until that, too,
+    becomes a document fact."""
+
+    k_atr: float
+    # Required and keyword-only — see AtrBracketPolicy.name.
+    name: str = field(kw_only=True)
+    geometry_name: str | None = None  # places no geometry at all
+    version: int = 1
+    applies_geometry: bool = False
+    requires_amend_stop: bool = True
+    min_stop_distance_frac: float = 0.002
+    trails: bool = False
+
+    def decide_placement_geometry(
+        self, blended: float, atr: float, *, ceiling_price: float | None
+    ) -> tuple[float, float] | None:
+        return None
+
+    def decide_reanchor(
+        self,
+        avg_price: float,
+        atr: float | None,
+        *,
+        peak: float | None = None,
+        last_price: float | None = None,
+        plan_stop: float | None = None,
+    ) -> float | None:
+        if not _usable_atr(atr):
             return None
-        return target
+        return reanchor_target(avg_price, atr, k=self.k_atr)
 
 
 @dataclass(frozen=True)

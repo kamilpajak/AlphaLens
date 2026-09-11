@@ -150,9 +150,14 @@ class ManagerWorld:
 
     # ==== GIVEN ================================================================
 
-    def arm(self, ticker: str) -> None:
-        """A human arms this ticker (records the intent in the pick queue)."""
-        self._service.submit_intent(_pick(ticker))
+    def arm(self, ticker: str, *, exit_policy: Any = None, source: str = "brief") -> None:
+        """A human arms this ticker (records the intent in the pick queue).
+
+        ``exit_policy`` is what the pick DECLARES about managing its stop — a
+        reaction primitive such as ``TrailingStop(0.5, 0.6)``, or ``None`` for a
+        pick that declares nothing and therefore never has its stop moved.
+        ``source`` is provenance only; the manager must not read it."""
+        self._service.submit_intent(_pick(ticker, exit_policy=exit_policy, source=source))
 
     def entry_fills(
         self,
@@ -162,11 +167,14 @@ class ManagerWorld:
         price: float = _DEFAULT_FILL,
         stop: float = _DEFAULT_STOP,
         take_profit: float | None = _DEFAULT_TP,
+        exit_policy: Any = None,
     ) -> None:
         """An entry fills: the position appears AND its plan (the disaster stop +
-        take-profit prices) is on record — the normal "a trade opened" setup."""
+        take-profit prices) is on record — the normal "a trade opened" setup.
+
+        ``exit_policy`` is what that plan DECLARES about managing the stop."""
         self.broker.set_position(ticker, shares, avg_price=price)
-        self._seed_plan(ticker, stop=stop, take_profit=take_profit)
+        self._seed_plan(ticker, stop=stop, take_profit=take_profit, exit_policy=exit_policy)
 
     def entry_fills_with_tranches(
         self,
@@ -213,6 +221,13 @@ class ManagerWorld:
 
     def price_is(self, ticker: str, price: float) -> None:
         """The live price feed reads this price for ``ticker`` this tick."""
+        self._live_exit_prices[self.broker.uic_of(ticker)] = price
+
+    def price_rises_to(self, ticker: str, price: float) -> None:
+        """The price feed reports this price. The manager keeps its own
+        high-water mark, so a sequence of these is a move the trail can follow —
+        the world does not hand it a peak, which is what makes the peak logic
+        part of what these scenarios exercise."""
         self._live_exit_prices[self.broker.uic_of(ticker)] = price
 
     def market_sell_fails_once(self, error: Exception) -> None:
@@ -356,6 +371,32 @@ class ManagerWorld:
                 f"{ticker}: stop qty {stop_qty} != owned {owned} (expected an exact match)"
             )
 
+    def assert_stop_at(self, ticker: str, price: float) -> None:
+        """The resting protective stop sits at exactly this price."""
+        resting = self._resting_stop_prices(ticker)
+        if not any(abs(p - price) < 1e-6 for p in resting):
+            raise AssertionError(
+                f"{ticker}: expected a stop at {price}, resting stops are {resting}"
+            )
+
+    def assert_stop_did_not_move(self, ticker: str, *, from_price: float) -> None:
+        """The stop is still where it was placed — the promise a pick that
+        declares nothing relies on."""
+        resting = self._resting_stop_prices(ticker)
+        moved = [p for p in resting if abs(p - from_price) >= 1e-6]
+        if moved:
+            raise AssertionError(
+                f"{ticker}: the stop was MOVED off {from_price} to {moved} — "
+                "a pick that declared nothing must keep the stop it was given"
+            )
+
+    def stop_price(self, ticker: str) -> float:
+        """Where the single resting protective stop sits."""
+        resting = self._resting_stop_prices(ticker)
+        if len(resting) != 1:
+            raise AssertionError(f"{ticker}: expected one resting stop, found {resting}")
+        return resting[0]
+
     def owned(self, ticker: str) -> float:
         return self._owned(ticker)
 
@@ -494,7 +535,9 @@ class ManagerWorld:
         self.picks_placed.append(pick)
         return True
 
-    def _seed_plan(self, ticker: str, *, stop: float, take_profit: float | None) -> None:
+    def _seed_plan(
+        self, ticker: str, *, stop: float, take_profit: float | None, exit_policy: Any = None
+    ) -> None:
         cl._append_standalone_stop_journal(
             cl._build_planned_line(
                 entry_crid=f"crid-{ticker.upper()}",
@@ -503,6 +546,7 @@ class ManagerWorld:
                 stop_price=stop,
                 take_profit=take_profit,
                 tier_index=0,
+                reaction=exit_policy,
             )
         )
 
@@ -513,6 +557,14 @@ class ManagerWorld:
     def _sell_legs(self, ticker: str) -> list[Any]:
         uic = self.broker.uic_of(ticker)
         return [o for o in self.broker.list_working_sell_orders() if o.uic == uic]
+
+    def _resting_stop_prices(self, ticker: str) -> list[float]:
+        return [
+            o.resting_price
+            for o in self._sell_legs(ticker)
+            if o.order_type in ("StopIfTraded", "Stop", "TrailingStopIfTraded")
+            and o.resting_price is not None
+        ]
 
     def _resting_stop_qty(self, ticker: str) -> float:
         return sum(
@@ -530,18 +582,24 @@ class ManagerWorld:
         return plain + oco
 
 
-def _pick(ticker: str) -> Any:
+def _pick(ticker: str, *, exit_policy: Any = None, source: str = "brief") -> Any:
     """A minimal, structurally valid armed TradeIntent (PR-7: the real
     _run_placement_drain calls the real _pick_key, which reads
-    intent.instrument.ticker / intent.meta.trade_date)."""
+    intent.instrument.ticker / intent.meta.trade_date).
+
+    ``exit_policy`` is the reaction primitive the document DECLARES about
+    managing its stop (#1236); no levels are supplied, because a declaration and
+    a bracket to place are independent."""
     from broker_contract.trade_intent.schema import (
         EntryTierSpec,
+        ExitGeometrySpec,
         InstrumentHint,
         IntentMeta,
         TradeIntent,
         TradeSpec,
     )
 
+    exit_spec = None if exit_policy is None else ExitGeometrySpec(reaction_plan=(exit_policy,))
     return TradeIntent(
         intent_id=f"{ticker.upper()}:2026-07-23",
         instrument=InstrumentHint(ticker=ticker.upper(), mic="XNYS"),
@@ -551,7 +609,12 @@ def _pick(ticker: str) -> Any:
             tp_tranches=(),
             suggested_size_pct=3.0,
         ),
-        meta=IntentMeta(armed_ts="2026-07-23T00:00:00+00:00", trade_date="2026-07-23"),
+        exit=exit_spec,
+        meta=IntentMeta(
+            armed_ts="2026-07-23T00:00:00+00:00",
+            trade_date="2026-07-23",
+            source=source,  # type: ignore[arg-type]
+        ),
     )
 
 

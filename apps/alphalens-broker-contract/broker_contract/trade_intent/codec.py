@@ -103,8 +103,16 @@ def _decode_exit(raw: Any) -> ExitGeometrySpec | None:
     if raw is None:
         return None
     exit_map = _require_mapping(raw, what="exit")
-    initial_levels_raw = _require_mapping(exit_map["initial_levels"], what="exit.initial_levels")
-    initial_levels = InitialLevels(**_filtered(InitialLevels, initial_levels_raw))
+    # #1236: levels are OPTIONAL. Absent key and explicit null mean the same
+    # thing — the document declares no levels to place — so neither is an error.
+    levels_raw = exit_map.get("initial_levels")
+    initial_levels = (
+        None
+        if levels_raw is None
+        else InitialLevels(
+            **_filtered(InitialLevels, _require_mapping(levels_raw, what="exit.initial_levels"))
+        )
+    )
     reaction_plan = tuple(
         _decode_reaction_primitive(entry) for entry in exit_map.get("reaction_plan") or ()
     )

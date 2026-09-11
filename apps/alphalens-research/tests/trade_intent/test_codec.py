@@ -6,6 +6,7 @@ section 5). Pure stdlib json/dataclasses; no I/O.
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from broker_contract.trade_intent.codec import (
@@ -296,3 +297,53 @@ class TestUnknownKeyObservability(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGeometryLessExitSpec(unittest.TestCase):
+    """#1236: a document may declare how its stop is managed WITHOUT supplying
+    levels to place.
+
+    ``initial_levels`` used to be required, which made "declares ``TrailingStop``,
+    supplies no geometry" unrepresentable — and that is exactly the shape a pick
+    whose exit is managed by the trail, not by a client-computed bracket, needs.
+    The field becoming optional is what lets the reaction plan carry the
+    declaration on its own."""
+
+    def _trailing_only(self) -> TradeIntent:
+        return TradeIntent(
+            intent_id="abc123",
+            instrument=InstrumentHint(ticker="NVDA", mic="XNAS"),
+            spec=_spec(),
+            meta=_meta(),
+            exit=ExitGeometrySpec(reaction_plan=(TrailingStop(arm_trigger_r=0.5, trail_frac=0.6),)),
+        )
+
+    def test_an_exit_spec_can_carry_a_reaction_plan_and_no_levels(self) -> None:
+        self.assertIsNone(self._trailing_only().exit.initial_levels)
+
+    def test_it_round_trips(self) -> None:
+        # Compared on the SERIALIZED form: `intent_to_jsonable` yields tuples and
+        # `json.loads` yields lists, so comparing the dicts would differ for a
+        # reason that has nothing to do with the contract.
+        intent = self._trailing_only()
+        restored = intent_from_jsonable(json.loads(json.dumps(intent_to_jsonable(intent))))
+        self.assertEqual(
+            json.dumps(intent_to_jsonable(restored), sort_keys=True),
+            json.dumps(intent_to_jsonable(intent), sort_keys=True),
+        )
+        primitive = restored.exit.reaction_plan[0]
+        assert isinstance(primitive, TrailingStop)
+        self.assertEqual((primitive.arm_trigger_r, primitive.trail_frac), (0.5, 0.6))
+
+    def test_a_payload_omitting_the_key_entirely_decodes(self) -> None:
+        """What an external producer actually sends: no ``initial_levels`` key at
+        all, rather than an explicit null."""
+        data = intent_to_jsonable(self._trailing_only())
+        data["exit"].pop("initial_levels", None)
+        self.assertIsNone(intent_from_jsonable(data).exit.initial_levels)
+
+    def test_levels_still_decode_when_present(self) -> None:
+        """Positive control: making the key optional must not stop it being read."""
+        restored = intent_from_jsonable(intent_to_jsonable(_intent_with_reanchor()))
+        assert restored.exit is not None and restored.exit.initial_levels is not None
+        self.assertEqual(restored.exit.initial_levels.stop, 90.0)

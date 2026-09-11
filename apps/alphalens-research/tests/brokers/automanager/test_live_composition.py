@@ -275,9 +275,22 @@ class TestSimBranchByteIdenticalUnderLiveComposition(unittest.TestCase):
         from broker_contract.contract import PlacedOrder, Position
 
         class _StopOnlyBroker:
-            # Carries the mandatory netted position reads (#1141) so the
-            # unconditional boot gate is not what this SIM-branch test trips on.
+            # Carries the mandatory netted position reads (#1141) AND the amend
+            # rail (#1236: management is declared per pick, so every composed
+            # daemon must be able to amend) so the boot gates are not what this
+            # SIM-branch test trips on.
             name = "stoponly"
+
+            def amend_stop_amount(
+                self,
+                order_id: str,
+                *,
+                amount: float,
+                stop_price: float,
+                order_type: str,
+                request_id: str | None = None,
+            ) -> None:
+                raise AssertionError("never amended in this test")
 
             def place_standalone_stop(
                 self,

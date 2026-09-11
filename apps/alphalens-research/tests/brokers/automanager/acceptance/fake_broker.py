@@ -122,6 +122,7 @@ class FakeBroker:
             amount=float(shares),
             external_reference=order_id,
             order_relation=relation,
+            resting_price=float(price),
         )
         return order_id
 
@@ -260,7 +261,9 @@ class FakeBroker:
         self, uic: int, side: str, qty: float, stop_price: float, request_id: str | None = None
     ) -> PlacedOrder:
         self._guard_write(uic)
-        order_id = self._new_sell_leg(uic, side, qty, "StopIfTraded", request_id)
+        order_id = self._new_sell_leg(
+            uic, side, qty, "StopIfTraded", request_id, resting_price=stop_price
+        )
         return PlacedOrder(entry_order_id=order_id, exit_order_ids=())
 
     def place_oco_exit(
@@ -295,7 +298,7 @@ class FakeBroker:
         request_id: str,
     ) -> PlacedOrder:
         self._guard_write(uic)
-        self._resize(order_id, new_qty)
+        self._resize(order_id, new_qty, stop_price=stop_price)
         # OCO amend propagates to the sibling (both legs stay Amount-consistent).
         sibling = self._oco_sibling.get(order_id)
         if sibling is not None:
@@ -355,6 +358,7 @@ class FakeBroker:
         order_type: str,
         ref: str | None,
         relation: str | None = None,
+        resting_price: float | None = None,
     ) -> str:
         self._seq += 1
         order_id = f"leg-{self._seq}"
@@ -370,10 +374,20 @@ class FakeBroker:
             amount=float(qty),
             external_reference=ref,
             order_relation=relation,
+            # WHERE the order rests, not just that it does. The harness could say
+            # "covered" and not "at what price", which is all a coverage promise
+            # needs — a promise about stop MANAGEMENT needs the price (#1236).
+            resting_price=resting_price,
         )
         return order_id
 
-    def _resize(self, order_id: str, new_qty: float) -> None:
+    def _resize(self, order_id: str, new_qty: float, *, stop_price: float | None = None) -> None:
         order = self._orders.get(order_id)
-        if order is not None:
-            self._orders[order_id] = dataclasses.replace(order, amount=float(new_qty))
+        if order is None:
+            return
+        changes: dict[str, object] = {"amount": float(new_qty)}
+        if stop_price is not None:
+            # An amend moves the stop as well as resizing it. The fake only
+            # resized, so a scenario could not tell a moved stop from a held one.
+            changes["resting_price"] = float(stop_price)
+        self._orders[order_id] = dataclasses.replace(order, **changes)  # type: ignore[arg-type]
