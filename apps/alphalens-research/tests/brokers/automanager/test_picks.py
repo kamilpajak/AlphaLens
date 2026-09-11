@@ -24,6 +24,7 @@ from alphalens_pipeline.brokers.automanager.picks import (
     generation_of,
     identity_token,
     iter_picks,
+    keys_with_any_submission,
     mark_disarmed,
     mark_refused,
     next_generation,
@@ -469,6 +470,72 @@ class JoinHelperTest(unittest.TestCase):
     def test_submitted_pick_keys_skips_records_missing_either_half(self) -> None:
         records = [{"ticker": "KO"}, {"trade_date": "2026-07-20"}, {}]
         self.assertEqual(submitted_pick_keys(records), set())
+
+    def test_any_submission_counts_the_now_half_that_retirement_ignores(self) -> None:
+        """The two helpers answer DIFFERENT questions and differ by exactly this.
+
+        `submitted_pick_keys` answers the DRAIN's question — should I place this
+        pick? — so the now half must not retire it (#1247). `keys_with_any_submission`
+        answers the DOOR's — has anything reached the broker for this key? A pick
+        whose now half rests at the broker must not be rewritten (#1406), and
+        measured 2026-09-11 the SIM journal holds a key in exactly that state.
+        """
+        records = [{"ticker": "ko", "trade_date": "2026-07-20", "tranche": "now"}]
+
+        self.assertEqual(submitted_pick_keys(records), set())
+        self.assertEqual(keys_with_any_submission(records), {("KO", "2026-07-20")})
+
+    def test_a_terminal_refusal_is_not_an_order(self) -> None:
+        """The operator's correction path must stay open.
+
+        `now refused: ask above cap` journals a record with NOTHING at the
+        broker, and the alert beside it tells the operator to "re-arm with a
+        fresh cap if the signal stands". Counting that record as an order would
+        make the door refuse exactly the re-arm the system just asked for.
+        Measured 2026-09-11: the SIM journal holds one such key (KO @ 2026-09-03)
+        and it is the ONLY key whose records are all `tranche: now`.
+        """
+        refused = [
+            {
+                "ticker": "KO",
+                "trade_date": "2026-09-03",
+                "tranche": "now",
+                "tranche_meta": {"outcome": "refused_cap"},
+            }
+        ]
+
+        self.assertEqual(keys_with_any_submission(refused), set())
+
+    def test_an_attempt_counts_because_its_outcome_is_unknown(self) -> None:
+        """The write-ahead record exists precisely because the POST's outcome is
+        not yet known, so it must count — the safe direction."""
+        for outcome in ("attempt", "placed", "some_future_value", None):
+            with self.subTest(outcome=outcome):
+                meta = {} if outcome is None else {"outcome": outcome}
+                records = [
+                    {
+                        "ticker": "QUBT",
+                        "trade_date": "2026-09-03",
+                        "tranche": "now",
+                        "tranche_meta": meta,
+                    }
+                ]
+                self.assertEqual(
+                    keys_with_any_submission(records), {("QUBT", "2026-09-03")}, outcome
+                )
+
+    def test_any_submission_keys_the_same_way_as_retirement_otherwise(self) -> None:
+        """Positive control: the only difference is the now half. A generation
+        and the legacy date key must key identically through both."""
+        records = [
+            {"ticker": "MU", "trade_date": "2026-07-21", "generation": 2},
+            {"ticker": "KO", "brief_date": "2026-07-20"},
+        ]
+
+        self.assertEqual(keys_with_any_submission(records), submitted_pick_keys(records))
+        self.assertEqual(
+            keys_with_any_submission(records), {("MU", "2026-07-21-g2"), ("KO", "2026-07-20")}
+        )
 
     def test_now_tranche_record_does_not_retire_the_pick(self) -> None:
         # #1247: the now half's records must NOT join — otherwise a placed or

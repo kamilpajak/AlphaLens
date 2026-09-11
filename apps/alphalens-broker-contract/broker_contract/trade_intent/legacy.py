@@ -97,9 +97,13 @@ LEGACY_ALLOWANCES: Final[Mapping[str, LegacyAllowance]] = MappingProxyType(
             "carry, so `validate_intent` refuses it rather than discarding it silently. "
             "The current brief path stopped declaring it, but the refusal must outlive "
             "the producer that needed it.",
-            retires_when="No line of any picks journal carries a non-null `ceiling_price` "
-            "in `exit.reaction_plan` — measured 45 of 63 on 2026-09-11. Removing the field "
-            "is a BREAKING schema change: it bumps `SCHEMA_VERSION`.",
+            retires_when="EITHER exit retires it, and the census only measures the first. "
+            "(1) No line of any picks journal carries a non-null `ceiling_price` in "
+            "`exit.reaction_plan` — measured 45 of 63 on 2026-09-11; removing the field is "
+            "then a BREAKING schema change that bumps `SCHEMA_VERSION`. (2) #1414 makes "
+            "placement a declaration too and LIFTS the refusal, at which point the field is "
+            "a live feature rather than an allowance and this entry goes even though the "
+            "count is still 45 — so read the count as evidence for path (1) only.",
             still_needed=_carries_reanchor_ceiling,
         ),
     }

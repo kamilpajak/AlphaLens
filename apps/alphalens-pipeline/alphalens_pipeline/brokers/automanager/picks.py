@@ -324,46 +324,101 @@ def pick_key(intent: TradeIntent) -> tuple[str, str]:
     )
 
 
+def _submission_join_key(record: Mapping[str, Any]) -> tuple[str, str] | None:
+    """The (ticker, identity token) this submission record joins on, or None.
+
+    Shared by the two questions below so they can differ in exactly ONE place —
+    which records count — rather than drifting on how a key is built.
+    """
+    ticker = record.get("ticker")
+    # #1252: the journal date key was renamed brief_date -> trade_date. Legacy
+    # records on disk still carry the old key (append-only journals are never
+    # rewritten), so fall back to it.
+    trade_date = record.get("trade_date") or record.get("brief_date")
+    if not ticker or not trade_date:
+        return None
+    # #1371: a malformed generation on a record that exists still proves
+    # SOMETHING was submitted for the key — fold it to generation 1 rather than
+    # drop it (never under-count the join).
+    try:
+        generation = generation_of(record)
+    except ValueError:
+        # DEBUG, not WARNING: the drain re-reads the journal every ~45 s tick,
+        # and this line is a durable fact of the file — a WARNING per tick would
+        # flood journald (iter_picks precedent).
+        logger.debug(
+            "submission join %s/%s: malformed generation %r — folded to "
+            "generation 1 (the queue fold treats the same value as malformed)",
+            ticker,
+            trade_date,
+            record.get(_GENERATION_KEY),
+        )
+        generation = FIRST_GENERATION
+    return (str(ticker).upper(), identity_token(str(trade_date), generation))
+
+
+# `tranche_meta.outcome` values that mean NOTHING reached the broker. The
+# vocabulary the placement path writes is `attempt` (write-ahead, before the
+# POST), `placed`, and `refused_cap` (the ask sat above the operator's cap, so
+# the tranche was never submitted). Only the last one is evidence of ABSENCE —
+# and an outcome this set does not know still counts, because a record whose
+# meaning we cannot read must be treated as "an order may exist".
+_NO_ORDER_OUTCOMES: frozenset[str] = frozenset({"refused_cap"})
+
+
+def _records_an_order(record: Mapping[str, Any]) -> bool:
+    """Could this record mean an order reached the broker?
+
+    Deliberately generous. A terminal refusal is the one shape that proves
+    nothing was submitted, and it matters because the alert beside it tells the
+    operator to "re-arm with a fresh cap if the signal stands" — treating it as
+    an order would close the path the system just asked them to take.
+    """
+    meta = record.get("tranche_meta")
+    outcome = meta.get("outcome") if isinstance(meta, Mapping) else None
+    return outcome not in _NO_ORDER_OUTCOMES
+
+
+def keys_with_any_submission(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
+    """Every key the broker has seen an order for — the now half INCLUDED.
+
+    A different question from :func:`submitted_pick_keys`, and the difference is
+    exactly the ``tranche == "now"`` skip. That skip exists so the now half does
+    not RETIRE a pick before its pullback half is placed, which is right for the
+    drain and wrong for anyone asking "has anything already reached the broker
+    for this key". `broker arm-intent` asks the second question before it lets a
+    document replace a queued pick: a pick whose immediate tier already rests at
+    the broker must not be rewritten, or the queue and the market disagree.
+
+    Measured 2026-09-11: the SIM journal holds one key whose ONLY submission
+    record is the now half, so this is a state that occurs, not a race window.
+    """
+    return {
+        key
+        for record in records
+        if _records_an_order(record) and (key := _submission_join_key(record)) is not None
+    }
+
+
 def submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
-    """The (ticker, identity token) pairs already present in the submissions journal.
+    """The (ticker, identity token) pairs whose pick the drain considers RETIRED.
 
     Design section Data-flow step 4: the drain places only picks NOT yet
     joined to submissions.jsonl. Without this join every armed pick is
     re-submitted on every tick with a fresh client_request_id (execution.py
     mints uuid4 per bracket), which Saxo's 15 s x-request-id dedup cannot
-    catch."""
-    keys: set[tuple[str, str]] = set()
-    for record in records:
-        if record.get("tranche") == "now":
-            # #1247: the now half's records (write-ahead, per-tier, refusal)
-            # never retire the pick — the pullback half's record does. The
-            # now half's own idempotency is the armed_ts scan in the drain.
-            continue
-        ticker = record.get("ticker")
-        # #1252: the journal date key was renamed brief_date -> trade_date.
-        # Legacy records on disk still carry the old key (append-only
-        # journals are never rewritten), so fall back to it.
-        trade_date = record.get("trade_date") or record.get("brief_date")
-        if ticker and trade_date:
-            # #1371: a malformed generation on a record that exists still
-            # proves SOMETHING was submitted for the key — fold it to
-            # generation 1 rather than drop it (never under-count the join).
-            try:
-                generation = generation_of(record)
-            except ValueError:
-                # DEBUG, not WARNING: the drain re-reads the journal every
-                # ~45 s tick, and this line is a durable fact of the file —
-                # a WARNING per tick would flood journald (iter_picks precedent).
-                logger.debug(
-                    "submitted_pick_keys %s/%s: malformed generation %r — folded to "
-                    "generation 1 (the queue fold treats the same value as malformed)",
-                    ticker,
-                    trade_date,
-                    record.get(_GENERATION_KEY),
-                )
-                generation = FIRST_GENERATION
-            keys.add((str(ticker).upper(), identity_token(str(trade_date), generation)))
-    return keys
+    catch.
+
+    #1247: the now half's records (write-ahead, per-tier, refusal) never retire
+    the pick — the pullback half's record does. The now half's own idempotency
+    is the armed_ts scan in the drain. Anyone asking whether an order EXISTS for
+    a key wants :func:`keys_with_any_submission` instead.
+    """
+    return {
+        key
+        for record in records
+        if record.get("tranche") != "now" and (key := _submission_join_key(record)) is not None
+    }
 
 
 def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
