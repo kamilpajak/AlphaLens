@@ -99,6 +99,13 @@ ignore = [
     "PLC2401", # non-ASCII variable names — research math notation (α_q, ρ_t, β_smb) is project policy per CLAUDE.md
 ]
 
+[tool.ruff.lint.flake8-bugbear]
+# `contract_field` is a thin wrapper over `dataclasses.field` (it attaches the
+# field's unit / meaning for the JSON Schema generator, #1405). Ruff cannot see
+# through the wrapper, so without this every contract field reads as RUF009
+# "function call in a dataclass default" — which is exactly what `field()` is.
+extend-immutable-calls = ["broker_contract.trade_intent.schema.contract_field"]
+
 [tool.ruff.lint.per-file-ignores]
 "apps/alphalens-research/tests/*" = [
     "PLR0915",  # tests can be long

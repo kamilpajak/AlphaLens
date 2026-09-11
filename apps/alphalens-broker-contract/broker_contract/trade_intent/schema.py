@@ -20,10 +20,43 @@ passing tuples, not lists.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import MISSING, dataclass, field
+from typing import Any, Literal
 
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
+
+
+def contract_field(
+    meaning: str,
+    *,
+    default: Any = MISSING,
+    json_schema: dict[str, Any] | None = None,
+) -> Any:
+    """Declare a contract field together with what its value MEANS.
+
+    A type says ``float``; it does not say that ``alloc_pct`` is a percentage
+    while ``trail_frac`` is a fraction, that ``order_ttl_days`` counts XNYS
+    sessions, or that ``limit_price`` is a cap on an immediate tier. That is
+    exactly what a third-party producer gets wrong, so it is stated here, on the
+    field, and the JSON Schema generator (#1405) reads it from here rather than
+    keeping a second table that can drift.
+
+    ``json_schema`` adds keywords to the generated schema. It is deliberately
+    rare: numeric bounds belong to ``validate_intent``, and mirroring one here
+    would give a single rule two owners. Today exactly one field uses it, pinned
+    by ``tests/trade_intent/test_contract_metadata.py``.
+
+    An empty meaning raises, because a gate satisfiable by ``""`` is not a gate.
+    """
+    if not meaning.strip():
+        raise ValueError("a contract field must say what its value means")
+    metadata: dict[str, Any] = {"meaning": meaning}
+    if json_schema:
+        metadata["json_schema"] = dict(json_schema)
+    if default is MISSING:
+        return field(metadata=metadata)
+    return field(default=default, metadata=metadata)
+
 
 # Wire schema version stamped on every TradeSpec / IntentMeta instance so a
 # future broker-manager can detect + reject stale client payloads.
@@ -41,9 +74,11 @@ DEFAULT_ACCOUNT_ID = "default"
 class InstrumentHint:
     """Identifies the tradable instrument (memo section 2.3 Boundary-2 contract)."""
 
-    ticker: str
-    # ISO 10383 Market Identifier Code, e.g. "XNYS", "XNAS", "XWAR".
-    mic: str
+    ticker: str = contract_field('Exchange symbol, vendor-agnostic, e.g. "NVDA".')
+    mic: str = contract_field(
+        'ISO 10383 Market Identifier Code, e.g. "XNYS". WHICH venues a deployment '
+        "can actually trade is the adapter's knowledge, not this contract's (#1122)."
+    )
 
 
 @dataclass(frozen=True)
@@ -64,10 +99,18 @@ class EntryTierSpec:
     namespace, name collision only.
     """
 
-    limit_price: float
-    alloc_pct: float
-    tag: str = ""
-    entry_mode: Literal["pullback", "immediate"] = "pullback"
+    limit_price: float = contract_field(
+        "Price in the instrument's currency. For an immediate tier this is the "
+        "operator's CAP (the worst acceptable fill), not a pullback level."
+    )
+    alloc_pct: float = contract_field(
+        "PERCENTAGE of the pick's notional, 0-100 — not a fraction. The rungs sum to 100."
+    )
+    tag: str = contract_field('Free-text rung label, e.g. "T1". No sizing semantics.', default="")
+    entry_mode: Literal["pullback", "immediate"] = contract_field(
+        '"pullback" rests below the market; "immediate" is an arm-manual now tranche.',
+        default="pullback",
+    )
 
 
 @dataclass(frozen=True)
@@ -82,10 +125,18 @@ class TpTrancheSpec:
     semantics of their own.
     """
 
-    price: float
-    tranche_pct: float
-    r_multiple: float = 0.0
-    tag: str = ""
+    price: float = contract_field("Take-profit price in the instrument's currency.")
+    tranche_pct: float = contract_field(
+        "PERCENTAGE of the position, 0-100 — not a fraction. The ladder MAY sum to "
+        "less than 100: that is a deliberate runner, not an error."
+    )
+    r_multiple: float = contract_field(
+        "Label only: the tranche's distance in R (multiples of initial risk). No sizing semantics.",
+        default=0.0,
+    )
+    tag: str = contract_field(
+        'Free-text tranche label, e.g. "TP1". No sizing semantics.', default=""
+    )
 
 
 @dataclass(frozen=True)
@@ -96,23 +147,40 @@ class TradeSpec:
     ``compute_setup_plan``'s ``suggested_size_pct / 100 * equity`` sizing.
     """
 
-    entry_tiers: tuple[EntryTierSpec, ...]
-    disaster_stop: float
-    tp_tranches: tuple[TpTrancheSpec, ...]
-    suggested_size_pct: float
-    order_ttl_days: int = DEFAULT_ORDER_TTL_DAYS
-    # Guards the "Sell"->Buy client-side footgun: today only long entries are
-    # armed, so the field is pinned to a single literal rather than left open.
-    side: Literal["long"] = "long"
-    schema_version: str = SCHEMA_VERSION
+    entry_tiers: tuple[EntryTierSpec, ...] = contract_field("The entry ladder, rung by rung.")
+    disaster_stop: float = contract_field(
+        "Stop price in the instrument's currency; sits below every entry rung."
+    )
+    tp_tranches: tuple[TpTrancheSpec, ...] = contract_field(
+        "The take-profit ladder. Empty is the legitimate --no-tp shape: a pick that "
+        "runs to its disaster stop."
+    )
+    suggested_size_pct: float = contract_field(
+        "PERCENTAGE of account equity, 0-100 — not a fraction."
+    )
+    order_ttl_days: int = contract_field(
+        "Entry-order lifetime in TRADING days (XNYS), not calendar days. 0 is the "
+        'planner\'s "field absent" sentinel and resolves to the default downstream.',
+        default=DEFAULT_ORDER_TTL_DAYS,
+    )
+    side: Literal["long"] = contract_field(
+        "Only long entries are armed today. Pinned to one literal as a barrier "
+        'against the client-side "Sell"->Buy footgun rather than left open.',
+        default="long",
+    )
+    schema_version: str = contract_field(
+        "Wire version of this spec. The same constant as meta.schema_version, not an "
+        "independent dial.",
+        default=SCHEMA_VERSION,
+    )
 
 
 @dataclass(frozen=True)
 class InitialLevels:
     """Client-precomputed stop/TP pair (via the ``exit_geometry`` leaf)."""
 
-    stop: float
-    tp: float
+    stop: float = contract_field("Stop price to place, in the instrument's currency.")
+    tp: float = contract_field("Take-profit price to place, in the instrument's currency.")
 
 
 @dataclass(frozen=True)
@@ -125,10 +193,21 @@ class ReanchorOnFill:
     the new levels without a second data fetch.
     """
 
-    k_atr: float
-    atr: float
-    ceiling_price: float | None = None
-    kind: Literal["reanchor_on_fill"] = "reanchor_on_fill"
+    k_atr: float = contract_field(
+        "ATR multiple the re-anchored stop sits away from the fill price."
+    )
+    atr: float = contract_field(
+        "Absolute ATR snapshot — a distance in the instrument's currency, not a "
+        "multiple — so the executor recomputes the levels without a second fetch."
+    )
+    ceiling_price: float | None = contract_field(
+        "Caps the TAKE-PROFIT (tp = min(tp, ceiling_price)); it never touches the "
+        "stop. The door refuses a non-null value today: ceiling_price_unsupported.",
+        default=None,
+    )
+    kind: Literal["reanchor_on_fill"] = contract_field(
+        "Discriminator of the reaction-plan union.", default="reanchor_on_fill"
+    )
 
 
 @dataclass(frozen=True)
@@ -140,9 +219,16 @@ class TrailingStop:
     the peak favorable excursion.
     """
 
-    arm_trigger_r: float
-    trail_frac: float
-    kind: Literal["trailing_stop"] = "trailing_stop"
+    arm_trigger_r: float = contract_field(
+        "Favourable excursion, in R (multiples of initial risk), at which the trail arms."
+    )
+    trail_frac: float = contract_field(
+        "FRACTION in (0, 1] of the peak excursion the stop gives back — a fraction "
+        "here, unlike the _pct fields elsewhere in this contract."
+    )
+    kind: Literal["trailing_stop"] = contract_field(
+        "Discriminator of the reaction-plan union.", default="trailing_stop"
+    )
 
 
 @dataclass(frozen=True)
@@ -154,7 +240,10 @@ class ModelPush:
     the discriminated union.
     """
 
-    kind: Literal["model"] = "model"
+    kind: Literal["model"] = contract_field(
+        "Discriminator of the reaction-plan union; reserves the tag and nothing else.",
+        default="model",
+    )
 
 
 # Discriminated union of the reaction-plan primitives the executor evaluates
@@ -179,34 +268,49 @@ class ExitGeometrySpec:
     (``control_loop._places_client_geometry``) rather than at each of the sites
     that dereference them."""
 
-    initial_levels: InitialLevels | None = None
-    reaction_plan: tuple[ReactionPrimitive, ...] = ()
+    initial_levels: InitialLevels | None = contract_field(
+        "Levels to PLACE, or null when the document supplies none.", default=None
+    )
+    reaction_plan: tuple[ReactionPrimitive, ...] = contract_field(
+        "How the stop MOVES after fill. At most one stop-management primitive; an "
+        "empty plan means the stop is never moved.",
+        default=(),
+    )
 
 
 @dataclass(frozen=True)
 class IntentMeta:
     """Wire-friendly provenance for a :class:`TradeIntent` (no datetime dep)."""
 
-    # ISO-8601 timestamp string.
-    armed_ts: str
-    # YYYY-MM-DD string. Date key of the record — pick identity, TTL anchor,
-    # reconcile join. For a manual pick (no brief row) this is the arm date;
-    # provenance lives in `source`, not in this field's name (#1252).
-    trade_date: str
-    schema_version: str = SCHEMA_VERSION
-    # Where the intent came from: "brief" (parsed from a brief row by `broker
-    # arm`) or "manual" (operator-provided levels via `broker arm-manual`,
-    # #1235). Journals and later measurement separate the two populations on
-    # this marker; legacy payloads without the key decode to "brief".
-    source: Literal["brief", "manual"] = "brief"
-    # Same-day re-arm counter (#1371). The pick identity everywhere downstream
-    # (queue fold, submissions join, entry-watch crids, stop refs) is
-    # (ticker, trade_date, generation); generation 1 keeps the pre-#1371
-    # identity strings byte-for-byte, so every journal line written before the
-    # field existed — and every payload that omits it — is generation 1.
-    # `broker arm-manual` assigns 1 + the highest generation already queued
-    # for (ticker, trade_date); a disarmed generation never comes back.
-    generation: int = 1
+    armed_ts: str = contract_field("ISO-8601 timestamp of the moment the pick was armed.")
+    trade_date: str = contract_field(
+        "YYYY-MM-DD. Date key of the record — pick identity, TTL anchor, reconcile "
+        "join. For a manual pick (no brief row) this is the arm date; provenance "
+        "lives in `source`, not in this field's name (#1252)."
+    )
+    schema_version: str = contract_field(
+        "Wire version of the document. A consumer reads this one.", default=SCHEMA_VERSION
+    )
+    source: Literal["brief", "manual"] = contract_field(
+        'Where the intent came from: "brief" (parsed from a brief row by `broker arm`) '
+        'or "manual" (operator-provided levels via `broker arm-manual`, #1235). '
+        "Journals and later measurement separate the two populations on this marker; "
+        'legacy payloads without the key decode to "brief".',
+        default="brief",
+    )
+    # `broker arm-manual` assigns 1 + the highest generation already queued for
+    # (ticker, trade_date); a disarmed generation never comes back. Generation 1
+    # keeps the pre-#1371 identity strings byte-for-byte, so every journal line
+    # written before the field existed — and every payload that omits it — is
+    # generation 1.
+    generation: int = contract_field(
+        "Same-day re-arm counter, 1-based (#1371). Pick identity everywhere "
+        "downstream — queue fold, submissions join, entry-watch crids, stop refs — "
+        "is (ticker, trade_date, generation), and the queue keeps the LATEST, so a "
+        "resubmission REPLACES rather than duplicates.",
+        default=1,
+        json_schema={"minimum": 1},
+    )
 
 
 @dataclass(frozen=True)
@@ -223,13 +327,17 @@ class TradeIntent:
     (memo section 5, PR-7).
     """
 
-    # Client-authored idempotency key.
-    intent_id: str
-    instrument: InstrumentHint
-    spec: TradeSpec
-    meta: IntentMeta
+    intent_id: str = contract_field("Client-authored idempotency key.")
+    instrument: InstrumentHint = contract_field("What is being traded, and where.")
+    spec: TradeSpec = contract_field("The unsized trade: entry ladder, stop, TP ladder, size.")
+    meta: IntentMeta = contract_field("Provenance and identity of this document.")
     # Field name "exit" per the memo contract — deliberately shadows the
     # builtin `exit` as an attribute (safe: instance attribute, never called).
-    exit: ExitGeometrySpec | None = None
-    # Reserved tenant dimension; single value today.
-    account_id: str = DEFAULT_ACCOUNT_ID
+    exit: ExitGeometrySpec | None = contract_field(
+        "Optional exit geometry: the levels to place, and how the stop is managed "
+        "afterwards. Null when the source brief yields no buildable bracket.",
+        default=None,
+    )
+    account_id: str = contract_field(
+        "Reserved tenant dimension; one value today.", default=DEFAULT_ACCOUNT_ID
+    )
