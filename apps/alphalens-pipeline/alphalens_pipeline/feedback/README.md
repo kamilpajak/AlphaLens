@@ -72,7 +72,21 @@ The `/edge` chart draws **only E1's price line** by design
 (`ladder_chart.py::_price_lines` uses `entries[0]`). E2/E3 exist in the data
 and their fills appear as markers, but there is one "entry" line on screen.
 
-## 3. Entry TTL — why a late touch of E2/E3 does nothing
+## 3. Arrival — the first session after the brief exists
+
+A brief dated `D` is built on calendar day `D+1` from session `D`'s close (the
+T-1 dating), so session `D` has closed before anyone can read it. The replay
+window therefore starts at **the first session strictly after `D`**:
+`ladder_config.ladder_arrival_session(D) = session_on_or_after(D + 1 day)`.
+A Tuesday brief arrives on Wednesday, a Friday brief on Monday, and a weekend or
+holiday brief on the next session (the same session as before #1416). This
+arrival keys the bar cache (`bars/<TICKER>_<arrival>.parquet`), and it anchors
+the arrival VWAP, the TTL and time-stop cutoffs, the SPY/sector windows in
+`benchmark_excess.py`, and the chart. Every one of them takes it from
+`_engine_cutoffs` or the helper, never from `session_on_or_after(brief_date)`.
+The event lane's `car_*_event` keeps its own anchor (`event_car.py`).
+
+## 3b. Entry TTL — why a late touch of E2/E3 does nothing
 
 Entries can fill only on bars **before** `entry_expiry_ms` = the session open
 **7 trading days** after arrival (`DEFAULT_ORDER_TTL_DAYS = 7` in

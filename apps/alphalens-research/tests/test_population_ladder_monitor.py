@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pandas as pd
 from alphalens_pipeline.feedback.breakeven_lenses import BREAKEVEN_LENSES
+from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.feedback.ladder_replay import GRID_CONFIGS, replay_ladder
 from alphalens_pipeline.feedback.population_ladder_monitor import (
     _CHART_PAYLOAD_COLUMN,
@@ -48,7 +49,6 @@ from alphalens_pipeline.paper.brief_loader import CandidateBrief
 from alphalens_pipeline.paper.calendar import (
     advance_trading_sessions,
     previous_trading_day,
-    session_on_or_after,
     session_open_utc,
 )
 
@@ -161,6 +161,159 @@ class TestFetchBudgetCap(_MonitorTestBase):
 
     def test_env_override_respected(self):
         self.assertEqual(self._captured_budget({"ALPHALENS_FEEDBACK_MAX_FETCHES": "600"}), 600)
+
+    def _captured_forced_budget(self, env: dict[str, str]) -> float:
+        from unittest import mock
+
+        import alphalens_pipeline.feedback.population_ladder_monitor as plm
+
+        captured: list[float] = []
+        real = plm._FetchBudget
+
+        def spy(n):
+            captured.append(n)
+            return real(n)
+
+        with (
+            mock.patch.dict("os.environ", env, clear=False),
+            mock.patch.object(plm, "_FetchBudget", side_effect=spy),
+        ):
+            plm.replay_population_ladders(
+                self.briefs_dir,
+                end_date=dt.date(2026, 5, 1),
+                store_dir=self.store_dir,
+                bar_fetch=lambda *a, **k: [],
+                grouped_fetch=lambda _d: {},
+                now=dt.datetime(2026, 5, 1, 21, tzinfo=dt.UTC),
+                lookback_days=0,
+            )
+        return captured[1]  # the forced sub-budget is constructed second
+
+    def test_default_forced_budget_is_50(self):
+        self.assertEqual(self._captured_forced_budget({}), 50)
+
+    def test_forced_budget_env_override_respected(self):
+        # A from-scratch store rebuild (#1416) makes every row brand-new, and
+        # brand-new rows draw only on the forced sub-budget.
+        env = {"ALPHALENS_FEEDBACK_FORCED_BUDGET": "900"}
+        self.assertEqual(self._captured_forced_budget(env), 900)
+
+
+class TestLadderArrivalAfterBrief(_MonitorTestBase):
+    """A brief dated on a session is built after that session closes, so the
+    replay window starts at the NEXT session (#1416)."""
+
+    # 2026-05-01 is a Friday session; the brief is built on Saturday.
+    _BRIEF = dt.date(2026, 5, 1)
+    _ARRIVAL = dt.date(2026, 5, 4)
+
+    def test_engine_cutoffs_start_at_the_next_session(self):
+        cutoffs = _engine_cutoffs(self._BRIEF, _OK_SETUP, "XNYS")
+        self.assertEqual(cutoffs[0], self._ARRIVAL)
+        self.assertEqual(cutoffs[1], advance_trading_sessions(self._ARRIVAL, 7, "XNYS"))
+
+    def _dip_on_brief_session_only(self, ticker, start, end):
+        # Session D (the brief's own session) dips through E1 = 100; every later
+        # bar trades above it. Returned regardless of the requested window, as a
+        # vendor that over-returns would, so only the replay window decides.
+        d_open = int(session_open_utc(self._BRIEF, "XNYS").timestamp() * 1000)
+        bars = [{"t": d_open, "o": 101.0, "h": 101.5, "l": 99.0, "c": 101.0, "v": 1000.0}]
+        t = int(session_open_utc(self._ARRIVAL, "XNYS").timestamp() * 1000)
+        end_ms = int(end.timestamp() * 1000)
+        while t < end_ms:
+            bars.append({"t": t, "o": 105.0, "h": 106.0, "l": 104.0, "c": 105.0, "v": 1000.0})
+            t += 86_400_000
+        return bars
+
+    def test_a_touch_on_the_brief_session_does_not_fill(self):
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, self._BRIEF, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=self._dip_on_brief_session_only,
+            now=now,
+            adjusted_closes_fetch=lambda t, s, e: None,
+        )
+        row = self._read_store(self._BRIEF).set_index("ticker").loc["NVDA"]
+        self.assertEqual(row["ladder_classification"], "NO_FILL")
+
+    def _write_store(self, rows: list[dict]) -> None:
+        self.store_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows).to_parquet(self.store_dir / f"{self._BRIEF.isoformat()}.parquet")
+
+    def test_a_store_from_the_old_rule_is_refused(self):
+        # A plannable row stamped before #1416 (schema-1 token, or no token) was
+        # replayed from the brief's own session. Running the new rule over it
+        # would freeze old terminals and mix windows, so the replay refuses the
+        # whole store instead of writing anything (the rebuild is the only path).
+        import alphalens_pipeline.feedback.population_ladder_monitor as plm
+
+        legacy = json.dumps({"schema": 1, "order_ttl_days": 7})
+        self._write_store(
+            [
+                {"ticker": "OLD", "plannable": True, "ladder_config_version": legacy},
+                {"ticker": "RAW", "plannable": True, "ladder_config_version": None},
+                {"ticker": "NP", "plannable": False, "ladder_config_version": None},
+            ]
+        )
+        _write_brief(self.briefs_dir, self._BRIEF, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+        before = (self.store_dir / f"{self._BRIEF.isoformat()}.parquet").read_bytes()
+        with self.assertRaises(plm.LegacyArrivalStoreError) as ctx:
+            replay_population_ladders(
+                self.briefs_dir,
+                end_date=dt.date(2026, 5, 15),
+                store_dir=self.store_dir,
+                bar_fetch=self._dip_on_brief_session_only,
+                now=dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC),
+            )
+        self.assertEqual(ctx.exception.rows, 2)  # OLD + RAW; the non-plannable row is exempt
+        self.assertEqual(
+            (self.store_dir / f"{self._BRIEF.isoformat()}.parquet").read_bytes(), before
+        )
+
+    def test_a_store_on_the_current_rule_is_accepted(self):
+        from alphalens_pipeline.feedback.ladder_config import ladder_config_version
+
+        self._write_store(
+            [
+                {
+                    "ticker": "NEW",
+                    "plannable": True,
+                    "ladder_config_version": ladder_config_version(order_ttl_days=7),
+                },
+                {"ticker": "NP", "plannable": False, "ladder_config_version": None},
+            ]
+        )
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=dt.date(2026, 5, 15),
+            store_dir=self.store_dir,
+            bar_fetch=self._dip_on_brief_session_only,
+            now=dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC),
+        )
+
+    def test_bar_cache_is_keyed_by_the_new_arrival(self):
+        now = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, self._BRIEF, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+        starts: list[dt.datetime] = []
+
+        def _fetch(ticker, start, end):
+            starts.append(start)
+            return self._dip_on_brief_session_only(ticker, start, end)
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+            adjusted_closes_fetch=lambda t, s, e: None,
+        )
+        self.assertTrue((self.store_dir / "bars" / "NVDA_2026-05-04.parquet").exists())
+        self.assertFalse((self.store_dir / "bars" / "NVDA_2026-05-01.parquet").exists())
+        self.assertEqual(starts[0], session_open_utc(self._ARRIVAL, "XNYS"))
 
 
 class TestPlannableSelection(_MonitorTestBase):
@@ -671,7 +824,7 @@ class TestScorerVersionFreshBrief(_MonitorTestBase):
         # brief's scorer_config_version.
         brief_date = dt.date(2026, 5, 5)  # Tuesday
         # now is early morning of brief_date: last_closed_session = 2026-05-04 (Monday)
-        # arrival_session = session_on_or_after(2026-05-05) = 2026-05-05
+        # arrival_session = ladder_arrival_session(2026-05-05) = 2026-05-06
         # horizon = min(position_expiry, 2026-05-04) < arrival_session → placeholder.
         now = dt.datetime(2026, 5, 5, 7, 0, tzinfo=UTC)
         self._write_brief_with_version(brief_date, "AAPL", "scorer-fresh-v1")
@@ -1343,9 +1496,9 @@ class TestIncrementalCache(_MonitorTestBase):
             # it unstubbed reached Yahoo for real on every run (#1179).
             adjusted_closes_fetch=lambda t, s, e: None,
         )
-        # Cache is keyed by (ticker, arrival_session); 2026-05-01 is a trading day
-        # so arrival == brief_date.
-        cache_path = self.store_dir / "bars" / "NVDA_2026-05-01.parquet"
+        # Cache is keyed by (ticker, arrival_session); the Friday 2026-05-01 brief
+        # arrives on Monday 2026-05-04 (#1416).
+        cache_path = self.store_dir / "bars" / "NVDA_2026-05-04.parquet"
         self.assertTrue(cache_path.exists())
         n_after_run1 = len(pd.read_parquet(cache_path))
         first_start = fetch_windows[0][1]
@@ -1401,13 +1554,14 @@ class TestIncrementalCache(_MonitorTestBase):
             now=now,
         )
         bars_dir = self.store_dir / "bars"
-        self.assertTrue((bars_dir / "NVDA_2026-05-01.parquet").exists())
-        self.assertTrue((bars_dir / "NVDA_2026-05-08.parquet").exists())
+        # Friday briefs arrive the following Monday (#1416).
+        self.assertTrue((bars_dir / "NVDA_2026-05-04.parquet").exists())
+        self.assertTrue((bars_dir / "NVDA_2026-05-11.parquet").exists())
         # The earlier brief's cache must START at its OWN arrival (2026-05-01),
         # never floored at the later brief's arrival.
-        early_first_ts = int(pd.read_parquet(bars_dir / "NVDA_2026-05-01.parquet")["t"].min())
+        early_first_ts = int(pd.read_parquet(bars_dir / "NVDA_2026-05-04.parquet")["t"].min())
         early_first = dt.datetime.fromtimestamp(early_first_ts / 1000, tz=UTC).date()
-        self.assertEqual(early_first, dt.date(2026, 5, 1))
+        self.assertEqual(early_first, dt.date(2026, 5, 4))
 
 
 class TestBrokerFree(unittest.TestCase):
@@ -2803,7 +2957,7 @@ class TestRthAlignment(_GroupedConsistentBase):
         from alphalens_pipeline.feedback.population_ladder_monitor import _filter_bars_to_rth
 
         brief_date = dt.date(2026, 5, 1)
-        arrival = session_on_or_after(brief_date, _XNYS)
+        arrival = ladder_arrival_session(brief_date, _XNYS)
         open_ms = int(session_open_utc(arrival, _XNYS).timestamp() * 1000)
         bars = [
             {"t": open_ms, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},  # RTH fill
@@ -2832,7 +2986,7 @@ class TestGroupedDailyIntegration(_GroupedConsistentBase):
         # later night whose new daily bar touches no level. THEN run 2 issues ZERO
         # minute fetches yet advances open_r / forward_return from the daily close.
         brief_date = dt.date(2026, 5, 1)
-        arrival = session_on_or_after(brief_date, _XNYS)
+        arrival = ladder_arrival_session(brief_date, _XNYS)
         _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
 
         def _minute_fetch_run1(ticker, start, end):
@@ -2911,7 +3065,7 @@ class TestGroupedDailyIntegration(_GroupedConsistentBase):
         # GIVEN the same OPEN row. WHEN run 2's daily bar pierces the stop. THEN the
         # minute fetch IS called and the row resolves precisely.
         brief_date = dt.date(2026, 5, 1)
-        arrival = session_on_or_after(brief_date, _XNYS)
+        arrival = ladder_arrival_session(brief_date, _XNYS)
         _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
 
         def _minute_run1(ticker, start, end):
@@ -2989,7 +3143,7 @@ class TestGroupedDailyIntegration(_GroupedConsistentBase):
         # screen runs. THEN the grouped-daily fetch is called ONCE per session (the
         # whole-market payload is shared), and both resolve from the single cache.
         brief_date = dt.date(2026, 5, 1)
-        arrival = session_on_or_after(brief_date, _XNYS)
+        arrival = ladder_arrival_session(brief_date, _XNYS)
         _write_brief(
             self.briefs_dir,
             brief_date,
@@ -3067,7 +3221,7 @@ class TestGroupedDailyIntegration(_GroupedConsistentBase):
         # (halt / gap) AND the minute fetch fails. THEN the row is carried (NOT
         # cheap-advanced) — open_r/last_close unchanged.
         brief_date = dt.date(2026, 5, 1)
-        arrival = session_on_or_after(brief_date, _XNYS)
+        arrival = ladder_arrival_session(brief_date, _XNYS)
         _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
 
         def _minute_run1(ticker, start, end):
@@ -3225,7 +3379,7 @@ class TestForcedResolvePrecedenceAndFairness(_MonitorTestBase):
         from alphalens_pipeline.feedback import population_ladder_monitor as mon
 
         brief_date = dt.date(2026, 5, 1)
-        arrival = session_on_or_after(brief_date, _XNYS)
+        arrival = ladder_arrival_session(brief_date, _XNYS)
         tickers = [f"T{i:02d}" for i in range(6)]
         _write_brief(
             self.briefs_dir,

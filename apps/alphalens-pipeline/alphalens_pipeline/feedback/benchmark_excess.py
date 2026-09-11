@@ -58,9 +58,9 @@ from typing import Any, TypeGuard
 import pandas as pd
 
 from alphalens_pipeline.feedback.bar_window import ARRIVAL_VWAP_WINDOW_MIN, _window_vwap
+from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
-    session_on_or_after,
     session_open_utc,
 )
 
@@ -177,7 +177,7 @@ def compute_market_excess_for_row(
     if exit_session is None:
         return None, None
 
-    arrival_session = session_on_or_after(brief_date, exchange)
+    arrival_session = ladder_arrival_session(brief_date, exchange)
     if exit_session < arrival_session:
         # A degenerate window (exit before arrival) — not recoverable.
         return None, None
@@ -329,7 +329,7 @@ def _seed_window_cache_from_reused(
     exit_session = _recover_exit_session(row_dict, last_closed_session=last_closed_session)
     if exit_session is None:
         return
-    arrival_session = session_on_or_after(brief_date, exchange)
+    arrival_session = ladder_arrival_session(brief_date, exchange)
     if exit_session < arrival_session:
         return
     key = (arrival_session, exit_session)
@@ -455,7 +455,7 @@ def _row_excess_cached(
     exit_session = _recover_exit_session(row, last_closed_session=last_closed_session)
     if exit_session is None:
         return None, None
-    arrival_session = session_on_or_after(brief_date, exchange)
+    arrival_session = ladder_arrival_session(brief_date, exchange)
     if exit_session < arrival_session:
         return None, None
 

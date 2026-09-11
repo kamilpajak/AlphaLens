@@ -82,7 +82,11 @@ from alphalens_pipeline.feedback.corporate_actions import (
     default_adjusted_closes_fetch,
     resolve_guard_disposition,
 )
-from alphalens_pipeline.feedback.ladder_config import ladder_config_version
+from alphalens_pipeline.feedback.ladder_config import (
+    ARRIVAL_RULE,
+    ladder_arrival_session,
+    ladder_config_version,
+)
 from alphalens_pipeline.feedback.ladder_replay import (
     LadderOutcome,
     realized_r_full_fill,
@@ -93,7 +97,6 @@ from alphalens_pipeline.paper.brief_loader import CandidateBrief, load_brief
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
-    session_on_or_after,
     session_open_utc,
 )
 from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
@@ -130,6 +133,8 @@ _MAX_FETCHES_PER_RUN = 250
 # establishment. Drawn SEPARATELY from the main touch budget so a brief-inflow /
 # crash night cannot starve a long-quiet candidate's forced re-pricing. Total
 # nightly minute fetches are bounded by ``_MAX_FETCHES_PER_RUN + _FORCED_RESOLVE_BUDGET``.
+# Operator override: ALPHALENS_FEEDBACK_FORCED_BUDGET (a from-scratch store rebuild
+# makes every row brand-new, and brand-new rows draw only on this budget).
 _FORCED_RESOLVE_BUDGET = 50
 
 _FETCH_DEADLINE_S_DEFAULT = 75 * 60  # wall-clock budget, under TimeoutStartSec=90min
@@ -370,6 +375,50 @@ def _is_plannable(c: CandidateBrief) -> tuple[bool, str | None]:
     return True, None
 
 
+class LegacyArrivalStoreError(RuntimeError):
+    """The store holds plannable rows replayed under the pre-#1416 arrival.
+
+    Those rows started at the brief's own session. The replay freezes terminal
+    rows and reuses stored anchors, so running the new rule over them would mix
+    two windows in one store. The only supported path is a from-scratch rebuild.
+    """
+
+    def __init__(self, rows: int) -> None:
+        super().__init__(
+            f"{rows} plannable row(s) predate the #1416 arrival rule; rebuild the "
+            "population-ladder store from scratch before running the monitor"
+        )
+        self.rows = rows
+
+
+def _uses_current_arrival(token: object) -> bool:
+    if not isinstance(token, str):
+        return False
+    try:
+        payload = json.loads(token)
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and payload.get("arrival_rule") == ARRIVAL_RULE
+
+
+def _legacy_arrival_rows(store_dir: Path) -> int:
+    """Plannable store rows whose stamp does not carry the current arrival rule.
+
+    A row with no stamp at all counts too: it was written before the stamp, so
+    under the old rule. Non-plannable rows are never replayed and carry no stamp.
+    """
+    count = 0
+    for path in sorted(store_dir.glob("20*.parquet")):
+        try:
+            frame = pd.read_parquet(path, columns=["plannable", "ladder_config_version"])
+        except (OSError, ValueError, KeyError):
+            continue
+        plannable = frame["plannable"].fillna(False).astype(bool)
+        tokens = frame.loc[plannable, "ladder_config_version"]
+        count += int((~tokens.map(_uses_current_arrival)).sum())
+    return count
+
+
 def _engine_cutoffs(
     brief_date: dt.date, setup: dict, exchange: str
 ) -> tuple[dt.date, dt.date, dt.date, int, int, int, int]:
@@ -379,8 +428,12 @@ def _engine_cutoffs(
     are advanced via the exchange calendar, NOT naive ms. Returns
     ``(arrival_session, entry_expiry_session, position_expiry_session,
     entry_ttl_days, position_ttl_days, entry_expiry_ms, position_expiry_ms)``.
+
+    ``arrival_session`` is :func:`ladder_arrival_session` -- the first session
+    after the brief exists, never the brief's own session (#1416). It also keys
+    the bar cache, so every reader of the cache must take it from here.
     """
-    arrival_session = session_on_or_after(brief_date, exchange)
+    arrival_session = ladder_arrival_session(brief_date, exchange)
     entry_ttl_days = int(setup.get("order_ttl_days") or DEFAULT_ORDER_TTL_DAYS)
     position_ttl_days = TIME_STOP_DAYS
     entry_expiry_session = advance_trading_sessions(arrival_session, entry_ttl_days, exchange)
@@ -1242,6 +1295,9 @@ def replay_population_ladders(
     fetch = bar_fetch or _default_bar_fetch
     grouped = grouped_fetch or _default_grouped_fetch
     store = store_dir or (Path.home() / ".alphalens" / "population_ladders")
+    legacy_rows = _legacy_arrival_rows(store)
+    if legacy_rows:
+        raise LegacyArrivalStoreError(legacy_rows)
     last_closed_session = _last_closed_session(now, exchange)
     guard = _build_guard(
         store,
@@ -1257,7 +1313,9 @@ def replay_population_ladders(
     budget = _FetchBudget(
         int(os.environ.get("ALPHALENS_FEEDBACK_MAX_FETCHES", _MAX_FETCHES_PER_RUN))
     )
-    forced_budget = _FetchBudget(_FORCED_RESOLVE_BUDGET)
+    forced_budget = _FetchBudget(
+        int(os.environ.get("ALPHALENS_FEEDBACK_FORCED_BUDGET", _FORCED_RESOLVE_BUDGET))
+    )
     reports: list[PopulationMonitorReport] = []
     for offset in range(lookback_days + 1):  # inclusive both ends; newest -> oldest
         if deadline is not None and deadline.should_stop():

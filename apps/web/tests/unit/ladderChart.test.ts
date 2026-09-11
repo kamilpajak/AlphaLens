@@ -108,9 +108,15 @@ describe('briefLineTime', () => {
 		expect(briefLineTime([], '2026-06-13')).toBeNull();
 	});
 
-	it('returns the bar time when brief_date lands exactly on a session', () => {
+	it('moves a session-day brief to the next session (the first one a reader can trade)', () => {
+		// The brief for 06-15 is built after the 06-15 session closes (#1416).
 		const bars = [bar('2026-06-12'), bar('2026-06-15'), bar('2026-06-16')];
-		expect(briefLineTime(bars, '2026-06-15')).toBe('2026-06-15');
+		expect(briefLineTime(bars, '2026-06-15')).toBe('2026-06-16');
+	});
+
+	it('returns null when the brief falls on the last bar', () => {
+		const bars = [bar('2026-06-12'), bar('2026-06-15')];
+		expect(briefLineTime(bars, '2026-06-15')).toBeNull();
 	});
 
 	it('snaps a weekend brief forward to the next session', () => {
@@ -295,10 +301,10 @@ function sessions(count: number): string[] {
 
 describe('trimLeadInBars', () => {
 	it('keeps exactly LEAD_IN_DISPLAY_SESSIONS bars before the brief session on a long lead-in', () => {
-		// 60 sessions; brief on session index 50 → 30 in-window from the brief on.
+		// 60 sessions; brief on index 49 → arrival (the anchor) on index 50.
 		const times = sessions(60);
 		const bars = times.map(tbar);
-		const briefDate = times[50];
+		const briefDate = times[49];
 
 		const trimmed = trimLeadInBars(bars, briefDate, []);
 
@@ -310,8 +316,8 @@ describe('trimLeadInBars', () => {
 	it('is a no-op when the lead-in is already at or under the display cap', () => {
 		const times = sessions(25);
 		const bars = times.map(tbar);
-		// Brief on index 20 → lead-in exactly 20 sessions: nothing to cut.
-		expect(trimLeadInBars(bars, times[20], [])).toBe(bars);
+		// Brief on index 19 → arrival on index 20 → lead-in exactly 20 sessions: nothing to cut.
+		expect(trimLeadInBars(bars, times[19], [])).toBe(bars);
 	});
 
 	it('is a no-op when there is no anchor at all (no brief date, no ENTRY marker)', () => {
@@ -322,7 +328,8 @@ describe('trimLeadInBars', () => {
 	it('anchors on the brief session for a PLANNED payload (empty marker list)', () => {
 		const times = sessions(40);
 		const bars = times.map(tbar);
-		const trimmed = trimLeadInBars(bars, times[30], []);
+		// Brief on index 29 → arrival (the anchor) on index 30.
+		const trimmed = trimLeadInBars(bars, times[29], []);
 		expect(trimmed[0].time).toBe(times[30 - LEAD_IN_DISPLAY_SESSIONS]);
 	});
 

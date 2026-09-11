@@ -17,7 +17,8 @@ from pathlib import Path
 from unittest import mock
 
 import pandas as pd
-from alphalens_pipeline.paper.calendar import session_on_or_after, session_open_utc
+from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
+from alphalens_pipeline.paper.calendar import session_open_utc
 from alphalens_research.diagnostics import fill_partition as fp
 from scripts.measure_fill_partition import (
     EXCHANGE,
@@ -96,7 +97,7 @@ def _write_store(store_dir: Path, rows: list[dict]) -> None:
 def _write_bars(
     store_dir: Path, ticker: str, lows: list[float], highs: list[float] | None = None
 ) -> None:
-    arrival = session_on_or_after(BRIEF_DATE, EXCHANGE)
+    arrival = ladder_arrival_session(BRIEF_DATE, EXCHANGE)
     open_ms = int(session_open_utc(arrival, EXCHANGE).timestamp() * 1000)
     tops = highs if highs is not None else [low + 1.0 for low in lows]
     bars = [

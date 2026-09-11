@@ -57,6 +57,77 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
         self.assertIn("population-monitor", result.stdout)
         replay.assert_called_once()
 
+    def _replay_kwargs(self, extra_args: list[str]) -> dict:
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                return_value=[],
+            ) as replay,
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.enrich_store_with_size_fields",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.benchmark_excess.enrich_store_with_benchmark_excess",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.sector_excess.enrich_store_with_sector_excess",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
+                return_value=0,
+            ),
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "feedback",
+                    "backfill-shadow-returns",
+                    "--briefs-dir",
+                    "/tmp/does-not-matter",
+                    *extra_args,
+                ],
+            )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        return dict(replay.call_args.kwargs)
+
+    def test_lookback_defaults_to_the_monitor_window(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import MONITOR_LOOKBACK_DAYS
+
+        self.assertEqual(self._replay_kwargs([])["lookback_days"], MONITOR_LOOKBACK_DAYS)
+
+    def test_lookback_days_option_reaches_the_replay(self):
+        # A from-scratch store rebuild (#1416) must reach briefs older than the
+        # nightly window.
+        self.assertEqual(self._replay_kwargs(["--lookback-days", "120"])["lookback_days"], 120)
+
+    def test_a_store_from_the_old_arrival_rule_stops_the_whole_chain(self):
+        # Fail closed (#1416): no enrichment pass and no ingest watermark run on a
+        # store that must be rebuilt, so /edge keeps the last complete state and
+        # the staleness alerts surface the pending rebuild.
+        from alphalens_cli.commands import feedback as feedback_cmd
+        from alphalens_pipeline.feedback.population_ladder_monitor import LegacyArrivalStoreError
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                side_effect=LegacyArrivalStoreError(3),
+            ),
+            mock.patch.object(feedback_cmd, "_enrich_population_benchmark_excess") as bench,
+            mock.patch.object(feedback_cmd, "_enrich_population_chart_payloads") as chart,
+            mock.patch.object(feedback_cmd, "_write_ingest_watermark") as watermark,
+        ):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "backfill-shadow-returns", "--briefs-dir", "/tmp/does-not-matter"],
+            )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        bench.assert_not_called()
+        chart.assert_not_called()
+        watermark.assert_not_called()
+
     def test_command_invokes_sector_excess_enrichment(self):
         # The sector-relative EDGE outcome (PR-2b) runs in the unconditional
         # enrichment tail alongside benchmark-excess, so the store gets its

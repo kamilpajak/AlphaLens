@@ -153,16 +153,16 @@ class TestDriverEndToEnd(unittest.TestCase):
 
             from alphalens_pipeline.feedback.population_ladder_monitor import _engine_cutoffs
 
-            *_rest, position_expiry_ms = _engine_cutoffs(
-                dt.date.fromisoformat(day), _setup(), "XNYS"
-            )
+            cutoffs = _engine_cutoffs(dt.date.fromisoformat(day), _setup(), "XNYS")
+            arrival, position_expiry_ms = cutoffs[0], cutoffs[6]
             day_ms = 24 * 3600 * 1000
             start_ms = position_expiry_ms - 70 * day_ms
             bars = pd.DataFrame(
                 [{"t": start_ms + i * day_ms, "l": 99.0, "h": 106.5, "c": 105.0} for i in range(75)]
             )
             for ticker in ("AAA", "BBB"):
-                bars.to_parquet(store / "bars" / f"{ticker}_{day}.parquet", index=False)
+                # Keyed by the ladder arrival, as the monitor writes it (#1416).
+                bars.to_parquet(store / "bars" / f"{ticker}_{arrival}.parquet", index=False)
             with (
                 mock.patch.object(psd, "STORE_DIR", store),
                 mock.patch.object(psd, "BRIEFS_DIR", briefs),

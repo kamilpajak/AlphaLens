@@ -1161,7 +1161,18 @@ def _payload_for_row(
         if setup is None:
             return _no_structure_payload()
 
-        arrival_session = session_on_or_after(brief_date, exchange)
+        # ONE arrival for the cache key, the RTH window and the TTL cutoffs: the
+        # monitor's own (#1416). Recomputing it here once let the chart read a
+        # different bar file than the monitor wrote.
+        (
+            arrival_session,
+            _ent_s,
+            _pos_s,
+            _ent_ttl,
+            _pos_ttl,
+            entry_expiry_ms,
+            position_expiry_ms,
+        ) = _engine_cutoffs(brief_date, setup, exchange)
         raw_bars: list[dict[str, Any]] = [dict(b) for b in fetch(ticker, arrival_session)]
         if not raw_bars:
             return _no_data_payload()
@@ -1173,10 +1184,7 @@ def _payload_for_row(
         # fills a limit touched only AFTER the order expired -> a stale E1 marker on a
         # NO_FILL row (and a missing TIME_STOP past the position TTL). The cutoffs make
         # the chart's modeled fills match the stored ladder_classification.
-        # Named unpack (over cutoffs[5]/[6]) so the two ms scalars are self-documenting.
-        (_arr, _ent_s, _pos_s, _ent_ttl, _pos_ttl, entry_expiry_ms, position_expiry_ms) = (
-            _engine_cutoffs(brief_date, setup, exchange)
-        )
+        # entry_expiry_ms / position_expiry_ms come from the named unpack above.
         # reference_close is intentionally omitted: it only anchors forward_return,
         # which the chart markers / sequence do not use.
         outcome = replay_ladder(

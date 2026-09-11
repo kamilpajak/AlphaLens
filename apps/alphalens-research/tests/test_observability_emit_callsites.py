@@ -1295,7 +1295,7 @@ class TestBackfillRefreshesPopulationLadders(unittest.TestCase):
         runner = CliRunner()
         recorded: list[Path] = []
 
-        def fake_refresh(briefs_dir: Path):
+        def fake_refresh(briefs_dir: Path, **_kwargs):
             recorded.append(briefs_dir)
 
         with tempfile.TemporaryDirectory() as tmp:
