@@ -31,7 +31,8 @@ from alphalens_pipeline.feedback.benchmark_excess import (
     compute_market_excess_for_row,
     enrich_store_with_benchmark_excess,
 )
-from alphalens_pipeline.paper.calendar import session_on_or_after, session_open_utc
+from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
+from alphalens_pipeline.paper.calendar import session_open_utc
 
 UTC = dt.UTC
 
@@ -66,7 +67,7 @@ def _spy_bars(arrival_open: dt.datetime, *, reference: float, last_close: float)
 class TestComputeMarketExcessForRow(unittest.TestCase):
     def setUp(self) -> None:
         self.brief_date = dt.date(2026, 5, 18)
-        self.arrival_session = session_on_or_after(self.brief_date)
+        self.arrival_session = ladder_arrival_session(self.brief_date)
         self.arrival_open = session_open_utc(self.arrival_session)
         self.last_closed = dt.date(2026, 6, 2)
 
@@ -143,7 +144,7 @@ class TestEnrichStore(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = Path(tmp)
             brief_date = dt.date(2026, 5, 18)
-            arrival_open = session_open_utc(session_on_or_after(brief_date))
+            arrival_open = session_open_utc(ladder_arrival_session(brief_date))
             df = pd.DataFrame(
                 [
                     {
@@ -285,7 +286,7 @@ class TestEnrichSelfHeal(unittest.TestCase):
             )
             # The newest date's arrival window must be fetched before the old one's,
             # so a deadline-truncated sweep heals the dashboard-visible dates first.
-            new_arrival = session_on_or_after(new)
+            new_arrival = ladder_arrival_session(new)
             self.assertEqual(fetched_starts[0], session_open_utc(new_arrival))
 
     def test_newest_first_under_deadline_heals_recent_and_leaves_old(self) -> None:
@@ -430,7 +431,7 @@ class TestBenchmarkAnchorInvariants(unittest.TestCase):
     A false-alarm investigation back-solved an implied SPY reference from SPY's
     DAILY cash close and concluded the benchmark leg was anchored one session
     early. It is not: production anchors BOTH legs to the same arrival session
-    (``session_on_or_after`` -> ``session_open_utc`` -> arrival 30-min VWAP), and
+    (``ladder_arrival_session`` -> ``session_open_utc`` -> arrival 30-min VWAP), and
     the exit leg uses the LAST available minute bar (an after-hours print ~480 min
     past the exit-session open), NOT the 16:00 ET cash close. These tests lock
     those invariants so a future refactor cannot silently introduce the anchor
@@ -443,21 +444,41 @@ class TestBenchmarkAnchorInvariants(unittest.TestCase):
     def _ms(d: dt.datetime) -> int:
         return int(d.timestamp() * 1000)
 
-    def test_arrival_anchor_is_brief_date_open_when_holiday_inside_window(self) -> None:
-        # brief_date 2026-06-18 (Thu). Juneteenth 2026-06-19 (Fri) is a market
-        # holiday STRICTLY INSIDE the [arrival, exit] holding window — it must
-        # never pull the arrival anchor back to the prior session.
+    def test_arrival_anchor_is_the_session_after_the_brief(self) -> None:
+        # The SPY leg shares the ladder's arrival (#1416): the first session after
+        # the brief exists. A Wed 2026-06-17 brief arrives Thu June 18 at 13:30 UTC.
         self.assertEqual(
-            session_on_or_after(dt.date(2026, 6, 18), self._EXCHANGE), dt.date(2026, 6, 18)
+            ladder_arrival_session(dt.date(2026, 6, 17), self._EXCHANGE), dt.date(2026, 6, 18)
         )
         self.assertEqual(
             session_open_utc(dt.date(2026, 6, 18), self._EXCHANGE),
             dt.datetime(2026, 6, 18, 13, 30, tzinfo=UTC),
         )
-        # Juneteenth itself is not a session -> rolls forward to Monday June 22.
+        # A Thu June-18 brief skips Juneteenth (Fri, not a session) -> Monday June 22.
         self.assertEqual(
-            session_on_or_after(dt.date(2026, 6, 19), self._EXCHANGE), dt.date(2026, 6, 22)
+            ladder_arrival_session(dt.date(2026, 6, 18), self._EXCHANGE), dt.date(2026, 6, 22)
         )
+
+    def test_market_window_starts_at_the_ladder_arrival(self) -> None:
+        # The SPY fetch must start where the ladder window starts, never at the
+        # brief's own (already closed) session.
+        seen_start: list[dt.datetime] = []
+
+        def _fetch(ticker, start, end):
+            seen_start.append(start)
+            return []
+
+        row = {
+            "brief_date": dt.date(2026, 6, 16),  # Tue
+            "ticker": "CRL",
+            "terminal": True,
+            "matured_at": dt.date(2026, 6, 24),
+            "forward_return": 0.1,
+        }
+        compute_market_excess_for_row(
+            row, bar_fetch=_fetch, last_closed_session=dt.date(2026, 6, 30), exchange=self._EXCHANGE
+        )
+        self.assertEqual(seen_start[0], dt.datetime(2026, 6, 17, 13, 30, tzinfo=UTC))
 
     def test_window_vwap_excludes_prior_session_and_post_window_bars(self) -> None:
         # The arrival reference VWAP must use ONLY bars in [arrival_open, +30min):
@@ -481,8 +502,9 @@ class TestBenchmarkAnchorInvariants(unittest.TestCase):
         # take the LAST bar (an after-hours print, 737.96 at June-24 21:30 UTC),
         # NOT an earlier 16:00-ET cash-close bar (733.24). Using the cash close
         # manufactures an implied ~740.7 (June-17-looking) reference.
+        # A Wed June-17 brief arrives Thu June 18 (#1416).
         arrival_open = session_open_utc(
-            session_on_or_after(dt.date(2026, 6, 18), self._EXCHANGE), self._EXCHANGE
+            ladder_arrival_session(dt.date(2026, 6, 17), self._EXCHANGE), self._EXCHANGE
         )
         seen_start: list[dt.datetime] = []
 
@@ -504,11 +526,11 @@ class TestBenchmarkAnchorInvariants(unittest.TestCase):
             ]
 
         row = {
-            "brief_date": dt.date(2026, 6, 18),
+            "brief_date": dt.date(2026, 6, 17),
             "ticker": "CRL",
             "terminal": True,
             "matured_at": dt.date(2026, 6, 24),
-            "forward_return": 0.104290606614145,  # CRL/06-18 stored value
+            "forward_return": 0.104290606614145,  # CRL/06-18-arrival stored value
         }
         bench, excess = compute_market_excess_for_row(
             row,
@@ -532,11 +554,14 @@ class TestBenchmarkAnchorInvariants(unittest.TestCase):
         self.assertEqual(_HORIZON_SESSION_SPAN_MIN, 480)
 
     def test_mid_week_and_post_holiday_arrivals_anchor_to_their_own_open(self) -> None:
-        # No-regression: a plain mid-week arrival (Thu June-11) and the session
-        # immediately AFTER a holiday (Mon June-22, after Juneteenth) both anchor
-        # to their own session open at 13:30 UTC.
-        for d in (dt.date(2026, 6, 11), dt.date(2026, 6, 22)):
-            self.assertEqual(session_on_or_after(d, self._EXCHANGE), d)
+        # No-regression: a plain mid-week arrival (Thu June-11, from a Wed brief)
+        # and the session immediately AFTER a holiday (Mon June-22, from a Thu
+        # brief across Juneteenth) both anchor to their own session open at 13:30.
+        for brief, d in (
+            (dt.date(2026, 6, 10), dt.date(2026, 6, 11)),
+            (dt.date(2026, 6, 18), dt.date(2026, 6, 22)),
+        ):
+            self.assertEqual(ladder_arrival_session(brief, self._EXCHANGE), d)
             self.assertEqual(
                 session_open_utc(d, self._EXCHANGE),
                 dt.datetime(d.year, d.month, d.day, 13, 30, tzinfo=UTC),
@@ -600,7 +625,7 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
 
-            arrival_open = session_open_utc(session_on_or_after(d))
+            arrival_open = session_open_utc(ladder_arrival_session(d))
             calls: list[str] = []
 
             def _fetch(t, s, e):
@@ -781,7 +806,7 @@ class TestCheapTerminalMaturationComposition(unittest.TestCase):
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
 
-            arrival_open = session_open_utc(session_on_or_after(d))
+            arrival_open = session_open_utc(ladder_arrival_session(d))
             calls: list[str] = []
 
             def _fetch(t, s, e):
@@ -821,7 +846,7 @@ class TestCheapTerminalMaturationComposition(unittest.TestCase):
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
 
-            arrival_open = session_open_utc(session_on_or_after(d))
+            arrival_open = session_open_utc(ladder_arrival_session(d))
             calls: list[str] = []
 
             def _fetch(t, s, e):
@@ -920,7 +945,7 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
             mtime_before = path.stat().st_mtime_ns
             time.sleep(0.01)  # ensure a distinguishable mtime tick
 
-            arrival_open = session_open_utc(session_on_or_after(d))
+            arrival_open = session_open_utc(ladder_arrival_session(d))
 
             def _fetch(t, s, e):
                 return _spy_bars(arrival_open, reference=100.0, last_close=102.0)

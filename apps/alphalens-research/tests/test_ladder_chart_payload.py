@@ -35,6 +35,7 @@ from alphalens_pipeline.feedback.ladder_chart import (
     build_chart_payload,
     enrich_store_with_chart_payloads,
 )
+from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.feedback.ladder_replay import replay_ladder
 from alphalens_pipeline.feedback.population_ladder_monitor import _RunDeadline
 from alphalens_pipeline.paper.calendar import (
@@ -51,6 +52,9 @@ UTC = dt.UTC
 _EXCHANGE = "XNYS"
 _ARRIVAL = dt.date(2026, 5, 1)
 _NEXT_SESSION = dt.date(2026, 5, 4)
+# The brief whose ladder arrival is _ARRIVAL: the Thursday session before it
+# (a brief is built after its own session closes, #1416).
+_BRIEF = dt.date(2026, 4, 30)
 _HORIZON = dt.date(2026, 5, 8)
 
 # A plannable OK setup: single dip-buy entry at 100, single TP at 110, disaster
@@ -608,6 +612,64 @@ def _write_brief(briefs_dir: Path, brief_date: dt.date, ticker: str, setup: dict
 
 
 class TestEnrichStoreWithChartPayloads(unittest.TestCase):
+    def test_session_day_brief_reads_the_monitor_bar_file(self) -> None:
+        """The chart must ask for exactly the bar file the monitor wrote, keyed by
+        the monitor's own arrival -- never the brief's (closed) session (#1416)."""
+        from alphalens_pipeline.feedback.population_ladder_monitor import _engine_cutoffs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir = root / "population_ladders"
+            briefs_dir = root / "briefs"
+            _write_store_row(store_dir, _BRIEF, "NVDA")
+            _write_brief(briefs_dir, _BRIEF, "NVDA", _OK_SETUP)
+            requested: list[tuple[str, dt.date]] = []
+
+            def bar_fetch(ticker: str, arrival_session: dt.date) -> list[dict]:
+                requested.append((ticker.upper(), arrival_session))
+                return []
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=lambda *_a, **_k: [],
+                exchange=_EXCHANGE,
+            )
+            monitor_arrival = _engine_cutoffs(_BRIEF, _OK_SETUP, _EXCHANGE)[0]
+            self.assertEqual(requested, [("NVDA", monitor_arrival)])
+            self.assertEqual(monitor_arrival, _ARRIVAL)
+
+    def test_brief_session_is_lead_in_context_not_in_trade(self) -> None:
+        """The brief's own session is history the brief was built from: it shows as a
+        lead-in daily bar, and no marker can sit on it (#1416)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir = root / "population_ladders"
+            briefs_dir = root / "briefs"
+            _write_store_row(store_dir, _BRIEF, "NVDA")
+            _write_brief(briefs_dir, _BRIEF, "NVDA", _OK_SETUP)
+            minute_bars = [
+                _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),
+                _bar(_session_open_ms(_NEXT_SESSION), o=105.0, h=111.0, low=104.0, c=110.5),
+            ]
+            pre = _sessions_before(_ARRIVAL, 25)
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=lambda t, a: minute_bars if a == _ARRIVAL else [],
+                daily_bar_fetch=lambda *_a, **_k: [
+                    _daily_bar(s, o=40.0, h=41.0, low=39.0, c=40.5) for s in pre
+                ],
+                exchange=_EXCHANGE,
+            )
+            df = pd.read_parquet(store_dir / f"{_BRIEF.isoformat()}.parquet")
+            payload = json.loads(df.set_index("ticker").loc["NVDA", "chart_payload_json"])
+            self.assertIn(_BRIEF.isoformat(), [b["time"] for b in payload["bars"]])
+            self.assertTrue(payload["markers"])
+            self.assertTrue(all(m["time"] >= _ARRIVAL.isoformat() for m in payload["markers"]))
+
     def test_enrich_store_writes_chart_payload_json_column(self) -> None:
         """Given a store row + a matching cached bars source, the enricher rewrites
         the store parquet with a ``chart_payload_json`` column whose value
@@ -616,7 +678,7 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
             root = Path(tmp)
             store_dir = root / "population_ladders"
             briefs_dir = root / "briefs"
-            brief_date = _ARRIVAL  # arrival session == brief date (Friday session)
+            brief_date = _BRIEF  # arrives on _ARRIVAL (#1416)
             _write_store_row(store_dir, brief_date, "NVDA")
             _write_brief(briefs_dir, brief_date, "NVDA", _OK_SETUP)
 
@@ -664,7 +726,7 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
             root = Path(tmp)
             store_dir = root / "population_ladders"
             briefs_dir = root / "briefs"
-            brief_date = _ARRIVAL
+            brief_date = _BRIEF
             _write_store_row(store_dir, brief_date, "MISS")
             _write_brief(briefs_dir, brief_date, "MISS", _OK_SETUP)
 
@@ -694,7 +756,7 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
             root = Path(tmp)
             store_dir = root / "population_ladders"
             briefs_dir = root / "briefs"
-            brief_date = _ARRIVAL
+            brief_date = _BRIEF
             _write_store_row(store_dir, brief_date, "NVDA")
             _write_brief(briefs_dir, brief_date, "NVDA", _OK_SETUP)
 
@@ -755,8 +817,8 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp2:
             root2 = Path(tmp2)
             store_dir2, briefs_dir2 = root2 / "population_ladders", root2 / "briefs"
-            _write_store_row(store_dir2, _ARRIVAL, "FRESH")
-            _write_brief(briefs_dir2, _ARRIVAL, "FRESH", _OK_SETUP)
+            _write_store_row(store_dir2, _BRIEF, "FRESH")
+            _write_brief(briefs_dir2, _BRIEF, "FRESH", _OK_SETUP)
 
             def bar_fetch2(ticker, arrival_session):
                 return [
@@ -774,7 +836,7 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
                 daily_bar_fetch=boom2,
                 exchange=_EXCHANGE,
             )
-            df2 = pd.read_parquet(store_dir2 / f"{_ARRIVAL.isoformat()}.parquet")
+            df2 = pd.read_parquet(store_dir2 / f"{_BRIEF.isoformat()}.parquet")
             fresh_payload = json.loads(df2.set_index("ticker").loc["FRESH", "chart_payload_json"])
             self.assertEqual(fresh_payload["status"], "OK")
             fresh_times = [b["time"] for b in fresh_payload["bars"]]
@@ -787,7 +849,7 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
             root = Path(tmp)
             store_dir = root / "population_ladders"
             briefs_dir = root / "briefs"
-            brief_date = _ARRIVAL
+            brief_date = _BRIEF
 
             # Two store rows for the SAME ticker on the same date (e.g. surfaced
             # under two themes) -> one (ticker, start, end) Polygon call, not two.
@@ -834,7 +896,7 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
             root = Path(tmp)
             store_dir = root / "population_ladders"
             briefs_dir = root / "briefs"
-            brief_date = _ARRIVAL
+            brief_date = _BRIEF
 
             store_dir.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(
@@ -1210,10 +1272,12 @@ def _position_expiry_ms(arrival: dt.date, position_ttl_days: int) -> int:
 
 def _enrich_and_load(store_dir: Path, briefs_dir: Path, ticker: str, brief_date: dt.date, bars):
     """Run the store enricher with an injected (hermetic) bar source and return the
-    persisted payload dict for ``ticker``."""
+    persisted payload dict for ``ticker``. The bars are served for the brief's
+    ladder arrival, the key the monitor's bar cache uses."""
+    arrival = ladder_arrival_session(brief_date, _EXCHANGE)
 
     def bar_fetch(t: str, arrival_session: dt.date) -> list[dict]:
-        return bars if t.upper() == ticker and arrival_session == brief_date else []
+        return bars if t.upper() == ticker and arrival_session == arrival else []
 
     enrich_store_with_chart_payloads(
         store_dir,
@@ -1264,9 +1328,9 @@ class TestChartReplayHonoursTtlCutoffs(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store_dir, briefs_dir = root / "population_ladders", root / "briefs"
-            _write_store_row(store_dir, _ARRIVAL, "KVYO")
-            _write_brief(briefs_dir, _ARRIVAL, "KVYO", _OK_SETUP)
-            payload = _enrich_and_load(store_dir, briefs_dir, "KVYO", _ARRIVAL, bars)
+            _write_store_row(store_dir, _BRIEF, "KVYO")
+            _write_brief(briefs_dir, _BRIEF, "KVYO", _OK_SETUP)
+            payload = _enrich_and_load(store_dir, briefs_dir, "KVYO", _BRIEF, bars)
 
         self.assertEqual(payload["status"], "OK")  # bars exist -> a plan chart still renders
         entry_markers = [m for m in payload["markers"] if m["kind"] == "ENTRY"]
@@ -1282,9 +1346,9 @@ class TestChartReplayHonoursTtlCutoffs(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store_dir, briefs_dir = root / "population_ladders", root / "briefs"
-            _write_store_row(store_dir, _ARRIVAL, "NVDA")
-            _write_brief(briefs_dir, _ARRIVAL, "NVDA", _OK_SETUP)
-            payload = _enrich_and_load(store_dir, briefs_dir, "NVDA", _ARRIVAL, bars)
+            _write_store_row(store_dir, _BRIEF, "NVDA")
+            _write_brief(briefs_dir, _BRIEF, "NVDA", _OK_SETUP)
+            payload = _enrich_and_load(store_dir, briefs_dir, "NVDA", _BRIEF, bars)
 
         entry_markers = [m for m in payload["markers"] if m["kind"] == "ENTRY"]
         self.assertEqual([m["label"] for m in entry_markers], ["E1"])
@@ -1317,9 +1381,9 @@ class TestChartReplayHonoursTtlCutoffs(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store_dir, briefs_dir = root / "population_ladders", root / "briefs"
-            _write_store_row(store_dir, _ARRIVAL, "TSLA")
-            _write_brief(briefs_dir, _ARRIVAL, "TSLA", _OK_SETUP)
-            payload = _enrich_and_load(store_dir, briefs_dir, "TSLA", _ARRIVAL, bars)
+            _write_store_row(store_dir, _BRIEF, "TSLA")
+            _write_brief(briefs_dir, _BRIEF, "TSLA", _OK_SETUP)
+            payload = _enrich_and_load(store_dir, briefs_dir, "TSLA", _BRIEF, bars)
 
         time_stops = [m for m in payload["markers"] if m["kind"] == "TIME_STOP"]
         self.assertEqual(len(time_stops), 1, "position-TTL must draw exactly one TIME_STOP marker")
@@ -1364,6 +1428,7 @@ class _BudgetDeadline:
 # 2026-06-16, matured 2026-07-23, sequence E1 -> TP1 (TP1 sold). These are the
 # exact levels the live store row carried.
 _FTRE_ARRIVAL = dt.date(2026, 6, 16)
+_FTRE_BRIEF = dt.date(2026, 6, 15)  # a Monday brief arrives Tuesday (#1416)
 _FTRE_MATURED = dt.date(2026, 7, 23)
 _FTRE_ENTRY = 15.988738606366711
 _FTRE_STOP = 10.855612341290005
@@ -1551,13 +1616,13 @@ class TestFreeTierAlwaysRebuiltPastDeadline(unittest.TestCase):
             }
             _write_terminal_store_row(
                 store_dir,
-                _FTRE_ARRIVAL,
+                _FTRE_BRIEF,
                 "FTRE",
                 terminal=True,
                 chart_payload=stale,
                 matured_at=_FTRE_MATURED,
             )
-            _write_brief(briefs_dir, _FTRE_ARRIVAL, "FTRE", _FTRE_SETUP)
+            _write_brief(briefs_dir, _FTRE_BRIEF, "FTRE", _FTRE_SETUP)
 
             ftre_bars = [
                 # Arrival session: dips to the entry limit (low <= 15.9887) -> E1 fills.
@@ -1586,7 +1651,7 @@ class TestFreeTierAlwaysRebuiltPastDeadline(unittest.TestCase):
                 deadline=_StubDeadline(stop=True),
             )
 
-            df = pd.read_parquet(store_dir / f"{_FTRE_ARRIVAL.isoformat()}.parquet")
+            df = pd.read_parquet(store_dir / f"{_FTRE_BRIEF.isoformat()}.parquet")
             payload = json.loads(df.set_index("ticker").loc["FTRE", "chart_payload_json"])
             self.assertEqual(payload["status"], "OK")
             self.assertEqual(daily_calls, [])  # marker core needs zero Polygon
@@ -1616,9 +1681,9 @@ class TestFreeTierAlwaysRebuiltPastDeadline(unittest.TestCase):
             }
             # Ongoing row so it is always reprocessed (not frozen).
             _write_terminal_store_row(
-                store_dir, _ARRIVAL, "OPEN", terminal=False, chart_payload=prior
+                store_dir, _BRIEF, "OPEN", terminal=False, chart_payload=prior
             )
-            _write_brief(briefs_dir, _ARRIVAL, "OPEN", _OK_SETUP)
+            _write_brief(briefs_dir, _BRIEF, "OPEN", _OK_SETUP)
 
             def bar_fetch(ticker, arrival_session):
                 return [
@@ -1637,7 +1702,7 @@ class TestFreeTierAlwaysRebuiltPastDeadline(unittest.TestCase):
                 exchange=_EXCHANGE,
                 deadline=_StubDeadline(stop=True),
             )
-            df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
+            df = pd.read_parquet(store_dir / f"{_BRIEF.isoformat()}.parquet")
             payload = json.loads(df.loc[0, "chart_payload_json"])
             self.assertEqual(payload["status"], "OK")
             self.assertEqual(payload.get("context"), "OK")
@@ -1652,7 +1717,7 @@ class TestFreeTierAlwaysRebuiltPastDeadline(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store_dir, briefs_dir = root / "population_ladders", root / "briefs"
-            d_old, d_new = _ARRIVAL, _NEXT_SESSION  # 2026-05-01 < 2026-05-04
+            d_old, d_new = _BRIEF, _ARRIVAL  # briefs 2026-04-30 < 2026-05-01 (#1416)
             _write_store_row(store_dir, d_old, "AAA")
             _write_store_row(store_dir, d_new, "BBB")
             _write_brief(briefs_dir, d_old, "AAA", _OK_SETUP)

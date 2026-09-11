@@ -82,7 +82,7 @@ from alphalens_pipeline.feedback.corporate_actions import (
     default_adjusted_closes_fetch,
     resolve_guard_disposition,
 )
-from alphalens_pipeline.feedback.ladder_config import ladder_config_version
+from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session, ladder_config_version
 from alphalens_pipeline.feedback.ladder_replay import (
     LadderOutcome,
     realized_r_full_fill,
@@ -93,7 +93,6 @@ from alphalens_pipeline.paper.brief_loader import CandidateBrief, load_brief
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
-    session_on_or_after,
     session_open_utc,
 )
 from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
@@ -130,6 +129,8 @@ _MAX_FETCHES_PER_RUN = 250
 # establishment. Drawn SEPARATELY from the main touch budget so a brief-inflow /
 # crash night cannot starve a long-quiet candidate's forced re-pricing. Total
 # nightly minute fetches are bounded by ``_MAX_FETCHES_PER_RUN + _FORCED_RESOLVE_BUDGET``.
+# Operator override: ALPHALENS_FEEDBACK_FORCED_BUDGET (a from-scratch store rebuild
+# makes every row brand-new, and brand-new rows draw only on this budget).
 _FORCED_RESOLVE_BUDGET = 50
 
 _FETCH_DEADLINE_S_DEFAULT = 75 * 60  # wall-clock budget, under TimeoutStartSec=90min
@@ -379,8 +380,12 @@ def _engine_cutoffs(
     are advanced via the exchange calendar, NOT naive ms. Returns
     ``(arrival_session, entry_expiry_session, position_expiry_session,
     entry_ttl_days, position_ttl_days, entry_expiry_ms, position_expiry_ms)``.
+
+    ``arrival_session`` is :func:`ladder_arrival_session` -- the first session
+    after the brief exists, never the brief's own session (#1416). It also keys
+    the bar cache, so every reader of the cache must take it from here.
     """
-    arrival_session = session_on_or_after(brief_date, exchange)
+    arrival_session = ladder_arrival_session(brief_date, exchange)
     entry_ttl_days = int(setup.get("order_ttl_days") or DEFAULT_ORDER_TTL_DAYS)
     position_ttl_days = TIME_STOP_DAYS
     entry_expiry_session = advance_trading_sessions(arrival_session, entry_ttl_days, exchange)
@@ -1257,7 +1262,9 @@ def replay_population_ladders(
     budget = _FetchBudget(
         int(os.environ.get("ALPHALENS_FEEDBACK_MAX_FETCHES", _MAX_FETCHES_PER_RUN))
     )
-    forced_budget = _FetchBudget(_FORCED_RESOLVE_BUDGET)
+    forced_budget = _FetchBudget(
+        int(os.environ.get("ALPHALENS_FEEDBACK_FORCED_BUDGET", _FORCED_RESOLVE_BUDGET))
+    )
     reports: list[PopulationMonitorReport] = []
     for offset in range(lookback_days + 1):  # inclusive both ends; newest -> oldest
         if deadline is not None and deadline.should_stop():

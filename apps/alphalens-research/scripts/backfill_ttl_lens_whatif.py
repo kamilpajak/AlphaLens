@@ -36,15 +36,15 @@ import datetime as dt
 import glob
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import pandas.testing as pdt
 from alphalens_pipeline.feedback.breakeven_lenses import BREAKEVEN_LENSES
+from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.feedback.ladder_replay import replay_ladder_breakeven
-from alphalens_pipeline.feedback.population_ladder_monitor import _rth_window_utc
+from alphalens_pipeline.feedback.population_ladder_monitor import _bars_cache_path, _rth_window_utc
 from alphalens_research.diagnostics.breakeven_backfill import (
     UNRESOLVABLE,
     apply_lens_key_backfill,
@@ -78,25 +78,16 @@ def _rth_session_aware(df: pd.DataFrame) -> pd.DataFrame:
     return df[keep]
 
 
-def _index_bar_files(bars_dir: Path) -> dict[str, list[tuple[str, str]]]:
-    by_ticker: dict[str, list[tuple[str, str]]] = {}
-    for p in glob.glob(str(bars_dir / "*.parquet")):
-        stem = os.path.basename(p)[:-8]
-        m = re.match(r"^(.+)_(\d{4}-\d{2}-\d{2})$", stem)
-        if m:
-            by_ticker.setdefault(m.group(1), []).append((m.group(2), p))
-    for entries in by_ticker.values():
-        entries.sort()
-    return by_ticker
+def _find_bars(bars_dir: Path, tk: str, bd: str) -> str | None:
+    """The monitor's own bar file for this brief: keyed by the ladder arrival (#1416).
 
-
-def _find_bars(by_ticker: dict[str, list[tuple[str, str]]], tk: str, bd: str) -> str | None:
-    """First bar file dated on-or-after the brief (the arrival-session cache key).
-
-    NO before-fallback: a missing window is a skip, never another brief's window.
+    An exact key, never a date search: a nearby file belongs to another brief's
+    window, and a missing file is a skip.
     """
-    ge = [p for d, p in by_ticker.get(tk, []) if d >= bd]
-    return ge[0] if ge else None
+    arrival = ladder_arrival_session(dt.date.fromisoformat(bd))
+    # The monitor's file NAME for the key, joined onto the --bars-dir given.
+    path = bars_dir / _bars_cache_path(bars_dir, tk, arrival).name
+    return str(path) if path.exists() else None
 
 
 def _load_setups(briefs_dir: Path) -> dict[tuple[str, str], dict]:
@@ -140,12 +131,11 @@ def main() -> None:
     args = ap.parse_args()
 
     setups = _load_setups(args.briefs_dir)
-    by_ticker = _index_bar_files(args.bars_dir)
     bars_cache: dict[str, list[dict] | None] = {}
     skipped = {"no_setup": 0, "no_bars": 0, "default_ttl_fallback": 0}
 
     def _bars(tk: str, bd: str) -> list[dict] | None:
-        bp = _find_bars(by_ticker, tk, bd)
+        bp = _find_bars(args.bars_dir, tk, bd)
         if bp is None:
             return None
         if bp not in bars_cache:

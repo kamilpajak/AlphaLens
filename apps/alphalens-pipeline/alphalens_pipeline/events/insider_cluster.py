@@ -9,8 +9,8 @@ research code — can run the live detection.
 Pure functions over pandas frames: leg qualification, cluster detection (the
 signal is the COMPLETION of the cluster — the filing of the second distinct
 insider), the arrival rule keyed on the EDGAR acceptance time, the brief-date
-mapping that makes the population monitor's ladder anchor coincide with the
-event arrival, and the fact-shaped catalyst text. The only I/O here is the
+mapping (``session_on_or_after(brief date)`` is the event arrival), and the
+fact-shaped catalyst text. The only I/O here is the
 cached acceptance-time fetch through an injected SEC client.
 """
 
@@ -234,9 +234,11 @@ def arrival_session(
 def event_brief_date(filed_date: dt.date, acceptance_et: dt.datetime | None) -> dt.date:
     """The brief date ``D`` an event row belongs to.
 
-    Chosen so that ``session_on_or_after(D) == arrival_session(filed_date, acceptance)``:
-    the population monitor anchors every ladder at ``session_on_or_after(brief_date)``,
-    so the event anchor and the ladder anchor coincide by construction. Accepted
+    Chosen so that ``session_on_or_after(D) == arrival_session(filed_date, acceptance)``,
+    the anchor of ``car_*_event``. The population monitor's LADDER does not start
+    there: it starts at the first session after brief ``D`` exists,
+    ``session_on_or_after(D + 1 day)`` -- the pre-registered reader anchor (#1416,
+    pre-registration deviation D1). Accepted
     before 09:00 ET on the filing date -> ``D = F``; otherwise ``D = F + 1``
     calendar day (a Friday after-close filing lands on the Saturday brief and
     arrives Monday; the Sunday and Monday briefs never claim it).

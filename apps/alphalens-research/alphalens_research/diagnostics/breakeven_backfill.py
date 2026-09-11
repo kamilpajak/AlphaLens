@@ -15,9 +15,9 @@ from collections.abc import Callable
 from typing import Any
 
 import pandas as pd
+from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.paper.calendar import (
     advance_trading_sessions,
-    session_on_or_after,
     session_open_utc,
 )
 
@@ -161,6 +161,6 @@ def entry_ttl_cutoff_ms(brief_date: dt.date, entry_ttl_days: int, exchange: str 
     must come from the ROW's stamped ``entry_ttl_days`` (the TTL actually applied
     when it froze), never from today's default constant.
     """
-    arrival = session_on_or_after(brief_date, exchange)
+    arrival = ladder_arrival_session(brief_date, exchange)
     expiry = advance_trading_sessions(arrival, int(entry_ttl_days), exchange)
     return int(session_open_utc(expiry, exchange).timestamp() * 1000)

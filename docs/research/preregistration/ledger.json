@@ -4749,7 +4749,7 @@
       },
       "registered_at": "2026-09-04",
       "status": "registered",
-      "notes": "Owner decision 2026-09-04: build as a candidate SOURCE with logging, not an automated strategy (epic #1293). Episode dedup 20 sessions as measured in stage 1 (supersedes the parent memo's 5-session line). Cohort keys: source, event_overlap, event_gate_version=insider_cluster_gate_v1, event_car_version=event-car-v1. Thematic aggregates exclude source != thematic from PR #1297 on; the flag is flipped ON only after #1297 is deployed.",
+      "notes": "Owner decision 2026-09-04: build as a candidate SOURCE with logging, not an automated strategy (epic #1293). Episode dedup 20 sessions as measured in stage 1 (supersedes the parent memo's 5-session line). Cohort keys: source, event_overlap, event_gate_version=insider_cluster_gate_v1, event_car_version=event-car-v1. Thematic aggregates exclude source != thematic from PR #1297 on; the flag is flipped ON only after #1297 is deployed. Deviation D1 (2026-09-11, #1416, memo section 13): the population monitor's ladder anchor moves to session_on_or_after(D + 1 day), the reader session, because brief D is built after session D closes; car_20_event / car_40_event / car_20_reader and every section 3-8 quantity are unchanged, only the section 9 descriptive ladder outputs move; 0 event rows were terminal and the look is not spent.",
       "outcome": {
         "accrual_start": "2026-09-05",
         "accrual_start_recorded_at": "2026-09-06",

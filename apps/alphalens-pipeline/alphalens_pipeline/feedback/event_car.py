@@ -5,8 +5,11 @@ outcome of the insider-cluster lane (``docs/research/insider_cluster_forward_pre
 section 6): the stock's OPEN(arrival) -> CLOSE(arrival + 19 / + 39 sessions)
 buy-and-hold return minus SPY's over the same window, beta = 1, with the split
 guard (every consecutive-close ratio inside [0.55, 1.8], else null). By the
-lane's brief-date rule the population monitor's ``session_on_or_after(brief_date)``
-IS the event arrival, so the anchor is derived from ``brief_date`` alone.
+lane's brief-date rule ``session_on_or_after(brief_date)`` IS the event arrival,
+so the anchor is derived from ``brief_date`` alone. This is NOT the population
+monitor's ladder arrival: the ladder starts at the first session after the brief
+exists, ``ladder_config.ladder_arrival_session`` (#1416, pre-registration
+deviation D1), which is the pre-registered reader anchor.
 
 Computed disk-first from the monitor's grouped-daily cache (raw ``adjusted=false``
 whole-market daily bars, one file per session, SPY included); a session the

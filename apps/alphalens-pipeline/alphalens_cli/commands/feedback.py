@@ -77,6 +77,15 @@ def backfill_shadow_returns_command(
         "--briefs-dir",
         help="Directory of daily thematic brief parquets (for the population replay).",
     ),
+    lookback_days: int | None = typer.Option(
+        None,
+        "--lookback-days",
+        min=0,
+        help=(
+            "Calendar days of brief dates to replay (default: the monitor's nightly "
+            "window, 75). Raise it for a one-off store rebuild that must reach older briefs."
+        ),
+    ),
 ) -> None:
     """Backfill the broker-free population-monitor outcomes.
 
@@ -91,10 +100,10 @@ def backfill_shadow_returns_command(
     # Population ladder monitor: the broker-free full-hold replay over EVERY brief
     # candidate. It uses its OWN ~42-session lookback (``MONITOR_LOOKBACK_DAYS``).
     # Never raises.
-    _refresh_population_ladders(briefs_dir)
+    _refresh_population_ladders(briefs_dir, lookback_days=lookback_days)
 
 
-def _refresh_population_ladders(briefs_dir: Path) -> None:
+def _refresh_population_ladders(briefs_dir: Path, *, lookback_days: int | None = None) -> None:
     """Run the broker-free POPULATION ladder monitor (PR-2). Never raises.
 
     Replays EVERY brief candidate's ladder to terminal over the monitor's OWN
@@ -140,7 +149,9 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
         deadline = _RunDeadline(max(total_s - reserve_s, 0.0))
         chart_deadline = _RunDeadline(total_s)
         reports = replay_population_ladders(
-            briefs_dir, lookback_days=MONITOR_LOOKBACK_DAYS, deadline=deadline
+            briefs_dir,
+            lookback_days=MONITOR_LOOKBACK_DAYS if lookback_days is None else lookback_days,
+            deadline=deadline,
         )
         terminal = sum(r.terminal for r in reports)
         ongoing = sum(r.ongoing for r in reports)

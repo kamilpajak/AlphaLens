@@ -128,9 +128,10 @@
 	// to a DOM node so the time-range subscription + ResizeObserver can update
 	// its left/width without a Svelte re-render (the chart owns its own RAF).
 	let shadeBand = $state<HTMLDivElement | undefined>(undefined);
-	// Vertical dashed "brief" line at the session the candidate appeared in its
-	// brief (snapped forward past non-trading days). Same overlay mechanism as
-	// the band: a bound DOM node repositioned in JS, no Svelte re-render.
+	// Vertical dashed "brief" line at the first session a reader of the brief
+	// could trade (the ladder arrival: the session after the brief date). Same
+	// overlay mechanism as the band: a bound DOM node repositioned in JS, no
+	// Svelte re-render.
 	let briefLine = $state<HTMLDivElement | undefined>(undefined);
 	const briefTime = $derived(briefLineTime(payload.bars, payload.brief_date));
 	// Set true only if the band overlay degraded (coordinate mapping failed); a

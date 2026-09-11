@@ -103,19 +103,19 @@ export function deeperEntryTierLines(markers: ChartMarker[]): EntryTierLine[] {
 	return lines;
 }
 
-/** The bar time anchoring the "brief" vertical line: the first bar at/after
- *  brief_date, i.e. the arrival session (session_on_or_after semantics), since
- *  a brief dated on a non-trading day snaps forward to the next session.
+/** The bar time anchoring the "brief" vertical line: the first bar strictly
+ *  AFTER brief_date, i.e. the ladder arrival session. A brief is built after its
+ *  own session closes, so the first session a reader can trade is the next one
+ *  (#1416); a brief dated on a non-trading day lands on the next session too.
  *  ISO YYYY-MM-DD strings compare correctly lexicographically. Assumes bars
  *  are chronological — the payload builder always emits them in session order.
- *  Null means "draw nothing" — no bars (NO_DATA) or the brief postdates every
- *  bar. */
+ *  Null means "draw nothing" — no bars (NO_DATA) or no bar after the brief. */
 export function briefLineTime(
 	bars: ChartBar[],
 	briefDate: string | null | undefined
 ): string | null {
 	if (!briefDate) return null;
-	return bars.find((b) => b.time >= briefDate)?.time ?? null;
+	return bars.find((b) => b.time > briefDate)?.time ?? null;
 }
 
 /** Sessions of pre-brief lead-in kept in the DISPLAYED window. The pipeline
