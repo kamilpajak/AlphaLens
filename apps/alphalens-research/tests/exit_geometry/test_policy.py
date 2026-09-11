@@ -86,6 +86,58 @@ class AtrBracketPolicyTest(unittest.TestCase):
         self.assertIsNone(self.p.decide_reanchor(0.0, 2.0))
 
 
+class AnAbsentAtrIsThePolicysOwnBusinessTest(unittest.TestCase):
+    """Whether a policy NEEDS an ATR is the policy's fact, not its caller's.
+
+    ``position_manager._maybe_trail`` refuses today on a missing / degenerate
+    ``plan.reanchor.atr`` before it ever calls in — so a pick armed without a
+    geometry stamp never trails, whatever policy is active. That guard is doing
+    two jobs at once: it enforces a real requirement of the ATR family, and it
+    also vetoes ``breakeven_trail``, which discards ``atr`` entirely. Issue
+    #1236 needs the second half gone, and the first half has to live somewhere
+    before it can be removed from the caller.
+
+    So ``decide_reanchor`` takes ``atr: float | None``: the ATR family refuses
+    cleanly on ``None``, and a policy that never reads it is undisturbed. Today
+    the ATR family RAISES ``TypeError`` on ``None`` — removing the caller's
+    veto first would turn a veto into a crash inside the protection pass.
+    """
+
+    def test_every_registered_policy_accepts_an_absent_atr_without_raising(self):
+        # Enumerated from the registry so a policy added later cannot quietly
+        # reintroduce the raise.
+        for key, policy in exit_policy_registry().items():
+            with self.subTest(key=key):
+                policy.decide_reanchor(100.0, None, peak=130.0, last_price=129.0, plan_stop=90.0)
+
+    def test_the_atr_family_refuses_an_absent_atr(self):
+        for key in ("atr_bracket_1p5", "trailing_atr"):
+            with self.subTest(key=key):
+                policy = resolve_exit_policy(key)
+                self.assertIsNone(
+                    policy.decide_reanchor(
+                        100.0, None, peak=130.0, last_price=129.0, plan_stop=90.0
+                    )
+                )
+
+    def test_a_policy_that_never_reads_the_atr_returns_the_same_target_without_one(self):
+        # The discriminator for the change: breakeven_trail's target is a
+        # function of (avg_price, peak, plan_stop) only, so an absent ATR must
+        # not change it. Numbers are the AMBA 2026-09-04 LIVE round trip
+        # (entry 59.00, disaster stop 55.00, session peak 62.78).
+        policy = resolve_exit_policy("breakeven_trail")
+        kwargs = {"peak": 62.78, "last_price": 62.40, "plan_stop": 55.00}
+        with_atr = policy.decide_reanchor(59.00, 0.4674, **kwargs)
+        without_atr = policy.decide_reanchor(59.00, None, **kwargs)
+        self.assertIsNotNone(with_atr)
+        self.assertEqual(with_atr, without_atr)
+
+    def test_the_inert_policy_still_refuses_either_way(self):
+        policy = resolve_exit_policy("setup_static")
+        self.assertIsNone(policy.decide_reanchor(100.0, 2.0))
+        self.assertIsNone(policy.decide_reanchor(100.0, None))
+
+
 class ResolveExitPolicyTest(unittest.TestCase):
     def test_known_names(self):
         self.assertIsInstance(resolve_exit_policy("setup_static"), SetupStaticPolicy)
