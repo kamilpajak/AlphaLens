@@ -74,9 +74,6 @@ class ExitPolicy(Protocol):
     def version(self) -> int: ...
 
     @property
-    def applies_geometry(self) -> bool: ...
-
-    @property
     def requires_amend_stop(self) -> bool: ...
 
     @property
@@ -109,7 +106,6 @@ class SetupStaticPolicy:
     name: str = "setup_static"
     geometry_name: str | None = None  # places no geometry at all
     version: int = 1
-    applies_geometry: bool = False
     requires_amend_stop: bool = False
     min_stop_distance_frac: float = 0.0
     trails: bool = False
@@ -138,7 +134,6 @@ class AtrBracketPolicy:
     # let this class report its geometry's name for months. The registry key is
     # the only honest source, so the construction site must state it.
     name: str = field(kw_only=True)
-    applies_geometry: bool = True
     requires_amend_stop: bool = True
     min_stop_distance_frac: float = 0.002  # hair-trigger floor; never binds 1.5x ATR
     trails: bool = False
@@ -190,7 +185,6 @@ class ReanchorOnFillPolicy:
     name: str = field(kw_only=True)
     geometry_name: str | None = None  # places no geometry at all
     version: int = 1
-    applies_geometry: bool = False
     requires_amend_stop: bool = True
     min_stop_distance_frac: float = 0.002
     trails: bool = False
@@ -229,7 +223,6 @@ class TrailingAtrPolicy:
     k_atr: float
     # Required and keyword-only — see AtrBracketPolicy.name.
     name: str = field(kw_only=True)
-    applies_geometry: bool = True
     requires_amend_stop: bool = True
     min_stop_distance_frac: float = 0.002  # hair-trigger floor; never binds 1.5x ATR
     trails: bool = True
@@ -271,9 +264,9 @@ class TrailingAtrPolicy:
 @dataclass(frozen=True)
 class BreakevenTrailPolicy:
     """Bot-amend break-even + fractional-giveback trailing stop — the live port
-    of the ``be_0p5r_trail0p6`` what-if lens. Places NO geometry
-    (``applies_geometry=False``): the brief's TP tranche ladder and the brief
-    disaster stop are journaled verbatim, so profit realizes through the
+    of the ``be_0p5r_trail0p6`` what-if lens. Manages ONLY the stop: since #1414
+    no policy decides what is PLACED, and a brief pick supplies no levels, so
+    its TP tranche ladder and its disaster stop are journaled verbatim and
     research TP levels while this policy manages ONLY the stop. 1R is the
     LENS risk unit — ``avg_price - plan_stop`` (filled blend minus the brief
     disaster floor), NOT an ATR multiple — and ``atr`` is ignored entirely
@@ -295,7 +288,6 @@ class BreakevenTrailPolicy:
     name: str = field(kw_only=True)
     geometry_name: str | None = None  # places no geometry at all
     version: int = 1
-    applies_geometry: bool = False
     requires_amend_stop: bool = True
     min_stop_distance_frac: float = 0.002
     trails: bool = True

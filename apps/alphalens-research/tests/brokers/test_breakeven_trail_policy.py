@@ -63,14 +63,13 @@ class TestBreakevenTrailPolicy(unittest.TestCase):
         p = self._policy()
         self.assertEqual(p.name, "breakeven_trail")
         self.assertIsNone(p.geometry_name)
-        self.assertFalse(p.applies_geometry)
         self.assertTrue(p.requires_amend_stop)
         self.assertTrue(p.trails)
         self.assertGreater(p.min_stop_distance_frac, 0.0)
 
     def test_places_no_geometry(self):
-        # applies_geometry=False is what keeps the brief's TP ladder and the
-        # brief disaster stop journaled verbatim; the policy places nothing.
+        # Since #1414 no policy decides what is placed; this one answers None
+        # to the placement question it is still asked by the research replay.
         self.assertIsNone(self._policy().decide_placement_geometry(100.0, 2.0, ceiling_price=None))
 
     def test_dark_without_plan_stop(self):
@@ -140,7 +139,6 @@ class TestBreakevenTrailPolicy(unittest.TestCase):
         self.assertIsNone(pol.geometry_name)
         self.assertTrue(pol.trails)
         self.assertTrue(pol.requires_amend_stop)
-        self.assertFalse(pol.applies_geometry)
         self.assertEqual(pol.activation_r, 0.5)
         self.assertEqual(pol.trail_frac, 0.6)
 

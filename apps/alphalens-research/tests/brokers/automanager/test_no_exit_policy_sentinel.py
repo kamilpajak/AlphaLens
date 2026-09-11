@@ -10,8 +10,9 @@ cached on ``LoopDeps``/``ProtectionView`` at startup
 
 1. NO STRING SENTINEL in the exit-policy decision paths — the per-tick
    protection/placement code must never compare a raw string against
-   ``"setup_static"``; it must dispatch on the cached ``ExitPolicy`` object
-   (``exit_policy.applies_geometry`` / ``exit_policy.decide_reanchor(...)``).
+   ``"setup_static"``. It dispatches on an object: the document's own
+   ``initial_levels`` for placement (#1414) and the declared policy's
+   ``decide_reanchor(...)`` for stop management (#1236).
 2. NO HOT-PATH RESOLVE — ``resolve_exit_policy(...)``/``_exit_policy()`` (the
    registry lookup + raw env read) must never be CALLED from the per-tick
    protection or placement-journal code; the only allowed resolve site is
@@ -30,10 +31,10 @@ import textwrap
 import unittest
 
 from alphalens_pipeline.brokers.automanager.control_loop import (
-    _geometry_shadow_stamp,
     _journal_tranche_plan,
     _journal_tranche_plan_core,
     _place_tiers,
+    _placed_geometry_stamp,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (
     _maybe_reanchor,
@@ -78,13 +79,15 @@ _SENTINEL_TOKEN = "setup_static"
 # scan each one too, or the guard silently shrinks every time a block is
 # extracted out of the placement path.
 _PLACEMENT_JOURNAL_HELPERS = (
-    _geometry_shadow_stamp,
+    _placed_geometry_stamp,
     _journal_tranche_plan,
     _journal_tranche_plan_core,
 )
 
-# The registry-resolve call sites. ``build_default_deps`` (startup, NOT
-# scanned here) is the one allowed resolve site.
+# The registry-resolve call sites. ``build_default_deps`` (startup, NOT scanned
+# here) is the one allowed resolve site on the daemon side, and #1414 is taking
+# even that away: placement is the document's own answer now, so nothing in the
+# placement path has a policy to resolve.
 _HOT_PATH_RESOLVE_CALL = "resolve_exit_policy("
 _HOT_PATH_RAW_ENV_READ_CALL = "_exit_policy()"
 
@@ -106,7 +109,7 @@ class NoExitPolicySentinelSurvivesTheRefactor(unittest.TestCase):
             msg=(
                 "control_loop._place_tiers (which encloses the nested "
                 "_journal_tier) must dispatch placement geometry via the "
-                "cached ExitPolicy (exit_policy.applies_geometry), never via "
+                "document (exit_spec.initial_levels), never via "
                 'a raw `_exit_policy() != "setup_static"` / `== "setup_static"` '
                 "env-sentinel comparison in EXECUTABLE code — adversarial-review "
                 "guard, Task 6."

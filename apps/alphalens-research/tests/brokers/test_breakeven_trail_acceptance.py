@@ -365,7 +365,6 @@ class TestBuildDefaultDepsFlagPath(unittest.TestCase):
         self.assertEqual(deps.exit_policy.name, "breakeven_trail")
         self.assertIsNone(deps.exit_policy.geometry_name)
         self.assertTrue(deps.exit_policy.trails)
-        self.assertFalse(deps.exit_policy.applies_geometry)
 
     def test_incapable_broker_fails_fast(self) -> None:
         incapable = _StopOnlyBroker()

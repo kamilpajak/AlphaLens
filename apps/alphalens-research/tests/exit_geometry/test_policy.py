@@ -57,7 +57,6 @@ class SetupStaticPolicyTest(unittest.TestCase):
     def test_is_inert(self):
         p = SetupStaticPolicy()
         self.assertEqual(p.name, "setup_static")
-        self.assertFalse(p.applies_geometry)
         self.assertFalse(p.requires_amend_stop)
         self.assertIsNone(p.decide_placement_geometry(100.0, 2.0, ceiling_price=None))
         self.assertIsNone(p.decide_reanchor(100.0, 2.0))
@@ -69,7 +68,6 @@ class AtrBracketPolicyTest(unittest.TestCase):
 
     def test_flags(self):
         self.assertEqual(self.p.name, "atr_bracket_1p5")
-        self.assertTrue(self.p.applies_geometry)
         self.assertTrue(self.p.requires_amend_stop)
         self.assertGreater(self.p.min_stop_distance_frac, 0.0)
 
