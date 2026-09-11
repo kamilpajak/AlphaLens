@@ -1996,7 +1996,7 @@ def arm_command(
     from alphalens_pipeline.brokers.automanager.picks import arm_pick
     from alphalens_pipeline.brokers.journal import JournalWriteError
     from alphalens_pipeline.paper.brief_loader import load_brief
-    from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, parse_brief_to_spec
+    from alphalens_pipeline.paper.sizing import build_exit_declaration, parse_brief_to_spec
     from broker_contract.sizing import TradeSetupNotPlannableError
     from broker_contract.trade_intent.schema import InstrumentHint, IntentMeta, TradeIntent
 
@@ -2032,9 +2032,7 @@ def arm_command(
     except TradeSetupNotPlannableError as exc:
         raise _fail(f"{wanted}: trade_setup not plannable — {exc}") from exc
 
-    exit_spec = build_exit_geometry_spec(
-        candidate.trade_setup, candidate.technical_pct_off_52w_high
-    )
+    exit_spec = build_exit_declaration()
 
     intent = TradeIntent(
         intent_id=f"{wanted}:{trade_date.isoformat()}",

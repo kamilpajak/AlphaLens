@@ -23,8 +23,7 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from broker_contract.exit_geometry import AtrBracketPolicy, resolve_exit_policy
-from broker_contract.exit_geometry.levels import ceiling_from_52w_high
+from broker_contract.exit_geometry import resolve_exit_policy
 from broker_contract.exit_geometry.policy import BreakevenTrailPolicy
 from broker_contract.sizing import (
     TradeSetupNotPlannableError,
@@ -34,7 +33,6 @@ from broker_contract.sizing import (
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     ExitGeometrySpec,
-    InitialLevels,
     TpTrancheSpec,
     TradeSpec,
     TrailingStop,
@@ -231,121 +229,44 @@ def _deployed_trail() -> BreakevenTrailPolicy:
     return policy
 
 
-def build_exit_geometry_spec(
-    brief_trade_setup: dict, pct_off_52w_high: float | None = None
-) -> ExitGeometrySpec | None:
-    """Build the ``atr_bracket_1p5`` exit-geometry spec for one brief trade setup.
+def build_exit_declaration() -> ExitGeometrySpec:
+    """What a brief pick DECLARES about its exit (#1414).
 
-    The client-precomputed levels for the (currently dark) exit-geometry
-    override at placement (broker-manager extraction memo section 4.1 / 4.3).
-    Reads the SAME setup dict as
-    :func:`alphalens_pipeline.feedback.ladder_replay.replay_ladder_atr_bracket`
-    (the ``/edge`` what-if replay) for the anchor FACTS -- ATR is
-    ``brief_trade_setup["atr"]`` (the identical brief key the replay leaf reads)
-    and the 52w ceiling comes from the identical
-    :func:`~broker_contract.exit_geometry.levels.ceiling_from_52w_high` leaf.
+    A declaration and nothing else: how the stop is to be MANAGED after fill,
+    with no ``initial_levels``. Since #1414 the presence of levels is the whole
+    placement instruction — supply them and they are placed, omit them and the
+    brief's own ladder is. This path omits them, which is what it has effectively
+    done all along: it used to compute an ATR bracket that the deployed policy
+    (``applies_geometry=False``) journaled and never placed, so the document said
+    one thing and the broker saw another.
 
-    LIVE AND THE REPLAY NO LONGER AGREE ON THE TAKE-PROFIT (issue #1112 step 3,
-    the clamp below): live raises the target to the brief's own first tranche
-    when the ATR bracket lands under it; the replay lens does not, on purpose,
-    because clamping there would rewrite the historical what-if series issues
-    #1114 / #1115 measure against. So an ``/edge`` ``atr_bracket_1p5`` what-if
-    figure is NOT a prediction of what live will do on the take-profit side.
-    The stop and the anchor blend match ONLY when every entry tier fills: the
-    replay lens takes its anchor as an explicit argument since issue #1114, and
-    on a partial fill ``anchor="realised"`` (the historical ``atr_bracket_1p5``
-    lens) blends only the tiers that touched, so both the anchor AND the stop
-    derived from it diverge -- on SMG, 59.786017 vs 55.5957 on the blend and
-    55.754017 vs 51.5637 on the stop. ``anchor="planned"`` is the mode that
-    mirrors this builder; it is registered as ``atr_bracket_1p5_planned``.
-    Pinned by ``test_exit_geometry_spec.py
-    ::test_multi_tier_blend_and_stop_match_replay_but_the_take_profit_does_not``
-    (every tier fills) and by
-    ``tests/feedback/test_atr_bracket_anchor_mode.py`` (partial fill).
+    Takes no arguments, which is the point rather than an oversight. The trail is
+    read off the registry (``_deployed_trail``) instead of retyped, so the
+    declaration cannot drift from the policy an operator reads in a log line, and
+    it does not vary per brief: every brief pick runs the same stop management.
+    The old builder returned ``None`` when the ATR was missing or the bracket was
+    degenerate; there is no bracket left to fail to build, and declining to say
+    how a stop is managed because a geometry we do not place could not be
+    computed was never coherent. Measured before the change: over the 45 sessions
+    to 2026-09-10, 287 of 287 plannable candidates had a usable ATR, so no live
+    pick took that branch.
 
-    ``pct_off_52w_high`` is deliberately NOT read off ``brief_trade_setup``
-    (it is a sibling column on the candidate/brief row, e.g.
-    ``CandidateBrief.technical_pct_off_52w_high`` in ``paper/brief_loader.py``,
-    never a key inside the ``trade_setup`` JSON blob itself -- confirmed against
-    ``population_ladder_monitor.py``'s ``_replay_candidate`` call site, which
-    threads it as a SEPARATE kwarg). Callers pass it in explicitly. This is
-    exactly the "planned-vs-realized BLEND anchor" divergence the memo elevates
-    to a P0 blocker (section 4.3) -- fixed by the PR-6b ``avg_price`` re-anchor,
-    NOT by this function; :func:`~alphalens_pipeline.brokers.automanager.
-    control_loop.build_default_deps`'s fail-fast guard keeps the flag from
-    flipping live before that ships.
-
-    Returns ``None`` (never raises) when there are no usable entry tiers, the
-    ATR is missing / non-finite / non-positive, or the bracket is not
-    constructible (degenerate ceiling, non-positive bracket stop) -- the same
-    degenerate-input contract as :func:`~broker_contract.exit_geometry.
-    levels.atr_bracket_levels`.
+    The ceiling and the never-below-brief-TP1 clamp went with the bracket. They
+    survive where they are still read: the ``/edge`` what-if lens
+    (``feedback/ladder_replay``) and the research replay
+    (``alphalens_research.diagnostics.exit_policy_replay``), both through the
+    shared ``atr_bracket_levels`` leaf.
     """
-    blended = planned_blended_entry(brief_trade_setup)
-    if blended is None:
-        return None
-    raw_atr = brief_trade_setup.get("atr") if hasattr(brief_trade_setup, "get") else None
-    try:
-        atr = float(raw_atr) if raw_atr is not None else None
-    except (TypeError, ValueError):
-        atr = None
-    if atr is None:
-        return None
-    ceiling = ceiling_from_52w_high(brief_trade_setup, pct_off_52w_high)
-    exit_policy = resolve_exit_policy("atr_bracket_1p5")
-    assert isinstance(exit_policy, AtrBracketPolicy)  # this builder handles only the ATR bracket
-    levels = exit_policy.decide_placement_geometry(blended, atr, ceiling_price=ceiling)
-    if levels is None:
-        return None
-    stop, tp = levels
-    # NEVER BELOW THE BRIEF'S OWN FIRST TAKE-PROFIT (issue #1112 step 3) — the
-    # take-profit-side mirror of the never-below-brief-floor rule
-    # ``clamp_reanchor_target`` enforces on the stop side. On 2026-08-24 the
-    # SMG policy target (blend + 1.5*ATR = 59.6277) landed BELOW the top entry
-    # tier (59.786017) and far below the brief's own first tranche (65.25), so
-    # the fill was past its take-profit the moment it happened.
-    #
-    # This is a FLOOR, never a cap (max, not min): a policy target above the
-    # first tranche is left alone. It also outranks the 52w ceiling applied
-    # inside ``atr_bracket_levels`` — the brief tranche is a level the research
-    # committed to, the ceiling is a do-not-chase heuristic.
-    #
-    # Deliberately NOT pushed down into ``atr_bracket_levels``: that leaf is
-    # shared with the ``/edge`` replay lens and ``feedback/ladder_replay``, and
-    # clamping there would silently rewrite historical what-if measurements.
-    first_target = first_brief_tp_target(brief_trade_setup)
-    if first_target is not None:
-        tp = max(tp, first_target)
+    trail = _deployed_trail()
     return ExitGeometrySpec(
-        initial_levels=InitialLevels(stop=stop, tp=tp),
-        # #1236: the document DECLARES how it wants its stop managed, and what it
-        # declares is what actually runs. It used to declare ``ReanchorOnFill``
-        # while the daemon did whatever ``ALPHALENS_BROKER_EXIT_POLICY`` said —
-        # since 2026-08-27 the break-even trail — so the document described one
-        # thing and the executor did another.
-        #
-        # The parameters are the deployed ones, read off the registry rather than
-        # retyped, so the declaration and the policy cannot drift apart silently.
-        # Changing the trail is now a change here plus a deploy, not an env flip:
-        # that is the rollback path recorded in
-        # ``breakeven_trail_live_policy_design_2026_08_27.md``, and the LIVE unit
-        # file says so.
-        #
-        # ``ceiling`` is NOT declared. It caps the take-profit, so it is a
-        # placement instruction, and this contract does not yet carry one — the
-        # door refuses a field it would discard. It is still applied, to the
-        # levels above.
         reaction_plan=(
-            TrailingStop(
-                arm_trigger_r=_deployed_trail().activation_r,
-                trail_frac=_deployed_trail().trail_frac,
-            ),
+            TrailingStop(arm_trigger_r=trail.activation_r, trail_frac=trail.trail_frac),
         ),
     )
 
 
 __all__ = [
-    "build_exit_geometry_spec",
+    "build_exit_declaration",
     "first_brief_tp_target",
     "parse_brief_to_spec",
     "planned_blended_entry",

@@ -17,8 +17,10 @@ import unittest
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager.control_loop import _geometry_shadow_stamp
-from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, parse_brief_to_spec
+from alphalens_pipeline.paper.sizing import parse_brief_to_spec
+from alphalens_research.diagnostics.exit_policy_replay import arm_b_initial_levels
 from broker_contract.exit_geometry.registry import resolve_exit_policy, resolve_policy
+from broker_contract.trade_intent.schema import ExitGeometrySpec, InitialLevels
 
 from tests.incident_1112_fixture import SMG_PLANNED_BLEND, smg_brief_trade_setup
 
@@ -31,8 +33,13 @@ _EXPECTED_TP_FLOOR_FRAC = 0.006
 class TestGeometryStampNamesItsAnchor(unittest.TestCase):
     def setUp(self) -> None:
         setup = smg_brief_trade_setup()
-        self.exit_spec = build_exit_geometry_spec(setup)
-        assert self.exit_spec is not None
+        # #1414 removed the live bracket builder; the research composition it
+        # mirrored is what still produces these levels.
+        levels = arm_b_initial_levels(setup, pct_off_52w_high=None)
+        assert levels is not None
+        self.exit_spec = ExitGeometrySpec(
+            initial_levels=InitialLevels(stop=levels.stop, tp=levels.tp)
+        )
         self.spec = parse_brief_to_spec(setup)
 
     def _stamp(self, exit_policy_key: str = "atr_bracket_1p5") -> dict:
@@ -132,8 +139,13 @@ class TestTheStampNamesTheBehaviouralPolicy(unittest.TestCase):
 
     def setUp(self) -> None:
         setup = smg_brief_trade_setup()
-        self.exit_spec = build_exit_geometry_spec(setup)
-        assert self.exit_spec is not None
+        # #1414 removed the live bracket builder; the research composition it
+        # mirrored is what still produces these levels.
+        levels = arm_b_initial_levels(setup, pct_off_52w_high=None)
+        assert levels is not None
+        self.exit_spec = ExitGeometrySpec(
+            initial_levels=InitialLevels(stop=levels.stop, tp=levels.tp)
+        )
         self.spec = parse_brief_to_spec(setup)
 
     def _stamp(self, key: str) -> dict:

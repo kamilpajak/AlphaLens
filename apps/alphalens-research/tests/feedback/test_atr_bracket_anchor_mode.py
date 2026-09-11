@@ -22,7 +22,7 @@ from alphalens_pipeline.feedback.ladder_replay import (
     atr_bracket_anchor,
     replay_ladder_atr_bracket,
 )
-from alphalens_pipeline.paper.sizing import build_exit_geometry_spec
+from alphalens_research.diagnostics.exit_policy_replay import arm_b_initial_levels
 from broker_contract.exit_geometry.levels import atr_bracket_levels
 
 from tests.incident_1112_fixture import (
@@ -114,21 +114,23 @@ class TestSmgAnchorsAreTheMeasuredIncidentNumbers(unittest.TestCase):
         self.assertAlmostEqual(tp, SMG_GEOMETRY_TP, places=9)
         self.assertAlmostEqual(stop, SMG_GEOMETRY_STOP, places=9)
 
-    def test_the_planned_anchor_equals_what_the_live_builder_places_against(self):
-        # The planned mode must CALL production's own blend, not re-implement it,
-        # so the lens and the money rail cannot drift apart again.
-        spec = build_exit_geometry_spec(smg_brief_trade_setup())
-        assert spec is not None
+    def test_the_planned_anchor_equals_what_the_clamped_arm_places_against(self):
+        # The planned mode must CALL the shared blend, not re-implement it, so
+        # the two lenses cannot drift apart again. Until #1414 the comparison
+        # ran against the LIVE builder; that builder no longer computes a
+        # bracket, so the clamped research arm is the counterpart now.
+        levels = arm_b_initial_levels(smg_brief_trade_setup(), pct_off_52w_high=None)
+        assert levels is not None
         anchor = atr_bracket_anchor(
             smg_brief_trade_setup(), _SMG_TOP_TIER_ONLY_BARS, anchor="planned"
         )
         assert anchor is not None
         _, tp = _bracket(anchor)
-        self.assertAlmostEqual(spec.initial_levels.stop, _bracket(anchor)[0], places=9)
+        self.assertAlmostEqual(levels.stop, _bracket(anchor)[0], places=9)
         # The take-profit deliberately does NOT match: #1112 step 3 clamps the
-        # live target up to the brief's own first tranche (65.25) and the lens
-        # does not. The STOP and the ANCHOR are what must agree.
-        self.assertGreater(spec.initial_levels.tp, tp)
+        # target up to the brief's own first tranche (65.25) and this lens does
+        # not. The STOP and the ANCHOR are what must agree.
+        self.assertGreater(levels.tp, tp)
 
     def test_the_realised_anchor_is_the_touched_tier_limit_not_the_broker_fill(self):
         anchor = atr_bracket_anchor(
@@ -447,9 +449,9 @@ class TestTheTakeProfitFloorIsTheSameLeafOnBothSides(unittest.TestCase):
     _EXPECTED_FLOOR_TP = 100.6
 
     def test_a_binding_floor_produces_the_identical_target_live_and_in_the_planned_lens(self):
-        spec = build_exit_geometry_spec(dict(self._FLOOR_BINDING_SETUP))
-        assert spec is not None
-        self.assertAlmostEqual(spec.initial_levels.tp, self._EXPECTED_FLOOR_TP, places=9)
+        levels = arm_b_initial_levels(dict(self._FLOOR_BINDING_SETUP), pct_off_52w_high=None)
+        assert levels is not None
+        self.assertAlmostEqual(levels.tp, self._EXPECTED_FLOOR_TP, places=9)
 
         bars = [_bar(1, 99.0, 100.2, 100.0)]
         anchor = atr_bracket_anchor(dict(self._FLOOR_BINDING_SETUP), bars, anchor="planned")
