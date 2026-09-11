@@ -206,7 +206,7 @@ validated as it arrives, not after reconstruction — validating the decoded
 object would mostly re-assert that the decoder built what its own types say.
 The journal drain is a different entry point and is deliberately not
 schema-gated, which is why the schema knows nothing about `meta.brief_date`: the
-codec migrates that pre-#1290 key so old journal lines still replay, while a new
+codec migrates that pre-#1252 key so old journal lines still replay, while a new
 producer must send `trade_date`. That gap is a decision, pinned by a test.
 
 **Identity, because a retry depends on it.** The queue folds picks on
