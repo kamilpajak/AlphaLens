@@ -156,3 +156,44 @@ Exit statuses stay coarse — the domain detail is in `code`:
 | `2` | `usage` |
 | `4` | `stream_metrics_missing` |
 | `7` | any `retryable` code |
+
+## The document schema (#1405)
+
+The wire shape of a `TradeIntent` is published as JSON Schema at
+[`docs/trade-intent-v2.schema.json`](docs/trade-intent-v2.schema.json). It is
+**generated** from `broker_contract/trade_intent/schema.py`, never hand-edited,
+and CI fails when the committed file and a fresh generation disagree:
+
+```
+python -m broker_contract.trade_intent.json_schema --write
+```
+
+Four things the file cannot say about itself.
+
+**It pins shape, not acceptability.** Closed vocabularies (`side`, `entry_mode`,
+each reaction `kind`), required fields, types and nullability live in the
+schema; the rules that need arithmetic or cross-field reasoning — allocations
+summing to 100, a stop below every entry rung, a take-profit above the blend,
+NaN — live in `validate_intent` and report as `intent_invalid`. One rule has one
+owner, so **schema-valid does not mean accepted**. The two halves are one
+contract, read them together.
+
+**It describes the door, checked on the wire, before decoding.** A document is
+validated as it arrives, not after reconstruction — validating the decoded
+object would mostly re-assert that the decoder built what its own types say.
+The journal drain is a different entry point and is deliberately not
+schema-gated, which is why the schema knows nothing about `meta.brief_date`: the
+codec migrates that pre-#1290 key so old journal lines still replay, while a new
+producer must send `trade_date`. That gap is a decision, pinned by a test.
+
+**Identity, because a retry depends on it.** The queue folds picks on
+`(ticker, trade_date, generation)` and keeps the LATEST, so re-submitting a pick
+**replaces** it rather than adding a second one. `generation` is assigned by the
+receiving side (`1 +` the highest already queued for that ticker and date); a
+document that omits it is generation 1.
+
+**Which `schema_version` to read.** `meta.schema_version` is the document's
+version. `spec.schema_version` is the same constant duplicated in a second
+class, not an independent dial. Older versions are accepted — only an unknown
+future one would be refused — and within a major version fields are only ever
+ADDED, and always optional.
