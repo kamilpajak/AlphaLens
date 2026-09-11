@@ -61,6 +61,9 @@ breaking change, so `unclassified` must never be a branch condition. Read it as
 | `live_refused` | CLI | no | A LIVE operation was refused: ad-hoc placement on LIVE is forbidden (ADR 0017), or the LIVE rails / auth surface are absent. |
 | `state_layout` | CLI | no | Durable broker state is still in the pre-migration flat layout (ADR 0016 D4). |
 | `pick_already_armed` | CLI | no | A live earlier generation of this (ticker, trade date) is still armed. Carries a `suggestions` argv. |
+| `pick_not_writable` | CLI | no | This pick key cannot take a write: the generation was disarmed or refused, or the daemon has already placed it. `details.reason` is `generation_spent` or `already_placed`. Carries a `suggestions` argv. |
+| `intent_malformed` | CLI | no | The submitted document does not match the published wire contract. `details.reason` names which gate refused it (see below). Nothing was queued. |
+| `venue_unsupported` | CLI | no | The document is well formed; this deployment does not trade that MIC. `details.mic` carries the venue. A venue list is deployment knowledge, never a document rule (#1122, #1404). |
 | `policy_refused` | CLI | no | A safety policy refused the operation (gross guard, FX divergence, unverifiable instrument currency, a resting order in the way). |
 | `stream_metrics_missing` | CLI | no | The stream gauge textfile does not exist for this instance. Carries a `suggestions` argv. |
 | `unclassified` | CLI | no | Not yet given a code. Never branch on it. |
@@ -85,6 +88,26 @@ are part of the contract:
 `message` carries the FIRST violation in the published order — identity, entry
 ladder, stop, size, take-profits, exit declaration — so the operator's text is
 stable while a machine reads the whole list.
+
+#### `intent_malformed` and `pick_not_writable` publish a `reason` too
+
+Same shape, same reason: one code per failure MODE, with a closed `details.reason`
+vocabulary naming which rule inside it broke. Three codes cover the three
+questions a submitted document has to answer — is it the right SHAPE
+(`intent_malformed`), is it COHERENT (`intent_invalid`), and will this
+deployment take it (`venue_unsupported`, `pick_not_writable`).
+
+| code | `details.reason` | what the submitter did |
+|---|---|---|
+| `intent_malformed` | `not_json` | the bytes are not a JSON document |
+| | `duplicate_key` | an object repeats a key; `json` parsers keep the LAST silently, so the value you sent first would vanish |
+| | `envelope_unknown` | a top-level `schema` that this door does not publish, or one with no `intent` inside |
+| | `schema_version_unsupported` | `meta.schema_version` is not the version this door speaks |
+| | `schema_violation` | the document fails the published JSON Schema; `details.path` locates it |
+| | `undecodable` | the shape passes but the decoder refuses it (e.g. `generation: 1.0` — JSON Schema calls that an integer, identity strings cannot) |
+| | `key_discarded` | a key the decoder would DROP, so the arm would not carry what you sent; `details.paths` lists them |
+| `pick_not_writable` | `generation_spent` | that generation was disarmed or refused; a spent generation never comes back |
+| | `already_placed` | the daemon has already placed this pick, so rewriting it would change the queue and not the market |
 
 #### The exit declaration, and what it may say
 

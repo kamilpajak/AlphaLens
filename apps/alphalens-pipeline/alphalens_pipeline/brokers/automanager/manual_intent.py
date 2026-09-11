@@ -116,6 +116,32 @@ class ManualIntentError(ValueError):
         self.failure = failure
 
 
+class UnsupportedVenueError(ManualIntentError):
+    """The MIC names a venue this deployment does not trade.
+
+    Its own class, not a message to match, because the CLI classifies by
+    exception type: this is ``venue_unsupported`` while every other compile
+    failure is ``intent_invalid``. The distinction is real — the document is
+    well formed and the DEPLOYMENT is the thing that cannot take it, which is
+    also why the venue list stayed out of ``validate_intent`` (#1404, and the
+    #1122 rule that the adapter reports while the contract never decides).
+    """
+
+
+def ensure_supported_venue(mic: str) -> None:
+    """Refuse a venue outside :data:`SUPPORTED_MICS`.
+
+    Split out of :func:`build_manual_intent` so the raw-intent door (#1406)
+    applies the identical rule and the identical message without copying the
+    list — the door receives a compiled document and never calls the builder.
+    """
+    if mic not in SUPPORTED_MICS:
+        raise UnsupportedVenueError(
+            f"MIC {mic!r} is not supported (supported: {', '.join(SUPPORTED_MICS)}; "
+            "XAMS awaits its own validation arc, #1238)"
+        )
+
+
 # Immediate-entry tier prefix (#1247): ``now@<cap>[:alloc_pct]``. The cap is
 # the operator's max acceptable fill — the daemon places a capped LIMIT at
 # drain instead of a resting pullback rung.
@@ -332,11 +358,7 @@ def build_manual_intent(
     would join to the retired generation's submission and skip.
     """
     ticker = ticker.strip().upper()
-    if mic not in SUPPORTED_MICS:
-        raise ManualIntentError(
-            f"MIC {mic!r} is not supported (supported: {', '.join(SUPPORTED_MICS)}; "
-            "XAMS awaits its own validation arc, #1238)"
-        )
+    ensure_supported_venue(mic)
     if stop <= 0:
         raise ManualIntentError(f"stop must be positive, got {stop:g}")
     if no_tp and tps_raw:

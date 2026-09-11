@@ -196,6 +196,36 @@ _CLI_FAILURE_CODES: Mapping[str, FailureCode] = {
             needs_suggestion=True,
         ),
         FailureCode(
+            name="pick_not_writable",
+            retryable=False,
+            meaning=(
+                "This pick key cannot take a write: the generation was disarmed or "
+                "refused (a spent generation never comes back), or the daemon has "
+                "already placed it, so a replacement would change the queue and not "
+                "the market. `details.reason` names which."
+            ),
+            needs_suggestion=True,
+        ),
+        FailureCode(
+            name="intent_malformed",
+            retryable=False,
+            meaning=(
+                "The submitted document does not match the published wire contract: "
+                "not JSON, a duplicate key, an unknown envelope, an unsupported "
+                "schema_version, a schema violation, undecodable, or carrying a key "
+                "the decoder would discard. `details.reason` names which."
+            ),
+        ),
+        FailureCode(
+            name="venue_unsupported",
+            retryable=False,
+            meaning=(
+                "The document is well formed; this deployment does not trade that "
+                "MIC. A venue list is broker-deployment knowledge, so it is never a "
+                "document rule (#1122, #1404)."
+            ),
+        ),
+        FailureCode(
             name="policy_refused",
             retryable=False,
             meaning=(
@@ -251,6 +281,12 @@ _SUGGESTIONS_BY_CODE: Mapping[str, tuple[Suggestion, ...]] = {
         Suggestion(
             argv=("alphalens", "broker", "picks", "--format", "json"),
             why="read which generation is still armed, then disarm it before re-arming",
+        ),
+    ),
+    "pick_not_writable": (
+        Suggestion(
+            argv=("alphalens", "broker", "picks", "--format", "json"),
+            why="read the state of this (ticker, date, generation) before rewriting it",
         ),
     ),
     "stream_metrics_missing": (
@@ -2137,6 +2173,7 @@ def arm_manual_command(
 
     from alphalens_pipeline.brokers.automanager.manual_intent import (
         ManualIntentError,
+        UnsupportedVenueError,
         build_manual_intent,
         planned_blended_entry_of,
     )
@@ -2193,6 +2230,12 @@ def arm_manual_command(
             armed_ts=now.isoformat(timespec="seconds"),
             generation=generation,
         )
+    except UnsupportedVenueError as exc:
+        # BEFORE the general clause: a venue this deployment does not trade is
+        # not a complaint about the document (#1406). It used to report
+        # `intent_invalid` with empty details, so a machine had nothing to
+        # branch on for the one refusal whose fix is "pick another venue".
+        raise _fail_with("venue_unsupported", str(exc), details={"mic": mic}) from exc
     except ManualIntentError as exc:
         # `details` carries the contract's `reason` (plus a tier/tranche index
         # for an element-wise rule) so a machine consumer branches on a stable
