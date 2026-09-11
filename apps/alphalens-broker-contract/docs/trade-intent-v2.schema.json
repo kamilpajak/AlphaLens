@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:alphalens:contract:trade-intent:2",
+  "title": "TradeIntent",
+  "description": "One client-armed pick handed to the broker-manager. Generated from broker_contract.trade_intent.schema — edit the dataclasses, never this file. The schema pins SHAPE; a schema-valid document can still be refused by the door's semantic rules (see intent_invalid in the package README). Within a major version only optional fields are added: a field is never renamed, retyped, or given a new unit. NOTE: no gate reads schema_version today — it is stamped and carried, and a document declaring any version decodes, so treat it as provenance rather than as version negotiation.",
+  "type": "object",
+  "properties": {
+    "intent_id": {
+      "type": "string",
+      "description": "Client-authored idempotency key."
+    },
+    "instrument": {
+      "$ref": "#/$defs/InstrumentHint",
+      "description": "What is being traded, and where."
+    },
+    "spec": {
+      "$ref": "#/$defs/TradeSpec",
+      "description": "The unsized trade: entry ladder, stop, TP ladder, size."
+    },
+    "meta": {
+      "$ref": "#/$defs/IntentMeta",
+      "description": "Provenance and identity of this document."
+    },
+    "exit": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExitGeometrySpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional exit geometry: the levels to place, and how the stop is managed afterwards. Null when the source brief yields no buildable bracket.",
+      "default": null
+    },
+    "account_id": {
+      "type": "string",
+      "description": "Reserved tenant dimension; one value today.",
+      "default": "default"
+    }
+  },
+  "required": [
+    "intent_id",
+    "instrument",
+    "spec",
+    "meta"
+  ],
+  "$defs": {
+    "InstrumentHint": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "Exchange symbol, vendor-agnostic, e.g. \"NVDA\"."
+        },
+        "mic": {
+          "type": "string",
+          "description": "ISO 10383 Market Identifier Code, e.g. \"XNYS\". WHICH venues a deployment can actually trade is the adapter's knowledge, not this contract's (#1122)."
+        }
+      },
+      "required": [
+        "ticker",
+        "mic"
+      ]
+    },
+    "TradeSpec": {
+      "type": "object",
+      "properties": {
+        "entry_tiers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntryTierSpec"
+          },
+          "description": "The entry ladder, rung by rung."
+        },
+        "disaster_stop": {
+          "type": "number",
+          "description": "Stop price in the instrument's currency; sits below every entry rung."
+        },
+        "tp_tranches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TpTrancheSpec"
+          },
+          "description": "The take-profit ladder. Empty is the legitimate --no-tp shape: a pick that runs to its disaster stop."
+        },
+        "suggested_size_pct": {
+          "type": "number",
+          "description": "PERCENTAGE of account equity, 0-100 — not a fraction."
+        },
+        "order_ttl_days": {
+          "type": "integer",
+          "description": "Entry-order lifetime in TRADING days (XNYS), not calendar days. 0 is the planner's \"field absent\" sentinel and resolves to the default downstream.",
+          "default": 7
+        },
+        "side": {
+          "type": "string",
+          "enum": [
+            "long"
+          ],
+          "description": "Only long entries are armed today. Pinned to one literal as a barrier against the client-side \"Sell\"->Buy footgun rather than left open.",
+          "default": "long"
+        },
+        "schema_version": {
+          "type": "string",
+          "description": "Wire version of this spec. The same constant as meta.schema_version, not an independent dial.",
+          "default": "2"
+        }
+      },
+      "required": [
+        "entry_tiers",
+        "disaster_stop",
+        "tp_tranches",
+        "suggested_size_pct"
+      ]
+    },
+    "EntryTierSpec": {
+      "type": "object",
+      "properties": {
+        "limit_price": {
+          "type": "number",
+          "description": "Price in the instrument's currency. For an immediate tier this is the operator's CAP (the worst acceptable fill), not a pullback level."
+        },
+        "alloc_pct": {
+          "type": "number",
+          "description": "PERCENTAGE of the pick's notional, 0-100 — not a fraction. The rungs sum to 100."
+        },
+        "tag": {
+          "type": "string",
+          "description": "Free-text rung label, e.g. \"T1\". No sizing semantics.",
+          "default": ""
+        },
+        "entry_mode": {
+          "type": "string",
+          "enum": [
+            "pullback",
+            "immediate"
+          ],
+          "description": "\"pullback\" rests below the market; \"immediate\" is an arm-manual now tranche.",
+          "default": "pullback"
+        }
+      },
+      "required": [
+        "limit_price",
+        "alloc_pct"
+      ]
+    },
+    "TpTrancheSpec": {
+      "type": "object",
+      "properties": {
+        "price": {
+          "type": "number",
+          "description": "Take-profit price in the instrument's currency."
+        },
+        "tranche_pct": {
+          "type": "number",
+          "description": "PERCENTAGE of the position, 0-100 — not a fraction. The ladder MAY sum to less than 100: that is a deliberate runner, not an error."
+        },
+        "r_multiple": {
+          "type": "number",
+          "description": "Label only: the tranche's distance in R (multiples of initial risk). No sizing semantics.",
+          "default": 0.0
+        },
+        "tag": {
+          "type": "string",
+          "description": "Free-text tranche label, e.g. \"TP1\". No sizing semantics.",
+          "default": ""
+        }
+      },
+      "required": [
+        "price",
+        "tranche_pct"
+      ]
+    },
+    "IntentMeta": {
+      "type": "object",
+      "properties": {
+        "armed_ts": {
+          "type": "string",
+          "description": "ISO-8601 timestamp of the moment the pick was armed."
+        },
+        "trade_date": {
+          "type": "string",
+          "description": "YYYY-MM-DD. Date key of the record — pick identity, TTL anchor, reconcile join. For a manual pick (no brief row) this is the arm date; provenance lives in `source`, not in this field's name (#1252)."
+        },
+        "schema_version": {
+          "type": "string",
+          "description": "Wire version of the document. A consumer reads this one.",
+          "default": "2"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "brief",
+            "manual"
+          ],
+          "description": "Where the intent came from: \"brief\" (parsed from a brief row by `broker arm`) or \"manual\" (operator-provided levels via `broker arm-manual`, #1235). Journals and later measurement separate the two populations on this marker; legacy payloads without the key decode to \"brief\".",
+          "default": "brief"
+        },
+        "generation": {
+          "type": "integer",
+          "description": "Same-day re-arm counter, 1-based (#1371). Pick identity everywhere downstream — queue fold, submissions join, entry-watch crids, stop refs — is (ticker, trade_date, generation), and the queue keeps the LATEST, so a resubmission REPLACES rather than duplicates.",
+          "minimum": 1,
+          "default": 1
+        }
+      },
+      "required": [
+        "armed_ts",
+        "trade_date"
+      ]
+    },
+    "ExitGeometrySpec": {
+      "type": "object",
+      "properties": {
+        "initial_levels": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InitialLevels"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Levels to PLACE, or null when the document supplies none.",
+          "default": null
+        },
+        "reaction_plan": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/ReanchorOnFill"
+              },
+              {
+                "$ref": "#/$defs/TrailingStop"
+              },
+              {
+                "$ref": "#/$defs/ModelPush"
+              }
+            ]
+          },
+          "description": "How the stop MOVES after fill. An empty plan means the stop is never moved. The door accepts at most ONE stop-management primitive and refuses a second with reaction_plan_ambiguous — that rule lives in validate_intent, not in this document's shape.",
+          "default": []
+        }
+      }
+    },
+    "InitialLevels": {
+      "type": "object",
+      "properties": {
+        "stop": {
+          "type": "number",
+          "description": "Stop price to place, in the instrument's currency."
+        },
+        "tp": {
+          "type": "number",
+          "description": "Take-profit price to place, in the instrument's currency."
+        }
+      },
+      "required": [
+        "stop",
+        "tp"
+      ]
+    },
+    "ReanchorOnFill": {
+      "type": "object",
+      "properties": {
+        "k_atr": {
+          "type": "number",
+          "description": "ATR multiple the re-anchored stop sits away from the fill price."
+        },
+        "atr": {
+          "type": "number",
+          "description": "Absolute ATR snapshot — a distance in the instrument's currency, not a multiple — so the executor recomputes the levels without a second fetch."
+        },
+        "ceiling_price": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Caps the TAKE-PROFIT (tp = min(tp, ceiling_price)); it never touches the stop. The door refuses a non-null value today: ceiling_price_unsupported.",
+          "default": null
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "reanchor_on_fill"
+          ],
+          "description": "Discriminator of the reaction-plan union.",
+          "default": "reanchor_on_fill"
+        }
+      },
+      "required": [
+        "atr",
+        "k_atr",
+        "kind"
+      ]
+    },
+    "TrailingStop": {
+      "type": "object",
+      "properties": {
+        "arm_trigger_r": {
+          "type": "number",
+          "description": "Favourable excursion, in R (multiples of initial risk), at which the trail arms."
+        },
+        "trail_frac": {
+          "type": "number",
+          "description": "FRACTION in (0, 1] of the peak excursion the stop gives back — a fraction here, unlike the _pct fields elsewhere in this contract."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "trailing_stop"
+          ],
+          "description": "Discriminator of the reaction-plan union.",
+          "default": "trailing_stop"
+        }
+      },
+      "required": [
+        "arm_trigger_r",
+        "kind",
+        "trail_frac"
+      ]
+    },
+    "ModelPush": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "model"
+          ],
+          "description": "Discriminator of the reaction-plan union; reserves the tag and nothing else.",
+          "default": "model"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  }
+}

@@ -322,15 +322,11 @@ class TestGeometryLessExitSpec(unittest.TestCase):
         self.assertIsNone(self._trailing_only().exit.initial_levels)
 
     def test_it_round_trips(self) -> None:
-        # Compared on the SERIALIZED form: `intent_to_jsonable` yields tuples and
-        # `json.loads` yields lists, so comparing the dicts would differ for a
-        # reason that has nothing to do with the contract.
+        # Through a real serialise/parse, because that is the trip the document
+        # makes; the documents themselves compare directly (#1405).
         intent = self._trailing_only()
         restored = intent_from_jsonable(json.loads(json.dumps(intent_to_jsonable(intent))))
-        self.assertEqual(
-            json.dumps(intent_to_jsonable(restored), sort_keys=True),
-            json.dumps(intent_to_jsonable(intent), sort_keys=True),
-        )
+        self.assertEqual(intent_to_jsonable(restored), intent_to_jsonable(intent))
         primitive = restored.exit.reaction_plan[0]
         assert isinstance(primitive, TrailingStop)
         self.assertEqual((primitive.arm_trigger_r, primitive.trail_frac), (0.5, 0.6))
@@ -347,3 +343,48 @@ class TestGeometryLessExitSpec(unittest.TestCase):
         restored = intent_from_jsonable(intent_to_jsonable(_intent_with_reanchor()))
         assert restored.exit is not None and restored.exit.initial_levels is not None
         self.assertEqual(restored.exit.initial_levels.stop, 90.0)
+
+
+class TestTheOutputIsActuallyJsonShaped(unittest.TestCase):
+    """``intent_to_jsonable`` promises a jsonable dict, and the promise is used.
+
+    ``dataclasses.asdict`` recurses tuples into tuples, which ``json.dumps``
+    renders as arrays but which every OTHER json tool reads as "not an array" —
+    a JSON Schema validator among them (#1405). The name is the contract: what
+    comes out here must equal what a consumer reads back off the wire, without a
+    ``json.loads(json.dumps(...))`` dance in between.
+    """
+
+    def test_the_document_equals_its_own_serialised_form(self) -> None:
+        document = intent_to_jsonable(_intent_with_reanchor())
+        self.assertEqual(document, json.loads(json.dumps(document)))
+
+    def test_every_sequence_is_a_list(self) -> None:
+        document = intent_to_jsonable(_intent_with_reanchor())
+        self.assertIsInstance(document["spec"]["entry_tiers"], list)
+        self.assertIsInstance(document["spec"]["tp_tranches"], list)
+        assert document["exit"] is not None
+        self.assertIsInstance(document["exit"]["reaction_plan"], list)
+
+    def test_an_empty_reaction_plan_is_an_empty_list(self) -> None:
+        intent = TradeIntent(
+            intent_id="abc123",
+            instrument=InstrumentHint(ticker="NVDA", mic="XNAS"),
+            spec=_spec(),
+            meta=_meta(),
+            exit=ExitGeometrySpec(initial_levels=InitialLevels(stop=90.0, tp=110.0)),
+        )
+        document = intent_to_jsonable(intent)
+        assert document["exit"] is not None
+        self.assertEqual(document["exit"]["reaction_plan"], [])
+
+    def test_the_bytes_on_the_journal_are_unchanged(self) -> None:
+        """The reason this change is safe: ``picks.jsonl`` is written through
+        ``json.dumps``, which renders a tuple and a list identically."""
+        intent = _intent_with_reanchor()
+        import dataclasses
+
+        self.assertEqual(
+            json.dumps(dataclasses.asdict(intent), sort_keys=True),
+            json.dumps(intent_to_jsonable(intent), sort_keys=True),
+        )

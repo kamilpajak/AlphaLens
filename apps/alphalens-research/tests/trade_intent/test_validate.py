@@ -446,13 +446,7 @@ class RoundTripTest(unittest.TestCase):
         emitted = json.loads(json.dumps(intent_to_jsonable(intent)))
         decoded = intent_from_jsonable(emitted)
         validate_intent(decoded)
-        # Compare the SERIALISED documents: intent_to_jsonable emits tuples where
-        # json.loads gives lists, so comparing the decoded objects is False for a
-        # reason that has nothing to do with the contract.
-        self.assertEqual(
-            json.dumps(emitted, sort_keys=True),
-            json.dumps(intent_to_jsonable(decoded), sort_keys=True),
-        )
+        self.assertEqual(emitted, intent_to_jsonable(decoded))
 
 
 if __name__ == "__main__":
