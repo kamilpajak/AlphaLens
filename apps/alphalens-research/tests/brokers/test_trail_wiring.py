@@ -36,7 +36,6 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
     PlannedExit,
     ProtectionView,
-    ReanchorFacts,
     _maybe_trail,
 )
 from broker_contract.contract import (
@@ -50,6 +49,7 @@ from broker_contract.exit_geometry import resolve_exit_policy
 from broker_contract.exit_geometry.policy import TrailingAtrPolicy
 from broker_contract.exit_geometry.registry import resolve_policy
 from broker_contract.price_feed import PricePoint
+from broker_contract.trade_intent.schema import TrailingStop
 
 _UIC = 43070
 
@@ -191,7 +191,15 @@ class _RaisingFeedFactory:
         raise RuntimeError("simulated feed/network/auth failure")
 
 
-def _seed_planned(journal: Path, *, take_profit: float | None = None) -> None:
+_DECLARED_TRAIL = TrailingStop(arm_trigger_r=0.5, trail_frac=0.6)
+"""What the seeded picks DECLARE (#1236). The seed used to carry a geometry
+stamp purely so the arm's ATR guard would let the pass through; the permission
+is the declaration now, so the stamp is gone."""
+
+
+def _seed_planned(
+    journal: Path, *, take_profit: float | None = None, reaction: object = _DECLARED_TRAIL
+) -> None:
     """A `planned` line WITH the geometry shadow stamp so ``plan.reanchor`` is
     non-None (both the trail and reanchor arms require it)."""
     with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
@@ -203,7 +211,7 @@ def _seed_planned(journal: Path, *, take_profit: float | None = None) -> None:
                 stop_price=90.0,
                 take_profit=take_profit,
                 tier_index=0,
-                geometry_stamp={"k_atr": 2.0, "atr": 4.0},
+                reaction=reaction,  # type: ignore[arg-type]
             )
         )
 
@@ -252,7 +260,7 @@ class TestTrailingPathEmitsAmendAndTrailedMarker(unittest.TestCase):
 
     def test_amend_and_marker_written(self) -> None:
         broker = _Broker(positions=[_pos()], sells=[_stop_leg()], by_uic={_UIC: _pos()})
-        feed = _ScriptedFeedFactory([{_UIC: 104.0}])
+        feed = _ScriptedFeedFactory([{_UIC: 110.0}])
         sink: list[str] = []
         report = cl.TickReport()
         with TemporaryDirectory() as d:
@@ -265,32 +273,36 @@ class TestTrailingPathEmitsAmendAndTrailedMarker(unittest.TestCase):
 
         self.assertEqual(feed.calls, 1)  # trailing path fetched the feed once
         self.assertEqual(len(broker.amended), 1)
-        # target 104 - k_atr 2 * atr 4 = 96.0 (live-price clamp floor 103.79 > 96)
-        self.assertAlmostEqual(broker.amended[0][5], 96.0)  # stop_price placed
+        # target 100 + 0.6*(110 - 100) = 106.0 (live-price clamp floor 109.78 > 106)
+        self.assertAlmostEqual(broker.amended[0][5], 106.0)  # stop_price placed
         self.assertIn(("protection", "AmendStop"), report.actions)
 
         self.assertEqual(len(trailed), 1)
         self.assertEqual(trailed[0]["uic"], _UIC)
-        self.assertAlmostEqual(trailed[0]["level"], 96.0)  # the clamped level placed
-        self.assertAlmostEqual(trailed[0]["peak"], 104.0)  # telemetry substrate
-        self.assertAlmostEqual(trailed[0]["last_price"], 104.0)
+        self.assertAlmostEqual(trailed[0]["level"], 106.0)  # the clamped level placed
+        self.assertAlmostEqual(trailed[0]["peak"], 110.0)  # telemetry substrate
+        self.assertAlmostEqual(trailed[0]["last_price"], 110.0)
         # a trail must NEVER be recorded as a reanchor
         self.assertEqual(_markers(journal, "reanchored"), [])
 
 
 class TestDefaultPolicyNeverFetchesFeed(unittest.TestCase):
-    """The default (non-trailing) policy takes the exact 2-arg build call with NO
+    """A pick that DECLARES no trail takes the exact 2-arg build call with NO
     peak fetch: the feed factory is never invoked and no ``trailed`` marker is
-    written -> byte-identical to today."""
+    written.
 
-    def test_atr_bracket_never_touches_the_feed(self) -> None:
+    The gate moved with #1236. It used to read the daemon-wide policy, so one env
+    var decided whether the whole deployment fetched peaks; trailing is a property
+    of an individual pick now, so the gate asks the plans."""
+
+    def test_a_pick_declaring_no_trail_never_touches_the_feed(self) -> None:
         broker = _Broker(positions=[_pos()], sells=[_stop_leg()], by_uic={_UIC: _pos()})
-        feed = _ScriptedFeedFactory([{_UIC: 104.0}])  # would raise IndexError if popped
+        feed = _ScriptedFeedFactory([{_UIC: 110.0}])  # would raise IndexError if popped
         sink: list[str] = []
         report = cl.TickReport()
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            _seed_planned(journal)
+            _seed_planned(journal, reaction=None)  # declares nothing
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, exit_policy=_ATR_BRACKET, feed_factory=feed, sink=sink)
                 cl._run_protection_pass(deps, [], False, report)
@@ -308,7 +320,7 @@ class TestCrossTickRatchet(unittest.TestCase):
         broker = _Broker(positions=[_pos()], sells=[_stop_leg()], by_uic={_UIC: _pos()})
         # Same price both ticks -> peak stays 104 -> proposal stays 96 -> tick 2's
         # 96 does not clear the folded floor 96 by _TRAIL_STEP_EPS -> dropped.
-        feed = _ScriptedFeedFactory([{_UIC: 104.0}, {_UIC: 104.0}])
+        feed = _ScriptedFeedFactory([{_UIC: 110.0}, {_UIC: 110.0}])
         sink: list[str] = []
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
@@ -341,11 +353,11 @@ class TestRatchetSurvivesDaemonRestart(unittest.TestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                # Tick 1: peak 104 -> trail the stop to 104 - 2*4 = 96.0.
+                # Tick 1: peak 110 -> trail the stop to 100 + 0.6*10 = 106.0.
                 deps = _deps(
                     broker,
                     exit_policy=_TRAIL,
-                    feed_factory=_ScriptedFeedFactory([{_UIC: 104.0}]),
+                    feed_factory=_ScriptedFeedFactory([{_UIC: 110.0}]),
                     sink=sink,
                 )
                 cl._run_protection_pass(deps, [], False, cl.TickReport())
@@ -369,17 +381,17 @@ class TestRatchetSurvivesDaemonRestart(unittest.TestCase):
         # Control arm: fresh deps alone (peak tracker reset) do NOT loosen the
         # stop — so a second amend in the other arm is caused by the compaction.
         amended, trailed = self._two_ticks(compact_between=False)
-        self.assertEqual([round(a[5], 4) for a in amended], [96.0])
-        self.assertEqual([round(m["level"], 4) for m in trailed], [96.0])
+        self.assertEqual([round(a[5], 4) for a in amended], [106.0])
+        self.assertEqual([round(m["level"], 4) for m in trailed], [106.0])
 
     def test_boot_compaction_does_not_loosen_the_trailed_stop(self) -> None:
         amended, trailed = self._two_ticks(compact_between=True)
         self.assertEqual(
             [round(a[5], 4) for a in amended],
-            [96.0],
+            [106.0],
             "the post-restart tick must stay vetoed by the folded ratchet floor",
         )
-        self.assertEqual([round(m["level"], 4) for m in trailed], [96.0])
+        self.assertEqual([round(m["level"], 4) for m in trailed], [106.0])
 
 
 class TestCarryover1PullbackLoosenDropped(unittest.TestCase):
@@ -398,7 +410,7 @@ class TestCarryover1PullbackLoosenDropped(unittest.TestCase):
             tp_price=None,
             conflicting=False,
             n_plans=1,
-            reanchor=ReanchorFacts(k_atr=2.0, atr=4.0),
+            reaction=_DECLARED_TRAIL,
         )
         legs = (_stop_leg(),)
         # peak 120 -> proposed 120 - 2*4 = 112 (clears floor 100.0 + eps easily).
@@ -431,11 +443,12 @@ class TestCarryover1PullbackLoosenDropped(unittest.TestCase):
             tp_price=None,
             conflicting=False,
             n_plans=1,
-            reanchor=ReanchorFacts(k_atr=2.0, atr=4.0),
+            reaction=_DECLARED_TRAIL,
         )
         legs = (_stop_leg(),)
-        # peak 112, live 112 -> clamp floor 111.78 does not bind -> clamped 104.0,
-        # clears the prior trailed floor 100.0 by well over eps -> fires.
+        # peak 112, live 112 -> clamp floor 111.78 does not bind -> the declared
+        # giveback target 100 + 0.6*12 = 107.2 clears the prior trailed floor
+        # 100.0 by well over eps -> fires.
         view = ProtectionView(
             long_positions={_UIC: pos},
             all_positions={_UIC: pos},
@@ -450,7 +463,7 @@ class TestCarryover1PullbackLoosenDropped(unittest.TestCase):
         action = _maybe_trail(_UIC, pos, plan, legs, view)
         self.assertIsInstance(action, AmendStop)
         assert isinstance(action, AmendStop)
-        self.assertAlmostEqual(action.stop_price, 104.0)
+        self.assertAlmostEqual(action.stop_price, 107.2)
 
 
 class TestCarryover2FeedFailureLeavesNeverNakedIntact(unittest.TestCase):

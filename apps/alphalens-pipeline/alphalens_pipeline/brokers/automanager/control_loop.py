@@ -50,7 +50,7 @@ from broker_contract.exit_geometry import (
     SetupStaticPolicy,
     resolve_exit_policy,
 )
-from broker_contract.exit_geometry.registry import resolve_policy
+from broker_contract.exit_geometry.registry import resolve_declared_policy, resolve_policy
 from broker_contract.price_feed import SupportsSessionLow
 from broker_contract.trade_intent.codec import (
     TradeIntentDecodeError,
@@ -1694,8 +1694,30 @@ def _announce_fired_tranches(
             )
 
 
+def _uics_declaring_a_trail(journal_lines: Iterable[Mapping[str, Any]]) -> frozenset[int]:
+    """The uics whose governing plan DECLARES a trailing stop (#1236).
+
+    The peak fetch used to be gated on the daemon-wide policy: one env var said
+    "this deployment trails", and peaks were fetched for every long. Trailing is
+    now a property of an individual pick, so the gate has to ask the plans.
+
+    Deliberately a SEPARATE, cheap fold rather than a peaks callback threaded into
+    ``build_protection_view``: that function is a pure assembler, and putting a
+    network call inside it would move I/O under a boundary that catches only
+    ``BrokerError`` — a feed failure would then skip the whole protection pass
+    instead of degrading trailing to dark. ``_fetch_protection_peaks`` keeps its
+    own boundary, and the cost is a second read of a journal that is compacted at
+    boot and small.
+    """
+    return frozenset(
+        uic
+        for uic, plan in _fold_planned_exits(journal_lines).items()
+        if resolve_declared_policy(plan.reaction).trails
+    )
+
+
 def _fetch_protection_peaks(
-    deps: LoopDeps, report: TickReport
+    deps: LoopDeps, report: TickReport, *, uics: frozenset[int] | None = None
 ) -> tuple[dict[int, float], dict[int, float]]:
     """Task 4: fetch this tick's high-water peaks for the trailing arm, behind a
     boundary whose ENTIRE job is that NOTHING here can starve the never-naked
@@ -1738,6 +1760,11 @@ def _fetch_protection_peaks(
         return {}, {}
     try:
         long_positions = broker.get_long_positions()
+        if uics is not None:
+            # Only the picks that DECLARE a trail need a peak (#1236). Previously
+            # the whole deployment trailed or none of it did, so every long was
+            # fetched; now a feed is built for the positions that asked for one.
+            long_positions = [pos for pos in long_positions if _position_uic(pos) in uics]
         return _update_peaks(deps, long_positions)
     # Broad on purpose (mirrors _build_live_exits_feed): a feed/network/auth error
     # must not propagate into the protection pass. Trailing goes dark, protection
@@ -1770,8 +1797,11 @@ def _run_protection_pass(
     ``deps.build_protection_view(deps.broker, records)`` with no peak fetch — zero
     new behaviour, byte-identical to today."""
     try:
-        if deps.exit_policy.trails:
-            peak_by_uic, last_price_by_uic = _fetch_protection_peaks(deps, report)
+        trailing_uics = _uics_declaring_a_trail(_iter_standalone_stop_journal())
+        if trailing_uics:
+            peak_by_uic, last_price_by_uic = _fetch_protection_peaks(
+                deps, report, uics=trailing_uics
+            )
             protection_view = deps.build_protection_view(
                 deps.broker,
                 records,

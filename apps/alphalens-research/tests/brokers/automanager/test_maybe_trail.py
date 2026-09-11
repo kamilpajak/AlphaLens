@@ -22,7 +22,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     NoOp,
     PlannedExit,
     ProtectionView,
-    ReanchorFacts,
+    _maybe_reanchor,
     _maybe_trail,
     _reconcile_long,
 )
@@ -35,6 +35,7 @@ from broker_contract.contract import (
 from broker_contract.exit_geometry import SetupStaticPolicy, resolve_exit_policy
 from broker_contract.exit_geometry.policy import TrailingAtrPolicy
 from broker_contract.exit_geometry.registry import resolve_policy
+from broker_contract.trade_intent.schema import ReanchorOnFill, TrailingStop
 
 _UIC = 43070
 
@@ -86,7 +87,16 @@ def _stop_leg(amount: float = 7.0, *, uic: int = _UIC) -> OrderState:
     )
 
 
-def _plan(*, stop_price: float = 90.0, atr: float = 4.0, k_atr: float = 2.0) -> PlannedExit:
+_DECLARED_TRAIL = TrailingStop(arm_trigger_r=0.5, trail_frac=0.6)
+"""What the picks in this module DECLARE. Before #1236 the module drove
+``trailing_atr`` through ``view.exit_policy`` and asserted a chandelier target;
+that policy has no wire form, so a pick cannot ask for it and the arm never runs
+it. The GUARDS this module exists for — the ratchet, the never-below-floor clamp,
+the feed vetoes, the amend backoff, the sole-stop scope — are unchanged, so they
+are exercised through the trail a document can actually declare."""
+
+
+def _plan(*, stop_price: float = 90.0, reaction: object = _DECLARED_TRAIL) -> PlannedExit:
     return PlannedExit(
         uic=_UIC,
         entry_crid="crid",
@@ -95,7 +105,7 @@ def _plan(*, stop_price: float = 90.0, atr: float = 4.0, k_atr: float = 2.0) -> 
         tp_price=None,
         conflicting=False,
         n_plans=1,
-        reanchor=ReanchorFacts(k_atr=k_atr, atr=atr),
+        reaction=reaction,  # type: ignore[arg-type]
     )
 
 
@@ -126,26 +136,31 @@ def _view(
 
 class TestMaybeTrailArmed(unittest.TestCase):
     """The armed happy path: peak clears the activation threshold, the ratchet is
-    open, the clamp allows the tighten -> an ``AmendStop`` at ``peak - k*atr``."""
+    open, the clamp allows the tighten -> an ``AmendStop`` at the giveback target.
 
-    def test_armed_emits_amendstop_at_chandelier_target(self) -> None:
+    The arithmetic is re-based since #1236. The activation threshold used to be
+    an ATR multiple off the wrapped geometry; the trail a document can declare
+    measures R as ``avg_price - plan_stop``, so with avg 100 and floor 90, 1R is
+    10.00 and a 0.5R arm sits at 105.00."""
+
+    def test_armed_emits_amendstop_at_the_giveback_target(self) -> None:
         pos = _pos()  # avg_price 100.0, qty 7.0
-        plan = _plan(stop_price=90.0)  # brief floor well below the 96.0 target
+        plan = _plan(stop_price=90.0)  # brief floor well below the target
         legs = (_stop_leg(),)
-        # peak 104.0 >= activation 100 + 0.5*1.5*4 = 103.0; target 104 - 2*4 = 96.0.
-        # last_price 104 -> the live-price clamp floor (103.79) is above the 96.0
-        # target, so the raw Chandelier level is emitted unclamped.
+        # peak 110 >= activation 105; target = 100 + 0.6*(110 - 100) = 106.0.
+        # last_price 110 -> the live-price clamp floor (109.78) is above the
+        # target, so the raw level is emitted unclamped.
         view = _view(
             pos=pos,
             plan=plan,
             legs=legs,
-            peak_by_uic={_UIC: 104.0},
-            last_price_by_uic={_UIC: 104.0},
+            peak_by_uic={_UIC: 110.0},
+            last_price_by_uic={_UIC: 110.0},
         )
         action = _maybe_trail(_UIC, pos, plan, legs, view)
         self.assertIsInstance(action, AmendStop)
         assert isinstance(action, AmendStop)
-        self.assertAlmostEqual(action.stop_price, 96.0)  # peak 104 - k_atr 2 * atr 4
+        self.assertAlmostEqual(action.stop_price, 106.0)  # 100 + 0.6*(110 - 100)
         self.assertEqual(action.target_qty, 7.0)  # netted owned, never planned
         self.assertEqual(action.order_id, "stop-1")
         self.assertEqual(action.reason, "trail")
@@ -155,8 +170,8 @@ class TestMaybeTrailArmed(unittest.TestCase):
     def test_armed_ratchets_stop_above_entry_to_lock_profit(self) -> None:
         # THE FIX: with the min-distance floor anchored on the LIVE PRICE (not
         # avg_price), an armed trail CAN ratchet the stop ABOVE entry to lock in
-        # profit. peak 112 -> target 112 - 2*4 = 104.0 > avg_price 100.0; live
-        # price 112 -> clamp floor 111.78 does not bind, so 104.0 is emitted.
+        # profit. peak 120 -> target 100 + 0.6*20 = 112.0 > avg_price 100.0; live
+        # price 120 -> clamp floor 119.76 does not bind, so 112.0 is emitted.
         # Under the old avg_price anchor the clamp capped at ~99.8 (< entry).
         pos = _pos(avg_price=100.0)  # qty 7.0
         plan = _plan(stop_price=90.0)
@@ -165,21 +180,21 @@ class TestMaybeTrailArmed(unittest.TestCase):
             pos=pos,
             plan=plan,
             legs=legs,
-            peak_by_uic={_UIC: 112.0},
-            last_price_by_uic={_UIC: 112.0},
+            peak_by_uic={_UIC: 120.0},
+            last_price_by_uic={_UIC: 120.0},
         )
         action = _maybe_trail(_UIC, pos, plan, legs, view)
         self.assertIsInstance(action, AmendStop)
         assert isinstance(action, AmendStop)
         self.assertGreater(action.stop_price, pos.avg_price)  # profit locked
-        self.assertAlmostEqual(action.stop_price, 104.0)
+        self.assertAlmostEqual(action.stop_price, 112.0)
 
     def test_clamp_caps_target_just_below_live_price(self) -> None:
-        # When the raw Chandelier target sits ABOVE the current market (price
-        # pulled back from the peak), the live-price clamp pulls it down to just
-        # below the market (never at/above -> OnWrongSideOfMarket). peak 120 ->
-        # raw target 120 - 2*4 = 112.0, but last_price 108 -> floor 108*0.998 =
-        # 107.784, so the emitted stop is 107.784 (< market 108, still > entry).
+        # When the raw target sits ABOVE the current market (price pulled back
+        # from the peak), the live-price clamp pulls it down to just below the
+        # market (never at/above -> OnWrongSideOfMarket). peak 120 -> raw target
+        # 100 + 0.6*20 = 112.0, but last_price 108 -> floor 108*0.998 = 107.784,
+        # so the emitted stop is 107.784 (< market 108, still > entry).
         pos = _pos(avg_price=100.0)
         plan = _plan(stop_price=90.0)
         legs = (_stop_leg(),)
@@ -197,7 +212,7 @@ class TestMaybeTrailArmed(unittest.TestCase):
         self.assertLess(action.stop_price, last_price)  # never at/above market
         self.assertAlmostEqual(action.stop_price, last_price * (1.0 - 0.002))
 
-    def test_reconcile_long_routes_trailing_policy_to_maybe_trail(self) -> None:
+    def test_reconcile_long_routes_a_declared_trail_to_maybe_trail(self) -> None:
         pos = _pos()
         plan = _plan(stop_price=90.0)
         legs = (_stop_leg(),)
@@ -205,8 +220,8 @@ class TestMaybeTrailArmed(unittest.TestCase):
             pos=pos,
             plan=plan,
             legs=legs,
-            peak_by_uic={_UIC: 104.0},
-            last_price_by_uic={_UIC: 104.0},
+            peak_by_uic={_UIC: 110.0},
+            last_price_by_uic={_UIC: 110.0},
         )
         actions = _reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
@@ -286,47 +301,40 @@ class TestMaybeTrailDark(unittest.TestCase):
         pos = _pos()
         plan = _plan(stop_price=90.0)
         legs = (_stop_leg(),)
-        # proposed 96.0 clears 94.0 + eps -> fires
+        # proposed 106.0 clears 104.0 + eps -> fires
         view = _view(
             pos=pos,
             plan=plan,
             legs=legs,
-            peak_by_uic={_UIC: 104.0},
-            last_price_by_uic={_UIC: 104.0},
-            trailed_stop_by_uic={_UIC: 94.0},
+            peak_by_uic={_UIC: 110.0},
+            last_price_by_uic={_UIC: 110.0},
+            trailed_stop_by_uic={_UIC: 104.0},
         )
         action = _maybe_trail(_UIC, pos, plan, legs, view)
         self.assertIsInstance(action, AmendStop)
 
     def test_clamp_refuses_below_brief_floor_and_logs(self) -> None:
-        pos = _pos()
-        plan = _plan(stop_price=98.0)  # brief floor ABOVE the 96.0 proposal
+        """Moved to the RE-ANCHOR arm by #1236, and the move is the finding.
+
+        A declared trail proposes ``max(avg_price, ...)``, and the brief floor
+        sits below entry by construction — so the never-below-brief-floor
+        refusal can never fire on the trailing arm any more. It is very much
+        reachable on the re-anchor arm, where a deep gap-down fill drags the
+        target under the floor, so that is where the refusal (and its
+        policy-naming log line) is pinned.
+
+        The naming half is #1138/#1139: substring-only assertions are what let a
+        mislabelled policy survive, so the value is asserted."""
+        pos = _pos(avg_price=100.0)
+        # 100 - 3.0*4 = 88.0, below the 95.0 brief floor -> refusal.
+        plan = _plan(stop_price=95.0, reaction=ReanchorOnFill(k_atr=3.0, atr=4.0))
         legs = (_stop_leg(),)
-        # live price 104 -> clamp target is the raw 96.0, which sits below the
-        # 98.0 brief floor -> never-below-brief-floor refusal (returns None + logs)
-        view = _view(
-            pos=pos,
-            plan=plan,
-            legs=legs,
-            peak_by_uic={_UIC: 104.0},
-            last_price_by_uic={_UIC: 104.0},
-        )
+        view = _view(pos=pos, plan=plan, legs=legs)
         with self.assertLogs(pm.__name__, level="INFO") as cm:
-            action = _maybe_trail(_UIC, pos, plan, legs, view)
+            action = _maybe_reanchor(_UIC, pos, plan, legs, view)
         self.assertIsNone(action)
         self.assertTrue(any("below brief floor" in message for message in cm.output))
-        # ...and it must NAME the policy that refused (#1138/#1139). This is the
-        # ONE log line in the file reachable only from the trailing pass, so it
-        # is the one that printed "policy=atr_bracket_1p5" — the name of the
-        # non-trailing policy — while LIVE ran trailing_atr. The sibling lines in
-        # _maybe_reanchor cannot be reached under a trailing policy at all: it is
-        # called without `peak`, and TrailingAtrPolicy.decide_reanchor returns
-        # None without one. Substring-only assertions are what let the mislabel
-        # survive, so assert the value.
-        self.assertTrue(
-            any("policy=trailing_atr" in message for message in cm.output),
-            f"the refusal must name the trailing policy, got: {cm.output}",
-        )
+        self.assertTrue(any("policy=reanchor_on_fill" in message for message in cm.output))
 
     def test_amend_recently_failed_is_veto(self) -> None:
         pos = _pos()
@@ -351,44 +359,50 @@ class TestMaybeTrailDark(unittest.TestCase):
             tp_price=None,
             conflicting=False,
             n_plans=1,
-            reanchor=None,
+            reaction=None,
         )
         legs = (_stop_leg(),)
         view = _view(pos=pos, plan=plan, legs=legs, peak_by_uic={_UIC: 104.0})
         self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
 
-    def test_degenerate_atr_is_veto_even_though_the_stamp_is_present(self) -> None:
-        """The OTHER half of the same guard pair, previously untested here: the
-        plan DOES carry a geometry stamp, but its ``atr`` is degenerate. The
-        sibling ``_maybe_reanchor`` has had this case pinned since PR-6b
-        (``test_degenerate_atr_is_noop``); the trailing arm had only the
-        ``reanchor is None`` half.
+    def test_a_degenerate_atr_is_refused_by_the_policy_that_needs_one(self) -> None:
+        """The successor to a guard #1236 removed, and the reason it moved.
 
-        Worth pinning because #1325 declines to relax this guard: it vetoes
-        ``breakeven_trail`` for a value that policy discards entirely, which is
-        wrong on its own terms, yet relaxing it in isolation would start
-        trailing every manual pick. Pinning the current behaviour makes the
-        deliberate choice visible instead of latent."""
+        The caller used to veto a missing / degenerate ``atr`` for EVERY policy.
+        That vetoed the break-even trail for a value it discards entirely — wrong
+        on its own terms, as #1325 recorded while declining to relax it in
+        isolation. Whether an absent ATR is fatal is now the POLICY's answer, so
+        the concern is pinned where it belongs: a declared re-anchor, which
+        cannot size a risk distance without one, refuses."""
         pos = _pos()
         legs = (_stop_leg(),)
         for atr in (0.0, -1.0, float("nan"), float("inf")):
             with self.subTest(atr=atr):
-                plan = _plan(stop_price=90.0, atr=atr)
-                view = _view(pos=pos, plan=plan, legs=legs, peak_by_uic={_UIC: 104.0})
-                self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
+                plan = _plan(stop_price=90.0, reaction=ReanchorOnFill(k_atr=2.0, atr=atr))
+                view = _view(pos=pos, plan=plan, legs=legs)
+                self.assertIsNone(_maybe_reanchor(_UIC, pos, plan, legs, view))
 
-    def test_positive_control_a_finite_atr_on_the_same_shape_does_trail(self) -> None:
-        """Without this, the veto test above would pass even if nothing could
-        ever trail on this shape."""
+    def test_positive_control_a_finite_atr_on_the_same_shape_does_reanchor(self) -> None:
+        """Without this the refusal above would pass even if nothing could ever
+        re-anchor on this shape."""
         pos = _pos()
         legs = (_stop_leg(),)
-        plan = _plan(stop_price=90.0, atr=4.0)
+        plan = _plan(stop_price=90.0, reaction=ReanchorOnFill(k_atr=2.0, atr=4.0))
+        view = _view(pos=pos, plan=plan, legs=legs)
+        self.assertIsNotNone(_maybe_reanchor(_UIC, pos, plan, legs, view))
+
+    def test_a_trail_needs_no_atr_at_all(self) -> None:
+        """The other half, and the point of the move: the declared trail carries
+        no ATR and trails anyway."""
+        pos = _pos()
+        legs = (_stop_leg(),)
+        plan = _plan(stop_price=90.0)
         view = _view(
             pos=pos,
             plan=plan,
             legs=legs,
-            peak_by_uic={_UIC: 104.0},
-            last_price_by_uic={_UIC: 104.0},
+            peak_by_uic={_UIC: 110.0},
+            last_price_by_uic={_UIC: 110.0},
         )
         self.assertIsNotNone(_maybe_trail(_UIC, pos, plan, legs, view))
 
@@ -428,7 +442,7 @@ class TestNonTrailingPolicyNeverTrails(unittest.TestCase):
         # 100 - 1.5*4 = 94.0 sits above the 90.0 brief floor -> _maybe_reanchor
         # fires with its own reason (proves the non-trailing arm is still used).
         pos = _pos(avg_price=100.0)
-        plan = _plan(stop_price=90.0)
+        plan = _plan(stop_price=90.0, reaction=ReanchorOnFill(k_atr=1.5, atr=4.0))
         legs = (_stop_leg(),)
         view = _view(
             pos=pos,

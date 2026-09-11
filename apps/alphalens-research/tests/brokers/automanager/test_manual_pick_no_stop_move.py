@@ -13,21 +13,18 @@ scenario a trail exists for):
   * the exit is a human decision on these picks, which is what issue #1236
     exists to make explicit per pick.
 
-MECHANISM, and why this file exists. The decision is implemented today by a
-STRUCTURAL property rather than by a switch: ``arm-manual`` builds its intent
-with ``exit=None``, so ``control_loop._geometry_shadow_stamp`` returns ``None``,
-so the ``planned`` journal line carries no ``geometry`` key, so
-``PlannedExit.reanchor`` folds to ``None`` — and BOTH post-fill stop-move arms
-(``_maybe_reanchor`` and ``_maybe_trail``) refuse on exactly that. The property
-is real but it is a side effect, so these tests pin it: they turn red the moment
-``arm-manual`` starts producing an exit spec, or a guard is relaxed, which is
-the change that would silently start trailing real money.
+MECHANISM — and it changed with #1236, which is the point of this rewrite. The
+decision used to rest on a SIDE EFFECT: ``arm-manual`` builds its intent with
+``exit=None``, so no geometry stamp reached the journal, so ``PlannedExit``
+carried no ATR, and both post-fill stop-move arms refused on exactly that. The
+property was real but incidental, and the note here used to warn against "fixing"
+the ATR guard in isolation, because relaxing it would have turned trailing ON for
+exactly the picks the decision excludes.
 
-Do NOT "fix" the ATR guard in ``_maybe_trail`` on its own to make
-``breakeven_trail`` (which ignores ATR) arm here. That guard is what implements
-this decision; relaxing it turns trailing ON for exactly the picks the decision
-excludes. The supported way to trail a manual pick is the per-pick policy
-override, issue #1236.
+It is now a GUARD. A pick's stop is managed if and only if its document DECLARES
+management, and a manual pick declares nothing. The ATR guard could therefore be
+moved into the policies that need an ATR without touching this promise — which is
+what #1236 did.
 
 Provenance of the numbers: the AMBA LIVE round trip of 2026-09-04 (entry 8 @
 59.00, disaster stop 55.00, so 1R = 4.00 and the 0.5R activation sits at 61.00;
@@ -55,7 +52,6 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     NoOp,
     PlannedExit,
     ProtectionView,
-    ReanchorFacts,
     _reconcile_long,
 )
 from broker_contract.contract import InstrumentRef, OrderState, OrderStatus, Position
@@ -64,6 +60,7 @@ from broker_contract.trade_intent.schema import (
     ExitGeometrySpec,
     InitialLevels,
     ReanchorOnFill,
+    TrailingStop,
 )
 
 _UIC = 267154
@@ -118,7 +115,7 @@ def _resting_stop() -> OrderState:
     )
 
 
-def _plan(*, reanchor: ReanchorFacts | None) -> PlannedExit:
+def _plan(*, reaction: object) -> PlannedExit:
     return PlannedExit(
         uic=_UIC,
         entry_crid="AMBA-2026-09-04-entry-t0",
@@ -127,14 +124,14 @@ def _plan(*, reanchor: ReanchorFacts | None) -> PlannedExit:
         tp_price=None,
         conflicting=False,
         n_plans=1,
-        reanchor=reanchor,
+        reaction=reaction,  # type: ignore[arg-type]
     )
 
 
 def _actions_for(
     policy_name: str,
     *,
-    reanchor: ReanchorFacts | None,
+    reaction: object,
     trailed_stop_by_uic: dict[int, float] | None = None,
 ) -> list:
     pos = _position()
@@ -142,7 +139,7 @@ def _actions_for(
         long_positions={_UIC: pos},
         all_positions={_UIC: pos},
         sell_legs_by_uic={_UIC: (_resting_stop(),)},
-        planned_by_uic={_UIC: _plan(reanchor=reanchor)},
+        planned_by_uic={_UIC: _plan(reaction=reaction)},
         oco_unsupported=frozenset(),
         exit_policy=exit_policy_registry()[policy_name],
         peak_by_uic={_UIC: _PEAK},
@@ -211,7 +208,7 @@ class TestManualPickIsPolicyImmune(unittest.TestCase):
     def test_no_stop_move_under_any_policy(self) -> None:
         for name in exit_policy_registry():
             with self.subTest(policy=name):
-                actions = _actions_for(name, reanchor=None)
+                actions = _actions_for(name, reaction=None)
                 self.assertEqual([type(a) for a in actions], [NoOp])
 
     def test_positive_control_the_same_numbers_move_the_stop_once_stamped(self) -> None:
@@ -219,25 +216,38 @@ class TestManualPickIsPolicyImmune(unittest.TestCase):
         even WITH the stamp) the test above proves nothing."""
         for name in _STOP_MOVING_POLICIES:
             with self.subTest(policy=name):
-                actions = _actions_for(name, reanchor=ReanchorFacts(k_atr=1.5, atr=_ATR))
+                actions = _actions_for(name, reaction=ReanchorOnFill(k_atr=1.5, atr=_ATR))
                 self.assertEqual([type(a) for a in actions], [AmendStop])
 
-    def test_the_inert_policy_stays_a_noop_even_when_stamped(self) -> None:
-        actions = _actions_for("setup_static", reanchor=ReanchorFacts(k_atr=1.5, atr=_ATR))
-        self.assertEqual([type(a) for a in actions], [NoOp])
+    def test_the_daemon_policy_no_longer_silences_a_declared_pick(self) -> None:
+        """The inversion, asserted in the direction that catches a regression.
 
-    def test_the_trail_target_does_not_depend_on_the_atr_it_is_vetoed_for(self) -> None:
-        """Why the ATR guard must not be relaxed in isolation: ``breakeven_trail``
-        discards ``atr`` entirely, so the veto is for a value the policy never
-        reads. Two ATRs three orders of magnitude apart give the SAME stop."""
+        This used to read "the inert daemon policy stays a NoOp even when the
+        plan is stamped" — the env could silence a pick that had asked for
+        management. Since #1236 the declaration decides, so the same shape under
+        ``setup_static`` fires. The manual pick is protected by declaring
+        NOTHING, which is the test above, not by the daemon being inert."""
+        actions = _actions_for("setup_static", reaction=ReanchorOnFill(k_atr=1.5, atr=_ATR))
+        self.assertEqual([type(a) for a in actions], [AmendStop])
+
+    def test_a_declared_trail_ignores_a_geometry_stamp_entirely(self) -> None:
+        """The successor to a test whose subject #1236 removed.
+
+        It used to read "the trail target does not depend on the ATR it is
+        vetoed for" — the point being that the guard refused a policy for a
+        number it discards. There is no such guard now. What remains worth
+        pinning is the other half: a declared trail's target is a function of
+        the declaration and the price path only, so whatever telemetry the plan
+        also carries cannot change where the stop goes."""
+        declared = TrailingStop(arm_trigger_r=0.5, trail_frac=0.6)
         targets = []
-        for atr in (_ATR, 99.0):
-            actions = _actions_for("breakeven_trail", reanchor=ReanchorFacts(k_atr=1.5, atr=atr))
+        for policy_name in ("setup_static", "atr_bracket_1p5", "breakeven_trail"):
+            actions = _actions_for(policy_name, reaction=declared)
             self.assertEqual([type(a) for a in actions], [AmendStop])
             amend = actions[0]
-            self.assertIsInstance(amend, AmendStop)
+            assert isinstance(amend, AmendStop)
             targets.append(amend.stop_price)
-        self.assertEqual(targets[0], targets[1])
+        self.assertEqual(len(set(targets)), 1)
 
 
 class TestInheritedTrailedLevelCannotMoveAManualPick(unittest.TestCase):
@@ -254,7 +264,7 @@ class TestInheritedTrailedLevelCannotMoveAManualPick(unittest.TestCase):
         for name in exit_policy_registry():
             with self.subTest(policy=name):
                 actions = _actions_for(
-                    name, reanchor=None, trailed_stop_by_uic={_UIC: _PLAN_STOP + 6.5}
+                    name, reaction=None, trailed_stop_by_uic={_UIC: _PLAN_STOP + 6.5}
                 )
                 self.assertEqual([type(a) for a in actions], [NoOp])
 
