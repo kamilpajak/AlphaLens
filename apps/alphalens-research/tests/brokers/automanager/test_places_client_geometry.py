@@ -213,14 +213,15 @@ class PlacingADocumentsOwnLevelsIsAnnouncedTest(unittest.TestCase):
     to place its own levels is announced rather than discovered afterwards. No
     pick has taken that path since 2026-08-19."""
 
-    def _alerts(self, exit_spec: Any) -> list[tuple[str, str]]:
+    def _alerts(self, exit_spec: Any, *, placed: bool = True) -> list[tuple[str, str]]:
         seen: list[tuple[str, str]] = []
 
         def _throttled(message: str, reason: str) -> bool:
             seen.append((message, reason))
             return True
 
-        cl._announce_client_geometry(exit_spec, "KO", _throttled)
+        verdict = cl._announce_client_geometry(placed, exit_spec, "KO", _throttled)
+        self.assertIs(verdict, placed, "the announcement must pass the verdict through")
         return seen
 
     def test_a_document_with_levels_pages_once_naming_them(self):
@@ -231,6 +232,13 @@ class PlacingADocumentsOwnLevelsIsAnnouncedTest(unittest.TestCase):
         self.assertIn("110.0", message)
         self.assertEqual(reason, "client-geometry-placed:KO")
 
+    def test_a_pick_that_did_not_place_is_silent(self):
+        """The review finding this exists for. At the top of ``_place_pick`` the
+        message said "placing" about picks the fee floor, the gross cap or the
+        exit-region gate then refused — and since a NON-terminal refusal leaves
+        the pick armed, the drain re-ran it every ~45 s tick forever."""
+        self.assertEqual(self._alerts(_with_levels(), placed=False), [])
+
     def test_a_declaration_only_document_is_silent(self):
         self.assertEqual(self._alerts(_levels_less()), [])
 
@@ -240,7 +248,7 @@ class PlacingADocumentsOwnLevelsIsAnnouncedTest(unittest.TestCase):
     def test_a_missing_alert_sink_is_tolerated(self):
         """Direct calls and second brokers carry none; this must never raise on
         the money path."""
-        cl._announce_client_geometry(_with_levels(), "KO", None)
+        self.assertTrue(cl._announce_client_geometry(True, _with_levels(), "KO", None))
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -8710,23 +8710,37 @@ _CLIENT_GEOMETRY_ALERT_PREFIX = "client-geometry-placed"
 
 
 def _announce_client_geometry(
-    exit_spec: Any, ticker: str, alert_throttled: Callable[[str, str], bool] | None
-) -> None:
-    """Page once per ticker when a pick places the levels its document supplied.
+    placed: bool,
+    exit_spec: Any,
+    ticker: str,
+    alert_throttled: Callable[[str, str], bool] | None,
+) -> bool:
+    """Page once per ticker when a pick HAS PLACED the levels its document
+    supplied, and pass the verdict through unchanged.
+
+    Takes the verdict rather than sitting at the top of ``_place_pick`` for two
+    reasons, both found in review. The message says "placing", and at the top it
+    said that about picks the fee floor, the gross cap or the exit-region gate
+    then refused. And the drain re-decodes every armed pick each ~45 s tick, so a
+    pick held by a NON-terminal refusal — `_refuse_geometry_without_trail` is
+    exactly one, and it fires only on levels-carrying documents — would repeat
+    the unthrottled ``logger.info`` forever.
 
     Deliberately NOT a gate: the document is the authority on what is placed
     (#1414), and a rail that could refuse here would be the fleet-wide veto that
-    change removed, reintroduced under another name."""
-    if not _places_client_geometry(exit_spec):
-        return
+    change removed, reintroduced under another name. Hence the pass-through
+    return — it wraps a verdict, it never changes one."""
+    if not placed or not _places_client_geometry(exit_spec):
+        return placed
     levels = exit_spec.initial_levels
     message = (
-        f"place_pick {ticker}: placing the DOCUMENT's own exit levels "
+        f"place_pick {ticker}: placed the DOCUMENT's own exit levels "
         f"(stop {levels.stop}, tp {levels.tp}) rather than the brief ladder"
     )
     logger.info(message)
     if alert_throttled is not None:
         alert_throttled(message, f"{_CLIENT_GEOMETRY_ALERT_PREFIX}:{ticker}")
+    return placed
 
 
 def _geometry_without_entry_trail_note(
@@ -9324,7 +9338,6 @@ def _place_pick(
     trade_date = dt.date.fromisoformat(intent.meta.trade_date)
     spec = intent.spec
     exit_spec = intent.exit
-    _announce_client_geometry(exit_spec, ticker, alert_throttled)
 
     # Day-1 gap gate (execution-quality placement discipline): evaluated FIRST,
     # before any broker/safety/sizing I/O — a deferral must be cheap. Never
@@ -9496,7 +9509,7 @@ def _place_pick(
         now_entry_scope=now_entry_scope,
     )
     if routing.early_result is not None:
-        return routing.early_result
+        return _announce_client_geometry(routing.early_result, exit_spec, ticker, alert_throttled)
     plan = routing.plan
     now_placed = routing.now_placed
     reference_qty_override = routing.reference_qty_override
@@ -9526,7 +9539,7 @@ def _place_pick(
         # must read as not-placed so the drain retries next tick (the
         # armed_ts scan skips the now half); the pick counts as placed on
         # the tick the siblings actually route.
-        return intercepted
+        return _announce_client_geometry(intercepted, exit_spec, ticker, alert_throttled)
 
     if _refuse_geometry_without_trail(exit_spec, ticker, alert_throttled):
         return False
@@ -9536,17 +9549,23 @@ def _place_pick(
         logger.warning("place_pick %s: every entry tier sized to zero shares", ticker)
         return now_placed
 
-    return (
-        _place_tiers(
-            _PickRefs(broker, intent, ticker, instrument, account, fx),
-            placement,
-            spec,
-            exit_spec,
-            plan=plan,
-            tranche_plan_override=tranche_plan_override,
+    return _announce_client_geometry(
+        (
+            _place_tiers(
+                _PickRefs(broker, intent, ticker, instrument, account, fx),
+                placement,
+                spec,
+                exit_spec,
+                plan=plan,
+                tranche_plan_override=tranche_plan_override,
+            )
+            > 0
         )
-        > 0
-    ) or now_placed
+        or now_placed,
+        exit_spec,
+        ticker,
+        alert_throttled,
+    )
 
 
 class _NowRouting(NamedTuple):
