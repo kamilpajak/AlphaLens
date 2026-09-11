@@ -227,6 +227,7 @@ class ReanchorOnFill:
         "Absolute ATR snapshot — a distance in the instrument's currency, not a "
         "multiple — so the executor recomputes the levels without a second fetch."
     )
+    # LEGACY(reanchor_ceiling_price) — see broker_contract.trade_intent.legacy
     ceiling_price: float | None = contract_field(
         "Caps the TAKE-PROFIT (tp = min(tp, ceiling_price)); it never touches the "
         "stop. The door refuses a non-null value today: ceiling_price_unsupported.",
