@@ -21,7 +21,9 @@ the sweep found two divergences the author's table had missed.
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import io
 import itertools
 import json
 import math
@@ -37,6 +39,7 @@ from broker_contract.trade_intent.json_schema import (
     SCHEMA_FILENAME,
     artefact_path,
     generate_schema,
+    main,
     render_schema,
 )
 from broker_contract.trade_intent.schema import SCHEMA_VERSION
@@ -444,51 +447,107 @@ def _objects(schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {"TradeIntent": schema, **schema.get("$defs", {})}
 
 
-def breaking_changes(committed: dict[str, Any], live: dict[str, Any]) -> list[str]:
-    """Differences that break a consumer pinned to ``committed``.
+def _shape(node: dict[str, Any]) -> dict[str, Any]:
+    """The part of a property that constrains a producer.
 
-    Additive (a new optional property, a new definition, a widened enum, a new
-    description) returns nothing: regenerate and commit. Everything here is a
-    contract break and needs a version bump, because the artefact for a version
-    must not change meaning under a consumer's feet. This project has already
-    renamed a wire field inside major version 2 without noticing.
+    `description` and `default` carry no constraint, so changing them is never a
+    break. Everything else is compared literally — which is what catches a `$ref`
+    retargeted at another definition, or an array whose `items` changed, neither
+    of which shows up in the property's own `type`.
+    """
+    return {key: value for key, value in node.items() if key not in ("description", "default")}
+
+
+def _as_set(node: dict[str, Any], keyword: str) -> frozenset[Any] | None:
+    """A constraint as a set of admissible values; None means unconstrained."""
+    if keyword not in node:
+        return None
+    value = node[keyword]
+    return frozenset(value if isinstance(value, list) else [value])
+
+
+def _is_widening(old: dict[str, Any], new: dict[str, Any]) -> bool:
+    """True when `new` admits everything `old` did, in the two ways we allow.
+
+    Widening a type union or an enum is safe for a producer pinned to the old
+    artefact: every document it could send still validates. Narrowing either, or
+    changing anything else at all, is not.
+    """
+    if {key: value for key, value in _shape(old).items() if key not in ("type", "enum")} != {
+        key: value for key, value in _shape(new).items() if key not in ("type", "enum")
+    }:
+        return False
+    for keyword in ("type", "enum"):
+        was, now = _as_set(old, keyword), _as_set(new, keyword)
+        if was is None:
+            continue  # was unconstrained; any constraint now is a narrowing
+        if now is not None and was <= now:
+            continue  # same constraint or a wider one
+        if now is None:
+            continue  # constraint dropped entirely: wider
+        return False
+    if _as_set(old, "type") is None and _as_set(new, "type") is not None:
+        return False
+    return _as_set(old, "enum") is not None or _as_set(new, "enum") is None
+
+
+def breaking_changes(committed: dict[str, Any], live: dict[str, Any]) -> list[str]:
+    """Differences that break a producer pinned to ``committed``.
+
+    Additive — a new optional property, a new definition, a widened enum or type,
+    a reworded description — returns nothing: regenerate and commit. Everything
+    else needs a version bump, because the artefact for a version must not change
+    meaning under a consumer's feet. This project has already renamed a wire field
+    inside major version 2 without noticing, which is the case this exists for.
+
+    Deliberately strict in one direction: a RELAXED numeric bound also reads as
+    breaking here. There is exactly one bound in the whole schema and it is
+    allowlisted, so paying for that precision is cheaper than a classifier with a
+    second notion of "wider".
     """
     broken: list[str] = []
     old_objects, new_objects = _objects(committed), _objects(live)
-    for name in sorted(set(old_objects) - set(new_objects)):
-        broken.append(f"{name}: definition removed")
+    broken.extend(
+        f"{name}: definition removed" for name in sorted(set(old_objects) - set(new_objects))
+    )
     for name in sorted(set(old_objects) & set(new_objects)):
         old, new = old_objects[name], new_objects[name]
-        old_props = old.get("properties", {})
-        new_props = new.get("properties", {})
-        for field in sorted(set(old_props) - set(new_props)):
-            broken.append(f"{name}.{field}: field removed or renamed")
-        for field in sorted(set(new.get("required", ())) - set(old.get("required", ()))):
-            broken.append(f"{name}.{field}: newly required")
+        old_props, new_props = old.get("properties", {}), new.get("properties", {})
+        broken.extend(
+            f"{name}.{field}: field removed or renamed"
+            for field in sorted(set(old_props) - set(new_props))
+        )
+        broken.extend(
+            f"{name}.{field}: newly required"
+            for field in sorted(set(new.get("required", ())) - set(old.get("required", ())))
+        )
         for field in sorted(set(old_props) & set(new_props)):
-            old_type = old_props[field].get("type")
-            new_type = new_props[field].get("type")
-            if old_type != new_type:
-                broken.append(f"{name}.{field}: type changed {old_type!r} -> {new_type!r}")
-            old_enum = set(old_props[field].get("enum", ()))
-            new_enum = set(new_props[field].get("enum", ()))
-            if old_enum - new_enum:
-                broken.append(
-                    f"{name}.{field}: enum narrowed, dropped {sorted(old_enum - new_enum)}"
-                )
+            was, now = _shape(old_props[field]), _shape(new_props[field])
+            if was != now and not _is_widening(old_props[field], new_props[field]):
+                broken.append(f"{name}.{field}: narrowed or retyped, {was} -> {now}")
     return broken
 
 
 class TestDriftClassification(unittest.TestCase):
-    """The classifier decides whether a diff is "recommit" or "bump the version",
-    so it gets its own tests rather than being trusted."""
+    """The classifier decides "recommit" vs "bump the version", so it is tested
+    rather than trusted. Every case below except the last two was a MISS in the
+    first implementation, found by probing it — a `$ref` retargeted at another
+    definition and an array whose items changed both left the property's own
+    `type` untouched and slipped straight through."""
 
     def _pair(self) -> tuple[dict[str, Any], dict[str, Any]]:
         base = {
             "type": "object",
-            "properties": {"a": {"type": "string"}},
+            "properties": {
+                "a": {"type": "string"},
+                "ref": {"$ref": "#/$defs/Leaf"},
+                "list": {"type": "array", "items": {"$ref": "#/$defs/Leaf"}},
+            },
             "required": ["a"],
-            "$defs": {"Leaf": {"type": "object", "properties": {"n": {"type": "integer"}}}},
+            "$defs": {
+                "Leaf": {"type": "object", "properties": {"n": {"type": "integer"}}},
+                "Other": {"type": "object", "properties": {}},
+            },
         }
         return copy.deepcopy(base), copy.deepcopy(base)
 
@@ -499,6 +558,11 @@ class TestDriftClassification(unittest.TestCase):
     def test_a_new_optional_field_is_additive(self) -> None:
         old, new = self._pair()
         new["properties"]["b"] = {"type": "string"}
+        self.assertEqual(breaking_changes(old, new), [])
+
+    def test_a_reworded_description_is_additive(self) -> None:
+        old, new = self._pair()
+        new["properties"]["a"]["description"] = "clearer wording"
         self.assertEqual(breaking_changes(old, new), [])
 
     def test_a_renamed_field_is_breaking(self) -> None:
@@ -517,16 +581,65 @@ class TestDriftClassification(unittest.TestCase):
     def test_a_changed_type_is_breaking(self) -> None:
         old, new = self._pair()
         new["$defs"]["Leaf"]["properties"]["n"] = {"type": "string"}
-        self.assertIn("Leaf.n: type changed 'integer' -> 'string'", breaking_changes(old, new))
+        self.assertTrue(any(item.startswith("Leaf.n:") for item in breaking_changes(old, new)))
+
+    def test_a_retargeted_ref_is_breaking(self) -> None:
+        """Invisible to a classifier that only compares `type`: a $ref node has none."""
+        old, new = self._pair()
+        new["properties"]["ref"]["$ref"] = "#/$defs/Other"
+        self.assertTrue(
+            any(item.startswith("TradeIntent.ref:") for item in breaking_changes(old, new))
+        )
+
+    def test_a_retargeted_array_item_is_breaking(self) -> None:
+        """Also invisible: the property stays `type: array` either way."""
+        old, new = self._pair()
+        new["properties"]["list"]["items"] = {"$ref": "#/$defs/Other"}
+        self.assertTrue(
+            any(item.startswith("TradeIntent.list:") for item in breaking_changes(old, new))
+        )
+
+    def test_a_dropped_union_branch_is_breaking(self) -> None:
+        old, new = self._pair()
+        old["properties"]["a"] = {"oneOf": [{"$ref": "#/$defs/Leaf"}, {"$ref": "#/$defs/Other"}]}
+        new["properties"]["a"] = {"oneOf": [{"$ref": "#/$defs/Leaf"}]}
+        self.assertTrue(
+            any(item.startswith("TradeIntent.a:") for item in breaking_changes(old, new))
+        )
+
+    def test_a_new_bound_is_breaking(self) -> None:
+        old, new = self._pair()
+        new["$defs"]["Leaf"]["properties"]["n"]["minimum"] = 1
+        self.assertTrue(any(item.startswith("Leaf.n:") for item in breaking_changes(old, new)))
+
+    def test_losing_nullability_is_breaking_and_gaining_it_is_not(self) -> None:
+        old, new = self._pair()
+        old["properties"]["a"]["type"] = ["string", "null"]
+        self.assertTrue(
+            any(item.startswith("TradeIntent.a:") for item in breaking_changes(old, new))
+        )
+        old, new = self._pair()
+        new["properties"]["a"]["type"] = ["string", "null"]
+        self.assertEqual(breaking_changes(old, new), [])
 
     def test_a_narrowed_enum_is_breaking_and_a_widened_one_is_not(self) -> None:
         old, new = self._pair()
         old["properties"]["a"]["enum"] = ["x", "y"]
         new["properties"]["a"]["enum"] = ["x"]
-        self.assertIn("TradeIntent.a: enum narrowed, dropped ['y']", breaking_changes(old, new))
+        self.assertTrue(
+            any(item.startswith("TradeIntent.a:") for item in breaking_changes(old, new))
+        )
+        old, new = self._pair()
         old["properties"]["a"]["enum"] = ["x"]
         new["properties"]["a"]["enum"] = ["x", "y"]
         self.assertEqual(breaking_changes(old, new), [])
+
+    def test_a_first_enum_on_a_free_field_is_breaking(self) -> None:
+        old, new = self._pair()
+        new["properties"]["a"]["enum"] = ["x"]
+        self.assertTrue(
+            any(item.startswith("TradeIntent.a:") for item in breaking_changes(old, new))
+        )
 
     def test_a_removed_definition_is_breaking(self) -> None:
         old, new = self._pair()
@@ -604,6 +717,33 @@ class TestAgainstARealJournal(unittest.TestCase):
                 unexpected.append(f"{document['instrument']['ticker']}: {errors[0].message}")
         print(f"\n{path}: {len(documents)} intents, {accepted} accepted")
         self.assertEqual(unexpected, [])
+
+
+class TestTheRegenerationCommand(unittest.TestCase):
+    """`python -m broker_contract.trade_intent.json_schema` is the command the
+    gate's failure message names, so it is exercised rather than assumed."""
+
+    def test_bare_invocation_writes_the_schema_to_stdout(self) -> None:
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            status = main([])
+        self.assertEqual(status, 0)
+        self.assertEqual(buffer.getvalue(), render_schema())
+
+    def test_write_puts_it_where_the_gate_looks(self) -> None:
+        original = artefact_path().read_text()
+        self.addCleanup(artefact_path().write_text, original)
+        artefact_path().write_text("{}\n")
+        with contextlib.redirect_stderr(io.StringIO()):
+            status = main(["--write"])
+        self.assertEqual(status, 0)
+        self.assertEqual(artefact_path().read_text(), render_schema())
+
+    def test_an_unknown_argument_is_a_usage_error(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            status = main(["--bogus"])
+        self.assertEqual(status, 2, "usage is exit 2 across this project's CLIs")
+        self.assertIn("usage:", errors.getvalue())
 
 
 class TestTheRendererIsStrict(unittest.TestCase):

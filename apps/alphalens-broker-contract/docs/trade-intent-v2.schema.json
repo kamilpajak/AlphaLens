@@ -239,7 +239,7 @@
               }
             ]
           },
-          "description": "How the stop MOVES after fill. At most one stop-management primitive; an empty plan means the stop is never moved.",
+          "description": "How the stop MOVES after fill. An empty plan means the stop is never moved. The door accepts at most ONE stop-management primitive and refuses a second with reaction_plan_ambiguous — that rule lives in validate_intent, not in this document's shape.",
           "default": []
         }
       }

@@ -83,6 +83,29 @@ class TestTheHelperRefusesAnEmptyMeaning(unittest.TestCase):
         )
 
 
+class TestTheHelperRefusesToRedefineWhatTheGeneratorEmits(unittest.TestCase):
+    """`json_schema` ADDS to the published node; it must not redefine it.
+
+    `description` is the one that bites: the generator writes the meaning there,
+    then applies `json_schema` on top, so an override would silently REPLACE the
+    published unit — and the allowlist gate below counts fields rather than
+    reading inside them, so nothing would go red.
+    """
+
+    def test_a_description_override_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            contract_field("percent 0-100", json_schema={"description": "something else"})
+
+    def test_a_type_override_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            contract_field("percent 0-100", json_schema={"type": "string"})
+
+    def test_a_genuine_addition_is_accepted(self) -> None:
+        """Positive control: the guard must not refuse the one real use."""
+        field = contract_field("1-based counter", default=1, json_schema={"minimum": 1})
+        self.assertEqual(field.metadata["json_schema"], {"minimum": 1})
+
+
 class TestExtraSchemaKeywordsStayRare(unittest.TestCase):
     """`json_schema=` is a wedge: it can express any rule `validate_intent`
     already owns. One field uses it, for a reason written down; a second use

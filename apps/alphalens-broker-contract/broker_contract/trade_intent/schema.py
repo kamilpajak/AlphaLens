@@ -25,6 +25,23 @@ from typing import Any, Literal
 
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 
+# Keywords the JSON Schema generator derives from the field itself (#1405). A
+# `json_schema` block may add to the published node, never redefine these.
+_GENERATOR_OWNED_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "type",
+        "enum",
+        "items",
+        "properties",
+        "required",
+        "description",
+        "default",
+        "$ref",
+        "anyOf",
+        "oneOf",
+    }
+)
+
 
 def contract_field(
     meaning: str,
@@ -47,9 +64,19 @@ def contract_field(
     by ``tests/trade_intent/test_contract_metadata.py``.
 
     An empty meaning raises, because a gate satisfiable by ``""`` is not a gate.
+    A ``json_schema`` block that redefines something the generator already emits
+    from the field itself raises too: ``description`` there would silently REPLACE
+    the meaning in the published document, and the allowlist gate counts fields
+    rather than reading inside them.
     """
     if not meaning.strip():
         raise ValueError("a contract field must say what its value means")
+    generated = _GENERATOR_OWNED_KEYWORDS.intersection(json_schema or ())
+    if generated:
+        raise ValueError(
+            f"json_schema must not set {sorted(generated)} — the generator emits "
+            "those from the field itself, and an override here would be invisible"
+        )
     metadata: dict[str, Any] = {"meaning": meaning}
     if json_schema:
         metadata["json_schema"] = dict(json_schema)
@@ -272,8 +299,10 @@ class ExitGeometrySpec:
         "Levels to PLACE, or null when the document supplies none.", default=None
     )
     reaction_plan: tuple[ReactionPrimitive, ...] = contract_field(
-        "How the stop MOVES after fill. At most one stop-management primitive; an "
-        "empty plan means the stop is never moved.",
+        "How the stop MOVES after fill. An empty plan means the stop is never "
+        "moved. The door accepts at most ONE stop-management primitive and "
+        "refuses a second with reaction_plan_ambiguous — that rule lives in "
+        "validate_intent, not in this document's shape.",
         default=(),
     )
 
