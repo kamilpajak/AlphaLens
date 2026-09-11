@@ -64,6 +64,7 @@ from broker_contract.fx import FxConversion
 
 from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.execution import execution_config_version
+from alphalens_pipeline.brokers.journal import append_json_line
 
 
 @dataclass(frozen=True)
@@ -153,10 +154,7 @@ def build_submission_record(
 def append_submission_record(record: dict[str, Any], *, path: Path | None = None) -> Path:
     """Append ``record`` as one JSON line (append-only journal; never rewrites)."""
     target = path or state_paths.submissions_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(record, sort_keys=True, default=str)
-    with target.open("a", encoding="utf-8") as fh:
-        fh.write(line + "\n")
+    append_json_line(target, record, default=str)
     return target
 
 

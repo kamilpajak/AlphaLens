@@ -5340,15 +5340,9 @@ def _append_standalone_stop_journal(record: Mapping[str, Any]) -> None:
     the instant it is written — a buffered write lost to a crash (or systemd
     SIGKILL) would silently drop a disaster-stop plan, and the protection pass
     can never re-derive a price the broker does not know."""
-    import json
-    import os
+    from alphalens_pipeline.brokers.journal import append_json_line
 
-    path = _standalone_stop_journal_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
+    append_json_line(_standalone_stop_journal_path(), record, default=str)
 
 
 _INITIAL_GEN = 0  # entry-placement plan is generation 0; resizes bump it via next_gen() (Task 4)
