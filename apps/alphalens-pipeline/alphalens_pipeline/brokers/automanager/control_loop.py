@@ -955,14 +955,34 @@ def _apply_generation_reset(
     uic: int,
     governing_key: dict[int, str],
     accumulators: tuple[dict[int, Any], ...],
+    *,
+    include_planned: bool = False,
 ) -> bool:
     """The identity-keyed generation reset shared by the fired/trailed folds
     (see ``_fold_fired_since_latest_plan`` for the incident history): a keyless
-    ``tranche_plan`` or one with a DIFFERENT ``pick_key`` clears the uic's
-    accumulators; a SAME-key re-append does not; ``tranche_plan_retracted``
-    always clears. Returns True when the line was a plan/retraction line (the
-    caller consumes it and moves on)."""
-    if kind == _TRANCHE_PLAN_KIND:
+    plan line or one with a DIFFERENT ``pick_key`` clears the uic's
+    accumulators; a SAME-key re-append does not; a retraction always clears.
+    Returns True when the line was a plan/retraction line (the caller consumes
+    it and moves on).
+
+    ``include_planned`` (#1236) additionally treats ``planned`` /
+    ``planned_retracted`` lines as generation markers. OFF by default, and ON for
+    the TRAILED selection only: the fired-tranche and round-trip-closure folds are
+    about a TP ladder, which only a ``tranche_plan`` line describes, and widening
+    their reset would change what counts as an already-fired tranche. The trailed
+    level is different — it belongs to a POSITION, and a pick armed ``--no-tp``
+    journals no ``tranche_plan`` at all, so under the tranche-only rule its uic
+    inherited the previous position's level. Every pick journals ``planned``
+    lines, which is what makes them the right generation marker here. A
+    multi-tier pick writes several of them under ONE ``pick_key``, so the tiers
+    do not reset each other."""
+    plan_kinds = (_TRANCHE_PLAN_KIND, "planned") if include_planned else (_TRANCHE_PLAN_KIND,)
+    retracted_kinds = (
+        (_TRANCHE_PLAN_RETRACTED_KIND, _PLANNED_RETRACTED_KIND)
+        if include_planned
+        else (_TRANCHE_PLAN_RETRACTED_KIND,)
+    )
+    if kind in plan_kinds:
         key = line.get("pick_key")
         if key is None or str(key) != governing_key.get(uic):
             for acc in accumulators:
@@ -972,7 +992,7 @@ def _apply_generation_reset(
         else:
             governing_key[uic] = str(key)
         return True
-    if kind == _TRANCHE_PLAN_RETRACTED_KIND:
+    if kind in retracted_kinds:
         for acc in accumulators:
             acc.pop(uic, None)
         governing_key.pop(uic, None)
@@ -2997,6 +3017,9 @@ def _journal_entry_planned_disaster(record: Mapping[str, Any], uic: int, entry_c
             # position actually trails. Absent on old lines -> None -> the
             # planned line stays byte-identical to today.
             geometry_stamp=record.get("geometry"),
+            # #1236: the watch_open already carries the trade identity; passing
+            # it through is what lets a trailed level be scoped to this pick.
+            pick_key=record.get("pick_key"),
         )
     )
 
@@ -5283,6 +5306,7 @@ def _build_planned_line(
     tier_index: int,
     gen: int = _INITIAL_GEN,
     geometry_stamp: dict[str, Any] | None = None,
+    pick_key: str | None = None,
 ) -> dict[str, Any]:
     """One append-only `planned` journal line — the plan PRICES the broker cannot
     know (disaster stop + in-band TP), keyed to the entry client_request_id and
@@ -5295,7 +5319,14 @@ def _build_planned_line(
     never collide with a field `_fold_planned_exits` reads, and it is never
     read by the fold (measures anchor divergence; confers no protection).
     ``None`` (the default) omits the key entirely, so a caller that never
-    passes it keeps a byte-identical record to pre-PR-6a."""
+    passes it keeps a byte-identical record to pre-PR-6a.
+
+    ``pick_key`` (#1236) is the plan's TRADE identity — the same
+    ``ticker:trade_date[-gN]`` string ``tranche_plan`` lines already carry. It is
+    here because a ``--no-tp`` pick journals no ``tranche_plan`` at all, so
+    ``tranche_plan`` alone cannot say which trade governs such a uic; a
+    ``trailed`` level then outlived the position that earned it. Absent key ->
+    key omitted, byte-identical to every line written before #1236."""
     record: dict[str, Any] = {
         "kind": "planned",
         "client_request_id": entry_crid,
@@ -5308,6 +5339,8 @@ def _build_planned_line(
     }
     if geometry_stamp is not None:
         record["geometry"] = geometry_stamp
+    if pick_key is not None:
+        record["pick_key"] = str(pick_key)
     return record
 
 
@@ -6265,7 +6298,8 @@ def _journal_trailed(
     ``level`` is the stop price actually placed (the ratchet floor, read by the
     fold). ``peak`` / ``last_price`` are the high-water mark and live price the
     trail was computed from — telemetry substrate for the future /edge trailing
-    lens; the fold ignores them, so a missing one is harmless (omitted here)."""
+    lens; the fold ignores them, so a missing one is harmless (omitted here).
+    """
     marker: dict[str, Any] = {
         "kind": "trailed",
         "uic": int(uic),
@@ -6336,49 +6370,69 @@ def _fold_reanchored_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, fl
     return latest_avg_price
 
 
-def _fold_trailed_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
-    """Fold the append-only ``trailed`` journal markers into the LATEST (by ``ts``)
-    trailed ``level`` per uic (Task 2), RESET on each new-generation
-    ``tranche_plan`` line. Mirrors ``_fold_reanchored_markers`` — a DICT, not a
-    TTL frozenset — but reads ``line["level"]`` (the price the stop was
-    confirmed trailed to) instead of the reanchor avg_price.
+def _select_trailed_lines(lines: Iterable[Mapping[str, Any]]) -> dict[int, Mapping[str, Any]]:
+    """The ONE ``trailed`` marker still governing each uic — newest by ``ts``
+    within the CURRENT plan generation.
 
-    The generation reset uses the SAME identity rules as
-    ``_fold_fired_since_latest_plan`` (see its docstring for the incident
-    history): a keyless ``tranche_plan`` or one with a DIFFERENT ``pick_key``
-    is a NEW trade in the uic and drops the accumulated level — the journal is
-    append-only and uic-keyed, so without the reset a re-entered position
-    would inherit the PRIOR trade's trailed level. That stale level used to be
-    merely a too-high ratchet floor that silently blackholed trailing for the
-    new position; once the level also feeds ``ManagedExit.stop_price`` it
-    would be actively PLACED (an absurdly high SL on a fresh entry), so the
-    reset is load-bearing for both consumers. A ``tranche_plan`` re-appended
-    with the SAME ``pick_key`` (the already_watching crash-recovery re-drive)
-    does NOT reset; ``tranche_plan_retracted`` clears. Feeds
-    ``ProtectionView.trailed_stop_by_uic`` (the never-DOWN ratchet floor
-    ``_maybe_trail`` requires a new proposal to clear by ``_TRAIL_STEP_EPS``)
-    and the live-exit engine's SL-amend level via ``_build_managed_exits``.
-    Malformed (missing / unparsable uic, level, or ts) lines are skipped."""
+    The single source of truth for both consumers: ``_fold_trailed_since_latest_plan``
+    reads the level off these lines and ``_elect_trailed_lines`` keeps the lines
+    themselves. Before #1236 the two ran the same logic twice and a comment asked
+    the next author to keep them in step; a compaction that elects a different set
+    from the fold either drops a live ratchet floor or resurrects a dead one,
+    which is #1324. Sharing makes that structural.
+
+    The generation reset now observes ``planned`` lines as well as ``tranche_plan``
+    ones (#1236). A pick armed ``--no-tp`` journals NO ``tranche_plan``, so under
+    the tranche-only rule a level trailed by an EARLIER position on the uic
+    survived into it — measured, and ``--no-tp`` is precisely the trail-only shape
+    a trailing pick uses. ``planned`` lines are written by every pick, which is
+    why they are the ones that close it.
+
+    ORDERING. The reset is write-order-based, and that is safe because the
+    ELECTION runs on the journal in write order, before the compactor reorders
+    anything: a marker the election drops is simply not in the rewritten file. A
+    marker is skipped WITHOUT advancing the newest-ts cursor when its ``level`` or
+    ``ts`` will not parse, so a malformed newer line can never evict a good older
+    one."""
     latest_ts: dict[int, float] = {}
-    latest_level: dict[int, float] = {}
+    latest_line: dict[int, Mapping[str, Any]] = {}
     governing_key: dict[int, str] = {}
     for line in lines:
         uic = _coerce(line, "uic", int)
         if uic is None:
             continue
         kind = line.get("kind")
-        if _apply_generation_reset(kind, line, uic, governing_key, (latest_ts, latest_level)):
+        if _apply_generation_reset(
+            kind, line, uic, governing_key, (latest_ts, latest_line), include_planned=True
+        ):
             continue
-        if kind == "trailed":
-            try:
-                level = float(line["level"])
-                ts = float(line["ts"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if uic not in latest_ts or ts >= latest_ts[uic]:
-                latest_ts[uic] = ts
-                latest_level[uic] = level
-    return latest_level
+        if kind != "trailed":
+            continue
+        try:
+            float(line["level"])  # parse guard; the level itself is read by the caller
+            ts = float(line["ts"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if uic not in latest_ts or ts >= latest_ts[uic]:
+            latest_ts[uic] = ts
+            latest_line[uic] = line
+    return latest_line
+
+
+def _fold_trailed_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
+    """The LATEST confirmed trailed ``level`` per uic, scoped to the plan
+    generation that earned it (see :func:`_select_trailed_lines`).
+
+    Mirrors ``_fold_reanchored_markers`` — a DICT, not a TTL frozenset — but
+    reads ``line["level"]`` (the price the stop was confirmed trailed to) instead
+    of the reanchor avg_price. Feeds ``ProtectionView.trailed_stop_by_uic`` (the
+    never-DOWN ratchet floor ``_maybe_trail`` requires a new proposal to clear by
+    ``_TRAIL_STEP_EPS``) and the live-exit engine's SL-amend level via
+    ``_build_managed_exits``. The second consumer is why the scoping is
+    load-bearing rather than tidy: ``_build_managed_exits`` PLACES
+    ``max(plan stop, trailed)``, so an inherited level is not merely a too-high
+    ratchet floor, it is an absurdly high SL on a fresh entry."""
+    return {uic: float(line["level"]) for uic, line in _select_trailed_lines(lines).items()}
 
 
 def _fold_ttl_markers(
@@ -6610,52 +6664,26 @@ def _emit_kept_tranche_lines(
 
 
 def _elect_trailed_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """The kept ``trailed`` lines: per uic, the ONE marker still inside
-    ``_fold_trailed_since_latest_plan``'s END accumulator (#1324).
+    """The kept ``trailed`` lines: per uic, the ONE marker
+    ``_fold_trailed_since_latest_plan`` still reads (#1324).
 
-    The election MIRRORS that fold line for line — same
-    ``_apply_generation_reset`` call, same ``float(line["level"])`` /
-    ``float(line["ts"])`` parse guard, same ``ts >= latest_ts[uic]`` tie rule —
-    but keeps the LINE instead of the level. Two properties make the mirror
-    load-bearing rather than cosmetic:
+    Selection is SHARED with that fold (:func:`_select_trailed_lines`), not
+    mirrored: the two used to run the same logic twice, and a compaction that
+    elects a different set from the fold either drops a live ratchet floor or
+    resurrects a dead one. Sharing makes the property structural.
 
-      * GENERATION GATING. A plain newest-per-uic election (the shape
-        ``_keep_latest_marker`` provides for ``oco_placed`` / ``amend_ok``) is
-        generation-BLIND: on ``[plan(A), trailed 115, plan(B)]`` the fold
-        returns ``{}`` while a max-ts keep would resurrect 115 behind the kept
-        plan-B line — handing a fresh position a ratchet floor ABOVE its entry
-        and, through ``_build_managed_exits``, an absurdly high SL to place.
-      * THE PARSE GUARD BEFORE THE ts COMPARISON. The fold skips an unparsable
-        ``level`` WITHOUT advancing ``latest_ts``, so a malformed NEWER line
-        must not evict the good older one — which a bare ``(uic, ts)`` keep
-        would do, dropping the uic from the compacted fold entirely.
+    Dropping these markers was the #1324 defect: the fold feeds BOTH
+    ``ProtectionView.trailed_stop_by_uic`` and ``ManagedExit.stop_price`` via
+    ``_build_managed_exits``, so a boot compaction let the daemon PATCH a stop
+    BELOW the level it had already been trailed to.
 
     The original line object is kept (shallow-copied), not a synthesised stub,
     so ``_journal_trailed``'s ``peak`` / ``last_price`` telemetry survives the
-    boot rewrite. Emitted sorted by uic for a deterministic file order; the
-    CALLER is responsible for writing these AFTER the tranche block (see
-    :func:`_compact_standalone_stop_journal_lines`)."""
-    latest_ts: dict[int, float] = {}
-    latest_line: dict[int, Mapping[str, Any]] = {}
-    governing_key: dict[int, str] = {}
-    for line in lines:
-        uic = _coerce(line, "uic", int)
-        if uic is None:
-            continue
-        kind = line.get("kind")
-        if _apply_generation_reset(kind, line, uic, governing_key, (latest_ts, latest_line)):
-            continue
-        if kind != "trailed":
-            continue
-        try:
-            float(line["level"])  # parse guard only — the fold reads the level
-            ts = float(line["ts"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if uic not in latest_ts or ts >= latest_ts[uic]:
-            latest_ts[uic] = ts
-            latest_line[uic] = line
-    return [dict(latest_line[uic]) for uic in sorted(latest_line)]
+    boot rewrite. Emitted sorted by uic for a deterministic file order. Since
+    #1236 the selection no longer depends on where these land relative to the
+    plan lines, because the identity rides on the marker."""
+    selected = _select_trailed_lines(list(lines))
+    return [dict(selected[uic]) for uic in sorted(selected)]
 
 
 def _elect_reanchored_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -8133,6 +8161,14 @@ def _place_tiers(
                     spec,
                     use_geometry=use_geometry,
                     exit_policy=resolved_exit_policy,
+                ),
+                # #1236: the same trade identity the watch path stamps. The
+                # bracket path's ``tranche_plan`` line is deliberately keyless
+                # (its always-reset semantics), but the trailed level is scoped
+                # off the PLANNED line, and this path must not be the one that
+                # keeps the leak open.
+                pick_key=picks.pick_key_str(
+                    ticker, intent.meta.trade_date, _pick_generation(intent)
                 ),
             )
         )
