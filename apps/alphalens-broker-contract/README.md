@@ -217,9 +217,16 @@ whatever became of it — and a document that omits it is generation 1.
 
 **Which `schema_version` to read, and what it does.** `meta.schema_version` is
 the document's version; `spec.schema_version` is the same constant duplicated in
-a second class, not an independent dial. **No gate reads either one today** —
-not the codec, not `validate_intent`, not the schema, which is why v1 documents
-still decode. It is provenance, not version negotiation: a document declaring
-version 99 is accepted exactly like one declaring 2. The compatibility promise
-is therefore a promise about what we EMIT — within a major version, fields are
-only ADDED and only as optional — and the CI gate is what enforces it.
+a second class, not an independent dial. **Exactly one gate reads it: the door**
+(`broker arm-intent`, #1406), which refuses any stated version other than its
+own with `schema_version_unsupported`. An ABSENT key is the current version
+rather than an unknown one — the field carries a default, so omitting it means
+"whatever this contract is at".
+
+Neither the codec nor `validate_intent` nor the JSON Schema reads it, and that
+is deliberate: the journal DRAIN is a different entry point, it reads history,
+and v1 documents must keep decoding there. So the door refusing `"1"` is not a
+claim that v1 is unreadable; it is a claim about what a NEW producer may send.
+The compatibility promise on top is a promise about what we EMIT — within a
+major version, fields are only ADDED and only as optional — and the CI gate on
+the generated artefact is what enforces it.

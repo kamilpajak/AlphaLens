@@ -43,8 +43,36 @@ LIVE_FACTORY_SEAM = "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_l
 SHOW_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._systemctl_show"
 READ_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._read_text"
 BRIEF_SEAM = "alphalens_pipeline.paper.brief_loader.load_brief"
+DOCUMENT_SEAM = "alphalens_cli.commands.broker._document_text"
 
 _ARM_TRADE_DATE = dt.date(2026, 7, 20)
+
+
+def _intent_document() -> str:
+    """One ready TradeIntent, as `arm-intent` would read it off disk.
+
+    Compiled through the same builder `arm-manual` uses rather than typed out:
+    a hand-written document would pass this table while failing the real gates.
+    """
+    from alphalens_pipeline.brokers.automanager.manual_intent import build_manual_intent
+    from broker_contract.trade_intent.codec import intent_to_jsonable
+
+    intent = build_manual_intent(
+        ticker="KO",
+        mic="XNYS",
+        tiers_raw=["100:60", "98:40"],
+        stop=90.0,
+        tps_raw=["110:100"],
+        no_tp=False,
+        size_pct=3.0,
+        notional=None,
+        frame=None,
+        ttl_days=None,
+        arm_date=_ARM_TRADE_DATE,
+        armed_ts=f"{_ARM_TRADE_DATE.isoformat()}T12:00:00+00:00",
+        generation=1,
+    )
+    return json.dumps(intent_to_jsonable(intent))
 
 
 def _brief_candidate():
@@ -159,6 +187,12 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
         ("armed", "dry_run", "ticker", "generation", "intent", "picks_journal"),
     ),
     (
+        "arm-intent",
+        ["arm-intent", "intent.json"],
+        True,
+        ("armed", "dry_run", "ticker", "trade_date", "generation", "intent_id", "picks_journal"),
+    ),
+    (
         "disarm",
         ["disarm", "KO", "--date", "2026-07-20"],
         True,
@@ -179,7 +213,7 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
 # following it (#1377) — a write must not choose SIM or LIVE off a variable the
 # operator forgot was set. `cancel` is not among them: it resolves the instance
 # the way the read commands do.
-_AMBIENT_REFUSING_COMMANDS = frozenset({"arm", "arm-manual", "disarm"})
+_AMBIENT_REFUSING_COMMANDS = frozenset({"arm", "arm-manual", "arm-intent", "disarm"})
 
 
 def _reject_json_constant(token: str) -> None:
@@ -322,6 +356,7 @@ class _BrokerCliCase(unittest.TestCase):
             mock.patch(LIVE_FACTORY_SEAM, return_value=(self.broker, mock.Mock())),
             mock.patch(REGISTRY_SEAM, return_value=self.broker),
             mock.patch(BRIEF_SEAM, return_value=[_brief_candidate()]),
+            mock.patch(DOCUMENT_SEAM, return_value=_intent_document()),
         ):
             return self.runner.invoke(broker_app, argv)
 

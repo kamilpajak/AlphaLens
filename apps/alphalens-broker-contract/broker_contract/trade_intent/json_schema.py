@@ -194,9 +194,10 @@ def generate_schema() -> dict[str, Any]:
             "The schema pins SHAPE; a schema-valid document can still be refused by the "
             "door's semantic rules (see intent_invalid in the package README). Within a "
             "major version only optional fields are added: a field is never renamed, "
-            "retyped, or given a new unit. NOTE: no gate reads schema_version today — "
-            "it is stamped and carried, and a document declaring any version decodes, "
-            "so treat it as provenance rather than as version negotiation."
+            "retyped, or given a new unit. NOTE: this schema does not constrain "
+            "schema_version and neither does the codec — the DOOR does (broker "
+            "arm-intent refuses a stated version other than its own), while the journal "
+            "drain stays ungated so older documents keep decoding there."
         ),
         **root,
         "$defs": definitions,

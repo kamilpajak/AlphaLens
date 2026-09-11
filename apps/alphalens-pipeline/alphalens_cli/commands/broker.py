@@ -77,8 +77,10 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 import os
 import re
+import sys
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from pathlib import Path
@@ -2292,6 +2294,391 @@ def arm_manual_command(
     typer.echo(f"armed {intent.instrument.ticker} (manual) -> {picks_target}")
 
 
+# ---------------------------------------------------------------------------
+# `arm-intent` — the raw-document door (#1406).
+# ---------------------------------------------------------------------------
+
+
+class _DuplicateJsonKeyError(ValueError):
+    """A JSON object repeated a key.
+
+    `json.loads` keeps the LAST value without a word, so a producer building
+    JSON by concatenation would arm at a price it never meant to send. The hook
+    below is the only layer where the repetition is still visible.
+    """
+
+    def __init__(self, keys: list[str]) -> None:
+        super().__init__(f"duplicate key(s): {', '.join(keys)}")
+        self.keys = keys
+
+
+def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = [key for key, _ in pairs]
+    duplicated = sorted({key for key in keys if keys.count(key) > 1})
+    if duplicated:
+        raise _DuplicateJsonKeyError(duplicated)
+    return dict(pairs)
+
+
+def _intent_malformed(reason: str, message: str, **details: Any) -> typer.Exit:
+    """One code for "this is not the published wire shape", with the rule named.
+
+    Same trade as `intent_invalid`: a closed `details.reason` vocabulary rather
+    than seven top-level codes for one failure mode, because a client branches
+    on the mode and only then looks at which rule it broke.
+    """
+    return _fail_with("intent_malformed", message, details={"reason": reason, **details})
+
+
+def _document_text(source: str) -> str:
+    if source == "-":
+        return sys.stdin.read()
+    try:
+        return Path(source).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise _fail_with("usage", f"cannot read {source}: {exc}", details={"path": source}) from exc
+
+
+def _parsed_document(text: str) -> Any:
+    try:
+        return json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
+    # BEFORE JSONDecodeError, which is also a ValueError.
+    except _DuplicateJsonKeyError as exc:
+        raise _intent_malformed(
+            "duplicate_key",
+            f"{exc} — a JSON parser keeps the last silently, so the value you sent "
+            "first would vanish",
+            keys=exc.keys,
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise _intent_malformed("not_json", f"not a JSON document: {exc}") from exc
+
+
+def _unwrapped(document: Any) -> Any:
+    """Peel one of OUR envelopes; anything else passes through as the document."""
+    if not isinstance(document, Mapping) or "schema" not in document:
+        return document
+    schema = document.get("schema")
+    body = document.get("intent")
+    if schema not in _UNWRAPPABLE_ENVELOPES or not isinstance(body, Mapping):
+        raise _intent_malformed(
+            "envelope_unknown",
+            f"a top-level 'schema' makes this an envelope, but {schema!r} is not one this "
+            f"door unwraps (known: {', '.join(sorted(_UNWRAPPABLE_ENVELOPES))}) or it "
+            "carries no 'intent'",
+            envelope=schema,
+        )
+    return body
+
+
+def _assert_published_shape(document: Any) -> None:
+    """The schema gate — on the WIRE, before decoding.
+
+    Validating the decoded object instead would be close to a tautology: the
+    object is built from the same dataclasses the schema is generated from
+    (#1405). Generated in-process rather than read off disk; CI already pins
+    that the committed artefact equals what this call produces.
+    """
+    import jsonschema
+    from broker_contract.trade_intent.json_schema import generate_schema
+
+    # The draft is pinned on the generator's side, and
+    # `test_json_schema.py::test_it_is_a_2020_12_schema_naming_its_version` is
+    # what keeps the two from drifting — cheaper than dispatching on `$schema`
+    # at every invocation.
+    validator = jsonschema.Draft202012Validator(generate_schema())
+    errors = sorted(validator.iter_errors(document), key=lambda error: error.json_path)
+    if errors:
+        first = errors[0]
+        raise _intent_malformed(
+            "schema_violation",
+            f"{first.json_path}: {first.message}",
+            path=first.json_path,
+        )
+
+
+def _assert_version_is_spoken(document: Mapping[str, Any]) -> None:
+    """Refuse a version string this door does not speak.
+
+    An ABSENT key is the current version, not an unknown one: the field carries
+    a default, so omitting it means "whatever this contract is at". Only a
+    stated, different version is refused — and that includes the retired "1",
+    whose documents all carry the pre-#1252 date key and cannot pass the schema
+    anyway. The journal DRAIN still reads them; it is a different entry point.
+    """
+    from broker_contract.trade_intent.schema import SCHEMA_VERSION
+
+    meta = document.get("meta")
+    declared = meta.get("schema_version") if isinstance(meta, Mapping) else None
+    if declared is not None and declared != SCHEMA_VERSION:
+        raise _intent_malformed(
+            "schema_version_unsupported",
+            f"meta.schema_version {declared!r} — this door speaks {SCHEMA_VERSION!r}",
+            declared=declared,
+            supported=SCHEMA_VERSION,
+        )
+
+
+def _same_leaf(sent: Any, rendered: Any) -> bool:
+    """Equality that treats NaN as unchanged.
+
+    Not indulgence: a non-finite number must reach `validate_intent`, which
+    refuses it as `numeric_not_finite`. Reporting it here as a discarded key
+    would name the wrong rule for a document that is wrong for another reason.
+    """
+    if isinstance(sent, float) and isinstance(rendered, float) and math.isnan(sent):
+        return math.isnan(rendered)
+    return sent == rendered
+
+
+def _discarded_paths(sent: Any, rendered: Any, prefix: str = "") -> list[str]:
+    """Every path the client sent that decoding did not give back unchanged.
+
+    The decoder DROPS keys it does not model, with only a log line (forward
+    compatibility for a newer client). Through a door that arms real money that
+    is the wrong default: `limit_pirce` vanishes and the pick carries the price
+    the client did not send. Defaults we ADD are not losses — only what the
+    client sent and did not get back counts.
+    """
+    here = prefix or "$"
+    if isinstance(sent, Mapping):
+        if not isinstance(rendered, Mapping):
+            return [here]
+        lost: list[str] = []
+        for key, value in sent.items():
+            where = f"{prefix}.{key}" if prefix else str(key)
+            if key not in rendered:
+                lost.append(where)
+            else:
+                lost.extend(_discarded_paths(value, rendered[key], where))
+        return lost
+    if isinstance(sent, list):
+        if not isinstance(rendered, list) or len(rendered) != len(sent):
+            return [here]
+        return [
+            path
+            for index, item in enumerate(sent)
+            for path in _discarded_paths(item, rendered[index], f"{prefix}[{index}]")
+        ]
+    return [] if _same_leaf(sent, rendered) else [here]
+
+
+def _trade_date_of(intent: Any) -> dt.date:
+    raw = intent.meta.trade_date
+    try:
+        return dt.date.fromisoformat(str(raw))
+    except ValueError as exc:
+        raise _intent_malformed(
+            "trade_date_malformed",
+            f"meta.trade_date {raw!r} is not a YYYY-MM-DD date — the queue fold would read "
+            "the armed line as malformed and never drain it",
+            value=raw,
+        ) from exc
+
+
+def _assert_key_is_writable(
+    intent: Any, trade_date: dt.date, *, env: str, picks_target: Path
+) -> None:
+    """The pick key takes a write only when nothing has happened to it yet.
+
+    Absent -> a new pick. Armed and not yet placed -> the idempotent replace a
+    client depends on after a timeout. Everything else is a refusal, and both
+    refusals were MEASURED on 2026-09-11 rather than imagined: resubmitting
+    after a `disarm` resurrected a pick the operator had cancelled, and
+    resubmitting after the daemon had placed it rewrote a queue line the drain
+    would never look at again (it skips keys already in submissions.jsonl).
+    """
+    from alphalens_pipeline.brokers.automanager import picks as picks_mod
+    from alphalens_pipeline.brokers.automanager import state_paths
+    from alphalens_pipeline.brokers.submission_log import iter_submission_records
+
+    ticker = intent.instrument.ticker.upper()
+    generation = intent.meta.generation
+    same_key = [
+        record
+        for record in picks_mod.read_pick_fold(path=picks_target).records
+        if record.ticker == ticker and record.trade_date == trade_date
+    ]
+    current = next((r for r in same_key if r.generation == generation), None)
+    if current is not None and current.status != picks_mod.STATUS_ARMED:
+        raise _fail_with(
+            "pick_not_writable",
+            f"{ticker} @ {current.token} is {current.status} — a spent generation never "
+            "comes back; arm the next generation instead",
+            details={
+                "reason": "generation_spent",
+                "pick_key": current.token,
+                "status": current.status,
+            },
+        )
+    if current is not None:
+        submitted = picks_mod.submitted_pick_keys(
+            iter_submission_records(state_paths.submissions_path(env=env))
+        )
+        if (ticker, current.token) in submitted:
+            raise _fail_with(
+                "pick_not_writable",
+                f"{ticker} @ {current.token} is already placed — the drain skips keys it has "
+                "submitted, so replacing this line would change the queue and not the market",
+                details={"reason": "already_placed", "pick_key": current.token},
+            )
+    live_siblings = [
+        r for r in same_key if r.generation != generation and r.status == picks_mod.STATUS_ARMED
+    ]
+    if live_siblings:
+        live = max(live_siblings, key=lambda record: record.generation)
+        raise _fail_with(
+            "pick_already_armed",
+            f"{ticker} @ {live.token} is still armed (generation {live.generation}) — arming "
+            f"generation {generation} beside it would run two live picks on one instrument; "
+            f"run `alphalens broker disarm {ticker} --date {trade_date.isoformat()} --env {env}` first",
+            details={"armed_generation": live.generation, "submitted_generation": generation},
+        )
+
+
+@broker_app.command(name="arm-intent")
+def arm_intent_command(
+    source: str = typer.Argument(
+        ..., help="Path to a TradeIntent JSON document, or - to read one from stdin."
+    ),
+    env: str | None = typer.Option(
+        None,
+        "--env",
+        help="Broker instance inbox to arm into: 'sim' or 'live' (ADR 0016). Default: sim; an explicit value is REQUIRED when "
+        "ALPHALENS_BROKER_ENVIRONMENT names another instance (#1377).",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Validate and echo the intent, append nothing."
+    ),
+    output_format: str | None = _FORMAT_OPTION,
+) -> None:
+    """Arm a pick from a ready TradeIntent document (#1406) — the client-agnostic door.
+
+    `arm` parses a brief and `arm-manual` compiles operator levels; both then
+    build the same artefact. This command accepts that artefact directly, so a
+    third producer needs a JSON document rather than a Typer command of its own.
+    Either a bare TradeIntent or one of this group's own envelopes is accepted:
+    `arm-manual --format json` output pipes straight in.
+
+    FOUR GATES, in this order, and none of them is redundant:
+
+    \b
+      shape       the published JSON Schema, on the WIRE before decoding
+      decode      the codec, which refuses what the schema cannot express
+                  (`generation: 1.0` is an integer to JSON Schema, and is not
+                  an integer to the identity strings built from it, #1371)
+      nothing lost  every key you sent comes back after decode+re-render; the
+                  decoder otherwise DROPS what it does not model, and a typo'd
+                  `limit_pirce` would arm at a price you never sent
+      coherent    `validate_intent` — allocations, stop below entries, size not
+                  levered, and the exit declaration (#1404)
+
+    Then two questions about this deployment rather than the document: is the
+    venue one we trade, and does the pick key still take a write.
+
+    A PURE EXECUTOR, like its siblings: no selection filter, no normalising, no
+    rescaling. Nothing is appended unless every gate passed.
+
+    IDENTITY. The queue folds on (ticker, trade_date, generation) and keeps the
+    LATEST, so resubmitting a document REPLACES rather than duplicates — the
+    retry-after-timeout path. The journal is append-only, so that leaves two
+    lines and one folded pick. A generation that was disarmed or refused is
+    spent, a pick the daemon already placed is not rewritten, and a DIFFERENT
+    live generation of the same key is refused rather than run beside it.
+    """
+    from alphalens_pipeline.brokers.automanager import state_paths
+    from alphalens_pipeline.brokers.automanager.manual_intent import (
+        UnsupportedVenueError,
+        ensure_supported_venue,
+    )
+    from alphalens_pipeline.brokers.automanager.picks import arm_pick
+    from broker_contract.trade_intent.codec import (
+        TradeIntentDecodeError,
+        intent_from_jsonable,
+        intent_to_jsonable,
+    )
+    from broker_contract.trade_intent.validate import IntentInvalidError, validate_intent
+
+    resolved_format = _resolve_format(output_format)
+    env = _guard_ambient_instance(env, default=_DEFAULT_ARM_ENV)
+
+    try:
+        picks_target = state_paths.picks_path(env=env)
+    except ValueError as exc:
+        raise _fail_with("usage", str(exc)) from exc
+
+    _guard_state_layout()
+
+    document = _unwrapped(_parsed_document(_document_text(source)))
+    _assert_published_shape(document)
+    _assert_version_is_spoken(document)
+
+    try:
+        intent = intent_from_jsonable(document)
+    except TradeIntentDecodeError as exc:
+        raise _intent_malformed("undecodable", str(exc)) from exc
+
+    discarded = _discarded_paths(document, intent_to_jsonable(intent))
+    if discarded:
+        raise _intent_malformed(
+            "key_discarded",
+            f"the decoder would discard {', '.join(discarded)} — the pick would not carry "
+            "what you sent",
+            paths=discarded,
+        )
+
+    try:
+        validate_intent(intent)
+    except IntentInvalidError as exc:
+        raise _fail_with(
+            "intent_invalid", exc.failure.message, details=exc.failure.details
+        ) from exc
+
+    try:
+        ensure_supported_venue(intent.instrument.mic)
+    except UnsupportedVenueError as exc:
+        raise _fail_with(
+            "venue_unsupported", str(exc), details={"mic": intent.instrument.mic}
+        ) from exc
+
+    trade_date = _trade_date_of(intent)
+    _assert_key_is_writable(intent, trade_date, env=env, picks_target=picks_target)
+
+    if resolved_format == _FORMAT_JSON:
+        # Render BEFORE the append: an unrenderable payload must refuse without
+        # having armed anything (the `arm` precedent).
+        body = _render_json(
+            _envelope(
+                _ARM_INTENT_SCHEMA,
+                env,
+                armed=not dry_run,
+                dry_run=dry_run,
+                ticker=intent.instrument.ticker,
+                trade_date=intent.meta.trade_date,
+                generation=intent.meta.generation,
+                intent_id=intent.intent_id,
+                source=intent.meta.source,
+                picks_journal=str(picks_target),
+            )
+        )
+        if not dry_run:
+            arm_pick(intent, path=picks_target)
+        typer.echo(body)
+        return
+
+    if dry_run:
+        typer.echo(
+            f"dry-run: {intent.instrument.ticker} @ {intent.meta.trade_date} "
+            f"(generation {intent.meta.generation}) passes every gate — nothing armed"
+        )
+        return
+    arm_pick(intent, path=picks_target)
+    typer.echo(
+        f"armed {intent.instrument.ticker} @ {intent.meta.trade_date} "
+        f"(generation {intent.meta.generation}, source={intent.meta.source}) -> {picks_target}"
+    )
+
+
 @broker_app.command(name="disarm")
 def disarm_command(
     ticker: str = typer.Argument(..., help="Plain ticker of the armed pick, e.g. KO."),
@@ -3448,6 +3835,11 @@ def manage_command(
 _ACCOUNT_SCHEMA = "alphalens.broker.account/v1"
 _ARM_SCHEMA = "alphalens.broker.arm/v1"
 _ARM_MANUAL_SCHEMA = "alphalens.broker.arm-manual/v1"
+_ARM_INTENT_SCHEMA = "alphalens.broker.arm-intent/v1"
+# Envelopes `arm-intent` unwraps. A bare TradeIntent never carries a top-level
+# `schema`, so the discriminator is a LOOKUP rather than a guess — and an
+# envelope we do not publish is refused instead of being peeled hopefully.
+_UNWRAPPABLE_ENVELOPES: frozenset[str] = frozenset({_ARM_MANUAL_SCHEMA, _ARM_INTENT_SCHEMA})
 _CANCEL_SCHEMA = "alphalens.broker.cancel/v1"
 _DISARM_SCHEMA = "alphalens.broker.disarm/v1"
 _POSITIONS_SCHEMA = "alphalens.broker.positions/v1"
