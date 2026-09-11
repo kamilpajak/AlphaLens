@@ -46,6 +46,9 @@ from alphalens_pipeline.brokers.automanager.control_loop import (
     _fold_trailed_since_latest_plan,
     _geometry_shadow_stamp,
 )
+from alphalens_pipeline.brokers.automanager.control_loop import (
+    _build_planned_line as _planned_line,
+)
 from alphalens_pipeline.brokers.automanager.manual_intent import build_manual_intent
 from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
@@ -255,33 +258,57 @@ class TestInheritedTrailedLevelCannotMoveAManualPick(unittest.TestCase):
                 )
                 self.assertEqual([type(a) for a in actions], [NoOp])
 
-    def test_a_manual_tranche_plan_resets_the_inherited_level(self) -> None:
+    def test_a_later_manual_pick_does_not_inherit_the_level(self) -> None:
         """The other consumer is ``control_loop._build_managed_exits``, which
-        takes ``max(plan stop, trailed)`` and PLACES it. A manual pick that
-        journals its own ``tranche_plan`` carries a new ``pick_key``, so the
-        generation reset clears the inherited marker before the fold is read."""
+        takes ``max(plan stop, trailed)`` and PLACES it.
+
+        The MECHANISM changed with #1236 and this test changed with it: the level
+        used to be cleared by a generation reset on the later pick's
+        ``tranche_plan`` line, which is why a ``--no-tp`` pick — journaling no
+        such line — inherited it anyway. Now the marker carries the identity of
+        the plan it was trailed under, and the fold keeps it only while that plan
+        still governs the uic. The promise is unchanged and strictly wider: it
+        now holds for the trail-only shape too, which is the one this file is
+        about."""
         earlier = [
+            _planned_line(
+                entry_crid="AMBA-2026-08-27-entry-t0",
+                uic=_UIC,
+                side="SELL",
+                stop_price=_PLAN_STOP,
+                take_profit=None,
+                tier_index=0,
+                pick_key="AMBA:2026-08-27",
+            ),
             {
-                "kind": "tranche_plan",
+                "kind": "trailed",
                 "uic": _UIC,
-                "ts": 100.0,
+                "ts": 110.0,
+                "level": _PLAN_STOP + 6.5,
                 "pick_key": "AMBA:2026-08-27",
-                "tiers": [],
-                "entry_crid": "AMBA-2026-08-27-entry-t0",
             },
-            {"kind": "trailed", "uic": _UIC, "ts": 110.0, "level": _PLAN_STOP + 6.5},
         ]
-        # Positive control: without the manual pick's own plan line the level survives.
+        # Positive control: while its own pick still governs, the level survives.
         self.assertEqual(_fold_trailed_since_latest_plan(earlier), {_UIC: _PLAN_STOP + 6.5})
-        manual_plan = {
-            "kind": "tranche_plan",
+        # The later manual pick supersedes the earlier plan on this uic. `--no-tp`
+        # on purpose: no tranche_plan line anywhere, which is exactly the case the
+        # old generation reset could not see.
+        retraction = {
+            "kind": "planned_retracted",
+            "client_request_id": "AMBA-2026-08-27-entry-t0",
             "uic": _UIC,
-            "ts": 200.0,
-            "pick_key": "AMBA:2026-09-04",
-            "tiers": [],
-            "entry_crid": "AMBA-2026-09-04-entry-t0",
+            "note": "superseded",
         }
-        self.assertEqual(_fold_trailed_since_latest_plan([*earlier, manual_plan]), {})
+        manual_plan = _planned_line(
+            entry_crid="AMBA-2026-09-04-entry-t0",
+            uic=_UIC,
+            side="SELL",
+            stop_price=_PLAN_STOP,
+            take_profit=None,
+            tier_index=0,
+            pick_key="AMBA:2026-09-04",
+        )
+        self.assertEqual(_fold_trailed_since_latest_plan([*earlier, retraction, manual_plan]), {})
 
     def test_a_no_tp_manual_pick_is_skipped_by_the_managed_exit_builder(self) -> None:
         """The residual case the reset does NOT cover: ``--no-tp`` journals no

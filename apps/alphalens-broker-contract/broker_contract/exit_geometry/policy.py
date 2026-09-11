@@ -14,10 +14,22 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeGuard, runtime_checkable
 
 from broker_contract.exit_geometry.levels import chandelier_target, fractional_giveback_target
 from broker_contract.exit_geometry.registry import ExitGeometryPolicy
+
+
+def _usable_atr(atr: float | None) -> TypeGuard[float]:
+    """Whether ``atr`` is a number this policy family can anchor risk on.
+
+    ``None`` is a FIRST-CLASS input, not a defect: it means "the plan carries no
+    ATR" (issue #1236). Whether that is fatal is the POLICY's business — the ATR
+    family cannot size a risk distance without one, while ``breakeven_trail``
+    never reads it. Before #1236 the caller
+    (``position_manager._maybe_trail``) refused on a missing ATR for everyone,
+    which vetoed a policy for a value it discards."""
+    return atr is not None and math.isfinite(atr) and atr > 0
 
 
 @runtime_checkable
@@ -80,7 +92,7 @@ class ExitPolicy(Protocol):
     def decide_reanchor(
         self,
         avg_price: float,
-        atr: float,
+        atr: float | None,
         *,
         peak: float | None = None,
         last_price: float | None = None,
@@ -106,7 +118,7 @@ class SetupStaticPolicy:
     def decide_reanchor(
         self,
         avg_price: float,
-        atr: float,
+        atr: float | None,
         *,
         peak: float | None = None,
         last_price: float | None = None,
@@ -143,7 +155,7 @@ class AtrBracketPolicy:
     def decide_reanchor(
         self,
         avg_price: float,
-        atr: float,
+        atr: float | None,
         *,
         peak: float | None = None,
         last_price: float | None = None,
@@ -151,7 +163,7 @@ class AtrBracketPolicy:
     ) -> float | None:
         if not math.isfinite(avg_price) or avg_price <= 0:
             return None
-        if not math.isfinite(atr) or atr <= 0:
+        if not _usable_atr(atr):
             return None
         target = avg_price - self.geom.stop_atr_mult * atr
         if not math.isfinite(target) or target <= 0:
@@ -195,7 +207,7 @@ class TrailingAtrPolicy:
     def decide_reanchor(
         self,
         avg_price: float,
-        atr: float,
+        atr: float | None,
         *,
         peak: float | None = None,
         last_price: float | None = None,
@@ -203,7 +215,7 @@ class TrailingAtrPolicy:
     ) -> float | None:
         if not math.isfinite(avg_price) or avg_price <= 0:
             return None
-        if not math.isfinite(atr) or atr <= 0:
+        if not _usable_atr(atr):
             return None
         if peak is None or not math.isfinite(peak) or peak <= 0:
             return None
@@ -253,7 +265,7 @@ class BreakevenTrailPolicy:
     def decide_reanchor(
         self,
         avg_price: float,
-        atr: float,
+        atr: float | None,
         *,
         peak: float | None = None,
         last_price: float | None = None,
