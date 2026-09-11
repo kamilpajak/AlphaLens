@@ -93,17 +93,18 @@ LEGACY_ALLOWANCES: Final[Mapping[str, LegacyAllowance]] = MappingProxyType(
             "the published schema, and the `ceiling_price_unsupported` rule that refuses "
             "any non-null value.",
             why="Every brief-armed document written before #1236 carries it. The field "
-            "caps a take-profit, which is a placement instruction this contract does not "
-            "carry, so `validate_intent` refuses it rather than discarding it silently. "
-            "The current brief path stopped declaring it, but the refusal must outlive "
-            "the producer that needed it.",
-            retires_when="EITHER exit retires it, and the census only measures the first. "
-            "(1) No line of any picks journal carries a non-null `ceiling_price` in "
-            "`exit.reaction_plan` — measured 45 of 63 on 2026-09-11; removing the field is "
-            "then a BREAKING schema change that bumps `SCHEMA_VERSION`. (2) #1414 makes "
-            "placement a declaration too and LIFTS the refusal, at which point the field is "
-            "a live feature rather than an allowance and this entry goes even though the "
-            "count is still 45 — so read the count as evidence for path (1) only.",
+            "caps a take-profit, and NOTHING on the daemon side computes one: "
+            "`decide_reanchor` returns a stop, and the only reader of `ceiling_price` is "
+            "the producer-side bracket builder. So `validate_intent` refuses it rather "
+            "than discarding it silently, and the refusal must outlive the producer that "
+            "needed it.",
+            retires_when="No line of any picks journal carries a non-null `ceiling_price` "
+            "in `exit.reaction_plan` — measured 45 of 63 on 2026-09-11; removing the field "
+            "is then a BREAKING schema change that bumps `SCHEMA_VERSION`. This entry used "
+            "to name a second exit — #1414 lifting the refusal — on the expectation that "
+            "making placement a declaration would give the field something to do. It did "
+            "not: #1414 measured that the daemon never re-derives a take-profit, so the "
+            "refusal is permanent and the count above is the only thing that retires this.",
             still_needed=_carries_reanchor_ceiling,
         ),
     }

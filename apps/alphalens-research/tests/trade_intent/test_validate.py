@@ -470,8 +470,11 @@ class TheDeclarationRulesTest(unittest.TestCase):
     * **``ceiling_price``**, which reads like a stop-side cap and is not. In
       ``atr_bracket_levels`` it applies as ``tp = min(tp, ceiling_price)`` and
       never touches the stop — it is a take-profit, that is, a PLACEMENT
-      parameter. This work has nothing to honour it with, and a door must not
-      accept a field it discards. The placement issue lifts this refusal.
+      parameter — and nothing on the daemon side computes a take-profit, so
+      there is nothing to honour it with and never will be under this design
+      (``decide_reanchor`` returns a stop; the only reader of ``ceiling_price``
+      is the PRODUCER-side bracket builder). #1414 confirmed the refusal is
+      permanent rather than lifting it as its own sketch expected.
     """
 
     def _with(self, exit_spec):
@@ -481,6 +484,15 @@ class TheDeclarationRulesTest(unittest.TestCase):
         with self.assertRaises(IntentInvalidError) as caught:
             validate_intent(self._with(exit_spec))
         return caught.exception.failure.details["reason"]
+
+    def _reason_or_none(self, exit_spec) -> str | None:
+        """For the cases that must be ACCEPTED: a helper that asserts a raise
+        cannot express "this is valid now"."""
+        try:
+            validate_intent(self._with(exit_spec))
+        except IntentInvalidError as exc:
+            return exc.failure.details["reason"]
+        return None
 
     def test_a_trailing_declaration_with_no_levels_is_accepted(self):
         """The shape the whole change exists for — asserted first, so the
@@ -508,13 +520,22 @@ class TheDeclarationRulesTest(unittest.TestCase):
             "reaction_plan_ambiguous",
         )
 
-    def test_a_reanchor_without_levels_is_refused(self):
-        self.assertEqual(
-            self._reason(ExitGeometrySpec(reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=2.0),))),
-            "reanchor_without_levels",
+    def test_a_reanchor_without_levels_is_accepted(self):
+        """#1414 retired ``reanchor_without_levels``.
+
+        Its message said the two halves of the document disagreed about what is
+        placed. They no longer can: absence of levels MEANS "place the brief
+        ladder", and the re-anchor moves the stop off ``avg_price``, floored by
+        the brief disaster stop — never off ``initial_levels``. A rule that has
+        stopped being true is removed, not re-worded.
+        """
+        self.assertIsNone(
+            self._reason_or_none(
+                ExitGeometrySpec(reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=2.0),))
+            )
         )
 
-    def test_a_ceiling_price_is_refused(self):
+    def test_a_ceiling_price_is_still_refused(self):
         self.assertEqual(
             self._reason(
                 ExitGeometrySpec(
@@ -604,6 +625,41 @@ class TheDeclarationRulesTest(unittest.TestCase):
                     ),
                     "initial_level_non_positive",
                 )
+
+    def test_a_take_profit_at_or_below_the_stop_is_refused(self):
+        """#1414 turned these two numbers into an ORDER.
+
+        While nothing placed them, an inverted pair was harmless telemetry. Now
+        it journals a 100% take-profit tranche below its own stop, and the
+        position sells itself the moment it fills. The arm gates catch the
+        economically bad case downstream; the door is where the incoherent
+        document is caught.
+        """
+        for levels in (
+            InitialLevels(stop=100.0, tp=100.0),
+            InitialLevels(stop=100.0, tp=90.0),
+        ):
+            with self.subTest(levels=levels):
+                self.assertEqual(
+                    self._reason(ExitGeometrySpec(initial_levels=levels)),
+                    "take_profit_not_above_stop",
+                )
+
+    def test_positive_control_a_take_profit_above_the_stop_is_accepted(self):
+        self.assertIsNone(
+            self._reason_or_none(
+                ExitGeometrySpec(initial_levels=InitialLevels(stop=90.0, tp=90.01))
+            )
+        )
+
+    def test_a_non_positive_level_is_reported_before_the_ordering_rule(self):
+        """Ordering is only meaningful once both numbers are real prices: a
+        negative stop is "below" every take-profit, so the ordering rule would
+        pass it and the reader would be told the wrong thing about it."""
+        self.assertEqual(
+            self._reason(ExitGeometrySpec(initial_levels=InitialLevels(stop=-5.0, tp=130.0))),
+            "initial_level_non_positive",
+        )
 
     def test_a_non_finite_initial_level_is_caught_first(self):
         """Levels became optional, so they are numbers the door now accepts and
