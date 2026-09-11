@@ -51,6 +51,7 @@ from typing import Any
 
 from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.automanager.labels import entry_label_from_crid
+from alphalens_pipeline.brokers.journal import append_json_line
 
 logger = logging.getLogger(__name__)
 
@@ -554,11 +555,7 @@ def append_entry_trail_line(record: Mapping[str, Any], *, path: Path | None = No
     ``datetime``/``Path`` in a payload serialize rather than crash the append.
     ``path`` overrides the per-env seam (see :func:`read_entry_trail_fold`)."""
     path = path if path is not None else _entry_trail_journal_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
+    append_json_line(path, record, default=str)
 
 
 # --- Operator disarm (the watch half of `alphalens broker disarm`) -----------

@@ -58,6 +58,7 @@ from broker_contract.trade_intent.codec import (
 from broker_contract.trade_intent.schema import TradeIntent
 
 from alphalens_pipeline.brokers.automanager import state_paths
+from alphalens_pipeline.brokers.journal import append_json_line
 
 logger = logging.getLogger(__name__)
 
@@ -114,12 +115,16 @@ def _generation_fields(generation: int) -> dict[str, int]:
 
 
 def _append_record(record: dict, path: Path | None) -> None:
-    """Append one JSON line (append-only; never rewrites)."""
+    """Append one JSON line (append-only; never rewrites).
+
+    Through the shared journal writer (#1421): it repairs a predecessor torn by
+    a partial write before appending — otherwise this record would concatenate
+    onto the broken line and BOTH would be lost — and fsyncs. No ``default``
+    here on purpose: an unrepresentable value in a TradeIntent must refuse
+    loudly rather than become a silent string on the money path.
+    """
     target = path or state_paths.picks_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(record, sort_keys=True)
-    with target.open("a", encoding="utf-8") as fh:
-        fh.write(line + "\n")
+    append_json_line(target, record)
 
 
 def arm_pick(intent: TradeIntent, *, path: Path | None = None) -> None:

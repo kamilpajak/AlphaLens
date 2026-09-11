@@ -229,6 +229,16 @@ _CLI_FAILURE_CODES: Mapping[str, FailureCode] = {
             ),
         ),
         FailureCode(
+            name="queue_write_failed",
+            retryable=True,
+            meaning=(
+                "Appending to a broker journal failed (disk full, permissions). "
+                "Nothing was queued and no broker order can be in flight — the "
+                "commands that report this write only to the queue — so the same "
+                "command may simply be re-run once the cause clears."
+            ),
+        ),
+        FailureCode(
             name="policy_refused",
             retryable=False,
             meaning=(
@@ -403,6 +413,22 @@ def _fail_from_broker_error(exc: Exception, context: str) -> typer.Exit:
     if vendor_code is not None:
         details["error_code"] = vendor_code
     return _fail_with(code, f"{context}: {exc}", details=details)
+
+
+def _queue_write_failed(exc: Exception, *, journal: Path) -> typer.Exit:
+    """A journal append failed, so nothing was queued (#1421).
+
+    Classified off the exception CLASS like the rest of this group, and shared
+    by the four queue-writing commands so they cannot drift into two answers
+    for one event. Retryable: these commands touch only the queue, and the
+    shared appender repairs a predecessor torn by the failed write, so the
+    retry does not land on damaged bytes.
+    """
+    return _fail_with(
+        "queue_write_failed",
+        f"could not append to the queue journal: {exc}",
+        details={"journal": str(journal)},
+    )
 
 
 def _guard_state_layout() -> None:
@@ -1968,6 +1994,7 @@ def arm_command(
     """
     from alphalens_pipeline.brokers.automanager import state_paths
     from alphalens_pipeline.brokers.automanager.picks import arm_pick
+    from alphalens_pipeline.brokers.journal import JournalWriteError
     from alphalens_pipeline.paper.brief_loader import load_brief
     from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, parse_brief_to_spec
     from broker_contract.sizing import TradeSetupNotPlannableError
@@ -2034,11 +2061,17 @@ def arm_command(
                 picks_journal=str(picks_target),
             )
         )
-        arm_pick(intent, path=picks_target)
+        try:
+            arm_pick(intent, path=picks_target)
+        except JournalWriteError as exc:
+            raise _queue_write_failed(exc, journal=picks_target) from exc
         typer.echo(body)
         return
 
-    arm_pick(intent, path=picks_target)
+    try:
+        arm_pick(intent, path=picks_target)
+    except JournalWriteError as exc:
+        raise _queue_write_failed(exc, journal=picks_target) from exc
     typer.echo(f"armed {wanted} @ {trade_date.isoformat()} -> {picks_target}")
 
 
@@ -2186,6 +2219,7 @@ def arm_manual_command(
         next_generation,
         read_pick_fold,
     )
+    from alphalens_pipeline.brokers.journal import JournalWriteError
 
     try:
         picks_target = state_paths.picks_path(env=env)
@@ -2275,9 +2309,21 @@ def arm_manual_command(
             )
         )
         if not dry_run:
-            arm_pick(intent, path=picks_target)
+            try:
+                arm_pick(intent, path=picks_target)
+            except JournalWriteError as exc:
+                raise _queue_write_failed(exc, journal=picks_target) from exc
         typer.echo(body)
         return
+
+    if not dry_run:
+        # #1421: the append comes FIRST. This used to echo the compiled levels
+        # before writing, so a failed append left the operator reading a pick
+        # description that was never queued, with a traceback under it.
+        try:
+            arm_pick(intent, path=picks_target)
+        except JournalWriteError as exc:
+            raise _queue_write_failed(exc, journal=picks_target) from exc
 
     _echo_manual_intent(intent, blend=blend, frame=frame, notional=notional)
     if generation > 1:
@@ -2291,7 +2337,6 @@ def arm_manual_command(
     if dry_run:
         typer.echo("dry-run: nothing armed")
         return
-    arm_pick(intent, path=picks_target)
     typer.echo(f"armed {intent.instrument.ticker} (manual) -> {picks_target}")
 
 
@@ -2602,6 +2647,7 @@ def arm_intent_command(
         ensure_supported_venue,
     )
     from alphalens_pipeline.brokers.automanager.picks import arm_pick
+    from alphalens_pipeline.brokers.journal import JournalWriteError
     from broker_contract.trade_intent.codec import (
         TradeIntentDecodeError,
         intent_from_jsonable,
@@ -2676,7 +2722,10 @@ def arm_intent_command(
             )
         )
         if not dry_run:
-            arm_pick(intent, path=picks_target)
+            try:
+                arm_pick(intent, path=picks_target)
+            except JournalWriteError as exc:
+                raise _queue_write_failed(exc, journal=picks_target) from exc
         typer.echo(body)
         return
 
@@ -2686,7 +2735,10 @@ def arm_intent_command(
             f"(generation {intent.meta.generation}) passes every gate — nothing armed"
         )
         return
-    arm_pick(intent, path=picks_target)
+    try:
+        arm_pick(intent, path=picks_target)
+    except JournalWriteError as exc:
+        raise _queue_write_failed(exc, journal=picks_target) from exc
     typer.echo(
         f"armed {intent.instrument.ticker} @ {intent.meta.trade_date} "
         f"(generation {intent.meta.generation}, source={intent.meta.source}) -> {picks_target}"
@@ -2752,6 +2804,7 @@ def disarm_command(
         next_generation,
         pick_key_str,
     )
+    from alphalens_pipeline.brokers.journal import JournalWriteError
 
     resolved_format = _resolve_format(output_format)
     env = _guard_ambient_instance(env, default=_DEFAULT_ARM_ENV)
@@ -2787,8 +2840,17 @@ def disarm_command(
         cancelled = entry_trails.cancel_open_watches(pick_key, note=note, path=trails_target)
     except entry_trails.DisarmRestingOrderError as exc:
         raise _fail(f"disarm refused — resting entry order: {exc}") from exc
+    except JournalWriteError as exc:
+        raise _queue_write_failed(exc, journal=trails_target) from exc
 
-    mark_disarmed(wanted, trade_date, note=note, generation=generation, path=picks_target)
+    # #1421: both halves classify the same way. Dying between them is already a
+    # documented, re-runnable state (watch cancelled, queue still armed, no
+    # orders placed) — what was missing is saying so in the published shape
+    # instead of a traceback.
+    try:
+        mark_disarmed(wanted, trade_date, note=note, generation=generation, path=picks_target)
+    except JournalWriteError as exc:
+        raise _queue_write_failed(exc, journal=picks_target) from exc
 
     if resolved_format == _FORMAT_JSON:
         _emit_json(

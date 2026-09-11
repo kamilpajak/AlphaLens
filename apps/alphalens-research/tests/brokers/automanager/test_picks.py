@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import tempfile
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -470,6 +471,27 @@ class JoinHelperTest(unittest.TestCase):
     def test_submitted_pick_keys_skips_records_missing_either_half(self) -> None:
         records = [{"ticker": "KO"}, {"trade_date": "2026-07-20"}, {}]
         self.assertEqual(submitted_pick_keys(records), set())
+
+    def test_a_torn_line_does_not_swallow_the_next_armed_pick(self) -> None:
+        """#1421, and the reason that ticket was rewritten.
+
+        A partial write (ENOSPC) leaves a line with no trailing newline. Before
+        the shared append helper the NEXT arm concatenated onto it and both
+        records merged into one unparseable line — the CLI printed "armed" and
+        exited 0 while the pick never reached the fold, and the malformed
+        counter read 1 rather than 2.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "picks.jsonl"
+            arm_pick(_intent(ticker="AAA"), path=path)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write('{"ticker": "TORN", "date": "2026-09-11", "intent')
+
+            arm_pick(_intent(ticker="BBB"), path=path)
+
+            fold = read_pick_fold(path=path)
+            self.assertEqual(sorted(r.ticker for r in fold.records), ["AAA", "BBB"])
+            self.assertEqual(fold.malformed, 1)
 
     def test_any_submission_counts_the_now_half_that_retirement_ignores(self) -> None:
         """The two helpers answer DIFFERENT questions and differ by exactly this.
