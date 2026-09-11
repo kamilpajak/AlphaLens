@@ -167,6 +167,25 @@ class DurabilityAndFailure(_JournalCase):
             with self.assertRaises(JournalWriteError):
                 append_json_line(self.path, {"k": "NEW"})
 
+    def test_a_directory_that_cannot_be_created_is_the_same_failure(self) -> None:
+        """`mkdir` is part of the append, not a preamble to it.
+
+        A journal whose directory cannot be created fails for the same reason a
+        write fails — the queue did not take the record — so it must carry the
+        same type. Left outside the guard it came back as a raw traceback, which
+        is the shape this whole change exists to remove.
+        """
+        with mock.patch.object(Path, "mkdir", side_effect=PermissionError("read-only fs")):
+            with self.assertRaises(JournalWriteError):
+                append_json_line(self.path, {"k": "NEW"})
+
+    def test_an_unserializable_payload_is_NOT_wrapped(self) -> None:
+        """The other side of that boundary. A payload that cannot be serialised
+        is a programming error in the caller, not an I/O condition a retry could
+        clear, so it must not wear a retryable I/O code."""
+        with self.assertRaises(TypeError):
+            append_json_line(self.path, {"k": object()})
+
     def test_that_error_is_still_an_OSError(self) -> None:
         """Load-bearing: `control_loop` catches OSError around a journal write,
         alerts the operator and keeps the tick alive so the protection pass is

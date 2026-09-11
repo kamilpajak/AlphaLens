@@ -92,9 +92,15 @@ def append_json_line(
     failure is NOT wrapped — a ``TypeError`` there is a programming error in the
     caller's payload, not an I/O condition a retry could clear.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Serialisation stays OUTSIDE the guard: a payload that cannot be rendered
+    # is a programming error in the caller, not an I/O condition a retry clears,
+    # and it must not wear a retryable I/O code.
     line = json.dumps(record, sort_keys=True, default=default)
     try:
+        # `mkdir` is part of the append, not a preamble: a directory that cannot
+        # be created fails for the same reason a write fails — the queue did not
+        # take the record — so it carries the same type.
+        path.parent.mkdir(parents=True, exist_ok=True)
         # The PROBE is inside the try on purpose: a journal we cannot read is a
         # journal we cannot safely append to, so a failure here is the same
         # failure as a failed write and must carry the same type.
