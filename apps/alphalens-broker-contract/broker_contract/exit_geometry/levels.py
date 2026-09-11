@@ -73,6 +73,28 @@ def atr_bracket_levels(
     return bracket_stop, tp
 
 
+def reanchor_target(avg_price: float, atr: float, *, k: float) -> float | None:
+    """Fill-complete re-anchor level for a long: ``avg_price - k*atr``.
+
+    The shared arithmetic behind BOTH re-anchoring policies — the env-selected
+    ``AtrBracketPolicy``, whose ``k`` comes from its wrapped geometry, and the
+    per-document ``ReanchorOnFillPolicy`` (#1236), whose ``k`` is declared by the
+    intent. Two copies of one formula is the #1114 fork-the-arithmetic defect,
+    which is why the multiplier is a parameter and the leaf is one function.
+
+    Returns ``None`` on any degenerate input or a non-positive target — never a
+    bad stop.
+    """
+    if not math.isfinite(avg_price) or avg_price <= 0:
+        return None
+    if not math.isfinite(atr) or atr <= 0:
+        return None
+    target = avg_price - k * atr
+    if not math.isfinite(target) or target <= 0:
+        return None
+    return target
+
+
 def chandelier_target(peak: float, atr: float, *, k: float) -> float | None:
     """Trailing-stop level for a long: ``peak - k*atr`` (ratchets up via the
     caller's peak). Returns ``None`` on any degenerate input or a non-positive

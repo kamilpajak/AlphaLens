@@ -2258,7 +2258,7 @@ def _route_pick_to_entry_watch(
         # Same use_geometry decision _place_tiers makes for its planned lines:
         # the stamp rides every watch_open so the fire-arm planned writer can
         # hand the (k_atr, atr) reanchor facts to the trailing-SL pass.
-        use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
+        use_geometry = _places_client_geometry(resolved_exit_policy, exit_spec)
         opened = _open_entry_watches(
             intent,
             ticker,
@@ -7811,6 +7811,29 @@ _GEOMETRY_STAMP_ANCHOR_MODE = "planned"
 _GEOMETRY_STAMP_TP_FLOOR_FRAC = resolve_policy(_GEOMETRY_STAMP_POLICY_NAME).tp_floor_frac
 
 
+def _places_client_geometry(exit_policy: ExitPolicy | None, exit_spec: Any) -> bool:
+    """Whether the CLIENT's own stop/TP levels are the ones to place (#1236).
+
+    Two questions that used to be one. The policy must apply geometry at all
+    (``applies_geometry``; under the inert / trail-only policies the brief's own
+    ladder is placed and ``initial_levels`` are telemetry), AND the document must
+    actually carry levels — which it need not, since ``initial_levels`` became
+    optional so a document could declare how its stop is MANAGED without
+    supplying a bracket to PLACE.
+
+    One predicate rather than a guard at each call site: there are several sites,
+    each dereferencing ``initial_levels.stop`` / ``.tp``, and a forgotten one is
+    an ``AttributeError`` inside the unattended placement drain. Callers that
+    dereference the levels after this returns True can do so unconditionally.
+    """
+    return (
+        exit_policy is not None
+        and exit_policy.applies_geometry
+        and exit_spec is not None
+        and exit_spec.initial_levels is not None
+    )
+
+
 def _geometry_shadow_stamp(
     exit_spec: Any, spec: Any, *, use_geometry: bool, exit_policy: ExitPolicy
 ) -> dict[str, Any] | None:
@@ -7837,13 +7860,17 @@ def _geometry_shadow_stamp(
     if exit_spec is None:
         return None
     reanchor = next((p for p in exit_spec.reaction_plan if isinstance(p, ReanchorOnFill)), None)
+    levels = exit_spec.initial_levels
     blend = planned_blended_entry_from_spec(spec) if spec is not None else None
     return {
         "policy_name": _GEOMETRY_STAMP_POLICY_NAME,
         "policy_version": 1,
         "planned_blend": blend,
-        "geometry_stop": exit_spec.initial_levels.stop,
-        "geometry_tp": exit_spec.initial_levels.tp,
+        # #1236: a declaration-only exit carries no levels. The stamp records
+        # their ABSENCE rather than refusing, so the reaction facts below and the
+        # policy name still reach the journal.
+        "geometry_stop": None if levels is None else levels.stop,
+        "geometry_tp": None if levels is None else levels.tp,
         "k_atr": reanchor.k_atr if reanchor is not None else None,
         "atr": reanchor.atr if reanchor is not None else None,
         "ceiling_price": reanchor.ceiling_price if reanchor is not None else None,
@@ -7873,8 +7900,11 @@ def _geometry_tranche_ladder(exit_spec: Any) -> tuple[tuple[TpTranchePlan, ...],
     geometry policy never placed."""
     from broker_contract.sizing import TpTranchePlan
 
-    geo_stop = exit_spec.initial_levels.stop
-    geo_tp = exit_spec.initial_levels.tp
+    levels = exit_spec.initial_levels
+    if levels is None:
+        return None  # a declaration-only exit places no ladder of its own
+    geo_stop = levels.stop
+    geo_tp = levels.tp
     if not (_is_journalable_price(geo_stop) and _is_journalable_price(geo_tp)):
         return None
     ladder = (
@@ -7915,7 +7945,10 @@ def _journal_tranche_plan_core(
     plan-vs-placement source of each — the bracket path reads
     ``placement.disaster_stop_price`` and sums ALL entry tiers, the watch path
     reads ``plan.disaster_stop`` and sums only the tiers that actually watch."""
-    if use_geometry and exit_spec is not None:
+    # The two callers below pass `applies_geometry` ALONE, so the document half
+    # of the question (#1236: are there levels at all?) is re-asked here rather
+    # than trusted from the caller.
+    if use_geometry and exit_spec is not None and exit_spec.initial_levels is not None:
         geometry = _geometry_tranche_ladder(exit_spec)
         if geometry is None:
             # Otherwise this skip is invisible: the live-exit engine finds no
@@ -7925,8 +7958,8 @@ def _journal_tranche_plan_core(
                 "tranche_plan uic %d: geometry levels unusable (stop=%r, tp=%r) — "
                 "no TP ladder journaled, the position stays stop-only",
                 uic,
-                exit_spec.initial_levels.stop,
-                exit_spec.initial_levels.tp,
+                getattr(exit_spec.initial_levels, "stop", None),
+                getattr(exit_spec.initial_levels, "tp", None),
             )
             return
         ladder, stop_price = geometry
@@ -8316,9 +8349,10 @@ def _planned_exit_levels(
     """``(use_geometry, stop_price, take_profit)`` for the journaled
     ``planned`` line: geometry levels under an applying policy, else the
     brief's static disaster stop / tier TP (byte-identical to pre-PR-6a)."""
-    use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
-    if use_geometry and exit_spec is not None:  # 2nd clause restated to narrow exit_spec
-        return use_geometry, exit_spec.initial_levels.stop, exit_spec.initial_levels.tp
+    use_geometry = _places_client_geometry(resolved_exit_policy, exit_spec)
+    if use_geometry:
+        levels = exit_spec.initial_levels
+        return use_geometry, levels.stop, levels.tp
     return use_geometry, placement.disaster_stop_price, tier.tp
 
 
@@ -8925,7 +8959,7 @@ def _now_cost_gate_violation(
     vacuous by design (stop-only plan, the group manages exits)."""
     resolved = exit_policy if exit_policy is not None else SetupStaticPolicy()
     reference_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
-    if resolved.applies_geometry and exit_spec is not None:
+    if _places_client_geometry(resolved, exit_spec):
         target = float(exit_spec.initial_levels.tp)
         qty = reference_qty
     else:

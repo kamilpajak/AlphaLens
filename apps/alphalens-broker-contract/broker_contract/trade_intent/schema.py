@@ -165,9 +165,21 @@ ReactionPrimitive = ReanchorOnFill | TrailingStop | ModelPush
 
 @dataclass(frozen=True)
 class ExitGeometrySpec:
-    """Initial levels plus an optional reaction plan (memo revision R3)."""
+    """Optional initial levels plus an optional reaction plan (memo revision R3).
 
-    initial_levels: InitialLevels
+    ``initial_levels`` is ``None`` when the document supplies no levels to place.
+    It was required until #1236, which made "declares how the stop is managed,
+    supplies no geometry" unrepresentable — and that is the shape of a pick whose
+    exit is a trail rather than a client-computed bracket. The two halves are
+    independent: levels say what to PLACE, the reaction plan says how the stop
+    then MOVES.
+
+    Consumers must therefore treat a present ``exit`` as no guarantee of levels.
+    On the daemon side that check lives in exactly one predicate
+    (``control_loop._places_client_geometry``) rather than at each of the sites
+    that dereference them."""
+
+    initial_levels: InitialLevels | None = None
     reaction_plan: tuple[ReactionPrimitive, ...] = ()
 
 
