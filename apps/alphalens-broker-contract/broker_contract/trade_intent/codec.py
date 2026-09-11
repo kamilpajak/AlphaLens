@@ -6,9 +6,12 @@ section 5): the client now persists the FULL ``TradeIntent`` into
 ``picks.jsonl`` at arm time, and the daemon drains + decodes it — no brief
 touched on the daemon side. Pure stdlib (``json``/``dataclasses``); no I/O.
 
-``intent_to_jsonable`` is a thin wrapper over ``dataclasses.asdict`` (every
-field is str/int/float/None/tuple/nested-dataclass, so ``asdict`` already
-yields a fully JSON-serializable dict). ``intent_from_jsonable`` is explicit
+``intent_to_jsonable`` renders through ``dataclasses.asdict`` and then turns
+every sequence into a list. ``asdict`` recurses a tuple INTO a tuple, which
+``json.dumps`` renders identically to a list but which every other json tool
+reads as "not an array" — a JSON Schema validator among them (#1405). The
+function's name is the contract: its output must equal what a consumer reads
+back off the wire. ``intent_from_jsonable`` is explicit
 reconstruction — it dispatches each reaction-plan entry on its ``"kind"``
 literal via a small registry and never hand-decodes the well-typed leaves.
 """
@@ -57,9 +60,23 @@ _REACTION_BY_KIND: dict[str, type[ReactionPrimitive]] = {
 }
 
 
+def _as_json_value(value: Any) -> Any:
+    """Recurse a structure into JSON value kinds — tuples become lists."""
+    if isinstance(value, Mapping):
+        return {key: _as_json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [_as_json_value(item) for item in value]
+    return value
+
+
 def intent_to_jsonable(intent: TradeIntent) -> dict[str, Any]:
-    """Render a :class:`TradeIntent` into a fully JSON-serializable dict."""
-    return dataclasses.asdict(intent)
+    """Render a :class:`TradeIntent` into a fully JSON-serializable dict.
+
+    The output compares equal to ``json.loads(json.dumps(output))``, so a caller
+    may hand it straight to a validator or to an equality assertion without a
+    serialise/parse round trip in between.
+    """
+    return _as_json_value(dataclasses.asdict(intent))
 
 
 def _require_mapping(data: Any, *, what: str) -> Mapping[str, Any]:

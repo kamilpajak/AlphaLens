@@ -363,10 +363,7 @@ class TheJsonFormEmitsTheArtefactNotADescriptionOfIt(unittest.TestCase):
     #1406 needs the emitted document to decode back into the same intent, so the
     property is proven HERE, where the document is produced.
 
-    Identity is asserted on the SERIALISED form, not on the decoded dict:
-    `intent_to_jsonable` emits tuples where `json.loads` gives lists, so the two
-    Python objects compare unequal while the JSON text is byte-identical. The
-    contract is the document.
+    The contract is the document, so identity is asserted on the document.
     """
 
     def setUp(self) -> None:
@@ -409,7 +406,7 @@ class TheJsonFormEmitsTheArtefactNotADescriptionOfIt(unittest.TestCase):
         emitted = self._emit("--dry-run")["intent"]
         again = intent_to_jsonable(intent_from_jsonable(emitted))
 
-        self.assertEqual(json.dumps(emitted, sort_keys=True), json.dumps(again, sort_keys=True))
+        self.assertEqual(emitted, again)
 
     def test_the_envelope_names_the_pick_a_client_would_have_to_read_from_prose(self) -> None:
         """The generation (#1371) was only ever printed as prose."""
