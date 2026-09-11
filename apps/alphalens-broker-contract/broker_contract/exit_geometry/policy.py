@@ -265,9 +265,9 @@ class TrailingAtrPolicy:
 class BreakevenTrailPolicy:
     """Bot-amend break-even + fractional-giveback trailing stop — the live port
     of the ``be_0p5r_trail0p6`` what-if lens. Manages ONLY the stop: since #1414
-    no policy decides what is PLACED, and a brief pick supplies no levels, so
-    its TP tranche ladder and its disaster stop are journaled verbatim and
-    research TP levels while this policy manages ONLY the stop. 1R is the
+    no policy decides what is PLACED, and a brief pick supplies no levels, so its
+    TP tranche ladder and its disaster stop are journaled verbatim and profit
+    realizes through the research TP levels. 1R is the
     LENS risk unit — ``avg_price - plan_stop`` (filled blend minus the brief
     disaster floor), NOT an ATR multiple — and ``atr`` is ignored entirely
     HERE. Read that narrowly: it means this method never reads ``atr``, NOT

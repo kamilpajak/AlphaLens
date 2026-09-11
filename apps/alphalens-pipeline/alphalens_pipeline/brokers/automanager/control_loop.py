@@ -3290,9 +3290,9 @@ def _brief_plan_arm_refusal(
 
     A brief pick supplies no ``initial_levels`` (#1414), so the placed exit is
     its multi-tranche ladder, ``_stamped_exit_target`` returns ``None``, and the
-    two geometry-scoped gates above price nothing. This gate closes that hole with the same
-    issue-#1112 condition, evaluated against the plan that will ACTUALLY govern
-    the position:
+    two geometry-scoped gates above price nothing. This gate closes that hole
+    with the same issue-#1112 condition, evaluated against the plan that will
+    ACTUALLY govern the position:
 
         refuse unless  tp1 > fill_estimate + round_trip_cost + E_min
 
