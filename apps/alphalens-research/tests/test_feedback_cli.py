@@ -103,6 +103,31 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
         # nightly window.
         self.assertEqual(self._replay_kwargs(["--lookback-days", "120"])["lookback_days"], 120)
 
+    def test_a_store_from_the_old_arrival_rule_stops_the_whole_chain(self):
+        # Fail closed (#1416): no enrichment pass and no ingest watermark run on a
+        # store that must be rebuilt, so /edge keeps the last complete state and
+        # the staleness alerts surface the pending rebuild.
+        from alphalens_cli.commands import feedback as feedback_cmd
+        from alphalens_pipeline.feedback.population_ladder_monitor import LegacyArrivalStoreError
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                side_effect=LegacyArrivalStoreError(3),
+            ),
+            mock.patch.object(feedback_cmd, "_enrich_population_benchmark_excess") as bench,
+            mock.patch.object(feedback_cmd, "_enrich_population_chart_payloads") as chart,
+            mock.patch.object(feedback_cmd, "_write_ingest_watermark") as watermark,
+        ):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "backfill-shadow-returns", "--briefs-dir", "/tmp/does-not-matter"],
+            )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        bench.assert_not_called()
+        chart.assert_not_called()
+        watermark.assert_not_called()
+
     def test_command_invokes_sector_excess_enrichment(self):
         # The sector-relative EDGE outcome (PR-2b) runs in the unconditional
         # enrichment tail alongside benchmark-excess, so the store gets its

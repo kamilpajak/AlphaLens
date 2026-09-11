@@ -239,6 +239,61 @@ class TestLadderArrivalAfterBrief(_MonitorTestBase):
         row = self._read_store(self._BRIEF).set_index("ticker").loc["NVDA"]
         self.assertEqual(row["ladder_classification"], "NO_FILL")
 
+    def _write_store(self, rows: list[dict]) -> None:
+        self.store_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows).to_parquet(self.store_dir / f"{self._BRIEF.isoformat()}.parquet")
+
+    def test_a_store_from_the_old_rule_is_refused(self):
+        # A plannable row stamped before #1416 (schema-1 token, or no token) was
+        # replayed from the brief's own session. Running the new rule over it
+        # would freeze old terminals and mix windows, so the replay refuses the
+        # whole store instead of writing anything (the rebuild is the only path).
+        import alphalens_pipeline.feedback.population_ladder_monitor as plm
+
+        legacy = json.dumps({"schema": 1, "order_ttl_days": 7})
+        self._write_store(
+            [
+                {"ticker": "OLD", "plannable": True, "ladder_config_version": legacy},
+                {"ticker": "RAW", "plannable": True, "ladder_config_version": None},
+                {"ticker": "NP", "plannable": False, "ladder_config_version": None},
+            ]
+        )
+        _write_brief(self.briefs_dir, self._BRIEF, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+        before = (self.store_dir / f"{self._BRIEF.isoformat()}.parquet").read_bytes()
+        with self.assertRaises(plm.LegacyArrivalStoreError) as ctx:
+            replay_population_ladders(
+                self.briefs_dir,
+                end_date=dt.date(2026, 5, 15),
+                store_dir=self.store_dir,
+                bar_fetch=self._dip_on_brief_session_only,
+                now=dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC),
+            )
+        self.assertEqual(ctx.exception.rows, 2)  # OLD + RAW; the non-plannable row is exempt
+        self.assertEqual(
+            (self.store_dir / f"{self._BRIEF.isoformat()}.parquet").read_bytes(), before
+        )
+
+    def test_a_store_on_the_current_rule_is_accepted(self):
+        from alphalens_pipeline.feedback.ladder_config import ladder_config_version
+
+        self._write_store(
+            [
+                {
+                    "ticker": "NEW",
+                    "plannable": True,
+                    "ladder_config_version": ladder_config_version(order_ttl_days=7),
+                },
+                {"ticker": "NP", "plannable": False, "ladder_config_version": None},
+            ]
+        )
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=dt.date(2026, 5, 15),
+            store_dir=self.store_dir,
+            bar_fetch=self._dip_on_brief_session_only,
+            now=dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC),
+        )
+
     def test_bar_cache_is_keyed_by_the_new_arrival(self):
         now = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)
         _write_brief(self.briefs_dir, self._BRIEF, [{"ticker": "NVDA", "setup": _OK_SETUP}])

@@ -82,7 +82,11 @@ from alphalens_pipeline.feedback.corporate_actions import (
     default_adjusted_closes_fetch,
     resolve_guard_disposition,
 )
-from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session, ladder_config_version
+from alphalens_pipeline.feedback.ladder_config import (
+    ARRIVAL_RULE,
+    ladder_arrival_session,
+    ladder_config_version,
+)
 from alphalens_pipeline.feedback.ladder_replay import (
     LadderOutcome,
     realized_r_full_fill,
@@ -369,6 +373,50 @@ def _is_plannable(c: CandidateBrief) -> tuple[bool, str | None]:
     except TradeSetupNotPlannableError as exc:
         return False, str(exc)
     return True, None
+
+
+class LegacyArrivalStoreError(RuntimeError):
+    """The store holds plannable rows replayed under the pre-#1416 arrival.
+
+    Those rows started at the brief's own session. The replay freezes terminal
+    rows and reuses stored anchors, so running the new rule over them would mix
+    two windows in one store. The only supported path is a from-scratch rebuild.
+    """
+
+    def __init__(self, rows: int) -> None:
+        super().__init__(
+            f"{rows} plannable row(s) predate the #1416 arrival rule; rebuild the "
+            "population-ladder store from scratch before running the monitor"
+        )
+        self.rows = rows
+
+
+def _uses_current_arrival(token: object) -> bool:
+    if not isinstance(token, str):
+        return False
+    try:
+        payload = json.loads(token)
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and payload.get("arrival_rule") == ARRIVAL_RULE
+
+
+def _legacy_arrival_rows(store_dir: Path) -> int:
+    """Plannable store rows whose stamp does not carry the current arrival rule.
+
+    A row with no stamp at all counts too: it was written before the stamp, so
+    under the old rule. Non-plannable rows are never replayed and carry no stamp.
+    """
+    count = 0
+    for path in sorted(store_dir.glob("20*.parquet")):
+        try:
+            frame = pd.read_parquet(path, columns=["plannable", "ladder_config_version"])
+        except (OSError, ValueError, KeyError):
+            continue
+        plannable = frame["plannable"].fillna(False).astype(bool)
+        tokens = frame.loc[plannable, "ladder_config_version"]
+        count += int((~tokens.map(_uses_current_arrival)).sum())
+    return count
 
 
 def _engine_cutoffs(
@@ -1247,6 +1295,9 @@ def replay_population_ladders(
     fetch = bar_fetch or _default_bar_fetch
     grouped = grouped_fetch or _default_grouped_fetch
     store = store_dir or (Path.home() / ".alphalens" / "population_ladders")
+    legacy_rows = _legacy_arrival_rows(store)
+    if legacy_rows:
+        raise LegacyArrivalStoreError(legacy_rows)
     last_closed_session = _last_closed_session(now, exchange)
     guard = _build_guard(
         store,

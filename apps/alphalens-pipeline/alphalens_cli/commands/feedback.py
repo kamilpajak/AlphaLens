@@ -133,6 +133,7 @@ def _refresh_population_ladders(briefs_dir: Path, *, lookback_days: int | None =
             _CHART_RESERVE_S_DEFAULT,
             _FETCH_DEADLINE_S_DEFAULT,
             MONITOR_LOOKBACK_DAYS,
+            LegacyArrivalStoreError,
             _RunDeadline,
             replay_population_ladders,
         )
@@ -159,6 +160,12 @@ def _refresh_population_ladders(briefs_dir: Path, *, lookback_days: int | None =
             f"population-monitor: {terminal} terminal, {ongoing} ongoing "
             f"across {len(reports)} brief dates."
         )
+    except LegacyArrivalStoreError as exc:
+        # Fail closed (#1416): no enrichment and no ingest watermark over a store
+        # that must be rebuilt, so /edge keeps its last complete state and the
+        # staleness alerts surface the pending rebuild.
+        logger.error("population-monitor refused the store: %s", exc)
+        return
     except Exception:
         logger.exception("population-monitor refresh failed; continuing")
 
