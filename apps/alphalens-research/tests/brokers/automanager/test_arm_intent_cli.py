@@ -321,6 +321,28 @@ class TheDocumentMustBeTheRightShape(_DoorCase):
         result = self.arm(document, "--format", "json")
         self.assert_untouched(result, "intent_malformed", "undecodable")
 
+    def test_the_schema_gate_is_what_protects_the_validator_from_a_wrong_type(self) -> None:
+        """Ordering carries weight here, so it is asserted rather than assumed.
+
+        `validate_intent` is not total: given a string or a boolean where it
+        expects a number it raises `TypeError` from `math.isfinite`, not a
+        refusal. The schema runs FIRST and catches those, so the door answers
+        with a failure object. Run the gates in the other order and the same
+        documents produce a traceback.
+        """
+        for label, mutate in (
+            ("a string price", lambda d: d["spec"].__setitem__("disaster_stop", "66.0")),
+            ("a boolean size", lambda d: d["spec"].__setitem__("suggested_size_pct", True)),
+            ("a boolean ttl", lambda d: d["spec"].__setitem__("order_ttl_days", True)),
+        ):
+            with self.subTest(document=label):
+                document = _document()
+                mutate(document)
+                result = self.arm(document, "--format", "json")
+
+                self.assert_refused(result, "intent_malformed", "schema_violation")
+                self.assertEqual(self.inbox_bytes(), b"")
+
     def test_a_trade_date_that_is_not_a_date_is_refused(self) -> None:
         """It would have armed a journal line the queue fold reads as MALFORMED —
         a pick that exists, is never drained, and never says why."""
