@@ -299,6 +299,19 @@ class BuildManualIntentTest(unittest.TestCase):
         with self.assertRaisesRegex(ManualIntentError, "XAMS"):
             _build(mic="XAMS")
 
+    def test_the_venue_refusal_has_its_own_class_so_the_cli_can_classify_it(self) -> None:
+        """The CLI maps this to `venue_unsupported`, every other compile failure
+        to `intent_invalid`. Reading the class is the repo's own doctrine —
+        the taxonomy classifies, never the call site — and it is what lets the
+        raw-intent door reuse the same refusal without re-implementing the list."""
+        from alphalens_pipeline.brokers.automanager.manual_intent import UnsupportedVenueError
+
+        with self.assertRaises(UnsupportedVenueError):
+            _build(mic="XAMS")
+        with self.assertRaises(ManualIntentError) as caught:
+            _build(stop=-1.0)
+        self.assertNotIsInstance(caught.exception, UnsupportedVenueError)
+
     def test_ttl_default_is_contract_default(self) -> None:
         from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 

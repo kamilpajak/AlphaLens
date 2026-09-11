@@ -429,13 +429,15 @@ class TestTheKnownDivergencesArePinned(unittest.TestCase):
             "different entry point and is not schema-gated",
         )
 
-    def test_no_gate_reads_the_schema_version_at_all(self) -> None:
-        """Pins the fact the published README states, because the claim it
-        replaced ("only an unknown future version would be refused") was copied
-        from the issue and was false: nothing in this path reads the field.
+    def test_neither_the_schema_nor_the_codec_reads_the_schema_version(self) -> None:
+        """These two layers are version-blind, and must stay that way.
 
-        If version gating is ever added, this test goes red and the README
-        paragraph must be rewritten in the same commit.
+        The DOOR is the one gate that reads the field (#1406: `broker
+        arm-intent` refuses a stated version other than its own). Keeping it out
+        of these two is what lets the journal DRAIN — which reads history
+        through the codec, never through the schema — carry on decoding older
+        documents. If a version rule ever lands HERE, this goes red and the
+        README paragraph about who reads the field must be rewritten with it.
         """
         for version in ("1", "2", "99", "not-a-version"):
             document = _brief_like()
@@ -445,9 +447,12 @@ class TestTheKnownDivergencesArePinned(unittest.TestCase):
                 self.assertTrue(_accepts(document))
                 self.assertTrue(_decodes(document))
 
-    def test_an_old_schema_version_is_still_accepted(self) -> None:
-        """Older is accepted, only unknown-and-future would be refused — and the
-        version is not an enum, so v1 payloads pass on shape."""
+    def test_the_shape_of_a_v1_document_is_not_what_refuses_it(self) -> None:
+        """`schema_version` is a plain string here, not an enum, so a v1 payload
+        passes on SHAPE once its date key is the current one. What refuses a real
+        v1 document is the date key (every one of them carries the pre-#1252
+        name), and what refuses a v1 document at the door is the door's own
+        version rule — never this layer."""
         legacy = _legacy_v1()
         legacy["meta"]["trade_date"] = legacy["meta"].pop("brief_date")
         self.assertTrue(_accepts(legacy))

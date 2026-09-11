@@ -486,6 +486,7 @@ def _exit_violations(intent: TradeIntent) -> list[Violation]:
                         where=where,
                     )
                 )
+            # LEGACY(reanchor_ceiling_price) — see broker_contract.trade_intent.legacy
             if primitive.ceiling_price is not None:
                 violations.append(
                     Violation(

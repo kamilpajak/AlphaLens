@@ -222,6 +222,23 @@ class ArmManualCommandTest(unittest.TestCase):
         self.assertIn("sum to 100", result.output)
         arm.assert_not_called()
 
+    def test_an_unsupported_venue_is_its_own_code_not_a_document_complaint(self) -> None:
+        """#1406: the document is well formed — this deployment simply does not
+        trade that venue. It used to report `intent_invalid` with EMPTY details,
+        so a machine had nothing to branch on, and the raw-intent door would
+        have had to answer differently for the identical refusal."""
+        from alphalens_cli.commands.broker import broker_app
+
+        args = [*_HAPPY_ARGS, "--mic", "XAMS", "--format", "json"]
+        with mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm:
+            result = self.runner.invoke(broker_app, args)
+
+        self.assertNotEqual(result.exit_code, 0)
+        failure = json.loads(result.stderr.strip().splitlines()[-1])
+        self.assertEqual(failure["code"], "venue_unsupported")
+        self.assertEqual(failure["details"]["mic"], "XAMS")
+        arm.assert_not_called()
+
     def test_default_env_targets_sim_inbox(self) -> None:
         from alphalens_cli.commands.broker import broker_app
         from alphalens_pipeline.brokers.automanager import state_paths

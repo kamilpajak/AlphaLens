@@ -167,6 +167,7 @@ def intent_from_jsonable(data: Mapping[str, Any]) -> TradeIntent:
         spec = _decode_spec(top["spec"])
         meta_map = dict(_require_mapping(top["meta"], what="meta"))
         if "brief_date" in meta_map:
+            # LEGACY(brief_date_key) — see broker_contract.trade_intent.legacy
             # #1252: the journal date key was renamed brief_date -> trade_date.
             # Legacy journal lines (pre-#1252) carry brief_date; decode
             # silently — no unknown-key WARNING, and trade_date wins if a line
