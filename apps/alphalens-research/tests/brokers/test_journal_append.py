@@ -99,6 +99,119 @@ class ATornLineNeverEatsTheNextRecord(_JournalCase):
         self.assertIn({"k": "NEW"}, self.records())
 
 
+class ConcurrentAppendersDoNotLoseEachOther(_JournalCase):
+    """The race a reviewer raised, and the invariant that makes it benign.
+
+    The probe and the append are two separate opens, so another writer can slip
+    between them. Measured both ways: when that writer also goes through this
+    helper it repairs the same torn line, and nothing is lost. When it appends
+    raw — the shape every journal writer had before #1421 — its record is
+    swallowed by the torn bytes exactly as predicted.
+
+    So the fix does not rest on locking; it rests on EVERY writer using the
+    helper, and `NoJournalWriterBypassesTheHelper` below is what keeps that
+    true.
+    """
+
+    def _append_between_probe_and_write(self, intruder) -> None:
+        from alphalens_pipeline.brokers import journal
+
+        real_probe = journal._ends_without_newline
+        seen = []
+
+        def probe_then_let_the_other_writer_in(path):
+            answer = real_probe(path)
+            if not seen:
+                seen.append(True)
+                intruder(path)
+            return answer
+
+        with mock.patch.object(
+            journal, "_ends_without_newline", probe_then_let_the_other_writer_in
+        ):
+            append_json_line(self.path, {"k": "SECOND"})
+
+    def test_a_concurrent_append_through_the_helper_survives(self) -> None:
+        self.seed(b'{"k": "TORN"')
+
+        self._append_between_probe_and_write(lambda path: append_json_line(path, {"k": "FIRST"}))
+
+        self.assertEqual(sorted(r["k"] for r in self.records()), ["FIRST", "SECOND"])
+
+    def test_a_concurrent_RAW_append_is_the_one_that_loses_its_record(self) -> None:
+        """Negative control, and the reason the gate below exists rather than a
+        lock: reintroducing one raw append is enough to lose a record again."""
+        self.seed(b'{"k": "TORN"')
+
+        def raw(path: Path) -> None:
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"k": "FIRST"}) + "\n")
+
+        self._append_between_probe_and_write(raw)
+
+        self.assertEqual([r["k"] for r in self.records()], ["SECOND"])
+
+
+class NoJournalWriterBypassesTheHelper(unittest.TestCase):
+    """Every append to a broker journal goes through `append_json_line`.
+
+    The concurrency property above is only as good as this. A new `open("a")`
+    added anywhere under `brokers/` reintroduces the record-swallowing shape,
+    and it would look perfectly ordinary in review.
+    """
+
+    def test_no_append_mode_open_outside_the_helper(self) -> None:
+        import ast
+
+        root = (
+            Path(__file__).resolve().parents[3]
+            / "alphalens-pipeline"
+            / "alphalens_pipeline"
+            / "brokers"
+        )
+        helper = root / "journal.py"
+        offenders: list[str] = []
+        for source in sorted(root.rglob("*.py")):
+            if source == helper:
+                continue
+            tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                    continue
+                if node.func.attr != "open":
+                    continue
+                modes = [a.value for a in node.args if isinstance(a, ast.Constant)]
+                modes += [
+                    k.value.value
+                    for k in node.keywords
+                    if k.arg == "mode" and isinstance(k.value, ast.Constant)
+                ]
+                if any(isinstance(m, str) and "a" in m for m in modes):
+                    offenders.append(f"{source.name}:{node.lineno}")
+
+        self.assertEqual(
+            offenders,
+            [],
+            "append-mode open outside journal.py — route it through append_json_line, "
+            "or a torn predecessor will swallow the record: " + ", ".join(offenders),
+        )
+
+    def test_the_scan_can_actually_fail(self) -> None:
+        """Positive control: a gate that matches nothing has tested nothing."""
+        import ast
+
+        tree = ast.parse('p.open("a", encoding="utf-8")')
+        calls = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "open"
+            and any(isinstance(a, ast.Constant) and "a" in str(a.value) for a in n.args)
+        ]
+        self.assertEqual(len(calls), 1)
+
+
 class TheSeparatorIsAddedOnlyWhenItIsMissing(_JournalCase):
     def test_a_healthy_journal_gains_no_blank_line(self) -> None:
         self.seed(b'{"k": "OLD"}\n')
