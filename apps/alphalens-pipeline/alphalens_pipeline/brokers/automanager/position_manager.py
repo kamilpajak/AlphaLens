@@ -426,14 +426,19 @@ _DEFAULT_EXIT_POLICY = "setup_static"
 
 
 def _exit_policy() -> str:
-    """Active exit-geometry policy name (read at call time, restart-consistent
-    and hermetically testable — same pattern as ``_oco_enabled``/``_amend_enabled``).
+    """Active PLACEMENT policy name (read at call time, restart-consistent and
+    hermetically testable — same pattern as ``_oco_enabled``/``_amend_enabled``).
 
-    Default ``"setup_static"`` = the brief's static disaster_stop/tp (geometry
-    INERT, byte-identical to pre-PR-6 placement). Flip to ``"atr_bracket_1p5"``
-    to activate both the placement-time ATR-bracket geometry (PR-6a) AND the
-    fill-complete avg_price reanchor (PR-6b, ``_maybe_reanchor``) together —
-    the two ship as one flag so a live flip is never geometry-without-reanchor."""
+    Since #1236 this selects ONE thing: whether a client's own ``initial_levels``
+    are placed instead of the brief's ladder. It no longer decides how a stop is
+    MANAGED after fill — that is what the pick DECLARES, which is what lets two
+    positions in one account be managed differently and lets a document state
+    what it wants. The policies this resolves to still carry ``trails`` and
+    ``decide_reanchor``; on this path those members are simply not read.
+
+    Default ``"setup_static"`` = the brief's static disaster_stop/tp. Removing
+    this variable entirely, once placement is a document fact too, is tracked
+    separately."""
     value = os.environ.get(_EXIT_POLICY_ENV, "").strip()
     return value or _DEFAULT_EXIT_POLICY
 

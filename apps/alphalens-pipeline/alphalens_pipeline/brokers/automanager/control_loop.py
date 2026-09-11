@@ -5036,12 +5036,19 @@ def build_default_deps(
     # _amend_enabled(): the reanchor is part of the geometry feature, not the Stage-3
     # grow/downsize amend that ALPHALENS_BROKER_AMEND_ENABLED gates — requiring that
     # flag too would let geometry go live WITHOUT the reanchor, the exact unsafe combo.
-    if exit_policy.requires_amend_stop and not isinstance(broker, SupportsAmendStop):
+    # #1236 widened this from the DAEMON's policy to the capability itself. Stop
+    # management is declared per pick now, so a document can ask for a re-anchor
+    # or a trail on a deployment whose env policy needs no amend rail — and the
+    # old gate, which only asked about ``exit_policy``, would have waved it
+    # through. Every declarable policy needs the rail, so the requirement is
+    # unconditional: a broker that cannot amend cannot honour a declaration, and
+    # finding that out at boot is the point.
+    if not isinstance(broker, SupportsAmendStop):
         raise BrokerCapabilityError(
-            f"exit policy {exit_policy.name!r} needs the AmendStop rail for "
-            f"the PR-6b fill-complete reanchor, but broker {broker.name!r} does not implement "
-            "amend_stop_amount (SupportsAmendStop) — geometry-live would leave a wrong-distance "
-            "stop. Wire an amend-capable broker or unset the flag (setup_static)."
+            f"broker {broker.name!r} does not implement amend_stop_amount "
+            "(SupportsAmendStop), so no pick's declared stop management can be "
+            "honoured — a declared re-anchor or trail would be silently ignored. "
+            "Wire an amend-capable broker."
         )
     # Live-exits capability gate (#1141), mirroring the _amend_enabled() gate
     # above: when the flag is on, the pass amends the SL and market-sells
@@ -10318,7 +10325,22 @@ def _execute_amend_stop(
     primitive, and escalate via ``record_place_failure`` — NO permanent capability
     latch (a benign fill-race 400 self-clears after the TTL and amend retries)."""
     if amend_stop is None:
-        return  # broker lacks SupportsAmendStop -> the pure arm never emits this
+        # Until #1236 this was a bare return, with the comment "the pure arm never
+        # emits this" — true while the boot gate covered the one policy the daemon
+        # resolved. Stop management is declared per pick now, so reaching here
+        # means a document asked for something this broker cannot do, and a
+        # SILENT return is exactly the failure a declaration must not have. The
+        # boot gate above makes it unreachable in a composed daemon; this is the
+        # backstop that says so out loud rather than dropping the instruction.
+        _emit_alert(
+            throttle,
+            report,
+            f"uic {action.uic}: declared stop management needs the amend rail, "
+            "which this broker does not implement — the stop was NOT moved",
+            uic=action.uic,
+            reason="amend-rail-missing",
+        )
+        return
 
     target = action.target_qty
     if isinstance(broker, SupportsNettedPositionReads):

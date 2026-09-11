@@ -10,7 +10,7 @@ The tests run the **real** manager against a **fake, in-memory broker** (never a
 live account). Because that fake broker is *not* Saxo, the suite also proves the
 manager doesn't secretly depend on anything Saxo-specific.
 
-## The six promises
+## The seven promises
 
 1. **The safety rails are respected** (`test_safety_rails.py`) — the manager will
    not open new risk when it shouldn't: a master "orders off" switch, a cap on
@@ -31,6 +31,18 @@ manager doesn't secretly depend on anything Saxo-specific.
    wrong or degrades, it raises an alert. The operator is always told.
 6. **It manages each position to its end** (`test_terminal.py`) — a filled entry
    ends the cycle protected; a cancelled entry has its leftover orders cleaned up.
+7. **Each position's stop is managed the way that pick asked, or not at all**
+   (`test_exit_policy_is_declared.py`) — a pick can say how it wants its stop
+   handled, and that is what happens to it. A pick that says nothing keeps the
+   stop it was given, however far the price runs. Two positions in the same
+   account can want different things. And where a pick came from — a research
+   brief, or a person typing it in — never changes how it is managed.
+7. **Each position's stop is managed the way that pick asked, or not at all**
+   (`test_exit_policy_is_declared.py`) — a pick can say how it wants its stop
+   handled, and that is what happens to it. A pick that says nothing keeps the
+   stop it was given, however far the price runs. Two positions in the same
+   account can want different things. Where a pick came from — a research brief
+   or a person typing it in — never changes how it is managed.
 
 ## How to read a test
 

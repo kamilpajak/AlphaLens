@@ -178,12 +178,37 @@ Environment=ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared
 # only manages the stop (arms at +0.5R, then trails at 0.6 of the run-up).
 # The change therefore alters WHAT is placed on LIVE, not only how it moves.
 #
-# ROLLBACK: put trailing_atr back here, `systemctl --user daemon-reload`,
-# restart OUTSIDE the configured venue-set hours (default XNYS 13:30-20:00
-# UTC; with ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR the union runs
-# ~06:45-20:10 UTC) — a restart resets the
-# in-memory peak, so arming can go dark until price re-crosses the threshold.
-# The journal-folded trailed floor means the placed stop never loosens.
+# ROLLBACK CHANGED SHAPE with #1236 — the old recipe here ("put trailing_atr
+# back and daemon-reload") NO LONGER WORKS, and leaving it written down would be
+# worse than having none.
+#
+# How a stop is managed is now DECLARED by the pick, not selected by this
+# variable. Two consequences. First, `trailing_atr` has no wire form: no
+# document can ask for a chandelier trail, so putting the name back would not
+# restore one. Second, `trailing_atr` still sets applies_geometry=True, so
+# putting it back WOULD change what gets PLACED (the ATR bracket instead of the
+# brief ladder) while never trailing it — a rollback applied in half, which is
+# worse than either whole.
+#
+# To roll the trail back, change what the brief path DECLARES:
+# `paper/sizing.py::build_exit_geometry_spec` reads its parameters off the
+# registry entry named below, so the change is one edit plus a deploy. That is
+# deliberate: which trail runs is a research decision
+# (breakeven_trail_live_policy_design_2026_08_27.md), not an operator knob.
+#
+# To stop managing stops at all in an incident, disarm the picks — a pick that
+# declares nothing has its stop held where it is and never tightened.
+#
+# Timing note, unchanged and still true: restart OUTSIDE the configured
+# venue-set hours (default XNYS 13:30-20:00 UTC; with
+# ALPHALENS_SAXO_STREAM_SESSION_VENUES=XNYS,XWAR the union runs ~06:45-20:10
+# UTC) — a restart resets the in-memory peak, so arming can go dark until price
+# re-crosses the threshold. The journal-folded trailed floor means the placed
+# stop never loosens.
+#
+# This variable now selects PLACEMENT only (whether a client's own levels are
+# placed instead of the brief ladder). Removing it entirely is tracked
+# separately.
 Environment=ALPHALENS_BROKER_EXIT_POLICY=breakeven_trail
 Environment=ALPHALENS_BROKER_MAX_FEE_BPS=100
 # 8th pin (entry-trailing memo §6): trail distance in bps, 0 = feature OFF

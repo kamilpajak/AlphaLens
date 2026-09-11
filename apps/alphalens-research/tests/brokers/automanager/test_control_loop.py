@@ -2714,7 +2714,7 @@ class TestBuildDefaultDepsBootCompactsJournals(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
             mock.patch.object(cl, "_compact_standalone_stop_journal", standalone),
@@ -2735,7 +2735,7 @@ class TestBuildDefaultDepsThreadsAuditBudgetIntoPlacement(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
             mock.patch.object(cl, "_make_place_pick", wraps=cl._make_place_pick) as factory,
@@ -6407,6 +6407,29 @@ class _StopOnlyBroker:
         return _pos(0.0, uic)
 
 
+class _AmendCapableBroker(_StopOnlyBroker):
+    """``_StopOnlyBroker`` plus the amend rail.
+
+    Since #1236 every composed daemon must be able to amend a stop: management is
+    declared per pick, so a broker without the rail could accept a pick whose
+    declaration it cannot honour. Boot-wiring tests whose subject is NOT the
+    capability therefore reach for this one; ``_StopOnlyBroker`` stays for the
+    tests that assert the refusal."""
+
+    name = "amendcapable"
+
+    def amend_stop_amount(
+        self,
+        order_id: str,
+        *,
+        amount: float,
+        stop_price: float,
+        order_type: str,
+        request_id: str | None = None,
+    ) -> None:
+        return None
+
+
 class _NoPositionReadsBroker:
     """SupportsStandaloneStop but NO netted position reads — the pre-#1141
     silent shape. build_default_deps must refuse it at boot: the protection
@@ -6458,7 +6481,7 @@ class TestBuildDefaultDepsPositionReadsGate(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
         ):
@@ -6583,7 +6606,7 @@ class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
             mock.patch.dict(os.environ, env, clear=True),
@@ -6625,7 +6648,7 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
         ):
@@ -6643,7 +6666,7 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(
                 cl, "_default_oauth_provider", return_value=mock.Mock()
@@ -6699,7 +6722,7 @@ class TestBuildDefaultDepsStateGuards(unittest.TestCase):
             _isolated_home() as home,
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
         ):
