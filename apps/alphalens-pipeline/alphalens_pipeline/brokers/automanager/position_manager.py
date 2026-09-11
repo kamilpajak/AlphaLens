@@ -54,6 +54,8 @@ from broker_contract.exit_geometry import (
     SetupStaticPolicy,
     clamp_reanchor_target,
 )
+from broker_contract.exit_geometry.registry import resolve_declared_policy
+from broker_contract.trade_intent.schema import ReactionPrimitive, ReanchorOnFill
 
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
@@ -127,17 +129,6 @@ def _exit_amend_ref(entry_crid: str, seq: int) -> str:
 
 
 @dataclass(frozen=True)
-class ReanchorFacts:
-    """The fill-complete STOP re-anchor facts (PR-6b, broker-manager extraction
-    memo §4.3), folded from the geometry shadow stamp journaled at placement
-    (PR-6a's ``control_loop._geometry_shadow_stamp``). Minimal — TP reanchor is OUT OF SCOPE, only
-    the disaster stop moves with the realized fill blend."""
-
-    k_atr: float
-    atr: float
-
-
-@dataclass(frozen=True)
 class PlannedExit:
     """The plan PRICES the broker cannot know, folded per NETTED uic from the
     append-only ``planned`` journal lines (saxo-oco memo §7). Carries NO
@@ -164,13 +155,16 @@ class PlannedExit:
     next_amend_seq: Callable[[], int] = field(
         default=_default_next_amend_seq, compare=False, repr=False
     )
-    # PR-6b: the fill-complete reanchor facts (k_atr/atr), folded ONLY when the
-    # governing planned line carries a "geometry" shadow stamp (PR-6a). ``None``
-    # for every pre-PR-6a journal line and for every hand-built PlannedExit that
-    # omits it — the default keeps every existing construction byte-identical.
+    # #1236: what the DOCUMENT declared about managing this stop, folded from the
+    # governing planned line's ``reaction`` stamp. ``None`` means the document
+    # declared nothing, and that is a decision rather than a default: the stop is
+    # never moved. It replaced ``reanchor: ReanchorFacts`` — the permission used
+    # to be the side effect of a geometry blob carrying a finite ATR, which meant
+    # a policy that never reads an ATR was vetoed for a number it discards, and a
+    # pick could not say for itself how it wanted to be managed.
     # Deliberately kept OUT of the deterministic-ref governing logic (next_gen /
-    # next_amend_seq) — a reanchor arm never bumps those counters itself.
-    reanchor: ReanchorFacts | None = None
+    # next_amend_seq) — a stop-move arm never bumps those counters itself.
+    reaction: ReactionPrimitive | None = None
 
 
 @dataclass(frozen=True)
@@ -694,6 +688,19 @@ def reconcile_protection(view: ProtectionView) -> list[Action]:
     return actions
 
 
+def _declared_atr(reaction: ReactionPrimitive | None) -> float | None:
+    """The ATR the DOCUMENT declared, or ``None`` when it declared none.
+
+    Only ``ReanchorOnFill`` carries one. A trailing declaration does not, and
+    that is the point: ``breakeven_trail``'s risk unit is ``avg_price -
+    plan_stop``, so it never reads an ATR — yet until #1236 the caller vetoed it
+    for a missing one, which is why a pick armed without a geometry stamp could
+    not trail whatever policy was active. Whether an absent ATR is fatal is now
+    the POLICY's answer (``policy._usable_atr``), not this caller's.
+    """
+    return reaction.atr if isinstance(reaction, ReanchorOnFill) else None
+
+
 def _maybe_reanchor(
     uic: int,
     pos: Position,
@@ -743,15 +750,13 @@ def _maybe_reanchor(
     the stop below the floor (a deep gap-down fill) the arm returns ``None`` and
     the resting stop stays put. Returns ``None`` (never a bad stop) whenever the
     policy or the envelope refuses (non-finite / ``<= 0`` / below-floor)."""
-    policy = view.exit_policy
-    if plan.reanchor is None:
-        return None
+    policy = resolve_declared_policy(plan.reaction)
+    if not policy.requires_amend_stop:
+        return None  # nothing declared -> the inert policy -> the stop never moves
     avg_price = pos.avg_price
     if not _finite_positive(avg_price):
         return None
-    atr = plan.reanchor.atr
-    if not _finite_positive(atr):
-        return None
+    atr = _declared_atr(plan.reaction)
     sole = _sole_standalone_stop(legs)
     if sole is None:
         return None
@@ -871,17 +876,13 @@ def _maybe_trail(
 
     Returns ``None`` (never a bad stop) whenever any guard, the ratchet, or the
     envelope refuses."""
-    policy = view.exit_policy
+    policy = resolve_declared_policy(plan.reaction)
     if not policy.trails:
-        return None
-    if plan.reanchor is None:
         return None
     avg_price = pos.avg_price
     if not _finite_positive(avg_price):
         return None
-    atr = plan.reanchor.atr
-    if not _finite_positive(atr):
-        return None
+    atr = _declared_atr(plan.reaction)
     sole = _sole_standalone_stop(legs)
     if sole is None:
         return None
@@ -1018,7 +1019,7 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
     # onto the realized fill blend (``_maybe_reanchor``). Both are dark by default
     # (the inert ``setup_static`` returns None) and never fire on the OCO-healthy
     # branch above (standalone stop only, by construction).
-    if view.exit_policy.trails:
+    if resolve_declared_policy(plan.reaction).trails:
         action = _maybe_trail(uic, pos, plan, legs, view)
     else:
         action = _maybe_reanchor(uic, pos, plan, legs, view)
@@ -1360,7 +1361,6 @@ __all__ = [
     "PlaceStop",
     "PlannedExit",
     "ProtectionView",
-    "ReanchorFacts",
     "UpgradeToOco",
     "advance",
     "reconcile_protection",

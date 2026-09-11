@@ -11,6 +11,7 @@ real modules.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import enum
 import functools
@@ -51,6 +52,10 @@ from broker_contract.exit_geometry import (
 )
 from broker_contract.exit_geometry.registry import resolve_policy
 from broker_contract.price_feed import SupportsSessionLow
+from broker_contract.trade_intent.codec import (
+    TradeIntentDecodeError,
+    _decode_reaction_primitive,
+)
 
 from alphalens_pipeline.brokers.automanager import (
     entry_trail_geometry,
@@ -99,7 +104,6 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlaceStop,
     PlannedExit,
     ProtectionView,
-    ReanchorFacts,
     UpgradeToOco,
     _amend_enabled,
     _exit_oco_ref,
@@ -5307,6 +5311,7 @@ def _build_planned_line(
     gen: int = _INITIAL_GEN,
     geometry_stamp: dict[str, Any] | None = None,
     pick_key: str | None = None,
+    reaction: Any = None,
 ) -> dict[str, Any]:
     """One append-only `planned` journal line — the plan PRICES the broker cannot
     know (disaster stop + in-band TP), keyed to the entry client_request_id and
@@ -5339,6 +5344,12 @@ def _build_planned_line(
     }
     if geometry_stamp is not None:
         record["geometry"] = geometry_stamp
+    # #1236: what the DOCUMENT declared about managing this stop. The protection
+    # pass never sees the intent, so the declaration has to travel on the line the
+    # pass DOES read. Encoded with the codec's own encoder so the wire form and
+    # the journal form cannot drift.
+    if reaction is not None:
+        record["reaction"] = dataclasses.asdict(reaction)
     # A BLANK key is absent, not an identity: `_apply_generation_reset` compares
     # keys as strings, so stamping "" would make two unrelated picks match each
     # other while still failing to match a genuinely keyless line.
@@ -5502,28 +5513,38 @@ def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, Planned
             n_plans=n_plans,
             next_gen=_make_next_gen(uic),
             next_amend_seq=_make_next_amend_seq(uic),
-            reanchor=_reanchor_facts_from_governing(governing),
+            reaction=_reaction_from_governing(governing),
         )
     return result
 
 
-def _reanchor_facts_from_governing(governing: Mapping[str, Any]) -> ReanchorFacts | None:
-    """PR-6b: fold the governing planned line's ``"geometry"`` shadow stamp
-    (PR-6a's ``_geometry_shadow_stamp``) into ``ReanchorFacts(k_atr, atr)``, or
-    ``None`` when the blob is absent / malformed. ``None`` for every
-    pre-PR-6a journal line (no ``"geometry"`` key) — so ``_fold_planned_exits``
-    stays BYTE-IDENTICAL for the whole pre-PR-6a journal history."""
-    geo = governing.get("geometry")
-    if not isinstance(geo, dict):
+def _reaction_from_governing(governing: Mapping[str, Any]) -> Any:
+    """Fold the governing planned line's ``"reaction"`` stamp (#1236) into the
+    declared reaction primitive, or ``None`` when the key is absent or will not
+    decode.
+
+    A malformed optional key must NOT take the line with it. ``_fold_planned_exits``
+    is called inside ``build_protection_view``, and ``_run_protection_pass``
+    catches only ``BrokerError`` — so an unguarded decoder here would escape the
+    whole protection pass and leave every position unmanaged for that tick. The
+    line still carries the disaster stop, which is the never-naked guarantee, so
+    losing the declaration is survivable and losing the line is not.
+
+    ``None`` for every line written before #1236, which is why those plans resolve
+    to "the stop is never moved"."""
+    raw = governing.get("reaction")
+    if not isinstance(raw, dict):
         return None
     try:
-        k_atr = float(geo["k_atr"])
-        atr = float(geo["atr"])
-    except (KeyError, TypeError, ValueError):
+        return _decode_reaction_primitive(raw)
+    except (TradeIntentDecodeError, TypeError, ValueError):
+        logger.warning(
+            "planned line for uic %s carries an undecodable reaction stamp %r — "
+            "treating the pick as declaring nothing (its stop will not be moved)",
+            governing.get("uic"),
+            raw,
+        )
         return None
-    if not (math.isfinite(k_atr) and math.isfinite(atr)):
-        return None
-    return ReanchorFacts(k_atr=k_atr, atr=atr)
 
 
 # --- Live-exit TP-tranche ladder persistence (INC-5 Task 1) ------------------
