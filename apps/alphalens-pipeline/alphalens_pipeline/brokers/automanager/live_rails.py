@@ -196,10 +196,10 @@ def _check_sizing_mode(var: str) -> str | None:
 
 
 def assert_live_rails() -> None:
-    """Refuse to let a LIVE instance boot unless all nine safety-rail env vars
+    """Refuse to let a LIVE instance boot unless all eight safety-rail env vars
     are explicitly set and within the live-soak bounds (design memo §3 point
-    2 / ADR 0017 point 4; the 8th pin is the entry-trailing distance per the
-    entry-trailing design memo §6 — explicit ``"0"`` = trailing off; the 9th is
+    2 / ADR 0017 point 4; the 7th pin is the entry-trailing distance per the
+    entry-trailing design memo §6 — explicit ``"0"`` = trailing off; the 8th is
     the entry-watch capacity, pinned to [1, 10] since #1189 so the shared code
     ceiling can be raised for the SIM lab without widening LIVE).
 
@@ -234,7 +234,7 @@ def assert_live_rails() -> None:
             # Entry-trailing distance (memo §6): [0, 150] — the bound and the
             # env-var name are OWNED by entry_trails.py; explicit "0" (feature
             # off) is valid, unset fails like every other pin. Custom unset
-            # wording: unlike the seven rails above, this pin's unset code
+            # wording: unlike the six rails above, this pin's unset code
             # default is SAFE (off) — the operator states a value, not a fix.
             _check_int_bounded(
                 ENTRY_TRAIL_BPS_ENV,

@@ -113,7 +113,7 @@ ENV_FILE_PATH = Path("/etc/alphalens/env")
 # Riding alphalens_systemd_drift_findings means the existing
 # AlphalensSystemdUnitDrift alert pages with zero new rules.
 ENV_FILE_UNIT_LABEL = "etc-alphalens-env"
-# Trailing underscore on purpose: ALPHALENS_BROKER_* are the nine rails plus
+# Trailing underscore on purpose: ALPHALENS_BROKER_* are the eight rails plus
 # ALLOW_ORDERS; ALPHALENS_BROKERAGE_-style names are not rails.
 BANNED_ENV_NAME_PREFIX = "ALPHALENS_BROKER_"
 
