@@ -29,7 +29,7 @@ _UNIT_PAYLOAD = (
     "ALPHALENS_BROKER_MAX_OPEN=10 ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC=1.0 "
     "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=1.0 ALPHALENS_BROKER_SIZING_EQUITY=15000 "
     "ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared "
-    "ALPHALENS_BROKER_EXIT_POLICY=breakeven_trail ALPHALENS_BROKER_MAX_FEE_BPS=1000 "
+    "ALPHALENS_BROKER_MAX_FEE_BPS=1000 "
     "ALPHALENS_BROKER_ENTRY_TRAIL_BPS=50 ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS=10 "
     "ALPHALENS_SAXO_LIVE_STANDING=ACCT-1 SAXO_LIVE_ACCOUNT_KEY=ACCT-1"
 )
@@ -201,7 +201,6 @@ class TestComposeLiveEnvironment(unittest.TestCase):
     def test_both_sources_land_in_the_composed_values(self) -> None:
         composed = _compose()
         self.assertEqual(composed.values["ALPHALENS_BROKER_MAX_OPEN"], "10")
-        self.assertEqual(composed.values["ALPHALENS_BROKER_EXIT_POLICY"], "breakeven_trail")
         self.assertEqual(composed.values["SAXO_LIVE_APP_KEY"], "key-live")
         self.assertEqual(composed.unit, "alphalens-broker-manager-live.service")
         self.assertEqual(composed.env_file, Path(_ENV_FILE_PATH))
@@ -220,7 +219,6 @@ class TestComposeLiveEnvironment(unittest.TestCase):
             "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R",
             "ALPHALENS_BROKER_SIZING_EQUITY",
             "ALPHALENS_BROKER_SIZING_EQUITY_MODE",
-            "ALPHALENS_BROKER_EXIT_POLICY",
             "ALPHALENS_BROKER_MAX_FEE_BPS",
             "ALPHALENS_BROKER_ENTRY_TRAIL_BPS",
             "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS",

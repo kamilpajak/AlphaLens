@@ -6514,52 +6514,16 @@ class TestBuildDefaultDepsAmendFailFast(unittest.TestCase):
                 cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
 
 
-class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
-    """PR-6b: the PR-6a BLANKET fail-fast on ALPHALENS_BROKER_EXIT_POLICY !=
-    "setup_static" is replaced by a CAPABILITY gate. Geometry-live now ships with
-    the fill-complete avg_price reanchor (position_manager._maybe_reanchor), which
-    rides the AmendStop rail — so it is allowed only when the wired broker can amend
-    (SupportsAmendStop); a stop-only broker cannot run the reanchor and would leave a
-    wrong-distance stop, so it still fail-fasts. The default flag never gates."""
+class TestBuildDefaultDepsAmendCapabilityGate(unittest.TestCase):
+    """Boot refuses a broker that cannot PATCH a resting stop.
 
-    def test_does_not_raise_when_flag_flipped_and_broker_can_amend(self) -> None:
-        with (
-            _isolated_home(),
-            mock.patch(
-                "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_ProtBroker(),  # SupportsStandaloneStop + SupportsAmendStop
-            ),
-            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
-            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}),
-        ):
-            deps = cl.build_default_deps(
-                notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
-            )
-        self.assertIsNotNone(deps)
-        # The policy is resolved ONCE at startup and cached on the deps so the hot
-        # protection path never re-resolves the env string (adversarial-review P0).
-        # Correct as-is: this path resolves the non-trailing bracket, whose own
-        # name IS "atr_bracket_1p5". Kept to pin that #1138 did not rename the
-        # policy that was always named honestly.
-        self.assertEqual(deps.exit_policy.name, "atr_bracket_1p5")
-        self.assertFalse(deps.exit_policy.trails)
-        self.assertTrue(deps.exit_policy.requires_amend_stop)
+    It used to be scoped to the policy `ALPHALENS_BROKER_EXIT_POLICY` named;
+    #1236 widened it to the capability (stop management is per pick, so any
+    document may ask for an amend) and #1414 deleted the variable. What is left
+    is unconditional: a broker that cannot amend cannot honour a declaration,
+    and finding that out at boot is the point."""
 
-    def test_fail_fasts_when_flag_flipped_but_broker_cannot_amend(self) -> None:
-        with (
-            _isolated_home(),
-            mock.patch(
-                "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),  # no SupportsAmendStop -> no reanchor rail
-            ),
-            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
-            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}),
-        ):
-            with self.assertRaises(BrokerCapabilityError):
-                cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
-
-    def test_does_not_raise_when_exit_policy_left_at_default(self) -> None:
-        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_EXIT_POLICY"}
+    def test_an_amend_capable_broker_builds(self) -> None:
         with (
             _isolated_home(),
             mock.patch(
@@ -6567,30 +6531,44 @@ class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
                 return_value=_AmendCapableBroker(),
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
-            mock.patch.dict(os.environ, env, clear=True),
         ):
             deps = cl.build_default_deps(
                 notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
             )
         self.assertIsNotNone(deps)
-        # Default env resolves to the inert setup_static policy, cached on the deps.
-        self.assertEqual(deps.exit_policy.name, "setup_static")
-        self.assertFalse(deps.exit_policy.requires_amend_stop)
 
-    def test_raises_value_error_on_unknown_exit_policy_name(self) -> None:
-        # An unknown env name FAILS FAST at startup (build_default_deps), never
-        # deferred into a tick where a ValueError would starve the protection pass.
+    def test_a_stop_only_broker_fails_fast(self) -> None:
         with (
             _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_ProtBroker(),  # capable broker: the name, not capability, fails
+                return_value=_StopOnlyBroker(),  # no SupportsAmendStop
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
-            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": "bogus"}),
         ):
-            with self.assertRaises(ValueError):
+            with self.assertRaises(BrokerCapabilityError):
                 cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
+
+    def test_a_leftover_exit_policy_pin_is_inert(self) -> None:
+        """An operator upgrade is code-first, unit-file-second: the host venv
+        redeploys itself on a pull while the units are edited by hand. A unit
+        still pinning the deleted variable must boot, and must not resolve
+        anything from it — including a name that no longer exists."""
+        for value in ("breakeven_trail", "trailing_atr", "bogus"):
+            with (
+                self.subTest(pin=value),
+                _isolated_home(),
+                mock.patch(
+                    "alphalens_pipeline.brokers.registry.get_default_broker",
+                    return_value=_AmendCapableBroker(),
+                ),
+                mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+                mock.patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": value}),
+            ):
+                deps = cl.build_default_deps(
+                    notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
+                )
+                self.assertFalse(hasattr(deps, "exit_policy"))
 
 
 class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):

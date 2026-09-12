@@ -95,11 +95,10 @@ UNITS: tuple[tuple[str, str, frozenset[str]], ...] = (
     # it belongs under the same detect-never-auto-apply watch as the daemons.
     ("alphalens-saxo-price-reader", "alphalens-saxo-price-reader.service", frozenset()),
     # The LIVE balance reader (#1203). It places nothing, but it carries the
-    # nine rails because `assert_live_rails` gates EVERY live client, and one of
-    # them (EXIT_POLICY) is resolved against the live policy registry at boot —
-    # a rename there would kill the balance read silently, before the gauge is
-    # written. It REQUIRES the grant for the same reason the daemon does: no
-    # grant, no client, no reading, at its next fire.
+    # rails because `assert_live_rails` gates EVERY live client, and a drifted
+    # pin would kill the balance read silently, before the gauge is written. It
+    # REQUIRES the grant for the same reason the daemon does: no grant, no
+    # client, no reading, at its next fire.
     ("alphalens-broker-capital-reader", "alphalens-broker-capital-reader.service", LIVE_GRANT_VARS),
 )
 
@@ -114,7 +113,7 @@ ENV_FILE_PATH = Path("/etc/alphalens/env")
 # Riding alphalens_systemd_drift_findings means the existing
 # AlphalensSystemdUnitDrift alert pages with zero new rules.
 ENV_FILE_UNIT_LABEL = "etc-alphalens-env"
-# Trailing underscore on purpose: ALPHALENS_BROKER_* are the nine rails plus
+# Trailing underscore on purpose: ALPHALENS_BROKER_* are the eight rails plus
 # ALLOW_ORDERS; ALPHALENS_BROKERAGE_-style names are not rails.
 BANNED_ENV_NAME_PREFIX = "ALPHALENS_BROKER_"
 

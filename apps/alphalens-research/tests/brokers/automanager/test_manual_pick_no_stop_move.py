@@ -141,7 +141,6 @@ def _actions_for(
         sell_legs_by_uic={_UIC: (_resting_stop(),)},
         planned_by_uic={_UIC: _plan(reaction=reaction)},
         oco_unsupported=frozenset(),
-        exit_policy=exit_policy_registry()[policy_name],
         peak_by_uic={_UIC: _PEAK},
         last_price_by_uic={_UIC: _LAST_PRICE},
         trailed_stop_by_uic=trailed_stop_by_uic or {},

@@ -32,9 +32,6 @@ from broker_contract.contract import (
     OrderStatus,
     Position,
 )
-from broker_contract.exit_geometry import SetupStaticPolicy, resolve_exit_policy
-from broker_contract.exit_geometry.policy import TrailingAtrPolicy
-from broker_contract.exit_geometry.registry import resolve_policy
 from broker_contract.trade_intent.schema import ReanchorOnFill, TrailingStop
 
 _UIC = 43070
@@ -44,11 +41,6 @@ _UIC = 43070
 # raw ``peak - k*atr`` and the assertions read cleanly. atr_bracket_1p5 sets
 # stop_atr_mult=1.5, so risk = 1.5*atr and activation fires at
 # ``peak >= avg_price + 0.5*1.5*atr``.
-_TRAIL = TrailingAtrPolicy(
-    resolve_policy("atr_bracket_1p5"), name="trailing_atr", activation_r=0.5, k_atr=2.0
-)
-_ATR_BRACKET = resolve_exit_policy("atr_bracket_1p5")  # trails=False sibling
-_BE_TRAIL = resolve_exit_policy("breakeven_trail")  # lens-faithful, plan_stop-risk
 
 
 def _instrument(uic: int = _UIC) -> InstrumentRef:
@@ -114,7 +106,6 @@ def _view(
     pos: Position,
     plan: PlannedExit,
     legs: tuple[OrderState, ...],
-    exit_policy: object = _TRAIL,
     peak_by_uic: dict[int, float] | None = None,
     last_price_by_uic: dict[int, float] | None = None,
     trailed_stop_by_uic: dict[int, float] | None = None,
@@ -127,7 +118,6 @@ def _view(
         planned_by_uic={_UIC: plan},
         oco_unsupported=frozenset(),
         amend_recently_failed=amend_recently_failed,
-        exit_policy=exit_policy,
         peak_by_uic=peak_by_uic or {},
         last_price_by_uic=last_price_by_uic or {},
         trailed_stop_by_uic=trailed_stop_by_uic or {},
@@ -419,7 +409,6 @@ class TestNonTrailingPolicyNeverTrails(unittest.TestCase):
             pos=pos,
             plan=plan,
             legs=legs,
-            exit_policy=SetupStaticPolicy(),
             peak_by_uic={_UIC: 104.0},
         )
         self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
@@ -432,7 +421,6 @@ class TestNonTrailingPolicyNeverTrails(unittest.TestCase):
             pos=pos,
             plan=plan,
             legs=legs,
-            exit_policy=_ATR_BRACKET,
             peak_by_uic={_UIC: 104.0},
         )
         self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
@@ -448,7 +436,6 @@ class TestNonTrailingPolicyNeverTrails(unittest.TestCase):
             pos=pos,
             plan=plan,
             legs=legs,
-            exit_policy=_ATR_BRACKET,
             peak_by_uic={_UIC: 104.0},  # ignored by the reanchor arm
         )
         actions = _reconcile_long(_UIC, pos, view)
@@ -465,7 +452,6 @@ class TestNonTrailingPolicyNeverTrails(unittest.TestCase):
             pos=pos,
             plan=plan,
             legs=legs,
-            exit_policy=SetupStaticPolicy(),
             peak_by_uic={_UIC: 104.0},
         )
         self.assertEqual(_reconcile_long(_UIC, pos, view), [NoOp()])
@@ -488,7 +474,6 @@ class TestMaybeTrailBreakevenTrail(unittest.TestCase):
             pos=pos,
             plan=plan,
             legs=legs,
-            exit_policy=_BE_TRAIL,
             peak_by_uic={_UIC: 106.0},
             last_price_by_uic={_UIC: 106.0},
         )
@@ -508,7 +493,6 @@ class TestMaybeTrailBreakevenTrail(unittest.TestCase):
             pos=pos,
             plan=plan,
             legs=legs,
-            exit_policy=_BE_TRAIL,
             peak_by_uic={_UIC: 104.9},
             last_price_by_uic={_UIC: 104.9},
         )
@@ -522,7 +506,6 @@ class TestMaybeTrailBreakevenTrail(unittest.TestCase):
             pos=pos,
             plan=plan,
             legs=legs,
-            exit_policy=_BE_TRAIL,
             peak_by_uic={_UIC: 106.0},
             last_price_by_uic={_UIC: 106.0},
         )

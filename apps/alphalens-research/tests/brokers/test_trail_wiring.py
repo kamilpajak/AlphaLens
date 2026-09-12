@@ -24,7 +24,6 @@ Safety invariants under test:
 from __future__ import annotations
 
 import datetime as dt
-import functools
 import json
 import unittest
 from pathlib import Path
@@ -45,9 +44,6 @@ from broker_contract.contract import (
     PlacedOrder,
     Position,
 )
-from broker_contract.exit_geometry import resolve_exit_policy
-from broker_contract.exit_geometry.policy import TrailingAtrPolicy
-from broker_contract.exit_geometry.registry import resolve_policy
 from broker_contract.price_feed import PricePoint
 from broker_contract.trade_intent.schema import TrailingStop
 
@@ -56,10 +52,6 @@ _UIC = 43070
 # atr_bracket_1p5 base (stop_atr_mult=1.5): activation fires at
 # ``peak >= avg_price + activation_r*1.5*atr``; the Chandelier target is
 # ``peak - k_atr*atr``.
-_TRAIL = TrailingAtrPolicy(
-    resolve_policy("atr_bracket_1p5"), name="trailing_atr", activation_r=0.5, k_atr=2.0
-)
-_ATR_BRACKET = resolve_exit_policy("atr_bracket_1p5")  # trails=False sibling
 
 
 def _instrument(uic: int = _UIC) -> InstrumentRef:
@@ -216,9 +208,7 @@ def _seed_planned(
         )
 
 
-def _deps(
-    broker: _Broker, *, exit_policy: object, feed_factory: object, sink: list[str]
-) -> cl.LoopDeps:
+def _deps(broker: _Broker, *, feed_factory: object, sink: list[str]) -> cl.LoopDeps:
     throttle = cl._AlertThrottle(sink.append)
     return cl.LoopDeps(
         broker=broker,  # type: ignore[arg-type]
@@ -229,7 +219,7 @@ def _deps(
         read_records=list,
         verdicts_fn=lambda records, broker: [],
         build_position_view=lambda broker, records: cl.BrokerView(working_children={}),
-        build_protection_view=functools.partial(cl.build_protection_view, exit_policy=exit_policy),
+        build_protection_view=cl.build_protection_view,
         execute_protection=cl._make_protection_executor(
             broker,  # type: ignore[arg-type]
             throttle,
@@ -238,7 +228,6 @@ def _deps(
         sweep_orphans_fn=lambda broker: [],
         alert=sink.append,
         alert_throttled=lambda msg, reason: bool(sink.append(msg)) or True,
-        exit_policy=exit_policy,  # type: ignore[arg-type]
         live_exits_feed_factory=feed_factory,  # type: ignore[arg-type]
     )
 
@@ -267,7 +256,7 @@ class TestTrailingPathEmitsAmendAndTrailedMarker(unittest.TestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                deps = _deps(broker, exit_policy=_TRAIL, feed_factory=feed, sink=sink)
+                deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl._run_protection_pass(deps, [], False, report)
                 trailed = _markers(journal, "trailed")
 
@@ -304,7 +293,7 @@ class TestDefaultPolicyNeverFetchesFeed(unittest.TestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal, reaction=None)  # declares nothing
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                deps = _deps(broker, exit_policy=_ATR_BRACKET, feed_factory=feed, sink=sink)
+                deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl._run_protection_pass(deps, [], False, report)
                 trailed = _markers(journal, "trailed")
 
@@ -326,7 +315,7 @@ class TestCrossTickRatchet(unittest.TestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                deps = _deps(broker, exit_policy=_TRAIL, feed_factory=feed, sink=sink)
+                deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl._run_protection_pass(deps, [], False, cl.TickReport())
                 cl._run_protection_pass(deps, [], False, cl.TickReport())
                 trailed = _markers(journal, "trailed")
@@ -356,7 +345,6 @@ class TestRatchetSurvivesDaemonRestart(unittest.TestCase):
                 # Tick 1: peak 110 -> trail the stop to 100 + 0.6*10 = 106.0.
                 deps = _deps(
                     broker,
-                    exit_policy=_TRAIL,
                     feed_factory=_ScriptedFeedFactory([{_UIC: 110.0}]),
                     sink=sink,
                 )
@@ -370,7 +358,6 @@ class TestRatchetSurvivesDaemonRestart(unittest.TestCase):
                 # Only the journal's trailed marker can veto it.
                 restarted = _deps(
                     broker,
-                    exit_policy=_TRAIL,
                     feed_factory=_ScriptedFeedFactory([{_UIC: 103.5}]),
                     sink=sink,
                 )
@@ -423,7 +410,6 @@ class TestCarryover1PullbackLoosenDropped(unittest.TestCase):
             sell_legs_by_uic={_UIC: legs},
             planned_by_uic={_UIC: plan},
             oco_unsupported=frozenset(),
-            exit_policy=_TRAIL,
             peak_by_uic={_UIC: 120.0},
             last_price_by_uic={_UIC: 100.0},
             trailed_stop_by_uic={_UIC: 100.0},  # prior CONFIRMED trailed level
@@ -455,7 +441,6 @@ class TestCarryover1PullbackLoosenDropped(unittest.TestCase):
             sell_legs_by_uic={_UIC: legs},
             planned_by_uic={_UIC: plan},
             oco_unsupported=frozenset(),
-            exit_policy=_TRAIL,
             peak_by_uic={_UIC: 112.0},
             last_price_by_uic={_UIC: 112.0},
             trailed_stop_by_uic={_UIC: 100.0},
@@ -481,7 +466,7 @@ class TestCarryover2FeedFailureLeavesNeverNakedIntact(unittest.TestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal, take_profit=None)  # no TP -> plain standalone stop
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                deps = _deps(broker, exit_policy=_TRAIL, feed_factory=feed, sink=sink)
+                deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl._run_protection_pass(deps, [], False, report)  # must not raise
                 trailed = _markers(journal, "trailed")
 
@@ -513,7 +498,6 @@ class TestPeakFetchCapabilityGuard(unittest.TestCase):
         sink: list[str] = []
         deps = _deps(
             _NoReadsBroker(),  # type: ignore[arg-type]
-            exit_policy=_TRAIL,
             feed_factory=_ScriptedFeedFactory([]),
             sink=sink,
         )

@@ -23,7 +23,6 @@ from broker_contract.exit_geometry.policy import (
     AtrBracketPolicy,
     BreakevenTrailPolicy,
     SetupStaticPolicy,
-    TrailingAtrPolicy,
 )
 from broker_contract.exit_geometry.registry import resolve_exit_policy, resolve_policy
 
@@ -122,13 +121,6 @@ class TestBreakevenTrailPolicy(unittest.TestCase):
         self.assertEqual(
             atr.decide_reanchor(100.0, 2.0, plan_stop=90.0),
             atr.decide_reanchor(100.0, 2.0),
-        )
-        trailing = TrailingAtrPolicy(
-            resolve_policy("atr_bracket_1p5"), name="trailing_atr", activation_r=0.5, k_atr=0.6
-        )
-        self.assertEqual(
-            trailing.decide_reanchor(100.0, 2.0, peak=110.0, plan_stop=90.0),
-            trailing.decide_reanchor(100.0, 2.0, peak=110.0),
         )
         self.assertIsNone(SetupStaticPolicy().decide_reanchor(100.0, 2.0, plan_stop=90.0))
 

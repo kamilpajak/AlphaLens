@@ -1619,7 +1619,7 @@ class TestLiveBrokerManagerUnit(unittest.TestCase):
             "Environment= directives placed in any other section.",
         )
 
-    def test_pins_all_six_boot_assert_rails_in_unit(self) -> None:
+    def test_pins_all_five_boot_assert_rails_in_unit(self) -> None:
         # design memo §3 table / live_rails.assert_live_rails: the LIVE
         # boot-assert refuses to start unless ALL SIX of these are
         # explicitly set AND within the live-soak bounds. Pinning the exact
@@ -1630,11 +1630,6 @@ class TestLiveBrokerManagerUnit(unittest.TestCase):
             "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC": "0.25",
             "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "1.0",
             "ALPHALENS_BROKER_SIZING_EQUITY": "10000",
-            # Flipped from trailing_atr on 2026-08-28 (owner confirmation, the
-            # step breakeven_trail_live_policy_design_2026_08_27.md section 5
-            # reserved for a separate PR). Both instances now run the same
-            # policy, so a SIM observation carries over to LIVE.
-            "ALPHALENS_BROKER_EXIT_POLICY": "breakeven_trail",
             "ALPHALENS_BROKER_MAX_FEE_BPS": "100",
         }
         for var, value in expected.items():
@@ -1669,7 +1664,7 @@ class TestLiveBrokerManagerUnit(unittest.TestCase):
             "copy — that practice caused the drift in issue #1121.",
         )
 
-    def test_all_seven_safety_vars_pinned_in_unit(self) -> None:
+    def test_all_six_safety_vars_pinned_in_unit(self) -> None:
         # "ALL SEVEN safety vars" = the six boot-assert rails +
         # ALLOW_ORDERS. Independent re-derivation of the count so this test
         # fails if either of the two tests above is ever deleted without
@@ -1679,7 +1674,6 @@ class TestLiveBrokerManagerUnit(unittest.TestCase):
             "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC",
             "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R",
             "ALPHALENS_BROKER_SIZING_EQUITY",
-            "ALPHALENS_BROKER_EXIT_POLICY",
             "ALPHALENS_BROKER_MAX_FEE_BPS",
             "ALPHALENS_BROKER_ALLOW_ORDERS",
         )
@@ -2261,7 +2255,6 @@ class TestSimBrokerManagerDropIns(unittest.TestCase):
                 "ALPHALENS_BROKER_SIZING_EQUITY": "100000",
                 "ALPHALENS_BROKER_SIZING_EQUITY_MODE": "declared",
                 "ALPHALENS_BROKER_STREAMING_ENABLED": "1",
-                "ALPHALENS_BROKER_EXIT_POLICY": "breakeven_trail",
                 # #1172: read the shared reader's single elevated session. Both
                 # lines are load-bearing together — the socket does nothing
                 # while LIVE_PRICES is off, and the flag alone would open a
@@ -2436,9 +2429,9 @@ class TestBrokerCapitalReaderUnit(unittest.TestCase):
         _assert_wall_clock_anchored(self, self.timer)
 
     def test_the_drift_check_watches_it(self) -> None:
-        """The rails are config that can drift, and one of them (EXIT_POLICY) is
-        resolved against a live registry at boot — a rename would kill the read
-        silently. Same watch as the daemons."""
+        """The rails are config that can drift, and the daemon reads them at
+        boot — a rename would kill the read silently. Same watch as the
+        daemons."""
         script = REPO_ROOT / "apps" / "alphalens-research" / "scripts" / "check_systemd_drift.py"
         self.assertIn("alphalens-broker-capital-reader.service", script.read_text())
 

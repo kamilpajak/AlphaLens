@@ -17,7 +17,6 @@ from dataclasses import dataclass, field
 from typing import Protocol, TypeGuard, runtime_checkable
 
 from broker_contract.exit_geometry.levels import (
-    chandelier_target,
     fractional_giveback_target,
     reanchor_target,
 )
@@ -58,10 +57,11 @@ class ExitPolicy(Protocol):
     # runtime_checkable Protocol checks that the attribute is PRESENT, not that
     # it is a descriptor.
 
-    # The BEHAVIORAL identity — the key ALPHALENS_BROKER_EXIT_POLICY selects and
-    # the one an operator reads in a log line. It must never be derived from a
-    # wrapped geometry: two policies can share a geometry and differ in whether
-    # they trail, which is the defect issue #1138 records.
+    # The BEHAVIORAL identity — the one an operator reads in a log line. It must
+    # never be derived from a wrapped geometry: two policies can share a geometry
+    # and differ in whether they trail, which is the defect issue #1138 records.
+    # (Both of that pair no longer exist together: `trailing_atr` went with
+    # ALPHALENS_BROKER_EXIT_POLICY in #1414. The rule stands for the next pair.)
     @property
     def name(self) -> str: ...
 
@@ -206,59 +206,6 @@ class ReanchorOnFillPolicy:
         if not _usable_atr(atr):
             return None
         return reanchor_target(avg_price, atr, k=self.k_atr)
-
-
-@dataclass(frozen=True)
-class TrailingAtrPolicy:
-    """Bot-amend Chandelier trailing stop: ``peak - k_atr*atr``, armed only
-    once the position is ``activation_r`` R-multiples in profit (R = the
-    wrapped geometry's ``stop_atr_mult * atr`` initial risk distance).
-    Placement geometry (initial disaster stop + TP) is delegated to the
-    wrapped ``ExitGeometryPolicy``, identical to ``AtrBracketPolicy`` — the
-    two share a geometry and differ in ``decide_reanchor``, ``trails`` and
-    ``name``. They used to share the name too, which is issue #1138."""
-
-    geom: ExitGeometryPolicy
-    activation_r: float
-    k_atr: float
-    # Required and keyword-only — see AtrBracketPolicy.name.
-    name: str = field(kw_only=True)
-    requires_amend_stop: bool = True
-    min_stop_distance_frac: float = 0.002  # hair-trigger floor; never binds 1.5x ATR
-    trails: bool = True
-
-    @property
-    def geometry_name(self) -> str:
-        return self.geom.name
-
-    @property
-    def version(self) -> int:
-        return self.geom.version
-
-    def decide_placement_geometry(
-        self, blended: float, atr: float, *, ceiling_price: float | None
-    ) -> tuple[float, float] | None:
-        return self.geom.levels(blended, atr, ceiling_price=ceiling_price)
-
-    def decide_reanchor(
-        self,
-        avg_price: float,
-        atr: float | None,
-        *,
-        peak: float | None = None,
-        last_price: float | None = None,
-        plan_stop: float | None = None,
-    ) -> float | None:
-        if not math.isfinite(avg_price) or avg_price <= 0:
-            return None
-        if not _usable_atr(atr):
-            return None
-        if peak is None or not math.isfinite(peak) or peak <= 0:
-            return None
-        risk = self.geom.stop_atr_mult * atr
-        if peak < avg_price + self.activation_r * risk:
-            return None
-        return chandelier_target(peak, atr, k=self.k_atr)
 
 
 @dataclass(frozen=True)
