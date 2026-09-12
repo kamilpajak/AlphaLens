@@ -95,11 +95,10 @@ UNITS: tuple[tuple[str, str, frozenset[str]], ...] = (
     # it belongs under the same detect-never-auto-apply watch as the daemons.
     ("alphalens-saxo-price-reader", "alphalens-saxo-price-reader.service", frozenset()),
     # The LIVE balance reader (#1203). It places nothing, but it carries the
-    # nine rails because `assert_live_rails` gates EVERY live client, and one of
-    # them (EXIT_POLICY) is resolved against the live policy registry at boot —
-    # a rename there would kill the balance read silently, before the gauge is
-    # written. It REQUIRES the grant for the same reason the daemon does: no
-    # grant, no client, no reading, at its next fire.
+    # rails because `assert_live_rails` gates EVERY live client, and a drifted
+    # pin would kill the balance read silently, before the gauge is written. It
+    # REQUIRES the grant for the same reason the daemon does: no grant, no
+    # client, no reading, at its next fire.
     ("alphalens-broker-capital-reader", "alphalens-broker-capital-reader.service", LIVE_GRANT_VARS),
 )
 

@@ -171,29 +171,17 @@ Environment=ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared
 # PR). SIM has run it since 2026-08-27, so both instances now share one exit
 # policy and a SIM observation carries over to LIVE.
 #
-# This is NOT just a different trailing formula. trailing_atr wraps the
-# atr_bracket_1p5 GEOMETRY, so the rail placed one volatility-derived target;
-# breakeven_trail sets applies_geometry=False, so the brief's own multi-tranche
-# TP ladder and the brief disaster stop are what get placed, and the policy
-# only manages the stop (arms at +0.5R, then trails at 0.6 of the run-up).
-# The change therefore alters WHAT is placed on LIVE, not only how it moves.
-#
-# ROLLBACK CHANGED SHAPE with #1236 — the old recipe here ("put trailing_atr
-# back and daemon-reload") NO LONGER WORKS, and leaving it written down would be
-# worse than having none.
-#
-# How a stop is managed is now DECLARED by the pick, not selected by this
-# variable. Two consequences. First, `trailing_atr` has no wire form: no
-# document can ask for a chandelier trail, so putting the name back would not
-# restore one. Second, `trailing_atr` still sets applies_geometry=True, so
-# putting it back WOULD change what gets PLACED (the ATR bracket instead of the
-# brief ladder) while never trailing it — a rollback applied in half, which is
-# worse than either whole.
+# THERE IS NO EXIT-POLICY VARIABLE ANY MORE (#1236, #1414). Both halves of what
+# `ALPHALENS_BROKER_EXIT_POLICY` used to select are facts of the pick's own
+# document now: #1236 made stop MANAGEMENT a declaration, #1414 made PLACEMENT
+# one (supply `exit.initial_levels` and they are placed, omit them and the
+# brief ladder is). `trailing_atr` was deleted with the variable — it was
+# reachable only by name and no name is resolved by name any more.
 #
 # To roll the trail back, change what the brief path DECLARES:
-# `paper/sizing.py::build_exit_geometry_spec` reads its parameters off the
-# registry entry named below, so the change is one edit plus a deploy. That is
-# deliberate: which trail runs is a research decision
+# `paper/sizing.py::build_exit_declaration` reads its parameters off the
+# `breakeven_trail` registry entry, so the change is one edit plus a deploy.
+# That is deliberate: which trail runs is a research decision
 # (breakeven_trail_live_policy_design_2026_08_27.md), not an operator knob.
 #
 # To stop managing stops at all in an incident, disarm the picks — a pick that
@@ -205,11 +193,6 @@ Environment=ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared
 # UTC) — a restart resets the in-memory peak, so arming can go dark until price
 # re-crosses the threshold. The journal-folded trailed floor means the placed
 # stop never loosens.
-#
-# This variable now selects PLACEMENT only (whether a client's own levels are
-# placed instead of the brief ladder). Removing it entirely is tracked
-# separately.
-Environment=ALPHALENS_BROKER_EXIT_POLICY=breakeven_trail
 Environment=ALPHALENS_BROKER_MAX_FEE_BPS=100
 # 8th pin (entry-trailing memo §6): trail distance in bps, 0 = feature OFF
 # (limit-at-touch entries). Bound [0, 150]; widen only per memo. Production

@@ -45,11 +45,6 @@ from broker_contract.contract import (
     _is_sell_orders_already_exist,
     _is_too_far_from_market,
 )
-from broker_contract.exit_geometry import (
-    ExitPolicy,
-    SetupStaticPolicy,
-    resolve_exit_policy,
-)
 from broker_contract.exit_geometry.registry import resolve_declared_policy, resolve_policy
 from broker_contract.price_feed import SupportsSessionLow
 from broker_contract.trade_intent.codec import (
@@ -107,7 +102,6 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     UpgradeToOco,
     _amend_enabled,
     _exit_oco_ref,
-    _exit_policy,
     _exit_stop_ref,
     _oco_enabled,
     advance,
@@ -285,10 +279,10 @@ class LoopDeps:
     # then a pure reconcile_protection diff executed action-by-action. The
     # executor closes over the broker + the alert throttle; run_once wires the
     # per-action BrokerError boundary around each call.
-    # ``Callable[..., ProtectionView]`` (not a fixed 2-arg signature): the wired
-    # partial binds ``exit_policy`` and the trailing path passes ``peak_by_uic`` /
-    # ``last_price_by_uic`` keyword args through (Task 4). Non-trailing callers /
-    # tests still call it with just ``(broker, records)``.
+    # ``Callable[..., ProtectionView]`` (not a fixed 2-arg signature): the
+    # trailing path passes ``peak_by_uic`` / ``last_price_by_uic`` keyword args
+    # through (Task 4). Non-trailing callers / tests still call it with just
+    # ``(broker, records)``.
     build_protection_view: Callable[..., ProtectionView]
     execute_protection: Callable[[Action, bool, TickReport], None]
     sweep_orphans_fn: Callable[[Broker], list[Any]]
@@ -350,13 +344,6 @@ class LoopDeps:
     wake_event: threading.Event | None = None
     stream_tick: Callable[[], None] | None = None
     stream_trigger: StreamTrigger | None = None
-    # Behavioral exit policy, resolved ONCE from ALPHALENS_BROKER_EXIT_POLICY in
-    # build_default_deps and cached here so the hot protection/placement paths read
-    # the instance instead of re-resolving the env string every tick (a ValueError
-    # there would starve the unconditional protection — adversarial-review P0). The
-    # default is the inert setup_static policy so every test/second-broker LoopDeps
-    # built without it behaves like today's dark path.
-    exit_policy: ExitPolicy = field(default_factory=SetupStaticPolicy)
     # Live TP-tranche exit price-feed factory (INC-5), or None -> the pass falls
     # back to _default_live_exits_feed_factory (Saxo LIVE streaming behind
     # ALPHALENS_SAXO_LIVE_PRICES, else a vetoing feed). Injected so tests can
@@ -4983,11 +4970,6 @@ def build_default_deps(
         from alphalens_pipeline.brokers.registry import get_default_broker
 
         broker = get_default_broker()
-    # Resolve the behavioral exit policy ONCE, at startup — fail fast on a bad env
-    # name here (a ValueError inside the per-tick protection pass would starve every
-    # position that tick). The resolved instance is cached on LoopDeps + threaded
-    # into build_protection_view so no hot path ever re-resolves.
-    exit_policy = resolve_exit_policy(_exit_policy())
     if not isinstance(broker, SupportsStandaloneStop):
         raise BrokerCapabilityError(
             f"broker {broker.name!r} does not implement place_standalone_stop "
@@ -5031,22 +5013,17 @@ def build_default_deps(
         broker.amend_stop_amount if isinstance(broker, SupportsAmendStop) else None
     )
     # Exit-geometry (PR-6a/6b) CAPABILITY gate — the principled replacement for
-    # PR-6a's removed blanket fail-fast. Flipping ALPHALENS_BROKER_EXIT_POLICY off
-    # "setup_static" places an ATR-bracket stop anchored to the PLANNED blend, which
-    # the PR-6b fill-complete reanchor (position_manager._maybe_reanchor) MUST PATCH
-    # onto the realized avg_price via the AmendStop rail. A broker without
-    # SupportsAmendStop cannot run that reanchor, so geometry would go live leaving a
-    # wrong-distance stop (the memo §4.3 P0). Gate on the CAPABILITY, NOT on
-    # _amend_enabled(): the reanchor is part of the geometry feature, not the Stage-3
-    # grow/downsize amend that ALPHALENS_BROKER_AMEND_ENABLED gates — requiring that
-    # flag too would let geometry go live WITHOUT the reanchor, the exact unsafe combo.
-    # #1236 widened this from the DAEMON's policy to the capability itself. Stop
-    # management is declared per pick now, so a document can ask for a re-anchor
-    # or a trail on a deployment whose env policy needs no amend rail — and the
-    # old gate, which only asked about ``exit_policy``, would have waved it
-    # through. Every declarable policy needs the rail, so the requirement is
-    # unconditional: a broker that cannot amend cannot honour a declaration, and
-    # finding that out at boot is the point.
+    # PR-6a's removed blanket fail-fast. A document that declares a re-anchor or a
+    # trail needs its stop PATCHed after fill via the AmendStop rail; a broker
+    # without SupportsAmendStop cannot run that, so the declaration would be
+    # silently ignored and the stop would sit at its placement-time distance
+    # forever (the memo §4.3 P0). Gate on the CAPABILITY, NOT on _amend_enabled():
+    # honouring a declaration is not the Stage-3 grow/downsize amend that
+    # ALPHALENS_BROKER_AMEND_ENABLED gates, and requiring that flag too would let a
+    # declaration go live WITHOUT the stop move it asked for. #1236 widened this
+    # from the DAEMON's policy to the capability itself, because stop management is
+    # per pick; the requirement is therefore unconditional, and finding out at boot
+    # that this broker cannot honour a declaration is the point.
     if not isinstance(broker, SupportsAmendStop):
         raise BrokerCapabilityError(
             f"broker {broker.name!r} does not implement amend_stop_amount "
@@ -5142,7 +5119,7 @@ def build_default_deps(
         read_records=_read_records,
         verdicts_fn=functools.partial(reconcile_bridge.verdicts, audit_budget=audit_budget),
         build_position_view=_make_position_view_builder(broker),
-        build_protection_view=functools.partial(build_protection_view, exit_policy=exit_policy),
+        build_protection_view=build_protection_view,
         execute_protection=_make_protection_executor(
             broker, throttle, place_oco_exit=oco_placer, amend_stop=amend_placer
         ),
@@ -5156,7 +5133,6 @@ def build_default_deps(
         wake_event=wake_event,
         stream_tick=stream_tick,
         stream_trigger=stream_trigger,
-        exit_policy=exit_policy,
         live_exits_feed_factory=_default_live_exits_feed_factory,
         day1_gap_price_probe=day1_gap_probe,
         audit_budget=audit_budget,
@@ -9816,7 +9792,6 @@ def build_protection_view(
     broker: Broker,
     _records: list[Mapping[str, Any]],
     *,
-    exit_policy: ExitPolicy | None = None,
     peak_by_uic: Mapping[int, float] | None = None,
     last_price_by_uic: Mapping[int, float] | None = None,
     clock: Callable[[], float] = time.time,
@@ -9899,7 +9874,6 @@ def build_protection_view(
         # The startup wiring (build_default_deps) binds the real cached policy via
         # functools.partial; the None default only guards direct test calls, where
         # the inert setup_static policy keeps the view byte-identical to today.
-        exit_policy=exit_policy if exit_policy is not None else SetupStaticPolicy(),
     )
 
 

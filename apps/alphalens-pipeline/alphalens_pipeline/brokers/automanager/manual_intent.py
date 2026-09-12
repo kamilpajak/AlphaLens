@@ -17,11 +17,10 @@ the intent's own static disaster stop and tranche TP levels and never moves the
 stop again.
 
 Since #1414 that immunity no longer depends on how this deployment is
-configured. A process-wide ``ALPHALENS_BROKER_EXIT_POLICY`` used to decide
-whether a document's levels were placed at all, so the sentence above used to
-have to say "whatever that variable names". Now the document decides, and a
-document with no ``exit`` decides both halves by supplying neither — which is
-a stronger guarantee than the one it replaces, from the same line of code.
+configured, because there is nothing left to configure: the variable that used
+to decide whether a document's levels were placed is gone. The document decides,
+and a document with no ``exit`` decides both halves by supplying neither — a
+stronger guarantee than the one it replaces, from the same line of code.
 
 One route does NOT pass that guard, so it is worth naming here rather than
 leaving for someone to rediscover: ``ProtectionView.trailed_stop_by_uic`` is a

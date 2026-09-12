@@ -1,4 +1,4 @@
-"""LIVE boot-assert (design memo §3 / ADR 0017 point 4) — the nine safety-rail
+"""LIVE boot-assert (design memo §3 / ADR 0017 point 4) — the eight safety-rail
 env vars a ``env=live`` instance must set explicitly, within bounds, before
 it may boot.
 
@@ -18,12 +18,12 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
+from alphalens_pipeline.brokers.automanager import live_rails
 from alphalens_pipeline.brokers.automanager.entry_trails import ENTRY_TRAIL_BPS_MAX
 from alphalens_pipeline.brokers.automanager.live_rails import (
     DAILY_LOSS_LIMIT_R_ENV,
     ENTRY_TRAIL_BPS_ENV,
     ENTRY_WATCH_MAX_PICKS_ENV,
-    EXIT_POLICY_ENV,
     MAX_FEE_BPS_ENV,
     MAX_OPEN_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
@@ -43,7 +43,6 @@ _VALID_ENV: dict[str, str] = {
     DAILY_LOSS_LIMIT_R_ENV: "1.0",
     SIZING_EQUITY_ENV: "10000",
     SIZING_EQUITY_MODE_ENV: "clamped",
-    EXIT_POLICY_ENV: "trailing_atr",
     MAX_FEE_BPS_ENV: "100",
     ENTRY_TRAIL_BPS_ENV: "0",
     ENTRY_WATCH_MAX_PICKS_ENV: "2",
@@ -55,7 +54,6 @@ _ALL_RAIL_VARS = (
     DAILY_LOSS_LIMIT_R_ENV,
     SIZING_EQUITY_ENV,
     SIZING_EQUITY_MODE_ENV,
-    EXIT_POLICY_ENV,
     MAX_FEE_BPS_ENV,
     ENTRY_TRAIL_BPS_ENV,
     ENTRY_WATCH_MAX_PICKS_ENV,
@@ -66,22 +64,21 @@ def _env_without(*names: str) -> dict[str, str]:
     return {k: v for k, v in _VALID_ENV.items() if k not in names}
 
 
-class TestAllNineConstantsAreDistinctNames(unittest.TestCase):
+class TestAllEightConstantsAreDistinctNames(unittest.TestCase):
     def test_env_var_names(self):
         self.assertEqual(MAX_OPEN_ENV, "ALPHALENS_BROKER_MAX_OPEN")
         self.assertEqual(PORTFOLIO_GROSS_FRAC_ENV, "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC")
         self.assertEqual(DAILY_LOSS_LIMIT_R_ENV, "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R")
         self.assertEqual(SIZING_EQUITY_ENV, "ALPHALENS_BROKER_SIZING_EQUITY")
         self.assertEqual(SIZING_EQUITY_MODE_ENV, "ALPHALENS_BROKER_SIZING_EQUITY_MODE")
-        self.assertEqual(EXIT_POLICY_ENV, "ALPHALENS_BROKER_EXIT_POLICY")
         self.assertEqual(MAX_FEE_BPS_ENV, "ALPHALENS_BROKER_MAX_FEE_BPS")
         self.assertEqual(ENTRY_TRAIL_BPS_ENV, "ALPHALENS_BROKER_ENTRY_TRAIL_BPS")
         self.assertEqual(ENTRY_WATCH_MAX_PICKS_ENV, "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS")
-        self.assertEqual(len(set(_ALL_RAIL_VARS)), 9, "all nine env-var names must be distinct")
+        self.assertEqual(len(set(_ALL_RAIL_VARS)), 8, "all eight env-var names must be distinct")
 
 
 class TestValidEnvPasses(unittest.TestCase):
-    def test_all_nine_set_in_bounds_passes(self):
+    def test_all_eight_set_in_bounds_passes(self):
         with mock.patch.dict("os.environ", _VALID_ENV, clear=True):
             assert_live_rails()  # must not raise
 
@@ -136,12 +133,6 @@ class TestEachVarUnsetIsNamedInTheError(unittest.TestCase):
             with self.assertRaises(BrokerCapabilityError) as captured:
                 assert_live_rails()
         self.assertIn(SIZING_EQUITY_MODE_ENV, str(captured.exception))
-
-    def test_exit_policy_unset(self):
-        with mock.patch.dict("os.environ", _env_without(EXIT_POLICY_ENV), clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(EXIT_POLICY_ENV, str(captured.exception))
 
     def test_entry_watch_max_picks_unset(self):
         with mock.patch.dict("os.environ", _env_without(ENTRY_WATCH_MAX_PICKS_ENV), clear=True):
@@ -426,29 +417,32 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
                     self.assertIn(var, str(captured.exception))
 
 
-class TestUnknownExitPolicyFailsAtBoot(unittest.TestCase):
-    def test_unknown_exit_policy_rejected(self):
-        env = dict(_VALID_ENV, **{EXIT_POLICY_ENV: "not_a_real_policy"})
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(EXIT_POLICY_ENV, str(captured.exception))
+class NoExitPolicyRailSurvivesTest(unittest.TestCase):
+    """#1414 removed ``ALPHALENS_BROKER_EXIT_POLICY`` and the rail that demanded
+    it. The rail refused a LIVE boot without an explicit, registry-resolvable
+    policy name; the name selected whether a document's own levels were placed,
+    which the document says itself now. A rail demanding a pin no code reads
+    would fail a correct unit file."""
 
-    def test_blank_exit_policy_rejected_as_unset(self):
-        """An empty string must fail the explicit-set check, never silently
-        fall back to the position-manager default (setup_static)."""
-        env = dict(_VALID_ENV, **{EXIT_POLICY_ENV: "   "})
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(EXIT_POLICY_ENV, str(captured.exception))
+    def test_the_rail_list_no_longer_names_it(self):
+        self.assertNotIn("ALPHALENS_BROKER_EXIT_POLICY", _ALL_RAIL_VARS)
 
-    def test_known_policies_all_pass(self):
-        for name in ("setup_static", "atr_bracket_1p5", "trailing_atr"):
-            with self.subTest(exit_policy=name):
-                env = dict(_VALID_ENV, **{EXIT_POLICY_ENV: name})
-                with mock.patch.dict("os.environ", env, clear=True):
-                    assert_live_rails()  # must not raise
+    def test_the_module_exposes_no_exit_policy_checker(self):
+        self.assertFalse(hasattr(live_rails, "_check_exit_policy"))
+        self.assertFalse(hasattr(live_rails, "EXIT_POLICY_ENV"))
+
+    def test_a_unit_that_still_pins_it_boots_anyway(self):
+        """An operator upgrade is code-first, unit-file-second: the daemon
+        redeploys itself on a pull while the units are edited by hand. A
+        leftover pin must be inert, never a boot failure."""
+        env = dict(_VALID_ENV, ALPHALENS_BROKER_EXIT_POLICY="breakeven_trail")
+        with mock.patch.dict("os.environ", env, clear=True):
+            assert_live_rails()  # must not raise
+
+    def test_and_so_must_a_leftover_pin_naming_a_policy_that_no_longer_exists(self):
+        env = dict(_VALID_ENV, ALPHALENS_BROKER_EXIT_POLICY="trailing_atr")
+        with mock.patch.dict("os.environ", env, clear=True):
+            assert_live_rails()  # must not raise
 
 
 class TestViolationsAreCollectedTogether(unittest.TestCase):
@@ -477,7 +471,6 @@ class TestViolationsAreCollectedTogether(unittest.TestCase):
             DAILY_LOSS_LIMIT_R_ENV,
             SIZING_EQUITY_ENV,
             SIZING_EQUITY_MODE_ENV,
-            EXIT_POLICY_ENV,
             ENTRY_TRAIL_BPS_ENV,
         ):
             self.assertNotIn(f"{var}:", message)

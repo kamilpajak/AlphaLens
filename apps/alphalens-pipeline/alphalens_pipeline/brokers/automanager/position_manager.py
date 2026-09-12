@@ -50,8 +50,6 @@ from broker_contract.contract import (
     Position,
 )
 from broker_contract.exit_geometry import (
-    ExitPolicy,
-    SetupStaticPolicy,
     clamp_reanchor_target,
 )
 from broker_contract.exit_geometry.registry import resolve_declared_policy
@@ -415,34 +413,6 @@ def _amend_enabled() -> bool:
     return os.environ.get(_AMEND_ENABLED_ENV) == "1"
 
 
-# Env flag selecting the placement-time exit-geometry policy (PR-6a, broker-
-# manager extraction memo §2.5 / §4.1). DEFAULTS to the brief's static
-# disaster_stop/tp (geometry INERT — byte-identical to pre-PR-6 placement).
-# Flipping to "atr_bracket_1p5" is now safe to enable live: the PR-6b
-# fill-complete avg_price reanchor (``_maybe_reanchor`` below) ships alongside
-# this flag, so ``build_default_deps`` no longer fail-fasts on it.
-_EXIT_POLICY_ENV = "ALPHALENS_BROKER_EXIT_POLICY"
-_DEFAULT_EXIT_POLICY = "setup_static"
-
-
-def _exit_policy() -> str:
-    """Active PLACEMENT policy name (read at call time, restart-consistent and
-    hermetically testable — same pattern as ``_oco_enabled``/``_amend_enabled``).
-
-    Since #1236 this selects ONE thing: whether a client's own ``initial_levels``
-    are placed instead of the brief's ladder. It no longer decides how a stop is
-    MANAGED after fill — that is what the pick DECLARES, which is what lets two
-    positions in one account be managed differently and lets a document state
-    what it wants. The policies this resolves to still carry ``trails`` and
-    ``decide_reanchor``; on this path those members are simply not read.
-
-    Default ``"setup_static"`` = the brief's static disaster_stop/tp. Removing
-    this variable entirely, once placement is a document fact too, is tracked
-    separately."""
-    value = os.environ.get(_EXIT_POLICY_ENV, "").strip()
-    return value or _DEFAULT_EXIT_POLICY
-
-
 # PR-6b idempotence-latch tolerance: avg_price only changes on a NEW fill (a
 # qty-weighted blend re-averages), so a near-exact match against the last
 # reanchored value means the reanchor already fired for this blend — never a
@@ -499,11 +469,6 @@ class ProtectionView:
     # negligible). Default empty dict so pure tests + a second broker stay
     # source-compatible.
     reanchored_by_uic: Mapping[int, float] = field(default_factory=dict)
-    # The behavioral exit policy for this tick, threaded from ``deps.exit_policy``
-    # by ``control_loop.build_protection_view`` (resolved ONCE at startup). Default =
-    # the inert ``setup_static`` so any ProtectionView built without it behaves like
-    # today's dark path (pure tests + a second broker stay source-compatible).
-    exit_policy: ExitPolicy = field(default_factory=SetupStaticPolicy)
     # Task 2 trailing-stop inputs, read ONLY by ``_maybe_trail`` (the trailing arm).
     # ``peak_by_uic`` is the high-water mark since entry (the Chandelier anchor);
     # ``last_price_by_uic`` the latest observed price (a future policy may use it).

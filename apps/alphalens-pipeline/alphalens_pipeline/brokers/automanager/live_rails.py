@@ -9,22 +9,22 @@ snapshot sizing, the silently-inert ``setup_static`` exit geometry, and an
 unset fee floor respectively). A LIVE unit missing one pin would trade 100%
 gross of the real balance instead of failing to boot.
 
-``assert_live_rails`` refuses to let a LIVE instance start unless ALL NINE of
+``assert_live_rails`` refuses to let a LIVE instance start unless ALL EIGHT of
 ``ALPHALENS_BROKER_MAX_OPEN``, ``ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC``,
 ``ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R``, ``ALPHALENS_BROKER_SIZING_EQUITY``,
-``ALPHALENS_BROKER_SIZING_EQUITY_MODE``, ``ALPHALENS_BROKER_EXIT_POLICY``,
-``ALPHALENS_BROKER_MAX_FEE_BPS``, ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS``
-(the entry-trailing distance, memo
+``ALPHALENS_BROKER_SIZING_EQUITY_MODE``, ``ALPHALENS_BROKER_MAX_FEE_BPS``,
+``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` (the entry-trailing distance, memo
 ``docs/research/entry_trailing_design_2026_08_12.md`` §6 — an operator must
 explicitly state ``0`` = trailing off rather than inherit it), and
 ``ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS`` (the entry-watch capacity, #1189)
 are EXPLICITLY set AND within the live bounds table below. Every violation is
 collected and reported TOGETHER (not fail-fast on the first one) so an
 operator with a unit file missing several pins fixes it in one edit instead
-of one restart per missing pin. ``EXIT_POLICY`` is additionally checked
-against the exit-policy registry HERE, at boot — a copy-paste unit with a
-typo'd policy name must never reach the per-tick protection pass, where a
-``ValueError`` would starve every position that tick.
+of one restart per missing pin.
+
+``ALPHALENS_BROKER_EXIT_POLICY`` was the ninth until #1414. It selected whether
+a document's own exit levels were placed; the document says that itself now, so
+the variable named nothing and the rail demanded a pin no code read.
 
 The numeric bounds (MAX_OPEN <= 10, PORTFOLIO_GROSS_FRAC <= 1.0,
 DAILY_LOSS_LIMIT_R <= 2.0, SIZING_EQUITY <= 15000, MAX_FEE_BPS <= 1000,
@@ -79,7 +79,6 @@ from __future__ import annotations
 import os
 
 from broker_contract.contract import BrokerCapabilityError
-from broker_contract.exit_geometry.registry import resolve_exit_policy
 
 from alphalens_pipeline.brokers.automanager.entry_trails import (
     ENTRY_TRAIL_BPS_ENV,
@@ -87,14 +86,11 @@ from alphalens_pipeline.brokers.automanager.entry_trails import (
     ENTRY_WATCH_MAX_PICKS_ENV,
     ENTRY_WATCH_MAX_PICKS_MIN,
 )
-from alphalens_pipeline.brokers.automanager.position_manager import _EXIT_POLICY_ENV
 from alphalens_pipeline.brokers.automanager.safety import (
     DAILY_LOSS_LIMIT_R_ENV,
     MAX_OPEN_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
 )
-
-EXIT_POLICY_ENV = _EXIT_POLICY_ENV
 
 # New env-var names — no PR-A consumer reads either yet (PR-B wires the
 # min(pinned, snapshot) sizing and the round-trip fee floor).
@@ -184,23 +180,6 @@ def _check_float_bounded(var: str, *, exclusive_lo: float, inclusive_hi: float) 
     return None
 
 
-def _check_exit_policy(var: str) -> str | None:
-    """``None`` iff ``var`` is explicitly set AND resolves against the
-    exit-policy registry. A blank value fails the explicit-set check (never
-    silently falls back to ``position_manager``'s own ``setup_static``
-    default — a copy-paste unit missing this pin must fail loud here, at
-    boot, not silently run the wrong exit mechanism)."""
-    raw = os.environ.get(var)
-    if _missing_or_blank(raw):
-        return f"{var}: must be explicitly set (unset would silently run setup_static)"
-    name = raw.strip()  # type: ignore[union-attr]  # raw is non-None past the blank check
-    try:
-        resolve_exit_policy(name)
-    except ValueError as exc:
-        return f"{var}: {exc}"
-    return None
-
-
 def _check_sizing_mode(var: str) -> str | None:
     """``None`` iff ``var`` is explicitly set AND (case-insensitively) one of
     ``_VALID_SIZING_MODES``. A blank value fails the explicit-set check — the
@@ -249,7 +228,6 @@ def assert_live_rails() -> None:
                 SIZING_EQUITY_ENV, exclusive_lo=0.0, inclusive_hi=_SIZING_EQUITY_UPPER
             ),
             _check_sizing_mode(SIZING_EQUITY_MODE_ENV),
-            _check_exit_policy(EXIT_POLICY_ENV),
             _check_float_bounded(
                 MAX_FEE_BPS_ENV, exclusive_lo=0.0, inclusive_hi=_MAX_FEE_BPS_UPPER
             ),
@@ -291,7 +269,6 @@ __all__ = [
     "DAILY_LOSS_LIMIT_R_ENV",
     "ENTRY_TRAIL_BPS_ENV",
     "ENTRY_WATCH_MAX_PICKS_ENV",
-    "EXIT_POLICY_ENV",
     "MAX_FEE_BPS_ENV",
     "MAX_OPEN_ENV",
     "PORTFOLIO_GROSS_FRAC_ENV",

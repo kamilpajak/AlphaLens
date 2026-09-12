@@ -8,6 +8,7 @@ REALIZED fill (2.0), never the planned qty (3). Realized-qty = design memo Risk 
 
 from __future__ import annotations
 
+import inspect
 import itertools
 import os
 import unittest
@@ -48,7 +49,6 @@ from broker_contract.contract import (
     Position,
 )
 from broker_contract.exit_geometry import (
-    SetupStaticPolicy,
     resolve_exit_policy,
 )
 from broker_contract.trade_intent.schema import ReanchorOnFill
@@ -233,13 +233,9 @@ def _pview(
     oco_recently_placed: frozenset[int] = frozenset(),
     amend_recently_failed: frozenset[int] = frozenset(),
     reanchored_by_uic: dict[int, float] | None = None,
-    exit_policy: Any = None,
 ) -> ProtectionView:
     longs = long_positions if long_positions is not None else {}
     alls = all_positions if all_positions is not None else dict(longs)
-    # Only override the ProtectionView default (inert SetupStaticPolicy) when a
-    # test passes an explicit policy — every non-reanchor caller stays byte-identical.
-    policy_kwargs: dict[str, Any] = {} if exit_policy is None else {"exit_policy": exit_policy}
     return ProtectionView(
         long_positions=longs,
         all_positions=alls,
@@ -249,7 +245,6 @@ def _pview(
         oco_recently_placed=oco_recently_placed,
         amend_recently_failed=amend_recently_failed,
         reanchored_by_uic=reanchored_by_uic or {},
-        **policy_kwargs,
     )
 
 
@@ -1730,7 +1725,6 @@ class TestFillCompleteReanchor(unittest.TestCase):
         amend_recently_failed: frozenset[int] = frozenset(),
         reanchored_by_uic: dict[int, float] | None = None,
         stop_price: float = 85.0,
-        exit_policy: Any = None,
     ) -> tuple[Position, ProtectionView]:
         # ``stop_price`` is the placement-time brief disaster floor (``prior_stop``
         # in the reanchor envelope). Default 85.0 sits BELOW the 89.0 reanchor
@@ -1744,7 +1738,6 @@ class TestFillCompleteReanchor(unittest.TestCase):
             planned_by_uic={_UIC: _plan(stop_price=stop_price, reaction=reaction)},
             amend_recently_failed=amend_recently_failed,
             reanchored_by_uic=reanchored_by_uic,
-            exit_policy=exit_policy,
         )
         return pos, view
 
@@ -1762,9 +1755,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
                     self.assertEqual(reconcile_long(_UIC, pos, view), [NoOp()])
 
     def test_policy_on_covered_sole_stop_valid_avg_price_emits_amendstop(self) -> None:
-        pos, view = self._covered_view(
-            owned=7.0, avg_price=95.0, reaction=self._facts(), exit_policy=_ATR_POLICY
-        )
+        pos, view = self._covered_view(owned=7.0, avg_price=95.0, reaction=self._facts())
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
         action = actions[0]
@@ -1783,7 +1774,6 @@ class TestFillCompleteReanchor(unittest.TestCase):
             avg_price=95.0,
             reaction=self._facts(),
             reanchored_by_uic={_UIC: 95.0},
-            exit_policy=_ATR_POLICY,
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
@@ -1794,7 +1784,6 @@ class TestFillCompleteReanchor(unittest.TestCase):
             avg_price=95.0,
             reaction=self._facts(),
             reanchored_by_uic={_UIC: 90.0},  # a prior, DIFFERENT blend
-            exit_policy=_ATR_POLICY,
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
@@ -1804,7 +1793,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         self.assertEqual(action.reanchor_avg_price, 95.0)
 
     def test_plan_reanchor_none_is_noop(self) -> None:
-        pos, view = self._covered_view(reaction=None, exit_policy=_ATR_POLICY)
+        pos, view = self._covered_view(reaction=None)
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
@@ -1816,23 +1805,18 @@ class TestFillCompleteReanchor(unittest.TestCase):
             long_positions={_UIC: pos},
             sell_legs_by_uic={_UIC: (stop, tp)},
             planned_by_uic={_UIC: _plan(tp_price=306.72, reaction=self._facts())},
-            exit_policy=_ATR_POLICY,
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     def test_avg_price_sentinel_le_zero_is_noop(self) -> None:
-        pos, view = self._covered_view(
-            avg_price=0.0, reaction=self._facts(), exit_policy=_ATR_POLICY
-        )
+        pos, view = self._covered_view(avg_price=0.0, reaction=self._facts())
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     def test_computed_target_le_zero_is_noop(self) -> None:
         # avg_price 5.0 - 1.5*4.0 = -1.0 <= 0 -> the policy refuses (never a bad stop).
-        pos, view = self._covered_view(
-            avg_price=5.0, reaction=self._facts(k_atr=1.5, atr=4.0), exit_policy=_ATR_POLICY
-        )
+        pos, view = self._covered_view(avg_price=5.0, reaction=self._facts(k_atr=1.5, atr=4.0))
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
@@ -1840,7 +1824,6 @@ class TestFillCompleteReanchor(unittest.TestCase):
         pos, view = self._covered_view(
             reaction=self._facts(),
             amend_recently_failed=frozenset({_UIC}),
-            exit_policy=_ATR_POLICY,
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
@@ -1856,7 +1839,6 @@ class TestFillCompleteReanchor(unittest.TestCase):
             avg_price=102.0,
             reaction=self._facts(),
             stop_price=94.0,
-            exit_policy=SetupStaticPolicy(),
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
@@ -1871,7 +1853,6 @@ class TestFillCompleteReanchor(unittest.TestCase):
             avg_price=102.0,
             reaction=self._facts(),
             stop_price=94.0,
-            exit_policy=_ATR_POLICY,
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
@@ -1893,7 +1874,6 @@ class TestFillCompleteReanchor(unittest.TestCase):
             avg_price=95.0,
             reaction=self._facts(),
             stop_price=94.0,
-            exit_policy=_ATR_POLICY,
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
@@ -1906,7 +1886,6 @@ class TestFillCompleteReanchor(unittest.TestCase):
             avg_price=95.0,
             reaction=self._facts(),
             stop_price=94.0,
-            exit_policy=_ATR_POLICY,
         )
         plan = view.planned_by_uic[_UIC]
         legs = view.sell_legs_by_uic[_UIC]
@@ -1921,7 +1900,6 @@ class TestFillCompleteReanchor(unittest.TestCase):
             avg_price=95.0,
             reaction=self._facts(atr=0.0),
             stop_price=94.0,
-            exit_policy=_ATR_POLICY,
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
@@ -1936,7 +1914,6 @@ class TestFillCompleteReanchor(unittest.TestCase):
             avg_price=100.0,
             reaction=self._facts(atr=0.1),
             stop_price=85.0,
-            exit_policy=_ATR_POLICY,
         )
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
@@ -1957,9 +1934,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
     def test_no_envelope_divergence_leaves_envelope_fields_none(self) -> None:
         # The common case (clamped == proposed) must not stamp divergence facts —
         # the executor keys the envelope_clamped journal write on their presence.
-        pos, view = self._covered_view(
-            owned=7.0, avg_price=95.0, reaction=self._facts(), exit_policy=_ATR_POLICY
-        )
+        pos, view = self._covered_view(owned=7.0, avg_price=95.0, reaction=self._facts())
         actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
         action = actions[0]
@@ -2005,7 +1980,6 @@ class TestGappedDeepFillReanchorGating(unittest.TestCase):
             long_positions={_UIC: pos},
             sell_legs_by_uic={_UIC: (stop,)},
             planned_by_uic={_UIC: plan},
-            exit_policy=_ATR_POLICY,
         )
 
         actions = reconcile_long(_UIC, pos, view)
@@ -2014,23 +1988,26 @@ class TestGappedDeepFillReanchorGating(unittest.TestCase):
         self.assertEqual(actions, [NoOp()])
 
 
-class TestExitPolicyFlag(unittest.TestCase):
-    """PR-6a dark flag: ``_exit_policy()`` defaults to ``"setup_static"`` (geometry
-    INERT, byte-identical placement) and only reports another value when the env
-    var is explicitly set — mirrors ``_amend_enabled``/``_oco_enabled``."""
+class NoExitPolicyEnvVarSurvivesTest(unittest.TestCase):
+    """#1414 deleted ``ALPHALENS_BROKER_EXIT_POLICY`` and its reader.
 
-    def test_defaults_to_setup_static_when_unset(self) -> None:
-        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_EXIT_POLICY"}
-        with patch.dict(os.environ, env, clear=True):
-            self.assertEqual(pm._exit_policy(), "setup_static")
+    The variable used to steer two things; #1236 moved stop MANAGEMENT into the
+    pick's own document and #1414 moved PLACEMENT there too, leaving it naming
+    nothing. This is the gate that keeps a reader from growing back: the module
+    must not expose ``_exit_policy`` and must not read the name anywhere.
+    """
 
-    def test_blank_env_value_falls_back_to_setup_static(self) -> None:
-        with patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": "  "}):
-            self.assertEqual(pm._exit_policy(), "setup_static")
+    def test_the_module_exposes_no_exit_policy_reader(self) -> None:
+        self.assertFalse(hasattr(pm, "_exit_policy"))
+        self.assertFalse(hasattr(pm, "_EXIT_POLICY_ENV"))
 
-    def test_reports_the_overridden_policy_name(self) -> None:
-        with patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}):
-            self.assertEqual(pm._exit_policy(), "atr_bracket_1p5")
+    def test_the_module_source_never_reads_the_variable(self) -> None:
+        source = inspect.getsource(pm)
+        self.assertNotIn("ALPHALENS_BROKER_EXIT_POLICY", source)
+
+    def test_positive_control_the_scan_still_finds_a_variable_it_does_read(self) -> None:
+        """Without this the check above passes on an empty file."""
+        self.assertIn("ALPHALENS_BROKER_AMEND_ENABLED", inspect.getsource(pm))
 
 
 if __name__ == "__main__":

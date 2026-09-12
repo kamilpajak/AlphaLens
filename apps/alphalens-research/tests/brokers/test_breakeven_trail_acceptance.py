@@ -17,9 +17,7 @@ atr=4.0 must be irrelevant to every number below.
 from __future__ import annotations
 
 import datetime as dt
-import functools
 import json
-import os
 import unittest
 from collections.abc import Mapping
 from pathlib import Path
@@ -207,7 +205,6 @@ def _seed_planned(journal: Path) -> None:
 def _deps(
     broker: _Broker,
     *,
-    exit_policy: object,
     feed_factory: object,
     sink: list[str],
     peak_tracker: dict[int, float] | None = None,
@@ -222,7 +219,7 @@ def _deps(
         read_records=list,
         verdicts_fn=lambda records, broker: [],
         build_position_view=lambda broker, records: cl.BrokerView(working_children={}),
-        build_protection_view=functools.partial(cl.build_protection_view, exit_policy=exit_policy),
+        build_protection_view=cl.build_protection_view,
         execute_protection=cl._make_protection_executor(
             broker,  # type: ignore[arg-type]
             throttle,
@@ -231,7 +228,6 @@ def _deps(
         sweep_orphans_fn=lambda broker: [],
         alert=sink.append,
         alert_throttled=lambda msg, reason: bool(sink.append(msg)) or True,
-        exit_policy=exit_policy,  # type: ignore[arg-type]
         live_exits_feed_factory=feed_factory,  # type: ignore[arg-type]
         peak_tracker={} if peak_tracker is None else peak_tracker,
     )
@@ -266,7 +262,7 @@ class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                deps = _deps(broker, exit_policy=_BE_TRAIL, feed_factory=feed, sink=sink)
+                deps = _deps(broker, feed_factory=feed, sink=sink)
                 for _ in range(3):
                     cl.run_once(deps)
                 trailed = _markers(journal, "trailed")
@@ -290,7 +286,7 @@ class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                deps = _deps(broker, exit_policy=_BE_TRAIL, feed_factory=feed, sink=sink)
+                deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl.run_once(deps)
                 cl.run_once(deps)
                 trailed = _markers(journal, "trailed")
@@ -307,7 +303,7 @@ class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                deps = _deps(broker, exit_policy=_BE_TRAIL, feed_factory=feed, sink=sink)
+                deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl.run_once(deps)
                 cl.run_once(deps)
         self.assertEqual(len(broker.amended), 1)
@@ -322,7 +318,7 @@ class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 # Session 1: arm at 120 -> amend to 112, journaled.
                 feed1 = _ScriptedFeedFactory([{_UIC: 120.0}])
-                deps1 = _deps(broker, exit_policy=_BE_TRAIL, feed_factory=feed1, sink=sink)
+                deps1 = _deps(broker, feed_factory=feed1, sink=sink)
                 cl.run_once(deps1)
                 self.assertEqual(len(broker.amended), 1)
 
@@ -331,7 +327,7 @@ class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
                 # LOOSEN vs the journaled 112 floor -> dropped. Tick B at 125
                 # clears the pre-restart high -> target 115 -> one re-raise.
                 feed2 = _ScriptedFeedFactory([{_UIC: 108.0}, {_UIC: 125.0}])
-                deps2 = _deps(broker, exit_policy=_BE_TRAIL, feed_factory=feed2, sink=sink)
+                deps2 = _deps(broker, feed_factory=feed2, sink=sink)
                 cl.run_once(deps2)
                 self.assertEqual(len(broker.amended), 1, "must not loosen post-restart")
                 cl.run_once(deps2)
@@ -339,15 +335,14 @@ class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
                 self.assertAlmostEqual(broker.amended[1][5], 115.0)
 
 
-_BE_TRAIL_FLAG = {"ALPHALENS_BROKER_EXIT_POLICY": "breakeven_trail"}
+class TestBuildDefaultDepsNeedsAnAmendCapableBroker(unittest.TestCase):
+    """#1414 deleted ``ALPHALENS_BROKER_EXIT_POLICY``, so there is no flag path
+    left to exercise here — what survives is the boot gate the flag used to
+    reach. It is unconditional since #1236: every declarable stop management
+    needs the AmendStop rail, so a broker without it cannot honour any document
+    and must fail at boot rather than silently ignore one."""
 
-
-class TestBuildDefaultDepsFlagPath(unittest.TestCase):
-    """``ALPHALENS_BROKER_EXIT_POLICY=breakeven_trail`` through the REAL
-    ``build_default_deps``: a capable (SupportsAmendStop) broker resolves the
-    policy onto deps; an incapable one fail-fasts (requires_amend_stop=True)."""
-
-    def test_capable_broker_resolves_breakeven_trail_onto_deps(self) -> None:
+    def test_a_capable_broker_builds_deps(self) -> None:
         capable = _Broker(positions=[], sells=[], by_uic={})
         with (
             TemporaryDirectory() as home_dir,
@@ -357,16 +352,14 @@ class TestBuildDefaultDepsFlagPath(unittest.TestCase):
                 return_value=capable,
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
-            mock.patch.dict(os.environ, _BE_TRAIL_FLAG),
         ):
             deps = cl.build_default_deps(
                 notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
             )
-        self.assertEqual(deps.exit_policy.name, "breakeven_trail")
-        self.assertIsNone(deps.exit_policy.geometry_name)
-        self.assertTrue(deps.exit_policy.trails)
+        self.assertIsNotNone(deps)
+        self.assertFalse(hasattr(deps, "exit_policy"))
 
-    def test_incapable_broker_fails_fast(self) -> None:
+    def test_an_incapable_broker_fails_fast(self) -> None:
         incapable = _StopOnlyBroker()
         with (
             TemporaryDirectory() as home_dir,
@@ -376,7 +369,6 @@ class TestBuildDefaultDepsFlagPath(unittest.TestCase):
                 return_value=incapable,
             ),
             mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
-            mock.patch.dict(os.environ, _BE_TRAIL_FLAG),
         ):
             with self.assertRaises(BrokerCapabilityError):
                 cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)

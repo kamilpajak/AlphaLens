@@ -24,26 +24,17 @@ class BehaviouralIdentityIsNotTheGeometryNameTest(unittest.TestCase):
         # The anti-rot guard: enumerated from the registry itself, so a policy
         # added later cannot quietly inherit its wrapped geometry's name again.
         registry = exit_policy_registry()
-        self.assertGreaterEqual(len(registry), 4)
+        self.assertGreaterEqual(len(registry), 3)
         for key, policy in registry.items():
             with self.subTest(key=key):
                 self.assertEqual(policy.name, key)
 
-    def test_the_two_bracket_policies_are_distinguishable_by_name(self):
-        trailing = resolve_exit_policy("trailing_atr")
-        static = resolve_exit_policy("atr_bracket_1p5")
-        # They genuinely differ in behaviour...
-        self.assertTrue(trailing.trails)
-        self.assertFalse(static.trails)
-        # ...so they must differ in the one field a log line prints.
-        self.assertNotEqual(trailing.name, static.name)
-
-    def test_the_wrapped_geometry_name_stays_reachable_and_is_shared(self):
-        # The geometry is a real, separate fact: both bracket policies place
-        # against the SAME geometry and differ only in how the exit then moves.
-        for key in ("trailing_atr", "atr_bracket_1p5"):
-            with self.subTest(key=key):
-                self.assertEqual(resolve_exit_policy(key).geometry_name, "atr_bracket_1p5")
+    def test_the_wrapped_geometry_name_stays_reachable(self):
+        # The geometry is a real, separate fact from the behavioural name.
+        # ``trailing_atr`` was the second policy wrapping this geometry and is
+        # gone with the env var (#1414) — it was reachable only by name, and
+        # nothing resolves a policy by name on the money path any more.
+        self.assertEqual(resolve_exit_policy("atr_bracket_1p5").geometry_name, "atr_bracket_1p5")
 
     def test_a_policy_that_wraps_no_geometry_has_no_geometry_name(self):
         # Honest absence rather than a placeholder string: setup_static and
@@ -109,14 +100,10 @@ class AnAbsentAtrIsThePolicysOwnBusinessTest(unittest.TestCase):
                 policy.decide_reanchor(100.0, None, peak=130.0, last_price=129.0, plan_stop=90.0)
 
     def test_the_atr_family_refuses_an_absent_atr(self):
-        for key in ("atr_bracket_1p5", "trailing_atr"):
-            with self.subTest(key=key):
-                policy = resolve_exit_policy(key)
-                self.assertIsNone(
-                    policy.decide_reanchor(
-                        100.0, None, peak=130.0, last_price=129.0, plan_stop=90.0
-                    )
-                )
+        policy = resolve_exit_policy("atr_bracket_1p5")
+        self.assertIsNone(
+            policy.decide_reanchor(100.0, None, peak=130.0, last_price=129.0, plan_stop=90.0)
+        )
 
     def test_a_policy_that_never_reads_the_atr_returns_the_same_target_without_one(self):
         # The discriminator for the change: breakeven_trail's target is a

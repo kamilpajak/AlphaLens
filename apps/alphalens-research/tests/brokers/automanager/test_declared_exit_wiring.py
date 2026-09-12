@@ -141,7 +141,6 @@ def _actions(*, reaction, daemon_policy: str = "setup_static") -> list:
         sell_legs_by_uic={_UIC: (_resting_stop(),)},
         planned_by_uic={_UIC: plan},
         oco_unsupported=frozenset(),
-        exit_policy=exit_policy_registry()[daemon_policy],
         peak_by_uic={_UIC: _PEAK},
         last_price_by_uic={_UIC: _LAST},
     )

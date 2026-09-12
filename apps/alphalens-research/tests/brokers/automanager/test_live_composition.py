@@ -35,7 +35,6 @@ from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.automanager.live_rails import (
     DAILY_LOSS_LIMIT_R_ENV,
-    EXIT_POLICY_ENV,
     MAX_FEE_BPS_ENV,
     MAX_OPEN_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
@@ -51,7 +50,6 @@ _VALID_RAIL_ENV: dict[str, str] = {
     PORTFOLIO_GROSS_FRAC_ENV: "0.25",
     DAILY_LOSS_LIMIT_R_ENV: "1.0",
     SIZING_EQUITY_ENV: "10000",
-    EXIT_POLICY_ENV: "trailing_atr",
     MAX_FEE_BPS_ENV: "100",
 }
 
@@ -86,7 +84,7 @@ def _live_broker_stub() -> mock.Mock:
     """A mock satisfying every runtime_checkable Broker capability Protocol
     the composition root probes (SupportsStandaloneStop / SupportsOcoExit /
     SupportsAmendStop — the last is required because ``_VALID_RAIL_ENV``
-    pins ``EXIT_POLICY_ENV=trailing_atr``, which needs the AmendStop rail —
+    needs the AmendStop rail —
     plus SupportsNettedPositionReads, the unconditional #1141 boot gate).
 
     Each capability method is set EXPLICITLY (not left to Mock's

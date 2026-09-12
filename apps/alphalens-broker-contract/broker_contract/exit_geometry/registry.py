@@ -63,14 +63,20 @@ def resolve_policy(name: str, version: int = 1) -> ExitGeometryPolicy:
 
 
 def exit_policy_registry() -> dict[str, ExitPolicy]:
-    """Every behavioral ExitPolicy, keyed by the name the env var selects.
+    """Every behavioral ExitPolicy, keyed by its own name.
 
-    A key is the policy's IDENTITY, not a lookup convenience: it is what
-    ``ALPHALENS_BROKER_EXIT_POLICY`` names, what an operator reads in a log
-    line, and what the geometry stamp journals. Each policy is therefore
-    constructed with its own key as ``name`` (issue #1138) — before that the
-    two bracket policies both reported the name of the geometry they wrap, so
-    no record could say which of them ran.
+    A key is the policy's IDENTITY, not a lookup convenience: it is what an
+    operator reads in a log line. Each policy is therefore constructed with its
+    own key as ``name`` (issue #1138) — before that the two bracket policies both
+    reported the name of the geometry they wrap, so no record could say which of
+    them ran.
+
+    Since #1414 no ENV VAR selects from here. The daemon resolves a policy from
+    the document (:func:`resolve_declared_policy`); what is left of this registry
+    is the research surface — ``paper.sizing`` reads ``breakeven_trail`` so the
+    brief's declaration cannot drift from the deployed numbers, and the ``/edge``
+    replay reads ``atr_bracket_1p5``. ``trailing_atr`` went with the variable: it
+    was reachable only by name, and no name is resolved by name any more.
 
     Exposed (rather than inlined in :func:`resolve_exit_policy`) so a test can
     enumerate the registry and assert that property for EVERY entry, including
@@ -81,7 +87,6 @@ def exit_policy_registry() -> dict[str, ExitPolicy]:
         AtrBracketPolicy,
         BreakevenTrailPolicy,
         SetupStaticPolicy,
-        TrailingAtrPolicy,
     )
 
     # Both bracket policies place against the SAME geometry and differ only in
@@ -91,7 +96,6 @@ def exit_policy_registry() -> dict[str, ExitPolicy]:
     return {
         "setup_static": SetupStaticPolicy(),
         "atr_bracket_1p5": AtrBracketPolicy(geom, name="atr_bracket_1p5"),
-        "trailing_atr": TrailingAtrPolicy(geom, name="trailing_atr", activation_r=0.5, k_atr=0.6),
         # The lens-faithful break-even + fractional-giveback trail (the live
         # port of be_0p5r_trail0p6): no geometry — the brief ladder + brief
         # disaster stop stay placed; only the stop is managed.
