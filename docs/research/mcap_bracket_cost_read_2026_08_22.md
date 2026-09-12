@@ -223,3 +223,35 @@ before the final read, so interim numbers were seen. The verdict logic was
 already committed and tested at that point, so the verdict could not move; this
 is recorded because the prose could have been influenced and the reader should
 be able to weigh that.
+
+## Addendum — 2026-09-12: this read is an earlier computation of the same sample
+
+Issued under Amendment 4 to the contract (appended 2026-09-12). The ladder
+engine's arrival session moved on 2026-09-11, and this measurement's store was
+rebuilt from scratch under the new rule on 2026-09-12. Everything above was
+computed under the old one.
+
+Facts of record:
+
+* **The sample was recomputed, not restarted.** The same rows were replayed; the
+  rebuilt store replaces the previous computation. The previous one is retained
+  at `~/.alphalens/bracket_cost_ladders.pre1416`, so every number above stays
+  reproducible.
+* **7.0% of entries disappear under the corrected arrival.** On the 1360 rows
+  present in both computations, entries fall 1089 to 1042 (76 lost, 29 gained);
+  by arm, 6.6% of the discarded arm's entries and 8.1% of the kept arm's. Rows
+  carrying a realised R fall from 93 / 21 to 82 / 18 (discarded / kept), and days
+  carrying one in both arms from 16 to 15.
+* **This read's verdict could not have flipped.** For brief dates on or before
+  2026-08-22, today's counts bound from above what this read could have seen, because
+  a row only ever gains a realised R. That bound is 7 rows in the kept arm under
+  BOTH rules against a floor of 30, and 6 paired days under both against a floor
+  of 20. INCONCLUSIVE was the only verdict available either way.
+* **Its numbers are not carried forward.** No later read quotes the counts above
+  beside its own as one growing series; §8's floors are counted on the rebuilt
+  store, where the kept arm stands at 18 of 30.
+
+This read is not withdrawn. Its verdict was correct for the sample it examined,
+and the comparability statement it makes concerns the two arms WITHIN that
+sample. A later read re-establishes that statement on the rebuilt sample rather
+than inheriting it.
