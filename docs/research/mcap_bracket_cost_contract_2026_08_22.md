@@ -302,3 +302,68 @@ theme column is never loaded, so §9's theme-stratified secondary is always
 empty. Run against the store, `theme` is present and non-null on all 413 rows:
 it arrives on the ladder rows, which the monitor stamps, not through the brief
 columns the review inspected. The secondary reports 10 themes.
+
+---
+
+## Amendment 4 — the ladder arrival moved under the measurement, and the store was rebuilt
+
+Written 2026-09-12, after read 1 and before any read 2, while verifying the
+rebuild. Every number below was measured from the two stores, not estimated.
+
+**What changed.** On 2026-09-11 PR #1418 (issue #1416, squash `27159045`)
+changed the arrival session of the shared ladder engine: the replay used to
+start on session `D`, but a brief dated `D` is built from session `D`'s close,
+so orders filled during a session that had closed before the brief existed. The
+arrival is now the first session strictly after `D`. The same PR added a guard
+that refuses to replay into a store holding rows from the old rule. This
+measurement's daily job failed with `LegacyArrivalStoreError` at 03:35 UTC on
+2026-09-12; it had been green at 05:48 UTC on 2026-09-11. The store was rebuilt
+from scratch 14:03-18:21 UTC on 2026-09-12 to restore the measurement. §5 needs
+no wording change: it defines the ladder as whatever the production monitor
+does, and that is exactly what moved.
+
+**What it did to the sample.** On the 1360 rows present in both computations:
+
+| | old computation | rebuilt |
+|---|---:|---:|
+| rows / dates | 1360 / 36 | 1391 / 37 |
+| positions that entered | 1089 | 1042 (76 lost, 29 gained) |
+| — discarded arm | 816 | 785 (54 lost, 6.6% of that arm) |
+| — kept arm | 273 | 257 (22 lost, 8.1% of that arm) |
+| rows carrying a realised R (discarded / kept) | 93 / 21 | 82 / 18 |
+| days carrying a realised R in BOTH arms | 16 | 15 |
+| TP_FULL / SL_HIT | 108 / 6 | 89 / 11 |
+
+7.0% of entries were removed overall. The removal is NOT arm-neutral: the kept
+arm, the smaller one and the one that binds the §8 floor, lost the larger share
+(8.1% against 6.6%), so the re-base makes the floor harder to clear, not easier.
+The direction inside the terminal rows is what removing a look-ahead predicts —
+fewer full-target wins, more stops.
+
+**Resolution: the rebuilt store is the measurement; read 1 is an earlier
+computation of it.** This is not a cohort restart. The same rows were
+recomputed, so there is nothing to pool: the rebuilt store replaces the previous
+computation of one sample. The §8 floors are counted on the rebuilt store only —
+the kept arm stands at 18 of 30, not 21 — and read 1's counts are never quoted
+beside a later read as one growing series. The previous computation is retained
+at `~/.alphalens/bracket_cost_ladders.pre1416`, outside the active path named in
+§14, so read 1 stays reproducible.
+
+**How a reader tells the two apart.** `ladder_config_version` carries an
+`arrival_rule` key on all 1391 rebuilt rows and on none of the 1360 rows of the
+previous computation. Any analysis that touches both must assert on that token;
+it is the same signal the engine's own guard reads.
+
+**Facts of record.** The daily job was down 10 h 28 min (03:35 to 14:03 UTC on
+2026-09-12), so one accrual night passed without a run; the rebuilt store covers
+37 brief dates, one more than the previous computation, so no brief date is
+missing. 942 entered positions are still open, and the oldest force-terminate at
+the 42-session time stop around 2026-10-06. An addendum recording the same facts
+was appended to the read-1 memo on 2026-09-12.
+
+**What would have made this improper.** Rebuilding after a read that cleared a
+floor; rebuilding one arm; or choosing the arrival rule from its effect on the
+arms. None happened: the rule was fixed in a production PR for a reason outside
+this measurement, both arms lost entries, and neither floor was met before or
+after. Read 2 must re-establish arm comparability on the rebuilt sample rather
+than inherit the claim read 1 makes for its own.
