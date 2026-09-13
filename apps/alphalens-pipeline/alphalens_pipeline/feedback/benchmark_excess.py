@@ -98,10 +98,17 @@ def _default_bar_fetch(
 def _recover_exit_session(row: dict[str, Any], *, last_closed_session: dt.date) -> dt.date | None:
     """Recover the exit session for a row's benchmark window.
 
-    Terminal rows carry ``matured_at`` (the session the position resolved).
-    Ongoing rows have ``matured_at = None``; their window runs to the last
-    closed session (the same horizon end the candidate's ``forward_return``
-    spans). Returns ``None`` when no usable date can be recovered.
+    Terminal rows carry ``matured_at`` — since #1442 the session the decision
+    ENDED (last crossing, or the entry-expiry session for a NO_FILL), so the
+    benchmark leg spans arrival → exit. Ongoing rows have ``matured_at = None``;
+    their window runs to the last closed session.
+
+    Caveat (#1444): the candidate leg, ``forward_return``, is the return to the
+    REPLAY HORIZON, because the engine keeps advancing ``last_close`` on bars
+    after the exit. On an incremental night the row freezes on its exit night,
+    so horizon == exit and the two legs agree; on a from-scratch rebuild the
+    horizon is the TTL expiry or the rebuild night, and they do not.
+    Returns ``None`` when no usable date can be recovered.
     """
     raw = row.get("matured_at")
     parsed = _as_date(raw)
