@@ -225,7 +225,7 @@ def _enrich_frame_rows(
     exchange: str,
     window_cache: dict[tuple[dt.date, dt.date], float | None],
     deadline: Any,
-) -> tuple[list[float | None], list[float | None], int, bool, int, int]:
+) -> tuple[list[float | None], list[float | None], list[str | None], int, bool, int, int]:
     """Compute the two benchmark columns for one frame.
 
     Reuse-first: a TERMINAL row with a consistent stored ``(benchmark, excess)``
