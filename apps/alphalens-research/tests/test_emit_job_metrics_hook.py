@@ -77,6 +77,29 @@ def _samples(body: str) -> dict[str, str]:
     return out
 
 
+def _every_line_is_well_formed(body: str) -> None:
+    """Raise unless EVERY non-comment line is a sample with a float value.
+
+    :func:`_samples` skips what it cannot match, so asserting over its output
+    alone proves "every line that already looks like a sample carries a number"
+    — not "node_exporter will accept this file". A line with no label braces, or
+    with no value at all, would be dropped silently and the assertion would
+    still pass. node_exporter rejects the WHOLE file on any bad sample, so the
+    check has to walk the raw text.
+    """
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _SAMPLE_LINE.match(line)
+        if match is None:
+            raise AssertionError(f"line is not a valid sample: {line!r}")
+        try:
+            float(match.group("value"))
+        except ValueError as exc:
+            raise AssertionError(f"value is not a float: {line!r}") from exc
+
+
 class TestEmitJobMetricsHookRouting(unittest.TestCase):
     def test_unset_textfile_dir_falls_back_loudly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -154,13 +177,24 @@ class TestExitCodeIsAlwaysANumber(_HookCase):
         body = self.fire(SERVICE_RESULT="protocol")
         self.assertEqual(_samples(body)["alphalens_job_last_exit_code"], NO_STATUS_SENTINEL)
 
-    def test_every_emitted_value_parses_as_a_float(self) -> None:
+    def test_every_emitted_line_is_a_sample_node_exporter_would_accept(self) -> None:
         body = self.fire(SERVICE_RESULT="timeout", EXIT_CODE="killed", EXIT_STATUS="TERM")
-        samples = _samples(body)
-        self.assertTrue(samples, f"no samples parsed out of:\n{body}")
-        for name, value in samples.items():
-            with self.subTest(metric=name):
-                float(value)  # raises ValueError if node_exporter would reject it
+        self.assertTrue(_samples(body), f"no samples parsed out of:\n{body}")
+        _every_line_is_well_formed(body)
+
+    def test_the_well_formed_check_can_actually_refute(self) -> None:
+        """Positive control. Without it, the check above could rot into a
+        no-op and nothing would notice — the failure mode it guards against is
+        precisely a line that never reaches the assertion.
+        """
+        for bad in (
+            'alphalens_job_last_exit_code{job="x"} TERM',  # the 2026-09-13 regression
+            "alphalens_job_last_exit_code 123",  # no label braces
+            'alphalens_job_last_exit_code{job="x"}',  # no value
+            "garbage",
+        ):
+            with self.subTest(line=bad), self.assertRaises(AssertionError):
+                _every_line_is_well_formed(bad)
 
 
 class TestOperatorStopIsNotAFailure(_HookCase):
