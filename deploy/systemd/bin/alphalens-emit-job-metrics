@@ -100,9 +100,24 @@ NO_STATUS_SENTINEL=256
 # so a plain `systemctl stop` of a running oneshot reports SUCCESS
 # together with EXIT_STATUS=TERM. Branching on $EXIT_CODE instead of
 # $SERVICE_RESULT would page a critical alert for a clean operator stop.
-if [ "$RESULT" = "success" ]; then
+#
+# The INVARIANT this enforces: a failure NEVER reports 0. Table 6 also has
+# failure rows whose $EXIT_STATUS is legitimately "0" —
+#   "timeout"  : "exited" : "0", "1", ... ; likewise "watchdog" and "oom-kill"
+# — so trusting $EXIT_STATUS on a failure re-opens the very hole this hook
+# is being fixed for. It is worse in combination with the carry-forward
+# below: a failed run would emit exit code 0 AND a last_success line, which
+# is byte-identical to a healthy run, so neither AlphalensJobFailed (needs
+# != 0) nor AlphalensJobMetricMissing (needs the success line absent) could
+# fire, and nothing would page until the staleness threshold — 48h for the
+# daily jobs and 70 days for literature-scan-monthly.
+#
+# RESULT="unknown" means no $SERVICE_RESULT at all, i.e. an operator running
+# this hook by hand (the shape the header documents). That is not a failure
+# and must not write a paging value into the scraped directory.
+if [ "$RESULT" = "success" ] || [ "$RESULT" = "unknown" ]; then
     EXIT_STATUS_NUM=0
-elif [ -n "$RAW_STATUS" ] && [ -z "${RAW_STATUS//[0-9]/}" ]; then
+elif [ -n "$RAW_STATUS" ] && [ -z "${RAW_STATUS//[0-9]/}" ] && [ "$RAW_STATUS" -ne 0 ]; then
     EXIT_STATUS_NUM="$RAW_STATUS"
 else
     EXIT_STATUS_NUM="$NO_STATUS_SENTINEL"
@@ -117,17 +132,25 @@ fi
 # stopped exporter, which is the #1369 mistake.
 SIGNAL_NUM=0
 if [ "$RAW_CODE" = "killed" ] || [ "$RAW_CODE" = "dumped" ]; then
-    SIGNAL_NUM=$(kill -l "$RAW_STATUS" 2>/dev/null || echo 0)
-    case "$SIGNAL_NUM" in
-        '' | *[!0-9]*) SIGNAL_NUM=0 ;;
-    esac
+    if [ -n "$RAW_STATUS" ] && [ -z "${RAW_STATUS//[0-9]/}" ]; then
+        # Already a number. `kill -l 15` answers "TERM" — a NAME — which the
+        # guard below would then zero, losing the signal we were handed.
+        SIGNAL_NUM="$RAW_STATUS"
+    else
+        SIGNAL_NUM=$(kill -l "$RAW_STATUS" 2>/dev/null || echo 0)
+        case "$SIGNAL_NUM" in
+            '' | *[!0-9]*) SIGNAL_NUM=0 ;;
+        esac
+    fi
 fi
 
 # Derive the run's wall-clock duration from the unit's
 # InactiveExitTimestamp — when the unit LEFT inactive, i.e. the start of
-# the whole run including ExecStartPre. That is the same span
-# TimeoutStartSec measures, so the gauge can be compared against the
-# budget directly.
+# the whole run including ExecStartPre. That is the span TimeoutStartSec
+# is measured against, so the gauge is roughly comparable to the budget.
+# Only roughly: this hook samples in ExecStopPost, after ExecStop and after
+# any kill has been waited on, so a timed-out run reports somewhat MORE
+# than its TimeoutStartSec rather than exactly it.
 #
 # NOT ActiveEnterTimestamp (#1365): a Type=oneshot unit never enters
 # "active" (activating -> deactivating -> inactive unless

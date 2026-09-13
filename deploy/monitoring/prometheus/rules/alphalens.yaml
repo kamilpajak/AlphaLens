@@ -85,7 +85,7 @@ groups:
           unit: edgar-detect
         annotations:
           summary: "edgar-detect success metric missing"
-          description: "No success metric for edgar-detect. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for edgar-detect. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       - alert: AlphalensJobStale
         expr: time() - alphalens_job_last_success_timestamp_seconds{job="literature-scan-weekly"} > 1209600
@@ -107,7 +107,7 @@ groups:
           unit: literature-scan-weekly
         annotations:
           summary: "literature-scan-weekly success metric missing"
-          description: "No success metric for literature-scan-weekly. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for literature-scan-weekly. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       - alert: AlphalensJobStale
         expr: time() - alphalens_job_last_success_timestamp_seconds{job="literature-scan-monthly"} > 6048000
@@ -129,7 +129,7 @@ groups:
           unit: literature-scan-monthly
         annotations:
           summary: "literature-scan-monthly success metric missing"
-          description: "No success metric for literature-scan-monthly. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for literature-scan-monthly. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       # thematic-build moved from 1×/day → 6×/day (every 4h at HH:30
       # UTC) in PR-F (epic #295, issue #300). 43200s = 12h = 3× the
@@ -160,7 +160,7 @@ groups:
           unit: thematic-build
         annotations:
           summary: "thematic-build success metric missing"
-          description: "No success metric for thematic-build. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for thematic-build. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       # thematic-shadow-map (#1330): the shadow-arm collector, activated by
       # OnSuccess= on thematic-build (no timer of its own). It draws once
@@ -191,7 +191,7 @@ groups:
           unit: thematic-shadow-map
         annotations:
           summary: "thematic-shadow-map success metric missing"
-          description: "No success metric for thematic-shadow-map. The unit has not run since it was installed (it is activated by OnSuccess= on thematic-build, so it needs one successful build first), or the textfile collector / node_exporter scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for thematic-shadow-map. The unit has not run since it was installed (it is activated by OnSuccess= on thematic-build, so it needs one successful build first), or the textfile collector / node_exporter scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       # edge-mirror fires on a successful compute run (OnSuccess=) PLUS an
       # hourly self-heal timer that also covers the failure/timeout path. It is
@@ -227,10 +227,12 @@ groups:
       # AlphalensJobStale family gets from AlphalensJobMetricMissing (and
       # AlphalensBrokerCapitalReadStale gets from ...ReadMissing). Fires when
       # the edge-mirror series is missing outright: unit never fired since
-      # install, hook routed to an unscraped directory (#1366), textfile
-      # collector / node_exporter scrape broken, or the last run FAILED (the
-      # emitter rewrites the textfile without the success line on a non-zero
-      # exit). Pinned by test_prometheus_rule_unit_parity.py
+      # install, hook routed to an unscraped directory (#1366), or the
+      # textfile collector / node_exporter scrape is broken. A merely FAILED
+      # run is NOT a cause any more: since #1369 the emitter carries the
+      # previous success line forward, so the series survives a failure and
+      # AlphalensJobFailed is what pages for one.
+      # Pinned by test_prometheus_rule_unit_parity.py
       # (DEDICATED_STALE_RULES).
       - alert: AlphalensEdgeMetricMissing
         expr: absent(alphalens_job_last_success_timestamp_seconds{job="edge-mirror"})
@@ -241,7 +243,7 @@ groups:
           unit: edge-mirror
         annotations:
           summary: "edge-mirror success metric missing — AlphalensEdgeStale is disarmed"
-          description: "No alphalens_job_last_success_timestamp_seconds{job=\"edge-mirror\"} series exists, so the 36h /edge staleness rule cannot fire. Causes: the unit has not succeeded since install, its hook writes outside /var/lib/node_exporter/textfile (ALPHALENS_TEXTFILE_DIR unset — check the unit's journal for the hook's WARN line), the textfile collector / node_exporter scrape is broken, or the last run failed. Clears after the first successful, correctly routed run."
+          description: "No alphalens_job_last_success_timestamp_seconds{job=\"edge-mirror\"} series exists, so the 36h /edge staleness rule cannot fire. Causes: the unit has not succeeded since install, its hook writes outside /var/lib/node_exporter/textfile (ALPHALENS_TEXTFILE_DIR unset — check the unit's journal for the hook's WARN line), or the textfile collector / node_exporter scrape is broken. A merely FAILED run no longer causes this: the emitter carries the previous success line forward. Clears after the first successful, correctly routed run."
 
       # feedback-shadow-returns runs nightly at 06:30 UTC (Track A v2
       # PR-T). 172800s = 48h = 2× the daily cadence, matching the other
@@ -271,7 +273,7 @@ groups:
           unit: feedback-shadow-returns
         annotations:
           summary: "feedback-shadow-returns success metric missing"
-          description: "No success metric for feedback-shadow-returns. The job has not run since metrics were enabled (e.g. a freshly installed unit before its first run), or the textfile collector / node_exporter scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for feedback-shadow-returns. The job has not run since metrics were enabled (e.g. a freshly installed unit before its first run), or the textfile collector / node_exporter scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       # form4-incremental runs daily at 02:30 UTC (Form-4 daily-incremental
       # ingest). 172800s = 48h = 2× the daily cadence, matching
@@ -299,7 +301,7 @@ groups:
           unit: form4-incremental
         annotations:
           summary: "form4-incremental success metric missing"
-          description: "No success metric for form4-incremental. The job has not run since metrics were enabled (e.g. a freshly installed unit before its first run), or the textfile collector / node_exporter scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for form4-incremental. The job has not run since metrics were enabled (e.g. a freshly installed unit before its first run), or the textfile collector / node_exporter scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       # grouped-daily-topup runs daily at 01:30 UTC (split-adjusted grouped-daily
       # history top-up that backs the O'Neil RS term). 172800s = 48h = 2× the daily
@@ -327,7 +329,7 @@ groups:
           unit: grouped-daily-topup
         annotations:
           summary: "grouped-daily-topup success metric missing"
-          description: "No success metric for grouped-daily-topup. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for grouped-daily-topup. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       # ---------------------------------------------------------------
       # Market-cap bracket-cost replay (PR #1087). Daily, and the cadence is
@@ -360,7 +362,7 @@ groups:
           unit: bracket-cost
         annotations:
           summary: "bracket-cost success metric missing"
-          description: "No success metric for bracket-cost. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for bracket-cost. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       # ---------------------------------------------------------------
       # waiting:data wake-date notifier (alphalens-issue-wake). Daily, and the
@@ -393,7 +395,7 @@ groups:
           unit: issue-wake
         annotations:
           summary: "issue-wake success metric missing"
-          description: "No success metric for issue-wake. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for issue-wake. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       # ---------------------------------------------------------------
       # Live-rules sync (alphalens-prometheus-rules-sync, issue #1073). Hourly,
@@ -428,7 +430,7 @@ groups:
           unit: prometheus-rules-sync
         annotations:
           summary: "prometheus-rules-sync success metric missing"
-          description: "No success metric for prometheus-rules-sync. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for prometheus-rules-sync. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       # A run that HAPPENS but fails is invisible to the staleness pair only
       # until its second consecutive failure: the sync emits a zero-initialised
@@ -487,7 +489,7 @@ groups:
           unit: grafana-provisioning-sync
         annotations:
           summary: "grafana-provisioning-sync success metric missing"
-          description: "No success metric for grafana-provisioning-sync. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for grafana-provisioning-sync. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       # A run that HAPPENS but fails is invisible to the staleness pair until
       # its second consecutive failure — same one-hot contract as the rules
@@ -601,7 +603,7 @@ groups:
           unit: systemd-drift-check
         annotations:
           summary: "systemd-drift-check success metric missing"
-          description: "No success metric for systemd-drift-check. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first successful run."
+          description: "No success metric for systemd-drift-check. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
       # ---------------------------------------------------------------
       # VIX regime-cache freshness (Track A v2 PR-2 follow-up).
@@ -678,7 +680,7 @@ groups:
           route: telegram
         annotations:
           summary: "{{ $labels.job }} failed — last_exit_code {{ $value }}"
-          description: "Check `journalctl --user -u alphalens-{{ $labels.job }}.service` on the VPS. A value of 256 is the sentinel the hook writes when systemd reported no numeric status: the run was killed by a signal (read `alphalens_job_last_signal{job=\"{{ $labels.job }}\"}` for which one — 15 is a timeout or a stop, 9 is the OOM killer), or it hit a Table 6 case such as `protocol` / `start-limit-hit` where systemd sets no status at all. Any other value is the code the job itself returned. Note a run systemd calls `success` reports 0 even when it ended on TERM, so a plain `systemctl stop` does not page."
+          description: "Check `journalctl --user -u alphalens-{{ $labels.job }}.service` on the VPS. 256 is the sentinel the hook writes whenever systemd reported a failure without a usable non-zero status — a signal kill, or a result such as timeout or watchdog whose reported status is 0. When a signal was involved, `alphalens_job_last_signal{job=\"{{ $labels.job }}\"}` carries its number; a cgroup OOM kill shows 9 there, but a container OOM on the docker-run units arrives as a plain exit 137 with no signal recorded. Other values come from whatever the unit's ExecStart returned, which is not always the job's own code: 200-243 are systemd's own failures (203 is a failed exec) and a killed container is reported by the docker client. A run systemd calls `success` reports 0 even when it ended on TERM, so a plain `systemctl stop` does not page."
 
       # ---------------------------------------------------------------
       # Domain alerts — surface "ran clean, found nothing" conditions
@@ -1479,7 +1481,7 @@ groups:
           unit: saxo-refresh
         annotations:
           summary: "saxo-refresh success metric missing"
-          description: "No success metric for saxo-refresh. The keep-alive timer has not fired since metrics were enabled, or the scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first refresh."
+          description: "No success metric for saxo-refresh. The keep-alive timer has not fired since metrics were enabled, or the scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first refresh."
 
       # -----------------------------------------------------------------
       # LIVE broker-manager instance (ADR 0017 standing-LIVE authorization;
@@ -1779,4 +1781,4 @@ groups:
           unit: saxo-marketdata-refresh
         annotations:
           summary: "saxo-marketdata-refresh success metric missing"
-          description: "No success metric for saxo-marketdata-refresh. The keep-alive timer has not fired since metrics were enabled, or the scrape is broken. Also fires after a FAILED run: the emitter rewrites the textfile without the success line on a non-zero exit, so this alert pairs with AlphalensJobFailed as the first page after a failure (AlphalensJobStale cannot fire then). Clears after the first refresh."
+          description: "No success metric for saxo-marketdata-refresh. The keep-alive timer has not fired since metrics were enabled, or the scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first refresh."

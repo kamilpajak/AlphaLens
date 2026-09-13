@@ -11,10 +11,11 @@ non-GNU ``date -d`` (duration falls back to 0), so it runs unchanged on macOS
 and in CI. Nothing here asserts the duration: controlling the timestamp would
 need a fake ``systemctl`` on ``PATH``, a pattern this repo does not have.
 
-What IS asserted here is the value of every emitted line. A value node_exporter
-cannot parse costs the WHOLE file — every series in it disappears — and the
-hook used to interpolate ``$EXIT_STATUS`` raw, which systemd sets to the signal
-NAME (``TERM``) on a signal kill.
+What IS asserted here is the value of every emitted line, and the invariant
+that a FAILURE never reports 0. node_exporter drops the whole file on one
+unparseable sample, and a failure that reports 0 while also carrying a
+success line is byte-identical to a healthy run — neither the failure alert
+nor the metric-missing alert can see it.
 """
 
 from __future__ import annotations
@@ -30,11 +31,16 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 HOOK = REPO_ROOT / "deploy" / "systemd" / "bin" / "alphalens-emit-job-metrics"
 FALLBACK_WARNING = "ALPHALENS_TEXTFILE_DIR unset"
 
-# The value the hook emits when systemd gave it no usable numeric status.
-# Deliberately OUTSIDE the 0-255 range a real wait status can occupy, so it can
-# never be confused with an exit code a job actually returned, while still
-# being >= 1 so `!= 0` alerting and the >= 1 dashboard threshold both fire.
+# The value the hook emits when systemd reported a failure without a usable
+# non-zero status. Deliberately OUTSIDE the 0-255 range a wait status can
+# occupy, so it can never be confused with a code a job actually returned,
+# while still being >= 1 so `!= 0` alerting and the >= 1 dashboard threshold
+# both fire.
 NO_STATUS_SENTINEL = "256"
+
+# systemd.exec(5) Table 6: these results are FAILURES whose reported
+# $EXIT_STATUS may legitimately be "0".
+FAILURES_THAT_CAN_REPORT_ZERO = ("timeout", "watchdog", "oom-kill", "protocol")
 
 _SAMPLE_LINE = re.compile(r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)\{[^}]*\}\s+(?P<value>\S+)$")
 
@@ -146,17 +152,52 @@ class _HookCase(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return self.out.read_text()
 
+    def seed(self, success_epoch: str) -> None:
+        """Write a prior file whose success timestamp is a known old value."""
+        self.routed.mkdir(parents=True, exist_ok=True)
+        self.out.write_text(
+            "# HELP alphalens_job_last_success_timestamp_seconds seeded by the test\n"
+            "# TYPE alphalens_job_last_success_timestamp_seconds gauge\n"
+            f'alphalens_job_last_success_timestamp_seconds{{job="{self.job}"}} {success_epoch}\n'
+        )
+
+
+class TestAFailureNeverReportsZero(_HookCase):
+    """The invariant that makes the failure alert able to fire at all.
+
+    `AlphalensJobFailed` is `alphalens_job_last_exit_code != 0` and
+    `AlphalensJobMetricMissing` needs the success line ABSENT. Since the hook
+    now carries the success line forward, a failure that also reported 0 would
+    be byte-identical to a healthy run and neither alert could see it — silence
+    until the staleness threshold, which is 70 days for the monthly job.
+    """
+
+    def test_a_failure_reporting_status_zero_still_reports_a_failure(self) -> None:
+        # systemd.exec(5) Table 6: "timeout"/"watchdog"/"oom-kill" may report
+        # `exited` with status "0". Trusting $EXIT_STATUS on a failure re-opens
+        # the hole this hook exists to close.
+        for result in FAILURES_THAT_CAN_REPORT_ZERO:
+            with self.subTest(service_result=result):
+                body = self.fire(SERVICE_RESULT=result, EXIT_CODE="exited", EXIT_STATUS="0")
+                self.assertEqual(_samples(body)["alphalens_job_last_exit_code"], NO_STATUS_SENTINEL)
+
+    def test_a_failed_run_is_distinguishable_from_a_healthy_one(self) -> None:
+        self.seed("1700000000")
+        body = self.fire(SERVICE_RESULT="watchdog", EXIT_CODE="exited", EXIT_STATUS="0")
+        samples = _samples(body)
+        self.assertNotEqual(samples["alphalens_job_last_exit_code"], "0")
+        # The success line is carried, so the exit code is the ONLY signal left.
+        self.assertIn("alphalens_job_last_success_timestamp_seconds", samples)
+
 
 class TestExitCodeIsAlwaysANumber(_HookCase):
     """systemd sets ``$EXIT_STATUS`` to the SIGNAL NAME when it kills a unit.
 
-    `systemd.exec(5)`: ``$EXIT_CODE`` is ``"exited"`` "and the signal name in
-    all other cases". Interpolating that raw produced
+    Interpolating that raw produced
     ``alphalens_job_last_exit_code{job="feedback-shadow-returns"} TERM`` on
     2026-09-13, node_exporter rejected the whole file
-    (``node_textfile_scrape_error 1``), and `AlphalensJobFailed` — whose
-    expression is ``alphalens_job_last_exit_code != 0`` — could not fire for a
-    job killed on its timeout.
+    (``node_textfile_scrape_error 1``), and `AlphalensJobFailed` could not fire
+    for a job killed on its timeout.
     """
 
     def test_signal_kill_emits_the_sentinel_not_the_signal_name(self) -> None:
@@ -164,15 +205,14 @@ class TestExitCodeIsAlwaysANumber(_HookCase):
         self.assertEqual(_samples(body)["alphalens_job_last_exit_code"], NO_STATUS_SENTINEL)
         self.assertNotIn("TERM", body)
 
-    def test_a_numeric_status_is_passed_through_unchanged(self) -> None:
+    def test_a_numeric_nonzero_status_is_passed_through_unchanged(self) -> None:
         body = self.fire(SERVICE_RESULT="exit-code", EXIT_CODE="exited", EXIT_STATUS="1")
         self.assertEqual(_samples(body)["alphalens_job_last_exit_code"], "1")
 
     def test_failure_with_no_status_at_all_is_not_reported_as_zero(self) -> None:
         """`systemd.exec(5)`: the variables "are only set if the service manager
-        succeeded to start and identify the main process". Table 6 has rows
-        (``protocol``, ``start-limit-hit``) where BOTH are unset. The old
-        ``${EXIT_STATUS:-0}`` turned those into a parseable claim of success.
+        succeeded to start and identify the main process". The old
+        ``${EXIT_STATUS:-0}`` turned those failures into a claim of success.
         """
         body = self.fire(SERVICE_RESULT="protocol")
         self.assertEqual(_samples(body)["alphalens_job_last_exit_code"], NO_STATUS_SENTINEL)
@@ -197,18 +237,26 @@ class TestExitCodeIsAlwaysANumber(_HookCase):
                 _every_line_is_well_formed(bad)
 
 
-class TestOperatorStopIsNotAFailure(_HookCase):
-    """`systemd.exec(5)` Table 6, first row: ``"success" : "killed" : "HUP",
-    "INT", "TERM", "PIPE"``. A plain ``systemctl stop`` of a running oneshot
-    therefore reports SUCCESS together with ``EXIT_STATUS=TERM``. Branching on
-    ``$EXIT_CODE`` alone would page a critical alert for that.
-    """
-
+class TestRunsThatAreNotFailures(_HookCase):
     def test_success_killed_by_term_reports_zero_and_keeps_the_success_line(self) -> None:
+        """`systemd.exec(5)` Table 6, first row: ``"success" : "killed" :
+        "HUP", "INT", "TERM", "PIPE"``. A plain ``systemctl stop`` of a running
+        oneshot therefore reports SUCCESS together with ``EXIT_STATUS=TERM``.
+        Branching on ``$EXIT_CODE`` alone would page a critical alert for that.
+        """
         body = self.fire(SERVICE_RESULT="success", EXIT_CODE="killed", EXIT_STATUS="TERM")
         samples = _samples(body)
         self.assertEqual(samples["alphalens_job_last_exit_code"], "0")
         self.assertIn("alphalens_job_last_success_timestamp_seconds", samples)
+
+    def test_the_operator_by_hand_shape_does_not_write_a_paging_value(self) -> None:
+        """The header documents running this hook by hand. Outside systemd no
+        result variable is set, and that is not a failure — writing the
+        sentinel there would page `AlphalensJobFailed` (critical) five minutes
+        after an operator ran the hook to check something.
+        """
+        body = self.fire()
+        self.assertEqual(_samples(body)["alphalens_job_last_exit_code"], "0")
 
 
 class TestSignalIsExposedSeparately(_HookCase):
@@ -222,6 +270,12 @@ class TestSignalIsExposedSeparately(_HookCase):
     def test_signal_number_is_its_own_gauge(self) -> None:
         body = self.fire(SERVICE_RESULT="timeout", EXIT_CODE="killed", EXIT_STATUS="TERM")
         self.assertEqual(_samples(body)["alphalens_job_last_signal"], "15")
+
+    def test_a_numeric_signal_status_is_not_lost(self) -> None:
+        """``kill -l 15`` answers ``TERM`` — a NAME — so routing a numeric
+        status through it and then demanding digits would zero the signal."""
+        body = self.fire(SERVICE_RESULT="signal", EXIT_CODE="killed", EXIT_STATUS="9")
+        self.assertEqual(_samples(body)["alphalens_job_last_signal"], "9")
 
     def test_the_signal_gauge_is_zero_when_no_signal_was_involved(self) -> None:
         """Emitted on EVERY run, zeros included. A series that disappears on
@@ -240,15 +294,23 @@ class TestLastSuccessSurvivesAFailedRun(_HookCase):
     """
 
     def test_a_failed_run_carries_the_previous_success_forward_unchanged(self) -> None:
-        first = self.fire(SERVICE_RESULT="success", EXIT_CODE="exited", EXIT_STATUS="0")
-        t1 = _samples(first)["alphalens_job_last_success_timestamp_seconds"]
-
-        second = self.fire(SERVICE_RESULT="exit-code", EXIT_CODE="exited", EXIT_STATUS="1")
-        samples = _samples(second)
+        # The earlier version of this test ran the hook twice and compared the
+        # second file against the first. Both fires land in the same wall-clock
+        # second, so a mutant that re-stamped $NOW instead of carrying the old
+        # value survived that assertion 12 times out of 12. Seeding a value
+        # that cannot be confused with "now" is what gives it refuting power.
+        seeded = "1700000000"
+        self.seed(seeded)
+        body = self.fire(SERVICE_RESULT="exit-code", EXIT_CODE="exited", EXIT_STATUS="1")
+        samples = _samples(body)
         self.assertEqual(samples["alphalens_job_last_exit_code"], "1")
-        # Equality, not presence: re-emitting $NOW here would pass a
-        # presence-only check while reintroducing the bug it claims to fix.
-        self.assertEqual(samples["alphalens_job_last_success_timestamp_seconds"], t1)
+        self.assertEqual(samples["alphalens_job_last_success_timestamp_seconds"], seeded)
+
+    def test_a_successful_run_stamps_a_fresh_value_over_the_old_one(self) -> None:
+        seeded = "1700000000"
+        self.seed(seeded)
+        body = self.fire(SERVICE_RESULT="success", EXIT_CODE="exited", EXIT_STATUS="0")
+        self.assertNotEqual(_samples(body)["alphalens_job_last_success_timestamp_seconds"], seeded)
 
     def test_a_first_ever_failure_emits_no_success_line_and_still_exits_zero(self) -> None:
         """The carry-forward reads the previous file. Under ``set -euo
