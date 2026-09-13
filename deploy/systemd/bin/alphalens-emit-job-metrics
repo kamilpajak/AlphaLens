@@ -26,10 +26,16 @@ set -euo pipefail
 #   alphalens_job_last_run_timestamp_seconds{job="..."} <epoch now>
 #   alphalens_job_last_duration_seconds{job="..."}      <wall seconds>
 #   alphalens_job_last_exit_code{job="..."}             <exit status>
+#   alphalens_job_last_signal{job="..."}                <signal number, 0 = none>
 #
-# Plus, when the run was successful:
+# Plus, when the run was successful — or, when it was not, carried forward
+# from the previous file:
 #
-#   alphalens_job_last_success_timestamp_seconds{job="..."} <epoch now>
+#   alphalens_job_last_success_timestamp_seconds{job="..."} <epoch>
+#
+# EVERY value emitted here must parse as a float. node_exporter rejects the
+# WHOLE file on one bad sample, so a single unparseable line silently deletes
+# every series this job has.
 #
 # Companion Python helper at
 # ``apps/alphalens-pipeline/alphalens_pipeline/observability/textfile.py``
@@ -57,26 +63,85 @@ if [ -z "${ALPHALENS_TEXTFILE_DIR:-}" ]; then
 fi
 mkdir -p "$TEXTFILE_DIR"
 
-# systemd ExecStopPost exports these (man systemd.service §
-# "Process Exit Codes"):
-#   $SERVICE_RESULT — "success" | "exit-code" | "signal" | ...
+# systemd ExecStopPost exports these (systemd.exec(5), "Environment
+# Variables in Spawned Processes", Table 6):
+#   $SERVICE_RESULT — "success" | "exit-code" | "signal" | "timeout" | ...
 #   $EXIT_CODE      — "exited" | "killed" | "dumped"
-#   $EXIT_STATUS    — the numeric exit code or signal number
-# All three default to empty when this script is invoked outside
-# systemd (e.g. an operator running it by hand for testing).
+#   $EXIT_STATUS    — the numeric exit code when $EXIT_CODE is "exited",
+#                     and the SIGNAL NAME ("TERM", "KILL") otherwise.
+#
+# Two traps follow from that table, and the hook used to fall into both.
+#
+# 1. $EXIT_STATUS is NOT reliably numeric. Interpolating it raw produced
+#    `alphalens_job_last_exit_code{job="feedback-shadow-returns"} TERM`
+#    on 2026-09-13. node_exporter rejected the whole file
+#    (node_textfile_scrape_error 1) and AlphalensJobFailed, whose
+#    expression is `alphalens_job_last_exit_code != 0`, could not fire
+#    for a job killed on its timeout — so a killed job paged more
+#    quietly than a failed one.
+# 2. The variables "are only set if the service manager succeeded to
+#    start and identify the main process", and Table 6 has "protocol"
+#    and "start-limit-hit" rows where BOTH are unset. The old
+#    ${EXIT_STATUS:-0} turned those failures into a parseable claim of
+#    success that nothing could alert on.
+#
+# $SERVICE_RESULT is the one field that is always set, so it decides.
 RESULT="${SERVICE_RESULT:-unknown}"
-EXIT_STATUS_NUM="${EXIT_STATUS:-0}"
+RAW_STATUS="${EXIT_STATUS:-}"
+RAW_CODE="${EXIT_CODE:-}"
 NOW=$(date +%s)
 
+# Outside the 0-255 range a wait status can hold, so it can never be
+# confused with a code a job actually returned, and >= 1 so both the
+# `!= 0` alert and the >= 1 dashboard threshold treat it as a failure.
+NO_STATUS_SENTINEL=256
+
+# Table 6 row 1 is `"success" : "killed" : "HUP", "INT", "TERM", "PIPE"`,
+# so a plain `systemctl stop` of a running oneshot reports SUCCESS
+# together with EXIT_STATUS=TERM. Branching on $EXIT_CODE instead of
+# $SERVICE_RESULT would page a critical alert for a clean operator stop.
+if [ "$RESULT" = "success" ]; then
+    EXIT_STATUS_NUM=0
+elif [ -n "$RAW_STATUS" ] && [ -z "${RAW_STATUS//[0-9]/}" ]; then
+    EXIT_STATUS_NUM="$RAW_STATUS"
+else
+    EXIT_STATUS_NUM="$NO_STATUS_SENTINEL"
+fi
+
+# The signal gets its own gauge rather than a 128+signum encoding inside
+# last_exit_code: `code=exited, status=128` occurs for real on this host,
+# and four hooked units shell out to `docker run`, whose client reports a
+# killed container as `code=exited, status=137`. A combined encoding would
+# be indistinguishable from those. Emitted on EVERY run, zeros included —
+# a series that disappears on healthy runs cannot be told apart from a
+# stopped exporter, which is the #1369 mistake.
+SIGNAL_NUM=0
+if [ "$RAW_CODE" = "killed" ] || [ "$RAW_CODE" = "dumped" ]; then
+    SIGNAL_NUM=$(kill -l "$RAW_STATUS" 2>/dev/null || echo 0)
+    case "$SIGNAL_NUM" in
+        '' | *[!0-9]*) SIGNAL_NUM=0 ;;
+    esac
+fi
+
 # Derive the run's wall-clock duration from the unit's
-# ActiveEnterTimestamp. systemctl --user reports it in the operator's
-# locale (e.g. "Fri 2026-05-30 11:42:01 UTC"); ``date -d`` parses that
-# back to an epoch. Fall back to 0 on any parse failure so a bad
-# locale does not turn a healthy run into a unit failure.
+# InactiveExitTimestamp — when the unit LEFT inactive, i.e. the start of
+# the whole run including ExecStartPre. That is the same span
+# TimeoutStartSec measures, so the gauge can be compared against the
+# budget directly.
+#
+# NOT ActiveEnterTimestamp (#1365): a Type=oneshot unit never enters
+# "active" (activating -> deactivating -> inactive unless
+# RemainAfterExit=yes), so that field is empty at ExecStopPost time and
+# every job reported a duration of 0 from the day this gauge shipped.
+# systemctl --user reports the timestamp in the operator's locale (e.g.
+# "Fri 2026-05-30 11:42:01 UTC"); ``date -d`` parses it back to an epoch.
+# Fall back to 0 on any parse failure so a bad locale does not turn a
+# healthy run into a unit failure — but say so, or a future field rename
+# silently restores the #1365 behaviour.
 UNIT="alphalens-${JOB}.service"
-ACTIVE_ENTER=$(systemctl --user show "$UNIT" -p ActiveEnterTimestamp --value 2>/dev/null || true)
-if [ -n "$ACTIVE_ENTER" ]; then
-    START_EPOCH=$(date -d "$ACTIVE_ENTER" +%s 2>/dev/null || echo 0)
+INACTIVE_EXIT=$(systemctl --user show "$UNIT" -p InactiveExitTimestamp --value 2>/dev/null || true)
+if [ -n "$INACTIVE_EXIT" ]; then
+    START_EPOCH=$(date -d "$INACTIVE_EXIT" +%s 2>/dev/null || echo 0)
 else
     START_EPOCH=0
 fi
@@ -84,10 +149,27 @@ if [ "$START_EPOCH" -gt 0 ] && [ "$START_EPOCH" -le "$NOW" ]; then
     DURATION=$((NOW - START_EPOCH))
 else
     DURATION=0
+    echo "WARN: no usable InactiveExitTimestamp for ${UNIT} — duration reported as 0 (see #1365)" >&2
 fi
 
 OUT="$TEXTFILE_DIR/alphalens_job_${JOB}.prom"
 TMP="${OUT}.tmp"
+
+# #1369: this hook rewrites the whole file, so emitting the success line
+# only on success DELETED the series after one failed run — and
+# AlphalensJobStale, `time() - max(last_success{job}) > N`, cannot fire on
+# an empty max(). The staleness alarm was disarmed exactly while a job was
+# broken. Carry the previous line forward verbatim instead; emit nothing
+# only when there has never been a success.
+#
+# ``|| true`` is load-bearing: grep exits 1 when it matches nothing, and
+# under ``set -e`` that would abort the hook before ``mv`` — leaving the
+# previous file in place, a stray tempfile behind, and the unit marked
+# failed — in exactly the first-ever-failure case this handles.
+CARRIED_SUCCESS=""
+if [ -f "$OUT" ]; then
+    CARRIED_SUCCESS=$(grep "^alphalens_job_last_success_timestamp_seconds{" "$OUT" || true)
+fi
 
 {
     echo "# HELP alphalens_job_last_run_timestamp_seconds Unix time of the last invocation (success or failure)"
@@ -96,13 +178,20 @@ TMP="${OUT}.tmp"
     echo "# HELP alphalens_job_last_duration_seconds Wall-clock seconds for the last invocation"
     echo "# TYPE alphalens_job_last_duration_seconds gauge"
     echo "alphalens_job_last_duration_seconds{job=\"${JOB}\"} ${DURATION}"
-    echo "# HELP alphalens_job_last_exit_code Exit status of the last invocation (0 = success)"
+    echo "# HELP alphalens_job_last_exit_code Exit status of the last invocation (0 = success, ${NO_STATUS_SENTINEL} = systemd reported no numeric status)"
     echo "# TYPE alphalens_job_last_exit_code gauge"
     echo "alphalens_job_last_exit_code{job=\"${JOB}\"} ${EXIT_STATUS_NUM}"
+    echo "# HELP alphalens_job_last_signal Signal number that terminated the last invocation (0 = not signalled)"
+    echo "# TYPE alphalens_job_last_signal gauge"
+    echo "alphalens_job_last_signal{job=\"${JOB}\"} ${SIGNAL_NUM}"
     if [ "$RESULT" = "success" ]; then
         echo "# HELP alphalens_job_last_success_timestamp_seconds Unix time of the last successful invocation"
         echo "# TYPE alphalens_job_last_success_timestamp_seconds gauge"
         echo "alphalens_job_last_success_timestamp_seconds{job=\"${JOB}\"} ${NOW}"
+    elif [ -n "$CARRIED_SUCCESS" ]; then
+        echo "# HELP alphalens_job_last_success_timestamp_seconds Unix time of the last successful invocation"
+        echo "# TYPE alphalens_job_last_success_timestamp_seconds gauge"
+        echo "$CARRIED_SUCCESS"
     fi
 } > "$TMP"
 

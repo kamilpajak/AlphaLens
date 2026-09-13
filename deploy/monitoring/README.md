@@ -14,8 +14,8 @@ rules + Alertmanager Telegram routing + a Grafana dashboard on top.
 1. **Bash hook** `deploy/systemd/bin/alphalens-emit-job-metrics` —
    called as `ExecStopPost=` from every active service. Writes
    `$ALPHALENS_TEXTFILE_DIR/alphalens_job_<job>.prom` with cron-health
-   gauges (last_run, last_duration, last_exit_code, last_success).
-   Atomic via tempfile + `mv`.
+   gauges (last_run, last_duration, last_exit_code, last_signal,
+   last_success). Atomic via tempfile + `mv`.
 
 2. **Python helper**
    `alphalens_pipeline/observability/textfile.py::emit_domain_metrics` —
@@ -93,8 +93,9 @@ curl -s localhost:9100/metrics | grep '^alphalens_'
 |---|---|---|
 | `alphalens_job_last_run_timestamp_seconds{job}` | gauge | Unix time of last invocation (success or failure). |
 | `alphalens_job_last_duration_seconds{job}` | gauge | Wall-clock seconds of last invocation. |
-| `alphalens_job_last_exit_code{job}` | gauge | Exit status of last invocation (0 = success). |
-| `alphalens_job_last_success_timestamp_seconds{job}` | gauge | Unix time of last **successful** invocation. PR-3 alert rules use `time() - this > N` to detect stale jobs. |
+| `alphalens_job_last_exit_code{job}` | gauge | Exit status of last invocation. `0` = success, including a run systemd reports as `success` after a `TERM` (a plain `systemctl stop`). `256` = systemd gave the hook no numeric status — a signal kill, or one of the Table 6 rows (`protocol`, `start-limit-hit`) where `$EXIT_CODE` and `$EXIT_STATUS` are both unset. `256` is deliberately outside the 0-255 a wait status can hold, so it can never be confused with a code a job returned. |
+| `alphalens_job_last_signal{job}` | gauge | Signal number that terminated the last invocation, `0` when none. Kept out of `last_exit_code` on purpose: `code=exited, status=128` happens for real, and the four units that shell out to `docker run` report a killed container as `code=exited, status=137`, so a `128+signum` encoding would be indistinguishable from a genuine exit code. |
+| `alphalens_job_last_success_timestamp_seconds{job}` | gauge | Unix time of last **successful** invocation. Alert rules use `time() - this > N` to detect stale jobs. A failed run carries the previous value forward verbatim rather than dropping the line: an absent series makes `max()` empty, which disarms the staleness rule exactly while the job is broken (#1369). |
 
 ### Domain (emitted from CLI success-paths)
 

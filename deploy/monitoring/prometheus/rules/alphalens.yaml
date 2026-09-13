@@ -677,8 +677,8 @@ groups:
           severity: critical
           route: telegram
         annotations:
-          summary: "{{ $labels.job }} exited with code {{ $value }}"
-          description: "Check `journalctl --user -u alphalens-{{ $labels.job }}.service` on the VPS."
+          summary: "{{ $labels.job }} failed — last_exit_code {{ $value }}"
+          description: "Check `journalctl --user -u alphalens-{{ $labels.job }}.service` on the VPS. A value of 256 is the sentinel the hook writes when systemd reported no numeric status: the run was killed by a signal (read `alphalens_job_last_signal{job=\"{{ $labels.job }}\"}` for which one — 15 is a timeout or a stop, 9 is the OOM killer), or it hit a Table 6 case such as `protocol` / `start-limit-hit` where systemd sets no status at all. Any other value is the code the job itself returned. Note a run systemd calls `success` reports 0 even when it ended on TERM, so a plain `systemctl stop` does not page."
 
       # ---------------------------------------------------------------
       # Domain alerts — surface "ran clean, found nothing" conditions
