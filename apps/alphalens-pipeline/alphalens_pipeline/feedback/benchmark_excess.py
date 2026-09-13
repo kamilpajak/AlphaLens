@@ -32,10 +32,18 @@ For every row that carries a non-null ``forward_return`` and a recoverable
   print is the LAST AVAILABLE MINUTE BAR, not the 16:00 ET cash close: the window
   runs ``_HORIZON_SESSION_SPAN_MIN`` (480) minutes past the exit-session open and
   Polygon minute aggs include after-hours, so the last bar is typically an
-  ~21:30 UTC after-hours print. This convention is applied SYMMETRICALLY to both
-  legs, so it cancels in ``market_excess_return`` and never biases the excess —
-  a naive daily-close back-out of the SPY reference will look one session early,
-  but production does not use the daily close.
+  ~21:30 UTC after-hours print. KNOWN LIMITATION (#1445): the candidate leg is a
+  regular-hours quantity (the replay is RTH-filtered, and a terminal row's stored
+  ``forward_return`` is the OFFICIAL 16:00 close of its ``matured_at`` session,
+  #1444), so the two legs end at different prints of the same day. The
+  after-hours move of SPY is small but not zero; making the SPY exit print the
+  official close is a deliberate whole-store recompute, tracked there.
+* ``benchmark_window_exit`` — the ISO date of the exit session the pair was
+  computed over. Reuse-first (:func:`_has_consistent_stored_pair`) accepts a
+  stored pair only while this still equals the row's ``matured_at``: the
+  2026-09-11 rebuild computed every window to the rebuild night, and once
+  ``matured_at`` was repaired the pairs stayed arithmetically consistent and were
+  reused forever (#1444). Consistency alone cannot see a moved window.
 * ``market_excess_return`` — ``forward_return − benchmark_window_return``.
 
 Rows whose window is not recoverable, or whose benchmark fetch returns no bars,
@@ -77,9 +85,9 @@ DEFAULT_BENCHMARK_TICKER = "SPY"
 # ``_HORIZON_SESSION_SPAN_MIN`` so the benchmark window matches the candidate's.
 _HORIZON_SESSION_SPAN_MIN = 480
 
-# The two columns this module writes. Listed once so the ingest side and the
+# The columns this module writes. Listed once so the ingest side and the
 # carry-forward back-fill can reference the same names.
-BENCHMARK_COLUMNS = ("benchmark_window_return", "market_excess_return")
+BENCHMARK_COLUMNS = ("benchmark_window_return", "market_excess_return", "benchmark_window_exit")
 
 # A (ticker, window start, window end) → list of Polygon agg bars. Same shape as
 # ``bar_window.BarFetch`` so the production default + test stubs are shared.
@@ -100,15 +108,11 @@ def _recover_exit_session(row: dict[str, Any], *, last_closed_session: dt.date) 
 
     Terminal rows carry ``matured_at`` — since #1442 the session the decision
     ENDED (last crossing, or the entry-expiry session for a NO_FILL), so the
-    benchmark leg spans arrival → exit. Ongoing rows have ``matured_at = None``;
-    their window runs to the last closed session.
-
-    Caveat (#1444): the candidate leg, ``forward_return``, is the return to the
-    REPLAY HORIZON, because the engine keeps advancing ``last_close`` on bars
-    after the exit. On an incremental night the row freezes on its exit night,
-    so horizon == exit and the two legs agree; on a from-scratch rebuild the
-    horizon is the TTL expiry or the rebuild night, and they do not.
-    Returns ``None`` when no usable date can be recovered.
+    benchmark leg spans arrival → exit, and since #1444 the candidate leg
+    (``forward_return``) ends on the same session's official close, on a rebuild
+    as on an incremental night. Ongoing rows have ``matured_at = None``; their
+    window runs to the last closed session. Returns ``None`` when no usable date
+    can be recovered.
     """
     raw = row.get("matured_at")
     parsed = _as_date(raw)
@@ -118,7 +122,7 @@ def _recover_exit_session(row: dict[str, Any], *, last_closed_session: dt.date) 
 
 
 def _as_date(value: Any) -> dt.date | None:
-    if value is None:
+    if value is None or value is pd.NaT:
         return None
     if isinstance(value, dt.datetime):
         return value.date()
@@ -221,7 +225,7 @@ def _enrich_frame_rows(
     exchange: str,
     window_cache: dict[tuple[dt.date, dt.date], float | None],
     deadline: Any,
-) -> tuple[list[float | None], list[float | None], int, bool, int, int]:
+) -> tuple[list[float | None], list[float | None], list[str | None], int, bool, int, int]:
     """Compute the two benchmark columns for one frame.
 
     Reuse-first: a TERMINAL row with a consistent stored ``(benchmark, excess)``
@@ -231,8 +235,8 @@ def _enrich_frame_rows(
     old unbenchmarked tail instead of being spent re-fetching already-settled
     rows every run.
 
-    Returns ``(bench_col, excess_col, n_enriched, stopped_early, n_reused,
-    n_fetched)``. When the deadline trips mid-frame the partial columns are
+    Returns ``(bench_col, excess_col, exit_col, n_enriched, stopped_early,
+    n_reused, n_fetched)``. When the deadline trips mid-frame the partial columns are
     returned with ``stopped_early=True`` so the caller can leave the parquet
     untouched; rows already processed still count toward ``n_enriched``
     (matching the pre-refactor behaviour where the counter incremented before
@@ -240,17 +244,23 @@ def _enrich_frame_rows(
     """
     bench_col: list[float | None] = []
     excess_col: list[float | None] = []
+    exit_col: list[str | None] = []
     n_enriched = 0
     n_reused = 0
     n_fetched = 0
     for _, row in df.iterrows():
         if deadline is not None and deadline.should_stop():
-            return bench_col, excess_col, n_enriched, True, n_reused, n_fetched
+            return bench_col, excess_col, exit_col, n_enriched, True, n_reused, n_fetched
+        exit_session = _recover_exit_session(dict(row), last_closed_session=last_closed_session)
         if _has_consistent_stored_pair(row):
             bench = float(row["benchmark_window_return"])
             excess = float(row["market_excess_return"])
             bench_col.append(bench)
             excess_col.append(excess)
+            # Carry the window stamp: the predicate just proved it equals
+            # matured_at. Dropping it here would turn every reused row into a
+            # gap on the next run and refetch the store forever.
+            exit_col.append(exit_session.isoformat() if exit_session is not None else None)
             n_enriched += 1
             n_reused += 1
             # Seed the per-window cache so a GAP sibling in the same
@@ -268,6 +278,8 @@ def _enrich_frame_rows(
         )
         bench_col.append(bench)
         excess_col.append(excess)
+        matured = _as_date(row.get("matured_at"))
+        exit_col.append(matured.isoformat() if bench is not None and matured is not None else None)
         # n_fetched counts rows that ENTERED the fetch branch (including rows
         # short-circuited by a missing forward_return before any network call),
         # NOT strictly rows that issued a Polygon call — it is the "did this
@@ -278,7 +290,7 @@ def _enrich_frame_rows(
         n_fetched += 1
         if excess is not None:
             n_enriched += 1
-    return bench_col, excess_col, n_enriched, False, n_reused, n_fetched
+    return bench_col, excess_col, exit_col, n_enriched, False, n_reused, n_fetched
 
 
 def _is_real(value: Any) -> TypeGuard[float]:
@@ -301,8 +313,16 @@ def _has_consistent_stored_pair(row: pd.Series) -> bool:
     ``excess == forward - benchmark``, so it must be recomputed rather than
     reused — this is what ``test_transient_none_drops_a_stale_pair_inconsistent_with_forward``
     guards. (Same predicate the removed _carry_forward_prev_pair used; it now
-    lives only here.)"""
-    if _as_date(row.get("matured_at")) is None:
+    lives only here.)
+
+    The pair must also have been computed over THIS ``matured_at``
+    (``benchmark_window_exit``, #1444): a pair whose window ended elsewhere can
+    be arithmetically consistent and still wrong, and a pair without a recorded
+    window is treated the same way — recomputed, never trusted."""
+    matured = _as_date(row.get("matured_at"))
+    if matured is None:
+        return False
+    if _as_date(row.get("benchmark_window_exit")) != matured:
         return False
     bench = row.get("benchmark_window_return")
     excess = row.get("market_excess_return")
@@ -398,14 +418,16 @@ def enrich_store_with_benchmark_excess(
             logger.warning("benchmark-excess: bad store parquet %s — %s; skipping.", path, exc)
             continue
 
-        bench_col, excess_col, n_delta, stopped_early, n_reused, n_fetched = _enrich_frame_rows(
-            df,
-            fetch=fetch,
-            last_closed_session=last_closed_session,
-            benchmark_ticker=benchmark_ticker,
-            exchange=exchange,
-            window_cache=window_cache,
-            deadline=deadline,
+        bench_col, excess_col, exit_col, n_delta, stopped_early, n_reused, n_fetched = (
+            _enrich_frame_rows(
+                df,
+                fetch=fetch,
+                last_closed_session=last_closed_session,
+                benchmark_ticker=benchmark_ticker,
+                exchange=exchange,
+                window_cache=window_cache,
+                deadline=deadline,
+            )
         )
         if stopped_early:
             # Deadline tripped mid-file: leave the parquet untouched so
@@ -432,6 +454,7 @@ def enrich_store_with_benchmark_excess(
 
         df["benchmark_window_return"] = bench_col
         df["market_excess_return"] = excess_col
+        df["benchmark_window_exit"] = exit_col
         _write_atomic(path, df)
 
     logger.info(
