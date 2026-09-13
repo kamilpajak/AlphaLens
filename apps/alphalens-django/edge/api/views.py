@@ -200,9 +200,11 @@ class EdgeOutcomesView(APIView):
         # TIME_STOP out of the capped listing — a TIME_STOP always carries an old
         # brief_date (the position aged to its TTL), so "newest briefs first"
         # evicted every one of them while fresher rows survived. Recency has no
-        # such class bias. Caveat: after a store re-seed / multi-day catch-up,
-        # terminal rows bunch at one matured_at and briefly dominate the top.
-        # Tiebreak on the (brief_date, ticker) composite PK keeps it deterministic.
+        # such class bias. matured_at is the session the decision ENDED (its last
+        # crossing, or the entry-expiry session for a NO_FILL), not the night the
+        # monitor noticed — so a store re-seed does not bunch terminal rows on one
+        # date (#1442). Tiebreak on the (brief_date, ticker) composite PK keeps
+        # the order deterministic.
         qs = qs.annotate(recency=Coalesce("matured_at", "brief_date")).order_by(
             "-recency", "-brief_date", "ticker"
         )

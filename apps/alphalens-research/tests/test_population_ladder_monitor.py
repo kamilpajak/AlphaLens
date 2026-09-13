@@ -4083,3 +4083,106 @@ class TestGroupedPreExCloseSelfHeals(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMaturedAtIsTheExitSession(unittest.TestCase):
+    """``matured_at`` is the session the decision ENDED, not the night the monitor
+    noticed (#1442).
+
+    On a normal night the two coincide, which is how the defect stayed invisible:
+    the from-scratch rebuild of 2026-09-11 replayed 675 already-terminal rows in one
+    pass and stamped every one of them with that night's ``last_closed_session``,
+    collapsing the /edge exit-date axis to two days. Each test therefore puts
+    ``last_closed_session`` WEEKS after the real exit, so a stamp taken from the
+    noticing night is refuted rather than coincidentally right.
+    """
+
+    _WEEKS_LATER = 30  # sessions between the real exit and the noticing night
+
+    def test_filled_row_matures_on_the_session_of_its_last_crossing(self):
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, _XNYS)
+        arrival = cutoffs[0]
+        exit_session = advance_trading_sessions(arrival, 1, _XNYS)
+        fill_ms = int(session_open_utc(arrival, _XNYS).timestamp() * 1000)
+        exit_ms = int(session_open_utc(exit_session, _XNYS).timestamp() * 1000)
+        bars = [
+            {"t": fill_ms, "o": 101.0, "h": 102.0, "l": 99.0, "c": 101.0, "v": 1000.0},  # E1
+            {"t": exit_ms, "o": 105.0, "h": 111.0, "l": 104.0, "c": 110.0, "v": 1000.0},  # TP
+        ]
+        outcome = replay_ladder(
+            _OK_SETUP, bars, entry_expiry_ms=cutoffs[5], position_expiry_ms=cutoffs[6]
+        )
+        self.assertEqual(outcome.classification, "TP_FULL", "precondition: terminal exit")
+        noticed = advance_trading_sessions(exit_session, self._WEEKS_LATER, _XNYS)
+
+        row = _terminal_row(brief_date, "NVDA", _OK_SETUP, outcome, cutoffs, noticed)
+
+        self.assertTrue(row["terminal"], "precondition: the row froze")
+        self.assertEqual(row["matured_at"], exit_session)
+
+    def test_no_fill_row_matures_on_its_entry_expiry_session(self):
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, _XNYS)
+        arrival, entry_expiry_session = cutoffs[0], cutoffs[1]
+        base = int(session_open_utc(arrival, _XNYS).timestamp() * 1000)
+        # Price never reaches the 100 limit -> NO_FILL with an empty sequence.
+        bars = [{"t": base, "o": 103.0, "h": 104.0, "l": 101.0, "c": 103.0, "v": 1000.0}]
+        outcome = replay_ladder(
+            _OK_SETUP, bars, entry_expiry_ms=cutoffs[5], position_expiry_ms=cutoffs[6]
+        )
+        self.assertEqual(outcome.classification, "NO_FILL", "precondition")
+        self.assertEqual(outcome.sequence, (), "precondition: nothing to read a date from")
+        noticed = advance_trading_sessions(entry_expiry_session, self._WEEKS_LATER, _XNYS)
+
+        row = _terminal_row(brief_date, "NVDA", _OK_SETUP, outcome, cutoffs, noticed)
+
+        self.assertTrue(row["terminal"], "precondition: the entry window has closed")
+        self.assertEqual(row["matured_at"], entry_expiry_session)
+
+    def test_cheap_path_no_fill_freeze_matures_on_the_entry_expiry_session(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _cheap_update_row
+
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, _XNYS)
+        entry_expiry_session = cutoffs[1]
+        new_session = advance_trading_sessions(entry_expiry_session, 1, _XNYS)
+        noticed = advance_trading_sessions(entry_expiry_session, self._WEEKS_LATER, _XNYS)
+        grouped = {new_session: _grouped(NVDA=(100.0, 101.0, 99.0, 100.0, 1000))}
+        prior = _open_prior(
+            setup=_OK_SETUP,
+            last_priced_session=cutoffs[0],
+            classification="NO_FILL",
+            sequence_str="",
+            blended_entry=None,
+        )
+
+        result = _cheap_update_row(
+            _OK_SETUP,
+            prior,
+            "NVDA",
+            [new_session],
+            grouped,
+            cutoffs,
+            noticed,
+            reference_close=100.0,
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        row, tag = result
+        self.assertEqual(tag, "terminal", "precondition: the cheap path froze it")
+        self.assertEqual(row["matured_at"], entry_expiry_session)
+
+    def test_ongoing_row_has_no_matured_at(self):
+        # Positive control for the stamp's other half: an OPEN row stays unstamped.
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, _XNYS)
+        base = int(session_open_utc(cutoffs[0], _XNYS).timestamp() * 1000)
+        bars = [{"t": base, "o": 100.0, "h": 103.0, "l": 99.0, "c": 102.0, "v": 1000.0}]
+        outcome = replay_ladder(
+            _OK_SETUP, bars, entry_expiry_ms=cutoffs[5], position_expiry_ms=cutoffs[6]
+        )
+        row = _terminal_row(brief_date, "NVDA", _OK_SETUP, outcome, cutoffs, cutoffs[0])
+        self.assertFalse(row["terminal"])
+        self.assertIsNone(row["matured_at"])

@@ -89,6 +89,7 @@ from alphalens_pipeline.feedback.ladder_config import (
 )
 from alphalens_pipeline.feedback.ladder_replay import (
     LadderOutcome,
+    LevelCrossing,
     realized_r_full_fill,
     replay_ladder,
     replay_ladder_grid,
@@ -951,13 +952,22 @@ def _terminal_row(
     realized_r = outcome.realized_r if terminal else None
     open_r = None if terminal else outcome.realized_r
     holding_days = _holding_days(outcome, last_closed_session, terminal=terminal)
+    # The session the decision ENDED, never the night this resolve happened to
+    # run (#1442): a from-scratch rebuild replays months of already-terminal
+    # rows in one pass, and stamping ``last_closed_session`` dated all of them
+    # with the rebuild night — the /edge exit-date axis collapsed to two days.
+    matured_at = (
+        _matured_session(outcome, classification, entry_expiry_session, last_closed_session)
+        if terminal
+        else None
+    )
     row = {
         "brief_date": brief_date,
         "ticker": ticker,
         "plannable": True,
         "nonplannable_reason": None,
         "terminal": bool(terminal),
-        "matured_at": last_closed_session if terminal else None,
+        "matured_at": matured_at,
         "ladder_classification": classification,
         # TP levels TOUCHED (price crossed) vs actually SOLD a tranche. They
         # diverge when the entry filled only partially: an early tranche consumes
@@ -1048,16 +1058,47 @@ def _holding_days(
     entry_crossings = [c for c in outcome.sequence if c.level_id.startswith("E")]
     if not entry_crossings:
         return None  # no position ever opened
-    first_fill_session = dt.datetime.fromtimestamp(
-        entry_crossings[0].bar_ts_ms / 1000, dt.UTC
-    ).date()
-    if terminal and outcome.sequence:
-        exit_session = dt.datetime.fromtimestamp(
-            outcome.sequence[-1].bar_ts_ms / 1000, dt.UTC
-        ).date()
-    else:
+    first_fill_session = _crossing_session(entry_crossings[0])
+    exit_session = _exit_session(outcome) if terminal else None
+    if exit_session is None:
         exit_session = last_closed_session
     return max(0, trading_days_elapsed(first_fill_session, exit_session))
+
+
+def _crossing_session(crossing: LevelCrossing) -> dt.date:
+    """The session a level crossing happened in (RTH bars never straddle a UTC day)."""
+    return dt.datetime.fromtimestamp(crossing.bar_ts_ms / 1000, dt.UTC).date()
+
+
+def _exit_session(outcome: LadderOutcome) -> dt.date | None:
+    """The session of the LAST crossing (SL / final TP / TIME_STOP); ``None``
+    when the path never crossed a level, so there is no exit to date."""
+    if not outcome.sequence:
+        return None
+    return _crossing_session(outcome.sequence[-1])
+
+
+def _matured_session(
+    outcome: LadderOutcome,
+    classification: str,
+    entry_expiry_session: dt.date,
+    last_closed_session: dt.date,
+) -> dt.date:
+    """The session a TERMINAL decision ended — what ``matured_at`` records (#1442).
+
+    * a filled row ended on the session of its last crossing;
+    * a ``NO_FILL`` ended when its entry window closed — the entry-expiry
+      session, which is also the first night an incremental run could freeze it;
+    * anything else (a terminal status with no crossings) falls back to the
+      noticing night, the only date there is.
+
+    Each branch reproduces the stamp an incremental nightly run would have
+    written, so a from-scratch rebuild and the nightly agree on the date.
+    """
+    if classification == "NO_FILL":
+        return entry_expiry_session
+    exit_session = _exit_session(outcome)
+    return exit_session if exit_session is not None else last_closed_session
 
 
 def _null_size_fields() -> dict[str, Any]:
@@ -2140,7 +2181,9 @@ def _cheap_update_row(
     # NO_FILL + entry window now closed and no fill touched → terminal NO_FILL.
     if classification == "NO_FILL" and entry_expiry_session <= last_closed_session:
         row["terminal"] = True
-        row["matured_at"] = last_closed_session
+        # The entry window closed on the entry-expiry session — that is when the
+        # decision ended, whichever night this advance happens to run (#1442).
+        row["matured_at"] = entry_expiry_session
         # The benchmark window is only fixed once terminal; a value carried from
         # the ongoing (growing-window) state is stale even when it is still
         # internally consistent with the (unchanged) forward_return. Null it so
