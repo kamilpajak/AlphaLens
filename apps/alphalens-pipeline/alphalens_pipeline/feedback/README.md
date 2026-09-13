@@ -207,10 +207,15 @@ touched-but-nothing-left TPs as dim **`TP_TOUCHED`** circles instead of solid
 arrows (`LadderChart.svelte`).
 
 **The excess-return column is NOT the replay.** `forward_return` is a plain
-buy-and-hold move from the arrival-session opening-window VWAP to maturity (or
-the last closed session while ongoing) — "independent of any ladder fill"
-(`ladder_replay.py::_forward_return`); `market_excess_return` subtracts the
-same-window SPY leg (`benchmark_excess.py`). This is **selection** telemetry
+buy-and-hold move from the arrival-session opening-window VWAP to maturity — the
+OFFICIAL close of the `matured_at` session, stamped by the monitor at freeze time
+on both the minute and the cheap path so a from-scratch rebuild writes the same
+value as an incremental night (#1444) — or to the last closed session while
+ongoing; "independent of any ladder fill" (`ladder_replay.py::_forward_return`
+is the engine's replay-horizon mark, which the monitor re-anchors).
+`market_excess_return` subtracts the same-window SPY leg (`benchmark_excess.py`),
+which records the exit session it was computed over in `benchmark_window_exit`
+and is reused only while that still equals `matured_at`. This is **selection** telemetry
 (was the pick good?), deliberately decoupled from replay R, which is
 **execution** telemetry (did the ladder geometry capture it?). A row can show
 `NO_FILL` with a large positive excess return — the pick was right, the dip

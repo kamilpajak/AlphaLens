@@ -279,10 +279,14 @@ def replay_ladder(
     correct even if the source returns them out of order.
 
     Single full-horizon pass: the walk records the as-specified exit marker (the
-    first SL or the full-TP scale-out) but does NOT return early -- it keeps
-    iterating so the MFE / MAE substrate covers the WHOLE in-trade window, not
-    just the bars up to the exit. ``reference_close`` anchors ``forward_return``
-    (computed independently of any fill); ``None`` leaves it ``None``.
+    first SL or the full-TP scale-out) but does NOT return early. MFE / MAE stop
+    at the exit (in-trade only); what the continued iteration feeds is
+    ``last_close``, so ``forward_return`` here is the return to the REPLAY
+    HORIZON -- the last bar supplied -- anchored on ``reference_close``
+    (computed independently of any fill; ``None`` leaves it ``None``). The
+    population monitor stores a MATURITY return instead for terminal rows (the
+    official close of the ``matured_at`` session, #1444); this horizon mark is
+    what the corporate-action guard compares against its same-horizon window.
 
     Time-awareness (PR-1): both cutoffs are ABSOLUTE epoch-ms scalars (the
     weeks/sessions -> ms conversion belongs to the future driver, NOT this pure
@@ -898,14 +902,16 @@ class _LadderWalk:
 
     def step(self, bar: Mapping[str, Any]) -> None:
         ts, low, high, close = _bar_lhc(bar)
-        self.last_close = close  # advances EVERY bar (whole-horizon forward_return)
+        self.last_close = close  # advances EVERY bar: the replay-HORIZON mark
 
         # Once the as-specified position has exited (full SL, or all TPs taken) it is
         # FLAT: no new entry fills, no in-trade excursion, no further exit resolution.
-        # ``last_close`` still advances above so ``forward_return`` spans the whole
-        # horizon. (zen HIGH: a post-exit dip must NOT fill an unused deeper tier and
-        # retroactively change blended entry / filled_frac / realized_r, nor extend
-        # the MFE/MAE window past the actual holding period.)
+        # ``last_close`` still advances above, so the engine's ``forward_return`` is
+        # the horizon mark, not a holding-window return -- the monitor re-anchors the
+        # STORED value to the maturity session's official close (#1444). (zen HIGH: a
+        # post-exit dip must NOT fill an unused deeper tier and retroactively change
+        # blended entry / filled_frac / realized_r, nor extend the MFE/MAE window past
+        # the actual holding period.)
         if self.exit_reached:
             return
 

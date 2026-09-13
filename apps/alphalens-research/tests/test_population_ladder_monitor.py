@@ -4184,5 +4184,279 @@ class TestMaturedAtIsTheExitSession(unittest.TestCase):
         self.assertIsNone(row["matured_at"])
 
 
+class TestForwardReturnIsAMaturityReturn(_MonitorTestBase):
+    """The STORED ``forward_return`` of a terminal row is the return from the
+    arrival anchor to the OFFICIAL CLOSE of its ``matured_at`` session (#1444).
+
+    The engine's ``LadderOutcome.forward_return`` keeps advancing on bars after
+    the exit (the replay-horizon mark). On an incremental night the horizon is
+    the maturity night, so the two agreed; on a from-scratch rebuild the horizon
+    is the TTL expiry or the rebuild night, and 457 of 681 stored values were
+    not holding-window returns. The official close (grouped-daily ``c``) is the
+    endpoint on BOTH freeze paths because the cheap path already wrote it.
+    """
+
+    _SESSIONS_AFTER_EXIT = 5
+
+    @staticmethod
+    def _minute_fetch(per_session: dict[dt.date, tuple[float, float, float, float, float]]):
+        """Two RTH bars per session: (o, h, l, first_close) at the open and a flat
+        bar at +60 min closing at ``last_close`` — the session's last minute print."""
+
+        def _fetch(ticker, start, end):
+            bars = []
+            for session, (o, h, low, c_first, c_last) in sorted(per_session.items()):
+                open_utc = session_open_utc(session, _XNYS)
+                if open_utc < start or open_utc > end:
+                    continue
+                base = int(open_utc.timestamp() * 1000)
+                bars.append({"t": base, "o": o, "h": h, "l": low, "c": c_first, "v": 1000.0})
+                bars.append(
+                    {
+                        "t": base + 60 * _MIN_MS,
+                        "o": c_last,
+                        "h": c_last,
+                        "l": c_last,
+                        "c": c_last,
+                        "v": 1000.0,
+                    }
+                )
+            return bars
+
+        return _fetch
+
+    @staticmethod
+    def _grouped_fetch(close_by_session: dict[dt.date, float]):
+        def _fetch(session):
+            c = close_by_session.get(session)
+            if c is None:
+                return {}
+            return _grouped(NVDA=(c, c + 1.0, c - 1.0, c, 1000))
+
+        return _fetch
+
+    def _sessions(self, brief_date: dt.date, n: int) -> list[dt.date]:
+        arrival = ladder_arrival_session(brief_date, _XNYS)
+        return [advance_trading_sessions(arrival, i, _XNYS) for i in range(n)]
+
+    def _tp_path(self, brief_date: dt.date):
+        """E1 fills on the arrival session, TP (110) on the next; five more sessions
+        follow with a very different close, so the horizon mark is distinguishable."""
+        sessions = self._sessions(brief_date, 2 + self._SESSIONS_AFTER_EXIT)
+        arrival, exit_session = sessions[0], sessions[1]
+        per_session = {
+            arrival: (101.0, 102.0, 99.0, 101.0, 101.0),
+            exit_session: (105.0, 111.0, 104.0, 110.0, 109.0),
+        }
+        for s in sessions[2:]:
+            per_session[s] = (120.0, 121.0, 119.0, 120.0, 120.0)
+        grouped = dict.fromkeys(sessions, 130.0)
+        grouped[exit_session] = 108.0  # differs from BOTH minute prints of that session
+        return sessions, per_session, grouped
+
+    def _run(self, brief_date, now, per_session, grouped, store_dir=None):
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=store_dir or self.store_dir,
+            bar_fetch=self._minute_fetch(per_session),
+            grouped_fetch=self._grouped_fetch(grouped),
+            now=now,
+        )
+
+    @staticmethod
+    def _morning_after(session: dt.date) -> dt.datetime:
+        return dt.datetime.combine(session + dt.timedelta(days=1), dt.time(7, 0), tzinfo=UTC)
+
+    def test_minute_path_marks_the_official_close_of_the_exit_session(self):
+        brief_date = dt.date(2026, 5, 1)
+        _sessions, per_session, grouped = self._tp_path(brief_date)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        self._run(brief_date, dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC), per_session, grouped)
+
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertEqual(row["ladder_classification"], "TP_FULL", "precondition")
+        ref = float(row["reference_close"])
+        official = (108.0 - ref) / ref
+        self.assertAlmostEqual(float(row["forward_return"]), official, places=12)
+        # Refute the two alternatives the review named: the session's last minute
+        # print (109) and the replay-horizon mark (120).
+        self.assertNotAlmostEqual(float(row["forward_return"]), (109.0 - ref) / ref, places=6)
+        self.assertNotAlmostEqual(float(row["forward_return"]), (120.0 - ref) / ref, places=6)
+
+    def test_exit_night_and_full_horizon_rebuild_write_the_same_value(self):
+        brief_date = dt.date(2026, 5, 1)
+        sessions, per_session, grouped = self._tp_path(brief_date)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+        nightly_store = self.root / "nightly"
+        rebuild_store = self.root / "rebuild"
+
+        self._run(brief_date, self._morning_after(sessions[1]), per_session, grouped, nightly_store)
+        self._run(
+            brief_date,
+            dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC),
+            per_session,
+            grouped,
+            rebuild_store,
+        )
+
+        nightly = (
+            pd.read_parquet(nightly_store / f"{brief_date.isoformat()}.parquet")
+            .set_index("ticker")
+            .loc["NVDA"]
+        )
+        rebuild = (
+            pd.read_parquet(rebuild_store / f"{brief_date.isoformat()}.parquet")
+            .set_index("ticker")
+            .loc["NVDA"]
+        )
+        self.assertTrue(bool(nightly["terminal"]) and bool(rebuild["terminal"]), "precondition")
+        self.assertEqual(nightly["matured_at"], rebuild["matured_at"])
+        self.assertEqual(float(nightly["forward_return"]), float(rebuild["forward_return"]))
+
+    def test_no_fill_cheap_freeze_and_rebuild_write_the_same_value(self):
+        # The cross-path invariant the plan review refuted in its first draft: a
+        # NO_FILL frozen by the CHEAP path (grouped close) and the same row replayed
+        # from scratch over the full horizon must carry one forward_return.
+        brief_date = dt.date(2026, 5, 1)
+        sessions = self._sessions(brief_date, 12)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, _XNYS)
+        entry_expiry = cutoffs[1]
+        # Never fills (lows above the 100 limit); minute closes and grouped closes
+        # deliberately differ so the test can tell which source was used.
+        # Closes stay inside (100, 110): above the entry limit (never fills), below
+        # the TP, and within the split screen's day-over-day band, so the cheap
+        # path is genuinely taken on night 3.
+        per_session = {
+            s: (104.0 + 0.2 * i, 105.0 + 0.2 * i, 101.0, 104.0 + 0.2 * i, 104.5 + 0.2 * i)
+            for i, s in enumerate(sessions)
+        }
+        grouped = {s: 104.8 + 0.2 * i for i, s in enumerate(sessions)}
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+        nightly_store = self.root / "nightly"
+        rebuild_store = self.root / "rebuild"
+
+        # Night 1: brand-new minute resolve on the arrival session.
+        self._run(brief_date, self._morning_after(sessions[0]), per_session, grouped, nightly_store)
+        # Night 2: R7 periodic minute resolve (6 sessions since the last one).
+        self._run(brief_date, self._morning_after(sessions[6]), per_session, grouped, nightly_store)
+        # Night 3: entry window closed, 1 session since the last resolve -> CHEAP freeze.
+        self._run(
+            brief_date, self._morning_after(entry_expiry), per_session, grouped, nightly_store
+        )
+        nightly = (
+            pd.read_parquet(nightly_store / f"{brief_date.isoformat()}.parquet")
+            .set_index("ticker")
+            .loc["NVDA"]
+        )
+        self.assertTrue(bool(nightly["terminal"]), "precondition: frozen on night 3")
+        self.assertEqual(nightly["ladder_classification"], "NO_FILL")
+        self.assertEqual(
+            pd.Timestamp(nightly["last_resolved_session"]).date(),
+            sessions[6],
+            "precondition: night 3 was the cheap path",
+        )
+
+        self._run(
+            brief_date,
+            dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC),
+            per_session,
+            grouped,
+            rebuild_store,
+        )
+        rebuild = (
+            pd.read_parquet(rebuild_store / f"{brief_date.isoformat()}.parquet")
+            .set_index("ticker")
+            .loc["NVDA"]
+        )
+
+        self.assertEqual(nightly["matured_at"], rebuild["matured_at"])
+        self.assertEqual(float(nightly["forward_return"]), float(rebuild["forward_return"]))
+        ref = float(rebuild["reference_close"])
+        self.assertAlmostEqual(
+            float(rebuild["forward_return"]), (grouped[entry_expiry] - ref) / ref, places=12
+        )
+
+    def test_missing_official_close_falls_back_to_the_cached_minute_close_with_a_warning(self):
+        brief_date = dt.date(2026, 5, 1)
+        _sessions, per_session, _grouped_unused = self._tp_path(brief_date)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        with self.assertLogs(
+            "alphalens_pipeline.feedback.population_ladder_monitor", level="WARNING"
+        ) as logs:
+            self._run(
+                brief_date, dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC), per_session, grouped={}
+            )
+
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        ref = float(row["reference_close"])
+        self.assertAlmostEqual(float(row["forward_return"]), (109.0 - ref) / ref, places=12)
+        self.assertTrue(any("maturity close" in line for line in logs.output), logs.output)
+
+    def test_ongoing_row_keeps_the_horizon_mark(self):
+        # Positive control: no override before the decision has ended.
+        brief_date = dt.date(2026, 5, 1)
+        sessions = self._sessions(brief_date, 2)
+        per_session = {sessions[0]: (101.0, 102.0, 99.0, 101.0, 103.0)}  # E1 fills, no exit
+        grouped = {sessions[0]: 150.0}
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        self._run(brief_date, self._morning_after(sessions[0]), per_session, grouped)
+
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertFalse(bool(row["terminal"]), "precondition")
+        ref = float(row["reference_close"])
+        self.assertAlmostEqual(float(row["forward_return"]), (103.0 - ref) / ref, places=12)
+
+    def test_cheap_freeze_on_a_catch_up_night_marks_the_entry_expiry_close_and_nulls_both_pairs(
+        self,
+    ):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _cheap_update_row
+
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, _XNYS)
+        entry_expiry = cutoffs[1]
+        later = [advance_trading_sessions(entry_expiry, i, _XNYS) for i in (1, 2)]
+        new_sessions = [entry_expiry, *later]
+        grouped = {
+            entry_expiry: _grouped(NVDA=(150.0, 151.0, 149.0, 150.0, 1000)),
+            later[0]: _grouped(NVDA=(160.0, 161.0, 159.0, 160.0, 1000)),
+            later[1]: _grouped(NVDA=(170.0, 171.0, 169.0, 170.0, 1000)),
+        }
+        prior = _open_prior(
+            setup=_OK_SETUP,
+            last_priced_session=previous_trading_day(entry_expiry, _XNYS),
+            classification="NO_FILL",
+            sequence_str="",
+            blended_entry=None,
+        )
+        prior["sector_etf_window_return"] = 0.01
+        prior["sector_excess_return"] = 0.02
+
+        result = _cheap_update_row(
+            _OK_SETUP,
+            prior,
+            "NVDA",
+            new_sessions,
+            grouped,
+            cutoffs,
+            later[1],
+            reference_close=100.0,
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        row, tag = result
+        self.assertEqual(tag, "terminal")
+        self.assertEqual(row["matured_at"], entry_expiry)
+        self.assertAlmostEqual(float(row["forward_return"]), 0.5, places=12)  # 150 vs 100, not 170
+        self.assertIsNone(row["benchmark_window_return"])
+        self.assertIsNone(row["market_excess_return"])
+        self.assertIsNone(row["sector_etf_window_return"])
+        self.assertIsNone(row["sector_excess_return"])
+
+
 if __name__ == "__main__":
     unittest.main()

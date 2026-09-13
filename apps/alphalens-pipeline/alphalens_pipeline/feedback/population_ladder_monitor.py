@@ -1106,6 +1106,88 @@ def _matured_session(
     return exit_session if exit_session is not None else last_closed_session
 
 
+def _maturity_close(
+    store_dir: Path,
+    ticker: str,
+    session: dt.date,
+    grouped_fetch: GroupedFetch,
+    exchange: str,
+) -> float | None:
+    """The OFFICIAL close of ``ticker`` on ``session`` — grouped-daily ``c`` from
+    the monitor's disk-first whole-market cache (one fetch per session per night,
+    shared with the screen). ``None`` when the session has no row for the ticker
+    or the fetch failed."""
+    grouped = _prefetch_grouped_daily(store_dir, [session], grouped_fetch, exchange).get(session)
+    return _grouped_close(grouped, ticker)
+
+
+def _cached_minute_close(
+    store_dir: Path,
+    ticker: str,
+    arrival_session: dt.date,
+    session: dt.date,
+    exchange: str,
+) -> float | None:
+    """Close of the last RTH minute bar of ``session`` in the per-(ticker, arrival)
+    bar cache — the fallback when no official close is available."""
+    bars = _filter_bars_to_rth(
+        _read_cached_bars(store_dir, ticker, arrival_session), arrival_session, session, exchange
+    )
+    closes = [
+        bar.get("c")
+        for bar in bars
+        if dt.datetime.fromtimestamp(int(bar["t"]) / 1000, dt.UTC).date() == session
+    ]
+    return _safe_finite_float(closes[-1]) if closes else None
+
+
+def _stamp_maturity_return(
+    row: dict[str, Any],
+    *,
+    store_dir: Path,
+    ticker: str,
+    arrival_session: dt.date,
+    grouped_fetch: GroupedFetch,
+    exchange: str,
+) -> None:
+    """Re-anchor a TERMINAL row's stored ``forward_return`` to its maturity (#1444).
+
+    The engine's ``LadderOutcome.forward_return`` is the return to the REPLAY
+    HORIZON: ``last_close`` keeps advancing on bars after the exit. On an
+    incremental night the horizon is the maturity night, so the two coincide; on
+    a from-scratch rebuild the horizon is the TTL expiry or the rebuild night, and
+    the stored value stopped being a holding-window return (457 of 681 rows after
+    the 2026-09-11 rebuild). The stored column is therefore
+    ``(official close of the matured_at session - reference_close) / reference_close``
+    — the same endpoint the cheap path writes when it freezes a NO_FILL, so a
+    rebuild, a minute-path night and a cheap-path night agree.
+
+    Fallbacks, each logged: the last cached RTH minute close of that session when
+    no official close is available, else the engine's horizon mark is kept.
+    """
+    session = _coerce_session(row.get("matured_at"))
+    reference_close = _safe_finite_float(row.get("reference_close"))
+    if session is None or reference_close is None:
+        return
+    close = _maturity_close(store_dir, ticker, session, grouped_fetch, exchange)
+    if close is None:
+        close = _cached_minute_close(store_dir, ticker, arrival_session, session, exchange)
+        if close is None:
+            logger.warning(
+                "population-monitor: no maturity close for %s on %s — keeping the horizon mark.",
+                ticker,
+                session,
+            )
+            return
+        logger.warning(
+            "population-monitor: no official maturity close for %s on %s — "
+            "using the last cached minute close.",
+            ticker,
+            session,
+        )
+    row["forward_return"] = _cheap_forward_return(close, reference_close)
+
+
 def _null_size_fields() -> dict[str, Any]:
     """All size columns set to ``None`` (non-replayed / placeholder rows)."""
     return dict.fromkeys(_SIZE_COLUMNS)
@@ -1575,6 +1657,7 @@ def _replay_one_date(
         counts,
         store_dir=store_dir,
         fetch=fetch,
+        grouped_fetch=grouped_fetch,
         last_closed_session=last_closed_session,
         exchange=exchange,
         budget=budget,
@@ -2189,13 +2272,21 @@ def _cheap_update_row(
         # The entry window closed on the entry-expiry session — that is when the
         # decision ended, whichever night this advance happens to run (#1442).
         row["matured_at"] = entry_expiry_session
+        # The maturity return is the official close of the entry-expiry session
+        # (#1444). On a punctual night that is ``c_star``; on a catch-up night
+        # ``c_star`` is a later session and would be a return PAST maturity.
+        expiry_close = _grouped_close(grouped_by_session.get(entry_expiry_session), ticker)
+        if expiry_close is not None:
+            row["forward_return"] = _cheap_forward_return(expiry_close, reference_close)
         # The benchmark window is only fixed once terminal; a value carried from
         # the ongoing (growing-window) state is stale even when it is still
-        # internally consistent with the (unchanged) forward_return. Null it so
-        # the benchmark pass's reuse-first (_has_consistent_stored_pair) sees a
-        # GAP and recomputes with the final window instead of freezing it.
+        # internally consistent with the (unchanged) forward_return. Null both
+        # pairs so the passes' reuse-first sees a GAP and recomputes with the
+        # final window instead of freezing it.
         row["benchmark_window_return"] = None
         row["market_excess_return"] = None
+        row["sector_etf_window_return"] = None
+        row["sector_excess_return"] = None
         return row, "terminal"
 
     if classification == "OPEN":
@@ -2327,6 +2418,7 @@ def _resolve_queue(
     *,
     store_dir: Path,
     fetch: BarFetch,
+    grouped_fetch: GroupedFetch,
     last_closed_session: dt.date,
     exchange: str,
     budget: _FetchBudget,
@@ -2405,6 +2497,9 @@ def _resolve_queue(
             rows_by_ticker=rows_by_ticker,
             counts=counts,
             last_closed_session=last_closed_session,
+            store_dir=store_dir,
+            grouped_fetch=grouped_fetch,
+            exchange=exchange,
         )
     return deferred_ages
 
@@ -2417,8 +2512,17 @@ def _commit_resolved_row(
     rows_by_ticker: dict[str, dict[str, Any]],
     counts: dict[str, int],
     last_closed_session: dt.date,
+    store_dir: Path,
+    grouped_fetch: GroupedFetch,
+    exchange: str,
 ) -> None:
-    """Build, guard-stamp, and store the terminal/ongoing row for one resolve."""
+    """Build, guard-stamp, and store the terminal/ongoing row for one resolve.
+
+    A row that ended (terminal, not a SPLIT_INVALIDATED quarantine) gets its
+    STORED ``forward_return`` re-anchored to the official close of its
+    ``matured_at`` session (#1444, :func:`_stamp_maturity_return`); the engine's
+    own horizon mark stays on the outcome for the corporate-action guard.
+    """
     assert item.candidate.trade_setup is not None
     row = _terminal_row(
         item.brief_date,
@@ -2439,6 +2543,15 @@ def _commit_resolved_row(
         _stamp_guard(row, result.guard_disposition, counts)
         if result.guard_disposition == DISPOSITION_SPLIT_INVALIDATED:
             row = _apply_split_invalidation(row, last_closed_session)
+    if row["terminal"] and row["ladder_classification"] != SPLIT_INVALIDATED_CLASSIFICATION:
+        _stamp_maturity_return(
+            row,
+            store_dir=store_dir,
+            ticker=ticker,
+            arrival_session=item.cutoffs[0],
+            grouped_fetch=grouped_fetch,
+            exchange=exchange,
+        )
     rows_by_ticker[ticker] = _stamp_brief_provenance(row, item.candidate)
     counts["terminal" if row["terminal"] else "ongoing"] += 1
 

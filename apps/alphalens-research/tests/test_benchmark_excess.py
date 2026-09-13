@@ -348,6 +348,7 @@ class TestEnrichSelfHeal(unittest.TestCase):
                         "forward_return": 0.05,
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
+                        "benchmark_window_exit": "2026-05-27",
                     }
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
@@ -383,6 +384,7 @@ class TestEnrichSelfHeal(unittest.TestCase):
                         "forward_return": 0.09,
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
+                        "benchmark_window_exit": "2026-05-27",
                     }
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
@@ -589,6 +591,7 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
                         "forward_return": 0.05,
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
+                        "benchmark_window_exit": "2026-05-27",
                     }
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
@@ -740,6 +743,7 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
                         "forward_return": 0.05,
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
+                        "benchmark_window_exit": "2026-06-08",
                     },
                     {
                         "brief_date": new,
@@ -749,6 +753,7 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
                         "forward_return": 0.04,
                         "benchmark_window_return": 0.01,
                         "market_excess_return": 0.03,
+                        "benchmark_window_exit": "2026-06-09",
                     },
                 ]
             ).to_parquet(store / f"{new.isoformat()}.parquet")
@@ -802,6 +807,7 @@ class TestCheapTerminalMaturationComposition(unittest.TestCase):
                         "forward_return": 0.05,
                         "benchmark_window_return": None,
                         "market_excess_return": None,
+                        "benchmark_window_exit": "2026-05-27",
                     }
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
@@ -842,6 +848,7 @@ class TestCheapTerminalMaturationComposition(unittest.TestCase):
                         "forward_return": 0.05,
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
+                        "benchmark_window_exit": "2026-05-27",
                     }
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
@@ -888,6 +895,7 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
                         "forward_return": 0.05,
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
+                        "benchmark_window_exit": "2026-05-27",
                     },
                     {
                         "brief_date": d,
@@ -897,6 +905,7 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
                         "forward_return": 0.04,
                         "benchmark_window_return": 0.01,
                         "market_excess_return": 0.03,
+                        "benchmark_window_exit": "2026-05-28",
                     },
                 ]
             ).to_parquet(path)
@@ -978,6 +987,7 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
                         "forward_return": 0.05,
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
+                        "benchmark_window_exit": "2026-05-27",
                     },
                     {
                         "brief_date": d,
@@ -1067,3 +1077,157 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBenchmarkWindowExitStamp(unittest.TestCase):
+    """The pass records WHICH exit session a pair was computed over
+    (``benchmark_window_exit``) and reuses the pair only while that still equals
+    the row's ``matured_at`` (#1444).
+
+    Why: the 2026-09-11 rebuild computed every window to the rebuild night; when
+    ``matured_at`` was repaired the pairs stayed internally consistent
+    (``excess == forward - bench``) and were reused forever. Consistency alone
+    cannot see a moved window.
+    """
+
+    _BRIEF = dt.date(2026, 5, 18)
+    _EXIT = dt.date(2026, 5, 27)
+
+    def _store_with(self, tmp: str, **overrides) -> Path:
+        store = Path(tmp)
+        row = {
+            "brief_date": self._BRIEF,
+            "ticker": "AA",
+            "terminal": True,
+            "matured_at": self._EXIT,
+            "forward_return": 0.05,
+            "benchmark_window_return": 0.02,
+            "market_excess_return": 0.03,
+            "benchmark_window_exit": self._EXIT.isoformat(),
+        }
+        row.update(overrides)
+        pd.DataFrame([row]).to_parquet(store / f"{self._BRIEF.isoformat()}.parquet")
+        return store
+
+    @staticmethod
+    def _spy(calls: list[str]):
+        def _fetch(t, s, e):
+            calls.append(t)
+            return _spy_bars(s, reference=100.0, last_close=101.0)  # window return 0.01
+
+        return _fetch
+
+    def _read(self, store: Path) -> pd.Series:
+        return pd.read_parquet(store / f"{self._BRIEF.isoformat()}.parquet").iloc[0]
+
+    def test_pair_whose_recorded_exit_matches_matured_at_is_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store_with(tmp)
+            calls: list[str] = []
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=self._spy(calls), now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+            self.assertEqual(calls, [])
+            self.assertAlmostEqual(
+                float(self._read(store)["benchmark_window_return"]), 0.02, places=9
+            )
+
+    def test_consistent_pair_whose_recorded_exit_moved_is_recomputed(self) -> None:
+        # The #1444 shape: the pair is arithmetically consistent, but it was
+        # computed over a window ending on another session than matured_at.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store_with(tmp, benchmark_window_exit="2026-09-10")
+            calls: list[str] = []
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=self._spy(calls), now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+            self.assertEqual(calls, ["SPY"])
+            row = self._read(store)
+            self.assertAlmostEqual(float(row["benchmark_window_return"]), 0.01, places=9)
+            self.assertAlmostEqual(float(row["market_excess_return"]), 0.04, places=9)
+            self.assertEqual(row["benchmark_window_exit"], self._EXIT.isoformat())
+
+    def test_consistent_pair_without_a_recorded_exit_is_recomputed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": self._BRIEF,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": self._EXIT,
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    }
+                ]
+            ).to_parquet(store / f"{self._BRIEF.isoformat()}.parquet")
+            calls: list[str] = []
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=self._spy(calls), now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+            self.assertEqual(calls, ["SPY"])
+            self.assertEqual(self._read(store)["benchmark_window_exit"], self._EXIT.isoformat())
+
+    def test_second_run_over_a_stamped_store_fetches_nothing_and_leaves_the_file_alone(
+        self,
+    ) -> None:
+        # Pins that the REUSE branch carries the stamp: if only the fetch branch
+        # wrote it, every reused row would lose it and the store would refetch forever.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store_with(tmp, benchmark_window_exit=None)
+            first: list[str] = []
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=self._spy(first), now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+            self.assertEqual(first, ["SPY"], "precondition: the first run stamps the row")
+            path = store / f"{self._BRIEF.isoformat()}.parquet"
+            mtime_before = path.stat().st_mtime_ns
+
+            second: list[str] = []
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=self._spy(second), now=dt.datetime(2026, 6, 4, tzinfo=UTC)
+            )
+
+            self.assertEqual(second, [])
+            self.assertEqual(path.stat().st_mtime_ns, mtime_before)
+            self.assertEqual(self._read(store)["benchmark_window_exit"], self._EXIT.isoformat())
+
+    def test_window_cache_is_not_seeded_from_a_pair_whose_exit_moved(self) -> None:
+        # Sibling rows share (arrival, exit). A stale-but-consistent row must not
+        # serve its sibling's gap from the cache; the sibling pays a real fetch.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": self._BRIEF,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": self._EXIT,
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                        "benchmark_window_exit": "2026-09-10",
+                    },
+                    {
+                        "brief_date": self._BRIEF,
+                        "ticker": "BB",
+                        "terminal": True,
+                        "matured_at": self._EXIT,
+                        "forward_return": 0.05,
+                        "benchmark_window_return": None,
+                        "market_excess_return": None,
+                        "benchmark_window_exit": None,
+                    },
+                ]
+            ).to_parquet(store / f"{self._BRIEF.isoformat()}.parquet")
+            calls: list[str] = []
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=self._spy(calls), now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+            df = pd.read_parquet(store / f"{self._BRIEF.isoformat()}.parquet").set_index("ticker")
+            self.assertEqual(calls, ["SPY"])  # one real fetch serves both rows
+            self.assertAlmostEqual(float(df.loc["BB", "benchmark_window_return"]), 0.01, places=9)
+            self.assertAlmostEqual(float(df.loc["AA", "benchmark_window_return"]), 0.01, places=9)
