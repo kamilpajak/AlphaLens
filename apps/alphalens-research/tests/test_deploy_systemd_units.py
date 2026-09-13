@@ -793,12 +793,13 @@ class TestJobMetricsHook(unittest.TestCase):
         self.assertIn('TMP="${OUT}.tmp"', text)
         self.assertIn('mv "$TMP" "$OUT"', text)
 
-    def test_emit_hook_only_writes_last_success_on_success(self) -> None:
+    def test_emit_hook_stamps_last_success_only_on_success(self) -> None:
         # ``alphalens_job_last_success_timestamp_seconds`` is the
         # alertmanager input for "job hasn't succeeded in N minutes".
-        # If the hook wrote it on every fire regardless of outcome,
-        # a failed job would still appear "recently successful" and
-        # the staleness alert would never fire.
+        # A FRESH stamp must stay behind the RESULT=success guard: if the
+        # hook stamped ``$NOW`` on every fire regardless of outcome, a failed
+        # job would appear "recently successful" and the staleness alert
+        # would never fire.
         text = EMIT_JOB_METRICS_HOOK.read_text()
         self.assertRegex(
             text,
@@ -807,8 +808,32 @@ class TestJobMetricsHook(unittest.TestCase):
                 r".*?alphalens_job_last_success_timestamp_seconds",
                 re.DOTALL,
             ),
-            "last_success_timestamp must be guarded by RESULT=success — "
+            "a fresh last_success_timestamp must be guarded by RESULT=success — "
             "otherwise failed runs falsely refresh the staleness clock.",
+        )
+
+    def test_emit_hook_carries_last_success_forward_rather_than_restamping(self) -> None:
+        # #1369: omitting the line on failure DELETED the series, and
+        # ``AlphalensJobStale`` cannot fire on an empty ``max()`` — the
+        # staleness alarm was disarmed exactly while a job was broken. The fix
+        # re-emits the PREVIOUS line verbatim.
+        #
+        # This is pinned statically as well as behaviourally because the
+        # behavioural test is easy to weaken: two hook fires land in the same
+        # wall-clock second, so a mutant that re-stamped ``$NOW`` on the
+        # failure path survived an equality assertion 12 times out of 12.
+        text = EMIT_JOB_METRICS_HOOK.read_text()
+        self.assertIn(
+            'echo "$CARRIED_SUCCESS"',
+            text,
+            "the failure path must re-emit the carried line, not a fresh stamp.",
+        )
+        self.assertRegex(
+            text,
+            re.compile(r"CARRIED_SUCCESS=\$\(grep [^)]*\|\| true\)"),
+            "the carry-forward grep needs `|| true`: under `set -e` a no-match "
+            "exit 1 aborts the hook before `mv`, which is exactly the "
+            "first-ever-failure case it handles.",
         )
 
     def test_every_active_service_wires_emit_hook(self) -> None:

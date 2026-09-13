@@ -449,7 +449,8 @@ def build_metrics(outcome: Outcome) -> dict[str, float]:
     disappears is indistinguishable from a stopped exporter, and the
     sustained-failure alert needs a clean run's 0 to clear. Job-level
     staleness deliberately comes from the unit's ``ExecStopPost``
-    ``alphalens-emit-job-metrics`` hook (success-only stamp), so a second
+    ``alphalens-emit-job-metrics`` hook, which stamps a fresh timestamp on
+    success and carries the previous one forward on failure, so a second
     script-side timestamp would be an unconsumed duplicate.
     """
     return {
