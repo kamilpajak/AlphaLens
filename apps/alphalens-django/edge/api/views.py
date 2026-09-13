@@ -201,10 +201,11 @@ class EdgeOutcomesView(APIView):
         # brief_date (the position aged to its TTL), so "newest briefs first"
         # evicted every one of them while fresher rows survived. Recency has no
         # such class bias. matured_at is the session the decision ENDED (its last
-        # crossing, or the entry-expiry session for a NO_FILL), not the night the
-        # monitor noticed — so a store re-seed does not bunch terminal rows on one
-        # date (#1442). Tiebreak on the (brief_date, ticker) composite PK keeps
-        # the order deterministic.
+        # crossing, or the entry-expiry session for a NO_FILL; only a
+        # SPLIT_INVALIDATED quarantine keeps the night it was frozen), not the
+        # night the monitor noticed — so a store re-seed does not bunch terminal
+        # rows on one date (#1442). Tiebreak on the (brief_date, ticker)
+        # composite PK keeps the order deterministic.
         qs = qs.annotate(recency=Coalesce("matured_at", "brief_date")).order_by(
             "-recency", "-brief_date", "ticker"
         )

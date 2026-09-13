@@ -1088,12 +1088,17 @@ def _matured_session(
 
     * a filled row ended on the session of its last crossing;
     * a ``NO_FILL`` ended when its entry window closed — the entry-expiry
-      session, which is also the first night an incremental run could freeze it;
-    * anything else (a terminal status with no crossings) falls back to the
-      noticing night, the only date there is.
+      session, which is also the first night an incremental run could freeze it.
 
-    Each branch reproduces the stamp an incremental nightly run would have
-    written, so a from-scratch rebuild and the nightly agree on the date.
+    Both reproduce the stamp an incremental nightly run would have written, so
+    a from-scratch rebuild and the nightly agree on the date. The
+    ``last_closed_session`` fallback is defensive only: today every terminal
+    classification other than ``NO_FILL`` requires a fill, hence a crossing
+    (``_finalize`` returns ``NO_FILL`` whenever nothing filled), so it is
+    unreachable — kept so a future classification without a crossing writes a
+    date rather than ``None`` into a date column. ``SPLIT_INVALIDATED`` is
+    stamped elsewhere (:func:`_apply_split_invalidation`) and deliberately keeps
+    the noticing night: it is a quarantine, not an exit.
     """
     if classification == "NO_FILL":
         return entry_expiry_session

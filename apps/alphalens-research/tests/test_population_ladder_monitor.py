@@ -4081,10 +4081,6 @@ class TestGroupedPreExCloseSelfHeals(unittest.TestCase):
         self.assertIsNone(close)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestMaturedAtIsTheExitSession(unittest.TestCase):
     """``matured_at`` is the session the decision ENDED, not the night the monitor
     noticed (#1442).
@@ -4186,3 +4182,7 @@ class TestMaturedAtIsTheExitSession(unittest.TestCase):
         row = _terminal_row(brief_date, "NVDA", _OK_SETUP, outcome, cutoffs, cutoffs[0])
         self.assertFalse(row["terminal"])
         self.assertIsNone(row["matured_at"])
+
+
+if __name__ == "__main__":
+    unittest.main()
