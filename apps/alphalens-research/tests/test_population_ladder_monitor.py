@@ -110,6 +110,16 @@ def _write_brief(briefs_dir: Path, brief_date: dt.date, rows: list[dict]) -> Non
 
 class _MonitorTestBase(unittest.TestCase):
     def setUp(self):
+        # Tests that do not inject ``grouped_fetch`` must never reach the production
+        # Polygon client (the maturity stamp reads grouped-daily on every terminal
+        # freeze); an empty map means "no official close" -> minute-close fallback.
+        from unittest import mock
+
+        import alphalens_pipeline.feedback.population_ladder_monitor as _plm
+
+        patcher = mock.patch.object(_plm, "_default_grouped_fetch", lambda _date: {})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self._td = tempfile.TemporaryDirectory()
         self.root = Path(self._td.name)
         self.briefs_dir = self.root / "briefs"
@@ -1457,6 +1467,7 @@ class TestChartPayloadCarryForward(_MonitorTestBase):
         row = _terminal_row(brief_date, "NVDA", _OK_SETUP, outcome, cutoffs, dt.date(2026, 5, 15))
         self.assertTrue(row["terminal"], "precondition: resolved terminal")
         self.assertIsNone(row.get("benchmark_window_return"))
+        self.assertIsNone(row.get("benchmark_window_exit"))
         self.assertIsNone(row.get("market_excess_return"))
 
 
@@ -4393,7 +4404,60 @@ class TestForwardReturnIsAMaturityReturn(_MonitorTestBase):
         row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
         ref = float(row["reference_close"])
         self.assertAlmostEqual(float(row["forward_return"]), (109.0 - ref) / ref, places=12)
-        self.assertTrue(any("maturity close" in line for line in logs.output), logs.output)
+        self.assertTrue(
+            any("using the last cached minute close" in line for line in logs.output), logs.output
+        )
+
+    def test_no_close_at_all_keeps_the_horizon_mark_with_a_warning(self):
+        # Second fallback, unit-level: an empty store (no grouped cache, no bar
+        # cache) and a grouped fetch that returns nothing -> the engine value stays.
+        from alphalens_pipeline.feedback.population_ladder_monitor import _stamp_maturity_return
+
+        row = {"matured_at": dt.date(2026, 5, 5), "reference_close": 100.0, "forward_return": 0.42}
+        with self.assertLogs(
+            "alphalens_pipeline.feedback.population_ladder_monitor", level="WARNING"
+        ) as logs:
+            _stamp_maturity_return(
+                row,
+                store_dir=self.store_dir,
+                ticker="NVDA",
+                arrival_session=dt.date(2026, 5, 4),
+                grouped_fetch=lambda _d: {},
+                grouped_memo={},
+                exchange=_XNYS,
+            )
+        self.assertEqual(row["forward_return"], 0.42)
+        self.assertTrue(
+            any("keeping the horizon mark" in line for line in logs.output), logs.output
+        )
+
+    def test_one_grouped_read_per_maturity_session_even_when_the_payload_is_empty(self):
+        # Three rows maturing on one session, a grouped source that answers empty:
+        # the memo must hold the gap so the fetch is issued once, not once per row.
+        from alphalens_pipeline.feedback.population_ladder_monitor import _stamp_maturity_return
+
+        calls: list[dt.date] = []
+
+        def _empty(session):
+            calls.append(session)
+            return {}
+
+        memo: dict = {}
+        for ticker in ("AA", "BB", "CC"):
+            _stamp_maturity_return(
+                {
+                    "matured_at": dt.date(2026, 5, 5),
+                    "reference_close": 100.0,
+                    "forward_return": 0.1,
+                },
+                store_dir=self.store_dir,
+                ticker=ticker,
+                arrival_session=dt.date(2026, 5, 4),
+                grouped_fetch=_empty,
+                grouped_memo=memo,
+                exchange=_XNYS,
+            )
+        self.assertEqual(calls, [dt.date(2026, 5, 5)])
 
     def test_ongoing_row_keeps_the_horizon_mark(self):
         # Positive control: no override before the decision has ended.

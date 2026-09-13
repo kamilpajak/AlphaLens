@@ -210,8 +210,8 @@ arrows (`LadderChart.svelte`).
 buy-and-hold move from the arrival-session opening-window VWAP to maturity — the
 OFFICIAL close of the `matured_at` session, stamped by the monitor at freeze time
 on both the minute and the cheap path so a from-scratch rebuild writes the same
-value as an incremental night (#1444) — or to the last closed session while
-ongoing; "independent of any ladder fill" (`ladder_replay.py::_forward_return`
+value as an incremental night (#1444; a `SPLIT_INVALIDATED` quarantine keeps the
+raw replay value as telemetry) — or to the last closed session while ongoing; "independent of any ladder fill" (`ladder_replay.py::_forward_return`
 is the engine's replay-horizon mark, which the monitor re-anchors).
 `market_excess_return` subtracts the same-window SPY leg (`benchmark_excess.py`),
 which records the exit session it was computed over in `benchmark_window_exit`

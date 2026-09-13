@@ -122,7 +122,7 @@ def _recover_exit_session(row: dict[str, Any], *, last_closed_session: dt.date) 
 
 
 def _as_date(value: Any) -> dt.date | None:
-    if value is None:
+    if value is None or value is pd.NaT:
         return None
     if isinstance(value, dt.datetime):
         return value.date()
@@ -278,7 +278,8 @@ def _enrich_frame_rows(
         )
         bench_col.append(bench)
         excess_col.append(excess)
-        exit_col.append(exit_session.isoformat() if bench is not None and exit_session else None)
+        matured = _as_date(row.get("matured_at"))
+        exit_col.append(matured.isoformat() if bench is not None and matured is not None else None)
         # n_fetched counts rows that ENTERED the fetch branch (including rows
         # short-circuited by a missing forward_return before any network call),
         # NOT strictly rows that issued a Polygon call — it is the "did this

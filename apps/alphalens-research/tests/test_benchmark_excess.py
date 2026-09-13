@@ -1075,10 +1075,6 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
             self.assertNotIn("benchmark_window_return", out.columns)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestBenchmarkWindowExitStamp(unittest.TestCase):
     """The pass records WHICH exit session a pair was computed over
     (``benchmark_window_exit``) and reuses the pair only while that still equals
@@ -1231,3 +1227,7 @@ class TestBenchmarkWindowExitStamp(unittest.TestCase):
             self.assertEqual(calls, ["SPY"])  # one real fetch serves both rows
             self.assertAlmostEqual(float(df.loc["BB", "benchmark_window_return"]), 0.01, places=9)
             self.assertAlmostEqual(float(df.loc["AA", "benchmark_window_return"]), 0.01, places=9)
+
+
+if __name__ == "__main__":
+    unittest.main()
