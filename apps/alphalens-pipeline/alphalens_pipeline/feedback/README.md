@@ -214,9 +214,10 @@ value as an incremental night (#1444; a `SPLIT_INVALIDATED` quarantine keeps the
 raw replay value as telemetry and gets no excess pair on either leg, #1452) — or to the last closed session while ongoing; "independent of any ladder fill" (`ladder_replay.py::_forward_return`
 is the engine's replay-horizon mark, which the monitor re-anchors).
 `market_excess_return` subtracts the same-window SPY leg (`benchmark_excess.py`),
-which ends at the SAME print as the candidate leg — the official close of the exit
-session, read from the monitor's grouped-daily cache (#1445; until then it was the
-last after-hours minute bar) — anchored on the same 30-minute arrival VWAP (one
+which ends at the SAME print as a terminal row's candidate leg — the official close
+of the exit session, read from the monitor's grouped-daily cache (#1445; until then it
+was the last after-hours minute bar; an ongoing row marked on the minute path still
+carries the engine's horizon mark on its own leg) — anchored on the same 30-minute arrival VWAP (one
 minute fetch per arrival session). It records the exit session it was computed over
 in `benchmark_window_exit` and the convention in `benchmark_leg_version`, and is
 reused only while both still match. The sector leg

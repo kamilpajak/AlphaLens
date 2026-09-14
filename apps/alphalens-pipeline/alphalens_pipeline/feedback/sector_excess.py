@@ -91,7 +91,8 @@ logger = logging.getLogger(__name__)
 # never pools rows across revisions (a re-mapped sector or another exit print is
 # a different benchmark). v2 = official close of the exit session (#1445); v1
 # (last minute bar, an after-hours print) was never settled under the #1435
-# rules — the 183 pairs that carried it were recomputed.
+# rules: of the 183 pairs that carried it, the 182 ongoing ones are dropped
+# (terminal-only pass) and the 1 terminal one is recomputed under v2.
 OUTCOME_BENCHMARK_VERSION = f"sector-etf-v2-{SECTOR_ETF_MAP_VERSION}"
 
 # The five columns this module writes onto every store parquet.
@@ -244,7 +245,8 @@ def _enrich_one_file(
             n_enriched += 1
             if key is not None and key not in anchor_cache:
                 # Seed the anchor a gap sibling with the same arrival needs:
-                # close / (1 + window), exact for the stored values; skipped
+                # close / (1 + window), within a few ULP of a fresh fetch (far
+                # inside the 1e-9 settle tolerance); skipped
                 # when the close is not on record or the arithmetic is unsafe.
                 reference = _anchor_from_pair(wret, exit_close_of(etf, matured))
                 if reference is not None:

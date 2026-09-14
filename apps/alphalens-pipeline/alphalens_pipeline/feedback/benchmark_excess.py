@@ -229,17 +229,6 @@ def _fetch_arrival_reference(
     return _arrival_reference(bars, arrival_open=arrival_open)
 
 
-def _official_close(exit_close_of: ExitCloseOf, ticker: str, session: dt.date) -> float | None:
-    close = exit_close_of(ticker, session)
-    if close is None:
-        logger.warning(
-            "benchmark-excess: no official close for %s on %s; leaving None (retried next run).",
-            ticker,
-            session.isoformat(),
-        )
-    return close
-
-
 def _window_bounds(
     row: dict[str, Any], *, last_closed_session: dt.date, exchange: str
 ) -> tuple[dt.date, dt.date] | None:
@@ -285,9 +274,7 @@ def compute_market_excess_for_row(
     reference = _fetch_arrival_reference(bar_fetch, benchmark_ticker, arrival_session, exchange)
     if reference is None:
         return None, None
-    benchmark_return = _window_return(
-        reference, _official_close(exit_close_of, benchmark_ticker, exit_session)
-    )
+    benchmark_return = _window_return(reference, exit_close_of(benchmark_ticker, exit_session))
     if benchmark_return is None:
         return None, None
     return benchmark_return, float(row["forward_return"]) - benchmark_return
@@ -306,9 +293,20 @@ def _exit_close_lookup(
     missing = sorted(s for s in sessions if s not in grouped_memo)
     if missing:
         grouped_memo.update(_prefetch_grouped_daily(store_dir, missing, grouped_fetch, exchange))
+    warned: set[tuple[str, dt.date]] = set()
 
     def _close(ticker: str, session: dt.date) -> float | None:
-        return _grouped_close(grouped_memo.get(session), ticker)
+        close = _grouped_close(grouped_memo.get(session), ticker)
+        if close is None and (ticker, session) not in warned:
+            # Once per (ticker, session) per file, not once per row: a missing
+            # last-closed session would otherwise print one line per ongoing row.
+            warned.add((ticker, session))
+            logger.warning(
+                "benchmark-excess: no official close for %s on %s; leaving None (retried next run).",
+                ticker,
+                session.isoformat(),
+            )
+        return close
 
     return _close
 
@@ -517,8 +515,8 @@ def _seed_anchor_cache_from_reused(
 
     A reused row carries a settled ``benchmark_window_return`` and its exit
     session's official close is on record, so the reference it was computed
-    against is ``close / (1 + window)`` (exact in floating point for the stored
-    values). Seeding lets a GAP sibling with the same arrival be served for free
+    against is ``close / (1 + window)`` (within a few ULP of a fresh fetch, far
+    inside the 1e-9 settle tolerance). Seeding lets a GAP sibling with the same arrival be served for free
     instead of paying its own anchor fetch. Skips silently when the window or the
     close cannot be recovered — a pure optimisation, never a correctness
     requirement; an anchor already in the cache is never overwritten.
@@ -673,9 +671,7 @@ def _row_excess_cached(
     reference = anchor_cache[key]
     if reference is None:
         return None, None
-    benchmark_return = _window_return(
-        reference, _official_close(exit_close_of, benchmark_ticker, exit_session)
-    )
+    benchmark_return = _window_return(reference, exit_close_of(benchmark_ticker, exit_session))
     if benchmark_return is None:
         return None, None
     return benchmark_return, float(row["forward_return"]) - benchmark_return

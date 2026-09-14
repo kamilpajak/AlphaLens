@@ -1583,6 +1583,16 @@ class TestOfficialCloseExitPrint(unittest.TestCase):
             self.assertTrue(pd.isna(out["market_excess_return"]))
             self.assertTrue(any("official close" in line for line in logs.output), logs.output)
 
+    def test_a_missing_close_warns_once_per_session_not_per_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = [self._row(t, self._EXIT) for t in ("AA", "BB", "CC")]
+            store = self._store(tmp, rows)
+            with self.assertLogs("alphalens_pipeline.feedback.benchmark_excess", "WARNING") as logs:
+                enrich_store_with_benchmark_excess(
+                    store, bar_fetch=self._spy([]), grouped_fetch=_grouped({}), now=self._NOW
+                )
+            self.assertEqual(sum("official close" in line for line in logs.output), 1, logs.output)
+
     def test_session_without_a_spy_row_yields_none(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = self._store(tmp, [self._row("AA", self._EXIT)])
