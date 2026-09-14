@@ -1261,5 +1261,129 @@ class TestStoredPairIsSettledIsColumnParametric(unittest.TestCase):
         )
 
 
+class TestSplitInvalidatedRowsGetNoBenchmark(unittest.TestCase):
+    """A ``SPLIT_INVALIDATED`` quarantine keeps its raw replay ``forward_return`` as
+    telemetry of what tripped the guard; it is not an outcome, so the pass must
+    give it no pair — and must not REUSE a pair it once had (#1452).
+
+    The fixture is the production row (MQ, 2026-05-29): a settled, consistent,
+    correctly stamped pair that reuse-first would otherwise carry for ever.
+    """
+
+    _BRIEF = dt.date(2026, 5, 29)
+    _EXIT = dt.date(2026, 9, 10)
+    _NOW = dt.datetime(2026, 9, 15, tzinfo=UTC)
+
+    @staticmethod
+    def _quarantined(**overrides) -> dict:
+        row = {
+            "brief_date": TestSplitInvalidatedRowsGetNoBenchmark._BRIEF,
+            "ticker": "MQ",
+            "terminal": True,
+            "ladder_classification": "SPLIT_INVALIDATED",
+            "matured_at": TestSplitInvalidatedRowsGetNoBenchmark._EXIT,
+            "forward_return": 3.2281,
+            "benchmark_window_return": 0.0032,
+            "market_excess_return": 3.2249,
+            "benchmark_window_exit": TestSplitInvalidatedRowsGetNoBenchmark._EXIT.isoformat(),
+        }
+        row.update(overrides)
+        return row
+
+    @staticmethod
+    def _spy(calls: list[str]):
+        def _fetch(t, s, e):
+            calls.append(t)
+            return _spy_bars(s, reference=100.0, last_close=101.0)  # window return 0.01
+
+        return _fetch
+
+    def _run(self, store: Path, rows: list[dict], calls: list[str]) -> Path:
+        path = store / f"{self._BRIEF.isoformat()}.parquet"
+        pd.DataFrame(rows).to_parquet(path)
+        enrich_store_with_benchmark_excess(store, bar_fetch=self._spy(calls), now=self._NOW)
+        return path
+
+    def test_a_settled_quarantined_pair_is_nulled_not_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            calls: list[str] = []
+            path = self._run(store, [self._quarantined()], calls)
+            out = pd.read_parquet(path).iloc[0]
+            self.assertEqual(calls, [])
+            self.assertTrue(pd.isna(out["market_excess_return"]))
+            self.assertTrue(pd.isna(out["benchmark_window_return"]))
+            self.assertTrue(pd.isna(out["benchmark_window_exit"]))
+            self.assertAlmostEqual(float(out["forward_return"]), 3.2281, places=9)
+
+    def test_a_quarantined_gap_is_not_fetched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            calls: list[str] = []
+            path = self._run(
+                store,
+                [
+                    self._quarantined(
+                        benchmark_window_return=None,
+                        market_excess_return=None,
+                        benchmark_window_exit=None,
+                    )
+                ],
+                calls,
+            )
+            out = pd.read_parquet(path).iloc[0]
+            self.assertEqual(calls, [])
+            self.assertTrue(pd.isna(out["market_excess_return"]))
+
+    def test_a_gap_sibling_in_the_same_window_still_gets_its_own_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            calls: list[str] = []
+            sibling = {
+                "brief_date": self._BRIEF,
+                "ticker": "BB",
+                "terminal": True,
+                "ladder_classification": "TP_FULL",
+                "matured_at": self._EXIT,
+                "forward_return": 0.05,
+                "benchmark_window_return": None,
+                "market_excess_return": None,
+                "benchmark_window_exit": None,
+            }
+            path = self._run(store, [self._quarantined(), sibling], calls)
+            df = pd.read_parquet(path).set_index("ticker")
+            self.assertLessEqual(len(calls), 1)
+            self.assertAlmostEqual(float(df.loc["BB", "benchmark_window_return"]), 0.01, places=9)
+            self.assertAlmostEqual(float(df.loc["BB", "market_excess_return"]), 0.04, places=9)
+            self.assertTrue(pd.isna(df.loc["MQ", "market_excess_return"]))
+
+    def test_the_summary_line_counts_the_quarantine_as_fetched_never_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            calls: list[str] = []
+            with self.assertLogs(
+                "alphalens_pipeline.feedback.benchmark_excess", level="INFO"
+            ) as logs:
+                self._run(store, [self._quarantined()], calls)
+            self.assertTrue(
+                any("enriched 0 (reused 0, fetched 1)" in line for line in logs.output),
+                logs.output,
+            )
+
+    def test_row_is_quarantined_predicate(self) -> None:
+        from alphalens_pipeline.feedback.benchmark_excess import row_is_quarantined
+
+        self.assertTrue(row_is_quarantined({"ladder_classification": "SPLIT_INVALIDATED"}))
+        self.assertTrue(
+            row_is_quarantined(pd.Series({"ladder_classification": "SPLIT_INVALIDATED"}))
+        )
+        for value in (None, "", float("nan"), "NO_FILL", "TP_FULL"):
+            with self.subTest(value=value):
+                self.assertFalse(row_is_quarantined({"ladder_classification": value}))
+                self.assertFalse(row_is_quarantined(pd.Series({"ladder_classification": value})))
+        self.assertFalse(row_is_quarantined({}))
+        self.assertFalse(row_is_quarantined(pd.Series({"ticker": "MQ"})))
+
+
 if __name__ == "__main__":
     unittest.main()
