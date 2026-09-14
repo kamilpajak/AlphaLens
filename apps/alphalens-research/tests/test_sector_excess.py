@@ -470,5 +470,98 @@ class TestSectorSweepOrderAndWrites(unittest.TestCase):
             self.assertTrue(any("stopped_early=True" in line for line in logs.output), logs.output)
 
 
+class TestSplitInvalidatedRowsGetNoSectorPair(unittest.TestCase):
+    """A ``SPLIT_INVALIDATED`` quarantine keeps its ETF label and gets no pair —
+    not computed, not reused, not seeded into the per-run cache (#1452)."""
+
+    _NOW = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+    _PATH = "2026-06-11.parquet"
+
+    @staticmethod
+    def _xlk(_ticker):
+        return "XLK"
+
+    @staticmethod
+    def _quarantined(**overrides):
+        return _settled_row("MQ", ladder_classification="SPLIT_INVALIDATED", **overrides)
+
+    def _run(self, root: Path, rows: list[dict], *, counter: list[str], write: bool = True):
+        from alphalens_pipeline.feedback import sector_excess
+
+        if write:
+            pd.DataFrame(rows).to_parquet(root / self._PATH, index=False)
+        with patch.object(sector_excess, "sector_etf_for_ticker", side_effect=self._xlk):
+            return sector_excess.enrich_store_with_sector_excess(
+                root, bar_fetch=_bars_factory(100.0, 110.0, counter=counter), now=self._NOW
+            )
+
+    def test_a_settled_quarantined_pair_is_nulled_not_reused(self):
+        from alphalens_pipeline.feedback.sector_excess import OUTCOME_BENCHMARK_VERSION
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            n = self._run(root, [self._quarantined()], counter=calls)
+            out = pd.read_parquet(root / self._PATH).iloc[0]
+            self.assertEqual(calls, [])
+            self.assertEqual(n, 0)
+            self.assertEqual(out["sector_etf_ticker"], "XLK")
+            self.assertTrue(pd.isna(out["sector_etf_window_return"]))
+            self.assertTrue(pd.isna(out["sector_excess_return"]))
+            self.assertTrue(pd.isna(out["sector_window_exit"]))
+            self.assertEqual(out["outcome_benchmark_version"], OUTCOME_BENCHMARK_VERSION)
+
+    def test_a_quarantined_gap_is_not_fetched(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            self._run(
+                root,
+                [
+                    self._quarantined(
+                        sector_etf_window_return=None,
+                        sector_excess_return=None,
+                        sector_window_exit=None,
+                    )
+                ],
+                counter=calls,
+            )
+            out = pd.read_parquet(root / self._PATH).iloc[0]
+            self.assertEqual(calls, [])
+            self.assertTrue(pd.isna(out["sector_excess_return"]))
+
+    def test_a_gap_sibling_in_the_same_window_pays_its_own_fetch(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            gap = _row("NVDA")  # same brief_date + matured_at as the quarantine → same window
+            self._run(root, [self._quarantined(), gap], counter=calls)
+            df = pd.read_parquet(root / self._PATH).set_index("ticker")
+            self.assertEqual(calls, ["XLK"])
+            self.assertAlmostEqual(df.loc["NVDA", "sector_excess_return"], 0.05, places=9)
+            self.assertTrue(pd.isna(df.loc["MQ", "sector_excess_return"]))
+
+    def test_the_second_run_over_a_nulled_quarantine_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._run(root, [self._quarantined()], counter=[])
+            path = root / self._PATH
+            mtime = path.stat().st_mtime_ns
+
+            calls: list[str] = []
+            with self.assertLogs("alphalens_pipeline.feedback.sector_excess", level="INFO") as logs:
+                self._run(root, [], counter=calls, write=False)
+
+            self.assertEqual(calls, [])
+            self.assertEqual(path.stat().st_mtime_ns, mtime)
+            self.assertTrue(
+                any(
+                    "sector-excess: enriched 0 (reused 0, fetched 0, stopped_early=False)" in line
+                    for line in logs.output
+                ),
+                logs.output,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

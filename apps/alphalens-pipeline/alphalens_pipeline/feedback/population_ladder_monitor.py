@@ -2597,7 +2597,10 @@ def _apply_split_invalidation(row: dict[str, Any], last_closed_session: dt.date)
     re-replays it); ``realized_r`` / ``open_r`` and their %-of-book projections
     are nulled so every R aggregate excludes the row (the NO_FILL convention).
     Diagnostic fields (forward_return, sequence, mfe/mae) keep the raw replay
-    values as telemetry of WHAT tripped the guard.
+    values as telemetry of WHAT tripped the guard. The excess passes read the
+    classification and give the row no SPY / sector pair (#1452,
+    ``benchmark_excess.row_is_quarantined``); this function does not carry those
+    columns, so nulling them here would be a no-op on a fresh resolve.
     """
     row["ladder_classification"] = SPLIT_INVALIDATED_CLASSIFICATION
     row["terminal"] = True

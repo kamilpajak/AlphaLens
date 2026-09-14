@@ -159,7 +159,7 @@ SL and a TP are crossable resolves **SL-first** (conservative,
 | `TIME_STOP` | terminal | 42-session horizon expired; remainder marked at the expiry close |
 | `NO_FILL` | terminal | no entry tier ever touched inside the TTL |
 | `BAD_GEOMETRY` | terminal-degenerate | stop at/above blended entry — R undefined, frozen |
-| `SPLIT_INVALIDATED` | terminal-degenerate | replay window crosses a real corporate action (split / material special dividend, #1090) — ladder levels were set on pre-action prices, `realized_r` null, frozen |
+| `SPLIT_INVALIDATED` | terminal-degenerate | replay window crosses a real corporate action (split / material special dividend, #1090) — ladder levels were set on pre-action prices, `realized_r` null, frozen; both excess pairs (SPY and sector) null, `forward_return` kept as raw telemetry only (#1452) |
 
 **Implausible-move guard (#1090).** `|forward_return| > 0.60`
 (`bar_window.IMPLAUSIBLE_RETURN_THRESHOLD`) is a *trigger*, not a verdict
@@ -211,7 +211,7 @@ buy-and-hold move from the arrival-session opening-window VWAP to maturity — t
 OFFICIAL close of the `matured_at` session, stamped by the monitor at freeze time
 on both the minute and the cheap path so a from-scratch rebuild writes the same
 value as an incremental night (#1444; a `SPLIT_INVALIDATED` quarantine keeps the
-raw replay value as telemetry) — or to the last closed session while ongoing; "independent of any ladder fill" (`ladder_replay.py::_forward_return`
+raw replay value as telemetry and gets no excess pair on either leg, #1452) — or to the last closed session while ongoing; "independent of any ladder fill" (`ladder_replay.py::_forward_return`
 is the engine's replay-horizon mark, which the monitor re-anchors).
 `market_excess_return` subtracts the same-window SPY leg (`benchmark_excess.py`),
 which records the exit session it was computed over in `benchmark_window_exit`

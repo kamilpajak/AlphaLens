@@ -48,7 +48,12 @@ For every row that carries a non-null ``forward_return`` and a recoverable
 
 Rows whose window is not recoverable, or whose benchmark fetch returns no bars,
 get ``None`` for both columns (never a fudged value — memo §4: "do NOT silently
-fudge"). ``forward_return`` itself is left untouched as the gross/raw leg.
+fudge"). ``forward_return`` itself is left untouched as the gross/raw leg. A
+``SPLIT_INVALIDATED`` quarantine (:func:`row_is_quarantined`) gets no pair at
+all, and a pair it once carried is nulled rather than reused (#1452): its
+``forward_return`` is raw replay telemetry of what tripped the corporate-action
+guard, not an outcome, so an excess over it would be a meaningless number
+settled under the pre-registered poolability key.
 
 Telemetry only; this reads briefs-independent price data + the existing parquet
 store, never any click ledger.
@@ -66,6 +71,7 @@ from typing import Any, TypeGuard
 import pandas as pd
 
 from alphalens_pipeline.feedback.bar_window import ARRIVAL_VWAP_WINDOW_MIN, _window_vwap
+from alphalens_pipeline.feedback.corporate_actions import SPLIT_INVALIDATED_CLASSIFICATION
 from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
@@ -251,6 +257,17 @@ def _enrich_frame_rows(
     for _, row in df.iterrows():
         if deadline is not None and deadline.should_stop():
             return bench_col, excess_col, exit_col, n_enriched, True, n_reused, n_fetched
+        if row_is_quarantined(row):
+            # Before the reuse check on purpose: a quarantine's stored pair can
+            # be settled and consistent (the production MQ row was), and the
+            # reuse branch would carry it for ever. No pair, no stamp, no fetch;
+            # counted under n_fetched so the file is rewritten (nulling a pair
+            # that is on disk) — see the n_fetched note below.
+            bench_col.append(None)
+            excess_col.append(None)
+            exit_col.append(None)
+            n_fetched += 1
+            continue
         exit_session = _recover_exit_session(dict(row), last_closed_session=last_closed_session)
         if _has_consistent_stored_pair(row):
             bench = float(row["benchmark_window_return"])
@@ -280,13 +297,15 @@ def _enrich_frame_rows(
         excess_col.append(excess)
         matured = _as_date(row.get("matured_at"))
         exit_col.append(matured.isoformat() if bench is not None and matured is not None else None)
-        # n_fetched counts rows that ENTERED the fetch branch (including rows
-        # short-circuited by a missing forward_return before any network call),
-        # NOT strictly rows that issued a Polygon call — it is the "did this
-        # frame change?" signal the M3 skip-write decision below reads. A file
-        # whose only unresolved rows are ongoing / no-forward-return is still
-        # rewritten (content unchanged, mtime bumps) — acceptable, since it
-        # never causes a needed write to be wrongly skipped.
+        # n_fetched counts rows that did NOT take the reuse branch: rows that
+        # entered the fetch branch (including rows short-circuited by a missing
+        # forward_return before any network call) and SPLIT_INVALIDATED
+        # quarantines nulled above — NOT strictly rows that issued a Polygon
+        # call. It is the "did this frame change?" signal the M3 skip-write
+        # decision below reads. A file whose only unresolved rows are ongoing /
+        # no-forward-return / quarantined is still rewritten (content unchanged,
+        # mtime bumps) — acceptable, since it never causes a needed write to be
+        # wrongly skipped.
         n_fetched += 1
         if excess is not None:
             n_enriched += 1
@@ -325,6 +344,21 @@ def _has_consistent_stored_pair(row: pd.Series) -> bool:
         excess_col="market_excess_return",
         exit_col="benchmark_window_exit",
     )
+
+
+def row_is_quarantined(row: pd.Series | dict[str, Any]) -> bool:
+    """True for a ``SPLIT_INVALIDATED`` quarantine (#1452), shared by the SPY and
+    the sector passes.
+
+    The monitor's ``_apply_split_invalidation`` nulls ``realized_r`` / ``open_r``
+    so every R aggregate excludes the row, but KEEPS ``forward_return`` as raw
+    telemetry of what tripped the corporate-action guard (the ladder levels were
+    set on pre-action prices). An excess over that value is not an outcome; the
+    passes give such a row no pair, no window stamp and no fetch, and never
+    reuse a pair it once carried. Missing / ``None`` / NaN classifications are
+    not quarantines.
+    """
+    return str(row.get("ladder_classification") or "") == SPLIT_INVALIDATED_CLASSIFICATION
 
 
 def stored_pair_is_settled(
@@ -545,5 +579,6 @@ __all__ = [
     "DEFAULT_BENCHMARK_TICKER",
     "compute_market_excess_for_row",
     "enrich_store_with_benchmark_excess",
+    "row_is_quarantined",
     "stored_pair_is_settled",
 ]

@@ -285,4 +285,31 @@ describe('excessCellState (/edge EXCESS RETURN cell)', () => {
 			})
 		).toBe('na');
 	});
+
+	it('is "na" for a SPLIT_INVALIDATED quarantine even though its stock return is kept', () => {
+		// The quarantine keeps forward_return as telemetry of what tripped the
+		// corporate-action guard and gets no benchmark pair on purpose (#1452):
+		// a genuine n/a, never "pending — recomputes nightly".
+		expect(
+			excessCellState({
+				market_excess_return: null,
+				forward_return: 3.2281,
+				benchmark_window_return: null,
+				ladder_classification: 'SPLIT_INVALIDATED'
+			})
+		).toBe('na');
+	});
+
+	it('keeps "pending" for other classifications whose benchmark leg is missing', () => {
+		// BAD_GEOMETRY's forward_return is a genuine buy-and-hold, so a missing
+		// benchmark there is a retriable gap, not a quarantine.
+		expect(
+			excessCellState({
+				market_excess_return: null,
+				forward_return: 0.107,
+				benchmark_window_return: null,
+				ladder_classification: 'BAD_GEOMETRY'
+			})
+		).toBe('pending');
+	});
 });

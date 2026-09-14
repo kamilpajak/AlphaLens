@@ -63,14 +63,23 @@ export function tpCaptureLabel(o: {
  *                missing, so the excess could not be computed yet. It recomputes
  *                nightly — a retriable data gap, NOT a genuine n/a.
  *  - `na`      — neither the excess nor the stock return is available (an older row
- *                or an unrecoverable window). */
+ *                or an unrecoverable window), OR the row is a `SPLIT_INVALIDATED`
+ *                quarantine: it keeps its stock return as telemetry of what tripped
+ *                the corporate-action guard and gets no benchmark pair on purpose
+ *                (#1452), so a null excess there is a genuine n/a, never pending.
+ *                Only that one classification is a quarantine — a `BAD_GEOMETRY`
+ *                row's stock return is a real buy-and-hold and its benchmark is
+ *                computable, so a missing pair there IS a retriable gap. */
 export type ExcessCellState = 'value' | 'pending' | 'na';
+const QUARANTINED_CLASSIFICATION = 'SPLIT_INVALIDATED'; // see ladderStatus.ts (group 'unmeasurable')
 export function excessCellState(o: {
 	market_excess_return: number | null | undefined;
 	forward_return: number | null | undefined;
 	benchmark_window_return: number | null | undefined;
+	ladder_classification?: string | null;
 }): ExcessCellState {
 	if (o.market_excess_return != null) return 'value';
+	if (o.ladder_classification === QUARANTINED_CLASSIFICATION) return 'na';
 	if (o.forward_return != null && o.benchmark_window_return == null) return 'pending';
 	return 'na';
 }

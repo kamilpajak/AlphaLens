@@ -22,7 +22,11 @@ Discipline (#1435), the same the SPY pass has:
   set — the window is fixed there. An ongoing row gets its ``sector_etf_ticker``
   (resolution is a free in-process lookup) and no pair: nothing reads a sector
   leg before maturity (the pre-registered H-B estimand is a matured outcome),
-  and the moving-window recompute was ~107 fetches a night.
+  and the moving-window recompute was ~107 fetches a night. A
+  ``SPLIT_INVALIDATED`` quarantine is treated the same way (#1452,
+  ``benchmark_excess.row_is_quarantined``): ETF label, no pair, no fetch, and a
+  pair it once carried is nulled rather than reused — its ``forward_return`` is
+  raw replay telemetry, not an outcome.
 * **Reuse-first.** A terminal row whose stored pair is real, arithmetically
   consistent with ``forward_return``, recorded over THIS ``matured_at``
   (``sector_window_exit``), computed against the ETF the ticker resolves to
@@ -62,6 +66,7 @@ from alphalens_pipeline.feedback.benchmark_excess import (
     _as_date,
     _is_real,
     compute_market_excess_for_row,
+    row_is_quarantined,
     stored_pair_is_settled,
 )
 from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
@@ -107,8 +112,8 @@ def compute_sector_excess_for_row(
 ) -> tuple[str | None, float | None, float | None]:
     """``(sector_etf_ticker, sector_etf_window_return, sector_excess_return)``.
 
-    The unguarded per-row primitive: no terminal-only gate, no reuse-first, no
-    cache. ``enrich_store_with_sector_excess`` is the only supported entry point
+    The unguarded per-row primitive: no terminal-only gate, no quarantine gate,
+    no reuse-first, no cache. ``enrich_store_with_sector_excess`` is the only supported entry point
     for a store; this exists for the row-level tests of the resolution rules.
 
     A row whose sector is unresolvable returns ``(None, None, None)`` — EXCLUDED,
@@ -204,8 +209,11 @@ def _enrich_one_file(
         ticker = row.get("ticker")
         etf = sector_etf_for_ticker(str(ticker)) if ticker else None
         matured = _as_date(row.get("matured_at"))
-        if etf is None or matured is None:
-            # Unresolvable sector, or an ongoing row: no pair, no fetch.
+        if etf is None or matured is None or row_is_quarantined(row):
+            # Unresolvable sector, an ongoing row, or a SPLIT_INVALIDATED
+            # quarantine (#1452): ETF resolved, no pair, no fetch. The
+            # quarantine check sits before the reuse gate on purpose — a stored
+            # pair can be settled and would otherwise be carried for ever.
             etf_col.append(etf)
             wret_col.append(None)
             excess_col.append(None)
