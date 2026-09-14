@@ -319,19 +319,36 @@ def _has_consistent_stored_pair(row: pd.Series) -> bool:
     (``benchmark_window_exit``, #1444): a pair whose window ended elsewhere can
     be arithmetically consistent and still wrong, and a pair without a recorded
     window is treated the same way — recomputed, never trusted."""
-    matured = _as_date(row.get("matured_at"))
+    return stored_pair_is_settled(
+        row,
+        window_col="benchmark_window_return",
+        excess_col="market_excess_return",
+        exit_col="benchmark_window_exit",
+    )
+
+
+def stored_pair_is_settled(
+    row: pd.Series | dict[str, Any], *, window_col: str, excess_col: str, exit_col: str
+) -> bool:
+    """The column-parametric settled-pair predicate shared by the SPY and the
+    sector passes (#1435): ``matured_at`` set, the pair real, ``excess ==
+    forward_return - window`` within 1e-9, and the recorded window exit equal to
+    ``matured_at``. A sector row additionally needs its ETF and map version to
+    match — the sector pass checks those itself, because only it knows them."""
+    get = row.get
+    matured = _as_date(get("matured_at"))
     if matured is None:
         return False
-    if _as_date(row.get("benchmark_window_exit")) != matured:
+    if _as_date(get(exit_col)) != matured:
         return False
-    bench = row.get("benchmark_window_return")
-    excess = row.get("market_excess_return")
-    forward = row.get("forward_return")
+    window = get(window_col)
+    excess = get(excess_col)
+    forward = get("forward_return")
     return (
-        _is_real(bench)
+        _is_real(window)
         and _is_real(excess)
         and _is_real(forward)
-        and abs(float(excess) - (float(forward) - float(bench))) < 1e-9
+        and abs(float(excess) - (float(forward) - float(window))) < 1e-9
     )
 
 
@@ -528,4 +545,5 @@ __all__ = [
     "DEFAULT_BENCHMARK_TICKER",
     "compute_market_excess_for_row",
     "enrich_store_with_benchmark_excess",
+    "stored_pair_is_settled",
 ]

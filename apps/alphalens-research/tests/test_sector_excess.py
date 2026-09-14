@@ -175,5 +175,279 @@ class TestEnrichStoreSectorExcess(unittest.TestCase):
             self.assertEqual(first, second)
 
 
+class _CountingDeadline:
+    """``should_stop()`` answers False for the first ``allow`` calls, then True."""
+
+    def __init__(self, allow: int):
+        self.allow = allow
+        self.calls = 0
+
+    def should_stop(self) -> bool:
+        self.calls += 1
+        return self.calls > self.allow
+
+
+def _settled_row(ticker="NVDA", *, etf="XLK", matured_at="2026-06-25", **overrides):
+    from alphalens_pipeline.feedback.sector_excess import OUTCOME_BENCHMARK_VERSION
+
+    row = _row(ticker, matured_at=matured_at)
+    row.update(
+        {
+            "sector_etf_ticker": etf,
+            "sector_etf_window_return": 0.10,
+            "sector_excess_return": 0.05,  # == 0.15 - 0.10: arithmetically consistent
+            "sector_window_exit": matured_at,
+            "outcome_benchmark_version": OUTCOME_BENCHMARK_VERSION,
+        }
+    )
+    row.update(overrides)
+    return row
+
+
+class TestSectorReuseFirst(unittest.TestCase):
+    """A settled terminal row is carried with no fetch; anything that could make the
+    stored pair wrong (moved window, map version, a ticker whose ETF changed under
+    the same version) makes it a gap again (#1435)."""
+
+    _NOW = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+
+    def _run(
+        self,
+        root: Path,
+        rows: list[dict],
+        *,
+        fetch,
+        resolver,
+        deadline=None,
+        path="2026-06-11.parquet",
+    ):
+        from alphalens_pipeline.feedback import sector_excess
+
+        pd.DataFrame(rows).to_parquet(root / path, index=False)
+        with patch.object(sector_excess, "sector_etf_for_ticker", side_effect=resolver):
+            return sector_excess.enrich_store_with_sector_excess(
+                root, bar_fetch=fetch, now=self._NOW, deadline=deadline
+            )
+
+    @staticmethod
+    def _xlk(_ticker):
+        return "XLK"
+
+    def test_settled_row_is_reused_without_a_fetch(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            self._run(
+                root,
+                [_settled_row()],
+                fetch=_bars_factory(100.0, 120.0, counter=calls),
+                resolver=self._xlk,
+            )
+            out = pd.read_parquet(root / "2026-06-11.parquet").iloc[0]
+            self.assertEqual(calls, [])
+            self.assertAlmostEqual(out["sector_etf_window_return"], 0.10, places=9)
+            self.assertAlmostEqual(out["sector_excess_return"], 0.05, places=9)
+
+    def test_pair_whose_window_stamp_moved_is_recomputed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            self._run(
+                root,
+                [_settled_row(sector_window_exit="2026-09-10")],
+                fetch=_bars_factory(100.0, 120.0, counter=calls),
+                resolver=self._xlk,
+            )
+            out = pd.read_parquet(root / "2026-06-11.parquet").iloc[0]
+            self.assertEqual(calls, ["XLK"])
+            self.assertAlmostEqual(out["sector_etf_window_return"], 0.20, places=9)
+            self.assertEqual(out["sector_window_exit"], "2026-06-25")
+
+    def test_pair_from_another_map_version_is_recomputed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            self._run(
+                root,
+                [_settled_row(outcome_benchmark_version="sector-etf-v0-old")],
+                fetch=_bars_factory(100.0, 120.0, counter=calls),
+                resolver=self._xlk,
+            )
+            self.assertEqual(calls, ["XLK"])
+
+    def test_pair_without_a_window_stamp_is_recomputed(self):
+        # The shape of the store after the #1444 repair: pair nulled, no stamp column.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            row = _settled_row()
+            del row["sector_window_exit"]
+            self._run(
+                root, [row], fetch=_bars_factory(100.0, 120.0, counter=calls), resolver=self._xlk
+            )
+            self.assertEqual(calls, ["XLK"])
+            self.assertEqual(
+                pd.read_parquet(root / "2026-06-11.parquet").iloc[0]["sector_window_exit"],
+                "2026-06-25",
+            )
+
+    def test_ticker_whose_etf_changed_under_the_same_version_is_recomputed_against_the_new_etf(
+        self,
+    ):
+        # sic_index.parquet is refreshed by hand with SECTOR_ETF_MAP_VERSION unchanged, so a
+        # ticker can move sector; the stored XLK pair must not be frozen under an XLE label.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            self._run(
+                root,
+                [_settled_row(etf="XLK")],
+                fetch=_bars_factory(100.0, 120.0, counter=calls),
+                resolver=lambda _t: "XLE",
+            )
+            out = pd.read_parquet(root / "2026-06-11.parquet").iloc[0]
+            self.assertEqual(calls, ["XLE"])
+            self.assertEqual(out["sector_etf_ticker"], "XLE")
+            self.assertAlmostEqual(out["sector_etf_window_return"], 0.20, places=9)
+            self.assertAlmostEqual(out["sector_excess_return"], 0.15 - 0.20, places=9)
+
+    def test_ongoing_row_gets_its_etf_and_no_pair_and_no_fetch(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            stale = _settled_row(
+                matured_at=None
+            )  # an ongoing row that carried a pair from the old pass
+            stale["sector_window_exit"] = None
+            self._run(
+                root, [stale], fetch=_bars_factory(100.0, 120.0, counter=calls), resolver=self._xlk
+            )
+            out = pd.read_parquet(root / "2026-06-11.parquet").iloc[0]
+            self.assertEqual(calls, [])
+            self.assertEqual(out["sector_etf_ticker"], "XLK")
+            self.assertTrue(pd.isna(out["sector_etf_window_return"]))
+            self.assertTrue(pd.isna(out["sector_excess_return"]))
+
+    def test_gap_row_is_served_from_a_settled_sibling_with_the_same_window(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            gap = _row("AAPL")  # same brief, same matured_at, same ETF -> same (etf, arrival, exit)
+            self._run(
+                root,
+                [_settled_row("NVDA"), gap],
+                fetch=_bars_factory(100.0, 120.0, counter=calls),
+                resolver=self._xlk,
+            )
+            out = pd.read_parquet(root / "2026-06-11.parquet").set_index("ticker")
+            self.assertEqual(calls, [])
+            self.assertAlmostEqual(out.loc["AAPL", "sector_etf_window_return"], 0.10, places=9)
+            self.assertAlmostEqual(out.loc["AAPL", "sector_excess_return"], 0.05, places=9)
+            self.assertEqual(out.loc["AAPL", "sector_window_exit"], "2026-06-25")
+
+    def test_event_lane_row_is_windowed_from_the_ladder_arrival(self):
+        from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
+        from alphalens_pipeline.paper.calendar import session_open_utc
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            starts: list[dt.datetime] = []
+
+            def fetch(ticker, start, end):
+                starts.append(start)
+                return _bars_factory(100.0, 110.0)(ticker, start, end)
+
+            row = _row("NVDA")
+            row["source"] = "insider_cluster"
+            self._run(root, [row], fetch=fetch, resolver=self._xlk)
+            expected = session_open_utc(ladder_arrival_session(dt.date(2026, 6, 11)), "XNYS")
+            self.assertEqual(starts, [expected])
+
+
+class TestSectorSweepOrderAndWrites(unittest.TestCase):
+    _NOW = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+
+    @staticmethod
+    def _xlk(_ticker):
+        return "XLK"
+
+    def _enrich(self, root, *, fetch, deadline=None):
+        from alphalens_pipeline.feedback import sector_excess
+
+        with patch.object(sector_excess, "sector_etf_for_ticker", side_effect=self._xlk):
+            return sector_excess.enrich_store_with_sector_excess(
+                root, bar_fetch=fetch, now=self._NOW, deadline=deadline
+            )
+
+    def test_newest_file_is_written_before_the_deadline_reaches_the_older_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            older, newer = root / "2026-06-11.parquet", root / "2026-06-12.parquet"
+            pd.DataFrame([_row("NVDA", brief_date="2026-06-11")]).to_parquet(older, index=False)
+            pd.DataFrame([_row("AAPL", brief_date="2026-06-12")]).to_parquet(newer, index=False)
+            older_mtime = older.stat().st_mtime_ns
+
+            n = self._enrich(
+                root, fetch=_bars_factory(100.0, 110.0), deadline=_CountingDeadline(allow=1)
+            )
+
+            self.assertEqual(n, 1)
+            self.assertAlmostEqual(
+                pd.read_parquet(newer).iloc[0]["sector_excess_return"], 0.05, places=9
+            )
+            self.assertEqual(older.stat().st_mtime_ns, older_mtime)
+            self.assertNotIn("sector_excess_return", pd.read_parquet(older).columns)
+
+    def test_mid_file_trip_leaves_the_file_untouched_and_uncounted(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path = root / "2026-06-11.parquet"
+            pd.DataFrame([_row("NVDA"), _row("AAPL")]).to_parquet(path, index=False)
+            mtime = path.stat().st_mtime_ns
+
+            n = self._enrich(
+                root, fetch=_bars_factory(100.0, 110.0), deadline=_CountingDeadline(allow=1)
+            )
+
+            self.assertEqual(n, 0)
+            self.assertEqual(path.stat().st_mtime_ns, mtime)
+
+    def test_all_reused_file_is_not_rewritten_and_the_second_run_fetches_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path = root / "2026-06-11.parquet"
+            pd.DataFrame([_row("NVDA")]).to_parquet(path, index=False)  # no sector columns at all
+            first: list[str] = []
+            self._enrich(root, fetch=_bars_factory(100.0, 110.0, counter=first))
+            self.assertEqual(first, ["XLK"], "precondition: the first run creates the columns")
+            self.assertIn("sector_window_exit", pd.read_parquet(path).columns)
+            mtime = path.stat().st_mtime_ns
+
+            second: list[str] = []
+            with self.assertLogs("alphalens_pipeline.feedback.sector_excess", level="INFO") as logs:
+                n = self._enrich(root, fetch=_bars_factory(100.0, 110.0, counter=second))
+
+            self.assertEqual(second, [])
+            self.assertEqual(n, 1)
+            self.assertEqual(path.stat().st_mtime_ns, mtime)
+            self.assertTrue(
+                any(
+                    "sector-excess: enriched 1 (reused 1, fetched 0, stopped_early=False)" in line
+                    for line in logs.output
+                ),
+                logs.output,
+            )
+
+    def test_log_line_reports_a_deadline_stop(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            pd.DataFrame([_row("NVDA")]).to_parquet(root / "2026-06-11.parquet", index=False)
+            with self.assertLogs("alphalens_pipeline.feedback.sector_excess", level="INFO") as logs:
+                self._enrich(
+                    root, fetch=_bars_factory(100.0, 110.0), deadline=_CountingDeadline(allow=0)
+                )
+            self.assertTrue(any("stopped_early=True" in line for line in logs.output), logs.output)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1229,5 +1229,37 @@ class TestBenchmarkWindowExitStamp(unittest.TestCase):
             self.assertAlmostEqual(float(df.loc["AA", "benchmark_window_return"]), 0.01, places=9)
 
 
+class TestStoredPairIsSettledIsColumnParametric(unittest.TestCase):
+    def test_sector_named_columns(self) -> None:
+        from alphalens_pipeline.feedback.benchmark_excess import stored_pair_is_settled
+
+        row = pd.Series(
+            {
+                "matured_at": dt.date(2026, 5, 27),
+                "forward_return": 0.15,
+                "sector_etf_window_return": 0.10,
+                "sector_excess_return": 0.05,
+                "sector_window_exit": "2026-05-27",
+            }
+        )
+        kw = {
+            "window_col": "sector_etf_window_return",
+            "excess_col": "sector_excess_return",
+            "exit_col": "sector_window_exit",
+        }
+        self.assertTrue(stored_pair_is_settled(row, **kw))
+        self.assertFalse(
+            stored_pair_is_settled(
+                pd.Series({**row.to_dict(), "sector_window_exit": "2026-09-10"}), **kw
+            )
+        )
+        self.assertFalse(
+            stored_pair_is_settled(pd.Series({**row.to_dict(), "sector_excess_return": 0.06}), **kw)
+        )
+        self.assertFalse(
+            stored_pair_is_settled(pd.Series({**row.to_dict(), "matured_at": None}), **kw)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

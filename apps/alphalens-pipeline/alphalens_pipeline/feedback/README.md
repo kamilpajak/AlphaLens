@@ -215,7 +215,11 @@ raw replay value as telemetry) — or to the last closed session while ongoing; 
 is the engine's replay-horizon mark, which the monitor re-anchors).
 `market_excess_return` subtracts the same-window SPY leg (`benchmark_excess.py`),
 which records the exit session it was computed over in `benchmark_window_exit`
-and is reused only while that still equals `matured_at`. This is **selection** telemetry
+and is reused only while that still equals `matured_at`. The sector leg
+(`sector_excess.py`, the candidate's own SPDR ETF over the same window) is computed for
+TERMINAL rows only, settles the same way (`sector_window_exit`, plus the ETF and the
+SIC→ETF map version must still match), and sweeps newest-first (#1435); an ongoing row
+carries `sector_etf_ticker` and no pair. This is **selection** telemetry
 (was the pick good?), deliberately decoupled from replay R, which is
 **execution** telemetry (did the ladder geometry capture it?). A row can show
 `NO_FILL` with a large positive excess return — the pick was right, the dip
