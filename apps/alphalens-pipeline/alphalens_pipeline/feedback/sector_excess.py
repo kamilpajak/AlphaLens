@@ -49,7 +49,7 @@ import datetime as dt
 import logging
 import os
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import Any
 
 import pandas as pd
 
@@ -59,6 +59,8 @@ from alphalens_pipeline.data.fundamentals.sector_etf import (
 )
 from alphalens_pipeline.feedback.benchmark_excess import (
     BarFetch,
+    _as_date,
+    _is_real,
     compute_market_excess_for_row,
     stored_pair_is_settled,
 )
@@ -105,6 +107,10 @@ def compute_sector_excess_for_row(
 ) -> tuple[str | None, float | None, float | None]:
     """``(sector_etf_ticker, sector_etf_window_return, sector_excess_return)``.
 
+    The unguarded per-row primitive: no terminal-only gate, no reuse-first, no
+    cache. ``enrich_store_with_sector_excess`` is the only supported entry point
+    for a store; this exists for the row-level tests of the resolution rules.
+
     A row whose sector is unresolvable returns ``(None, None, None)`` — EXCLUDED,
     never benchmarked against SPY (memo §4.2). A resolved sector whose window is
     unrecoverable (no ``forward_return`` / degenerate window / empty fetch) keeps
@@ -128,25 +134,6 @@ def _write_atomic(path: Path, df: pd.DataFrame) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     df.to_parquet(tmp)
     os.replace(tmp, path)
-
-
-def _as_date(value: Any) -> dt.date | None:
-    """A store date cell (date / datetime / Timestamp / ISO str / None / NaN / NaT)
-    as a ``date``; ``None`` when there is none."""
-    if value is None or value is pd.NaT or (isinstance(value, float) and pd.isna(value)):
-        return None
-    if isinstance(value, dt.datetime):
-        return value.date()
-    if isinstance(value, dt.date):
-        return value
-    try:
-        return pd.Timestamp(value).date()
-    except (ValueError, TypeError):
-        return None
-
-
-def _is_real(value: Any) -> TypeGuard[float]:
-    return value is not None and not (isinstance(value, float) and pd.isna(value))
 
 
 def _row_is_settled(row: pd.Series, etf: str) -> bool:
@@ -236,7 +223,13 @@ def _enrich_one_file(
                 window_returns.setdefault(key, wret)
         else:
             forward = row.get("forward_return")
-            if key is not None and key in window_returns and _is_real(forward):
+            n_fetched += 1
+            if not _is_real(forward):
+                # No candidate leg: nothing to compute and NOTHING to cache — a
+                # None written here would deny every sibling of this window a
+                # fetch for the rest of the run (review finding on #1435).
+                wret, excess = None, None
+            elif key is not None and key in window_returns:
                 wret = window_returns[key]
                 excess = float(forward) - wret if wret is not None else None
             else:
@@ -248,8 +241,9 @@ def _enrich_one_file(
                     exchange=exchange,
                 )
                 if key is not None:
+                    # A failed fetch caches None on purpose: one attempt per
+                    # window per run, the SPY pass's policy; it is retried next run.
                     window_returns[key] = wret
-            n_fetched += 1
             if excess is not None:
                 n_enriched += 1
         etf_col.append(etf)
@@ -288,6 +282,7 @@ def enrich_store_with_sector_excess(
     """
     store = Path(store_dir)
     if not store.exists():
+        logger.info("sector-excess: enriched 0 (reused 0, fetched 0, stopped_early=False)")
         return 0
     fetch = bar_fetch or _default_bar_fetch
     now = now or dt.datetime.now(dt.UTC)

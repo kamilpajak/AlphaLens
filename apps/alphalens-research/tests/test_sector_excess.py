@@ -345,6 +345,27 @@ class TestSectorReuseFirst(unittest.TestCase):
             self.assertAlmostEqual(out.loc["AAPL", "sector_excess_return"], 0.05, places=9)
             self.assertEqual(out.loc["AAPL", "sector_window_exit"], "2026-06-25")
 
+    def test_a_row_without_forward_return_does_not_deny_its_sibling_a_fetch(self):
+        # A terminal row with no candidate leg computes nothing; it must not leave a
+        # None in the per-run window cache that a sibling of the same window would
+        # then read as "already tried" (review finding on #1435).
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            no_leg = _row("NVDA", forward_return=None)
+            sibling = _row("AAPL")
+            self._run(
+                root,
+                [no_leg, sibling],
+                fetch=_bars_factory(100.0, 110.0, counter=calls),
+                resolver=self._xlk,
+            )
+            out = pd.read_parquet(root / "2026-06-11.parquet").set_index("ticker")
+            self.assertEqual(calls, ["XLK"])
+            self.assertTrue(pd.isna(out.loc["NVDA", "sector_excess_return"]))
+            self.assertAlmostEqual(out.loc["AAPL", "sector_excess_return"], 0.05, places=9)
+            self.assertEqual(out.loc["AAPL", "sector_window_exit"], "2026-06-25")
+
     def test_event_lane_row_is_windowed_from_the_ladder_arrival(self):
         from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
         from alphalens_pipeline.paper.calendar import session_open_utc
