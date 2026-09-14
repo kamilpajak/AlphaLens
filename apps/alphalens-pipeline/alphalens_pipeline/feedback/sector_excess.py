@@ -15,6 +15,32 @@ convention verbatim. Only the per-row benchmark TICKER differs (resolved via
 ``sector_etf``). A row whose sector is unresolvable is EXCLUDED (all-None), never
 benchmarked against SPY. UNVALIDATED forward-log; poolability key
 ``OUTCOME_BENCHMARK_VERSION`` (encodes the SIC→ETF map version).
+
+Discipline (#1435), the same the SPY pass has:
+
+* **Terminal rows only.** The pair is computed for rows whose ``matured_at`` is
+  set — the window is fixed there. An ongoing row gets its ``sector_etf_ticker``
+  (resolution is a free in-process lookup) and no pair: nothing reads a sector
+  leg before maturity (the pre-registered H-B estimand is a matured outcome),
+  and the moving-window recompute was ~107 fetches a night.
+* **Reuse-first.** A terminal row whose stored pair is real, arithmetically
+  consistent with ``forward_return``, recorded over THIS ``matured_at``
+  (``sector_window_exit``), computed against the ETF the ticker resolves to
+  TODAY, and stamped with the current map version is settled — carried with no
+  fetch. The ETF equality matters because ``sic_index.parquet`` is refreshed by
+  hand with ``SECTOR_ETF_MAP_VERSION`` unchanged, so a ticker can change sector
+  under the same version; without it a reused pair could sit under the wrong
+  label — and the wrong benchmark series — for ever, and the poolability key
+  would pool two series.
+* **Newest-first; a deadline trip mid-file leaves the file untouched and its
+  rows uncounted; a file is written only when something changed** (an absent
+  column counts as changed), so the hourly Django mirror is not woken by no-op
+  rewrites.
+* **Per-run float cache** keyed ``(etf, ladder arrival, exit)`` — seeded from
+  reused rows and consulted before any fetch — instead of a raw-bar memo. The
+  arrival is ``ladder_arrival_session(brief_date)`` for EVERY row, event lane
+  included, because that is what ``compute_market_excess_for_row`` fetches with;
+  the event-CAR anchor differs on most dates and must never key this cache.
 """
 
 from __future__ import annotations
@@ -33,8 +59,12 @@ from alphalens_pipeline.data.fundamentals.sector_etf import (
 )
 from alphalens_pipeline.feedback.benchmark_excess import (
     BarFetch,
+    _as_date,
+    _is_real,
     compute_market_excess_for_row,
+    stored_pair_is_settled,
 )
+from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, previous_trading_day
 
 logger = logging.getLogger(__name__)
@@ -44,13 +74,21 @@ logger = logging.getLogger(__name__)
 # revisions (a re-mapped sector is a different benchmark).
 OUTCOME_BENCHMARK_VERSION = f"sector-etf-v1-{SECTOR_ETF_MAP_VERSION}"
 
-# The four columns this module writes onto every store parquet.
+# The five columns this module writes onto every store parquet.
+# ``sector_window_exit`` is parquet-only (no Django field; the ingest copies model
+# fields only, the same precedent as ``benchmark_window_exit``).
 SECTOR_EXCESS_COLUMNS = (
     "sector_etf_ticker",
     "sector_etf_window_return",
     "sector_excess_return",
+    "sector_window_exit",
     "outcome_benchmark_version",
 )
+
+# (etf, ladder arrival session, exit session) -> the ETF's window return, or
+# ``None`` when the window could not be computed this run (not retried within
+# the run, same policy as the SPY pass's window cache).
+WindowReturns = dict[tuple[str, dt.date, dt.date], float | None]
 
 
 def _default_bar_fetch(ticker: str, start: dt.datetime, end: dt.datetime) -> list[dict[str, Any]]:
@@ -68,6 +106,10 @@ def compute_sector_excess_for_row(
     exchange: str = DEFAULT_EXCHANGE,
 ) -> tuple[str | None, float | None, float | None]:
     """``(sector_etf_ticker, sector_etf_window_return, sector_excess_return)``.
+
+    The unguarded per-row primitive: no terminal-only gate, no reuse-first, no
+    cache. ``enrich_store_with_sector_excess`` is the only supported entry point
+    for a store; this exists for the row-level tests of the resolution rules.
 
     A row whose sector is unresolvable returns ``(None, None, None)`` — EXCLUDED,
     never benchmarked against SPY (memo §4.2). A resolved sector whose window is
@@ -88,26 +130,45 @@ def compute_sector_excess_for_row(
     return etf, window_return, excess
 
 
-def _memoizing_fetch(fetch: BarFetch) -> BarFetch:
-    """Wrap ``fetch`` so identical ``(ticker, start, end)`` windows fetch once per
-    run. Many candidates share the same sector ETF + arrival/exit window, so one
-    Polygon call serves them all — the benchmark_excess per-window cache
-    generalised to a per-ticker key so distinct sector ETFs never collide."""
-    cache: dict[tuple[str, dt.datetime, dt.datetime], list[dict[str, Any]]] = {}
-
-    def wrapped(ticker: str, start: dt.datetime, end: dt.datetime) -> list[dict[str, Any]]:
-        key = (ticker, start, end)
-        if key not in cache:
-            cache[key] = list(fetch(ticker, start, end))
-        return cache[key]
-
-    return wrapped
-
-
 def _write_atomic(path: Path, df: pd.DataFrame) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     df.to_parquet(tmp)
     os.replace(tmp, path)
+
+
+def _row_is_settled(row: pd.Series, etf: str) -> bool:
+    """The reuse-first gate: the shared pair predicate plus the two facts only
+    this pass knows — the ETF the ticker resolves to today and the map version."""
+    if str(row.get("sector_etf_ticker") or "") != etf:
+        return False
+    if row.get("outcome_benchmark_version") != OUTCOME_BENCHMARK_VERSION:
+        return False
+    return stored_pair_is_settled(
+        row,
+        window_col="sector_etf_window_return",
+        excess_col="sector_excess_return",
+        exit_col="sector_window_exit",
+    )
+
+
+def _cell_equal(a: Any, b: Any) -> bool:
+    if not _is_real(a) and not _is_real(b):
+        return True
+    if not _is_real(a) or not _is_real(b):
+        return False
+    if isinstance(a, float) or isinstance(b, float):
+        try:
+            return abs(float(a) - float(b)) < 1e-12
+        except (TypeError, ValueError):
+            return False
+    return a == b
+
+
+def _column_changed(df: pd.DataFrame, name: str, values: list[Any]) -> bool:
+    if name not in df.columns:
+        return True
+    current = df[name].tolist()
+    return any(not _cell_equal(c, n) for c, n in zip(current, values, strict=True))
 
 
 def _enrich_one_file(
@@ -117,45 +178,91 @@ def _enrich_one_file(
     last_closed_session: dt.date,
     exchange: str,
     deadline: Any,
-) -> tuple[int, bool]:
-    """Enrich one store parquet in place; return (rows_enriched, stopped_early).
+    window_returns: WindowReturns,
+) -> tuple[int, int, int, bool]:
+    """Enrich one store parquet in place.
 
-    A read error skips the file ``(0, False)``. A deadline trip mid-file leaves
-    the parquet UNTOUCHED and reports ``stopped_early=True`` so its rows retry
-    next run — the in-memory enriched count up to the trip is still returned to
-    match the pre-refactor running total.
+    Returns ``(n_enriched, n_reused, n_fetched, stopped_early)``. A read error
+    skips the file. A deadline trip mid-file leaves the parquet UNTOUCHED and
+    reports ``stopped_early=True``; the caller must not count its rows. The file
+    is rewritten only when a column would actually change.
     """
     try:
         df = pd.read_parquet(path)
     except (OSError, ValueError) as exc:
         logger.warning("sector-excess: bad store parquet %s — %s; skipping.", path, exc)
-        return 0, False
+        return 0, 0, 0, False
 
     etf_col: list[str | None] = []
     wret_col: list[float | None] = []
     excess_col: list[float | None] = []
-    n_enriched = 0
+    exit_col: list[str | None] = []
+    n_enriched = n_reused = n_fetched = 0
     for _, row in df.iterrows():
         if deadline is not None and deadline.should_stop():
-            return n_enriched, True
-        etf, wret, excess = compute_sector_excess_for_row(
-            dict(row),
-            bar_fetch=fetch,
-            last_closed_session=last_closed_session,
-            exchange=exchange,
-        )
+            return 0, 0, 0, True
+        ticker = row.get("ticker")
+        etf = sector_etf_for_ticker(str(ticker)) if ticker else None
+        matured = _as_date(row.get("matured_at"))
+        if etf is None or matured is None:
+            # Unresolvable sector, or an ongoing row: no pair, no fetch.
+            etf_col.append(etf)
+            wret_col.append(None)
+            excess_col.append(None)
+            exit_col.append(None)
+            continue
+        brief_date = _as_date(row.get("brief_date"))
+        arrival = ladder_arrival_session(brief_date, exchange) if brief_date is not None else None
+        key = (etf, arrival, matured) if arrival is not None else None
+        if _row_is_settled(row, etf):
+            wret = float(row["sector_etf_window_return"])
+            excess = float(row["sector_excess_return"])
+            n_reused += 1
+            n_enriched += 1
+            if key is not None:
+                window_returns.setdefault(key, wret)
+        else:
+            forward = row.get("forward_return")
+            n_fetched += 1
+            if not _is_real(forward):
+                # No candidate leg: nothing to compute and NOTHING to cache — a
+                # None written here would deny every sibling of this window a
+                # fetch for the rest of the run (review finding on #1435).
+                wret, excess = None, None
+            elif key is not None and key in window_returns:
+                wret = window_returns[key]
+                excess = float(forward) - wret if wret is not None else None
+            else:
+                wret, excess = compute_market_excess_for_row(
+                    dict(row),
+                    bar_fetch=fetch,
+                    last_closed_session=last_closed_session,
+                    benchmark_ticker=etf,
+                    exchange=exchange,
+                )
+                if key is not None:
+                    # A failed fetch caches None on purpose: one attempt per
+                    # window per run, the SPY pass's policy; it is retried next run.
+                    window_returns[key] = wret
+            if excess is not None:
+                n_enriched += 1
         etf_col.append(etf)
         wret_col.append(wret)
         excess_col.append(excess)
-        if excess is not None:
-            n_enriched += 1
+        exit_col.append(matured.isoformat() if wret is not None else None)
 
-    df["sector_etf_ticker"] = etf_col
-    df["sector_etf_window_return"] = wret_col
-    df["sector_excess_return"] = excess_col
-    df["outcome_benchmark_version"] = OUTCOME_BENCHMARK_VERSION
-    _write_atomic(path, df)
-    return n_enriched, False
+    new_columns: dict[str, list[Any]] = {
+        "sector_etf_ticker": etf_col,
+        "sector_etf_window_return": wret_col,
+        "sector_excess_return": excess_col,
+        "sector_window_exit": exit_col,
+        "outcome_benchmark_version": [OUTCOME_BENCHMARK_VERSION] * len(df),
+    }
+    if any(_column_changed(df, name, values) for name, values in new_columns.items()):
+        for name, values in new_columns.items():
+            df[name] = values
+        _write_atomic(path, df)
+    return n_enriched, n_reused, n_fetched, False
 
 
 def enrich_store_with_sector_excess(
@@ -168,31 +275,46 @@ def enrich_store_with_sector_excess(
 ) -> int:
     """Add / refresh the sector-excess columns on every store parquet.
 
-    Mirrors ``enrich_store_with_benchmark_excess`` but resolves a PER-ROW sector
-    ETF benchmark. Returns the number of rows that got a non-null
-    ``sector_excess_return``. Deadline handling matches benchmark-excess: a trip
-    mid-file leaves that parquet untouched so unprocessed rows retry next run.
+    Mirrors ``enrich_store_with_benchmark_excess``: newest-first, reuse-first,
+    a deadline trip mid-file leaves that parquet untouched and stops the sweep
+    (the deadline latches, so later files would only be opened to skip). Returns
+    the number of PERSISTED rows carrying a non-null ``sector_excess_return``.
     """
     store = Path(store_dir)
     if not store.exists():
+        logger.info("sector-excess: enriched 0 (reused 0, fetched 0, stopped_early=False)")
         return 0
-    fetch = _memoizing_fetch(bar_fetch or _default_bar_fetch)
+    fetch = bar_fetch or _default_bar_fetch
     now = now or dt.datetime.now(dt.UTC)
     last_closed_session = previous_trading_day(now.date(), exchange)
-    n_enriched = 0
+    window_returns: WindowReturns = {}
+    n_enriched = n_reused = n_fetched = 0
+    stopped_early = False
 
-    for path in sorted(store.glob("*.parquet")):
-        delta, stopped = _enrich_one_file(
+    for path in sorted(store.glob("*.parquet"), reverse=True):
+        delta, reused, fetched, stopped = _enrich_one_file(
             path,
             fetch=fetch,
             last_closed_session=last_closed_session,
             exchange=exchange,
             deadline=deadline,
+            window_returns=window_returns,
         )
-        n_enriched += delta
         if stopped:
+            # Nothing from this file was persisted, so nothing from it is counted.
+            stopped_early = True
             break
+        n_enriched += delta
+        n_reused += reused
+        n_fetched += fetched
 
+    logger.info(
+        "sector-excess: enriched %d (reused %d, fetched %d, stopped_early=%s)",
+        n_enriched,
+        n_reused,
+        n_fetched,
+        stopped_early,
+    )
     return n_enriched
 
 
