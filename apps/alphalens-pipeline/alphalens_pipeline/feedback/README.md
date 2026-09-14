@@ -214,8 +214,12 @@ value as an incremental night (#1444; a `SPLIT_INVALIDATED` quarantine keeps the
 raw replay value as telemetry and gets no excess pair on either leg, #1452) — or to the last closed session while ongoing; "independent of any ladder fill" (`ladder_replay.py::_forward_return`
 is the engine's replay-horizon mark, which the monitor re-anchors).
 `market_excess_return` subtracts the same-window SPY leg (`benchmark_excess.py`),
-which records the exit session it was computed over in `benchmark_window_exit`
-and is reused only while that still equals `matured_at`. The sector leg
+which ends at the SAME print as the candidate leg — the official close of the exit
+session, read from the monitor's grouped-daily cache (#1445; until then it was the
+last after-hours minute bar) — anchored on the same 30-minute arrival VWAP (one
+minute fetch per arrival session). It records the exit session it was computed over
+in `benchmark_window_exit` and the convention in `benchmark_leg_version`, and is
+reused only while both still match. The sector leg
 (`sector_excess.py`, the candidate's own SPDR ETF over the same window) is computed for
 TERMINAL rows only, settles the same way (`sector_window_exit`, plus the ETF and the
 SIC→ETF map version must still match), and sweeps newest-first (#1435); an ongoing row

@@ -36,6 +36,19 @@ def _bars_factory(reference: float, last_close: float, *, counter: list | None =
     return fetch
 
 
+def _grouped(closes: dict):
+    """A grouped-daily stub: session -> {TICKER: {"c": close}}; empty for unknown sessions."""
+    return lambda session: {t: {"c": c} for t, c in closes.get(session, {}).items()}
+
+
+_ETFS = ("XLK", "XLE")
+
+
+def _etf_closes(close: float):
+    """Grouped-daily stub: every sector ETF's official close is ``close`` on EVERY session."""
+    return lambda _session: {etf: {"c": close} for etf in _ETFS}
+
+
 def _row(
     ticker="NVDA",
     *,
@@ -59,7 +72,10 @@ class TestComputeSectorExcessForRow(unittest.TestCase):
         fetch = _bars_factory(100.0, 110.0)
         with patch.object(sector_excess, "sector_etf_for_ticker", return_value="XLK"):
             etf, wret, excess = sector_excess.compute_sector_excess_for_row(
-                _row(), bar_fetch=fetch, last_closed_session=_ASOF_LAST_CLOSED
+                _row(),
+                bar_fetch=fetch,
+                exit_close_of=lambda _t, _s: 110.0,
+                last_closed_session=_ASOF_LAST_CLOSED,
             )
 
         self.assertEqual(etf, "XLK")
@@ -72,7 +88,10 @@ class TestComputeSectorExcessForRow(unittest.TestCase):
         fetch = _bars_factory(100.0, 110.0)
         with patch.object(sector_excess, "sector_etf_for_ticker", return_value=None):
             result = sector_excess.compute_sector_excess_for_row(
-                _row("ZZZZ"), bar_fetch=fetch, last_closed_session=_ASOF_LAST_CLOSED
+                _row("ZZZZ"),
+                bar_fetch=fetch,
+                exit_close_of=lambda _t, _s: 110.0,
+                last_closed_session=_ASOF_LAST_CLOSED,
             )
 
         self.assertEqual(result, (None, None, None))
@@ -83,7 +102,10 @@ class TestComputeSectorExcessForRow(unittest.TestCase):
         fetch = _bars_factory(100.0, 110.0)
         with patch.object(sector_excess, "sector_etf_for_ticker", return_value="XLK"):
             etf, wret, excess = sector_excess.compute_sector_excess_for_row(
-                _row(forward_return=None), bar_fetch=fetch, last_closed_session=_ASOF_LAST_CLOSED
+                _row(forward_return=None),
+                bar_fetch=fetch,
+                exit_close_of=lambda _t, _s: 110.0,
+                last_closed_session=_ASOF_LAST_CLOSED,
             )
 
         self.assertEqual(etf, "XLK")
@@ -97,7 +119,10 @@ class TestComputeSectorExcessForRow(unittest.TestCase):
         fetch = _bars_factory(100.0, 999.0)  # would give a huge excess if used
         with patch.object(sector_excess, "sector_etf_for_ticker", return_value=None):
             _etf, _wret, excess = sector_excess.compute_sector_excess_for_row(
-                _row("ZZZZ"), bar_fetch=fetch, last_closed_session=_ASOF_LAST_CLOSED
+                _row("ZZZZ"),
+                bar_fetch=fetch,
+                exit_close_of=lambda _t, _s: 999.0,
+                last_closed_session=_ASOF_LAST_CLOSED,
             )
 
         self.assertIsNone(excess)
@@ -119,7 +144,10 @@ class TestEnrichStoreSectorExcess(unittest.TestCase):
             fetch = _bars_factory(100.0, 110.0)
             with patch.object(sector_excess, "sector_etf_for_ticker", side_effect=self._sector_map):
                 n = sector_excess.enrich_store_with_sector_excess(
-                    root, bar_fetch=fetch, now=dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+                    root,
+                    bar_fetch=fetch,
+                    grouped_fetch=_etf_closes(110.0),
+                    now=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
                 )
 
             out = pd.read_parquet(root / "2026-06-11.parquet")
@@ -146,7 +174,10 @@ class TestEnrichStoreSectorExcess(unittest.TestCase):
             fetch = _bars_factory(100.0, 110.0, counter=calls)
             with patch.object(sector_excess, "sector_etf_for_ticker", side_effect=self._sector_map):
                 sector_excess.enrich_store_with_sector_excess(
-                    root, bar_fetch=fetch, now=dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+                    root,
+                    bar_fetch=fetch,
+                    grouped_fetch=_etf_closes(110.0),
+                    now=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
                 )
 
             self.assertEqual(calls, ["XLK"])  # memoized: one fetch for the shared window
@@ -160,13 +191,19 @@ class TestEnrichStoreSectorExcess(unittest.TestCase):
             fetch = _bars_factory(100.0, 110.0)
             with patch.object(sector_excess, "sector_etf_for_ticker", side_effect=self._sector_map):
                 sector_excess.enrich_store_with_sector_excess(
-                    root, bar_fetch=fetch, now=dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+                    root,
+                    bar_fetch=fetch,
+                    grouped_fetch=_etf_closes(110.0),
+                    now=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
                 )
                 first = pd.read_parquet(root / "2026-06-11.parquet")[
                     "sector_excess_return"
                 ].tolist()
                 sector_excess.enrich_store_with_sector_excess(
-                    root, bar_fetch=fetch, now=dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+                    root,
+                    bar_fetch=fetch,
+                    grouped_fetch=_etf_closes(110.0),
+                    now=dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
                 )
                 second = pd.read_parquet(root / "2026-06-11.parquet")[
                     "sector_excess_return"
@@ -220,13 +257,18 @@ class TestSectorReuseFirst(unittest.TestCase):
         resolver,
         deadline=None,
         path="2026-06-11.parquet",
+        close=120.0,
     ):
         from alphalens_pipeline.feedback import sector_excess
 
         pd.DataFrame(rows).to_parquet(root / path, index=False)
         with patch.object(sector_excess, "sector_etf_for_ticker", side_effect=resolver):
             return sector_excess.enrich_store_with_sector_excess(
-                root, bar_fetch=fetch, now=self._NOW, deadline=deadline
+                root,
+                bar_fetch=fetch,
+                grouped_fetch=_etf_closes(close),
+                now=self._NOW,
+                deadline=deadline,
             )
 
     @staticmethod
@@ -359,6 +401,7 @@ class TestSectorReuseFirst(unittest.TestCase):
                 [no_leg, sibling],
                 fetch=_bars_factory(100.0, 110.0, counter=calls),
                 resolver=self._xlk,
+                close=110.0,
             )
             out = pd.read_parquet(root / "2026-06-11.parquet").set_index("ticker")
             self.assertEqual(calls, ["XLK"])
@@ -380,7 +423,7 @@ class TestSectorReuseFirst(unittest.TestCase):
 
             row = _row("NVDA")
             row["source"] = "insider_cluster"
-            self._run(root, [row], fetch=fetch, resolver=self._xlk)
+            self._run(root, [row], fetch=fetch, resolver=self._xlk, close=110.0)
             expected = session_open_utc(ladder_arrival_session(dt.date(2026, 6, 11)), "XNYS")
             self.assertEqual(starts, [expected])
 
@@ -397,7 +440,11 @@ class TestSectorSweepOrderAndWrites(unittest.TestCase):
 
         with patch.object(sector_excess, "sector_etf_for_ticker", side_effect=self._xlk):
             return sector_excess.enrich_store_with_sector_excess(
-                root, bar_fetch=fetch, now=self._NOW, deadline=deadline
+                root,
+                bar_fetch=fetch,
+                grouped_fetch=_etf_closes(110.0),
+                now=self._NOW,
+                deadline=deadline,
             )
 
     def test_newest_file_is_written_before_the_deadline_reaches_the_older_one(self):
@@ -492,7 +539,10 @@ class TestSplitInvalidatedRowsGetNoSectorPair(unittest.TestCase):
             pd.DataFrame(rows).to_parquet(root / self._PATH, index=False)
         with patch.object(sector_excess, "sector_etf_for_ticker", side_effect=self._xlk):
             return sector_excess.enrich_store_with_sector_excess(
-                root, bar_fetch=_bars_factory(100.0, 110.0, counter=counter), now=self._NOW
+                root,
+                bar_fetch=_bars_factory(100.0, 110.0, counter=counter),
+                grouped_fetch=_etf_closes(110.0),
+                now=self._NOW,
             )
 
     def test_a_settled_quarantined_pair_is_nulled_not_reused(self):
@@ -561,6 +611,81 @@ class TestSplitInvalidatedRowsGetNoSectorPair(unittest.TestCase):
                 ),
                 logs.output,
             )
+
+
+class TestOfficialCloseSectorLeg(unittest.TestCase):
+    """The sector leg ends at the ETF's OFFICIAL close of the exit session (#1445):
+    one anchor fetch per (ETF, arrival), the close from the grouped cache, and a
+    v1 (last-bar) pair is recomputed under the v2 poolability key."""
+
+    _NOW = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
+    _PATH = "2026-06-11.parquet"
+
+    @staticmethod
+    def _xlk(_ticker):
+        return "XLK"
+
+    def _run(self, root: Path, rows: list[dict], *, closes: dict, counter: list[str]):
+        from alphalens_pipeline.feedback import sector_excess
+
+        pd.DataFrame(rows).to_parquet(root / self._PATH, index=False)
+        with patch.object(sector_excess, "sector_etf_for_ticker", side_effect=self._xlk):
+            return sector_excess.enrich_store_with_sector_excess(
+                root,
+                bar_fetch=_bars_factory(100.0, 999.0, counter=counter),
+                grouped_fetch=_grouped(closes),
+                now=self._NOW,
+            )
+
+    def test_exit_leg_is_the_official_close_and_the_version_is_v2(self):
+        from alphalens_pipeline.feedback.sector_excess import OUTCOME_BENCHMARK_VERSION
+
+        self.assertTrue(OUTCOME_BENCHMARK_VERSION.startswith("sector-etf-v2-"))
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            self._run(
+                root, [_row("NVDA")], closes={dt.date(2026, 6, 25): {"XLK": 110.0}}, counter=calls
+            )
+            out = pd.read_parquet(root / self._PATH).iloc[0]
+            self.assertEqual(calls, ["XLK"])
+            self.assertAlmostEqual(out["sector_etf_window_return"], 0.10, places=9)
+            self.assertAlmostEqual(out["sector_excess_return"], 0.05, places=9)
+            self.assertEqual(out["outcome_benchmark_version"], OUTCOME_BENCHMARK_VERSION)
+
+    def test_a_v1_pair_is_recomputed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            v1 = _settled_row(outcome_benchmark_version="sector-etf-v1-sic2-spdr-v1")
+            self._run(root, [v1], closes={dt.date(2026, 6, 25): {"XLK": 120.0}}, counter=calls)
+            out = pd.read_parquet(root / self._PATH).iloc[0]
+            self.assertEqual(calls, ["XLK"])
+            self.assertAlmostEqual(out["sector_etf_window_return"], 0.20, places=9)
+
+    def test_rows_sharing_an_anchor_with_different_exits_pay_one_fetch(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            calls: list[str] = []
+            self._run(
+                root,
+                [_row("NVDA", matured_at="2026-06-25"), _row("AAPL", matured_at="2026-06-26")],
+                closes={dt.date(2026, 6, 25): {"XLK": 110.0}, dt.date(2026, 6, 26): {"XLK": 120.0}},
+                counter=calls,
+            )
+            df = pd.read_parquet(root / self._PATH).set_index("ticker")
+            self.assertEqual(calls, ["XLK"])
+            self.assertAlmostEqual(df.loc["NVDA", "sector_etf_window_return"], 0.10, places=9)
+            self.assertAlmostEqual(df.loc["AAPL", "sector_etf_window_return"], 0.20, places=9)
+
+    def test_missing_official_close_leaves_the_pair_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._run(root, [_row("NVDA")], closes={}, counter=[])
+            out = pd.read_parquet(root / self._PATH).iloc[0]
+            self.assertEqual(out["sector_etf_ticker"], "XLK")
+            self.assertTrue(pd.isna(out["sector_excess_return"]))
+            self.assertTrue(pd.isna(out["sector_window_exit"]))
 
 
 if __name__ == "__main__":

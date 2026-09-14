@@ -25,30 +25,35 @@ What it computes
 For every row that carries a non-null ``forward_return`` and a recoverable
 ``[arrival_session, exit_session]`` window:
 
-* ``benchmark_window_return`` — the market index (SPY) raw close-to-close return
-  over the SAME window, computed with the SAME arrival-window-VWAP reference
-  anchor and exit print as ``forward_return`` (see
-  :func:`alphalens_pipeline.feedback.ladder_replay._forward_return`). The exit
-  print is the LAST AVAILABLE MINUTE BAR, not the 16:00 ET cash close: the window
-  runs ``_HORIZON_SESSION_SPAN_MIN`` (480) minutes past the exit-session open and
-  Polygon minute aggs include after-hours, so the last bar is typically an
-  ~21:30 UTC after-hours print. KNOWN LIMITATION (#1445): the candidate leg is a
-  regular-hours quantity (the replay is RTH-filtered, and a terminal row's stored
-  ``forward_return`` is the OFFICIAL 16:00 close of its ``matured_at`` session,
-  #1444), so the two legs end at different prints of the same day. The
-  after-hours move of SPY is small but not zero; making the SPY exit print the
-  official close is a deliberate whole-store recompute, tracked there.
+* ``benchmark_window_return`` — the market index (SPY) raw return over the SAME
+  window as ``forward_return``, with the SAME two prints (#1445): the reference
+  is the arrival-session opening-window VWAP (first ``ARRIVAL_VWAP_WINDOW_MIN``
+  minutes of minute bars, the candidate's own anchor), and the exit print is the
+  OFFICIAL close of the exit session read from the monitor's grouped-daily cache
+  (``population_ladders/grouped/<session>.parquet``, disk-first, one grouped
+  call per session the cache lacks) — the same file and field the monitor uses
+  for a terminal row's ``forward_return`` since #1444. The minute fetch therefore
+  covers only the 30-minute arrival window, once per (ticker, arrival session)
+  per run, never the whole holding window. Until #1445 the exit print was the
+  last available minute bar, an after-hours print up to 17:30 ET, so the two
+  legs ended at different prints of the same day.
 * ``benchmark_window_exit`` — the ISO date of the exit session the pair was
   computed over. Reuse-first (:func:`_has_consistent_stored_pair`) accepts a
   stored pair only while this still equals the row's ``matured_at``: the
   2026-09-11 rebuild computed every window to the rebuild night, and once
   ``matured_at`` was repaired the pairs stayed arithmetically consistent and were
   reused forever (#1444). Consistency alone cannot see a moved window.
+* ``benchmark_leg_version`` — the convention the pair was computed under
+  (``BENCHMARK_LEG_VERSION``). Reuse-first also requires equality, so a change of
+  convention recomputes the whole store through the ordinary nightly gate with
+  no operator step; the sector pass has the same in ``outcome_benchmark_version``.
 * ``market_excess_return`` — ``forward_return − benchmark_window_return``.
 
-Rows whose window is not recoverable, or whose benchmark fetch returns no bars,
-get ``None`` for both columns (never a fudged value — memo §4: "do NOT silently
-fudge"). ``forward_return`` itself is left untouched as the gross/raw leg. A
+Rows whose window is not recoverable, whose anchor fetch returns no bars, or
+whose exit session has no official close on record get ``None`` for both
+columns (never a fudged value — memo §4: "do NOT silently fudge"; a missing
+close is retried next run, never replaced by a minute bar).
+``forward_return`` itself is left untouched as the gross/raw leg. A
 ``SPLIT_INVALIDATED`` quarantine (:func:`row_is_quarantined`) gets no pair at
 all, and a pair it once carried is nulled rather than reused (#1452): its
 ``forward_return`` is raw replay telemetry of what tripped the corporate-action
@@ -73,8 +78,15 @@ import pandas as pd
 from alphalens_pipeline.feedback.bar_window import ARRIVAL_VWAP_WINDOW_MIN, _window_vwap
 from alphalens_pipeline.feedback.corporate_actions import SPLIT_INVALIDATED_CLASSIFICATION
 from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
+from alphalens_pipeline.feedback.population_ladder_monitor import (
+    GroupedFetch,
+    _default_grouped_fetch,
+    _grouped_close,
+    _prefetch_grouped_daily,
+)
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
+    previous_trading_day,
     session_open_utc,
 )
 
@@ -86,18 +98,34 @@ logger = logging.getLogger(__name__)
 # across rows and easy to retune.
 DEFAULT_BENCHMARK_TICKER = "SPY"
 
-# Minutes of the horizon-end session to include so the benchmark window covers
-# the full final session (open → close, half-days too). Mirrors the monitor's
-# ``_HORIZON_SESSION_SPAN_MIN`` so the benchmark window matches the candidate's.
-_HORIZON_SESSION_SPAN_MIN = 480
+# The leg convention a stored pair was computed under; a pair carrying another
+# value (or none) is a gap and is recomputed. v2 = arrival VWAP anchor + OFFICIAL
+# close of the exit session (#1445); v1 (never stamped) was the last minute bar.
+BENCHMARK_LEG_VERSION = "spy-v2-official-close"
 
 # The columns this module writes. Listed once so the ingest side and the
 # carry-forward back-fill can reference the same names.
-BENCHMARK_COLUMNS = ("benchmark_window_return", "market_excess_return", "benchmark_window_exit")
+BENCHMARK_COLUMNS = (
+    "benchmark_window_return",
+    "market_excess_return",
+    "benchmark_window_exit",
+    "benchmark_leg_version",
+)
 
 # A (ticker, window start, window end) → list of Polygon agg bars. Same shape as
 # ``bar_window.BarFetch`` so the production default + test stubs are shared.
 BarFetch = Callable[[str, dt.datetime, dt.datetime], Sequence[dict[str, Any]]]
+
+# (ticker, session) → the OFFICIAL close of that session, or None when the
+# session has no close on record for the ticker. Built per run from the
+# prefetched grouped-daily maps (:func:`_exit_close_lookup`).
+ExitCloseOf = Callable[[str, dt.date], float | None]
+
+# (ticker, arrival session) → the arrival opening-window VWAP reference, or None
+# when the anchor could not be computed this run (cached so it is not retried
+# within the run; retried next run). The exit close is free (on disk), so the
+# anchor is the only thing worth caching.
+AnchorCache = dict[tuple[str, dt.date], float | None]
 
 
 def _default_bar_fetch(
@@ -145,81 +173,158 @@ def _as_date(value: Any) -> dt.date | None:
         return None
 
 
-def _benchmark_window_return(
-    bars: Sequence[dict[str, Any]],
-    *,
-    arrival_open: dt.datetime,
+def _arrival_reference(
+    bars: Sequence[dict[str, Any]], *, arrival_open: dt.datetime
 ) -> float | None:
-    """Raw close-to-close benchmark return over ``bars``.
-
-    Uses the SAME anchor convention as the candidate's ``forward_return``: the
-    reference is the arrival opening-window VWAP (first ``ARRIVAL_VWAP_WINDOW_MIN``
-    minutes), the numerator is the last bar's close. Returns ``None`` when the
-    window has no bars or a zero reference.
-    """
+    """The benchmark's anchor: the arrival opening-window VWAP over ``bars``
+    (first ``ARRIVAL_VWAP_WINDOW_MIN`` minutes, half-open) — the SAME reference
+    convention as the candidate's ``forward_return``. ``None`` when no bar falls
+    in the window or the VWAP is not a positive number."""
     if not bars:
         return None
     arrival_window_end = arrival_open + dt.timedelta(minutes=ARRIVAL_VWAP_WINDOW_MIN)
     reference = _window_vwap(bars, arrival_open, arrival_window_end)
-    if reference is None or reference == 0:
+    if reference is None or reference <= 0:
         return None
-    last_close = bars[-1].get("c")
-    if last_close is None:
+    return reference
+
+
+def _window_return(reference: float | None, exit_close: float | None) -> float | None:
+    """``(exit_close − reference) / reference``; ``None`` unless both are positive
+    numbers (a zero close from the grouped cache is ``0.0``, real and wrong)."""
+    if not _is_real(reference) or not _is_real(exit_close):
         return None
-    return (float(last_close) - reference) / reference
+    if reference <= 0 or exit_close <= 0:
+        return None
+    return (float(exit_close) - float(reference)) / float(reference)
+
+
+def _anchor_from_pair(window: float | None, exit_close: float | None) -> float | None:
+    """Recover the reference a settled pair was computed against
+    (``close / (1 + window)``), so a reused row can seed the anchor cache for a
+    gap sibling with the same arrival. ``None`` unless the arithmetic is safe."""
+    if not _is_real(window) or not _is_real(exit_close):
+        return None
+    if exit_close <= 0 or 1.0 + float(window) <= 0:
+        return None
+    return float(exit_close) / (1.0 + float(window))
+
+
+def _fetch_arrival_reference(
+    fetch: BarFetch, ticker: str, arrival_session: dt.date, exchange: str
+) -> float | None:
+    """One minute fetch over the arrival VWAP window only, reduced to the anchor."""
+    arrival_open = session_open_utc(arrival_session, exchange)
+    window_end = arrival_open + dt.timedelta(minutes=ARRIVAL_VWAP_WINDOW_MIN)
+    try:
+        bars = list(fetch(ticker, arrival_open, window_end))
+    except Exception as exc:
+        logger.warning(
+            "benchmark-excess: anchor fetch failed for %s on %s — %s; leaving None.",
+            ticker,
+            arrival_session.isoformat(),
+            exc,
+        )
+        return None
+    return _arrival_reference(bars, arrival_open=arrival_open)
+
+
+def _official_close(exit_close_of: ExitCloseOf, ticker: str, session: dt.date) -> float | None:
+    close = exit_close_of(ticker, session)
+    if close is None:
+        logger.warning(
+            "benchmark-excess: no official close for %s on %s; leaving None (retried next run).",
+            ticker,
+            session.isoformat(),
+        )
+    return close
+
+
+def _window_bounds(
+    row: dict[str, Any], *, last_closed_session: dt.date, exchange: str
+) -> tuple[dt.date, dt.date] | None:
+    """``(arrival_session, exit_session)`` for a row with a real ``forward_return``
+    and a recoverable, non-degenerate window; ``None`` otherwise."""
+    forward_return = row.get("forward_return")
+    if not _is_real(forward_return):
+        return None
+    brief_date = _as_date(row.get("brief_date"))
+    if brief_date is None:
+        return None
+    exit_session = _recover_exit_session(row, last_closed_session=last_closed_session)
+    if exit_session is None:
+        return None
+    arrival_session = ladder_arrival_session(brief_date, exchange)
+    if exit_session < arrival_session:
+        # A degenerate window (exit before arrival) — not recoverable.
+        return None
+    return arrival_session, exit_session
 
 
 def compute_market_excess_for_row(
     row: dict[str, Any],
     *,
     bar_fetch: BarFetch,
+    exit_close_of: ExitCloseOf,
     last_closed_session: dt.date,
     benchmark_ticker: str = DEFAULT_BENCHMARK_TICKER,
     exchange: str = DEFAULT_EXCHANGE,
 ) -> tuple[float | None, float | None]:
     """``(benchmark_window_return, market_excess_return)`` for one store row.
 
-    Returns ``(None, None)`` when the candidate has no ``forward_return``, the
-    window is not recoverable, or the benchmark fetch yields no bars — never a
-    fudged value.
+    The anchor is one minute fetch over the arrival VWAP window; the exit print
+    is ``exit_close_of(benchmark_ticker, exit_session)``, the official close of
+    the exit session. Returns ``(None, None)`` when the candidate has no
+    ``forward_return``, the window is not recoverable, the anchor fetch yields no
+    bars, or the exit session has no official close — never a fudged value.
     """
-    forward_return = row.get("forward_return")
-    if forward_return is None or (isinstance(forward_return, float) and pd.isna(forward_return)):
+    bounds = _window_bounds(row, last_closed_session=last_closed_session, exchange=exchange)
+    if bounds is None:
         return None, None
-
-    brief_date = _as_date(row.get("brief_date"))
-    if brief_date is None:
+    arrival_session, exit_session = bounds
+    reference = _fetch_arrival_reference(bar_fetch, benchmark_ticker, arrival_session, exchange)
+    if reference is None:
         return None, None
-    exit_session = _recover_exit_session(row, last_closed_session=last_closed_session)
-    if exit_session is None:
-        return None, None
-
-    arrival_session = ladder_arrival_session(brief_date, exchange)
-    if exit_session < arrival_session:
-        # A degenerate window (exit before arrival) — not recoverable.
-        return None, None
-
-    arrival_open = session_open_utc(arrival_session, exchange)
-    horizon_end = session_open_utc(exit_session, exchange) + dt.timedelta(
-        minutes=_HORIZON_SESSION_SPAN_MIN
+    benchmark_return = _window_return(
+        reference, _official_close(exit_close_of, benchmark_ticker, exit_session)
     )
-    try:
-        bars = list(bar_fetch(benchmark_ticker, arrival_open, horizon_end))
-    except Exception as exc:
-        logger.warning(
-            "benchmark-excess: fetch failed for %s window [%s, %s] — %s; leaving None.",
-            benchmark_ticker,
-            arrival_session.isoformat(),
-            exit_session.isoformat(),
-            exc,
-        )
-        return None, None
-
-    benchmark_return = _benchmark_window_return(bars, arrival_open=arrival_open)
     if benchmark_return is None:
         return None, None
-    excess = float(forward_return) - benchmark_return
-    return benchmark_return, excess
+    return benchmark_return, float(row["forward_return"]) - benchmark_return
+
+
+def _exit_close_lookup(
+    store_dir: Path,
+    sessions: set[dt.date],
+    grouped_fetch: GroupedFetch,
+    grouped_memo: dict[dt.date, dict[str, dict[str, Any]] | None],
+    exchange: str,
+) -> ExitCloseOf:
+    """Prefetch the grouped-daily maps for ``sessions`` (disk-first, one grouped
+    call per session the cache lacks, memoised in ``grouped_memo`` across files
+    so a session is read once per run) and return the official-close lookup."""
+    missing = sorted(s for s in sessions if s not in grouped_memo)
+    if missing:
+        grouped_memo.update(_prefetch_grouped_daily(store_dir, missing, grouped_fetch, exchange))
+
+    def _close(ticker: str, session: dt.date) -> float | None:
+        return _grouped_close(grouped_memo.get(session), ticker)
+
+    return _close
+
+
+def _frame_exit_sessions(
+    df: pd.DataFrame, *, last_closed_session: dt.date, exchange: str
+) -> set[dt.date]:
+    """The exit sessions the rows of ``df`` will read an official close for."""
+    sessions: set[dt.date] = set()
+    for _, row in df.iterrows():
+        bounds = _window_bounds(
+            dict(row), last_closed_session=last_closed_session, exchange=exchange
+        )
+        if bounds is not None:
+            sessions.add(bounds[1])
+    return sessions
 
 
 def _enrich_frame_rows(
@@ -229,7 +334,8 @@ def _enrich_frame_rows(
     last_closed_session: dt.date,
     benchmark_ticker: str,
     exchange: str,
-    window_cache: dict[tuple[dt.date, dt.date], float | None],
+    anchor_cache: AnchorCache,
+    exit_close_of: ExitCloseOf,
     deadline: Any,
 ) -> tuple[list[float | None], list[float | None], list[str | None], int, bool, int, int]:
     """Compute the two benchmark columns for one frame.
@@ -280,10 +386,16 @@ def _enrich_frame_rows(
             exit_col.append(exit_session.isoformat() if exit_session is not None else None)
             n_enriched += 1
             n_reused += 1
-            # Seed the per-window cache so a GAP sibling in the same
-            # (arrival, exit) window is served free instead of paying its own
-            # fetch (M1).
-            _seed_window_cache_from_reused(row, window_cache, last_closed_session, exchange)
+            # Seed the anchor cache so a GAP sibling with the same arrival is
+            # served free instead of paying its own fetch (M1).
+            _seed_anchor_cache_from_reused(
+                row,
+                anchor_cache,
+                exit_close_of=exit_close_of,
+                last_closed_session=last_closed_session,
+                benchmark_ticker=benchmark_ticker,
+                exchange=exchange,
+            )
             continue
         bench, excess = _row_excess_cached(
             dict(row),
@@ -291,7 +403,8 @@ def _enrich_frame_rows(
             last_closed_session=last_closed_session,
             benchmark_ticker=benchmark_ticker,
             exchange=exchange,
-            window_cache=window_cache,
+            anchor_cache=anchor_cache,
+            exit_close_of=exit_close_of,
         )
         bench_col.append(bench)
         excess_col.append(excess)
@@ -337,7 +450,12 @@ def _has_consistent_stored_pair(row: pd.Series) -> bool:
     The pair must also have been computed over THIS ``matured_at``
     (``benchmark_window_exit``, #1444): a pair whose window ended elsewhere can
     be arithmetically consistent and still wrong, and a pair without a recorded
-    window is treated the same way — recomputed, never trusted."""
+    window is treated the same way — recomputed, never trusted. And it must
+    carry the CURRENT leg convention (``benchmark_leg_version``, #1445): a pair
+    computed with another exit print is consistent, correctly stamped, and still
+    a different quantity."""
+    if row.get("benchmark_leg_version") != BENCHMARK_LEG_VERSION:
+        return False
     return stored_pair_is_settled(
         row,
         window_col="benchmark_window_return",
@@ -386,33 +504,37 @@ def stored_pair_is_settled(
     )
 
 
-def _seed_window_cache_from_reused(
+def _seed_anchor_cache_from_reused(
     row: pd.Series,
-    window_cache: dict[tuple[dt.date, dt.date], float | None],
+    anchor_cache: AnchorCache,
+    *,
+    exit_close_of: ExitCloseOf,
     last_closed_session: dt.date,
+    benchmark_ticker: str,
     exchange: str,
 ) -> None:
-    """Best-effort: seed the per-window benchmark cache from a reused row (M1).
+    """Best-effort: seed the anchor cache from a reused row (M1).
 
-    A reused row already carries a settled ``benchmark_window_return`` for its
-    (arrival, exit) window. Seeding the cache lets a GAP sibling sharing the
-    same window (same brief_date + matured_at) be served for free instead of
-    paying its own fetch. Skips silently when the window can't be recovered —
-    this is a pure optimisation, never a correctness requirement.
+    A reused row carries a settled ``benchmark_window_return`` and its exit
+    session's official close is on record, so the reference it was computed
+    against is ``close / (1 + window)`` (exact in floating point for the stored
+    values). Seeding lets a GAP sibling with the same arrival be served for free
+    instead of paying its own anchor fetch. Skips silently when the window or the
+    close cannot be recovered — a pure optimisation, never a correctness
+    requirement; an anchor already in the cache is never overwritten.
     """
-    row_dict = dict(row)
-    brief_date = _as_date(row_dict.get("brief_date"))
-    if brief_date is None:
+    bounds = _window_bounds(dict(row), last_closed_session=last_closed_session, exchange=exchange)
+    if bounds is None:
         return
-    exit_session = _recover_exit_session(row_dict, last_closed_session=last_closed_session)
-    if exit_session is None:
+    arrival_session, exit_session = bounds
+    key = (benchmark_ticker, arrival_session)
+    if key in anchor_cache:
         return
-    arrival_session = ladder_arrival_session(brief_date, exchange)
-    if exit_session < arrival_session:
-        return
-    key = (arrival_session, exit_session)
-    if key not in window_cache:
-        window_cache[key] = float(row["benchmark_window_return"])
+    reference = _anchor_from_pair(
+        row.get("benchmark_window_return"), exit_close_of(benchmark_ticker, exit_session)
+    )
+    if reference is not None:
+        anchor_cache[key] = reference
 
 
 def enrich_store_with_benchmark_excess(
@@ -423,38 +545,36 @@ def enrich_store_with_benchmark_excess(
     benchmark_ticker: str = DEFAULT_BENCHMARK_TICKER,
     exchange: str = DEFAULT_EXCHANGE,
     deadline: Any = None,
+    grouped_fetch: GroupedFetch | None = None,
 ) -> int:
     """Add / refresh the benchmark-excess columns on every store parquet.
 
-    Reads each ``YYYY-MM-DD.parquet`` in ``store_dir``, computes the two
-    benchmark columns per row, and rewrites the frame atomically. Returns the
-    number of rows that got a non-null ``market_excess_return``.
+    Reads each ``YYYY-MM-DD.parquet`` in ``store_dir``, computes the benchmark
+    columns per row, and rewrites the frame atomically. Returns the number of
+    rows that got a non-null ``market_excess_return``.
 
-    The benchmark window per (arrival, exit) is fetched once per distinct window
-    via a small in-run cache so repeated tickers on the same date pay a single
-    Polygon call for the shared index window.
+    The anchor (arrival VWAP) is fetched once per distinct arrival session via a
+    small in-run cache; the exit print is the official close read from the
+    monitor's grouped-daily cache under ``store_dir/grouped`` (disk-first, one
+    ``grouped_fetch`` call per session the cache lacks, memoised across files).
 
     When ``deadline`` is provided and ``deadline.should_stop()`` is True at the
     top of the per-row loop, the row loop breaks early. Rows left unprocessed
     keep their existing (None) values in the store — they are not marked as done
-    and will be retried on the next run. ``deadline`` is typed ``Any`` to avoid a
-    circular import with ``population_ladder_monitor``; callers pass a
-    ``_RunDeadline`` instance.
+    and will be retried on the next run. ``deadline`` is typed ``Any`` (callers
+    pass the monitor's ``_RunDeadline``).
     """
-    from alphalens_pipeline.paper.calendar import previous_trading_day
-
     store = Path(store_dir)
     if not store.exists():
         logger.info("benchmark-excess: enriched 0 (reused 0, fetched 0)")
         return 0
     fetch = bar_fetch or _default_bar_fetch
+    grouped = grouped_fetch or _default_grouped_fetch
     now = now or dt.datetime.now(dt.UTC)
     last_closed_session = previous_trading_day(now.date(), exchange)
 
-    # (arrival_session, exit_session) -> (benchmark_return) cache. The index
-    # window is identical for every candidate sharing the same arrival+exit, so
-    # one fetch serves all of them.
-    window_cache: dict[tuple[dt.date, dt.date], float | None] = {}
+    anchor_cache: AnchorCache = {}
+    grouped_memo: dict[dt.date, dict[str, dict[str, Any]] | None] = {}
     n_enriched = 0
     n_reused_total = 0
     n_fetched_total = 0
@@ -469,6 +589,13 @@ def enrich_store_with_benchmark_excess(
             logger.warning("benchmark-excess: bad store parquet %s — %s; skipping.", path, exc)
             continue
 
+        exit_close_of = _exit_close_lookup(
+            store,
+            _frame_exit_sessions(df, last_closed_session=last_closed_session, exchange=exchange),
+            grouped,
+            grouped_memo,
+            exchange,
+        )
         bench_col, excess_col, exit_col, n_delta, stopped_early, n_reused, n_fetched = (
             _enrich_frame_rows(
                 df,
@@ -476,7 +603,8 @@ def enrich_store_with_benchmark_excess(
                 last_closed_session=last_closed_session,
                 benchmark_ticker=benchmark_ticker,
                 exchange=exchange,
-                window_cache=window_cache,
+                anchor_cache=anchor_cache,
+                exit_close_of=exit_close_of,
                 deadline=deadline,
             )
         )
@@ -506,6 +634,7 @@ def enrich_store_with_benchmark_excess(
         df["benchmark_window_return"] = bench_col
         df["market_excess_return"] = excess_col
         df["benchmark_window_exit"] = exit_col
+        df["benchmark_leg_version"] = [BENCHMARK_LEG_VERSION] * len(df)
         _write_atomic(path, df)
 
     logger.info(
@@ -524,48 +653,32 @@ def _row_excess_cached(
     last_closed_session: dt.date,
     benchmark_ticker: str,
     exchange: str,
-    window_cache: dict[tuple[dt.date, dt.date], float | None],
+    anchor_cache: AnchorCache,
+    exit_close_of: ExitCloseOf,
 ) -> tuple[float | None, float | None]:
-    """``compute_market_excess_for_row`` with a per-window benchmark-return cache."""
-    forward_return = row.get("forward_return")
-    if forward_return is None or (isinstance(forward_return, float) and pd.isna(forward_return)):
-        return None, None
-    brief_date = _as_date(row.get("brief_date"))
-    if brief_date is None:
-        return None, None
-    exit_session = _recover_exit_session(row, last_closed_session=last_closed_session)
-    if exit_session is None:
-        return None, None
-    arrival_session = ladder_arrival_session(brief_date, exchange)
-    if exit_session < arrival_session:
-        return None, None
+    """``compute_market_excess_for_row`` with a per-(ticker, arrival) anchor cache.
 
-    key = (arrival_session, exit_session)
-    if key in window_cache:
-        benchmark_return = window_cache[key]
-    else:
-        arrival_open = session_open_utc(arrival_session, exchange)
-        horizon_end = session_open_utc(exit_session, exchange) + dt.timedelta(
-            minutes=_HORIZON_SESSION_SPAN_MIN
+    A failed anchor fetch caches ``None`` on purpose: one attempt per anchor per
+    run; it is retried next run.
+    """
+    bounds = _window_bounds(row, last_closed_session=last_closed_session, exchange=exchange)
+    if bounds is None:
+        return None, None
+    arrival_session, exit_session = bounds
+    key = (benchmark_ticker, arrival_session)
+    if key not in anchor_cache:
+        anchor_cache[key] = _fetch_arrival_reference(
+            fetch, benchmark_ticker, arrival_session, exchange
         )
-        try:
-            bars = list(fetch(benchmark_ticker, arrival_open, horizon_end))
-        except Exception as exc:
-            logger.warning(
-                "benchmark-excess: fetch failed for %s window [%s, %s] — %s; leaving None.",
-                benchmark_ticker,
-                arrival_session.isoformat(),
-                exit_session.isoformat(),
-                exc,
-            )
-            benchmark_return = None
-        else:
-            benchmark_return = _benchmark_window_return(bars, arrival_open=arrival_open)
-        window_cache[key] = benchmark_return
-
+    reference = anchor_cache[key]
+    if reference is None:
+        return None, None
+    benchmark_return = _window_return(
+        reference, _official_close(exit_close_of, benchmark_ticker, exit_session)
+    )
     if benchmark_return is None:
         return None, None
-    return benchmark_return, float(forward_return) - benchmark_return
+    return benchmark_return, float(row["forward_return"]) - benchmark_return
 
 
 def _write_atomic(path: Path, df: pd.DataFrame) -> None:
@@ -576,6 +689,7 @@ def _write_atomic(path: Path, df: pd.DataFrame) -> None:
 
 __all__ = [
     "BENCHMARK_COLUMNS",
+    "BENCHMARK_LEG_VERSION",
     "DEFAULT_BENCHMARK_TICKER",
     "compute_market_excess_for_row",
     "enrich_store_with_benchmark_excess",

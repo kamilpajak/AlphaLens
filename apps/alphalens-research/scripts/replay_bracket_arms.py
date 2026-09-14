@@ -421,6 +421,9 @@ def benchmark(store_dir: Path = STORE_DIR) -> int:
 
     if store_dir == Path.home() / ".alphalens" / "population_ladders":
         raise SystemExit("refusing to write the production ladder store")
+    # The exit close comes from store_dir/grouped/ (#1445): a copy without that
+    # cache pays one grouped-daily call per exit session and writes the files
+    # into the copy.
     n = enrich_store_with_benchmark_excess(store_dir)
     logger.info("benchmark-excess: enriched %d rows", n)
     return n
