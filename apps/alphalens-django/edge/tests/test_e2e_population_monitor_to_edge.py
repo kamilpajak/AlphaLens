@@ -115,6 +115,12 @@ def _spy_bars(ticker, start, end):
     return bars or [{"t": base, "o": 400.0, "h": 405.0, "l": 399.0, "c": 404.0, "v": 10_000.0}]
 
 
+def _official_closes(_session):
+    """Grouped-daily stub: the official close of SPY and of NVDA's sector ETF on
+    every session is the same 404 the synthetic bar path ends at."""
+    return {"SPY": {"c": 404.0}, "XLK": {"c": 404.0}}
+
+
 # Three-tier setup whose entry fills only E1 (so an early tranche takes the whole
 # held position and the deeper TPs are touched-not-sold): the partial-capture case
 # the honesty feature exists for.
@@ -170,12 +176,19 @@ def _build_real_store(root: Path) -> Path:
     )
     # Size overlay (hermetic — reads the brief, no vendor call).
     enrich_store_with_size_fields(store_dir, briefs_dir)
-    # Benchmark excess (SPY bars injected).
-    enrich_store_with_benchmark_excess(store_dir, bar_fetch=_spy_bars, now=_NOW)
+    # Benchmark excess: the anchor comes from the injected SPY bars, the exit
+    # print from the grouped-daily stub (#1445). The stub's payload is WRITTEN to
+    # store_dir/grouped/ by the disk-first prefetch, so every later pass reading
+    # the grouped cache (sector, event-CAR) sees these closes from disk.
+    enrich_store_with_benchmark_excess(
+        store_dir, bar_fetch=_spy_bars, grouped_fetch=_official_closes, now=_NOW
+    )
     # Sector excess (per-row SPDR sector ETF; NVDA -> XLK via the bundled SIC
     # index, offline). Reuse the same synthetic bar path — the contract test only
     # needs the columns present, not a specific excess value.
-    enrich_store_with_sector_excess(store_dir, bar_fetch=_spy_bars, now=_NOW)
+    enrich_store_with_sector_excess(
+        store_dir, bar_fetch=_spy_bars, grouped_fetch=_official_closes, now=_NOW
+    )
     # Event-lane outcome (epic #1293): stamps only event rows, but the pass runs
     # in production right after benchmark excess, so it runs here too (grouped
     # fetch stubbed — a thematic-only day needs no session).

@@ -1170,7 +1170,12 @@ def _stamp_maturity_return(
     rebuild, a minute-path night and a cheap-path night agree.
 
     Fallbacks, each logged: the last cached RTH minute close of that session when
-    no official close is available, else the engine's horizon mark is kept.
+    no official close is available, else the engine's horizon mark is kept. The
+    SPY and sector legs end on the same official close (#1445), so a terminal
+    row that takes a fallback here still ends its two legs at different prints
+    — and nothing on the row marks it. (An ONGOING row marked on the minute
+    path carries the engine's horizon mark until it matures, so its two legs
+    differ by design until then.)
     """
     session = _coerce_session(row.get("matured_at"))
     reference_close = _safe_finite_float(row.get("reference_close"))

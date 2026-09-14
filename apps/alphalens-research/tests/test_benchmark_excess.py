@@ -26,8 +26,8 @@ from pathlib import Path
 import pandas as pd
 from alphalens_pipeline.feedback.bar_window import ARRIVAL_VWAP_WINDOW_MIN, _window_vwap
 from alphalens_pipeline.feedback.benchmark_excess import (
-    _HORIZON_SESSION_SPAN_MIN,
     BENCHMARK_COLUMNS,
+    BENCHMARK_LEG_VERSION,
     compute_market_excess_for_row,
     enrich_store_with_benchmark_excess,
 )
@@ -64,6 +64,11 @@ def _spy_bars(arrival_open: dt.datetime, *, reference: float, last_close: float)
     ]
 
 
+def _spy_closes(close: float):
+    """Grouped-daily stub: SPY's official close is ``close`` on EVERY session."""
+    return lambda _session: {"SPY": {"c": close}}
+
+
 class TestComputeMarketExcessForRow(unittest.TestCase):
     def setUp(self) -> None:
         self.brief_date = dt.date(2026, 5, 18)
@@ -82,7 +87,10 @@ class TestComputeMarketExcessForRow(unittest.TestCase):
             "forward_return": 0.05,
         }
         bench, excess = compute_market_excess_for_row(
-            row, bar_fetch=lambda *_: bars, last_closed_session=self.last_closed
+            row,
+            bar_fetch=lambda *_: bars,
+            exit_close_of=lambda _t, _s: 102.0,
+            last_closed_session=self.last_closed,
         )
         assert bench is not None
         self.assertAlmostEqual(bench, 0.02, places=6)
@@ -100,6 +108,7 @@ class TestComputeMarketExcessForRow(unittest.TestCase):
         bench, excess = compute_market_excess_for_row(
             row,
             bar_fetch=lambda *_: _spy_bars(self.arrival_open, reference=100.0, last_close=102.0),
+            exit_close_of=lambda _t, _s: 102.0,
             last_closed_session=self.last_closed,
         )
         self.assertIsNone(bench)
@@ -114,7 +123,10 @@ class TestComputeMarketExcessForRow(unittest.TestCase):
             "forward_return": 0.05,
         }
         bench, excess = compute_market_excess_for_row(
-            row, bar_fetch=lambda *_: [], last_closed_session=self.last_closed
+            row,
+            bar_fetch=lambda *_: [],
+            exit_close_of=lambda _t, _s: 102.0,
+            last_closed_session=self.last_closed,
         )
         self.assertIsNone(bench)
         self.assertIsNone(excess)
@@ -131,7 +143,10 @@ class TestComputeMarketExcessForRow(unittest.TestCase):
             "forward_return": 0.03,
         }
         bench, excess = compute_market_excess_for_row(
-            row, bar_fetch=lambda *_: bars, last_closed_session=self.last_closed
+            row,
+            bar_fetch=lambda *_: bars,
+            exit_close_of=lambda _t, _s: 101.0,
+            last_closed_session=self.last_closed,
         )
         assert bench is not None
         self.assertAlmostEqual(bench, 0.01, places=6)
@@ -171,6 +186,7 @@ class TestEnrichStore(unittest.TestCase):
             n = enrich_store_with_benchmark_excess(
                 store,
                 bar_fetch=lambda *_: bars,
+                grouped_fetch=_spy_closes(102.0),
                 now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
             self.assertEqual(n, 1)  # only the row with a forward_return
@@ -187,6 +203,7 @@ class TestEnrichStore(unittest.TestCase):
             n2 = enrich_store_with_benchmark_excess(
                 store,
                 bar_fetch=lambda *_: bars,
+                grouped_fetch=_spy_closes(102.0),
                 now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
             self.assertEqual(n2, 1)
@@ -236,6 +253,7 @@ class TestEnrichDeadline(unittest.TestCase):
             n = enrich_store_with_benchmark_excess(
                 store,
                 bar_fetch=_fetch,
+                grouped_fetch=_spy_closes(102.0),
                 now=dt.datetime(2026, 6, 3, tzinfo=UTC),
                 deadline=dead,
             )
@@ -282,7 +300,10 @@ class TestEnrichSelfHeal(unittest.TestCase):
                 return _spy_bars(start, reference=100.0, last_close=102.0)
 
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 10, tzinfo=UTC)
+                store,
+                bar_fetch=_fetch,
+                grouped_fetch=_spy_closes(102.0),
+                now=dt.datetime(2026, 6, 10, tzinfo=UTC),
             )
             # The newest date's arrival window must be fetched before the old one's,
             # so a deadline-truncated sweep heals the dashboard-visible dates first.
@@ -324,6 +345,7 @@ class TestEnrichSelfHeal(unittest.TestCase):
             enrich_store_with_benchmark_excess(
                 store,
                 bar_fetch=_fetch,
+                grouped_fetch=_spy_closes(102.0),
                 now=dt.datetime(2026, 6, 10, tzinfo=UTC),
                 deadline=dead,
             )
@@ -349,6 +371,7 @@ class TestEnrichSelfHeal(unittest.TestCase):
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
                         "benchmark_window_exit": "2026-05-27",
+                        "benchmark_leg_version": BENCHMARK_LEG_VERSION,
                     }
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
@@ -356,7 +379,10 @@ class TestEnrichSelfHeal(unittest.TestCase):
             # A transient outage: the fetch returns no bars, so the benchmark
             # recomputes to None. The previously-good value must be KEPT.
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=lambda *_: [], now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=lambda *_: [],
+                grouped_fetch=_spy_closes(102.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
             row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
             self.assertAlmostEqual(float(row["benchmark_window_return"]), 0.02, places=6)
@@ -385,12 +411,16 @@ class TestEnrichSelfHeal(unittest.TestCase):
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
                         "benchmark_window_exit": "2026-05-27",
+                        "benchmark_leg_version": BENCHMARK_LEG_VERSION,
                     }
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
 
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=lambda *_: [], now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=lambda *_: [],
+                grouped_fetch=_spy_closes(102.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
             row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
             self.assertTrue(pd.isna(row["benchmark_window_return"]))
@@ -420,7 +450,10 @@ class TestEnrichSelfHeal(unittest.TestCase):
             ).to_parquet(store / f"{d.isoformat()}.parquet")
 
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=lambda *_: [], now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=lambda *_: [],
+                grouped_fetch=_spy_closes(102.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
             row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
             self.assertTrue(pd.isna(row["benchmark_window_return"]))
@@ -428,16 +461,17 @@ class TestEnrichSelfHeal(unittest.TestCase):
 
 
 class TestBenchmarkAnchorInvariants(unittest.TestCase):
-    """Pins the verified market_excess anchor invariants (NO anchor bug exists).
+    """Pins the market_excess anchor invariants (NO anchor bug exists).
 
     A false-alarm investigation back-solved an implied SPY reference from SPY's
     DAILY cash close and concluded the benchmark leg was anchored one session
     early. It is not: production anchors BOTH legs to the same arrival session
-    (``ladder_arrival_session`` -> ``session_open_utc`` -> arrival 30-min VWAP), and
-    the exit leg uses the LAST available minute bar (an after-hours print ~480 min
-    past the exit-session open), NOT the 16:00 ET cash close. These tests lock
-    those invariants so a future refactor cannot silently introduce the anchor
-    shift the scare implied.
+    (``ladder_arrival_session`` -> ``session_open_utc`` -> arrival 30-min VWAP).
+    Since #1445 the exit leg is the OFFICIAL close of the exit session (the same
+    print the candidate leg uses, #1444), no longer the last available minute
+    bar. These tests lock those invariants so a future refactor cannot silently
+    introduce the anchor shift the scare implied, or reintroduce the after-hours
+    exit print.
     """
 
     _EXCHANGE = "XNYS"
@@ -478,7 +512,11 @@ class TestBenchmarkAnchorInvariants(unittest.TestCase):
             "forward_return": 0.1,
         }
         compute_market_excess_for_row(
-            row, bar_fetch=_fetch, last_closed_session=dt.date(2026, 6, 30), exchange=self._EXCHANGE
+            row,
+            bar_fetch=_fetch,
+            exit_close_of=lambda _t, _s: 740.0,
+            last_closed_session=dt.date(2026, 6, 30),
+            exchange=self._EXCHANGE,
         )
         self.assertEqual(seen_start[0], dt.datetime(2026, 6, 17, 13, 30, tzinfo=UTC))
 
@@ -499,11 +537,12 @@ class TestBenchmarkAnchorInvariants(unittest.TestCase):
         assert vwap is not None
         self.assertAlmostEqual(vwap, 746.0, places=6)
 
-    def test_exit_leg_uses_last_minute_bar_not_intermediate_cash_close(self) -> None:
-        # The CRL/2026-06-18 case that triggered the false alarm. The exit leg must
-        # take the LAST bar (an after-hours print, 737.96 at June-24 21:30 UTC),
-        # NOT an earlier 16:00-ET cash-close bar (733.24). Using the cash close
-        # manufactures an implied ~740.7 (June-17-looking) reference.
+    def test_exit_leg_is_the_official_close_not_the_last_minute_bar(self) -> None:
+        # The CRL/2026-06-18 case that triggered the false alarm, under #1445: the
+        # exit leg is the OFFICIAL June-24 close (733.24, the closing-auction print
+        # the candidate leg also uses), NOT the last after-hours minute bar
+        # (737.96 at 21:30 UTC) the pass took until #1445 — and the reference is
+        # still the June-18 arrival VWAP, never a June-17-looking back-out.
         # A Wed June-17 brief arrives Thu June 18 (#1416).
         arrival_open = session_open_utc(
             ladder_arrival_session(dt.date(2026, 6, 17), self._EXCHANGE), self._EXCHANGE
@@ -515,11 +554,6 @@ class TestBenchmarkAnchorInvariants(unittest.TestCase):
             self.assertEqual(ticker, "SPY")
             return [
                 {"t": self._ms(arrival_open), "c": 745.4737, "v": 1000},  # arrival 30-min VWAP
-                {
-                    "t": self._ms(dt.datetime(2026, 6, 24, 20, 0, tzinfo=UTC)),
-                    "c": 733.24,
-                    "v": 1000,
-                },
                 {
                     "t": self._ms(dt.datetime(2026, 6, 24, 21, 30, tzinfo=UTC)),
                     "c": 737.96,
@@ -537,23 +571,21 @@ class TestBenchmarkAnchorInvariants(unittest.TestCase):
         bench, excess = compute_market_excess_for_row(
             row,
             bar_fetch=_fetch,
+            exit_close_of=lambda _t, session: 733.24 if session == dt.date(2026, 6, 24) else None,
             last_closed_session=dt.date(2026, 6, 30),
             exchange=self._EXCHANGE,
         )
         # The SPY fetch anchored to the June-18 arrival open (NOT June-17).
         self.assertEqual(seen_start[0], dt.datetime(2026, 6, 18, 13, 30, tzinfo=UTC))
         assert bench is not None and excess is not None
-        # Benchmark uses the LAST bar (737.96), not the cash-close bar (733.24).
-        self.assertAlmostEqual(bench, (737.96 - 745.4737) / 745.4737, places=6)
-        # Reproduces the stored CRL/06-18 market_excess (~+11.44%) — the +0.8pp
-        # "understatement" the daily-close back-out reported does not exist.
-        self.assertAlmostEqual(excess, 0.11436972113938475, places=4)
+        # Benchmark uses the official close (733.24), not the after-hours bar (737.96).
+        self.assertAlmostEqual(bench, (733.24 - 745.4737) / 745.4737, places=6)
+        self.assertAlmostEqual(excess, 0.104290606614145 - (733.24 - 745.4737) / 745.4737, places=9)
 
-    def test_window_span_constants(self) -> None:
-        # The two moving parts of the anchor convention; a silent change to either
-        # is exactly what would shift the metric.
+    def test_window_span_constant(self) -> None:
+        # The one moving part of the anchor convention; a silent change is
+        # exactly what would shift the metric.
         self.assertEqual(ARRIVAL_VWAP_WINDOW_MIN, 30)
-        self.assertEqual(_HORIZON_SESSION_SPAN_MIN, 480)
 
     def test_mid_week_and_post_holiday_arrivals_anchor_to_their_own_open(self) -> None:
         # No-regression: a plain mid-week arrival (Thu June-11, from a Wed brief)
@@ -592,6 +624,7 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
                         "benchmark_window_exit": "2026-05-27",
+                        "benchmark_leg_version": BENCHMARK_LEG_VERSION,
                     }
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
@@ -603,7 +636,10 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
                 return _spy_bars(s, reference=100.0, last_close=999.0)
 
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=_fetch,
+                grouped_fetch=_spy_closes(102.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
 
             self.assertEqual(calls, [])
@@ -636,7 +672,10 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
                 return _spy_bars(arrival_open, reference=100.0, last_close=102.0)
 
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=_fetch,
+                grouped_fetch=_spy_closes(102.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
 
             self.assertEqual(calls, ["SPY"])
@@ -670,7 +709,10 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
                 return _spy_bars(s, reference=100.0, last_close=101.0)
 
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=_fetch,
+                grouped_fetch=_spy_closes(101.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
 
             self.assertEqual(calls, ["SPY"])
@@ -705,7 +747,10 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
                 return _spy_bars(s, reference=100.0, last_close=102.0)
 
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=_fetch,
+                grouped_fetch=_spy_closes(102.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
 
             self.assertEqual(calls, ["SPY"])
@@ -744,6 +789,7 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
                         "benchmark_window_exit": "2026-06-08",
+                        "benchmark_leg_version": BENCHMARK_LEG_VERSION,
                     },
                     {
                         "brief_date": new,
@@ -754,6 +800,7 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
                         "benchmark_window_return": 0.01,
                         "market_excess_return": 0.03,
                         "benchmark_window_exit": "2026-06-09",
+                        "benchmark_leg_version": BENCHMARK_LEG_VERSION,
                     },
                 ]
             ).to_parquet(store / f"{new.isoformat()}.parquet")
@@ -774,6 +821,7 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
             enrich_store_with_benchmark_excess(
                 store,
                 bar_fetch=spy_fetch,
+                grouped_fetch=_spy_closes(102.0),
                 now=dt.datetime(2026, 6, 10, tzinfo=UTC),
                 deadline=dead,
             )
@@ -808,6 +856,7 @@ class TestCheapTerminalMaturationComposition(unittest.TestCase):
                         "benchmark_window_return": None,
                         "market_excess_return": None,
                         "benchmark_window_exit": "2026-05-27",
+                        "benchmark_leg_version": BENCHMARK_LEG_VERSION,
                     }
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
@@ -820,7 +869,10 @@ class TestCheapTerminalMaturationComposition(unittest.TestCase):
                 return _spy_bars(arrival_open, reference=100.0, last_close=102.0)
 
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=_fetch,
+                grouped_fetch=_spy_closes(102.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
 
             self.assertEqual(calls, ["SPY"], "a nulled pair is a GAP -> must be fetched")
@@ -849,6 +901,7 @@ class TestCheapTerminalMaturationComposition(unittest.TestCase):
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
                         "benchmark_window_exit": "2026-05-27",
+                        "benchmark_leg_version": BENCHMARK_LEG_VERSION,
                     }
                 ]
             ).to_parquet(store / f"{d.isoformat()}.parquet")
@@ -861,7 +914,10 @@ class TestCheapTerminalMaturationComposition(unittest.TestCase):
                 return _spy_bars(arrival_open, reference=100.0, last_close=999.0)
 
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=_fetch,
+                grouped_fetch=_spy_closes(102.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
 
             self.assertEqual(calls, [], "a consistent stored pair is reused, NOT recomputed")
@@ -896,6 +952,7 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
                         "benchmark_window_exit": "2026-05-27",
+                        "benchmark_leg_version": BENCHMARK_LEG_VERSION,
                     },
                     {
                         "brief_date": d,
@@ -906,6 +963,7 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
                         "benchmark_window_return": 0.01,
                         "market_excess_return": 0.03,
                         "benchmark_window_exit": "2026-05-28",
+                        "benchmark_leg_version": BENCHMARK_LEG_VERSION,
                     },
                 ]
             ).to_parquet(path)
@@ -919,7 +977,10 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
 
             # WHEN enrichment runs over an all-reused file
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=_fetch,
+                grouped_fetch=_spy_closes(102.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
 
             # THEN no fetch was issued, the file was never rewritten...
@@ -961,7 +1022,10 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
 
             # WHEN enrichment runs over a file with a real gap
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=_fetch,
+                grouped_fetch=_spy_closes(102.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
 
             # THEN the file was rewritten...
@@ -988,6 +1052,7 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
                         "benchmark_window_exit": "2026-05-27",
+                        "benchmark_leg_version": BENCHMARK_LEG_VERSION,
                     },
                     {
                         "brief_date": d,
@@ -1007,7 +1072,10 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
                 "alphalens_pipeline.feedback.benchmark_excess", level="INFO"
             ) as cm:
                 enrich_store_with_benchmark_excess(
-                    store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                    store,
+                    bar_fetch=_fetch,
+                    grouped_fetch=_spy_closes(102.0),
+                    now=dt.datetime(2026, 6, 3, tzinfo=UTC),
                 )
 
             # THEN the summary line reports the exact reused/fetched split.
@@ -1061,6 +1129,7 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
                 enrich_store_with_benchmark_excess(
                     store,
                     bar_fetch=spy_fetch,
+                    grouped_fetch=_spy_closes(102.0),
                     now=dt.datetime(2026, 6, 3, tzinfo=UTC),
                     deadline=dead,
                 )
@@ -1100,6 +1169,7 @@ class TestBenchmarkWindowExitStamp(unittest.TestCase):
             "benchmark_window_return": 0.02,
             "market_excess_return": 0.03,
             "benchmark_window_exit": self._EXIT.isoformat(),
+            "benchmark_leg_version": BENCHMARK_LEG_VERSION,
         }
         row.update(overrides)
         pd.DataFrame([row]).to_parquet(store / f"{self._BRIEF.isoformat()}.parquet")
@@ -1121,7 +1191,10 @@ class TestBenchmarkWindowExitStamp(unittest.TestCase):
             store = self._store_with(tmp)
             calls: list[str] = []
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=self._spy(calls), now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=self._spy(calls),
+                grouped_fetch=_spy_closes(101.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
             self.assertEqual(calls, [])
             self.assertAlmostEqual(
@@ -1135,7 +1208,10 @@ class TestBenchmarkWindowExitStamp(unittest.TestCase):
             store = self._store_with(tmp, benchmark_window_exit="2026-09-10")
             calls: list[str] = []
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=self._spy(calls), now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=self._spy(calls),
+                grouped_fetch=_spy_closes(101.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
             self.assertEqual(calls, ["SPY"])
             row = self._read(store)
@@ -1161,7 +1237,10 @@ class TestBenchmarkWindowExitStamp(unittest.TestCase):
             ).to_parquet(store / f"{self._BRIEF.isoformat()}.parquet")
             calls: list[str] = []
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=self._spy(calls), now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=self._spy(calls),
+                grouped_fetch=_spy_closes(101.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
             self.assertEqual(calls, ["SPY"])
             self.assertEqual(self._read(store)["benchmark_window_exit"], self._EXIT.isoformat())
@@ -1175,7 +1254,10 @@ class TestBenchmarkWindowExitStamp(unittest.TestCase):
             store = self._store_with(tmp, benchmark_window_exit=None)
             first: list[str] = []
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=self._spy(first), now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=self._spy(first),
+                grouped_fetch=_spy_closes(101.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
             self.assertEqual(first, ["SPY"], "precondition: the first run stamps the row")
             path = store / f"{self._BRIEF.isoformat()}.parquet"
@@ -1183,7 +1265,10 @@ class TestBenchmarkWindowExitStamp(unittest.TestCase):
 
             second: list[str] = []
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=self._spy(second), now=dt.datetime(2026, 6, 4, tzinfo=UTC)
+                store,
+                bar_fetch=self._spy(second),
+                grouped_fetch=_spy_closes(101.0),
+                now=dt.datetime(2026, 6, 4, tzinfo=UTC),
             )
 
             self.assertEqual(second, [])
@@ -1206,6 +1291,7 @@ class TestBenchmarkWindowExitStamp(unittest.TestCase):
                         "benchmark_window_return": 0.02,
                         "market_excess_return": 0.03,
                         "benchmark_window_exit": "2026-09-10",
+                        "benchmark_leg_version": BENCHMARK_LEG_VERSION,
                     },
                     {
                         "brief_date": self._BRIEF,
@@ -1221,7 +1307,10 @@ class TestBenchmarkWindowExitStamp(unittest.TestCase):
             ).to_parquet(store / f"{self._BRIEF.isoformat()}.parquet")
             calls: list[str] = []
             enrich_store_with_benchmark_excess(
-                store, bar_fetch=self._spy(calls), now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                store,
+                bar_fetch=self._spy(calls),
+                grouped_fetch=_spy_closes(101.0),
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
             )
             df = pd.read_parquet(store / f"{self._BRIEF.isoformat()}.parquet").set_index("ticker")
             self.assertEqual(calls, ["SPY"])  # one real fetch serves both rows
@@ -1286,6 +1375,7 @@ class TestSplitInvalidatedRowsGetNoBenchmark(unittest.TestCase):
             "benchmark_window_return": 0.0032,
             "market_excess_return": 3.2249,
             "benchmark_window_exit": TestSplitInvalidatedRowsGetNoBenchmark._EXIT.isoformat(),
+            "benchmark_leg_version": BENCHMARK_LEG_VERSION,
         }
         row.update(overrides)
         return row
@@ -1301,7 +1391,9 @@ class TestSplitInvalidatedRowsGetNoBenchmark(unittest.TestCase):
     def _run(self, store: Path, rows: list[dict], calls: list[str]) -> Path:
         path = store / f"{self._BRIEF.isoformat()}.parquet"
         pd.DataFrame(rows).to_parquet(path)
-        enrich_store_with_benchmark_excess(store, bar_fetch=self._spy(calls), now=self._NOW)
+        enrich_store_with_benchmark_excess(
+            store, bar_fetch=self._spy(calls), grouped_fetch=_spy_closes(101.0), now=self._NOW
+        )
         return path
 
     def test_a_settled_quarantined_pair_is_nulled_not_reused(self) -> None:
@@ -1383,6 +1475,291 @@ class TestSplitInvalidatedRowsGetNoBenchmark(unittest.TestCase):
                 self.assertFalse(row_is_quarantined(pd.Series({"ladder_classification": value})))
         self.assertFalse(row_is_quarantined({}))
         self.assertFalse(row_is_quarantined(pd.Series({"ticker": "MQ"})))
+
+
+def _grouped(closes: dict[dt.date, dict[str, float]], *, calls: list[dt.date] | None = None):
+    """A grouped-daily stub: session -> {TICKER: {"c": close}}; empty for unknown sessions."""
+
+    def _fetch(session: dt.date) -> dict[str, dict[str, float]]:
+        if calls is not None:
+            calls.append(session)
+        return {t: {"c": c} for t, c in closes.get(session, {}).items()}
+
+    return _fetch
+
+
+class TestOfficialCloseExitPrint(unittest.TestCase):
+    """The benchmark leg ends at the OFFICIAL close of the exit session, read from
+    the monitor's grouped-daily cache — the same print the candidate leg uses
+    since #1444 — and the minute fetch covers only the arrival VWAP window (#1445).
+    """
+
+    _BRIEF = dt.date(2026, 5, 18)
+    _ARRIVAL = ladder_arrival_session(dt.date(2026, 5, 18))  # 2026-05-19
+    _EXIT = dt.date(2026, 5, 27)
+    _EXIT_2 = dt.date(2026, 5, 28)
+    _NOW = dt.datetime(2026, 6, 3, tzinfo=UTC)
+
+    @staticmethod
+    def _row(ticker: str, matured_at: dt.date | None, forward: float = 0.05) -> dict:
+        return {
+            "brief_date": TestOfficialCloseExitPrint._BRIEF,
+            "ticker": ticker,
+            "terminal": matured_at is not None,
+            "matured_at": matured_at,
+            "forward_return": forward,
+        }
+
+    @staticmethod
+    def _spy(calls: list[tuple[dt.datetime, dt.datetime]], *, reference: float = 100.0):
+        def _fetch(t, s, e):
+            calls.append((s, e))
+            # A 17:30-style after-hours print that must NEVER be the exit leg.
+            return _spy_bars(s, reference=reference, last_close=999.0)
+
+        return _fetch
+
+    def _store(self, tmp: str, rows: list[dict]) -> Path:
+        store = Path(tmp)
+        pd.DataFrame(rows).to_parquet(store / f"{self._BRIEF.isoformat()}.parquet")
+        return store
+
+    def test_minute_fetch_covers_only_the_arrival_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp, [self._row("AA", self._EXIT)])
+            calls: list[tuple[dt.datetime, dt.datetime]] = []
+            enrich_store_with_benchmark_excess(
+                store,
+                bar_fetch=self._spy(calls),
+                grouped_fetch=_grouped({self._EXIT: {"SPY": 102.0}}),
+                now=self._NOW,
+            )
+            arrival_open = session_open_utc(self._ARRIVAL)
+            self.assertEqual(
+                calls,
+                [(arrival_open, arrival_open + dt.timedelta(minutes=ARRIVAL_VWAP_WINDOW_MIN))],
+            )
+
+    def test_exit_leg_is_the_official_close_not_the_last_minute_bar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp, [self._row("AA", self._EXIT)])
+            enrich_store_with_benchmark_excess(
+                store,
+                bar_fetch=self._spy([]),
+                grouped_fetch=_grouped({self._EXIT: {"SPY": 102.0}}),
+                now=self._NOW,
+            )
+            out = pd.read_parquet(store / f"{self._BRIEF.isoformat()}.parquet").iloc[0]
+            self.assertAlmostEqual(float(out["benchmark_window_return"]), 0.02, places=9)
+            self.assertAlmostEqual(float(out["market_excess_return"]), 0.03, places=9)
+
+    def test_rows_sharing_an_arrival_pay_one_fetch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp, [self._row("AA", self._EXIT), self._row("BB", self._EXIT_2)])
+            calls: list[tuple[dt.datetime, dt.datetime]] = []
+            enrich_store_with_benchmark_excess(
+                store,
+                bar_fetch=self._spy(calls),
+                grouped_fetch=_grouped({self._EXIT: {"SPY": 102.0}, self._EXIT_2: {"SPY": 104.0}}),
+                now=self._NOW,
+            )
+            df = pd.read_parquet(store / f"{self._BRIEF.isoformat()}.parquet").set_index("ticker")
+            self.assertEqual(len(calls), 1)
+            self.assertAlmostEqual(float(df.loc["AA", "benchmark_window_return"]), 0.02, places=9)
+            self.assertAlmostEqual(float(df.loc["BB", "benchmark_window_return"]), 0.04, places=9)
+
+    def test_missing_official_close_leaves_none_and_warns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp, [self._row("AA", self._EXIT)])
+            with self.assertLogs("alphalens_pipeline.feedback.benchmark_excess", "WARNING") as logs:
+                enrich_store_with_benchmark_excess(
+                    store,
+                    bar_fetch=self._spy([]),
+                    grouped_fetch=_grouped({}),  # no session payload at all
+                    now=self._NOW,
+                )
+            out = pd.read_parquet(store / f"{self._BRIEF.isoformat()}.parquet").iloc[0]
+            self.assertTrue(pd.isna(out["benchmark_window_return"]))
+            self.assertTrue(pd.isna(out["market_excess_return"]))
+            self.assertTrue(any("official close" in line for line in logs.output), logs.output)
+
+    def test_a_missing_close_warns_once_per_session_not_per_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = [self._row(t, self._EXIT) for t in ("AA", "BB", "CC")]
+            store = self._store(tmp, rows)
+            with self.assertLogs("alphalens_pipeline.feedback.benchmark_excess", "WARNING") as logs:
+                enrich_store_with_benchmark_excess(
+                    store, bar_fetch=self._spy([]), grouped_fetch=_grouped({}), now=self._NOW
+                )
+            self.assertEqual(sum("official close" in line for line in logs.output), 1, logs.output)
+
+    def test_session_without_a_spy_row_yields_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp, [self._row("AA", self._EXIT)])
+            enrich_store_with_benchmark_excess(
+                store,
+                bar_fetch=self._spy([]),
+                grouped_fetch=_grouped({self._EXIT: {"AAPL": 190.0}}),
+                now=self._NOW,
+            )
+            out = pd.read_parquet(store / f"{self._BRIEF.isoformat()}.parquet").iloc[0]
+            self.assertTrue(pd.isna(out["market_excess_return"]))
+
+    def test_grouped_map_is_read_from_disk_before_fetching(self) -> None:
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            _write_grouped_cache_atomic,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp, [self._row("AA", self._EXIT), self._row("BB", self._EXIT_2)])
+            _write_grouped_cache_atomic(store, self._EXIT, {"SPY": {"c": 102.0}})
+            grouped_calls: list[dt.date] = []
+            enrich_store_with_benchmark_excess(
+                store,
+                bar_fetch=self._spy([]),
+                grouped_fetch=_grouped({self._EXIT_2: {"SPY": 104.0}}, calls=grouped_calls),
+                now=self._NOW,
+            )
+            # The cached session was never fetched; the missing one was fetched once
+            # and is now on disk for the next run.
+            self.assertEqual(grouped_calls, [self._EXIT_2])
+            self.assertTrue((store / "grouped" / f"{self._EXIT_2.isoformat()}.parquet").exists())
+            df = pd.read_parquet(store / f"{self._BRIEF.isoformat()}.parquet").set_index("ticker")
+            self.assertAlmostEqual(float(df.loc["AA", "benchmark_window_return"]), 0.02, places=9)
+
+    def test_ongoing_row_uses_the_last_closed_sessions_official_close(self) -> None:
+        from alphalens_pipeline.paper.calendar import previous_trading_day
+
+        last_closed = previous_trading_day(self._NOW.date())
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp, [self._row("AA", None, forward=0.03)])
+            enrich_store_with_benchmark_excess(
+                store,
+                bar_fetch=self._spy([]),
+                grouped_fetch=_grouped({last_closed: {"SPY": 101.0}}),
+                now=self._NOW,
+            )
+            out = pd.read_parquet(store / f"{self._BRIEF.isoformat()}.parquet").iloc[0]
+            self.assertAlmostEqual(float(out["benchmark_window_return"]), 0.01, places=9)
+            self.assertAlmostEqual(float(out["market_excess_return"]), 0.02, places=9)
+
+    def test_a_zero_official_close_is_refused_not_divided(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp, [self._row("AA", self._EXIT)])
+            enrich_store_with_benchmark_excess(
+                store,
+                bar_fetch=self._spy([]),
+                grouped_fetch=_grouped({self._EXIT: {"SPY": 0.0}}),
+                now=self._NOW,
+            )
+            out = pd.read_parquet(store / f"{self._BRIEF.isoformat()}.parquet").iloc[0]
+            self.assertTrue(pd.isna(out["benchmark_window_return"]))
+
+
+class TestBenchmarkLegVersion(unittest.TestCase):
+    """A settled pair is reused only under the CURRENT leg convention
+    (``benchmark_leg_version``); the exit-print change (#1445) recomputes the
+    whole store through this gate, with no operator step."""
+
+    _BRIEF = dt.date(2026, 5, 18)
+    _EXIT = dt.date(2026, 5, 27)
+    _NOW = dt.datetime(2026, 6, 3, tzinfo=UTC)
+
+    def _settled(self, **overrides) -> dict:
+        from alphalens_pipeline.feedback.benchmark_excess import BENCHMARK_LEG_VERSION
+
+        row = {
+            "brief_date": self._BRIEF,
+            "ticker": "AA",
+            "terminal": True,
+            "matured_at": self._EXIT,
+            "forward_return": 0.05,
+            "benchmark_window_return": 0.02,
+            "market_excess_return": 0.03,
+            "benchmark_window_exit": self._EXIT.isoformat(),
+            "benchmark_leg_version": BENCHMARK_LEG_VERSION,
+        }
+        row.update(overrides)
+        return row
+
+    def _run(self, tmp: str, rows: list[dict], calls: list[str]) -> pd.DataFrame:
+        store = Path(tmp)
+        pd.DataFrame(rows).to_parquet(store / f"{self._BRIEF.isoformat()}.parquet")
+
+        def _fetch(t, s, e):
+            calls.append(t)
+            return _spy_bars(s, reference=100.0, last_close=999.0)
+
+        enrich_store_with_benchmark_excess(
+            store,
+            bar_fetch=_fetch,
+            grouped_fetch=_grouped({self._EXIT: {"SPY": 104.0}}),
+            now=self._NOW,
+        )
+        return pd.read_parquet(store / f"{self._BRIEF.isoformat()}.parquet")
+
+    def test_current_version_pair_is_reused_with_no_fetch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            calls: list[str] = []
+            out = self._run(tmp, [self._settled()], calls).iloc[0]
+            self.assertEqual(calls, [])
+            self.assertAlmostEqual(float(out["benchmark_window_return"]), 0.02, places=9)
+
+    def test_pair_without_the_version_column_is_recomputed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            row = self._settled()
+            del row["benchmark_leg_version"]
+            calls: list[str] = []
+            out = self._run(tmp, [row], calls).iloc[0]
+            self.assertEqual(calls, ["SPY"])
+            self.assertAlmostEqual(float(out["benchmark_window_return"]), 0.04, places=9)
+
+    def test_pair_under_another_version_is_recomputed_and_relabelled(self) -> None:
+        from alphalens_pipeline.feedback.benchmark_excess import BENCHMARK_LEG_VERSION
+
+        with tempfile.TemporaryDirectory() as tmp:
+            calls: list[str] = []
+            out = self._run(
+                tmp, [self._settled(benchmark_leg_version="spy-v1-last-bar")], calls
+            ).iloc[0]
+            self.assertEqual(calls, ["SPY"])
+            self.assertAlmostEqual(float(out["benchmark_window_return"]), 0.04, places=9)
+            self.assertEqual(out["benchmark_leg_version"], BENCHMARK_LEG_VERSION)
+
+    def test_version_is_written_on_every_row_including_ongoing(self) -> None:
+        from alphalens_pipeline.feedback.benchmark_excess import (
+            BENCHMARK_COLUMNS,
+            BENCHMARK_LEG_VERSION,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ongoing = {
+                "brief_date": self._BRIEF,
+                "ticker": "BB",
+                "terminal": False,
+                "matured_at": None,
+                "forward_return": 0.01,
+            }
+            out = self._run(tmp, [self._settled(), ongoing], [])
+            self.assertIn("benchmark_leg_version", BENCHMARK_COLUMNS)
+            self.assertTrue((out["benchmark_leg_version"] == BENCHMARK_LEG_VERSION).all())
+
+    def test_reused_row_seeds_the_anchor_for_a_gap_sibling(self) -> None:
+        # The settled row implies reference = close / (1 + window) = 104 / 1.02;
+        # its sibling with the same arrival pays no fetch and gets its own exit.
+        with tempfile.TemporaryDirectory() as tmp:
+            sibling = {
+                "brief_date": self._BRIEF,
+                "ticker": "BB",
+                "terminal": True,
+                "matured_at": self._EXIT,
+                "forward_return": 0.05,
+            }
+            calls: list[str] = []
+            settled = self._settled(benchmark_window_return=0.04, market_excess_return=0.01)
+            out = self._run(tmp, [settled, sibling], calls).set_index("ticker")
+            self.assertEqual(calls, [])
+            self.assertAlmostEqual(float(out.loc["BB", "benchmark_window_return"]), 0.04, places=9)
 
 
 if __name__ == "__main__":

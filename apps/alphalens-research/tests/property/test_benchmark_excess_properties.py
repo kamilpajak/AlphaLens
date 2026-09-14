@@ -6,9 +6,11 @@ Both legs are raw close-to-close over the SAME window; the subtraction must be
 exact and the None-propagation total (a fudged value here silently misstates
 every candidate's edge).
 
-Two levels: the pure VWAP-anchored ``_benchmark_window_return`` (exactness vs an
-independent VWAP, empty → None, scale-invariance), and ``compute_market_excess_for_row``
-(the exact subtraction, constant-shift, and None/NaN propagation with a stub fetch).
+Two levels: the pure VWAP anchor ``_arrival_reference`` composed with
+``_window_return`` (exactness vs an independent VWAP, empty → None,
+scale-invariance), and ``compute_market_excess_for_row`` (the exact subtraction,
+constant-shift, and None/NaN propagation with a stub fetch and a stub official
+close, #1445).
 """
 
 from __future__ import annotations
@@ -19,7 +21,8 @@ from typing import Any
 
 from alphalens_pipeline.feedback.bar_window import ARRIVAL_VWAP_WINDOW_MIN
 from alphalens_pipeline.feedback.benchmark_excess import (
-    _benchmark_window_return,
+    _arrival_reference,
+    _window_return,
     compute_market_excess_for_row,
 )
 from hypothesis import given
@@ -51,6 +54,16 @@ def _bars_in_window(pairs: list[tuple[float, float]], anchor: dt.datetime) -> li
     """Bars whose ``t`` all fall inside the arrival VWAP window (<= 6 * 60s < 30min)."""
     base = int(anchor.timestamp() * 1000)
     return [{"t": base + i * 60_000, "c": c, "v": v} for i, (c, v) in enumerate(pairs)]
+
+
+def _benchmark_window_return(
+    bars: list[dict[str, Any]], *, arrival_open: dt.datetime
+) -> float | None:
+    """The pre-#1445 composition, kept as the property under test: anchor on the
+    arrival VWAP, exit on the LAST bar's close (the stub official close)."""
+    if not bars:
+        return None
+    return _window_return(_arrival_reference(bars, arrival_open=arrival_open), bars[-1].get("c"))
 
 
 def _independent_window_return(pairs: list[tuple[float, float]]) -> float:
@@ -103,13 +116,22 @@ class TestComputeMarketExcess(PropertyTestCase):
 
         return _fetch
 
+    @staticmethod
+    def _close_for(pairs: list[tuple[float, float]]):
+        # The official close of the exit session is the last pair's close, so the
+        # independent oracle below stays exactly the pre-#1445 expression.
+        return lambda _ticker, _session: pairs[-1][0]
+
     @given(pairs=_close_vol_pairs(), fwd=finite_prices(1e-4, 1.0))
     def test_excess_is_exactly_forward_minus_benchmark(
         self, pairs: list[tuple[float, float]], fwd: float
     ) -> None:
         row = {"forward_return": fwd, "brief_date": _BRIEF_DATE, "matured_at": _MATURED_AT}
         bench, excess = compute_market_excess_for_row(
-            row, bar_fetch=self._fetch_for(pairs), last_closed_session=_LAST_CLOSED
+            row,
+            bar_fetch=self._fetch_for(pairs),
+            exit_close_of=self._close_for(pairs),
+            last_closed_session=_LAST_CLOSED,
         )
         assert bench is not None and excess is not None
         # Independent oracle: the fetch stub anchors the bars at the arrival open,
@@ -126,24 +148,33 @@ class TestComputeMarketExcess(PropertyTestCase):
         self, pairs: list[tuple[float, float]], fwd: float, k: float
     ) -> None:
         """Same bars -> same benchmark; shifting forward by k shifts excess by exactly k."""
-        fetch = self._fetch_for(pairs)
+        fetch, close = self._fetch_for(pairs), self._close_for(pairs)
         base = {"brief_date": _BRIEF_DATE, "matured_at": _MATURED_AT}
         _, e1 = compute_market_excess_for_row(
-            {**base, "forward_return": fwd}, bar_fetch=fetch, last_closed_session=_LAST_CLOSED
+            {**base, "forward_return": fwd},
+            bar_fetch=fetch,
+            exit_close_of=close,
+            last_closed_session=_LAST_CLOSED,
         )
         _, e2 = compute_market_excess_for_row(
-            {**base, "forward_return": fwd + k}, bar_fetch=fetch, last_closed_session=_LAST_CLOSED
+            {**base, "forward_return": fwd + k},
+            bar_fetch=fetch,
+            exit_close_of=close,
+            last_closed_session=_LAST_CLOSED,
         )
         assert e1 is not None and e2 is not None
         self.assert_close(e2 - e1, k, rel_tol=1e-9, abs_tol=1e-9)
 
     @given(pairs=_close_vol_pairs())
     def test_none_and_nan_forward_return_propagate(self, pairs: list[tuple[float, float]]) -> None:
-        fetch = self._fetch_for(pairs)
+        fetch, close = self._fetch_for(pairs), self._close_for(pairs)
         base = {"brief_date": _BRIEF_DATE, "matured_at": _MATURED_AT}
         for bad in (None, float("nan")):
             b, e = compute_market_excess_for_row(
-                {**base, "forward_return": bad}, bar_fetch=fetch, last_closed_session=_LAST_CLOSED
+                {**base, "forward_return": bad},
+                bar_fetch=fetch,
+                exit_close_of=close,
+                last_closed_session=_LAST_CLOSED,
             )
             self.assertIsNone(b)
             self.assertIsNone(e)
@@ -152,7 +183,10 @@ class TestComputeMarketExcess(PropertyTestCase):
     def test_empty_benchmark_fetch_propagates_none(self, fwd: float) -> None:
         row = {"forward_return": fwd, "brief_date": _BRIEF_DATE, "matured_at": _MATURED_AT}
         b, e = compute_market_excess_for_row(
-            row, bar_fetch=lambda *_a: [], last_closed_session=_LAST_CLOSED
+            row,
+            bar_fetch=lambda *_a: [],
+            exit_close_of=lambda *_a: 100.0,
+            last_closed_session=_LAST_CLOSED,
         )
         self.assertIsNone(b)
         self.assertIsNone(e)
