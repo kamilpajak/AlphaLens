@@ -338,7 +338,8 @@ field is present in the API fixture.
     and `AlphalensEdgeStale` read the MIRROR's exit-0 clock, which advances on a run that refuses
     the whole store. On 2026-09-13 a timeout-killed nightly left `unsettled=117` hourly, `/edge` a
     brief day behind, and no page (the alert that did fire was `AlphalensJobMetricMissing` for the
-    nightly, because its job textfile vanished after the kill — #1458). The mirror command now
+    nightly, because the pre-#1441 hook had written a non-float exit code into its job textfile —
+    #1437, fixed by #1441 the same day; #1458 was a duplicate report). The mirror command now
     publishes the watermark it read, the refused-date count and the newest brief date in its
     per-date ledger (`DayMetaLadderOutcome`) as textfile gauges, and `AlphalensEdgeStale` (36h on the watermark), `AlphalensEdgeMirrorRefusing`
     (`unsettled > 0` for 3h) and `AlphalensEdgeNewestBriefDateStale` (96h) read them. Note for the

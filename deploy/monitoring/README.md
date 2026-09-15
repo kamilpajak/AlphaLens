@@ -93,7 +93,7 @@ curl -s localhost:9100/metrics | grep '^alphalens_'
 |---|---|---|
 | `alphalens_job_last_run_timestamp_seconds{job}` | gauge | Unix time of last invocation (success or failure). |
 | `alphalens_job_last_duration_seconds{job}` | gauge | Wall-clock seconds of last invocation. |
-| `alphalens_job_last_exit_code{job}` | gauge | Exit status of last invocation. `0` = success, including a run systemd reports as `success` after a `TERM` (a plain `systemctl stop`). `256` = systemd gave the hook no numeric status — a signal kill, or one of the Table 6 rows (`protocol`, `start-limit-hit`) where `$EXIT_CODE` and `$EXIT_STATUS` are both unset. `256` is deliberately outside the 0-255 a wait status can hold, so it can never be confused with a code a job returned. |
+| `alphalens_job_last_exit_code{job}` | gauge | Exit status of last invocation. `0` = success, including a run systemd reports as `success` after a `TERM` (a plain `systemctl stop`). `256` = a failed result with no usable numeric status: a signal kill, one of the Table 6 rows (`protocol`, `start-limit-hit`) where `$EXIT_CODE` and `$EXIT_STATUS` are both unset, or a status of `0` on a failure (`timeout : exited : 0`) — a failure never reports `0`. `256` is deliberately outside the 0-255 a wait status can hold, so it can never be confused with a code a job returned. |
 | `alphalens_job_last_signal{job}` | gauge | Signal number that terminated the last invocation, `0` when none. Kept out of `last_exit_code` on purpose: `code=exited, status=128` happens for real, and the four units that shell out to `docker run` report a killed container as `code=exited, status=137`, so a `128+signum` encoding would be indistinguishable from a genuine exit code. |
 | `alphalens_job_last_success_timestamp_seconds{job}` | gauge | Unix time of last **successful** invocation. Alert rules use `time() - this > N` to detect stale jobs. A failed run carries the previous value forward verbatim rather than dropping the line: an absent series makes `max()` empty, which disarms the staleness rule exactly while the job is broken (#1369). |
 
@@ -268,8 +268,9 @@ gate for one run and leaves the watermark file untouched, so the next hourly run
 The four rules are evaluated in `prometheus/rules/alphalens_test.yaml` (`just test-rules`)
 against the 2026-09-13 series shape, a healthy morning and the missing-series case. Nothing
 reads the mirror's `last_success` clock any more; `AlphalensJobFailed` still pages a mirror run
-that exits non-zero, and #1458 tracks the nightly's own job textfile vanishing after a timeout
-kill.
+that exits non-zero. After the 2026-09-13 timeout kill node_exporter rejected the nightly's own
+job textfile, because the pre-#1441 hook had written a non-float exit code, so every series for
+that job vanished from the collector (#1437, fixed the same day; #1458 was a duplicate report).
 
 ## Grafana dashboard
 
