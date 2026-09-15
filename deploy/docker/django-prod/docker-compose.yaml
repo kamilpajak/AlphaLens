@@ -57,6 +57,14 @@ x-django-base: &django-base
     # below, else the command falls back to a non-existent in-container
     # ~/.alphalens path). See edge.ingest.parquet:DEFAULT_LADDER_OUTCOMES_DIR.
     ALPHALENS_LADDER_OUTCOMES_DIR: /var/lib/alphalens/population_ladders
+    # Where rebuild_ladder_outcomes_cache writes its Prometheus textfile gauges
+    # (#1436) — the host's node_exporter directory, bind-mounted at the SAME
+    # path on the rebuild-ladder-outcomes service below. Declared on the base
+    # because a redeclared `environment` replaces the whole mapping under the
+    # YAML merge; the django / rebuild-cache services carry the variable but
+    # have no mount and write no metrics. Unset → the command logs a warning
+    # and writes nothing (it never falls back to an unscraped path).
+    ALPHALENS_TEXTFILE_DIR: /var/lib/node_exporter/textfile
   depends_on:
     postgres:
       condition: service_healthy
@@ -131,6 +139,16 @@ services:
   rebuild-ladder-outcomes:
     <<: *django-base
     profiles: ["maintenance"]
+    # The YAML merge replaces a redeclared list wholesale, so the two read-only
+    # store mounts from x-django-base are repeated here on purpose; only this
+    # service adds the WRITABLE node_exporter directory (identity mount, the
+    # alphalens-thematic-build.service precedent) for the gauges the command
+    # publishes after each run (#1436). The always-on django service keeps the
+    # base's two mounts and never touches the scraped directory.
+    volumes:
+      - ${BRIEFS_DIR:-${HOME}/.alphalens/thematic_briefs}:/var/lib/alphalens/thematic_briefs:ro
+      - ${LADDER_OUTCOMES_DIR:-${HOME}/.alphalens/population_ladders}:/var/lib/alphalens/population_ladders:ro
+      - ${TEXTFILE_DIR:-/var/lib/node_exporter/textfile}:/var/lib/node_exporter/textfile
     command:
       - python
       - manage.py

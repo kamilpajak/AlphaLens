@@ -104,6 +104,7 @@ curl -s localhost:9100/metrics | grep '^alphalens_'
 | `edgar-detect` | `alphalens_edgar_events_detected_total`, `alphalens_edgar_events_dispatched_total`, `alphalens_edgar_portfolio_size{class}` |
 | `literature-scan-{weekly,monthly}` | `alphalens_literature_last_run_trigger{window}` |
 | `thematic-build` | `alphalens_thematic_briefs_total`, `alphalens_thematic_briefs_by_model{model}` |
+| `edge-mirror` (the Django `rebuild_ladder_outcomes_cache` command, #1436) | `alphalens_edge_mirror_watermark_timestamp_seconds` (`completed_at` of the ingest watermark the run read; `0` when none), `alphalens_edge_mirror_unsettled_dates` (dates refused because their parquet is newer than the watermark — non-zero for one hour every morning while the nightly is mid-run), `alphalens_edge_mirror_newest_brief_date_timestamp_seconds` (`max(brief_date)` in Postgres after the run, midnight UTC; `0` on an empty table). Written by the container through the `/var/lib/node_exporter/textfile` bind mount on the `rebuild-ladder-outcomes` compose service; the Django image cannot import the pipeline writer, so `edge/ingest/textfile.py` is its mirror. |
 
 All metrics are **gauges** — they describe THIS run's outcome, not a
 cumulative counter. A run that emits 0 values is meaningful (and

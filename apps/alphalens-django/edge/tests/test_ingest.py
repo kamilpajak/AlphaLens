@@ -7,6 +7,7 @@ builds the population-ladder fixture inline, no checked-in golden files.
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
 import os
 from pathlib import Path
@@ -396,3 +397,138 @@ def test_ingest_tolerates_malformed_watermark(tmp_path: Path):
     (tmp_path / ".ingest_watermark.json").write_text("{not json")
     result = rebuild_from_parquet(tmp_path)  # malformed → fallback, still ingests
     assert dt.date(2026, 7, 17) in result.rebuilt_dates
+
+
+@pytest.mark.django_db
+def test_result_carries_the_watermark_it_read(tmp_path: Path):
+    _write_parquet(tmp_path, "2026-07-17", [_terminal_row("BIO", excess=0.05)])
+    settled_at = (tmp_path / "2026-07-17.parquet").stat().st_mtime + 10.0
+    _write_watermark(tmp_path, settled_at)
+
+    assert rebuild_from_parquet(tmp_path).watermark == pytest.approx(settled_at)
+
+    (tmp_path / ".ingest_watermark.json").unlink()
+    assert rebuild_from_parquet(tmp_path).watermark is None
+
+
+# --- the gauges the mirror publishes (#1436) ---------------------------------
+#
+# AlphalensEdgeStale used to read the mirror's last-success clock, which
+# advances on an all-unsettled run (exit 0). The command now publishes what it
+# saw — the watermark it read, the refused-date count and the newest brief date
+# in Postgres — so the rules can read the DATA's age.
+
+_METRICS_FILE = "alphalens_domain_edge-mirror.prom"
+_WATERMARK_GAUGE = "alphalens_edge_mirror_watermark_timestamp_seconds"
+_UNSETTLED_GAUGE = "alphalens_edge_mirror_unsettled_dates"
+_NEWEST_GAUGE = "alphalens_edge_mirror_newest_brief_date_timestamp_seconds"
+
+
+def _midnight_utc(iso_date: str) -> float:
+    return dt.datetime.combine(
+        dt.date.fromisoformat(iso_date), dt.time(), tzinfo=dt.UTC
+    ).timestamp()
+
+
+def _read_gauges(metrics_dir: Path) -> dict[str, float]:
+    text = (metrics_dir / _METRICS_FILE).read_text()
+    return {name: float(value) for name, value in (line.split(" ") for line in text.splitlines())}
+
+
+def _run_mirror(store: Path) -> str:
+    out = io.StringIO()
+    call_command("rebuild_ladder_outcomes_cache", "--store-dir", str(store), stdout=out)
+    return out.getvalue()
+
+
+@pytest.fixture
+def mirror_dirs(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+    store = tmp_path / "store"
+    metrics = tmp_path / "metrics"
+    store.mkdir()
+    metrics.mkdir()
+    monkeypatch.setenv("ALPHALENS_TEXTFILE_DIR", str(metrics))
+    return store, metrics
+
+
+@pytest.mark.django_db
+def test_command_publishes_the_refusal_and_the_frozen_newest_date(mirror_dirs):
+    # The 2026-09-13 shape. A settled ingest of D first ...
+    store, metrics = mirror_dirs
+    first = _write_parquet(store, "2026-09-11", [_terminal_row("BIO", excess=0.05)])
+    settled_at = first.stat().st_mtime + 10.0
+    _write_watermark(store, settled_at)
+    _run_mirror(store)
+    gauges = _read_gauges(metrics)
+    assert gauges[_UNSETTLED_GAUGE] == 0
+    assert gauges[_WATERMARK_GAUGE] == pytest.approx(settled_at, abs=1.0)
+    assert gauges[_NEWEST_GAUGE] == _midnight_utc("2026-09-11")
+
+    # ... then the killed nightly: D rewritten and D+1 created, both newer than
+    # the watermark it never advanced.
+    _write_parquet(store, "2026-09-11", [_terminal_row("BIO", excess=None)])
+    second = _write_parquet(store, "2026-09-12", [_terminal_row("ACME", excess=0.01)])
+    for path in (first, second):
+        os.utime(path, (settled_at + 100.0, settled_at + 100.0))
+
+    summary = _run_mirror(store)
+
+    assert "rebuilt=0 skipped=0 deleted=0 unsettled=2 total_rows=0" in summary
+    gauges = _read_gauges(metrics)
+    assert gauges[_UNSETTLED_GAUGE] == 2
+    assert gauges[_WATERMARK_GAUGE] == pytest.approx(settled_at, abs=1.0)
+    # The newest date is what Postgres HOLDS, not what the store offers: the
+    # refused 2026-09-12 must not move the gauge.
+    assert gauges[_NEWEST_GAUGE] == _midnight_utc("2026-09-11")
+
+
+@pytest.mark.django_db
+def test_command_publishes_the_ingested_newest_date_after_a_settled_run(mirror_dirs):
+    store, metrics = mirror_dirs
+    _write_parquet(store, "2026-09-11", [_terminal_row("BIO", excess=0.05)])
+    newest = _write_parquet(store, "2026-09-12", [_terminal_row("ACME", excess=0.01)])
+    _write_watermark(store, newest.stat().st_mtime + 10.0)
+
+    summary = _run_mirror(store)
+
+    assert "rebuilt=2 skipped=0 deleted=0 unsettled=0 total_rows=2" in summary
+    assert _read_gauges(metrics)[_NEWEST_GAUGE] == _midnight_utc("2026-09-12")
+
+
+@pytest.mark.django_db
+def test_command_without_a_watermark_publishes_zero_and_still_ingests(mirror_dirs):
+    store, metrics = mirror_dirs
+    _write_parquet(store, "2026-09-11", [_terminal_row("BIO", excess=0.05)])
+
+    summary = _run_mirror(store)
+
+    assert "rebuilt=1" in summary
+    assert _read_gauges(metrics)[_WATERMARK_GAUGE] == 0
+
+
+@pytest.mark.django_db
+def test_command_on_an_empty_store_publishes_zero_newest_date(mirror_dirs):
+    store, metrics = mirror_dirs
+
+    _run_mirror(store)
+
+    gauges = _read_gauges(metrics)
+    assert gauges[_NEWEST_GAUGE] == 0
+    assert gauges[_UNSETTLED_GAUGE] == 0
+
+
+@pytest.mark.django_db
+def test_command_without_a_textfile_dir_still_ingests(tmp_path: Path, monkeypatch):
+    # The compose file without the mount (or a local run): the ingest is the
+    # job; the missing metric channel is a warning, not a failure.
+    monkeypatch.delenv("ALPHALENS_TEXTFILE_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    store = tmp_path / "store"
+    store.mkdir()
+    _write_parquet(store, "2026-09-11", [_terminal_row("BIO", excess=0.05)])
+
+    summary = _run_mirror(store)
+
+    assert summary == "rebuilt=1 skipped=0 deleted=0 unsettled=0 total_rows=1\n"
+    assert LadderOutcome.objects.filter(ticker="BIO").count() == 1
+    assert not list(tmp_path.rglob("*.prom"))

@@ -71,6 +71,9 @@ SHADOW_TIMER = SYSTEMD_DIR / "alphalens-feedback-shadow-returns.timer"
 # Decoupled edge-mirror unit (rebuild-ladder-outcomes Postgres cache).
 EDGE_MIRROR_SERVICE = SYSTEMD_DIR / "alphalens-edge-mirror.service"
 EDGE_MIRROR_TIMER = SYSTEMD_DIR / "alphalens-edge-mirror.timer"
+# The compose stack the mirror unit runs; the maintenance service inside it is
+# what writes the edge-mirror gauges (#1436).
+DJANGO_PROD_COMPOSE = REPO_ROOT / "deploy" / "docker" / "django-prod" / "docker-compose.yaml"
 
 # Saxo auto-manager units (ADR 0013 T6/T7 live consumer). The broker-manager
 # daemon is excluded from ACTIVE_SERVICES / the emit-hook glob like
@@ -1258,6 +1261,76 @@ class TestEdgeMirrorUnit(unittest.TestCase):
         # Persistent=true ensures the self-heal timer catches up after a VPS
         # reboot without waiting for the next hour tick.
         self.assertIn("Persistent=true", EDGE_MIRROR_TIMER.read_text())
+
+
+class TestEdgeMirrorComposeMetricsRouting(unittest.TestCase):
+    """The maintenance service that runs the mirror can reach the scraped textfile
+    directory (#1436).
+
+    The Django image cannot import the pipeline's textfile writer (ADR 0011), so
+    ``rebuild_ladder_outcomes_cache`` writes its gauges itself — into the directory
+    ``ALPHALENS_TEXTFILE_DIR`` names, which must be the host's node_exporter
+    directory bind-mounted at the SAME path (the thematic-build precedent). PyYAML
+    resolves the ``<<: *django-base`` merge, so these assertions see the rendered
+    service, including the list the redeclared ``volumes`` replaces.
+    """
+
+    TEXTFILE_DIR = "/var/lib/node_exporter/textfile"
+
+    def setUp(self) -> None:
+        self.services = yaml.safe_load(DJANGO_PROD_COMPOSE.read_text())["services"]
+
+    def _mounts(self, service: str) -> list[str]:
+        return [str(v) for v in self.services[service]["volumes"]]
+
+    @staticmethod
+    def _split_mount(spec: str) -> tuple[str, str, str | None]:
+        # ``host:container[:mode]`` — but the host side may be ``${VAR:-default}``,
+        # whose ``:-`` would fool a plain split, so parse from the right.
+        parts = spec.split(":")
+        mode = parts.pop() if parts[-1] in ("ro", "rw") else None
+        container = parts.pop()
+        return ":".join(parts), container, mode
+
+    def test_maintenance_service_mounts_the_scraped_dir_writable_at_the_same_path(self) -> None:
+        mounts = [m for m in self._mounts("rebuild-ladder-outcomes") if self.TEXTFILE_DIR in m]
+        self.assertEqual(len(mounts), 1, "exactly one textfile mount on rebuild-ladder-outcomes")
+        host, container, mode = self._split_mount(mounts[0])
+        self.assertEqual(container, self.TEXTFILE_DIR)
+        self.assertEqual(
+            host,
+            f"${{TEXTFILE_DIR:-{self.TEXTFILE_DIR}}}",
+            "host side must default to the scraped dir (identity mount)",
+        )
+        self.assertNotEqual(mode, "ro", "the mirror WRITES the gauges — the mount cannot be :ro")
+
+    def test_maintenance_service_keeps_both_read_only_store_mounts(self) -> None:
+        # YAML merge replaces a redeclared list wholesale, so the two store mounts
+        # from x-django-base have to be repeated on the service.
+        mounts = self._mounts("rebuild-ladder-outcomes")
+        for target in (
+            "/var/lib/alphalens/thematic_briefs",
+            "/var/lib/alphalens/population_ladders",
+        ):
+            with self.subTest(target=target):
+                self.assertEqual(
+                    [m for m in mounts if m.endswith(f":{target}:ro")].__len__(),
+                    1,
+                    f"read-only store mount {target} missing from rebuild-ladder-outcomes",
+                )
+
+    def test_maintenance_service_names_the_scraped_dir_in_its_environment(self) -> None:
+        env = self.services["rebuild-ladder-outcomes"]["environment"]
+        self.assertEqual(env.get("ALPHALENS_TEXTFILE_DIR"), self.TEXTFILE_DIR)
+
+    def test_api_service_does_not_get_the_writable_mount(self) -> None:
+        # Positive control for the merge: the always-on API container keeps only
+        # the two read-only store mounts.
+        self.assertEqual(
+            [m for m in self._mounts("django") if self.TEXTFILE_DIR in m],
+            [],
+            "the django service must not mount the node_exporter directory",
+        )
 
 
 class TestStartLimitInUnitSection(unittest.TestCase):
