@@ -37,6 +37,26 @@ set -euo pipefail
 # WHOLE file on one bad sample, so a single unparseable line silently deletes
 # every series this job has.
 #
+# NO ``# HELP`` / ``# TYPE`` LINES (#1461). Seventeen files share these five
+# metric names, and node_exporter's textfile collector (collector/textfile.go,
+# ``Update()``) keeps the FIRST help text it meets per scrape for a name and
+# drops that family from every later file (name order) whose text differs.
+# A file is rewritten only when its job runs, so a HELP edit here was a
+# rolling outage: #1441's new text blinded AlphalensJobFailed for 8 of 17
+# jobs from 2026-09-13 to 2026-09-15 (``inconsistent metric help text`` in
+# the exporter log, ``node_textfile_scrape_error 1``, nothing paging). The
+# collector never compares a family that carries no help line, so samples
+# without HELP coexist with any HELP-bearing file — which is also why the
+# rollout needed no file migration. node_exporter synthesises
+# ``Metric read from <file>`` as the help text; nothing reads TYPE. The
+# Python emitters below never wrote HELP either. Residual hazard, documented
+# in deploy/systemd/README.md: two differing HELP texts for one of these
+# names followed by a helpless file dereference a nil ``*mf.Help`` in
+# v1.9.1 and crash the exporter — never add a HELP line for these names
+# anywhere. Pinned by test_emit_job_metrics_hook.py
+# (TestTheHookWritesNoCommentLines); AlphalensJobFamilyMissing pages a
+# dropped family per job, AlphalensTextfileScrapeError a rejected file.
+#
 # Companion Python helper at
 # ``apps/alphalens-pipeline/alphalens_pipeline/observability/textfile.py``
 # writes domain-specific gauges (briefs count, candidates by severity,
@@ -194,26 +214,15 @@ if [ -f "$OUT" ]; then
     CARRIED_SUCCESS=$(grep "^alphalens_job_last_success_timestamp_seconds{" "$OUT" || true)
 fi
 
+# Samples only — see the header for why there is no ``# HELP`` / ``# TYPE``.
 {
-    echo "# HELP alphalens_job_last_run_timestamp_seconds Unix time of the last invocation (success or failure)"
-    echo "# TYPE alphalens_job_last_run_timestamp_seconds gauge"
     echo "alphalens_job_last_run_timestamp_seconds{job=\"${JOB}\"} ${NOW}"
-    echo "# HELP alphalens_job_last_duration_seconds Wall-clock seconds for the last invocation"
-    echo "# TYPE alphalens_job_last_duration_seconds gauge"
     echo "alphalens_job_last_duration_seconds{job=\"${JOB}\"} ${DURATION}"
-    echo "# HELP alphalens_job_last_exit_code Exit status of the last invocation (0 = success, ${NO_STATUS_SENTINEL} = systemd reported no numeric status)"
-    echo "# TYPE alphalens_job_last_exit_code gauge"
     echo "alphalens_job_last_exit_code{job=\"${JOB}\"} ${EXIT_STATUS_NUM}"
-    echo "# HELP alphalens_job_last_signal Signal number that terminated the last invocation (0 = not signalled)"
-    echo "# TYPE alphalens_job_last_signal gauge"
     echo "alphalens_job_last_signal{job=\"${JOB}\"} ${SIGNAL_NUM}"
     if [ "$RESULT" = "success" ]; then
-        echo "# HELP alphalens_job_last_success_timestamp_seconds Unix time of the last successful invocation"
-        echo "# TYPE alphalens_job_last_success_timestamp_seconds gauge"
         echo "alphalens_job_last_success_timestamp_seconds{job=\"${JOB}\"} ${NOW}"
     elif [ -n "$CARRIED_SUCCESS" ]; then
-        echo "# HELP alphalens_job_last_success_timestamp_seconds Unix time of the last successful invocation"
-        echo "# TYPE alphalens_job_last_success_timestamp_seconds gauge"
         echo "$CARRIED_SUCCESS"
     fi
 } > "$TMP"

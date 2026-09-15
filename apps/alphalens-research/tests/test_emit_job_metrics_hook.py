@@ -325,5 +325,62 @@ class TestLastSuccessSurvivesAFailedRun(_HookCase):
         )
 
 
+def _assert_no_comment_lines(body: str) -> None:
+    """Raise if ANY line of ``body`` is a ``#`` comment (``# HELP`` / ``# TYPE``).
+
+    node_exporter's textfile collector keeps the FIRST ``# HELP`` text it meets
+    per scrape for a metric name and drops that family from every later file
+    (name order) whose text differs. Seventeen files share the same five
+    names, and each is rewritten only when its job runs, so a HELP edit in the
+    hook is a rolling outage (#1461: 8 of 17 jobs blind to AlphalensJobFailed
+    for two days). A family with NO help line is never compared, so the hook
+    writes none.
+    """
+    for raw in body.splitlines():
+        if raw.lstrip().startswith("#"):
+            raise AssertionError(f"the hook wrote a comment line: {raw!r}")
+
+
+class TestTheHookWritesNoCommentLines(_HookCase):
+    """#1461 — the hook writes samples only, never ``# HELP`` / ``# TYPE``."""
+
+    EXPECTED_FAMILIES = (
+        "alphalens_job_last_run_timestamp_seconds",
+        "alphalens_job_last_duration_seconds",
+        "alphalens_job_last_exit_code",
+        "alphalens_job_last_signal",
+        "alphalens_job_last_success_timestamp_seconds",
+    )
+
+    def test_a_fresh_file_has_no_help_or_type_lines(self) -> None:
+        body = self.fire(SERVICE_RESULT="success", EXIT_CODE="exited", EXIT_STATUS="0")
+        _assert_no_comment_lines(body)
+        self.assertEqual(set(_samples(body)), set(self.EXPECTED_FAMILIES))
+
+    def test_a_failed_run_carries_the_success_line_without_reviving_its_help_text(self) -> None:
+        """The transition shape: the previous file was written by the old hook
+        and still carries HELP/TYPE. The carry-forward must copy the SAMPLE
+        line only.
+        """
+        self.seed("1700000000")
+        body = self.fire(SERVICE_RESULT="timeout", EXIT_CODE="killed", EXIT_STATUS="TERM")
+        self.assertEqual(
+            _samples(body)["alphalens_job_last_success_timestamp_seconds"], "1700000000"
+        )
+        _assert_no_comment_lines(body)
+
+    def test_the_no_comment_check_refutes_a_help_line_in_real_hook_output(self) -> None:
+        """Positive control on the REAL path: a checker fed only synthetic
+        strings proves the checker works, not that it is wired to the hook's
+        output. Mutate what the hook actually wrote and make sure the check
+        sees it.
+        """
+        body = self.fire(SERVICE_RESULT="success", EXIT_CODE="exited", EXIT_STATUS="0")
+        _assert_no_comment_lines(body)  # sanity: clean before the mutation
+        mutated = body + "# HELP alphalens_job_last_exit_code Exit status of the last invocation\n"
+        with self.assertRaises(AssertionError):
+            _assert_no_comment_lines(mutated)
+
+
 if __name__ == "__main__":
     unittest.main()

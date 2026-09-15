@@ -905,13 +905,40 @@ rejects a whole file on one non-float sample, so every series for that job
 vanished for 23h, `AlphalensJobFailed` had nothing to evaluate and
 `AlphalensJobMetricMissing` paged instead (#1437; #1458 was a duplicate report).
 
-A deploy hazard that comes with the `# HELP` lines the hook writes: node_exporter
-keeps the first help text it meets per scrape and drops the metric family from
-every later file (name order) whose text differs. A HELP-text change is therefore
-live only for jobs whose file has been rewritten since, and the others lose the
-family until then. #1441's change blinded `AlphalensJobFailed` for 8 of 17 jobs
-from 2026-09-13 to 2026-09-15 (#1461); #1439 is the missing alert on
-`node_textfile_scrape_error`.
+### Why the hook writes no `# HELP` / `# TYPE` (#1461 / #1439, 2026-09-15)
+
+Until #1461 the hook wrote a `# HELP` and `# TYPE` line per family. Seventeen
+files share the same five metric names, and node_exporter's textfile collector
+(`collector/textfile.go`, `Update()`, v1.9.1) keeps the first help text it meets
+per scrape for a name and drops that family from every later file (name order)
+whose text differs — `inconsistent metric help text` in the exporter log,
+`node_textfile_scrape_error 1`, and no alert. Each file is rewritten only when
+its job runs, so a HELP edit in the hook was a rolling outage: #1441's new text
+blinded `AlphalensJobFailed` for 8 of 17 jobs from 2026-09-13 16:01 UTC until the
+one stale file was rewritten by hand on 2026-09-15.
+
+The collector never compares a family that carries no help line (the condition
+is `mf.Help != nil && helpTexts[0] != *mf.Help || helpTexts[1] != ""`, and a
+helpless family registers no text either), so the hook now writes samples only,
+like the Python emitters always did. That is also why the rollout needed no file
+migration: files written by the new hook coexist with the 17 old HELP-bearing
+ones, which age out as each job next runs (the last, `literature-scan-monthly`,
+on 2026-10-01). node_exporter synthesises `Metric read from <file>` as the help
+text; nothing in the rules, the fixtures or Grafana reads HELP or TYPE, and the
+families are simply exposed untyped.
+
+Residual hazard: once a conflict HAS been recorded for a name in a scrape, the
+same condition short-circuits and dereferences `*mf.Help` for every later family
+of that name, so two differing HELP texts for an `alphalens_job_*` name followed
+by a helpless file crash the exporter (no `recover` in `collector.go` or
+client_golang; the container is `unless-stopped`, so it would crash on every
+scrape until the files change). Never add a HELP line for these names anywhere.
+Two rules watch this layer: `AlphalensTextfileScrapeError` (the global gauge,
+30m) and `AlphalensJobFamilyMissing` (`last_run unless last_exit_code`, per job,
+15m) — see `deploy/monitoring/README.md` "Textfile integrity". The hook is
+executed in place from this checkout, so a hook change is live only after
+`git pull` on the VPS (the Sunday literature scan does one; do it by hand
+otherwise) — `check_systemd_drift.py` does not look at `deploy/systemd/bin/`.
 
 ### What the mirror publishes (#1436, 2026-09-15)
 
@@ -1322,7 +1349,9 @@ alphalens-grafana-provisioning-sync.service` names the stage.
 ### Deploy bootstrap (one-time)
 
 The script, the provisioning content and the alert rules all self-deploy (the
-first two on `git pull`, the rules through the hourly rules-sync timer). The
+first two on `git pull`, the rules through the hourly rules-sync timer; the
+metrics hook `deploy/systemd/bin/alphalens-emit-job-metrics` likewise runs in
+place from the checkout, so it too is live only after a `git pull`). The
 UNIT FILES do not — the VPS runs COPIES under `~/.config/systemd/user/`, not
 symlinks into the checkout, so a later unit edit needs a re-`cp` +
 `daemon-reload`.
