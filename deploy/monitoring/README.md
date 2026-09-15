@@ -89,6 +89,16 @@ curl -s localhost:9100/metrics | grep '^alphalens_'
 
 ### Cron-health (emitted by every unit's ExecStopPost)
 
+The hook writes samples only — no `# HELP` / `# TYPE` lines — so node_exporter
+exposes these families untyped with a synthesised help text. Seventeen files share
+the five names; the collector drops a family whose help text differs from the first
+it met per scrape (#1461), and the registry behind it drops any sample whose help or
+type differs from the first family under that name, `scrape_error` untouched — so
+a HELP-bearing file must never appear next to the hook's files again (the one-shot
+strip at deploy time is in `deploy/systemd/README.md`; the mixed-directory outcome
+is pinned against the real exporter by `tests/test_node_exporter_textfile_mixing.py`).
+The "Type" column below is the semantic type every rule treats them as.
+
 | Metric | Type | Description |
 |---|---|---|
 | `alphalens_job_last_run_timestamp_seconds{job}` | gauge | Unix time of last invocation (success or failure). |
@@ -271,6 +281,36 @@ reads the mirror's `last_success` clock any more; `AlphalensJobFailed` still pag
 that exits non-zero. After the 2026-09-13 timeout kill node_exporter rejected the nightly's own
 job textfile, because the pre-#1441 hook had written a non-float exit code, so every series for
 that job vanished from the collector (#1437, fixed the same day; #1458 was a duplicate report).
+
+### Textfile integrity: AlphalensTextfileScrapeError, AlphalensJobFamilyMissing
+
+Two ways the cron-health families go silent without any job failing, both
+demonstrated on the live gauge before the rules existed (#1439, #1461):
+
+| Rule | Reads | Fires when |
+|---|---|---|
+| `AlphalensTextfileScrapeError` | `node_textfile_scrape_error` | node_exporter has been rejecting at least one file in the textfile directory for 30m. A non-float sample drops the WHOLE file (the 2026-09-13 `TERM`, #1437); a `# HELP` text differing between files drops one FAMILY from the later file (#1461). The gauge is global and unlabelled, so the description carries the one-liner that names the file: `docker logs --since 10m node-exporter 2>&1 \| grep -E 'failed to collect textfile data\|inconsistent metric help text' \| tail -3`. |
+| `AlphalensJobFamilyMissing` | `alphalens_job_last_run_timestamp_seconds unless alphalens_job_last_exit_code` | a job's `last_run` is scraped but its `last_exit_code` family is not, for 15m — `AlphalensJobFailed` is blind for exactly that job. Labelled by `job`, which the global gauge cannot give. The hook writes no HELP since #1461, so this now means a foreign writer of the `alphalens_job_*` names. |
+
+Why 30m: a 30-day census of the live gauge (read 2026-09-15, 5-min resolution)
+found 17 episodes — 14 nightly rejections of `alphalens_job_thematic-build.prom`
+lasting 140-225 min (02:25-05:30 UTC, 2026-08-21..09-06: the 00:30 slot hit
+`TimeoutStartSec` and the pre-#1441 hook wrote `TERM`; stopped with #1363), one
+230-min rejection of the `bracket-cost` file (2026-09-01), the 80-min #1437
+rejection and the 46h #1461 conflict. None paged. Every real episode lasted
+>= 80 min, and writer-vs-scrape races (every writer renames a tempfile) never
+showed at 5-min resolution, so 30m clears the blips and still lands inside the
+hour after the `AlphalensJobMetricMissing` (5m) it disambiguates. Why 15m for
+the per-job rule: above the 5-min staleness a vanished series lingers, so a file
+rewritten within one run cannot page.
+
+Both are evaluated in `prometheus/rules/alphalens_test.yaml` (`just test-rules`):
+the sustained and the blip shape for the gauge, the dropped-family and the
+healthy shape for the per-job rule. Recovery is the writer's, not Prometheus's:
+fix the writer, rewrite the file with tmp + `mv`, and never run the hook by hand
+inside the scraped directory (it stamps `last_run=now`). The residual crash
+hazard of a differing HELP text on these names is described in
+`deploy/systemd/README.md` "Why the hook writes no `# HELP` / `# TYPE`".
 
 ## Grafana dashboard
 
