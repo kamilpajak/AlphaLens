@@ -333,6 +333,19 @@ field is present in the API fixture.
   completed run. This is the price of the no-half-state guarantee and is desired. Monitored via
   `AlphalensJobStale`. (A run that *completes* with an internally-failed pass still advances the
   watermark — its columns are honestly degraded, not withheld.)
+  - **Amendment 2026-09-15 (#1436):** "Monitored via `AlphalensJobStale`" was wrong twice over.
+    The compute job's `AlphalensJobStale` needs 48h and a single killed night self-heals in 24h,
+    and `AlphalensEdgeStale` read the MIRROR's exit-0 clock, which advances on a run that refuses
+    the whole store. On 2026-09-13 a timeout-killed nightly left `unsettled=117` hourly, `/edge` a
+    brief day behind, and no page (the alert that did fire was `AlphalensJobMetricMissing` for the
+    nightly, because its job textfile vanished after the kill — #1458). The mirror command now
+    publishes the watermark it read, the refused-date count and the newest brief date in its
+    per-date ledger (`DayMetaLadderOutcome`) as textfile gauges, and `AlphalensEdgeStale` (36h on the watermark), `AlphalensEdgeMirrorRefusing`
+    (`unsettled > 0` for 3h) and `AlphalensEdgeNewestBriefDateStale` (96h) read them. Note for the
+    recovery: the 2026-09-13 "unfreeze" run with `ALPHALENS_FEEDBACK_FETCH_DEADLINE_S=0` replayed 0
+    brief dates and still wrote the watermark, stamping the killed run's half-rewritten store as
+    settled — the exact state this stamp exists to keep out of `/edge`. The recovery is a full
+    rerun with the default budget.
 - **Cheap NO_FILL maturation can carry a stale excess under benchmark starvation (residual,
   same mechanism as old-tail starvation):** the monitor's `_cheap_update_row` matures a
   `NO_FILL` row by copying the prior dict without recomputing `market_excess_return`. In a
