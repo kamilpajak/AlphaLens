@@ -268,8 +268,9 @@ gate for one run and leaves the watermark file untouched, so the next hourly run
 The four rules are evaluated in `prometheus/rules/alphalens_test.yaml` (`just test-rules`)
 against the 2026-09-13 series shape, a healthy morning and the missing-series case. Nothing
 reads the mirror's `last_success` clock any more; `AlphalensJobFailed` still pages a mirror run
-that exits non-zero, and #1458 tracks the nightly's own job textfile vanishing after a timeout
-kill.
+that exits non-zero. The nightly's own job textfile vanished after the 2026-09-13 timeout kill
+because the pre-#1441 hook wrote a non-float exit code (#1437, fixed the same day; #1458 was a
+duplicate report).
 
 ## Grafana dashboard
 

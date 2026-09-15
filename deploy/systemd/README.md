@@ -883,6 +883,34 @@ files under `~/.alphalens/metrics/` (`alphalens_job_edge-mirror.prom` plus the
 June `alphalens_domain_*.prom` leftovers from before the #373/#374 routing
 fix) can be deleted; nothing reads them.
 
+### What the hook writes on a kill (#1437 / #1441, 2026-09-13)
+
+The exit code the hook publishes comes from `$SERVICE_RESULT`, never from a raw
+`$EXIT_STATUS`. `success` writes `0` (including a plain `systemctl stop`, which
+ends on `TERM`). Any other result writes the numeric status when systemd gives
+one, and `256` when it does not: a signal kill, a `timeout`, an `oom-kill` or a
+`start-limit-hit` with no status. The signal number goes to
+`alphalens_job_last_signal` (`15` for `TERM`, `9` for `KILL`), and a failed run
+carries the previous `last_success` line forward, so `AlphalensJobStale` stays
+armed. The full field contract is the "Cron-health" table in
+`deploy/monitoring/README.md`.
+
+Why it is written this way: on 2026-09-13 the pre-#1441 hook interpolated
+`$EXIT_STATUS` raw and, after the 90-min timeout of
+`alphalens-feedback-shadow-returns.service`, wrote
+`alphalens_job_last_exit_code{job="feedback-shadow-returns"} TERM`. node_exporter
+rejects a whole file on one non-float sample, so every series for that job
+vanished for 23h, `AlphalensJobFailed` had nothing to evaluate and
+`AlphalensJobMetricMissing` paged instead (#1437; #1458 was a duplicate report).
+
+A deploy hazard that comes with the `# HELP` lines the hook writes: node_exporter
+keeps the first help text it meets per scrape and drops the metric family from
+every later file (name order) whose text differs. A HELP-text change is therefore
+live only for jobs whose file has been rewritten since, and the others lose the
+family until then. #1441's change blinded `AlphalensJobFailed` for 8 of 17 jobs
+from 2026-09-13 to 2026-09-15 (#1461); #1439 is the missing alert on
+`node_textfile_scrape_error`.
+
 ### What the mirror publishes (#1436, 2026-09-15)
 
 The hook above only says whether the unit RAN and exited 0. The mirror command
