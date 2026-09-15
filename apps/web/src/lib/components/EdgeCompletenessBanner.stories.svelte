@@ -67,17 +67,18 @@
 	}}
 />
 
-<!-- One quarantined row (#1453): the edge-summary.json fixture shape (121 terminal,
-     118 matured) with ONE SPLIT_INVALIDATED quarantine among the 3 rows that lack
-     a benchmark. The quarantine gets no benchmark by design, so the denominator
-     drops to 120 and the row is named beside the ratio instead of reading as
-     "still to enrich". -->
+<!-- One quarantined row (#1453) — the REAL production partition, read on the VPS
+     on 2026-09-15 08:38 UTC over the whole thematic lane (no window): 688 terminal,
+     687 with a benchmark, 1 SPLIT_INVALIDATED quarantine (MQ, brief 2026-05-29)
+     whose pair the #1452 drain nulled that night. The quarantine gets no benchmark
+     by design, so the denominator drops to 687 and the row is named beside the
+     ratio instead of reading as "still to enrich". -->
 <Story
 	name="Quarantined"
-	args={{ enrichedAt: FIXED_ENRICHED_AT, nTerminal: 121, nMatured: 118, nQuarantined: 1 } satisfies BannerProps}
+	args={{ enrichedAt: FIXED_ENRICHED_AT, nTerminal: 688, nMatured: 687, nQuarantined: 1 } satisfies BannerProps}
 	play={async ({ canvasElement }) => {
 		const canvas = within(canvasElement);
-		await expect(canvas.getByText('118 / 120')).toBeVisible();
+		await expect(canvas.getByText('687 / 687')).toBeVisible();
 		await expect(canvas.getByText('1 quarantined')).toBeVisible();
 	}}
 />

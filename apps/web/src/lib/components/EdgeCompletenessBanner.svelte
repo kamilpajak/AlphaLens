@@ -67,13 +67,15 @@
 		<span>complete</span>
 		{#if counts.quarantined > 0}
 			<span aria-hidden="true">&middot;</span>
-			<span class="whitespace-nowrap">
-				<JargonTip
-					term="quarantined"
-					body="Closed positions whose replay window crossed a stock split or a large special dividend (the legend's “not measurable” group). They keep the stock's own return as telemetry but get no benchmark by design, so they are left out of the completeness count rather than shown as still to enrich."
-					>{counts.quarantined} quarantined</JargonTip
-				>
-			</span>
+			<!-- nowrap goes INSIDE the trigger (LadderChart precedent): white-space is
+			     inherited, so a nowrap wrapper around the JargonTip would reach the
+			     absolutely-positioned tooltip bubble and render its body as one
+			     unwrapped ~1900 px line. -->
+			<JargonTip
+				term="quarantined"
+				body="Closed positions whose replay window crossed a stock split or a large special dividend (the legend's “not measurable” group). They keep the stock's own return as telemetry but get no benchmark by design, so they are left out of the completeness count rather than shown as still to enrich."
+				><span class="whitespace-nowrap">{counts.quarantined} quarantined</span></JargonTip
+			>
 		{/if}
 	{/if}
 	<span aria-hidden="true">&middot;</span>
