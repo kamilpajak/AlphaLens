@@ -18,6 +18,13 @@ in one place:
 
 The DEPLOYMENT block (fill-rate, mean tiers filled, NO_FILL %) is N-INDEPENDENT
 (it describes the population's mechanics, not its edge) and is ALWAYS returned.
+
+Completeness partition (#1453) over the plannable terminal rows:
+``n_terminal == n_matured + n_quarantined + pending``, where ``n_matured`` are the
+rows with a finite ``market_excess_return``, ``n_quarantined`` the corporate-action
+quarantines that carry no pair and never will, and the remainder are retriable
+gaps the nightly pass fills in. The /edge completeness banner divides by
+``n_terminal - n_quarantined``.
 """
 
 from __future__ import annotations
@@ -37,6 +44,16 @@ N_EARLY_THRESHOLD = 100
 # Classifications that mean a position was opened (NO_FILL / BAD_GEOMETRY did not
 # deploy capital). Used for the deployment fill-rate.
 _FILLED_TERMINAL = frozenset({"TP_FULL", "SL_HIT", "PARTIAL_TP_THEN_SL", "TIME_STOP"})
+
+# Terminal classifications that can NEVER carry a benchmark: the corporate-action
+# quarantine (#1090) keeps its stock return as raw telemetry and gets no SPY /
+# sector pair by design (#1452), so it must not read as "still to enrich" in the
+# /edge completeness banner (#1453). Only the quarantine qualifies — a
+# BAD_GEOMETRY row's stock return is a real buy-and-hold and its benchmark is
+# computable. Mirror of the pipeline's SPLIT_INVALIDATED_CLASSIFICATION (the slim
+# image cannot import it); parity pinned by a research-side source-grep test
+# (tests/feedback/test_corporate_actions.py).
+_QUARANTINED_TERMINAL = frozenset({"SPLIT_INVALIDATED"})
 
 # Provenance mirror of ``BreakevenLens.preregistered_ref`` for lenses whose
 # parameters were written down BEFORE registration. The slim Django image cannot
@@ -242,6 +259,9 @@ class _Accumulator:
     n_filled: int = 0
     n_no_fill: int = 0
     n_terminal: int = 0
+    # Completeness partition (#1453): terminal rows that carry no benchmark AND
+    # never will (a quarantine). n_terminal == n_matured + n_quarantined + pending.
+    n_quarantined: int = 0
     # Open distribution (descriptive only — never a scalar mean).
     n_open: int = 0
     open_near_tp: int = 0
@@ -284,6 +304,12 @@ def _accumulate_terminal(acc: _Accumulator, row: dict[str, Any]) -> None:
     ex = _finite(row.get("market_excess_return"))
     if ex is not None:
         acc.excess.append(ex)
+    elif classification in _QUARANTINED_TERMINAL:
+        # Keyed on the classification AND the missing pair: a quarantine mirrored
+        # before the #1452 drain reached it still carries a pair and is counted
+        # as matured (what the payload says about it), so the banner's
+        # n_matured / (n_terminal - n_quarantined) can never exceed 1.
+        acc.n_quarantined += 1
     rv = _finite(row.get("realized_r"))
     if rv is not None:
         acc.realized_r.append(rv)
@@ -487,6 +513,7 @@ def build_edge_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "n_plannable": acc.n_plannable,
         "n_terminal": acc.n_terminal,
         "n_matured": n_matured,
+        "n_quarantined": acc.n_quarantined,
         "n_gate_threshold": N_GATE_THRESHOLD,
         "benchmark": "SPY",
         "metric_note": (

@@ -85,6 +85,38 @@ export function excessCellState(o: {
 }
 
 /**
+ * The /edge completeness banner's three numbers, off the SUMMARY payload.
+ *
+ * Partition over the plannable terminal rows (server-side, #1453):
+ * `n_terminal == n_matured + n_quarantined + retriable gaps`. A quarantine
+ * (`QUARANTINED_CLASSIFICATION` above) keeps its stock return as telemetry and
+ * gets no benchmark by design, so it is neither matured nor "still to enrich"
+ * — the banner reads `matured / measurable` with `measurable =
+ * n_terminal - n_quarantined`, and names the quarantined count beside it.
+ *
+ * A missing or null `n_quarantined` counts as 0: Cloudflare Pages redeploys the
+ * SPA on merge while the Django image is pulled by hand on the VPS, so for a
+ * while the payload predates the field and `n_terminal - undefined` would be NaN.
+ */
+export interface CompletenessCounts {
+	matured: number;
+	measurable: number;
+	quarantined: number;
+}
+export function completenessCounts(summary: {
+	n_terminal: number;
+	n_matured: number;
+	n_quarantined?: number | null;
+}): CompletenessCounts {
+	const quarantined = summary.n_quarantined ?? 0;
+	return {
+		matured: summary.n_matured,
+		measurable: summary.n_terminal - quarantined,
+		quarantined
+	};
+}
+
+/**
  * Geometry for a CENTERED excess-R bar — zero sits in the middle, a positive
  * excess fills rightward and a negative excess fills leftward. Returns the
  * left edge and width of the coloured segment as percentages of the track

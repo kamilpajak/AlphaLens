@@ -310,6 +310,13 @@ class EdgeSummarySerializer(serializers.Serializer):
     n_plannable = serializers.IntegerField()
     n_terminal = serializers.IntegerField()
     n_matured = serializers.IntegerField()
+    n_quarantined = serializers.IntegerField(
+        help_text=(
+            "Terminal rows that carry no benchmark and never will (the corporate-action "
+            "quarantine, SPLIT_INVALIDATED): n_terminal == n_matured + n_quarantined + "
+            "retriable gaps. The completeness banner divides by n_terminal - n_quarantined."
+        )
+    )
     n_gate_threshold = serializers.IntegerField()
     benchmark = serializers.CharField()
     metric_note = serializers.CharField()

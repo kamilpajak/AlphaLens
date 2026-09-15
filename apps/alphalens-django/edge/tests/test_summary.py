@@ -177,6 +177,96 @@ class TestDeploymentIsNIndependent:
         assert abs(out["deployment"]["fill_rate"] - (1 / 3)) < 1e-9
 
 
+def _quarantine(ticker: str, *, excess: float | None = None, plannable: bool = True) -> dict:
+    """A SPLIT_INVALIDATED terminal (#1090): realized_r null; the excess is null
+    by design since #1452, but a row mirrored before the drain still carries one.
+    """
+    return {
+        "ticker": ticker,
+        "brief_date": "2026-05-29",
+        "plannable": plannable,
+        "terminal": True,
+        "ladder_classification": "SPLIT_INVALIDATED",
+        "realized_r": None,
+        "market_excess_return": excess,
+        "forward_return": 3.2281,
+        "open_r": None,
+    }
+
+
+def _gap(ticker: str, classification: str) -> dict:
+    """A terminal row whose benchmark leg is missing but retriable (not a quarantine)."""
+    return {
+        "ticker": ticker,
+        "brief_date": "2026-05-27",
+        "plannable": True,
+        "terminal": True,
+        "ladder_classification": classification,
+        "realized_r": 0.5,
+        "market_excess_return": None,
+        "forward_return": 0.03,
+        "open_r": None,
+    }
+
+
+class TestQuarantinedCount:
+    """``n_quarantined`` (#1453): terminal rows that can never carry a benchmark.
+
+    Partition over the plannable terminal rows:
+    ``n_terminal == n_matured + n_quarantined + n_pending``. The /edge completeness
+    banner divides by ``n_terminal - n_quarantined``, so a quarantine must never
+    read as "still to enrich".
+    """
+
+    def test_quarantine_without_excess_is_counted_and_stays_out_of_matured(self):
+        rows = [_terminal("AMPL", excess=0.04, realized_r=1.2), _quarantine("MQ")]
+        out = build_edge_summary(rows)
+        assert out["n_quarantined"] == 1
+        assert out["n_matured"] == 1
+        assert out["n_terminal"] == 2
+
+    def test_quarantine_still_carrying_a_pair_counts_as_matured(self):
+        # A row quarantined before the #1452 drain reached the mirror: the payload
+        # says it has a benchmark, so it is matured, not quarantined — the
+        # banner can never show N > M.
+        rows = [_quarantine("MQ", excess=3.2249)]
+        out = build_edge_summary(rows)
+        assert out["n_quarantined"] == 0
+        assert out["n_matured"] == 1
+
+    def test_retriable_gaps_are_not_quarantined(self):
+        # BAD_GEOMETRY / NO_FILL / TP_FULL rows get a benchmark once the nightly
+        # pass reaches them, so a missing pair there stays in the denominator.
+        rows = [_gap("BG", "BAD_GEOMETRY"), _gap("NF", "NO_FILL"), _gap("TP", "TP_FULL")]
+        out = build_edge_summary(rows)
+        assert out["n_quarantined"] == 0
+        assert out["n_matured"] == 0
+        assert out["n_terminal"] == 3
+
+    def test_non_plannable_quarantine_is_ignored(self):
+        out = build_edge_summary([_quarantine("MQ", plannable=False)])
+        assert out["n_quarantined"] == 0
+        assert out["n_terminal"] == 0
+
+    def test_partition_holds_over_a_mixed_population(self):
+        rows = [_terminal(f"T{i}", excess=0.01, realized_r=0.5) for i in range(4)]
+        rows += [_no_fill("NF1"), _gap("BG", "BAD_GEOMETRY"), _gap("PEND", "TIME_STOP")]
+        rows += [_quarantine("MQ"), _quarantine("MQ2", excess=1.0)]
+        rows += [_ongoing("OP", open_r=0.1), {"plannable": False, "terminal": True}]
+        out = build_edge_summary(rows)
+        n_pending = sum(
+            1
+            for r in rows
+            if r.get("plannable")
+            and r.get("terminal")
+            and r.get("market_excess_return") is None
+            and r.get("ladder_classification") != "SPLIT_INVALIDATED"
+        )
+        assert n_pending == 3
+        assert out["n_quarantined"] == 1
+        assert out["n_terminal"] == out["n_matured"] + out["n_quarantined"] + n_pending
+
+
 def _char_terminal(i: int, excess: float, rr: float, cls: str = "TP_FULL") -> dict:
     """Richly-varied terminal row used by the full-payload characterization."""
     return {
@@ -239,6 +329,7 @@ class TestFullPayloadCharacterization:
             "n_plannable": 42,
             "n_terminal": 38,
             "n_matured": 36,
+            "n_quarantined": 0,
             "n_gate_threshold": 30,
             "benchmark": "SPY",
             "metric_note": (

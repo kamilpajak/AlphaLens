@@ -450,6 +450,11 @@ export interface EdgeSummary {
 	n_plannable: number;
 	n_terminal: number;
 	n_matured: number;
+	/** Terminal rows that carry no benchmark and never will (the corporate-action
+	 *  quarantine, SPLIT_INVALIDATED): `n_terminal == n_matured + n_quarantined +
+	 *  retriable gaps`. The completeness banner divides by
+	 *  `n_terminal - n_quarantined` (#1453). */
+	n_quarantined: number;
 	n_gate_threshold: number;
 	benchmark: string;
 	metric_note: string;

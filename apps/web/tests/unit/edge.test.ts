@@ -10,7 +10,8 @@ import {
 	statusLabel,
 	toneClasses,
 	tpCaptureLabel,
-	excessCellState
+	excessCellState,
+	completenessCounts
 } from '../../src/lib/edge';
 
 // Pins the pure derivation/formatting the /edge dashboard relies on: the
@@ -311,5 +312,46 @@ describe('excessCellState (/edge EXCESS RETURN cell)', () => {
 				ladder_classification: 'BAD_GEOMETRY'
 			})
 		).toBe('pending');
+	});
+});
+
+describe('completenessCounts (/edge completeness banner)', () => {
+	it('divides the matured rows by every terminal row when nothing is quarantined', () => {
+		expect(completenessCounts({ n_terminal: 121, n_matured: 118, n_quarantined: 0 })).toEqual({
+			matured: 118,
+			measurable: 121,
+			quarantined: 0
+		});
+	});
+
+	it('leaves a quarantined row out of the denominator (#1453)', () => {
+		// A SPLIT_INVALIDATED quarantine carries no benchmark by design, so it is
+		// neither matured nor "still to enrich": 684 of 684 measurable, 1 aside.
+		expect(completenessCounts({ n_terminal: 685, n_matured: 684, n_quarantined: 1 })).toEqual({
+			matured: 684,
+			measurable: 684,
+			quarantined: 1
+		});
+	});
+
+	it('treats a missing or null n_quarantined as zero (payload from an older API)', () => {
+		// Cloudflare Pages redeploys the SPA on merge while the Django image is
+		// pulled by hand, so for a while the summary has no n_quarantined at all.
+		expect(completenessCounts({ n_terminal: 446, n_matured: 446 })).toEqual({
+			matured: 446,
+			measurable: 446,
+			quarantined: 0
+		});
+		expect(
+			completenessCounts({ n_terminal: 446, n_matured: 446, n_quarantined: null })
+		).toEqual({ matured: 446, measurable: 446, quarantined: 0 });
+	});
+
+	it('is all zeros before the first closed position', () => {
+		expect(completenessCounts({ n_terminal: 0, n_matured: 0, n_quarantined: 0 })).toEqual({
+			matured: 0,
+			measurable: 0,
+			quarantined: 0
+		});
 	});
 });

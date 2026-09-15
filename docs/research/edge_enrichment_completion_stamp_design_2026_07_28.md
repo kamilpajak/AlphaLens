@@ -248,6 +248,20 @@ A single header line on `/edge` giving a global trust signal, e.g.:
 - Purpose: a single dash in one row no longer reads as "the system is broken" — the user sees
   "data is N/M complete, last refreshed X ago", which frames any residual gap as a known,
   bounded, self-healing state.
+- **Amendment 2026-09-15 (#1453) — `M = summary.n_terminal − summary.n_quarantined`.** Since
+  #1452 a `SPLIT_INVALIDATED` quarantine carries no benchmark by design, so under the LOCKED
+  `M = n_terminal` it could never leave the denominator: the banner would read `N / N+1` with
+  nothing on the page saying why, for as long as the row's brief stayed in the SPA's 90-day
+  window. A quarantine is neither a gap nor self-healing, so it is not "still to enrich". The
+  summary now publishes `n_quarantined` (plannable, terminal, quarantined classification AND no
+  finite `market_excess_return`), which makes `n_terminal == n_matured + n_quarantined +
+  retriable gaps` hold by construction (a quarantine mirrored before the drain reached it still
+  counts as matured, so the ratio never exceeds 1); the banner divides by `n_terminal −
+  n_quarantined` and names the quarantined count beside the ratio. `n_terminal` itself is
+  unchanged (it feeds the deployment fill rates). Only the quarantine qualifies — a
+  `BAD_GEOMETRY` row's benchmark is computable. Never observed in production before the
+  amendment: the one quarantine (MQ, brief 2026-05-29) left the 90-day window around
+  2026-08-28 and was quarantined on 2026-09-10, so `446 / 446` was never disturbed.
 
 **API:** expose `completed_at` (and optionally the N/M counts, or compute N/M client-side from
 the already-fetched rows) via the edge summary/outcomes endpoint. Prefer computing N/M

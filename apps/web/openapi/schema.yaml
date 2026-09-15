@@ -1825,6 +1825,12 @@ components:
           type: integer
         n_matured:
           type: integer
+        n_quarantined:
+          type: integer
+          description: 'Terminal rows that carry no benchmark and never will (the
+            corporate-action quarantine, SPLIT_INVALIDATED): n_terminal == n_matured
+            + n_quarantined + retriable gaps. The completeness banner divides by n_terminal
+            - n_quarantined.'
         n_gate_threshold:
           type: integer
         benchmark:
@@ -1855,6 +1861,7 @@ components:
       - n_gate_threshold
       - n_matured
       - n_plannable
+      - n_quarantined
       - n_terminal
       - open_positions
       - portfolio

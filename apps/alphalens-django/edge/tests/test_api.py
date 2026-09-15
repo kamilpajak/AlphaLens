@@ -449,6 +449,32 @@ def test_edge_tolerates_split_invalidated_classification(tmp_path: Path):
 
 
 @pytest.mark.django_db
+def test_summary_counts_the_quarantine(tmp_path: Path):
+    """``n_quarantined`` (#1453) counts the SPLIT_INVALIDATED terminal rows that
+    carry no benchmark, so the /edge completeness banner can leave them out of
+    its denominator: 2 matured of (3 terminal − 1 quarantined)."""
+    split_row = _terminal("MQ", excess=0.0, realized_r=1.0, classification="SPLIT_INVALIDATED")
+    split_row["realized_r"] = None
+    split_row["market_excess_return"] = None
+    split_row["benchmark_window_return"] = None
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [
+            split_row,
+            _terminal("AMPL", excess=0.04, realized_r=1.2),
+            _terminal("RGTI", excess=-0.03, realized_r=-1.0, classification="SL_HIT"),
+        ],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    body = APIClient().get("/v1/edge/summary").json()
+    assert body["n_terminal"] == 3
+    assert body["n_matured"] == 2
+    assert body["n_quarantined"] == 1
+
+
+@pytest.mark.django_db
 def test_outcomes_facets_drop_empty_classification_bucket(tmp_path: Path):
     # Not-yet-priced rows carry an empty ladder_classification; the "" bucket is
     # dropped from facets.classification but the row still counts in facets.status.
