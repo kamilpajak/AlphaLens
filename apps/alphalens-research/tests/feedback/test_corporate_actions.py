@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,6 +36,7 @@ from alphalens_pipeline.feedback.corporate_actions import (
     GUARD_CONFIG_VERSION,
     NONE_FOUND_CACHE_TTL_DAYS,
     SPECIAL_DIVIDEND_PRE_EX_CLOSE_FRACTION,
+    SPLIT_INVALIDATED_CLASSIFICATION,
     CachedCorporateActionsLookup,
     CorporateActionsAnswer,
     CorporateActionsLookupError,
@@ -420,6 +422,20 @@ class TestCachedCorporateActionsLookup(unittest.TestCase):
 class TestGuardConfigVersion(unittest.TestCase):
     def test_version_is_the_memo_date(self):
         self.assertEqual(GUARD_CONFIG_VERSION, "2026-08-23")
+
+
+class TestDjangoSummaryMirrorsTheQuarantineClassification(unittest.TestCase):
+    def test_django_quarantined_terminal_set_carries_the_pipeline_value(self):
+        """Cross-app parity guard (#1453): the slim Django image cannot import
+        this module, so ``edge/api/summary.py`` mirrors the quarantine
+        classification in ``_QUARANTINED_TERMINAL`` (the ``_LENS_PREREGISTERED_REF``
+        precedent). A rename here must not make ``n_quarantined`` silently 0."""
+        repo_root = Path(__file__).resolve().parents[4]
+        src = (repo_root / "apps/alphalens-django/edge/api/summary.py").read_text(encoding="utf-8")
+        match = re.search(r"_QUARANTINED_TERMINAL\s*=\s*frozenset\(\{(?P<body>[^}]*)\}\)", src)
+        self.assertIsNotNone(match, "_QUARANTINED_TERMINAL missing from the Django summary")
+        assert match is not None
+        self.assertIn(f'"{SPLIT_INVALIDATED_CLASSIFICATION}"', match.group("body"))
 
 
 if __name__ == "__main__":

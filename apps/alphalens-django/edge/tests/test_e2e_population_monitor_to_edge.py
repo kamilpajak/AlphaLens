@@ -366,3 +366,6 @@ class TestPopulationMonitorToEdgeE2E:
         # population count, not the gated stat).
         body = resp.json()
         assert body["n_matured"] >= 1
+        # The completeness partition (#1453) ships with every payload; the real
+        # NVDA row is a TIME_STOP with a benchmark, so nothing is quarantined.
+        assert body["n_quarantined"] == 0
