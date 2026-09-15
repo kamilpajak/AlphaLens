@@ -159,7 +159,7 @@ SL and a TP are crossable resolves **SL-first** (conservative,
 | `TIME_STOP` | terminal | 42-session horizon expired; remainder marked at the expiry close |
 | `NO_FILL` | terminal | no entry tier ever touched inside the TTL |
 | `BAD_GEOMETRY` | terminal-degenerate | stop at/above blended entry — R undefined, frozen |
-| `SPLIT_INVALIDATED` | terminal-degenerate | replay window crosses a real corporate action (split / material special dividend, #1090) — ladder levels were set on pre-action prices, `realized_r` null, frozen; both excess pairs (SPY and sector) null, `forward_return` kept as raw telemetry only (#1452) |
+| `SPLIT_INVALIDATED` | terminal-degenerate | replay window crosses a real corporate action (split / material special dividend, #1090) — ladder levels were set on pre-action prices, `realized_r` null, frozen; both excess pairs (SPY and sector) null, `forward_return` kept as raw telemetry only (#1452); left out of the /edge completeness denominator (`n_quarantined`, #1453) |
 
 **Implausible-move guard (#1090).** `|forward_return| > 0.60`
 (`bar_window.IMPLAUSIBLE_RETURN_THRESHOLD`) is a *trigger*, not a verdict
