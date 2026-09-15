@@ -398,6 +398,7 @@ class TestEdgeRulesReadTheMirrorGauges(unittest.TestCase):
     def test_edge_rules_share_the_unit_label_and_route(self) -> None:
         for alert in self.EDGE_RULES:
             with self.subTest(alert=alert):
+                self.assertIn(alert, self.by_name, f"{alert} missing from the rules file")
                 labels = self.by_name[alert]["labels"]
                 self.assertEqual(labels.get("unit"), "edge-mirror")
                 self.assertEqual(labels.get("route"), "telegram")

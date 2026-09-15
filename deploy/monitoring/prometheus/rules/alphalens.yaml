@@ -203,7 +203,7 @@ groups:
       # deploy/systemd/README.md "What the mirror publishes"):
       #   alphalens_edge_mirror_watermark_timestamp_seconds          the settled watermark it read
       #   alphalens_edge_mirror_unsettled_dates                      dates it refused this run
-      #   alphalens_edge_mirror_newest_brief_date_timestamp_seconds  max(brief_date) in Postgres
+      #   alphalens_edge_mirror_newest_brief_date_timestamp_seconds  newest date in the mirror's ledger
       # No rule reads alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}
       # any more; AlphalensJobFailed still pages a mirror run that exits non-zero.
       #
@@ -262,8 +262,17 @@ groups:
       # = the fourth consecutive refusal, one hour of margin over the worst
       # legitimate case. A mirror run that dies before its emit leaves the
       # previous file, so a 07:05 count can persist alongside AlphalensJobFailed;
-      # OOM / timeout days page both, by design. The gauge is rewritten hourly
-      # and scraped every 5 s, so ``for: 3h`` is well defined on it.
+      # OOM / timeout days page both, by design — and AlphalensEdgeStale joins
+      # ~12h later once the previous night's watermark passes 36h (three pages
+      # for one fault, in order of arrival). On the real 2026-09-13 the manual
+      # run at 09:55 UTC would have cleared this rule ten minutes before it
+      # fired; it pages the day nobody intervenes. The gauge is rewritten hourly
+      # and scraped every 5 s, so ``for: 3h`` holds between runs; the series
+      # carries instance/job="node-exporter" from the scrape (one target, one
+      # file, so no aggregation is needed), and a scrape that cannot open the
+      # file staleness-marks it and restarts the ``for`` clock — the writer's
+      # rename→chmod window is microseconds, the same as every other
+      # alphalens_*.prom (pre-existing, shared with the pipeline writer).
       - alert: AlphalensEdgeMirrorRefusing
         expr: alphalens_edge_mirror_unsettled_dates > 0
         for: 3h
@@ -275,8 +284,9 @@ groups:
           summary: "edge mirror has refused {{ $value }} store date(s) for 3h - /edge holds its last complete state"
           description: "The population-ladder store has had parquets newer than the ingest watermark for more than 3 hours, so the hourly mirror keeps refusing them and /edge shows the last completed run. One refusal a day (the 07:05 UTC run, while the nightly is mid-run) is normal; hours of it mean the nightly never completed (a timeout or OOM kill before the watermark was written; check journalctl --user -u alphalens-feedback-shadow-returns) or the store was rewritten outside the nightly (a manual repair or a restore must end with a completed nightly). Recovery: rerun the nightly with its default budget: systemctl --user start alphalens-feedback-shadow-returns.service. Do not use ALPHALENS_FEEDBACK_FETCH_DEADLINE_S=0 and do not use --force on the mirror."
 
-      # The terminal-state backstop: max(brief_date) in Postgres, as the mirror
-      # read it back after its own writes. It sees the one shape the two rules
+      # The terminal-state backstop: the newest brief date in the mirror's
+      # per-date ledger (DayMetaLadderOutcome — a 0-candidate day counts), as the
+      # mirror read it back after its own writes. It sees the one shape the two rules
       # above cannot: a nightly that COMPLETES (every pass is swallow-all) yet
       # ingests nothing new — the 2026-09-13 "unfreeze" run with a zero fetch
       # budget replayed 0 brief dates and still wrote the watermark. Brief dates
@@ -293,7 +303,7 @@ groups:
           unit: edge-mirror
         annotations:
           summary: "/edge newest brief date is > 96h old"
-          description: "The newest brief_date in the /edge Postgres cache is {{ $value | humanizeDuration }} old (the healthy peak is about 55h). New brief dates stop arriving when the nightly completes without ingesting anything (a run with no fetch budget, an empty replay) or when the thematic pipeline stops producing briefs (AlphalensJobStale for thematic-build covers that side). Check journalctl --user -u alphalens-feedback-shadow-returns for 'population-monitor: 0 terminal, 0 ongoing across 0 brief dates', then rerun the nightly with its default budget: systemctl --user start alphalens-feedback-shadow-returns.service."
+          description: "The newest brief date the edge mirror has ingested is {{ $value | humanizeDuration }} old (the healthy peak is about 55h). New brief dates stop arriving when the nightly completes without ingesting anything (a run with no fetch budget, an empty replay) or when the thematic pipeline stops producing briefs (AlphalensJobStale for thematic-build covers that side). Check journalctl --user -u alphalens-feedback-shadow-returns for 'population-monitor: 0 terminal, 0 ongoing across 0 brief dates', then rerun the nightly with its default budget: systemctl --user start alphalens-feedback-shadow-returns.service."
 
       # feedback-shadow-returns runs nightly at 06:30 UTC (Track A v2
       # PR-T). 172800s = 48h = 2× the daily cadence, matching the other

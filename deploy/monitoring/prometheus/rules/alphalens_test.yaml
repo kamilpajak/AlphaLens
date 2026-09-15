@@ -527,6 +527,12 @@ tests:
       - eval_time: 2h
         alertname: AlphalensEdgeMirrorRefusing
         exp_alerts: []
+      # Still pending at 3h: the refusal began at t=1h, so `for: 3h` is first
+      # satisfied at 4h. This is what pins the hold from below — a `for: 2h`
+      # would fire here.
+      - eval_time: 3h
+        alertname: AlphalensEdgeMirrorRefusing
+        exp_alerts: []
       - eval_time: 4h
         alertname: AlphalensEdgeMirrorRefusing
         exp_alerts:
@@ -566,7 +572,7 @@ tests:
               unit: edge-mirror
             exp_annotations:
               summary: "/edge newest brief date is > 96h old"
-              description: "The newest brief_date in the /edge Postgres cache is 4d 2h 0m 0s old (the healthy peak is about 55h). New brief dates stop arriving when the nightly completes without ingesting anything (a run with no fetch budget, an empty replay) or when the thematic pipeline stops producing briefs (AlphalensJobStale for thematic-build covers that side). Check journalctl --user -u alphalens-feedback-shadow-returns for 'population-monitor: 0 terminal, 0 ongoing across 0 brief dates', then rerun the nightly with its default budget: systemctl --user start alphalens-feedback-shadow-returns.service."
+              description: "The newest brief date the edge mirror has ingested is 4d 2h 0m 0s old (the healthy peak is about 55h). New brief dates stop arriving when the nightly completes without ingesting anything (a run with no fetch budget, an empty replay) or when the thematic pipeline stops producing briefs (AlphalensJobStale for thematic-build covers that side). Check journalctl --user -u alphalens-feedback-shadow-returns for 'population-monitor: 0 terminal, 0 ongoing across 0 brief dates', then rerun the nightly with its default budget: systemctl --user start alphalens-feedback-shadow-returns.service."
       # The series exist, so the guard stays quiet.
       - eval_time: 4h
         alertname: AlphalensEdgeMetricMissing
@@ -586,6 +592,21 @@ tests:
         alertname: AlphalensEdgeMirrorRefusing
         exp_alerts: []
       - eval_time: 5h
+        alertname: AlphalensEdgeMirrorRefusing
+        exp_alerts: []
+
+  # The worst legitimate morning: a nightly started late (Persistent= catch-up
+  # or by hand) is bounded by its 90-min timeout, so two consecutive refusals
+  # can happen; the handoff ingests before the third. Still nothing may fire.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_edge_mirror_unsettled_dates'
+        values: '0 84 84 0x10'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: AlphalensEdgeMirrorRefusing
+        exp_alerts: []
+      - eval_time: 6h
         alertname: AlphalensEdgeMirrorRefusing
         exp_alerts: []
 
