@@ -404,6 +404,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             "alphalens_feedback_",
             "alphalens_rules_sync_",
             "alphalens_grafana_sync_",
+            "alphalens_edge_",
         )
         for rule in rules:
             expr = rule.get("expr", "")

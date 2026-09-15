@@ -240,12 +240,36 @@ echo "alphalens_job_last_success_timestamp_seconds{job=\"edgar-detect\"} 0" \
 systemctl --user start alphalens-edgar-detect.service
 ```
 
-### AlphalensEdgeStale
+### /edge freshness: AlphalensEdgeStale, AlphalensEdgeMirrorRefusing, AlphalensEdgeNewestBriefDateStale
 
-`AlphalensEdgeStale` fires when `alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}` has
-not been refreshed for >36h (15-min debounce, severity warning). It measures /edge Postgres
-freshness directly — independent of whether `alphalens-feedback-shadow-returns.service` itself
-succeeded, closing the blind spot where a timed-out compute job left /edge frozen with no alert.
+Until 2026-09-15 `AlphalensEdgeStale` read `alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}`
+and this README said that measured "/edge Postgres freshness directly". It did not: that series
+is the mirror unit's exit-0 clock, and the mirror exits 0 on a run that refuses the whole store.
+On 2026-09-13 the nightly compute job was timeout-killed before it wrote the ingest watermark,
+every hourly mirror run logged `unsettled=117` and exited 0, `/edge` sat a brief day behind, and
+the alert stayed silent (#1436). The rules now read the gauges the mirror command publishes about
+the data (`alphalens_domain_edge-mirror.prom`; see `deploy/systemd/README.md` "What the mirror
+publishes"):
+
+| Rule | Reads | Fires when |
+|---|---|---|
+| `AlphalensEdgeStale` | `alphalens_edge_mirror_watermark_timestamp_seconds` | the settled watermark the mirror last read is older than 36h (15-min debounce). Nothing newer than that completed compute run is in `/edge`: the nightly stopped completing, or the mirror stopped running (the gauge freezes with the file). |
+| `AlphalensEdgeMirrorRefusing` | `alphalens_edge_mirror_unsettled_dates` | the mirror has refused store dates for 3h. One refusal a day (the 07:05 UTC run, while the nightly is mid-run) is normal and clears by 08:05; hours of it is the 2026-09-13 shape (a killed nightly) or a store rewritten outside the nightly. Fires the same morning (~10:05 UTC) instead of a day later. |
+| `AlphalensEdgeNewestBriefDateStale` | `alphalens_edge_mirror_newest_brief_date_timestamp_seconds` | the newest brief date in the mirror's per-date ledger (`edge_daymetaladderoutcome`) is older than 96h (healthy peak about 55h; one missed night about 79h). The backstop for a nightly that completes but ingests nothing new, which the two rules above cannot see. |
+| `AlphalensEdgeMetricMissing` | `absent(alphalens_edge_mirror_watermark_timestamp_seconds)` | the gauges do not exist (image not yet pulled by the hourly run, compose mount or `ALPHALENS_TEXTFILE_DIR` missing, scrape broken), so the three rules above are disarmed. One guard covers all three: one atomic file. |
+
+Recovery for all of them is a full rerun of the nightly with its default budget:
+`systemctl --user start alphalens-feedback-shadow-returns.service` (about 75 min; the
+`OnSuccess=` handoff mirrors the result). Do not use `ALPHALENS_FEEDBACK_FETCH_DEADLINE_S=0`
+(it disables all fetching and stamps a half-rewritten store as settled, which is what the
+2026-09-13 recovery did) and do not use `rebuild_ladder_outcomes_cache --force` (it bypasses the
+gate for one run and leaves the watermark file untouched, so the next hourly run refuses again).
+
+The four rules are evaluated in `prometheus/rules/alphalens_test.yaml` (`just test-rules`)
+against the 2026-09-13 series shape, a healthy morning and the missing-series case. Nothing
+reads the mirror's `last_success` clock any more; `AlphalensJobFailed` still pages a mirror run
+that exits non-zero, and #1458 tracks the nightly's own job textfile vanishing after a timeout
+kill.
 
 ## Grafana dashboard
 

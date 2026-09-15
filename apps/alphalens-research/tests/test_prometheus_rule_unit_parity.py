@@ -50,6 +50,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.test_edge_mirror_metrics_parity import EDGE_MIRROR_GAUGES
+
 # tests/<name>.py -> repo root is three parents up; deploy/ is at root.
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SYSTEMD_DIR = REPO_ROOT / "deploy" / "systemd"
@@ -75,9 +77,13 @@ EMIT_HOOK_RE = re.compile(
 # weekend staleness window.
 STALENESS_EXEMPT_JOBS: frozenset[str] = frozenset(
     {
-        # edge-mirror is covered by the dedicated AlphalensEdgeStale alert (watches
-        # /edge freshness via job="edge-mirror" last-success) rather than the generic
-        # AlphalensJobStale per-job rule. See deploy/monitoring/prometheus/rules/alphalens.yaml.
+        # edge-mirror is covered by the dedicated AlphalensEdgeStale alert rather than
+        # the generic AlphalensJobStale per-job rule. Since #1436 that alert watches
+        # the ingest watermark the mirror READ (alphalens_edge_mirror_watermark_
+        # timestamp_seconds), not the unit's last-success clock: the mirror exits 0
+        # on a run that refuses the whole store, so the clock advanced hourly on
+        # 2026-09-13 while /edge sat a brief day behind. A generic rule on the
+        # clock would be wrong here. See TestEdgeRulesReadTheMirrorGauges below.
         "edge-mirror",
         # broker-capital-reader follows the edge-mirror shape: the unit wires the
         # emit hook like every other timer-driven service, but the generic
@@ -336,6 +342,65 @@ class TestParityPositiveControls(unittest.TestCase):
         real = _emitting_jobs() | _staleness_rule_jobs()
         self.assertNotIn("nonexistent", real)
         self.assertNotIn("new-cron-unit", real)
+
+
+class TestEdgeRulesReadTheMirrorGauges(unittest.TestCase):
+    """The four /edge rules read the gauges the mirror command publishes (#1436).
+
+    Until 2026-09-15 ``AlphalensEdgeStale`` read the mirror unit's last-success
+    clock, which advances on an all-refused run (exit 0): on 2026-09-13 the
+    nightly was killed before writing the ingest watermark, the mirror refused
+    117 dates hourly, /edge sat a brief day behind, and the rule stayed silent.
+    The rules now read the DATA gauges; this pins the series each one reads,
+    that the guard wraps the same series the stale rule reads, that every name
+    is one the Django command declares, and that the old blind spot does not
+    return under a new alert name.
+    """
+
+    EDGE_RULES: dict[str, str] = {
+        "AlphalensEdgeStale": "alphalens_edge_mirror_watermark_timestamp_seconds",
+        "AlphalensEdgeMetricMissing": "alphalens_edge_mirror_watermark_timestamp_seconds",
+        "AlphalensEdgeMirrorRefusing": "alphalens_edge_mirror_unsettled_dates",
+        "AlphalensEdgeNewestBriefDateStale": (
+            "alphalens_edge_mirror_newest_brief_date_timestamp_seconds"
+        ),
+    }
+    OLD_SERIES = 'alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}'
+
+    def setUp(self) -> None:
+        self.by_name = {r["alert"]: r for r in _all_rules() if r.get("alert")}
+
+    def test_each_edge_rule_reads_its_mirror_gauge(self) -> None:
+        for alert, series in self.EDGE_RULES.items():
+            with self.subTest(alert=alert):
+                self.assertIn(alert, self.by_name, f"{alert} missing from the rules file")
+                self.assertIn(series, self.by_name[alert]["expr"])
+
+    def test_the_guard_wraps_the_series_the_stale_rule_reads(self) -> None:
+        stale = self.by_name["AlphalensEdgeStale"]["expr"]
+        guard = self.by_name["AlphalensEdgeMetricMissing"]["expr"]
+        series = self.EDGE_RULES["AlphalensEdgeStale"]
+        self.assertIn(series, stale)
+        self.assertEqual(guard.strip(), f"absent({series})")
+
+    def test_every_series_read_is_one_the_django_command_declares(self) -> None:
+        self.assertLessEqual(set(self.EDGE_RULES.values()), set(EDGE_MIRROR_GAUGES))
+
+    def test_no_rule_reads_the_mirror_last_success_clock_any_more(self) -> None:
+        readers = [r["alert"] for r in _all_rules() if self.OLD_SERIES in r.get("expr", "")]
+        self.assertEqual(
+            readers,
+            [],
+            "a rule reads the edge-mirror last-success clock again — it advances on an "
+            "all-refused run, which is the #1436 blind spot",
+        )
+
+    def test_edge_rules_share_the_unit_label_and_route(self) -> None:
+        for alert in self.EDGE_RULES:
+            with self.subTest(alert=alert):
+                labels = self.by_name[alert]["labels"]
+                self.assertEqual(labels.get("unit"), "edge-mirror")
+                self.assertEqual(labels.get("route"), "telegram")
 
 
 if __name__ == "__main__":

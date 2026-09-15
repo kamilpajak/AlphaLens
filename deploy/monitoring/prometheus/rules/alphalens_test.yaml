@@ -499,3 +499,115 @@ tests:
       - eval_time: 8h
         alertname: AlphalensTemplateMetricsMissing
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # /edge freshness (#1436): AlphalensEdgeStale, AlphalensEdgeMirrorRefusing,
+  # AlphalensEdgeNewestBriefDateStale, AlphalensEdgeMetricMissing
+  # ---------------------------------------------------------------------
+  #
+  # The 2026-09-13 incident, as series. The nightly was timeout-killed before it
+  # wrote the ingest watermark, so the mirror's watermark gauge froze (here at 0),
+  # the mirror refused the whole store from its next hourly run (117 dates), and
+  # Postgres kept the previous newest brief date (here 0). Meanwhile the unit's
+  # own last-success clock kept ADVANCING every hour — the series the old rule
+  # read. The old rule stayed silent for the whole day; these must not.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}'
+        values: '0+3600x119'
+      - series: 'alphalens_edge_mirror_watermark_timestamp_seconds'
+        values: '0x119'
+      - series: 'alphalens_edge_mirror_unsettled_dates'
+        values: '0 117x118'
+      - series: 'alphalens_edge_mirror_newest_brief_date_timestamp_seconds'
+        values: '0x119'
+    alert_rule_test:
+      # Refusing: the count goes non-zero at t=1h; `for: 3h` makes it fire at
+      # the fourth consecutive refusal (t=4h), which on the real day is ~10:05 UTC.
+      - eval_time: 2h
+        alertname: AlphalensEdgeMirrorRefusing
+        exp_alerts: []
+      - eval_time: 4h
+        alertname: AlphalensEdgeMirrorRefusing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: edge-mirror
+            exp_annotations:
+              summary: "edge mirror has refused 117 store date(s) for 3h - /edge holds its last complete state"
+              description: "The population-ladder store has had parquets newer than the ingest watermark for more than 3 hours, so the hourly mirror keeps refusing them and /edge shows the last completed run. One refusal a day (the 07:05 UTC run, while the nightly is mid-run) is normal; hours of it mean the nightly never completed (a timeout or OOM kill before the watermark was written; check journalctl --user -u alphalens-feedback-shadow-returns) or the store was rewritten outside the nightly (a manual repair or a restore must end with a completed nightly). Recovery: rerun the nightly with its default budget: systemctl --user start alphalens-feedback-shadow-returns.service. Do not use ALPHALENS_FEEDBACK_FETCH_DEADLINE_S=0 and do not use --force on the mirror."
+      # Stale: `> 129600` is first true at the 37h step on the 1h grid (36h is
+      # not `>`), `for: 15m` makes the 38h step the first firing one. The
+      # advancing job clock suppresses nothing — that was the old blind spot.
+      - eval_time: 36h
+        alertname: AlphalensEdgeStale
+        exp_alerts: []
+      - eval_time: 38h
+        alertname: AlphalensEdgeStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: edge-mirror
+            exp_annotations:
+              summary: "/edge data comes from a compute run that completed > 36h ago"
+              description: "The ingest watermark the edge mirror last read is 1d 14h 0m 0s old, so nothing newer than that completed compute run is in /edge. Either the nightly alphalens-feedback-shadow-returns has not completed since then (a timeout kill or an OOM kill leaves the watermark unwritten; check its journal), or the mirror itself has stopped running (check alphalens-edge-mirror.timer; the gauge freezes with the file). Recovery: rerun the nightly with its default budget: systemctl --user start alphalens-feedback-shadow-returns.service. Do not use ALPHALENS_FEEDBACK_FETCH_DEADLINE_S=0 (it stamps a half-rewritten store as settled) and do not use --force on the mirror (the next hourly run refuses again)."
+      # Newest brief date: 96h is the threshold, the 98h step the first firing one.
+      - eval_time: 96h
+        alertname: AlphalensEdgeNewestBriefDateStale
+        exp_alerts: []
+      - eval_time: 98h
+        alertname: AlphalensEdgeNewestBriefDateStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: edge-mirror
+            exp_annotations:
+              summary: "/edge newest brief date is > 96h old"
+              description: "The newest brief_date in the /edge Postgres cache is 4d 2h 0m 0s old (the healthy peak is about 55h). New brief dates stop arriving when the nightly completes without ingesting anything (a run with no fetch budget, an empty replay) or when the thematic pipeline stops producing briefs (AlphalensJobStale for thematic-build covers that side). Check journalctl --user -u alphalens-feedback-shadow-returns for 'population-monitor: 0 terminal, 0 ongoing across 0 brief dates', then rerun the nightly with its default budget: systemctl --user start alphalens-feedback-shadow-returns.service."
+      # The series exist, so the guard stays quiet.
+      - eval_time: 4h
+        alertname: AlphalensEdgeMetricMissing
+        exp_alerts: []
+
+  # A healthy morning: the 07:05 UTC run refuses the store once (84 dates,
+  # the nightly is mid-run), the next run ingests. Nothing may fire.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_edge_mirror_unsettled_dates'
+        values: '0 84 0x10'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: AlphalensEdgeMirrorRefusing
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: AlphalensEdgeMirrorRefusing
+        exp_alerts: []
+      - eval_time: 5h
+        alertname: AlphalensEdgeMirrorRefusing
+        exp_alerts: []
+
+  # The disarm case: the gauges do not exist (image not yet pulled, mount
+  # missing, scrape broken). The stale rule cannot fire — `time() - absent`
+  # is empty — so the guard has to, and it must not wait for the 36h the stale
+  # rule would need.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}'
+        values: '0+3600x47'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: AlphalensEdgeMetricMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: edge-mirror
+            exp_annotations:
+              summary: "edge-mirror gauges missing - the /edge staleness rules are disarmed"
+              description: "No alphalens_edge_mirror_watermark_timestamp_seconds series exists, so AlphalensEdgeStale, AlphalensEdgeMirrorRefusing and AlphalensEdgeNewestBriefDateStale cannot fire. Causes: the hourly mirror has not yet pulled an image that publishes the gauges, the compose file on the VPS lacks the /var/lib/node_exporter/textfile mount or ALPHALENS_TEXTFILE_DIR (the command logs 'ALPHALENS_TEXTFILE_DIR unset' in journalctl --user -u alphalens-edge-mirror), or the textfile collector / node_exporter scrape is broken. Clears after the first run that writes alphalens_domain_edge-mirror.prom."
+      - eval_time: 40h
+        alertname: AlphalensEdgeStale
+        exp_alerts: []

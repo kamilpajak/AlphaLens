@@ -999,12 +999,18 @@ re-mirroring unchanged parquets and exiting quickly.
 
 ### Alerting
 
-`AlphalensEdgeStale` (in `deploy/monitoring/prometheus/rules/alphalens.yaml`)
-fires when `alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}` has
-not been refreshed for >36h. This is independent of whether the compute job
-(`feedback-shadow-returns`) succeeded — it directly measures /edge Postgres
-freshness, closing the blind spot where a timed-out compute job left /edge
-frozen with no alert.
+Four rules in `deploy/monitoring/prometheus/rules/alphalens.yaml` read the gauges described in
+"What the mirror publishes" above (#1436): `AlphalensEdgeStale` (the watermark the mirror last
+read is older than 36h), `AlphalensEdgeMirrorRefusing` (store dates refused for 3h — the daily
+07:05 UTC refusal clears by 08:05, hours of it is a killed nightly or a store rewritten outside
+it), `AlphalensEdgeNewestBriefDateStale` (the newest brief date in the mirror's per-date ledger older than 96h) and the
+`absent()` guard `AlphalensEdgeMetricMissing`. Until 2026-09-15 the stale rule read this unit's
+`alphalens_job_last_success_timestamp_seconds`, which advances on every exit-0 run — including
+the all-refused runs of 2026-09-13, when `/edge` sat a brief day behind with no page. That
+series is no longer read by any rule. Recovery is a full rerun of the nightly with its default
+budget (`systemctl --user start alphalens-feedback-shadow-returns.service`), never a zero fetch
+deadline and never `--force` on the mirror; `deploy/monitoring/README.md` "/edge freshness" has
+the reasons.
 
 ### Deployment runbook (ordered steps)
 
