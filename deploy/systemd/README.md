@@ -888,8 +888,10 @@ fix) can be deleted; nothing reads them.
 The exit code the hook publishes comes from `$SERVICE_RESULT`, never from a raw
 `$EXIT_STATUS`. `success` writes `0` (including a plain `systemctl stop`, which
 ends on `TERM`). Any other result writes the numeric status when systemd gives
-one, and `256` when it does not: a signal kill, a `timeout`, an `oom-kill` or a
-`start-limit-hit` with no status. The signal number goes to
+a non-zero one, and `256` otherwise: a signal kill, a `timeout`, an `oom-kill` or
+a `start-limit-hit` with no status, and also a failed result whose status IS `0`
+(Table 6 has `timeout : exited : 0`), because a failure never reports `0`. The
+signal number goes to
 `alphalens_job_last_signal` (`15` for `TERM`, `9` for `KILL`), and a failed run
 carries the previous `last_success` line forward, so `AlphalensJobStale` stays
 armed. The full field contract is the "Cron-health" table in
