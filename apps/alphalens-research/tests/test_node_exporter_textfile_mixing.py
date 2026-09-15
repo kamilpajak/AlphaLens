@@ -6,7 +6,7 @@ Opt-in (needs Docker):
     NODE_EXPORTER_DOCKER_TEST=1 .venv/bin/python -m unittest \
         tests.test_node_exporter_textfile_mixing -v
 
-The CI ``prom-rules`` job runs it with the flag set (pinned by
+The CI research job runs it with the flag set (pinned by
 ``test_promtool_lint_parity.py``).
 
 Why it exists (#1461): the plan to drop ``# HELP`` / ``# TYPE`` from the hook
