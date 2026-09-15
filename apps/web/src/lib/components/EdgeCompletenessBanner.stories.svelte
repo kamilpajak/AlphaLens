@@ -21,7 +21,7 @@
 <!-- All matured terminals have benchmark coverage: N === M. -->
 <Story
 	name="Complete"
-	args={{ enrichedAt: FIXED_ENRICHED_AT, nTerminal: 118, nMatured: 118 } satisfies BannerProps}
+	args={{ enrichedAt: FIXED_ENRICHED_AT, nTerminal: 118, nMatured: 118, nQuarantined: 0 } satisfies BannerProps}
 	play={async ({ canvasElement }) => {
 		const canvas = within(canvasElement);
 		await expect(canvas.getByText('118 / 118')).toBeVisible();
@@ -32,7 +32,7 @@
      3 terminal rows still lack a finite market_excess_return. -->
 <Story
 	name="Partial"
-	args={{ enrichedAt: FIXED_ENRICHED_AT, nTerminal: 121, nMatured: 118 } satisfies BannerProps}
+	args={{ enrichedAt: FIXED_ENRICHED_AT, nTerminal: 121, nMatured: 118, nQuarantined: 0 } satisfies BannerProps}
 	play={async ({ canvasElement }) => {
 		const canvas = within(canvasElement);
 		await expect(canvas.getByText('118 / 121')).toBeVisible();
@@ -46,7 +46,7 @@
      function matcher against the full normalized textContent instead. -->
 <Story
 	name="NoWatermark"
-	args={{ enrichedAt: null, nTerminal: 121, nMatured: 118 } satisfies BannerProps}
+	args={{ enrichedAt: null, nTerminal: 121, nMatured: 118, nQuarantined: 0 } satisfies BannerProps}
 	play={async ({ canvasElement }) => {
 		const canvas = within(canvasElement);
 		await expect(
@@ -60,9 +60,24 @@
 <!-- No closed positions yet (nTerminal 0) — avoid a bare "0 / 0". -->
 <Story
 	name="NoClosedYet"
-	args={{ enrichedAt: FIXED_ENRICHED_AT, nTerminal: 0, nMatured: 0 } satisfies BannerProps}
+	args={{ enrichedAt: FIXED_ENRICHED_AT, nTerminal: 0, nMatured: 0, nQuarantined: 0 } satisfies BannerProps}
 	play={async ({ canvasElement }) => {
 		const canvas = within(canvasElement);
 		await expect(canvas.getByText('no closed positions yet')).toBeVisible();
+	}}
+/>
+
+<!-- One quarantined row (#1453): the edge-summary.json fixture shape (121 terminal,
+     118 matured) with ONE SPLIT_INVALIDATED quarantine among the 3 rows that lack
+     a benchmark. The quarantine gets no benchmark by design, so the denominator
+     drops to 120 and the row is named beside the ratio instead of reading as
+     "still to enrich". -->
+<Story
+	name="Quarantined"
+	args={{ enrichedAt: FIXED_ENRICHED_AT, nTerminal: 121, nMatured: 118, nQuarantined: 1 } satisfies BannerProps}
+	play={async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		await expect(canvas.getByText('118 / 120')).toBeVisible();
+		await expect(canvas.getByText('1 quarantined')).toBeVisible();
 	}}
 />

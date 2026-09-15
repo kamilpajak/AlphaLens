@@ -665,6 +665,7 @@
 					enrichedAt={summary.enriched_at}
 					nTerminal={summary.n_terminal}
 					nMatured={summary.n_matured}
+					nQuarantined={summary.n_quarantined}
 				/>
 			</div>
 

@@ -3,6 +3,7 @@
   "n_plannable": 102,
   "n_terminal": 5,
   "n_matured": 3,
+  "n_quarantined": 0,
   "n_gate_threshold": 30,
   "benchmark": "SPY",
   "metric_note": "excess-of-benchmark, gross of cost, mechanical ladder",
