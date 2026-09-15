@@ -883,6 +883,47 @@ files under `~/.alphalens/metrics/` (`alphalens_job_edge-mirror.prom` plus the
 June `alphalens_domain_*.prom` leftovers from before the #373/#374 routing
 fix) can be deleted; nothing reads them.
 
+### What the mirror publishes (#1436, 2026-09-15)
+
+The hook above only says whether the unit RAN and exited 0. The mirror command
+exits 0 on a run that refuses the whole store — on 2026-09-13 the nightly was
+timeout-killed before it wrote `.ingest_watermark.json`, so every hourly run
+logged `rebuilt=0 skipped=0 deleted=0 unsettled=117 total_rows=0`, `/edge` sat a
+brief day behind, and `alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}`
+kept advancing. The command therefore publishes what it saw, from inside the
+container, to `alphalens_domain_edge-mirror.prom`:
+
+| Gauge | Value |
+|---|---|
+| `alphalens_edge_mirror_watermark_timestamp_seconds` | `completed_at` of the ingest watermark the run read (`0` when none). Nothing newer than that completed compute run can be in `/edge`. |
+| `alphalens_edge_mirror_unsettled_dates` | dates refused this run (parquet newer than the watermark). Non-zero at the 07:05 UTC run every morning, while the nightly is mid-run; non-zero for hours means the nightly never completed, or the store was rewritten outside it. |
+| `alphalens_edge_mirror_newest_brief_date_timestamp_seconds` | the newest brief date in the mirror's per-date ledger (`edge_daymetaladderoutcome`) after the run, at midnight UTC. A 0-candidate day (empty parquet) counts; `0` before the first ingest. |
+
+Routing: the Django image cannot import the pipeline's textfile writer (ADR
+0011), so `apps/alphalens-django/edge/ingest/textfile.py` mirrors it — same file
+name, same atomic replace, same `0o644` — but with no home-directory fallback and
+no `mkdir`: with `ALPHALENS_TEXTFILE_DIR` unset it logs a warning and writes
+nothing; with the directory missing (the bind mount absent) it fails the run. The
+`rebuild-ladder-outcomes` service in `deploy/docker/django-prod/docker-compose.yaml`
+carries the identity mount `/var/lib/node_exporter/textfile` (writable; the
+container runs as uid 1000 = the directory's owner) and the base environment
+carries the variable. Pinned by
+`test_deploy_systemd_units.py::TestEdgeMirrorComposeMetricsRouting`.
+
+Deploy: the maintenance service inherits `pull_policy: always`, so the hourly
+run pulls `ghcr.io/kamilpajak/alphalens-django:latest` by itself — new command
+code is live within an hour of the image build, no `docker compose up -d`
+needed. The compose file arrives with `git pull` on the VPS checkout (the Sunday
+literature scan does one; do it by hand to bring the mount forward). Until the
+pull the command logs `ALPHALENS_TEXTFILE_DIR unset` hourly and exits 0. Verify
+the effect through Prometheus, not the exporter's loopback (node_exporter
+listens on the docker bridge):
+
+```bash
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=alphalens_edge_mirror_watermark_timestamp_seconds'
+journalctl --user -u alphalens-edge-mirror -n 20 | grep -E 'watermark completed_at|edge-mirror: wrote'
+```
+
 ### Install (ATOMIC DEPLOY REQUIREMENT)
 
 The compute-unit edit and both new unit files **must land together** in a

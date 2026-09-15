@@ -23,6 +23,7 @@ import datetime as dt
 import json
 import logging
 import os
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -89,6 +90,10 @@ class RebuildResult:
     deleted_dates: tuple[dt.date, ...]
     total_rows: int
     unsettled_dates: tuple[dt.date, ...]
+    # ``completed_at`` of the settled watermark this run read (None = no sentinel,
+    # mtime gate only). Published by the management command as a gauge (#1436):
+    # nothing newer than this completed compute run can be in /edge.
+    watermark: float | None
 
     @property
     def n_rebuilt(self) -> int:
@@ -181,6 +186,18 @@ def _stored_mtimes() -> dict[dt.date, float]:
     }
 
 
+def newest_mirrored_brief_date() -> dt.date | None:
+    """The newest brief date the mirror has ingested, read back after this run's
+    writes (None before the first ingest).
+
+    Read from ``DayMetaLadderOutcome`` — the per-date ledger ``_stored_mtimes``
+    also treats as "what is mirrored" — not from ``LadderOutcome``: a 0-candidate
+    brief date is ingested as a ledger row with zero outcome rows, and it still
+    counts as the store having advanced.
+    """
+    return DayMetaLadderOutcome.objects.aggregate(newest=django_models.Max("brief_date"))["newest"]
+
+
 @transaction.atomic
 def _rebuild_one_date(*, date: dt.date, parquet_path: Path, mtime: float, now: dt.datetime) -> int:
     df = pd.read_parquet(parquet_path)
@@ -225,6 +242,18 @@ def rebuild_from_parquet(
     parquet_by_date = _scan_parquets(resolved)
     stored_mtimes = _stored_mtimes()
     watermark = read_ingest_watermark(resolved)
+    if watermark is None:
+        logger.info("ladder-ingest: no settled watermark in %s (mtime gate only)", resolved)
+    else:
+        # The journal line an operator reads on the day /edge looks frozen: how old
+        # the last COMPLETED compute run is (#1436).
+        completed = dt.datetime.fromtimestamp(watermark, tz=dt.UTC)
+        age_s = max(time.time() - watermark, 0.0)
+        logger.info(
+            "ladder-ingest: watermark completed_at=%s age=%.0fs",
+            completed.isoformat(timespec="seconds"),
+            age_s,
+        )
 
     rebuilt: list[dt.date] = []
     skipped: list[dt.date] = []
@@ -264,4 +293,5 @@ def rebuild_from_parquet(
         deleted_dates=tuple(deleted),
         total_rows=total,
         unsettled_dates=tuple(unsettled),
+        watermark=watermark,
     )
