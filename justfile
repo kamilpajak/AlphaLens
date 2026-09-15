@@ -58,6 +58,13 @@ test-rules:
 # intended template change: rerun the render without `| diff` and commit it.
 # Each recipe line runs in its own `sh -c`, so no pipefail here: `diff` is the
 # last pipeline stage and fails on an empty render (amtool error) as well.
+# Real node_exporter (Docker) against real hook output — what a mixed
+# HELP/no-HELP directory scrapes as (#1461). Same image pin as the test.
+test-textfile-exporter:
+    NODE_EXPORTER_DOCKER_TEST=1 .venv/bin/python -m unittest discover \
+        -s apps/alphalens-research/tests -t apps/alphalens-research \
+        -p 'test_node_exporter_textfile_mixing.py' -v
+
 lint-alertmanager:
     docker run --rm --entrypoint amtool \
         -v "$PWD/deploy/monitoring/alertmanager:/etc/alertmanager:ro" \

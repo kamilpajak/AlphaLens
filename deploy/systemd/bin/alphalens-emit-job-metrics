@@ -45,15 +45,23 @@ set -euo pipefail
 # rolling outage: #1441's new text blinded AlphalensJobFailed for 8 of 17
 # jobs from 2026-09-13 to 2026-09-15 (``inconsistent metric help text`` in
 # the exporter log, ``node_textfile_scrape_error 1``, nothing paging). The
-# collector never compares a family that carries no help line, so samples
-# without HELP coexist with any HELP-bearing file — which is also why the
-# rollout needed no file migration. node_exporter synthesises
-# ``Metric read from <file>`` as the help text; nothing reads TYPE. The
-# Python emitters below never wrote HELP either. Residual hazard, documented
-# in deploy/systemd/README.md: two differing HELP texts for one of these
-# names followed by a helpless file dereference a nil ``*mf.Help`` in
-# v1.9.1 and crash the exporter — never add a HELP line for these names
-# anywhere. Pinned by test_emit_job_metrics_hook.py
+# collector never compares a family that carries no help line, and
+# synthesises ``Metric read from <files>`` for it; nothing reads TYPE. The
+# Python emitters below never wrote HELP either.
+#
+# A HELP-bearing and a helpless file for the SAME names still cannot
+# coexist: the collector passes both through, and the client_golang
+# registry behind it then drops every sample whose help text or type
+# differs from the first family it met under that name — logged as
+# ``error gathering metrics ... has help ... but should have``, with
+# ``node_textfile_scrape_error`` still 0 (measured against the real
+# exporter: test_node_exporter_textfile_mixing.py). So deploying this
+# version is a one-shot migration: strip the comment lines from every
+# existing alphalens_job_*.prom in the same step as the ``git pull``
+# (runbook in deploy/systemd/README.md). Never add a HELP line for these
+# names anywhere afterwards — besides the drop above, two differing texts
+# followed by a helpless file dereference a nil ``*mf.Help`` in v1.9.1 and
+# crash the exporter. Pinned by test_emit_job_metrics_hook.py
 # (TestTheHookWritesNoCommentLines); AlphalensJobFamilyMissing pages a
 # dropped family per job, AlphalensTextfileScrapeError a rejected file.
 #

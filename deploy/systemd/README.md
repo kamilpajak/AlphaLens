@@ -920,19 +920,49 @@ one stale file was rewritten by hand on 2026-09-15.
 The collector never compares a family that carries no help line (the condition
 is `mf.Help != nil && helpTexts[0] != *mf.Help || helpTexts[1] != ""`, and a
 helpless family registers no text either), so the hook now writes samples only,
-like the Python emitters always did. That is also why the rollout needed no file
-migration: files written by the new hook coexist with the 17 old HELP-bearing
-ones, which age out as each job next runs (the last, `literature-scan-monthly`,
-on 2026-10-01). node_exporter synthesises `Metric read from <file>` as the help
-text; nothing in the rules, the fixtures or Grafana reads HELP or TYPE, and the
-families are simply exposed untyped.
+like the Python emitters always did. node_exporter synthesises
+`Metric read from <files>` as the help text; nothing in the rules, the fixtures
+or Grafana reads HELP or TYPE, and the families are simply exposed untyped.
 
-Residual hazard: once a conflict HAS been recorded for a name in a scrape, the
-same condition short-circuits and dereferences `*mf.Help` for every later family
-of that name, so two differing HELP texts for an `alphalens_job_*` name followed
-by a helpless file crash the exporter (no `recover` in `collector.go` or
-client_golang; the container is `unless-stopped`, so it would crash on every
-scrape until the files change). Never add a HELP line for these names anywhere.
+That reading of `textfile.go` alone said the rollout needed no migration. The
+real exporter says otherwise (`tests/test_node_exporter_textfile_mixing.py`, run
+in CI against `prom/node-exporter:v1.9.1`): the collector does pass a
+HELP-bearing and a helpless family for the same name through, but the
+client_golang registry behind it refuses every sample whose help text or type
+differs from the first family it met under that name — `error gathering
+metrics ... has help "Metric read from ..." but should have ...` in the
+exporter log — and `node_textfile_scrape_error` stays 0. Whichever style sorts
+second loses all five families, so a job-by-job rollout would have taken jobs
+dark one at a time for weeks (the last old file, `literature-scan-monthly`,
+would have been rewritten on 2026-10-01) with only `AlphalensJobMetricMissing`
+to say so. **Deploying this hook is therefore a one-shot migration**, done in
+the same shell line as the pull so no job fires in between:
+
+```bash
+# On the VPS. The hook runs in place from the checkout; the loop strips the
+# comment lines from every existing job file (values untouched, tmp + mv per
+# file). Scrapes are 5 s apart, so at most one scrape sees a mixed directory.
+cd ~/AlphaLens && git pull --ff-only origin main && \
+  cd /var/lib/node_exporter/textfile && \
+  for f in alphalens_job_*.prom; do grep -v '^#' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
+# Verify: no comment line left, every job still exposed, no gather error.
+grep -l '^#' /var/lib/node_exporter/textfile/alphalens_job_*.prom   # prints nothing
+curl -s 172.17.0.1:9100/metrics | grep -c '^alphalens_job_last_exit_code'   # 17
+docker logs --since 2m node-exporter 2>&1 | grep -c 'error gathering'        # 0
+```
+
+Rolling the hook back needs the mirror image of the same step (revert, pull,
+and either strip nothing and wait for every job to rewrite its file, accepting
+the per-job drops meanwhile, or re-add the HELP lines to all 17 files at once).
+
+Residual hazards, both reasons never to add a HELP line for these names
+anywhere again: a single HELP-bearing file drops itself or every helpless file
+under the shared names (the registry behaviour above, no `scrape_error`), and
+once a conflict HAS been recorded for a name in a scrape, the collector's
+condition short-circuits and dereferences `*mf.Help` for every later family of
+that name, so two differing HELP texts followed by a helpless file crash the
+exporter (no `recover` in `collector.go` or client_golang; the container is
+`unless-stopped`, so it would crash on every scrape until the files change).
 Two rules watch this layer: `AlphalensTextfileScrapeError` (the global gauge,
 30m) and `AlphalensJobFamilyMissing` (`last_run unless last_exit_code`, per job,
 15m) — see `deploy/monitoring/README.md` "Textfile integrity". The hook is

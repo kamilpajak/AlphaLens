@@ -91,9 +91,13 @@ curl -s localhost:9100/metrics | grep '^alphalens_'
 
 The hook writes samples only — no `# HELP` / `# TYPE` lines — so node_exporter
 exposes these families untyped with a synthesised help text. Seventeen files share
-the five names and the collector drops a family whose help text differs from the
-first it met per scrape (#1461); a family with no help line is never compared. The
-"Type" column below is the semantic type every rule treats them as.
+the five names; the collector drops a family whose help text differs from the first
+it met per scrape (#1461), and the registry behind it drops any sample whose help or
+type differs from the first family under that name, `scrape_error` untouched — so
+a HELP-bearing file must never appear next to the hook's files again (the one-shot
+strip at deploy time is in `deploy/systemd/README.md`; the mixed-directory outcome
+is pinned against the real exporter by `tests/test_node_exporter_textfile_mixing.py`).
+The "Type" column below is the semantic type every rule treats them as.
 
 | Metric | Type | Description |
 |---|---|---|

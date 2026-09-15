@@ -418,6 +418,18 @@ jobs:
             -v "$PWD/deploy/monitoring/prometheus/rules:/r:ro" -w /r \
             prom/prometheus:v3.3.1 test rules /r/alphalens_test.yaml /r/alphalens_broker_test.yaml
 
+      # What the exporter actually serves from a directory the hook wrote
+      # into (#1461). The textfile collector passes a HELP-bearing and a
+      # helpless family for the same name through, and the registry behind it
+      # then drops whichever sorted second — with scrape_error still 0. Read
+      # from textfile.go alone that looked like "no migration needed"; the
+      # real exporter says otherwise, so this runs the real exporter.
+      - name: node_exporter textfile integration
+        run: |
+          NODE_EXPORTER_DOCKER_TEST=1 python3 -m unittest discover \
+            -s apps/alphalens-research/tests -t apps/alphalens-research \
+            -p 'test_node_exporter_textfile_mixing.py' -v
+
       # Alertmanager side of the same gate (#1345). `check-config` proves the
       # config + telegram.tmpl LOAD (Alertmanager keeps the old config on a
       # failed SIGHUP reload, silently). `template render --template.type=html`
