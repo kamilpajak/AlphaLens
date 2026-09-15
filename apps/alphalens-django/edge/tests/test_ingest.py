@@ -416,7 +416,7 @@ def test_result_carries_the_watermark_it_read(tmp_path: Path):
 # AlphalensEdgeStale used to read the mirror's last-success clock, which
 # advances on an all-unsettled run (exit 0). The command now publishes what it
 # saw — the watermark it read, the refused-date count and the newest brief date
-# in Postgres — so the rules can read the DATA's age.
+# in the mirror's per-date ledger — so the rules can read the DATA's age.
 
 _METRICS_FILE = "alphalens_domain_edge-mirror.prom"
 _WATERMARK_GAUGE = "alphalens_edge_mirror_watermark_timestamp_seconds"
@@ -456,6 +456,8 @@ def test_command_publishes_the_refusal_and_the_frozen_newest_date(mirror_dirs):
     # The 2026-09-13 shape. A settled ingest of D first ...
     store, metrics = mirror_dirs
     first = _write_parquet(store, "2026-09-11", [_terminal_row("BIO", excess=0.05)])
+    # The +10 s offset is what makes a gauge that reported wall-clock time
+    # (instead of the watermark it read) fail the abs=1.0 comparison below.
     settled_at = first.stat().st_mtime + 10.0
     _write_watermark(store, settled_at)
     _run_mirror(store)
@@ -493,6 +495,46 @@ def test_command_publishes_the_ingested_newest_date_after_a_settled_run(mirror_d
 
     assert "rebuilt=2 skipped=0 deleted=0 unsettled=0 total_rows=2" in summary
     assert _read_gauges(metrics)[_NEWEST_GAUGE] == _midnight_utc("2026-09-12")
+
+
+@pytest.mark.django_db
+def test_command_counts_a_zero_candidate_day_as_the_newest_date(mirror_dirs):
+    # A 0-candidate brief date is an EMPTY parquet: ingested as a ledger row
+    # (DayMetaLadderOutcome) with no outcome rows. The store advanced, so the
+    # gauge must say so — reading max(brief_date) off LadderOutcome would not.
+    store, metrics = mirror_dirs
+    _write_parquet(store, "2026-09-11", [_terminal_row("BIO", excess=0.05)])
+    empty = store / "2026-09-12.parquet"
+    pd.DataFrame({"benchmark_window_return": [], "market_excess_return": []}).to_parquet(
+        empty, index=False
+    )
+    _write_watermark(store, empty.stat().st_mtime + 10.0)
+
+    summary = _run_mirror(store)
+
+    assert "rebuilt=2" in summary
+    assert LadderOutcome.objects.filter(brief_date="2026-09-12").count() == 0
+    assert _read_gauges(metrics)[_NEWEST_GAUGE] == _midnight_utc("2026-09-12")
+
+
+@pytest.mark.django_db
+def test_unsettled_is_counted_before_the_mtime_gate(tmp_path: Path):
+    # An already-mirrored date whose parquet is UNCHANGED, with the watermark
+    # moved below its mtime (a restore, or a nightly that never stamped): the
+    # date must be reported unsettled, not skipped. A gate that checked the
+    # mtime first would call it skipped, and AlphalensEdgeMirrorRefusing reads
+    # the unsettled count.
+    path = _write_parquet(tmp_path, "2026-09-11", [_terminal_row("BIO", excess=0.05)])
+    mtime = path.stat().st_mtime
+    _write_watermark(tmp_path, mtime + 10.0)
+    first = rebuild_from_parquet(tmp_path)
+    assert dt.date(2026, 9, 11) in first.rebuilt_dates
+
+    _write_watermark(tmp_path, mtime - 10.0)
+    second = rebuild_from_parquet(tmp_path)
+
+    assert second.unsettled_dates == (dt.date(2026, 9, 11),)
+    assert second.skipped_dates == ()
 
 
 @pytest.mark.django_db

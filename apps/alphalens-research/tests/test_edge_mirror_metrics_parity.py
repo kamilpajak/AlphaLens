@@ -38,7 +38,7 @@ EDGE_MIRROR_GAUGES: dict[str, str] = {
     ),
     "alphalens_edge_mirror_unsettled_dates": "dates refused this run (parquet newer than the watermark)",
     "alphalens_edge_mirror_newest_brief_date_timestamp_seconds": (
-        "max(brief_date) in edge_ladderoutcome after the run, midnight UTC (0 when empty)"
+        "newest brief date in the mirror ledger (edge_daymetaladderoutcome) after the run, midnight UTC (0 before the first ingest)"
     ),
 }
 

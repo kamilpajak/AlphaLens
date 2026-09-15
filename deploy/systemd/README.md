@@ -897,7 +897,7 @@ container, to `alphalens_domain_edge-mirror.prom`:
 |---|---|
 | `alphalens_edge_mirror_watermark_timestamp_seconds` | `completed_at` of the ingest watermark the run read (`0` when none). Nothing newer than that completed compute run can be in `/edge`. |
 | `alphalens_edge_mirror_unsettled_dates` | dates refused this run (parquet newer than the watermark). Non-zero at the 07:05 UTC run every morning, while the nightly is mid-run; non-zero for hours means the nightly never completed, or the store was rewritten outside it. |
-| `alphalens_edge_mirror_newest_brief_date_timestamp_seconds` | `max(brief_date)` Postgres holds after the run, at midnight UTC (`0` on an empty table). |
+| `alphalens_edge_mirror_newest_brief_date_timestamp_seconds` | the newest brief date in the mirror's per-date ledger (`edge_daymetaladderoutcome`) after the run, at midnight UTC. A 0-candidate day (empty parquet) counts; `0` before the first ingest. |
 
 Routing: the Django image cannot import the pipeline's textfile writer (ADR
 0011), so `apps/alphalens-django/edge/ingest/textfile.py` mirrors it — same file

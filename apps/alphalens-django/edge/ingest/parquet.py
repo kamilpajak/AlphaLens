@@ -187,9 +187,15 @@ def _stored_mtimes() -> dict[dt.date, float]:
 
 
 def newest_mirrored_brief_date() -> dt.date | None:
-    """The newest ``brief_date`` Postgres holds — the terminal state of the mirror,
-    read after this run's writes (None on an empty table)."""
-    return LadderOutcome.objects.aggregate(newest=django_models.Max("brief_date"))["newest"]
+    """The newest brief date the mirror has ingested, read back after this run's
+    writes (None before the first ingest).
+
+    Read from ``DayMetaLadderOutcome`` — the per-date ledger ``_stored_mtimes``
+    also treats as "what is mirrored" — not from ``LadderOutcome``: a 0-candidate
+    brief date is ingested as a ledger row with zero outcome rows, and it still
+    counts as the store having advanced.
+    """
+    return DayMetaLadderOutcome.objects.aggregate(newest=django_models.Max("brief_date"))["newest"]
 
 
 @transaction.atomic

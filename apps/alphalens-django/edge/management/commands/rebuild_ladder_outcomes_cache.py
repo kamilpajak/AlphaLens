@@ -21,9 +21,11 @@ staleness rules read instead:
   parquet is newer than the watermark. Non-zero for one hour every morning while
   the nightly is mid-run; non-zero for hours means the nightly never completed or
   the store was rewritten outside it.
-- ``alphalens_edge_mirror_newest_brief_date_timestamp_seconds`` — ``max(brief_date)``
-  Postgres holds after this run, at midnight UTC (``0`` on an empty table). The
-  terminal state, read back rather than inferred from the run's own counters.
+- ``alphalens_edge_mirror_newest_brief_date_timestamp_seconds`` — the newest brief
+  date in the mirror's per-date ledger (``DayMetaLadderOutcome``) after this run,
+  at midnight UTC (``0`` before the first ingest). The terminal state, read back
+  rather than inferred from the run's own counters; the ledger rather than the
+  outcome rows because a 0-candidate day ingests as a ledger row with no rows.
 
 The names are pinned from the research side by
 ``tests/test_edge_mirror_metrics_parity.py`` (the rules file reads them by name).

@@ -1314,7 +1314,7 @@ class TestEdgeMirrorComposeMetricsRouting(unittest.TestCase):
         ):
             with self.subTest(target=target):
                 self.assertEqual(
-                    [m for m in mounts if m.endswith(f":{target}:ro")].__len__(),
+                    len([m for m in mounts if m.endswith(f":{target}:ro")]),
                     1,
                     f"read-only store mount {target} missing from rebuild-ladder-outcomes",
                 )
