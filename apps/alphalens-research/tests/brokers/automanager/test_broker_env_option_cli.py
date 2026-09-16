@@ -25,7 +25,7 @@ from unittest import mock
 
 from typer.testing import CliRunner
 
-from tests.brokers.automanager.test_arm_cli import _isolate_home
+from tests.brokers.automanager.cli_isolation import _isolate_home
 from tests.test_broker_cli import _CliFakeBroker
 
 ENV_VAR = "ALPHALENS_BROKER_ENVIRONMENT"
@@ -349,7 +349,7 @@ class MutatingCommandAmbientEnvTest(unittest.TestCase):
     ``picks`` and ``watches`` follow ``ALPHALENS_BROKER_ENVIRONMENT``; the
     arming commands keep defaulting to ``sim``. In a shell that exports
     ``live`` those two rules disagree, and the loser used to be the operator:
-    ``arm`` wrote to SIM while ``picks`` showed LIVE, so the pick "vanished".
+    an arming command wrote to SIM while ``picks`` showed LIVE, so the pick "vanished".
     The arming commands now refuse instead of choosing.
     """
 
@@ -370,11 +370,10 @@ class MutatingCommandAmbientEnvTest(unittest.TestCase):
         self.assertIn("--env", result.stderr)
         self.assertIn("live", result.stderr)
 
-    def test_arm_refuses_in_a_live_shell_without_an_explicit_env(self) -> None:
-        result = self._invoke(
-            ["arm", "KO", "--date", "2026-09-08", "--frame", "100000", "--currency", "USD"],
-            {ENV_VAR: "live"},
-        )
+    def test_arm_intent_refuses_in_a_live_shell_without_an_explicit_env(self) -> None:
+        # The ambient check runs before the document is read, so a path that
+        # does not exist is enough to reach it.
+        result = self._invoke(["arm-intent", "no-such-document.json"], {ENV_VAR: "live"})
         self.assertEqual(result.exit_code, 1)
         self.assertIn("--env", result.stderr)
 

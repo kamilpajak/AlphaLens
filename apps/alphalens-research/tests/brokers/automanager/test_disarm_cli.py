@@ -1,10 +1,10 @@
 """CLI tests for `alphalens broker disarm`.
 
-The operator counterpart of `arm`: retire an armed (ticker, date) pick from the
+The operator counterpart of `arm-intent`: retire an armed (ticker, date) pick from the
 queue AND cancel its open entry-trail watch tiers, in that strict order —
 watch-refusal first (a tier with a resting/in-flight armed BUY refuses the
 whole disarm and writes NOTHING), queue write second. Lazy-import doctrine:
-patches target the SOURCE modules, exactly like test_arm_cli.py.
+patches target the SOURCE modules, exactly like test_arm_intent_cli.py.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from unittest import mock
 
 from typer.testing import CliRunner
 
-from tests.brokers.automanager.test_arm_cli import _isolate_home, _seed_legacy_flat_state
+from tests.brokers.automanager.cli_isolation import _isolate_home, _seed_legacy_flat_state
 
 
 def _seed_watch(home: Path, env: str, crid: str, pick_key: str, *extra_lines: str) -> Path:

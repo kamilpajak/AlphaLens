@@ -11,6 +11,7 @@ import unittest
 
 from broker_contract.trade_intent.codec import (
     TradeIntentDecodeError,
+    author_jsonable,
     intent_from_jsonable,
     intent_to_jsonable,
 )
@@ -320,6 +321,100 @@ class TestUnknownKeyObservability(unittest.TestCase):
         data = intent_to_jsonable(_intent_with_reanchor())
         with self.assertNoLogs("broker_contract.trade_intent.codec", level="WARNING"):
             intent_from_jsonable(data)
+
+
+def _trailing_intent() -> TradeIntent:
+    return TradeIntent(
+        intent_id="KBH:2026-08-21",
+        instrument=InstrumentHint(ticker="KBH", mic="XNYS"),
+        spec=TradeSpec(
+            entry_tiers=(
+                EntryTierSpec(limit_price=60.0, alloc_pct=60.0, tag="swing-low"),
+                EntryTierSpec(limit_price=58.0, alloc_pct=40.0, tag="50-day MA"),
+            ),
+            disaster_stop=54.0,
+            tp_tranches=(
+                TpTrancheSpec(price=66.0, tranche_pct=50.0, r_multiple=1.2, tag="TP1"),
+                TpTrancheSpec(price=70.0, tranche_pct=50.0, r_multiple=2.0, tag="TP2"),
+            ),
+            size=PickSize(notional_acct=1500.0, currency="EUR"),
+        ),
+        meta=IntentMeta(armed_ts="2026-09-16T15:00:00+00:00", trade_date="2026-08-21"),
+        exit=ExitGeometrySpec(reaction_plan=(TrailingStop(arm_trigger_r=0.5, trail_frac=0.6),)),
+    )
+
+
+def _without(document: dict, paths: list[str]) -> dict:
+    """``document`` with each dotted path removed; ``a[1].b`` indexes a list."""
+    import copy
+    import re
+
+    trimmed = copy.deepcopy(document)
+    for path in paths:
+        node = trimmed
+        parts = path.split(".")
+        for part in parts[:-1]:
+            match = re.fullmatch(r"(\w+)\[(\d+)\]", part)
+            node = node[match.group(1)][int(match.group(2))] if match else node[part]
+        del node[parts[-1]]
+    return trimmed
+
+
+class TestAuthorJsonable(unittest.TestCase):
+    """What an author sends: the stored rendering minus the fields the door derives (#1469)."""
+
+    def test_it_is_the_stored_rendering_without_the_derived_fields(self) -> None:
+        from alphalens_pipeline.brokers.automanager.intent_door import supplied_derived_paths
+
+        intent = _trailing_intent()
+        stored = intent_to_jsonable(intent)
+        derived = supplied_derived_paths(stored)
+
+        # Positive control: the stored rendering does carry every derived field,
+        # including the one nested under a tuple of dataclasses.
+        self.assertEqual(
+            derived,
+            [
+                "intent_id",
+                "meta.armed_ts",
+                "spec.tp_tranches[0].r_multiple",
+                "spec.tp_tranches[1].r_multiple",
+            ],
+        )
+        self.assertEqual(author_jsonable(intent), _without(stored, derived))
+
+    def test_it_carries_no_derived_field(self) -> None:
+        from alphalens_pipeline.brokers.automanager.intent_door import supplied_derived_paths
+
+        self.assertEqual(supplied_derived_paths(author_jsonable(_trailing_intent())), [])
+
+    def test_a_filled_field_is_rendered_as_it_is(self) -> None:
+        # The door treats a stated generation as a replace, so a caller that
+        # wants a NEW pick drops it; the renderer does not guess that for it.
+        self.assertEqual(author_jsonable(_trailing_intent())["meta"]["generation"], 1)
+
+    def test_the_input_schema_accepts_it(self) -> None:
+        import jsonschema
+        from broker_contract.trade_intent.json_schema import generate_schema
+
+        validator = jsonschema.Draft202012Validator(generate_schema("input"))
+        errors = [
+            error.message for error in validator.iter_errors(author_jsonable(_trailing_intent()))
+        ]
+        self.assertEqual(errors, [])
+
+    def test_a_part_of_the_intent_renders_on_its_own(self) -> None:
+        spec = _trailing_intent().spec
+        rendered = author_jsonable(spec)
+        self.assertEqual(
+            rendered["tp_tranches"][1], {"price": 70.0, "tranche_pct": 50.0, "tag": "TP2"}
+        )
+        self.assertIsInstance(rendered["entry_tiers"], list)
+
+    def test_an_absent_exit_level_is_null(self) -> None:
+        exit_spec = author_jsonable(_trailing_intent())["exit"]
+        self.assertIsNone(exit_spec["initial_levels"])
+        self.assertEqual(exit_spec["reaction_plan"][0]["kind"], "trailing_stop")
 
 
 if __name__ == "__main__":

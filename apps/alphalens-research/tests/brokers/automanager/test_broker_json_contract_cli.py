@@ -42,7 +42,6 @@ REGISTRY_SEAM = "alphalens_pipeline.brokers.registry.get_default_broker"
 LIVE_FACTORY_SEAM = "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env"
 SHOW_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._systemctl_show"
 READ_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._read_text"
-BRIEF_SEAM = "alphalens_pipeline.paper.brief_loader.load_brief"
 DOCUMENT_SEAM = "alphalens_cli.commands.broker._document_text"
 
 _ARM_TRADE_DATE = dt.date(2026, 7, 20)
@@ -75,43 +74,6 @@ def _intent_document() -> str:
                 "generation": 1,
             },
         }
-    )
-
-
-def _brief_candidate():
-    """One plannable brief candidate, so `arm` has something to arm.
-
-    Values mirror `test_arm_cli._plannable_trade_setup()` — the point here is the
-    ENVELOPE, not the sizing, and inventing different numbers would make two
-    fixtures drift apart for no gain.
-    """
-    from alphalens_pipeline.paper.brief_loader import CandidateBrief
-
-    return CandidateBrief(
-        brief_date=_ARM_TRADE_DATE,
-        ticker="KO",
-        theme="test-theme",
-        verified=True,
-        suggested_size_pct=3.0,
-        trade_setup={
-            "schema_version": "1.0.0",
-            "status": "OK",
-            "asof_close": 100.0,
-            "atr": 1.5,
-            "disaster_stop": 90.0,
-            "suggested_size_pct": 3.0,
-            "entry_tiers": [
-                {"limit": 100.0, "alloc_pct": 60.0, "tag": "T1"},
-                {"limit": 98.0, "alloc_pct": 40.0, "tag": "T2"},
-            ],
-            "tp_tranches": [
-                {"target": 110.0, "tranche_pct": 100.0, "r_multiple": 2.0, "tag": "TP1"}
-            ],
-        },
-        n_gates_passed=3,
-        n_gates_failed=0,
-        layer4_weighted_score=1.0,
-        scorer_config_version="scorer-v1-test",
     )
 
 
@@ -165,12 +127,6 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
     ),
     ("orders", ["orders"], True, ("orders",)),
     (
-        "arm",
-        ["arm", "KO", "--date", "2026-07-20", "--frame", "100000", "--currency", "USD"],
-        True,
-        ("armed", "ticker", "trade_date", "generation", "intent_id", "picks_journal"),
-    ),
-    (
         "arm-manual",
         [
             "arm-manual",
@@ -223,12 +179,12 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
 )
 
 
-# The three commands that APPEND to an instance inbox. They refuse an ambient
+# The commands that APPEND to an instance inbox. They refuse an ambient
 # ALPHALENS_BROKER_ENVIRONMENT that disagrees with their default instead of
 # following it (#1377) — a write must not choose SIM or LIVE off a variable the
 # operator forgot was set. `cancel` is not among them: it resolves the instance
 # the way the read commands do.
-_AMBIENT_REFUSING_COMMANDS = frozenset({"arm", "arm-manual", "arm-intent", "disarm"})
+_AMBIENT_REFUSING_COMMANDS = frozenset({"arm-manual", "arm-intent", "disarm"})
 
 
 def _reject_json_constant(token: str) -> None:
@@ -355,9 +311,8 @@ class _BrokerCliCase(unittest.TestCase):
     def invoke(self, argv: list[str]):
         """Run one broker command with the SIM and LIVE gateways both faked.
 
-        `arm` additionally reads a brief; the loader is patched to one plannable
-        candidate so the table below can exercise its envelope without a parquet
-        fixture. Inert for every other command.
+        `arm-intent` reads its document through a patched seam, so the table can
+        exercise its envelope without a file. Inert for every other command.
 
         The unit-composition seams are installed for every call, not just the
         LIVE ones: patching them is inert on a SIM read, and it keeps a single
@@ -370,7 +325,6 @@ class _BrokerCliCase(unittest.TestCase):
             mock.patch(READ_SEAM, lambda _path: ""),
             mock.patch(LIVE_FACTORY_SEAM, return_value=(self.broker, mock.Mock())),
             mock.patch(REGISTRY_SEAM, return_value=self.broker),
-            mock.patch(BRIEF_SEAM, return_value=[_brief_candidate()]),
             mock.patch(DOCUMENT_SEAM, return_value=_intent_document()),
         ):
             return self.runner.invoke(broker_app, argv)

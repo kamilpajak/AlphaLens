@@ -390,14 +390,14 @@ class IntentMeta:
         "Wire version of the document. A consumer reads this one.", default=SCHEMA_VERSION
     )
     source: Literal["brief", "manual"] = contract_field(
-        'Where the intent came from: "brief" (parsed from a brief row by `broker arm`) '
+        'Where the intent came from: "brief" (a brief row, written by `thematic intent`) '
         'or "manual" (operator-provided levels via `broker arm-manual`, #1235). '
         "Journals and later measurement separate the two populations on this marker; "
         'legacy payloads without the key decode to "brief".',
         default="brief",
         door="required",
     )
-    # `broker arm-manual` assigns 1 + the highest generation already queued for
+    # The arming door (and `broker arm-manual`) assigns 1 + the highest generation queued for
     # (ticker, trade_date); a disarmed generation never comes back. Generation 1
     # keeps the pre-#1371 identity strings byte-for-byte, so every journal line
     # written before the field existed — and every payload that omits it — is

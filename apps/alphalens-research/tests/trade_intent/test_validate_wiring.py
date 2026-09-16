@@ -15,6 +15,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 _BROKER_CLI = (
     _REPO_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli" / "commands" / "broker.py"
 )
+_THEMATIC_CLI = (
+    _REPO_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli" / "commands" / "thematic.py"
+)
 _MANUAL_INTENT = (
     _REPO_ROOT
     / "apps"
@@ -46,31 +49,27 @@ def _calls(node: ast.AST) -> set[str]:
     return names
 
 
-class TheBriefPathIsNotValidatedTest(unittest.TestCase):
-    """`broker arm` must NOT call the validator, and the reason is measured.
+class WhereTheValidatorRunsTest(unittest.TestCase):
+    """Every document that reaches a pick inbox passed `validate_intent`.
 
-    `parse_brief_to_spec` deliberately carries non-positive limit/target rows
-    through (the money-half `compute_setup_plan` is what drops them) and keeps
-    `order_ttl_days`'s 0 sentinel. Validating there would turn a documented
-    tolerance into a refusal on the real-money path — the one thing #1404 says
-    would be a defect rather than a feature.
-
-    Concretely, a brief carrying a zero-limit tier is refused by
-    `entry_price_non_positive`. (An earlier version of this note claimed it was
-    refused twice over, because `min(limit_price)` was zero and `stop_above_entry`
-    fired too. That second refusal was a DEFECT, not a safety margin — it also
-    fired for a stop sitting correctly below every real tier — and it was removed
-    in review. The conclusion is unchanged: one refusal is still one more than a
-    tolerated shape should get on the real-money path.)
+    Until #1469 the brief path (`broker arm`) deliberately skipped it, on the
+    grounds that `parse_brief_to_spec` carries non-positive limit rows the
+    validator refuses. Measured on the VPS briefs on 2026-09-16, 0 of 995
+    plannable rows carry one, and the brief producer now sends its document
+    through the door like any other author.
     """
 
-    def test_arm_command_does_not_call_validate_intent(self) -> None:
-        self.assertNotIn("validate_intent", _calls(_function(_BROKER_CLI, "arm_command")))
+    def test_the_door_calls_it(self) -> None:
+        self.assertIn("validate_intent", _calls(_function(_BROKER_CLI, "arm_intent_command")))
 
     def test_arm_manual_reaches_it_through_the_builder(self) -> None:
-        # The positive control: without it this suite would still pass if
-        # `validate_intent` had been wired nowhere at all.
+        # A second path, until `arm-manual` goes in #1470.
         self.assertIn("validate_intent", _calls(_function(_MANUAL_INTENT, "build_manual_intent")))
+
+    def test_the_brief_producer_does_not_bypass_the_door(self) -> None:
+        # Positive control for the claim above: the producer writes a document
+        # and appends nothing, so the door is the only way its picks arm.
+        self.assertNotIn("arm_pick", _calls(_function(_THEMATIC_CLI, "intent_command")))
 
 
 class NoImportCycleTest(unittest.TestCase):

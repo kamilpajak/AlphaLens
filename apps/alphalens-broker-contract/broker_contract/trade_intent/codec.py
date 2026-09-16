@@ -80,6 +80,31 @@ def intent_to_jsonable(intent: TradeIntent) -> dict[str, Any]:
     return _as_json_value(dataclasses.asdict(intent))
 
 
+def author_jsonable(value: Any) -> Any:
+    """Render a contract object the way an AUTHOR writes it for the arming door.
+
+    The same JSON as :func:`intent_to_jsonable`, without every field whose
+    ``door`` role is ``"derived"`` (#1468): the door computes those and refuses
+    them on input. The role is read off each field's metadata at every level, so
+    a derived field nested in a tuple of dataclasses (``TpTrancheSpec.r_multiple``)
+    is dropped as well. Accepts a whole :class:`TradeIntent` or any part of one.
+
+    ``filled`` fields are rendered as they are. A stated ``meta.generation`` asks
+    the door to REPLACE that pick, so a caller that wants a new pick drops it.
+    """
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: author_jsonable(getattr(value, field.name))
+            for field in dataclasses.fields(value)
+            if field.metadata.get("door") != "derived"
+        }
+    if isinstance(value, Mapping):
+        return {key: author_jsonable(item) for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [author_jsonable(item) for item in value]
+    return value
+
+
 def _require_mapping(data: Any, *, what: str) -> Mapping[str, Any]:
     if not isinstance(data, Mapping):
         raise TradeIntentDecodeError(f"{what} must be a mapping, got {type(data).__name__}")

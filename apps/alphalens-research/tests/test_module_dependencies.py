@@ -241,6 +241,17 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # #1469: the brief producer (`alphalens thematic intent`) writes a
+        # document for the arming door and pipes it into `broker arm-intent`.
+        # It must not import the broker layer, not even lazily inside the
+        # command body: that coupling is what moving the brief read out of the
+        # broker group removed. The rule names a module FILE, not a package.
+        "name": "the thematic CLI must not import brokers (#1469: the brief producer only writes a document)",
+        "from_pkg": "alphalens_cli.commands.thematic",
+        "forbidden_prefix": "alphalens_pipeline.brokers",
+        "exemptions": set(),
+    },
+    {
         # Broker-manager extraction 2A-2: broker_contract is the shared
         # A-tier leaf (exit_geometry, trade_intent) consumed by BOTH
         # alphalens_pipeline and alphalens_research. No `top_level_only` —
@@ -308,17 +319,31 @@ def _iter_imports(path: Path, *, include_function_scope: bool):
     yield from collector.modules
 
 
-def _python_files(pkg_dir: Path):
-    return sorted(p for p in pkg_dir.rglob("*.py") if p.name != "__pycache__")
+def _python_files(target: Path):
+    """Every ``.py`` file of a package directory, or the one module file itself."""
+    if target.is_file():
+        return [target]
+    return sorted(p for p in target.rglob("*.py") if p.name != "__pycache__")
 
 
 def _resolve_pkg_dir(from_pkg: str) -> Path:
-    """Map ``alphalens_research.backtest`` → its on-disk directory."""
+    """Map ``alphalens_research.backtest`` → its on-disk directory, or a module
+    such as ``alphalens_cli.commands.thematic`` → its ``.py`` file.
+
+    Raises ``FileNotFoundError`` when neither exists: ``rglob`` over a missing
+    directory yields nothing, so a mistyped rule would otherwise pass vacuously.
+    """
     parts = from_pkg.split(".")
     base = PACKAGE_DIRS.get(parts[0])
     if base is None:
         raise KeyError(f"unknown top-level package in rule: {parts[0]}")
-    return base.joinpath(*parts[1:]) if len(parts) > 1 else base
+    target = base.joinpath(*parts[1:]) if len(parts) > 1 else base
+    if target.is_dir():
+        return target
+    module = target.with_suffix(".py")
+    if module.is_file():
+        return module
+    raise FileNotFoundError(f"rule package {from_pkg!r} resolves to no directory or module")
 
 
 class TestModuleDependencies(unittest.TestCase):
@@ -535,6 +560,49 @@ class TestModuleDependencies(unittest.TestCase):
             any(m.startswith(thematic_rules[0]["forbidden_prefix"]) for m in modules),
             "rule would not catch the synthetic violation",
         )
+
+    def test_the_thematic_cli_module_brokers_tripwire_positive_control(self):
+        """#1469: the brief producer (`thematic intent`) emits a document for the
+        arming door and must not reach into the broker layer, lazily or not. The
+        rule names a single MODULE file, which the walker used to resolve to a
+        directory that does not exist and scan nothing: pin that it scans exactly
+        that file, and that a function-scope import there is caught."""
+        import tempfile
+
+        rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "alphalens_cli.commands.thematic"
+            and rule["forbidden_prefix"] == "alphalens_pipeline.brokers"
+        ]
+        self.assertEqual(len(rules), 1, "the thematic CLI -> brokers rule must exist once")
+        self.assertNotIn("top_level_only", rules[0])
+
+        scanned = _python_files(_resolve_pkg_dir(rules[0]["from_pkg"]))
+        self.assertEqual(
+            [p.relative_to(WORKSPACE_ROOT).as_posix() for p in scanned],
+            ["apps/alphalens-pipeline/alphalens_cli/commands/thematic.py"],
+        )
+
+        synthetic = (
+            "def intent_command():\n"
+            "    from alphalens_pipeline.brokers.automanager.picks import arm_pick\n"
+            "    return arm_pick\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_thematic_cli_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+        self.assertTrue(any(m.startswith(rules[0]["forbidden_prefix"]) for m in modules))
+
+    def test_a_rule_that_resolves_to_nothing_is_an_error(self):
+        """A rule whose package or module is missing would scan no file and pass
+        whatever it forbids. Every rule must resolve, and a typo must not."""
+        for rule in RULES:
+            with self.subTest(rule=rule["name"]):
+                self.assertTrue(_python_files(_resolve_pkg_dir(rule["from_pkg"])))
+        with self.assertRaises(FileNotFoundError):
+            _resolve_pkg_dir("alphalens_cli.commands.no_such_module")
 
     def test_automanager_saxo_boundary_positive_control(self):
         """The automanager -> saxo boundary rule cannot rot silently.

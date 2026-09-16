@@ -1,6 +1,6 @@
 """Append-only pick queue for the Saxo auto-manager.
 
-One JSON line per `alphalens broker arm` under
+One JSON line per arm (`alphalens broker arm-intent`) under
 ~/.alphalens/broker_orders/<env>/picks.jsonl (per-environment path,
 state_paths.picks_path, ADR 0016) — the durable human-intent inbox the
 control loop drains. Mirrors submission_log.py: the file is NEVER rewritten;
@@ -9,27 +9,27 @@ lines are skipped; a missing file yields nothing.
 
 PR-7 (broker-manager extraction memo section 5): ``arm_pick`` now persists the
 FULL :class:`~broker_contract.trade_intent.schema.TradeIntent` on the armed
-line (under the ``"intent"`` key) — ``arm_command`` already parses the brief
-into a ``TradeIntent`` at arm time, and ``iter_picks`` decodes it back so the
+line (under the ``"intent"`` key) — the arming door journals the whole
+``TradeIntent`` at arm time, and ``iter_picks`` decodes it back so the
 daemon never touches a brief. No back-compat for the old bare
 (ticker, date) armed line shape (solo-project doctrine): an armed line missing
 the ``"intent"`` key, or carrying an undecodable one, is skipped exactly like
-any other malformed line — re-arming via `alphalens broker arm` is the
-explicit human path back.
+any other malformed line — arming a new document through
+`alphalens broker arm-intent` is the explicit human path back.
 
 Pick identity (#1371) is (ticker, date, generation). ``generation`` is the
 same-day re-arm counter: 1 for every line written before the field existed
 (the key is OMITTED on generation-1 lines, so today's journal shape is
 unchanged) and 1 + the highest generation already queued for (ticker, date)
-on a later `alphalens broker arm-manual`. :func:`identity_token` renders the
+on a later arm of the same (ticker, date). :func:`identity_token` renders the
 generation into every downstream identity string — ``pick_key`` (colon form),
 the entry-watch crid, the stop refs — so a disarmed generation's terminal
 markers never shadow its successor.
 
 Queue semantics: the LATEST status line per (ticker, date, generation) wins. A terminal
 ``refused`` line (capacity/cap safety refusal) retires the pick so the drain
-never retries it — re-arming via `alphalens broker arm` appends a fresh armed
-line and is the explicit human path back.
+never retries it — arming a new document through `alphalens broker arm-intent`
+appends a fresh armed line and is the explicit human path back.
 
 There is deliberately NO ``placed`` status: the drain decides what to place by
 joining the armed picks against the submissions journal on
@@ -160,8 +160,8 @@ def mark_refused(
 
     Written when safety.check refuses placement (open-legs cap / portfolio
     gross cap) — without it the armed pick retries every tick and self-places
-    a stale brief signal days later once capacity frees. Re-arming via
-    `alphalens broker arm` is the explicit human path back."""
+    a stale brief signal days later once capacity frees. Arming a new document
+    through `alphalens broker arm-intent` is the explicit human path back."""
     _append_record(
         {
             "ticker": ticker.upper(),
@@ -187,12 +187,11 @@ def mark_disarmed(
 
     The OPERATOR terminal (`alphalens broker disarm`), sibling of the daemon's
     ``mark_refused``: latest-wins retires the pick from ``iter_picks`` with no
-    daemon change. Re-arming via `alphalens broker arm` is the explicit human
-    path back QUEUE-side — but note the entry-trail side is stickier: a
+    daemon change. The path back is a new document through
+    `alphalens broker arm-intent`, which takes the NEXT generation (#1371): a
     ``cancelled`` crid never leaves the terminal state and crids are
-    deterministic per (ticker, date, generation, tier), so a re-armed pick for
-    the SAME identity will not re-open its watch. The path back is a NEW
-    generation (`arm-manual` assigns it, #1371) or a fresh brief date."""
+    deterministic per (ticker, date, generation, tier), so the SAME identity
+    could never re-open its watch, and the door refuses that key."""
     _append_record(
         {
             "ticker": ticker.upper(),
@@ -452,7 +451,7 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
             # DEBUG so troubleshooting can still surface it on demand.
             logger.debug(
                 "iter_picks %s/%s: armed line has no 'intent' (pre-PR-7 bare shape) — "
-                "skipped, re-arm via `alphalens broker arm`",
+                "skipped, arm a new document via `alphalens broker arm-intent`",
                 ticker,
                 parsed_date,
             )

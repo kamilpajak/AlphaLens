@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -1316,6 +1317,113 @@ def brief(
         )
     except Exception:
         logger.exception("emit_domain_metrics failed; thematic-build run succeeded")
+
+
+# Exit statuses of `thematic intent`, per the CLI convention: a shell pipe into
+# `broker arm-intent -` branches on them, and the door refuses the empty stdin.
+_EXIT_USAGE = 2
+_EXIT_NOT_FOUND = 4
+_EXIT_REFUSED = 1
+
+
+def _intent_failure(message: str, exit_code: int) -> typer.Exit:
+    typer.echo(message, err=True)
+    return typer.Exit(exit_code)
+
+
+def _positive_amount(value: float | None, option: str) -> float | None:
+    if value is not None and not (math.isfinite(value) and value > 0):
+        raise _intent_failure(
+            f"{option} must be a positive finite amount, got {value!r}", _EXIT_USAGE
+        )
+    return value
+
+
+@thematic_app.command("intent")
+def intent_command(
+    ticker: str = typer.Argument(..., help="Ticker of a row in the brief, e.g. KBH."),
+    date: str = typer.Option(..., "--date", help="Brief date (YYYY-MM-DD)."),
+    currency: str = typer.Option(
+        ..., "--currency", help="Account currency of the amount, ISO 4217 (e.g. PLN, EUR)."
+    ),
+    frame: float | None = typer.Option(
+        None,
+        "--frame",
+        help="Account-currency equity the brief's size percent applies to: the amount "
+        "is percent / 100 x frame. Exactly one of --frame and --notional.",
+    ),
+    notional: float | None = typer.Option(
+        None,
+        "--notional",
+        help="The amount itself, in the account currency; the brief's percent is not "
+        "used. Exactly one of --frame and --notional.",
+    ),
+    briefs_dir: Path = typer.Option(
+        brief_orchestrator.DEFAULT_OUTPUT_DIR, "--briefs-dir", help="Brief parquet root."
+    ),
+) -> None:
+    """Write a brief row as a TradeIntent document for the arming door (#1469).
+
+    Stdout is exactly one JSON value, the document, so it pipes straight in:
+
+    \b
+      set -o pipefail
+      alphalens thematic intent KBH --date 2026-08-21 --frame 24000 --currency PLN \\
+        | alphalens broker arm-intent - --env sim
+
+    The document states the trade and leaves identity to the door, which
+    derives `intent_id`, `armed_ts` and each `r_multiple` and assigns the
+    generation. A re-run is therefore refused while the first pick is armed.
+
+    EXIT CODES: 0 written, 2 usage, 4 brief or ticker not found, 1 the row
+    cannot be written (no plannable setup, a percent above the whole frame, a
+    value strict JSON cannot carry). On failure stdout is empty.
+    """
+    from alphalens_pipeline.paper.brief_loader import load_brief
+    from alphalens_pipeline.thematic.brief_intent import (
+        BriefIntentRefusedError,
+        BriefRowNotFoundError,
+        brief_intent_document,
+    )
+
+    try:
+        brief_date = dt.date.fromisoformat(date)
+    except ValueError as exc:
+        raise _intent_failure(f"invalid --date {date!r}: {exc}", _EXIT_USAGE) from exc
+    if (frame is None) == (notional is None):
+        raise _intent_failure("state exactly one of --frame and --notional", _EXIT_USAGE)
+    _positive_amount(frame, "--frame")
+    _positive_amount(notional, "--notional")
+
+    try:
+        candidates = load_brief(brief_date, briefs_dir)
+    except FileNotFoundError as exc:
+        raise _intent_failure(str(exc), _EXIT_NOT_FOUND) from exc
+    except ValueError as exc:
+        raise _intent_failure(str(exc), _EXIT_REFUSED) from exc
+
+    try:
+        document = brief_intent_document(
+            candidates,
+            ticker=ticker,
+            brief_date=brief_date,
+            currency=currency.strip().upper(),
+            frame=frame,
+            notional=notional,
+        )
+    except BriefRowNotFoundError as exc:
+        raise _intent_failure(str(exc), _EXIT_NOT_FOUND) from exc
+    except BriefIntentRefusedError as exc:
+        raise _intent_failure(str(exc), _EXIT_REFUSED) from exc
+
+    try:
+        rendered = json.dumps(document, allow_nan=False, separators=(",", ":"))
+    except ValueError as exc:
+        raise _intent_failure(
+            f"{ticker.upper()}: the document cannot be written as strict JSON — {exc}",
+            _EXIT_REFUSED,
+        ) from exc
+    typer.echo(rendered)
 
 
 @thematic_app.command("verify-cache")

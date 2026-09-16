@@ -1063,7 +1063,7 @@ class TestPlacePickBranches(unittest.TestCase):
         # Queue-semantics fix (2026-07-30): a capacity/cap refusal retires the
         # pick via a terminal refused line — otherwise it retries every ~45s
         # tick and self-places a stale brief signal days later when capacity
-        # frees. Re-arming via `alphalens broker arm` is the human path back.
+        # frees. Arming a new document via `alphalens broker arm-intent` is the human path back.
         from alphalens_pipeline.brokers.automanager.safety import Refuse
 
         refusals: list[tuple] = []
