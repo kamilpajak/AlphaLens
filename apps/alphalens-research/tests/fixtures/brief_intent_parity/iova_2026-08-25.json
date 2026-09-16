@@ -1,0 +1,98 @@
+{
+  "armed_intent": {
+    "account_id": "default",
+    "exit": {
+      "initial_levels": null,
+      "reaction_plan": [
+        {
+          "arm_trigger_r": 0.5,
+          "kind": "trailing_stop",
+          "trail_frac": 0.6
+        }
+      ]
+    },
+    "instrument": {
+      "mic": "XNYS",
+      "ticker": "IOVA"
+    },
+    "intent_id": "IOVA:2026-08-25",
+    "meta": {
+      "armed_ts": "2026-09-16T15:43:20+00:00",
+      "generation": 1,
+      "schema_version": "3",
+      "source": "brief",
+      "trade_date": "2026-08-25"
+    },
+    "spec": {
+      "disaster_stop": 5.709669145872683,
+      "entry_tiers": [
+        {
+          "alloc_pct": 41.08240170955096,
+          "entry_mode": "pullback",
+          "limit_price": 8.131563320350736,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 58.91759829044904,
+          "entry_mode": "pullback",
+          "limit_price": 7.20625454025304,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "3",
+      "side": "long",
+      "size": {
+        "currency": "PLN",
+        "notional_acct": 980.718362292181
+      },
+      "tp_tranches": [
+        {
+          "price": 9.359999656677246,
+          "r_multiple": 0.9450540449090252,
+          "tag": "overhead resistance",
+          "tranche_pct": 100.0
+        }
+      ]
+    }
+  },
+  "brief_date": "2026-08-25",
+  "brief_trade_setup": {
+    "asof_close": 8.4399995803833,
+    "atr": 0.6168725200651304,
+    "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+    "disaster_stop": 5.709669145872683,
+    "entry_tiers": [
+      {
+        "alloc_pct": 41.08240170955096,
+        "atr_distance": 0.4999999999999993,
+        "label": "E1",
+        "limit": 8.131563320350736,
+        "tag": "shallow pullback"
+      },
+      {
+        "alloc_pct": 58.91759829044904,
+        "atr_distance": 2.0,
+        "label": "E2",
+        "limit": 7.20625454025304,
+        "tag": "volatility support"
+      }
+    ],
+    "order_ttl_days": 7,
+    "schema_version": "1.1.0",
+    "status": "OK",
+    "suggested_size_pct": 4.086326509550754,
+    "tp_tranches": [
+      {
+        "label": "TP1",
+        "r_multiple": 0.9450540449090252,
+        "tag": "overhead resistance",
+        "target": 9.359999656677246,
+        "tranche_pct": 100.0
+      }
+    ]
+  },
+  "currency": "PLN",
+  "frame": 24000.0,
+  "ticker": "IOVA"
+}

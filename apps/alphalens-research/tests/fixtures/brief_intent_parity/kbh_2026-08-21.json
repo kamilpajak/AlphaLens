@@ -1,0 +1,137 @@
+{
+  "armed_intent": {
+    "account_id": "default",
+    "exit": {
+      "initial_levels": null,
+      "reaction_plan": [
+        {
+          "arm_trigger_r": 0.5,
+          "kind": "trailing_stop",
+          "trail_frac": 0.6
+        }
+      ]
+    },
+    "instrument": {
+      "mic": "XNYS",
+      "ticker": "KBH"
+    },
+    "intent_id": "KBH:2026-08-21",
+    "meta": {
+      "armed_ts": "2026-09-16T15:43:18+00:00",
+      "generation": 1,
+      "schema_version": "3",
+      "source": "brief",
+      "trade_date": "2026-08-21"
+    },
+    "spec": {
+      "disaster_stop": 42.05423379941888,
+      "entry_tiers": [
+        {
+          "alloc_pct": 24.81244815036264,
+          "entry_mode": "pullback",
+          "limit_price": 54.38211644194577,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 30.88508717802672,
+          "entry_mode": "pullback",
+          "limit_price": 51.41846897212878,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 44.30246467161064,
+          "entry_mode": "pullback",
+          "limit_price": 48.16999816894531,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "3",
+      "side": "long",
+      "size": {
+        "currency": "PLN",
+        "notional_acct": 1422.289436406352
+      },
+      "tp_tranches": [
+        {
+          "price": 57.54999923706055,
+          "r_multiple": 0.7892592677536423,
+          "tag": "overhead resistance",
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "price": 59.54999923706055,
+          "r_multiple": 1.0201945222854705,
+          "tag": "overhead resistance",
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "price": 63.2450008392334,
+          "r_multiple": 1.4468475900321207,
+          "tag": "overhead resistance",
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "brief_date": "2026-08-21",
+  "brief_trade_setup": {
+    "asof_close": 55.369998931884766,
+    "atr": 1.9757649798779955,
+    "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+    "disaster_stop": 42.05423379941888,
+    "entry_tiers": [
+      {
+        "alloc_pct": 24.81244815036264,
+        "atr_distance": 0.49999999999999956,
+        "label": "E1",
+        "limit": 54.38211644194577,
+        "tag": "shallow pullback"
+      },
+      {
+        "alloc_pct": 30.88508717802672,
+        "atr_distance": 1.9999999999999982,
+        "label": "E2",
+        "limit": 51.41846897212878,
+        "tag": "volatility support"
+      },
+      {
+        "alloc_pct": 44.30246467161064,
+        "atr_distance": 3.6441585088647828,
+        "label": "E3",
+        "limit": 48.16999816894531,
+        "tag": "swing-low"
+      }
+    ],
+    "order_ttl_days": 7,
+    "schema_version": "1.1.0",
+    "status": "OK",
+    "suggested_size_pct": 5.926205985026467,
+    "tp_tranches": [
+      {
+        "label": "TP1",
+        "r_multiple": 0.7892592677536423,
+        "tag": "overhead resistance",
+        "target": 57.54999923706055,
+        "tranche_pct": 33.333333333333336
+      },
+      {
+        "label": "TP2",
+        "r_multiple": 1.0201945222854705,
+        "tag": "overhead resistance",
+        "target": 59.54999923706055,
+        "tranche_pct": 33.333333333333336
+      },
+      {
+        "label": "TP3",
+        "r_multiple": 1.4468475900321207,
+        "tag": "overhead resistance",
+        "target": 63.2450008392334,
+        "tranche_pct": 33.333333333333336
+      }
+    ]
+  },
+  "currency": "PLN",
+  "frame": 24000.0,
+  "ticker": "KBH"
+}
