@@ -12,6 +12,11 @@ cannot be opted out of.
 
 ``cancel_order`` is deliberately allowed: cancelling is risk-reducing, and the
 LIVE manual-flatten runbook depends on ``broker cancel``.
+
+The walk matches attribute accesses AND string literals, so ``getattr`` with a
+literal name, or a name kept in a constant, is caught too. What it cannot see: a
+method name assembled at runtime, and a placement call inside a helper outside
+``alphalens_cli`` that a command delegates to. Neither shape exists today.
 """
 
 from __future__ import annotations
@@ -28,15 +33,17 @@ import alphalens_cli
 _FORBIDDEN_ATTRIBUTE = re.compile(r"^(place_\w+|amend_\w+|precheck_bracket_order)$")
 
 
+def _referenced_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
 def _offending_attributes(source: str) -> list[str]:
-    tree = ast.parse(source)
-    return sorted(
-        {
-            node.attr
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute) and _FORBIDDEN_ATTRIBUTE.match(node.attr)
-        }
-    )
+    names = (_referenced_name(node) for node in ast.walk(ast.parse(source)))
+    return sorted({name for name in names if name and _FORBIDDEN_ATTRIBUTE.match(name)})
 
 
 class CliModulesPlaceNothingTest(unittest.TestCase):
@@ -45,6 +52,20 @@ class CliModulesPlaceNothingTest(unittest.TestCase):
         source = "def run(broker, request):\n    broker.place_bracket_order(request)\n"
 
         self.assertEqual(_offending_attributes(source), ["place_bracket_order"])
+
+    def test_the_gate_flags_a_method_named_by_string(self):
+        # The removed `submit` reached precheck through getattr with a string,
+        # which an attribute-only walk cannot see.
+        source = "def run(broker):\n    return getattr(broker, 'precheck_bracket_order', None)\n"
+
+        self.assertEqual(_offending_attributes(source), ["precheck_bracket_order"])
+
+    def test_the_gate_flags_a_method_name_held_in_a_variable(self):
+        source = (
+            "METHOD = 'place_market_order'\n\ndef run(broker):\n    getattr(broker, METHOD)()\n"
+        )
+
+        self.assertEqual(_offending_attributes(source), ["place_market_order"])
 
     def test_the_gate_allows_cancel(self):
         source = "def run(broker, order_id):\n    broker.cancel_order(order_id)\n"
