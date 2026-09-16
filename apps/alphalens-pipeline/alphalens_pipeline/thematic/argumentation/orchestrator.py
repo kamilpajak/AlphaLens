@@ -862,9 +862,14 @@ def model_counts(brief: pd.DataFrame) -> tuple[int, int]:
     """``(n_pro, n_flash)`` read back from a stored brief, as ``generate_briefs`` counts them."""
     if brief.empty or "brief_model_used" not in brief.columns:
         return 0, 0
-    n_ok = int((brief["brief_status"] == "ok").sum()) if "brief_status" in brief.columns else 0
-    n_pro = int((brief["brief_model_used"] == generator.PRO_MODEL).sum())
-    return n_pro, n_ok - n_pro
+    # A brief older than `brief_status` has prose exactly where a model is named.
+    ok = (
+        brief["brief_status"] == "ok"
+        if "brief_status" in brief.columns
+        else brief["brief_model_used"].notna()
+    )
+    n_pro = int((ok & (brief["brief_model_used"] == generator.PRO_MODEL)).sum())
+    return n_pro, int(ok.sum()) - n_pro
 
 
 __all__ = ["DEFAULT_OUTPUT_DIR", "generate_briefs", "model_counts", "refresh_published_telemetry"]

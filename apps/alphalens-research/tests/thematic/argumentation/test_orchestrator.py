@@ -443,6 +443,25 @@ class TestPublicationStamp(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["2026-04-14.parquet"])
 
 
+class TestModelCounts(unittest.TestCase):
+    """Counts read back from a stored brief feed the by-model gauges; never negative."""
+
+    def test_counts_pro_and_flash_among_ok_rows(self):
+        brief = pd.DataFrame(
+            {
+                "brief_model_used": [generator.PRO_MODEL, generator.FLASH_MODEL, None],
+                "brief_status": ["ok", "ok", "unavailable"],
+            }
+        )
+        self.assertEqual(orchestrator.model_counts(brief), (1, 1))
+
+    def test_a_brief_without_status_never_reports_a_negative_flash_count(self):
+        brief = pd.DataFrame({"brief_model_used": [generator.PRO_MODEL, generator.FLASH_MODEL]})
+        n_pro, n_flash = orchestrator.model_counts(brief)
+        self.assertGreaterEqual(n_flash, 0)
+        self.assertEqual((n_pro, n_flash), (1, 1))
+
+
 class TestEarningsDatePropagation(unittest.TestCase):
     """The fetched next_earnings_date must be persisted to the brief
     parquet as ``next_earnings_date`` — not just passed to the LLM prompt."""
