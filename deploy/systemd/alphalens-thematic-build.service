@@ -232,7 +232,8 @@ TimeoutStartSec=150min
 
 # Oneshot doesn't auto-restart on success. On real failures (Polygon 5xx,
 # OpenRouter quota, OOM) systemd surfaces non-zero exit in journalctl + status.
-# The timer fires 6× daily (PR-F); a one-slot miss is acceptable.
+# The timer fires at 00:30, 04:30 and 08:30 UTC (#1479); a failed 00:30 run is
+# repaired by the next slot, which publishes the date if the brief is missing.
 
 [Install]
 WantedBy=default.target

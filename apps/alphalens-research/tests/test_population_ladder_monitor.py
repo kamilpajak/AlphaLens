@@ -741,6 +741,14 @@ class TestBriefProvenanceUnit(unittest.TestCase):
         self.assertEqual(row["source"], "thematic")
         self.assertIs(row["event_overlap"], False)
 
+    def test_stamp_carries_the_brief_publication_time(self):
+        stamp = pd.Timestamp("2026-05-02T01:40:00Z")
+        row = _stamp_brief_provenance({}, self._brief(brief_published_at=stamp))
+        self.assertEqual(row["brief_published_at"], stamp)
+
+    def test_stamp_publication_time_none_for_a_brief_without_it(self):
+        self.assertIsNone(_stamp_brief_provenance({}, self._brief())["brief_published_at"])
+
     def test_stamp_none_scorer_when_falsy(self):
         self.assertIsNone(
             _stamp_brief_provenance({}, self._brief(scorer_config_version=""))[
@@ -752,7 +760,7 @@ class TestBriefProvenanceUnit(unittest.TestCase):
         # _carry_prior must back-fill every provenance column to None for rows
         # that predate it (old-format parquets).
         carried = _carry_prior({"ticker": "X"})
-        for col in ("scorer_config_version", "source", "event_overlap"):
+        for col in ("scorer_config_version", "source", "event_overlap", "brief_published_at"):
             self.assertIn(col, carried)
             self.assertIsNone(carried[col])
 

@@ -10,7 +10,7 @@ hosts where launchd is unavailable.
 | `alphalens-edgar-detect.{service,timer}` | every 15 min | Layer 1 EDGAR poll + Telegram alert (migrated from macOS `com.alphalens.edgar-detect` on 2026-05-30) |
 | `alphalens-literature-scan-weekly.{service,timer}` | Sun 18:00 Europe/Warsaw | Perplexity weekly RSS scan + Telegram digest + auto-commit to `main` (migrated 2026-05-30) |
 | `alphalens-literature-scan-monthly.{service,timer}` | 1st of month 09:00 Europe/Warsaw | Perplexity deep scan + Telegram digest + auto-commit to `main` (migrated 2026-05-30) |
-| `alphalens-thematic-build.{service,timer}` | 6× daily at HH:30 UTC (00/04/08/12/16/20) | docker-run thematic pipeline + verify-cache + Django rebuild-cache (PR-F, epic #295 #300) |
+| `alphalens-thematic-build.{service,timer}` | 3× daily at 00:30, 04:30, 08:30 UTC (#1479; 6× before) | docker-run thematic pipeline + verify-cache + Django rebuild-cache. 00:30 publishes the brief; a published brief is final; later slots only repair a missing brief or late options telemetry |
 | `alphalens-thematic-shadow-map.service` | `OnSuccess=` of every successful thematic-build (no timer) | docker-run `alphalens thematic shadow-map` — the shadow-arm collection (#1330), once per day (idempotent; skips in seconds on the other slots). Carved out of `run_thematic_day.sh` because its 65-73 min sat in front of `score`/`brief` and timed the 00:30 UTC slot out 12 days of 13 |
 | `alphalens-feedback-shadow-returns.{service,timer}` | daily 06:30 UTC | host-venv `alphalens feedback backfill-shadow-returns` — runs the broker-free population monitor over its own ~42-session window (price-path replay over Polygon minute bars) and the benchmark-excess + size-field enrichment tail. `Persistent=true` catch-up; idempotent re-stamp. Needs `POLYGON_API_KEY`. NOT trading-day-gated (the per-date maturity guard handles non-trading dates). The unit + command name are retained for the existing timer; the per-decision ladder replay (Track A click ledger) was removed (#465), so the command now drives only the population monitor — a rename is a deferred follow-up. Replay mechanics: `apps/alphalens-pipeline/alphalens_pipeline/feedback/README.md`. |
 | `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) — the one-time historical seed (DONE 2026-05-08) |
@@ -676,7 +676,7 @@ ingests it, so the SPA card's `expert.panel` deep-read drawer lights up. O'Neil
 `expert_spread` disagreement scalar are stamped earlier at the `score` stage. Needs
 `OPENROUTER_API_KEY` (DeepSeek) + `SEC_EDGAR_USER_AGENT` + `PERPLEXITY_API_KEY` (all
 already passed into the container); results are cached per `(date, ticker,
-scuttlebutt)` under `~/.alphalens/buffett_qual/` so the 6×/day reruns re-pay the LLM
+scuttlebutt)` under `~/.alphalens/buffett_qual/` so the repair-slot reruns re-pay the LLM
 only for not-yet-classified names (~$3-4/day steady-state).
 It is non-fatal under `set -e`: a DeepSeek / Perplexity / SEC hiccup leaves the
 drawer absent for that name until the next run, never failing the build.

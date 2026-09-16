@@ -23,8 +23,10 @@ from pathlib import Path
 
 import pandas as pd
 
+from alphalens_pipeline.data.parquet_io import write_parquet_atomic
 from alphalens_pipeline.thematic.argumentation import generator, support_guard
 from alphalens_pipeline.thematic.mapping import channel_assessor
+from alphalens_pipeline.thematic.publication import BRIEF_PUBLISHED_AT
 from alphalens_pipeline.thematic.trade_setup import builder as trade_setup_builder
 
 logger = logging.getLogger(__name__)
@@ -419,6 +421,7 @@ _EMPTY_OUT_COLUMNS = (
     "brief_status",
     "brief_error_kind",
     "brief_generated_at",
+    BRIEF_PUBLISHED_AT,
     *_SUPPORT_GUARD_COLUMNS,
 )
 
@@ -537,7 +540,7 @@ def _sort_and_dedup_for_brief(verified: pd.DataFrame) -> pd.DataFrame:
 def _empty_output(output_dir: Path, asof: dt.date) -> pd.DataFrame:
     """Write a typed-empty parquet + empty bundle + zero-counts sidecar."""
     empty = pd.DataFrame({c: pd.Series(dtype="object") for c in _EMPTY_OUT_COLUMNS})
-    empty.to_parquet(output_dir / f"{asof.isoformat()}.parquet", index=False)
+    write_parquet_atomic(empty, output_dir / f"{asof.isoformat()}.parquet", index=False)
     _write_sidecar(output_dir, asof, n_pro=0, n_flash=0)
     return empty
 
@@ -784,10 +787,15 @@ def generate_briefs(
 
     enrichment = pd.DataFrame(rows).drop_duplicates(subset=["ticker"], keep="first")
     merged = verified.merge(enrichment, on="ticker", how="left")
+    # One value for the whole list (#1479): the moment this list became the
+    # published brief for the date. `brief_generated_at` stays per row.
+    merged[BRIEF_PUBLISHED_AT] = pd.Timestamp.now(tz="UTC")
     merged.attrs["n_pro"] = n_pro
     merged.attrs["n_flash"] = n_flash
     out_path = output_dir / f"{asof.isoformat()}.parquet"
-    merged.to_parquet(out_path, index=False)
+    # Atomic: a crash mid-write must not leave a truncated brief, because an
+    # unreadable brief is never rebuilt (thematic/publication.py).
+    write_parquet_atomic(merged, out_path, index=False)
     _write_sidecar(output_dir, asof, n_pro=n_pro, n_flash=n_flash)
     logger.info(
         "generate_briefs %s: wrote %d briefs (Pro=%d, Flash=%d), %d unavailable%s → %s",
@@ -802,4 +810,61 @@ def generate_briefs(
     return merged
 
 
-__all__ = ["DEFAULT_OUTPUT_DIR", "generate_briefs"]
+# The column that says an options snapshot was taken for a row (options_telemetry).
+_OPTIONS_SNAPSHOT_COLUMN = "options_snapshot_utc"
+
+
+def refresh_published_telemetry(
+    published: pd.DataFrame, scored: pd.DataFrame
+) -> tuple[pd.DataFrame, int]:
+    """Fill options telemetry that arrived after the brief was published (#1479).
+
+    The options snapshot is taken only after the session close and retried on
+    later slots, so the slot that published the brief may not have it yet. Only
+    rows of the published brief whose snapshot is missing take the ``options_*``
+    columns of the same ticker from ``scored``; the list, order, prose, levels
+    and every other column stay as published. Returns the frame and the number of
+    rows filled in (0 means ``published`` is returned unchanged).
+    """
+    from alphalens_pipeline.thematic.options_telemetry.enrichment import OPTIONS_COLUMNS
+
+    if (
+        published.empty
+        or scored.empty
+        or "ticker" not in scored.columns
+        or _OPTIONS_SNAPSHOT_COLUMN not in scored.columns
+    ):
+        return published, 0
+    stamped = (
+        scored[scored[_OPTIONS_SNAPSHOT_COLUMN].notna()]
+        .drop_duplicates(subset=["ticker"], keep="first")
+        .set_index("ticker")
+    )
+    if _OPTIONS_SNAPSHOT_COLUMN in published.columns:
+        missing = published[_OPTIONS_SNAPSHOT_COLUMN].isna()
+    else:
+        missing = pd.Series(True, index=published.index)
+    fill = missing & published["ticker"].isin(stamped.index)
+    n_filled = int(fill.sum())
+    if n_filled == 0:
+        return published, 0
+    refreshed = published.copy()
+    for column in OPTIONS_COLUMNS:
+        if column not in stamped.columns:
+            continue
+        if column not in refreshed.columns:
+            refreshed[column] = pd.Series(None, index=refreshed.index, dtype="object")
+        refreshed.loc[fill, column] = refreshed.loc[fill, "ticker"].map(stamped[column])
+    return refreshed, n_filled
+
+
+def model_counts(brief: pd.DataFrame) -> tuple[int, int]:
+    """``(n_pro, n_flash)`` read back from a stored brief, as ``generate_briefs`` counts them."""
+    if brief.empty or "brief_model_used" not in brief.columns:
+        return 0, 0
+    n_ok = int((brief["brief_status"] == "ok").sum()) if "brief_status" in brief.columns else 0
+    n_pro = int((brief["brief_model_used"] == generator.PRO_MODEL).sum())
+    return n_pro, n_ok - n_pro
+
+
+__all__ = ["DEFAULT_OUTPUT_DIR", "generate_briefs", "model_counts", "refresh_published_telemetry"]

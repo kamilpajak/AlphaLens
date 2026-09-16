@@ -291,7 +291,7 @@ _CONFIG_COLUMNS = ("ladder_config_version", "setup_builder_config_version")
 # Brief-provenance columns: stamped from the CandidateBrief, not computed by the
 # replay engine. Like ``theme``, they travel WITH the outcome record so they stay
 # queryable even after the brief is rebuilt or the candidate churns out.
-_PROVENANCE_COLUMNS = ("scorer_config_version", "source", "event_overlap")
+_PROVENANCE_COLUMNS = ("scorer_config_version", "source", "event_overlap", "brief_published_at")
 
 # The alternate-exit-ladder grid (PR-2): a JSON map {config -> realized_r} from
 # re-replaying the SAME bars under each EXIT policy. Carried/back-filled like the
@@ -1361,7 +1361,7 @@ THEMATIC_SOURCE = "thematic"
 
 
 def _stamp_brief_provenance(row: dict[str, Any], c: CandidateBrief) -> dict[str, Any]:
-    """Stamp the brief's provenance (theme, scorer version, source lane, overlap) onto a row.
+    """Stamp the brief's provenance (theme, scorer version, lane, overlap, publication) onto a row.
 
     Like ``theme``, these values travel WITH the outcome record rather than being
     re-joined downstream from the (mutable, 6x/day-rebuilt) briefs cache. An
@@ -1375,6 +1375,11 @@ def _stamp_brief_provenance(row: dict[str, Any], c: CandidateBrief) -> dict[str,
     row["scorer_config_version"] = c.scorer_config_version or None
     row["source"] = c.source or THEMATIC_SOURCE
     row["event_overlap"] = bool(c.event_overlap)
+    # When the brief's list was published (#1479). A research reader answers
+    # "did this list exist before the open?" with
+    # thematic.publication.published_before_open(brief_date, brief_published_at),
+    # which also covers the unstamped history.
+    row["brief_published_at"] = c.brief_published_at
     return row
 
 

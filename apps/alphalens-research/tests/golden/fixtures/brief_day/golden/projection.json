@@ -9,6 +9,7 @@
     "brief_error_kind",
     "brief_generated_at",
     "brief_model_used",
+    "brief_published_at",
     "brief_status",
     "brief_supply_chain_md",
     "brief_support_guard_spans_json",

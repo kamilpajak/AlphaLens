@@ -35,8 +35,8 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic ingest"
 # --force: the per-UTC-day read-through cache at
 # alphalens_pipeline/thematic/sources/polygon_news.py:124 would
 # otherwise short-circuit every run after the first of the day. The
-# 6× timer (every 4 hours UTC) needs each run to actually re-fetch
-# news so the SPA sees same-day catalysts the same day. Polygon
+# 04:30 and 08:30 UTC repair slots still re-fetch the day's news: it feeds
+# later dates' theme rollups, and never changes a published brief (#1479). Polygon
 # Stocks Basic ($0/mo) has no daily cap, only a 5 req/min rate
 # limit, so forced re-fetch is free. See
 # docs/research/polygon_quota_6x_per_day_2026_05_30.md §"What changes
@@ -47,6 +47,10 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic extract"
 alphalens thematic extract
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic map-themes"
+# map-themes, score and brief each check the date's publication state first
+# (#1479, thematic/publication.py): a published brief is final, so a later slot
+# neither re-maps nor regenerates it (brief only fills in late options
+# telemetry), and after the arrival open a scheduled run creates no brief.
 alphalens thematic map-themes
 
 # Event lane (epic #1293). Detects insider purchase clusters for the brief date
@@ -82,7 +86,7 @@ alphalens thematic brief
 # All five thematic stages above default to yesterday-UTC; `experts enrich` takes
 # the date as a positional arg, so pass the same day explicitly. Results are cached
 # immutably per (date, ticker, scuttlebutt) under ~/.alphalens/buffett_qual/, so
-# the 6×/day reruns re-pay the LLM only for names not yet classified for the day
+# the repair-slot reruns re-pay the LLM only for names not yet classified for the day
 # (~$3-4/day steady-state with scuttlebutt on; a no-10-K name costs nothing).
 #
 # `--scuttlebutt` is ON: it adds a web-grounded Perplexity context block
