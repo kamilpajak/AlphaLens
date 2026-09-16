@@ -90,6 +90,32 @@ class DerivedFieldsAreRefusedOnInput(unittest.TestCase):
         self.assertEqual(intent_door.supplied_derived_paths(["not", "an", "object"]), [])
 
 
+class TheWalkerCoversEveryDerivedField(unittest.TestCase):
+    """`supplied_derived_paths` names its fields by hand. A field newly marked
+    `door="derived"` in the contract would be absent from the input schema and
+    silently accepted by the door, so the two lists are pinned together."""
+
+    WALKED = {
+        ("TradeIntent", "intent_id"),
+        ("IntentMeta", "armed_ts"),
+        ("TpTrancheSpec", "r_multiple"),
+    }
+
+    def test_the_contract_marks_exactly_the_fields_the_walker_checks(self) -> None:
+        import dataclasses
+
+        from broker_contract.trade_intent import schema as contract_schema
+
+        derived = {
+            (name, field.name)
+            for name, cls in vars(contract_schema).items()
+            if isinstance(cls, type) and dataclasses.is_dataclass(cls)
+            for field in dataclasses.fields(cls)
+            if field.metadata.get("door") == "derived"
+        }
+        self.assertEqual(derived, self.WALKED)
+
+
 class IdentityShapesAreCheckedBeforeAnythingIsDerived(unittest.TestCase):
     def test_a_float_generation_is_refused_as_undecodable(self) -> None:
         with self.assertRaises(intent_door.GenerationMalformedError):
