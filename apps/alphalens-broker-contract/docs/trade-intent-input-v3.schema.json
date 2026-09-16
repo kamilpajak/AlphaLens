@@ -1,14 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:alphalens:contract:trade-intent:3",
-  "title": "TradeIntent",
-  "description": "One client-armed pick handed to the broker-manager, as the journal stores it. Generated from broker_contract.trade_intent.schema — edit the dataclasses, never this file. The schema pins SHAPE; a schema-valid document can still be refused by the door's semantic rules (see intent_invalid in the package README). Within a major version only optional fields are added: a field is never renamed, retyped, or given a new unit. NOTE: this schema does not constrain schema_version and neither does the codec — the DOOR does (broker arm-intent refuses a stated version other than its own), while the journal drain stays ungated so older documents keep decoding there.",
+  "$id": "urn:alphalens:contract:trade-intent-input:3",
+  "title": "TradeIntent input",
+  "description": "One pick as an author sends it to the arming door. The door derives intent_id, meta.armed_ts and every tp_tranches[].r_multiple and REFUSES them on input (derived_field_supplied), fills the fields whose description says what happens when they are absent, then journals the stored TradeIntent shape. Generated from broker_contract.trade_intent.schema — edit the dataclasses, never this file. The schema pins SHAPE; a schema-valid document can still be refused by the door's semantic rules (see intent_invalid in the package README). Within a major version only optional fields are added: a field is never renamed, retyped, or given a new unit. NOTE: this schema does not constrain schema_version and neither does the codec — the DOOR does (broker arm-intent refuses a stated version other than its own), while the journal drain stays ungated so older documents keep decoding there.",
   "type": "object",
   "properties": {
-    "intent_id": {
-      "type": "string",
-      "description": "Identity label set by the arming door: \"TICKER:DATE\" for a brief pick, \"TICKER:DATE:manual\" for a manual one, with \"-g<N>\" after generation 1."
-    },
     "instrument": {
       "$ref": "#/$defs/InstrumentHint",
       "description": "What is being traded, and where."
@@ -40,7 +36,6 @@
     }
   },
   "required": [
-    "intent_id",
     "instrument",
     "spec",
     "meta"
@@ -127,8 +122,7 @@
         },
         "tag": {
           "type": "string",
-          "description": "Free-text rung label, e.g. \"T1\". No sizing semantics.",
-          "default": ""
+          "description": "Free-text rung label, e.g. \"T1\". No sizing semantics. When absent: \"T<n>\", the 1-based position of the rung in the ladder."
         },
         "entry_mode": {
           "type": "string",
@@ -156,15 +150,9 @@
           "type": "number",
           "description": "PERCENTAGE of the position, 0-100 — not a fraction. The ladder MAY sum to less than 100: that is a deliberate runner, not an error."
         },
-        "r_multiple": {
-          "type": "number",
-          "description": "Label only: the tranche's distance in R (multiples of initial risk), computed by the arming door as (price - planned blend) / (planned blend - disaster stop). No sizing semantics.",
-          "default": 0.0
-        },
         "tag": {
           "type": "string",
-          "description": "Free-text tranche label, e.g. \"TP1\". No sizing semantics.",
-          "default": ""
+          "description": "Free-text tranche label, e.g. \"TP1\". No sizing semantics. When absent: \"TP<n>\", the 1-based position of the tranche in the ladder."
         }
       },
       "required": [
@@ -192,13 +180,9 @@
     "IntentMeta": {
       "type": "object",
       "properties": {
-        "armed_ts": {
-          "type": "string",
-          "description": "ISO-8601 timestamp of the moment the pick was armed, set by the arming door. A replace of an armed, unplaced pick keeps the timestamp of the line it replaces: the immediate tier's idempotency is keyed on it."
-        },
         "trade_date": {
           "type": "string",
-          "description": "YYYY-MM-DD. Date key of the record — pick identity, TTL anchor, reconcile join, day-1 gap gate anchor. For a manual pick (no brief row) this is the arm date; provenance lives in `source`, not in this field's name (#1252)."
+          "description": "YYYY-MM-DD. Date key of the record — pick identity, TTL anchor, reconcile join, day-1 gap gate anchor. For a manual pick (no brief row) this is the arm date; provenance lives in `source`, not in this field's name (#1252). When absent: the next session of instrument.mic that has not closed at the moment of arming. Refused when absent on a \"brief\" document: a brief's date is a fact the door cannot derive."
         },
         "schema_version": {
           "type": "string",
@@ -211,19 +195,16 @@
             "brief",
             "manual"
           ],
-          "description": "Where the intent came from: \"brief\" (parsed from a brief row by `broker arm`) or \"manual\" (operator-provided levels via `broker arm-manual`, #1235). Journals and later measurement separate the two populations on this marker; legacy payloads without the key decode to \"brief\".",
-          "default": "brief"
+          "description": "Where the intent came from: \"brief\" (parsed from a brief row by `broker arm`) or \"manual\" (operator-provided levels via `broker arm-manual`, #1235). Journals and later measurement separate the two populations on this marker; legacy payloads without the key decode to \"brief\"."
         },
         "generation": {
           "type": "integer",
-          "description": "Same-day re-arm counter, 1-based (#1371). Pick identity everywhere downstream — queue fold, submissions join, entry-watch crids, stop refs — is (ticker, trade_date, generation), and the queue keeps the LATEST, so a resubmission REPLACES rather than duplicates.",
-          "minimum": 1,
-          "default": 1
+          "description": "Same-day re-arm counter, 1-based (#1371). Pick identity everywhere downstream — queue fold, submissions join, entry-watch crids, stop refs — is (ticker, trade_date, generation), and the queue keeps the LATEST, so a resubmission REPLACES rather than duplicates. When absent: the next free generation of (ticker, trade_date). Refused while another pick on the same ticker and venue is armed and unplaced.",
+          "minimum": 1
         }
       },
       "required": [
-        "armed_ts",
-        "trade_date"
+        "source"
       ]
     },
     "ExitGeometrySpec": {

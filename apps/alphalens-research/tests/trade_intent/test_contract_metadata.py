@@ -167,3 +167,54 @@ class TestTheTrapsAreActuallyWrittenDown(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheDoorRoleOfEachField(unittest.TestCase):
+    """What the arming door does with a field (#1468): derive it and refuse it on
+    input, fill it when absent, or require it although history gave it a default.
+
+    Pinned as a table, because a role is a promise to authors: moving a field in
+    or out of it changes what a hand-written document must say.
+    """
+
+    EXPECTED = {
+        ("TradeIntent", "intent_id"): "derived",
+        ("IntentMeta", "armed_ts"): "derived",
+        ("TpTrancheSpec", "r_multiple"): "derived",
+        ("IntentMeta", "trade_date"): "filled",
+        ("IntentMeta", "generation"): "filled",
+        ("EntryTierSpec", "tag"): "filled",
+        ("TpTrancheSpec", "tag"): "filled",
+        ("IntentMeta", "source"): "required",
+    }
+
+    def test_the_roles_are_exactly_the_published_ones(self) -> None:
+        found = {
+            (cls.__name__, field.name): field.metadata["door"]
+            for cls in _contract_dataclasses()
+            for field in dataclasses.fields(cls)
+            if "door" in field.metadata
+        }
+        self.assertEqual(found, self.EXPECTED)
+
+    def test_an_unknown_role_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            contract_field("a label", default="", door="computed")
+
+    def test_a_filled_field_must_say_what_absent_means(self) -> None:
+        with self.assertRaises(ValueError):
+            contract_field("a label", default="", door="filled")
+
+    def test_only_a_filled_field_says_what_absent_means(self) -> None:
+        with self.assertRaises(ValueError):
+            contract_field("a label", default="", door="derived", when_absent="T1")
+
+    def test_a_required_role_needs_a_stored_default_to_override(self) -> None:
+        """Without a default the stored shape already requires the field, so the
+        role would say nothing."""
+        with self.assertRaises(ValueError):
+            contract_field("provenance", door="required")
+
+    def test_a_filled_field_really_carries_its_note(self) -> None:
+        generation = next(f for f in dataclasses.fields(IntentMeta) if f.name == "generation")
+        self.assertTrue(generation.metadata["when_absent"].strip())

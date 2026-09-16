@@ -3466,6 +3466,16 @@ class TestPlacePickNowTranche(unittest.TestCase):
         opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
         self.assertEqual(len(opens), 1)
 
+    def test_the_cap_refusal_names_the_path_that_can_still_enter(self) -> None:
+        """#1468: a replace keeps `armed_ts`, so re-sending the pick with a new
+        cap would NOT re-open this tier. The page must name the path that does."""
+        _verdict, _submissions, alerts, _calls, _path = self._drain(
+            _now_plan(cap=10.5), points={307: _point(ask=11.0)}
+        )
+        page = next(a for a in alerts if "above cap" in a)
+        self.assertIn("disarm", page)
+        self.assertIn("new document", page)
+
     def test_no_quote_defers_the_whole_pick_and_places_nothing(self) -> None:
         broker = _RecordingBroker()
         verdict, submissions, alerts, _calls, path = self._drain(
@@ -3611,6 +3621,9 @@ class TestPlacePickNowTranche(unittest.TestCase):
         ]
         self.assertEqual(len(failures), 1)
         self.assertTrue(any("rejected" in a for a in alerts))
+        page = next(a for a in alerts if "rejected" in a)
+        self.assertIn("disarm", page)
+        self.assertIn("new document", page)
         opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
         self.assertEqual(len(opens), 1)
 

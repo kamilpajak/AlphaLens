@@ -36,6 +36,7 @@ from typing import Any
 import jsonschema
 from broker_contract.trade_intent.codec import TradeIntentDecodeError, intent_from_jsonable
 from broker_contract.trade_intent.json_schema import (
+    INPUT_SCHEMA_FILENAME,
     SCHEMA_FILENAME,
     artefact_path,
     generate_schema,
@@ -200,6 +201,82 @@ class TestTheGeneratedShape(unittest.TestCase):
             if {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"} & set(body)
         ]
         self.assertEqual(bounded, ["IntentMeta.generation"])
+
+
+class TestTheInputShape(unittest.TestCase):
+    """What an AUTHOR writes (#1468): the door derives identity and labels, so
+    the input schema must neither require nor even describe them."""
+
+    def _defs(self) -> dict[str, Any]:
+        return generate_schema("input")["$defs"]
+
+    def _root(self) -> dict[str, Any]:
+        return generate_schema("input")
+
+    def test_it_names_itself_apart_from_the_stored_shape(self) -> None:
+        self.assertNotEqual(self._root()["$id"], generate_schema()["$id"])
+        self.assertIn("input", self._root()["$id"])
+        self.assertIn(SCHEMA_VERSION, self._root()["$id"])
+
+    def test_the_derived_fields_are_not_described_at_all(self) -> None:
+        self.assertNotIn("intent_id", self._root()["properties"])
+        self.assertNotIn("intent_id", self._root()["required"])
+        self.assertNotIn("armed_ts", self._defs()["IntentMeta"]["properties"])
+        self.assertNotIn("r_multiple", self._defs()["TpTrancheSpec"]["properties"])
+
+    def test_the_stored_shape_still_carries_them(self) -> None:
+        stored = generate_schema()
+        self.assertIn("intent_id", stored["required"])
+        self.assertIn("armed_ts", stored["$defs"]["IntentMeta"]["required"])
+        self.assertIn("r_multiple", stored["$defs"]["TpTrancheSpec"]["properties"])
+
+    def test_source_is_required_on_input_and_carries_no_default(self) -> None:
+        meta = self._defs()["IntentMeta"]
+        self.assertIn("source", meta["required"])
+        self.assertNotIn("default", meta["properties"]["source"])
+
+    def test_filled_fields_are_optional_and_promise_no_default(self) -> None:
+        """A stored default would be a lie here: an absent generation is the
+        next FREE one, not 1, and an absent tag is T{n}, not ""."""
+        filled = {
+            "IntentMeta": ("trade_date", "generation"),
+            "EntryTierSpec": ("tag",),
+            "TpTrancheSpec": ("tag",),
+        }
+        for definition, names in filled.items():
+            for name in names:
+                with self.subTest(field=f"{definition}.{name}"):
+                    body = self._defs()[definition]
+                    self.assertNotIn(name, body.get("required", ()))
+                    self.assertNotIn("default", body["properties"][name])
+                    self.assertIn("absent", body["properties"][name]["description"])
+
+    def test_an_untouched_field_is_the_same_on_both_shapes(self) -> None:
+        stored = generate_schema()["$defs"]["TradeSpec"]
+        self.assertEqual(self._defs()["TradeSpec"], stored)
+
+    def test_the_minimum_author_document_passes(self) -> None:
+        document = {
+            "instrument": {"ticker": "KO", "mic": "XNYS"},
+            "spec": {
+                "entry_tiers": [{"limit_price": 60.0, "alloc_pct": 100.0}],
+                "disaster_stop": 55.0,
+                "tp_tranches": [],
+                "size": {"notional_acct": 1500.0, "currency": "EUR"},
+            },
+            "meta": {"source": "manual"},
+        }
+        validator = jsonschema.Draft202012Validator(generate_schema("input"))
+        self.assertEqual([e.message for e in validator.iter_errors(document)], [])
+
+    def test_a_document_without_source_fails(self) -> None:
+        validator = jsonschema.Draft202012Validator(generate_schema("input"))
+        errors = list(validator.iter_errors({**_manual_like(), "meta": {}}))
+        self.assertIn("'source' is a required property", [e.message for e in errors])
+
+    def test_an_unknown_shape_is_a_programming_error(self) -> None:
+        with self.assertRaises(ValueError):
+            generate_schema("journal")
 
 
 class TestEveryDocumentWeEmitValidates(unittest.TestCase):
@@ -669,39 +746,51 @@ class TestDriftClassification(unittest.TestCase):
 
 
 class TestTheCommittedArtefact(unittest.TestCase):
+    SHAPES = (("stored", SCHEMA_FILENAME), ("input", INPUT_SCHEMA_FILENAME))
+
     def test_the_artefact_for_the_current_version_exists(self) -> None:
         """A missing artefact FAILS. The Django precedent skips instead, which
         makes its gate disappear exactly when the artefact does."""
-        self.assertTrue(
-            artefact_path().exists(),
-            f"{SCHEMA_FILENAME} is missing — generate it with `{REGENERATE}`",
-        )
+        for shape, filename in self.SHAPES:
+            with self.subTest(shape=shape):
+                self.assertTrue(
+                    artefact_path(shape).exists(),
+                    f"{filename} is missing — generate it with `{REGENERATE}`",
+                )
 
     def test_it_matches_a_fresh_generation(self) -> None:
-        committed = json.loads(artefact_path().read_text())
-        live = generate_schema()
-        if committed == live:
-            return
-        broken = breaking_changes(committed, live)
-        self.assertEqual(
-            broken,
-            [],
-            "the contract changed in a way that breaks a consumer pinned to "
-            f"v{SCHEMA_VERSION}. Bump SCHEMA_VERSION (which creates a new "
-            "artefact and freezes this one) rather than recommitting this file",
-        )
-        self.fail(f"{SCHEMA_FILENAME} is stale (additive drift). Regenerate: `{REGENERATE}`")
+        for shape, filename in self.SHAPES:
+            with self.subTest(shape=shape):
+                committed = json.loads(artefact_path(shape).read_text())
+                live = generate_schema(shape)
+                if committed == live:
+                    continue
+                broken = breaking_changes(committed, live)
+                self.assertEqual(
+                    broken,
+                    [],
+                    "the contract changed in a way that breaks a consumer pinned to "
+                    f"v{SCHEMA_VERSION}. Bump SCHEMA_VERSION (which creates a new "
+                    "artefact and freezes this one) rather than recommitting this file",
+                )
+                self.fail(f"{filename} is stale (additive drift). Regenerate: `{REGENERATE}`")
 
     def test_the_file_is_byte_identical_to_the_renderer(self) -> None:
-        self.assertEqual(artefact_path().read_text(), render_schema())
+        for shape, _ in self.SHAPES:
+            with self.subTest(shape=shape):
+                self.assertEqual(artefact_path(shape).read_text(), render_schema(shape))
 
     def test_rendering_is_idempotent(self) -> None:
-        self.assertEqual(render_schema(), render_schema())
+        for shape, _ in self.SHAPES:
+            with self.subTest(shape=shape):
+                self.assertEqual(render_schema(shape), render_schema(shape))
 
-    def test_the_readme_names_the_current_artefact(self) -> None:
+    def test_the_readme_names_the_current_artefacts(self) -> None:
         """Two artefacts sit side by side after a bump, and nothing else says
         which one a consumer should read."""
-        self.assertIn(SCHEMA_FILENAME, README.read_text())
+        for _, filename in self.SHAPES:
+            with self.subTest(artefact=filename):
+                self.assertIn(filename, README.read_text())
 
 
 class TestAgainstARealJournal(unittest.TestCase):
@@ -751,14 +840,17 @@ class TestTheRegenerationCommand(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(buffer.getvalue(), render_schema())
 
-    def test_write_puts_it_where_the_gate_looks(self) -> None:
-        original = artefact_path().read_text()
-        self.addCleanup(artefact_path().write_text, original)
-        artefact_path().write_text("{}\n")
+    def test_write_puts_both_shapes_where_the_gate_looks(self) -> None:
+        for shape in ("stored", "input"):
+            original = artefact_path(shape).read_text()
+            self.addCleanup(artefact_path(shape).write_text, original)
+            artefact_path(shape).write_text("{}\n")
         with contextlib.redirect_stderr(io.StringIO()):
             status = main(["--write"])
         self.assertEqual(status, 0)
-        self.assertEqual(artefact_path().read_text(), render_schema())
+        for shape in ("stored", "input"):
+            with self.subTest(shape=shape):
+                self.assertEqual(artefact_path(shape).read_text(), render_schema(shape))
 
     def test_an_unknown_argument_is_a_usage_error(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()) as errors:
@@ -777,7 +869,9 @@ class TestTheRendererIsStrict(unittest.TestCase):
     def test_the_schema_is_a_valid_schema(self) -> None:
         """A generated document that no validator can load would fail silently
         everywhere else in this file."""
-        jsonschema.Draft202012Validator.check_schema(generate_schema())
+        for shape in ("stored", "input"):
+            with self.subTest(shape=shape):
+                jsonschema.Draft202012Validator.check_schema(generate_schema(shape))
 
     def test_no_non_finite_number_reaches_the_artefact(self) -> None:
         """`json.dumps` writes a bare NaN by default, which is not JSON."""
