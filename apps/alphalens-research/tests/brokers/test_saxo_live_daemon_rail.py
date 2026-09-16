@@ -26,7 +26,6 @@ from alphalens_pipeline.brokers.automanager.live_rails import (
     MAX_OPEN_ENV,
     MAX_PICK_NOTIONAL_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
-    SIZING_EQUITY_ENV,
     SIZING_EQUITY_MODE_ENV,
 )
 from alphalens_pipeline.brokers.saxo.client import (
@@ -51,7 +50,6 @@ _VALID_RAIL_ENV: dict[str, str] = {
     MAX_OPEN_ENV: "1",
     PORTFOLIO_GROSS_FRAC_ENV: "0.25",
     DAILY_LOSS_LIMIT_R_ENV: "1.0",
-    SIZING_EQUITY_ENV: "10000",
     SIZING_EQUITY_MODE_ENV: "clamped",
     MAX_FEE_BPS_ENV: "100",
     MAX_PICK_NOTIONAL_ENV: "10000",

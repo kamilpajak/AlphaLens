@@ -2,7 +2,7 @@
 
 A LIVE read command (`alphalens broker account|positions|orders|reconcile|cancel
 --env live`) needs the daemon's whole boot surface before
-``create_saxo_broker_live_from_env`` will construct anything: the nine risk
+``create_saxo_broker_live_from_env`` will construct anything: the eight risk
 rails plus the account-bound grant from the unit's ``Environment=``, and the
 ``SAXO_LIVE_APP_KEY`` / ``_APP_SECRET`` / ``_AUTH_REDIRECT_URL`` credentials
 that ``LiveAuthConfig.from_env`` reads from the shared ``EnvironmentFile=``.
