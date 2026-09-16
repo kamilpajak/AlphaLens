@@ -6,9 +6,8 @@ the journal + the broker's order/audit views, recomputed at read time).
 
 Capability model — the frozen ``contract.Broker`` Protocol is NOT widened.
 Terminal resolution and the fill cross-check are VENDOR CAPABILITIES reached
-through the ``@runtime_checkable`` extension Protocols below (the typed
-variant of the CLI's existing ``getattr(broker, "precheck_bracket_order",
-None)`` precedent). A broker lacking a capability degrades honestly:
+through the ``@runtime_checkable`` extension Protocols below, checked with
+``isinstance`` rather than probed with ``getattr``. A broker lacking a capability degrades honestly:
 
 - no :class:`SupportsOrderResolution` -> every disappeared order is
   ``UNRESOLVED(capability_absent)`` — never a guessed terminal state (so

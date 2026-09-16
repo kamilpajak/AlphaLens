@@ -1,11 +1,7 @@
-"""CLI tests for ``alphalens broker`` P2 order commands + the P3 reconciler.
+"""CLI tests for the ``alphalens broker`` order commands + the P3 reconciler.
 
-The submit command is DRY-RUN BY DEFAULT (bracket table + precheck, nothing
-sent); ``--execute`` additionally requires an interactive confirmation
-(``--yes`` skips it — the first confirmation pattern in alphalens_cli).
-Broker + brief loading are patched at their source modules (the CLI
-lazy-imports inside command bodies, so source-module patches are picked up at
-call time).
+The broker is patched at its source module (the CLI lazy-imports inside
+command bodies, so source-module patches are picked up at call time).
 """
 
 from __future__ import annotations
@@ -14,16 +10,13 @@ import ast
 import datetime as dt
 import json
 import unittest
-import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from alphalens_pipeline.paper.brief_loader import CandidateBrief
 from broker_contract.contract import (
     AccountSnapshot,
     BracketOrderRequest,
-    BrokerError,
     InstrumentNotFoundError,
     InstrumentRef,
     OrderState,
@@ -31,39 +24,6 @@ from broker_contract.contract import (
     PlacedOrder,
 )
 from typer.testing import CliRunner
-
-_TRADE_SETUP = {
-    "schema_version": "1.1.0",
-    "status": "OK",
-    "asof_close": 55.0,
-    "atr": 1.5,
-    "disaster_stop": 40.0,
-    "suggested_size_pct": 3.0,
-    "order_ttl_days": 5,
-    "entry_tiers": [{"limit": 50.0, "alloc_pct": 100.0, "atr_distance": 1.0, "tag": "t0"}],
-    "tp_tranches": [{"target": 60.0, "tranche_pct": 100.0, "r_multiple": 1.0, "tag": "tp0"}],
-    "builder_config_version": "setup-v1-test",
-}
-
-_TRADE_DATE = dt.date(2026, 7, 16)
-
-
-def _candidate(ticker: str = "KO", *, trade_setup: dict | None = None) -> CandidateBrief:
-    return CandidateBrief(
-        # CandidateBrief.brief_date is the thematic brief's OWN date field
-        # (alphalens_pipeline/paper/brief_loader.py) — a different concept
-        # from the broker journal's date key renamed by #1252, out of scope.
-        brief_date=_TRADE_DATE,
-        ticker=ticker,
-        theme="test-theme",
-        verified=True,
-        suggested_size_pct=3.0,
-        trade_setup=dict(trade_setup) if trade_setup is not None else dict(_TRADE_SETUP),
-        n_gates_passed=3,
-        n_gates_failed=0,
-        layer4_weighted_score=1.0,
-        scorer_config_version="scorer-v1-test",
-    )
 
 
 def _instrument() -> InstrumentRef:
@@ -82,11 +42,8 @@ class _CliFakeBroker:
 
     def __init__(self):
         self.place_calls: list[BracketOrderRequest] = []
-        self.precheck_calls: list[BracketOrderRequest] = []
         self.cancel_calls: list[str] = []
-        self.place_error: BrokerError | None = None
         self.account_currency = "USD"
-        self.precheck_payload: dict = {"PreCheckResult": "Ok", "EstimatedCashRequired": 3_000.0}
         # The default open-orders view carries every per-uic accounting field
         # the Saxo adapter maps (#1375) so the renderer tests read real shapes;
         # a test overrides the list to exercise the missing-field branches.
@@ -125,13 +82,7 @@ class _CliFakeBroker:
             raise InstrumentNotFoundError(f"no ({ticker}, {exchange_mic})")
         return _instrument()
 
-    def precheck_bracket_order(self, request: BracketOrderRequest) -> dict:
-        self.precheck_calls.append(request)
-        return dict(self.precheck_payload)
-
     def place_bracket_order(self, request: BracketOrderRequest) -> PlacedOrder:
-        if self.place_error is not None:
-            raise self.place_error
         self.place_calls.append(request)
         seq = len(self.place_calls)
         return PlacedOrder(entry_order_id=f"E-{seq}", exit_order_ids=(f"T-{seq}", f"S-{seq}"))
@@ -152,7 +103,7 @@ def _isolate_home(case: unittest.TestCase) -> Path:
 
     The legacy-layout guard (``state_paths.assert_no_legacy_flat_state``,
     ADR 0016 D4) now runs inside ``arm``/``reconcile``/``reconcile-fills``
-    and the submit ``--execute`` path — every command test that reaches one
+    — every command test that reaches one
     of those must be isolated from the REAL ``~/.alphalens/broker_orders/``
     tree, which on a developer machine running the live SIM daemon genuinely
     holds a pre-ADR-0016 flat layout and would otherwise make these hermetic
@@ -179,356 +130,43 @@ def _seed_legacy_flat_state(home: Path) -> Path:
     return legacy_file
 
 
-class _SubmitHarness:
-    """Patches registry/brief-loader/submission-log at their source modules."""
+class _BrokerCliHarness:
+    """Isolates ``Path.home()`` and patches the broker registry at its source module."""
 
-    def __init__(
-        self,
-        case: unittest.TestCase,
-        *,
-        candidates: list[CandidateBrief] | None = None,
-        broker: _CliFakeBroker | None = None,
-    ):
+    def __init__(self, case: unittest.TestCase, *, broker: _CliFakeBroker | None = None):
         self.home = _isolate_home(case)
         self.broker = broker if broker is not None else _CliFakeBroker()
-        self.appended: list[dict] = []
-
-        def _fake_append(record: dict, *, path: Path | None = None) -> Path:
-            self.appended.append(record)
-            return path or Path("/tmp/submissions-test.jsonl")
-
-        rows = candidates if candidates is not None else [_candidate()]
-        patches = [
-            mock.patch(
-                "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=self.broker,
-            ),
-            mock.patch("alphalens_pipeline.paper.brief_loader.load_brief", return_value=rows),
-            mock.patch(
-                "alphalens_pipeline.brokers.submission_log.append_submission_record",
-                side_effect=_fake_append,
-            ),
-        ]
-        for patch in patches:
-            patch.start()
-            case.addCleanup(patch.stop)
-
-
-_SUBMIT_ARGS = ["submit", "KO", "--date", "2026-07-16", "--equity", "100000"]
-
-
-class TestSubmitDryRun(unittest.TestCase):
-    def setUp(self):
-        self.runner = CliRunner()
-
-    def test_dry_run_prints_table_prechecks_and_sends_nothing(self):
-        harness = _SubmitHarness(self)
-        from alphalens_cli.commands.broker import broker_app
-
-        result = self.runner.invoke(broker_app, _SUBMIT_ARGS)
-
-        self.assertEqual(result.exit_code, 0, msg=result.output)
-        self.assertIn("DRY-RUN", result.output)
-        self.assertIn("client_request_id", result.output, "bracket table header expected")
-        # Human header columns: E / SL / TP, never the old #/stop/tp headers.
-        header = next(line for line in result.output.splitlines() if "client_request_id" in line)
-        self.assertIn("SL", header)
-        self.assertIn("TP", header)
-        self.assertNotIn("stop", header)
-        self.assertNotIn("#", header)
-        # Single tier -> the FAITHFUL entry label E1 on the row and the precheck.
-        self.assertIn("E1", result.output)
-        self.assertIn("precheck E1", result.output)
-        # 3% of 100k at 50 = 60 shares on the single tier.
-        self.assertIn("60", result.output)
-        self.assertEqual(len(harness.broker.precheck_calls), 1, "dry-run STILL prechecks")
-        self.assertEqual(harness.broker.place_calls, [], "dry-run must send NOTHING")
-        self.assertEqual(harness.appended, [], "dry-run must not journal")
-
-    def test_dropped_zero_qty_first_tier_labels_faithfully(self):
-        # tier 0 (alloc 1% -> 0 shares) is dropped, so the first PLACED bracket
-        # realizes setup-plan tier 1 -> the table and precheck must read E2, not
-        # a lying sequential E1. This is the faithful-label regression.
-        two_tier_setup = dict(
-            _TRADE_SETUP,
-            entry_tiers=[
-                {"limit": 50.0, "alloc_pct": 1.0, "atr_distance": 1.0, "tag": "t0"},
-                {"limit": 50.0, "alloc_pct": 99.0, "atr_distance": 1.5, "tag": "t1"},
-            ],
+        patch = mock.patch(
+            "alphalens_pipeline.brokers.registry.get_default_broker",
+            return_value=self.broker,
         )
-        harness = _SubmitHarness(self, candidates=[_candidate(trade_setup=two_tier_setup)])
-        from alphalens_cli.commands.broker import broker_app
-
-        result = self.runner.invoke(broker_app, _SUBMIT_ARGS)
-
-        self.assertEqual(result.exit_code, 0, msg=result.output)
-        self.assertEqual(len(harness.broker.precheck_calls), 1, "only the sized tier is placed")
-        self.assertIn("E2", result.output)
-        self.assertIn("precheck E2", result.output)
-        table_lines = [ln for ln in result.output.splitlines() if ln.strip().startswith("E")]
-        self.assertNotIn(
-            "E1",
-            "".join(table_lines),
-            "the first placed bracket is tier 1 -> E2, never a lying E1",
-        )
-
-    def test_unknown_ticker_fails_cleanly(self):
-        _SubmitHarness(self, candidates=[_candidate("OTHER")])
-        from alphalens_cli.commands.broker import broker_app
-
-        result = self.runner.invoke(broker_app, _SUBMIT_ARGS)
-
-        self.assertNotEqual(result.exit_code, 0)
+        patch.start()
+        case.addCleanup(patch.stop)
 
 
-class TestSubmitExecute(unittest.TestCase):
-    def setUp(self):
-        self.runner = CliRunner()
-
-    def test_execute_without_confirmation_aborts(self):
-        harness = _SubmitHarness(self)
-        from alphalens_cli.commands.broker import broker_app
-
-        result = self.runner.invoke(broker_app, [*_SUBMIT_ARGS, "--execute"], input="n\n")
-
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertEqual(harness.broker.place_calls, [], "declined confirm must send NOTHING")
-        self.assertEqual(harness.appended, [])
-
-    def test_execute_yes_places_prints_ids_and_token_and_journals(self):
-        harness = _SubmitHarness(self)
-        from alphalens_cli.commands.broker import broker_app
-
-        result = self.runner.invoke(broker_app, [*_SUBMIT_ARGS, "--execute", "--yes"])
-
-        self.assertEqual(result.exit_code, 0, msg=result.output)
-        self.assertEqual(len(harness.broker.place_calls), 1)
-        self.assertIn("placed entry=E-1", result.output)
-        self.assertIn("T-1", result.output)
-        self.assertIn("execution_config_version execution-v3-", result.output)
-
-        (record,) = harness.appended
-        self.assertEqual(record["ticker"], "KO")
-        self.assertEqual(record["mic"], "XNYS")
-        self.assertEqual(record["uic"], "307")
-        self.assertTrue(record["execution_config_version"].startswith("execution-v3-"))
-        # Same-currency journal: REAL nulls on the fx keys, currencies stamped.
-        self.assertEqual(record["sizing_currency"], "USD")
-        self.assertEqual(record["instrument_currency"], "USD")
-        self.assertIsNone(record["fx_rate"], "same-currency must journal null, never 1.0")
-        self.assertIsNone(record["fx_rate_source"])
-        (bracket,) = record["brackets"]
-        self.assertEqual(bracket["entry_order_id"], "E-1")
-        self.assertEqual(bracket["qty"], 60)
-        request = harness.broker.place_calls[0]
-        self.assertEqual(bracket["client_request_id"], request.client_request_id)
-        uuid.UUID(request.client_request_id)
-
-    def test_execute_failure_journals_partial_run_and_fails_loudly(self):
-        harness = _SubmitHarness(self)
-        harness.broker.place_error = BrokerError("Saxo rejected bracket")
-        from alphalens_cli.commands.broker import broker_app
-
-        result = self.runner.invoke(broker_app, [*_SUBMIT_ARGS, "--execute", "--yes"])
-
-        self.assertNotEqual(result.exit_code, 0)
-        (record,) = harness.appended
-        self.assertIn("placement stopped after 0/1", record["note"])
-
-    def test_execute_on_legacy_layout_refuses_before_placing_anything(self):
-        # The guard lives at the top of `_place_and_record` (only reached on
-        # --execute) — it must refuse BEFORE the first
-        # broker.place_bracket_order call (ADR 0016 D4): placing an order and
-        # then failing to journal it would be the worst outcome.
-        harness = _SubmitHarness(self)
-        _seed_legacy_flat_state(harness.home)
-        from alphalens_cli.commands.broker import broker_app
-
-        result = self.runner.invoke(broker_app, [*_SUBMIT_ARGS, "--execute", "--yes"])
-
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("legacy flat broker state", result.output)
-        self.assertEqual(harness.broker.place_calls, [], "must place nothing on refusal")
-        self.assertEqual(harness.appended, [], "must journal nothing on refusal")
-
-    def test_dry_run_on_legacy_layout_is_not_guarded(self):
-        # Dry-run never reaches `_place_and_record` — it must NOT refuse on
-        # stale local state it is not about to touch.
-        harness = _SubmitHarness(self)
-        _seed_legacy_flat_state(harness.home)
-        from alphalens_cli.commands.broker import broker_app
-
-        result = self.runner.invoke(broker_app, _SUBMIT_ARGS)
-
-        self.assertEqual(result.exit_code, 0, msg=result.output)
-        self.assertEqual(harness.broker.place_calls, [])
-
-
-def _fx_quote(**overrides):
-    from broker_contract.fx import FxRateQuote
-
-    fields: dict = {
-        "base_currency": "EUR",
-        "quote_currency": "USD",
-        "mid": 1.08,
-        "bid": 1.079,
-        "ask": 1.081,
-        "price_type_bid": "Tradable",
-        "price_type_ask": "Tradable",
-        "market_state": "Open",
-        "source": "saxo-fxspot-uic-21-mid",
-        "asof": dt.datetime.now(dt.UTC),
-    }
-    fields.update(overrides)
-    return FxRateQuote(**fields)
-
-
-class _FxFakeBroker(_CliFakeBroker):
-    """EUR account + USD instrument: the FX path activates (memo §7 Q1 —
-    on the EUR SIM account even US names are cross-currency)."""
-
-    def __init__(self):
-        super().__init__()
-        self.account_currency = "EUR"
-        self.fx_calls: list[tuple[str, str]] = []
-        self.fx_quote = _fx_quote()
-        self.precheck_payload = {
-            "PreCheckResult": "Ok",
-            "EstimatedCashRequired": 3_207.6,
-            "EstimatedCashRequiredCurrency": "EUR",
-            "InstrumentToAccountConversionRate": 1.0 / 1.08,
-        }
-
-    def get_fx_rate(self, base: str, quote: str):
-        self.fx_calls.append((base, quote))
-        return self.fx_quote
-
-
-class TestSubmitFxLeg(unittest.TestCase):
-    """Cross-currency submit orchestration (FX-leg memo §4.2)."""
+class TestSubmitIsGone(unittest.TestCase):
+    """``broker submit`` placed brackets outside the daemon (#1466). Only the
+    daemon places now, so the command must not exist at all."""
 
     def setUp(self):
         self.runner = CliRunner()
+        _BrokerCliHarness(self)
 
-    def _invoke(self, harness: _SubmitHarness, *extra: str):
+    def test_the_group_registers_no_submit_command(self):
         from alphalens_cli.commands.broker import broker_app
 
-        return self.runner.invoke(broker_app, [*_SUBMIT_ARGS, *extra])
+        names = {command.name for command in broker_app.registered_commands}
 
-    def test_fx_path_sizes_through_the_rate_and_buffer(self):
-        harness = _SubmitHarness(self, broker=_FxFakeBroker())
+        self.assertNotIn("submit", names)
 
-        result = self._invoke(harness)
+    def test_invoking_submit_is_an_unknown_command(self):
+        from alphalens_cli.commands.broker import broker_app
 
-        self.assertEqual(result.exit_code, 0, msg=result.output)
-        self.assertEqual(harness.broker.fx_calls, [("EUR", "USD")], "account->instrument")
-        # EUR 3,000 (3% of 100k) x 1.08 x 0.99 = USD 3,207.60 -> 64 shares
-        # at the 50.00 tier (same-currency path would size 60).
-        self.assertIn("64", result.output)
-        self.assertIn("EUR", result.output)
-        self.assertIn("USD", result.output)
-        self.assertIn("@ 1.0800 mid", result.output)
-        self.assertIn("fx cross-check ok", result.output)
-        self.assertIn("precheck E1", result.output)
+        result = self.runner.invoke(broker_app, ["submit", "KO", "--date", "2026-07-16"])
 
-    def test_fx_path_journals_the_conversion_verbatim(self):
-        harness = _SubmitHarness(self, broker=_FxFakeBroker())
-
-        result = self._invoke(harness, "--execute", "--yes")
-
-        self.assertEqual(result.exit_code, 0, msg=result.output)
-        (record,) = harness.appended
-        self.assertEqual(record["sizing_currency"], "EUR")
-        self.assertEqual(record["instrument_currency"], "USD")
-        self.assertEqual(record["sizing_equity"], 100_000.0)
-        self.assertEqual(record["fx_rate"], 1.08)
-        self.assertEqual(record["fx_rate_bid"], 1.079)
-        self.assertEqual(record["fx_rate_ask"], 1.081)
-        self.assertEqual(record["fx_rate_price_type"], "Tradable")
-        self.assertEqual(record["fx_rate_source"], "saxo-fxspot-uic-21-mid")
-        self.assertAlmostEqual(record["precheck_conversion_rate"], 1.0 / 1.08)
-        (bracket,) = record["brackets"]
-        self.assertEqual(bracket["qty"], 64)
-        self.assertEqual(bracket["entry"], 50.0, "prices stay instrument-native")
-
-    def test_missing_capability_refuses_cross_currency(self):
-        broker = _CliFakeBroker()
-        broker.account_currency = "EUR"  # USD instrument, no get_fx_rate
-        harness = _SubmitHarness(self, broker=broker)
-
-        result = self._invoke(harness)
-
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("get_fx_rate", result.output)
-        self.assertEqual(harness.broker.precheck_calls, [], "refused before any precheck")
-
-    def test_unacceptable_price_type_refuses_before_any_order(self):
-        broker = _FxFakeBroker()
-        broker.fx_quote = _fx_quote(price_type_bid="OldIndicative", price_type_ask="OldIndicative")
-        harness = _SubmitHarness(self, broker=broker)
-
-        result = self._invoke(harness, "--execute", "--yes")
-
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("not plannable", result.output)
-        self.assertEqual(harness.broker.place_calls, [])
-        self.assertEqual(harness.appended, [])
-
-    def test_precheck_currency_mismatch_refuses(self):
-        broker = _FxFakeBroker()
-        broker.precheck_payload = dict(broker.precheck_payload, EstimatedCashRequiredCurrency="USD")
-        harness = _SubmitHarness(self, broker=broker)
-
-        result = self._invoke(harness, "--execute", "--yes")
-
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("EstimatedCashRequiredCurrency", result.output)
-        self.assertEqual(harness.broker.place_calls, [])
-
-    def test_precheck_divergence_refuses_in_both_directions(self):
-        for factor in (1.03, 0.97):  # Saxo's implied rate 3% above / below
-            with self.subTest(factor=factor):
-                broker = _FxFakeBroker()
-                broker.precheck_payload = dict(
-                    broker.precheck_payload,
-                    InstrumentToAccountConversionRate=1.0 / (1.08 * factor),
-                )
-                harness = _SubmitHarness(self, broker=broker)
-
-                result = self._invoke(harness, "--execute", "--yes")
-
-                self.assertNotEqual(result.exit_code, 0)
-                self.assertIn("divergence", result.output)
-                self.assertEqual(harness.broker.place_calls, [])
-
-    def test_precheck_missing_conversion_rate_refuses(self):
-        broker = _FxFakeBroker()
-        broker.precheck_payload = dict(
-            broker.precheck_payload, InstrumentToAccountConversionRate=None
-        )
-        harness = _SubmitHarness(self, broker=broker)
-
-        result = self._invoke(harness)
-
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("InstrumentToAccountConversionRate", result.output)
-
-    def test_gross_guard_refuses_an_oversized_plan(self):
-        # 150% suggested at scale 1.0 grosses past GROSS_SAFETY_FRAC x equity.
-        import dataclasses
-
-        oversized = dataclasses.replace(
-            _candidate(),
-            suggested_size_pct=150.0,
-            trade_setup=dict(_TRADE_SETUP, suggested_size_pct=150.0),
-        )
-        harness = _SubmitHarness(self, candidates=[oversized])
-
-        result = self._invoke(harness)
-
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("gross safety guard", result.output)
-        self.assertEqual(harness.broker.precheck_calls, [])
+        # The exit status alone proves nothing: submit's own usage refusal
+        # also exits 2. Typer's unknown-command text is the discriminator.
+        self.assertIn("No such command 'submit'", result.output)
 
 
 class TestOrdersAndCancel(unittest.TestCase):
@@ -536,7 +174,7 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.runner = CliRunner()
 
     def test_orders_lists_open_orders(self):
-        harness = _SubmitHarness(self)
+        harness = _BrokerCliHarness(self)
         from alphalens_cli.commands.broker import broker_app
 
         result = self.runner.invoke(broker_app, ["orders"])
@@ -547,7 +185,7 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertEqual(harness.broker.place_calls, [])
 
     def test_orders_json_is_one_value_carrying_every_order_state_field(self):
-        harness = _SubmitHarness(self)
+        harness = _BrokerCliHarness(self)
         from alphalens_cli.commands.broker import broker_app
 
         result = self.runner.invoke(broker_app, ["orders", "--format", "json"])
@@ -609,7 +247,7 @@ class TestOrdersAndCancel(unittest.TestCase):
         # because the default fake carries no price — so nothing exercised a
         # REAL level through either rendering. "The column is there" is not
         # "the number arrives".
-        harness = _SubmitHarness(self)
+        harness = _BrokerCliHarness(self)
         harness.broker.open_orders = [
             OrderState(
                 "S-1",
@@ -640,7 +278,7 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertIn("30.39", line.split(), line)
 
     def test_orders_human_row_carries_side_type_amount_ref_and_label(self):
-        _SubmitHarness(self)
+        _BrokerCliHarness(self)
         from alphalens_cli.commands.broker import broker_app
 
         result = self.runner.invoke(broker_app, ["orders"])
@@ -663,7 +301,7 @@ class TestOrdersAndCancel(unittest.TestCase):
         # Positive control for the #1375 defect: a one-shot CLI process has an
         # empty resolve cache, so the adapter hands back instrument=None while
         # the uic is known. The old renderer printed `?` for exactly this row.
-        harness = _SubmitHarness(self)
+        harness = _BrokerCliHarness(self)
         harness.broker.open_orders = [
             OrderState(
                 "S-1",
@@ -694,7 +332,7 @@ class TestOrdersAndCancel(unittest.TestCase):
         # The minimal OrderState shape (every additive field defaulted) must
         # render — the label helper raises TypeError on None, so the renderer
         # has to guard it rather than pass the field through.
-        harness = _SubmitHarness(self)
+        harness = _BrokerCliHarness(self)
         harness.broker.open_orders = [OrderState("X-1", OrderStatus.WORKING, None, 0.0, "Working")]
         from alphalens_cli.commands.broker import broker_app
 
@@ -718,7 +356,7 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertIn("raw=Working", line)
 
     def test_orders_rejects_an_unknown_format_before_any_broker_call(self):
-        harness = _SubmitHarness(self)
+        harness = _BrokerCliHarness(self)
         from alphalens_cli.commands.broker import broker_app
 
         result = self.runner.invoke(broker_app, ["orders", "--format", "xml"])
@@ -730,7 +368,7 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertEqual(harness.broker.list_open_orders_calls, 0)
 
     def test_orders_empty_reference_renders_the_placeholder_not_a_blank_cell(self):
-        harness = _SubmitHarness(self)
+        harness = _BrokerCliHarness(self)
         harness.broker.open_orders = [
             OrderState(
                 "R-1",
@@ -758,7 +396,7 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertEqual(line.split().count("-"), 3, line)
 
     def test_orders_empty_book_reads_no_open_orders(self):
-        harness = _SubmitHarness(self)
+        harness = _BrokerCliHarness(self)
         harness.broker.open_orders = []
         from alphalens_cli.commands.broker import broker_app
 
@@ -770,7 +408,7 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertEqual(json.loads(as_json.stdout)["orders"], [])
 
     def test_cancel_happy_path(self):
-        harness = _SubmitHarness(self)
+        harness = _BrokerCliHarness(self)
         from alphalens_cli.commands.broker import broker_app
 
         result = self.runner.invoke(broker_app, ["cancel", "E-1"])

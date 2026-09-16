@@ -116,7 +116,9 @@ _ENTRY_DURATION = "GoodTillDate-date-only"
 # the paper-planner default so the two consumers cannot drift.
 _TTL_ZERO_SENTINEL_DAYS = DEFAULT_ORDER_TTL_DAYS
 
-# POST /trade/v2/orders/precheck runs before EVERY real placement POST.
+# Token-only since #1466: the removed `broker submit` ran the precheck; the
+# daemon never has. Kept at its old value so execution_config_version() does
+# not start a new cohort for a policy no placement path enforces.
 _PRECHECK_REQUIRED = True
 
 # ManualOrder pinned false on parent and both children (generated/routed
@@ -179,10 +181,10 @@ _FX_RATE_SOURCE = "saxo-fxspot-infoprice-mid"
 # notional, BEFORE the per-tier qty floor. Prices are never converted.
 _FX_CONVERSION_POINT = "notional-before-qty"
 
-# Precheck cross-check: |InstrumentToAccountConversionRate^-1 vs sizing rate|
-# beyond this % means the infoprice snapshot and Saxo's own conversion rate
-# disagree materially (or a wrong-pair/inverted-rate bug) -> refuse placement.
-# Mind the direction: precheck's rate is instrument->account.
+# Token-only since #1466, like _PRECHECK_REQUIRED: the precheck FX cross-check
+# (refuse when the precheck's inverted InstrumentToAccountConversionRate and the
+# sizing rate differ by more than this %) ran only in the removed
+# `broker submit`. The value stays so the cohort token does not change.
 _FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT = 2.0
 
 # Settlement-drift honesty haircut on the converted instrument-ccy notional
@@ -519,28 +521,8 @@ def build_fx_conversion(
     )
 
 
-def fx_precheck_divergence_pct(sizing_rate: float, instrument_to_account_rate: float) -> float:
-    """% divergence between the sizing rate and the precheck's independent rate.
-
-    MIND THE DIRECTION: precheck's ``InstrumentToAccountConversionRate`` is
-    instrument->account (e.g. PLN->EUR), the sizing rate is
-    account->instrument — so the precheck rate is INVERTED before comparing.
-    Callers compare the result against
-    :data:`_FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT`; non-positive inputs raise
-    ``ValueError`` (the caller refuses before dividing by a broken rate).
-    """
-    if sizing_rate <= 0 or instrument_to_account_rate <= 0:
-        raise ValueError(
-            f"non-positive rate in FX precheck cross-check (sizing={sizing_rate!r}, "
-            f"instrument_to_account={instrument_to_account_rate!r})"
-        )
-    implied_account_to_instrument = 1.0 / instrument_to_account_rate
-    return abs(implied_account_to_instrument - sizing_rate) / sizing_rate * 100.0
-
-
 __all__ = [
     "build_fx_conversion",
     "decompose_setup_plan",
     "execution_config_version",
-    "fx_precheck_divergence_pct",
 ]

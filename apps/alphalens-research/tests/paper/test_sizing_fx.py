@@ -3,8 +3,7 @@
 Pins the FX-leg design memo §4.2 math: the conversion happens ONCE, between
 the account-currency notional and the per-tier qty division; prices are
 NEVER converted; the same-currency ``fx=None`` path is byte-exact vs the
-pre-FX-leg output; the gross guard compares in ONE currency through the
-plan's OWN rate (no buffer on the ceiling).
+pre-FX-leg output.
 """
 
 from __future__ import annotations
@@ -14,13 +13,8 @@ import datetime as dt
 import math
 import unittest
 
-from broker_contract.constants import GROSS_SAFETY_FRAC
 from broker_contract.fx import FxConversion, FxRateQuote
-from broker_contract.sizing import (
-    TradeSetupNotPlannableError,
-    setup_plan_gross_guard_limit,
-    setup_plan_gross_notional,
-)
+from broker_contract.sizing import TradeSetupNotPlannableError
 
 from tests.paper.sizing_test_helpers import plan_from_brief
 
@@ -182,31 +176,6 @@ class TestFxRefusals(unittest.TestCase):
                 scale_factor=1.0,
                 fx=_fx(instrument="EUR"),
             )
-
-
-class TestGrossGuardSingleCurrency(unittest.TestCase):
-    def test_same_currency_limit_is_frac_times_equity(self):
-        plan = plan_from_brief(
-            brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=1.0
-        )
-        self.assertAlmostEqual(setup_plan_gross_guard_limit(plan), GROSS_SAFETY_FRAC * _EQUITY_EUR)
-
-    def test_cross_currency_limit_converts_equity_through_the_plan_rate(self):
-        # SAME rate object as sizing, NO buffer on the ceiling.
-        plan = plan_from_brief(
-            brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=1.0, fx=_fx()
-        )
-        self.assertAlmostEqual(
-            setup_plan_gross_guard_limit(plan), GROSS_SAFETY_FRAC * _EQUITY_EUR * 4.34
-        )
-
-    def test_gross_and_limit_share_the_instrument_currency(self):
-        # Both sides of the compare are instrument-ccy: a sane plan's gross
-        # sits far below the converted ceiling.
-        plan = plan_from_brief(
-            brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=1.0, fx=_fx()
-        )
-        self.assertLess(setup_plan_gross_notional(plan), setup_plan_gross_guard_limit(plan))
 
 
 class TestFxRateQuotePriceType(unittest.TestCase):

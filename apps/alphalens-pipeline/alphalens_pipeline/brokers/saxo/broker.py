@@ -1495,8 +1495,7 @@ class SaxoBroker:
     # Saxo can honor audit-log resolution today. The vendor-agnostic
     # reconciler reaches these through the ``SupportsOrderResolution`` /
     # ``SupportsFillCrossCheck`` extension Protocols in
-    # ``brokers/reconcile.py`` (typed variant of the existing
-    # ``getattr(broker, "precheck_bracket_order", None)`` CLI precedent);
+    # ``brokers/reconcile.py``;
     # brokers lacking them degrade to UNRESOLVED(capability_absent) — never
     # a guessed terminal state.
 

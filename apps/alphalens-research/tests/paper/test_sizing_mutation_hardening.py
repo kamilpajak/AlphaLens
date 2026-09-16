@@ -20,7 +20,6 @@ from broker_contract.sizing import (
     TpTranchePlan,
     TradeSetupNotPlannableError,
     compute_daily_scale_factor,
-    setup_plan_gross_guard_limit,
 )
 
 from tests.paper.sizing_test_helpers import plan_from_brief
@@ -316,15 +315,6 @@ class FxGuardHardeningTests(unittest.TestCase):
         sizing_notional = total_notional * 2.0 * (1.0 - 50.0 / 100.0)  # 500
         expected_qty = int(sizing_notional // 1.0)  # alloc 100%, limit 1.0 -> 500
         self.assertEqual(plan.entry_tiers[0].qty, expected_qty)
-
-
-class GrossGuardHardeningTests(unittest.TestCase):
-    def test_gross_guard_frac_is_keyword_only(self):
-        # gross_safety_frac is keyword-only (the `*` marker); a `*`->`/` mutant
-        # would accept it positionally (L341).
-        plan = plan_from_brief(brief_trade_setup=_setup(), paper_equity=10_000.0, scale_factor=1.0)
-        with self.assertRaises(TypeError):
-            setup_plan_gross_guard_limit(plan, 0.5)  # type: ignore[misc]
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -60,7 +60,6 @@ from dataclasses import dataclass
 
 from broker_contract.constants import (
     EXPECTED_AVG_HOLD_DAYS,
-    GROSS_SAFETY_FRAC,
     STEADY_STATE_GROSS_FRAC,
 )
 from broker_contract.fx import FxConversion
@@ -388,28 +387,10 @@ def compute_setup_plan(
 def setup_plan_gross_notional(plan: SetupPlan) -> float:
     """The INSTRUMENT-currency gross a planner would commit if every tier filled.
 
-    Used by the gross safety guard in the planner (block if cumulative would
-    push past :func:`setup_plan_gross_guard_limit`).
+    The daemon's fee floor, portfolio gross cap and cash floor read it
+    (``control_loop``).
     """
     return sum(t.qty * t.limit_price for t in plan.entry_tiers)
-
-
-def setup_plan_gross_guard_limit(
-    plan: SetupPlan,
-    *,
-    gross_safety_frac: float = GROSS_SAFETY_FRAC,
-) -> float:
-    """The gross-guard ceiling in INSTRUMENT currency (memo §4.3 item 7).
-
-    The gross guard must compare in ONE currency: the equity side is
-    converted through the plan's OWN :class:`~broker_contract.fx.FxConversion`
-    rate (no second fetch — two fetches could straddle a tick and disagree
-    with the journal), WITHOUT the sizing buffer (the buffer shrinks the
-    deployed notional, not the safety ceiling). Same-currency plans compare
-    raw.
-    """
-    rate = plan.fx.rate if plan.fx is not None else 1.0
-    return gross_safety_frac * plan.paper_equity * rate
 
 
 __all__ = [
@@ -419,6 +400,5 @@ __all__ = [
     "TradeSetupNotPlannableError",
     "compute_daily_scale_factor",
     "compute_setup_plan",
-    "setup_plan_gross_guard_limit",
     "setup_plan_gross_notional",
 ]

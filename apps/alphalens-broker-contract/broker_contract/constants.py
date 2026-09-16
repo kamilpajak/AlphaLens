@@ -3,8 +3,8 @@ boundary.
 
 Holds ``DEFAULT_ORDER_TTL_DAYS``, the entry-TTL default the Boundary-2
 ``TradeSpec`` wire schema (``broker_contract.trade_intent.schema``) depends
-on, plus the 3 money-math sizing constants (``STEADY_STATE_GROSS_FRAC``,
-``EXPECTED_AVG_HOLD_DAYS``, ``GROSS_SAFETY_FRAC``) that
+on, plus the 2 money-math sizing constants (``STEADY_STATE_GROSS_FRAC``,
+``EXPECTED_AVG_HOLD_DAYS``) that
 ``broker_contract.sizing`` depends on (2A-4a, sub-PR of the broker-manager
 extraction arc — see
 ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``
@@ -42,14 +42,6 @@ DEFAULT_ORDER_TTL_DAYS = 7
 # equivalence at steady state); variance / inter-candidate ratios restored.
 STEADY_STATE_GROSS_FRAC = 0.667
 EXPECTED_AVG_HOLD_DAYS = 30
-
-# Gross safety guard: block new orders if planned cumulative notional
-# would push the day's book past this fraction of equity. v2's global
-# scaling keeps the typical daily aggregate well below this (target
-# 2.2% of equity per day for steady-state ~67%), so the guard is a
-# belt-and-suspenders layer that catches realised-lambda spikes the
-# scale factor under-projects for.
-GROSS_SAFETY_FRAC = 1.0
 
 # Broker share-quantity precision. Owned quantities are whole numbers on the
 # wire but arrive as floats, so a bare ``>=`` on two of them can flicker (e.g.

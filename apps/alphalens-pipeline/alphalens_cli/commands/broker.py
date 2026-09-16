@@ -8,9 +8,6 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker account                 — account snapshot (cash / value / margin)
     alphalens broker positions               — open positions
     alphalens broker resolve KO [--exchange XNYS]  — instrument resolution (symbol -> Uic)
-    alphalens broker submit KO --date 2026-07-16   — DRY-RUN by default: bracket
-        table + precheck; sending needs --execute AND an interactive confirm
-        (--yes skips the prompt) AND ALPHALENS_BROKER_ALLOW_ORDERS=1 in the env
     alphalens broker arm KO --date 2026-07-20 [--env sim|live]   — validate
         against the brief, append an "armed" pick to <env>/picks.jsonl (the
         auto-manager hand-off seam; --env selects the instance, default sim)
@@ -50,12 +47,13 @@ EXACTLY one compact object whose first two fields are ``schema`` and ``env``.
 deferred with the failure contract until a consumer needs them (#1389).
 
 Every one-off broker-touching command (account / positions / resolve /
-submit / orders / reconcile / reconcile-fills / cancel) resolves its broker
+orders / reconcile / reconcile-fills / cancel) resolves its broker
 through :func:`_cli_broker` — env-aware per ``ALPHALENS_BROKER_ENVIRONMENT``,
 the same seam the per-env journal paths use — and echoes one
-``env=<env> gateway=<label>`` line to stderr. Under ``env=live`` reads route
-into the ADR 0017 LIVE factory and ad-hoc placement (``submit``) refuses
-(the daemon is the only LIVE placement path).
+``env=<env> gateway=<label>`` line to stderr. Under ``env=live`` they route
+into the ADR 0017 LIVE factory. No command here places or amends an order: the
+``manage`` daemon is the only placement path, and a command hands it work by
+appending an armed pick (#1466, pinned by ``test_broker_cli_places_nothing``).
 
 ``--env sim|live`` on the read commands (account / positions / orders /
 reconcile / cancel, plus picks / watches / stream-status over the journals)
@@ -82,7 +80,7 @@ import os
 import re
 import sys
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -96,13 +94,12 @@ import typer
 from broker_contract.failure import CONTRACT_FAILURE_CODES, Failure, FailureCode, Suggestion
 
 if TYPE_CHECKING:
-    # Type-only imports for the extracted submit helpers. Guarded by
+    # Type-only imports for helper signatures. Guarded by
     # TYPE_CHECKING so they never run at import time (lazy-CLI startup budget) —
     # `from __future__ import annotations` keeps the annotations as strings.
     from alphalens_pipeline.brokers.automanager.picks import PickRecord
     from alphalens_pipeline.brokers.notifications import NotificationPort
-    from broker_contract.contract import Broker, InstrumentRef, OrderState
-    from broker_contract.fx import FxConversion
+    from broker_contract.contract import Broker, OrderState
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +173,8 @@ _CLI_FAILURE_CODES: Mapping[str, FailureCode] = {
             name="live_refused",
             retryable=False,
             meaning=(
-                "A LIVE operation was refused: ad-hoc placement on LIVE is forbidden "
-                "(ADR 0017), or the LIVE rails / auth surface are not present."
+                "A LIVE broker could not be built: the LIVE rails or auth surface "
+                "are not present in this process (ADR 0017)."
             ),
         ),
         FailureCode(
@@ -236,15 +233,6 @@ _CLI_FAILURE_CODES: Mapping[str, FailureCode] = {
                 "Nothing was queued and no broker order can be in flight — the "
                 "commands that report this write only to the queue — so the same "
                 "command may simply be re-run once the cause clears."
-            ),
-        ),
-        FailureCode(
-            name="policy_refused",
-            retryable=False,
-            meaning=(
-                "A safety policy refused the operation (gross guard, FX divergence, "
-                "unverifiable instrument currency, a resting order in the way). The "
-                "specific reason is in details, which is diagnostic and unstable."
             ),
         ),
         FailureCode(
@@ -688,7 +676,7 @@ def _guard_ambient_instance(env: str | None, *, default: str) -> str:
     return default
 
 
-def _cli_broker(*, mutating: bool) -> Broker:
+def _cli_broker() -> Broker:
     """Resolve the broker for a one-off command per ``ALPHALENS_BROKER_ENVIRONMENT``.
 
     The environment is read through ``state_paths.broker_environment()`` — the
@@ -696,18 +684,17 @@ def _cli_broker(*, mutating: bool) -> Broker:
     command talks to and the journals it touches can never disagree (pre-fix,
     ``reconcile`` under ``env=live`` read the live journal but asked the SIM
     gateway). Under ``sim`` (the default) this is exactly the registry
-    ``get_default_broker()`` path. Under ``live``:
+    ``get_default_broker()`` path.
 
-    * ``mutating=True`` (ad-hoc placement, i.e. ``submit``) refuses loud
-      BEFORE any broker construction — ADR 0017: the ``manage`` daemon is the
-      ONLY LIVE placement path (the §4a probes are deliberate standalone
-      scripts). ``submit`` has no broker-free preview (the dry-run still
-      reads the account and prechecks server-side), so the WHOLE command
-      refuses.
-    * everything else — reads plus the risk-reducing ``cancel`` (same
-      doctrine that keeps it ungated by ``ALLOW_ORDERS``; the LIVE
-      manual-flatten runbook needs it) — builds the LIVE broker via the
-      ADR 0017 factory ``create_saxo_broker_live_from_env`` (lazy import,
+    It serves reads and the risk-reducing ``cancel`` only (same doctrine that
+    keeps cancelling ungated by ``ALLOW_ORDERS``; the LIVE manual-flatten
+    runbook needs it). No CLI command places or amends an order: the ``manage``
+    daemon is the only placement path (ADR 0017), and
+    ``test_broker_cli_places_nothing`` walks every CLI module to keep it so.
+    That gate replaced a caller-declared ``mutating`` flag, which a future
+    command could have opted out of (#1466).
+
+    Under ``live`` it builds the LIVE broker via the ADR 0017 factory ``create_saxo_broker_live_from_env`` (lazy import,
       house doctrine). The registry stays SIM-only per ADR 0017 — ``live``
       is never registered in ``_BROKER_FACTORIES``. The factory demands the
       daemon's FULL LIVE boot surface (the eight rail pins in soak bounds,
@@ -719,14 +706,11 @@ def _cli_broker(*, mutating: bool) -> Broker:
       dropped — it exists for the daemon's SessionKeeper, which a one-shot
       command does not run.
 
-    Echoes one ``env=<env> gateway=<sim|live|none|refused>`` line to STDERR at
+    Echoes one ``env=<env> gateway=<sim|live|refused>`` line to STDERR at
     resolution time (stdout carries the result only — CLI convention);
-    ``gateway=none`` marks the mutating-on-live refusal and ``gateway=refused``
-    a failed LIVE construction — the ``live`` label is emitted only AFTER the
-    factory succeeds, so the echo never claims a gateway that was not built.
-    The ``mutating`` keyword has NO default on purpose: a future mutating
-    caller must state its intent or it will not compile into the live-capable
-    branch by accident (zen review).
+    ``gateway=refused`` marks a failed LIVE construction — the ``live`` label is
+    emitted only AFTER the factory succeeds, so the echo never claims a gateway
+    that was not built.
     """
     from alphalens_pipeline.brokers.automanager import state_paths
 
@@ -740,19 +724,6 @@ def _cli_broker(*, mutating: bool) -> Broker:
         from alphalens_pipeline.brokers.registry import get_default_broker
 
         return get_default_broker()
-
-    if mutating:
-        typer.secho(f"env={env} gateway=none", err=True)
-        raise _fail_with(
-            "live_refused",
-            "env=live: ad-hoc placement on LIVE is forbidden by design "
-            "(ADR 0017) — the `alphalens broker manage` daemon is the only "
-            "LIVE placement path, and `submit` has no broker-free preview "
-            "(the dry-run still reads the account and prechecks server-side), "
-            "so the whole command refuses. Re-run with "
-            "ALPHALENS_BROKER_ENVIRONMENT=sim, or hand the pick to the live "
-            "daemon via `alphalens broker arm ... --env live`.",
-        )
 
     from alphalens_pipeline.brokers.saxo.broker import create_saxo_broker_live_from_env
 
@@ -1359,7 +1330,7 @@ def account_command(
     resolved_format = _resolve_format(output_format)
     _apply_env_option(env)
     try:
-        snapshot = _cli_broker(mutating=False).get_account()
+        snapshot = _cli_broker().get_account()
     except BrokerError as exc:
         raise _fail_from_broker_error(exc, "broker account failed") from exc
 
@@ -1408,7 +1379,7 @@ def capital_reader_command() -> None:
     from broker_contract.contract import BrokerError
 
     try:
-        balance = emit_capital_reader_gauges(_cli_broker(mutating=False))
+        balance = emit_capital_reader_gauges(_cli_broker())
     except BrokerError as exc:
         raise _fail_from_broker_error(exc, "capital-reader failed") from exc
     except (OSError, ValueError) as exc:
@@ -1429,7 +1400,7 @@ def positions_command(
     resolved_format = _resolve_format(output_format)
     _apply_env_option(env)
     try:
-        positions = _cli_broker(mutating=False).get_positions()
+        positions = _cli_broker().get_positions()
     except BrokerError as exc:
         raise _fail_from_broker_error(exc, "broker positions failed") from exc
 
@@ -1489,7 +1460,7 @@ def resolve_command(
 
     resolved_format = _resolve_format(output_format)
     try:
-        ref = _cli_broker(mutating=False).resolve_instrument(ticker, exchange)
+        ref = _cli_broker().resolve_instrument(ticker, exchange)
     except BrokerError as exc:
         raise _fail_from_broker_error(exc, "broker resolve failed") from exc
 
@@ -1514,446 +1485,6 @@ def resolve_command(
     typer.echo(f"broker_id     {ref.broker_instrument_id}")
     typer.echo(f"symbol        {ref.broker_symbol}")
     typer.echo(f"currency      {ref.currency or 'n/a'}")
-
-
-def _echo_bracket_table(brackets: list) -> None:
-    # Human labels only: E{n}/SL/TP columns and the FAITHFUL entry label from
-    # each bracket's setup-plan tier_index (E2 when tier 0 was dropped for zero
-    # qty), never a 0-based placement index. The machine journal keeps raw
-    # values. Width 3 fits E10 (lazy-CLI: import inside the body).
-    from alphalens_pipeline.brokers.automanager.labels import human_entry_label
-
-    typer.echo(
-        f"{'E':>3s}  {'qty':>6s}  {'entry':>10s}  {'SL':>10s}  {'TP':>10s}  "
-        f"{'ttl':>4s}  client_request_id"
-    )
-    for bracket in brackets:
-        tp = "-" if bracket.take_profit is None else f"{bracket.take_profit:.4f}"
-        stop = "-" if bracket.stop_loss is None else f"{bracket.stop_loss:.4f}"
-        typer.echo(
-            f"{human_entry_label(bracket.tier_index):>3s}  {bracket.quantity:>6d}  "
-            f"{bracket.entry_limit:>10.4f}  {stop:>10s}  {tp:>10s}  "
-            f"{bracket.entry_ttl_days:>4d}  {bracket.client_request_id}"
-        )
-
-
-def _assert_fx_precheck_cross_checks(
-    *,
-    entry_label: str,
-    ticker: str,
-    payload: dict,
-    fx: object,
-    account_currency: str,
-    divergence_max_pct: float,
-    divergence_fn: Callable[[float, float], float],
-) -> float:
-    """FX-path precheck cross-checks (FX-leg memo §4.3 item 5); refuse on any miss.
-
-    (a) ``EstimatedCashRequiredCurrency`` must equal the account currency —
-    anything else (including absent) means the account model is not what we
-    think. (b) Saxo's ``InstrumentToAccountConversionRate`` (instrument->
-    account direction) inverted must agree with the sizing rate within the
-    policy bound. Returns the verbatim precheck rate for the journal.
-    ``fx`` / ``divergence_fn`` stay duck-typed so this helper adds no
-    top-level pipeline import (lazy-CLI doctrine).
-    """
-    est_cash_currency = payload.get("EstimatedCashRequiredCurrency")
-    if est_cash_currency != account_currency:
-        raise _fail(
-            f"{ticker}: precheck {entry_label} EstimatedCashRequiredCurrency="
-            f"{est_cash_currency!r} does not match the account currency "
-            f"{account_currency!r} — the account model is not what we think; "
-            "refusing placement"
-        )
-    conversion_rate_raw = payload.get("InstrumentToAccountConversionRate")
-    try:
-        conversion_rate = float(conversion_rate_raw)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        conversion_rate = 0.0
-    if conversion_rate <= 0:
-        raise _fail(
-            f"{ticker}: precheck {entry_label} carries no usable "
-            f"InstrumentToAccountConversionRate ({conversion_rate_raw!r}) — the "
-            "independent FX cross-check cannot run; refusing placement"
-        )
-    sizing_rate: float = fx.rate  # type: ignore[attr-defined]
-    try:
-        divergence = divergence_fn(sizing_rate, conversion_rate)
-    except ValueError as exc:
-        # Belt: both rates are validated positive above/at FxConversion build,
-        # but a helper-level ValueError must surface as a clean refusal, never
-        # a traceback (review finding, PR #849).
-        raise _fail(f"{ticker}: precheck {entry_label} FX divergence check failed: {exc}") from exc
-    if divergence > divergence_max_pct:
-        raise _fail(
-            f"{ticker}: precheck {entry_label} FX divergence {divergence:.2f}% exceeds the "
-            f"{divergence_max_pct}% bound — sizing rate {sizing_rate:.6f} "
-            f"(account->instrument) vs Saxo {conversion_rate:.6f} "
-            "(instrument->account, inverted before comparing); refusing placement"
-        )
-    typer.echo(
-        f"precheck {entry_label}: fx cross-check ok — saxo rate {conversion_rate:.6f} "
-        f"(instrument->account), divergence {divergence:.2f}% <= {divergence_max_pct}%"
-    )
-    return conversion_rate
-
-
-def _resolve_instrument_and_plan(
-    *,
-    wanted: str,
-    exchange: str | None,
-    equity: float | None,
-    scale_factor: float,
-    trade_setup: dict,
-) -> tuple:
-    """Resolve the instrument, read the account, and size the setup plan.
-
-    Extracted from ``submit_command`` to keep it a short orchestration: the
-    broker read, the cross-currency FX-rate resolution, and the sizing call
-    live here. Lazy imports keep the ``alphalens`` binary's startup cost off
-    this path (lazy-CLI doctrine). Returns
-    ``(broker, account, sizing_equity, instrument, fx, plan)``.
-    """
-    from alphalens_pipeline.brokers import execution as execution_policy
-    from alphalens_pipeline.brokers.execution import build_fx_conversion
-    from alphalens_pipeline.brokers.routing import resolve_us_instrument
-    from alphalens_pipeline.paper.sizing import parse_brief_to_spec
-    from broker_contract.contract import BrokerError
-    from broker_contract.sizing import TradeSetupNotPlannableError, compute_setup_plan
-
-    try:
-        # mutating=True: submit is ad-hoc PLACEMENT — under env=live the whole
-        # command refuses HERE, before the account read below (there is no
-        # broker-free preview; ADR 0017 keeps LIVE placement daemon-only).
-        broker = _cli_broker(mutating=True)
-        # The account read is unconditional now: the BUDGET is the account
-        # currency (FX-leg memo §7 Q1 operator decision), so the currency
-        # compare needs AccountSnapshot.currency even with --equity given.
-        account = broker.get_account()
-        sizing_equity = equity if equity is not None else account.total_value
-        instrument = resolve_us_instrument(broker, wanted, exchange_mic=exchange)
-        if not instrument.currency:
-            raise _fail(
-                f"{wanted}: broker {broker.name!r} resolve stamped no instrument "
-                "currency — cannot verify the account-vs-instrument currency; "
-                "refusing to size (never MIC-inferred, never guessed)"
-            )
-        fx = None
-        if instrument.currency != account.currency:
-            get_fx_rate = getattr(broker, "get_fx_rate", None)
-            if get_fx_rate is None:
-                raise _fail(
-                    f"{wanted} trades in {instrument.currency} but the account is "
-                    f"{account.currency}, and broker {broker.name!r} exposes no "
-                    "get_fx_rate capability — refusing to size cross-currency "
-                    f"(policy {execution_policy._MISSING_FX_RATE_POLICY!r})"
-                )
-            fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
-        spec = parse_brief_to_spec(trade_setup)
-        plan = compute_setup_plan(
-            spec,
-            paper_equity=sizing_equity,
-            scale_factor=scale_factor,
-            fx=fx,
-        )
-    except TradeSetupNotPlannableError as exc:
-        raise _fail(f"{wanted} is not plannable: {exc}") from exc
-    except BrokerError as exc:
-        raise _fail_from_broker_error(exc, "broker submit failed") from exc
-    return broker, account, sizing_equity, instrument, fx, plan
-
-
-def _run_prechecks(
-    *,
-    broker: object,
-    brackets: list,
-    fx: object,
-    wanted: str,
-    account_currency: str,
-) -> tuple[list[dict], float | None]:
-    """Precheck every bracket server-side (places nothing); FX-path cross-checks.
-
-    Extracted from ``submit_command``. On the FX path the precheck is also the
-    SECOND, independent rate source (see the caller's comment). Returns
-    ``(precheck_summaries, precheck_conversion_rate)``.
-    """
-    from alphalens_pipeline.brokers import execution as execution_policy
-    from alphalens_pipeline.brokers.automanager.labels import human_entry_label
-    from alphalens_pipeline.brokers.execution import fx_precheck_divergence_pct
-    from broker_contract.contract import BrokerError
-
-    precheck_summaries: list[dict] = []
-    precheck_conversion_rate: float | None = None
-    precheck_fn = getattr(broker, "precheck_bracket_order", None)
-    if precheck_fn is None:
-        typer.echo("precheck: not supported by this broker — skipping")
-        return precheck_summaries, precheck_conversion_rate
-    for bracket in brackets:
-        # FAITHFUL entry label from the setup-plan tier_index, not the 0-based
-        # placement position (E2 when tier 0 was dropped for zero qty).
-        entry_label = human_entry_label(bracket.tier_index)
-        try:
-            payload = precheck_fn(bracket)
-        except BrokerError as exc:
-            raise _fail_from_broker_error(
-                exc, f"precheck failed for entry tier {entry_label}"
-            ) from exc
-        est_cash_currency = payload.get("EstimatedCashRequiredCurrency")
-        summary = {
-            "client_request_id": bracket.client_request_id,
-            "PreCheckResult": payload.get("PreCheckResult"),
-            "EstimatedCashRequired": payload.get("EstimatedCashRequired"),
-            "EstimatedCashRequiredCurrency": est_cash_currency,
-            "InstrumentToAccountConversionRate": payload.get("InstrumentToAccountConversionRate"),
-            "Costs": payload.get("Cost", payload.get("Costs")),
-        }
-        precheck_summaries.append(summary)
-        est_cash_label = (
-            f"{summary['EstimatedCashRequired']!r}"
-            if est_cash_currency is None
-            else f"{summary['EstimatedCashRequired']!r} {est_cash_currency}"
-        )
-        typer.echo(
-            f"precheck {entry_label}: result={summary['PreCheckResult']!r} "
-            f"est_cash={est_cash_label} costs={summary['Costs']!r}"
-        )
-        if fx is not None:
-            precheck_conversion_rate = _assert_fx_precheck_cross_checks(
-                entry_label=entry_label,
-                ticker=wanted,
-                payload=payload,
-                fx=fx,
-                account_currency=account_currency,
-                divergence_max_pct=(execution_policy._FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT),
-                divergence_fn=fx_precheck_divergence_pct,
-            )
-    return precheck_summaries, precheck_conversion_rate
-
-
-def _place_and_record(
-    *,
-    broker: Broker,
-    brackets: list,
-    trade_date: dt.date,
-    wanted: str,
-    instrument: InstrumentRef,
-    precheck_summaries: list[dict],
-    account_currency: str,
-    sizing_equity: float,
-    fx: FxConversion | None,
-    precheck_conversion_rate: float | None,
-) -> None:
-    """Place each bracket, journal the outcome, then raise on any failure.
-
-    Extracted from ``submit_command``. The submission record is written in a
-    ``finally`` so a mid-run BrokerError still journals the already-placed
-    entries; the command then exits non-zero with the reconcile hint.
-
-    Only ever reached on ``--execute`` (dry-run returns before this is
-    called), so the legacy-layout guard belongs HERE rather than earlier in
-    ``submit_command`` — a dry-run must never refuse on stale local state it
-    is not about to touch. The guard runs before the first
-    ``broker.place_bracket_order`` call: placing orders and then failing to
-    journal them would be the worst outcome (ADR 0016 D4).
-    """
-    _guard_state_layout()
-
-    from alphalens_pipeline.brokers.execution import execution_config_version
-    from alphalens_pipeline.brokers.submission_log import (
-        SizingStamp,
-        append_submission_record,
-        build_submission_record,
-    )
-    from broker_contract.contract import BrokerError
-
-    placed_records: list[dict] = []
-    failure_note: str | None = None
-    try:
-        for bracket in brackets:
-            placed = broker.place_bracket_order(bracket)
-            placed_records.append(
-                {
-                    "client_request_id": bracket.client_request_id,
-                    "entry_order_id": placed.entry_order_id,
-                    "exit_order_ids": list(placed.exit_order_ids),
-                    "qty": bracket.quantity,
-                    "entry": bracket.entry_limit,
-                    "stop": bracket.stop_loss,
-                    "tp": bracket.take_profit,
-                    "ttl": bracket.entry_ttl_days,
-                }
-            )
-            typer.echo(
-                f"placed entry={placed.entry_order_id} "
-                f"exits={','.join(placed.exit_order_ids) or '-'} "
-                f"(request {bracket.client_request_id})"
-            )
-    except BrokerError as exc:
-        failure_note = (
-            f"placement stopped after {len(placed_records)}/{len(brackets)} bracket(s): {exc}"
-        )
-    finally:
-        if placed_records or failure_note:
-            record = build_submission_record(
-                trade_date=trade_date.isoformat(),
-                ticker=wanted,
-                mic=instrument.exchange_mic,
-                uic=instrument.broker_instrument_id,
-                brackets=placed_records,
-                precheck=precheck_summaries,
-                note=failure_note,
-                sizing=SizingStamp(
-                    sizing_currency=account_currency,
-                    instrument_currency=instrument.currency,
-                    sizing_equity=sizing_equity,
-                    fx=fx,
-                    precheck_conversion_rate=precheck_conversion_rate,
-                ),
-            )
-            path = append_submission_record(record)
-            typer.echo(f"submission recorded: {path}")
-
-    token = execution_config_version()
-    typer.echo(f"execution_config_version {token}")
-    if failure_note:
-        placed_ids = [r["entry_order_id"] for r in placed_records]
-        raise _fail(
-            f"{failure_note}\nalready-placed entry orders: {placed_ids or 'none'} — "
-            "reconcile via 'alphalens broker orders' / 'alphalens broker cancel <id>'"
-        )
-
-
-@broker_app.command(name="submit")
-def submit_command(
-    ticker: str = typer.Argument(..., help="Plain ticker from the brief, e.g. KO."),
-    date: str = typer.Option(..., "--date", help="Brief date (YYYY-MM-DD)."),
-    briefs_dir: Path = typer.Option(
-        _DEFAULT_BRIEFS_DIR, "--briefs-dir", help="Thematic briefs parquet directory."
-    ),
-    exchange: str | None = typer.Option(
-        None,
-        "--exchange",
-        help="Explicit ISO 10383 MIC; omit to probe US venues (XNYS then XNAS). "
-        "Non-US venues (XWAR, XETR, XPAR) are explicit-only.",
-    ),
-    equity: float | None = typer.Option(
-        None, "--equity", help="Sizing equity in account currency; default: broker total value."
-    ),
-    scale_factor: float = typer.Option(
-        1.0, "--scale-factor", help="Daily global scale factor (see paper/sizing.py); default 1.0."
-    ),
-    execute: bool = typer.Option(
-        False,
-        "--execute",
-        help="Actually place the brackets (default is DRY-RUN: table + precheck only). "
-        "Also requires ALPHALENS_BROKER_ALLOW_ORDERS=1 in the environment.",
-    ),
-    yes: bool = typer.Option(
-        False, "--yes", "-y", help="Skip the interactive confirmation (scripted use)."
-    ),
-) -> None:
-    """Decompose one candidate's trade setup into per-tier brackets and submit.
-
-    DRY-RUN BY DEFAULT: prints the decomposed bracket table and runs the
-    order precheck (validates server-side, places NOTHING). Sending requires
-    --execute AND an interactive confirmation (--yes skips it) AND the
-    ALPHALENS_BROKER_ALLOW_ORDERS=1 env gate enforced inside the broker.
-    """
-    from alphalens_pipeline.brokers.execution import decompose_setup_plan
-    from alphalens_pipeline.paper.brief_loader import load_brief
-    from broker_contract.sizing import (
-        setup_plan_gross_guard_limit,
-        setup_plan_gross_notional,
-    )
-
-    try:
-        trade_date = dt.date.fromisoformat(date)
-    except ValueError as exc:
-        raise _fail_with("usage", f"invalid --date {date!r}: {exc}") from exc
-
-    try:
-        candidates = load_brief(trade_date, briefs_dir)
-    except (FileNotFoundError, ValueError) as exc:
-        raise _fail(str(exc)) from exc
-
-    wanted = ticker.upper()
-    candidate = next((c for c in candidates if c.ticker.upper() == wanted), None)
-    if candidate is None:
-        raise _fail(f"{wanted} not in the {trade_date} brief ({len(candidates)} candidates)")
-    if candidate.trade_setup is None:
-        raise _fail(f"{wanted} has no parseable brief_trade_setup on {trade_date}")
-
-    broker, account, sizing_equity, instrument, fx, plan = _resolve_instrument_and_plan(
-        wanted=wanted,
-        exchange=exchange,
-        equity=equity,
-        scale_factor=scale_factor,
-        trade_setup=candidate.trade_setup,
-    )
-
-    gross = setup_plan_gross_notional(plan)
-    gross_limit = setup_plan_gross_guard_limit(plan)
-    if gross > gross_limit:
-        raise _fail_with(
-            "policy_refused",
-            f"{wanted}: planned gross {gross:,.2f} {instrument.currency} exceeds the "
-            f"gross safety guard {gross_limit:,.2f} {instrument.currency} "
-            "(GROSS_SAFETY_FRAC x equity, one currency through the sizing rate) — "
-            "nothing submitted",
-        )
-
-    brackets = decompose_setup_plan(plan, instrument)
-    if not brackets:
-        raise _fail(f"{wanted}: every entry tier sized to zero shares — nothing to submit")
-
-    typer.echo(
-        f"{wanted} @ {instrument.exchange_mic} (Uic {instrument.broker_instrument_id})  "
-        f"equity={sizing_equity:,.2f} {account.currency}  scale_factor={scale_factor}"
-    )
-    if fx is not None:
-        typer.echo(
-            f"fx: {fx.account_currency} {plan.total_notional:,.2f} -> "
-            f"{fx.instrument_currency} {plan.sizing_notional:,.2f} @ {fx.rate:.4f} mid "
-            f"({fx.price_type}, buffer {fx.sizing_buffer_pct:.1f}%, {fx.source})"
-        )
-    _echo_bracket_table(brackets)
-
-    # Precheck every bracket (validates server-side, places nothing). On the
-    # FX path the precheck is also the SECOND, independent rate source: its
-    # EstimatedCashRequiredCurrency must match the account currency, and its
-    # InstrumentToAccountConversionRate (instrument->account direction — the
-    # INVERSE of the sizing rate) must agree with the sizing rate within the
-    # policy divergence bound; any failure refuses placement.
-    precheck_summaries, precheck_conversion_rate = _run_prechecks(
-        broker=broker,
-        brackets=brackets,
-        fx=fx,
-        wanted=wanted,
-        account_currency=account.currency,
-    )
-
-    if not execute:
-        typer.echo("DRY-RUN: nothing was sent. Re-run with --execute to place these brackets.")
-        return
-
-    if not yes:
-        typer.confirm(
-            f"Send {len(brackets)} bracket(s) for {wanted} to the Saxo SIM gateway?",
-            abort=True,
-        )
-
-    _place_and_record(
-        broker=broker,
-        brackets=brackets,
-        trade_date=trade_date,
-        wanted=wanted,
-        instrument=instrument,
-        precheck_summaries=precheck_summaries,
-        account_currency=account.currency,
-        sizing_equity=sizing_equity,
-        fx=fx,
-        precheck_conversion_rate=precheck_conversion_rate,
-    )
 
 
 @broker_app.command(name="arm")
@@ -3180,7 +2711,7 @@ def orders_command(
     _apply_env_option(env)
     resolved_env = env if env is not None else state_paths.broker_environment()
     try:
-        states = _cli_broker(mutating=False).list_open_orders()
+        states = _cli_broker().list_open_orders()
     except BrokerError as exc:
         raise _fail_from_broker_error(exc, "broker orders failed") from exc
 
@@ -3591,7 +3122,7 @@ def status_command(
     # given. Claiming the unit here would be the lie (pre-merge review).
     limits_source = _limits_source(applied, offline=offline)
 
-    broker = None if offline else _cli_broker(mutating=False)
+    broker = None if offline else _cli_broker()
     try:
         snapshot = status_snapshot.build_snapshot(
             broker=broker,
@@ -3680,7 +3211,7 @@ def reconcile_command(
         return
 
     try:
-        verdicts = reconcile_brackets(records, _cli_broker(mutating=False))
+        verdicts = reconcile_brackets(records, _cli_broker())
     except BrokerError as exc:
         raise _fail_from_broker_error(exc, "broker reconcile failed") from exc
 
@@ -3767,7 +3298,7 @@ def reconcile_fills_command(
     out_path = out or state_paths.exec_quality_parquet()
     lines = list(control_loop._iter_standalone_stop_journal())
 
-    broker = _cli_broker(mutating=False)
+    broker = _cli_broker()
     if not isinstance(broker, SupportsOrderResolution):
         raise _fail(
             "the configured broker does not support order-outcome resolution "
@@ -3841,7 +3372,7 @@ def cancel_command(
     resolved_format = _resolve_format(output_format)
     _apply_env_option(env)
     try:
-        _cli_broker(mutating=False).cancel_order(order_id)
+        _cli_broker().cancel_order(order_id)
     except BrokerError as exc:
         raise _fail_from_broker_error(exc, "broker cancel failed") from exc
 
