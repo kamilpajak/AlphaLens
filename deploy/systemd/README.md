@@ -2095,9 +2095,12 @@ rm -r ~/.config/systemd/user/alphalens-broker-capital-reader.service.d   # the g
 rm ~/.config/systemd/user/alphalens-broker-manager-live.service.d/30-sizing-frame.conf
 rm ~/.config/systemd/user/alphalens-broker-manager.service.d/30-sizing-frame.conf
 systemctl --user daemon-reload
-# Stale textfiles would keep serving the retired gauges:
+# Stale textfiles would keep serving the retired gauges. The job file matters
+# most: AlphalensJobFailed matches every job, so a reader whose last run failed
+# would page for ever from a file nothing rewrites.
 rm /var/lib/node_exporter/textfile/alphalens_domain_broker-manager-{sim,live}-capital.prom \
-   /var/lib/node_exporter/textfile/alphalens_domain_broker-capital-reader-live.prom
+   /var/lib/node_exporter/textfile/alphalens_domain_broker-capital-reader-live.prom \
+   /var/lib/node_exporter/textfile/alphalens_job_broker-capital-reader.prom
 ```
 
 #### 9.8 Standing-grant decommission
