@@ -383,6 +383,11 @@ class TestAuthorJsonable(unittest.TestCase):
         )
         self.assertEqual(author_jsonable(intent), _without(stored, derived))
 
+    def test_it_is_part_of_the_published_codec_api(self) -> None:
+        from broker_contract.trade_intent import codec
+
+        self.assertIn("author_jsonable", codec.__all__)
+
     def test_it_carries_no_derived_field(self) -> None:
         from alphalens_pipeline.brokers.automanager.intent_door import supplied_derived_paths
 

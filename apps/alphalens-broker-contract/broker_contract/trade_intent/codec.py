@@ -225,6 +225,7 @@ def intent_from_jsonable(data: Mapping[str, Any]) -> TradeIntent:
 
 __all__ = [
     "TradeIntentDecodeError",
+    "author_jsonable",
     "intent_from_jsonable",
     "intent_to_jsonable",
 ]
