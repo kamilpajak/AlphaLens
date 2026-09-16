@@ -21,7 +21,7 @@ from alphalens_pipeline.events import (
 )
 from alphalens_pipeline.observability.textfile import emit_domain_metrics
 from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
-from alphalens_pipeline.thematic import news_ingest
+from alphalens_pipeline.thematic import news_ingest, publication
 from alphalens_pipeline.thematic import verify_cache as verify_cache_mod
 from alphalens_pipeline.thematic.argumentation import orchestrator as brief_orchestrator
 from alphalens_pipeline.thematic.extraction import event_extractor
@@ -42,6 +42,51 @@ logger = logging.getLogger(__name__)
 
 _DATE_OPTION_HELP = "UTC date in YYYY-MM-DD (default: yesterday)."
 _MSG_OPENROUTER_KEY_MISSING = "OPENROUTER_API_KEY missing from environment."
+
+
+def _now_utc() -> dt.datetime:
+    """Wall clock of a run; one seam so tests can place a scheduled run in time."""
+    return dt.datetime.now(dt.UTC)
+
+
+def _default_asof() -> dt.date:
+    return _now_utc().date() - dt.timedelta(days=1)
+
+
+def _sibling_briefs_dir(stage_dir: Path) -> Path:
+    """The brief store next to a stage's store (production layout under ~/.alphalens).
+
+    Derived instead of defaulting to the operator's home store, so a run that
+    points a stage at another root never reads that home store implicitly.
+    """
+    return stage_dir.parent / brief_orchestrator.DEFAULT_OUTPUT_DIR.name
+
+
+def _publication_gate(
+    target: dt.date, briefs_dir: Path, *, scheduled: bool
+) -> publication.PublicationStatus:
+    """Where the date stands (#1479). Only a scheduled run has a deadline.
+
+    An explicit ``--date`` is a deliberate operator run (a backfill of a missed
+    date, for example), so it is never refused for being late; the stored
+    ``brief_published_at`` then records that it was published after the open.
+    A PUBLISHED date is final for every run unless ``--rebuild`` is passed.
+    """
+    status = publication.publication_status(target, briefs_dir, now=_now_utc())
+    if status is publication.PublicationStatus.CLOSED and not scheduled:
+        return publication.PublicationStatus.OPEN
+    return status
+
+
+def _gate_message(target: dt.date, status: publication.PublicationStatus) -> str:
+    if status is publication.PublicationStatus.PUBLISHED:
+        return f"{target}: the brief is published, so this date is final (pass --rebuild to replace it)"
+    if status is publication.PublicationStatus.UNREADABLE:
+        return f"{target}: the brief parquet is unreadable, so this date is left untouched"
+    deadline = publication.deadline_utc(target).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        f"{target}: no brief was published before the deadline ({deadline}); not creating one now"
+    )
 
 
 def _stage_volume_metrics(stage: str, *, output_rows: int, input_rows: int) -> dict[str, int]:
@@ -818,17 +863,32 @@ def map_themes_cmd(
     """Roll up novel themes from Phase B → DeepSeek v4-pro maps to candidates → verify."""
     # Default to yesterday so a same-day cron after Phase B extract sees a
     # fully-extracted day, matching `ingest` and `extract` defaults.
-    target = (
-        dt.date.fromisoformat(date)
-        if date
-        else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
-    )
+    target = dt.date.fromisoformat(date) if date else _default_asof()
     # Same split as `extract`: fail fast on the missing key here, but leave the
     # client to the stage so it lands on `get_default_openrouter_client()` and
     # inherits the operator's ALPHALENS_OPENROUTER_* provider pin. Threading
     # `api_key=` down would pick the un-pinned constructor instead.
     if not os.environ.get("OPENROUTER_API_KEY"):
         raise typer.BadParameter(_MSG_OPENROUTER_KEY_MISSING)
+
+    # #1479: a published date keeps its list even when the mapper config changed
+    # (the freeze below would recompute on a config mismatch), and a scheduled
+    # run creates no list after the arrival open. Checked before the rollup, so a
+    # skipped slot re-describes nothing.
+    status = _publication_gate(target, _sibling_briefs_dir(output_dir), scheduled=date is None)
+    if not rebuild and status is not publication.PublicationStatus.OPEN:
+        decided_rows = _parquet_num_rows(output_dir / f"{target.isoformat()}.parquet")
+        _emit_stage_volume(
+            "map-themes",
+            output_rows=decided_rows,
+            input_rows=0,
+            extra_metrics={
+                **_map_themes_outcome_metrics(),
+                **_theme_rollup_write_metrics("skipped"),
+            },
+        )
+        typer.echo(_gate_message(target, status))
+        return
     polygon_key = os.environ.get("POLYGON_API_KEY", "")
 
     # Single source for recent_days so roll_up and the novelty_config_version
@@ -1055,11 +1115,14 @@ def score(
     ),
 ) -> None:
     """Layer 4 quantitative screen — enrich Phase C candidates with 4 signals."""
-    target = (
-        dt.date.fromisoformat(date)
-        if date
-        else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
-    )
+    target = dt.date.fromisoformat(date) if date else _default_asof()
+    # #1479: after the arrival open a scheduled run has no list to score. A
+    # published date is still scored: only its options telemetry can reach the
+    # brief (see `brief`).
+    status = _publication_gate(target, _sibling_briefs_dir(output_dir), scheduled=date is None)
+    if status is publication.PublicationStatus.CLOSED:
+        typer.echo(_gate_message(target, status))
+        return
     src = candidates_dir / f"{target.isoformat()}.parquet"
     if not src.exists():
         raise typer.BadParameter(f"Phase C parquet missing: {src}")
@@ -1243,28 +1306,46 @@ def brief(
         "--output-dir",
         help="Phase E brief parquet root.",
     ),
+    rebuild: bool = typer.Option(
+        False,
+        "--rebuild",
+        help=(
+            "Regenerate the brief even when it is already published. By default a "
+            "published brief is final: its list, order, prose and trade levels are "
+            "kept, and only missing options telemetry is filled in (#1479)."
+        ),
+    ),
 ) -> None:
     """Layer 5 brief generator — enrich scored candidates with structured brief fields."""
-    target = (
-        dt.date.fromisoformat(date)
-        if date
-        else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
-    )
+    target = dt.date.fromisoformat(date) if date else _default_asof()
+    status = _publication_gate(target, output_dir, scheduled=date is None)
+    if status in (publication.PublicationStatus.CLOSED, publication.PublicationStatus.UNREADABLE):
+        typer.echo(_gate_message(target, status))
+        return
     src = scored_dir / f"{target.isoformat()}.parquet"
     if not src.exists():
         raise typer.BadParameter(f"Phase D scored parquet missing: {src}")
 
     scored = pd.read_parquet(src)
-    typer.echo(
-        f"Generating briefs for {len(scored)} scored rows from {src} (asof={target.isoformat()})..."
-    )
-    enriched = brief_orchestrator.generate_briefs(scored, asof=target, output_dir=output_dir)
-
-    n_pro = int(enriched.attrs.get("n_pro", 0))
-    n_flash = int(enriched.attrs.get("n_flash", 0))
     out_parquet = output_dir / f"{target.isoformat()}.parquet"
-    typer.echo(f"Wrote {len(enriched)} briefs → {out_parquet}")
-    typer.echo(f"  Pro: {n_pro}, Flash: {n_flash}")
+    if status is publication.PublicationStatus.PUBLISHED and not rebuild:
+        published = pd.read_parquet(out_parquet)
+        enriched, n_refreshed = brief_orchestrator.refresh_published_telemetry(published, scored)
+        if n_refreshed:
+            write_parquet_atomic(enriched, out_parquet, index=False)
+        n_pro, n_flash = brief_orchestrator.model_counts(enriched)
+        typer.echo(_gate_message(target, status))
+        typer.echo(f"  options telemetry filled in on {n_refreshed} row(s) → {out_parquet}")
+    else:
+        typer.echo(
+            f"Generating briefs for {len(scored)} scored rows from {src} "
+            f"(asof={target.isoformat()})..."
+        )
+        enriched = brief_orchestrator.generate_briefs(scored, asof=target, output_dir=output_dir)
+        n_pro = int(enriched.attrs.get("n_pro", 0))
+        n_flash = int(enriched.attrs.get("n_flash", 0))
+        typer.echo(f"Wrote {len(enriched)} briefs → {out_parquet}")
+        typer.echo(f"  Pro: {n_pro}, Flash: {n_flash}")
 
     # Domain counters for the cron-observability dashboard (PR-2 of
     # the epic). ``briefs_total`` is the headline number Grafana

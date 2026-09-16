@@ -131,24 +131,20 @@ groups:
           summary: "literature-scan-monthly success metric missing"
           description: "No success metric for literature-scan-monthly. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
-      # thematic-build moved from 1×/day → 6×/day (every 4h at HH:30
-      # UTC) in PR-F (epic #295, issue #300). 43200s = 12h = 3× the
-      # 4h interval — DELIBERATELY asymmetric vs the other 4 services
-      # which use 2× cadence. Justification: a thematic run is
-      # 15-20 min wall time and each Gemini Pro/Flash stage can take
-      # 5-10 min of API latency on its own. A 2× threshold (8h) would
-      # page on one transient Gemini RPM blip; 3× gives one missed
-      # slot's worth of slack while still surfacing two consecutive
-      # misses within half a day. Pinned by PR-F zen pre-merge review.
+      # thematic-build runs at 00:30, 04:30 and 08:30 UTC (#1479; 6× a day
+      # before). The normal gap from the 08:30 run to the next 00:30 run is
+      # about 16.5h, and about 20h when the 00:30 run fails and 04:30
+      # repairs it, so 86400s = 24h pages only when no slot succeeded for a
+      # whole day. A day without a success is a day without a brief.
       - alert: AlphalensJobStale
-        expr: time() - alphalens_job_last_success_timestamp_seconds{job="thematic-build"} > 43200
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="thematic-build"} > 86400
         for: 5m
         labels:
           severity: warning
           route: telegram
           unit: thematic-build
         annotations:
-          summary: "thematic-build stale > 12h (expected 4h cadence)"
+          summary: "thematic-build stale > 24h (runs at 00:30, 04:30 and 08:30 UTC)"
           description: "Last successful run was {{ $value | humanizeDuration }} ago."
 
       - alert: AlphalensJobMetricMissing

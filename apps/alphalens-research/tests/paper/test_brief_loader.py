@@ -291,6 +291,22 @@ class TestLoadBrief(unittest.TestCase):
         self.assertEqual(candidates[0].source, "")
         self.assertIs(candidates[0].event_overlap, False)
 
+    def test_brief_published_at_decoded_as_utc_timestamp(self):
+        """#1479: the publication time travels with each candidate."""
+        d = dt.date(2026, 9, 10)
+        stamp = pd.Timestamp("2026-09-11T01:40:00Z")
+        _write_brief(self.tmpdir, d, [{"ticker": "QUBT", "brief_published_at": stamp}])
+        self.assertEqual(load_brief(d, self.tmpdir)[0].brief_published_at, stamp)
+
+    def test_brief_published_at_none_when_absent_or_null(self):
+        d = dt.date(2026, 9, 10)
+        _write_brief(self.tmpdir, d, [{"ticker": "QUBT"}])
+        self.assertIsNone(load_brief(d, self.tmpdir)[0].brief_published_at)
+        _write_brief(
+            self.tmpdir, d, [{"ticker": "QUBT", "brief_published_at": pd.NaT}, {"ticker": "X"}]
+        )
+        self.assertIsNone(load_brief(d, self.tmpdir)[0].brief_published_at)
+
 
 if __name__ == "__main__":
     unittest.main()

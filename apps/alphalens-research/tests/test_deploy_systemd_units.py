@@ -861,45 +861,35 @@ class TestJobMetricsHook(unittest.TestCase):
 
 
 class TestThematicBuildCadence(unittest.TestCase):
-    """PR-F (epic #295 / issue #300) — 6×/day thematic-build cadence.
+    """Thematic-build cadence: one deciding run and two repair runs a day (#1479).
 
-    Moves from daily 06:30 UTC to 6× UTC (`00,04,08,12,16,20:30`) so the
-    weekend SPA read-experience picks up Saturday-afternoon ET news the
-    same calendar day, and pre-prepares the harness for multi-exchange
-    routing (XWAR / XTKS / XHKG / XSHG) where each session needs its own
-    "right-before-open" and "right-after-close" refresh.
+    PR-F (issue #300) ran the build 6× a day. Since the idempotent freeze the
+    00:30 UTC slot decides the list on every date, and the later slots could
+    only change it after the owner had read it (16 of 114 dates were recomputed
+    after the open). The brief is now published once and kept
+    (``thematic/publication.py``), so only three slots remain:
 
-    Three coupled changes pinned here:
-
-    1. Timer ``OnCalendar`` lists six HH:30 hours.
-    2. ``run_thematic_day.sh`` passes ``--force`` to ``thematic ingest``
-       so the read-through cache at ``polygon_news.py:124`` does not
-       silently short-circuit every run after the first of the UTC day.
-    3. Prometheus staleness threshold for ``thematic-build`` tightens
-       from ``> 48h`` to ``> 12h`` (3× the new 4h interval) — at 6×
-       cadence, 48h would silence the alert for 12 missed runs.
-
-    See ``docs/research/polygon_quota_6x_per_day_2026_05_30.md`` for the
-    empirical quota measurement that justifies 6× over 4×.
+    1. Timer ``OnCalendar`` lists 00:30, 04:30 and 08:30 UTC. The two later
+       slots publish a date whose first run failed and fill in late options
+       telemetry; every slot is before the NYSE open.
+    2. ``run_thematic_day.sh`` passes ``--force`` to ``thematic ingest`` so a
+       repair slot still re-fetches the day's news for later dates' rollups.
+    3. Prometheus staleness threshold for ``thematic-build`` is 24h: the normal
+       gap from the 08:30 run to the next 00:30 run is about 16h.
     """
 
-    def test_timer_fires_six_times_per_day_at_hh30(self) -> None:
-        # OnCalendar comma-list is the canonical systemd form for
-        # "multiple times per day". HH:30 chosen so each run lands
-        # outside the every-15-min EDGAR-detect window (XX:00, XX:15,
-        # XX:30, XX:45 — but EDGAR runs are ~30s, no real contention;
-        # HH:30 simply keeps the schedule readable in
-        # `systemctl --user list-timers`).
+    def test_timer_fires_three_times_before_the_open(self) -> None:
+        # 00:30 decides; 04:30 and 08:30 only publish a date whose first run
+        # failed. No slot runs after the NYSE open (13:30 UTC in summer), when
+        # a changed list would no longer be the list the owner read (#1479).
         timer_text = TIMER_PATH.read_text()
         self.assertRegex(
             timer_text,
             re.compile(
-                r"^OnCalendar=\*-\*-\* 00,04,08,12,16,20:30:00 UTC\s*$",
+                r"^OnCalendar=\*-\*-\* 00,04,08:30:00 UTC\s*$",
                 re.MULTILINE,
             ),
-            "Expected 6× HH:30 UTC schedule (00/04/08/12/16/20). "
-            "See docs/research/polygon_quota_6x_per_day_2026_05_30.md "
-            "for the timezone-coverage rationale.",
+            "Expected the 00:30 / 04:30 / 08:30 UTC schedule (#1479).",
         )
 
     def test_timer_keeps_persistent_true(self) -> None:
@@ -1013,23 +1003,20 @@ class TestThematicBuildCadence(unittest.TestCase):
             script_text.index("alphalens experts enrich"),
         )
 
-    def test_thematic_build_staleness_alert_threshold_is_12h(self) -> None:
-        # 12h = 3× the 4h interval. Loose enough that one transient
-        # miss (Gemini RPM blip, Polygon outage) does not page; tight
-        # enough that two consecutive misses surface within half a day.
-        # 48h was the 1×-cadence threshold (2× daily interval); the
-        # 12h threshold preserves the same "2-3× cadence" sensitivity.
+    def test_thematic_build_staleness_alert_threshold_is_24h(self) -> None:
+        # Slots at 00:30 / 04:30 / 08:30 UTC: the normal gap from the last
+        # success (~09:00) to the next (~01:30) is ~16.5h, and ~20h when the
+        # 00:30 run fails and 04:30 repairs it. 12h would page every day; 24h
+        # pages when no slot succeeded for a whole day (#1479).
         rules_path = REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
         rules_text = rules_path.read_text()
-        # 12h = 43200 seconds. Look for the threshold inside the
-        # thematic-build block (the only place this number appears).
         self.assertRegex(
             rules_text,
             re.compile(
-                r'job="thematic-build"\}\s*>\s*43200\b',
+                r'job="thematic-build"\}\s*>\s*86400\b',
             ),
-            "thematic-build staleness threshold must be 43200 (12h) at "
-            "6× cadence; was 172800 (48h) at 1× cadence.",
+            "thematic-build staleness threshold must be 86400 (24h) with "
+            "three morning slots (#1479).",
         )
 
     def test_thematic_build_staleness_alert_summary_mentions_new_threshold(self) -> None:
@@ -1040,9 +1027,9 @@ class TestThematicBuildCadence(unittest.TestCase):
         rules_text = rules_path.read_text()
         self.assertRegex(
             rules_text,
-            re.compile(r'"thematic-build stale > 12h \(expected 4h cadence\)"'),
-            "Summary annotation must reflect the new 12h threshold + "
-            "4h cadence so operator-facing text matches the expression.",
+            re.compile(r'"thematic-build stale > 24h \(runs at 00:30, 04:30 and 08:30 UTC\)"'),
+            "Summary annotation must reflect the 24h threshold and the three "
+            "slots so operator-facing text matches the expression.",
         )
 
 

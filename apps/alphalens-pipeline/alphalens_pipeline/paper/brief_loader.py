@@ -54,6 +54,11 @@ class CandidateBrief:
     # A thematic card that ALSO carried an insider cluster that day; the episode
     # is counted in both cohorts downstream.
     event_overlap: bool = False
+    # When this list became the published brief for the date (#1479). ``None`` on
+    # briefs written before the column existed. Compare it with the arrival open
+    # through ``thematic.publication.published_before_open``, which also answers
+    # for the unstamped history.
+    brief_published_at: pd.Timestamp | None = None
 
 
 def _bool_or_false(row: pd.Series, key: str) -> bool:
@@ -87,6 +92,14 @@ def _float_or_none(row: pd.Series, key: str) -> float | None:
         return float(val) if pd.notna(val) else None
     except (TypeError, ValueError):
         return None
+
+
+def _timestamp_or_none(row: pd.Series, key: str) -> pd.Timestamp | None:
+    """Return ``row[key]`` as a UTC ``Timestamp``, or ``None`` when absent or null."""
+    if key not in row.index or pd.isna(row[key]):
+        return None
+    stamp = pd.Timestamp(row[key])
+    return stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
 
 
 def _str_or_empty(row: pd.Series, key: str) -> str:
@@ -143,6 +156,7 @@ def _row_to_candidate(row: pd.Series, brief_date: dt.date) -> CandidateBrief:
         technical_pct_off_52w_high=_float_or_none(row, "technical_pct_off_52w_high"),
         source=_str_or_empty(row, "source"),
         event_overlap=_bool_or_false(row, "event_overlap"),
+        brief_published_at=_timestamp_or_none(row, "brief_published_at"),
     )
 
 

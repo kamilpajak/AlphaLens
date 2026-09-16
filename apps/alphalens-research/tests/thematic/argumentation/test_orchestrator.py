@@ -397,6 +397,71 @@ class TestBriefStatusStamping(unittest.TestCase):
         self.assertIn("truncated", joined)
 
 
+class TestPublicationStamp(unittest.TestCase):
+    """#1479: a written brief records when it was published, and a crash cannot half-write it."""
+
+    def _generate(self, output_dir: Path) -> pd.DataFrame:
+        with patch.object(
+            orchestrator,
+            "_brief_for_row",
+            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE, {}, []),
+        ):
+            return orchestrator.generate_briefs(
+                _scored_df(), asof=dt.date(2026, 4, 14), output_dir=output_dir
+            )
+
+    def test_every_row_carries_one_utc_publication_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._generate(Path(tmp))
+            stored = pd.read_parquet(Path(tmp) / "2026-04-14.parquet")
+        stamps = stored["brief_published_at"]
+        self.assertEqual(stamps.nunique(), 1)
+        self.assertEqual(str(stamps.iloc[0].tz), "UTC")
+
+    def test_empty_day_output_carries_the_publication_column(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = orchestrator.generate_briefs(
+                pd.DataFrame(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
+            )
+        self.assertIn("brief_published_at", out.columns)
+
+    def test_a_failed_write_leaves_the_previous_brief_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "2026-04-14.parquet"
+            pd.DataFrame({"ticker": ["OLD"]}).to_parquet(path, index=False)
+
+            def crash_mid_write(self_df, target, *args, **kwargs):
+                Path(target).write_bytes(b"PAR1 truncated")  # the bytes that did reach disk
+                raise OSError("disk full")
+
+            with (
+                patch("pandas.DataFrame.to_parquet", autospec=True, side_effect=crash_mid_write),
+                self.assertRaises(OSError),
+            ):
+                self._generate(Path(tmp))
+            self.assertEqual(list(pd.read_parquet(path)["ticker"]), ["OLD"])
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["2026-04-14.parquet"])
+
+
+class TestModelCounts(unittest.TestCase):
+    """Counts read back from a stored brief feed the by-model gauges; never negative."""
+
+    def test_counts_pro_and_flash_among_ok_rows(self):
+        brief = pd.DataFrame(
+            {
+                "brief_model_used": [generator.PRO_MODEL, generator.FLASH_MODEL, None],
+                "brief_status": ["ok", "ok", "unavailable"],
+            }
+        )
+        self.assertEqual(orchestrator.model_counts(brief), (1, 1))
+
+    def test_a_brief_without_status_never_reports_a_negative_flash_count(self):
+        brief = pd.DataFrame({"brief_model_used": [generator.PRO_MODEL, generator.FLASH_MODEL]})
+        n_pro, n_flash = orchestrator.model_counts(brief)
+        self.assertGreaterEqual(n_flash, 0)
+        self.assertEqual((n_pro, n_flash), (1, 1))
+
+
 class TestEarningsDatePropagation(unittest.TestCase):
     """The fetched next_earnings_date must be persisted to the brief
     parquet as ``next_earnings_date`` — not just passed to the LLM prompt."""
