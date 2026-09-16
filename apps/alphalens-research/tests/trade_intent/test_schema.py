@@ -20,6 +20,7 @@ from broker_contract.trade_intent.schema import (
     InstrumentHint,
     IntentMeta,
     ModelPush,
+    PickSize,
     ReanchorOnFill,
     TpTrancheSpec,
     TradeIntent,
@@ -33,7 +34,7 @@ def _build_trade_intent() -> TradeIntent:
         entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=50.0, tag="T1"),),
         disaster_stop=90.0,
         tp_tranches=(TpTrancheSpec(price=110.0, tranche_pct=100.0, r_multiple=2.0, tag="TP1"),),
-        suggested_size_pct=2.0,
+        size=PickSize(notional_acct=1500.0, currency="USD"),
     )
     exit_spec = ExitGeometrySpec(
         initial_levels=InitialLevels(stop=90.0, tp=110.0),
@@ -67,7 +68,7 @@ class TestTradeIntentRoundTrip(unittest.TestCase):
         self.assertEqual(intent.spec.tp_tranches[0].tranche_pct, 100.0)
         self.assertEqual(intent.spec.tp_tranches[0].r_multiple, 2.0)
         self.assertEqual(intent.spec.tp_tranches[0].tag, "TP1")
-        self.assertEqual(intent.spec.suggested_size_pct, 2.0)
+        self.assertEqual(intent.spec.size, PickSize(notional_acct=1500.0, currency="USD"))
         self.assertEqual(intent.exit.initial_levels.stop, 90.0)
         self.assertEqual(intent.exit.initial_levels.tp, 110.0)
         self.assertEqual(intent.meta.armed_ts, "2026-07-31T12:00:00Z")
@@ -80,7 +81,7 @@ class TestFrozenImmutability(unittest.TestCase):
             entry_tiers=(),
             disaster_stop=90.0,
             tp_tranches=(),
-            suggested_size_pct=2.0,
+            size=PickSize(notional_acct=1500.0, currency="USD"),
         )
         with self.assertRaises(dataclasses.FrozenInstanceError):
             spec.disaster_stop = 80.0  # type: ignore[misc]
@@ -97,7 +98,7 @@ class TestDefaults(unittest.TestCase):
             entry_tiers=(),
             disaster_stop=90.0,
             tp_tranches=(),
-            suggested_size_pct=2.0,
+            size=PickSize(notional_acct=1500.0, currency="USD"),
         )
         self.assertEqual(spec.order_ttl_days, DEFAULT_ORDER_TTL_DAYS)
         self.assertEqual(spec.side, "long")

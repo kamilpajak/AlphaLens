@@ -85,16 +85,6 @@ STALENESS_EXEMPT_JOBS: frozenset[str] = frozenset(
         # 2026-09-13 while /edge sat a brief day behind. A generic rule on the
         # clock would be wrong here. See TestEdgeRulesReadTheMirrorGauges below.
         "edge-mirror",
-        # broker-capital-reader follows the edge-mirror shape: the unit wires the
-        # emit hook like every other timer-driven service, but the generic
-        # AlphalensJobStale rule is replaced by the dedicated
-        # AlphalensBrokerCapitalReadStale alert, which is STRICTLY better here.
-        # It watches the freshness of the READING
-        # (alphalens_broker_manager_account_read_timestamp_seconds), so it also
-        # catches a run that exits 0 while producing nothing usable — which a
-        # last_success timestamp cannot. Adding both would page twice for one
-        # condition. See deploy/monitoring/prometheus/rules/alphalens.yaml.
-        "broker-capital-reader",
     }
 )
 
@@ -105,17 +95,13 @@ STALENESS_EXEMPT_JOBS: frozenset[str] = frozenset(
 # the series does not exist, so the rule sits ``inactive`` forever and looks
 # healthy. The generic family pairs each stale rule with an ``absent()``
 # guard (AlphalensJobMetricMissing); the dedicated ones must too. Named
-# pairs, not job-label matching: broker-capital-reader deliberately watches
-# a series labelled job="broker-manager-live", not its own.
+# pairs, not job-label matching, because a dedicated rule may watch a series
+# labelled with another job than its own.
 #
 # #1366: AlphalensEdgeStale had no guard while the edge-mirror unit wrote its
 # metric to an unscraped directory — two months of ``inactive`` with no page.
 DEDICATED_STALE_RULES: dict[str, tuple[str, str]] = {
     "edge-mirror": ("AlphalensEdgeStale", "AlphalensEdgeMetricMissing"),
-    "broker-capital-reader": (
-        "AlphalensBrokerCapitalReadStale",
-        "AlphalensBrokerCapitalReadMissing",
-    ),
 }
 
 

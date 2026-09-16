@@ -595,6 +595,7 @@ def _pick(ticker: str, *, exit_policy: Any = None, source: str = "brief") -> Any
         ExitGeometrySpec,
         InstrumentHint,
         IntentMeta,
+        PickSize,
         TradeIntent,
         TradeSpec,
     )
@@ -607,7 +608,7 @@ def _pick(ticker: str, *, exit_policy: Any = None, source: str = "brief") -> Any
             entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=100.0),),
             disaster_stop=90.0,
             tp_tranches=(),
-            suggested_size_pct=3.0,
+            size=PickSize(notional_acct=3000.0, currency="USD"),
         ),
         exit=exit_spec,
         meta=IntentMeta(

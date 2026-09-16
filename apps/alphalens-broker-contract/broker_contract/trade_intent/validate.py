@@ -54,6 +54,7 @@ Stdlib only, like the rest of the package (``dependencies = []`` on purpose).
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -104,6 +105,8 @@ class IntentInvalidError(ContractError):
     """The submitted document is internally inconsistent; nothing was queued."""
 
 
+_CURRENCY_CODE: Final = re.compile(r"[A-Z]{3}")
+
 INTENT_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "numeric_not_finite": "A numeric field is NaN or infinite; every comparison on it "
@@ -121,7 +124,8 @@ INTENT_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         "immediate_tier_not_first": "The immediate entry tier is not listed first.",
         "stop_non_positive": "The disaster stop is zero or negative.",
         "stop_above_entry": "The disaster stop is not below every entry tier.",
-        "size_pct_out_of_range": "The suggested size is outside (0, 100] — a pick is never levered.",
+        "size_notional_not_positive": "The pick's account-currency amount is zero or negative.",
+        "size_currency_invalid": "The size currency is not a three-letter uppercase ISO 4217 code.",
         "tp_pct_non_positive": "A take-profit tranche percentage is zero or negative.",
         "tp_pct_sum_exceeds_100": "The take-profit tranche percentages exceed 100.",
         "tp_price_duplicate": "Two take-profit tranches sit at the same price.",
@@ -149,7 +153,7 @@ def _numeric_fields(spec: TradeSpec) -> Iterator[tuple[str, float, dict[str, Any
         yield f"entry_tiers[{index}].limit_price", tier.limit_price, where
         yield f"entry_tiers[{index}].alloc_pct", tier.alloc_pct, where
     yield "disaster_stop", spec.disaster_stop, {}
-    yield "suggested_size_pct", spec.suggested_size_pct, {}
+    yield "size.notional_acct", spec.size.notional_acct, {}
     for index, tranche in enumerate(spec.tp_tranches):
         where = {"tranche_index": index}
         yield f"tp_tranches[{index}].price", tranche.price, where
@@ -282,12 +286,23 @@ def _stop_and_size_violations(spec: TradeSpec) -> list[Violation]:
                     f"tier (lowest tier {lowest:g})",
                 )
             )
-    if not 0.0 < spec.suggested_size_pct <= 100.0:
+    if spec.size.notional_acct <= 0:
         found.append(
             Violation(
-                "size_pct_out_of_range",
-                "suggested_size_pct must satisfy 0 < size_pct <= 100, got "
-                f"{spec.suggested_size_pct:g}",
+                "size_notional_not_positive",
+                f"size.notional_acct must be positive, got {spec.size.notional_acct:g}",
+            )
+        )
+    # Shape only: the ISO 4217 list is not vendored here. The drain compares the
+    # code with the real account currency, which is the check that matters. A
+    # ceiling on the amount is deployment knowledge (a LIVE rail), not a document
+    # rule, so there is none here.
+    if not _CURRENCY_CODE.fullmatch(spec.size.currency):
+        found.append(
+            Violation(
+                "size_currency_invalid",
+                "size.currency must be a three-letter uppercase ISO 4217 code, got "
+                f"{spec.size.currency!r}",
             )
         )
     return found

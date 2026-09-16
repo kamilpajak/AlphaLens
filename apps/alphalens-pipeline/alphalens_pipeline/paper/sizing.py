@@ -33,6 +33,7 @@ from broker_contract.sizing import (
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     ExitGeometrySpec,
+    PickSize,
     TpTrancheSpec,
     TradeSpec,
     TrailingStop,
@@ -40,13 +41,12 @@ from broker_contract.trade_intent.schema import (
 
 
 def validate_trade_setup(brief_trade_setup: dict) -> float:
-    """Run the plannability checks and return ``suggested_size_pct``.
+    """Run the plannability checks and return the brief's ``suggested_size_pct``.
 
-    Exposed so the planner's first pass can compute the aggregate uncapped
-    notional without building a full :class:`~broker_contract.sizing.SetupPlan`
-    (which would require the not-yet-computed ``scale_factor``). The checks
-    are the same ones :func:`~broker_contract.sizing.compute_setup_plan`
-    enforces; sharing them here avoids drift.
+    Exposed so a caller can ask "is this brief row plannable" without building
+    a :class:`~broker_contract.trade_intent.schema.TradeSpec` (the population
+    monitor does). The percent is the BRIEF's field; turning it into an amount
+    needs a frame, which only :func:`parse_brief_to_spec` takes.
     """
     if not isinstance(brief_trade_setup, dict):
         raise TradeSetupNotPlannableError(
@@ -80,12 +80,8 @@ def validate_trade_setup(brief_trade_setup: dict) -> float:
 
     # Apply the same post-sanitisation tier-emptiness check that
     # :func:`~broker_contract.sizing.compute_setup_plan` runs (it drops tiers
-    # with ``limit <= 0`` as defense-in-depth). Without this alignment a
-    # candidate with all-zero- limit tiers would pass pass 1 of the planner
-    # (contributing to the aggregate that feeds compute_daily_scale_factor)
-    # then fail pass 2 with "no usable entry tiers after sanitisation",
-    # introducing a downward bias on the day's global scale factor. Per zen
-    # second-round review 2026-05-28.
+    # with ``limit <= 0`` as defense-in-depth), so a row this function accepts
+    # is never refused later for having no usable tier.
     usable_tiers = [
         t for t in entry_tiers_raw if isinstance(t, dict) and float(t.get("limit", 0) or 0) > 0
     ]
@@ -95,8 +91,15 @@ def validate_trade_setup(brief_trade_setup: dict) -> float:
     return float(suggested_size_pct)
 
 
-def parse_brief_to_spec(brief_trade_setup: dict) -> TradeSpec:
-    """Parse a raw ``brief_trade_setup`` dict into an unsized :class:`TradeSpec`.
+def parse_brief_to_spec(brief_trade_setup: dict, *, frame: float, currency: str) -> TradeSpec:
+    """Parse a raw ``brief_trade_setup`` dict into a :class:`TradeSpec`.
+
+    The brief states its size as a percent; the spec states an amount (#1467).
+    ``frame`` is the account-currency equity the operator sizes against, and
+    ``currency`` the account currency: ``notional_acct = pct / 100 x frame``.
+    Both come from the caller, never from the environment, so the amount is
+    fixed at arm time. This is interim until the brief producer states amounts
+    itself (#1469).
 
     Kept in ``paper/sizing.py`` (not ``thematic/intent_builder.py``) — the
     daemon still parses at drain time, so moving it now would introduce a
@@ -113,6 +116,8 @@ def parse_brief_to_spec(brief_trade_setup: dict) -> TradeSpec:
     index either way.
     """
     suggested_size_pct = validate_trade_setup(brief_trade_setup)
+    if not math.isfinite(frame) or frame <= 0:
+        raise TradeSetupNotPlannableError(f"frame={frame!r} must be a positive finite amount")
 
     entry_tiers_raw = brief_trade_setup["entry_tiers"]
     entry_tiers = tuple(
@@ -144,7 +149,7 @@ def parse_brief_to_spec(brief_trade_setup: dict) -> TradeSpec:
         entry_tiers=entry_tiers,
         disaster_stop=disaster_stop,
         tp_tranches=tp_tranches,
-        suggested_size_pct=suggested_size_pct,
+        size=PickSize(notional_acct=suggested_size_pct / 100.0 * frame, currency=currency),
         order_ttl_days=order_ttl_days,
         side="long",
     )

@@ -137,6 +137,7 @@ class TheContractPackageStaysStdlibOnlyTest(unittest.TestCase):
             "collections",
             "dataclasses",
             "math",
+            "re",
             "types",
             "typing",
         }

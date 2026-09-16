@@ -129,7 +129,19 @@ class ArmCommandTest(unittest.TestCase):
             ),
         ):
             result = self.runner.invoke(
-                broker_app, ["arm", "ko", "--date", "2026-07-20", "--format", "json"]
+                broker_app,
+                [
+                    "arm",
+                    "ko",
+                    "--date",
+                    "2026-07-20",
+                    "--frame",
+                    "100000",
+                    "--currency",
+                    "USD",
+                    "--format",
+                    "json",
+                ],
             )
 
         self.assertEqual(result.exit_code, 7, result.output)
@@ -148,7 +160,10 @@ class ArmCommandTest(unittest.TestCase):
             ),
             mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
         ):
-            result = self.runner.invoke(broker_app, ["arm", "ko", "--date", "2026-07-20"])
+            result = self.runner.invoke(
+                broker_app,
+                ["arm", "ko", "--date", "2026-07-20", "--frame", "100000", "--currency", "USD"],
+            )
         self.assertEqual(result.exit_code, 0, result.output)
         arm.assert_called_once()
         (intent,), _kwargs = arm.call_args
@@ -168,7 +183,10 @@ class ArmCommandTest(unittest.TestCase):
             ),
             mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
         ):
-            result = self.runner.invoke(broker_app, ["arm", "ZZZZ", "--date", "2026-07-20"])
+            result = self.runner.invoke(
+                broker_app,
+                ["arm", "ZZZZ", "--date", "2026-07-20", "--frame", "100000", "--currency", "USD"],
+            )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("not in the 2026-07-20 brief", result.output)
         arm.assert_not_called()
@@ -176,7 +194,10 @@ class ArmCommandTest(unittest.TestCase):
     def test_arm_bad_date_refuses(self) -> None:
         from alphalens_cli.commands.broker import broker_app
 
-        result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "not-a-date"])
+        result = self.runner.invoke(
+            broker_app,
+            ["arm", "KO", "--date", "not-a-date", "--frame", "100000", "--currency", "USD"],
+        )
         self.assertEqual(result.exit_code, 2)
         self.assertIn("invalid --date", result.output)
 
@@ -187,7 +208,10 @@ class ArmCommandTest(unittest.TestCase):
             "alphalens_pipeline.paper.brief_loader.load_brief",
             side_effect=FileNotFoundError("thematic brief parquet not found: /x.parquet"),
         ):
-            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+            result = self.runner.invoke(
+                broker_app,
+                ["arm", "KO", "--date", "2026-07-20", "--frame", "100000", "--currency", "USD"],
+            )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("not found", result.output)
 
@@ -201,7 +225,10 @@ class ArmCommandTest(unittest.TestCase):
             ),
             mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
         ):
-            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+            result = self.runner.invoke(
+                broker_app,
+                ["arm", "KO", "--date", "2026-07-20", "--frame", "100000", "--currency", "USD"],
+            )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("no plannable trade_setup", result.output)
         arm.assert_not_called()
@@ -218,7 +245,10 @@ class ArmCommandTest(unittest.TestCase):
             ),
             mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
         ):
-            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+            result = self.runner.invoke(
+                broker_app,
+                ["arm", "KO", "--date", "2026-07-20", "--frame", "100000", "--currency", "USD"],
+            )
         self.assertEqual(result.exit_code, 1)
         arm.assert_not_called()
 
@@ -268,7 +298,10 @@ class ArmCommandTest(unittest.TestCase):
             ),
             mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
         ):
-            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+            result = self.runner.invoke(
+                broker_app,
+                ["arm", "KO", "--date", "2026-07-20", "--frame", "100000", "--currency", "USD"],
+            )
         self.assertEqual(result.exit_code, 0, result.output)
         arm.assert_called_once()
 
@@ -296,7 +329,10 @@ class ArmEnvOptionTest(unittest.TestCase):
             ),
             mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
         ):
-            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+            result = self.runner.invoke(
+                broker_app,
+                ["arm", "KO", "--date", "2026-07-20", "--frame", "100000", "--currency", "USD"],
+            )
         self.assertEqual(result.exit_code, 0, result.output)
         _args, kwargs = arm.call_args
         self.assertEqual(kwargs["path"], state_paths.picks_path(env="sim"))
@@ -313,7 +349,19 @@ class ArmEnvOptionTest(unittest.TestCase):
             mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
         ):
             result = self.runner.invoke(
-                broker_app, ["arm", "KO", "--date", "2026-07-20", "--env", "live"]
+                broker_app,
+                [
+                    "arm",
+                    "KO",
+                    "--date",
+                    "2026-07-20",
+                    "--frame",
+                    "100000",
+                    "--currency",
+                    "USD",
+                    "--env",
+                    "live",
+                ],
             )
         self.assertEqual(result.exit_code, 0, result.output)
         _args, kwargs = arm.call_args
@@ -333,7 +381,19 @@ class ArmEnvOptionTest(unittest.TestCase):
             mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
         ):
             result = self.runner.invoke(
-                broker_app, ["arm", "KO", "--date", "2026-07-20", "--env", "prod"]
+                broker_app,
+                [
+                    "arm",
+                    "KO",
+                    "--date",
+                    "2026-07-20",
+                    "--frame",
+                    "100000",
+                    "--currency",
+                    "USD",
+                    "--env",
+                    "prod",
+                ],
             )
         self.assertEqual(result.exit_code, 2)
         self.assertIn("ALPHALENS_BROKER_ENVIRONMENT", result.output)
@@ -368,7 +428,19 @@ class ArmEnvIsolationTest(unittest.TestCase):
             return_value=[_candidate("KO")],
         ):
             result = self.runner.invoke(
-                broker_app, ["arm", "KO", "--date", "2026-07-20", "--env", "live"]
+                broker_app,
+                [
+                    "arm",
+                    "KO",
+                    "--date",
+                    "2026-07-20",
+                    "--frame",
+                    "100000",
+                    "--currency",
+                    "USD",
+                    "--env",
+                    "live",
+                ],
             )
         self.assertEqual(result.exit_code, 0, result.output)
 
@@ -386,7 +458,10 @@ class ArmEnvIsolationTest(unittest.TestCase):
             "alphalens_pipeline.paper.brief_loader.load_brief",
             return_value=[_candidate("KO")],
         ):
-            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+            result = self.runner.invoke(
+                broker_app,
+                ["arm", "KO", "--date", "2026-07-20", "--frame", "100000", "--currency", "USD"],
+            )
         self.assertEqual(result.exit_code, 0, result.output)
 
         sim_picks = list(iter_picks(path=state_paths.picks_path(env="sim")))
@@ -416,7 +491,10 @@ class ArmLegacyLayoutGuardTest(unittest.TestCase):
             ),
             mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
         ):
-            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+            result = self.runner.invoke(
+                broker_app,
+                ["arm", "KO", "--date", "2026-07-20", "--frame", "100000", "--currency", "USD"],
+            )
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("legacy flat broker state", result.output)

@@ -63,8 +63,10 @@ logger = logging.getLogger(__name__)
 # sizing_equity / precheck_conversion_rate — FX-leg design memo §4.3 item 8).
 # "2"->"3": the record gained ``est_round_trip_fee_bps`` (the honest per-tier
 # round-trip fee estimate, broker sizing declared-frame memo §4.5 — the
-# calibration series for path B's 150 bps fee-cap target).
-_STAMP_SCHEMA = "3"
+# calibration series for path B's 150 bps fee-cap target). "3"->"4": the record
+# lost ``sizing_equity`` (#1467 — a pick states its amount, no frame is used).
+# A new cohort is honest here: the sizing semantics changed with the key.
+_STAMP_SCHEMA = "4"
 
 # One 3-way bracket (entry Limit + TP Limit child + StopIfTraded child) per
 # NON-ZERO entry tier, placed as a single POST each.

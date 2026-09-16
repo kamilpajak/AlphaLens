@@ -56,6 +56,7 @@ def _intent(*, reaction):
         ExitGeometrySpec,
         InstrumentHint,
         IntentMeta,
+        PickSize,
         TradeIntent,
         TradeSpec,
     )
@@ -67,7 +68,7 @@ def _intent(*, reaction):
             entry_tiers=(EntryTierSpec(limit_price=_AVG, alloc_pct=100.0),),
             disaster_stop=_STOP,
             tp_tranches=(),
-            suggested_size_pct=3.0,
+            size=PickSize(notional_acct=3000.0, currency="USD"),
         ),
         exit=None if reaction is None else ExitGeometrySpec(reaction_plan=(reaction,)),
         meta=IntentMeta(armed_ts="2026-09-04T12:00:00+00:00", trade_date="2026-09-04"),

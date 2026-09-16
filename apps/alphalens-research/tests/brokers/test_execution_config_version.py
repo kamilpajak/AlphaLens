@@ -2,8 +2,8 @@
 
 Mirrors ``test_catalyst_config_version``-style pins:
 
-- deterministic + non-empty; shape ``execution-v3-<12 hex>`` (v3 = the
-  est_round_trip_fee_bps journal-shape bump);
+- deterministic + non-empty; shape ``execution-v4-<12 hex>`` (v4 = the
+  sizing_equity key removal, #1467);
 - the token DRIFTS when any covered policy constant changes
   (``mock.patch.object`` + ``subTest`` over the full covered list);
 - a module-level policy constant cannot be added without joining the token
@@ -71,7 +71,7 @@ class TestExecutionConfigVersion(unittest.TestCase):
         # v3 = the est_round_trip_fee_bps journal-shape bump (sizing PR-2;
         # v2 was the FX-leg fx-provenance-keys bump).
         token = execution.execution_config_version()
-        self.assertRegex(token, r"^execution-v3-[0-9a-f]{12}$")
+        self.assertRegex(token, r"^execution-v4-[0-9a-f]{12}$")
 
     def test_token_changes_on_every_covered_constant(self):
         baseline = execution.execution_config_version()

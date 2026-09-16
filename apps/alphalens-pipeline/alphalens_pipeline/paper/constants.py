@@ -8,7 +8,7 @@ that allocates capacity references the same source of truth.
 from __future__ import annotations
 
 # Historical cross-check, NOT the binding sizing constraint anymore.
-# Equivalence with v2: STEADY_STATE_GROSS_FRAC / EXPECTED_AVG_HOLD_DAYS ≈
+# Equivalence with the retired v2 daily scale factor: 0.667 gross / 30d hold ≈
 # 0.022 daily, integrated over W=30d hold ≈ 0.667 ≈ 240 / 360 = L / N_FIXED.
 N_FIXED = 360
 

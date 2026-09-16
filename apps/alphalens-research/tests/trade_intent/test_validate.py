@@ -22,6 +22,7 @@ from broker_contract.trade_intent.schema import (
     InstrumentHint,
     IntentMeta,
     ModelPush,
+    PickSize,
     ReanchorOnFill,
     TpTrancheSpec,
     TradeIntent,
@@ -47,7 +48,7 @@ def _intent(**spec_overrides) -> TradeIntent:
             TpTrancheSpec(price=80.0, tranche_pct=50.0, r_multiple=1.5, tag="TP1"),
             TpTrancheSpec(price=90.0, tranche_pct=50.0, r_multiple=3.0, tag="TP2"),
         ),
-        "suggested_size_pct": 10.0,
+        "size": PickSize(notional_acct=1500.0, currency="USD"),
     }
     spec_kwargs.update(spec_overrides)
     return TradeIntent(
@@ -212,18 +213,37 @@ class StopAndSizeRulesTest(unittest.TestCase):
             validate_intent(_intent(disaster_stop=70.0))
         self.assertEqual(_reason_of(ctx.exception), "stop_above_entry")
 
-    def test_a_levered_size_refuses(self) -> None:
+    def test_zero_notional_refuses(self) -> None:
         with self.assertRaises(IntentInvalidError) as ctx:
-            validate_intent(_intent(suggested_size_pct=100.1))
-        self.assertEqual(_reason_of(ctx.exception), "size_pct_out_of_range")
+            validate_intent(_intent(size=PickSize(notional_acct=0.0, currency="USD")))
+        self.assertEqual(_reason_of(ctx.exception), "size_notional_not_positive")
 
-    def test_a_full_frame_size_is_accepted(self) -> None:
-        self.assertIsNone(validate_intent(_intent(suggested_size_pct=100.0)))
-
-    def test_zero_size_refuses(self) -> None:
+    def test_negative_notional_refuses(self) -> None:
         with self.assertRaises(IntentInvalidError) as ctx:
-            validate_intent(_intent(suggested_size_pct=0.0))
-        self.assertEqual(_reason_of(ctx.exception), "size_pct_out_of_range")
+            validate_intent(_intent(size=PickSize(notional_acct=-1.0, currency="USD")))
+        self.assertEqual(_reason_of(ctx.exception), "size_notional_not_positive")
+
+    def test_a_large_notional_is_not_the_contracts_business(self) -> None:
+        # The per-pick ceiling is deployment knowledge (the LIVE rail), not a
+        # document rule, so the validator accepts any positive amount.
+        self.assertIsNone(
+            validate_intent(_intent(size=PickSize(notional_acct=1e9, currency="USD")))
+        )
+
+    def test_a_lowercase_currency_refuses(self) -> None:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(size=PickSize(notional_acct=1500.0, currency="usd")))
+        self.assertEqual(_reason_of(ctx.exception), "size_currency_invalid")
+
+    def test_a_blank_currency_refuses(self) -> None:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(size=PickSize(notional_acct=1500.0, currency="")))
+        self.assertEqual(_reason_of(ctx.exception), "size_currency_invalid")
+
+    def test_a_four_letter_currency_refuses(self) -> None:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(size=PickSize(notional_acct=1500.0, currency="USDT")))
+        self.assertEqual(_reason_of(ctx.exception), "size_currency_invalid")
 
 
 class TakeProfitRulesTest(unittest.TestCase):
@@ -305,7 +325,8 @@ class NonFiniteNumbersTest(unittest.TestCase):
         self.assertEqual(self._refuses(disaster_stop=float("nan")), "numeric_not_finite")
 
     def test_nan_size_refuses(self) -> None:
-        self.assertEqual(self._refuses(suggested_size_pct=float("nan")), "numeric_not_finite")
+        size = PickSize(notional_acct=float("nan"), currency="USD")
+        self.assertEqual(self._refuses(size=size), "numeric_not_finite")
 
     def test_nan_tp_price_refuses(self) -> None:
         tranches = (TpTrancheSpec(price=float("nan"), tranche_pct=50.0),)
@@ -327,7 +348,7 @@ class NonFiniteNumbersTest(unittest.TestCase):
         raw = (
             '{"intent_id":"X:2026-09-10:m","instrument":{"ticker":"X","mic":"XNYS"},'
             '"spec":{"entry_tiers":[{"limit_price":NaN,"alloc_pct":100.0}],'
-            '"disaster_stop":5.0,"tp_tranches":[],"suggested_size_pct":10.0},'
+            '"disaster_stop":5.0,"tp_tranches":[],"size":{"notional_acct":10.0,"currency":"USD"}},'
             '"meta":{"armed_ts":"t","trade_date":"2026-09-10"}}'
         )
         decoded = intent_from_jsonable(json.loads(raw))
@@ -405,10 +426,13 @@ class TheFailureShapeTest(unittest.TestCase):
             EntryTierSpec(limit_price=70.0, alloc_pct=30.0),
         )
         with self.assertRaises(IntentInvalidError) as ctx:
-            validate_intent(_intent(entry_tiers=tiers, disaster_stop=0.0, suggested_size_pct=250.0))
+            size = PickSize(notional_acct=0.0, currency="USD")
+            validate_intent(_intent(entry_tiers=tiers, disaster_stop=0.0, size=size))
         details = ctx.exception.failure.details
         reasons = [v["reason"] for v in details["violations"]]
-        self.assertEqual(reasons, ["entry_alloc_sum", "stop_non_positive", "size_pct_out_of_range"])
+        self.assertEqual(
+            reasons, ["entry_alloc_sum", "stop_non_positive", "size_notional_not_positive"]
+        )
         self.assertEqual(details["reason"], "entry_alloc_sum")
         self.assertIn("sum to 100", ctx.exception.failure.message)
 

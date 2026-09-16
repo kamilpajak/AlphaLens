@@ -94,12 +94,6 @@ UNITS: tuple[tuple[str, str, frozenset[str]], ...] = (
     # flipped) silently changes what every price decision on this host sees, so
     # it belongs under the same detect-never-auto-apply watch as the daemons.
     ("alphalens-saxo-price-reader", "alphalens-saxo-price-reader.service", frozenset()),
-    # The LIVE balance reader (#1203). It places nothing, but it carries the
-    # rails because `assert_live_rails` gates EVERY live client, and a drifted
-    # pin would kill the balance read silently, before the gauge is written. It
-    # REQUIRES the grant for the same reason the daemon does: no grant, no
-    # client, no reading, at its next fire.
-    ("alphalens-broker-capital-reader", "alphalens-broker-capital-reader.service", LIVE_GRANT_VARS),
 )
 
 METRICS_BASENAME = "alphalens_domain_systemd-drift-check.prom"

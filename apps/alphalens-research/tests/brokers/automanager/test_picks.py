@@ -40,6 +40,7 @@ from broker_contract.trade_intent.schema import (
     InitialLevels,
     InstrumentHint,
     IntentMeta,
+    PickSize,
     ReanchorOnFill,
     TpTrancheSpec,
     TradeIntent,
@@ -52,7 +53,7 @@ def _intent(ticker: str = "KO", trade_date: str = "2026-07-20", generation: int 
         entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=50.0, tag="T1"),),
         disaster_stop=90.0,
         tp_tranches=(TpTrancheSpec(price=110.0, tranche_pct=100.0, r_multiple=2.0, tag="TP1"),),
-        suggested_size_pct=2.0,
+        size=PickSize(notional_acct=2000.0, currency="USD"),
     )
     exit_spec = ExitGeometrySpec(
         initial_levels=InitialLevels(stop=90.0, tp=110.0),
@@ -301,10 +302,10 @@ class IterPicksTest(unittest.TestCase):
                             "entry_tiers": [{"limit_price": 100.0, "alloc_pct": 100.0, "tag": ""}],
                             "disaster_stop": 90.0,
                             "tp_tranches": [],
-                            "suggested_size_pct": 2.0,
+                            "size": {"notional_acct": 2000.0, "currency": "USD"},
                             "order_ttl_days": 7,
                             "side": "long",
-                            "schema_version": "1",
+                            "schema_version": "3",
                         },
                         "meta": {
                             "armed_ts": "2026-07-20T00:00:00+00:00",

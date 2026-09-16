@@ -1,10 +1,9 @@
 """Pure builder behind `alphalens broker arm-manual` (#1235).
 
 Compiles operator vocabularies — the ``price[:alloc]`` tier mini-DSL, TP
-tranches given as absolute prices or R-multiples, and sizing given as either a
-percent of the declared frame or an account-currency notional — into the one
-normal form the wire contract already speaks (`TradeSpec` with absolute prices
-and 0-100 percentages). No I/O, no typer: the CLI command stays a thin shell
+tranches given as absolute prices or R-multiples, and an account-currency
+notional — into the one normal form the wire contract already speaks
+(`TradeSpec` with absolute prices, 0-100 percentages and a stated amount). No I/O, no typer: the CLI command stays a thin shell
 and every rule here is testable without a runner.
 
 The intent arms with ``exit=None`` on purpose, and that choice does MORE than
@@ -49,8 +48,8 @@ Since #1404 the refusals are split by WHOSE invariant each one is, and only two
 of the three kinds live here:
 
 * **This module owns the operator's VOCABULARY** — the ``price[:alloc]`` and
-  ``<N>R:pct`` mini-DSLs, the ``now@`` prefix, ``--no-tp`` against ``--tp``, the
-  ``--size-pct``/``--notional`` XOR. None of it is representable in a
+  ``<N>R:pct`` mini-DSLs, the ``now@`` prefix, ``--no-tp`` against ``--tp``.
+  None of it is representable in a
   ``TradeIntent``: after compilation ``alloc_pct`` is always set, so "a mix of
   bare and explicit allocations" is a fact about the command line, not the
   document.
@@ -86,6 +85,7 @@ from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     InstrumentHint,
     IntentMeta,
+    PickSize,
     TpTrancheSpec,
     TradeIntent,
     TradeSpec,
@@ -301,41 +301,13 @@ def planned_blended_entry_of(tiers: tuple[EntryTierSpec, ...], *, disaster_stop:
         entry_tiers=tiers,
         disaster_stop=disaster_stop,
         tp_tranches=(),
-        suggested_size_pct=1.0,
+        # The blend reads prices and allocations only; the amount is a placeholder.
+        size=PickSize(notional_acct=1.0, currency="XXX"),
     )
     blend = planned_blended_entry_from_spec(provisional)
     if blend is None:  # unreachable: parse_entry_tiers guarantees priced tiers
         raise ManualIntentError("entry tiers yield no planned blend")
     return blend
-
-
-def resolve_size_pct(
-    *, size_pct: float | None, notional: float | None, frame: float | None
-) -> float:
-    """Resolve the two sizing vocabularies into one ``suggested_size_pct``.
-
-    Exactly one of ``size_pct`` (percent of the declared frame) or
-    ``notional`` (account currency; divided by ``frame``) must be given.
-
-    The resolved value must land in (0, 100] — a pick is never levered — but that
-    is an invariant of the DOCUMENT, so ``validate_intent`` enforces it on the
-    assembled intent (#1404) rather than this function. What stays here is the
-    vocabulary: which flags may be combined, and that a notional needs a frame.
-    """
-    if (size_pct is None) == (notional is None):
-        raise ManualIntentError("exactly one of --size-pct or --notional is required")
-    if size_pct is None:
-        assert notional is not None  # the XOR check above guarantees it
-        if notional <= 0:
-            raise ManualIntentError(f"--notional must be positive, got {notional:g}")
-        if frame is None:
-            raise ManualIntentError(
-                "--notional needs the declared frame (pass --frame or set the sizing-equity env)"
-            )
-        if frame <= 0:
-            raise ManualIntentError(f"--frame must be positive, got {frame:g}")
-        size_pct = 100.0 * notional / frame
-    return size_pct
 
 
 def build_manual_intent(
@@ -346,9 +318,8 @@ def build_manual_intent(
     stop: float,
     tps_raw: list[str] | tuple[str, ...],
     no_tp: bool,
-    size_pct: float | None,
-    notional: float | None,
-    frame: float | None,
+    notional: float,
+    currency: str,
     ttl_days: int | None,
     arm_date: dt.date,
     armed_ts: str,
@@ -385,8 +356,6 @@ def build_manual_intent(
     blend = planned_blended_entry_of(tiers, disaster_stop=stop)
     tranches = () if no_tp else parse_tp_tranches(tps_raw, blend=blend, stop=stop)
 
-    resolved_size_pct = resolve_size_pct(size_pct=size_pct, notional=notional, frame=frame)
-
     spec_kwargs: dict = {}
     if ttl_days is not None:
         spec_kwargs["order_ttl_days"] = ttl_days
@@ -394,7 +363,9 @@ def build_manual_intent(
         entry_tiers=tiers,
         disaster_stop=stop,
         tp_tranches=tranches,
-        suggested_size_pct=resolved_size_pct,
+        # The amount's rules (positive, a currency code) are the document's
+        # invariants, so validate_intent below enforces them (#1404).
+        size=PickSize(notional_acct=notional, currency=currency),
         **spec_kwargs,
     )
     generation_suffix = "" if generation == 1 else f"-g{generation}"

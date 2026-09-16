@@ -4,7 +4,7 @@ behind `alphalens broker arm-manual` (#1235).
 The builder compiles operator vocabularies (tier/TP mini-DSL, R-multiples,
 account-currency notional) into the one normal form the wire contract already
 speaks: absolute prices, ``alloc_pct``/``tranche_pct`` percentages and a
-``suggested_size_pct``. Every refusal is a :class:`ManualIntentError` with an
+stated ``size`` amount. Every refusal is a :class:`ManualIntentError` with an
 operator-readable message — this command arms real money, so a typo must
 explode, never be silently normalized.
 """
@@ -20,12 +20,12 @@ from alphalens_pipeline.brokers.automanager.manual_intent import (
     parse_entry_tiers,
     parse_tp_tranches,
     planned_blended_entry_of,
-    resolve_size_pct,
 )
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     InstrumentHint,
     IntentMeta,
+    PickSize,
     TradeIntent,
     TradeSpec,
 )
@@ -45,9 +45,8 @@ def _build(**overrides):
         "stop": 66.0,
         "tps_raw": ["80:50", "2R:50"],
         "no_tp": False,
-        "size_pct": None,
         "notional": 10000.0,
-        "frame": 15000.0,
+        "currency": "USD",
         "ttl_days": None,
         "arm_date": _ARM_DATE,
         "armed_ts": _ARMED_TS,
@@ -187,36 +186,6 @@ class ParseTpTranchesTest(unittest.TestCase):
             parse_tp_tranches(["2X:50"], blend=_BLEND, stop=_STOP)
 
 
-class ResolveSizePctTest(unittest.TestCase):
-    def test_size_pct_passes_through(self) -> None:
-        self.assertEqual(resolve_size_pct(size_pct=67.0, notional=None, frame=None), 67.0)
-
-    def test_notional_divides_by_frame(self) -> None:
-        self.assertAlmostEqual(
-            resolve_size_pct(size_pct=None, notional=10000.0, frame=15000.0), 100.0 * 10000 / 15000
-        )
-
-    def test_both_modes_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "exactly one of"):
-            resolve_size_pct(size_pct=67.0, notional=10000.0, frame=15000.0)
-
-    def test_neither_mode_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "exactly one of"):
-            resolve_size_pct(size_pct=None, notional=None, frame=None)
-
-    def test_notional_without_frame_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "needs the declared frame"):
-            resolve_size_pct(size_pct=None, notional=10000.0, frame=None)
-
-    def test_non_positive_notional_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "notional must be positive"):
-            resolve_size_pct(size_pct=None, notional=-5.0, frame=15000.0)
-
-    def test_non_positive_frame_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "frame must be positive"):
-            resolve_size_pct(size_pct=None, notional=10000.0, frame=0.0)
-
-
 class BuildManualIntentTest(unittest.TestCase):
     def test_full_intent_assembly(self) -> None:
         intent = _build()
@@ -231,7 +200,7 @@ class BuildManualIntentTest(unittest.TestCase):
         self.assertEqual(intent.spec.disaster_stop, 66.0)
         self.assertEqual(len(intent.spec.entry_tiers), 2)
         self.assertEqual(len(intent.spec.tp_tranches), 2)
-        self.assertAlmostEqual(intent.spec.suggested_size_pct, 100.0 * 10000 / 15000)
+        self.assertEqual(intent.spec.size, PickSize(notional_acct=10000.0, currency="USD"))
         self.assertEqual(intent.spec.side, "long")
 
     def test_r_form_tp_uses_manual_blend_and_stop(self) -> None:
@@ -335,7 +304,7 @@ class MovedDocumentRulesStillRefuseTest(unittest.TestCase):
     """The rules that moved into ``broker_contract.trade_intent.validate`` (#1404).
 
     Each one used to be raised by the parse helper it sat in, so these tests used
-    to call ``parse_entry_tiers`` / ``parse_tp_tranches`` / ``resolve_size_pct``
+    to call ``parse_entry_tiers`` / ``parse_tp_tranches``
     directly. The rule is now an invariant of the assembled document, so the
     operator-facing behaviour it protects is exercised through
     ``build_manual_intent`` — the same inputs, refused at the same command.
@@ -399,17 +368,18 @@ class MovedDocumentRulesStillRefuseTest(unittest.TestCase):
         with self.assertRaisesRegex(ManualIntentError, "duplicate take-profit price"):
             _build(tps_raw=["80:50", "80:50"])
 
-    def test_size_pct_over_100_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "0 < size_pct <= 100"):
-            _build(size_pct=101.0, notional=None, frame=None)
+    def test_non_positive_notional_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "notional_acct must be positive"):
+            _build(notional=0.0)
 
-    def test_notional_over_frame_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "0 < size_pct <= 100"):
-            _build(size_pct=None, notional=16000.0, frame=15000.0)
+    def test_an_invalid_currency_refuses(self) -> None:
+        with self.assertRaisesRegex(ManualIntentError, "ISO 4217"):
+            _build(currency="dollars")
 
-    def test_non_positive_size_pct_refuses(self) -> None:
-        with self.assertRaisesRegex(ManualIntentError, "0 < size_pct <= 100"):
-            _build(size_pct=0.0, notional=None, frame=None)
+    def test_a_notional_above_any_old_frame_is_accepted(self) -> None:
+        # #1467: there is no frame any more, so 16000 is simply an amount. The
+        # per-pick ceiling is the LIVE rail's business, enforced at the drain.
+        self.assertEqual(_build(notional=16000.0).spec.size.notional_acct, 16000.0)
 
 
 class RulesThatDeliberatelyStayInTheCliTest(unittest.TestCase):
@@ -430,7 +400,7 @@ class RulesThatDeliberatelyStayInTheCliTest(unittest.TestCase):
             entry_tiers=(EntryTierSpec(limit_price=10.0, alloc_pct=100.0),),
             disaster_stop=5.0,
             tp_tranches=(),
-            suggested_size_pct=10.0,
+            size=PickSize(notional_acct=1000.0, currency="USD"),
             order_ttl_days=0,
         )
         validate_intent(
@@ -466,7 +436,7 @@ class EveryAcceptedManualIntentAlsoValidatesTest(unittest.TestCase):
             {"tps_raw": ["80:50"]},
             {"tps_raw": ["2R:50", "3R:25"]},
             {"no_tp": True, "tps_raw": []},
-            {"size_pct": 100.0, "notional": None, "frame": None},
+            {"notional": 15000.0, "currency": "PLN"},
             {"ttl_days": 3},
             {"mic": "XWAR"},
             {"generation": 4},

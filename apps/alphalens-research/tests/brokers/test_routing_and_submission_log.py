@@ -28,7 +28,6 @@ from broker_contract.fx import FxConversion
 _FX_KEYS = (
     "sizing_currency",
     "instrument_currency",
-    "sizing_equity",
     "fx_rate",
     "fx_rate_bid",
     "fx_rate_ask",
@@ -258,7 +257,7 @@ class TestSubmissionLog(unittest.TestCase):
         record = self._record()
         self.assertEqual(record["execution_config_version"], execution_config_version())
         # v3 = the est_round_trip_fee_bps journal-shape bump (sizing PR-2).
-        self.assertTrue(record["execution_config_version"].startswith("execution-v3-"))
+        self.assertTrue(record["execution_config_version"].startswith("execution-v4-"))
         self.assertIn("+00:00", record["ts"])
         self.assertEqual(record["mic"], "XNYS")
         self.assertEqual(record["uic"], "307")
@@ -321,14 +320,12 @@ class TestSubmissionLog(unittest.TestCase):
             sizing=SizingStamp(
                 sizing_currency="EUR",
                 instrument_currency="PLN",
-                sizing_equity=1_000_000.0,
                 fx=_EURPLN_FX,
                 precheck_conversion_rate=0.2304,
             )
         )
         self.assertEqual(record["sizing_currency"], "EUR")
         self.assertEqual(record["instrument_currency"], "PLN")
-        self.assertEqual(record["sizing_equity"], 1_000_000.0)
         self.assertEqual(record["fx_rate"], 4.34)
         self.assertEqual(record["fx_rate_bid"], 4.3331)
         self.assertEqual(record["fx_rate_ask"], 4.3469)
@@ -345,7 +342,6 @@ class TestSubmissionLog(unittest.TestCase):
                     sizing=SizingStamp(
                         sizing_currency="EUR",
                         instrument_currency="PLN",
-                        sizing_equity=1_000_000.0,
                         fx=_EURPLN_FX,
                         precheck_conversion_rate=0.2304,
                     )

@@ -2,13 +2,15 @@
 
 PR-5 (broker-manager extraction, memo
 ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``)
-splits the pre-split ``compute_setup_plan(*, brief_trade_setup, paper_equity,
-scale_factor, fx=None)`` into a brief-parse half (``parse_brief_to_spec``,
-emitting a :class:`~broker_contract.trade_intent.schema.TradeSpec`) and a
-money-math half (``compute_setup_plan(spec, ...)``). :func:`plan_from_brief`
-re-composes the two so the existing sizing test suites keep calling with the
-SAME ``brief_trade_setup=`` kwarg shape they always did, without rewriting
-any expected value — the behavior-preservation guard for this split.
+split the pre-split ``compute_setup_plan(*, brief_trade_setup, paper_equity,
+scale_factor, fx=None)`` into a brief-parse half and a money-math half.
+:func:`plan_from_brief` re-composes the two so the sizing suites keep their
+kwarg shape and expected values.
+
+Since #1467 the spec states an amount, so the old ``paper_equity`` and
+``scale_factor`` pair collapses into the one frame ``parse_brief_to_spec``
+takes: ``frame = paper_equity x scale_factor``. That keeps every expected
+notional identical: ``pct / 100 x equity x scale`` is what the old chain spent.
 """
 
 from __future__ import annotations
@@ -31,10 +33,8 @@ def plan_from_brief(
     via :func:`parse_brief_to_spec` for the same unplannable briefs the
     pre-split function rejected.
     """
-    spec = parse_brief_to_spec(brief_trade_setup)
-    return compute_setup_plan(
-        spec,
-        paper_equity=paper_equity,
-        scale_factor=scale_factor,
-        fx=fx,
+    account_currency = fx.account_currency if fx is not None else "USD"
+    spec = parse_brief_to_spec(
+        brief_trade_setup, frame=paper_equity * scale_factor, currency=account_currency
     )
+    return compute_setup_plan(spec, fx=fx)

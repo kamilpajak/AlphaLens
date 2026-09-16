@@ -12,10 +12,11 @@ measurement source, never merged with broker-free replays).
 Record shape (frozen with the token's ``_STAMP_SCHEMA``; changing it costs a
 schema bump — schema "2" ADDED the FX provenance keys, FX-leg design memo
 §4.3 item 8; schema "3" ADDED ``est_round_trip_fee_bps``, broker sizing
-declared-frame memo §4.5)::
+declared-frame memo §4.5; schema "4" REMOVED ``sizing_equity``, #1467 — the
+document states the amount, so no frame is used)::
 
     {
-        "execution_config_version": "execution-v3-...",
+        "execution_config_version": "execution-v4-...",
         "ts": "<UTC ISO-8601>",
         "trade_date": "YYYY-MM-DD",
         "ticker": "KO",
@@ -30,7 +31,6 @@ declared-frame memo §4.5)::
         "precheck": {...},       # per-bracket precheck summary
         "sizing_currency": "EUR" | null,     # account ccy the budget was in
         "instrument_currency": "PLN" | null, # resolved instrument ccy
-        "sizing_equity": 1000000.0 | null,   # equity the sizing used (acct ccy)
         "fx_rate": 4.34 | null,   # REAL null on same-currency (a fake 1.0
                                   # would masquerade as a quote); acct->instr
         "fx_rate_bid": ... | null,
@@ -76,7 +76,6 @@ class SizingStamp:
 
     sizing_currency: str | None = None
     instrument_currency: str | None = None
-    sizing_equity: float | None = None
     fx: FxConversion | None = None
     precheck_conversion_rate: float | None = None
     est_round_trip_fee_bps: float | None = None
@@ -123,7 +122,6 @@ def build_submission_record(
         "precheck": precheck or [],
         "sizing_currency": stamp.sizing_currency,
         "instrument_currency": stamp.instrument_currency,
-        "sizing_equity": stamp.sizing_equity,
         "fx_rate": fx.rate if fx is not None else None,
         "fx_rate_bid": fx.bid if fx is not None else None,
         "fx_rate_ask": fx.ask if fx is not None else None,

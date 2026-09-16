@@ -89,7 +89,11 @@ def contract_field(
 # future broker-manager can detect + reject stale client payloads.
 # "2": EntryTierSpec.entry_mode added (#1247 immediate-entry tiers). Old "1"
 # payloads decode unchanged (absent key -> the dataclass default applies).
-SCHEMA_VERSION = "2"
+# "3": TradeSpec.suggested_size_pct replaced by TradeSpec.size (#1467). A "2"
+# document does NOT decode: its percent needs a frame the daemon no longer has.
+# The journal drain recognises those lines before decoding (picks.py,
+# LEGACY(size_pct_v2)).
+SCHEMA_VERSION = "3"
 
 # Reserved multi-tenant dimension. A single account is live today; the field
 # exists so a future multi-account broker-manager does not need a schema
@@ -167,11 +171,30 @@ class TpTrancheSpec:
 
 
 @dataclass(frozen=True)
+class PickSize:
+    """How much one pick spends, stated by the producer (#1467).
+
+    An amount, not a percent: the sizing frame used to live in the daemon's
+    environment, so the same document sized differently on SIM and LIVE and
+    could change size between arming and draining.
+    """
+
+    notional_acct: float = contract_field(
+        "Budget for the WHOLE entry ladder, in the account currency. Each rung gets "
+        "notional_acct x alloc_pct / 100."
+    )
+    currency: str = contract_field(
+        'ISO 4217 code of the account currency the amount is in, e.g. "PLN". The daemon '
+        "refuses a pick whose currency is not its account's."
+    )
+
+
+@dataclass(frozen=True)
 class TradeSpec:
     """Formalizes ``compute_setup_plan``'s UNSIZED dict input (memo section 2.3).
 
-    ``suggested_size_pct`` is a PERCENTAGE (0-100) of account equity, matching
-    ``compute_setup_plan``'s ``suggested_size_pct / 100 * equity`` sizing.
+    ``size`` is an account-currency amount for the whole entry ladder, which
+    ``compute_setup_plan`` spends as-is (#1467).
     """
 
     entry_tiers: tuple[EntryTierSpec, ...] = contract_field("The entry ladder, rung by rung.")
@@ -182,8 +205,8 @@ class TradeSpec:
         "The take-profit ladder. Empty is the legitimate --no-tp shape: a pick that "
         "runs to its disaster stop."
     )
-    suggested_size_pct: float = contract_field(
-        "PERCENTAGE of account equity, 0-100 — not a fraction."
+    size: PickSize = contract_field(
+        "How much the pick spends: an account-currency amount for the whole entry ladder."
     )
     order_ttl_days: int = contract_field(
         "Entry-order lifetime in TRADING days (XNYS), not calendar days. 0 is the "

@@ -6,21 +6,17 @@ no broker SDK reach — this module is intentionally easy to test in isolation
 and easy to reason about against the locked sizing formula in
 ``docs/research/paper_trading_capital_sizing_2026_05_28.md`` §2.3 / §3.
 
-v2 sizing math (per memo §2.3, supersedes v1's per-candidate cap):
+Sizing math (#1467 — the document states the amount):
 
-  daily_target_notional = STEADY_STATE_GROSS_FRAC × equity
-                            / EXPECTED_AVG_HOLD_DAYS
-  aggregate_uncapped    = Σ_i suggested_size_pct_i / 100 × equity
-                            (sum over plannable candidates today)
-  scale_factor          = min(1.0, daily_target_notional / aggregate_uncapped)
-  final_size_pct_i      = suggested_size_pct_i × scale_factor
-  total_notional_i      = final_size_pct_i / 100 × equity
-  per_tier_notional     = total_notional × (tier.alloc_pct / 100)
-  per_tier_qty          = floor(per_tier_notional / tier.limit)
+  total_notional    = spec.size.notional_acct            (account currency)
+  sizing_notional   = total_notional                     (same currency)
+                    | total_notional × rate × (1 − buffer/100)   (FX path)
+  per_tier_notional = sizing_notional × (tier.alloc_pct / 100)
+  per_tier_qty      = floor(per_tier_notional / tier.limit)
 
-The scale factor preserves inter-candidate ratios while bounding aggregate
-daily gross. ``compute_setup_plan`` takes the pre-computed ``scale_factor``
-as an explicit argument; the planner runs a two-pass loop to derive it.
+Before #1467 the spec carried a percent that was multiplied by an equity frame
+the daemon read from its environment, so the same document sized differently
+per deployment and could change size between arming and draining.
 
 ``alloc_pct`` already sums to ~100 across tiers (trade_setup §7.3); the
 ``total_notional × alloc_pct`` step honours the per-tier risk weighting
@@ -58,10 +54,6 @@ import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from broker_contract.constants import (
-    EXPECTED_AVG_HOLD_DAYS,
-    STEADY_STATE_GROSS_FRAC,
-)
 from broker_contract.fx import FxConversion
 from broker_contract.trade_intent.schema import TpTrancheSpec, TradeSpec
 
@@ -164,15 +156,10 @@ class TpTranchePlan:
 
 @dataclass(frozen=True)
 class SetupPlan:
-    """The full per-candidate plan: sizing scalars + ladder + exit references.
+    """The full per-candidate plan: the amount + ladder + exit references.
 
-    ``scale_factor`` and ``final_size_pct`` reflect the v2 global-scaling
-    decision: ``final_size_pct = suggested_size_pct × scale_factor``. The
-    raw ``suggested_size_pct`` is preserved so the analysis report can
-    attribute outcomes back to the brief's calibrated risk budget.
-
-    Currencies (FX-leg design memo §4.2): ``paper_equity`` and
-    ``total_notional`` are ACCOUNT currency; ``entry_tiers`` limits,
+    Currencies (FX-leg design memo §4.2): ``total_notional`` is ACCOUNT
+    currency, copied from ``TradeSpec.size.notional_acct``; ``entry_tiers`` limits,
     ``tp_tranches`` targets and ``disaster_stop`` are INSTRUMENT currency
     (prices are never converted). ``fx`` is ``None`` on the same-currency
     path (a strict no-op — the plan is byte-identical to the pre-FX-leg
@@ -180,11 +167,7 @@ class SetupPlan:
     instrument-currency notional the qty division used.
     """
 
-    suggested_size_pct: float
-    scale_factor: float
-    final_size_pct: float
     total_notional: float
-    paper_equity: float
     disaster_stop: float
     order_ttl_days: int
     entry_tiers: tuple[TierPlan, ...]
@@ -210,45 +193,6 @@ class TradeSetupNotPlannableError(ValueError):
     rather than propagating the exception (the planner is expected to handle
     many candidates, of which some are routinely unplannable).
     """
-
-
-def compute_daily_scale_factor(
-    plannable_suggested_pcts: Iterable[float],
-    paper_equity: float,
-    *,
-    steady_state_gross_frac: float = STEADY_STATE_GROSS_FRAC,
-    expected_avg_hold_days: int = EXPECTED_AVG_HOLD_DAYS,
-) -> float:
-    """Daily global scale factor preserving inter-candidate ratios.
-
-    Args:
-        plannable_suggested_pcts: ``suggested_size_pct`` values from every
-            candidate that passed :func:`~alphalens_pipeline.paper.sizing.
-            validate_trade_setup` today (i.e. verified + has a plannable
-            setup). Order does not matter.
-        paper_equity: live account equity in the ACCOUNT currency (whatever
-            ``AccountSnapshot.currency`` says — the budget IS the account
-            currency by operator decision, FX-leg memo §7 Q1).
-
-    Returns:
-        ``min(1.0, daily_target / aggregate)``. When the candidate set is
-        empty (no plannable candidates today) returns ``1.0`` — the value
-        is moot since the planner won't apply it to anything.
-
-    The formula computes a single multiplicative factor applied to every
-    candidate's ``suggested_size_pct``. See memo §2.3 for the full
-    derivation + why this preserves inter-candidate ratios (vs v1's
-    per-candidate ``min(suggested, 100/N_FIXED)`` cap which flattened
-    ~95% of candidates to uniform notional).
-    """
-    suggested_list = list(plannable_suggested_pcts)
-    if not suggested_list or paper_equity <= 0:
-        return 1.0
-    aggregate_uncapped = sum(s / 100.0 * paper_equity for s in suggested_list)
-    if aggregate_uncapped <= 0:
-        return 1.0
-    daily_target = steady_state_gross_frac * paper_equity / expected_avg_hold_days
-    return min(1.0, daily_target / aggregate_uncapped)
 
 
 def _build_tp_tranches(tp_tranches: Iterable[TpTrancheSpec]) -> list[TpTranchePlan]:
@@ -282,8 +226,6 @@ def _build_tp_tranches(tp_tranches: Iterable[TpTrancheSpec]) -> list[TpTranchePl
 def compute_setup_plan(
     spec: TradeSpec,
     *,
-    paper_equity: float,
-    scale_factor: float,
     fx: FxConversion | None = None,
 ) -> SetupPlan:
     """Turn an unsized :class:`~broker_contract.trade_intent.schema.TradeSpec`
@@ -292,11 +234,6 @@ def compute_setup_plan(
     Args:
         spec: parsed, unsized trade spec — see
             :func:`~alphalens_pipeline.paper.sizing.parse_brief_to_spec`.
-        paper_equity: live account equity in the ACCOUNT currency.
-        scale_factor: pre-computed daily scale factor from
-            :func:`compute_daily_scale_factor`. Pass ``1.0`` for unit tests
-            that want to inspect un-scaled sizing (rare; almost every prod
-            day will scale < 1.0 given typical ``suggested_size_pct`` values).
         fx: ``None`` on the same-currency path (strict no-op — the plan is
             byte-identical to the pre-FX-leg output). When the instrument
             currency differs from the account currency the caller passes a
@@ -309,7 +246,7 @@ def compute_setup_plan(
     (non-positive rate, same-currency ``FxConversion`` — same-currency must
     pass ``fx=None``) plus "no usable entry tiers after sanitisation" when
     every tier in ``spec`` has a non-positive ``limit_price``. The brief-side
-    plannability checks (status != OK, missing ``suggested_size_pct``, …) now
+    plannability checks (status != OK, missing size percent, …) now
     run earlier, inside
     :func:`~alphalens_pipeline.paper.sizing.parse_brief_to_spec` /
     :func:`~alphalens_pipeline.paper.sizing.validate_trade_setup`.
@@ -326,11 +263,9 @@ def compute_setup_plan(
                 f"({fx.account_currency}->{fx.instrument_currency})"
             )
 
-    suggested_size_pct = spec.suggested_size_pct
     disaster_stop = spec.disaster_stop
 
-    final_size_pct = suggested_size_pct * float(scale_factor)
-    total_notional = final_size_pct / 100.0 * float(paper_equity)
+    total_notional = float(spec.size.notional_acct)
     if fx is None:
         # Same-currency: the account-ccy notional IS the sizing notional —
         # no float op applied, so the plan stays byte-exact vs pre-FX-leg.
@@ -371,11 +306,7 @@ def compute_setup_plan(
     order_ttl_days = spec.order_ttl_days  # 0 sentinel → planner falls back to default
 
     return SetupPlan(
-        suggested_size_pct=suggested_size_pct,
-        scale_factor=float(scale_factor),
-        final_size_pct=final_size_pct,
         total_notional=total_notional,
-        paper_equity=float(paper_equity),
         disaster_stop=disaster_stop,
         order_ttl_days=order_ttl_days,
         entry_tiers=tuple(entries),
@@ -398,7 +329,6 @@ __all__ = [
     "TierPlan",
     "TpTranchePlan",
     "TradeSetupNotPlannableError",
-    "compute_daily_scale_factor",
     "compute_setup_plan",
     "setup_plan_gross_notional",
 ]

@@ -96,7 +96,8 @@ def _mk_instr(uic: int) -> Any:
 def _mk_pick(ticker: str, date: str, plan: Any, mic: str = "XNYS") -> Any:
     """An armed intent carrying its sized plan on the spec (the ``compute_setup_plan``
     stub reads ``spec.soak_plan``, so each pick sizes to its OWN plan)."""
-    spec = type("Spec", (), {"entry_tiers": ("t",), "soak_plan": plan})()
+    size = type("Size", (), {"notional_acct": 1000.0, "currency": "USD"})()
+    spec = type("Spec", (), {"entry_tiers": ("t",), "soak_plan": plan, "size": size})()
     return type(
         "Intent",
         (),
