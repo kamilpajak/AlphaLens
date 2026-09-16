@@ -707,3 +707,32 @@ tests:
       - eval_time: 1h
         alertname: AlphalensJobFamilyMissing
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensTextfileInvalidSample (#1462) — the persistent shape
+  # ---------------------------------------------------------------------
+
+  # A daily job's file carries the invalid-samples line until its next run,
+  # so the series is present on every evaluation: firing one hour in (true
+  # since 0h, for 5m), cleared once the line is gone and the 15m window is past.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_textfile_invalid_samples{textfile="thematic-build"}'
+        values: '1 1 1 _ _'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: AlphalensTextfileInvalidSample
+        exp_alerts: []
+      - eval_time: 1h
+        alertname: AlphalensTextfileInvalidSample
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              textfile: thematic-build
+            exp_annotations:
+              summary: "thematic-build: a textfile writer dropped a sample that was not a finite number"
+              description: "A Python textfile writer (alphalens_pipeline.observability.textfile or the Django edge mirror copy) refused a value for thematic-build in the last 15 minutes: it was not a finite number (a bool, a string, None, NaN or Inf), so that sample was dropped, not written, and the rest of the file was. Any rule that reads that series without an absent() partner is blind while this fires. The writer names the expression and the value in an ERROR line, logged once per defect and then latched until the expression writes cleanly (an INFO line says so): journalctl --user -u <unit> for host units, docker logs for the Django mirror. For a one-tick defect that INFO line can come before this page. The writer never raises by design (#1462): the broker daemon calls it on every tick and catches only OSError, so a raise would stop the protective loop. Fix the caller that computes the value."
+      - eval_time: 4h
+        alertname: AlphalensTextfileInvalidSample
+        exp_alerts: []

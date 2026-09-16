@@ -35,14 +35,43 @@ themselves::
     )
 
 The bash hook (``alphalens-emit-job-metrics``) uses the same approach.
+
+**A bad value is dropped and reported, never written and never raised (#1462).**
+Only a finite real number is a valid sample. A ``bool`` or ``str`` renders as a
+token node_exporter cannot parse, and it then drops the WHOLE file; ``nan`` /
+``inf`` parse, and then silently defeat every ``!= 0`` / ``> N`` alert rule. So a
+refused value is left out of the file, the rest of the file is still written,
+one ``alphalens_textfile_invalid_samples{textfile="<job>"} <count>`` line is
+appended (only when something was refused, so a healthy file is unchanged), and
+the ``AlphalensTextfileInvalidSample`` rule pages on it.
+
+Raising instead would be the worse failure: the broker daemon calls this on
+every tick and catches only ``OSError`` there, so a ``ValueError`` from a
+metrics defect would stop the protective loop. The conversions below are
+guarded for the same reason — nothing a caller passes can make this raise,
+except the filesystem.
+
+The refusal is logged at ERROR once per (job, expression) and then latched
+until that expression writes cleanly again: the daemon emits every ~45 s and
+the price stream every ~15 s, so a per-call ERROR would flood the journal.
+
+The Django mirror (``alphalens-django/edge/ingest/textfile.py``) cannot import
+this module (ADR 0011) and duplicates the same rules;
+``tests/test_textfile_writer_parity.py`` runs one case table through both.
 """
 
 from __future__ import annotations
 
+import logging
+import math
+import numbers
 import os
 import tempfile
+import threading
 from collections.abc import Mapping
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Keep in lock-step with the ``${ALPHALENS_TEXTFILE_DIR:-...}`` default
 # in ``deploy/systemd/bin/alphalens-emit-job-metrics``. The two halves
@@ -52,6 +81,80 @@ from pathlib import Path
 # the contract.
 DEFAULT_DIR = Path.home() / ".alphalens" / "metrics"
 ENV_VAR = "ALPHALENS_TEXTFILE_DIR"
+
+# Written only when a value was refused; read by AlphalensTextfileInvalidSample.
+# The label is ``textfile``, not ``job``: callers already put their own ``job``
+# label on the samples in this file.
+INVALID_SAMPLES_METRIC = "alphalens_textfile_invalid_samples"
+
+# Log latch: (job, expression) pairs whose refusal has already been logged.
+# Per process, so a restart starts clean. The lock makes check-then-add atomic
+# across the price-stream thread and the daemon's main thread. Past the cap a
+# new pair is not latched and logs on every refusal: degraded, never silenced.
+_LATCH_CAP = 512
+_LATCHED: set[tuple[str, str]] = set()
+_LATCH_LOCK = threading.Lock()
+
+
+def _render_value(value: object) -> str | None:
+    """The sample text for ``value``, or ``None`` when it is not a valid sample.
+
+    ``bool`` is checked first because it IS an ``Integral``. ``numpy.bool_`` is
+    not a ``numbers.Real``, so it falls out of the next check. Integral values
+    render through ``int`` (numpy integers, ``IntEnum`` members). Other reals go
+    through ``float`` and ``repr``: a Python float's ``repr`` is the shortest
+    exact text, where ``repr`` of a numpy scalar is ``np.float64(1.5)``.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return None
+    try:
+        if isinstance(value, numbers.Integral):
+            return str(int(value))
+        number = float(value)
+    except Exception:  # a caller's __int__ / __float__ may raise anything: a refusal
+        return None
+    return repr(number) if math.isfinite(number) else None
+
+
+def _describe(value: object) -> str:
+    """``repr`` for the log line, which must not raise either."""
+    try:
+        return repr(value)
+    except Exception:  # a hostile __repr__ must not break the emit
+        return f"<unrepresentable {type(value).__name__}>"
+
+
+def _report_refusals(job: str, refused: Mapping[str, object], accepted: set[str]) -> None:
+    """Log each refused expression once, and one INFO when it writes cleanly again.
+
+    The log calls run outside the lock on purpose. The one ordering this allows
+    under concurrency is harmless: thread A latches a refusal, thread B writes
+    the same expression cleanly and logs the recovery before A logs its ERROR.
+    Every refusal is still logged, and the next refusal logs again.
+    """
+    for expression, value in refused.items():
+        key = (job, expression)
+        with _LATCH_LOCK:
+            if key in _LATCHED:
+                continue
+            if len(_LATCHED) < _LATCH_CAP:
+                _LATCHED.add(key)
+        logger.error(
+            "%s: dropped %s = %s (%s): not a finite number, sample not written (#1462)",
+            job,
+            expression,
+            _describe(value),
+            type(value).__name__,
+        )
+    recovered: list[str] = []
+    with _LATCH_LOCK:
+        for expression in accepted:
+            key = (job, expression)
+            if key in _LATCHED:
+                _LATCHED.discard(key)
+                recovered.append(expression)
+    for expression in recovered:
+        logger.info("%s: %s is a valid sample again", job, expression)
 
 
 def _resolve_dir() -> Path:
@@ -106,8 +209,27 @@ def emit_domain_metrics(job: str, metrics: Mapping[str, float | int]) -> Path:
     Raises:
         OSError: if the textfile dir is unwriteable or a partial-write
             cleanup fails. The systemd unit's set -e + ExecStopPost
-            will surface this as a unit failure.
+            will surface this as a unit failure. Never raised for a
+            VALUE: a value that is not a finite number is dropped,
+            counted in ``alphalens_textfile_invalid_samples`` and logged
+            (see the module docstring).
     """
+    # Validate everything BEFORE the tempfile exists, so a refusal can never
+    # leave a ``.tmp`` behind in the scraped directory.
+    lines: list[str] = []
+    refused: dict[str, object] = {}
+    accepted: set[str] = set()
+    for metric_expr, value in metrics.items():
+        rendered = _render_value(value)
+        if rendered is None:
+            refused[metric_expr] = value
+        else:
+            accepted.add(metric_expr)
+            lines.append(f"{metric_expr} {rendered}\n")
+    if refused:
+        lines.append(f'{INVALID_SAMPLES_METRIC}{{textfile="{job}"}} {len(refused)}\n')
+    _report_refusals(job, refused, accepted)
+
     out_dir = _resolve_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / f"alphalens_domain_{job}.prom"
@@ -123,8 +245,7 @@ def emit_domain_metrics(job: str, metrics: Mapping[str, float | int]) -> Path:
         suffix=".tmp",
         encoding="utf-8",
     ) as tmp:
-        for metric_expr, value in metrics.items():
-            tmp.write(f"{metric_expr} {value}\n")
+        tmp.writelines(lines)
         tmp_path = Path(tmp.name)
 
     os.replace(tmp_path, target)

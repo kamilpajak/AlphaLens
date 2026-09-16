@@ -115,6 +115,7 @@ The "Type" column below is the semantic type every rule treats them as.
 | `literature-scan-{weekly,monthly}` | `alphalens_literature_last_run_trigger{window}` |
 | `thematic-build` | `alphalens_thematic_briefs_total`, `alphalens_thematic_briefs_by_model{model}` |
 | `edge-mirror` (the Django `rebuild_ladder_outcomes_cache` command, #1436) | `alphalens_edge_mirror_watermark_timestamp_seconds` (`completed_at` of the ingest watermark the run read; `0` when none), `alphalens_edge_mirror_unsettled_dates` (dates refused because their parquet is newer than the watermark — non-zero for one hour every morning while the nightly is mid-run), `alphalens_edge_mirror_newest_brief_date_timestamp_seconds` (the newest brief date in the mirror's per-date ledger `edge_daymetaladderoutcome` after the run, midnight UTC; a 0-candidate day counts, `0` before the first ingest). Written by the container through the `/var/lib/node_exporter/textfile` bind mount on the `rebuild-ladder-outcomes` compose service; the Django image cannot import the pipeline writer, so `edge/ingest/textfile.py` is its mirror. |
+| any job written by either Python writer (#1462) | `alphalens_textfile_invalid_samples{textfile}`: how many values this write DROPPED because they were not a finite number (a bool, a string, None, NaN, Inf). Written only when that count is above zero, so a healthy file carries no such line. |
 
 All metrics are **gauges** — they describe THIS run's outcome, not a
 cumulative counter. A run that emits 0 values is meaningful (and
@@ -282,15 +283,17 @@ that exits non-zero. After the 2026-09-13 timeout kill node_exporter rejected th
 job textfile, because the pre-#1441 hook had written a non-float exit code, so every series for
 that job vanished from the collector (#1437, fixed the same day; #1458 was a duplicate report).
 
-### Textfile integrity: AlphalensTextfileScrapeError, AlphalensJobFamilyMissing
+### Textfile integrity: AlphalensTextfileScrapeError, AlphalensJobFamilyMissing, AlphalensTextfileInvalidSample
 
-Two ways the cron-health families go silent without any job failing, both
-demonstrated on the live gauge before the rules existed (#1439, #1461):
+Three ways a metric goes silent without any job failing. The first two were
+demonstrated on the live gauge before their rules existed (#1439, #1461); the
+third is prevention (#1462: no invalid value was on the VPS when it shipped):
 
 | Rule | Reads | Fires when |
 |---|---|---|
 | `AlphalensTextfileScrapeError` | `node_textfile_scrape_error` | node_exporter has been rejecting at least one file in the textfile directory for 30m. A non-float sample drops the WHOLE file (the 2026-09-13 `TERM`, #1437); a `# HELP` text differing between files drops one FAMILY from the later file (#1461). The gauge is global and unlabelled, so the description carries the one-liner that names the file: `docker logs --since 10m node-exporter 2>&1 \| grep -E 'failed to collect textfile data\|inconsistent metric help text' \| tail -3`. |
 | `AlphalensJobFamilyMissing` | `alphalens_job_last_run_timestamp_seconds unless alphalens_job_last_exit_code` | a job's `last_run` is scraped but its `last_exit_code` family is not, for 15m — `AlphalensJobFailed` is blind for exactly that job. Labelled by `job`, which the global gauge cannot give. The hook writes no HELP since #1461, so this now means a foreign writer of the `alphalens_job_*` names. |
+| `AlphalensTextfileInvalidSample` | `max_over_time(alphalens_textfile_invalid_samples[15m]) > 0` | a Python writer dropped a value in the last 15 minutes, held for 5m. Labelled by `textfile` (the writer's job argument). Every rule that reads the dropped series without an `absent()` partner is blind meanwhile. The ERROR log line naming the expression is written once per defect and latched until the expression writes cleanly. |
 
 Why 30m: a 30-day census of the live gauge (read 2026-09-15, 5-min resolution)
 found 17 episodes — 14 nightly rejections of `alphalens_job_thematic-build.prom`
@@ -304,9 +307,21 @@ hour after the `AlphalensJobMetricMissing` (5m) it disambiguates. Why 15m for
 the per-job rule: above the 5-min staleness a vanished series lingers, so a file
 rewritten within one run cannot page.
 
-Both are evaluated in `prometheus/rules/alphalens_test.yaml` (`just test-rules`):
-the sustained and the blip shape for the gauge, the dropped-family and the
-healthy shape for the per-job rule. Recovery is the writer's, not Prometheus's:
+Why the Python writers drop instead of raising (#1462): the broker daemon calls
+them bare on every tick and catches only `OSError`, so a `ValueError` for a bad
+gauge would stop the protective loop on SIM and LIVE. Dropping is also better
+than writing: a `True` or a string used to make node_exporter drop the WHOLE
+file, and a `nan` it accepts defeats every `!= 0` / `> N` rule. Why
+`max_over_time` over 15m rather than a plain `> 0`: a daemon writes its file
+clean again on the next tick (15-45 s), so the line lives for a scrape or two
+and would never outlast a `for:`; over 15m a one-tick drop pages 5 minutes later
+and clears about 15 minutes after the defect stops.
+
+All three are evaluated with `just test-rules`: in `prometheus/rules/alphalens_test.yaml`,
+the sustained and the blip shape for the scrape-error gauge, the dropped-family and
+the healthy shape for the per-job rule, and the persistent daily-job shape for the
+invalid-sample rule; in `alphalens_broker_test.yaml` (1-minute grid), its one-tick
+daemon shape. Recovery is the writer's, not Prometheus's:
 fix the writer, rewrite the file with tmp + `mv`, and never run the hook by hand
 inside the scraped directory (it stamps `last_run=now`). The residual crash
 hazard of a differing HELP text on these names is described in

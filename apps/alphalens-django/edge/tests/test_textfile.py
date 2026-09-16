@@ -10,11 +10,17 @@ unscraped path), and an unwritable directory raises instead of being swallowed.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
+import math
 import os
+import re
 import stat
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from edge.ingest import textfile
@@ -90,3 +96,115 @@ def test_unwritable_directory_raises(tmp_path: Path, monkeypatch):
             textfile.emit_domain_metrics(_JOB, {"g": 1})
     finally:
         locked.chmod(0o700)
+
+
+# ---------------------------------------------------------------------------
+# #1462: a bad value is dropped and reported, never written and never raised.
+# Same rules as the pipeline writer; tests/test_textfile_writer_parity.py in the
+# research suite runs one case table through both.
+# ---------------------------------------------------------------------------
+
+_SAMPLE = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*(\{[^}]*\})? (?P<value>\S+)$")
+
+
+class _RuntimeErrorFloat(float):
+    def __float__(self) -> float:
+        raise RuntimeError("refuses to convert")
+
+
+class _KeyErrorInt(int):
+    def __int__(self) -> int:
+        raise KeyError("refuses to convert")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_latch(monkeypatch):
+    monkeypatch.setattr(textfile, "_LATCHED", set())
+
+
+def _assert_node_exporter_accepts(body: str) -> None:
+    for line in body.splitlines():
+        match = _SAMPLE.match(line)
+        assert match is not None, f"not a sample line: {line!r}"
+        assert math.isfinite(float(match.group("value"))), f"not finite: {line!r}"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        True,
+        False,
+        "1",
+        None,
+        Decimal(1),
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        np.bool_(True),
+        np.array(2.5),
+        dt.datetime(2026, 9, 16, tzinfo=dt.UTC),
+        Fraction(10**400, 1),
+        _RuntimeErrorFloat(1.0),
+        _KeyErrorInt(3),
+    ],
+    ids=[
+        "True",
+        "False",
+        "str",
+        "None",
+        "Decimal",
+        "nan",
+        "inf",
+        "-inf",
+        "np.bool_",
+        "0-d array",
+        "datetime",
+        "huge Fraction",
+        "RuntimeError float",
+        "KeyError int",
+    ],
+)
+def test_a_refused_value_is_dropped_counted_logged_and_not_raised(
+    tmp_path: Path, monkeypatch, caplog, value
+):
+    monkeypatch.setenv(textfile.ENV_VAR, str(tmp_path))
+
+    with caplog.at_level(logging.ERROR):
+        written = textfile.emit_domain_metrics(_JOB, {"bad_gauge": value, "good_gauge": 7})
+
+    body = written.read_text()
+    assert body == (f'good_gauge 7\n{textfile.INVALID_SAMPLES_METRIC}{{textfile="{_JOB}"}} 1\n')
+    _assert_node_exporter_accepts(body)
+    assert "bad_gauge" in caplog.text
+    assert [p.name for p in tmp_path.iterdir()] == [written.name]
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (3, "3"),
+        (1.5, "1.5"),
+        (1789545634.404397, "1789545634.404397"),
+        (15000.0, "15000.0"),
+        (np.int64(3), "3"),
+        (np.float64(1.5), "1.5"),
+        (np.float32(0.1), "0.10000000149011612"),
+        (Fraction(1, 4), "0.25"),
+    ],
+)
+def test_an_accepted_value_renders_exactly(tmp_path: Path, monkeypatch, value, text):
+    monkeypatch.setenv(textfile.ENV_VAR, str(tmp_path))
+
+    written = textfile.emit_domain_metrics(_JOB, {"g": value})
+
+    assert written.read_text() == f"g {text}\n"
+
+
+def test_a_persistent_defect_logs_once_and_a_recovery_re_arms(tmp_path: Path, monkeypatch, caplog):
+    monkeypatch.setenv(textfile.ENV_VAR, str(tmp_path))
+
+    with caplog.at_level(logging.INFO, logger=textfile.logger.name):
+        for value in (True, True, 1, True):
+            textfile.emit_domain_metrics(_JOB, {"g": value})
+
+    assert [r.levelname for r in caplog.records] == ["ERROR", "INFO", "ERROR"]

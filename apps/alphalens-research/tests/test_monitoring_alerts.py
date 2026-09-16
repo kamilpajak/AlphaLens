@@ -405,6 +405,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             "alphalens_rules_sync_",
             "alphalens_grafana_sync_",
             "alphalens_edge_",
+            "alphalens_textfile_",
         )
         for rule in rules:
             expr = rule.get("expr", "")
@@ -2008,6 +2009,53 @@ class TestJobFamilyMissing(unittest.TestCase):
         description = self._one().get("annotations", {}).get("description", "")
         self.assertIn("inconsistent metric help text", description)
         self.assertIn("#1461", description)
+
+
+class TestTextfileInvalidSample(unittest.TestCase):
+    """Pins for #1462: the page when a Python textfile writer drops a value.
+
+    The writers never raise for a value (the broker daemon calls them bare on
+    every tick and catches only ``OSError``); they drop it and append
+    ``alphalens_textfile_invalid_samples{textfile}`` ONLY when something was
+    dropped. A daemon rewrites that file clean 15-45 s later, so a plain
+    ``> 0`` would see the line for a scrape or two and never outlast a ``for:``.
+    ``max_over_time`` over 15m keeps a one-tick drop visible long enough to page.
+    """
+
+    ALERT = "AlphalensTextfileInvalidSample"
+
+    def _one(self) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_expr_keeps_a_one_tick_drop_visible(self) -> None:
+        self.assertEqual(
+            self._one()["expr"],
+            "max_over_time(alphalens_textfile_invalid_samples[15m]) > 0",
+        )
+
+    def test_has_a_debounce_shorter_than_the_window(self) -> None:
+        # A for: at or above the 15m window could never fire on a one-tick drop.
+        minutes = _for_minutes(self._one())
+        self.assertGreater(minutes, 0)
+        self.assertLess(minutes, 15)
+
+    def test_routes_warning_telegram_without_a_job_label(self) -> None:
+        rule = self._one()
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule["expr"]))
+        self.assertIn("{{ $labels.textfile }}", rule.get("annotations", {}).get("summary", ""))
+
+    def test_description_says_dropped_logged_once_and_never_raised(self) -> None:
+        description = self._one().get("annotations", {}).get("description", "")
+        for phrase in ("dropped", "logged once", "never raises", "#1462"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, description)
 
 
 if __name__ == "__main__":

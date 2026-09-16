@@ -552,13 +552,14 @@ def _emit_json(payload: Mapping[str, Any]) -> None:
 
     ``allow_nan=False`` because Python's default emits bare ``NaN`` /
     ``Infinity``, which are not JSON and are rejected by readers outside
-    Python. That is reachable from OUR OWN writer, not only from a hand-edited
-    file: ``observability.textfile`` renders a gauge as ``f"{expr} {value}"``,
-    and ``str()`` on a non-finite float gives lowercase ``nan`` / ``inf`` —
-    exactly the spelling ``_PROM_LINE_RE`` accepts and ``float()`` parses. (The
-    regex has no capital ``N`` or ``I``, so Prometheus' own ``NaN`` / ``+Inf``
-    would be skipped; ours would not.) Such a value used to land in the
-    ``stream-status`` envelope with exit 0.
+    Python. A lowercase ``nan`` / ``inf`` in a textfile is exactly the spelling
+    ``_PROM_LINE_RE`` accepts and ``float()`` parses (the regex has no capital
+    ``N`` or ``I``, so Prometheus' own ``NaN`` / ``+Inf`` would be skipped), and
+    such a value used to land in the ``stream-status`` envelope with exit 0.
+    Until #1462 our own ``observability.textfile`` produced that spelling; it
+    now drops a non-finite value instead, so this guard covers the other
+    writers of the directory (the bash hook, a hand-edited file, a future
+    emitter).
 
     A payload that cannot be rendered strictly is REFUSED, so stdout is either
     one valid JSON value or empty. Serialising half-valid output would defeat
