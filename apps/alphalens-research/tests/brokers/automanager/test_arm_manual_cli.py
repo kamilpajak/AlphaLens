@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -361,7 +362,7 @@ class ArmManualReadsNoFrameTest(unittest.TestCase):
         result = self.runner.invoke(broker_app, [*_HAPPY_ARGS, "--frame", "15000"])
 
         self.assertEqual(result.exit_code, 2)
-        self.assertIn("No such option", result.output)
+        self.assertIn("No such option", re.sub(r"\x1b\[[0-9;]*m", "", result.output))
 
     def test_the_currency_flag_is_required(self) -> None:
         from alphalens_cli.commands.broker import broker_app
@@ -370,7 +371,10 @@ class ArmManualReadsNoFrameTest(unittest.TestCase):
         result = self.runner.invoke(broker_app, args)
 
         self.assertEqual(result.exit_code, 2)
-        self.assertIn("--currency", result.output)
+        # Typer styles the usage error with ANSI codes when it thinks it has a
+        # terminal (it does on CI), which splits "--" from "currency".
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        self.assertIn("--currency", plain)
 
 
 class ArmManualLegacyLayoutGuardTest(unittest.TestCase):
