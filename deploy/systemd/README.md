@@ -2094,7 +2094,15 @@ rm ~/.config/systemd/user/alphalens-broker-capital-reader.{service,timer}
 rm -r ~/.config/systemd/user/alphalens-broker-capital-reader.service.d   # the grant drop-in
 rm ~/.config/systemd/user/alphalens-broker-manager-live.service.d/30-sizing-frame.conf
 rm ~/.config/systemd/user/alphalens-broker-manager.service.d/30-sizing-frame.conf
+# The SIM cash-floor switch lived in the file just removed; install its successor,
+# or SIM runs without a cash floor. LIVE carries the same line in its base unit.
+cp deploy/systemd/alphalens-broker-manager.service.d/30-cash-floor.conf \
+   ~/.config/systemd/user/alphalens-broker-manager.service.d/
+cp deploy/systemd/alphalens-broker-manager-live.service.d/30-max-pick-notional.conf \
+   ~/.config/systemd/user/alphalens-broker-manager-live.service.d/
 systemctl --user daemon-reload
+# Verify the switch is LOADED, not just on disk:
+systemctl --user show alphalens-broker-manager -p Environment | tr ' ' '\n' | grep SIZING_EQUITY_MODE
 # Stale textfiles would keep serving the retired gauges. The job file matters
 # most: AlphalensJobFailed matches every job, so a reader whose last run failed
 # would page for ever from a file nothing rewrites.
