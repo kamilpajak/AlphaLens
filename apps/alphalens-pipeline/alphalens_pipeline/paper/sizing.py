@@ -46,7 +46,8 @@ def validate_trade_setup(brief_trade_setup: dict) -> float:
     Exposed so a caller can ask "is this brief row plannable" without building
     a :class:`~broker_contract.trade_intent.schema.TradeSpec` (the population
     monitor does). The percent is the BRIEF's field; turning it into an amount
-    needs a frame, which only :func:`parse_brief_to_spec` takes.
+    needs a frame, which only the brief producer takes
+    (``alphalens_pipeline.thematic.brief_intent``).
     """
     if not isinstance(brief_trade_setup, dict):
         raise TradeSetupNotPlannableError(
@@ -91,20 +92,20 @@ def validate_trade_setup(brief_trade_setup: dict) -> float:
     return float(suggested_size_pct)
 
 
-def parse_brief_to_spec(brief_trade_setup: dict, *, frame: float, currency: str) -> TradeSpec:
+def parse_brief_to_spec(
+    brief_trade_setup: dict, *, notional_acct: float, currency: str
+) -> TradeSpec:
     """Parse a raw ``brief_trade_setup`` dict into a :class:`TradeSpec`.
 
     The brief states its size as a percent; the spec states an amount (#1467).
-    ``frame`` is the account-currency equity the operator sizes against, and
-    ``currency`` the account currency: ``notional_acct = pct / 100 x frame``.
-    Both come from the caller, never from the environment, so the amount is
-    fixed at arm time. This is interim until the brief producer states amounts
-    itself (#1469).
+    The caller decides the amount (``notional_acct``, in ``currency``, the
+    account currency) and passes it in, never the environment: the brief
+    producer turns the percent into an amount against a frame the operator
+    names, or takes the amount as given (#1469).
 
-    Kept in ``paper/sizing.py`` (not ``thematic/intent_builder.py``) — the
-    daemon still parses at drain time, so moving it now would introduce a
-    transient brokers->thematic import edge; PR-7 relocates it when the
-    parse moves to arm-time (memo section 2.3).
+    Kept in ``paper/sizing.py`` beside :func:`validate_trade_setup`, which the
+    population monitor also reads; its one production caller is the brief
+    producer, ``alphalens_pipeline.thematic.brief_intent``.
 
     Runs :func:`validate_trade_setup` FIRST so the same unplannable briefs
     raise :class:`~broker_contract.sizing.TradeSetupNotPlannableError` here as
@@ -115,9 +116,11 @@ def parse_brief_to_spec(brief_trade_setup: dict, *, frame: float, currency: str)
     so ``tier_index``/``tranche_index`` downstream stay the raw enumerate
     index either way.
     """
-    suggested_size_pct = validate_trade_setup(brief_trade_setup)
-    if not math.isfinite(frame) or frame <= 0:
-        raise TradeSetupNotPlannableError(f"frame={frame!r} must be a positive finite amount")
+    validate_trade_setup(brief_trade_setup)
+    if not math.isfinite(notional_acct) or notional_acct <= 0:
+        raise TradeSetupNotPlannableError(
+            f"notional_acct={notional_acct!r} must be a positive finite amount"
+        )
 
     entry_tiers_raw = brief_trade_setup["entry_tiers"]
     entry_tiers = tuple(
@@ -149,7 +152,7 @@ def parse_brief_to_spec(brief_trade_setup: dict, *, frame: float, currency: str)
         entry_tiers=entry_tiers,
         disaster_stop=disaster_stop,
         tp_tranches=tp_tranches,
-        size=PickSize(notional_acct=suggested_size_pct / 100.0 * frame, currency=currency),
+        size=PickSize(notional_acct=notional_acct, currency=currency),
         order_ttl_days=order_ttl_days,
         side="long",
     )

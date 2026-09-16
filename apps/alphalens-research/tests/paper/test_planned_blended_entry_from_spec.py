@@ -33,7 +33,7 @@ def _setup(*, entry_tiers) -> dict:
 class TestParityWithDictVersion(unittest.TestCase):
     def _assert_parity(self, entry_tiers: list[dict]) -> None:
         setup = _setup(entry_tiers=entry_tiers)
-        spec = parse_brief_to_spec(setup, frame=100_000.0, currency="USD")
+        spec = parse_brief_to_spec(setup, notional_acct=5_000.0, currency="USD")
         expected = planned_blended_entry(setup)
         actual = planned_blended_entry_from_spec(spec)
         if expected is None:

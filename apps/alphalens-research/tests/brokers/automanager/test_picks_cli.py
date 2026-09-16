@@ -13,7 +13,7 @@ alone suggested 45 pending placements, and a session reported two of them as a
 live anomaly. The states below are what makes that unambiguous.
 
 Lazy-import doctrine: patches target the SOURCE modules, exactly like
-test_arm_cli.py / test_disarm_cli.py.
+test_arm_intent_cli.py / test_disarm_cli.py.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from tests.brokers.automanager.test_arm_cli import _isolate_home
+from tests.brokers.automanager.cli_isolation import _isolate_home
 from tests.brokers.automanager.test_picks import _intent
 
 

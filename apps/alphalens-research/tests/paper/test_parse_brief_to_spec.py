@@ -20,8 +20,8 @@ from broker_contract.sizing import TradeSetupNotPlannableError
 from broker_contract.trade_intent.schema import EntryTierSpec, PickSize, TpTrancheSpec, TradeSpec
 
 
-def _parse(setup, *, frame: float = 100_000.0, currency: str = "USD") -> TradeSpec:
-    return parse_brief_to_spec(setup, frame=frame, currency=currency)
+def _parse(setup, *, notional_acct: float = 5_000.0, currency: str = "USD") -> TradeSpec:
+    return parse_brief_to_spec(setup, notional_acct=notional_acct, currency=currency)
 
 
 def _make_setup(
@@ -69,16 +69,21 @@ class TestFieldMapping(unittest.TestCase):
         spec = _parse(_make_setup())
         self.assertEqual(spec.side, "long")
 
-    def test_disaster_stop_carried_and_the_percent_becomes_an_amount(self):
-        # #1467: 4.2% of a 100000 frame is stated as 4200 in the account currency.
-        spec = _parse(_make_setup(disaster_stop=88.5, suggested_size_pct=4.2), currency="PLN")
+    def test_disaster_stop_and_the_given_amount_are_carried(self):
+        # #1469: the caller states the amount; the brief's percent is not read
+        # here, so 4.2 does not turn 1500 into anything else.
+        spec = _parse(
+            _make_setup(disaster_stop=88.5, suggested_size_pct=4.2),
+            notional_acct=1500.0,
+            currency="PLN",
+        )
         self.assertEqual(spec.disaster_stop, 88.5)
-        self.assertEqual(spec.size, PickSize(notional_acct=4200.0, currency="PLN"))
+        self.assertEqual(spec.size, PickSize(notional_acct=1500.0, currency="PLN"))
 
-    def test_a_non_positive_frame_is_not_plannable(self):
-        for frame in (0.0, -1.0, float("nan"), float("inf")):
-            with self.subTest(frame=frame), self.assertRaises(TradeSetupNotPlannableError):
-                _parse(_make_setup(), frame=frame)
+    def test_a_non_positive_amount_is_not_plannable(self):
+        for amount in (0.0, -1.0, float("nan"), float("inf")):
+            with self.subTest(amount=amount), self.assertRaises(TradeSetupNotPlannableError):
+                _parse(_make_setup(), notional_acct=amount)
 
     def test_all_entry_tiers_carried_in_order_including_non_positive_limit(self):
         """Sanitisation (dropping limit<=0) is the money half's job — parse

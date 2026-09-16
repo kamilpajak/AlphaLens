@@ -4,7 +4,7 @@ A thin shell over ``manual_intent.build_manual_intent``: the operator provides
 the levels agreed off-brief (the WhatsApp flow), the command compiles them
 into a full manual :class:`TradeIntent`, echoes the compiled result for
 verification, and appends it to the selected instance inbox via ``arm_pick``
-— the same seam `broker arm` uses. ``--dry-run`` does everything except the
+— the same seam `broker arm-intent` uses. ``--dry-run`` does everything except the
 append. Level/sizing rules live in ``test_manual_intent.py``; here we pin the
 CLI wiring only: option plumbing, the echo, the
 ``--env`` inbox seam and the legacy-layout guard.

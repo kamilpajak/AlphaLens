@@ -256,7 +256,7 @@ class TheHappyPath(_DoorCase):
         self.assertEqual(self.inbox_bytes(), b"")
 
     def test_an_unrenderable_envelope_refuses_without_arming(self) -> None:
-        """The `arm` precedent: render BEFORE the append, so a payload that
+        """Render BEFORE the append, so a payload that
         cannot be serialised strictly reports a failure for something that has
         NOT happened. Rendering afterwards would hand a client the
         `write_outcome_unknown` shape this group exists to keep out."""
@@ -737,6 +737,50 @@ class TheInstanceIsNeverAmbiguous(_DoorCase):
 
         self.assert_refused(result, "env_ambiguous")
         self.assertEqual(self.inbox_bytes(), b"")
+
+
+class TheLegacyLayoutGuardRunsFirst(_DoorCase):
+    """ADR 0016 D4: on a pre-ADR-0016 flat layout the door refuses before it
+    persists anything (moved from the deleted `test_arm_cli.py`, #1469)."""
+
+    def test_a_legacy_layout_refuses_and_creates_no_inbox(self) -> None:
+        from tests.brokers.automanager.cli_isolation import _seed_legacy_flat_state
+
+        _seed_legacy_flat_state(self.home)
+
+        result = self.arm(_document())
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("legacy flat broker state", result.output)
+        self.assertIn("Migrate into the per-environment layout", result.output)
+        self.assertFalse(self.inbox.exists())
+
+
+class TheDefaultInstanceMirrorsTheSeam(unittest.TestCase):
+    """`_DEFAULT_ARM_ENV` is a literal copy of `state_paths.ENV_SIM`, kept literal
+    so the option default needs no module-scope import (lazy-CLI doctrine)."""
+
+    def test_default_arm_env_matches_the_seam_sim_constant(self) -> None:
+        from alphalens_cli.commands import broker
+        from alphalens_pipeline.brokers.automanager import state_paths
+
+        self.assertEqual(broker._DEFAULT_ARM_ENV, state_paths.ENV_SIM)
+
+
+class BrokerArmIsGone(_DoorCase):
+    """#1469: the brief reader left the broker group. Until #1470 gives the name
+    to the door, `broker arm` is not a command at all."""
+
+    def test_the_group_registers_no_arm_command(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        self.assertNotIn("arm", {command.name for command in broker_app.registered_commands})
+
+    def test_the_old_brief_form_is_an_unknown_command(self) -> None:
+        result = self.invoke(["arm", "KO", "--date", "2026-09-16"])
+
+        # Exit 2 alone proves nothing: a usage error exits 2 too.
+        self.assertIn("No such command 'arm'", result.output)
 
 
 if __name__ == "__main__":

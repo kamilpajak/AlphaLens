@@ -19,7 +19,7 @@ from unittest import mock
 
 from typer.testing import CliRunner
 
-from tests.brokers.automanager.test_arm_cli import _isolate_home, _seed_legacy_flat_state
+from tests.brokers.automanager.cli_isolation import _isolate_home, _seed_legacy_flat_state
 
 _WINDOW_END = "2026-09-10T20:00:00+00:00"
 

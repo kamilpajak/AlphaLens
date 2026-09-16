@@ -7068,7 +7068,7 @@ def _resolve_and_size(
 
     PR-7 (broker-manager extraction memo §5): the brief-side parse
     (``parse_brief_to_spec``) and the exit-geometry build
-    (``build_exit_geometry_spec``) moved to arm-time (``arm_command``) — this
+    (``build_exit_geometry_spec``) moved to arm time, client-side — this
     helper now only runs the money half (``compute_setup_plan``) on the
     already-parsed ``spec`` the daemon received on the drained
     ``TradeIntent``. The caller reads ``intent.exit`` directly for the
@@ -9204,7 +9204,7 @@ def _place_pick(
     PR-7 (broker-manager extraction memo §5): the daemon never touches a
     brief any more — ``ticker``/``trade_date``/``spec``/``exit_spec`` are all
     read directly off the drained ``intent`` (the client already parsed +
-    validated the brief at arm time, in ``arm_command``)."""
+    validated the document at arm time, through the arming door)."""
     from broker_contract.contract import BrokerError
 
     from alphalens_pipeline.brokers.automanager import safety
@@ -9575,8 +9575,8 @@ def _handle_safety_refusal(
     journal their own refusals via ``_refuse_pick_terminal``) journals
     a refused line so the pick never retries — left armed it would retry
     every tick for days and then self-place a stale brief signal once
-    capacity frees. Re-arming via `alphalens broker arm` is the explicit
-    human path back. The transient rails (KILL file, dead chain,
+    capacity frees. Arming a new document through
+    `alphalens broker arm-intent` is the explicit human path back. The transient rails (KILL file, dead chain,
     ALLOW_ORDERS master arm, daily-loss lockout) keep the pick armed —
     an inert/paused daemon must never destroy the armed queue. The
     append is fallible I/O and must never crash the drain: on OSError

@@ -211,7 +211,7 @@
             "brief",
             "manual"
           ],
-          "description": "Where the intent came from: \"brief\" (parsed from a brief row by `broker arm`) or \"manual\" (operator-provided levels via `broker arm-manual`, #1235). Journals and later measurement separate the two populations on this marker; legacy payloads without the key decode to \"brief\".",
+          "description": "Where the intent came from: \"brief\" (a brief row, written by `thematic intent`) or \"manual\" (operator-provided levels via `broker arm-manual`, #1235). Journals and later measurement separate the two populations on this marker; legacy payloads without the key decode to \"brief\".",
           "default": "brief"
         },
         "generation": {

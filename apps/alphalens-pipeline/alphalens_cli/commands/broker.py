@@ -8,11 +8,10 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker account                 — account snapshot (cash / value / margin)
     alphalens broker positions               — open positions
     alphalens broker resolve KO [--exchange XNYS]  — instrument resolution (symbol -> Uic)
-    alphalens broker arm KO --date 2026-07-20 --frame 24000 --currency PLN
-        [--env sim|live]   — validate against the brief, turn its size percent
-        into an amount (percent / 100 x frame), append an "armed" pick to
-        <env>/picks.jsonl (the auto-manager hand-off seam; --env selects the
-        instance, default sim)
+    alphalens broker arm-intent FILE|- [--env sim|live]  — the arming door:
+        validate a TradeIntent document, derive its identity, append an
+        "armed" pick to <env>/picks.jsonl (the auto-manager hand-off seam).
+        A brief pick is written by `alphalens thematic intent` and piped in
     alphalens broker orders [--format json]  — open orders with side, type,
         resting amount, instrument (symbol, else `uic <n>`), ExternalReference
         + its human label (#1375)
@@ -63,7 +62,7 @@ names the instance without exporting anything; ``--env live`` additionally
 COMPOSES the process environment from the installed LIVE unit (rails +
 ``EnvironmentFile=``, see ``brokers/automanager/unit_env.py``), so a LIVE read
 runs in a plain shell and the one-off process is never armed. The arming
-commands (arm / arm-manual / disarm) keep defaulting to ``sim`` and REFUSE when
+commands (arm-intent / arm-manual / disarm) keep defaulting to ``sim`` and REFUSE when
 ``ALPHALENS_BROKER_ENVIRONMENT`` names another instance — a write must never be
 steered by an ambient variable (#1377).
 
@@ -115,20 +114,15 @@ broker_app = typer.Typer(
     no_args_is_help=True,
 )
 
-_DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
-
 # Status line shared by `broker auth --status` and `broker marketdata-auth
 # --status` — the column padding aligns with the sibling `access`/`store` rows.
 _REFRESH_DEAD_LINE = "refresh      DEAD"
 
-# Advisory-only instrument hint MIC stamped on every armed TradeIntent (PR-7,
-# broker-manager extraction memo section 5). The daemon resolves the REAL
-# instrument via resolve_us_instrument at drain time — this hint is
-# informational metadata for a human/future multi-exchange client, never used
-# for routing.
-_ARM_INSTRUMENT_MIC = "XNYS"
+# Default venue of `arm-manual --mic`. It goes with `arm-manual` (#1470); a brief
+# pick's venue is stamped by the brief producer (`thematic.brief_intent`).
+_DEFAULT_MANUAL_MIC = "XNYS"
 
-# `arm --env` default — mirrors state_paths.ENV_SIM, kept as a literal so the
+# `--env` default of the arming commands — mirrors state_paths.ENV_SIM, kept as a literal so the
 # option default is available without importing `state_paths` at module scope
 # (lazy-CLI doctrine, module docstring above). The real validation (and the
 # full sim/live vocabulary) is owned by the seam at call time, not here.
@@ -655,7 +649,7 @@ def _guard_ambient_instance(env: str | None, *, default: str) -> str:
     The read commands follow ``ALPHALENS_BROKER_ENVIRONMENT`` when no option is
     given; the arming commands default to ``sim`` so an ambient variable can
     never steer a WRITE. Those two rules disagree inside a shell that exports
-    ``live``: ``arm`` would write to SIM while ``picks`` showed LIVE, and the
+    ``live``: an arming command would write to SIM while ``picks`` showed LIVE, and the
     pick would look like it vanished. Rather than pick a winner silently, an
     unaccompanied write in such a shell refuses and asks for an explicit
     ``--env`` (#1377 review). An explicit option always wins, including
@@ -1461,135 +1455,6 @@ def resolve_command(
     typer.echo(f"currency      {ref.currency or 'n/a'}")
 
 
-@broker_app.command(name="arm")
-def arm_command(
-    ticker: str = typer.Argument(..., help="Plain ticker from the brief, e.g. KO."),
-    date: str = typer.Option(..., "--date", help="Brief date (YYYY-MM-DD)."),
-    frame: float = typer.Option(
-        ...,
-        "--frame",
-        help="Account-currency equity the brief's size percent applies to. The pick "
-        "arms with the resulting amount (percent / 100 x frame), fixed at arm time (#1467).",
-    ),
-    currency: str = typer.Option(
-        ..., "--currency", help="Account currency of the amount, ISO 4217 (e.g. PLN, USD)."
-    ),
-    briefs_dir: Path = typer.Option(
-        _DEFAULT_BRIEFS_DIR, "--briefs-dir", help="Thematic briefs parquet directory."
-    ),
-    env: str | None = typer.Option(
-        None,
-        "--env",
-        help="Broker instance inbox to arm into: 'sim' or 'live' (ADR 0016). Default: sim; an explicit value is REQUIRED when "
-        "ALPHALENS_BROKER_ENVIRONMENT names another instance (#1377).",
-    ),
-    output_format: str | None = _FORMAT_OPTION,
-) -> None:
-    """Arm a picked candidate — parse the brief into a TradeIntent client-side
-    and append it to the picks queue.
-
-    A PURE EXECUTOR: it carries no selection / filtering logic. After the
-    structural checks (parquet present, ticker present, row has a plannable
-    trade_setup) it parses the brief's trade_setup into a
-    :class:`~broker_contract.trade_intent.schema.TradeIntent` (memo
-    section 5, PR-7) and appends ONE 'armed' line carrying the full intent to
-    picks.jsonl. The VPS control loop drains the queue and never touches a
-    brief; this command places nothing.
-
-    No selection-policy filter (2026-08-03): the arm-time earnings-window gate
-    was removed. Selection filters — earnings-window avoidance included — belong
-    at brief-creation (the selection tier), so a filtered-out candidate never
-    reaches the brief. The client invoking arm is responsible for knowing what
-    it arms; the command never second-guesses it.
-
-    A pick belongs to exactly one instance (ADR 0016 D6): ``--env`` selects
-    which instance's inbox (``<env>/picks.jsonl``) the armed intent lands in,
-    via the ``state_paths`` seam — the daemon drains only its own inbox, so
-    cross-instance placement is impossible by construction.
-    """
-    from alphalens_pipeline.brokers.automanager import state_paths
-    from alphalens_pipeline.brokers.automanager.picks import arm_pick
-    from alphalens_pipeline.brokers.journal import JournalWriteError
-    from alphalens_pipeline.paper.brief_loader import load_brief
-    from alphalens_pipeline.paper.sizing import build_exit_declaration, parse_brief_to_spec
-    from broker_contract.sizing import TradeSetupNotPlannableError
-    from broker_contract.trade_intent.schema import InstrumentHint, IntentMeta, TradeIntent
-
-    resolved_format = _resolve_format(output_format)
-    env = _guard_ambient_instance(env, default=_DEFAULT_ARM_ENV)
-
-    try:
-        trade_date = dt.date.fromisoformat(date)
-    except ValueError as exc:
-        raise _fail_with("usage", f"invalid --date {date!r}: {exc}") from exc
-
-    try:
-        picks_target = state_paths.picks_path(env=env)
-    except ValueError as exc:
-        raise _fail_with("usage", str(exc)) from exc
-
-    _guard_state_layout()
-
-    try:
-        candidates = load_brief(trade_date, briefs_dir)
-    except (FileNotFoundError, ValueError) as exc:
-        raise _fail(str(exc)) from exc
-
-    wanted = ticker.upper()
-    candidate = next((c for c in candidates if c.ticker.upper() == wanted), None)
-    if candidate is None:
-        raise _fail(f"{wanted} not in the {trade_date} brief ({len(candidates)} candidates)")
-    if candidate.trade_setup is None:
-        raise _fail(f"{wanted}: no plannable trade_setup on {trade_date}")
-
-    try:
-        spec = parse_brief_to_spec(
-            candidate.trade_setup, frame=frame, currency=currency.strip().upper()
-        )
-    except TradeSetupNotPlannableError as exc:
-        raise _fail(f"{wanted}: trade_setup not plannable — {exc}") from exc
-
-    exit_spec = build_exit_declaration()
-
-    intent = TradeIntent(
-        intent_id=f"{wanted}:{trade_date.isoformat()}",
-        instrument=InstrumentHint(ticker=wanted, mic=_ARM_INSTRUMENT_MIC),
-        spec=spec,
-        exit=exit_spec,
-        meta=IntentMeta(
-            armed_ts=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
-            trade_date=trade_date.isoformat(),
-        ),
-    )
-    if resolved_format == _FORMAT_JSON:
-        # Render BEFORE the append: an unrenderable payload must refuse without
-        # having armed anything.
-        body = _render_json(
-            _envelope(
-                _ARM_SCHEMA,
-                env,
-                armed=True,
-                ticker=wanted,
-                trade_date=trade_date.isoformat(),
-                generation=intent.meta.generation,
-                intent_id=intent.intent_id,
-                picks_journal=str(picks_target),
-            )
-        )
-        try:
-            arm_pick(intent, path=picks_target)
-        except JournalWriteError as exc:
-            raise _queue_write_failed(exc, journal=picks_target) from exc
-        typer.echo(body)
-        return
-
-    try:
-        arm_pick(intent, path=picks_target)
-    except JournalWriteError as exc:
-        raise _queue_write_failed(exc, journal=picks_target) from exc
-    typer.echo(f"armed {wanted} @ {trade_date.isoformat()} -> {picks_target}")
-
-
 def _echo_manual_intent(intent: Any, *, blend: float) -> None:
     """Echo the compiled manual intent for operator verification (levels, blend, 1R, sizing)."""
     risk = blend - intent.spec.disaster_stop
@@ -1658,7 +1523,7 @@ def arm_manual_command(
         None, "--ttl-days", help="Entry TTL in sessions (default: contract default)."
     ),
     mic: str = typer.Option(
-        _ARM_INSTRUMENT_MIC,
+        _DEFAULT_MANUAL_MIC,
         "--mic",
         help="ISO 10383 MIC; supported: XNYS / XNAS / XWAR (GPW) / XETR (Xetra) / "
         "XPAR (Euronext Paris). LIVE on a European venue needs its market-data "
@@ -1683,7 +1548,7 @@ def arm_manual_command(
     watch, TTL, day-1 gap gate, daemon-wide stop management, Telegram) —
     the daemon never learns where a pick came from beyond ``meta.source``.
 
-    Same pure-executor doctrine as `arm`: no selection filter, no
+    Same pure-executor doctrine as `arm-intent`: no selection filter, no
     second-guessing; only level/sizing-consistency refusals. The intent arms
     with ``exit=None`` (static disaster stop + tranche TPs at placement; stop
     management is the daemon-wide policy — per-pick override is #1236).
@@ -2174,7 +2039,7 @@ def arm_intent_command(
 
     if resolved_format == _FORMAT_JSON:
         # Render BEFORE the append: an unrenderable payload must refuse without
-        # having armed anything (the `arm` precedent).
+        # having armed anything.
         body = _render_json(
             _envelope(
                 _ARM_INTENT_SCHEMA,
@@ -2237,7 +2102,7 @@ def disarm_command(
     """Disarm a picked candidate — retire the (ticker, date) pick from the
     queue AND cancel its open entry-trail watch tiers.
 
-    The operator counterpart of `arm`, a PURE EXECUTOR with no selection
+    The operator counterpart of `arm-intent`, a PURE EXECUTOR with no selection
     logic: it disarms exactly the named (ticker, date) identity. Two
     append-only writes, in a strict order:
 
@@ -2253,11 +2118,10 @@ def disarm_command(
 
     Watch-refusal-first means a refused disarm leaves BOTH journals
     untouched; a repeated disarm is idempotent (zero open tiers -> zero
-    cancelled lines, one more terminal queue line). Re-arming the SAME
-    (ticker, date, generation) works queue-side but will NOT re-open its watch
-    tiers (deterministic crids stay terminal); the path back is
-    `broker arm-manual`, which assigns the NEXT generation (#1371) with its
-    own crids, or a fresh brief date. Best-effort vs the running daemon: it can arm a native trail
+    cancelled lines, one more terminal queue line). A disarmed generation is
+    never re-armed (its crids stay terminal, and the door refuses the key); the
+    path back is a new document through `broker arm-intent`, which takes the
+    NEXT generation (#1371) with its own crids. Best-effort vs the running daemon: it can arm a native trail
     between the read and the write; rerun after `broker cancel` if refused.
 
     Crash recovery: dying between the two writes leaves the watch cancelled
@@ -3377,7 +3241,6 @@ def manage_command(
 # ``stream-status`` result contract version (rearm design memo §6 INC-6).
 # Within this major version fields are only ever ADDED, never renamed/retyped.
 _ACCOUNT_SCHEMA = "alphalens.broker.account/v1"
-_ARM_SCHEMA = "alphalens.broker.arm/v1"
 _ARM_MANUAL_SCHEMA = "alphalens.broker.arm-manual/v1"
 _ARM_INTENT_SCHEMA = "alphalens.broker.arm-intent/v1"
 _CANCEL_SCHEMA = "alphalens.broker.cancel/v1"

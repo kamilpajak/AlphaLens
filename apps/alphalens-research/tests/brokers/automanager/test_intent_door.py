@@ -239,8 +239,8 @@ class ARetryCannotBecomeASecondLivePick(unittest.TestCase):
         self.assertEqual(completion.document["meta"]["generation"], 1)
 
     def test_us_venues_are_one_venue(self) -> None:
-        """Routing probes XNYS, XNAS and XASE together, and `arm` stamps every
-        brief pick XNYS, so a manual XNAS pick would trade the same instrument."""
+        """Routing probes XNYS, XNAS and XASE together, and the brief producer stamps
+        every brief pick XNYS, so a manual XNAS pick would trade the same instrument."""
         document = _author()
         document["instrument"]["mic"] = "XNAS"
         with self.assertRaises(intent_door.PickAlreadyArmedError):

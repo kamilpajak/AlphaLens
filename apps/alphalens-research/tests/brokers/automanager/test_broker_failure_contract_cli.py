@@ -335,7 +335,7 @@ class TheFormatHandleDoesNotLeakBetweenCommands(_FailureCliCase):
 class AMutatorRendersBeforeItWrites(unittest.TestCase):
     """A command that appends must not report a failure for work it already did.
 
-    `arm` used to write the pick and THEN serialise the envelope. An
+    `broker arm` (deleted in #1469) used to write the pick and THEN serialise the envelope. An
     unrenderable payload would have exited non-zero with the pick queued —
     exactly the `write_outcome_unknown` shape this ticket exists to keep out of
     a client's hands, manufactured by our own renderer. Pinned by source order
@@ -344,7 +344,7 @@ class AMutatorRendersBeforeItWrites(unittest.TestCase):
     a structural check instead of a behavioural one.
     """
 
-    ARMING_COMMANDS = ("arm_command", "arm_manual_command")
+    ARMING_COMMANDS = ("arm_intent_command", "arm_manual_command")
 
     def test_the_json_branch_renders_before_it_arms(self) -> None:
         tree = _module_ast()
