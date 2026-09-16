@@ -43,11 +43,21 @@ _GENERATOR_OWNED_KEYWORDS: frozenset[str] = frozenset(
 )
 
 
+# What the arming door does with a field (#1468). Absent = the author writes
+# exactly what is stored.
+#   derived   the door computes it and REFUSES it on input
+#   filled    optional on input; the door fills it when absent (`when_absent` says how)
+#   required  required on input although the stored field has a default for history
+DOOR_ROLES: frozenset[str] = frozenset({"derived", "filled", "required"})
+
+
 def contract_field(
     meaning: str,
     *,
     default: Any = MISSING,
     json_schema: dict[str, Any] | None = None,
+    door: str | None = None,
+    when_absent: str | None = None,
 ) -> Any:
     """Declare a contract field together with what its value MEANS.
 
@@ -68,6 +78,11 @@ def contract_field(
     from the field itself raises too: ``description`` there would silently REPLACE
     the meaning in the published document, and the allowlist gate counts fields
     rather than reading inside them.
+
+    ``door`` names what the arming door does with the field (``DOOR_ROLES``); the
+    generator reads it to publish the INPUT shape beside the stored one. A
+    ``filled`` field must say in ``when_absent`` what the door puts there, and a
+    ``required`` role needs a stored default to override.
     """
     if not meaning.strip():
         raise ValueError("a contract field must say what its value means")
@@ -77,7 +92,17 @@ def contract_field(
             f"json_schema must not set {sorted(generated)} — the generator emits "
             "those from the field itself, and an override here would be invisible"
         )
+    if door is not None and door not in DOOR_ROLES:
+        raise ValueError(f"door role {door!r} is not one of {sorted(DOOR_ROLES)}")
+    if (door == "filled") != bool(when_absent and when_absent.strip()):
+        raise ValueError("a filled field, and only a filled field, says what absent means")
+    if door == "required" and default is MISSING:
+        raise ValueError("a required door role overrides a stored default; this field has none")
     metadata: dict[str, Any] = {"meaning": meaning}
+    if door is not None:
+        metadata["door"] = door
+    if when_absent:
+        metadata["when_absent"] = when_absent
     if json_schema:
         metadata["json_schema"] = dict(json_schema)
     if default is MISSING:
@@ -137,7 +162,12 @@ class EntryTierSpec:
     alloc_pct: float = contract_field(
         "PERCENTAGE of the pick's notional, 0-100 — not a fraction. The rungs sum to 100."
     )
-    tag: str = contract_field('Free-text rung label, e.g. "T1". No sizing semantics.', default="")
+    tag: str = contract_field(
+        'Free-text rung label, e.g. "T1". No sizing semantics.',
+        default="",
+        door="filled",
+        when_absent='"T<n>", the 1-based position of the rung in the ladder.',
+    )
     entry_mode: Literal["pullback", "immediate"] = contract_field(
         '"pullback" rests below the market; "immediate" is an arm-manual now tranche.',
         default="pullback",
@@ -162,11 +192,17 @@ class TpTrancheSpec:
         "less than 100: that is a deliberate runner, not an error."
     )
     r_multiple: float = contract_field(
-        "Label only: the tranche's distance in R (multiples of initial risk). No sizing semantics.",
+        "Label only: the tranche's distance in R (multiples of initial risk), computed "
+        "by the arming door as (price - planned blend) / (planned blend - disaster "
+        "stop). No sizing semantics.",
         default=0.0,
+        door="derived",
     )
     tag: str = contract_field(
-        'Free-text tranche label, e.g. "TP1". No sizing semantics.', default=""
+        'Free-text tranche label, e.g. "TP1". No sizing semantics.',
+        default="",
+        door="filled",
+        when_absent='"TP<n>", the 1-based position of the tranche in the ladder.',
     )
 
 
@@ -335,11 +371,20 @@ class ExitGeometrySpec:
 class IntentMeta:
     """Wire-friendly provenance for a :class:`TradeIntent` (no datetime dep)."""
 
-    armed_ts: str = contract_field("ISO-8601 timestamp of the moment the pick was armed.")
+    armed_ts: str = contract_field(
+        "ISO-8601 timestamp of the moment the pick was armed, set by the arming door. "
+        "A replace of an armed, unplaced pick keeps the timestamp of the line it "
+        "replaces: the immediate tier's idempotency is keyed on it.",
+        door="derived",
+    )
     trade_date: str = contract_field(
         "YYYY-MM-DD. Date key of the record — pick identity, TTL anchor, reconcile "
-        "join. For a manual pick (no brief row) this is the arm date; provenance "
-        "lives in `source`, not in this field's name (#1252)."
+        "join, day-1 gap gate anchor. For a manual pick (no brief row) this is the arm "
+        "date; provenance lives in `source`, not in this field's name (#1252).",
+        door="filled",
+        when_absent="the next session of instrument.mic that has not closed at the "
+        'moment of arming. Refused when absent on a "brief" document: a brief\'s '
+        "date is a fact the door cannot derive.",
     )
     schema_version: str = contract_field(
         "Wire version of the document. A consumer reads this one.", default=SCHEMA_VERSION
@@ -350,6 +395,7 @@ class IntentMeta:
         "Journals and later measurement separate the two populations on this marker; "
         'legacy payloads without the key decode to "brief".',
         default="brief",
+        door="required",
     )
     # `broker arm-manual` assigns 1 + the highest generation already queued for
     # (ticker, trade_date); a disarmed generation never comes back. Generation 1
@@ -363,6 +409,9 @@ class IntentMeta:
         "resubmission REPLACES rather than duplicates.",
         default=1,
         json_schema={"minimum": 1},
+        door="filled",
+        when_absent="the next free generation of (ticker, trade_date). Refused while "
+        "another pick on the same ticker and venue is armed and unplaced.",
     )
 
 
@@ -380,7 +429,11 @@ class TradeIntent:
     (memo section 5, PR-7).
     """
 
-    intent_id: str = contract_field("Client-authored idempotency key.")
+    intent_id: str = contract_field(
+        'Identity label set by the arming door: "TICKER:DATE" for a brief pick, '
+        '"TICKER:DATE:manual" for a manual one, with "-g<N>" after generation 1.',
+        door="derived",
+    )
     instrument: InstrumentHint = contract_field("What is being traded, and where.")
     spec: TradeSpec = contract_field("The unsized trade: entry ladder, stop, TP ladder, size.")
     meta: IntentMeta = contract_field("Provenance and identity of this document.")

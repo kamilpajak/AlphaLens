@@ -60,7 +60,7 @@ breaking change, so `unclassified` must never be a branch condition. Read it as
 | `env_ambiguous` | CLI | no | The shell names one broker instance and a queue-writing command defaults to another. Pass `--env` explicitly (#1377). |
 | `live_refused` | CLI | no | A LIVE broker could not be built: the LIVE rails or auth surface are absent from the process (ADR 0017). |
 | `state_layout` | CLI | no | Durable broker state is still in the pre-migration flat layout (ADR 0016 D4). |
-| `pick_already_armed` | CLI | no | A live earlier generation of this (ticker, trade date) is still armed. Carries a `suggestions` argv. |
+| `pick_already_armed` | CLI | no | Another pick on this ticker is still armed: a live generation of the same (ticker, trade date), or an unplaced pick on the same venue under any date. `details` names its `armed_trade_date` and `armed_generation`. Carries a `suggestions` argv. |
 | `pick_not_writable` | CLI | no | This pick key cannot take a write: the generation was disarmed or refused, or the daemon has already placed it. `details.reason` is `generation_spent` or `already_placed`. Carries a `suggestions` argv. |
 | `intent_malformed` | CLI | no | The submitted document does not match the published wire contract. `details.reason` names which gate refused it (see below). Nothing was queued. |
 | `venue_unsupported` | CLI | no | The document is well formed; this deployment does not trade that MIC. `details.mic` carries the venue. A venue list is deployment knowledge, never a document rule (#1122, #1404). |
@@ -101,10 +101,12 @@ deployment take it (`venue_unsupported`, `pick_not_writable`).
 |---|---|---|
 | `intent_malformed` | `not_json` | the bytes are not a JSON document |
 | | `duplicate_key` | an object repeats a key; `json` parsers keep the LAST silently, so the value you sent first would vanish |
-| | `envelope_unknown` | a top-level `schema` that this door does not publish, or one with no `intent` inside |
+| | `derived_field_supplied` | the document carries `intent_id`, `meta.armed_ts` or a `r_multiple`, which the door computes; `details.paths` lists them |
 | | `schema_version_unsupported` | `meta.schema_version` is not the version this door speaks |
-| | `schema_violation` | the document fails the published JSON Schema; `details.path` locates it |
+| | `schema_violation` | the document fails the published input JSON Schema; `details.path` locates it |
 | | `undecodable` | the shape passes but the decoder refuses it (e.g. `generation: 1.0` — JSON Schema calls that an integer, identity strings cannot) |
+| | `trade_date_malformed` | `meta.trade_date` is not a `YYYY-MM-DD` date |
+| | `trade_date_required` | a `"brief"` document with no `meta.trade_date`: day 1 of a brief pick is the session after its brief date, which the door cannot know |
 | | `key_discarded` | a key the decoder would DROP, so the arm would not carry what you sent; `details.paths` lists them |
 | `pick_not_writable` | `generation_spent` | that generation was disarmed or refused; a spent generation never comes back |
 | | `already_placed` | the daemon has already placed this pick, so rewriting it would change the queue and not the market |
@@ -190,10 +192,22 @@ Exit statuses stay coarse — the domain detail is in `code`:
 
 ## The document schema (#1405)
 
-The wire shape of a `TradeIntent` is published as JSON Schema at
-[`docs/trade-intent-v3.schema.json`](docs/trade-intent-v3.schema.json). It is
-**generated** from `broker_contract/trade_intent/schema.py`, never hand-edited,
-and CI fails when the committed file and a fresh generation disagree:
+The wire shape of a `TradeIntent` is published as JSON Schema in two shapes,
+both **generated** from `broker_contract/trade_intent/schema.py`, never
+hand-edited; CI fails when a committed file and a fresh generation disagree:
+
+| artefact | what it describes |
+|---|---|
+| [`docs/trade-intent-input-v3.schema.json`](docs/trade-intent-input-v3.schema.json) | what an AUTHOR sends to the door (#1468) |
+| [`docs/trade-intent-v3.schema.json`](docs/trade-intent-v3.schema.json) | what the journal stores and the drain decodes |
+
+The input shape is the stored one with each field's `door` role applied: a
+**derived** field (`intent_id`, `meta.armed_ts`, `tp_tranches[].r_multiple`) is not
+described at all and is refused if sent; a **filled** field (`meta.trade_date`,
+`meta.generation`, the tier and tranche `tag`) is optional and its description says
+what the door puts there; `meta.source` is **required**, because its stored
+default `"brief"` exists for old journal lines and moves the day-1 gate by a
+session.
 
 ```
 python -m broker_contract.trade_intent.json_schema --write
@@ -219,13 +233,11 @@ producer must send `trade_date`. That gap is a decision, pinned by a test.
 
 **Identity, because a retry depends on it.** The queue folds picks on
 `(ticker, trade_date, generation)` and keeps the LATEST, so re-submitting a pick
-**replaces** it rather than adding a second one. A document that omits
-`generation` is generation 1. Who assigns it depends on the producer:
-`arm-manual` takes `1 +` the highest already recorded for that ticker and date
-(whatever became of it), while a document submitted to the door carries its own
-— and the door then checks that the key it names still takes a write. The rules
-are in the next section, and they are the difference between "your retry landed"
-and "you replaced someone else's pick".
+with its generation **replaces** it rather than adding a second one. A document
+that omits `generation` asks for a NEW pick: the door takes `1 +` the highest
+already recorded for that ticker and date (whatever became of it). The rules are
+in the next section, and they are the difference between "your retry landed" and
+"you replaced someone else's pick".
 
 **Which `schema_version` to read, and what it does.** `meta.schema_version` is
 the document's version; `spec.schema_version` is the same constant duplicated in
@@ -263,52 +275,104 @@ major version, fields are only ADDED and only as optional — and the CI gate on
 the generated artefact is what enforces it.
 
 
-## The door: submitting a ready document (#1406)
+## The door: submitting a document (#1406, #1468)
 
 ```
 alphalens broker arm-intent <path|-> [--env sim|live] [--dry-run] [--format human|json]
 ```
 
-A producer that can write JSON does not need a command of its own. `arm` parses
-a brief, `arm-manual` compiles operator levels, and both then build the same
-artefact; this takes that artefact directly. Either a bare `TradeIntent` or one
-of this group's own envelopes is accepted — `arm-manual --format json` pipes
-straight in — and both roads queue the same bytes. An envelope this door does
-not publish is refused rather than peeled hopefully.
+A producer that can write JSON does not need a command of its own. The author
+writes the TRADE and nothing the door can compute:
 
-**Four gates on the document, in order.** Each answers a different question, and
+```json
+{
+  "instrument": {"ticker": "KO", "mic": "XNYS"},
+  "spec": {
+    "entry_tiers": [
+      {"limit_price": 60.0, "alloc_pct": 75.0},
+      {"limit_price": 58.0, "alloc_pct": 25.0}
+    ],
+    "disaster_stop": 55.0,
+    "tp_tranches": [{"price": 66.0, "tranche_pct": 50.0}],
+    "size": {"notional_acct": 1500.0, "currency": "EUR"}
+  },
+  "meta": {"source": "manual"}
+}
+```
+
+The door then derives, and journals:
+
+| field | value |
+|---|---|
+| `intent_id` | `TICKER:DATE` for a brief pick, `TICKER:DATE:manual` for a manual one, `-g<N>` after generation 1 |
+| `meta.armed_ts` | the moment of arming; a replace KEEPS the `armed_ts` of the line it replaces |
+| `meta.trade_date` | when absent: the next session of `instrument.mic` that has not closed (during a session, that session; after the close or on a holiday, the next one). Required on a `"brief"` document |
+| `meta.generation` | when absent: the next free generation of (ticker, trade_date) |
+| tags | when absent: `T1`, `T2`, … and `TP1`, `TP2`, … |
+| `r_multiple` | `(price - blend) / (blend - stop)`, `blend` being the alloc-weighted planned entry |
+
+`--dry-run` echoes all of it, with the account-currency amount of each tier, and
+`--format json` answers with the full stored document under `intent`. The door
+does not unwrap envelopes: a document is the bare input shape above.
+
+Why the door computes these rather than trusting the author: `armed_ts` is the
+idempotency key of an immediate tier, so a fresh value on a retry sends that tier
+again; `trade_date` anchors the day-1 gap gate, and "today at the exchange" would
+give a US pick armed after the New York close a session that has already closed;
+and a non-finite `r_multiple` used to leave a take-profit ladder unmanaged.
+
+**Gates on the document, in order.** Each answers a different question, and
 none of them is implied by another:
 
 | gate | question | refusal |
 |---|---|---|
-| JSON Schema | is it the published SHAPE? | `intent_malformed` / `schema_violation` |
+| derived fields | did the author send what the door computes? | `intent_malformed` / `derived_field_supplied` |
+| JSON Schema | is it the published INPUT shape? | `intent_malformed` / `schema_violation` |
+| version | does it state a version this door does not speak? | `intent_malformed` / `schema_version_unsupported` |
+| venue | does this deployment trade the MIC? | `venue_unsupported` |
+| identity | is `generation` a real integer, `trade_date` a date? | `intent_malformed` / `undecodable`, `trade_date_malformed` |
+| the pick key | see the table below | `pick_already_armed`, `pick_not_writable` |
 | the codec | can it be decoded? | `intent_malformed` / `undecodable` |
 | the fixed point | does every key you sent survive decoding? | `intent_malformed` / `key_discarded` |
 | `validate_intent` | is the document COHERENT? | `intent_invalid` |
 
-The third gate is the one a reader is most likely to think redundant. It is not:
+The fixed point is the gate a reader is most likely to think redundant. It is not:
 the decoder drops keys it does not model with only a log line, which is sensible
 forward compatibility for a daemon reading its own journal and wrong for a door
 that arms money. Without it a typo'd `limit_pirce` is discarded and the pick
 arms at the price you did NOT send. The parser refuses a repeated JSON key for
 the same reason — `json.loads` keeps the last silently.
 
-The second gate is not redundant either, and the reason is worth stating because
-it cannot be fixed: JSON Schema defines `integer` as any number with zero
+The identity check is not redundant either, and the reason is worth stating
+because it cannot be fixed: JSON Schema defines `integer` as any number with zero
 fractional part, so `"generation": 1.0` passes the schema, while the identity
-strings built from that field require a real integer (#1371).
+strings built from that field require a real integer (#1371). It runs before the
+pick key is read, so the derivation never sees such a value.
 
-**Then two questions about the deployment, not the document.** Is the venue one
-this deployment trades (`venue_unsupported`), and does the pick key still take a
-write:
+**The pick key.** Venue is checked before it, because deriving a date reads the
+MIC's calendar. Then:
 
-| state of `(ticker, trade_date, generation)` | what happens |
+| state | what happens |
 |---|---|
-| the queue has never seen it | armed — a new pick |
-| armed, and the daemon has not placed it | armed — **this is the idempotent replace**, the retry-after-timeout path |
-| armed, but already placed | refused, `pick_not_writable` / `already_placed` |
-| disarmed or refused | refused, `pick_not_writable` / `generation_spent` |
-| a DIFFERENT generation of that key is still armed | refused, `pick_already_armed` |
+| no `generation` sent, and nothing on that (ticker, trade_date) is armed | armed — a new pick, the next free generation |
+| no `generation` sent, and a pick on that (ticker, trade_date) is armed, placed or not | refused, `pick_already_armed` |
+| `generation` sent, the queue has never seen that key | armed — a new pick |
+| `generation` sent, armed, and the daemon has not placed it | armed — **this is the idempotent replace**, the retry-after-timeout path; `armed_ts` is kept |
+| `generation` sent, armed, but already placed | refused, `pick_not_writable` / `already_placed` |
+| `generation` sent, disarmed or refused | refused, `pick_not_writable` / `generation_spent` |
+| a DIFFERENT generation of that (ticker, trade_date) is still armed | refused, `pick_already_armed` |
+| any other armed, UNPLACED pick on the same ticker and venue, under any date | refused, `pick_already_armed` |
+
+The last row closes a retry across midnight: without it, a re-sent document
+whose `trade_date` the door derives a day later would be a second live pick on
+the same instrument. XNYS, XNAS and XASE count as one venue, because routing
+probes them together. A pick that stays armed and unplaced (for example one whose
+tiers size to zero shares) therefore blocks its ticker until it is disarmed; the
+refusal names it and the `disarm` command.
+
+Because a replace keeps `armed_ts`, it cannot re-open an immediate tier the daemon
+already handled, including one it refused above its cap. A new cap is `disarm`
+followed by a new document, which gets a new generation.
 
 The last three are refusals for reasons that were measured rather than assumed.
 Re-sending a document after `disarm` used to bring a cancelled pick back to
@@ -330,5 +394,5 @@ does not refuse a LIVE `--env` when the LIVE rails are absent, because arming is
 not placing: the rails gate the daemon, and the guard that does exist here is
 the refusal to take the instance off an ambient environment variable (#1377).
 Concurrent submitters are not serialised; the key check reads the fold and then
-appends, so two processes racing on one key can both pass it — the same shape
+appends, so two processes racing on one ticker can both pass it — the same shape
 `arm-manual` has.

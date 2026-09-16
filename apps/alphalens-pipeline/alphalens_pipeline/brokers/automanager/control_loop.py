@@ -9138,7 +9138,8 @@ def _classify_now_broker_error(
         if alert_throttled is not None:
             alert_throttled(
                 f"now tranche {ticker}: rejected by the venue price-tolerance check "
-                f"({exc}) — NOT entered; re-arm with a fresh cap if the signal stands",
+                f"({exc}) — NOT entered; if the signal stands, disarm the pick and arm a "
+                "new document with a fresh cap (a replace keeps this tier done)",
                 f"now-reject:{ticker}",
             )
         return "refused_reject"
@@ -9171,7 +9172,8 @@ def _refuse_now_above_cap(
         alert_throttled(
             f"now tranche {refs.ticker}: price above cap "
             f"({float(point.ask):.4f} > {submitted_cap:.4f}) — NOT entered; "
-            "re-arm with a fresh cap if the signal stands",
+            "if the signal stands, disarm the pick and arm a new document with a fresh "
+            "cap (a replace keeps this tier done)",
             f"now-cap:{refs.ticker}",
         )
 

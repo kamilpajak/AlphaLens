@@ -324,6 +324,31 @@ def session_close_utc(
     return cal.session_close(ts).to_pydatetime().astimezone(dt.UTC)
 
 
+def session_not_closed(
+    now_utc: dt.datetime,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> dt.date:
+    """The first ``exchange`` session whose close is still ahead of ``now_utc``.
+
+    During a session that is the session itself; after its close, before the
+    next open, on a weekend or a holiday it is the next session. The arming door
+    gives this date to a pick that states none (#1468), because the day-1 gap gate
+    anchors on it: a plain calendar date at the exchange would give a US pick
+    armed after the New York close a session that has already closed.
+
+    ``now_utc`` must be timezone-aware; a naive moment raises ``ValueError``
+    rather than being guessed as UTC on the money path.
+    """
+    if now_utc.tzinfo is None:
+        raise ValueError("now_utc must be timezone-aware")
+    # One day back covers a venue ahead of UTC, whose session may carry the
+    # previous UTC date and still be open.
+    session = session_on_or_after(now_utc.date() - dt.timedelta(days=1), exchange=exchange)
+    while session_close_utc(session, exchange=exchange) <= now_utc:
+        session = advance_trading_sessions(session, 1, exchange=exchange)
+    return session
+
+
 def trading_days_elapsed(
     start: DateLike,
     end: DateLike,

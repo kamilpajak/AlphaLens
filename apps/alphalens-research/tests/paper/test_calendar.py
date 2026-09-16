@@ -34,6 +34,7 @@ from alphalens_pipeline.paper.calendar import (
     next_trading_open,
     previous_trading_day,
     session_close_utc,
+    session_not_closed,
     session_on_or_after,
     session_open_utc,
     trading_days_elapsed,
@@ -418,3 +419,57 @@ class TestSessionCloseUtc(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSessionNotClosed(unittest.TestCase):
+    """The date the arming door gives a pick with no `trade_date` (#1468): the
+    session that has not closed yet at the moment of arming. A plain "local date
+    at the exchange" would hand a US pick armed after the New York close a closed
+    session, and the day-1 gap gate would treat it as already past."""
+
+    def _at(self, stamp: str) -> dt.datetime:
+        return dt.datetime.fromisoformat(stamp)
+
+    def test_during_a_session_it_is_that_session(self) -> None:
+        self.assertEqual(
+            session_not_closed(self._at("2026-09-16T15:00:00+00:00"), "XNYS"),
+            dt.date(2026, 9, 16),
+        )
+
+    def test_after_the_close_it_is_the_next_session(self) -> None:
+        self.assertEqual(
+            session_not_closed(self._at("2026-09-16T20:00:00+00:00"), "XNYS"),
+            dt.date(2026, 9, 17),
+        )
+
+    def test_before_the_open_in_utc_terms_of_the_next_day(self) -> None:
+        self.assertEqual(
+            session_not_closed(self._at("2026-09-17T01:30:00+00:00"), "XNYS"),
+            dt.date(2026, 9, 17),
+        )
+
+    def test_a_weekend_rolls_to_monday(self) -> None:
+        self.assertEqual(
+            session_not_closed(self._at("2026-09-19T12:00:00+00:00"), "XNYS"),
+            dt.date(2026, 9, 21),
+        )
+
+    def test_a_holiday_is_skipped(self) -> None:
+        self.assertEqual(
+            session_not_closed(self._at("2026-12-24T22:00:00+00:00"), "XNYS"),
+            dt.date(2026, 12, 28),
+        )
+
+    def test_a_european_venue_uses_its_own_hours(self) -> None:
+        self.assertEqual(
+            session_not_closed(self._at("2026-09-17T01:30:00+00:00"), "XWAR"),
+            dt.date(2026, 9, 17),
+        )
+        self.assertEqual(
+            session_not_closed(self._at("2026-09-17T16:00:00+00:00"), "XWAR"),
+            dt.date(2026, 9, 18),
+        )
+
+    def test_a_naive_moment_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            session_not_closed(dt.datetime(2026, 9, 16, 15), "XNYS")

@@ -1,28 +1,22 @@
-"""CLI tests for `alphalens broker arm-intent` — the raw-document door (#1406).
+"""CLI tests for `alphalens broker arm-intent` — the document door (#1406, #1468).
 
-The last step of #1403. `intent_from_jsonable` had exactly one caller in the
-tree, on the DRAIN side; nothing accepted a ready document on the way IN, so
-every new producer had to become another Typer command. This door takes the
-document itself, so `arm`, `arm-manual` and `arm-intent` become three producers
-of one artefact rather than three ways into the daemon.
+The door takes a ready document, so a producer needs JSON rather than a Typer
+command of its own. Since #1468 the author writes only the TRADE; the door
+derives identity and labels. What is pinned here, and why each one is not
+obvious:
 
-What is pinned here, and why each one is not obvious:
-
-1. **Round trip across two producers.** What `arm-manual` emits, fed back
-   through this door, queues a BYTE-IDENTICAL journal line. Both the envelope
-   and the bare intent are accepted, and both give the same bytes.
+1. **What the door derives, it refuses on input** — `intent_id`, `armed_ts`,
+   `r_multiple` — and what it fills (`trade_date`, `generation`, tags) is
+   journaled, so the author can see it in the dry run.
 2. **Every refusal leaves the inbox untouched** — asserted on the file's bytes,
    not merely on a non-zero exit. A door that refused after appending would be
    worse than no door.
-3. **The writability table** (measured 2026-09-11, and the reason the first
-   draft of this ticket was wrong): resubmitting a document after `disarm`
-   RESURRECTED the pick, and resubmitting after the daemon had placed it
-   rewrote a queue line nobody would ever act on, because the drain skips keys
-   already in `submissions.jsonl`. Both are refusals now, each with a positive
-   control beside it.
+3. **The writability table** (measured 2026-09-11): resubmitting after `disarm`
+   RESURRECTED the pick, and resubmitting after the daemon had placed it rewrote
+   a queue line nobody would ever act on. Both are refusals, each with a positive
+   control beside it. A replace keeps the `armed_ts` of the line it replaces.
 4. **Silent losses.** A typo'd key and a duplicate JSON key both used to arrive
-   as a pick carrying a value the client never sent — the codec drops unknown
-   keys with a log line, and `json.loads` keeps the LAST of a repeated key.
+   as a pick carrying a value the client never sent.
 5. **No "LIVE without rails refuses" test.** Measured: it does not, and it never
    did. Arming is not placing; the rails gate the daemon. The real guard is the
    ambiguous-shell refusal, and that is what is asserted.
@@ -39,24 +33,7 @@ from unittest import mock
 
 from typer.testing import CliRunner
 
-_ARM_MANUAL_ARGS = [
-    "arm-manual",
-    "nvo",
-    "--tier",
-    "72.5:60",
-    "--tier",
-    "70.0:40",
-    "--stop",
-    "66.0",
-    "--tp",
-    "80:50",
-    "--tp",
-    "2R:50",
-    "--notional",
-    "3000",
-    "--currency",
-    "USD",
-]
+ARMING_MOMENT = dt.datetime(2026, 9, 11, 15, 0, tzinfo=dt.UTC)
 
 
 def _isolate_home(case: unittest.TestCase) -> Path:
@@ -69,39 +46,39 @@ def _isolate_home(case: unittest.TestCase) -> Path:
     return home
 
 
-def _document(**overrides: object) -> dict:
-    """A real compiled intent, never a hand-authored dict.
+def _document(**meta: object) -> dict:
+    """The document an author writes: the trade, and nothing the door computes.
 
-    Built through the same compiler `arm-manual` uses, so a field this fixture
-    carries is a field the product emits — the failure mode where a test passes
-    against a shape no producer creates.
+    `trade_date` is stated so a test does not depend on the frozen clock unless
+    it is about the clock.
     """
-    from alphalens_pipeline.brokers.automanager.manual_intent import build_manual_intent
-    from broker_contract.trade_intent.codec import intent_to_jsonable
-
-    intent = build_manual_intent(
-        ticker="NVO",
-        mic="XNYS",
-        tiers_raw=["72.5:60", "70.0:40"],
-        stop=66.0,
-        tps_raw=["80:50", "2R:50"],
-        no_tp=False,
-        notional=3000.0,
-        currency="USD",
-        ttl_days=None,
-        arm_date=dt.date(2026, 9, 11),
-        armed_ts="2026-09-11T12:00:00+00:00",
-        generation=1,
-    )
-    document = intent_to_jsonable(intent)
-    document.update(overrides)
-    return document
+    return {
+        "instrument": {"ticker": "NVO", "mic": "XNYS"},
+        "spec": {
+            "entry_tiers": [
+                {"limit_price": 72.5, "alloc_pct": 60.0},
+                {"limit_price": 70.0, "alloc_pct": 40.0},
+            ],
+            "disaster_stop": 66.0,
+            "tp_tranches": [
+                {"price": 80.0, "tranche_pct": 50.0},
+                {"price": 82.0, "tranche_pct": 50.0},
+            ],
+            "size": {"notional_acct": 3000.0, "currency": "USD"},
+        },
+        "meta": {"source": "manual", "trade_date": "2026-09-11", **meta},
+    }
 
 
 class _DoorCase(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
         self.home = _isolate_home(self)
+        self.clock = mock.patch(
+            "alphalens_cli.commands.broker._arming_now", return_value=ARMING_MOMENT
+        )
+        self.clock.start()
+        self.addCleanup(self.clock.stop)
         self.inbox = self.home / ".alphalens" / "broker_orders" / "sim" / "picks.jsonl"
 
     def invoke(self, argv: list[str], stdin: str | None = None):
@@ -131,39 +108,98 @@ class _DoorCase(unittest.TestCase):
             self.assertEqual(failure["details"].get("reason"), reason, failure)
         return failure
 
+    def move_clock(self, moment: dt.datetime) -> None:
+        self.clock.stop()
+        self.clock = mock.patch("alphalens_cli.commands.broker._arming_now", return_value=moment)
+        self.clock.start()
+
+    def journaled_intent(self) -> dict:
+        records = self.fold_records()
+        self.assertEqual(len(records), 1)
+        return records[0].record["intent"]
+
     def fold_records(self):
         from alphalens_pipeline.brokers.automanager.picks import read_pick_fold
 
         return read_pick_fold(path=self.inbox).records
 
 
-class TheRoundTripIsIdentity(_DoorCase):
-    """Acceptance criterion 1, on the SERIALISED form."""
+class TheDoorDerivesWhatAnAuthorShouldNotCompute(_DoorCase):
+    """#1468 acceptance 1, 2 and 6, end to end."""
 
-    def _arm_manual_then_clear(self) -> tuple[bytes, dict]:
-        result = self.invoke([*_ARM_MANUAL_ARGS, "--format", "json"])
-        self.assertEqual(result.exit_code, 0, result.output)
-        line = self.inbox.read_bytes()
-        self.inbox.unlink()
-        return line, json.loads(result.stdout.strip())
-
-    def test_the_envelope_arm_manual_emits_queues_the_same_bytes(self) -> None:
-        line, envelope = self._arm_manual_then_clear()
-
-        result = self.invoke(["arm-intent", "-"], stdin=json.dumps(envelope))
+    def test_the_journaled_line_carries_every_derived_field(self) -> None:
+        result = self.arm(_document())
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertEqual(self.inbox.read_bytes(), line)
+        intent = self.journaled_intent()
+        self.assertEqual(intent["intent_id"], "NVO:2026-09-11:manual")
+        self.assertEqual(intent["meta"]["armed_ts"], "2026-09-11T15:00:00+00:00")
+        self.assertEqual(intent["meta"]["generation"], 1)
+        self.assertEqual([t["tag"] for t in intent["spec"]["entry_tiers"]], ["T1", "T2"])
+        self.assertEqual([t["tag"] for t in intent["spec"]["tp_tranches"]], ["TP1", "TP2"])
 
-    def test_the_bare_intent_inside_it_queues_the_same_bytes(self) -> None:
-        """The published contract is the bare TradeIntent; unwrapping our own
-        envelope is a convenience on top, so both roads must end in one place."""
-        line, envelope = self._arm_manual_then_clear()
+    def test_r_multiples_match_a_hand_worked_example(self) -> None:
+        """Blend = 0.6 * 72.5 + 0.4 * 70 = 71.5, so 1R = 71.5 - 66 = 5.5.
+        TP 80 is 8.5 / 5.5 R and TP 82 is 10.5 / 5.5 R."""
+        self.assertEqual(self.arm(_document()).exit_code, 0)
 
-        result = self.invoke(["arm-intent", "-"], stdin=json.dumps(envelope["intent"]))
+        tranches = self.journaled_intent()["spec"]["tp_tranches"]
+        self.assertAlmostEqual(tranches[0]["r_multiple"], 8.5 / 5.5)
+        self.assertAlmostEqual(tranches[1]["r_multiple"], 10.5 / 5.5)
 
-        self.assertEqual(result.exit_code, 0, result.output)
-        self.assertEqual(self.inbox.read_bytes(), line)
+    def test_a_missing_trade_date_is_the_session_that_has_not_closed(self) -> None:
+        """After the New York close the next session, not the closed one."""
+        self.move_clock(dt.datetime(2026, 9, 17, 1, 30, tzinfo=dt.UTC))
+        document = _document()
+        del document["meta"]["trade_date"]
+
+        self.assertEqual(self.arm(document).exit_code, 0)
+
+        self.assertEqual(self.journaled_intent()["meta"]["trade_date"], "2026-09-17")
+
+    def test_each_derived_field_sent_is_refused_and_nothing_changes(self) -> None:
+        for label, mutate in (
+            ("intent_id", lambda d: d.__setitem__("intent_id", "NVO:2026-09-11:manual")),
+            ("armed_ts", lambda d: d["meta"].__setitem__("armed_ts", "2026-09-11T00:00:00Z")),
+            ("r_multiple", lambda d: d["spec"]["tp_tranches"][1].__setitem__("r_multiple", 2.0)),
+        ):
+            with self.subTest(field=label):
+                document = _document()
+                mutate(document)
+                path = self.write(document)
+                sent = Path(path).read_bytes()
+
+                result = self.invoke(["arm-intent", path, "--format", "json"])
+
+                failure = self.assert_refused(result, "intent_malformed", "derived_field_supplied")
+                self.assertTrue(any(label in p for p in failure["details"]["paths"]))
+                self.assertEqual(Path(path).read_bytes(), sent)
+                self.assertEqual(self.inbox_bytes(), b"")
+
+    def test_an_arm_manual_envelope_is_not_a_document(self) -> None:
+        """Its intent carries the derived fields, and the door no longer peels
+        envelopes, so it is refused as the wrong shape."""
+        envelope = {"schema": "alphalens.broker.arm-manual/v1", "env": "sim", "intent": {}}
+        result = self.invoke(["arm-intent", "-", "--format", "json"], stdin=json.dumps(envelope))
+        self.assert_refused(result, "intent_malformed", "schema_violation")
+        self.assertEqual(self.inbox_bytes(), b"")
+
+    def test_a_document_without_source_is_refused(self) -> None:
+        document = _document()
+        del document["meta"]["source"]
+        failure = self.assert_refused(
+            self.arm(document, "--format", "json"), "intent_malformed", "schema_violation"
+        )
+        self.assertIn("meta", failure["details"]["path"])
+        self.assertEqual(self.inbox_bytes(), b"")
+
+    def test_a_brief_document_without_its_date_is_refused(self) -> None:
+        document = _document(source="brief")
+        del document["meta"]["trade_date"]
+        self.assert_refused(
+            self.arm(document, "--format", "json"), "intent_malformed", "trade_date_required"
+        )
+        self.assertEqual(self.inbox_bytes(), b"")
 
 
 class TheHappyPath(_DoorCase):
@@ -182,6 +218,24 @@ class TheHappyPath(_DoorCase):
         self.assertTrue(payload["armed"])
         self.assertEqual(payload["ticker"], "NVO")
         self.assertEqual(payload["generation"], 1)
+        self.assertEqual(payload["intent_id"], "NVO:2026-09-11:manual")
+        self.assertEqual(payload["armed_ts"], "2026-09-11T15:00:00+00:00")
+        self.assertFalse(payload["replaces"])
+        self.assertEqual(payload["tier_amounts"], [1800.0, 1200.0])
+        self.assertEqual(payload["intent"], self.journaled_intent())
+
+    def test_a_human_dry_run_shows_what_would_be_journaled(self) -> None:
+        result = self.arm(_document(), "--dry-run")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        for fragment in (
+            "NVO:2026-09-11:manual",
+            "armed_ts 2026-09-11T15:00:00+00:00",
+            "1800.00 USD",
+            "1.55R",
+        ):
+            self.assertIn(fragment, result.stdout)
+        self.assertEqual(self.inbox_bytes(), b"")
 
     def test_dry_run_compiles_and_appends_nothing(self) -> None:
         result = self.arm(_document(), "--dry-run", "--format", "json")
@@ -295,20 +349,13 @@ class TheDocumentMustBeTheRightShape(_DoorCase):
         failure = self.assert_refused(result, "intent_malformed", "duplicate_key")
         self.assertEqual(failure["details"]["keys"], ["alloc_pct", "limit_price"])
 
-    def test_an_envelope_we_do_not_publish_is_refused_rather_than_guessed(self) -> None:
-        envelope = {"schema": "someone.else/v1", "env": "sim", "intent": _document()}
-        result = self.invoke(["arm-intent", "-", "--format", "json"], stdin=json.dumps(envelope))
-        self.assert_untouched(result, "intent_malformed", "envelope_unknown")
-
-    def test_an_envelope_of_ours_carrying_no_intent_is_refused(self) -> None:
-        envelope = {"schema": "alphalens.broker.arm-manual/v1", "env": "sim", "armed": False}
-        result = self.invoke(["arm-intent", "-", "--format", "json"], stdin=json.dumps(envelope))
-        self.assert_untouched(result, "intent_malformed", "envelope_unknown")
-
     def test_a_schema_violation_names_where(self) -> None:
-        result = self.arm(_document(intent_id=17), "--format", "json")
-        failure = self.assert_refused(result, "intent_malformed", "schema_violation")
-        self.assertIn("intent_id", failure["details"]["path"])
+        document = _document()
+        document["instrument"]["mic"] = 17
+        failure = self.assert_refused(
+            self.arm(document, "--format", "json"), "intent_malformed", "schema_violation"
+        )
+        self.assertIn("instrument", failure["details"]["path"])
 
     def test_a_version_this_door_does_not_speak_is_refused(self) -> None:
         document = _document()
@@ -329,17 +376,14 @@ class TheDocumentMustBeTheRightShape(_DoorCase):
     def test_an_absent_version_is_the_current_one(self) -> None:
         """Positive control on the two above: the field carries a default, so
         omitting it means "the version this contract is at", not "unknown"."""
-        document = _document()
-        document["meta"].pop("schema_version")
-        result = self.arm(document)
+        result = self.arm(_document())
         self.assertEqual(result.exit_code, 0, result.output)
 
     def test_a_shape_the_schema_accepts_and_the_codec_refuses_is_still_caught(self) -> None:
         """JSON Schema defines `integer` as any number with zero fractional part,
         so `1.0` passes it; the codec refuses because identity strings are built
         from this field (#1371). The door runs BOTH gates for exactly this."""
-        document = _document()
-        document["meta"]["generation"] = 1.0
+        document = _document(generation=1.0)
         result = self.arm(document, "--format", "json")
         self.assert_untouched(result, "intent_malformed", "undecodable")
 
@@ -398,23 +442,21 @@ class NothingTheClientSentMayBeDiscarded(_DoorCase):
         producer sending it would watch its own key silently become another."""
         document = _document()
         document["meta"]["brief_date"] = document["meta"].pop("trade_date")
-        self.assert_refused(self.arm(document, "--format", "json"), "intent_malformed")
+        self.assert_refused(
+            self.arm(document, "--format", "json"), "intent_malformed", "key_discarded"
+        )
 
     def test_an_explicitly_null_exit_survives(self) -> None:
         """The gate's most plausible false refusal, and it is not one: `asdict`
         never omits a field, so `exit: null` comes back as `exit: null`. Kept as
         a test so nobody "fixes" the gate into refusing a legal document."""
-        result = self.arm(_document(exit=None))
+        result = self.arm({**_document(), "exit": None})
         self.assertEqual(result.exit_code, 0, result.output)
 
     def test_a_document_omitting_every_defaulted_field_survives(self) -> None:
-        """Defaults we ADD are not losses — only keys that vanish are."""
-        document = _document()
-        document.pop("account_id")
-        document.pop("exit")
-        for key in ("schema_version", "source", "generation"):
-            document["meta"].pop(key)
-        result = self.arm(document)
+        """Defaults and derived fields we ADD are not losses — only keys that
+        vanish are. The fixture omits every optional field."""
+        result = self.arm(_document())
         self.assertEqual(result.exit_code, 0, result.output)
 
 
@@ -469,7 +511,7 @@ class ThePickKeyMustBeWritable(_DoorCase):
     """The table the first draft of this ticket got wrong."""
 
     def _arm_once(self) -> dict:
-        document = _document()
+        document = _document(generation=1)
         self.assertEqual(self.arm(document).exit_code, 0)
         return document
 
@@ -485,7 +527,7 @@ class ThePickKeyMustBeWritable(_DoorCase):
 
     def test_a_changed_document_under_the_same_key_wins(self) -> None:
         self._arm_once()
-        changed = _document()
+        changed = _document(generation=1)
         changed["spec"]["disaster_stop"] = 60.0
 
         self.assertEqual(self.arm(changed).exit_code, 0)
@@ -558,12 +600,12 @@ class ThePickKeyMustBeWritable(_DoorCase):
         self.assertEqual(self.inbox_bytes(), before)
 
     def test_a_now_half_REFUSED_above_its_cap_stays_replaceable(self) -> None:
-        """Positive control for the refusal above, and the case that matters most.
+        """Positive control for the refusal above.
 
         When the ask is above the operator's cap the daemon journals a terminal
-        refusal, places nothing, and alerts "re-arm with a fresh cap if the
-        signal stands". A door that read that record as an order would refuse
-        the very re-arm the system asked for.
+        refusal and places nothing, so the line is still unplaced and a replace
+        is allowed. The replace keeps `armed_ts`, so the refused now half stays
+        done — see the test below; a new cap needs `disarm` and a new document.
         """
         document = self._arm_once()
         self.inbox.with_name("submissions.jsonl").write_text(
@@ -585,10 +627,77 @@ class ThePickKeyMustBeWritable(_DoorCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertEqual(len(self.fold_records()), 1)
 
+    def test_a_replace_keeps_armed_ts_so_a_refused_now_half_is_not_re_sent(self) -> None:
+        """#1468 acceptance 4, read through the drain's own idempotency check,
+        not through the field: a raised cap on a replace must not re-open the
+        immediate tier."""
+        from alphalens_pipeline.brokers.automanager.control_loop import _now_already_done
+        from alphalens_pipeline.brokers.submission_log import iter_submission_records
+        from broker_contract.trade_intent.codec import intent_from_jsonable
+
+        document = _document(generation=1)
+        document["spec"]["entry_tiers"][0]["entry_mode"] = "immediate"
+        self.assertEqual(self.arm(document).exit_code, 0)
+        first_armed_ts = self.journaled_intent()["meta"]["armed_ts"]
+        submissions = self.inbox.with_name("submissions.jsonl")
+        submissions.write_text(
+            json.dumps(
+                {
+                    "ticker": "NVO",
+                    "trade_date": "2026-09-11",
+                    "tranche": "now",
+                    "tranche_meta": {"outcome": "refused_cap", "armed_ts": first_armed_ts},
+                    "brackets": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.move_clock(ARMING_MOMENT + dt.timedelta(hours=1))
+        raised = _document(generation=1)
+        raised["spec"]["entry_tiers"][0].update(entry_mode="immediate", limit_price=73.5)
+
+        self.assertEqual(self.arm(raised).exit_code, 0)
+
+        intent = intent_from_jsonable(self.journaled_intent())
+        self.assertEqual(intent.meta.armed_ts, first_armed_ts)
+        self.assertEqual(intent.spec.entry_tiers[0].limit_price, 73.5)
+        records = list(iter_submission_records(submissions))
+        self.assertTrue(_now_already_done(records, "NVO", intent))
+
+    def test_a_retry_without_generation_is_refused_while_the_pick_is_armed(self) -> None:
+        """#1468 acceptance 3: omitting `generation` asks for a NEW pick."""
+        self._arm_once()
+        before = self.inbox_bytes()
+
+        result = self.arm(_document(), "--format", "json")
+
+        self.assert_refused(result, "pick_already_armed")
+        self.assertEqual(self.inbox_bytes(), before)
+        self.assertEqual(len(self.fold_records()), 1)
+
+    def test_the_same_retry_on_a_later_derived_date_is_refused_too(self) -> None:
+        document = _document()
+        del document["meta"]["trade_date"]
+        self.assertEqual(self.arm(document).exit_code, 0)
+        self.move_clock(dt.datetime(2026, 9, 12, 1, 30, tzinfo=dt.UTC))
+        before = self.inbox_bytes()
+
+        result = self.arm(document, "--format", "json")
+
+        failure = self.assert_refused(result, "pick_already_armed")
+        self.assertEqual(failure["details"]["armed_trade_date"], "2026-09-11")
+        self.assertEqual(self.inbox_bytes(), before)
+
+    def test_a_manual_nasdaq_pick_beside_an_armed_nyse_one_is_refused(self) -> None:
+        self._arm_once()
+        other = _document(trade_date="2026-09-14")
+        other["instrument"]["mic"] = "XNAS"
+        self.assert_refused(self.arm(other, "--format", "json"), "pick_already_armed")
+
     def test_a_second_live_generation_on_one_instrument_is_refused(self) -> None:
         self._arm_once()
-        second = _document()
-        second["meta"]["generation"] = 2
+        second = _document(generation=2)
         before = self.inbox_bytes()
 
         result = self.arm(second, "--format", "json")
@@ -603,8 +712,7 @@ class ThePickKeyMustBeWritable(_DoorCase):
 
         self._arm_once()
         mark_disarmed("NVO", dt.date(2026, 9, 11), note="cancelled", path=self.inbox)
-        second = _document()
-        second["meta"]["generation"] = 2
+        second = _document(generation=2)
 
         self.assertEqual(self.arm(second).exit_code, 0)
         self.assertEqual(

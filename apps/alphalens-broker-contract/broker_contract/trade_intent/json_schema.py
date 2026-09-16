@@ -27,7 +27,14 @@ breaks the schema's promise.
 Stdlib only, like the rest of the package (``dependencies = []`` on purpose) —
 the ``jsonschema`` library appears in the tests, never here.
 
-Regenerate the artefact with::
+**Two shapes (#1468).** The STORED shape is what the journal holds and what the
+drain decodes. The INPUT shape is what an author sends to the arming door: the
+door derives ``intent_id``, ``meta.armed_ts`` and every ``r_multiple`` (and
+refuses them on input), fills ``trade_date``, ``generation`` and tags when they
+are absent, and requires ``meta.source``. Each field's role is read from its
+``door`` metadata in ``schema.py``, so the two shapes cannot drift apart by hand.
+
+Regenerate both artefacts with::
 
     python -m broker_contract.trade_intent.json_schema --write
 """
@@ -40,22 +47,29 @@ import sys
 import types
 import typing
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from broker_contract.trade_intent.schema import SCHEMA_VERSION, TradeIntent
 
 __all__ = [
+    "INPUT_SCHEMA_FILENAME",
     "SCHEMA_FILENAME",
+    "Shape",
     "artefact_path",
     "generate_schema",
     "render_schema",
 ]
 
+Shape = Literal["stored", "input"]
+_SHAPES: Final[tuple[str, ...]] = ("stored", "input")
+
 SCHEMA_FILENAME: Final = f"trade-intent-v{SCHEMA_VERSION}.schema.json"
+INPUT_SCHEMA_FILENAME: Final = f"trade-intent-input-v{SCHEMA_VERSION}.schema.json"
 
 # A URN rather than a URL: nothing serves this document over HTTP, and an $id
 # that looks fetchable and is not would be a promise the project cannot keep.
 SCHEMA_ID: Final = f"urn:alphalens:contract:trade-intent:{SCHEMA_VERSION}"
+INPUT_SCHEMA_ID: Final = f"urn:alphalens:contract:trade-intent-input:{SCHEMA_VERSION}"
 
 _JSON_TYPES: Final[dict[type, str]] = {
     str: "string",
@@ -65,14 +79,21 @@ _JSON_TYPES: Final[dict[type, str]] = {
 }
 
 
-def artefact_path() -> Path:
+def _checked_shape(shape: str) -> Shape:
+    if shape not in _SHAPES:
+        raise ValueError(f"unknown schema shape {shape!r}; known: {', '.join(_SHAPES)}")
+    return shape  # type: ignore[return-value]
+
+
+def artefact_path(shape: Shape = "stored") -> Path:
     """Where the committed schema lives: inside the package it describes.
 
     Beside the package rather than at the repo root, so the artefact travels
     with ``broker_contract`` if it is ever extracted as a standalone
     distribution — the reason this package carries no dependencies at all.
     """
-    return Path(__file__).resolve().parents[2] / "docs" / SCHEMA_FILENAME
+    name = SCHEMA_FILENAME if _checked_shape(shape) == "stored" else INPUT_SCHEMA_FILENAME
+    return Path(__file__).resolve().parents[2] / "docs" / name
 
 
 def _reference(cls: type) -> dict[str, Any]:
@@ -179,34 +200,100 @@ def _define(cls: type, definitions: dict[str, dict[str, Any]]) -> None:
     definitions[cls.__name__] = definition
 
 
-def generate_schema() -> dict[str, Any]:
-    """Build the schema for :class:`TradeIntent` from the dataclasses."""
-    definitions: dict[str, dict[str, Any]] = {}
-    _define(TradeIntent, definitions)
-    root = definitions.pop(TradeIntent.__name__)
+_SHARED_DESCRIPTION: Final = (
+    "Generated from broker_contract.trade_intent.schema — edit the dataclasses, never "
+    "this file. The schema pins SHAPE; a schema-valid document can still be refused by "
+    "the door's semantic rules (see intent_invalid in the package README). Within a "
+    "major version only optional fields are added: a field is never renamed, retyped, "
+    "or given a new unit. NOTE: this schema does not constrain schema_version and "
+    "neither does the codec — the DOOR does (broker arm-intent refuses a stated version "
+    "other than its own), while the journal drain stays ungated so older documents keep "
+    "decoding there."
+)
+
+
+def _contract_classes() -> dict[str, type]:
+    from broker_contract.trade_intent import schema as contract_schema
+
     return {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": SCHEMA_ID,
-        "title": "TradeIntent",
-        "description": (
-            "One client-armed pick handed to the broker-manager. Generated from "
-            "broker_contract.trade_intent.schema — edit the dataclasses, never this file. "
-            "The schema pins SHAPE; a schema-valid document can still be refused by the "
-            "door's semantic rules (see intent_invalid in the package README). Within a "
-            "major version only optional fields are added: a field is never renamed, "
-            "retyped, or given a new unit. NOTE: this schema does not constrain "
-            "schema_version and neither does the codec — the DOOR does (broker "
-            "arm-intent refuses a stated version other than its own), while the journal "
-            "drain stays ungated so older documents keep decoding there."
-        ),
-        **root,
-        "$defs": definitions,
+        name: value
+        for name, value in vars(contract_schema).items()
+        if isinstance(value, type) and dataclasses.is_dataclass(value)
     }
 
 
-def render_schema() -> str:
-    """The exact bytes of the committed artefact."""
-    return json.dumps(generate_schema(), indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+def _as_input(definition: dict[str, Any], cls: type) -> dict[str, Any]:
+    """One definition rewritten for what an AUTHOR sends (#1468), by field role."""
+    properties: dict[str, Any] = dict(definition.get("properties", {}))
+    required: list[str] = [str(name) for name in definition.get("required", ())]
+    for field in dataclasses.fields(cls):
+        role = field.metadata.get("door")
+        if role is None:
+            continue
+        if role == "derived":
+            properties.pop(field.name, None)
+            required = [name for name in required if name != field.name]
+            continue
+        node = {key: value for key, value in properties[field.name].items() if key != "default"}
+        if role == "filled":
+            node["description"] = (
+                f"{node['description']} When absent: {field.metadata['when_absent']}"
+            )
+            required = [name for name in required if name != field.name]
+        elif field.name not in required:  # "required"
+            required.append(field.name)
+        properties[field.name] = node
+    rewritten: dict[str, Any] = {**definition, "properties": properties}
+    rewritten.pop("required", None)
+    if required:
+        rewritten["required"] = required
+    return rewritten
+
+
+def generate_schema(shape: Shape = "stored") -> dict[str, Any]:
+    """Build the schema for :class:`TradeIntent` from the dataclasses.
+
+    ``"stored"`` is the journaled document; ``"input"`` is what the arming door
+    accepts from an author (see the module docstring).
+    """
+    shape = _checked_shape(shape)
+    definitions: dict[str, dict[str, Any]] = {}
+    _define(TradeIntent, definitions)
+    root = definitions.pop(TradeIntent.__name__)
+    if shape == "stored":
+        return {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": SCHEMA_ID,
+            "title": "TradeIntent",
+            "description": (
+                "One client-armed pick handed to the broker-manager, as the journal "
+                f"stores it. {_SHARED_DESCRIPTION}"
+            ),
+            **root,
+            "$defs": definitions,
+        }
+    classes = _contract_classes()
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": INPUT_SCHEMA_ID,
+        "title": "TradeIntent input",
+        "description": (
+            "One pick as an author sends it to the arming door. The door derives "
+            "intent_id, meta.armed_ts and every tp_tranches[].r_multiple and REFUSES them "
+            "on input (derived_field_supplied), fills the fields whose description says "
+            "what happens when they are absent, then journals the stored TradeIntent "
+            f"shape. {_SHARED_DESCRIPTION}"
+        ),
+        **_as_input(root, TradeIntent),
+        "$defs": {
+            name: _as_input(definition, classes[name]) for name, definition in definitions.items()
+        },
+    }
+
+
+def render_schema(shape: Shape = "stored") -> str:
+    """The exact bytes of the committed artefact for ``shape``."""
+    return json.dumps(generate_schema(shape), indent=2, ensure_ascii=False, allow_nan=False) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -215,10 +302,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"usage: python -m {__spec__.name} [--write]", file=sys.stderr)
         return 2
     if arguments == ["--write"]:
-        path = artefact_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(render_schema())
-        print(f"wrote {path}", file=sys.stderr)
+        for shape in ("stored", "input"):
+            path = artefact_path(shape)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(render_schema(shape))
+            print(f"wrote {path}", file=sys.stderr)
         return 0
     print(render_schema(), end="")
     return 0

@@ -512,9 +512,9 @@ class JoinHelperTest(unittest.TestCase):
         """The operator's correction path must stay open.
 
         `now refused: ask above cap` journals a record with NOTHING at the
-        broker, and the alert beside it tells the operator to "re-arm with a
-        fresh cap if the signal stands". Counting that record as an order would
-        make the door refuse exactly the re-arm the system just asked for.
+        broker. Counting that record as an order would make the door refuse a
+        replace of a pick that is still unplaced, and would block the ticker for
+        a new document after `disarm` (#1468).
         Measured 2026-09-11: the SIM journal holds one such key (KO @ 2026-09-03)
         and it is the ONLY key whose records are all `tranche: now`.
         """

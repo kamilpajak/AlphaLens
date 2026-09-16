@@ -49,29 +49,33 @@ _ARM_TRADE_DATE = dt.date(2026, 7, 20)
 
 
 def _intent_document() -> str:
-    """One ready TradeIntent, as `arm-intent` would read it off disk.
+    """One author document, as `arm-intent` would read it off disk (#1468).
 
-    Compiled through the same builder `arm-manual` uses rather than typed out:
-    a hand-written document would pass this table while failing the real gates.
+    Only the trade: the door derives identity and labels and refuses them on
+    input, so a compiled intent carrying them would be refused here. The date is
+    stated so the table does not depend on the clock, and the generation is
+    stated so the table's repeated invocations replace the same armed pick
+    rather than being refused as a second one.
     """
-    from alphalens_pipeline.brokers.automanager.manual_intent import build_manual_intent
-    from broker_contract.trade_intent.codec import intent_to_jsonable
-
-    intent = build_manual_intent(
-        ticker="KO",
-        mic="XNYS",
-        tiers_raw=["100:60", "98:40"],
-        stop=90.0,
-        tps_raw=["110:100"],
-        no_tp=False,
-        notional=3000.0,
-        currency="USD",
-        ttl_days=None,
-        arm_date=_ARM_TRADE_DATE,
-        armed_ts=f"{_ARM_TRADE_DATE.isoformat()}T12:00:00+00:00",
-        generation=1,
+    return json.dumps(
+        {
+            "instrument": {"ticker": "KO", "mic": "XNYS"},
+            "spec": {
+                "entry_tiers": [
+                    {"limit_price": 100.0, "alloc_pct": 60.0},
+                    {"limit_price": 98.0, "alloc_pct": 40.0},
+                ],
+                "disaster_stop": 90.0,
+                "tp_tranches": [{"price": 110.0, "tranche_pct": 100.0}],
+                "size": {"notional_acct": 3000.0, "currency": "USD"},
+            },
+            "meta": {
+                "source": "manual",
+                "trade_date": _ARM_TRADE_DATE.isoformat(),
+                "generation": 1,
+            },
+        }
     )
-    return json.dumps(intent_to_jsonable(intent))
 
 
 def _brief_candidate():
@@ -189,7 +193,19 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
         "arm-intent",
         ["arm-intent", "intent.json"],
         True,
-        ("armed", "dry_run", "ticker", "trade_date", "generation", "intent_id", "picks_journal"),
+        (
+            "armed",
+            "dry_run",
+            "ticker",
+            "trade_date",
+            "generation",
+            "intent_id",
+            "armed_ts",
+            "replaces",
+            "tier_amounts",
+            "intent",
+            "picks_journal",
+        ),
     ),
     (
         "disarm",

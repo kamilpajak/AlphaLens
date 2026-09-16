@@ -376,9 +376,10 @@ def _records_an_order(record: Mapping[str, Any]) -> bool:
     """Could this record mean an order reached the broker?
 
     Deliberately generous. A terminal refusal is the one shape that proves
-    nothing was submitted, and it matters because the alert beside it tells the
-    operator to "re-arm with a fresh cap if the signal stands" — treating it as
-    an order would close the path the system just asked them to take.
+    nothing was submitted, so a pick whose now half was refused is still unplaced:
+    the arming door lets a document replace it, and `disarm` followed by a new
+    document is the path to a fresh cap (a replace keeps `armed_ts`, so it does
+    not re-open the refused tier, #1468).
     """
     meta = record.get("tranche_meta")
     outcome = meta.get("outcome") if isinstance(meta, Mapping) else None
