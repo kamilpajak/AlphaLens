@@ -9,10 +9,11 @@ snapshot sizing, the silently-inert ``setup_static`` exit geometry, and an
 unset fee floor respectively). A LIVE unit missing one pin would trade 100%
 gross of the real balance instead of failing to boot.
 
-``assert_live_rails`` refuses to let a LIVE instance start unless ALL EIGHT of
+``assert_live_rails`` refuses to let a LIVE instance start unless ALL NINE of
 ``ALPHALENS_BROKER_MAX_OPEN``, ``ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC``,
 ``ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R``, ``ALPHALENS_BROKER_SIZING_EQUITY``,
 ``ALPHALENS_BROKER_SIZING_EQUITY_MODE``, ``ALPHALENS_BROKER_MAX_FEE_BPS``,
+``ALPHALENS_BROKER_MAX_PICK_NOTIONAL`` (the per-pick amount ceiling, #1467),
 ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` (the entry-trailing distance, memo
 ``docs/research/entry_trailing_design_2026_08_12.md`` §6 — an operator must
 explicitly state ``0`` = trailing off rather than inherit it), and
@@ -28,6 +29,7 @@ the variable named nothing and the rail demanded a pin no code read.
 
 The numeric bounds (MAX_OPEN <= 10, PORTFOLIO_GROSS_FRAC <= 1.0,
 DAILY_LOSS_LIMIT_R <= 2.0, SIZING_EQUITY <= 15000, MAX_FEE_BPS <= 1000,
+MAX_PICK_NOTIONAL <= 15000,
 ENTRY_TRAIL_BPS <= 150, and ENTRY_WATCH_MAX_PICKS <= 10) are the
 operator-decided §8 caps for the soak — NOT a mechanism for widening risk
 later without also widening this assert. MAX_OPEN and ENTRY_WATCH_MAX_PICKS
@@ -96,6 +98,9 @@ from alphalens_pipeline.brokers.automanager.safety import (
 # min(pinned, snapshot) sizing and the round-trip fee floor).
 SIZING_EQUITY_ENV = "ALPHALENS_BROKER_SIZING_EQUITY"
 MAX_FEE_BPS_ENV = "ALPHALENS_BROKER_MAX_FEE_BPS"
+# The largest account-currency amount one pick may state (#1467). Read by the
+# placement drain, which refuses a larger pick before the day-1 gate.
+MAX_PICK_NOTIONAL_ENV = "ALPHALENS_BROKER_MAX_PICK_NOTIONAL"
 
 # Declared-frame sizing mode (memo broker_sizing_declared_frame_design §4.1).
 # Names live ONLY here — every consumer (control_loop's sizing resolver, the
@@ -125,6 +130,10 @@ _DAILY_LOSS_LIMIT_R_UPPER = 2.0
 # future widening is now a reviewed code change rather than a silent host edit.
 _SIZING_EQUITY_UPPER = 15_000.0
 _MAX_FEE_BPS_UPPER = 1_000.0
+# #1467 replaced "percent x frame" with an amount the document states. The frame
+# ceiling above was therefore the only bound on one pick's size (100% of at most
+# 15000); this carries the same number over, so the day it ships nothing widens.
+_MAX_PICK_NOTIONAL_UPPER = 15_000.0
 # The LIVE ceiling on concurrent entry-trail watches (#1189). Deliberately here
 # and NOT beside the shared runtime bound in `entry_trails`: this module is the
 # one place the LIVE bounds table lives, and a bound kept elsewhere is a bound a
@@ -196,7 +205,7 @@ def _check_sizing_mode(var: str) -> str | None:
 
 
 def assert_live_rails() -> None:
-    """Refuse to let a LIVE instance boot unless all eight safety-rail env vars
+    """Refuse to let a LIVE instance boot unless all nine safety-rail env vars
     are explicitly set and within the live-soak bounds (design memo §3 point
     2 / ADR 0017 point 4; the 7th pin is the entry-trailing distance per the
     entry-trailing design memo §6 — explicit ``"0"`` = trailing off; the 8th is
@@ -230,6 +239,11 @@ def assert_live_rails() -> None:
             _check_sizing_mode(SIZING_EQUITY_MODE_ENV),
             _check_float_bounded(
                 MAX_FEE_BPS_ENV, exclusive_lo=0.0, inclusive_hi=_MAX_FEE_BPS_UPPER
+            ),
+            _check_float_bounded(
+                MAX_PICK_NOTIONAL_ENV,
+                exclusive_lo=0.0,
+                inclusive_hi=_MAX_PICK_NOTIONAL_UPPER,
             ),
             # Entry-trailing distance (memo §6): [0, 150] — the bound and the
             # env-var name are OWNED by entry_trails.py; explicit "0" (feature
@@ -271,6 +285,7 @@ __all__ = [
     "ENTRY_WATCH_MAX_PICKS_ENV",
     "MAX_FEE_BPS_ENV",
     "MAX_OPEN_ENV",
+    "MAX_PICK_NOTIONAL_ENV",
     "PORTFOLIO_GROSS_FRAC_ENV",
     "SIZING_EQUITY_ENV",
     "SIZING_EQUITY_MODE_ENV",

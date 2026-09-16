@@ -49,7 +49,7 @@ EnvironmentFile=/etc/alphalens/env
 
 Environment=ALPHALENS_BROKER_ENVIRONMENT=live
 
-# The nine rails `assert_live_rails` demands before ANY LIVE client is built —
+# The rails `assert_live_rails` demands before ANY LIVE client is built —
 # see the header. None of them governs anything here: this unit never sizes,
 # places or exits. They are copies of the base LIVE unit's conservative pins,
 # so they are already-reviewed numbers rather than a second set invented here.
@@ -69,6 +69,7 @@ Environment=ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=1.0
 Environment=ALPHALENS_BROKER_SIZING_EQUITY=10000
 Environment=ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared
 Environment=ALPHALENS_BROKER_MAX_FEE_BPS=100
+Environment=ALPHALENS_BROKER_MAX_PICK_NOTIONAL=10000
 Environment=ALPHALENS_BROKER_ENTRY_TRAIL_BPS=0
 Environment=ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS=1
 

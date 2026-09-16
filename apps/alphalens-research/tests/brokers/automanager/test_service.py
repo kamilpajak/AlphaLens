@@ -26,6 +26,7 @@ from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     InstrumentHint,
     IntentMeta,
+    PickSize,
     TradeIntent,
     TradeSpec,
 )
@@ -55,7 +56,7 @@ def _pick(ticker: str) -> TradeIntent:
             entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=100.0),),
             disaster_stop=90.0,
             tp_tranches=(),
-            suggested_size_pct=3.0,
+            size=PickSize(notional_acct=3000.0, currency="USD"),
         ),
         meta=IntentMeta(armed_ts="2026-07-31T00:00:00+00:00", trade_date="2026-07-31"),
     )

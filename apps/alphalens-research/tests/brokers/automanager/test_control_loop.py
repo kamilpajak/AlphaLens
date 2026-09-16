@@ -65,6 +65,7 @@ from broker_contract.trade_intent.schema import (
     InitialLevels,
     InstrumentHint,
     IntentMeta,
+    PickSize,
     ReanchorOnFill,
     TpTrancheSpec,
     TradeIntent,
@@ -79,14 +80,13 @@ _UIC = 43070
 def _fake_build_record(**kw: Any) -> dict[str, Any]:
     """Stub for ``build_submission_record`` that mirrors its flattening: the
     ``sizing`` stamp's fields land as top-level record keys, so assertions on
-    ``sizing_equity`` / ``est_round_trip_fee_bps`` read like the real journal."""
+    ``sizing_currency`` / ``est_round_trip_fee_bps`` read like the real journal."""
     sizing = kw.pop("sizing", None)
     record: dict[str, Any] = dict(kw)
     if sizing is not None:
         record.update(
             sizing_currency=sizing.sizing_currency,
             instrument_currency=sizing.instrument_currency,
-            sizing_equity=sizing.sizing_equity,
             precheck_conversion_rate=sizing.precheck_conversion_rate,
             est_round_trip_fee_bps=sizing.est_round_trip_fee_bps,
         )
@@ -100,7 +100,7 @@ def _pick(ticker: str = "KO", date: str = "2026-07-20", source: str = "brief") -
         entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=50.0, tag="T1"),),
         disaster_stop=90.0,
         tp_tranches=(TpTrancheSpec(price=110.0, tranche_pct=100.0, r_multiple=2.0, tag="TP1"),),
-        suggested_size_pct=2.0,
+        size=PickSize(notional_acct=2000.0, currency="USD"),
     )
     return TradeIntent(
         intent_id=f"{ticker}:{date}",
@@ -1209,134 +1209,47 @@ class TestPlacePickBranches(unittest.TestCase):
 # --- Sizing cap + fee floor (design memo §4) ---------------------------------
 
 
-class TestResolveSizingEquity(unittest.TestCase):
-    """``_resolve_sizing_equity`` — ``min(pinned, snapshot)`` when
-    ``ALPHALENS_BROKER_SIZING_EQUITY`` is explicitly set, else the raw
-    account snapshot unchanged (SIM never sets the pin -> byte-identical)."""
+class TestResolveAndSizeSpendsTheDocumentsAmount(unittest.TestCase):
+    """#1467: ``_resolve_and_size`` spends ``spec.size.notional_acct``. Before, it
+    multiplied a percent by a frame read from the environment, so the same
+    document sized differently per deployment (6246 instead of 1500 on SIM)."""
 
-    def test_unset_returns_snapshot_unchanged(self) -> None:
-        with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertEqual(cl._resolve_sizing_equity(100_000.0), 100_000.0)
-
-    def test_blank_pin_treated_as_unset(self) -> None:
-        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "   "}, clear=True):
-            self.assertEqual(cl._resolve_sizing_equity(100_000.0), 100_000.0)
-
-    def test_pinned_below_snapshot_wins(self) -> None:
-        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
-            self.assertEqual(cl._resolve_sizing_equity(100_000.0), 10_000.0)
-
-    def test_snapshot_below_pinned_wins(self) -> None:
-        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
-            self.assertEqual(cl._resolve_sizing_equity(5_000.0), 5_000.0)
-
-    def test_malformed_pin_fails_closed_to_zero_equity(self) -> None:
-        # A typo'd pin must NEVER crash the tick (drain resilience) and must
-        # NEVER silently fall back to the raw snapshot (that would size off
-        # the FULL real balance — the exact thing the pin exists to prevent).
-        # Fail-closed: effective equity 0.0 -> nothing sizes -> the existing
-        # unplannable/zero-tiers refusal path handles the pick.
-        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10OOO"}, clear=True):
-            with self.assertLogs(cl.logger, level="WARNING") as logs:
-                self.assertEqual(cl._resolve_sizing_equity(100_000.0), 0.0)
-        self.assertTrue(any(SIZING_EQUITY_ENV in line for line in logs.output))
-
-    # --- declared sizing mode (memo §4.1 broker_sizing_declared_frame) ------
-
-    def test_declared_mode_returns_pin_above_snapshot(self) -> None:
-        env = {SIZING_EQUITY_ENV: "16000", SIZING_EQUITY_MODE_ENV: "declared"}
-        with mock.patch.dict("os.environ", env, clear=True):
-            self.assertEqual(cl._resolve_sizing_equity(1_984.0), 16_000.0)
-
-    def test_declared_mode_returns_pin_below_snapshot(self) -> None:
-        # Declared means the pin IS the frame — not max(pin, snapshot).
-        env = {SIZING_EQUITY_ENV: "1000", SIZING_EQUITY_MODE_ENV: "declared"}
-        with mock.patch.dict("os.environ", env, clear=True):
-            self.assertEqual(cl._resolve_sizing_equity(5_000.0), 1_000.0)
-
-    def test_mode_env_unset_keeps_min_clamp(self) -> None:
-        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
-            self.assertEqual(cl._resolve_sizing_equity(5_000.0), 5_000.0)
-            self.assertEqual(cl._resolve_sizing_equity(100_000.0), 10_000.0)
-
-    def test_clamped_mode_keeps_min_clamp(self) -> None:
-        env = {SIZING_EQUITY_ENV: "10000", SIZING_EQUITY_MODE_ENV: "clamped"}
-        with mock.patch.dict("os.environ", env, clear=True):
-            self.assertEqual(cl._resolve_sizing_equity(5_000.0), 5_000.0)
-            self.assertEqual(cl._resolve_sizing_equity(100_000.0), 10_000.0)
-
-    def test_unknown_mode_fails_closed_to_zero_equity(self) -> None:
-        env = {SIZING_EQUITY_ENV: "10000", SIZING_EQUITY_MODE_ENV: "snapshot"}
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertLogs(cl.logger, level="WARNING") as logs:
-                self.assertEqual(cl._resolve_sizing_equity(100_000.0), 0.0)
-        self.assertTrue(any(SIZING_EQUITY_MODE_ENV in line for line in logs.output))
-
-    def test_declared_mode_with_blank_pin_fails_closed_to_zero(self) -> None:
-        # Critic B8: declared mode with no pin must NEVER fall back to the
-        # raw snapshot — that is exactly the raw-balance sizing the declared
-        # frame exists to prevent.
-        env = {SIZING_EQUITY_ENV: "   ", SIZING_EQUITY_MODE_ENV: "declared"}
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertLogs(cl.logger, level="WARNING") as logs:
-                self.assertEqual(cl._resolve_sizing_equity(100_000.0), 0.0)
-        self.assertTrue(any(SIZING_EQUITY_ENV in line for line in logs.output))
-        self.assertTrue(any(SIZING_EQUITY_MODE_ENV in line for line in logs.output))
-
-    def test_declared_mode_with_malformed_pin_still_fails_closed(self) -> None:
-        env = {SIZING_EQUITY_ENV: "16OOO", SIZING_EQUITY_MODE_ENV: "declared"}
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertLogs(cl.logger, level="WARNING") as logs:
-                self.assertEqual(cl._resolve_sizing_equity(100_000.0), 0.0)
-        self.assertTrue(any(SIZING_EQUITY_ENV in line for line in logs.output))
-
-    def test_mode_value_is_case_and_whitespace_insensitive(self) -> None:
-        env = {SIZING_EQUITY_ENV: "16000", SIZING_EQUITY_MODE_ENV: " Declared "}
-        with mock.patch.dict("os.environ", env, clear=True):
-            self.assertEqual(cl._resolve_sizing_equity(1_984.0), 16_000.0)
-
-
-class TestResolveAndSizeUsesEffectiveSizingEquity(unittest.TestCase):
-    """``_resolve_and_size`` feeds ``compute_setup_plan(paper_equity=...)``
-    the EFFECTIVE (min-pinned-snapshot) equity, not the raw account
-    snapshot."""
-
-    def _paper_equity(self, *, account_equity: float, env: dict[str, str]) -> Any:
-        pkg = "alphalens_pipeline.brokers"
-        captured: dict[str, Any] = {}
-
-        def _capture_plan(_spec: Any, **kw: Any) -> Any:
-            captured.update(kw)
-            return object()
-
+    def _spent(self, env: dict[str, str], *, account_equity: float = 100_000.0) -> float:
+        spec = TradeSpec(
+            entry_tiers=(
+                EntryTierSpec(limit_price=50.0, alloc_pct=60.0),
+                EntryTierSpec(limit_price=48.0, alloc_pct=40.0),
+            ),
+            disaster_stop=45.0,
+            tp_tranches=(),
+            size=PickSize(notional_acct=1500.0, currency="USD"),
+        )
         account = _acct()
         account.total_value = account_equity  # type: ignore[attr-defined]
-        with contextlib.ExitStack() as stack:
-            p = stack.enter_context
-            p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t, **_kw: _instr()))
-            p(mock.patch("broker_contract.sizing.compute_setup_plan", _capture_plan))
-            p(mock.patch.dict("os.environ", env, clear=True))
-            cl._resolve_and_size(_PlaceBroker(), "KO", account, object())
-        return captured["paper_equity"]
+        pkg = "alphalens_pipeline.brokers"
+        with (
+            mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t, **_kw: _instr()),
+            mock.patch.dict("os.environ", env, clear=True),
+        ):
+            resolved = cl._resolve_and_size(_PlaceBroker(), "KO", account, spec)
+        assert resolved is not None
+        _instrument, _fx, plan = resolved
+        return sum(t.qty * t.limit_price for t in plan.entry_tiers)
 
-    def test_pinned_below_snapshot_sizes_off_the_pin(self) -> None:
-        equity = self._paper_equity(account_equity=100_000.0, env={SIZING_EQUITY_ENV: "10000"})
-        self.assertEqual(equity, 10_000.0)
+    def test_the_sim_frame_does_not_scale_the_amount(self) -> None:
+        spent = self._spent({SIZING_EQUITY_ENV: "100000", SIZING_EQUITY_MODE_ENV: "declared"})
 
-    def test_pinned_above_snapshot_sizes_off_the_snapshot(self) -> None:
-        equity = self._paper_equity(account_equity=5_000.0, env={SIZING_EQUITY_ENV: "10000"})
-        self.assertEqual(equity, 5_000.0)
+        self.assertLessEqual(spent, 1500.0)
+        self.assertGreater(spent, 1500.0 - 50.0 - 48.0)
 
-    def test_env_unset_sizes_off_the_raw_snapshot(self) -> None:
-        equity = self._paper_equity(account_equity=100_000.0, env={})
-        self.assertEqual(equity, 100_000.0)
+    def test_two_frames_size_the_same_document_identically(self) -> None:
+        sim = self._spent({SIZING_EQUITY_ENV: "100000", SIZING_EQUITY_MODE_ENV: "declared"})
+        live = self._spent({SIZING_EQUITY_ENV: "15000", SIZING_EQUITY_MODE_ENV: "declared"})
 
-    def test_declared_mode_sizes_off_the_pin_above_snapshot(self) -> None:
-        equity = self._paper_equity(
-            account_equity=1_984.0,
-            env={SIZING_EQUITY_ENV: "16000", SIZING_EQUITY_MODE_ENV: "declared"},
-        )
-        self.assertEqual(equity, 16_000.0)
+        self.assertEqual(sim, live)
+
+    def test_the_account_balance_does_not_scale_the_amount(self) -> None:
+        self.assertEqual(self._spent({}, account_equity=2_000.0), self._spent({}))
 
 
 class TestResolveAndSizeThreadsTheVenueHint(unittest.TestCase):
@@ -1398,11 +1311,7 @@ def _fee_plan(notional: float) -> SetupPlan:
     ``notional`` (a single fully-filled tier at a $10 limit)."""
     qty = int(notional // 10.0)
     return SetupPlan(
-        suggested_size_pct=1.0,
-        scale_factor=1.0,
-        final_size_pct=1.0,
         total_notional=notional,
-        paper_equity=100_000.0,
         disaster_stop=90.0,
         order_ttl_days=1,
         entry_tiers=(TierPlan(tier_index=0, limit_price=10.0, qty=qty, alloc_pct=100.0, tag="T1"),),
@@ -1502,11 +1411,7 @@ def _smg_fee_plan() -> SetupPlan:
     orders, gross $332.09. The live journal recorded 230.67 bps for this plan
     (#1123); the two-fill aggregate model prices the same plan at 110.2."""
     return SetupPlan(
-        suggested_size_pct=1.0,
-        scale_factor=1.0,
-        final_size_pct=1.0,
         total_notional=332.094,
-        paper_equity=100_000.0,
         disaster_stop=48.0,
         order_ttl_days=7,
         entry_tiers=(
@@ -1550,11 +1455,7 @@ class TestFeeFloorCountsChargeableOrders(unittest.TestCase):
         # anyone changes the mirrored-exit assumption, which is what makes the
         # single-tier equivalence true. Do not delete it as "testing nothing".
         plan = SetupPlan(
-            suggested_size_pct=1.0,
-            scale_factor=1.0,
-            final_size_pct=1.0,
             total_notional=67.62,
-            paper_equity=100_000.0,
             disaster_stop=60.0,
             order_ttl_days=7,
             entry_tiers=(
@@ -1579,11 +1480,7 @@ class TestFeeFloorCountsChargeableOrders(unittest.TestCase):
         # and must SAY SO — a LIVE rail never takes the fallback silently.
         # `assertLogs` cannot pass vacuously: it fails when nothing is logged.
         plan = SetupPlan(
-            suggested_size_pct=1.0,
-            scale_factor=1.0,
-            final_size_pct=1.0,
             total_notional=0.0,
-            paper_equity=100_000.0,
             disaster_stop=0.0,
             order_ttl_days=7,
             entry_tiers=(),
@@ -1653,10 +1550,10 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
         placer = cl._make_place_pick(broker, alert_throttled=_alert_throttled)
         return placer, alerts, refusals
 
-    def test_journal_records_the_effective_sizing_equity_not_the_snapshot(self) -> None:
-        # Audit fidelity (T8): the plan is sized off min(pin, snapshot); the
-        # submission record must carry that SAME figure — a record stamped
-        # with the raw balance would misdescribe every quantity in it.
+    def test_journal_records_carry_no_sizing_frame(self) -> None:
+        # #1467: a pick states its amount, so no frame sized it and the record
+        # must not claim one. Both records of a placement (the write-ahead
+        # "placement attempt" and the bracket record) are checked.
         appended: list[dict] = []
         broker = _RecordingBroker()
         with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
@@ -1664,16 +1561,9 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
                 broker, notional=10_000.0, append=appended.append
             )
             self.assertTrue(placer(_pick()))
-        # Two records per placement since the write-ahead dedup line (memo
-        # §4.4 B2): the note-only "placement attempt" + the real bracket
-        # record — BOTH must carry the effective equity.
         self.assertEqual(len(appended), 2)
         for record in appended:
-            self.assertEqual(
-                record["sizing_equity"],
-                10_000.0,
-                "journal must record the effective (pinned) equity, not total_value=100000",
-            )
+            self.assertNotIn("sizing_equity", record)
 
     def test_small_notional_over_cap_is_refused_terminal_never_placed(self) -> None:
         broker = _RecordingBroker()
@@ -2870,11 +2760,7 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
 
     def _plan(self, *, tp_tranches: tuple[TpTranchePlan, ...] = ()) -> SetupPlan:
         return SetupPlan(
-            suggested_size_pct=2.0,
-            scale_factor=1.0,
-            final_size_pct=2.0,
             total_notional=1000.0,
-            paper_equity=100000.0,
             disaster_stop=9.0,
             order_ttl_days=5,
             entry_tiers=(
@@ -3029,11 +2915,7 @@ def _tiered_plan(
 ) -> SetupPlan:
     """A SetupPlan with explicit tiers/tranches for the honest fee estimate."""
     return SetupPlan(
-        suggested_size_pct=1.0,
-        scale_factor=1.0,
-        final_size_pct=1.0,
         total_notional=sum(t.qty * t.limit_price for t in tiers),
-        paper_equity=100_000.0,
         disaster_stop=9.0,
         order_ttl_days=1,
         entry_tiers=tiers,
@@ -8884,7 +8766,7 @@ def _day1_spec(limit_price: float = 100.0) -> TradeSpec:
         entry_tiers=(EntryTierSpec(limit_price=limit_price, alloc_pct=100.0, tag="T1"),),
         disaster_stop=90.0,
         tp_tranches=(),
-        suggested_size_pct=2.0,
+        size=PickSize(notional_acct=2000.0, currency="USD"),
     )
 
 
@@ -9097,7 +8979,7 @@ class TestEvaluateDay1GapGate(unittest.TestCase):
             ),
             disaster_stop=90.0,
             tp_tranches=(),
-            suggested_size_pct=2.0,
+            size=PickSize(notional_acct=2000.0, currency="USD"),
         )
         with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
             verdict = cl._evaluate_day1_gap_gate(
@@ -9114,7 +8996,7 @@ class TestEvaluateDay1GapGate(unittest.TestCase):
             ),
             disaster_stop=90.0,
             tp_tranches=(),
-            suggested_size_pct=2.0,
+            size=PickSize(notional_acct=2000.0, currency="USD"),
         )
         with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
             verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, spec, "XNYS", _RaisingProbe())

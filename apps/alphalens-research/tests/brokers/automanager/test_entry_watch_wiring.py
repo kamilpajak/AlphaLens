@@ -75,7 +75,14 @@ def _pick(
                     "generation": generation,
                 },
             )(),
-            "spec": type("Spec", (), {"entry_tiers": ("t",)})(),
+            "spec": type(
+                "Spec",
+                (),
+                {
+                    "entry_tiers": ("t",),
+                    "size": type("Size", (), {"notional_acct": 1000.0, "currency": "USD"})(),
+                },
+            )(),
             "exit": None,
         },
     )()
@@ -84,11 +91,7 @@ def _pick(
 def _plan(*tiers: tuple[int, float, int]) -> SetupPlan:
     """A SetupPlan with the given (tier_index, limit_price, qty) tiers."""
     return SetupPlan(
-        suggested_size_pct=1.0,
-        scale_factor=1.0,
-        final_size_pct=1.0,
         total_notional=sum(limit * qty for _i, limit, qty in tiers),
-        paper_equity=100_000.0,
         disaster_stop=8.0,
         order_ttl_days=1,
         entry_tiers=tuple(
@@ -1113,7 +1116,8 @@ class TestGeometryActiveWithTheTrailDisabled(unittest.TestCase):
             {
                 "entry_tiers": (
                     type("T", (), {"limit_price": self._TIER_LIMIT, "alloc_pct": 100.0})(),
-                )
+                ),
+                "size": type("Size", (), {"notional_acct": 1000.0, "currency": "USD"})(),
             },
         )()
         pick.exit = type(
@@ -1783,11 +1787,7 @@ def _plan_with_tranches(
 ) -> SetupPlan:
     base = _plan(*tiers)
     return SetupPlan(
-        suggested_size_pct=base.suggested_size_pct,
-        scale_factor=base.scale_factor,
-        final_size_pct=base.final_size_pct,
         total_notional=base.total_notional,
-        paper_equity=base.paper_equity,
         disaster_stop=base.disaster_stop,
         order_ttl_days=base.order_ttl_days,
         entry_tiers=base.entry_tiers,
@@ -1802,7 +1802,14 @@ def _exit_spec(stop: float | None, tp: float | None) -> Any:
 
 def _blend_spec() -> Any:
     tier = type("SpecTier", (), {"limit_price": 10.0, "alloc_pct": 100.0})()
-    return type("Spec", (), {"entry_tiers": (tier,)})()
+    return type(
+        "Spec",
+        (),
+        {
+            "entry_tiers": (tier,),
+            "size": type("Size", (), {"notional_acct": 1000.0, "currency": "USD"})(),
+        },
+    )()
 
 
 def _route_watch(
@@ -3366,11 +3373,7 @@ def _now_plan(*, cap: float = 12.0, cap_qty: int = 40, pullback: bool = True) ->
     if pullback:
         tiers.append(TierPlan(tier_index=1, limit_price=10.0, qty=60, alloc_pct=60.0, tag="T2"))
     return SetupPlan(
-        suggested_size_pct=1.0,
-        scale_factor=1.0,
-        final_size_pct=1.0,
         total_notional=1000.0,
-        paper_equity=100_000.0,
         disaster_stop=8.0,
         order_ttl_days=1,
         entry_tiers=tuple(tiers),

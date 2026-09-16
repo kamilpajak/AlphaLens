@@ -13,13 +13,11 @@ import datetime as dt
 import unittest
 
 from alphalens_pipeline.paper.sizing import validate_trade_setup
-from broker_contract.constants import EXPECTED_AVG_HOLD_DAYS, STEADY_STATE_GROSS_FRAC
 from broker_contract.fx import FxConversion
 from broker_contract.sizing import (
     TierPlan,
     TpTranchePlan,
     TradeSetupNotPlannableError,
-    compute_daily_scale_factor,
 )
 
 from tests.paper.sizing_test_helpers import plan_from_brief
@@ -127,52 +125,6 @@ class ValidateTradeSetupHardeningTests(unittest.TestCase):
         # fallback (->1) would count it as usable (L170).
         with self.assertRaises(TradeSetupNotPlannableError):
             validate_trade_setup(_setup(entry_tiers=[{"limit": 0.0, "alloc_pct": 100.0}]))
-
-
-class ComputeDailyScaleFactorHardeningTests(unittest.TestCase):
-    def test_extra_positional_arg_is_rejected(self):
-        # steady_state_gross_frac is keyword-only (the `*` marker); a `*`->`/`
-        # mutant would accept it positionally (L181).
-        with self.assertRaises(TypeError):
-            compute_daily_scale_factor([1.0], 1000.0, 0.5)  # type: ignore[misc]
-
-    def test_nonpositive_equity_short_circuits_to_one(self):
-        # `paper_equity <= 0` returns 1.0 BEFORE any arithmetic — a real guard
-        # against dividing by a non-positive budget. With equity=-0.5 the
-        # `<= 0` guard must fire; `==0`, `<= -1`, and `or`->`and` mutants each
-        # fall through and compute a (negative) factor instead (L207).
-        self.assertEqual(compute_daily_scale_factor([-50.0], -0.5), 1.0)
-
-    def test_small_positive_equity_still_scales_below_one(self):
-        # A tiny but positive equity must NOT short-circuit; a NumberReplacer
-        # `<= 1` mutant would return 1.0 for equity in (0, 1] (L207).
-        self.assertLess(compute_daily_scale_factor([50.0], 0.5), 1.0)
-
-    def test_zero_aggregate_returns_one_avoiding_division(self):
-        # A zero aggregate (all-zero pcts) returns 1.0, guarding the
-        # `daily_target / aggregate` division. `<`/`<= -1` mutants fall through
-        # to a ZeroDivisionError; the returned-constant 1.0->2.0/0.0 mutants
-        # change the value (L210/L211).
-        self.assertEqual(compute_daily_scale_factor([0.0], 1000.0), 1.0)
-
-    def test_negative_aggregate_returns_one(self):
-        # A negative aggregate (with positive equity) also short-circuits to
-        # 1.0; an `<= 0`->`== 0` mutant would fall through to a negative factor
-        # (L210).
-        self.assertEqual(compute_daily_scale_factor([-50.0], 1000.0), 1.0)
-
-    def test_small_aggregate_still_scales(self):
-        # An aggregate in (0, 1] must still be scaled, not short-circuited; a
-        # NumberReplacer `<= 1` mutant would return 1.0 (L210).
-        self.assertLess(compute_daily_scale_factor([50.0], 1.0), 1.0)
-
-    def test_scale_factor_matches_formula(self):
-        # Pin min(1.0, daily_target / aggregate) exactly.
-        pcts, equity = [50.0, 30.0], 100_000.0
-        aggregate = sum(s / 100.0 * equity for s in pcts)
-        daily_target = STEADY_STATE_GROSS_FRAC * equity / EXPECTED_AVG_HOLD_DAYS
-        expected = min(1.0, daily_target / aggregate)
-        self.assertAlmostEqual(compute_daily_scale_factor(pcts, equity), expected, places=12)
 
 
 class ComputeSetupPlanHardeningTests(unittest.TestCase):

@@ -50,11 +50,7 @@ def _plan(
     order_ttl_days: int = 5,
 ) -> SetupPlan:
     return SetupPlan(
-        suggested_size_pct=3.0,
-        scale_factor=1.0,
-        final_size_pct=3.0,
         total_notional=3_000.0,
-        paper_equity=100_000.0,
         disaster_stop=disaster_stop,
         order_ttl_days=order_ttl_days,
         entry_tiers=tiers,

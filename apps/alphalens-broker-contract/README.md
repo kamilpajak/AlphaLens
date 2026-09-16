@@ -191,7 +191,7 @@ Exit statuses stay coarse — the domain detail is in `code`:
 ## The document schema (#1405)
 
 The wire shape of a `TradeIntent` is published as JSON Schema at
-[`docs/trade-intent-v2.schema.json`](docs/trade-intent-v2.schema.json). It is
+[`docs/trade-intent-v3.schema.json`](docs/trade-intent-v3.schema.json). It is
 **generated** from `broker_contract/trade_intent/schema.py`, never hand-edited,
 and CI fails when the committed file and a fresh generation disagree:
 
@@ -239,6 +239,25 @@ Neither the codec nor `validate_intent` nor the JSON Schema reads it, and that
 is deliberate: the journal DRAIN is a different entry point, it reads history,
 and v1 documents must keep decoding there. So the door refusing `"1"` is not a
 claim that v1 is unreadable; it is a claim about what a NEW producer may send.
+
+Version 3 (#1467) is the one exception to "history keeps decoding". It replaced
+`spec.suggested_size_pct`, a percent of an equity frame the daemon read from its
+own environment, with `spec.size`, an amount the document states:
+
+```json
+"size": {"notional_acct": 1500.0, "currency": "PLN"}
+```
+
+`notional_acct` is the budget for the whole entry ladder in the ACCOUNT currency;
+each rung gets `notional_acct x alloc_pct / 100`. `validate_intent` refuses an
+amount that is not positive (`size_notional_not_positive`) and a currency that is
+not three uppercase letters (`size_currency_invalid`). Whether the currency is
+this account's, and whether the amount stays under the deployment's per-pick
+ceiling, are deployment facts: the daemon refuses those picks when it drains
+them, before the day-1 gate, and never shrinks one to fit. A version-2 document
+does not decode, because its percent cannot be turned into an amount without the
+frame that is gone; the journal reader recognises such lines and the drain
+refuses an unplaced one once (`legacy.py`, `size_pct_v2`).
 The compatibility promise on top is a promise about what we EMIT — within a
 major version, fields are only ADDED and only as optional — and the CI gate on
 the generated artefact is what enforces it.

@@ -392,6 +392,10 @@ class LoopDeps:
     # ``place_pick`` closure (which holds picks on it) and carried here (the
     # drain commits / releases it per tick). None = no now-tranche feed.
     now_entry_scope: _NowEntryScope | None = None
+    # #1467: armed pre-#1467 picks that size by percent. ``iter_picks`` skips
+    # them without decoding; the drain refuses the unplaced ones once. ``None``
+    # (tests that build LoopDeps by hand) reads nothing.
+    iter_legacy_size_pct_picks: Callable[[], Iterator[Any]] | None = None
     # Entry-trailing watcher runtimes (PR-T1, DRY-RUN): crid -> the daemon-
     # lifetime state for ONE open entry-tier watch (the stateful engine watcher
     # + its measurement marks). A MUTABLE dict on the (frozen-field) deps — built
@@ -532,10 +536,9 @@ _SIZING_MODE_DECLARED_METRIC_NAME = "alphalens_broker_manager_sizing_mode_declar
 def _sizing_pin_and_mode() -> tuple[float | None, bool]:
     """The configured pin and whether the mode is ``declared``, read from env.
 
-    Deliberately NOT via :func:`_resolve_sizing_equity`: that function needs the
-    account equity to resolve ``clamped`` mode (``min(pin, snapshot)``), and the
-    balance is exactly what this daemon no longer reads. So it reports the raw
-    pin plus the mode, and the consumer decides — in ``declared`` mode the pin IS
+    Since #1467 no pick is sized off the pin; it is reported until the frame
+    variable itself is removed. It reports the raw pin plus the mode, and the
+    consumer decides — in ``declared`` mode the pin IS
     the effective frame, which is why the alert conditions on the mode gauge
     instead of assuming it.
 
@@ -602,9 +605,8 @@ def emit_capital_reader_gauges(broker: Broker, *, now_wall: float | None = None)
     timer, never from the daemon tick — see the ownership-split note above.
 
     ``total_value`` is ACCOUNT currency, the same denomination as the sizing pin
-    (it comes from the account-scoped balances payload, while the pin is
-    ``paper_equity``, which ``broker_contract.sizing`` documents as account
-    currency). That is what lets the alert divide the two directly; fx enters
+    (it comes from the account-scoped balances payload, and the pin is declared
+    in account currency). That is what lets the alert divide the two directly; fx enters
     only later, converting a notional to the instrument currency for the share
     count.
 
@@ -791,7 +793,9 @@ def _run_placement_drain(deps: LoopDeps, report: TickReport, *, enabled: bool) -
     # even when the first attempt returns False (refused / zero-sized / partial-
     # then-failed). Recording the attempt (not just a success) guards the
     # never-double-commit invariant against a retry inside the same tick.
-    already_submitted = picks.submitted_pick_keys(deps.read_records())
+    records = deps.read_records()
+    already_submitted = picks.submitted_pick_keys(records)
+    _refuse_legacy_size_pct_picks(deps, records, already_submitted)
     placed_this_tick: set[tuple[str, str]] = set()
     for pick in deps.iter_picks():
         key = picks.pick_key(pick)
@@ -802,6 +806,49 @@ def _run_placement_drain(deps: LoopDeps, report: TickReport, *, enabled: bool) -
             report.picks_placed += 1
     if scope is not None:
         scope.commit()
+
+
+def _refuse_legacy_size_pct_picks(
+    deps: LoopDeps,
+    records: list[Mapping[str, Any]],
+    already_submitted: set[tuple[str, str]],
+) -> None:
+    """Retire every armed, unplaced pre-#1467 pick with one refusal (#1467).
+
+    LEGACY(size_pct_v2). Its size is a percent of a frame the daemon no longer
+    reads, so it cannot be sized correctly; there is no shim. A placed one (its
+    key already retired by a submission) is left alone. A pick whose NOW half
+    was placed but whose pullback half was not is still refused, with a message
+    that says so: a plain re-arm gets a new ``armed_ts``, and the now tranche is
+    idempotent only on that value, so re-arming the whole ladder would buy the
+    now half a second time."""
+    if deps.iter_legacy_size_pct_picks is None:
+        return
+    any_submission = picks.keys_with_any_submission(records)
+    for pick in deps.iter_legacy_size_pct_picks():
+        key = (pick.ticker, pick.token)
+        if key in already_submitted:
+            continue
+        if key in any_submission:
+            violation = (
+                f"{pick.ticker} @ {pick.token}: armed before #1467 with a percent size, and "
+                "its now tranche is ALREADY placed — refused. Re-arm the pullback tiers only "
+                "(with --notional/--currency); a full re-arm would buy the now tranche again"
+            )
+        else:
+            violation = (
+                f"{pick.ticker} @ {pick.token}: armed before #1467 with a percent size, which "
+                "the daemon can no longer size — refused. Re-arm it with an amount "
+                "(--notional/--currency)"
+            )
+        _refuse_pick_terminal(
+            pick.ticker,
+            pick.trade_date,
+            violation,
+            f"legacy-size-pct:{pick.ticker}:{pick.token}",
+            deps.alert_throttled,
+            generation=pick.generation,
+        )
 
 
 def _run_verdict_advance(
@@ -2320,7 +2367,6 @@ def _route_pick_to_entry_watch(
             sizing=SizingStamp(
                 sizing_currency=account.currency,
                 instrument_currency=instrument.currency,
-                sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
                 est_round_trip_fee_bps=_estimate_round_trip_fee_bps(
                     plan,
@@ -5107,6 +5153,7 @@ def build_default_deps(
         global_kill_file=state_paths.global_kill_file_path(),
         ensure_alive=keeper.ensure_alive,
         iter_picks=picks.iter_picks,
+        iter_legacy_size_pct_picks=picks.iter_legacy_size_pct_picks,
         place_pick=_make_place_pick(
             broker,
             alert_throttled=_throttled,
@@ -7033,6 +7080,11 @@ def _make_place_pick(
     tolerated: the gate only calls it when ``ALPHALENS_BROKER_DAY1_GAP_GATE``
     is armed, and a ``None`` probe there simply defers every day-1 pick."""
 
+    # One per daemon: the account currency does not change within a process
+    # (SAXO_ACCOUNT_KEY selects the account), so the pre-gate currency check
+    # reads the broker once rather than on every deferred tick (#1467).
+    account_currency = _AccountCurrency()
+
     def _place(pick: Any) -> bool:
         return _place_pick(
             broker,
@@ -7041,6 +7093,7 @@ def _make_place_pick(
             day1_gap_price_probe=day1_gap_price_probe,
             audit_budget=audit_budget,
             now_entry_scope=now_entry_scope,
+            account_currency=account_currency,
         )
 
     return _place
@@ -7069,74 +7122,65 @@ def _summarize_open_verdicts(open_verdicts: Iterable[Any], today_iso: str) -> tu
     return open_bracket_count, realized_r_today
 
 
-def _resolve_sizing_equity(account_equity: float) -> float:
-    """Effective sizing equity for ``compute_setup_plan`` (design memo §4 +
-    the declared-frame memo §4.1). Two modes, selected by
-    ``ALPHALENS_BROKER_SIZING_EQUITY_MODE`` (read at CALL TIME, like the pin,
-    so an operator edit takes effect on the daemon's next restart):
+class _AccountCurrency:
+    """The account currency, read from the broker once per daemon (#1467).
 
-    - ``clamped`` (or unset — today's behavior): ``min(pinned, snapshot)``
-      when ``ALPHALENS_BROKER_SIZING_EQUITY`` is explicitly set, else
-      ``account_equity`` unchanged — SIM never sets the pin, so this stays
-      byte-identical to the raw account snapshot on the SIM path. ``min``
-      survives BOTH failure directions: a pin set too high above the real
-      balance stays capped at the snapshot, and a balance that has dropped
-      below the frame stays capped at the snapshot too.
-    - ``declared``: the pin IS the frame — no ``min()``; the cash floor
-      (PR-2) guards the real balance. A declared mode with NO pin fails
-      CLOSED to zero equity (critic B8) — never the raw snapshot.
+    A failed read leaves it unknown and is retried on the next call, so a
+    transient broker error defers a pick instead of refusing it."""
 
-    Every malformed/unknown value fails CLOSED to zero sizing equity:
-    raw-snapshot sizing (scaling picks to the FULL real balance) is the one
-    thing this must never fall back to."""
-    from alphalens_pipeline.brokers.automanager.live_rails import (
-        _VALID_SIZING_MODES,
-        SIZING_EQUITY_ENV,
-        SIZING_EQUITY_MODE_ENV,
-        SIZING_MODE_CLAMPED,
-        SIZING_MODE_DECLARED,
-    )
+    def __init__(self) -> None:
+        self._value: str | None = None
 
-    mode_raw = os.environ.get(SIZING_EQUITY_MODE_ENV)
-    mode = (mode_raw or "").strip().lower() or SIZING_MODE_CLAMPED
-    if mode not in _VALID_SIZING_MODES:
-        logger.warning(
-            "%s=%r is not a valid sizing mode (valid: %s) — failing CLOSED to zero sizing equity",
-            SIZING_EQUITY_MODE_ENV,
-            mode_raw,
-            ", ".join(_VALID_SIZING_MODES),
+    def read(self, broker: Broker) -> str | None:
+        from broker_contract.contract import BrokerError
+
+        if self._value is None:
+            try:
+                self._value = str(broker.get_account().currency)
+            except BrokerError as exc:
+                logger.warning("place_pick: account currency read failed: %s", exc)
+                return None
+        return self._value
+
+
+def _check_pick_size(size: Any, *, account_currency: str, ticker: str) -> tuple[str, str] | None:
+    """``None`` iff the document's amount can be spent here, else
+    ``(violation, alert_key)`` for a terminal refusal (#1467).
+
+    Currency first: an amount in another currency cannot be compared with the
+    cap, which is in account currency. The cap is
+    ``ALPHALENS_BROKER_MAX_PICK_NOTIONAL``: unset means no cap (SIM, the
+    ``MAX_FEE_BPS`` precedent; LIVE boots only with it pinned, see
+    ``live_rails``), and a value that is not a positive number refuses every
+    pick until the unit is fixed (fail closed, like the fee floor)."""
+    from alphalens_pipeline.brokers.automanager.live_rails import MAX_PICK_NOTIONAL_ENV
+
+    if size.currency != account_currency:
+        return (
+            f"{ticker}: the pick is sized in {size.currency} but the account is "
+            f"{account_currency} — refused; re-arm it in {account_currency}",
+            f"pick-currency:{ticker}",
         )
-        return 0.0
-    pinned_raw = os.environ.get(SIZING_EQUITY_ENV)
-    if pinned_raw is None or not pinned_raw.strip():
-        if mode == SIZING_MODE_DECLARED:
-            # FAIL-CLOSED (critic B8): declared mode without a pin has no
-            # frame to size against — the raw snapshot is exactly the
-            # fallback the declared frame exists to prevent.
-            logger.warning(
-                "%s=declared but %s is unset/blank — failing CLOSED to zero sizing equity",
-                SIZING_EQUITY_MODE_ENV,
-                SIZING_EQUITY_ENV,
-            )
-            return 0.0
-        return account_equity
+    raw = os.environ.get(MAX_PICK_NOTIONAL_ENV)
+    if raw is None or not raw.strip():
+        return None
     try:
-        pinned = float(pinned_raw)
+        cap = float(raw)
     except ValueError:
-        # FAIL-CLOSED: a typo'd pin must never crash the tick, and it must
-        # never fall back to the raw snapshot either (sizing off the FULL
-        # real balance is the exact outcome the pin exists to prevent).
-        # Zero equity sizes nothing; the unplannable/zero-tiers refusal
-        # path downstream handles the pick, and the operator fixes the pin.
-        logger.warning(
-            "%s=%r is not a number — failing CLOSED to zero sizing equity",
-            SIZING_EQUITY_ENV,
-            pinned_raw,
+        cap = math.nan
+    if not math.isfinite(cap) or cap <= 0:
+        return (
+            f"{MAX_PICK_NOTIONAL_ENV}={raw!r} is not a positive number — {ticker} refused "
+            "(fail-closed until the cap is fixed)",
+            f"pick-cap:{ticker}",
         )
-        return 0.0
-    if mode == SIZING_MODE_DECLARED:
-        return pinned
-    return min(pinned, account_equity)
+    if size.notional_acct > cap:
+        return (
+            f"{ticker}: the pick's amount {size.notional_acct:,.2f} {size.currency} exceeds "
+            f"{MAX_PICK_NOTIONAL_ENV}={cap:,.2f} — refused, never shrunk",
+            f"pick-cap:{ticker}",
+        )
+    return None
 
 
 def _resolve_and_size(
@@ -7190,12 +7234,8 @@ def _resolve_and_size(
                 )
                 return None
             fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
-        plan = compute_setup_plan(
-            spec,
-            paper_equity=_resolve_sizing_equity(account.total_value),
-            scale_factor=1.0,
-            fx=fx,
-        )
+        # #1467: the document states the amount, so nothing here reads a frame.
+        plan = compute_setup_plan(spec, fx=fx)
     except (BrokerError, TradeSetupNotPlannableError) as exc:
         logger.warning("place_pick %s: resolve/size failed: %s", ticker, exc)
         return None
@@ -8160,7 +8200,6 @@ def _place_tiers(
                 sizing=SizingStamp(
                     sizing_currency=account.currency,
                     instrument_currency=instrument.currency,
-                    sizing_equity=_resolve_sizing_equity(account.total_value),
                     fx=fx,
                     est_round_trip_fee_bps=est_fee_bps,
                 ),
@@ -8223,7 +8262,6 @@ def _place_tiers(
             sizing=SizingStamp(
                 sizing_currency=account.currency,
                 instrument_currency=instrument.currency,
-                sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
                 est_round_trip_fee_bps=est_fee_bps,
             ),
@@ -8316,7 +8354,6 @@ def _handle_tier_placement_failure(
             sizing=SizingStamp(
                 sizing_currency=account.currency,
                 instrument_currency=instrument.currency,
-                sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
                 est_round_trip_fee_bps=est_fee_bps,
             ),
@@ -9074,7 +9111,6 @@ def _refuse_now_tranche(
                 sizing=SizingStamp(
                     sizing_currency=account.currency,
                     instrument_currency=instrument.currency,
-                    sizing_equity=_resolve_sizing_equity(account.total_value),
                     fx=fx,
                 ),
                 tranche="now",
@@ -9283,6 +9319,7 @@ def _place_pick(
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
     audit_budget: OutcomeAuditBudget | None = None,
     now_entry_scope: _NowEntryScope | None = None,
+    account_currency: _AccountCurrency | None = None,
 ) -> bool:
     """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
@@ -9315,8 +9352,30 @@ def _place_pick(
     spec = intent.spec
     exit_spec = intent.exit
 
-    # Day-1 gap gate (execution-quality placement discipline): evaluated FIRST,
-    # before any broker/safety/sizing I/O — a deferral must be cheap. Never
+    # #1467: the document states its amount, so two of its facts can be judged
+    # before the day-1 gate and must be — a pick armed before the open would
+    # otherwise sit deferred for hours and be refused only after it. Both
+    # refusals are terminal: a wrong currency or an over-cap amount does not
+    # fix itself on the next tick.
+    currency = (account_currency or _AccountCurrency()).read(broker)
+    if currency is None:
+        return False
+    size_violation = _check_pick_size(spec.size, account_currency=currency, ticker=ticker)
+    if size_violation is not None:
+        violation, alert_key = size_violation
+        _refuse_pick_terminal(
+            ticker,
+            trade_date,
+            violation,
+            alert_key,
+            alert_throttled,
+            generation=intent.meta.generation,
+        )
+        return False
+
+    # Day-1 gap gate (execution-quality placement discipline): evaluated before
+    # any other broker/safety/sizing I/O — a deferral must be cheap. The one
+    # read above is memoised per daemon, so a warm deferral costs nothing. Never
     # journals a refusal (queue-semantics stays unchanged): a deferred pick
     # stays armed and is re-evaluated next tick.
     if _day1_gap_gate_defers(

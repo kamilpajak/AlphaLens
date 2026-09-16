@@ -74,6 +74,11 @@ def _carries_reanchor_ceiling(document: Mapping[str, Any]) -> bool:
     )
 
 
+def _carries_size_pct(document: Mapping[str, Any]) -> bool:
+    spec = document.get("spec")
+    return isinstance(spec, Mapping) and "suggested_size_pct" in spec and "size" not in spec
+
+
 LEGACY_ALLOWANCES: Final[Mapping[str, LegacyAllowance]] = MappingProxyType(
     {
         "brief_date_key": LegacyAllowance(
@@ -106,6 +111,19 @@ LEGACY_ALLOWANCES: Final[Mapping[str, LegacyAllowance]] = MappingProxyType(
             "not: #1414 measured that the daemon never re-derives a take-profit, so the "
             "refusal is permanent and the count above is the only thing that retires this.",
             still_needed=_carries_reanchor_ceiling,
+        ),
+        "size_pct_v2": LegacyAllowance(
+            what="The picks journal reader recognises a document that sizes by "
+            "`spec.suggested_size_pct` and no `spec.size`, skips it without decoding or "
+            "warning, and the drain refuses it once if it was never placed.",
+            why="#1467 replaced the percent with an account-currency amount. A percent "
+            "needs the frame the daemon used to read from its environment, so an old "
+            "line cannot be sized correctly and must not decode. Placed lines are still "
+            "read on every tick, so without this they would log a warning every 45 s.",
+            retires_when="No line of any picks journal carries `spec.suggested_size_pct`. "
+            "Journals are never rewritten, so in practice this means the oldest line still "
+            "read is newer than #1467.",
+            still_needed=_carries_size_pct,
         ),
     }
 )

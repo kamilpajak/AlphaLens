@@ -5,7 +5,7 @@ section 5): the daemon's geometry SHADOW stamp loses the brief dict at drain
 time (arm-time now owns the parse) but still needs the planned blend, so it
 consumes the already-parsed :class:`TradeSpec`. This must return the SAME
 value as the dict-based ``planned_blended_entry`` for the equivalent spec —
-``parse_brief_to_spec(setup)`` fed to ``planned_blended_entry_from_spec`` must
+``parse_brief_to_spec(setup, ...)`` fed to ``planned_blended_entry_from_spec`` must
 equal ``planned_blended_entry(setup)``.
 """
 
@@ -33,7 +33,7 @@ def _setup(*, entry_tiers) -> dict:
 class TestParityWithDictVersion(unittest.TestCase):
     def _assert_parity(self, entry_tiers: list[dict]) -> None:
         setup = _setup(entry_tiers=entry_tiers)
-        spec = parse_brief_to_spec(setup)
+        spec = parse_brief_to_spec(setup, frame=100_000.0, currency="USD")
         expected = planned_blended_entry(setup)
         actual = planned_blended_entry_from_spec(spec)
         if expected is None:
@@ -70,24 +70,24 @@ class TestParityWithDictVersion(unittest.TestCase):
         # parse_brief_to_spec would reject all-non-positive-limit tiers at
         # validate_trade_setup, so this exercises the standalone function via
         # a spec built directly with a single non-positive tier.
-        from broker_contract.trade_intent.schema import EntryTierSpec, TradeSpec
+        from broker_contract.trade_intent.schema import EntryTierSpec, PickSize, TradeSpec
 
         spec = TradeSpec(
             entry_tiers=(EntryTierSpec(limit_price=0.0, alloc_pct=100.0, tag="bad"),),
             disaster_stop=90.0,
             tp_tranches=(),
-            suggested_size_pct=5.0,
+            size=PickSize(notional_acct=5_000.0, currency="USD"),
         )
         self.assertIsNone(planned_blended_entry_from_spec(spec))
 
     def test_no_entry_tiers_returns_none(self) -> None:
-        from broker_contract.trade_intent.schema import TradeSpec
+        from broker_contract.trade_intent.schema import PickSize, TradeSpec
 
         spec = TradeSpec(
             entry_tiers=(),
             disaster_stop=90.0,
             tp_tranches=(),
-            suggested_size_pct=5.0,
+            size=PickSize(notional_acct=5_000.0, currency="USD"),
         )
         self.assertIsNone(planned_blended_entry_from_spec(spec))
 

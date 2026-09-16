@@ -24,6 +24,7 @@ from alphalens_pipeline.brokers.automanager.live_rails import (
     ENTRY_WATCH_MAX_PICKS_ENV,
     MAX_FEE_BPS_ENV,
     MAX_OPEN_ENV,
+    MAX_PICK_NOTIONAL_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
     SIZING_EQUITY_ENV,
     SIZING_EQUITY_MODE_ENV,
@@ -53,6 +54,7 @@ _VALID_RAIL_ENV: dict[str, str] = {
     SIZING_EQUITY_ENV: "10000",
     SIZING_EQUITY_MODE_ENV: "clamped",
     MAX_FEE_BPS_ENV: "100",
+    MAX_PICK_NOTIONAL_ENV: "10000",
     ENTRY_TRAIL_BPS_ENV: "0",
     ENTRY_WATCH_MAX_PICKS_ENV: "2",
 }

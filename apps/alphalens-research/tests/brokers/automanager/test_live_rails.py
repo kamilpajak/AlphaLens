@@ -26,6 +26,7 @@ from alphalens_pipeline.brokers.automanager.live_rails import (
     ENTRY_WATCH_MAX_PICKS_ENV,
     MAX_FEE_BPS_ENV,
     MAX_OPEN_ENV,
+    MAX_PICK_NOTIONAL_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
     SIZING_EQUITY_ENV,
     SIZING_EQUITY_MODE_ENV,
@@ -44,6 +45,7 @@ _VALID_ENV: dict[str, str] = {
     SIZING_EQUITY_ENV: "10000",
     SIZING_EQUITY_MODE_ENV: "clamped",
     MAX_FEE_BPS_ENV: "100",
+    MAX_PICK_NOTIONAL_ENV: "10000",
     ENTRY_TRAIL_BPS_ENV: "0",
     ENTRY_WATCH_MAX_PICKS_ENV: "2",
 }
@@ -55,6 +57,7 @@ _ALL_RAIL_VARS = (
     SIZING_EQUITY_ENV,
     SIZING_EQUITY_MODE_ENV,
     MAX_FEE_BPS_ENV,
+    MAX_PICK_NOTIONAL_ENV,
     ENTRY_TRAIL_BPS_ENV,
     ENTRY_WATCH_MAX_PICKS_ENV,
 )
@@ -74,7 +77,8 @@ class TestAllEightConstantsAreDistinctNames(unittest.TestCase):
         self.assertEqual(MAX_FEE_BPS_ENV, "ALPHALENS_BROKER_MAX_FEE_BPS")
         self.assertEqual(ENTRY_TRAIL_BPS_ENV, "ALPHALENS_BROKER_ENTRY_TRAIL_BPS")
         self.assertEqual(ENTRY_WATCH_MAX_PICKS_ENV, "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS")
-        self.assertEqual(len(set(_ALL_RAIL_VARS)), 8, "all eight env-var names must be distinct")
+        self.assertEqual(MAX_PICK_NOTIONAL_ENV, "ALPHALENS_BROKER_MAX_PICK_NOTIONAL")
+        self.assertEqual(len(set(_ALL_RAIL_VARS)), 9, "all nine env-var names must be distinct")
 
 
 class TestValidEnvPasses(unittest.TestCase):
@@ -127,6 +131,12 @@ class TestEachVarUnsetIsNamedInTheError(unittest.TestCase):
             with self.assertRaises(BrokerCapabilityError) as captured:
                 assert_live_rails()
         self.assertIn(SIZING_EQUITY_ENV, str(captured.exception))
+
+    def test_max_pick_notional_unset(self):
+        with mock.patch.dict("os.environ", _env_without(MAX_PICK_NOTIONAL_ENV), clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        self.assertIn(MAX_PICK_NOTIONAL_ENV, str(captured.exception))
 
     def test_sizing_equity_mode_unset(self):
         with mock.patch.dict("os.environ", _env_without(SIZING_EQUITY_MODE_ENV), clear=True):
@@ -341,6 +351,27 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
         # 15000 is what the LIVE unit runs (declared frame, 1% = 150). The cap
         # is inclusive, so bounding the rail must not refuse production.
         env = dict(_VALID_ENV, **{SIZING_EQUITY_ENV: "15000"})
+        with mock.patch.dict("os.environ", env, clear=True):
+            assert_live_rails()
+
+    def test_max_pick_notional_above_cap_rejected(self):
+        # #1467: a pick states its amount, so the frame no longer bounds one
+        # pick's size. The rail carries the frame's old ceiling over.
+        env = dict(_VALID_ENV, **{MAX_PICK_NOTIONAL_ENV: "15001"})
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        self.assertIn(MAX_PICK_NOTIONAL_ENV, str(captured.exception))
+
+    def test_max_pick_notional_zero_rejected(self):
+        env = dict(_VALID_ENV, **{MAX_PICK_NOTIONAL_ENV: "0"})
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        self.assertIn(MAX_PICK_NOTIONAL_ENV, str(captured.exception))
+
+    def test_max_pick_notional_at_the_old_frame_ceiling_passes(self):
+        env = dict(_VALID_ENV, **{MAX_PICK_NOTIONAL_ENV: "15000"})
         with mock.patch.dict("os.environ", env, clear=True):
             assert_live_rails()
 

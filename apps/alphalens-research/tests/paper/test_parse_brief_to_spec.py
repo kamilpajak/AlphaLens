@@ -17,7 +17,11 @@ import unittest
 
 from alphalens_pipeline.paper.sizing import parse_brief_to_spec
 from broker_contract.sizing import TradeSetupNotPlannableError
-from broker_contract.trade_intent.schema import EntryTierSpec, TpTrancheSpec, TradeSpec
+from broker_contract.trade_intent.schema import EntryTierSpec, PickSize, TpTrancheSpec, TradeSpec
+
+
+def _parse(setup, *, frame: float = 100_000.0, currency: str = "USD") -> TradeSpec:
+    return parse_brief_to_spec(setup, frame=frame, currency=currency)
 
 
 def _make_setup(
@@ -58,22 +62,28 @@ def _make_setup(
 
 class TestFieldMapping(unittest.TestCase):
     def test_returns_a_tradespec(self):
-        spec = parse_brief_to_spec(_make_setup())
+        spec = _parse(_make_setup())
         self.assertIsInstance(spec, TradeSpec)
 
     def test_side_is_long(self):
-        spec = parse_brief_to_spec(_make_setup())
+        spec = _parse(_make_setup())
         self.assertEqual(spec.side, "long")
 
-    def test_disaster_stop_and_suggested_size_pct_carried(self):
-        spec = parse_brief_to_spec(_make_setup(disaster_stop=88.5, suggested_size_pct=4.2))
+    def test_disaster_stop_carried_and_the_percent_becomes_an_amount(self):
+        # #1467: 4.2% of a 100000 frame is stated as 4200 in the account currency.
+        spec = _parse(_make_setup(disaster_stop=88.5, suggested_size_pct=4.2), currency="PLN")
         self.assertEqual(spec.disaster_stop, 88.5)
-        self.assertEqual(spec.suggested_size_pct, 4.2)
+        self.assertEqual(spec.size, PickSize(notional_acct=4200.0, currency="PLN"))
+
+    def test_a_non_positive_frame_is_not_plannable(self):
+        for frame in (0.0, -1.0, float("nan"), float("inf")):
+            with self.subTest(frame=frame), self.assertRaises(TradeSetupNotPlannableError):
+                _parse(_make_setup(), frame=frame)
 
     def test_all_entry_tiers_carried_in_order_including_non_positive_limit(self):
         """Sanitisation (dropping limit<=0) is the money half's job — parse
         keeps every tier, incl. the bad tier-2 (limit=0.0)."""
-        spec = parse_brief_to_spec(_make_setup())
+        spec = _parse(_make_setup())
         self.assertEqual(len(spec.entry_tiers), 3)
         self.assertEqual(
             spec.entry_tiers,
@@ -85,7 +95,7 @@ class TestFieldMapping(unittest.TestCase):
         )
 
     def test_all_tp_tranches_carried_in_order_including_non_positive_target(self):
-        spec = parse_brief_to_spec(_make_setup())
+        spec = _parse(_make_setup())
         self.assertEqual(len(spec.tp_tranches), 2)
         self.assertEqual(
             spec.tp_tranches,
@@ -98,59 +108,57 @@ class TestFieldMapping(unittest.TestCase):
     def test_tp_tranches_empty_when_brief_omits_them(self):
         setup = _make_setup()
         setup["tp_tranches"] = []
-        spec = parse_brief_to_spec(setup)
+        spec = _parse(setup)
         self.assertEqual(spec.tp_tranches, ())
 
     def test_order_ttl_days_present_is_preserved(self):
-        spec = parse_brief_to_spec(_make_setup(order_ttl_days=7))
+        spec = _parse(_make_setup(order_ttl_days=7))
         self.assertEqual(spec.order_ttl_days, 7)
 
     def test_order_ttl_days_zero_sentinel_when_brief_omits_it(self):
         """CRITICAL: a brief with no order_ttl_days must parse to the 0
         sentinel, NOT fall through to TradeSpec's own default (7) — the
         planner distinguishes "explicit 7-day TTL" from "no TTL info"."""
-        spec = parse_brief_to_spec(_make_setup(order_ttl_days=None))
+        spec = _parse(_make_setup(order_ttl_days=None))
         self.assertEqual(spec.order_ttl_days, 0)
 
     def test_order_ttl_days_zero_sentinel_when_brief_has_falsy_zero(self):
-        spec = parse_brief_to_spec(_make_setup(order_ttl_days=0))
+        spec = _parse(_make_setup(order_ttl_days=0))
         self.assertEqual(spec.order_ttl_days, 0)
 
 
 class TestUnplannableBriefsStillRaise(unittest.TestCase):
     def test_status_not_ok_rejected(self):
         with self.assertRaises(TradeSetupNotPlannableError):
-            parse_brief_to_spec(_make_setup(status="NO_STRUCTURE"))
+            _parse(_make_setup(status="NO_STRUCTURE"))
 
     def test_unknown_schema_rejected(self):
         with self.assertRaises(TradeSetupNotPlannableError):
-            parse_brief_to_spec(_make_setup(schema_version="2.0.0"))
+            _parse(_make_setup(schema_version="2.0.0"))
 
     def test_missing_suggested_size_rejected(self):
         setup = _make_setup()
         setup["suggested_size_pct"] = None
         with self.assertRaises(TradeSetupNotPlannableError):
-            parse_brief_to_spec(setup)
+            _parse(setup)
 
     def test_missing_disaster_stop_rejected(self):
         setup = _make_setup()
         setup["disaster_stop"] = None
         with self.assertRaises(TradeSetupNotPlannableError):
-            parse_brief_to_spec(setup)
+            _parse(setup)
 
     def test_empty_entry_tiers_rejected(self):
         with self.assertRaises(TradeSetupNotPlannableError):
-            parse_brief_to_spec(_make_setup(entry_tiers=[]))
+            _parse(_make_setup(entry_tiers=[]))
 
     def test_all_tiers_non_positive_limit_rejected(self):
         with self.assertRaises(TradeSetupNotPlannableError):
-            parse_brief_to_spec(
-                _make_setup(entry_tiers=[{"limit": 0.0, "alloc_pct": 100.0, "tag": "bad"}])
-            )
+            _parse(_make_setup(entry_tiers=[{"limit": 0.0, "alloc_pct": 100.0, "tag": "bad"}]))
 
     def test_non_dict_rejected(self):
         with self.assertRaises(TradeSetupNotPlannableError):
-            parse_brief_to_spec("not a dict")
+            _parse("not a dict")
 
 
 if __name__ == "__main__":

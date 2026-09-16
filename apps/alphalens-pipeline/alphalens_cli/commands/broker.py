@@ -8,9 +8,11 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker account                 — account snapshot (cash / value / margin)
     alphalens broker positions               — open positions
     alphalens broker resolve KO [--exchange XNYS]  — instrument resolution (symbol -> Uic)
-    alphalens broker arm KO --date 2026-07-20 [--env sim|live]   — validate
-        against the brief, append an "armed" pick to <env>/picks.jsonl (the
-        auto-manager hand-off seam; --env selects the instance, default sim)
+    alphalens broker arm KO --date 2026-07-20 --frame 24000 --currency PLN
+        [--env sim|live]   — validate against the brief, turn its size percent
+        into an amount (percent / 100 x frame), append an "armed" pick to
+        <env>/picks.jsonl (the auto-manager hand-off seam; --env selects the
+        instance, default sim)
     alphalens broker orders [--format json]  — open orders with side, type,
         resting amount, instrument (symbol, else `uic <n>`), ExternalReference
         + its human label (#1375)
@@ -1491,6 +1493,15 @@ def resolve_command(
 def arm_command(
     ticker: str = typer.Argument(..., help="Plain ticker from the brief, e.g. KO."),
     date: str = typer.Option(..., "--date", help="Brief date (YYYY-MM-DD)."),
+    frame: float = typer.Option(
+        ...,
+        "--frame",
+        help="Account-currency equity the brief's size percent applies to. The pick "
+        "arms with the resulting amount (percent / 100 x frame), fixed at arm time (#1467).",
+    ),
+    currency: str = typer.Option(
+        ..., "--currency", help="Account currency of the amount, ISO 4217 (e.g. PLN, USD)."
+    ),
     briefs_dir: Path = typer.Option(
         _DEFAULT_BRIEFS_DIR, "--briefs-dir", help="Thematic briefs parquet directory."
     ),
@@ -1560,7 +1571,9 @@ def arm_command(
         raise _fail(f"{wanted}: no plannable trade_setup on {trade_date}")
 
     try:
-        spec = parse_brief_to_spec(candidate.trade_setup)
+        spec = parse_brief_to_spec(
+            candidate.trade_setup, frame=frame, currency=currency.strip().upper()
+        )
     except TradeSetupNotPlannableError as exc:
         raise _fail(f"{wanted}: trade_setup not plannable — {exc}") from exc
 
@@ -1605,22 +1618,7 @@ def arm_command(
     typer.echo(f"armed {wanted} @ {trade_date.isoformat()} -> {picks_target}")
 
 
-def _frame_from_sizing_equity_env() -> float | None:
-    """The declared sizing frame off the sizing-equity env, or ``None``."""
-    from alphalens_pipeline.brokers.automanager.live_rails import SIZING_EQUITY_ENV
-
-    raw_frame = os.environ.get(SIZING_EQUITY_ENV)
-    if raw_frame is None or not raw_frame.strip():
-        return None
-    try:
-        return float(raw_frame)
-    except ValueError as exc:
-        raise _fail(f"{SIZING_EQUITY_ENV} is not a number: {raw_frame!r}") from exc
-
-
-def _echo_manual_intent(
-    intent: Any, *, blend: float, frame: float | None, notional: float | None
-) -> None:
+def _echo_manual_intent(intent: Any, *, blend: float) -> None:
     """Echo the compiled manual intent for operator verification (levels, blend, 1R, sizing)."""
     risk = blend - intent.spec.disaster_stop
     tiers_echo = ", ".join(
@@ -1641,11 +1639,7 @@ def _echo_manual_intent(
             f"  — WARNING: {100.0 - tranche_sum:g}% of the position has no TP "
             "(runs under the stop policy only)"
         )
-    size_echo = f"{intent.spec.suggested_size_pct:.2f}% of frame"
-    if frame is not None:
-        size_echo += f" {frame:g}"
-    if notional is not None:
-        size_echo += f" (notional {notional:g})"
+    size_echo = f"{intent.spec.size.notional_acct:g} {intent.spec.size.currency}"
     typer.echo(
         f"manual intent {intent.intent_id} ({intent.instrument.ticker} @ "
         f"{intent.instrument.mic}, source={intent.meta.source})\n"
@@ -1676,20 +1670,17 @@ def arm_manual_command(
         "forms mixable. Tranche percentages must not exceed 100.",
     ),
     no_tp: bool = typer.Option(False, "--no-tp", help="Arm with no TP ladder (trail-only pick)."),
-    size_pct: float | None = typer.Option(
-        None, "--size-pct", help="Full-entry size as percent of the declared frame."
-    ),
-    notional: float | None = typer.Option(
-        None,
+    notional: float = typer.Option(
+        ...,
         "--notional",
-        help="Full-entry notional in ACCOUNT currency; divided by the declared frame. "
-        "Exactly one of --size-pct / --notional.",
+        help="Amount for the whole entry ladder, in ACCOUNT currency. The pick spends it "
+        "as stated; nothing in the daemon's environment rescales it (#1467).",
     ),
-    frame: float | None = typer.Option(
-        None,
-        "--frame",
-        help="Declared sizing frame for --notional; falls back to the sizing-equity env "
-        "(live_rails.SIZING_EQUITY_ENV).",
+    currency: str = typer.Option(
+        ...,
+        "--currency",
+        help="Account currency of --notional, ISO 4217 (e.g. PLN, USD). The daemon refuses "
+        "a pick whose currency is not its account's.",
     ),
     ttl_days: int | None = typer.Option(
         None, "--ttl-days", help="Entry TTL in sessions (default: contract default)."
@@ -1758,9 +1749,6 @@ def arm_manual_command(
 
     _guard_state_layout()
 
-    if notional is not None and frame is None:
-        frame = _frame_from_sizing_equity_env()
-
     now = dt.datetime.now(dt.UTC)
     # #1371: a same-day re-arm is a NEW generation of the (ticker, date) pick.
     # An earlier generation that is still ARMED (pending, or placed with a live
@@ -1789,9 +1777,8 @@ def arm_manual_command(
             stop=stop,
             tps_raw=tp,
             no_tp=no_tp,
-            size_pct=size_pct,
             notional=notional,
-            frame=frame,
+            currency=currency.strip().upper(),
             ttl_days=ttl_days,
             arm_date=now.date(),
             armed_ts=now.isoformat(timespec="seconds"),
@@ -1855,7 +1842,7 @@ def arm_manual_command(
         except JournalWriteError as exc:
             raise _queue_write_failed(exc, journal=picks_target) from exc
 
-    _echo_manual_intent(intent, blend=blend, frame=frame, notional=notional)
+    _echo_manual_intent(intent, blend=blend)
     if generation > 1:
         retired = ", ".join(
             f"g{p.generation} {p.status}" for p in sorted(earlier, key=lambda p: p.generation)
@@ -1984,9 +1971,11 @@ def _assert_version_is_spoken(document: Mapping[str, Any]) -> None:
 
     An ABSENT key is the current version, not an unknown one: the field carries
     a default, so omitting it means "whatever this contract is at". Only a
-    stated, different version is refused — and that includes the retired "1",
-    whose documents all carry the pre-#1252 date key and cannot pass the schema
-    anyway. The journal DRAIN still reads them; it is a different entry point.
+    stated, different version is refused — and that includes the retired "1" and
+    "2". A "2" document sizes by percent, which #1467 removed, so it cannot pass
+    the schema either (it has no `spec.size`); a producer that omits the version
+    is refused there instead. The journal DRAIN still reads history; it is a
+    different entry point.
     """
     from broker_contract.trade_intent.schema import SCHEMA_VERSION
 
@@ -2155,8 +2144,8 @@ def arm_intent_command(
       nothing lost  every key you sent comes back after decode+re-render; the
                   decoder otherwise DROPS what it does not model, and a typo'd
                   `limit_pirce` would arm at a price you never sent
-      coherent    `validate_intent` — allocations, stop below entries, size not
-                  levered, and the exit declaration (#1404)
+      coherent    `validate_intent` — allocations, stop below entries, a positive
+                  amount in a currency code, and the exit declaration (#1404)
 
     Then two questions about this deployment rather than the document: is the
     venue one we trade, and does the pick key still take a write.

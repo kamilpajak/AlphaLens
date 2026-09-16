@@ -371,13 +371,27 @@ class MutatingCommandAmbientEnvTest(unittest.TestCase):
         self.assertIn("live", result.stderr)
 
     def test_arm_refuses_in_a_live_shell_without_an_explicit_env(self) -> None:
-        result = self._invoke(["arm", "KO", "--date", "2026-09-08"], {ENV_VAR: "live"})
+        result = self._invoke(
+            ["arm", "KO", "--date", "2026-09-08", "--frame", "100000", "--currency", "USD"],
+            {ENV_VAR: "live"},
+        )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("--env", result.stderr)
 
     def test_arm_manual_refuses_in_a_live_shell_without_an_explicit_env(self) -> None:
         result = self._invoke(
-            ["arm-manual", "KO", "--tier", "11", "--stop", "10", "--notional", "100"],
+            [
+                "arm-manual",
+                "KO",
+                "--tier",
+                "11",
+                "--stop",
+                "10",
+                "--notional",
+                "100",
+                "--currency",
+                "USD",
+            ],
             {ENV_VAR: "live"},
         )
         self.assertEqual(result.exit_code, 1)

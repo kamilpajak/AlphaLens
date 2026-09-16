@@ -21,6 +21,7 @@ from broker_contract.trade_intent.schema import (
     InstrumentHint,
     IntentMeta,
     ModelPush,
+    PickSize,
     ReanchorOnFill,
     TpTrancheSpec,
     TradeIntent,
@@ -34,7 +35,7 @@ def _spec() -> TradeSpec:
         entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=50.0, tag="T1"),),
         disaster_stop=90.0,
         tp_tranches=(TpTrancheSpec(price=110.0, tranche_pct=100.0, r_multiple=2.0, tag="TP1"),),
-        suggested_size_pct=2.0,
+        size=PickSize(notional_acct=1500.0, currency="USD"),
     )
 
 
@@ -240,7 +241,7 @@ class TestEntryTierMode(unittest.TestCase):
                 ),
                 disaster_stop=39.0,
                 tp_tranches=(),
-                suggested_size_pct=2.0,
+                size=PickSize(notional_acct=1500.0, currency="USD"),
             ),
             meta=_meta(),
             exit=None,
@@ -255,6 +256,32 @@ class TestEntryTierMode(unittest.TestCase):
         del data["spec"]["entry_tiers"][0]["entry_mode"]
         restored = intent_from_jsonable(data)
         self.assertEqual(restored.spec.entry_tiers[0].entry_mode, "pullback")
+
+
+class TestPickSizeCodec(unittest.TestCase):
+    def test_size_round_trips_as_a_nested_object(self) -> None:
+        intent = _intent_with_reanchor()
+        data = intent_to_jsonable(intent)
+
+        self.assertEqual(data["spec"]["size"], {"notional_acct": 1500.0, "currency": "USD"})
+        self.assertEqual(intent_from_jsonable(data), intent)
+
+    def test_a_v2_document_carrying_a_percent_does_not_decode(self) -> None:
+        # #1467: a percent needs a frame the daemon no longer has, so there is no
+        # silent mapping. The journal drain recognises these lines before decoding.
+        data = intent_to_jsonable(_intent_with_reanchor())
+        del data["spec"]["size"]
+        data["spec"]["suggested_size_pct"] = 2.0
+
+        with self.assertRaises(TradeIntentDecodeError):
+            intent_from_jsonable(data)
+
+    def test_a_size_that_is_not_an_object_is_a_decode_error(self) -> None:
+        data = intent_to_jsonable(_intent_with_reanchor())
+        data["spec"]["size"] = 1500.0
+
+        with self.assertRaises(TradeIntentDecodeError):
+            intent_from_jsonable(data)
 
 
 class TestDecodeErrors(unittest.TestCase):

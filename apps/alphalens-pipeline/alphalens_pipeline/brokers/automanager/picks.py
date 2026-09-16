@@ -55,6 +55,7 @@ from broker_contract.trade_intent.codec import (
     intent_from_jsonable,
     intent_to_jsonable,
 )
+from broker_contract.trade_intent.legacy import LEGACY_ALLOWANCES
 from broker_contract.trade_intent.schema import TradeIntent
 
 from alphalens_pipeline.brokers.automanager import state_paths
@@ -455,6 +456,18 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
                 parsed_date,
             )
             continue
+        if _sizes_by_percent(raw_intent):
+            # LEGACY(size_pct_v2) — a pre-#1467 document sizes by a percent of a
+            # frame the daemon no longer has, so it must not decode. Placed lines
+            # are re-read every ~45 s tick, so a WARNING here would repeat for
+            # ever; the drain refuses an unplaced one ONCE via
+            # iter_legacy_size_pct_picks instead.
+            logger.debug(
+                "iter_picks %s/%s: pre-#1467 percent-sized intent — not decoded",
+                ticker,
+                parsed_date,
+            )
+            continue
         try:
             yield intent_from_jsonable(raw_intent)
         except TradeIntentDecodeError as exc:
@@ -467,6 +480,24 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
             continue
 
 
+def _sizes_by_percent(raw_intent: Any) -> bool:
+    return isinstance(raw_intent, Mapping) and LEGACY_ALLOWANCES["size_pct_v2"].still_needed(
+        raw_intent
+    )
+
+
+def iter_legacy_size_pct_picks(*, path: Path | None = None) -> Iterator[PickRecord]:
+    """Yield ARMED picks whose intent sizes by percent (pre-#1467), undecoded.
+
+    LEGACY(size_pct_v2) — :func:`iter_picks` skips these silently, so without
+    this the drain would never learn that an unplaced one exists: it would sit
+    armed and invisible. The caller joins them to the submissions journal and
+    refuses the unplaced ones."""
+    for pick in read_pick_fold(path=path).records:
+        if pick.status == STATUS_ARMED and _sizes_by_percent(pick.record.get("intent")):
+            yield pick
+
+
 __all__ = [
     "FIRST_GENERATION",
     "STATUS_ARMED",
@@ -477,6 +508,7 @@ __all__ = [
     "arm_pick",
     "generation_of",
     "identity_token",
+    "iter_legacy_size_pct_picks",
     "iter_picks",
     "mark_disarmed",
     "mark_refused",

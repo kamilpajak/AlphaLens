@@ -52,8 +52,10 @@ _ARM_MANUAL_ARGS = [
     "80:50",
     "--tp",
     "2R:50",
-    "--size-pct",
-    "3",
+    "--notional",
+    "3000",
+    "--currency",
+    "USD",
 ]
 
 
@@ -84,9 +86,8 @@ def _document(**overrides: object) -> dict:
         stop=66.0,
         tps_raw=["80:50", "2R:50"],
         no_tp=False,
-        size_pct=3.0,
-        notional=None,
-        frame=None,
+        notional=3000.0,
+        currency="USD",
         ttl_days=None,
         arm_date=dt.date(2026, 9, 11),
         armed_ts="2026-09-11T12:00:00+00:00",
@@ -193,7 +194,7 @@ class TheHappyPath(_DoorCase):
         """`--dry-run` is not a way past the rules — the README says it runs
         them all, so a document that would be refused is refused."""
         document = _document()
-        document["spec"]["suggested_size_pct"] = 180.0
+        document["spec"]["size"]["notional_acct"] = 0.0
 
         result = self.arm(document, "--dry-run", "--format", "json")
 
@@ -311,7 +312,7 @@ class TheDocumentMustBeTheRightShape(_DoorCase):
 
     def test_a_version_this_door_does_not_speak_is_refused(self) -> None:
         document = _document()
-        document["meta"]["schema_version"] = "3"
+        document["meta"]["schema_version"] = "4"
         result = self.arm(document, "--format", "json")
         self.assert_untouched(result, "intent_malformed", "schema_version_unsupported")
 
@@ -353,7 +354,7 @@ class TheDocumentMustBeTheRightShape(_DoorCase):
         """
         for label, mutate in (
             ("a string price", lambda d: d["spec"].__setitem__("disaster_stop", "66.0")),
-            ("a boolean size", lambda d: d["spec"].__setitem__("suggested_size_pct", True)),
+            ("a boolean size", lambda d: d["spec"]["size"].__setitem__("notional_acct", True)),
             ("a boolean ttl", lambda d: d["spec"].__setitem__("order_ttl_days", True)),
         ):
             with self.subTest(document=label):
@@ -425,10 +426,28 @@ class TheDocumentMustAlsoBeCoherentAndTradable(_DoorCase):
         self.assertEqual(failure["details"]["reason"], "entry_alloc_sum")
         self.assertEqual(self.inbox_bytes(), b"")
 
-    def test_a_levered_size_is_refused(self) -> None:
+    def test_a_non_positive_amount_is_refused(self) -> None:
         document = _document()
-        document["spec"]["suggested_size_pct"] = 180.0
-        self.assert_refused(self.arm(document, "--format", "json"), "intent_invalid")
+        document["spec"]["size"]["notional_acct"] = -1.0
+        failure = self.assert_refused(self.arm(document, "--format", "json"), "intent_invalid")
+        self.assertEqual(failure["details"]["reason"], "size_notional_not_positive")
+
+    def test_a_pre_1467_percent_document_is_refused_and_nothing_arms(self) -> None:
+        """A v2 document sizes by percent. With no version stated it reaches the
+        schema, which has no `suggested_size_pct` and requires `size`."""
+        document = _document()
+        del document["spec"]["size"]
+        document["spec"]["suggested_size_pct"] = 3.0
+        document["spec"].pop("schema_version", None)
+        document["meta"].pop("schema_version", None)
+        self.assert_refused(self.arm(document, "--format", "json"), "intent_malformed")
+        self.assertEqual(self.inbox_bytes(), b"")
+
+    def test_a_document_stating_version_2_is_refused_by_the_version_gate(self) -> None:
+        document = _document()
+        document["meta"]["schema_version"] = "2"
+        failure = self.assert_refused(self.arm(document, "--format", "json"), "intent_malformed")
+        self.assertEqual(failure["details"]["reason"], "schema_version_unsupported")
 
     def test_a_short_is_refused(self) -> None:
         document = _document()

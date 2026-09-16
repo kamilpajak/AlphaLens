@@ -30,6 +30,7 @@ from broker_contract.trade_intent.schema import (
     InstrumentHint,
     IntentMeta,
     ModelPush,
+    PickSize,
     ReactionPrimitive,
     ReanchorOnFill,
     TpTrancheSpec,
@@ -149,6 +150,9 @@ def _decode_spec(raw: Any) -> TradeSpec:
     kwargs = _filtered(TradeSpec, spec_map)
     kwargs["entry_tiers"] = entry_tiers
     kwargs["tp_tranches"] = tp_tranches
+    if "size" in spec_map:
+        size_map = _require_mapping(spec_map["size"], what="spec.size")
+        kwargs["size"] = PickSize(**_filtered(PickSize, size_map))
     return TradeSpec(**kwargs)
 
 

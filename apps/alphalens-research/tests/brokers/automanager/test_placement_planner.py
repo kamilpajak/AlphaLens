@@ -51,11 +51,7 @@ def _setup_plan(
         for i, t in enumerate(tps)
     )
     return SetupPlan(
-        suggested_size_pct=10.0,
-        scale_factor=1.0,
-        final_size_pct=10.0,
         total_notional=10_000.0,
-        paper_equity=100_000.0,
         disaster_stop=disaster_stop,
         order_ttl_days=order_ttl_days,
         entry_tiers=tiers,

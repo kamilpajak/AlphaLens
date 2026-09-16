@@ -6,11 +6,7 @@ tests pin the numerical contract so a refactor of ``sizing.py`` cannot
 silently drift.
 
 The key invariants:
-- ``scale_factor = min(1.0, daily_target / aggregate_uncapped)``
-  where ``daily_target = STEADY_STATE_GROSS_FRAC × equity / EXPECTED_AVG_HOLD_DAYS``
-  and ``aggregate_uncapped = Σ_i suggested_size_pct_i / 100 × equity``
-- ``final_size_pct = suggested_size_pct × scale_factor`` per candidate
-- ``total_notional = final_size_pct / 100 × equity``
+- ``total_notional = spec.size.notional_acct`` (#1467 — the document states it)
 - ``per_tier_qty = floor(total_notional × alloc_pct / 100 / limit_price)``
 - malformed setups raise :class:`TradeSetupNotPlannableError`, not silent zero-qty
 """
@@ -21,18 +17,13 @@ import math
 import unittest
 
 from alphalens_pipeline.paper.sizing import validate_trade_setup
-from broker_contract.constants import (
-    EXPECTED_AVG_HOLD_DAYS,
-    STEADY_STATE_GROSS_FRAC,
-)
 from broker_contract.sizing import (
     SetupPlan,
     TradeSetupNotPlannableError,
-    compute_daily_scale_factor,
     compute_setup_plan,
     setup_plan_gross_notional,
 )
-from broker_contract.trade_intent.schema import EntryTierSpec, TradeSpec
+from broker_contract.trade_intent.schema import EntryTierSpec, PickSize, TradeSpec
 
 from tests.paper.sizing_test_helpers import plan_from_brief
 
@@ -73,84 +64,25 @@ def _make_setup(
 
 
 # ---------------------------------------------------------------------------
-# compute_daily_scale_factor — the v2 entry point
+# compute_setup_plan — spends the stated amount (#1467)
 # ---------------------------------------------------------------------------
 
 
-class TestDailyScaleFactor(unittest.TestCase):
-    """v2 §2.3: daily_target / aggregate_uncapped, clipped to 1.0."""
-
-    def test_no_candidates_returns_one(self):
-        self.assertEqual(compute_daily_scale_factor([], 1_000_000.0), 1.0)
-
-    def test_aggregate_below_target_clips_to_one(self):
-        """Quiet day: aggregate uncapped is below daily target → no scale-down."""
-        # daily_target @ $1M = 0.667 × 1M / 30 = $22,233. One candidate at 1% =
-        # $10k notional. Below target → scale = 1.0.
-        self.assertEqual(
-            compute_daily_scale_factor([1.0], 1_000_000.0),
-            1.0,
+class TestSetupPlanSpendsTheStatedAmount(unittest.TestCase):
+    def test_total_notional_is_the_documents_amount(self):
+        spec = TradeSpec(
+            entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=100.0),),
+            disaster_stop=90.0,
+            tp_tranches=(),
+            size=PickSize(notional_acct=1_500.0, currency="USD"),
         )
+        self.assertEqual(compute_setup_plan(spec).total_notional, 1_500.0)
 
-    def test_aggregate_above_target_scales_down_proportionally(self):
-        """Busy day: aggregate exceeds target → scale = target / aggregate."""
-        # 8 candidates @ suggested=6% on $1M equity:
-        # aggregate = 8 × 0.06 × 1M = $480_000
-        # daily_target = 0.667 × 1M / 30 = $22,233
-        # scale = 22_233 / 480_000 = 0.0463
-        scale = compute_daily_scale_factor([6.0] * 8, 1_000_000.0)
-        expected = (STEADY_STATE_GROSS_FRAC * 1_000_000.0 / EXPECTED_AVG_HOLD_DAYS) / (
-            8 * 0.06 * 1_000_000.0
-        )
-        self.assertAlmostEqual(scale, expected, places=8)
-        # Sanity: applying scale to one candidate's 6% yields ~0.278% (matches
-        # v1's per-candidate cap by construction; just preserves variance).
-        self.assertAlmostEqual(6.0 * scale, 100.0 / 360, places=2)
-
-    def test_ratios_preserved_across_candidates(self):
-        """v2 § core invariant: a candidate with 8% suggested gets a position
-        33% larger than one with 6% after scaling. v1's cap would have
-        flattened both to 0.278%."""
-        suggested = [6.0, 8.0]
-        scale = compute_daily_scale_factor(suggested, 1_000_000.0)
-        # final/final = 8/6 regardless of scale
-        finals = [s * scale for s in suggested]
-        self.assertAlmostEqual(finals[1] / finals[0], 8.0 / 6.0, places=8)
-
-    def test_empty_iterable_returns_one(self):
-        self.assertEqual(compute_daily_scale_factor(iter([]), 1_000_000.0), 1.0)
-
-    def test_non_positive_equity_returns_one(self):
-        """Defense against bad operator input — scaling against $0 is undefined."""
-        self.assertEqual(compute_daily_scale_factor([6.0], 0.0), 1.0)
-        self.assertEqual(compute_daily_scale_factor([6.0], -100.0), 1.0)
-
-
-# ---------------------------------------------------------------------------
-# compute_setup_plan — applies the precomputed scale factor
-# ---------------------------------------------------------------------------
-
-
-class TestSetupPlanWithScale(unittest.TestCase):
-    def test_final_size_pct_equals_suggested_times_scale(self):
-        setup = _make_setup(suggested_size_pct=6.0)
-        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.05)
-        self.assertAlmostEqual(plan.suggested_size_pct, 6.0)
-        self.assertAlmostEqual(plan.scale_factor, 0.05)
-        self.assertAlmostEqual(plan.final_size_pct, 6.0 * 0.05)
-
-    def test_total_notional_equals_final_pct_over_100_times_equity(self):
+    def test_the_brief_percent_becomes_an_amount_at_parse_time(self):
         setup = _make_setup(suggested_size_pct=6.0)
         plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.04)
         expected = (6.0 * 0.04) / 100.0 * 1_000_000.0
         self.assertAlmostEqual(plan.total_notional, expected, places=4)
-
-    def test_scale_one_preserves_full_suggested_size(self):
-        """When scale=1.0 (quiet day), each candidate gets its full
-        suggested_size_pct as the final size."""
-        setup = _make_setup(suggested_size_pct=2.5)
-        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0)
-        self.assertAlmostEqual(plan.final_size_pct, 2.5)
 
 
 # ---------------------------------------------------------------------------
@@ -373,9 +305,9 @@ class TestEntryModePropagation(unittest.TestCase):
             ),
             disaster_stop=39.0,
             tp_tranches=(),
-            suggested_size_pct=5.0,
+            size=PickSize(notional_acct=50_000.0, currency="USD"),
         )
-        plan = compute_setup_plan(spec, paper_equity=1_000_000.0, scale_factor=1.0)
+        plan = compute_setup_plan(spec)
         self.assertEqual(plan.entry_tiers[0].entry_mode, "immediate")
         self.assertEqual(plan.entry_tiers[1].entry_mode, "pullback")
 
@@ -390,11 +322,11 @@ class TestEntryModePropagation(unittest.TestCase):
                 "entry_tiers": (stub,),
                 "disaster_stop": 45.0,
                 "tp_tranches": (),
-                "suggested_size_pct": 5.0,
+                "size": PickSize(notional_acct=50_000.0, currency="USD"),
                 "order_ttl_days": 0,
             },
         )()
-        plan = compute_setup_plan(spec_stub, paper_equity=1_000_000.0, scale_factor=1.0)
+        plan = compute_setup_plan(spec_stub)
         self.assertEqual(plan.entry_tiers[0].entry_mode, "pullback")
 
 

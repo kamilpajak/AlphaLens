@@ -2103,6 +2103,7 @@ _LIVE_DROPIN_DIR = REPO_ROOT / "deploy" / "systemd" / "alphalens-broker-manager-
 
 _ALLOW_ORDERS = "ALPHALENS_BROKER_ALLOW_ORDERS"
 _SIZING_EQUITY = "ALPHALENS_BROKER_SIZING_EQUITY"
+_MAX_PICK_NOTIONAL = "ALPHALENS_BROKER_MAX_PICK_NOTIONAL"
 
 
 # The Environment= parser and its refusal guard were PROMOTED to
@@ -2145,6 +2146,17 @@ class TestTheShippedLiveConfigBoots(unittest.TestCase):
         # typo'd digit in the declared frame — the exact shape #1121 left
         # unbounded — must be refused.
         broken = dict(_composed_environment(), **{_SIZING_EQUITY: "150000"})
+        with mock.patch.dict("os.environ", broken, clear=True):
+            with self.assertRaises(BrokerCapabilityError):
+                assert_live_rails()
+
+    def test_the_shipped_pick_ceiling_is_the_old_frame_ceiling(self):
+        # #1467: the per-pick amount rail replaces the frame as the bound on one
+        # pick's size, so the drop-in must carry the same number over.
+        self.assertEqual(_composed_environment()[_MAX_PICK_NOTIONAL], "15000")
+
+    def test_a_pick_ceiling_above_the_bound_cannot_boot(self):
+        broken = dict(_composed_environment(), **{_MAX_PICK_NOTIONAL: "15001"})
         with mock.patch.dict("os.environ", broken, clear=True):
             with self.assertRaises(BrokerCapabilityError):
                 assert_live_rails()

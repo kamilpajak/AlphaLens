@@ -143,11 +143,17 @@ class TestTheTrapsAreActuallyWrittenDown(unittest.TestCase):
         for cls_name, field_name in (
             ("EntryTierSpec", "alloc_pct"),
             ("TpTrancheSpec", "tranche_pct"),
-            ("TradeSpec", "suggested_size_pct"),
         ):
             cls = getattr(contract_schema, cls_name)
             with self.subTest(field=f"{cls_name}.{field_name}"):
                 self.assertIn("percentage", self._meaning(cls, field_name).lower())
+
+    def test_the_pick_amount_names_the_account_currency(self) -> None:
+        # #1467: the size is an amount, and the confusion to prevent is reading it
+        # as instrument currency or as a percent.
+        meaning = self._meaning(contract_schema.PickSize, "notional_acct").lower()
+        self.assertIn("account currency", meaning)
+        self.assertIn("whole entry ladder", meaning)
 
     def test_the_one_fraction_says_fraction(self) -> None:
         meaning = self._meaning(contract_schema.TrailingStop, "trail_frac").lower()

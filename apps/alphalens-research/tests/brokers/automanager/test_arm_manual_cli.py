@@ -6,7 +6,7 @@ into a full manual :class:`TradeIntent`, echoes the compiled result for
 verification, and appends it to the selected instance inbox via ``arm_pick``
 — the same seam `broker arm` uses. ``--dry-run`` does everything except the
 append. Level/sizing rules live in ``test_manual_intent.py``; here we pin the
-CLI wiring only: option plumbing, the echo, the env-frame fallback, the
+CLI wiring only: option plumbing, the echo, the
 ``--env`` inbox seam and the legacy-layout guard.
 """
 
@@ -36,8 +36,8 @@ _HAPPY_ARGS = [
     "2R:50",
     "--notional",
     "10000",
-    "--frame",
-    "15000",
+    "--currency",
+    "usd",
 ]
 
 
@@ -165,7 +165,9 @@ class ArmManualCommandTest(unittest.TestCase):
         self.assertEqual(intent.spec.disaster_stop, 66.0)
         # blend = 72.5*0.6 + 70*0.4 = 71.5; 2R above blend with R=5.5 => 82.5
         self.assertAlmostEqual(intent.spec.tp_tranches[1].price, 82.5)
-        self.assertAlmostEqual(intent.spec.suggested_size_pct, 100.0 * 10000 / 15000)
+        # The flag's lowercase currency is normalised; the amount is not rescaled.
+        self.assertEqual(intent.spec.size.notional_acct, 10000.0)
+        self.assertEqual(intent.spec.size.currency, "USD")
 
     def test_echo_shows_compiled_levels(self) -> None:
         from alphalens_cli.commands.broker import broker_app
@@ -176,7 +178,7 @@ class ArmManualCommandTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("71.5", result.output)  # planned blend
         self.assertIn("82.5", result.output)  # computed 2R target
-        self.assertIn("66.67", result.output)  # resolved size_pct
+        self.assertIn("10000 USD", result.output)  # the stated amount
         self.assertIn("manual", result.output)
 
     def test_dry_run_compiles_but_never_appends(self) -> None:
@@ -206,8 +208,8 @@ class ArmManualCommandTest(unittest.TestCase):
             "2R:100",
             "--notional",
             "10000",
-            "--frame",
-            "15000",
+            "--currency",
+            "USD",
             "--dry-run",
         ]
         with mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm:
@@ -234,8 +236,8 @@ class ArmManualCommandTest(unittest.TestCase):
             "--no-tp",
             "--notional",
             "10000",
-            "--frame",
-            "15000",
+            "--currency",
+            "USD",
         ]
         with mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm:
             result = self.runner.invoke(broker_app, args)
@@ -313,7 +315,7 @@ class ArmManualEchoWarningsTest(unittest.TestCase):
             "--tier", "72.5:60", "--tier", "70.0:40",
             "--stop", "66.0",
             "--tp", "80:40",  # 60% of the position keeps no TP target
-            "--notional", "10000", "--frame", "15000",
+            "--notional", "10000", "--currency", "USD",
         ]  # fmt: skip
         with mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick"):
             result = self.runner.invoke(broker_app, args)
@@ -332,57 +334,43 @@ class ArmManualEchoWarningsTest(unittest.TestCase):
         self.assertNotIn("uncovered", result.output)
 
 
-class ArmManualFrameFallbackTest(unittest.TestCase):
-    """``--notional`` without ``--frame`` falls back to the declared-frame env
-    (``live_rails.SIZING_EQUITY_ENV``); no env either → loud refusal."""
+class ArmManualReadsNoFrameTest(unittest.TestCase):
+    """#1467: the amount is the document's. A frame in the environment used to
+    rescale it; now it must change nothing."""
 
     def setUp(self) -> None:
         self.runner = CliRunner()
         self.home = _isolate_home(self)
-        self.args = [a for a in _HAPPY_ARGS if a not in ("--frame", "15000")]
 
-    def test_frame_falls_back_to_sizing_equity_env(self) -> None:
+    def test_a_sizing_frame_in_the_environment_does_not_change_the_amount(self) -> None:
         from alphalens_cli.commands.broker import broker_app
-        from alphalens_pipeline.brokers.automanager.live_rails import SIZING_EQUITY_ENV
 
         with (
-            mock.patch.dict(os.environ, {SIZING_EQUITY_ENV: "15000"}),
+            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_SIZING_EQUITY": "100000"}),
             mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
         ):
-            result = self.runner.invoke(broker_app, self.args)
+            result = self.runner.invoke(broker_app, _HAPPY_ARGS)
 
         self.assertEqual(result.exit_code, 0, result.output)
         (intent,), _kwargs = arm.call_args
-        self.assertAlmostEqual(intent.spec.suggested_size_pct, 100.0 * 10000 / 15000)
+        self.assertEqual(intent.spec.size.notional_acct, 10000.0)
 
-    def test_no_frame_anywhere_refuses(self) -> None:
+    def test_the_old_frame_flag_is_gone(self) -> None:
         from alphalens_cli.commands.broker import broker_app
-        from alphalens_pipeline.brokers.automanager.live_rails import SIZING_EQUITY_ENV
 
-        env_without_frame = {k: v for k, v in os.environ.items() if k != SIZING_EQUITY_ENV}
-        with (
-            mock.patch.dict(os.environ, env_without_frame, clear=True),
-            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
-        ):
-            result = self.runner.invoke(broker_app, self.args)
+        result = self.runner.invoke(broker_app, [*_HAPPY_ARGS, "--frame", "15000"])
 
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("frame", result.output)
-        arm.assert_not_called()
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("No such option", result.output)
 
-    def test_malformed_env_frame_refuses(self) -> None:
+    def test_the_currency_flag_is_required(self) -> None:
         from alphalens_cli.commands.broker import broker_app
-        from alphalens_pipeline.brokers.automanager.live_rails import SIZING_EQUITY_ENV
 
-        with (
-            mock.patch.dict(os.environ, {SIZING_EQUITY_ENV: "not-a-number"}),
-            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
-        ):
-            result = self.runner.invoke(broker_app, self.args)
+        args = [a for a in _HAPPY_ARGS if a not in ("--currency", "usd")]
+        result = self.runner.invoke(broker_app, args)
 
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn(SIZING_EQUITY_ENV, result.output)
-        arm.assert_not_called()
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("--currency", result.output)
 
 
 class ArmManualLegacyLayoutGuardTest(unittest.TestCase):
@@ -442,8 +430,10 @@ class TheJsonFormEmitsTheArtefactNotADescriptionOfIt(unittest.TestCase):
                 "90",
                 "--tp",
                 "110:100",
-                "--size-pct",
-                "3",
+                "--notional",
+                "3000",
+                "--currency",
+                "USD",
                 "--format",
                 "json",
                 *extra,
