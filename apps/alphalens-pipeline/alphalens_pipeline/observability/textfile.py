@@ -95,9 +95,6 @@ _LATCH_CAP = 512
 _LATCHED: set[tuple[str, str]] = set()
 _LATCH_LOCK = threading.Lock()
 
-# Anything a conversion of a caller's value can raise is a refusal, never a raise.
-_CONVERSION_ERRORS = (ArithmeticError, ValueError, TypeError)
-
 
 def _render_value(value: object) -> str | None:
     """The sample text for ``value``, or ``None`` when it is not a valid sample.
@@ -114,7 +111,7 @@ def _render_value(value: object) -> str | None:
         if isinstance(value, numbers.Integral):
             return str(int(value))
         number = float(value)
-    except _CONVERSION_ERRORS:
+    except Exception:  # a caller's __int__ / __float__ may raise anything: a refusal
         return None
     return repr(number) if math.isfinite(number) else None
 
@@ -128,7 +125,13 @@ def _describe(value: object) -> str:
 
 
 def _report_refusals(job: str, refused: Mapping[str, object], accepted: set[str]) -> None:
-    """Log each refused expression once, and one INFO when it writes cleanly again."""
+    """Log each refused expression once, and one INFO when it writes cleanly again.
+
+    The log calls run outside the lock on purpose. The one ordering this allows
+    under concurrency is harmless: thread A latches a refusal, thread B writes
+    the same expression cleanly and logs the recovery before A logs its ERROR.
+    Every refusal is still logged, and the next refusal logs again.
+    """
     for expression, value in refused.items():
         key = (job, expression)
         with _LATCH_LOCK:

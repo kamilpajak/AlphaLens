@@ -274,6 +274,20 @@ class _HostileFloat(float):
         raise RuntimeError("refuses to render")
 
 
+class _RuntimeErrorFloat(float):
+    """Conversion raises an exception outside the arithmetic/value/type family."""
+
+    def __float__(self) -> float:
+        raise RuntimeError("refuses to convert")
+
+
+class _KeyErrorInt(int):
+    """An ``Integral`` whose ``__int__`` raises."""
+
+    def __int__(self) -> int:
+        raise KeyError("refuses to convert")
+
+
 class TestEmitDomainMetricsValueContract(unittest.TestCase):
     """#1462: a bad value is DROPPED and REPORTED, never written and never raised.
 
@@ -302,6 +316,8 @@ class TestEmitDomainMetricsValueContract(unittest.TestCase):
         ("datetime", dt.datetime(2026, 9, 16)),
         ("huge Fraction", Fraction(10**400, 1)),
         ("hostile float", _HostileFloat(1.0)),
+        ("RuntimeError float", _RuntimeErrorFloat(1.0)),
+        ("KeyError int", _KeyErrorInt(3)),
     )
 
     ACCEPTED = (

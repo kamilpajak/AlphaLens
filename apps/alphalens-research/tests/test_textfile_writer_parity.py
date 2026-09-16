@@ -62,6 +62,16 @@ class _HostileFloat(float):
         raise RuntimeError("refuses to render")
 
 
+class _RuntimeErrorFloat(float):
+    def __float__(self) -> float:
+        raise RuntimeError("refuses to convert")
+
+
+class _KeyErrorInt(int):
+    def __int__(self) -> int:
+        raise KeyError("refuses to convert")
+
+
 CASES: tuple[tuple[str, object], ...] = (
     ("int", 3),
     ("negative int", -2),
@@ -90,6 +100,8 @@ CASES: tuple[tuple[str, object], ...] = (
     ("datetime", dt.datetime(2026, 9, 16)),
     ("huge Fraction", Fraction(10**400, 1)),
     ("hostile float", _HostileFloat(1.0)),
+    ("RuntimeError float", _RuntimeErrorFloat(1.0)),
+    ("KeyError int", _KeyErrorInt(3)),
 )
 
 
@@ -128,7 +140,7 @@ class TestTheTwoWritersRenderEveryValueIdentically(unittest.TestCase):
                 self.assertEqual(ours, theirs)
 
     def test_the_shared_constants_agree(self) -> None:
-        for name in ("INVALID_SAMPLES_METRIC", "_LATCH_CAP", "_CONVERSION_ERRORS"):
+        for name in ("INVALID_SAMPLES_METRIC", "_LATCH_CAP"):
             with self.subTest(constant=name):
                 self.assertEqual(
                     getattr(pipeline_textfile, name), getattr(self.django_textfile, name)

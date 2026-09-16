@@ -107,6 +107,16 @@ def test_unwritable_directory_raises(tmp_path: Path, monkeypatch):
 _SAMPLE = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*(\{[^}]*\})? (?P<value>\S+)$")
 
 
+class _RuntimeErrorFloat(float):
+    def __float__(self) -> float:
+        raise RuntimeError("refuses to convert")
+
+
+class _KeyErrorInt(int):
+    def __int__(self) -> int:
+        raise KeyError("refuses to convert")
+
+
 @pytest.fixture(autouse=True)
 def _fresh_latch(monkeypatch):
     monkeypatch.setattr(textfile, "_LATCHED", set())
@@ -134,6 +144,8 @@ def _assert_node_exporter_accepts(body: str) -> None:
         np.array(2.5),
         dt.datetime(2026, 9, 16, tzinfo=dt.UTC),
         Fraction(10**400, 1),
+        _RuntimeErrorFloat(1.0),
+        _KeyErrorInt(3),
     ],
     ids=[
         "True",
@@ -148,6 +160,8 @@ def _assert_node_exporter_accepts(body: str) -> None:
         "0-d array",
         "datetime",
         "huge Fraction",
+        "RuntimeError float",
+        "KeyError int",
     ],
 )
 def test_a_refused_value_is_dropped_counted_logged_and_not_raised(

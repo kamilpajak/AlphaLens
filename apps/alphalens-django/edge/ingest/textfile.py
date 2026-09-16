@@ -57,7 +57,6 @@ INVALID_SAMPLES_METRIC = "alphalens_textfile_invalid_samples"
 _LATCH_CAP = 512
 _LATCHED: set[tuple[str, str]] = set()
 _LATCH_LOCK = threading.Lock()
-_CONVERSION_ERRORS = (ArithmeticError, ValueError, TypeError)
 
 
 def _render_value(value: object) -> str | None:
@@ -68,7 +67,7 @@ def _render_value(value: object) -> str | None:
         if isinstance(value, numbers.Integral):
             return str(int(value))
         number = float(value)
-    except _CONVERSION_ERRORS:
+    except Exception:  # noqa: BLE001 - a caller's __int__ / __float__ may raise anything
         return None
     return repr(number) if math.isfinite(number) else None
 
