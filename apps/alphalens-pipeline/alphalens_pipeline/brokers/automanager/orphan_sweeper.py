@@ -1,6 +1,6 @@
 """Orphan-sweeper — read-only detector for the place-before-journal crash window.
 
-_place_and_record journals AFTER placement, so a crash between the POST and the
+_place_tiers journals each tier AFTER its POST, so a crash between the POST and the
 journal write leaves an order/position at Saxo the append-only journal never
 recorded. On start-of-process the sweeper flags them (design memo, Components
 §12): an open ORDER whose id is absent from the journal's known entry + exit

@@ -9,7 +9,7 @@ confidently wrong thresholds. The rule the package states about itself is in
 A failure-code registry is exactly the shape that invites the same mistake. The
 broker taxonomy's codes belong to the contract — every adapter raises those
 classes. ``usage``, ``env_ambiguous``, ``live_refused``, ``state_layout``,
-``policy_refused``, ``pick_already_armed`` and ``unclassified`` do not: they are
+``pick_already_armed`` and ``unclassified`` do not: they are
 decisions a command-line program makes, and a second consumer of the published
 package must not find them there and assume they are part of the contract.
 
@@ -41,7 +41,6 @@ CLI_OWNED_CODES = frozenset(
         "queue_write_failed",
         "intent_malformed",
         "venue_unsupported",
-        "policy_refused",
         "stream_metrics_missing",
         "unclassified",
     }

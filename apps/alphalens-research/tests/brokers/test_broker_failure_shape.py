@@ -48,7 +48,6 @@ _CLI_ONLY_CODES = frozenset(
         "env_ambiguous",
         "live_refused",
         "state_layout",
-        "policy_refused",
         "pick_already_armed",
         "not_found",
         "unclassified",

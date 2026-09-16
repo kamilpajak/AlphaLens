@@ -4,9 +4,7 @@
 Covers :func:`build_fx_conversion` (the policy-acceptance seam between the
 adapter's verbatim ``FxRateQuote`` and sizing's ``FxConversion`` — injected
 clock for staleness, refuse-to-size on every bad-quote class, NEVER a 1.0
-fallback), :func:`fx_precheck_divergence_pct` (direction-aware: precheck's
-rate is instrument->account and must be INVERTED before comparing), and the
-operator-locked policy constant values.
+fallback) and the operator-locked policy constant values.
 """
 
 from __future__ import annotations
@@ -15,10 +13,7 @@ import datetime as dt
 import unittest
 
 from alphalens_pipeline.brokers import execution
-from alphalens_pipeline.brokers.execution import (
-    build_fx_conversion,
-    fx_precheck_divergence_pct,
-)
+from alphalens_pipeline.brokers.execution import build_fx_conversion
 from broker_contract.fx import FxRateQuote
 from broker_contract.sizing import TradeSetupNotPlannableError
 
@@ -121,38 +116,6 @@ class TestBuildFxConversionRefusals(unittest.TestCase):
             build_fx_conversion(_quote(), now=stale_now)
         self.assertIn("stale", str(ctx.exception))
         self.assertIsNotNone(build_fx_conversion(_quote(), now=fresh_now))
-
-
-class TestFxPrecheckDivergence(unittest.TestCase):
-    """Direction-aware cross-check: precheck rate is instrument->account."""
-
-    def test_exact_inverse_is_zero_divergence(self):
-        self.assertAlmostEqual(fx_precheck_divergence_pct(4.34, 1.0 / 4.34), 0.0, places=9)
-
-    def test_precheck_rate_implying_a_higher_sizing_rate(self):
-        # Saxo's inverted rate 3% ABOVE the sizing rate.
-        implied = 4.34 * 1.03
-        divergence = fx_precheck_divergence_pct(4.34, 1.0 / implied)
-        self.assertAlmostEqual(divergence, 3.0, places=9)
-
-    def test_precheck_rate_implying_a_lower_sizing_rate(self):
-        # Saxo's inverted rate 3% BELOW the sizing rate — the absolute value
-        # catches both directions.
-        implied = 4.34 * 0.97
-        divergence = fx_precheck_divergence_pct(4.34, 1.0 / implied)
-        self.assertAlmostEqual(divergence, 3.0, places=9)
-
-    def test_forgetting_to_invert_would_scream(self):
-        # A wrong-direction bug shows ~1800% off for EURPLN — pin that the
-        # bound would catch it loudly.
-        divergence = fx_precheck_divergence_pct(4.34, 4.34)
-        self.assertGreater(divergence, 90.0)
-
-    def test_non_positive_rates_raise_value_error(self):
-        with self.assertRaises(ValueError):
-            fx_precheck_divergence_pct(0.0, 0.23)
-        with self.assertRaises(ValueError):
-            fx_precheck_divergence_pct(4.34, 0.0)
 
 
 class TestFxPolicyConstantValues(unittest.TestCase):

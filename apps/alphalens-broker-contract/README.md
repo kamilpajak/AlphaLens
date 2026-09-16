@@ -58,14 +58,13 @@ breaking change, so `unclassified` must never be a branch condition. Read it as
 | `intent_invalid` | contract | no | The submitted `TradeIntent` is internally inconsistent. Nothing was queued. |
 | `usage` | CLI | no | The invocation is malformed (unknown option value, bad date, bad bound, unknown instance name). |
 | `env_ambiguous` | CLI | no | The shell names one broker instance and a queue-writing command defaults to another. Pass `--env` explicitly (#1377). |
-| `live_refused` | CLI | no | A LIVE operation was refused: ad-hoc placement on LIVE is forbidden (ADR 0017), or the LIVE rails / auth surface are absent. |
+| `live_refused` | CLI | no | A LIVE broker could not be built: the LIVE rails or auth surface are absent from the process (ADR 0017). |
 | `state_layout` | CLI | no | Durable broker state is still in the pre-migration flat layout (ADR 0016 D4). |
 | `pick_already_armed` | CLI | no | A live earlier generation of this (ticker, trade date) is still armed. Carries a `suggestions` argv. |
 | `pick_not_writable` | CLI | no | This pick key cannot take a write: the generation was disarmed or refused, or the daemon has already placed it. `details.reason` is `generation_spent` or `already_placed`. Carries a `suggestions` argv. |
 | `intent_malformed` | CLI | no | The submitted document does not match the published wire contract. `details.reason` names which gate refused it (see below). Nothing was queued. |
 | `venue_unsupported` | CLI | no | The document is well formed; this deployment does not trade that MIC. `details.mic` carries the venue. A venue list is deployment knowledge, never a document rule (#1122, #1404). |
 | `queue_write_failed` | CLI | **yes** | Appending to a broker journal failed (disk full, permissions). Nothing was queued and no broker order can be in flight — the commands that report this write only to the queue — so the same command may be re-run once the cause clears. `details.journal` names the file. |
-| `policy_refused` | CLI | no | A safety policy refused the operation (gross guard, FX divergence, unverifiable instrument currency, a resting order in the way). |
 | `stream_metrics_missing` | CLI | no | The stream gauge textfile does not exist for this instance. Carries a `suggestions` argv. |
 | `unclassified` | CLI | no | Not yet given a code. Never branch on it. |
 

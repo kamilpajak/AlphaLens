@@ -1,6 +1,6 @@
 """Append-only submission journal for broker order placement (P2).
 
-One JSON line per ``broker submit --execute`` run under
+One JSON line per daemon placement run (``control_loop._place_tiers``) under
 ``~/.alphalens/broker_orders/<env>/submissions.jsonl`` (per-environment path,
 ``state_paths.submissions_path``, ADR 0016) — the FIRST execution output, and
 the P3 reconciler's input. Every record is stamped with
@@ -107,8 +107,8 @@ def build_submission_record(
 
     Schema-3: ``sizing.est_round_trip_fee_bps`` (broker sizing memo §4.5) is
     ALWAYS present — the honest per-tier round-trip fee estimate the placer
-    computed, or a REAL null when the caller has no sized plan (explicit-qty
-    CLI submits, note records built outside ``_place_tiers``).
+    computed, or a REAL null when the caller has no sized plan (note records
+    built outside ``_place_tiers``).
     """
     stamp = sizing if sizing is not None else SizingStamp()
     fx = stamp.fx

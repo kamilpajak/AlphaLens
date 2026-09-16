@@ -1,16 +1,15 @@
 """CLI tests for the env-aware one-off broker resolution (``_cli_broker``).
 
 The one-off ``alphalens broker`` commands (account / positions / resolve /
-submit / orders / reconcile / reconcile-fills / cancel) resolve their broker
+orders / reconcile / reconcile-fills / cancel) resolve their broker
 per ``ALPHALENS_BROKER_ENVIRONMENT`` through the SAME seam the per-env
 journal paths use (``state_paths.broker_environment``), instead of
 unconditionally calling the SIM-only registry — pre-fix, ``reconcile`` under
 ``env=live`` read the live journal but asked the SIM gateway. Under ``sim``
 (the default) the registry path is byte-identical to before; under ``live``
 read commands (cancel included — risk-reducing) build the broker via the
-ADR 0017 LIVE factory, and ad-hoc placement (``submit``, whose dry-run
-preview still needs a broker) refuses loud BEFORE any broker construction:
-the daemon is the only LIVE placement path.
+ADR 0017 LIVE factory. No command places an order; the daemon is the only
+placement path (``tests/brokers/test_broker_cli_places_nothing.py``).
 
 Every helper-resolved command echoes one ``env=<env> gateway=<label>`` line
 to STDERR (stdout carries the result only — CLI convention).
@@ -30,10 +29,8 @@ from typer.testing import CliRunner
 
 from tests.test_broker_cli import (
     _CLEAN_KINDS,
-    _SUBMIT_ARGS,
     _CliFakeBroker,
     _ReconcileHarness,
-    _SubmitHarness,
 )
 
 ENV_VAR = "ALPHALENS_BROKER_ENVIRONMENT"
@@ -212,45 +209,6 @@ class TestLiveReadRouting(unittest.TestCase):
         self.assertIn("standing grant mismatch", result.stderr)
         self.assertIn("env=live gateway=refused", result.stderr)
         self.assertNotIn("gateway=live", result.stderr)
-
-
-class TestLiveSubmitRefusal(unittest.TestCase):
-    def setUp(self):
-        self.runner = CliRunner()
-
-    def _invoke_submit_live(self, extra_args: list[str]) -> tuple:
-        harness = _SubmitHarness(self)
-        with (
-            mock.patch.dict("os.environ", {ENV_VAR: "live"}, clear=True),
-            mock.patch(LIVE_FACTORY_SEAM) as live_mock,
-        ):
-            from alphalens_cli.commands.broker import broker_app
-
-            result = self.runner.invoke(broker_app, [*_SUBMIT_ARGS, *extra_args])
-        return harness, live_mock, result
-
-    def test_live_submit_dry_run_refuses_before_any_broker_read(self):
-        # There is NO broker-free preview: the dry-run still reads the account
-        # and prechecks server-side, so the WHOLE command refuses under
-        # env=live — before the account read, not only before placement.
-        harness, live_mock, result = self._invoke_submit_live([])
-
-        self.assertNotEqual(result.exit_code, 0)
-        live_mock.assert_not_called()
-        self.assertEqual(harness.broker.precheck_calls, [], "no broker read may happen")
-        self.assertEqual(harness.broker.place_calls, [])
-        self.assertIn("alphalens broker manage", result.stderr)
-        self.assertIn("ADR 0017", result.stderr)
-
-    def test_live_submit_execute_refuses_before_any_broker_read(self):
-        harness, live_mock, result = self._invoke_submit_live(["--execute", "--yes"])
-
-        self.assertNotEqual(result.exit_code, 0)
-        live_mock.assert_not_called()
-        self.assertEqual(harness.broker.precheck_calls, [], "no broker read may happen")
-        self.assertEqual(harness.broker.place_calls, [], "nothing may be placed")
-        self.assertEqual(harness.appended, [], "nothing may be journaled")
-        self.assertIn("alphalens broker manage", result.stderr)
 
 
 if __name__ == "__main__":

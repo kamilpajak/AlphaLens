@@ -138,9 +138,7 @@ _UNIT_PROPERTIES = {
 # Every command that can render JSON today: the argv that runs it, whether it
 # takes `--env`, and the body keys its envelope must carry beyond schema/env.
 # The three reads joined in #1389, when the failure contract gave the group a
-# machine caller; `submit` stays text-only on purpose (it is LIVE-forbidden by
-# ADR 0017, carries the module's only interactive confirmation, and `arm` is
-# what a client drives instead). `resolve` carries no `--env` because it names
+# machine caller. `resolve` carries no `--env` because it names
 # an instrument, not an instance; `reconcile-fills` carries none because it
 # WRITES the execution-quality parquet, so #1377 left it out of the
 # read-command option — its envelope still names the instance it read.

@@ -31,7 +31,7 @@ Which codes live here
 Only the ones the CONTRACT owns: the broker error taxonomy in
 :mod:`broker_contract.contract`, plus ``intent_invalid`` (raised by the intent
 validator). The CLI's own vocabulary (``usage``, ``env_ambiguous``,
-``live_refused``, ``state_layout``, ``policy_refused``, ``pick_already_armed``,
+``live_refused``, ``state_layout``, ``pick_already_armed``,
 ``not_found``, ``unclassified``) stays with the CLI. That split is the #1122
 decision applied again: the Saxo fee card was moved out of this package because
 *"the ADAPTER reports, never the contract decides"*, and a CLI concept defined
