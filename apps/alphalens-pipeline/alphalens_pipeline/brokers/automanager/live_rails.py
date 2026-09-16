@@ -3,16 +3,15 @@
 **The most dangerous verified fact this guards against:** the code defaults
 of the safety rails are permissive — ``safety.DEFAULT_MAX_OPEN = 3``,
 ``safety.DEFAULT_PORTFOLIO_GROSS_FRAC = 1.0`` (100% gross), and
-``safety.DEFAULT_DAILY_LOSS_LIMIT_R = 3.0``. Sizing equity, the exit policy,
-and the round-trip fee floor have no live-safe default either (raw account
-snapshot sizing, the silently-inert ``setup_static`` exit geometry, and an
-unset fee floor respectively). A LIVE unit missing one pin would trade 100%
+``safety.DEFAULT_DAILY_LOSS_LIMIT_R = 3.0``. The per-pick amount ceiling and
+the round-trip fee floor have no live-safe default either (an unset ceiling
+admits any amount a document states, and an unset fee floor admits any cost). A LIVE unit missing one pin would trade 100%
 gross of the real balance instead of failing to boot.
 
-``assert_live_rails`` refuses to let a LIVE instance start unless ALL NINE of
+``assert_live_rails`` refuses to let a LIVE instance start unless ALL EIGHT of
 ``ALPHALENS_BROKER_MAX_OPEN``, ``ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC``,
-``ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R``, ``ALPHALENS_BROKER_SIZING_EQUITY``,
-``ALPHALENS_BROKER_SIZING_EQUITY_MODE``, ``ALPHALENS_BROKER_MAX_FEE_BPS``,
+``ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R``,
+``ALPHALENS_BROKER_SIZING_EQUITY_MODE`` (the cash-floor switch), ``ALPHALENS_BROKER_MAX_FEE_BPS``,
 ``ALPHALENS_BROKER_MAX_PICK_NOTIONAL`` (the per-pick amount ceiling, #1467),
 ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` (the entry-trailing distance, memo
 ``docs/research/entry_trailing_design_2026_08_12.md`` §6 — an operator must
@@ -28,8 +27,7 @@ a document's own exit levels were placed; the document says that itself now, so
 the variable named nothing and the rail demanded a pin no code read.
 
 The numeric bounds (MAX_OPEN <= 10, PORTFOLIO_GROSS_FRAC <= 1.0,
-DAILY_LOSS_LIMIT_R <= 2.0, SIZING_EQUITY <= 15000, MAX_FEE_BPS <= 1000,
-MAX_PICK_NOTIONAL <= 15000,
+DAILY_LOSS_LIMIT_R <= 2.0, MAX_FEE_BPS <= 1000, MAX_PICK_NOTIONAL <= 15000,
 ENTRY_TRAIL_BPS <= 150, and ENTRY_WATCH_MAX_PICKS <= 10) are the
 operator-decided §8 caps for the soak — NOT a mechanism for widening risk
 later without also widening this assert. MAX_OPEN and ENTRY_WATCH_MAX_PICKS
@@ -59,21 +57,21 @@ lab could hold more concurrent watches would therefore have widened LIVE as a
 side effect of a decision taken about the lab alone. Pinning it here makes the
 two independent.
 
-SIZING_EQUITY and MAX_FEE_BPS carried a floor but no CEILING until issue
-#1121, which is the one shape this assert was blind to: the declared frame is
-the direct multiplier on position size, so a typo of 150000 for 15000 passed
-every check and would have traded ten times the intended size. Both ceilings
-are the values the LIVE unit already ran on the day they were added, so
-nothing changed at deploy time; what changed is that widening either one is
-now a reviewed code edit instead of a silent host edit.
+The sizing frame (ALPHALENS_BROKER_SIZING_EQUITY) and MAX_FEE_BPS carried a
+floor but no CEILING until issue #1121: the frame was the direct multiplier on
+position size, so a typo of 150000 for 15000 passed every check. #1467 removed
+the frame — a pick states its own amount — and MAX_PICK_NOTIONAL carries the
+frame's 15000 ceiling over as the bound on one pick's amount. Every ceiling here
+was the value the LIVE unit already ran on the day it was added, so widening one
+is a reviewed code edit instead of a silent host edit.
 
 Env-var NAMES are imported from their owning modules (``safety.py`` for the
 three portfolio rails already used by ``safety.check``,
 ``position_manager.py`` for the exit-policy flag already used by
 ``control_loop.build_default_deps``) — never re-declared as string literals,
 so the boot-assert and the runtime reader can never drift onto different env
-var names. ``SIZING_EQUITY_ENV`` and ``MAX_FEE_BPS_ENV`` are new (no PR-A
-consumer reads sizing equity or the fee floor yet — PR-B wires them).
+var names. ``MAX_FEE_BPS_ENV`` and ``MAX_PICK_NOTIONAL_ENV`` are owned here;
+their runtime readers are in ``control_loop``.
 """
 
 from __future__ import annotations
@@ -94,20 +92,20 @@ from alphalens_pipeline.brokers.automanager.safety import (
     PORTFOLIO_GROSS_FRAC_ENV,
 )
 
-# New env-var names — no PR-A consumer reads either yet (PR-B wires the
-# min(pinned, snapshot) sizing and the round-trip fee floor).
-SIZING_EQUITY_ENV = "ALPHALENS_BROKER_SIZING_EQUITY"
+# The round-trip fee floor, read by the placement drain.
 MAX_FEE_BPS_ENV = "ALPHALENS_BROKER_MAX_FEE_BPS"
 # The largest account-currency amount one pick may state (#1467). Read by the
 # placement drain, which refuses a larger pick before the day-1 gate.
 MAX_PICK_NOTIONAL_ENV = "ALPHALENS_BROKER_MAX_PICK_NOTIONAL"
 
-# Declared-frame sizing mode (memo broker_sizing_declared_frame_design §4.1).
-# Names live ONLY here — every consumer (control_loop's sizing resolver, the
-# tests) imports them, mirroring the module-ownership doctrine above.
+# The cash-floor switch. Its name is historical: it used to select how the
+# sizing frame was resolved (memo broker_sizing_declared_frame_design §4.1), and
+# since #1467 removed the frame, ``declared`` means one thing only — the cash
+# floor runs (control_loop._check_cash_floor, status_snapshot._cash_floor).
+# Renaming the variable is a unit change on the VPS, left for a separate step.
 SIZING_EQUITY_MODE_ENV = "ALPHALENS_BROKER_SIZING_EQUITY_MODE"
-SIZING_MODE_CLAMPED = "clamped"  # min(pin, snapshot) — today's behavior
-SIZING_MODE_DECLARED = "declared"  # the pin IS the frame; the cash floor (PR-2) guards it
+SIZING_MODE_CLAMPED = "clamped"  # the cash floor is off
+SIZING_MODE_DECLARED = "declared"  # the cash floor is on
 _VALID_SIZING_MODES = (SIZING_MODE_CLAMPED, SIZING_MODE_DECLARED)
 
 # Operator-decided §8 soak bounds (design memo §3 table). Widening risk later
@@ -122,17 +120,13 @@ _DAILY_LOSS_LIMIT_R_UPPER = 2.0
 # values because that is the point: the ceiling is the last deliberate decision,
 # so widening one is a design-memo decision here, never a silent host edit.
 #
-# These two were checked for POSITIVITY only until issue #1121, which left the
-# declared frame — the direct multiplier on position size — unbounded above: a
-# typo of 150000 for 15000 booted clean and would have traded ten times the
-# intended size. Each ceiling is the value the LIVE unit already runs, so
-# bounding them changed nothing on the day it shipped; the point is that every
-# future widening is now a reviewed code change rather than a silent host edit.
-_SIZING_EQUITY_UPPER = 15_000.0
+# The fee floor was checked for POSITIVITY only until issue #1121. Each ceiling
+# is the value the LIVE unit already runs, so bounding it changed nothing on the
+# day it shipped; every future widening is a reviewed code change.
 _MAX_FEE_BPS_UPPER = 1_000.0
 # #1467 replaced "percent x frame" with an amount the document states. The frame
-# ceiling above was therefore the only bound on one pick's size (100% of at most
-# 15000); this carries the same number over, so the day it ships nothing widens.
+# ceiling (15000) had been the only bound on one pick's size; this carries the
+# same number over, so the day it shipped nothing widened.
 _MAX_PICK_NOTIONAL_UPPER = 15_000.0
 # The LIVE ceiling on concurrent entry-trail watches (#1189). Deliberately here
 # and NOT beside the shared runtime bound in `entry_trails`: this module is the
@@ -205,7 +199,7 @@ def _check_sizing_mode(var: str) -> str | None:
 
 
 def assert_live_rails() -> None:
-    """Refuse to let a LIVE instance boot unless all nine safety-rail env vars
+    """Refuse to let a LIVE instance boot unless all eight safety-rail env vars
     are explicitly set and within the live-soak bounds (design memo §3 point
     2 / ADR 0017 point 4; the 7th pin is the entry-trailing distance per the
     entry-trailing design memo §6 — explicit ``"0"`` = trailing off; the 8th is
@@ -232,9 +226,6 @@ def assert_live_rails() -> None:
                 DAILY_LOSS_LIMIT_R_ENV,
                 exclusive_lo=0.0,
                 inclusive_hi=_DAILY_LOSS_LIMIT_R_UPPER,
-            ),
-            _check_float_bounded(
-                SIZING_EQUITY_ENV, exclusive_lo=0.0, inclusive_hi=_SIZING_EQUITY_UPPER
             ),
             _check_sizing_mode(SIZING_EQUITY_MODE_ENV),
             _check_float_bounded(
@@ -287,7 +278,6 @@ __all__ = [
     "MAX_OPEN_ENV",
     "MAX_PICK_NOTIONAL_ENV",
     "PORTFOLIO_GROSS_FRAC_ENV",
-    "SIZING_EQUITY_ENV",
     "SIZING_EQUITY_MODE_ENV",
     "SIZING_MODE_CLAMPED",
     "SIZING_MODE_DECLARED",

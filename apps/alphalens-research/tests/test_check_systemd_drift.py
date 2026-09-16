@@ -180,10 +180,7 @@ class TestUnitRequirements(unittest.TestCase):
         The positive control survives in the arm that matters: a unit that
         never builds a LIVE client must NOT declare a requirement, or the
         gauge really would be a permanent 0."""
-        builds_live_client = {
-            "alphalens-broker-manager-live",
-            "alphalens-broker-capital-reader",
-        }
+        builds_live_client = {"alphalens-broker-manager-live"}
         for unit, _base, required in drift.UNITS:
             if unit in builds_live_client:
                 self.assertEqual(required, drift.LIVE_GRANT_VARS, unit)

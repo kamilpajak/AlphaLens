@@ -24,7 +24,7 @@ Type=oneshot
 # over an absent series returns nothing, so the alert meant to catch a
 # frozen /edge could not fire. Explicit pin rather than EnvironmentFile=:
 # the only thing this unit needs from that file is this one non-secret path
-# (the broker-manager / price-reader / capital-reader precedent).
+# (the broker-manager / price-reader precedent).
 Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile
 TimeoutStartSec=20min
 # The mgmt command is mtime-gated + idempotent, so redundant runs are ~free.

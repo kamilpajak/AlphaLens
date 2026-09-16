@@ -28,7 +28,6 @@ from alphalens_pipeline.brokers.automanager.live_rails import (
     MAX_OPEN_ENV,
     MAX_PICK_NOTIONAL_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
-    SIZING_EQUITY_ENV,
     SIZING_EQUITY_MODE_ENV,
     SIZING_MODE_CLAMPED,
     SIZING_MODE_DECLARED,
@@ -42,7 +41,6 @@ _VALID_ENV: dict[str, str] = {
     MAX_OPEN_ENV: "1",
     PORTFOLIO_GROSS_FRAC_ENV: "0.25",
     DAILY_LOSS_LIMIT_R_ENV: "1.0",
-    SIZING_EQUITY_ENV: "10000",
     SIZING_EQUITY_MODE_ENV: "clamped",
     MAX_FEE_BPS_ENV: "100",
     MAX_PICK_NOTIONAL_ENV: "10000",
@@ -54,7 +52,6 @@ _ALL_RAIL_VARS = (
     MAX_OPEN_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
     DAILY_LOSS_LIMIT_R_ENV,
-    SIZING_EQUITY_ENV,
     SIZING_EQUITY_MODE_ENV,
     MAX_FEE_BPS_ENV,
     MAX_PICK_NOTIONAL_ENV,
@@ -72,13 +69,26 @@ class TestAllEightConstantsAreDistinctNames(unittest.TestCase):
         self.assertEqual(MAX_OPEN_ENV, "ALPHALENS_BROKER_MAX_OPEN")
         self.assertEqual(PORTFOLIO_GROSS_FRAC_ENV, "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC")
         self.assertEqual(DAILY_LOSS_LIMIT_R_ENV, "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R")
-        self.assertEqual(SIZING_EQUITY_ENV, "ALPHALENS_BROKER_SIZING_EQUITY")
         self.assertEqual(SIZING_EQUITY_MODE_ENV, "ALPHALENS_BROKER_SIZING_EQUITY_MODE")
         self.assertEqual(MAX_FEE_BPS_ENV, "ALPHALENS_BROKER_MAX_FEE_BPS")
         self.assertEqual(ENTRY_TRAIL_BPS_ENV, "ALPHALENS_BROKER_ENTRY_TRAIL_BPS")
         self.assertEqual(ENTRY_WATCH_MAX_PICKS_ENV, "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS")
         self.assertEqual(MAX_PICK_NOTIONAL_ENV, "ALPHALENS_BROKER_MAX_PICK_NOTIONAL")
-        self.assertEqual(len(set(_ALL_RAIL_VARS)), 9, "all nine env-var names must be distinct")
+        self.assertEqual(len(set(_ALL_RAIL_VARS)), 8, "all eight env-var names must be distinct")
+
+
+class TheRetiredFrameIsNotARailTest(unittest.TestCase):
+    """#1467: a pick states its amount, so the sizing frame is no longer a rail.
+    A unit that still pins it must boot, and one that omits it must boot too."""
+
+    def test_a_unit_without_the_frame_boots(self):
+        with mock.patch.dict("os.environ", _VALID_ENV, clear=True):
+            assert_live_rails()
+
+    def test_a_leftover_frame_pin_is_ignored(self):
+        env = dict(_VALID_ENV, ALPHALENS_BROKER_SIZING_EQUITY="150000")
+        with mock.patch.dict("os.environ", env, clear=True):
+            assert_live_rails()
 
 
 class TestValidEnvPasses(unittest.TestCase):
@@ -100,7 +110,7 @@ class TestValidEnvPasses(unittest.TestCase):
         edge_env[MAX_OPEN_ENV] = "2"
         edge_env[PORTFOLIO_GROSS_FRAC_ENV] = "0.5"
         edge_env[DAILY_LOSS_LIMIT_R_ENV] = "2.0"
-        edge_env[SIZING_EQUITY_ENV] = "15000"
+        edge_env[MAX_PICK_NOTIONAL_ENV] = "15000"
         edge_env[MAX_FEE_BPS_ENV] = "1000"
         edge_env[ENTRY_WATCH_MAX_PICKS_ENV] = "2"
         with mock.patch.dict("os.environ", edge_env, clear=True):
@@ -125,12 +135,6 @@ class TestEachVarUnsetIsNamedInTheError(unittest.TestCase):
             with self.assertRaises(BrokerCapabilityError) as captured:
                 assert_live_rails()
         self.assertIn(DAILY_LOSS_LIMIT_R_ENV, str(captured.exception))
-
-    def test_sizing_equity_unset(self):
-        with mock.patch.dict("os.environ", _env_without(SIZING_EQUITY_ENV), clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(SIZING_EQUITY_ENV, str(captured.exception))
 
     def test_max_pick_notional_unset(self):
         with mock.patch.dict("os.environ", _env_without(MAX_PICK_NOTIONAL_ENV), clear=True):
@@ -306,20 +310,6 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
                 assert_live_rails()
         self.assertIn(DAILY_LOSS_LIMIT_R_ENV, str(captured.exception))
 
-    def test_sizing_equity_zero_rejected(self):
-        env = dict(_VALID_ENV, **{SIZING_EQUITY_ENV: "0"})
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(SIZING_EQUITY_ENV, str(captured.exception))
-
-    def test_sizing_equity_negative_rejected(self):
-        env = dict(_VALID_ENV, **{SIZING_EQUITY_ENV: "-1000"})
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(SIZING_EQUITY_ENV, str(captured.exception))
-
     def test_max_fee_bps_zero_rejected(self):
         env = dict(_VALID_ENV, **{MAX_FEE_BPS_ENV: "0"})
         with mock.patch.dict("os.environ", env, clear=True):
@@ -333,26 +323,6 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
             with self.assertRaises(BrokerCapabilityError) as captured:
                 assert_live_rails()
         self.assertIn(MAX_FEE_BPS_ENV, str(captured.exception))
-
-    def test_sizing_equity_above_cap_rejected(self):
-        # The declared frame is the DIRECT multiplier on position size, and it
-        # was the one rail the assert checked only for positivity: an operator
-        # typo of 150000 for 15000 booted clean and traded ten times the
-        # intended size (issue #1121). The cap is the value production already
-        # runs, so this is inert today and any future widening is a code change
-        # that leaves a trace — the regime _MAX_OPEN_UPPER has always had.
-        env = dict(_VALID_ENV, **{SIZING_EQUITY_ENV: "150000"})
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(SIZING_EQUITY_ENV, str(captured.exception))
-
-    def test_sizing_equity_at_the_deployed_frame_passes(self):
-        # 15000 is what the LIVE unit runs (declared frame, 1% = 150). The cap
-        # is inclusive, so bounding the rail must not refuse production.
-        env = dict(_VALID_ENV, **{SIZING_EQUITY_ENV: "15000"})
-        with mock.patch.dict("os.environ", env, clear=True):
-            assert_live_rails()
 
     def test_max_pick_notional_above_cap_rejected(self):
         # #1467: a pick states its amount, so the frame no longer bounds one
@@ -396,7 +366,7 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
         # False. Moving these two rails onto the bounded checker must not lose
         # it: `inf` fails `<= hi`, and `nan` fails the whole chain. Pinned here
         # rather than assumed — this passed before the move and must after.
-        for var in (SIZING_EQUITY_ENV, MAX_FEE_BPS_ENV):
+        for var in (MAX_PICK_NOTIONAL_ENV, MAX_FEE_BPS_ENV):
             for raw in ("inf", "-inf", "nan"):
                 with self.subTest(var=var, value=raw):
                     env = dict(_VALID_ENV, **{var: raw})
@@ -439,7 +409,7 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
         # check would let both BOOT a live daemon with an unbounded sizing
         # frame / fee floor. The rails must require finite values.
         for bad in ("inf", "nan", "-inf"):
-            for var in (SIZING_EQUITY_ENV, MAX_FEE_BPS_ENV):
+            for var in (MAX_PICK_NOTIONAL_ENV, MAX_FEE_BPS_ENV):
                 with self.subTest(var=var, value=bad):
                     env = dict(_VALID_ENV, **{var: bad})
                     with mock.patch.dict("os.environ", env, clear=True):
@@ -500,7 +470,7 @@ class TestViolationsAreCollectedTogether(unittest.TestCase):
         for var in (
             PORTFOLIO_GROSS_FRAC_ENV,
             DAILY_LOSS_LIMIT_R_ENV,
-            SIZING_EQUITY_ENV,
+            MAX_PICK_NOTIONAL_ENV,
             SIZING_EQUITY_MODE_ENV,
             ENTRY_TRAIL_BPS_ENV,
         ):

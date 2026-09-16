@@ -25,7 +25,6 @@ from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
 from alphalens_pipeline.brokers.automanager.costs import round_trip_fee_bps
 from alphalens_pipeline.brokers.automanager.live_rails import (
     MAX_FEE_BPS_ENV,
-    SIZING_EQUITY_ENV,
     SIZING_EQUITY_MODE_ENV,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (
@@ -1209,6 +1208,11 @@ class TestPlacePickBranches(unittest.TestCase):
 # --- Sizing cap + fee floor (design memo §4) ---------------------------------
 
 
+# #1467 removed this variable. The sizing tests still set it, to prove that a
+# value left behind on a host changes nothing.
+_RETIRED_FRAME_ENV = "ALPHALENS_BROKER_SIZING_EQUITY"
+
+
 class TestResolveAndSizeSpendsTheDocumentsAmount(unittest.TestCase):
     """#1467: ``_resolve_and_size`` spends ``spec.size.notional_acct``. Before, it
     multiplied a percent by a frame read from the environment, so the same
@@ -1237,14 +1241,14 @@ class TestResolveAndSizeSpendsTheDocumentsAmount(unittest.TestCase):
         return sum(t.qty * t.limit_price for t in plan.entry_tiers)
 
     def test_the_sim_frame_does_not_scale_the_amount(self) -> None:
-        spent = self._spent({SIZING_EQUITY_ENV: "100000", SIZING_EQUITY_MODE_ENV: "declared"})
+        spent = self._spent({_RETIRED_FRAME_ENV: "100000", SIZING_EQUITY_MODE_ENV: "declared"})
 
         self.assertLessEqual(spent, 1500.0)
         self.assertGreater(spent, 1500.0 - 50.0 - 48.0)
 
     def test_two_frames_size_the_same_document_identically(self) -> None:
-        sim = self._spent({SIZING_EQUITY_ENV: "100000", SIZING_EQUITY_MODE_ENV: "declared"})
-        live = self._spent({SIZING_EQUITY_ENV: "15000", SIZING_EQUITY_MODE_ENV: "declared"})
+        sim = self._spent({_RETIRED_FRAME_ENV: "100000", SIZING_EQUITY_MODE_ENV: "declared"})
+        live = self._spent({_RETIRED_FRAME_ENV: "15000", SIZING_EQUITY_MODE_ENV: "declared"})
 
         self.assertEqual(sim, live)
 
@@ -1556,7 +1560,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
         # "placement attempt" and the bracket record) are checked.
         appended: list[dict] = []
         broker = _RecordingBroker()
-        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
+        with mock.patch.dict("os.environ", {_RETIRED_FRAME_ENV: "10000"}, clear=True):
             placer, _alerts, _refusals = self._placer(
                 broker, notional=10_000.0, append=appended.append
             )
@@ -2188,7 +2192,7 @@ def _cash_acct(margin_available: Any, currency: str = "USD") -> Any:
     )()
 
 
-_DECLARED_ENV = {SIZING_EQUITY_ENV: "16000", SIZING_EQUITY_MODE_ENV: "declared"}
+_DECLARED_ENV = {SIZING_EQUITY_MODE_ENV: "declared"}
 
 
 class TestCheckCashFloor(unittest.TestCase):
@@ -2223,7 +2227,7 @@ class TestCheckCashFloor(unittest.TestCase):
     def test_clamped_or_unset_mode_returns_none_even_when_broke(self) -> None:
         # Byte-identical inertness outside declared mode: SIM (unset) and an
         # explicit clamped unit never consult the floor, however broke.
-        for env in ({}, {SIZING_EQUITY_ENV: "10000", SIZING_EQUITY_MODE_ENV: "clamped"}):
+        for env in ({}, {SIZING_EQUITY_MODE_ENV: "clamped"}):
             with self.subTest(env=env), mock.patch.dict("os.environ", env, clear=True):
                 self.assertIsNone(self._check(notional=10_000.0, margin_available=1.0))
 
@@ -2369,7 +2373,7 @@ class TestPlacePickCashFloorIntegration(unittest.TestCase):
         # Same broke account, mode clamped: the floor never consults the
         # balance — byte-identical to pre-cash-floor behavior.
         broker = _RecordingBroker(on_account=lambda: _cash_acct(5_000.0))
-        env = {SIZING_EQUITY_ENV: "10000", SIZING_EQUITY_MODE_ENV: "clamped"}
+        env = {SIZING_EQUITY_MODE_ENV: "clamped"}
         with mock.patch.dict("os.environ", env, clear=True):
             placer, alerts, refusals, _appended = self._placer(broker, notional=10_000.0)
             self.assertTrue(placer(_pick()))
@@ -2583,7 +2587,7 @@ class TestCheckCashFloorWatchingReservation(unittest.TestCase):
         # The cash floor is inert outside declared mode (memo G5) — the
         # watching term must not change that; the GROSS cap carries it there.
         _entry_trail_journal(self, [_watch_open_line(limit=10.0, qty=200.0)])
-        env = {SIZING_EQUITY_ENV: "10000", SIZING_EQUITY_MODE_ENV: "clamped"}
+        env = {SIZING_EQUITY_MODE_ENV: "clamped"}
         with mock.patch.dict("os.environ", env, clear=True):
             self.assertIsNone(self._check(notional=10_000.0, margin_available=1.0))
 
@@ -6747,191 +6751,6 @@ def _planned_fold_data(
         )
         for uic, planned in fold.items()
     }
-
-
-class TestCapitalGauges(unittest.TestCase):
-    """#1203 — the sizing frame and the real balance, published so the ratio
-    between them is queryable.
-
-    The daily-loss breaker is denominated in the FRAME, not the balance, so a
-    balance that falls while the frame stays put makes the same "1R" a larger
-    share of real capital: the rail loosens exactly when it should tighten.
-    Specified as critic finding B9 in
-    ``broker_sizing_declared_frame_design_2026_08_12.md`` §4.6 and never built.
-
-    OWNERSHIP SPLIT. The daemon publishes only the CHEAP half (a config read and
-    a local file write). The balance needs a broker round trip that can block for
-    minutes, and the daemon's loop runs the protective tick bare — so the
-    expensive half is collected out-of-process.
-    """
-
-    @staticmethod
-    @contextlib.contextmanager
-    def _textfile_dir():
-        with (
-            TemporaryDirectory() as d,
-            # ALPHALENS_BROKER_ENVIRONMENT is pinned, not inherited: every
-            # assertion below hardcodes the "-sim" domain and job label, and
-            # state_paths resolves those from this variable. Left ambient, an
-            # unrelated test that sets it to "live" would make this class fail
-            # by execution order alone.
-            mock.patch.dict(
-                os.environ,
-                {"ALPHALENS_TEXTFILE_DIR": d, "ALPHALENS_BROKER_ENVIRONMENT": "sim"},
-                clear=False,
-            ),
-        ):
-            yield Path(d)
-
-    @staticmethod
-    @contextlib.contextmanager
-    def _declared_frame(frame: str = "15000"):
-        with mock.patch.dict(
-            os.environ,
-            {SIZING_EQUITY_ENV: frame, SIZING_EQUITY_MODE_ENV: "declared"},
-            clear=False,
-        ):
-            yield
-
-    @staticmethod
-    def _account_broker(balance: float = 2000.0, *, raises: BaseException | None = None) -> Any:
-        calls: list[int] = []
-
-        class _B:
-            def get_account(self) -> Any:
-                calls.append(1)
-                if raises is not None:
-                    raise raises
-                return type("Acct", (), {"total_value": balance, "currency": "PLN"})()
-
-        broker = _B()
-        broker.calls = calls  # type: ignore[attr-defined]
-        return broker
-
-    # --- the daemon half: cheap, local, no broker -------------------------
-
-    def test_the_frame_gauges_land_in_their_own_domain_file(self) -> None:
-        with self._textfile_dir() as d, self._declared_frame():
-            cl._emit_frame_gauges()
-            written = d / "alphalens_domain_broker-manager-sim-capital.prom"
-            self.assertTrue(written.is_file(), "the frame gauges must have their OWN domain file")
-            body = written.read_text()
-        self.assertIn("alphalens_broker_manager_sizing_pin_acct", body)
-        self.assertIn("alphalens_broker_manager_sizing_mode_declared", body)
-        # Same instance as the heartbeat: only the containing file differs.
-        self.assertIn('job="broker-manager-sim"', body)
-
-    def test_the_mode_gauge_distinguishes_declared_from_clamped(self) -> None:
-        """In clamped mode the pin is NOT the frame (the frame is
-        min(pin, balance)), so the alert must condition on this rather than
-        assume declared mode."""
-        with (
-            self._textfile_dir() as d,
-            mock.patch.dict(
-                os.environ,
-                {SIZING_EQUITY_ENV: "15000", SIZING_EQUITY_MODE_ENV: "clamped"},
-                clear=False,
-            ),
-        ):
-            cl._emit_frame_gauges()
-            body = (d / "alphalens_domain_broker-manager-sim-capital.prom").read_text()
-        self.assertIn("alphalens_broker_manager_sizing_mode_declared", body)
-        self.assertRegex(body, r"sizing_mode_declared\{[^}]*\}\s+0")
-
-    def test_nothing_is_published_when_the_pin_is_unset_or_unparseable(self) -> None:
-        # Publishing a frame that does not exist would be worse than silence:
-        # the ratio would look authoritative against an invented numerator.
-        for pin in ("", "not-a-number", "-1"):
-            with (
-                self._textfile_dir() as d,
-                mock.patch.dict(
-                    os.environ,
-                    {SIZING_EQUITY_ENV: pin, SIZING_EQUITY_MODE_ENV: "declared"},
-                    clear=False,
-                ),
-            ):
-                cl._emit_frame_gauges()
-                self.assertFalse(
-                    (d / "alphalens_domain_broker-manager-sim-capital.prom").exists(), pin
-                )
-
-    def test_the_frame_domain_does_not_clobber_the_heartbeat(self) -> None:
-        # emit_domain_metrics overwrites a whole per-job file, so two emitters
-        # sharing a job erase each other's series.
-        with self._textfile_dir() as d, self._declared_frame():
-            cl._default_emit_heartbeat()
-            cl._emit_frame_gauges()
-            heartbeat = d / "alphalens_domain_broker-manager-sim.prom"
-            capital = d / "alphalens_domain_broker-manager-sim-capital.prom"
-            self.assertTrue(heartbeat.is_file() and capital.is_file())
-            self.assertIn(
-                "alphalens_broker_manager_last_tick_timestamp_seconds", heartbeat.read_text()
-            )
-
-    def test_the_daemon_tick_never_reads_the_account(self) -> None:
-        """The whole point of the ownership split. ``get_account()`` is three
-        HTTP requests, each retrying up to four attempts behind a 30s timeout, so
-        one read can block for MINUTES — and ``run_daemon`` calls ``run_once``
-        bare, so that would stall stop management for exactly as long, precisely
-        during a broker outage. A broker that explodes on ``get_account`` must
-        therefore never be touched by a tick."""
-        # mock.Mock(spec=[]) raises AttributeError on ANY attribute access, so
-        # this fails on get_positions() or list_open_orders() too — not just on
-        # the get_account() the first shape called. A broker-shaped stub that
-        # only explodes on one method would pass vacuously.
-        broker = mock.Mock(spec=[])
-        with self._textfile_dir(), self._declared_frame(), TemporaryDirectory() as home:
-            deps = _deps(
-                broker, kill_file=Path(home) / "KILL", verdicts=[], place_calls=[], alerts=[]
-            )
-            cl.run_daemon(
-                deps,
-                once=True,
-                poll_seconds=45.0,
-                heartbeat_fn=lambda _kill: None,
-                sleep_fn=lambda _s: None,
-                wake_event=None,
-            )
-        self.assertEqual(broker.mock_calls, [], "the tick must not touch the broker at all")
-
-    # --- the collector half: out of process, allowed to be slow -----------
-
-    def test_the_reader_publishes_the_balance_in_its_own_domain(self) -> None:
-        with self._textfile_dir() as d:
-            returned = cl.emit_capital_reader_gauges(
-                self._account_broker(2000.0), now_wall=1_700_000_000.0
-            )
-            written = d / "alphalens_domain_broker-capital-reader-sim.prom"
-            self.assertTrue(written.is_file(), "the balance must NOT share the frame's domain")
-            body = written.read_text()
-        self.assertEqual(returned, 2000.0)
-        self.assertIn("alphalens_broker_manager_account_total_value_acct", body)
-        self.assertIn("alphalens_broker_manager_account_read_timestamp_seconds", body)
-
-    def test_a_failed_read_leaves_the_previous_snapshot_untouched(self) -> None:
-        """Stale, not absent. emit_domain_metrics replaces a whole file
-        atomically, so declining to write preserves the last good balance AND its
-        timestamp — which is exactly what the alert's freshness guard detects.
-        Writing a zero would lie; dropping the keys would silently disarm the
-        rule."""
-        with self._textfile_dir() as d:
-            cl.emit_capital_reader_gauges(self._account_broker(2000.0), now_wall=100.0)
-            written = d / "alphalens_domain_broker-capital-reader-sim.prom"
-            before = written.read_text()
-            with self.assertRaises(RuntimeError):
-                cl.emit_capital_reader_gauges(
-                    self._account_broker(raises=RuntimeError("saxo is down")), now_wall=200.0
-                )
-            self.assertEqual(written.read_text(), before, "a failed read must not rewrite the file")
-
-    def test_an_unusable_balance_is_refused_rather_than_published(self) -> None:
-        for bad in (0.0, -1.0, float("nan")):
-            with self._textfile_dir() as d:
-                with self.assertRaises(ValueError):
-                    cl.emit_capital_reader_gauges(self._account_broker(bad), now_wall=1.0)
-                self.assertFalse(
-                    (d / "alphalens_domain_broker-capital-reader-sim.prom").exists(), str(bad)
-                )
 
 
 def _position_row(uic: int | None, qty: float) -> Any:

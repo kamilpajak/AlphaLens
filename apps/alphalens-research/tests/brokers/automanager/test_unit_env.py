@@ -2,7 +2,7 @@
 installed systemd unit (#1377).
 
 A LIVE read command needs BOTH sources the daemon gets: the unit's
-``Environment=`` (the nine risk rails + the account-bound grant, drop-ins
+``Environment=`` (the eight risk rails + the account-bound grant, drop-ins
 merged) and the ``EnvironmentFile=`` the unit names (the ``SAXO_LIVE_*``
 credentials `LiveAuthConfig.from_env` reads). This module composes them the
 way systemd does — ``Environment=`` first, the file second, so the FILE wins —
@@ -27,7 +27,7 @@ from alphalens_pipeline.brokers.automanager import unit_env
 _UNIT_PAYLOAD = (
     "ALPHALENS_BROKER_ENVIRONMENT=live ALPHALENS_BROKER_ALLOW_ORDERS=1 "
     "ALPHALENS_BROKER_MAX_OPEN=10 ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC=1.0 "
-    "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=1.0 ALPHALENS_BROKER_SIZING_EQUITY=15000 "
+    "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=1.0 ALPHALENS_BROKER_MAX_PICK_NOTIONAL=15000 "
     "ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared "
     "ALPHALENS_BROKER_MAX_FEE_BPS=1000 "
     "ALPHALENS_BROKER_ENTRY_TRAIL_BPS=50 ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS=10 "
@@ -209,7 +209,7 @@ class TestComposeLiveEnvironment(unittest.TestCase):
         self.assertEqual(composed.warnings, [])
 
     def test_the_composed_set_satisfies_the_live_factory(self) -> None:
-        # The factory needs the nine rails (assert_live_rails), the grant pair
+        # The factory needs the eight rails (assert_live_rails), the grant pair
         # and the three SAXO_LIVE_* auth vars before any I/O; the union of the
         # two sources is what makes `--env live` work in a plain shell.
         composed = _compose()
@@ -217,7 +217,7 @@ class TestComposeLiveEnvironment(unittest.TestCase):
             "ALPHALENS_BROKER_MAX_OPEN",
             "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC",
             "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R",
-            "ALPHALENS_BROKER_SIZING_EQUITY",
+            "ALPHALENS_BROKER_MAX_PICK_NOTIONAL",
             "ALPHALENS_BROKER_SIZING_EQUITY_MODE",
             "ALPHALENS_BROKER_MAX_FEE_BPS",
             "ALPHALENS_BROKER_ENTRY_TRAIL_BPS",

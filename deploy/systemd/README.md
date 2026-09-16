@@ -2057,112 +2057,47 @@ Two readers are refused, not merged: a second `alphalens broker price-reader`
 on the same socket exits with `already serving`. That refusal is the guard —
 two readers would be two elevated sessions demoting each other.
 
-#### 9.7 Capital adequacy — the declared frame against the real balance (#1203)
+#### 9.7 How much one pick may spend (#1467)
 
-Under `ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared` the pin **is** the frame:
-position size comes from `ALPHALENS_BROKER_SIZING_EQUITY`, not from the account.
-The daily-loss breaker (`ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R`) is denominated in
-that same frame, so one "1R" day costs roughly `frame / balance` times one
-percent of REAL capital — 1% at parity, ~7.5% at a frame of 15 000 against a
-2 000 balance. The direction is the hazard: a loss lowers the balance, raises the
-ratio, and lets the daily stop tolerate a **larger** share of what is left.
+A pick states its own size: `spec.size = {notional_acct, currency}`, an amount
+in the account currency for the whole entry ladder. The daemon spends it as
+stated. Nothing in its environment rescales it.
 
-**Two writers, one ratio — split by COST, not by ownership.**
+Three settings bound what that amount can do:
 
-The daemon publishes the cheap half itself, every tick, from a config read and
-one local file write — no broker call — into
-`alphalens_domain_broker-manager-<env>-capital.prom`:
+- `ALPHALENS_BROKER_MAX_PICK_NOTIONAL` — the largest amount one pick may state.
+  A LIVE boot rail, bounded at 15 000 in `live_rails.py` (the old frame
+  ceiling), shipped as `30-max-pick-notional.conf`. The drain refuses a larger
+  pick before the day-1 gate with one alert and never shrinks it. Unset on SIM
+  means no ceiling.
+- `ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared` — switches the cash floor on
+  (candidate × 1.04 plus resting entries must fit in the margin available). The
+  name is historical. It is set in the LIVE base unit and in the SIM
+  `30-cash-floor.conf`.
+- `ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC` — the total committed, as a fraction
+  of the real account value (`20-exposure.conf`).
 
-- `alphalens_broker_manager_sizing_pin_acct` — the configured pin, account currency;
-- `alphalens_broker_manager_sizing_mode_declared` — 1 when the mode is `declared`, so the pin IS the effective frame (in `clamped` mode the frame is `min(pin, balance)`, which the daemon cannot know without the balance it deliberately does not read).
+The drain also refuses a pick whose `size.currency` is not the account's. Check
+the account currency with `alphalens broker account --env sim|live` before
+arming.
 
-`alphalens-broker-capital-reader.timer` publishes the expensive half every
-~15 min into `alphalens_domain_broker-capital-reader-<env>.prom`:
-
-- `alphalens_broker_manager_account_total_value_acct` — the balance, same currency as the pin, so the alert divides them directly;
-- `alphalens_broker_manager_account_read_timestamp_seconds` — when that read succeeded.
-
-**Why the balance is NOT read in the daemon.** `get_account()` is three HTTP
-requests, each retrying up to four attempts with 5/15/30 s backoffs behind a 30 s
-timeout, so one read can block for minutes. `run_daemon` runs its protective tick
-bare, so a blocking observability read would stall reconcile, exit management and
-stop placement for exactly that long — during precisely the broker outage that
-makes it slow. Telemetry may observe the control path; it must not decide whether
-that path runs. Keeping the pin in-process is what preserves the consistency the
-in-daemon version was for: the frame reported is provably the frame in use.
-
-**A failed read writes nothing.** `emit_domain_metrics` replaces a whole file
-atomically, so declining to write leaves the previous balance and its timestamp
-in place. The reading goes stale rather than absent, which is what the alert's
-freshness guard detects; writing a zero would lie, and dropping the keys would
-silently disarm the rule.
-
-Three LIVE-only rules (SIM never sets the pin, so its ratio is identically 1):
-
-- `AlphalensBrokerFrameToBalanceHigh` — ratio > 10 for 30 m, guarded on the sizing MODE, the daemon heartbeat and the read timestamp;
-- `AlphalensBrokerCapitalReadStale` — the balance read has missed two consecutive fires while the daemon still ticks, warning a full window before the ratio rule disarms itself;
-- `AlphalensBrokerCapitalReadMissing` — the read-timestamp series does not exist at all (never written, or the textfile deleted), the quadrant the other two structurally cannot see: a failed read writes nothing on purpose, so a chain that never succeeded leaves nothing to age.
-
-**The threshold of 10 is a backstop, not the production value.** The account has
-knowingly run near 7.5 since the declared frame shipped, so a rule that paged on
-that state would be noise. Lower it to about 2 once the account is funded — that
-is where the worst-case frame draw (`MAX_OPEN` x max suggested weight = 0.5 of
-the frame) meets the gross cap (`GROSS_FRAC` x `total_value` — 0.5 of the
-balance until 2026-09-08, 1.0 since), and every declared rail then means what it says.
-
-**The reader carries the nine LIVE rails, and needs its own grant.** It places
-nothing, but `create_saxo_broker_live_from_env` runs `assert_live_rails()` before
-any broker I/O, so no LIVE client exists — read-only included — until the rails
-are pinned. They are in the unit file at the base LIVE unit's conservative
-values with `ALPHALENS_BROKER_ALLOW_ORDERS=0`; none of them governs anything
-here. The first deploy of this unit shipped WITHOUT them and failed on the host.
-
-**Do NOT mirror daemon rail changes into this unit.** The values here are not a
-copy that tracks production — they are any legal inert set, taken from the base
-LIVE unit only so they are already-reviewed numbers. Nothing on the
-`get_account()` path reads them. The drift check is strictly per-unit
-(`drift_findings` receives one unit's files and `main` loops over `UNITS`), so
-it compares this unit against its own `origin/main` blob and never against the
-daemon's rails; a divergence between the two is neither detected nor a problem.
-Changing a rail on the daemon requires no change here.
-
-Beyond the rails it needs the account-bound ADR 0017 grant, which is host-only
-and must NEVER go in `/etc/alphalens/env`. Create it BEFORE copying the unit —
-`cp` of the `.service`/`.timer` cannot touch a `.d/` directory, which is exactly
-why the grant lives there (#1195):
+**Retired in #1467.** `ALPHALENS_BROKER_SIZING_EQUITY` (the declared frame), its
+gauges `alphalens_broker_manager_sizing_pin_acct` / `…_sizing_mode_declared`,
+the balance reader `alphalens-broker-capital-reader.{service,timer}` and the
+alerts `AlphalensBrokerFrameToBalanceHigh`, `…CapitalReadStale` and
+`…CapitalReadMissing`. They existed to compare the frame with the real balance,
+and there is no frame any more. One-time host cleanup:
 
 ```bash
-mkdir -p ~/.config/systemd/user/alphalens-broker-capital-reader.service.d
-$EDITOR ~/.config/systemd/user/alphalens-broker-capital-reader.service.d/99-live-grant.conf
-#   [Service]
-#   Environment=ALPHALENS_SAXO_LIVE_STANDING=<live account key>
-#   Environment=SAXO_LIVE_ACCOUNT_KEY=<live account key>      # the SAME key
-chmod 600 ~/.config/systemd/user/alphalens-broker-capital-reader.service.d/99-live-grant.conf
-
-cp deploy/systemd/alphalens-broker-capital-reader.{service,timer} ~/.config/systemd/user/
+systemctl --user disable --now alphalens-broker-capital-reader.timer
+rm ~/.config/systemd/user/alphalens-broker-capital-reader.{service,timer}
+rm -r ~/.config/systemd/user/alphalens-broker-capital-reader.service.d   # the grant drop-in
+rm ~/.config/systemd/user/alphalens-broker-manager-live.service.d/30-sizing-frame.conf
+rm ~/.config/systemd/user/alphalens-broker-manager.service.d/30-sizing-frame.conf
 systemctl --user daemon-reload
-systemctl --user enable --now alphalens-broker-capital-reader.timer
-# Verify the TIMER's effect: NEXT must be populated on the :15 wall-clock grid.
-# `is-active`/`is-enabled` are NOT evidence — the 2026-08-30 dormancy incident
-# was exactly `enabled` + `active` with NEXT empty (the old interval-anchored
-# stanza had no anchor; the timer is OnCalendar now, which schedules the moment
-# it starts, so ordering against the service no longer matters).
-systemctl --user list-timers alphalens-broker-capital-reader.timer
-systemctl --user start alphalens-broker-capital-reader.service   # verify the SERVICE's effect, not is-active
-```
-
-The unit is watched by the hourly drift check and DECLARES the grant
-requirement, so a wiped grant surfaces on
-`alphalens_systemd_live_grant_present{unit="alphalens-broker-capital-reader"}`
-rather than waiting for the next fire to fail.
-
-Triage:
-
-```bash
-cat /var/lib/node_exporter/textfile/alphalens_domain_broker-manager-live-capital.prom
-cat /var/lib/node_exporter/textfile/alphalens_domain_broker-capital-reader-live.prom
-journalctl --user -u alphalens-broker-capital-reader.service --since -2h
-alphalens broker capital-reader        # one-shot, ALPHALENS_BROKER_ENVIRONMENT=live
+# Stale textfiles would keep serving the retired gauges:
+rm /var/lib/node_exporter/textfile/alphalens_domain_broker-manager-{sim,live}-capital.prom \
+   /var/lib/node_exporter/textfile/alphalens_domain_broker-capital-reader-live.prom
 ```
 
 #### 9.8 Standing-grant decommission
