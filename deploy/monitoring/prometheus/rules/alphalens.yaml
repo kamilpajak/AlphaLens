@@ -789,6 +789,25 @@ groups:
           summary: "{{ $labels.job }}: last_exit_code missing while last_run is present, AlphalensJobFailed is blind for it"
           description: "alphalens_job_last_run_timestamp_seconds exists for job {{ $labels.job }} but alphalens_job_last_exit_code does not, so AlphalensJobFailed cannot fire for this job. Either a # HELP text for that family differs between two textfiles (node_exporter keeps the first and drops the later family; docker logs node-exporter shows inconsistent metric help text with the winning file) or a writer omitted the sample. The hook itself writes no HELP since #1461, so look for a foreign writer of the alphalens_job_* names in /var/lib/node_exporter/textfile."
 
+      # #1462: the Python writers drop a value that is not a finite number
+      # (bool, str, None, NaN, Inf) instead of writing it or raising, and
+      # append alphalens_textfile_invalid_samples{textfile} only when they
+      # did. A daemon rewrites its file clean on the next tick (15-45 s), so a
+      # plain `> 0` would see the line for a scrape or two and never outlast
+      # a for:. Over [15m] a one-tick drop stays visible long enough to page
+      # 5 min later and clears about 15 min after the defect stops; a daily
+      # oneshot's line persists until its next run. Verified with promtool on
+      # both shapes (the fixtures) and on the live 5 s scrape / 15 s eval.
+      - alert: AlphalensTextfileInvalidSample
+        expr: max_over_time(alphalens_textfile_invalid_samples[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+        annotations:
+          summary: "{{ $labels.textfile }}: a textfile writer dropped a sample that was not a finite number"
+          description: "A Python textfile writer (alphalens_pipeline.observability.textfile or the Django edge mirror copy) refused a value for {{ $labels.textfile }} in the last 15 minutes: it was not a finite number (a bool, a string, None, NaN or Inf), so that sample was dropped, not written, and the rest of the file was. Any rule that reads that series without an absent() partner is blind while this fires. The writer names the expression and the value in an ERROR line, logged once per defect and then latched until the expression writes cleanly (an INFO line says so): journalctl --user -u <unit> for host units, docker logs for the Django mirror. For a one-tick defect that INFO line can come before this page. The writer never raises by design (#1462): the broker daemon calls it on every tick and catches only OSError, so a raise would stop the protective loop. Fix the caller that computes the value."
+
       # ---------------------------------------------------------------
       # Domain alerts — surface "ran clean, found nothing" conditions
       # that an exit-code check would miss.

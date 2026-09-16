@@ -464,33 +464,57 @@ class StrictJsonTest(_BrokerCliCase):
     Reachable through `stream-status`: `_PROM_LINE_RE` accepts a lowercase
     ``nan`` / ``inf`` value and `float()` parses it, so before this the
     envelope carried a token no reader outside Python accepts, with exit 0.
-    And the spelling is OUR OWN: `observability.textfile` writes a gauge as
-    ``f"{expr} {value}"``, and `str()` on a non-finite float gives exactly
-    ``nan`` / ``inf``. (Prometheus' ``NaN`` / ``+Inf`` would be skipped by the
-    regex — the accepted spelling is the one our writer produces.)
+    (Prometheus' ``NaN`` / ``+Inf`` would be skipped by the regex.)
+
+    Until #1462 that spelling was OUR OWN: `observability.textfile` rendered a
+    gauge as ``f"{expr} {value}"``, and `str()` on a non-finite float is exactly
+    ``nan`` / ``inf``, so this test seeded through the real writer. Since #1462
+    the writer drops a non-finite value instead of writing it
+    (`test_our_writer_no_longer_writes_that_spelling` pins that), so the reader
+    guard now protects against the OTHER writers of this directory: the bash
+    hook, the drift checker, a hand-edited file, a future emitter. The
+    non-finite line is therefore seeded raw, in the one spelling the regex
+    accepts.
     """
 
-    def _seed_gauge(self, value: float) -> None:
-        """Write through the REAL emitter, not a hand-authored line.
+    STREAM_FILE = "alphalens_domain_broker-manager-sim-stream.prom"
+    KEY = 'a_up{job="broker-manager-sim"}'
 
-        The point under test is that our own writer spells a non-finite float
-        the way the reader accepts; a string literal here would test my typing
-        instead of the code.
-        """
+    def _seed_raw_line(self, token: str) -> None:
+        (self.textfile_dir / self.STREAM_FILE).write_text(f"{self.KEY} {token}\n", encoding="utf-8")
+
+    def _seed_gauge(self, value: float) -> None:
         from alphalens_pipeline.observability import textfile
 
-        textfile.emit_domain_metrics(
-            "broker-manager-sim-stream", {'a_up{job="broker-manager-sim"}': value}
-        )
+        textfile.emit_domain_metrics("broker-manager-sim-stream", {self.KEY: value})
 
     def test_a_non_finite_gauge_is_refused_not_printed(self) -> None:
-        for value in (float("nan"), float("inf"), float("-inf")):
-            with self.subTest(value=value):
-                self._seed_gauge(value)
+        for token in ("nan", "inf", "-inf"):
+            with self.subTest(token=token):
+                self._seed_raw_line(token)
                 result = self.invoke(["stream-status", "--format", "json"])
                 self.assertEqual(result.exit_code, 1, result.output)
                 self.assertEqual(result.stdout, "")
                 self.assertIn("JSON", result.stderr)
+
+    def test_our_writer_no_longer_writes_that_spelling(self) -> None:
+        from alphalens_pipeline.observability import textfile
+
+        for value in (float("nan"), float("inf"), float("-inf")):
+            # The writer logs a refused expression once and then latches it, and
+            # these three share one expression; start each case unlatched.
+            with (
+                self.subTest(value=value),
+                mock.patch.object(textfile, "_LATCHED", set()),
+            ):
+                with self.assertLogs(textfile.logger, "ERROR"):
+                    self._seed_gauge(value)
+                body = (self.textfile_dir / self.STREAM_FILE).read_text(encoding="utf-8")
+                self.assertNotIn("a_up", body)
+                self.assertEqual(
+                    body,
+                    'alphalens_textfile_invalid_samples{textfile="broker-manager-sim-stream"} 1\n',
+                )
 
     def test_a_finite_gauge_still_renders(self) -> None:
         self._seed_gauge(1.5)

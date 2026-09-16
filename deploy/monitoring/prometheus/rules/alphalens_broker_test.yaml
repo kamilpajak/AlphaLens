@@ -1,5 +1,7 @@
-# promtool unit tests for the SIM order-stream breaker rules in alphalens.yaml
-# (rearm design memo saxo_stream_breaker_rearm_design_2026_08_22.md §6 INC-5).
+# promtool unit tests for the rules in alphalens.yaml that need a 1-minute grid:
+# the SIM order-stream breaker rules (rearm design memo
+# saxo_stream_breaker_rearm_design_2026_08_22.md §6 INC-5) and the one-tick
+# shape of AlphalensTextfileInvalidSample (#1462).
 #
 # WHY A SECOND FIXTURE FILE. alphalens_test.yaml sets a file-level
 # `evaluation_interval: 1h` with fixtures on a 1h grid — on that grid a
@@ -304,4 +306,34 @@ tests:
     alert_rule_test:
       - eval_time: 70m
         alertname: AlphalensBrokerCapitalReadMissing
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensTextfileInvalidSample (#1462) — the one-tick shape
+  # ---------------------------------------------------------------------
+
+  # The broker daemon drops one bad value on ONE tick and rewrites its file
+  # clean on the next, so the invalid-samples line exists for a single sample.
+  # A plain `> 0` would never outlast for: 5m; over [15m] it pages at 11m and
+  # clears by 21m.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_textfile_invalid_samples{textfile="broker-manager-live"}'
+        values: '_ _ _ _ _ 1 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: AlphalensTextfileInvalidSample
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: AlphalensTextfileInvalidSample
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              textfile: broker-manager-live
+            exp_annotations:
+              summary: "broker-manager-live: a textfile writer dropped a sample that was not a finite number"
+              description: "A Python textfile writer (alphalens_pipeline.observability.textfile or the Django edge mirror copy) refused a value for broker-manager-live in the last 15 minutes: it was not a finite number (a bool, a string, None, NaN or Inf), so that sample was dropped, not written, and the rest of the file was. Any rule that reads that series without an absent() partner is blind while this fires. The writer names the expression and the value in an ERROR line, logged once per defect and then latched until the expression writes cleanly (an INFO line says so): journalctl --user -u <unit> for host units, docker logs for the Django mirror. For a one-tick defect that INFO line can come before this page. The writer never raises by design (#1462): the broker daemon calls it on every tick and catches only OSError, so a raise would stop the protective loop. Fix the caller that computes the value."
+      - eval_time: 21m
+        alertname: AlphalensTextfileInvalidSample
         exp_alerts: []
