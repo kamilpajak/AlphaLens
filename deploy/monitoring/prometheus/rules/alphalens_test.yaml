@@ -632,3 +632,78 @@ tests:
       - eval_time: 40h
         alertname: AlphalensEdgeStale
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensTextfileScrapeError (#1439)
+  # ---------------------------------------------------------------------
+
+  # node_exporter rejects a file (a non-float sample, or a # HELP text that
+  # differs between files) and keeps rejecting it: pending at the first
+  # evaluation the gauge is 1, firing once it has been 1 for 30m. On the 1h
+  # grid that is the next evaluation. Every real episode in the 30-day census
+  # lasted >= 80 min, so the rule catches all of them.
+  - interval: 1h
+    input_series:
+      - series: 'node_textfile_scrape_error'
+        values: '0 1 1 1'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: AlphalensTextfileScrapeError
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: AlphalensTextfileScrapeError
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+            exp_annotations:
+              summary: "node_exporter is rejecting a textfile metrics file"
+              description: "node_textfile_scrape_error has been 1 for 30m. The gauge is global and carries no file label; name the culprit on the VPS with: docker logs --since 10m node-exporter 2>&1 | grep -E 'failed to collect textfile data|inconsistent metric help text' | tail -3 (both known causes log file=). A non-float sample drops the WHOLE file (#1437 shape): an AlphalensJobMetricMissing for that job then means a rejected file, not an unrun unit. A # HELP text that differs between files drops one family from the later file (#1461 shape): the hook writes no HELP since #1461, so this means a foreign writer, and with helpless files in the directory a second differing text can crash node_exporter (nil dereference in textfile.go v1.9.1). Recovery: fix the writer and rewrite the file with tmp + mv; never run the hook by hand inside the scraped directory (it stamps last_run=now). Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly."
+
+  # A blip: the gauge is 1 for one evaluation and clears. Never fires.
+  - interval: 1h
+    input_series:
+      - series: 'node_textfile_scrape_error'
+        values: '0 1 0 0'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: AlphalensTextfileScrapeError
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: AlphalensTextfileScrapeError
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensJobFamilyMissing (#1461)
+  # ---------------------------------------------------------------------
+
+  # The 2026-09-13..15 shape: last_run is scraped for a job but its
+  # last_exit_code family was dropped (HELP-text conflict), so
+  # AlphalensJobFailed is blind for that job. Labelled by the job.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_job_last_run_timestamp_seconds{job="saxo-refresh"}'
+        values: '0x3'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: AlphalensJobFamilyMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              job: saxo-refresh
+            exp_annotations:
+              summary: "saxo-refresh: last_exit_code missing while last_run is present, AlphalensJobFailed is blind for it"
+              description: "alphalens_job_last_run_timestamp_seconds exists for job saxo-refresh but alphalens_job_last_exit_code does not, so AlphalensJobFailed cannot fire for this job. Either a # HELP text for that family differs between two textfiles (node_exporter keeps the first and drops the later family; docker logs node-exporter shows inconsistent metric help text with the winning file) or a writer omitted the sample. The hook itself writes no HELP since #1461, so look for a foreign writer of the alphalens_job_* names in /var/lib/node_exporter/textfile."
+
+  # A healthy job exposes both families: quiet.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_job_last_run_timestamp_seconds{job="saxo-refresh"}'
+        values: '0x3'
+      - series: 'alphalens_job_last_exit_code{job="saxo-refresh"}'
+        values: '0x3'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: AlphalensJobFamilyMissing
+        exp_alerts: []

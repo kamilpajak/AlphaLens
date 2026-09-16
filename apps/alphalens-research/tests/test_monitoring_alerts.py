@@ -1910,5 +1910,105 @@ class TestCapitalAdequacyRules(unittest.TestCase):
                 self.assertNotIn('job="broker-manager-sim"', rule["expr"], rule["alert"])
 
 
+def _for_minutes(rule: dict) -> int:
+    """``for:`` as whole minutes (the rules file writes ``30m`` / ``1h``)."""
+    text = str(rule.get("for", "0m"))
+    match = re.fullmatch(r"(\d+)([mh])", text)
+    if match is None:
+        raise AssertionError(f"unparseable for: {text!r}")
+    value, unit = int(match.group(1)), match.group(2)
+    return value * 60 if unit == "h" else value
+
+
+class TestTextfileScrapeError(unittest.TestCase):
+    """Pins for #1439: the page when node_exporter rejects a metrics file.
+
+    ``node_textfile_scrape_error`` is global and unlabelled, so the alert
+    cannot name the file; its description carries the one-liner that does.
+    The 30m debounce comes from a 30-day census of the live gauge: every real
+    episode (a nightly ``TERM`` written by the pre-#1441 hook, #1437, #1461)
+    lasted >= 80 min, and writer-vs-scrape races never showed at 5-min
+    resolution.
+    """
+
+    ALERT = "AlphalensTextfileScrapeError"
+
+    def _one(self) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_expr_reads_the_global_scrape_error_gauge(self) -> None:
+        self.assertEqual(self._one()["expr"], "node_textfile_scrape_error == 1")
+
+    def test_debounce_clears_the_blips_but_not_a_real_episode(self) -> None:
+        # >= 30m: above the sub-5-min race blips; below the 80-min floor of
+        # every real episode measured, and inside the hour after the
+        # AlphalensJobMetricMissing it disambiguates.
+        minutes = _for_minutes(self._one())
+        self.assertGreaterEqual(minutes, 30)
+        self.assertLess(minutes, 80)
+
+    def test_routes_warning_telegram_without_a_job_label(self) -> None:
+        rule = self._one()
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+        self.assertNotIn("job", rule.get("labels", {}))
+
+    def test_description_names_the_culprit_one_liner_and_both_causes(self) -> None:
+        description = self._one().get("annotations", {}).get("description", "")
+        self.assertIn("docker logs --since 10m node-exporter", description)
+        self.assertIn("failed to collect textfile data", description)
+        self.assertIn("inconsistent metric help text", description)
+        self.assertIn("#1437", description)
+        self.assertIn("#1461", description)
+
+
+class TestJobFamilyMissing(unittest.TestCase):
+    """Pins for the per-job half of #1461.
+
+    The hook no longer writes ``# HELP``, so this is defence in depth: the
+    hook deploys out of band (``git pull``, not CI), and a future writer of
+    the ``alphalens_job_*`` names can reintroduce a help text. When one
+    family is dropped while its siblings stay, ``AlphalensJobFailed`` is
+    blind for that job and only a labelled rule can say WHICH job.
+    """
+
+    ALERT = "AlphalensJobFamilyMissing"
+    EXPR = "alphalens_job_last_run_timestamp_seconds unless alphalens_job_last_exit_code"
+
+    def _one(self) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_expr_is_last_run_unless_last_exit_code(self) -> None:
+        self.assertEqual(self._one()["expr"], self.EXPR)
+
+    def test_debounce_outlives_staleness_but_pages_within_the_hour(self) -> None:
+        # > 5m so Prometheus staleness (a series lingers 5 min after its file
+        # stops exposing it) cannot page; <= 60m so the page lands the same hour.
+        minutes = _for_minutes(self._one())
+        self.assertGreater(minutes, 5)
+        self.assertLessEqual(minutes, 60)
+
+    def test_routes_warning_telegram_and_names_the_job_in_the_summary(self) -> None:
+        rule = self._one()
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+        self.assertIn("{{ $labels.job }}", rule.get("annotations", {}).get("summary", ""))
+        # No job= matcher: the rule is one-for-all, like AlphalensJobFailed.
+        self.assertIsNone(re.search(r'job="[^"]+"', rule["expr"]))
+
+    def test_description_points_at_the_help_conflict_and_the_hook_contract(self) -> None:
+        description = self._one().get("annotations", {}).get("description", "")
+        self.assertIn("inconsistent metric help text", description)
+        self.assertIn("#1461", description)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -743,6 +743,53 @@ groups:
           description: "Check `journalctl --user -u alphalens-{{ $labels.job }}.service` on the VPS. 256 is the sentinel the hook writes whenever systemd reported a failure without a usable non-zero status — a signal kill, or a result such as timeout or watchdog whose reported status is 0. When a signal was involved, `alphalens_job_last_signal{job=\"{{ $labels.job }}\"}` carries its number; a cgroup OOM kill shows 9 there, but a container OOM on the docker-run units arrives as a plain exit 137 with no signal recorded. Other values come from whatever the unit's ExecStart returned, which is not always the job's own code: 200-243 are systemd's own failures (203 is a failed exec) and a killed container is reported by the docker client. A run systemd calls `success` reports 0 even when it ended on TERM, so a plain `systemctl stop` does not page."
 
       # ---------------------------------------------------------------
+      # Textfile integrity (#1439, #1461) — the two ways the job metrics
+      # above can go silent WITHOUT any job failing.
+      # ---------------------------------------------------------------
+
+      # node_exporter drops a WHOLE .prom file on one non-float sample
+      # (the 2026-09-13 `TERM`, #1437) and drops one FAMILY from a later
+      # file whose `# HELP` text differs from the first it met (#1461).
+      # Both set this global, unlabelled gauge to 1 and nothing read it: a
+      # 30-day census found 17 episodes (14 nightly rejections of the
+      # thematic-build file at 02:25-05:30 UTC, one bracket-cost, #1437,
+      # the 46h #1461 conflict), none paged. Every real episode lasted
+      # >= 80 min; writer-vs-scrape races (all writers rename a tempfile)
+      # never showed at 5-min resolution, so 30m clears the blips and still
+      # lands inside the hour after the AlphalensJobMetricMissing it
+      # disambiguates. The description carries the one-liner that names
+      # the file, because the gauge cannot.
+      - alert: AlphalensTextfileScrapeError
+        expr: node_textfile_scrape_error == 1
+        for: 30m
+        labels:
+          severity: warning
+          route: telegram
+        annotations:
+          summary: "node_exporter is rejecting a textfile metrics file"
+          description: "node_textfile_scrape_error has been 1 for 30m. The gauge is global and carries no file label; name the culprit on the VPS with: docker logs --since 10m node-exporter 2>&1 | grep -E 'failed to collect textfile data|inconsistent metric help text' | tail -3 (both known causes log file=). A non-float sample drops the WHOLE file (#1437 shape): an AlphalensJobMetricMissing for that job then means a rejected file, not an unrun unit. A # HELP text that differs between files drops one family from the later file (#1461 shape): the hook writes no HELP since #1461, so this means a foreign writer, and with helpless files in the directory a second differing text can crash node_exporter (nil dereference in textfile.go v1.9.1). Recovery: fix the writer and rewrite the file with tmp + mv; never run the hook by hand inside the scraped directory (it stamps last_run=now). Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly."
+
+      # Per-job half of #1461. The hook writes no `# HELP` any more, so
+      # this is defence in depth: the hook deploys by `git pull`, not CI,
+      # and any future writer of the alphalens_job_* names can bring a
+      # help text back. When last_exit_code is dropped while last_run
+      # stays, AlphalensJobFailed is blind for exactly that job, and only a
+      # labelled rule can say which. Both series come from the same file
+      # and scrape, so `unless` matches on the identical {instance, job}.
+      # for: 15m — above the 5-min staleness a vanished series lingers,
+      # so a file rewritten within one run cannot page. Would have fired
+      # at 17:00 UTC on 2026-09-13, 46h before the operator noticed.
+      - alert: AlphalensJobFamilyMissing
+        expr: alphalens_job_last_run_timestamp_seconds unless alphalens_job_last_exit_code
+        for: 15m
+        labels:
+          severity: warning
+          route: telegram
+        annotations:
+          summary: "{{ $labels.job }}: last_exit_code missing while last_run is present, AlphalensJobFailed is blind for it"
+          description: "alphalens_job_last_run_timestamp_seconds exists for job {{ $labels.job }} but alphalens_job_last_exit_code does not, so AlphalensJobFailed cannot fire for this job. Either a # HELP text for that family differs between two textfiles (node_exporter keeps the first and drops the later family; docker logs node-exporter shows inconsistent metric help text with the winning file) or a writer omitted the sample. The hook itself writes no HELP since #1461, so look for a foreign writer of the alphalens_job_* names in /var/lib/node_exporter/textfile."
+
+      # ---------------------------------------------------------------
       # Domain alerts — surface "ran clean, found nothing" conditions
       # that an exit-code check would miss.
       # ---------------------------------------------------------------

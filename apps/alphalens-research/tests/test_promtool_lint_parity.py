@@ -133,6 +133,15 @@ class TestPromtoolLintParity(unittest.TestCase):
                     "its cases are silently never executed.",
                 )
 
+    def test_ci_runs_the_node_exporter_integration_with_the_flag_set(self) -> None:
+        # The opt-in Docker test in test_node_exporter_textfile_mixing.py is
+        # skipped without its flag, so a CI run that forgets the flag silently
+        # stops checking what the exporter scrapes (and the diff-coverage gate
+        # then sees the file unexecuted). The research job's unittest step
+        # sets it.
+        ci = CI_WORKFLOW.read_text()
+        self.assertRegex(ci, r'NODE_EXPORTER_DOCKER_TEST: "1"')
+
     def test_rules_header_does_not_overstate_unit_test_coverage(self) -> None:
         # The header used to list what the unit tests check in a way that read
         # as full validation. Anyone trusting that list would not run promtool.
