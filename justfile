@@ -24,6 +24,13 @@ lock:
 # Lint / format
 # -------------------------------------------------------------------------
 
+# Dead-code REPORT for the broker and contract packages (#1471) — not a CI gate.
+# Scans all production code so a symbol used from research or Django counts as
+# used, and prints only the broker scope. Exit 0 clean, 1 something to read,
+# 2 vulture itself failed. Whitelist: apps/alphalens-research/scripts/deadcode_broker_whitelist.py
+deadcode:
+    uv run python apps/alphalens-research/scripts/deadcode_broker.py
+
 # Lint Python (all members) + check web TS
 lint:
     uv run ruff check apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
