@@ -1279,9 +1279,8 @@ def _default_live_exits_feed_factory(
 ) -> PriceFeed:
     """The production price feed: Saxo LIVE streaming, or nothing.
 
-    yfinance is NOT a fallback here. It remains in the tree, unwired, and its
-    PricePoint carries no event time so the freshness gate would veto it
-    anyway. Behind ``ALPHALENS_SAXO_LIVE_PRICES`` (default OFF); when off this
+    There is no fallback feed: a quote without an event time would fail the
+    freshness gate anyway. Behind ``ALPHALENS_SAXO_LIVE_PRICES`` (default OFF); when off this
     returns a feed that vetoes every uic rather than quietly downgrading.
 
     ``scope`` is forwarded to ``stream.ensure_subscribed`` so each of the
@@ -4816,11 +4815,8 @@ def build_default_deps(
     SAXO_LIVE_TEST=1 SIM probe, not the hermetic unit tests. The factory helpers
     (_default_oauth_provider, _make_place_pick, _make_position_view_builder,
     build_protection_view + _make_protection_executor) compose the seams; they
-    are validated only by the SIM probe. The pluggable fill-source
-    (fill_source.PollingFillSource) stays a tested seam for the phase-B streaming
-    drop-in; the MVP loop detects fills through reconcile_bridge.verdicts
-    (reconcile classifies FILLED), so no PollingFillSource instance is wired
-    into LoopDeps here.
+    are validated only by the SIM probe. The loop detects fills through
+    reconcile_bridge.verdicts (reconcile classifies FILLED).
 
     ``notify`` and ``chain_loss_notify`` are the concrete alert sinks (PR-4,
     NotificationPort) — injected by the CLI composition root

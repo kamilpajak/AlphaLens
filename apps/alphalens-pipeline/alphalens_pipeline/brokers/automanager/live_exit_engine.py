@@ -596,12 +596,11 @@ def run_live_exits(
     a crash: an infinite bid satisfies ``price >= target`` for every tranche, so
     the engine used to sell the whole ladder in one pass.
 
-    Defence in depth, not a reachable live defect today: both production feeds
-    already withhold such a quote, by different mechanisms —
-    ``yfinance_price_feed`` checks ``isfinite`` / ``> 0`` before it builds the
-    point, ``saxo_live_price_feed`` builds the point and then returns it only if
-    ``price_feed.is_fresh`` passes, which vetoes a non-finite, non-positive or
-    crossed side. Neither is a rule this engine owns, so it states its own.
+    Defence in depth, not a reachable live defect today: the production feed
+    already withholds such a quote — ``saxo_live_price_feed`` builds the point
+    and then returns it only if ``price_feed.is_fresh`` passes, which vetoes a
+    non-finite, non-positive or crossed side. That is not a rule this engine
+    owns, so it states its own.
 
     ``dispositions`` is an OPTIONAL out-param (the repo's
     ``iter_submission_records(path, *, malformed=...)`` shape): given a dict, it
