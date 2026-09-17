@@ -1215,6 +1215,7 @@ class TestBackfillEmitsGuardDispositionMetrics(unittest.TestCase):
             patch.object(feedback, "_enrich_population_benchmark_excess"),
             patch.object(feedback, "_enrich_population_sector_excess"),
             patch.object(feedback, "_enrich_population_size_fields"),
+            patch.object(feedback, "_enrich_selection_labels"),
             patch.object(feedback, "_enrich_population_chart_payloads"),
             patch.object(feedback, "_write_ingest_watermark"),
         ):

@@ -15,7 +15,10 @@ import unittest
 from unittest import mock
 
 from alphalens_cli.main import app
+from alphalens_pipeline.feedback.selection_label import SelectionLabelReport
 from typer.testing import CliRunner
+
+_EMPTY_LABEL_REPORT = SelectionLabelReport()
 
 
 class TestFeedbackBackfillCommand(unittest.TestCase):
@@ -46,6 +49,10 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
             mock.patch(
                 "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
                 return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.selection_label.enrich_selection_labels",
+                return_value=_EMPTY_LABEL_REPORT,
             ),
         ):
             result = self.runner.invoke(
@@ -78,6 +85,10 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
             mock.patch(
                 "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
                 return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.selection_label.enrich_selection_labels",
+                return_value=_EMPTY_LABEL_REPORT,
             ),
         ):
             result = self.runner.invoke(
@@ -154,6 +165,10 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
                 "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
                 return_value=0,
             ),
+            mock.patch(
+                "alphalens_pipeline.feedback.selection_label.enrich_selection_labels",
+                return_value=_EMPTY_LABEL_REPORT,
+            ),
         ):
             result = self.runner.invoke(
                 app,
@@ -189,6 +204,10 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
                 "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
                 return_value=2,
             ) as event_car,
+            mock.patch(
+                "alphalens_pipeline.feedback.selection_label.enrich_selection_labels",
+                return_value=_EMPTY_LABEL_REPORT,
+            ),
         ):
             result = self.runner.invoke(
                 app,
@@ -198,6 +217,58 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.stdout)
         event_car.assert_called_once()
         self.assertIn("event-car: 2 event row(s)", result.stdout)
+
+    def _run_with_selection_label(self, **label_patch):
+        fake_report = mock.Mock(terminal=2, ongoing=1)
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                return_value=[fake_report],
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.enrich_store_with_size_fields",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.benchmark_excess.enrich_store_with_benchmark_excess",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.sector_excess.enrich_store_with_sector_excess",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.selection_label.enrich_selection_labels",
+                **label_patch,
+            ) as labels,
+        ):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "backfill-shadow-returns", "--briefs-dir", "/tmp/briefs-under-test"],
+            )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        return result, labels
+
+    def test_command_invokes_selection_label_enrichment_and_prints_counts_only(self):
+        # The ML selection label (memo section 5.1) is stamped in the enrichment tail
+        # from the same briefs directory; the echo carries status counts, never values.
+        report = SelectionLabelReport(
+            dates_written=3, rows_stamped=7, status_counts_h20={"ok": 5, "immature": 2}
+        )
+        result, labels = self._run_with_selection_label(return_value=report)
+        labels.assert_called_once()
+        self.assertEqual(str(labels.call_args.kwargs["briefs_dir"]), "/tmp/briefs-under-test")
+        self.assertIn("selection-labels: 3 date(s) written, 7 row(s) stamped", result.stdout)
+        self.assertIn("immature=2", result.stdout)
+
+    def test_selection_label_failure_is_swallowed(self):
+        result, labels = self._run_with_selection_label(side_effect=RuntimeError("boom"))
+        labels.assert_called_once()
+        self.assertNotIn("selection-labels:", result.stdout)
 
     def test_population_failure_is_swallowed_command_still_exits_zero(self):
         # A Polygon outage / replay error must NOT change the command's exit
@@ -225,6 +296,10 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
             mock.patch(
                 "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
                 return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.selection_label.enrich_selection_labels",
+                return_value=_EMPTY_LABEL_REPORT,
             ),
         ):
             result = self.runner.invoke(

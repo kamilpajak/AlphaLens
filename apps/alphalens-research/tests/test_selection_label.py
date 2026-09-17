@@ -433,6 +433,17 @@ class TestEnrichStore(unittest.TestCase):
         self._run()
         self.assertEqual(path.stat().st_mtime, 1_000_000)
 
+    def test_a_recomputed_row_that_did_not_change_is_not_rewritten(self):
+        book = make_book(stock_window=[0.01] * 40)
+        self._write_book(book, until=advance_trading_sessions(T0, 9))
+        _brief([{"theme": "t", "ticker": "AAA"}]).to_parquet(self.briefs / "2026-03-03.parquet")
+        self._run()
+        path = self.labels / "2026-03-03.parquet"
+        os.utime(path, (1_000_000, 1_000_000))
+        report = self._run(now=dt.datetime(2026, 9, 2, 7, 0, tzinfo=dt.UTC))  # still immature
+        self.assertEqual(path.stat().st_mtime, 1_000_000)
+        self.assertEqual(report.dates_written, 0)
+
     def test_immature_horizon_is_completed_when_the_session_arrives(self):
         book = make_book(stock_window=[0.01] * 40)
         cut = advance_trading_sessions(T0, 9)

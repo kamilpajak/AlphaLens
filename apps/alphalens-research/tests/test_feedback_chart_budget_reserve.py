@@ -61,6 +61,7 @@ class TestChartPassBudgetReserve(unittest.TestCase):
                     feedback_cmd, "_enrich_population_sector_excess", _capture("sector")
                 ),
                 mock.patch.object(feedback_cmd, "_enrich_population_size_fields", _capture("size")),
+                mock.patch.object(feedback_cmd, "_enrich_selection_labels", _capture("labels")),
                 mock.patch.object(
                     feedback_cmd, "_enrich_population_chart_payloads", _capture("chart")
                 ),
@@ -84,6 +85,7 @@ class TestChartPassBudgetReserve(unittest.TestCase):
         # benchmark/sector/size all share the SAME upstream instance.
         self.assertIs(captured["sector"], upstream)
         self.assertIs(captured["size"], upstream)
+        self.assertIs(captured["labels"], upstream)
 
     def test_reserve_env_override_is_respected(self) -> None:
         captured = self._run(

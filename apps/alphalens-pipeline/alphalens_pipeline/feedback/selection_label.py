@@ -592,6 +592,7 @@ def _stamp_date(
 
     rows = dict(existing)
     changed = False
+    n_stamped = 0
     for ticker, stage in pop_records.items():
         base = rows.get(ticker, {"brief_date": brief_date, "ticker": ticker})
         merged = {**base, **stage}
@@ -612,15 +613,27 @@ def _stamp_date(
                 pre=_reusable_pre(existing.get(ticker)),
                 exchange=exchange,
             )
-            rows[ticker] = {**rows[ticker], **_label_record(result, published, now)}
+            record = _label_record(result, published, now)
+            old = existing.get(ticker)
+            if old is not None and _same_label(old, record):
+                continue  # still immature / unknown with nothing new: keep the stored row
+            rows[ticker] = {**rows[ticker], **record}
             counts[result.statuses[ar_key(PATH_MEAN_HORIZON)]] += 1
-        changed = True
+            n_stamped += 1
+            changed = True
 
     if not changed:
         return False, 0
     frame = pd.DataFrame([rows[t] for t in sorted(rows)], columns=list(SEL_LABEL_COLUMNS))
     write_parquet_atomic(frame, out_path, index=False)
-    return True, len(todo)
+    return True, n_stamped
+
+
+def _same_label(old: Mapping[str, Any], new: Mapping[str, Any]) -> bool:
+    """True when a recomputation reproduced the stored row (``computed_at`` aside)."""
+    return all(
+        _normalise(old.get(k)) == _normalise(v) for k, v in new.items() if k != "computed_at"
+    )
 
 
 def _book_for(

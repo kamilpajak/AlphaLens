@@ -68,6 +68,7 @@ class RefreshStampsWatermarkTest(unittest.TestCase):
                 mock.patch.object(fb, "_enrich_population_benchmark_excess", lambda *a, **k: None),
                 mock.patch.object(fb, "_enrich_population_sector_excess", lambda *a, **k: None),
                 mock.patch.object(fb, "_enrich_population_size_fields", lambda *a, **k: None),
+                mock.patch.object(fb, "_enrich_selection_labels", lambda *a, **k: None),
                 mock.patch.object(fb, "_enrich_population_chart_payloads", lambda *a, **k: None),
                 mock.patch(
                     "alphalens_pipeline.feedback.population_ladder_monitor."

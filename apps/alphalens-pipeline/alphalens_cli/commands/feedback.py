@@ -191,6 +191,7 @@ def _refresh_population_ladders(briefs_dir: Path, *, lookback_days: int | None =
     _enrich_population_event_car(deadline=deadline)
     _enrich_population_sector_excess(deadline=deadline)
     _enrich_population_size_fields(briefs_dir, deadline=deadline)
+    _enrich_selection_labels(briefs_dir, deadline=deadline)
     _enrich_population_chart_payloads(briefs_dir, deadline=chart_deadline)
 
     # Final step: stamp the store as settled so the mirror ingests the COMPLETE
@@ -219,6 +220,34 @@ def _enrich_population_event_car(*, deadline: Any = None) -> None:
         typer.echo(f"event-car: {n} event row(s) carry a matured car_20_event.")
     except Exception:
         logger.exception("event-car enrichment failed; continuing")
+
+
+def _enrich_selection_labels(briefs_dir: Path, *, deadline: Any = None) -> None:
+    """Stamp the ML selection label (label registry memo section 5.1). Never raises.
+
+    Writes its own store (``~/.alphalens/selection_labels``), which nothing on the wire
+    reads, so it does not touch the population store or the ingest watermark. Disk-only
+    over the split-adjusted grouped-daily history. The echo carries status counts only:
+    a label value printed in a journal would be an unregistered look.
+    """
+    try:
+        from alphalens_pipeline.feedback.selection_label import enrich_selection_labels
+
+        report = enrich_selection_labels(
+            briefs_dir=briefs_dir,
+            shadow_dir=_ALPHALENS_HOME / "proposal_shadow",
+            labels_dir=_ALPHALENS_HOME / "selection_labels",
+            grouped_root=_ALPHALENS_HOME / "grouped_daily_history",
+            deadline=deadline,
+        )
+        counts = ", ".join(f"{k}={v}" for k, v in sorted(report.status_counts_h20.items()))
+        typer.echo(
+            f"selection-labels: {report.dates_written} date(s) written, "
+            f"{report.rows_stamped} row(s) stamped, {report.dates_failed} failed; "
+            f"h20 status of stamped rows: {counts or 'none'}."
+        )
+    except Exception:
+        logger.exception("selection-label enrichment failed; continuing")
 
 
 def _emit_guard_metrics(reports: Any) -> None:
