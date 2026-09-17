@@ -244,7 +244,8 @@ def compute_setup_plan(
 
     Raises :class:`TradeSetupNotPlannableError` for the FX refusals
     (non-positive rate, same-currency ``FxConversion`` — same-currency must
-    pass ``fx=None``) plus "no usable entry tiers after sanitisation" when
+    pass ``fx=None``), a ``disaster_stop`` that is not a finite positive
+    price, plus "no usable entry tiers after sanitisation" when
     every tier in ``spec`` has a non-positive ``limit_price``. The brief-side
     plannability checks (status != OK, missing size percent, …) now
     run earlier, inside
@@ -264,6 +265,18 @@ def compute_setup_plan(
             )
 
     disaster_stop = spec.disaster_stop
+    # The drain sizes a decoded spec, so only the arming schema stood between a
+    # legacy or hand-edited journal line and an entry that rests with no usable
+    # stop. bool is an int subclass, hence the explicit exclusion.
+    if (
+        isinstance(disaster_stop, bool)
+        or not isinstance(disaster_stop, int | float)
+        or not math.isfinite(disaster_stop)
+        or disaster_stop <= 0
+    ):
+        raise TradeSetupNotPlannableError(
+            f"disaster_stop {disaster_stop!r} is not a finite positive price"
+        )
 
     total_notional = float(spec.size.notional_acct)
     if fx is None:

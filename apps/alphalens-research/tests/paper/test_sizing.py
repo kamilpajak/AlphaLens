@@ -206,6 +206,31 @@ class TestUnplannable(unittest.TestCase):
             self._compute(setup)
 
 
+class TestTheDrainNeverPlansWithoutAUsableStop(unittest.TestCase):
+    """The drain sizes a decoded ``TradeSpec``, not a brief, so the brief-side
+    stop check never runs there. Only the arming schema stood in front of a
+    missing stop; a legacy or hand-edited journal line must still be refused
+    before any entry order rests without a protective stop."""
+
+    def _spec(self, disaster_stop):
+        return TradeSpec(
+            entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=100.0),),
+            disaster_stop=disaster_stop,
+            tp_tranches=(),
+            size=PickSize(notional_acct=1_500.0, currency="USD"),
+        )
+
+    def test_an_unusable_stop_is_not_plannable(self):
+        for stop in (None, "90", math.nan, math.inf, 0.0, -1.0, True):
+            with self.subTest(disaster_stop=stop):
+                with self.assertRaises(TradeSetupNotPlannableError) as ctx:
+                    compute_setup_plan(self._spec(stop))
+                self.assertIn("disaster_stop", str(ctx.exception))
+
+    def test_an_integer_stop_still_plans(self):
+        self.assertEqual(compute_setup_plan(self._spec(90)).disaster_stop, 90)
+
+
 # ---------------------------------------------------------------------------
 # validate_trade_setup (the shared validation entry point)
 # ---------------------------------------------------------------------------
