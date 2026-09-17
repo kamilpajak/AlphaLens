@@ -415,11 +415,12 @@ class TestDegeneratePriceFiresNothing(unittest.TestCase):
     safe because ``_exit_clears_cost`` happened to refuse it, and that gate
     fails OPEN whenever the realised entry is unknown.
 
-    This is defence in depth, NOT a reachable live defect today. The
-    production feed already withholds such a quote: ``saxo_live_price_feed``
-    returns its point only when ``price_feed.is_fresh`` passes, which vetoes a
-    non-finite, non-positive or crossed side. That rule does not belong to the
-    exit engine, so it states its own.
+    This is defence in depth, NOT a reachable live defect today. Both
+    production feeds already withhold such a quote, by different mechanisms:
+    ``yfinance_price_feed`` checks ``isfinite`` / ``> 0`` before building the
+    point, ``saxo_live_price_feed`` returns its point only when
+    ``price_feed.is_fresh`` passes, which vetoes a non-finite, non-positive or
+    crossed side. Neither rule belongs to the exit engine, so it states its own.
     """
 
     _DEGENERATE_BIDS = (float("inf"), float("-inf"), float("nan"), 0.0, -1.0)

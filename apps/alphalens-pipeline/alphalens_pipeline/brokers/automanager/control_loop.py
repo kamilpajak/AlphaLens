@@ -1269,8 +1269,9 @@ def _default_live_exits_feed_factory(
 ) -> PriceFeed:
     """The production price feed: Saxo LIVE streaming, or nothing.
 
-    There is no fallback feed: a quote without an event time would fail the
-    freshness gate anyway. Behind ``ALPHALENS_SAXO_LIVE_PRICES`` (default OFF); when off this
+    yfinance is NOT a fallback here. It remains in the tree, unwired, and its
+    PricePoint carries no event time so the freshness gate would veto it
+    anyway. Behind ``ALPHALENS_SAXO_LIVE_PRICES`` (default OFF); when off this
     returns a feed that vetoes every uic rather than quietly downgrading.
 
     ``scope`` is forwarded to ``stream.ensure_subscribed`` so each of the

@@ -83,6 +83,9 @@ UNWIRED_ALLOWED: Mapping[str, str] = {
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/fill_source.py": (
         "the fill-detection seam the streaming FillSource will plug into; kept on purpose"
     ),
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/yfinance_price_feed.py": (
+        "interim and fallback price feed kept on purpose; not wired into the daemon yet"
+    ),
 }
 
 _FINDING = re.compile(r"^(?P<path>[^:]+):\d+: unused \w+(?: \w+)? '(?P<name>[^']+)'")

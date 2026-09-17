@@ -16,6 +16,7 @@ _.place_stop_limit  # SupportsTrailingStop member; control_loop gates entry trai
 _.geometry_name  # ExitPolicy identity property, read by the policy tests; a Protocol member, not checked with isinstance
 
 _.poll_tick  # FillSource member; the seam a streaming fill source will implement, not wired yet on purpose
+_.YfinancePriceFeed  # PriceFeed kept on purpose as an interim/fallback price source and test double; not wired yet
 
 # Framework hooks, called by the standard library.
 _.do_GET  # BaseHTTPRequestHandler hook of the marketdata-auth callback server
