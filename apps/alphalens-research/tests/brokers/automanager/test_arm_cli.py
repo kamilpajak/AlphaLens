@@ -870,10 +870,23 @@ class TheOldBriefFormPointsAtTheProducer(_DoorCase):
     def test_a_ticker_that_is_not_a_file_also_gets_the_hint(self) -> None:
         """`arm KO` alone reads KO as a path; when there is no such file the
         usage refusal points at the producer as well."""
-        result = self.invoke(["arm", str(self.home / "KO"), "--format", "json"])
+        result = self.invoke(["arm", "KO", "--format", "json"])
 
         failure = self.assert_refused(result, "usage")
         self.assertEqual(failure["suggestions"][0]["argv"][:3], ["alphalens", "thematic", "intent"])
+
+
+class AMissingDocumentPathGetsNoProducerHint(_DoorCase):
+    """Only a bare name reads like the old brief form. A mistyped document path
+    is not a ticker, and pointing it at `thematic intent` would mislead."""
+
+    def test_a_missing_json_file_carries_no_suggestion(self) -> None:
+        for source in (str(self.home / "my-pick.json"), "picks/KO"):
+            with self.subTest(source=source):
+                result = self.invoke(["arm", source, "--format", "json"])
+
+                failure = self.assert_refused(result, "usage")
+                self.assertEqual(failure["suggestions"], [])
 
 
 class TheImmediateTierRulesHoldAtTheDoor(_DoorCase):

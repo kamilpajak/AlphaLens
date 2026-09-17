@@ -1499,13 +1499,14 @@ def _document_text(source: str) -> str:
     try:
         return Path(source).read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        # `arm KO` was the brief form until #1469; a missing file named like a
-        # ticker most likely is one.
+        # `arm KO` was the brief form until #1469. Only a bare name reads like a
+        # ticker; a mistyped document path gets no producer hint.
+        bare_name = Path(source).name == source and not Path(source).suffix
         raise _fail_with(
             "usage",
             f"cannot read {source}: {exc}",
             details={"path": source},
-            suggestions=(_producer_suggestion(Path(source).name, None, None, None),),
+            suggestions=(_producer_suggestion(source, None, None, None),) if bare_name else (),
         ) from exc
     except OSError as exc:
         raise _fail_with("usage", f"cannot read {source}: {exc}", details={"path": source}) from exc
