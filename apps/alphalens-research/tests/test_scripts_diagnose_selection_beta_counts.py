@@ -11,7 +11,7 @@ import importlib
 import unittest
 
 import pandas as pd
-from alphalens_research.diagnostics import fixed_horizon as fh
+from alphalens_pipeline.feedback import market_beta as mb
 
 
 def _import_script():
@@ -22,7 +22,7 @@ class TestBetaCounts(unittest.TestCase):
     def test_skipped_events_are_not_counted_as_fallbacks(self):
         mod = _import_script()
         sources = pd.Series(
-            [fh.BETA_ESTIMATED, fh.BETA_ESTIMATED, fh.BETA_FALLBACK_THIN, None, None]
+            [mb.BETA_ESTIMATED, mb.BETA_ESTIMATED, mb.BETA_FALLBACK_THIN, None, None]
         )
 
         counts = mod._beta_counts(sources)
@@ -33,7 +33,7 @@ class TestBetaCounts(unittest.TestCase):
 
     def test_both_fallback_tags_count_as_fallbacks(self):
         mod = _import_script()
-        sources = pd.Series([fh.BETA_FALLBACK_THIN, fh.BETA_FALLBACK_DEGENERATE])
+        sources = pd.Series([mb.BETA_FALLBACK_THIN, mb.BETA_FALLBACK_DEGENERATE])
 
         counts = mod._beta_counts(sources)
 
@@ -44,7 +44,7 @@ class TestBetaCounts(unittest.TestCase):
     def test_the_buckets_partition_every_row(self):
         mod = _import_script()
         sources = pd.Series(
-            [fh.BETA_ESTIMATED, fh.BETA_FALLBACK_DEGENERATE, None, fh.BETA_ESTIMATED]
+            [mb.BETA_ESTIMATED, mb.BETA_FALLBACK_DEGENERATE, None, mb.BETA_ESTIMATED]
         )
 
         counts = mod._beta_counts(sources)
@@ -56,7 +56,7 @@ class TestBetaCounts(unittest.TestCase):
         # A future beta_source value must not be absorbed into fell_back, which is the
         # same conflation this helper exists to remove.
         mod = _import_script()
-        sources = pd.Series([fh.BETA_ESTIMATED, "some_future_tag"])
+        sources = pd.Series([mb.BETA_ESTIMATED, "some_future_tag"])
 
         counts = mod._beta_counts(sources)
 
