@@ -159,15 +159,17 @@ class HistoryMatchesTheRecordTest(unittest.TestCase):
         )
         self.assertEqual(publication.PUBLISHED_AFTER_OPEN_HISTORY, recorded)
 
-    def test_the_records_meet_without_a_gap_or_an_overlap(self) -> None:
+    def test_the_records_cover_every_day_of_the_window_exactly_once(self) -> None:
+        # A day inside the window without a row would silently read as "before the open".
+        dates = [dt.date.fromisoformat(r["asof"]) for r in self.journal + self.pre_journal]
+        first, last = publication.HISTORY_RECORD_WINDOW
+        every_day = [first + dt.timedelta(days=i) for i in range((last - first).days + 1)]
+        self.assertEqual(sorted(dates), every_day)
+
+    def test_the_pre_journal_record_ends_where_the_journal_record_starts(self) -> None:
         journal = [dt.date.fromisoformat(r["asof"]) for r in self.journal]
         pre_journal = [dt.date.fromisoformat(r["asof"]) for r in self.pre_journal]
         self.assertEqual(max(pre_journal) + dt.timedelta(days=1), min(journal))
-        self.assertEqual(len(pre_journal), len(set(pre_journal)))
-        self.assertEqual(
-            sorted(pre_journal),
-            [min(pre_journal) + dt.timedelta(days=i) for i in range(len(pre_journal))],
-        )
 
     def test_record_window_matches_the_records(self) -> None:
         dates = [dt.date.fromisoformat(r["asof"]) for r in self.journal + self.pre_journal]
@@ -181,6 +183,20 @@ class HistoryMatchesTheRecordTest(unittest.TestCase):
                 self.assertEqual(r["published_after_open"], str(int(last >= open_utc)))
                 self.assertEqual(
                     open_utc, publication.deadline_utc(dt.date.fromisoformat(r["asof"]))
+                )
+
+    def test_a_pre_journal_date_reads_before_the_open_only_with_consistent_files(self) -> None:
+        # The stamp alone is not enough: the meta file of the same run must count the same
+        # rows, and the brief must carry exactly the tickers of the candidate file.
+        for r in self.pre_journal:
+            if r["published_after_open"] != "0":
+                continue
+            with self.subTest(asof=r["asof"]):
+                self.assertEqual(r["meta_rows"], r["brief_rows"])
+                self.assertEqual(r["brief_tickers_equal_candidates"], "1")
+                self.assertLess(
+                    dt.datetime.fromisoformat(r["candidates_parquet_mtime_utc"]),
+                    dt.datetime.fromisoformat(r["arrival_open_utc"]),
                 )
 
 

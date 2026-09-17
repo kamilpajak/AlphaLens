@@ -96,10 +96,24 @@ from three facts that do not depend on it. Read-only on the VPS, 2026-09-17.
 - **`thematic_candidates/<asof>.parquet`.** Its mtime is the last candidate
   recompute. On every date it is a few minutes before the brief run and never later.
 
+- **Brief tickers equal candidate tickers.** On every date the set of tickers in the
+  brief is exactly the set in the candidates parquet, and the candidates parquet was
+  never written after the open. A later change of the brief's list alone would break
+  this equality; a change of both files would move the candidates mtime.
+
 The brief parquets of 2026-05-21 … 2026-05-23 have a later mtime (2026-05-27T09:12:17Z,
-all within 0.04 s, 2026-05-24 too). That is the one-off `alphalens thematic
-clean-titles` backfill (#271), which rewrites only `source_event_title`. The stamps,
-the meta files and the candidate files were not touched by it.
+all within 0.04 s; the journal-covered 2026-05-24 has the same mtime). The most likely
+writer is the one-off `alphalens thematic clean-titles` backfill, which rewrites only
+`source_event_title`: its PR #271 was merged a day later, on 2026-05-28, so it was run
+from the branch, and no brief title on these dates has padded punctuation today. That
+attribution is not proven. It does not matter for the list: the meta files and the
+candidate files were not written on 2026-05-27, and the ticker sets still match.
+
+Why these dates become "before the open" (a frozen label) and not "unknown": two
+independent files agree (the brief stamps with the meta file, and the candidate file
+with the ticker sets), and nothing that can set the list wrote after the open. If a
+later finding proves one of them wrong, the correction is a new `SEL_LABEL_VERSION`,
+which recomputes frozen rows.
 
 | asof | arrival open (UTC) | candidates written (UTC) | last brief stamp (UTC) | rows | after open |
 |---|---|---|---|---|---|
@@ -124,8 +138,9 @@ Limits of this source:
 - It shows the LAST write, not every write. A list written before the open and replaced
   by a different list before the open looks the same as one list, which is correct for
   this question: the list that existed at the open is the stored one.
-- It trusts that no tool rewrote the list without the brief writer. The only later
-  rewrite found is the title backfill above.
+- It trusts file mtimes on the VPS. A copy that set every mtime to a new value would
+  show up as meta and candidate times far from the brief stamps; on these dates they
+  match the stamps within minutes, and the meta times to the second.
 
 Extraction command (read-only, on the VPS, from `~/AlphaLens` with the host venv):
 
@@ -143,13 +158,15 @@ for asof in ["2026-05-19", "2026-05-20", "2026-05-21", "2026-05-22", "2026-05-23
     brief = f"{home}/thematic_briefs/{asof}.parquet"
     meta_path = f"{home}/thematic_briefs/{asof}.meta.json"
     cand = f"{home}/thematic_candidates/{asof}.parquet"
-    stamps = pd.to_datetime(pd.read_parquet(brief)["brief_generated_at"], utc=True)
+    frame = pd.read_parquet(brief)
+    stamps = pd.to_datetime(frame["brief_generated_at"], utc=True)
+    same = set(frame["ticker"].astype(str)) == set(pd.read_parquet(cand)["ticker"].astype(str))
     meta = json.load(open(meta_path))
     deadline = deadline_utc(day)
     print(",".join(map(str, [
         asof, ladder_arrival_session(day), iso(deadline), len(stamps),
         meta["n_pro"] + meta["n_flash"], iso(stamps.min()), iso(stamps.max()),
-        mtime(meta_path), mtime(brief), mtime(cand), int(stamps.max() >= deadline),
+        mtime(meta_path), mtime(brief), mtime(cand), int(same), int(stamps.max() >= deadline),
     ])))
 ```
 
