@@ -2118,24 +2118,41 @@ rm /var/lib/node_exporter/textfile/alphalens_domain_broker-manager-{sim,live}-ca
 ```
 
 **Order on a host that still runs code from before #1467.** The LIVE daemon
-refuses to start without `ALPHALENS_BROKER_MAX_PICK_NOTIONAL`, so no daemon is
-restarted before its units are installed. Do steps 1 to 3 in one sitting: a
-running daemon keeps its loaded code, but a lazy import after the pull would
-read the new files.
+refuses to start without `ALPHALENS_BROKER_MAX_PICK_NOTIONAL` (`live_rails.py`).
+Between the code update and step 3, a daemon that crashes is restarted by
+systemd (`Restart=on-failure`) with the NEW code and the OLD units, and LIVE then
+refuses to boot, so no exits are managed. Keep that window short. The code can
+also arrive with nobody present: the literature-scan timer runs
+`git pull --ff-only` on this checkout (Sundays at 18:00 and on the 1st of each
+month at 09:00, Europe/Warsaw). So
+start with `git log -1`; if the pull already happened, go straight to step 2.
 
-1. Update the code (`git pull --ff-only`); the unit files come from it.
-2. Install the base units and drop-ins above, then `systemctl --user daemon-reload`.
-3. Restart the SIM manager, then the LIVE manager.
+1. Update the code (`git pull --ff-only`). The unit files come from it.
+2. Run the one-time cleanup block above: it disables the retired capital reader
+   (its command no longer exists, so every run would fail), removes both
+   `30-sizing-frame.conf` files and installs `30-cash-floor.conf` and
+   `30-max-pick-notional.conf`. Copy a base unit only if it changed (§3, §9.1).
+   Then `systemctl --user daemon-reload`.
+3. Restart the SIM manager, then the LIVE manager. Check each is running, not
+   restarting: `systemctl --user show <unit> -p ActiveState -p NRestarts`, and
+   `journalctl --user -u alphalens-broker-manager-live -n 50` shows no LIVE
+   boot-assert failure.
 4. Only then arm documents that state `spec.size`.
 
 A pick armed before #1467 sizes by percent, and the daemon no longer decodes it
-(`size_pct_v2` in `legacy.py`). The drain handles such a line in one of three ways:
+(`size_pct_v2` in `legacy.py`). On each tick that may place (no `KILL`, OAuth
+chain alive), the drain handles such a pick by what `submissions.jsonl` holds
+for it. A write-ahead `attempt` record counts as a record.
 
-- **Nothing placed:** refused with one alert. Re-arm it with an amount.
-- **Now tranche placed, pullback tiers not:** refused with one alert that says so.
+- **A record for the pullback tiers:** left alone.
+- **A record for the now tranche only:** refused, with one alert that says so.
   Re-arm the pullback tiers only; re-arming the whole ladder would buy the now
   tranche again.
-- **Fully placed:** left alone.
+- **No record:** refused, with one alert. Re-arm it with an amount.
+
+A refusal is written to `picks.jsonl`, so it happens once. If that write fails,
+the pick stays armed and is refused again on the next tick (the alert is
+throttled).
 
 #### 9.8 Standing-grant decommission
 

@@ -272,9 +272,10 @@ ceiling, are deployment facts: the daemon refuses those picks when it drains
 them, before the day-1 gate, and never shrinks one to fit. A version-2 document
 does not decode, because its percent cannot be turned into an amount without the
 frame that is gone. The journal reader recognises such lines and skips them
-(`legacy.py`, `size_pct_v2`). The drain refuses such a pick with one alert
-unless it is fully placed; when its now tranche already rests, the refusal says
-to re-arm the pullback tiers only.
+(`legacy.py`, `size_pct_v2`). The drain refuses such a pick once, with an alert,
+unless `submissions.jsonl` already holds a record for its pullback tiers. When
+only its now tranche has a record, the refusal says to re-arm the pullback tiers
+only.
 The compatibility promise on top is a promise about what we EMIT — within a
 major version, fields are only ADDED and only as optional — and the CI gate on
 the generated artefact is what enforces it.
