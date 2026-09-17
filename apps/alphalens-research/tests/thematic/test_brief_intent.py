@@ -48,8 +48,6 @@ def _candidate(ticker: str = "KBH", trade_setup: dict | None = None) -> Candidat
         verified=True,
         suggested_size_pct=3.0,
         trade_setup=_setup() if trade_setup is None else trade_setup,
-        n_gates_passed=3,
-        n_gates_failed=0,
         layer4_weighted_score=1.0,
         scorer_config_version="scorer-v1-test",
     )

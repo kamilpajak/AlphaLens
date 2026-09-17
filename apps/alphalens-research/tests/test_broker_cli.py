@@ -616,7 +616,6 @@ class TestReconcileCommand(unittest.TestCase):
         forbidden = {
             "place_bracket_order",
             "place_order",
-            "precheck_bracket_order",
             "cancel_order",
             "cancel_order_ids",
             "append_submission_record",

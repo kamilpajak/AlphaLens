@@ -89,7 +89,6 @@ class ComposedEnv:
     unit: str
     env_file: Path | None
     dropins: int
-    needs_daemon_reload: bool
     warnings: list[str]
 
 
@@ -317,7 +316,6 @@ def compose_live_environment(
         unit=unit,
         env_file=env_file,
         dropins=len([line for line in dropin_property.split() if line.strip()]),
-        needs_daemon_reload=needs_reload,
         warnings=warnings,
     )
 

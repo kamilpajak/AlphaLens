@@ -205,7 +205,6 @@ class TestComposeLiveEnvironment(unittest.TestCase):
         self.assertEqual(composed.unit, "alphalens-broker-manager-live.service")
         self.assertEqual(composed.env_file, Path(_ENV_FILE_PATH))
         self.assertEqual(composed.dropins, 2)
-        self.assertFalse(composed.needs_daemon_reload)
         self.assertEqual(composed.warnings, [])
 
     def test_the_composed_set_satisfies_the_live_factory(self) -> None:
@@ -263,7 +262,6 @@ class TestComposeLiveEnvironment(unittest.TestCase):
 
     def test_a_pending_daemon_reload_warns(self) -> None:
         composed = _compose(needs_reload="yes")
-        self.assertTrue(composed.needs_daemon_reload)
         self.assertTrue(any("daemon-reload" in w for w in composed.warnings))
 
     def test_a_missing_unit_is_refused_via_load_state_not_via_an_empty_payload(self) -> None:

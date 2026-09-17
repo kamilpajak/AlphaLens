@@ -6,10 +6,9 @@ Holds ``DEFAULT_ORDER_TTL_DAYS``, the entry-TTL default the Boundary-2
 on (2A-4a, sub-PR of the broker-manager extraction arc — see
 ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``
 §2.1/§2.3). The v2 daily scale-factor constants left with the percent sizing
-they served (#1467). ``N_FIXED``, ``DEFAULT_PAPER_EQUITY_USD``, ``TIME_STOP_DAYS``,
-and the ledger/briefs relpath defaults remain in
-``alphalens_pipeline.paper.constants`` — those are client-side (brief-parse /
-operator-default) concerns, not consumed by the money-math leaf. Stdlib-only
+they served (#1467). ``TIME_STOP_DAYS`` remains in
+``alphalens_pipeline.paper.constants`` — a client-side concern, not consumed by
+the money-math leaf. Stdlib-only
 — this is the shared A-tier leaf, consumed by both ``alphalens_pipeline`` and
 ``alphalens_research``, never a consumer of either.
 """

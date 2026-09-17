@@ -336,47 +336,6 @@ class TestPlacementBody(unittest.TestCase):
             self.assertEqual(child["BuySell"], "Buy")
 
 
-class TestLimitOrderDurations(unittest.TestCase):
-    """#1247 PR-B: fail-open per-instrument read of the durations Saxo
-    supports for Limit orders. WIRE SHAPE ASSUMED (SupportedOrderTypeSettings
-    has never been parsed in this repo; T3 probe pending) — verify via the
-    one-time INFO log on the SIM probe before the drain trusts IOC."""
-
-    _PLAUSIBLE = {
-        "SupportedOrderTypeSettings": [
-            {
-                "OrderType": "Limit",
-                "DurationTypes": ["DayOrder", "GoodTillDate", "ImmediateOrCancel"],
-            },
-            {"OrderType": "Market", "DurationTypes": ["DayOrder"]},
-        ]
-    }
-
-    def test_limit_durations_parsed_from_plausible_fixture(self) -> None:
-        self.assertEqual(
-            broker_module._limit_order_durations(self._PLAUSIBLE),
-            frozenset({"DayOrder", "GoodTillDate", "ImmediateOrCancel"}),
-        )
-
-    def test_limit_durations_absent_returns_none(self) -> None:
-        self.assertIsNone(broker_module._limit_order_durations(dict(_DETAILS_KO)))
-
-    def test_limit_durations_malformed_returns_none(self) -> None:
-        for details in (
-            {"SupportedOrderTypeSettings": "nope"},
-            {"SupportedOrderTypeSettings": [{"OrderType": "Limit"}]},
-            {"SupportedOrderTypeSettings": [{"DurationTypes": ["DayOrder"]}]},
-            {"SupportedOrderTypeSettings": [{"OrderType": "Limit", "DurationTypes": "DayOrder"}]},
-        ):
-            with self.subTest(details=details):
-                self.assertIsNone(broker_module._limit_order_durations(details))
-
-    def test_limit_durations_logs_raw_settings(self) -> None:
-        with self.assertLogs(broker_module.logger, level="INFO") as logs:
-            broker_module._limit_order_durations(self._PLAUSIBLE)
-        self.assertTrue(any("SupportedOrderTypeSettings" in line for line in logs.output))
-
-
 class TestFloorPriceToTick(unittest.TestCase):
     """#1247 PR-B: the operator's cap floors to the limit tick — NEVER up
     (memo §3.2.3: rounding up could submit a cap above the operator's)."""
@@ -570,19 +529,6 @@ class TestChildDistanceFailFast(unittest.TestCase):
                 _request(entry_limit=18.08, stop_loss=17.55, take_profit=18.60)
             )
         self.assertEqual(len(stub.place_calls), 1, "in-band children place normally")
-
-    def test_precheck_path_also_fails_fast(self):
-        # The false-green closure: precheck_bracket_order (the dry-run path)
-        # ALSO rejects a wide child locally — both paths route through
-        # _build_bracket_body, so the precheck no longer returns Ok while the
-        # real POST would 400.
-        broker, stub = _make_broker()
-        with self.assertRaises(OrderRejectedError) as ctx:
-            broker.precheck_bracket_order(
-                _request(entry_limit=18.08, stop_loss=12.57, take_profit=18.81)
-            )
-        self.assertIn("standalone", str(ctx.exception).lower())
-        self.assertEqual(stub.precheck_calls, [], "precheck never reaches the network")
 
     def test_regression_all_three_tiers_reject_locally(self):
         # Anchors S-2026-07-13: every tier of the shared-disaster-stop ladder

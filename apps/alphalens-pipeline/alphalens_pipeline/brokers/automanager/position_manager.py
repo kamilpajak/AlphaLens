@@ -97,11 +97,6 @@ def _exit_stop_ref(entry_crid: str, gen: int) -> str:
     return f"{entry_crid}-stop-{gen}"
 
 
-def _exit_tp_ref(entry_crid: str, gen: int) -> str:
-    """Deterministic gen-stamped x-request-id for a take-profit leg (rung 2, memo §4.5)."""
-    return f"{entry_crid}-tp-{gen}"
-
-
 def _exit_oco_ref(entry_crid: str, gen: int) -> str:
     """Deterministic gen-stamped BASE x-request-id for an OCO exit pair (rung 2).
 

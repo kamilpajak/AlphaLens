@@ -28,9 +28,8 @@ from pathlib import Path
 
 import alphalens_cli
 
-# Every write method on the broker contract that creates or changes an order,
-# plus the precheck call that only exists to precede a placement.
-_FORBIDDEN_ATTRIBUTE = re.compile(r"^(place_\w+|amend_\w+|precheck_bracket_order)$")
+# Every write method on the broker contract that creates or changes an order.
+_FORBIDDEN_ATTRIBUTE = re.compile(r"^(place_\w+|amend_\w+)$")
 
 
 def _referenced_name(node: ast.AST) -> str | None:
@@ -54,11 +53,11 @@ class CliModulesPlaceNothingTest(unittest.TestCase):
         self.assertEqual(_offending_attributes(source), ["place_bracket_order"])
 
     def test_the_gate_flags_a_method_named_by_string(self):
-        # The removed `submit` reached precheck through getattr with a string,
+        # The removed `submit` reached the broker through getattr with a string,
         # which an attribute-only walk cannot see.
-        source = "def run(broker):\n    return getattr(broker, 'precheck_bracket_order', None)\n"
+        source = "def run(broker):\n    return getattr(broker, 'place_bracket_order', None)\n"
 
-        self.assertEqual(_offending_attributes(source), ["precheck_bracket_order"])
+        self.assertEqual(_offending_attributes(source), ["place_bracket_order"])
 
     def test_the_gate_flags_a_method_name_held_in_a_variable(self):
         source = (

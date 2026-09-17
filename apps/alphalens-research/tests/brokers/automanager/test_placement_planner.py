@@ -102,14 +102,6 @@ class TestClassifyLaz(unittest.TestCase):
         self.assertIsNone(t1.bracket.stop_loss)
         self.assertEqual(t1.bracket.entry_limit, 38.85, "the sized entry is preserved")
 
-    def test_report_enumerates_every_tier_and_tp_no_silent_drop(self):
-        setup, instrument = _laz()
-        report = classify(setup, instrument).operator_report
-        # Operator report renders 1-based E{n} tier labels, never 0-based "tier N".
-        for token in ("E1", "E2", "46.54", "50.95", "operator-managed", "13.2", "31.1"):
-            self.assertIn(token, report)
-        self.assertNotIn("tier 0", report)
-
 
 class TestClassifyKnifeEdge(unittest.TestCase):
     def test_15_00_places_15_01_operator_managed(self):
@@ -217,7 +209,6 @@ class TestDisasterStopExactlyOnce(unittest.TestCase):
                 self.assertGreater(plan.disaster_stop_price, 0.0)
                 for tier in plan.tiers:
                     self.assertIsNone(tier.bracket.stop_loss)
-                self.assertEqual(plan.operator_report.lower().count("disaster stop"), 1)
 
     def test_s_incident_all_stops_far_still_one_standalone(self):
         setup, instrument = _s()

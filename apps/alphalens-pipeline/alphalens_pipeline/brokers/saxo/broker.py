@@ -151,30 +151,6 @@ def _today() -> dt.date:
     return dt.datetime.now(dt.UTC).date()
 
 
-def _limit_order_durations(details: dict[str, Any]) -> frozenset[str] | None:
-    """DurationTypes Saxo reports for Limit orders on this instrument.
-
-    ``None`` = shape unknown/absent (FAIL-OPEN): the caller must default to
-    DayOrder, never IOC, when support cannot be read. The wire shape of
-    ``SupportedOrderTypeSettings`` is UNVERIFIED offline (T3 probe pending,
-    ``docs/research/saxo_live_followup_tests_2026_07_20.md``) — the raw block
-    is INFO-logged so the SIM probe can pin the real shape before the drain
-    trusts an IOC answer.
-    """
-    settings = details.get("SupportedOrderTypeSettings")
-    if not isinstance(settings, list):
-        return None
-    logger.info("SupportedOrderTypeSettings (wire-shape verification): %r", settings)
-    for entry in settings:
-        if not isinstance(entry, dict) or entry.get("OrderType") != "Limit":
-            continue
-        durations = entry.get("DurationTypes")
-        if not isinstance(durations, list) or not durations:
-            return None
-        return frozenset(str(d) for d in durations)
-    return None
-
-
 # Saxo refuses /port/v1/closedpositions outright on EndOfDay-netting accounts
 # (the real LIVE PL account); detected by ErrorCode substring because SaxoError
 # carries the body only as message text.
@@ -246,7 +222,7 @@ def _oco_leg_ref(request_id: str, leg: str) -> str:
     """Per-leg ``ExternalReference`` derived from the OCO base ``request_id``.
 
     ``<request_id>-stop`` / ``<request_id>-tp``. Kept local to the adapter (the
-    automanager's ``_exit_stop_ref`` / ``_exit_tp_ref`` are NOT imported here —
+    automanager's ``_exit_stop_ref`` is NOT imported here —
     that would create a broker -> automanager -> broker import cycle). The
     executor passes a base ``request_id`` (derived from the entry crid + resize
     generation); the same-suffix scheme keeps the leg refs deterministic for
@@ -300,7 +276,7 @@ def _validate_price_relations(
     ``TooFarFromEntryOrder`` while the single-order precheck stays FALSE-GREEN.
     Any child (stop OR take-profit) more than
     :data:`execution._MAX_CHILD_DISTANCE_FRAC` from the entry is rejected here
-    — before any network call, on BOTH the precheck and place paths — with
+    — before any network call, and before the precheck — with
     guidance that a wide disaster stop belongs on a STANDALONE position-level
     order (Option B), not an OCO bracket child. This is an EARLY ARCHITECTURAL
     guard, not Saxo's authority: Saxo's real child-distance cap is
@@ -643,24 +619,6 @@ class SaxoBroker:
             status, payload = self._client.place_order(body, request_id=request.client_request_id)
             return self._handle_placement_response(
                 status, payload, request.client_request_id, account_key
-            )
-
-    def precheck_bracket_order(self, request: BracketOrderRequest) -> dict[str, Any]:
-        """Validate + precheck WITHOUT placing (the CLI dry-run path).
-
-        Runs the same pre-POST validation and ``/trade/v2/orders/precheck``
-        call as :meth:`place_bracket_order` but never POSTs the real order —
-        so it is deliberately NOT behind the ``ALPHALENS_BROKER_ALLOW_ORDERS``
-        gate. Returns the precheck payload (EstimatedCashRequired / costs /
-        PreCheckResult); raises :class:`OrderRejectedError` on a non-Ok
-        result exactly like the live path would.
-        """
-        with _translate_saxo_errors():
-            account_key = self._resolve_account_key()
-            body = self._build_bracket_body(request, account_key)
-            return self._precheck_or_raise(
-                body,
-                label=f"bracket {request.client_request_id} ({request.instrument.broker_symbol})",
             )
 
     def place_standalone_stop(
