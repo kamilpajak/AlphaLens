@@ -24,11 +24,6 @@ class _StubProvider:
             raise self._error
         return "tok-access"
 
-    def refresh_now(self) -> str:
-        if self._error is not None:
-            raise self._error
-        return "tok-refreshed"
-
 
 class SaxoAuthErrorReparentTests(unittest.TestCase):
     def test_saxo_auth_error_is_a_broker_auth_error(self) -> None:
@@ -41,13 +36,6 @@ class GenericCatchStillCatchesSaxoTests(unittest.TestCase):
             _StubProvider(error=SaxoAuthError("Saxo OAuth refresh chain lost"))
         ).ensure_alive()
         self.assertEqual(status, ChainStatus(alive=False, reason="Saxo OAuth refresh chain lost"))
-
-    def test_keep_alive_reports_dead_on_saxo_auth_error(self) -> None:
-        status = SessionKeeper(
-            _StubProvider(error=SaxoAuthError("refresh token expired"))
-        ).keep_alive()
-        self.assertFalse(status.alive)
-        self.assertEqual(status.reason, "refresh token expired")
 
 
 if __name__ == "__main__":

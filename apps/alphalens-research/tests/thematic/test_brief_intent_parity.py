@@ -42,8 +42,6 @@ def _candidate(fixture: dict) -> CandidateBrief:
         verified=True,
         suggested_size_pct=fixture["brief_trade_setup"]["suggested_size_pct"],
         trade_setup=fixture["brief_trade_setup"],
-        n_gates_passed=0,
-        n_gates_failed=0,
         layer4_weighted_score=None,
         scorer_config_version="fixture",
     )

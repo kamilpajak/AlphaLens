@@ -530,19 +530,6 @@ class TestChildDistanceFailFast(unittest.TestCase):
             )
         self.assertEqual(len(stub.place_calls), 1, "in-band children place normally")
 
-    def test_precheck_path_also_fails_fast(self):
-        # The false-green closure: precheck_bracket_order (the dry-run path)
-        # ALSO rejects a wide child locally — both paths route through
-        # _build_bracket_body, so the precheck no longer returns Ok while the
-        # real POST would 400.
-        broker, stub = _make_broker()
-        with self.assertRaises(OrderRejectedError) as ctx:
-            broker.precheck_bracket_order(
-                _request(entry_limit=18.08, stop_loss=12.57, take_profit=18.81)
-            )
-        self.assertIn("standalone", str(ctx.exception).lower())
-        self.assertEqual(stub.precheck_calls, [], "precheck never reaches the network")
-
     def test_regression_all_three_tiers_reject_locally(self):
         # Anchors S-2026-07-13: every tier of the shared-disaster-stop ladder
         # (30.5% / 24.6% / 20.5% below its entry) rejects locally.

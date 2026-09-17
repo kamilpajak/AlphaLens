@@ -621,24 +621,6 @@ class SaxoBroker:
                 status, payload, request.client_request_id, account_key
             )
 
-    def precheck_bracket_order(self, request: BracketOrderRequest) -> dict[str, Any]:
-        """Validate + precheck WITHOUT placing (the CLI dry-run path).
-
-        Runs the same pre-POST validation and ``/trade/v2/orders/precheck``
-        call as :meth:`place_bracket_order` but never POSTs the real order —
-        so it is deliberately NOT behind the ``ALPHALENS_BROKER_ALLOW_ORDERS``
-        gate. Returns the precheck payload (EstimatedCashRequired / costs /
-        PreCheckResult); raises :class:`OrderRejectedError` on a non-Ok
-        result exactly like the live path would.
-        """
-        with _translate_saxo_errors():
-            account_key = self._resolve_account_key()
-            body = self._build_bracket_body(request, account_key)
-            return self._precheck_or_raise(
-                body,
-                label=f"bracket {request.client_request_id} ({request.instrument.broker_symbol})",
-            )
-
     def place_standalone_stop(
         self, uic: int, side: str, qty: float, stop_price: float, request_id: str | None = None
     ) -> PlacedOrder:

@@ -39,8 +39,6 @@ class CandidateBrief:
     verified: bool
     suggested_size_pct: float | None
     trade_setup: dict | None
-    n_gates_passed: int
-    n_gates_failed: int
     layer4_weighted_score: float | None
     scorer_config_version: str
     # Brief-row 52w-high distance (100*(last-peak)/peak, <= 0; NOT part of the
@@ -70,17 +68,6 @@ def _bool_or_false(row: pd.Series, key: str) -> bool:
         return bool(val) if pd.notna(val) else False
     except (TypeError, ValueError):
         return False
-
-
-def _int_or_zero(row: pd.Series, key: str) -> int:
-    """Return ``int(row[key])`` or ``0`` when the key is absent, null, or un-castable."""
-    if key not in row.index:
-        return 0
-    val = row[key]
-    try:
-        return int(val) if pd.notna(val) else 0
-    except (TypeError, ValueError):
-        return 0
 
 
 def _float_or_none(row: pd.Series, key: str) -> float | None:
@@ -149,8 +136,6 @@ def _row_to_candidate(row: pd.Series, brief_date: dt.date) -> CandidateBrief:
         verified=bool(row.get("verified", False)),
         suggested_size_pct=suggested,
         trade_setup=setup,
-        n_gates_passed=_int_or_zero(row, "n_gates_passed"),
-        n_gates_failed=_int_or_zero(row, "n_gates_failed"),
         layer4_weighted_score=_float_or_none(row, "layer4_weighted_score"),
         scorer_config_version=_str_or_empty(row, "scorer_config_version"),
         technical_pct_off_52w_high=_float_or_none(row, "technical_pct_off_52w_high"),

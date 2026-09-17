@@ -26,7 +26,6 @@ from broker_contract.contract import BracketOrderRequest, InstrumentRef
 from broker_contract.sizing import SetupPlan
 
 from alphalens_pipeline.brokers import execution as execution_policy
-from alphalens_pipeline.brokers.automanager.labels import human_entry_label
 from alphalens_pipeline.brokers.execution import decompose_setup_plan
 
 
@@ -43,7 +42,6 @@ class TierPlacement:
 class PlacementPlan:
     tiers: tuple[TierPlacement, ...]
     disaster_stop_price: float
-    operator_report: str
 
 
 def classify(
@@ -84,44 +82,10 @@ def classify(
                 tp_operator_managed=tp_operator_managed,
             )
         )
-    report = _operator_report(instrument, tuple(tiers), setup_plan.disaster_stop, limit_frac)
     return PlacementPlan(
         tiers=tuple(tiers),
         disaster_stop_price=setup_plan.disaster_stop,
-        operator_report=report,
     )
-
-
-def _operator_report(
-    instrument: InstrumentRef,
-    tiers: tuple[TierPlacement, ...],
-    disaster_stop: float,
-    limit_frac: float,
-) -> str:
-    """Whole-plan report; the phrase 'disaster stop' appears EXACTLY ONCE.
-
-    Stage 1 is entry-only: NO TP is placed as a bracket child, so every in-band
-    TP is reported operator-managed (an in-band TP is flagged OCO-eligible — it is
-    the Stage-2 upgrade candidate; a far TP is beyond the child-distance guard)."""
-    lines = [f"{instrument.ticker} placement plan ({len(tiers)} non-zero tiers, entry-only):"]
-    for tier in tiers:
-        entry = tier.bracket.entry_limit
-        if tier.tp is not None:
-            tp = tier.tp
-            pct = abs(tp - entry) / entry * 100.0
-            band = "OCO-eligible" if tier.tp_planned_in_oco else f"beyond {limit_frac * 100:.0f}%"
-            lines.append(
-                f"  {human_entry_label(tier.tier_index)}: entry {entry:.2f} (entry-only); "
-                f"TP {tp:.2f} operator-managed (+{pct:.1f}%, {band})"
-            )
-        else:
-            lines.append(
-                f"  {human_entry_label(tier.tier_index)}: entry {entry:.2f} (entry-only, no TP)"
-            )
-    lines.append(
-        f"  disaster stop {disaster_stop:.2f}: standalone StopIfTraded after fill (placed once)"
-    )
-    return "\n".join(lines)
 
 
 __all__ = ["PlacementPlan", "TierPlacement", "classify"]

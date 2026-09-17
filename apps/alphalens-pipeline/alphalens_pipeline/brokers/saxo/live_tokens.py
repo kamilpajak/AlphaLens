@@ -9,7 +9,7 @@ LIVE order-rail daemon needs from a token provider:
   ``invalidate``, the shape :class:`~alphalens_pipeline.brokers.saxo.client.
   SaxoClient` calls on every HTTP attempt and after a 401.
 - ``brokers/automanager/session_keeper.py``'s duck-typed surface —
-  ``get_access_token`` / ``refresh_now`` — so ``SessionKeeper`` works
+  ``get_access_token`` — so ``SessionKeeper`` works
   unchanged over LIVE exactly as it does over SIM's ``OAuthTokenProvider``.
 
 **The gap this closes (design memo §2, "a real gap found in review"):**
@@ -134,20 +134,6 @@ class LiveOrderTokenProvider:
             if self._dead:
                 return
             self._rejected_token = self._last_token
-
-    def refresh_now(self) -> str:
-        """Unconditional rotation — the ``SessionKeeper.keep_alive``
-        idle-timer primitive. Same dead-latch semantics as
-        :meth:`get_access_token`."""
-        with self._lock:
-            if self._dead:
-                raise SaxoAuthError(_LIVE_CHAIN_LOST_MESSAGE)
-            try:
-                token = self._underlying.force_refresh()
-            except Exception as exc:
-                self._chain_lost(cause=exc)
-            self._last_token = token
-            return token
 
     def _chain_lost(self, *, cause: Exception | None) -> NoReturn:
         if not self._alerted:

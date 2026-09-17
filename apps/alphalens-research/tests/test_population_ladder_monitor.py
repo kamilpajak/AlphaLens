@@ -720,8 +720,6 @@ class TestBriefProvenanceUnit(unittest.TestCase):
             "verified": True,
             "suggested_size_pct": None,
             "trade_setup": None,
-            "n_gates_passed": 0,
-            "n_gates_failed": 0,
             "layer4_weighted_score": None,
             "scorer_config_version": "scorer-v1-test",
         }

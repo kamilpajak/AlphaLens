@@ -72,7 +72,6 @@ class TestLoadBrief(unittest.TestCase):
         self.assertTrue(c.verified)
         self.assertEqual(c.suggested_size_pct, 5.0)
         self.assertEqual(c.trade_setup["status"], "OK")
-        self.assertEqual(c.n_gates_passed, 4)
 
     def test_technical_pct_off_52w_high_decoded_when_present(self):
         # The 52w-high distance rides the brief row (NOT the trade_setup JSON);
@@ -186,14 +185,12 @@ class TestLoadBrief(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_brief(d, self.tmpdir)
 
-    def test_legacy_rows_without_n_gates_default_to_zero(self):
+    def test_legacy_rows_without_optional_columns_still_load(self):
         """Pre-2024 / pre-verification parquets don't have all the optional
         feature columns. The loader tolerates that — we still want the row."""
         d = dt.date(2024, 1, 1)
         _write_brief(self.tmpdir, d, [{"ticker": "FOO", "theme": "legacy"}])
         candidates = load_brief(d, self.tmpdir)
-        self.assertEqual(candidates[0].n_gates_passed, 0)
-        self.assertEqual(candidates[0].n_gates_failed, 0)
         self.assertIsNone(candidates[0].layer4_weighted_score)
 
     def test_scorer_config_version_populated_when_present(self):

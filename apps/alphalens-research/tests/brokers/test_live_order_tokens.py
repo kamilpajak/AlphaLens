@@ -171,43 +171,6 @@ class LiveOrderTokenProviderDeadLatchTests(unittest.TestCase):
         self.assertEqual(len(alert.messages), 1)
         self.assertEqual(underlying.access_token_calls, 1)
 
-    def test_refresh_now_delegates_and_latches_on_failure(self) -> None:
-        underlying = _FakeUnderlying(force_refresh_queue=[SaxoAuthError("invalid_grant")])
-        alert = _RecordingAlert()
-        adapter = LiveOrderTokenProvider(underlying, alert=alert)
-
-        with self.assertRaises(SaxoAuthError):
-            adapter.refresh_now()
-
-        self.assertEqual(len(alert.messages), 1)
-        with self.assertRaises(SaxoAuthError):
-            adapter.refresh_now()
-        self.assertEqual(len(alert.messages), 1)
-        self.assertEqual(underlying.force_refresh_calls, 1)
-
-    def test_refresh_now_happy_path_returns_token(self) -> None:
-        underlying = _FakeUnderlying(force_refresh_queue=["tok-rotated"])
-        adapter = LiveOrderTokenProvider(underlying)
-
-        token = adapter.refresh_now()
-
-        self.assertEqual(token, "tok-rotated")
-        self.assertEqual(underlying.force_refresh_calls, 1)
-
-    def test_latch_via_get_access_token_also_blocks_refresh_now(self) -> None:
-        underlying = _FakeUnderlying(access_token_queue=[SaxoAuthError("invalid_grant")])
-        alert = _RecordingAlert()
-        adapter = LiveOrderTokenProvider(underlying, alert=alert)
-
-        with self.assertRaises(SaxoAuthError):
-            adapter.get_access_token()
-
-        with self.assertRaises(SaxoAuthError):
-            adapter.refresh_now()
-
-        self.assertEqual(len(alert.messages), 1)
-        self.assertEqual(underlying.force_refresh_calls, 0)
-
 
 class LiveOrderTokenProviderSessionKeeperIntegrationTests(unittest.TestCase):
     def test_session_keeper_reports_not_alive_after_latch_instead_of_crashing(self) -> None:
@@ -221,15 +184,6 @@ class LiveOrderTokenProviderSessionKeeperIntegrationTests(unittest.TestCase):
         second_status = keeper.ensure_alive()
         self.assertFalse(second_status.alive)
         self.assertEqual(underlying.access_token_calls, 1)
-
-    def test_session_keeper_keep_alive_reports_not_alive_after_refresh_failure(self) -> None:
-        underlying = _FakeUnderlying(force_refresh_queue=[SaxoAuthError("invalid_grant")])
-        adapter = LiveOrderTokenProvider(underlying, alert=_RecordingAlert())
-        keeper = SessionKeeper(adapter)
-
-        status = keeper.keep_alive()
-
-        self.assertFalse(status.alive)
 
 
 if __name__ == "__main__":
