@@ -149,7 +149,12 @@ def whitelist_entries(path: Path) -> dict[str, str]:
 
 
 def _module_name(path: Path) -> str:
-    """Dotted import name: climb while the parent directory is a package."""
+    """Dotted import name: climb while the parent directory is a package.
+
+    A module under a directory without ``__init__.py`` gets a shorter name that
+    no import matches, so it is reported as unwired. That errs loud on purpose;
+    every scoped directory is a regular package today.
+    """
     parts = [] if path.name == "__init__.py" else [path.stem]
     directory = path.parent
     while (directory / "__init__.py").is_file():

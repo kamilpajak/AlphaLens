@@ -191,6 +191,19 @@ class AnUnwiredBrokerModuleIsReported(_TreeCase):
         self.assertEqual(status, deadcode.EXIT_FINDINGS)
         self.assertIn("brokers/selfish.py", text)
 
+    def test_a_module_in_a_directory_without_init_is_reported_not_skipped(self) -> None:
+        # The dotted name stops at the first directory without __init__.py, so
+        # an import of the full name does not match. That must fail loud: the
+        # module is reported, never silently treated as wired.
+        self.write(f"{self._PKG}/loose/helper.py", "X = 1\n")
+        self.write(
+            "apps/alphalens-pipeline/alphalens_pipeline/app.py",
+            "from alphalens_pipeline.brokers.loose import helper\n",
+        )
+        status, text = self.report(_FakeRunner(_run()))
+        self.assertEqual(status, deadcode.EXIT_FINDINGS)
+        self.assertIn("brokers/loose/helper.py", text)
+
     def test_an_allowed_module_is_not_reported(self) -> None:
         self.write(f"{self._PKG}/boundary.py", "X = 1\n")
         status, text = self.report(
