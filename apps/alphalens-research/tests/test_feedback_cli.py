@@ -265,6 +265,18 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
         self.assertIn("selection-labels: 3 date(s) written, 7 row(s) stamped", result.stdout)
         self.assertIn("immature=2", result.stdout)
 
+    def test_selection_label_reads_the_stores_where_the_pipeline_writes_them(self):
+        # The map-themes run writes the shadow under the candidates directory
+        # (orchestrator: ``out_dir / "proposal_shadow"``), not under the home root.
+        from alphalens_cli.commands import feedback as feedback_cmd
+        from alphalens_pipeline.thematic.mapping.orchestrator import DEFAULT_OUTPUT_DIR
+
+        _, labels = self._run_with_selection_label(return_value=_EMPTY_LABEL_REPORT)
+        kwargs = labels.call_args.kwargs
+        home = feedback_cmd._ALPHALENS_HOME
+        self.assertEqual(kwargs["shadow_dir"], home / DEFAULT_OUTPUT_DIR.name / "proposal_shadow")
+        self.assertEqual(kwargs["grouped_root"], home / "grouped_daily_history")
+
     def test_selection_label_failure_is_swallowed(self):
         result, labels = self._run_with_selection_label(side_effect=RuntimeError("boom"))
         labels.assert_called_once()

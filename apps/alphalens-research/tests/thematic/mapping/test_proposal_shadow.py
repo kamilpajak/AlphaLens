@@ -202,5 +202,15 @@ class TestWriteProposalShadow(unittest.TestCase):
             self.assertFalse((out_dir / "2026-06-10.parquet").exists())
 
 
+class TestDefaultShadowDir(unittest.TestCase):
+    def test_default_is_where_map_themes_writes_the_shadow(self):
+        # map-themes writes ``DEFAULT_OUTPUT_DIR / "proposal_shadow"``; a reader using the
+        # module default must land on the same directory.
+        from alphalens_pipeline.thematic.mapping import proposal_shadow
+        from alphalens_pipeline.thematic.mapping.orchestrator import DEFAULT_OUTPUT_DIR
+
+        self.assertEqual(proposal_shadow.DEFAULT_SHADOW_DIR, DEFAULT_OUTPUT_DIR / "proposal_shadow")
+
+
 if __name__ == "__main__":
     unittest.main()
