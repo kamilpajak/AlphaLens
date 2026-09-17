@@ -52,7 +52,7 @@ class Refuse:
     - terminal=True — CAPACITY refusals (the MAX_OPEN cap).
       The drain retires the pick with a refused line in picks.jsonl; left
       armed it would retry every tick and self-place a stale brief signal
-      once capacity frees. `alphalens broker arm-intent` is the human path back.
+      once capacity frees. `alphalens broker arm` is the human path back.
     - terminal=False (default, fail-safe) — transient rails (KILL file,
       dead chain, ALLOW_ORDERS master arm, daily-loss lockout). The pick
       stays armed and places once the rail clears; an inert/paused daemon

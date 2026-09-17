@@ -262,7 +262,7 @@ class IterPicksTest(unittest.TestCase):
         self.assertEqual([i.instrument.ticker for i in intents], ["MU"])
 
     def test_rearm_after_refusal_yields_the_pick_again(self) -> None:
-        # `alphalens broker arm-intent` is the explicit human path back: a NEW armed
+        # `alphalens broker arm` is the explicit human path back: a NEW armed
         # line after the refusal makes armed the latest status again.
         arm_pick(_intent("KO", "2026-07-29"), path=self.path)
         mark_refused("KO", dt.date(2026, 7, 29), "portfolio cap exceeded", path=self.path)

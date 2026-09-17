@@ -6,6 +6,8 @@
   positive control, so the map cannot rot empty silently.
 - ``US_MIC_PROBE_ORDER`` (the shared placement-side + day-1-gate probe order)
   only names venues the MIC map can actually resolve.
+- ``SUPPORTED_MICS`` / ``ensure_supported_venue`` — the venues this deployment
+  arms, checked by the arming door before anything reads a calendar.
 """
 
 from __future__ import annotations
@@ -15,8 +17,11 @@ import unittest
 from alphalens_pipeline.data.alt_data.saxo_exchanges import (
     MIC_TO_SAXO_EXCHANGE_ID,
     SAXO_TICKER_ALIASES,
+    SUPPORTED_MICS,
     US_MIC_PROBE_ORDER,
+    UnsupportedVenueError,
     alias_expected_for,
+    ensure_supported_venue,
 )
 
 
@@ -29,7 +34,7 @@ class TestMicToSaxoExchangeId(unittest.TestCase):
         """Euronext Amsterdam cash equities — live-verified against SIM
         /ref/v1/exchanges (ExchangeId "AMS", Mic XAMS, NL) and by resolving
         ASML:xams / uic 1636 / EUR (2026-09-02). Map entry ONLY (#1238 PR 6):
-        XAMS stays out of every probe order and out of arm-manual's
+        XAMS stays out of every probe order and out of
         SUPPORTED_MICS until its own validation arc."""
         self.assertEqual(MIC_TO_SAXO_EXCHANGE_ID["XAMS"], "AMS")
 
@@ -46,8 +51,8 @@ class TestMicToSaxoExchangeId(unittest.TestCase):
         ExchangeIds share Mic XETR (FSE, XETRA, XETR_STARS, XETR_ETF,
         XETR_ETP); cash equities live on FSE, and the ``:xetr``
         display-symbol suffix both resolvers match on is MIC-based, so it
-        covers them all. Map entry only until #1271 PR 4 opens the venue in
-        arm-manual's SUPPORTED_MICS."""
+        covers them all. Map entry only until #1271 PR 4 opened the venue in
+        SUPPORTED_MICS."""
         self.assertEqual(MIC_TO_SAXO_EXCHANGE_ID["XETR"], "FSE")
 
     def test_xpar_maps_to_par(self) -> None:
@@ -58,8 +63,8 @@ class TestMicToSaxoExchangeId(unittest.TestCase):
         ExchangeIds share Mic XPAR (PAR, EGP, PAR_ACCESS, PAR_BONDS, PAR_SP,
         EUR_PAR1/2, PAR_MC_ETF); cash equities live on PAR, and the ``:xpar``
         display-symbol suffix both resolvers match on is MIC-based, so it
-        covers them all. Map entry only until #1355 PR-C opens the venue in
-        arm-manual's SUPPORTED_MICS."""
+        covers them all. Map entry only until #1355 PR-C opened the venue in
+        SUPPORTED_MICS."""
         self.assertEqual(MIC_TO_SAXO_EXCHANGE_ID["XPAR"], "PAR")
 
 
@@ -107,6 +112,57 @@ class TestUsMicProbeOrder(unittest.TestCase):
         for mic in US_MIC_PROBE_ORDER:
             with self.subTest(mic=mic):
                 self.assertIn(mic, MIC_TO_SAXO_EXCHANGE_ID)
+
+
+class TestSupportedVenues(unittest.TestCase):
+    """The venues the arming door accepts. A deployment fact, not a document
+    rule: the contract's ``validate_intent`` never reads this list (#1122)."""
+
+    def test_the_opened_venues_are_accepted(self) -> None:
+        # XWAR #1238 PR 7, XETR #1271 PR 4, XPAR #1355 PR-C.
+        for mic in ("XNYS", "XNAS", "XWAR", "XETR", "XPAR"):
+            with self.subTest(mic=mic):
+                ensure_supported_venue(mic)
+
+    def test_a_mapped_venue_without_its_validation_arc_is_refused_naming_the_set(self) -> None:
+        with self.assertRaisesRegex(UnsupportedVenueError, "XAMS") as caught:
+            ensure_supported_venue("XAMS")
+        for mic in SUPPORTED_MICS:
+            self.assertIn(mic, str(caught.exception))
+
+    def test_the_refusal_is_its_own_class(self) -> None:
+        """The CLI classifies by exception type: this one is `venue_unsupported`."""
+        self.assertTrue(issubclass(UnsupportedVenueError, ValueError))
+
+    def test_every_supported_venue_is_resolvable(self) -> None:
+        for mic in SUPPORTED_MICS:
+            with self.subTest(mic=mic):
+                self.assertIn(mic, MIC_TO_SAXO_EXCHANGE_ID)
+
+    def test_the_contract_does_not_read_the_venue_list(self) -> None:
+        from broker_contract.trade_intent.schema import (
+            EntryTierSpec,
+            InstrumentHint,
+            IntentMeta,
+            PickSize,
+            TradeIntent,
+            TradeSpec,
+        )
+        from broker_contract.trade_intent.validate import validate_intent
+
+        validate_intent(
+            TradeIntent(
+                intent_id="ASML:2026-09-02:manual",
+                instrument=InstrumentHint(ticker="ASML", mic="XAMS"),
+                spec=TradeSpec(
+                    entry_tiers=(EntryTierSpec(limit_price=10.0, alloc_pct=100.0),),
+                    disaster_stop=5.0,
+                    tp_tranches=(),
+                    size=PickSize(notional_acct=1000.0, currency="EUR"),
+                ),
+                meta=IntentMeta(armed_ts="2026-09-02T12:00:00+00:00", trade_date="2026-09-02"),
+            )
+        )
 
 
 if __name__ == "__main__":

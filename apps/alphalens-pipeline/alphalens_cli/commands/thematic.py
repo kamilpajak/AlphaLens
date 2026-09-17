@@ -1401,7 +1401,7 @@ def brief(
 
 
 # Exit statuses of `thematic intent`, per the CLI convention: a shell pipe into
-# `broker arm-intent -` branches on them, and the door refuses the empty stdin.
+# `broker arm -` branches on them, and the door refuses the empty stdin.
 _EXIT_USAGE = 2
 _EXIT_NOT_FOUND = 4
 _EXIT_REFUSED = 1
@@ -1450,7 +1450,7 @@ def intent_command(
     \b
       set -o pipefail
       alphalens thematic intent KBH --date 2026-08-21 --frame 24000 --currency PLN \\
-        | alphalens broker arm-intent - --env sim
+        | alphalens broker arm - --env sim
 
     The document states the trade and leaves identity to the door, which
     derives `intent_id`, `armed_ts` and each `r_multiple` and assigns the

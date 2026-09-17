@@ -510,7 +510,7 @@ class TestTheKnownDivergencesArePinned(unittest.TestCase):
         """These two layers are version-blind, and must stay that way.
 
         The DOOR is the one gate that reads the field (#1406: `broker
-        arm-intent` refuses a stated version other than its own). Keeping it out
+        arm` refuses a stated version other than its own). Keeping it out
         of these two is what lets the journal DRAIN — which reads history
         through the codec, never through the schema — carry on decoding older
         documents. If a version rule ever lands HERE, this goes red and the

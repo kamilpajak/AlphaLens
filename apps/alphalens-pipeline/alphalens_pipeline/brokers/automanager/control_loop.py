@@ -877,7 +877,7 @@ def _apply_generation_reset(
     the TRAILED selection only: the fired-tranche and round-trip-closure folds are
     about a TP ladder, which only a ``tranche_plan`` line describes, and widening
     their reset would change what counts as an already-fired tranche. The trailed
-    level is different — it belongs to a POSITION, and a pick armed ``--no-tp``
+    level is different — it belongs to a POSITION, and a pick with no take-profit
     journals no ``tranche_plan`` at all, so under the tranche-only rule its uic
     inherited the previous position's level. Every pick journals ``planned``
     lines, which is what makes them the right generation marker here. A
@@ -5250,7 +5250,7 @@ def _build_planned_line(
 
     ``pick_key`` (#1236) is the plan's TRADE identity — the same
     ``ticker:trade_date[-gN]`` string ``tranche_plan`` lines already carry. It is
-    here because a ``--no-tp`` pick journals no ``tranche_plan`` at all, so
+    here because a pick with no take-profit journals no ``tranche_plan`` at all, so
     ``tranche_plan`` alone cannot say which trade governs such a uic; a
     ``trailed`` level then outlived the position that earned it. Absent key ->
     key omitted, byte-identical to every line written before #1236."""
@@ -6335,9 +6335,9 @@ def _select_trailed_lines(lines: Iterable[Mapping[str, Any]]) -> dict[int, Mappi
     which is #1324. Sharing makes that structural.
 
     The generation reset now observes ``planned`` lines as well as ``tranche_plan``
-    ones (#1236). A pick armed ``--no-tp`` journals NO ``tranche_plan``, so under
+    ones (#1236). A pick with no take-profit journals NO ``tranche_plan``, so under
     the tranche-only rule a level trailed by an EARLIER position on the uic
-    survived into it — measured, and ``--no-tp`` is precisely the trail-only shape
+    survived into it — measured, and no take-profit is precisely the trail-only shape
     a trailing pick uses. ``planned`` lines are written by every pick, which is
     why they are the ones that close it.
 
@@ -7063,7 +7063,7 @@ def _resolve_and_size(
     ``hint_mic`` is the intent's ``InstrumentHint.mic`` (#1238):
     ``explicit_mic_from_hint`` keeps US hints on the probe path (a brief pick
     hints XNYS while its real venue may be XNAS) and turns a non-US hint
-    (``arm-manual``'s operator venue, e.g. XWAR) into an explicit
+    (an operator's venue on a manual document, e.g. XWAR) into an explicit
     single-venue resolve.
 
     PR-7 (broker-manager extraction memo §5): the brief-side parse
@@ -8744,8 +8744,7 @@ def _entry_trail_intercept(
     )
 
 
-# --- Immediate ("now") tranche (#1247, memo docs/research/
-# arm_manual_immediate_entry_design_2026_09_03.md) ---------------------------
+# --- Immediate ("now") tranche (#1247 and its design memo under docs/research/) ---
 
 # The now tranche's marketability gate reads the shared price feed under ONE
 # pass-level scope, owned by the placement drain (#1315). It used to be one
@@ -8877,7 +8876,7 @@ def _now_cost_gate_violation(
 ) -> str | None:
     """Memo §3.3 — the #1112 parity gate at drain: TP1 must clear round-trip
     cost at the CAP (the worst-case fill). Mirrors ``_brief_plan_arm_refusal``
-    with ``fill_estimate = cap``; a ``--no-tp`` pick has no TP1 to gate —
+    with ``fill_estimate = cap``; a pick with no take-profit has no TP1 to gate —
     vacuous by design (stop-only plan, the group manages exits)."""
     reference_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
     if _places_client_geometry(exit_spec):
@@ -8886,7 +8885,7 @@ def _now_cost_gate_violation(
     else:
         tranches = getattr(plan, "tp_tranches", ()) or ()
         if not tranches:
-            logger.info("now cost gate: pick has no TP tranches (--no-tp) — gate vacuous")
+            logger.info("now cost gate: pick has no TP tranches — gate vacuous")
             return None
         quantities = apportion_tranche_quantities(
             reference_qty=reference_qty,
@@ -9576,7 +9575,7 @@ def _handle_safety_refusal(
     a refused line so the pick never retries — left armed it would retry
     every tick for days and then self-place a stale brief signal once
     capacity frees. Arming a new document through
-    `alphalens broker arm-intent` is the explicit human path back. The transient rails (KILL file, dead chain,
+    `alphalens broker arm` is the explicit human path back. The transient rails (KILL file, dead chain,
     ALLOW_ORDERS master arm, daily-loss lockout) keep the pick armed —
     an inert/paused daemon must never destroy the armed queue. The
     append is fallible I/O and must never crash the drain: on OSError

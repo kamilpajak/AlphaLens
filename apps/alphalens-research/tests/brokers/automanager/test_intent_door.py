@@ -1,7 +1,7 @@
 """The arming door derives identity and labels (#1468).
 
 Pure tests of `intent_door`: no Typer, no journal file, a frozen clock. The CLI
-tests in `test_arm_intent_cli.py` drive the same rules end to end.
+tests in `test_arm_cli.py` drive the same rules end to end.
 """
 
 from __future__ import annotations
@@ -229,7 +229,7 @@ class ARetryCannotBecomeASecondLivePick(unittest.TestCase):
             _complete(_author(generation=1), now=AFTER_NY_CLOSE, records=[_record()])
 
     def test_no_generation_beside_a_placed_pick_of_the_same_day_is_refused(self) -> None:
-        """Today's `arm-manual` rule: a placed pick may still have a live watch."""
+        """The rule `arm-manual` had before #1470: a placed pick may still have a live watch."""
         with self.assertRaises(intent_door.PickAlreadyArmedError):
             _complete(_author(), records=[_record()], placed=[("KO", "2026-09-16")])
 
@@ -370,7 +370,7 @@ class TheInputSchemaNeverOutrunsTheDoor(unittest.TestCase):
         """None when the door takes it or refuses it for a non-shape reason;
         otherwise a short label of the shape refusal or the crash."""
         import jsonschema
-        from alphalens_pipeline.brokers.automanager.manual_intent import (
+        from alphalens_pipeline.data.alt_data.saxo_exchanges import (
             UnsupportedVenueError,
             ensure_supported_venue,
         )

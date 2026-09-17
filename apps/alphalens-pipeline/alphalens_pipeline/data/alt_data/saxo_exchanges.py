@@ -29,7 +29,7 @@ MIC_TO_SAXO_EXCHANGE_ID: dict[str, str] = {
     # Euronext Amsterdam cash equities — live-verified against SIM
     # /ref/v1/exchanges (ExchangeId "AMS", Mic XAMS, NL) and by resolving
     # ASML:xams / uic 1636 / EUR (2026-09-02). Map entry ONLY (#1238 PR 6):
-    # XAMS stays out of every probe order and out of arm-manual's
+    # XAMS stays out of every probe order and out of
     # SUPPORTED_MICS until its own validation arc.
     "XAMS": "AMS",
     # Deutsche Boerse Xetra cash equities — live-verified against SIM
@@ -38,7 +38,7 @@ MIC_TO_SAXO_EXCHANGE_ID: dict[str, str] = {
     # share Mic XETR (FSE, XETRA, XETR_STARS, XETR_ETF, XETR_ETP) — cash
     # equities live on FSE; the ``:xetr`` display-symbol suffix both
     # resolvers match on is MIC-based, so it covers them all. Map entry only
-    # until #1271 PR 4 opens the venue in arm-manual's SUPPORTED_MICS.
+    # until #1271 PR 4 opened the venue in SUPPORTED_MICS.
     "XETR": "FSE",
     # Euronext Paris cash equities — live-verified against SIM
     # /ref/v1/exchanges (ExchangeId "PAR", Mic XPAR, FR, EUR) and by resolving
@@ -48,10 +48,46 @@ MIC_TO_SAXO_EXCHANGE_ID: dict[str, str] = {
     # EUR_PAR1/2 derivatives, PAR_MC_ETF in USD) — cash equities live on PAR;
     # the ``:xpar`` display-symbol suffix both resolvers match on is
     # MIC-based, so it covers them all. No ticker alias: Kering and Alstom
-    # list under their market tickers. Map entry only until #1355 PR-C opens
-    # the venue in arm-manual's SUPPORTED_MICS.
+    # list under their market tickers. Map entry only until #1355 PR-C opened
+    # the venue in SUPPORTED_MICS.
     "XPAR": "PAR",
 }
+
+# The venues this deployment ARMS, checked by the arming door (`broker arm`)
+# before anything reads a calendar. A subset of the map above: a venue gets a
+# map entry first and joins this list only after its own validation arc.
+# US venues plus GPW (#1238 PR 7) plus Xetra (#1271 PR 4) plus Euronext
+# Paris (#1355 PR-C — XPAR opens after the arc landed the venue map entry
+# XPAR -> PAR, the MIC-keyed EUR 2 Euronext fee card and the tracked stream
+# venue window XNYS,XWAR,XETR,XPAR). XAMS stays refused until its own
+# validation arc (map entry + fee card only). LIVE on a European venue
+# additionally needs a verified market-data entitlement for that venue — a
+# delayed quote is vetoed by the live feed and `any_delayed` is process-wide
+# (Euronext Paris: MISSING as of 2026-09-07, KER/ALO delayed-15 during the
+# open session; `scripts/probe_saxo_live_entitlement.py` re-reads it) — see
+# the runbook notes in deploy/systemd/README.md.
+SUPPORTED_MICS = ("XNYS", "XNAS", "XWAR", "XETR", "XPAR")
+
+
+class UnsupportedVenueError(ValueError):
+    """The MIC names a venue this deployment does not trade.
+
+    Its own class, not a message to match, because the CLI classifies by
+    exception type: this is ``venue_unsupported``, not ``intent_invalid``. The
+    document is well formed and the DEPLOYMENT is the thing that cannot take it,
+    which is also why the list stays out of ``validate_intent`` (#1404, and the
+    #1122 rule that the adapter reports while the contract never decides).
+    """
+
+
+def ensure_supported_venue(mic: str) -> None:
+    """Refuse a venue outside :data:`SUPPORTED_MICS`."""
+    if mic not in SUPPORTED_MICS:
+        raise UnsupportedVenueError(
+            f"MIC {mic!r} is not supported (supported: {', '.join(SUPPORTED_MICS)}; "
+            "XAMS awaits its own validation arc, #1238)"
+        )
+
 
 # Market ticker -> Saxo symbol root, consulted by BOTH resolvers AFTER the
 # exact ticker==symbol match fails (the alias is a Saxo-side lookup detail:

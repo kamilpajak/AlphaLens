@@ -1,11 +1,11 @@
 """The brief producer: one brief row as a TradeIntent author document (#1469).
 
-The arming door (``alphalens broker arm-intent``) is the one way a pick enters a
+The arming door (``alphalens broker arm``) is the one way a pick enters a
 broker inbox. This module is what turns a thematic brief row into the document
 that door takes, so the broker group never reads a brief:
 
     alphalens thematic intent TICKER --date D --frame F --currency C \\
-      | alphalens broker arm-intent - --env sim|live
+      | alphalens broker arm - --env sim|live
 
 The document states the TRADE and nothing the door computes: no ``intent_id``,
 ``armed_ts`` or ``r_multiple`` (derived), and no ``generation``, so every send is

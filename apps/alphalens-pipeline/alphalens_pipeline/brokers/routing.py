@@ -41,8 +41,8 @@ def explicit_mic_from_hint(hint_mic: str | None) -> str | None:
     A US hint is ADVISORY: every brief pick stamps ``mic="XNYS"`` while its
     real venue may be XNAS/XASE, so any hint inside
     :data:`US_MIC_PROBE_ORDER` (or an absent hint) returns ``None`` — the
-    caller keeps probing exactly as before. A non-US hint (``arm-manual``
-    stamps the operator's venue, e.g. XWAR) is AUTHORITATIVE: it returns the
+    caller keeps probing exactly as before. A non-US hint (a manual
+    document states the operator's venue, e.g. XWAR) is AUTHORITATIVE: it returns the
     normalized MIC for an explicit single-venue resolve, so a same-ticker US
     listing is unreachable. Single-sourced here — the day-1 gap gate price
     probe applies the same rule (#1238).

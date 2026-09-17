@@ -1,4 +1,4 @@
-"""CLI tests for `alphalens broker arm-intent` — the document door (#1406, #1468).
+"""CLI tests for `alphalens broker arm` — the document door (#1406, #1468, #1470).
 
 The door takes a ready document, so a producer needs JSON rather than a Typer
 command of its own. Since #1468 the author writes only the TRADE; the door
@@ -92,7 +92,7 @@ class _DoorCase(unittest.TestCase):
         return str(path)
 
     def arm(self, document: object, *extra: str):
-        return self.invoke(["arm-intent", self.write(document), *extra])
+        return self.invoke(["arm", self.write(document), *extra])
 
     def inbox_bytes(self) -> bytes:
         return self.inbox.read_bytes() if self.inbox.exists() else b""
@@ -169,18 +169,18 @@ class TheDoorDerivesWhatAnAuthorShouldNotCompute(_DoorCase):
                 path = self.write(document)
                 sent = Path(path).read_bytes()
 
-                result = self.invoke(["arm-intent", path, "--format", "json"])
+                result = self.invoke(["arm", path, "--format", "json"])
 
                 failure = self.assert_refused(result, "intent_malformed", "derived_field_supplied")
                 self.assertTrue(any(label in p for p in failure["details"]["paths"]))
                 self.assertEqual(Path(path).read_bytes(), sent)
                 self.assertEqual(self.inbox_bytes(), b"")
 
-    def test_an_arm_manual_envelope_is_not_a_document(self) -> None:
-        """Its intent carries the derived fields, and the door no longer peels
-        envelopes, so it is refused as the wrong shape."""
-        envelope = {"schema": "alphalens.broker.arm-manual/v1", "env": "sim", "intent": {}}
-        result = self.invoke(["arm-intent", "-", "--format", "json"], stdin=json.dumps(envelope))
+    def test_an_envelope_is_not_a_document(self) -> None:
+        """The door does not peel envelopes (#1468), so the group's own answer
+        sent back in is refused as the wrong shape."""
+        envelope = {"schema": "alphalens.broker.arm/v2", "env": "sim", "intent": {}}
+        result = self.invoke(["arm", "-", "--format", "json"], stdin=json.dumps(envelope))
         self.assert_refused(result, "intent_malformed", "schema_violation")
         self.assertEqual(self.inbox_bytes(), b"")
 
@@ -213,7 +213,7 @@ class TheHappyPath(_DoorCase):
         result = self.arm(_document(), "--format", "json")
 
         payload = json.loads(result.stdout.strip())
-        self.assertEqual(payload["schema"], "alphalens.broker.arm-intent/v1")
+        self.assertEqual(payload["schema"], "alphalens.broker.arm/v2")
         self.assertEqual(payload["env"], "sim")
         self.assertTrue(payload["armed"])
         self.assertEqual(payload["ticker"], "NVO")
@@ -290,7 +290,7 @@ class TheHappyPath(_DoorCase):
         self.assertTrue(failure["retryable"])
 
     def test_stdin_is_a_source_like_any_other(self) -> None:
-        result = self.invoke(["arm-intent", "-"], stdin=json.dumps(_document()))
+        result = self.invoke(["arm", "-"], stdin=json.dumps(_document()))
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertEqual(len(self.fold_records()), 1)
@@ -306,19 +306,19 @@ class TheDocumentMustBeTheRightShape(_DoorCase):
         self.assertEqual(result.stdout, "", "a refusal must leave stdout empty")
 
     def test_a_missing_file_is_a_usage_error(self) -> None:
-        result = self.invoke(["arm-intent", str(self.home / "nope.json"), "--format", "json"])
+        result = self.invoke(["arm", str(self.home / "nope.json"), "--format", "json"])
         self.assert_untouched(result, "usage")
 
     def test_text_that_is_not_json_is_refused(self) -> None:
-        result = self.invoke(["arm-intent", "-", "--format", "json"], stdin="not json at all")
+        result = self.invoke(["arm", "-", "--format", "json"], stdin="not json at all")
         self.assert_untouched(result, "intent_malformed", "not_json")
 
     def test_an_empty_stdin_is_refused(self) -> None:
-        result = self.invoke(["arm-intent", "-", "--format", "json"], stdin="")
+        result = self.invoke(["arm", "-", "--format", "json"], stdin="")
         self.assert_untouched(result, "intent_malformed", "not_json")
 
     def test_a_document_that_is_not_an_object_is_refused(self) -> None:
-        result = self.invoke(["arm-intent", "-", "--format", "json"], stdin="[1, 2, 3]")
+        result = self.invoke(["arm", "-", "--format", "json"], stdin="[1, 2, 3]")
         self.assert_untouched(result, "intent_malformed", "schema_violation")
 
     def test_a_duplicate_key_is_refused_rather_than_silently_resolved(self) -> None:
@@ -328,7 +328,7 @@ class TheDocumentMustBeTheRightShape(_DoorCase):
         text = json.dumps(_document()).replace(
             '"limit_price": 72.5', '"limit_price": 72.5, "limit_price": 5.0', 1
         )
-        result = self.invoke(["arm-intent", "-", "--format", "json"], stdin=text)
+        result = self.invoke(["arm", "-", "--format", "json"], stdin=text)
 
         failure = self.failure_of(result)
         self.assertEqual(failure["details"]["reason"], "duplicate_key")
@@ -344,7 +344,7 @@ class TheDocumentMustBeTheRightShape(_DoorCase):
             .replace('"limit_price": 72.5', '"limit_price": 72.5, "limit_price": 5.0', 1)
             .replace('"alloc_pct": 60.0', '"alloc_pct": 60.0, "alloc_pct": 1.0', 1)
         )
-        result = self.invoke(["arm-intent", "-", "--format", "json"], stdin=text)
+        result = self.invoke(["arm", "-", "--format", "json"], stdin=text)
 
         failure = self.assert_refused(result, "intent_malformed", "duplicate_key")
         self.assertEqual(failure["details"]["keys"], ["alloc_pct", "limit_price"])
@@ -505,6 +505,30 @@ class TheDocumentMustAlsoBeCoherentAndTradable(_DoorCase):
         failure = self.assert_refused(self.arm(document, "--format", "json"), "venue_unsupported")
         self.assertEqual(failure["details"]["mic"], "XAMS")
         self.assertEqual(self.inbox_bytes(), b"")
+
+
+class APaddedTickerCannotSlipPastTheKey(_DoorCase):
+    """`arm-manual` stripped the ticker; a hand-edited document may not. The fold
+    upper-cases without stripping, so `" NVO "` armed beside `NVO` would be a
+    second live pick on one instrument (#1470)."""
+
+    def test_a_padded_ticker_is_refused_and_nothing_arms(self) -> None:
+        document = _document()
+        document["instrument"]["ticker"] = " NVO "
+
+        self.assert_refused(
+            self.arm(document, "--format", "json"), "intent_invalid", "ticker_not_trimmed"
+        )
+        self.assertEqual(self.inbox_bytes(), b"")
+
+    def test_a_lower_case_ticker_still_arms_upper_cased(self) -> None:
+        document = _document()
+        document["instrument"]["ticker"] = "nvo"
+
+        result = self.arm(document)
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual([r.ticker for r in self.fold_records()], ["NVO"])
 
 
 class ThePickKeyMustBeWritable(_DoorCase):
@@ -767,20 +791,168 @@ class TheDefaultInstanceMirrorsTheSeam(unittest.TestCase):
         self.assertEqual(broker._DEFAULT_ARM_ENV, state_paths.ENV_SIM)
 
 
-class BrokerArmIsGone(_DoorCase):
-    """#1469: the brief reader left the broker group. Until #1470 gives the name
-    to the door, `broker arm` is not a command at all."""
+class TheOldBriefFormPointsAtTheProducer(_DoorCase):
+    """#1470: `arm` is the door. The brief form it had until #1469
+    (`arm TICKER --date D --frame F --currency C`) is a usage error that names
+    the producer, and it never reads TICKER as a document path."""
 
-    def test_the_group_registers_no_arm_command(self) -> None:
+    OLD_FORM = ["arm", "KO", "--date", "2026-09-16", "--frame", "24000", "--currency", "PLN"]
+
+    def test_help_lists_arm_and_no_other_arming_command(self) -> None:
         from alphalens_cli.commands.broker import broker_app
 
-        self.assertNotIn("arm", {command.name for command in broker_app.registered_commands})
+        names = {command.name for command in broker_app.registered_commands}
+        self.assertIn("arm", names)
+        self.assertNotIn("arm-intent", names)
+        self.assertNotIn("arm-manual", names)
 
-    def test_the_old_brief_form_is_an_unknown_command(self) -> None:
-        result = self.invoke(["arm", "KO", "--date", "2026-09-16"])
+    def test_the_old_form_exits_2_naming_the_producer(self) -> None:
+        result = self.invoke(self.OLD_FORM)
 
-        # Exit 2 alone proves nothing: a usage error exits 2 too.
-        self.assertIn("No such command 'arm'", result.output)
+        self.assertEqual(result.exit_code, 2, result.output)
+        self.assertIn("alphalens thematic intent", result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(self.inbox.exists())
+
+    def test_the_json_failure_carries_a_runnable_producer_argv(self) -> None:
+        result = self.invoke([*self.OLD_FORM, "--format", "json"])
+
+        failure = self.assert_refused(result, "usage")
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(
+            failure["suggestions"][0]["argv"],
+            [
+                "alphalens",
+                "thematic",
+                "intent",
+                "KO",
+                "--date",
+                "2026-09-16",
+                "--frame",
+                "24000",
+                "--currency",
+                "PLN",
+            ],
+        )
+
+    def test_an_option_that_was_not_passed_is_a_placeholder(self) -> None:
+        result = self.invoke(["arm", "KO", "--date", "2026-09-16", "--format", "json"])
+
+        argv = self.assert_refused(result, "usage")["suggestions"][0]["argv"]
+        self.assertEqual(argv[-4:], ["--frame", "<FRAME>", "--currency", "<CURRENCY>"])
+
+    def test_a_file_named_like_the_ticker_is_never_read(self) -> None:
+        document = self.home / "KO"
+        document.write_text(json.dumps(_document()), encoding="utf-8")
+        result = self.invoke(["arm", str(document), "--date", "2026-09-16"])
+
+        self.assertEqual(result.exit_code, 2, result.output)
+        self.assertFalse(self.inbox.exists())
+
+    def test_stdin_with_an_old_option_reads_nothing(self) -> None:
+        result = self.invoke(["arm", "-", "--date", "2026-09-16"], stdin=json.dumps(_document()))
+
+        self.assertEqual(result.exit_code, 2, result.output)
+        self.assertFalse(self.inbox.exists())
+
+    def test_an_empty_old_option_still_counts(self) -> None:
+        result = self.invoke(["arm", "KO", "--date", ""])
+
+        self.assertEqual(result.exit_code, 2, result.output)
+        self.assertIn("alphalens thematic intent", result.stderr)
+
+    def test_the_hint_comes_before_the_ambient_instance_guard(self) -> None:
+        with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ENVIRONMENT": "live"}):
+            result = self.invoke([*self.OLD_FORM, "--format", "json"])
+
+        self.assert_refused(result, "usage")
+
+    def test_a_ticker_that_is_not_a_file_also_gets_the_hint(self) -> None:
+        """`arm KO` alone reads KO as a path; when there is no such file the
+        usage refusal points at the producer as well."""
+        result = self.invoke(["arm", "KO", "--format", "json"])
+
+        failure = self.assert_refused(result, "usage")
+        self.assertEqual(failure["suggestions"][0]["argv"][:3], ["alphalens", "thematic", "intent"])
+
+
+class AMissingDocumentPathGetsNoProducerHint(_DoorCase):
+    """Only a bare name reads like the old brief form. A mistyped document path
+    is not a ticker, and pointing it at `thematic intent` would mislead."""
+
+    def test_a_missing_json_file_carries_no_suggestion(self) -> None:
+        for source in (str(self.home / "my-pick.json"), "picks/KO"):
+            with self.subTest(source=source):
+                result = self.invoke(["arm", source, "--format", "json"])
+
+                failure = self.assert_refused(result, "usage")
+                self.assertEqual(failure["suggestions"], [])
+
+
+class TheImmediateTierRulesHoldAtTheDoor(_DoorCase):
+    """`arm-manual` compiled `now@` tiers and refused a bad ladder before the
+    document existed. The rules live in `validate_intent`; these pin that the
+    door reaches them (#1470)."""
+
+    @staticmethod
+    def _with_tiers(*tiers: dict) -> dict:
+        document = _document()
+        document["spec"]["entry_tiers"] = list(tiers)
+        return document
+
+    def test_two_immediate_tiers_are_refused(self) -> None:
+        document = self._with_tiers(
+            {"limit_price": 73.0, "alloc_pct": 50.0, "entry_mode": "immediate"},
+            {"limit_price": 72.0, "alloc_pct": 50.0, "entry_mode": "immediate"},
+        )
+        self.assert_refused(
+            self.arm(document, "--format", "json"), "intent_invalid", "immediate_tier_count"
+        )
+        self.assertEqual(self.inbox_bytes(), b"")
+
+    def test_an_immediate_tier_after_a_pullback_is_refused(self) -> None:
+        document = self._with_tiers(
+            {"limit_price": 72.0, "alloc_pct": 50.0},
+            {"limit_price": 73.0, "alloc_pct": 50.0, "entry_mode": "immediate"},
+        )
+        self.assert_refused(
+            self.arm(document, "--format", "json"), "intent_invalid", "immediate_tier_not_first"
+        )
+        self.assertEqual(self.inbox_bytes(), b"")
+
+
+class TheEchoNamesAnUncoveredPosition(_DoorCase):
+    """Ported from `arm-manual` (#1470): a take-profit ladder that covers less than
+    the whole position leaves the rest to the stop policy, and the human echo says so."""
+
+    def test_under_100_percent_is_called_out(self) -> None:
+        document = _document()
+        document["spec"]["tp_tranches"] = [{"price": 80.0, "tranche_pct": 60.0}]
+
+        result = self.arm(document, "--dry-run")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("40% of the position has no TP", result.stdout)
+
+    def test_full_coverage_says_nothing(self) -> None:
+        result = self.arm(_document(), "--dry-run")
+
+        self.assertNotIn("has no TP", result.stdout)
+
+    def test_no_warning_when_the_document_places_its_own_levels(self) -> None:
+        """With `exit.initial_levels` the daemon places those levels, not the
+        tranches (#1414), so a tranche sum says nothing about coverage."""
+        document = _document()
+        document["spec"]["tp_tranches"] = [{"price": 80.0, "tranche_pct": 60.0}]
+        document["exit"] = {
+            "initial_levels": {"stop": 66.0, "tp": 80.0},
+            "reaction_plan": [{"kind": "trailing_stop", "arm_trigger_r": 0.5, "trail_frac": 0.6}],
+        }
+
+        result = self.arm(document, "--dry-run")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertNotIn("has no TP", result.stdout)
 
 
 if __name__ == "__main__":

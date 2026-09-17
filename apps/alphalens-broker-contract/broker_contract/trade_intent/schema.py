@@ -148,7 +148,7 @@ class EntryTierSpec:
     carries no sizing semantics.
 
     ``entry_mode`` (#1247): ``"pullback"`` is a resting rung below the market
-    (today's only shape); ``"immediate"`` marks an arm-manual "now" tranche —
+    (today's only shape); ``"immediate"`` marks a "now" tranche the daemon places at drain —
     for it ``limit_price`` is the operator's CAP (max acceptable fill), not a
     pullback level. NOTE: the entry-trail journal's ``watch_open`` lines carry
     an unrelated top-level ``entry_mode`` cohort tag — different JSON
@@ -169,7 +169,7 @@ class EntryTierSpec:
         when_absent='"T<n>", the 1-based position of the rung in the ladder.',
     )
     entry_mode: Literal["pullback", "immediate"] = contract_field(
-        '"pullback" rests below the market; "immediate" is an arm-manual now tranche.',
+        '"pullback" rests below the market; "immediate" is bought at drain, capped at limit_price.',
         default="pullback",
     )
 
@@ -238,7 +238,7 @@ class TradeSpec:
         "Stop price in the instrument's currency; sits below every entry rung."
     )
     tp_tranches: tuple[TpTrancheSpec, ...] = contract_field(
-        "The take-profit ladder. Empty is the legitimate --no-tp shape: a pick that "
+        "The take-profit ladder. Empty is legitimate: a pick with no take-profit that "
         "runs to its disaster stop."
     )
     size: PickSize = contract_field(
@@ -391,13 +391,13 @@ class IntentMeta:
     )
     source: Literal["brief", "manual"] = contract_field(
         'Where the intent came from: "brief" (a brief row, written by `thematic intent`) '
-        'or "manual" (operator-provided levels via `broker arm-manual`, #1235). '
+        'or "manual" (a document written by hand and armed with `broker arm`, #1235). '
         "Journals and later measurement separate the two populations on this marker; "
         'legacy payloads without the key decode to "brief".',
         default="brief",
         door="required",
     )
-    # The arming door (and `broker arm-manual`) assigns 1 + the highest generation queued for
+    # The arming door assigns 1 + the highest generation queued for
     # (ticker, trade_date); a disarmed generation never comes back. Generation 1
     # keeps the pre-#1371 identity strings byte-for-byte, so every journal line
     # written before the field existed — and every payload that omits it — is

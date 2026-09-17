@@ -344,7 +344,7 @@ class AMutatorRendersBeforeItWrites(unittest.TestCase):
     a structural check instead of a behavioural one.
     """
 
-    ARMING_COMMANDS = ("arm_intent_command", "arm_manual_command")
+    ARMING_COMMANDS = ("arm_command",)
 
     def test_the_json_branch_renders_before_it_arms(self) -> None:
         tree = _module_ast()

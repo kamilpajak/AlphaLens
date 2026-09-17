@@ -227,7 +227,7 @@ class TestMetaTradeDateLegacyDecode(unittest.TestCase):
 
 
 class TestEntryTierMode(unittest.TestCase):
-    """The immediate-entry tier marker for arm-manual "now" tranches (#1247)."""
+    """The immediate-entry tier marker for "now" tranches the daemon places at drain (#1247)."""
 
     def test_entry_mode_round_trips(self) -> None:
         intent = TradeIntent(

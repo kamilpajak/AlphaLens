@@ -370,29 +370,10 @@ class MutatingCommandAmbientEnvTest(unittest.TestCase):
         self.assertIn("--env", result.stderr)
         self.assertIn("live", result.stderr)
 
-    def test_arm_intent_refuses_in_a_live_shell_without_an_explicit_env(self) -> None:
+    def test_arm_refuses_in_a_live_shell_without_an_explicit_env(self) -> None:
         # The ambient check runs before the document is read, so a path that
         # does not exist is enough to reach it.
-        result = self._invoke(["arm-intent", "no-such-document.json"], {ENV_VAR: "live"})
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("--env", result.stderr)
-
-    def test_arm_manual_refuses_in_a_live_shell_without_an_explicit_env(self) -> None:
-        result = self._invoke(
-            [
-                "arm-manual",
-                "KO",
-                "--tier",
-                "11",
-                "--stop",
-                "10",
-                "--notional",
-                "100",
-                "--currency",
-                "USD",
-            ],
-            {ENV_VAR: "live"},
-        )
+        result = self._invoke(["arm", "no-such-document.json"], {ENV_VAR: "live"})
         self.assertEqual(result.exit_code, 1)
         self.assertIn("--env", result.stderr)
 

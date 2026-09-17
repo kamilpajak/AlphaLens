@@ -102,7 +102,7 @@ def _isolate_home(case: unittest.TestCase) -> Path:
     """Patch ``Path.home()`` to a fresh, empty temp directory for ``case``.
 
     The legacy-layout guard (``state_paths.assert_no_legacy_flat_state``,
-    ADR 0016 D4) now runs inside ``arm-intent``/``reconcile``/``reconcile-fills``
+    ADR 0016 D4) now runs inside ``arm``/``reconcile``/``reconcile-fills``
     — every command test that reaches one
     of those must be isolated from the REAL ``~/.alphalens/broker_orders/``
     tree, which on a developer machine running the live SIM daemon genuinely

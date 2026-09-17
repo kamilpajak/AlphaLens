@@ -1,6 +1,6 @@
 """Append-only pick queue for the Saxo auto-manager.
 
-One JSON line per arm (`alphalens broker arm-intent`) under
+One JSON line per arm (`alphalens broker arm`) under
 ~/.alphalens/broker_orders/<env>/picks.jsonl (per-environment path,
 state_paths.picks_path, ADR 0016) — the durable human-intent inbox the
 control loop drains. Mirrors submission_log.py: the file is NEVER rewritten;
@@ -15,7 +15,7 @@ daemon never touches a brief. No back-compat for the old bare
 (ticker, date) armed line shape (solo-project doctrine): an armed line missing
 the ``"intent"`` key, or carrying an undecodable one, is skipped exactly like
 any other malformed line — arming a new document through
-`alphalens broker arm-intent` is the explicit human path back.
+`alphalens broker arm` is the explicit human path back.
 
 Pick identity (#1371) is (ticker, date, generation). ``generation`` is the
 same-day re-arm counter: 1 for every line written before the field existed
@@ -28,7 +28,7 @@ markers never shadow its successor.
 
 Queue semantics: the LATEST status line per (ticker, date, generation) wins. A terminal
 ``refused`` line (capacity/cap safety refusal) retires the pick so the drain
-never retries it — arming a new document through `alphalens broker arm-intent`
+never retries it — arming a new document through `alphalens broker arm`
 appends a fresh armed line and is the explicit human path back.
 
 There is deliberately NO ``placed`` status: the drain decides what to place by
@@ -161,7 +161,7 @@ def mark_refused(
     Written when safety.check refuses placement (open-legs cap / portfolio
     gross cap) — without it the armed pick retries every tick and self-places
     a stale brief signal days later once capacity frees. Arming a new document
-    through `alphalens broker arm-intent` is the explicit human path back."""
+    through `alphalens broker arm` is the explicit human path back."""
     _append_record(
         {
             "ticker": ticker.upper(),
@@ -188,7 +188,7 @@ def mark_disarmed(
     The OPERATOR terminal (`alphalens broker disarm`), sibling of the daemon's
     ``mark_refused``: latest-wins retires the pick from ``iter_picks`` with no
     daemon change. The path back is a new document through
-    `alphalens broker arm-intent`, which takes the NEXT generation (#1371): a
+    `alphalens broker arm`, which takes the NEXT generation (#1371): a
     ``cancelled`` crid never leaves the terminal state and crids are
     deterministic per (ticker, date, generation, tier), so the SAME identity
     could never re-open its watch, and the door refuses that key."""
@@ -303,7 +303,7 @@ def read_pick_fold(*, path: Path | None = None) -> PickFold:
 
 
 def next_generation(ticker: str, date: dt.date, *, path: Path | None = None) -> int:
-    """The generation `arm-manual` assigns to a new pick on (ticker, date):
+    """The next free generation of (ticker, date) — what `disarm` counts back from:
     1 + the highest generation on ANY line of that key (whatever its status —
     a disarmed or refused generation is spent, it never comes back), 1 for a
     key the queue has never seen."""
@@ -392,7 +392,7 @@ def keys_with_any_submission(records: Iterable[Mapping[str, Any]]) -> set[tuple[
     exactly the ``tranche == "now"`` skip. That skip exists so the now half does
     not RETIRE a pick before its pullback half is placed, which is right for the
     drain and wrong for anyone asking "has anything already reached the broker
-    for this key". `broker arm-intent` asks the second question before it lets a
+    for this key". `broker arm` asks the second question before it lets a
     document replace a queued pick: a pick whose immediate tier already rests at
     the broker must not be rewritten, or the queue and the market disagree.
 
@@ -451,7 +451,7 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
             # DEBUG so troubleshooting can still surface it on demand.
             logger.debug(
                 "iter_picks %s/%s: armed line has no 'intent' (pre-PR-7 bare shape) — "
-                "skipped, arm a new document via `alphalens broker arm-intent`",
+                "skipped, arm a new document via `alphalens broker arm`",
                 ticker,
                 parsed_date,
             )

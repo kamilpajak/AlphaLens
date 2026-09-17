@@ -1,0 +1,14 @@
+{
+  "instrument": {"ticker": "KO", "mic": "XNYS"},
+  "spec": {
+    "entry_tiers": [
+      {"limit_price": 68.0, "alloc_pct": 60.0},
+      {"limit_price": 66.5, "alloc_pct": 40.0}
+    ],
+    "disaster_stop": 63.0,
+    "tp_tranches": [{"price": 74.0, "tranche_pct": 100.0}],
+    "size": {"notional_acct": 1500.0, "currency": "EUR"}
+  },
+  "meta": {"source": "manual"},
+  "exit": null
+}

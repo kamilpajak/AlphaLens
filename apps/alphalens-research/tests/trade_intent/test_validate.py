@@ -1,10 +1,11 @@
 """Unit tests for ``broker_contract/trade_intent/validate.py`` — the semantic
 validation of a :class:`TradeIntent` (#1404).
 
-Every rule here used to live in the CLI-layer builder behind `alphalens broker
-arm-manual`, so nothing that did not invoke our Typer command could reach it.
+Every rule here used to live in the CLI-layer builder behind the since-removed
+`alphalens broker arm-manual` (#1470), so nothing that did not invoke our Typer
+command could reach it.
 These tests exercise the rules with NO CLI in the picture — that is the property
-#1406's `arm --from-intent` door depends on.
+the arming door (`broker arm`, #1406) depends on.
 """
 
 from __future__ import annotations
@@ -92,6 +93,36 @@ class IdentityRulesTest(unittest.TestCase):
         with self.assertRaises(IntentInvalidError) as ctx:
             validate_intent(blank)
         self.assertEqual(_reason_of(ctx.exception), "ticker_empty")
+
+    def test_a_padded_ticker_refuses(self) -> None:
+        """The pick queue upper-cases a ticker without stripping it, so `" KO "`
+        and `KO` would be two instruments to the one-armed-pick rule (#1470)."""
+        intent = _intent()
+        for ticker in (" NVO", "NVO ", "NVO\n"):
+            with self.subTest(ticker=ticker):
+                padded = TradeIntent(
+                    intent_id=intent.intent_id,
+                    instrument=InstrumentHint(ticker=ticker, mic="XNYS"),
+                    spec=intent.spec,
+                    meta=intent.meta,
+                )
+                with self.assertRaises(IntentInvalidError) as ctx:
+                    validate_intent(padded)
+                self.assertEqual(_reason_of(ctx.exception), "ticker_not_trimmed")
+
+    def test_a_blank_ticker_is_only_empty_not_also_untrimmed(self) -> None:
+        intent = _intent()
+        blank = TradeIntent(
+            intent_id=intent.intent_id,
+            instrument=InstrumentHint(ticker="   ", mic="XNYS"),
+            spec=intent.spec,
+            meta=intent.meta,
+        )
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(blank)
+        reasons = [v["reason"] for v in ctx.exception.failure.details["violations"]]
+        self.assertIn("ticker_empty", reasons)
+        self.assertNotIn("ticker_not_trimmed", reasons)
 
 
 class LiteralIsNotAGateTest(unittest.TestCase):
