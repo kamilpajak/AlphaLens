@@ -39,7 +39,9 @@ from alphalens_pipeline.thematic.mapping.catalyst_resolver import DEFAULT_EVENTS
 MECH_RULE_VERSION = "mech-salience-equalweight-v1"
 PROPOSAL_SHADOW_VERSION = "proposal-shadow-v1"
 
-DEFAULT_SHADOW_DIR = Path.home() / ".alphalens" / "proposal_shadow"
+# map-themes writes the shadow beside the candidates parquets (orchestrator DEFAULT_OUTPUT_DIR);
+# importing the orchestrator here would be circular, so the path is spelled out and pinned by a test.
+DEFAULT_SHADOW_DIR = Path.home() / ".alphalens" / "thematic_candidates" / "proposal_shadow"
 
 # Production catalyst window (catalyst_resolver.DEFAULT_LOOKBACK_DAYS).
 _DEFAULT_LOOKBACK_DAYS = 30

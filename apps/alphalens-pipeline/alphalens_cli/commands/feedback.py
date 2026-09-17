@@ -235,7 +235,7 @@ def _enrich_selection_labels(briefs_dir: Path, *, deadline: Any = None) -> None:
 
         report = enrich_selection_labels(
             briefs_dir=briefs_dir,
-            shadow_dir=_ALPHALENS_HOME / "proposal_shadow",
+            shadow_dir=_ALPHALENS_HOME / "thematic_candidates" / "proposal_shadow",
             labels_dir=_ALPHALENS_HOME / "selection_labels",
             grouped_root=_ALPHALENS_HOME / "grouped_daily_history",
             deadline=deadline,
