@@ -1,6 +1,6 @@
 """CLI tests for `alphalens thematic intent` — the brief producer (#1469).
 
-Its stdout is piped into `alphalens broker arm-intent -`, so stdout carries the
+Its stdout is piped into `alphalens broker arm -`, so stdout carries the
 document and NOTHING else, on success; on failure it is empty and the message is
 on stderr. Exit statuses follow the CLI convention: 2 usage, 4 not found, 1 any
 other refusal.
@@ -181,12 +181,10 @@ class ThroughTheDoor(_IntentCase):
             mock.patch("pathlib.Path.home", return_value=home),
             mock.patch("alphalens_cli.commands.broker._arming_now", return_value=moment),
         ):
-            first = self.runner.invoke(broker_app, ["arm-intent", "-"], input=document)
-            again = self.runner.invoke(
-                broker_app, ["arm-intent", "-", "--format", "json"], input=document
-            )
+            first = self.runner.invoke(broker_app, ["arm", "-"], input=document)
+            again = self.runner.invoke(broker_app, ["arm", "-", "--format", "json"], input=document)
             disarm = self.runner.invoke(broker_app, ["disarm", "KBH", "--date", BRIEF_DATE])
-            after = self.runner.invoke(broker_app, ["arm-intent", "-"], input=document)
+            after = self.runner.invoke(broker_app, ["arm", "-"], input=document)
             inbox = home / ".alphalens" / "broker_orders" / "sim" / "picks.jsonl"
             records = read_pick_fold(path=inbox).records
 

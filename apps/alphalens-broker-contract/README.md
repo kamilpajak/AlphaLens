@@ -242,7 +242,7 @@ in the next section, and they are the difference between "your retry landed" and
 **Which `schema_version` to read, and what it does.** `meta.schema_version` is
 the document's version; `spec.schema_version` is the same constant duplicated in
 a second class, not an independent dial. **Exactly one gate reads it: the door**
-(`broker arm-intent`, #1406), which refuses any stated version other than its
+(`broker arm`, #1406), which refuses any stated version other than its
 own with `schema_version_unsupported`. An ABSENT key is the current version
 rather than an unknown one — the field carries a default, so omitting it means
 "whatever this contract is at".
@@ -275,10 +275,10 @@ major version, fields are only ADDED and only as optional — and the CI gate on
 the generated artefact is what enforces it.
 
 
-## The door: submitting a document (#1406, #1468)
+## The door: submitting a document (#1406, #1468, #1470)
 
 ```
-alphalens broker arm-intent <path|-> [--env sim|live] [--dry-run] [--format human|json]
+alphalens broker arm <path|-> [--env sim|live] [--dry-run] [--format human|json]
 ```
 
 A producer that can write JSON does not need a command of its own. The author
@@ -394,5 +394,57 @@ does not refuse a LIVE `--env` when the LIVE rails are absent, because arming is
 not placing: the rails gate the daemon, and the guard that does exist here is
 the refusal to take the instance off an ambient environment variable (#1377).
 Concurrent submitters are not serialised; the key check reads the fold and then
-appends, so two processes racing on one ticker can both pass it — the same shape
-`arm-manual` has.
+appends, so two processes racing on one ticker can both pass it.
+
+### Writing a manual pick (#1470)
+
+`broker arm` is the only arming command. There is no flag form: a manual pick is a
+document. Start from one of these templates, change the ticker, the levels and the
+amount, and send it with `--dry-run` first:
+
+| template | shape |
+|---|---|
+| [`examples/manual-pick/pullback-two-tiers.json`](examples/manual-pick/pullback-two-tiers.json) | two resting pullback tiers, one take-profit, `exit: null` (the stop is never moved) |
+| [`examples/manual-pick/pullback-trailing-stop.json`](examples/manual-pick/pullback-trailing-stop.json) | the same ladder, and the stop trails once the position is 0.5R up |
+| [`examples/manual-pick/immediate-plus-pullback.json`](examples/manual-pick/immediate-plus-pullback.json) | half bought at once with a price cap (`entry_mode: "immediate"`, listed first), half resting lower |
+
+```bash
+.venv/bin/alphalens broker arm my-pick.json --env sim --dry-run
+.venv/bin/alphalens broker arm my-pick.json --env sim
+```
+
+Things to set every time:
+
+- `size.currency` is the ACCOUNT currency of the instance you arm into. The daemon
+  refuses a pick in any other currency when it drains it.
+- `instrument.mic` is the venue. The door accepts XNYS, XNAS, XWAR, XETR and XPAR.
+- A take-profit is a PRICE. The dry run prints the R of each one, so check it there.
+- Keep `exit.initial_levels` null unless you mean it. A document with levels has the
+  daemon place those two levels (one stop, one take-profit for the whole position)
+  INSTEAD of `disaster_stop` and `tp_tranches` (#1414).
+
+**Copying an armed pick.** To arm yesterday's pick again with corrected levels,
+turn its journal line back into a document. The templates test runs this block
+exactly as written:
+
+<!-- manual-pick-copy-recipe -->
+```bash
+set -o pipefail
+jq -cR 'fromjson? | select(.ticker == "KO" and .status == "armed") | .intent
+        | del(.intent_id, .meta.armed_ts, .meta.generation, .meta.trade_date,
+              .spec.tp_tranches[]?.r_multiple)' \
+  ~/.alphalens/broker_orders/sim/picks.jsonl | tail -n 1 > ko.json
+```
+
+- It takes the LAST armed line for the ticker, which after a replace is the newest
+  version of the pick. `fromjson?` skips a torn line instead of stopping at it.
+- It removes what the door derives (`intent_id`, `armed_ts`, every `r_multiple`) and
+  also `generation` and `trade_date`. The copy is therefore a NEW pick: the door gives
+  it the next generation and the current session. Stating the old generation would
+  mean "replace", and stating the old date would arm under that date.
+- The door refuses the copy while the original is still armed. `disarm` it first.
+- Manual picks only. A copied brief pick is refused (`trade_date_required`); produce
+  it again with `alphalens thematic intent`.
+- For LIVE, read `broker_orders/live/picks.jsonl` and arm with `--env live`.
+- Lines armed before #1475 (2026-09-16) state a percent size or `meta.brief_date` and
+  are refused by the door. Start from a template instead.

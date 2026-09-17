@@ -18,15 +18,6 @@ _BROKER_CLI = (
 _THEMATIC_CLI = (
     _REPO_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli" / "commands" / "thematic.py"
 )
-_MANUAL_INTENT = (
-    _REPO_ROOT
-    / "apps"
-    / "alphalens-pipeline"
-    / "alphalens_pipeline"
-    / "brokers"
-    / "automanager"
-    / "manual_intent.py"
-)
 
 
 def _function(source: Path, name: str) -> ast.FunctionDef:
@@ -52,7 +43,8 @@ def _calls(node: ast.AST) -> set[str]:
 class WhereTheValidatorRunsTest(unittest.TestCase):
     """Every document that reaches a pick inbox passed `validate_intent`.
 
-    Until #1469 the brief path (`broker arm`) deliberately skipped it, on the
+    Since #1470 the door is the only arming command. Until #1469 the brief path
+    (the old brief-reading `broker arm`) deliberately skipped it, on the
     grounds that `parse_brief_to_spec` carries non-positive limit rows the
     validator refuses. Measured on the VPS briefs on 2026-09-16, 0 of 995
     plannable rows carry one, and the brief producer now sends its document
@@ -60,11 +52,7 @@ class WhereTheValidatorRunsTest(unittest.TestCase):
     """
 
     def test_the_door_calls_it(self) -> None:
-        self.assertIn("validate_intent", _calls(_function(_BROKER_CLI, "arm_intent_command")))
-
-    def test_arm_manual_reaches_it_through_the_builder(self) -> None:
-        # A second path, until `arm-manual` goes in #1470.
-        self.assertIn("validate_intent", _calls(_function(_MANUAL_INTENT, "build_manual_intent")))
+        self.assertIn("validate_intent", _calls(_function(_BROKER_CLI, "arm_command")))
 
     def test_the_brief_producer_does_not_bypass_the_door(self) -> None:
         # Positive control for the claim above: the producer writes a document

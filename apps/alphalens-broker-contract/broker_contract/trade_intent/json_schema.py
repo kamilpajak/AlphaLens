@@ -206,7 +206,7 @@ _SHARED_DESCRIPTION: Final = (
     "the door's semantic rules (see intent_invalid in the package README). Within a "
     "major version only optional fields are added: a field is never renamed, retyped, "
     "or given a new unit. NOTE: this schema does not constrain schema_version and "
-    "neither does the codec — the DOOR does (broker arm-intent refuses a stated version "
+    "neither does the codec — the DOOR does (broker arm refuses a stated version "
     "other than its own), while the journal drain stays ungated so older documents keep "
     "decoding there."
 )

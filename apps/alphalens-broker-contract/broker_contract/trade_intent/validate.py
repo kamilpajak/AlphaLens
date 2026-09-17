@@ -1,25 +1,23 @@
 """Semantic validation of a :class:`TradeIntent` (#1404).
 
 Until this module existed, every refusal protecting a real-money arm lived in
-``alphalens_pipeline/brokers/automanager/manual_intent.py`` — the CLI layer. A
+the CLI-layer builder behind `broker arm-manual` (removed in #1470). A
 ladder whose allocations summed to 250, or a levered size, was refused only if
 you happened to come in through our Typer command. ``schema.py`` said so about
 itself: *"These are pure data: no validation, no parsing, no I/O. The
 client-side parse/validate step is deferred to a later PR."* This is that PR,
-and #1406's ``arm --from-intent`` door is the consumer whose absence deferred it.
+and the #1406 door (now ``broker arm``) is the consumer whose absence deferred it.
 
 What belongs here, and what does not
 ------------------------------------
-These are invariants of the DOCUMENT. Three kinds of rule deliberately stay in
-the CLI, because they are not about the document at all:
+These are invariants of the DOCUMENT. Kinds of rule that deliberately stay
+out of it, because they are not about the document at all:
 
-* **Operator vocabulary** — the ``price[:alloc]`` mini-DSL, the ``now@`` prefix,
-  the ``R`` suffix, ``--no-tp`` with ``--tp``, the ``--size-pct``/``--notional``
-  XOR. A third party sends structured JSON and never sees the mini-DSL. A mix of
-  bare and explicit allocations is not even representable here: after
-  compilation ``alloc_pct`` is always set.
-* **Rules about the INVOCATION** — ``--ttl-days > 0`` and the supported-venue
-  list. ``order_ttl_days == 0`` is a LEGAL document value: ``brokers/execution.py``
+* **Operator vocabulary** — the flag mini-DSL of the removed ``arm-manual``
+  (``price[:alloc]``, ``now@``, ``<N>R``) never reached a document; an author
+  writes structured JSON (#1470).
+* **Rules about the INVOCATION** — the supported-venue list (checked by the
+  door, ``data/alt_data/saxo_exchanges.py``). ``order_ttl_days == 0`` is a LEGAL document value: ``brokers/execution.py``
   resolves that sentinel to a default, commented "the planner's 'field absent'
   sentinel". Refusing it here would make a document the brief path legitimately
   emits un-submittable. The venue list is Saxo deployment knowledge (venue map,
@@ -113,6 +111,8 @@ INTENT_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         "would silently pass.",
         "intent_id_empty": "The client-authored idempotency key is missing or blank.",
         "ticker_empty": "The instrument carries no ticker.",
+        "ticker_not_trimmed": "The ticker has leading or trailing whitespace; the pick "
+        "queue would read it as a different instrument.",
         "side_not_long": "Only long entries are armed today.",
         "entry_tiers_empty": "The entry ladder has no rungs.",
         "entry_price_non_positive": "An entry tier's limit price is zero or negative.",
@@ -186,8 +186,13 @@ def _identity_violations(intent: TradeIntent) -> list[Violation]:
     found: list[Violation] = []
     if not str(intent.intent_id).strip():
         found.append(Violation("intent_id_empty", "intent_id must be non-empty"))
-    if not str(intent.instrument.ticker).strip():
+    ticker = str(intent.instrument.ticker)
+    if not ticker.strip():
         found.append(Violation("ticker_empty", "ticker must be non-empty"))
+    elif ticker != ticker.strip():
+        found.append(
+            Violation("ticker_not_trimmed", f"ticker {ticker!r} has surrounding whitespace")
+        )
     if intent.spec.side != "long":
         found.append(Violation("side_not_long", f"side must be 'long', got {intent.spec.side!r}"))
     return found
@@ -311,7 +316,7 @@ def _stop_and_size_violations(spec: TradeSpec) -> list[Violation]:
 def _tp_violations(spec: TradeSpec) -> list[Violation]:
     tranches = spec.tp_tranches
     if not tranches:
-        # An empty ladder is the `--no-tp` shape: a legitimate pick that runs to
+        # An empty ladder is a pick with no take-profit: a legitimate pick that runs to
         # its disaster stop. Not a violation.
         return []
 

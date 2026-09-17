@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:alphalens:contract:trade-intent:3",
   "title": "TradeIntent",
-  "description": "One client-armed pick handed to the broker-manager, as the journal stores it. Generated from broker_contract.trade_intent.schema — edit the dataclasses, never this file. The schema pins SHAPE; a schema-valid document can still be refused by the door's semantic rules (see intent_invalid in the package README). Within a major version only optional fields are added: a field is never renamed, retyped, or given a new unit. NOTE: this schema does not constrain schema_version and neither does the codec — the DOOR does (broker arm-intent refuses a stated version other than its own), while the journal drain stays ungated so older documents keep decoding there.",
+  "description": "One client-armed pick handed to the broker-manager, as the journal stores it. Generated from broker_contract.trade_intent.schema — edit the dataclasses, never this file. The schema pins SHAPE; a schema-valid document can still be refused by the door's semantic rules (see intent_invalid in the package README). Within a major version only optional fields are added: a field is never renamed, retyped, or given a new unit. NOTE: this schema does not constrain schema_version and neither does the codec — the DOOR does (broker arm refuses a stated version other than its own), while the journal drain stays ungated so older documents keep decoding there.",
   "type": "object",
   "properties": {
     "intent_id": {
@@ -82,7 +82,7 @@
           "items": {
             "$ref": "#/$defs/TpTrancheSpec"
           },
-          "description": "The take-profit ladder. Empty is the legitimate --no-tp shape: a pick that runs to its disaster stop."
+          "description": "The take-profit ladder. Empty is legitimate: a pick with no take-profit that runs to its disaster stop."
         },
         "size": {
           "$ref": "#/$defs/PickSize",
@@ -136,7 +136,7 @@
             "pullback",
             "immediate"
           ],
-          "description": "\"pullback\" rests below the market; \"immediate\" is an arm-manual now tranche.",
+          "description": "\"pullback\" rests below the market; \"immediate\" is bought at drain, capped at limit_price.",
           "default": "pullback"
         }
       },
@@ -211,7 +211,7 @@
             "brief",
             "manual"
           ],
-          "description": "Where the intent came from: \"brief\" (a brief row, written by `thematic intent`) or \"manual\" (operator-provided levels via `broker arm-manual`, #1235). Journals and later measurement separate the two populations on this marker; legacy payloads without the key decode to \"brief\".",
+          "description": "Where the intent came from: \"brief\" (a brief row, written by `thematic intent`) or \"manual\" (a document written by hand and armed with `broker arm`, #1235). Journals and later measurement separate the two populations on this marker; legacy payloads without the key decode to \"brief\".",
           "default": "brief"
         },
         "generation": {

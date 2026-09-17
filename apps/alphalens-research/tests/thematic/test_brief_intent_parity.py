@@ -2,7 +2,7 @@
 
 The fixtures were captured from `broker arm` on four real brief rows before it was
 deleted (see `tests/fixtures/brief_intent_parity/README.md`). Each row's producer
-document goes through the real `arm-intent` command into an empty inbox, and the
+document goes through the real `arm` command into an empty inbox, and the
 journaled intent must equal the captured one in every field but `meta.armed_ts`,
 which is the moment of arming. `intent_id` and `generation` are compared too: an
 empty inbox gives generation 1, and the door names that pick `TICKER:DATE`, as
@@ -89,7 +89,7 @@ class TheProducerThroughTheDoorArmsWhatBrokerArmArmed(unittest.TestCase):
                     ),
                 ):
                     result = CliRunner().invoke(
-                        broker_app, ["arm-intent", "-"], input=json.dumps(document)
+                        broker_app, ["arm", "-"], input=json.dumps(document)
                     )
                     self.assertEqual(result.exit_code, 0, result.output)
                     inbox = home / ".alphalens" / "broker_orders" / "sim" / "picks.jsonl"

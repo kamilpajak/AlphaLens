@@ -813,9 +813,9 @@ def _maybe_trail(
         A declaration of any other kind is routed to ``_maybe_reanchor`` by
         ``_reconcile_long``, and no declaration at all resolves to the inert
         policy, so this arm never touches either. That is what keeps the daemon
-        from tightening a hand-set stop: a manual (``arm-manual``) pick declares
+        from tightening a hand-set stop: a document with ``exit: null`` declares
         nothing, the decided behaviour for group-managed picks, pinned by
-        ``tests/brokers/automanager/test_manual_pick_no_stop_move.py``. It used to
+        ``tests/brokers/automanager/test_undeclared_exit_no_stop_move.py``. It used to
         rest on the ABSENCE of a geometry stamp, which also vetoed
         ``breakeven_trail`` for an ATR that policy discards.
       - ``pos.avg_price`` finite and > 0 — never anchor on the SIM NoAccess

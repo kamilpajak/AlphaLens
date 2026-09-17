@@ -26,6 +26,7 @@ import datetime as dt
 import json
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -48,7 +49,7 @@ _ARM_TRADE_DATE = dt.date(2026, 7, 20)
 
 
 def _intent_document() -> str:
-    """One author document, as `arm-intent` would read it off disk (#1468).
+    """One author document, as `arm` would read it off disk (#1468).
 
     Only the trade: the door derives identity and labels and refuses them on
     input, so a compiled intent carrying them would be refused here. The date is
@@ -127,27 +128,8 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
     ),
     ("orders", ["orders"], True, ("orders",)),
     (
-        "arm-manual",
-        [
-            "arm-manual",
-            "NVO",
-            "--tier",
-            "100",
-            "--stop",
-            "90",
-            "--no-tp",
-            "--notional",
-            "3000",
-            "--currency",
-            "USD",
-            "--dry-run",
-        ],
-        True,
-        ("armed", "dry_run", "ticker", "generation", "intent", "picks_journal"),
-    ),
-    (
-        "arm-intent",
-        ["arm-intent", "intent.json"],
+        "arm",
+        ["arm", "intent.json"],
         True,
         (
             "armed",
@@ -184,7 +166,17 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
 # following it (#1377) — a write must not choose SIM or LIVE off a variable the
 # operator forgot was set. `cancel` is not among them: it resolves the instance
 # the way the read commands do.
-_AMBIENT_REFUSING_COMMANDS = frozenset({"arm-manual", "arm-intent", "disarm"})
+# The envelope version of each command, `v1` unless listed. `arm` answers `v2`
+# because `alphalens.broker.arm/v1` named the brief envelope, with a different
+# body, until #1469; its body is the one `arm-intent/v1` had (#1470).
+_SCHEMA_VERSIONS: Mapping[str, str] = {"arm": "v2"}
+
+
+def _schema_id(name: str) -> str:
+    return f"alphalens.broker.{name}/{_SCHEMA_VERSIONS.get(name, 'v1')}"
+
+
+_AMBIENT_REFUSING_COMMANDS = frozenset({"arm", "disarm"})
 
 
 def _reject_json_constant(token: str) -> None:
@@ -311,7 +303,7 @@ class _BrokerCliCase(unittest.TestCase):
     def invoke(self, argv: list[str]):
         """Run one broker command with the SIM and LIVE gateways both faked.
 
-        `arm-intent` reads its document through a patched seam, so the table can
+        `arm` reads its document through a patched seam, so the table can
         exercise its envelope without a file. Inert for every other command.
 
         The unit-composition seams are installed for every call, not just the
@@ -347,7 +339,7 @@ class JsonEnvelopeContractTest(_BrokerCliCase):
                 )
                 self.assertTrue(
                     payload["schema"].startswith("alphalens.broker.")
-                    and payload["schema"].endswith("/v1"),
+                    and payload["schema"].endswith(f"/{_SCHEMA_VERSIONS.get(name, 'v1')}"),
                     payload["schema"],
                 )
                 self.assertEqual(payload["env"], "sim")
@@ -357,7 +349,7 @@ class JsonEnvelopeContractTest(_BrokerCliCase):
             with self.subTest(command=name):
                 result = self.invoke([*argv, "--format", "json"])
                 payload = _strict_json(result.stdout)
-                self.assertEqual(payload["schema"], f"alphalens.broker.{name}/v1")
+                self.assertEqual(payload["schema"], _schema_id(name))
 
     def test_each_envelope_carries_its_own_body(self) -> None:
         """schema + env alone is an empty answer, not a contract."""

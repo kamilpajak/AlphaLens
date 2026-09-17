@@ -242,7 +242,7 @@ RULES = (
     },
     {
         # #1469: the brief producer (`alphalens thematic intent`) writes a
-        # document for the arming door and pipes it into `broker arm-intent`.
+        # document for the arming door and pipes it into `broker arm`.
         # It must not import the broker layer, not even lazily inside the
         # command body: that coupling is what moving the brief read out of the
         # broker group removed. The rule names a module FILE, not a package.

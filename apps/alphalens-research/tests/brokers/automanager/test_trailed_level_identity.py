@@ -5,11 +5,11 @@ record belongs to one position. The separation was a generation reset in
 ``_fold_trailed_since_latest_plan``: a ``tranche_plan`` line with a new
 ``pick_key`` cleared the uic's accumulator.
 
-That reset cannot fire for a pick armed ``--no-tp``, which journals no
+That reset cannot fire for a pick with no take-profit, which journals no
 ``tranche_plan`` at all. Measured on the real fold before this change: such a
-pick INHERITED the level trailed by an earlier position on the same uic. The CLI
-help calls ``--no-tp`` a "trail-only pick", so this is the shape a trailing pick
-uses, not a corner case. The consequence is not a bad stop
+pick INHERITED the level trailed by an earlier position on the same uic. The
+removed ``arm-manual`` help called that shape a "trail-only pick", so it is the
+shape a trailing pick uses, not a corner case. The consequence is not a bad stop
 (``_build_managed_exits`` skips a uic with no tranche plan) but a silently dark
 trail: ``_maybe_trail``'s ratchet floor sits at another position's level.
 
@@ -76,7 +76,7 @@ def _trailed(*, ts: float, level: float = _LEVEL):
 class ThePlannedLineCarriesTheTradeIdentityTest(unittest.TestCase):
     """``tranche_plan`` has carried ``pick_key`` since the entry-trail work. The
     ``planned`` line did not, which is why the only available reset depended on a
-    line a ``--no-tp`` pick never writes."""
+    line a pick with no take-profit never writes."""
 
     def test_a_pick_key_is_stamped_when_given(self):
         self.assertEqual(_planned("crid-1", pick_key=_A)["pick_key"], _A)
@@ -112,7 +112,7 @@ class ThePlannedLineCarriesTheTradeIdentityTest(unittest.TestCase):
 
 class ALevelDoesNotOutliveThePickThatEarnedItTest(unittest.TestCase):
     def test_a_no_tp_pick_does_not_inherit_the_previous_picks_level(self):
-        """THE FIX. Pick A trails; A closes; pick B arms `--no-tp` on the same
+        """THE FIX. Pick A trails; A closes; pick B arms with no take-profit on the same
         uic, so it journals a `planned` line and NO tranche plan. Before this
         change B inherited A's level."""
         lines = [
@@ -145,7 +145,7 @@ class ALevelDoesNotOutliveThePickThatEarnedItTest(unittest.TestCase):
         self.assertEqual(_fold_trailed_since_latest_plan(lines), {_UIC: _LEVEL})
 
     def test_neither_pick_having_a_tranche_plan_is_also_covered(self):
-        """Both picks `--no-tp`: no `tranche_plan` line anywhere, so the old rule
+        """Both picks with no take-profit: no `tranche_plan` line anywhere, so the old rule
         had nothing at all to reset on."""
         lines = [
             _planned("KO-2026-09-01-entry-t0", pick_key=_A),
