@@ -80,6 +80,9 @@ UNWIRED_ALLOWED: Mapping[str, str] = {
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/service.py": (
         "the client-manager boundary; the acceptance suite drives the real loop through it"
     ),
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/fill_source.py": (
+        "the fill-detection seam the streaming FillSource will plug into; kept on purpose"
+    ),
 }
 
 _FINDING = re.compile(r"^(?P<path>[^:]+):\d+: unused \w+(?: \w+)? '(?P<name>[^']+)'")

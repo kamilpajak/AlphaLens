@@ -15,6 +15,8 @@ _ = Whitelist()
 _.place_stop_limit  # SupportsTrailingStop member; control_loop gates entry trailing on isinstance, removing it turns LIVE trailing off silently
 _.geometry_name  # ExitPolicy identity property, read by the policy tests; a Protocol member, not checked with isinstance
 
+_.poll_tick  # FillSource member; the seam a streaming fill source will implement, not wired yet on purpose
+
 # Framework hooks, called by the standard library.
 _.do_GET  # BaseHTTPRequestHandler hook of the marketdata-auth callback server
 _.log_message  # BaseHTTPRequestHandler hook, silenced so the callback does not print request lines
