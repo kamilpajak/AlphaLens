@@ -31,7 +31,9 @@ import datetime as dt
 import itertools
 import logging
 import math
+import os
 import statistics
+import tempfile
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -39,8 +41,9 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
-from alphalens_pipeline.data.parquet_io import write_parquet_atomic
 from alphalens_pipeline.data.rs_history import DEFAULT_RS_HISTORY_ROOT
 from alphalens_pipeline.events.insider_cluster import (
     SOURCE_INSIDER_CLUSTER,
@@ -143,18 +146,43 @@ PRE_COLUMNS: tuple[str, ...] = (
     "beta_n_split_dropped",
     "sigma_resid_pre",
 )
-SEL_LABEL_COLUMNS: tuple[str, ...] = (
-    "brief_date",
-    "ticker",
-    *STAGE_COLUMNS,
-    "anchor_session",
-    "published_before_open",
-    *PRE_COLUMNS,
-    *VALUE_KEYS,
-    *(status_key(h) for h in HORIZONS),
-    "sel_label_version",
-    "computed_at",
+
+
+_STRING = pa.string()
+_FLOAT = pa.float64()
+_INT = pa.int64()
+_BOOL = pa.bool_()
+# One fixed schema for every label file. Without it a date whose rows carry no value
+# (all excluded) writes null-typed columns, and the store no longer reads as one dataset.
+BRIEF_PUBLISHED_AT_TYPE = pa.timestamp("us", tz="UTC")
+SEL_LABEL_SCHEMA = pa.schema(
+    [
+        ("brief_date", pa.date32()),
+        ("ticker", _STRING),
+        ("lane", _STRING),
+        ("population", _STRING),
+        ("briefed_any_theme", _BOOL),
+        ("themes_briefed", pa.list_(_STRING)),
+        ("themes_proposed", pa.list_(_STRING)),
+        ("shadow_available", _BOOL),
+        ("event_overlap", _BOOL),
+        ("mapper_config_version", _STRING),
+        (BRIEF_PUBLISHED_AT, BRIEF_PUBLISHED_AT_TYPE),
+        ("anchor_session", pa.date32()),
+        ("published_before_open", _BOOL),
+        ("beta_ols", _FLOAT),
+        ("beta_source", _STRING),
+        ("beta_n_obs", _INT),
+        ("beta_n_zero", _INT),
+        ("beta_n_split_dropped", _INT),
+        ("sigma_resid_pre", _FLOAT),
+        *((key, _FLOAT) for key in VALUE_KEYS),
+        *((status_key(h), _STRING) for h in HORIZONS),
+        ("sel_label_version", _STRING),
+        ("computed_at", _STRING),
+    ]
 )
+SEL_LABEL_COLUMNS: tuple[str, ...] = tuple(SEL_LABEL_SCHEMA.names)
 
 
 @dataclass(frozen=True)
@@ -554,6 +582,43 @@ def _label_record(
     return rec
 
 
+def _coerce(value: Any, kind: pa.DataType) -> Any:
+    """A stored Python value in the type its schema field expects (parquet reads ints with
+    nulls back as floats and timestamps as ``pd.Timestamp``)."""
+    value = _normalise(value)
+    if value is None:
+        return None
+    if kind == _INT:
+        return int(value)
+    if kind == _FLOAT:
+        return float(value)
+    if kind == _BOOL:
+        return bool(value)
+    if kind == BRIEF_PUBLISHED_AT_TYPE:
+        stamp = pd.Timestamp(value)
+        stamp = stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
+        return stamp.to_pydatetime()
+    return value
+
+
+def _write_labels_atomic(rows: Sequence[Mapping[str, Any]], path: Path) -> None:
+    """Write ``rows`` under ``SEL_LABEL_SCHEMA`` via a temp file in the same directory."""
+    table = pa.Table.from_pylist(
+        [{f.name: _coerce(row.get(f.name), f.type) for f in SEL_LABEL_SCHEMA} for row in rows],
+        schema=SEL_LABEL_SCHEMA,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        pq.write_table(table, tmp)
+        os.replace(tmp, path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def _stamp_date(
     brief_date: dt.date,
     *,
@@ -624,8 +689,7 @@ def _stamp_date(
 
     if not changed:
         return False, 0
-    frame = pd.DataFrame([rows[t] for t in sorted(rows)], columns=list(SEL_LABEL_COLUMNS))
-    write_parquet_atomic(frame, out_path, index=False)
+    _write_labels_atomic([rows[t] for t in sorted(rows)], out_path)
     return True, n_stamped
 
 

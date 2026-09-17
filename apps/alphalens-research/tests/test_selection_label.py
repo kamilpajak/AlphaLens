@@ -433,6 +433,24 @@ class TestEnrichStore(unittest.TestCase):
         self._run()
         self.assertEqual(path.stat().st_mtime, 1_000_000)
 
+    def test_every_label_file_has_the_same_schema_and_the_store_reads_as_one_dataset(self):
+        import pyarrow.dataset as ds
+        import pyarrow.parquet as pq
+
+        self._write_book(make_book(stock_window=[0.01] * 40))
+        _brief([{"theme": "t", "ticker": "AAA"}]).to_parquet(self.briefs / "2026-03-03.parquet")
+        # A date whose rows carry no value, no beta, no stamp and no themes proposed.
+        _brief([{"theme": "t", "ticker": "AAA"}], published_at=None).to_parquet(
+            self.briefs / "2026-08-18.parquet"
+        )
+        self._run()
+        files = sorted(self.labels.glob("*.parquet"))
+        self.assertEqual(len(files), 2)
+        schemas = [pq.read_schema(f).remove_metadata() for f in files]
+        self.assertTrue(schemas[0].equals(schemas[1]), f"{schemas[0]}\n!=\n{schemas[1]}")
+        self.assertEqual(str(schemas[1].field("sel_ar_20").type), "double")
+        self.assertEqual(ds.dataset([str(f) for f in files]).to_table().num_rows, 2)
+
     def test_a_recomputed_row_that_did_not_change_is_not_rewritten(self):
         book = make_book(stock_window=[0.01] * 40)
         self._write_book(book, until=advance_trading_sessions(T0, 9))
