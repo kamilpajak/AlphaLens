@@ -29,6 +29,7 @@ from typing import NamedTuple
 
 import pandas as pd
 from alphalens_pipeline.data import rs_history
+from alphalens_pipeline.feedback import market_beta
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
@@ -129,8 +130,8 @@ def _pre_event_closes(
 
 
 _BETA_FALLBACK_SOURCES = (
-    fixed_horizon.BETA_FALLBACK_THIN,
-    fixed_horizon.BETA_FALLBACK_DEGENERATE,
+    market_beta.BETA_FALLBACK_THIN,
+    market_beta.BETA_FALLBACK_DEGENERATE,
 )
 
 
@@ -157,7 +158,7 @@ def _beta_counts(sources: pd.Series) -> _BetaCounts:
     when it is non-zero -- visible, without aborting a long diagnostic run at
     its last line.
     """
-    estimated = int((sources == fixed_horizon.BETA_ESTIMATED).sum())
+    estimated = int((sources == market_beta.BETA_ESTIMATED).sum())
     fell_back = int(sources.isin(_BETA_FALLBACK_SOURCES).sum())
     not_attempted = int(sources.isna().sum())
     return _BetaCounts(
@@ -255,7 +256,7 @@ def main() -> None:
         # when no CAR is computable anyway (nothing elapsed, or the anchor cannot be priced).
         elapsed = any(h <= newest for h in horizons.values())
         beta_est = (
-            fixed_horizon.estimate_beta(
+            market_beta.estimate_beta(
                 *_pre_event_closes(
                     grouped,
                     anchor_session,
@@ -332,8 +333,8 @@ def main() -> None:
     print(
         f"\nbeta vs SPY over {args.beta_window} pre-event sessions, {len(table)} events: "
         f"{counts.estimated} estimated, "
-        f"{counts.fell_back} fell back to {fixed_horizon.BETA_FALLBACK_VALUE} "
-        f"(min {fixed_horizon.MIN_BETA_OBSERVATIONS} usable returns), "
+        f"{counts.fell_back} fell back to {market_beta.BETA_FALLBACK_VALUE} "
+        f"(min {market_beta.MIN_BETA_OBSERVATIONS} usable returns), "
         f"{counts.not_attempted} not attempted (no elapsed window or no priceable anchor); "
         f"{stale_sessions} flat stock sessions inside the estimated windows"
         + (f"; {counts.unexpected} with an unrecognised beta_source" if counts.unexpected else "")
