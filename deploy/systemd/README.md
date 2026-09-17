@@ -2117,6 +2117,26 @@ rm /var/lib/node_exporter/textfile/alphalens_domain_broker-manager-{sim,live}-ca
    /var/lib/node_exporter/textfile/alphalens_job_broker-capital-reader.prom
 ```
 
+**Order on a host that still runs code from before #1467.** The LIVE daemon
+refuses to start without `ALPHALENS_BROKER_MAX_PICK_NOTIONAL`, so no daemon is
+restarted before its units are installed. Do steps 1 to 3 in one sitting: a
+running daemon keeps its loaded code, but a lazy import after the pull would
+read the new files.
+
+1. Update the code (`git pull --ff-only`); the unit files come from it.
+2. Install the base units and drop-ins above, then `systemctl --user daemon-reload`.
+3. Restart the SIM manager, then the LIVE manager.
+4. Only then arm documents that state `spec.size`.
+
+A pick armed before #1467 sizes by percent, and the daemon no longer decodes it
+(`size_pct_v2` in `legacy.py`). The drain handles such a line in one of three ways:
+
+- **Nothing placed:** refused with one alert. Re-arm it with an amount.
+- **Now tranche placed, pullback tiers not:** refused with one alert that says so.
+  Re-arm the pullback tiers only; re-arming the whole ladder would buy the now
+  tranche again.
+- **Fully placed:** left alone.
+
 #### 9.8 Standing-grant decommission
 
 The account-bound grant (`ALPHALENS_SAXO_LIVE_STANDING` /

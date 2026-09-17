@@ -10,9 +10,11 @@ with it. See the broker-manager extraction design memo,
 `docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md`,
 §2.1.
 
-This is the first cut (step 2A-1): only the `exit_geometry` leaf has moved
-here so far. `contract.py`, `intent.py`, `sizing.py`, `fx.py`, `constants.py`,
-`calendar.py` follow in later 2A sub-PRs.
+The package holds the broker contract (`contract.py`), the failure contract
+(`failure.py`), sizing and quantity arithmetic (`sizing.py`, `quantity.py`,
+`fx.py`, `constants.py`), the price-feed protocol (`price_feed.py`), the
+`TradeIntent` document (`trade_intent/`: schema, codec, validation, JSON Schema
+generator, legacy register) and the exit-geometry leaf (`exit_geometry/`).
 
 ## The failure contract (#1389)
 
@@ -248,11 +250,12 @@ rather than an unknown one — the field carries a default, so omitting it means
 "whatever this contract is at".
 
 Neither the codec nor `validate_intent` nor the JSON Schema reads it, and that
-is deliberate: the journal DRAIN is a different entry point, it reads history,
-and v1 documents must keep decoding there. So the door refusing `"1"` is not a
-claim that v1 is unreadable; it is a claim about what a NEW producer may send.
+is deliberate: a future ADDITIVE version must decode in the door and in the
+journal drain alike. It is not a promise that every old journal line decodes.
+Every document written before #1467 sizes by percent, and the journal reader
+skips those before decoding (see below).
 
-Version 3 (#1467) is the one exception to "history keeps decoding". It replaced
+Version 3 (#1467) broke that on purpose. It replaced
 `spec.suggested_size_pct`, a percent of an equity frame the daemon read from its
 own environment, with `spec.size`, an amount the document states:
 
@@ -268,8 +271,10 @@ this account's, and whether the amount stays under the deployment's per-pick
 ceiling, are deployment facts: the daemon refuses those picks when it drains
 them, before the day-1 gate, and never shrinks one to fit. A version-2 document
 does not decode, because its percent cannot be turned into an amount without the
-frame that is gone; the journal reader recognises such lines and the drain
-refuses an unplaced one once (`legacy.py`, `size_pct_v2`).
+frame that is gone. The journal reader recognises such lines and skips them
+(`legacy.py`, `size_pct_v2`). The drain refuses such a pick with one alert
+unless it is fully placed; when its now tranche already rests, the refusal says
+to re-arm the pullback tiers only.
 The compatibility promise on top is a promise about what we EMIT — within a
 major version, fields are only ADDED and only as optional — and the CI gate on
 the generated artefact is what enforces it.
@@ -389,7 +394,7 @@ refuses without having armed anything. `--dry-run` runs every gate and appends
 nothing.
 
 **What the door does NOT do.** It applies no selection filter and never
-normalises or rescales — same pure-executor doctrine as its siblings. It also
+normalises or rescales: it is a pure executor. It also
 does not refuse a LIVE `--env` when the LIVE rails are absent, because arming is
 not placing: the rails gate the daemon, and the guard that does exist here is
 the refusal to take the instance off an ambient environment variable (#1377).
