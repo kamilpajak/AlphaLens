@@ -32,7 +32,7 @@ class _SessionProvider(Protocol):
 
 
 class SessionKeeper:
-    """Per-tick + idle-timer liveness gate over the OAuth token chain."""
+    """Per-tick liveness gate over the OAuth token chain."""
 
     def __init__(self, provider: _SessionProvider):
         self._provider = provider

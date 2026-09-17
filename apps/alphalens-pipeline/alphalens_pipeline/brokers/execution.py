@@ -93,8 +93,8 @@ _STOP_ORDER_TYPE = "StopIfTraded"
 # below each tier entry, far beyond Saxo's bracket child-distance band, so
 # Saxo 400s it with TooFarFromEntryOrder and the single-order precheck is
 # false-green. This guard converts that known-bad wide child into a clean,
-# deterministic LOCAL reject before any network call, on both the precheck and
-# place paths — directing the wide stop to a STANDALONE position-level order
+# deterministic LOCAL reject before any network call, ahead of the precheck —
+# directing the wide stop to a STANDALONE position-level order
 # (Option B), never a bracket child. It is an EARLY ARCHITECTURAL guard, NOT a
 # model of Saxo's real engine bound: Saxo's own child-distance cap is
 # instrument-specific and undocumented (tighter than this, ~5%), so this is

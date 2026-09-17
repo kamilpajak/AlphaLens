@@ -13,7 +13,7 @@ from alphalens_pipeline.brokers.automanager.live_exit_engine import (
 from broker_contract.price_feed import PricePoint
 
 
-class TestFoldFiredTranches(unittest.TestCase):
+class TestFiredTranchesFold(unittest.TestCase):
     """The daemon's fold (``control_loop._fold_fired_since_latest_plan``) over
     journal lines with no plan line, so no generation reset applies."""
 

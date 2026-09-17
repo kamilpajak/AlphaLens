@@ -276,7 +276,7 @@ def _validate_price_relations(
     ``TooFarFromEntryOrder`` while the single-order precheck stays FALSE-GREEN.
     Any child (stop OR take-profit) more than
     :data:`execution._MAX_CHILD_DISTANCE_FRAC` from the entry is rejected here
-    — before any network call, on BOTH the precheck and place paths — with
+    — before any network call, and before the precheck — with
     guidance that a wide disaster stop belongs on a STANDALONE position-level
     order (Option B), not an OCO bracket child. This is an EARLY ARCHITECTURAL
     guard, not Saxo's authority: Saxo's real child-distance cap is

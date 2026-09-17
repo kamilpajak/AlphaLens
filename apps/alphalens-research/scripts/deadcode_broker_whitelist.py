@@ -36,7 +36,7 @@ _.chain_alive  # ManagerEvent field emitted each cycle
 _.picks_placed  # TickReport counter, the observable outcome of a tick in tests and the service
 _.exits_placed  # TickReport counter, the observable outcome of a tick in tests
 _.cancels  # TickReport counter, the observable outcome of a tick in tests
-_.verdict_count  # TickReport counter, read by the service and the tests
+_.verdict_count  # TickReport counter, the observable outcome of a tick in tests
 _.audits_deferred  # TickReport counter, the observable outcome of a tick in tests
 _.decision_mid  # ExecQualityRecord column, written to parquet through asdict
 _.retires_when  # LegacyAllowance field, read through a string loop in legacy.py

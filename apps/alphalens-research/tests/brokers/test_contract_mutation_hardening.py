@@ -1,6 +1,6 @@
 """Mutation-hardening for ``brokers/contract.py``.
 
-The baseline cosmic-ray run over the broker package left 6 KILLABLE survivors in
+The baseline cosmic-ray run over the broker package left KILLABLE survivors in
 ``contract.py`` (the other 33 are EQUIVALENT ``|``-in-a-type-annotation swaps that
 never evaluate under ``from __future__ import annotations``). The killable gaps are
 in the structured error classifier and the two capability-Protocol
