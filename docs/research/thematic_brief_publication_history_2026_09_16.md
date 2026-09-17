@@ -21,6 +21,7 @@ stamp the publication time going forward; this record covers the past.
 |---|---|
 | `thematic_brief_publication_history_2026_09_16_journal.log.gz` | Raw journal lines (3211), read 2026-09-16T16:05Z. `sha256` of the uncompressed text: `c44eb94551c67df4bf31e2a39232be8484c1f2b0ea0d442b90f5379c3fc02146` |
 | `thematic_brief_publication_history_2026_09_16.csv` | One row per asof date (115), derived from the lines above by the script below |
+| `thematic_brief_publication_history_pre_journal_2026_09_17.csv` | One row per asof date 2026-05-19 … 2026-05-23, from the brief stamps and file times on the VPS (see "Dates before the journal") |
 
 Extraction command (read-only, on the VPS):
 
@@ -69,8 +70,9 @@ lower bound on how many names changed. No per-name history exists.
 
 ## Limits
 
-- **Dates before 2026-05-24 are not covered**, and 2026-05-24 is covered only from
-  2026-05-25T13:45Z. An earlier write for that date would not be visible.
+- **Dates before 2026-05-24 are not in the journal**, and 2026-05-24 is covered only from
+  2026-05-25T13:45Z. An earlier write for that date would not be visible. The older
+  dates are covered by a second source, see "Dates before the journal".
 - **2026-07-22** has 5 brief runs and no recompute line. The 00:30 run hit its timeout at
   01:47Z; before #1330 a timeout killed only the docker client, so the container went on
   writing with no journal output. Every later run logged `reusing 11 frozen candidate(s)`,
@@ -78,6 +80,78 @@ lower bound on how many names changed. No per-name history exists.
   CSV row shows `recomputed_after_open = 0`, which is correct.
 - The record trusts the log text. If a future change renames these log lines, the script
   below stops matching; it reads a frozen extract, so this file is not affected.
+
+## Dates before the journal (added 2026-09-17)
+
+The VPS brief store starts at asof 2026-05-19; no brief exists for an earlier date.
+The five dates 2026-05-19 … 2026-05-23 fell out of the journal, so they are answered
+from three facts that do not depend on it. Read-only on the VPS, 2026-09-17.
+
+- **`brief_generated_at`.** The brief writer stamps every row with the time of the
+  run that wrote it (`pd.Timestamp.now`, the same in #133 and today). The largest
+  stamp is the last run that wrote the list.
+- **`<asof>.meta.json`.** It is written by the same run and holds the row count split
+  by model. No later tool rewrites it: its mtime equals the largest stamp to the
+  second, and its count equals today's row count on every date.
+- **`thematic_candidates/<asof>.parquet`.** Its mtime is the last candidate
+  recompute. On every date it is a few minutes before the brief run and never later.
+
+The brief parquets of 2026-05-21 … 2026-05-23 have a later mtime (2026-05-27T09:12:17Z,
+all within 0.04 s, 2026-05-24 too). That is the one-off `alphalens thematic
+clean-titles` backfill (#271), which rewrites only `source_event_title`. The stamps,
+the meta files and the candidate files were not touched by it.
+
+| asof | arrival open (UTC) | candidates written (UTC) | last brief stamp (UTC) | rows | after open |
+|---|---|---|---|---|---|
+| 2026-05-19 | 05-20 13:30 | 05-20 17:13 | 05-20 17:21 | 8 | **yes** |
+| 2026-05-20 | 05-21 13:30 | 05-21 10:28 | 05-21 10:31 | 7 | no |
+| 2026-05-21 | 05-22 13:30 | 05-22 09:31 | 05-22 09:42 | 13 | no |
+| 2026-05-22 | 05-26 13:30 | 05-23 07:00 | 05-23 07:10 | 12 | no |
+| 2026-05-23 | 05-26 13:30 | 05-24 06:57 | 05-24 07:03 | 8 | no |
+
+`published_after_open` is 1 when the last brief stamp is at or after the arrival open.
+For 2026-05-19 even the candidate list was computed after the open, so no list for that
+date existed before it. For the other four dates nothing that can change the list
+wrote after the open.
+
+The schedule in git agrees but does not decide: from #157 (2026-05-19) to #315
+(2026-05-30) the timer ran once a day at 06:30 UTC, before the open. The actual run times
+above are irregular (07:00 to 17:21), so some runs were started by hand, and only the
+stamps say when the list was written.
+
+Limits of this source:
+
+- It shows the LAST write, not every write. A list written before the open and replaced
+  by a different list before the open looks the same as one list, which is correct for
+  this question: the list that existed at the open is the stored one.
+- It trusts that no tool rewrote the list without the brief writer. The only later
+  rewrite found is the title backfill above.
+
+Extraction command (read-only, on the VPS, from `~/AlphaLens` with the host venv):
+
+```python
+import datetime as dt, json, os
+import pandas as pd
+from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
+from alphalens_pipeline.thematic.publication import deadline_utc
+
+home = os.path.expanduser("~/.alphalens")
+iso = lambda t: pd.Timestamp(t).tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+mtime = lambda p: dt.datetime.fromtimestamp(os.path.getmtime(p), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+for asof in ["2026-05-19", "2026-05-20", "2026-05-21", "2026-05-22", "2026-05-23"]:
+    day = dt.date.fromisoformat(asof)
+    brief = f"{home}/thematic_briefs/{asof}.parquet"
+    meta_path = f"{home}/thematic_briefs/{asof}.meta.json"
+    cand = f"{home}/thematic_candidates/{asof}.parquet"
+    stamps = pd.to_datetime(pd.read_parquet(brief)["brief_generated_at"], utc=True)
+    meta = json.load(open(meta_path))
+    deadline = deadline_utc(day)
+    print(",".join(map(str, [
+        asof, ladder_arrival_session(day), iso(deadline), len(stamps),
+        meta["n_pro"] + meta["n_flash"], iso(stamps.min()), iso(stamps.max()),
+        mtime(meta_path), mtime(brief), mtime(cand), int(stamps.max() >= deadline),
+    ])))
+```
 
 ## Derivation script
 

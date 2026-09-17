@@ -32,13 +32,16 @@ logger = logging.getLogger(__name__)
 
 BRIEF_PUBLISHED_AT = "brief_published_at"
 
-# Asof dates whose candidate list was last recomputed AFTER the arrival open,
-# read from the build journal before it rotated away. Source and method:
-# docs/research/thematic_brief_publication_history_2026_09_16.{md,csv}; a
-# research test keeps these two constants equal to the CSV.
+# Asof dates whose list was set AFTER the arrival open. From 2026-05-24 the source
+# is the build journal, read before it rotated away; for the older dates it is the
+# brief's own `brief_generated_at` stamp and the file times on the VPS. Sources and
+# method: docs/research/thematic_brief_publication_history_2026_09_16.{md,csv} and
+# thematic_brief_publication_history_pre_journal_2026_09_17.csv; a research test
+# keeps these two constants equal to the two CSVs.
 PUBLISHED_AFTER_OPEN_HISTORY: frozenset[dt.date] = frozenset(
     dt.date.fromisoformat(d)
     for d in (
+        "2026-05-19",
         "2026-05-28",
         "2026-05-31",
         "2026-06-01",
@@ -57,7 +60,7 @@ PUBLISHED_AFTER_OPEN_HISTORY: frozenset[dt.date] = frozenset(
         "2026-08-19",
     )
 )
-HISTORY_RECORD_WINDOW: tuple[dt.date, dt.date] = (dt.date(2026, 5, 24), dt.date(2026, 9, 15))
+HISTORY_RECORD_WINDOW: tuple[dt.date, dt.date] = (dt.date(2026, 5, 19), dt.date(2026, 9, 15))
 
 
 class PublicationStatus(enum.Enum):
@@ -105,7 +108,7 @@ def published_before_open(
 ) -> bool | None:
     """Did the stored list exist before the arrival open? ``None`` when unknown.
 
-    A publication stamp decides. Without one, a date inside the journal record
+    A publication stamp decides. Without one, a date inside the history record
     is answered from that record; any other date is unknown.
     """
     if published_at is not None and not pd.isna(published_at):

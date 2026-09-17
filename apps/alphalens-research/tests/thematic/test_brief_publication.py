@@ -21,6 +21,9 @@ from alphalens_pipeline.thematic.publication import PublicationStatus
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 HISTORY_CSV = REPO_ROOT / "docs/research/thematic_brief_publication_history_2026_09_16.csv"
+PRE_JOURNAL_CSV = (
+    REPO_ROOT / "docs/research/thematic_brief_publication_history_pre_journal_2026_09_17.csv"
+)
 
 ASOF = dt.date(2026, 9, 10)  # Thursday; arrival Friday 2026-09-11, open 13:30 UTC
 DEADLINE = dt.datetime(2026, 9, 11, 13, 30, tzinfo=dt.UTC)
@@ -106,31 +109,79 @@ class PublishedBeforeOpenTest(unittest.TestCase):
     def test_no_stamp_on_a_recorded_date_that_was_set_before_the_open(self) -> None:
         self.assertIs(publication.published_before_open(dt.date(2026, 8, 17), None), True)
 
-    def test_no_stamp_outside_the_journal_record_is_unknown(self) -> None:
-        self.assertIsNone(publication.published_before_open(dt.date(2026, 5, 20), None))
+    def test_no_stamp_on_a_pre_journal_date_built_after_the_open(self) -> None:
+        self.assertIs(publication.published_before_open(dt.date(2026, 5, 19), None), False)
+
+    def test_no_stamp_on_a_pre_journal_date_built_before_the_open(self) -> None:
+        self.assertIs(publication.published_before_open(dt.date(2026, 5, 20), None), True)
+
+    def test_no_stamp_outside_the_record_is_unknown(self) -> None:
+        self.assertIsNone(publication.published_before_open(dt.date(2026, 5, 18), None))
         self.assertIsNone(publication.published_before_open(dt.date(2026, 9, 20), None))
 
     def test_a_null_stamp_counts_as_no_stamp(self) -> None:
         self.assertIsNone(publication.published_before_open(dt.date(2026, 9, 20), pd.NaT))
 
 
-class HistoryMatchesTheJournalRecordTest(unittest.TestCase):
-    """The constants are copied from the committed journal record; keep them equal."""
+def _read_csv(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8") as fh:
+        return list(csv.DictReader(fh))
+
+
+def _after_open(rows: list[dict[str, str]], flag: str) -> set[dt.date]:
+    return {dt.date.fromisoformat(r["asof"]) for r in rows if r[flag] == "1"}
+
+
+class HistoryMatchesTheRecordTest(unittest.TestCase):
+    """The constants are copied from the two committed records; keep them equal.
+
+    The journal record covers 2026-05-24 onwards. The pre-journal record covers the
+    older dates from the brief stamps and file times on the VPS.
+    """
 
     def setUp(self) -> None:
-        with HISTORY_CSV.open(encoding="utf-8") as fh:
-            self.rows = list(csv.DictReader(fh))
+        self.journal = _read_csv(HISTORY_CSV)
+        self.pre_journal = _read_csv(PRE_JOURNAL_CSV)
 
-    def test_after_open_dates_match_the_record(self) -> None:
-        recorded = {
-            dt.date.fromisoformat(r["asof"]) for r in self.rows if r["recomputed_after_open"] == "1"
-        }
+    def test_after_open_dates_match_the_journal_record(self) -> None:
+        recorded = _after_open(self.journal, "recomputed_after_open")
         self.assertEqual(len(recorded), 16)
+        self.assertTrue(recorded <= publication.PUBLISHED_AFTER_OPEN_HISTORY)
+
+    def test_after_open_dates_match_the_pre_journal_record(self) -> None:
+        recorded = _after_open(self.pre_journal, "published_after_open")
+        self.assertEqual(recorded, {dt.date(2026, 5, 19)})
+        self.assertTrue(recorded <= publication.PUBLISHED_AFTER_OPEN_HISTORY)
+
+    def test_after_open_dates_are_exactly_the_two_records(self) -> None:
+        recorded = _after_open(self.journal, "recomputed_after_open") | _after_open(
+            self.pre_journal, "published_after_open"
+        )
         self.assertEqual(publication.PUBLISHED_AFTER_OPEN_HISTORY, recorded)
 
-    def test_record_window_matches_the_record(self) -> None:
-        dates = [dt.date.fromisoformat(r["asof"]) for r in self.rows]
+    def test_the_records_meet_without_a_gap_or_an_overlap(self) -> None:
+        journal = [dt.date.fromisoformat(r["asof"]) for r in self.journal]
+        pre_journal = [dt.date.fromisoformat(r["asof"]) for r in self.pre_journal]
+        self.assertEqual(max(pre_journal) + dt.timedelta(days=1), min(journal))
+        self.assertEqual(len(pre_journal), len(set(pre_journal)))
+        self.assertEqual(
+            sorted(pre_journal),
+            [min(pre_journal) + dt.timedelta(days=i) for i in range(len(pre_journal))],
+        )
+
+    def test_record_window_matches_the_records(self) -> None:
+        dates = [dt.date.fromisoformat(r["asof"]) for r in self.journal + self.pre_journal]
         self.assertEqual(publication.HISTORY_RECORD_WINDOW, (min(dates), max(dates)))
+
+    def test_pre_journal_flag_follows_the_last_stamp_and_the_open(self) -> None:
+        for r in self.pre_journal:
+            with self.subTest(asof=r["asof"]):
+                last = dt.datetime.fromisoformat(r["last_brief_generated_utc"])
+                open_utc = dt.datetime.fromisoformat(r["arrival_open_utc"])
+                self.assertEqual(r["published_after_open"], str(int(last >= open_utc)))
+                self.assertEqual(
+                    open_utc, publication.deadline_utc(dt.date.fromisoformat(r["asof"]))
+                )
 
 
 if __name__ == "__main__":
