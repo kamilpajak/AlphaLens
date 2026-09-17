@@ -1288,7 +1288,7 @@ def price_reader_command(
     )
     server = reader.PriceReaderServer(stream, socket_path)
 
-    def _shutdown(signum, frame) -> None:
+    def _shutdown(_signum, _frame) -> None:
         """Signal-handler signature: both args are required and unused.
 
         MUST use ``request_stop`` (non-blocking), never ``stop`` — a handler

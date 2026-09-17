@@ -241,13 +241,6 @@ _STREAM_TRIPS_TOTAL_METRIC_NAME = "alphalens_broker_manager_stream_trips_total"
 _STREAM_IN_SESSION_METRIC_NAME = "alphalens_broker_manager_stream_in_session"
 
 
-def stream_last_message_metric(job: str) -> str:
-    """The stream-liveness gauge, labeled with the SAME job as the heartbeat
-    (``state_paths.metrics_job()``) — it is the same daemon instance, only
-    written to a distinct domain textfile (see ``_emit_stream_gauge``)."""
-    return f'{_STREAM_LAST_MESSAGE_METRIC_NAME}{{job="{job}"}}'
-
-
 # The stream gauge writes to its OWN domain textfile, NOT the heartbeat's domain
 # (``state_paths.stream_metrics_job()``, e.g. "broker-manager-sim-stream"). Both
 # emit_domain_metrics(...) writes atomically OVERWRITE alphalens_domain_<domain>.prom,
@@ -821,16 +814,13 @@ def _fold_fired_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[in
 
     A uic is stable per instrument (Saxo nets by uic), and the standalone-stop
     journal is append-only and NEVER cleared — so a position that fully exits
-    (every tranche fired) and is later RE-ENTERED on the same uic would, under
-    the engine's own ``fold_fired_tranches`` (which folds every
-    ``tranche_fired`` line ever written for the uic), inherit the PRIOR
-    trade's fired tags and silently suppress the new trade's whole TP ladder
+    (every tranche fired) and is later RE-ENTERED on the same uic would, under a
+    fold of every ``tranche_fired`` line ever written for the uic, inherit the
+    PRIOR trade's fired tags and silently suppress the new trade's whole TP ladder
     forever. Processing the journal in write order (``_iter_standalone_stop_
     journal`` already yields it that way), a new ``tranche_plan`` line for a
     uic clears its accumulator — only ``tranche_fired`` lines AFTER the LATEST
-    plan for that uic count. The live-exit engine's own ``fold_fired_tranches``
-    is untouched (still used by its own tests) — this is a control_loop-side
-    wrapper around the same append-only journal, not an engine change.
+    plan for that uic count.
 
     Identity-keyed reset (2026-08-19 adjudication finding 4): a ``tranche_plan``
     line carrying the SAME ``pick_key`` as the uic's governing plan is an

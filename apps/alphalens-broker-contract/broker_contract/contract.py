@@ -103,7 +103,7 @@ class OrderRejectedError(BrokerError):
     (set in ``SaxoBroker._precheck_or_raise``); ``None`` when the rejection
     carried no structured code. Safety branches classify on this STRUCTURED
     code (see :func:`_is_sell_orders_already_exist` /
-    :func:`_is_too_far_from_entry` / :func:`_is_too_far_from_market`),
+    :func:`_is_too_far_from_market`),
     never by parsing the message string —
     string parsing is brittle and rots silently.
     """
@@ -145,16 +145,6 @@ def _is_sell_orders_already_exist(e: BrokerError) -> bool:
         isinstance(e, OrderRejectedError)
         and e.error_code == "SellOrdersAlreadyExistForOwnedContracts"
     )
-
-
-def _is_too_far_from_entry(e: BrokerError) -> bool:
-    """True iff ``e`` is Saxo's ``TooFarFromEntryOrder`` rejection.
-
-    A wide disaster stop rejected as a bracket child (ADR 0013 T7) — the
-    signal that the exit belongs on a standalone position-level order, not an
-    OCO bracket child.
-    """
-    return isinstance(e, OrderRejectedError) and e.error_code == "TooFarFromEntryOrder"
 
 
 # Saxo error codes classified as "the account cannot fund this order".

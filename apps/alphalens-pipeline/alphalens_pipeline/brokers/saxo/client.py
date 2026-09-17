@@ -294,10 +294,6 @@ class SaxoClient:
         """
         return self._get_json(f"/ref/v1/instruments/details/{uic}/{asset_type}")
 
-    def get_exchanges(self) -> dict[str, Any]:
-        """GET ``/ref/v1/exchanges`` — one-time confirmation of ExchangeId codes."""
-        return self._get_json("/ref/v1/exchanges")
-
     # ----- FX-leg reads (sizing FX rate; design memo saxo_fx_leg_gpw_design) -----
 
     def get_currency_pairs(self) -> dict[str, Any]:

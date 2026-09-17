@@ -8,13 +8,15 @@ from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     TrancheExit,
     _fire_telemetry,
-    fold_fired_tranches,
     mark_tranche_fired,
 )
 from broker_contract.price_feed import PricePoint
 
 
 class TestFoldFiredTranches(unittest.TestCase):
+    """The daemon's fold (``control_loop._fold_fired_since_latest_plan``) over
+    journal lines with no plan line, so no generation reset applies."""
+
     def test_folds_lines_into_per_uic_tag_sets(self):
         lines = [
             {"kind": "tranche_fired", "uic": 486, "tag": "tp1"},
@@ -23,7 +25,7 @@ class TestFoldFiredTranches(unittest.TestCase):
             {"kind": "oco_placed", "uic": 486},  # ignored
             {"kind": "tranche_fired", "uic": 486},  # malformed (no tag) ignored
         ]
-        out = fold_fired_tranches(lines)
+        out = cl._fold_fired_since_latest_plan(lines)
         self.assertEqual(out[486], frozenset({"tp1", "tp2"}))
         self.assertEqual(out[999], frozenset({"tp1"}))
 
@@ -39,7 +41,7 @@ class TestFoldFiredTranches(unittest.TestCase):
                 "telemetry": {"decision_bid": 16.5, "source": "saxo-live-l1"},
             },
         ]
-        out = fold_fired_tranches(lines)
+        out = cl._fold_fired_since_latest_plan(lines)
         self.assertEqual(out[486], frozenset({"tp1"}))
 
 

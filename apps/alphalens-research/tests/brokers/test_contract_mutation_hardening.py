@@ -3,7 +3,7 @@
 The baseline cosmic-ray run over the broker package left 6 KILLABLE survivors in
 ``contract.py`` (the other 33 are EQUIVALENT ``|``-in-a-type-annotation swaps that
 never evaluate under ``from __future__ import annotations``). The killable gaps are
-in the two structured error classifiers and the two capability-Protocol
+in the structured error classifier and the two capability-Protocol
 ``@runtime_checkable`` decorators — both money-critical: a mis-classified Saxo
 rejection makes the auto-manager defer or crash on the wrong condition, and a
 Protocol that no longer answers ``isinstance`` silently disables a capability
@@ -11,7 +11,6 @@ narrow (standalone-stop / OCO exit) so protection degrades unnoticed.
 
 Killable survivors pinned here:
   - L85 ``_is_sell_orders_already_exist``: ``==`` -> ``is`` and ``==`` -> ``>=``
-  - L96 ``_is_too_far_from_entry``:        ``==`` -> ``is`` and ``==`` -> ``>=``
   - L236 ``@runtime_checkable`` on ``SupportsStandaloneStop``
   - L260 ``@runtime_checkable`` on ``SupportsOcoExit``
 
@@ -30,13 +29,11 @@ from broker_contract.contract import (
     SupportsOcoExit,
     SupportsStandaloneStop,
     _is_sell_orders_already_exist,
-    _is_too_far_from_entry,
 )
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 _SELL_CODE = "SellOrdersAlreadyExistForOwnedContracts"
-_TOOFAR_CODE = "TooFarFromEntryOrder"
 
 
 def _distinct_copy(s: str) -> str:
@@ -74,27 +71,6 @@ class TestSellOrdersClassifierValueEquality(unittest.TestCase):
         self.assertFalse(_is_sell_orders_already_exist(BrokerError("boom")))
 
 
-class TestTooFarClassifierValueEquality(unittest.TestCase):
-    """L96: same value-equality contract for the TooFarFromEntry classifier."""
-
-    def test_matches_a_distinct_equal_string_object_kills_is(self) -> None:
-        code = _distinct_copy(_TOOFAR_CODE)
-        self.assertIsNot(code, _TOOFAR_CODE)
-        err = OrderRejectedError("rejected", error_code=code)
-        self.assertTrue(_is_too_far_from_entry(err))
-
-    def test_lexicographically_greater_nonmatch_is_false_kills_ge(self) -> None:
-        err = OrderRejectedError("rejected", error_code="ZZZ_not_this_error_code")
-        self.assertFalse(_is_too_far_from_entry(err))
-
-    def test_none_error_code_is_false_not_raises(self) -> None:
-        err = OrderRejectedError("rejected", error_code=None)
-        self.assertFalse(_is_too_far_from_entry(err))
-
-    def test_non_order_rejected_error_is_false(self) -> None:
-        self.assertFalse(_is_too_far_from_entry(BrokerError("boom")))
-
-
 class TestClassifierExactCodeProperty(unittest.TestCase):
     """PBT supplement: each classifier fires for EXACTLY its own code and nothing
     else. Sweeping the string space pins the `>=` ordering mutant (which fires on
@@ -105,12 +81,6 @@ class TestClassifierExactCodeProperty(unittest.TestCase):
     def test_sell_classifier_true_iff_exact_code(self, code: str) -> None:
         err = OrderRejectedError("rejected", error_code=code)
         self.assertEqual(_is_sell_orders_already_exist(err), code == _SELL_CODE)
-
-    @settings(deadline=None, max_examples=300)
-    @given(code=st.text())
-    def test_too_far_classifier_true_iff_exact_code(self, code: str) -> None:
-        err = OrderRejectedError("rejected", error_code=code)
-        self.assertEqual(_is_too_far_from_entry(err), code == _TOOFAR_CODE)
 
 
 class _StopConformant:

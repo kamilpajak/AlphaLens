@@ -40,7 +40,6 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     _exit_amend_ref,
     _exit_oco_ref,
     _exit_stop_ref,
-    _exit_tp_ref,
     _reconcile_long,
     reconcile_protection,
 )
@@ -5280,9 +5279,7 @@ class TestGenStampedRefChangesOnResize(unittest.TestCase):
 
     def test_ref_helpers_are_gen_stamped(self) -> None:
         self.assertEqual(_exit_stop_ref("crid-0", 0), "crid-0-stop-0")
-        self.assertEqual(_exit_tp_ref("crid-0", 0), "crid-0-tp-0")
         self.assertEqual(_exit_stop_ref("crid-0", 2), "crid-0-stop-2")
-        self.assertEqual(_exit_tp_ref("crid-0", 3), "crid-0-tp-3")
 
     def test_resize_increments_gen_same_size_retry_keeps_it(self) -> None:
         with TemporaryDirectory() as tmp:

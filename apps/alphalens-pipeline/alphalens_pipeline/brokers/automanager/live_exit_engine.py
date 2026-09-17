@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -439,20 +439,6 @@ def execute_tranche_exit(
     )
 
 
-def fold_fired_tranches(lines: Iterable[Mapping[str, Any]]) -> dict[int, frozenset[str]]:
-    """Fold append-only ``tranche_fired`` journal lines into per-uic tag sets.
-    Non-``tranche_fired`` and malformed (missing uic/tag) lines are ignored."""
-    acc: dict[int, set[str]] = {}
-    for line in lines:
-        if line.get("kind") != "tranche_fired":
-            continue
-        uic, tag = line.get("uic"), line.get("tag")
-        if uic is None or not tag:
-            continue
-        acc.setdefault(int(uic), set()).add(str(tag))
-    return {u: frozenset(t) for u, t in acc.items()}
-
-
 def _fire_telemetry(
     point: PricePoint, exit: TrancheExit, *, sell_order_id: str | None
 ) -> dict[str, Any]:
@@ -490,8 +476,8 @@ def mark_tranche_fired(
     """Append one ``tranche_fired`` marker (idempotency: a fired tranche never
     re-fires). Writes via the shared append-only standalone-stop journal seam.
 
-    ``kind``/``uic``/``tag`` stay at the TOP LEVEL because ``fold_fired_tranches``
-    keys idempotency off them; optional decision-side ``telemetry`` is nested
+    ``kind``/``uic``/``tag`` stay at the TOP LEVEL because
+    ``control_loop._fold_fired_since_latest_plan`` keys idempotency off them; optional decision-side ``telemetry`` is nested
     under its own key so it can never collide with those. When ``telemetry`` is
     None the line is the historical bare 3-key shape (byte-identical for existing
     callers/journals).

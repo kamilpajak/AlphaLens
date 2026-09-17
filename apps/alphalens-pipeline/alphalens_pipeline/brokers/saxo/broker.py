@@ -151,30 +151,6 @@ def _today() -> dt.date:
     return dt.datetime.now(dt.UTC).date()
 
 
-def _limit_order_durations(details: dict[str, Any]) -> frozenset[str] | None:
-    """DurationTypes Saxo reports for Limit orders on this instrument.
-
-    ``None`` = shape unknown/absent (FAIL-OPEN): the caller must default to
-    DayOrder, never IOC, when support cannot be read. The wire shape of
-    ``SupportedOrderTypeSettings`` is UNVERIFIED offline (T3 probe pending,
-    ``docs/research/saxo_live_followup_tests_2026_07_20.md``) — the raw block
-    is INFO-logged so the SIM probe can pin the real shape before the drain
-    trusts an IOC answer.
-    """
-    settings = details.get("SupportedOrderTypeSettings")
-    if not isinstance(settings, list):
-        return None
-    logger.info("SupportedOrderTypeSettings (wire-shape verification): %r", settings)
-    for entry in settings:
-        if not isinstance(entry, dict) or entry.get("OrderType") != "Limit":
-            continue
-        durations = entry.get("DurationTypes")
-        if not isinstance(durations, list) or not durations:
-            return None
-        return frozenset(str(d) for d in durations)
-    return None
-
-
 # Saxo refuses /port/v1/closedpositions outright on EndOfDay-netting accounts
 # (the real LIVE PL account); detected by ErrorCode substring because SaxoError
 # carries the body only as message text.
@@ -246,7 +222,7 @@ def _oco_leg_ref(request_id: str, leg: str) -> str:
     """Per-leg ``ExternalReference`` derived from the OCO base ``request_id``.
 
     ``<request_id>-stop`` / ``<request_id>-tp``. Kept local to the adapter (the
-    automanager's ``_exit_stop_ref`` / ``_exit_tp_ref`` are NOT imported here —
+    automanager's ``_exit_stop_ref`` is NOT imported here —
     that would create a broker -> automanager -> broker import cycle). The
     executor passes a base ``request_id`` (derived from the entry crid + resize
     generation); the same-suffix scheme keeps the leg refs deterministic for
