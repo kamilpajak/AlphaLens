@@ -31,6 +31,15 @@ _CONTRACT = (
     "unused method 'place_stop_limit' (60% confidence)"
 )
 
+_UNREACHABLE = (
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/broker.py:60: "
+    "unreachable code after 'return' (100% confidence)"
+)
+_UNUSED_IMPORT = (
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/broker.py:3: "
+    "unused import 'os' (90% confidence)"
+)
+
 
 class _FakeRunner:
     """Answers the with-whitelist run and the no-whitelist run separately."""
@@ -102,6 +111,25 @@ class TheExitStatusNeverReadsCleanWhileCheckingNothing(_TreeCase):
         status, _ = self.report(_FakeRunner(_run(_CONTRACT, returncode=3)))
         self.assertEqual(status, deadcode.EXIT_FINDINGS)
 
+    def test_findings_at_every_confidence_and_of_every_kind_are_reported(self) -> None:
+        for line in (_UNUSED_IMPORT, _UNREACHABLE):
+            with self.subTest(line=line):
+                status, text = self.report(_FakeRunner(_run(line, returncode=3)))
+                self.assertEqual(status, deadcode.EXIT_FINDINGS)
+                self.assertIn(line, text)
+
+    def test_an_output_line_the_parser_does_not_know_is_a_tool_failure(self) -> None:
+        # A new vulture message format must not be dropped as if it were clean.
+        run = _run("apps/x.py: something new vulture says", returncode=3)
+        status, text = self.report(_FakeRunner(run))
+        self.assertEqual(status, deadcode.EXIT_TOOL_FAILED)
+        self.assertIn("something new vulture says", text)
+
+    def test_a_failing_run_without_the_whitelist_is_a_tool_failure(self) -> None:
+        runner = _FakeRunner(_run(), without_whitelist=_run(returncode=1, stderr="Error: gone"))
+        status, _ = self.report(runner)
+        self.assertEqual(status, deadcode.EXIT_TOOL_FAILED)
+
     def test_a_file_vulture_cannot_parse_is_a_tool_failure(self) -> None:
         # Vulture still exits 3 here; the unparsed file only shows on stderr.
         run = _run(_OUT_OF_SCOPE, returncode=3, stderr='x.py:1: invalid syntax at "def f(:"')
@@ -124,6 +152,20 @@ class TheExitStatusNeverReadsCleanWhileCheckingNothing(_TreeCase):
         self.assertTrue(deadcode.WHITELIST_RELPATH in argv)
 
 
+class BothRunsUseTheSameScanRules(_TreeCase):
+    def test_tests_are_excluded_and_typer_decorators_ignored_in_both_runs(self) -> None:
+        runner = _FakeRunner(_run())
+        self.report(runner)
+        self.assertEqual(len(runner.calls), 2)
+        for argv in runner.calls:
+            with self.subTest(argv=argv):
+                exclude = argv[argv.index("--exclude") + 1].split(",")
+                self.assertIn("*/tests/*", exclude)
+                self.assertIn("*/test_*.py", exclude)
+                decorators = argv[argv.index("--ignore-decorators") + 1].split(",")
+                self.assertEqual(sorted(decorators), ["@*.callback", "@*.command"])
+
+
 class AStaleWhitelistEntryIsReported(_TreeCase):
     def test_an_entry_no_finding_needs_is_stale(self) -> None:
         self.whitelist("_.gone_symbol  # it was removed\n")
@@ -143,6 +185,24 @@ class AStaleWhitelistEntryIsReported(_TreeCase):
         )
         self.assertEqual(status, deadcode.EXIT_FINDINGS)
         self.assertIn("helper", text)
+
+    def test_a_statement_that_is_not_an_underscore_entry_is_reported(self) -> None:
+        # Vulture treats any name in the file as used, so a bare name or a
+        # dotted entry would hide code while escaping the stale and reason checks.
+        for entry in ("orphan_name  # bare\n", "_.SaxoClient.get_exchanges  # dotted\n"):
+            with self.subTest(entry=entry):
+                self.whitelist(entry)
+                status, text = self.report(_FakeRunner(_run()))
+                self.assertEqual(status, deadcode.EXIT_FINDINGS)
+                self.assertIn("not a `_.name` entry", text)
+
+    def test_a_duplicate_entry_is_reported(self) -> None:
+        self.whitelist("_.get_exchanges  # first\n_.get_exchanges  # second\n")
+        status, text = self.report(
+            _FakeRunner(_run(), without_whitelist=_run(_SCOPED, returncode=3))
+        )
+        self.assertEqual(status, deadcode.EXIT_FINDINGS)
+        self.assertIn("more than once", text)
 
     def test_an_entry_without_a_reason_is_reported(self) -> None:
         self.whitelist("_.get_exchanges\n")
@@ -184,6 +244,26 @@ class AnUnwiredBrokerModuleIsReported(_TreeCase):
         )
         status, text = self.report(_FakeRunner(_run()))
         self.assertEqual(status, deadcode.EXIT_CLEAN, text)
+
+    def test_a_relative_import_in_a_package_init_wires_a_module(self) -> None:
+        self.write(f"{self._PKG}/used.py", "X = 1\n")
+        self.write(f"{self._PKG}/__init__.py", "from . import used\n")
+        status, text = self.report(_FakeRunner(_run()))
+        self.assertEqual(status, deadcode.EXIT_CLEAN, text)
+
+    def test_a_module_only_a_test_imports_is_still_unwired(self) -> None:
+        self.write(f"{self._PKG}/tested_only.py", "X = 1\n")
+        self.write(
+            "apps/alphalens-pipeline/alphalens_pipeline/tests/test_it.py",
+            "from alphalens_pipeline.brokers import tested_only\n",
+        )
+        self.write(
+            "apps/alphalens-pipeline/alphalens_pipeline/brokers/test_helper_like.py",
+            "from alphalens_pipeline.brokers import tested_only\n",
+        )
+        status, text = self.report(_FakeRunner(_run()))
+        self.assertEqual(status, deadcode.EXIT_FINDINGS)
+        self.assertIn("brokers/tested_only.py", text)
 
     def test_a_module_imported_only_by_itself_is_still_unwired(self) -> None:
         self.write(f"{self._PKG}/selfish.py", "import alphalens_pipeline.brokers.selfish\n")
@@ -245,6 +325,22 @@ class TheRealToolFindsAPlantedFunction(_TreeCase):
         )
         self.assertEqual(status, deadcode.EXIT_FINDINGS, text)
         self.assertIn("never_called", text)
+
+    def test_planted_unreachable_code_is_reported(self) -> None:
+        self.write(
+            "apps/alphalens-pipeline/alphalens_pipeline/brokers/planted.py",
+            "def run():\n    return 1\n    print('never')\n\n\nrun()\n",
+        )
+        self.write(
+            "apps/alphalens-pipeline/alphalens_pipeline/app.py",
+            "from alphalens_pipeline.brokers import planted\n",
+        )
+        status, text = self.report(
+            deadcode.subprocess_runner(self.root),
+            production_roots=("apps/alphalens-pipeline/alphalens_pipeline",),
+        )
+        self.assertEqual(status, deadcode.EXIT_FINDINGS, text)
+        self.assertIn("unreachable code", text)
 
     def test_a_whitelisted_function_is_hidden_and_its_entry_is_not_stale(self) -> None:
         self.write(

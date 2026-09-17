@@ -88,7 +88,11 @@ UNWIRED_ALLOWED: Mapping[str, str] = {
     ),
 }
 
-_FINDING = re.compile(r"^(?P<path>[^:]+):\d+: unused \w+(?: \w+)? '(?P<name>[^']+)'")
+# Every vulture finding: "unused function 'x'", "unused import 'os'",
+# "unreachable code after 'return'", "redundant if-condition", ... at any
+# confidence. Only an "unused" finding names a symbol a whitelist can hide.
+_FINDING = re.compile(r"^(?P<path>.+?):\d+: (?P<message>.+) \(\d+% confidence\)$")
+_UNUSED_NAME = re.compile(r"^unused \w+(?: \w+)? '(?P<name>[^']+)'")
 
 
 @dataclass(frozen=True)
@@ -125,13 +129,20 @@ def _in_scope(path: str) -> bool:
     return path.startswith(SCOPE_PREFIXES)
 
 
-def _scoped_findings(stdout: str) -> list[tuple[str, str]]:
-    """(line, symbol name) for every finding inside the scope."""
-    found = []
+def _unparsed_lines(stdout: str) -> list[str]:
+    """Output lines that are not a finding. A format vulture adds later must
+    fail the report rather than vanish from it."""
+    return [line for line in stdout.splitlines() if line.strip() and not _FINDING.match(line)]
+
+
+def _scoped_findings(stdout: str) -> list[tuple[str, str | None]]:
+    """(line, whitelistable symbol name or None) for every finding in the scope."""
+    found: list[tuple[str, str | None]] = []
     for line in stdout.splitlines():
         match = _FINDING.match(line)
         if match and _in_scope(match["path"]):
-            found.append((line, match["name"]))
+            unused = _UNUSED_NAME.match(match["message"])
+            found.append((line, unused["name"] if unused else None))
     return found
 
 
@@ -143,15 +154,55 @@ def whitelist_entries(path: Path) -> dict[str, str]:
         if token.type == tokenize.COMMENT:
             comments[token.start[0]] = token.string.lstrip("#").strip()
     entries: dict[str, str] = {}
-    for node in ast.walk(ast.parse(source)):
-        if (
-            isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Attribute)
-            and isinstance(node.value.value, ast.Name)
-            and node.value.value.id == "_"
-        ):
-            entries[node.value.attr] = comments.get(node.lineno, "")
+    for node in ast.parse(source).body:
+        name = _entry_name(node)
+        if name is not None:
+            entries[name] = comments.get(node.lineno, "")
     return entries
+
+
+def _entry_name(node: ast.stmt) -> str | None:
+    """The name of a ``_.name`` entry, or None for any other statement."""
+    if (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Attribute)
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "_"
+    ):
+        return node.value.attr
+    return None
+
+
+def _is_scaffolding(node: ast.stmt, index: int) -> bool:
+    """The docstring, the imports and ``_ = Whitelist()``."""
+    if index == 0 and isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+        return True
+    if isinstance(node, ast.Import | ast.ImportFrom):
+        return True
+    return (
+        isinstance(node, ast.Assign)
+        and [getattr(target, "id", None) for target in node.targets] == ["_"]
+        and isinstance(node.value, ast.Call)
+        and getattr(node.value.func, "id", None) == "Whitelist"
+    )
+
+
+def whitelist_problems(path: Path) -> list[str]:
+    """Statements the stale and reason checks cannot see, and duplicate names.
+
+    Vulture counts every name in the file as used, so a bare name or a dotted
+    ``_.A.b`` would hide code with no reason and never read as stale."""
+    problems = []
+    seen: set[str] = set()
+    for index, node in enumerate(ast.parse(path.read_text()).body):
+        name = _entry_name(node)
+        if name is not None:
+            if name in seen:
+                problems.append(f"line {node.lineno}: `{name}` is listed more than once")
+            seen.add(name)
+        elif not _is_scaffolding(node, index):
+            problems.append(f"line {node.lineno}: not a `_.name` entry")
+    return problems
 
 
 def _module_name(path: Path) -> str:
@@ -245,9 +296,13 @@ def run_report(
         [*production_roots, "--exclude", _EXCLUDE_WITHOUT_WHITELIST, *decorators]
     )
     for run in (with_whitelist, without_whitelist):
-        if _tool_failure(run):
-            emit(f"vulture failed (exit {run.returncode}); nothing was checked:")
-            emit(run.stderr.strip() or run.stdout.strip())
+        unparsed = _unparsed_lines(run.stdout)
+        if _tool_failure(run) or unparsed:
+            emit(
+                f"vulture exited {run.returncode}, wrote to stderr or printed a line this "
+                "report cannot parse; the report cannot be trusted:"
+            )
+            emit(run.stderr.strip() or "\n".join(unparsed) or run.stdout.strip())
             return EXIT_TOOL_FAILED
 
     problems = False
@@ -258,8 +313,15 @@ def run_report(
         for line, _ in findings:
             emit(f"  {line}")
 
+    malformed = whitelist_problems(root / WHITELIST_RELPATH)
+    if malformed:
+        problems = True
+        emit("Whitelist lines the checks below cannot see:")
+        for problem in malformed:
+            emit(f"  {problem}")
+
     entries = whitelist_entries(root / WHITELIST_RELPATH)
-    hidden = {name for _, name in _scoped_findings(without_whitelist.stdout)}
+    hidden = {name for _, name in _scoped_findings(without_whitelist.stdout) if name}
     stale = sorted(name for name in entries if name not in hidden)
     if stale:
         problems = True
