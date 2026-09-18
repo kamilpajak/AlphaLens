@@ -147,6 +147,52 @@ class ARecoveredNameWithNoFrozenSetupIsNotPlannableTest(unittest.TestCase):
             self.assertTrue(missing.verified)
 
 
+class ARepeatedRecoveredNameYieldsOneRowTest(unittest.TestCase):
+    """The store is keyed by (brief_date, ticker), so a repeat would duplicate a row.
+
+    The committed record carries no repeats today and a test below pins that, but the seam
+    must not depend on it: the record is data, and a later recovery could add one.
+    """
+
+    def test_a_repeat_is_collapsed_to_its_first_occurrence(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            briefs = Path(tmp)
+            _write_brief(briefs, RECOVERED_DATE, [KEPT])
+            with patch.object(
+                pre_open_population, "pre_open_names", return_value=("CRL", "FDS", "crl", "FDS")
+            ):
+                got = pre_open_population.load_brief_for_population(RECOVERED_DATE, briefs)
+            self.assertEqual([c.ticker for c in got], ["CRL", "FDS"])
+
+
+class TheRecordItselfCarriesNoRepeatsTest(unittest.TestCase):
+    def test_no_recovered_date_names_a_ticker_twice(self) -> None:
+        from alphalens_pipeline.thematic.pre_open_brief import PRE_OPEN_BRIEF_NAMES
+
+        for brief_date, names in PRE_OPEN_BRIEF_NAMES.items():
+            upper = [n.upper() for n in names]
+            self.assertEqual(len(set(upper)), len(upper), f"{brief_date}: {names}")
+
+
+class TheFrozenSetupArrivesAsPlainContainersTest(unittest.TestCase):
+    def test_an_injected_record_is_thawed_like_the_committed_one(self) -> None:
+        # The ladder codecs expect ordinary dicts and lists. A caller handing in the real
+        # read-only record must not get proxies and tuples back on the candidate.
+        from alphalens_pipeline.thematic.pre_open_setup import PRE_OPEN_SETUPS as REAL
+
+        with tempfile.TemporaryDirectory() as tmp:
+            briefs = Path(tmp)
+            _write_brief(briefs, RECOVERED_DATE, [KEPT])
+            got = pre_open_population.load_brief_for_population(RECOVERED_DATE, briefs, setups=REAL)
+            rebuilt = {c.ticker: c for c in got}[REBUILT]
+            assert rebuilt.trade_setup is not None
+            self.assertIsInstance(rebuilt.trade_setup, dict)
+            self.assertIsInstance(rebuilt.trade_setup["entry_tiers"], list)
+            self.assertIsInstance(rebuilt.trade_setup["entry_tiers"][0], dict)
+
+
 class EveryPassThatWritesTheStoreUsesTheSeamTest(unittest.TestCase):
     """The replay is not the only pass that turns a brief into store columns.
 

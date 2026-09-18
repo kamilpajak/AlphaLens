@@ -182,20 +182,34 @@ def _refresh_population_ladders(
             # single call cannot express "these dates and nothing between them". Each
             # call also gets its own fetch budget, which keeps a date with many
             # brand-new names from starving the next one.
-            reports = []
+            # Accumulate into a LOCAL: ``reports`` stays None until the loop finishes, so a
+            # replay that raises leaves it None and the guard counters below stay unsent.
+            # An empty list reads as "a completed replay found nothing" and would publish
+            # all-zero dispositions over a run that never looked anything up.
+            named_reports: list[Any] = []
+            empty: list[dt.date] = []
             for named in dates:
                 one = replay_population_ladders(
                     briefs_dir, end_date=named, lookback_days=0, deadline=deadline
                 )
                 if not one:
-                    # The monitor skips a date it has no brief parquet for. Saying so is
-                    # the difference between "nothing to do" and "you named the wrong
-                    # date": the summary below would otherwise read 0 across 0 dates.
+                    # The monitor skips a date it has no brief parquet for, and a spent
+                    # deadline makes every later date come back empty too. Either way the
+                    # summary alone would read 0 across 0 dates for a date the operator
+                    # named, so name the ones that came back empty.
+                    empty.append(named)
                     logger.warning(
                         "population-monitor: %s produced no report — no brief parquet for it?",
                         named.isoformat(),
                     )
-                reports.extend(one)
+                named_reports.extend(one)
+            if empty:
+                typer.echo(
+                    "population-monitor: no report for "
+                    + ", ".join(d.isoformat() for d in empty)
+                    + " (no brief for the date, or the run's deadline was already spent)."
+                )
+            reports = named_reports
         else:
             reports = replay_population_ladders(
                 briefs_dir,

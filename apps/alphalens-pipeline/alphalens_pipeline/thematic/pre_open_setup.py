@@ -81,12 +81,23 @@ def _load() -> Mapping[dt.date, Mapping[str, Mapping[str, Any]]]:
 PRE_OPEN_SETUPS: Mapping[dt.date, Mapping[str, Mapping[str, Any]]] = _load()
 
 
-def pre_open_setup(brief_date: dt.date, ticker: str) -> dict[str, Any] | None:
+def pre_open_setup(
+    brief_date: dt.date,
+    ticker: str,
+    *,
+    record: Mapping[dt.date, Mapping[str, Mapping[str, Any]]] | None = None,
+) -> dict[str, Any] | None:
     """The frozen setup for ``ticker`` on ``brief_date``, or ``None`` if none was rebuilt.
 
-    Returns a writable copy, so what the caller does with it cannot reach the record.
+    Returns a writable copy in ordinary containers, so what the caller does with it cannot
+    reach the record and the ladder codecs get the shape they expect.
+
+    ``record`` substitutes the committed one. It exists so a caller can ask what happens to
+    a name the record cannot serve, and it goes through the same thawing path — reading a
+    substitute by hand is how a caller ends up holding read-only views.
     """
-    by_ticker = PRE_OPEN_SETUPS.get(brief_date)
+    source = PRE_OPEN_SETUPS if record is None else record
+    by_ticker = source.get(brief_date)
     if by_ticker is None:
         return None
     setup = by_ticker.get(ticker.upper())

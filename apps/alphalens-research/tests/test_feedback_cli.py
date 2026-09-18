@@ -241,6 +241,58 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
         warned.assert_called()
         self.assertIn("2026-06-04", str(warned.call_args))
 
+    def test_a_failed_named_replay_emits_no_guard_metrics(self):
+        # Guard counters go out only off a COMPLETED replay: all-zero dispositions would
+        # clear a firing sustained-lookup_failed alert without any lookup having run. The
+        # sweep path already holds that line by leaving reports None on an exception.
+        from alphalens_cli.commands import feedback as feedback_cmd
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                side_effect=RuntimeError("polygon down"),
+            ),
+            mock.patch.object(feedback_cmd, "_emit_guard_metrics") as guard,
+            mock.patch.object(feedback_cmd, "_enrich_population_benchmark_excess"),
+            mock.patch.object(feedback_cmd, "_enrich_population_event_car"),
+            mock.patch.object(feedback_cmd, "_enrich_population_sector_excess"),
+            mock.patch.object(feedback_cmd, "_enrich_population_size_fields"),
+            mock.patch.object(feedback_cmd, "_enrich_selection_labels"),
+            mock.patch.object(feedback_cmd, "_enrich_population_chart_payloads"),
+            mock.patch.object(feedback_cmd, "_write_ingest_watermark"),
+        ):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "backfill-shadow-returns", "--date", "2026-06-04"],
+            )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        guard.assert_not_called()
+
+    def test_a_named_date_that_did_nothing_is_named_on_stdout(self):
+        # The operator asked for specific dates; which of them came back empty belongs in
+        # the result, not only in the journal.
+        from alphalens_cli.commands import feedback as feedback_cmd
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                return_value=[],
+            ),
+            mock.patch.object(feedback_cmd, "_enrich_population_benchmark_excess"),
+            mock.patch.object(feedback_cmd, "_enrich_population_event_car"),
+            mock.patch.object(feedback_cmd, "_enrich_population_sector_excess"),
+            mock.patch.object(feedback_cmd, "_enrich_population_size_fields"),
+            mock.patch.object(feedback_cmd, "_enrich_selection_labels"),
+            mock.patch.object(feedback_cmd, "_enrich_population_chart_payloads"),
+            mock.patch.object(feedback_cmd, "_write_ingest_watermark"),
+        ):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "backfill-shadow-returns", "--date", "2026-06-04"],
+            )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("2026-06-04", result.stdout)
+
     def test_the_enrichment_tail_runs_once_however_many_dates_were_named(self):
         # The enrichment passes sweep the WHOLE store, so running them per date would
         # repeat the same work N times inside one wall-clock deadline.
