@@ -27,10 +27,9 @@ rebuilt here" — the caller keeps whatever the brief already says.
 
 from __future__ import annotations
 
-import copy
 import datetime as dt
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -38,12 +37,41 @@ from typing import Any
 SETUPS_PATH = Path(__file__).parent / "config" / "pre_open_setups.json"
 
 
+def _freeze(value: Any) -> Any:
+    """Make a decoded JSON value read-only, all the way down.
+
+    A ``MappingProxyType`` over the top level is not enough: it leaves the setup dicts and
+    their ``entry_tiers`` / ``tp_tranches`` lists writable, so a caller reading the record
+    directly could change a level in place and every later reader in that process would see
+    the changed one. The record is evidence; it has to be unwritable.
+    """
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    """The plain, writable mirror of a frozen value.
+
+    The ladder replay reads the setup out of a candidate and the codecs expect ordinary
+    dicts and lists, so the accessor hands back a copy in that shape rather than the
+    read-only view.
+    """
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return [_thaw(item) for item in value]
+    return value
+
+
 def _load() -> Mapping[dt.date, Mapping[str, Mapping[str, Any]]]:
     raw = json.loads(SETUPS_PATH.read_text(encoding="utf-8"))
     return MappingProxyType(
         {
             dt.date.fromisoformat(iso): MappingProxyType(
-                {str(ticker).upper(): setup for ticker, setup in by_ticker.items()}
+                {str(ticker).upper(): _freeze(setup) for ticker, setup in by_ticker.items()}
             )
             for iso, by_ticker in raw.items()
         }
@@ -56,8 +84,7 @@ PRE_OPEN_SETUPS: Mapping[dt.date, Mapping[str, Mapping[str, Any]]] = _load()
 def pre_open_setup(brief_date: dt.date, ticker: str) -> dict[str, Any] | None:
     """The frozen setup for ``ticker`` on ``brief_date``, or ``None`` if none was rebuilt.
 
-    Returns a deep copy: the ladder replay reads the setup out of a mutable candidate, and
-    the record behind it must stay the record.
+    Returns a writable copy, so what the caller does with it cannot reach the record.
     """
     by_ticker = PRE_OPEN_SETUPS.get(brief_date)
     if by_ticker is None:
@@ -65,4 +92,4 @@ def pre_open_setup(brief_date: dt.date, ticker: str) -> dict[str, Any] | None:
     setup = by_ticker.get(ticker.upper())
     if setup is None:
         return None
-    return copy.deepcopy(dict(setup))
+    return _thaw(setup)

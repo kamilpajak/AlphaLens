@@ -184,11 +184,18 @@ def _refresh_population_ladders(
             # brand-new names from starving the next one.
             reports = []
             for named in dates:
-                reports.extend(
-                    replay_population_ladders(
-                        briefs_dir, end_date=named, lookback_days=0, deadline=deadline
-                    )
+                one = replay_population_ladders(
+                    briefs_dir, end_date=named, lookback_days=0, deadline=deadline
                 )
+                if not one:
+                    # The monitor skips a date it has no brief parquet for. Saying so is
+                    # the difference between "nothing to do" and "you named the wrong
+                    # date": the summary below would otherwise read 0 across 0 dates.
+                    logger.warning(
+                        "population-monitor: %s produced no report — no brief parquet for it?",
+                        named.isoformat(),
+                    )
+                reports.extend(one)
         else:
             reports = replay_population_ladders(
                 briefs_dir,

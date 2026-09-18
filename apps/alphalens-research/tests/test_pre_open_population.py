@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 from alphalens_pipeline.feedback import pre_open_population
-from alphalens_pipeline.thematic.pre_open_setup import PRE_OPEN_SETUPS
+from alphalens_pipeline.thematic.pre_open_setup import PRE_OPEN_SETUPS, pre_open_setup
 
 # 2026-06-04 recovered CRL, FDS, GME, IRDM. The brief still stores CRL and IRDM, so FDS and
 # GME are the two names that had to be rebuilt.
@@ -106,7 +106,7 @@ class ARecoveredDateIsRebuiltFromTheOpenListTest(unittest.TestCase):
 
     def test_a_rebuilt_name_carries_the_frozen_setup(self) -> None:
         rebuilt = self.by_ticker[REBUILT]
-        self.assertEqual(rebuilt.trade_setup, PRE_OPEN_SETUPS[RECOVERED_DATE][REBUILT])
+        self.assertEqual(rebuilt.trade_setup, pre_open_setup(RECOVERED_DATE, REBUILT))
 
     def test_a_rebuilt_name_is_verified_so_the_ladder_plans_it(self) -> None:
         self.assertTrue(self.by_ticker[REBUILT].verified)

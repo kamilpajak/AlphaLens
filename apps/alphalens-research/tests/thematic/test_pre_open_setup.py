@@ -126,9 +126,33 @@ class TheLookupAnswersOnlyForFrozenNamesTest(unittest.TestCase):
         found = pre_open_setup.pre_open_setup(brief_date, ticker)
         assert found is not None
         found["disaster_stop"] = -1.0
+        found["entry_tiers"][0]["limit"] = -1.0
         again = pre_open_setup.pre_open_setup(brief_date, ticker)
         assert again is not None
         self.assertNotEqual(again["disaster_stop"], -1.0)
+        self.assertNotEqual(again["entry_tiers"][0]["limit"], -1.0)
+
+    def test_the_record_itself_refuses_a_write_at_every_depth(self) -> None:
+        # The record is evidence. A proxy over the top level alone would leave the setup
+        # and its level lists writable, and a direct reader could change one in place for
+        # every later reader in the process.
+        brief_date = sorted(pre_open_setup.PRE_OPEN_SETUPS)[0]
+        ticker = sorted(pre_open_setup.PRE_OPEN_SETUPS[brief_date])[0]
+        setup = pre_open_setup.PRE_OPEN_SETUPS[brief_date][ticker]
+        with self.assertRaises(TypeError):
+            setup["disaster_stop"] = -1.0  # type: ignore[index]
+        with self.assertRaises(TypeError):
+            setup["entry_tiers"][0]["limit"] = -1.0  # type: ignore[index]
+
+    def test_the_accessor_hands_back_ordinary_dicts_and_lists(self) -> None:
+        # The ladder replay and the codecs expect plain containers, not read-only views.
+        brief_date = sorted(pre_open_setup.PRE_OPEN_SETUPS)[0]
+        ticker = sorted(pre_open_setup.PRE_OPEN_SETUPS[brief_date])[0]
+        found = pre_open_setup.pre_open_setup(brief_date, ticker)
+        assert found is not None
+        self.assertIsInstance(found, dict)
+        self.assertIsInstance(found["entry_tiers"], list)
+        self.assertIsInstance(found["entry_tiers"][0], dict)
 
 
 if __name__ == "__main__":  # pragma: no cover

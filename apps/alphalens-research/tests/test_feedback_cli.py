@@ -213,6 +213,34 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.stdout)
         watermark.assert_called_once()
 
+    def test_a_named_date_that_produced_nothing_is_reported(self):
+        # The monitor skips a date with no brief parquet and returns no report, so a
+        # silent run would tell the operator "0 across 0 dates" for a date they asked
+        # for by name.
+        from alphalens_cli.commands import feedback as feedback_cmd
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                return_value=[],
+            ),
+            mock.patch.object(feedback_cmd, "_enrich_population_benchmark_excess"),
+            mock.patch.object(feedback_cmd, "_enrich_population_event_car"),
+            mock.patch.object(feedback_cmd, "_enrich_population_sector_excess"),
+            mock.patch.object(feedback_cmd, "_enrich_population_size_fields"),
+            mock.patch.object(feedback_cmd, "_enrich_selection_labels"),
+            mock.patch.object(feedback_cmd, "_enrich_population_chart_payloads"),
+            mock.patch.object(feedback_cmd, "_write_ingest_watermark"),
+            mock.patch.object(feedback_cmd.logger, "warning") as warned,
+        ):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "backfill-shadow-returns", "--date", "2026-06-04"],
+            )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        warned.assert_called()
+        self.assertIn("2026-06-04", str(warned.call_args))
+
     def test_the_enrichment_tail_runs_once_however_many_dates_were_named(self):
         # The enrichment passes sweep the WHOLE store, so running them per date would
         # repeat the same work N times inside one wall-clock deadline.
