@@ -23,6 +23,7 @@ from scripts.recover_pre_open_brief_names import (
     DateRecovery,
     recover_all,
     recover_date,
+    recovery_dates,
     write_csv,
 )
 
@@ -168,9 +169,45 @@ class TestWhatTheTableSays(unittest.TestCase):
         with self.assertRaises(ValueError):
             recover_date(broken, ASOF)
 
+    def test_a_table_that_never_ends_is_refused(self):
+        # A cut extract would otherwise let later lines pass as rows of the table.
+        text = "\n".join(_table("2026-06-11T08:50:00+00:00", 100, ["AAA"]))
+        text += "\n" + _line(
+            "2026-06-11T08:50:04+00:00",
+            100,
+            f"generate_briefs {ASOF.isoformat()}: wrote 1 briefs (Pro=1, Flash=0)",
+        )
+        with self.assertRaises(ValueError):
+            recover_date(text, ASOF)
+
+    def test_a_first_token_longer_than_the_ticker_column_is_reported_as_partial(self):
+        # Both readings drop it, so only the count check can see that a name is missing.
+        text = "\n".join(_run("2026-06-11T08:50", 100, ["TOOLONGNAME", "BBB"], briefs=2))
+        result = recover_date(text, ASOF)
+        self.assertEqual(result.names, ["BBB"])
+        self.assertEqual(result.status, RECOVERY_PARTIAL)
+
     def test_the_order_of_the_table_is_kept(self):
         text = "\n".join(_run("2026-06-11T08:50", 100, ["CCC", "AAA", "BBB"]))
         self.assertEqual(recover_date(text, ASOF).names, ["CCC", "AAA", "BBB"])
+
+
+class TestWhichDatesTheExtractCanAnswer(unittest.TestCase):
+    def test_a_date_whose_open_precedes_the_extract_is_not_attempted(self):
+        text = _line("2026-06-11T00:00:00+00:00", 1, "Wrote 1 candidate rows → x.parquet")
+        dates = recovery_dates(text)
+        self.assertNotIn(dt.date(2026, 5, 28), dates)
+        self.assertIn(dt.date(2026, 6, 14), dates)
+
+    def test_the_committed_extract_answers_every_affected_date_after_it_starts(self):
+        text = gzip.decompress(EXTRACT.read_bytes()).decode("utf-8")
+        dates = recovery_dates(text)
+        self.assertEqual(min(dates), dt.date(2026, 5, 28))
+        self.assertEqual(len(dates), 16)
+
+    def test_an_empty_extract_is_refused(self):
+        with self.assertRaises(ValueError):
+            recovery_dates("")
 
 
 class TestTheCsv(unittest.TestCase):
@@ -219,9 +256,8 @@ class TestTheCommittedRecovery(unittest.TestCase):
         return [r["ticker"] for r in rows]
 
     def test_the_csv_is_the_script_run_over_the_extract(self):
-        dates = sorted({dt.date.fromisoformat(r["asof"]) for r in self.rows})
         rebuilt = []
-        for rec in recover_all(self.text, dates):
+        for rec in recover_all(self.text, recovery_dates(self.text)):
             rebuilt.extend((rec.asof.isoformat(), t, i + 1) for i, t in enumerate(rec.names))
         self.assertEqual(rebuilt, [(r["asof"], r["ticker"], int(r["position"])) for r in self.rows])
 

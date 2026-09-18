@@ -114,6 +114,10 @@ today for the same date. Two dates share no name with what is stored (2026-08-02
   earlier list replaced before the open is not recorded, which is correct for the question asked.
 - **The journal is size-rotated.** Dates before 2026-05-25 have already gone; a future rotation
   will take more. This file is the copy that survives that.
+- **The two readings do not disagree on everything.** A first token longer than the ticker column
+  is dropped by both, so the cross-check cannot see it; the count check then marks that date
+  `partial`. A table block that never ends in the extract is refused outright, so a cut extract
+  cannot pass later lines off as table rows.
 
 ## Pre-registration for the recompute (step 2)
 

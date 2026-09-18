@@ -28,7 +28,9 @@ Rules, in order, for one as-of date:
 
 The table is read twice, by two parsers that fail differently — one keyed on the runs of
 whitespace between columns, one on the fixed column widths of the printer's format string
-— and a date whose two readings disagree is refused rather than reported.
+— and a date whose two readings disagree is refused rather than reported. They do NOT fail
+differently on a first token longer than the ticker column: both drop it, which the count
+check then reports as ``partial``. That is the backstop, not the cross-check.
 
 Read-only. It touches no store: the input is a frozen journal extract committed beside the
 CSV it produces (``docs/research/pre_open_brief_names_2026_09_18*``).
@@ -51,11 +53,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from alphalens_pipeline.thematic.publication import (
-    HISTORY_RECORD_WINDOW,
-    PUBLISHED_AFTER_OPEN_HISTORY,
-    deadline_utc,
-)
+from alphalens_pipeline.thematic.publication import PUBLISHED_AFTER_OPEN_HISTORY, deadline_utc
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_EXTRACT = REPO_ROOT / "docs/research/pre_open_brief_names_2026_09_18_journal.log.gz"
@@ -154,6 +152,11 @@ def _table_for_pid(text: str, pid: str) -> list[str]:
             inside = False
             continue
         rows.append(message)
+    if inside:
+        raise ValueError(
+            f"pid {pid}: the score table never ends in the extract, so the lines after it "
+            "cannot be told apart from its rows"
+        )
     by_whitespace = _names_by_whitespace(rows)
     by_column = _names_by_column(rows)
     if by_whitespace != by_column:
@@ -207,19 +210,26 @@ def recover_date(text: str, asof: dt.date) -> DateRecovery:
     )
 
 
-def recovery_dates() -> list[dt.date]:
-    """The affected as-of dates the journal can speak about."""
-    first, _ = HISTORY_RECORD_WINDOW
-    oldest_in_journal = dt.date(2026, 5, 25)
-    return sorted(
-        asof
-        for asof in PUBLISHED_AFTER_OPEN_HISTORY
-        if asof >= max(first, oldest_in_journal - dt.timedelta(days=1))
-    )
+def recovery_dates(text: str) -> list[dt.date]:
+    """The affected as-of dates this extract can speak about.
+
+    A date qualifies when its arrival open is after the extract's first line: only then
+    could the write that set the stored list be inside the extract. Reading the bound off
+    the text keeps a re-cut extract honest instead of trusting a constant.
+    """
+    first_event = next((stamp for stamp, _, _ in iter_events(text)), None)
+    if first_event is None:
+        raise ValueError("the extract holds no journal line")
+    return sorted(asof for asof in PUBLISHED_AFTER_OPEN_HISTORY if deadline_utc(asof) > first_event)
 
 
 def recover_all(text: str, dates: Iterable[dt.date]) -> list[DateRecovery]:
     return [recover_date(text, asof) for asof in sorted(dates)]
+
+
+def _number(value: int | None) -> str:
+    """An absent count is an empty cell, never the string "None"."""
+    return "" if value is None else str(value)
 
 
 def write_csv(recoveries: Sequence[DateRecovery], path: Path) -> None:
@@ -234,8 +244,8 @@ def write_csv(recoveries: Sequence[DateRecovery], path: Path) -> None:
                         "asof": recovery.asof.isoformat(),
                         "ticker": ticker,
                         "position": position,
-                        "n_briefs_logged": recovery.n_briefs_logged,
-                        "n_scored_logged": recovery.n_scored_logged,
+                        "n_briefs_logged": _number(recovery.n_briefs_logged),
+                        "n_scored_logged": _number(recovery.n_scored_logged),
                         "n_names_recovered": recovery.n_names_recovered,
                         "recovery_status": recovery.status,
                         "source_run_utc": (
@@ -259,7 +269,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     extract = Path(args[0]) if args else DEFAULT_EXTRACT
     out = Path(args[1]) if len(args) > 1 else DEFAULT_CSV
-    recoveries = recover_all(read_extract(extract), recovery_dates())
+    text = read_extract(extract)
+    recoveries = recover_all(text, recovery_dates(text))
     write_csv(recoveries, out)
     for recovery in recoveries:
         print(
