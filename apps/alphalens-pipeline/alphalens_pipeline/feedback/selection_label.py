@@ -17,6 +17,10 @@ only computes and stores what it defines.
   21-40 and the pre-specified secondary ``sel_car_mean_20`` (D1). ``sel_zar_h`` is the
   label over the pre-window residual volatility: stored, not an owner decision.
 - Missing is a coded outcome, one status per horizon, never a dropped row.
+- On a date whose list was set after the open and later recovered (#1494),
+  ``population`` reads ``pre_open_recovered`` and ``published_before_open`` is True for
+  the RECOVERED list, whatever ``brief_published_at`` says: that stamp belongs to the run
+  that rewrote the list, not to the list being labelled.
 
 Prices come from the split-adjusted grouped-daily history (``rs_history``), where the
 memo's measurements were taken. That store never re-fetches a session already on disk,
@@ -59,6 +63,7 @@ from alphalens_pipeline.paper.calendar import (
     previous_trading_day,
 )
 from alphalens_pipeline.thematic.mapping.proposal_shadow import DEFAULT_SHADOW_DIR
+from alphalens_pipeline.thematic.pre_open_brief import pre_open_names
 from alphalens_pipeline.thematic.publication import BRIEF_PUBLISHED_AT, published_before_open
 
 logger = logging.getLogger(__name__)
@@ -66,7 +71,7 @@ logger = logging.getLogger(__name__)
 # Poolability key. Bump on ANY change to: the anchor rule, the horizons, the benchmark
 # ticker, BETA_WINDOW_SESSIONS, MIN_BETA_OBS, the split bounds, RESID_WINDOW_SESSIONS,
 # MIN_RESID_OBS, the population rule or the status codes and their order.
-SEL_LABEL_VERSION = "sel-label-v1"
+SEL_LABEL_VERSION = "sel-label-v2"  # v2: the recovered pre-open population (#1494)
 
 HORIZONS: tuple[int, ...] = (1, 3, 5, 10, 20, 40)
 MAX_HORIZON = max(HORIZONS)
@@ -96,6 +101,11 @@ NON_TERMINAL_STATUSES = frozenset(
 )
 
 POPULATION_BRIEFED_OR_PROPOSED = "briefed_or_llm_proposed"
+# A date whose stored list was set after the arrival open, replaced by the list the
+# journal says existed at that open (#1494). Its names are all briefed, and the LLM
+# proposals of such a date are dropped with everything else not on the list: they were
+# written by the same runs, so their state at the open is unknown.
+POPULATION_PRE_OPEN_RECOVERED = "pre_open_recovered"
 LANE_THEMATIC = "thematic"
 SHADOW_SOURCE_LLM = "llm"
 
@@ -459,6 +469,40 @@ def build_population(brief: pd.DataFrame | None, shadow: pd.DataFrame | None) ->
     return pd.DataFrame(rows, columns=["ticker", *STAGE_COLUMNS])
 
 
+def apply_pre_open_population(
+    population: pd.DataFrame, recovered: Sequence[str], *, shadow_available: bool
+) -> pd.DataFrame:
+    """Replace a date's population with the names its brief held at the arrival open.
+
+    A name in both keeps the stage values the stored brief carries for it (its themes,
+    the overlap flag, the mapper config). A name the later run dropped comes back with
+    no theme, because the journal records names only. Every row is briefed by
+    construction: it was on the published list a reader could have acted on.
+
+    ``shadow_available`` is a fact about the DATE, so it is the same on every row: a
+    re-added name must not read as "no proposals were recorded that day" when they were.
+    """
+    stored = {str(rec["ticker"]): rec for rec in population.to_dict("records")}
+    rows = []
+    for ticker in recovered:
+        rec = stored.get(ticker, {})
+        rows.append(
+            {
+                "ticker": ticker,
+                "lane": LANE_THEMATIC,
+                "population": POPULATION_PRE_OPEN_RECOVERED,
+                "briefed_any_theme": True,
+                "themes_briefed": rec.get("themes_briefed", []),
+                "themes_proposed": rec.get("themes_proposed", []),
+                "shadow_available": shadow_available,
+                "event_overlap": bool(rec.get("event_overlap", False)),
+                "mapper_config_version": rec.get("mapper_config_version"),
+                BRIEF_PUBLISHED_AT: rec.get(BRIEF_PUBLISHED_AT),
+            }
+        )
+    return pd.DataFrame(rows, columns=["ticker", *STAGE_COLUMNS])
+
+
 # ---------------------------------------------------------------------------
 # Store pass
 # ---------------------------------------------------------------------------
@@ -635,6 +679,11 @@ def _stamp_date(
     brief = pd.read_parquet(brief_path) if brief_path is not None else None
     shadow = pd.read_parquet(shadow_path) if shadow_path is not None else None
     population = build_population(brief, shadow)
+    recovered = pre_open_names(brief_date)
+    if recovered is not None:
+        population = apply_pre_open_population(
+            population, recovered, shadow_available=shadow is not None
+        )
     out_path = labels_dir / f"{brief_date.isoformat()}.parquet"
     existing: dict[str, dict[str, Any]] = {}
     if out_path.exists():
@@ -648,15 +697,27 @@ def _stamp_date(
     if population.empty and not existing:
         return False, 0
 
-    published_at = _first_present(population[BRIEF_PUBLISHED_AT]) if len(population) else None
-    published = published_before_open(brief_date, published_at, exchange)
+    if recovered is not None:
+        # The recovered list IS the list that existed at the open, so the date is no
+        # longer "set final after open" — that is the whole point of recovering it.
+        published = True
+    else:
+        published_at = _first_present(population[BRIEF_PUBLISHED_AT]) if len(population) else None
+        published = published_before_open(brief_date, published_at, exchange)
     pop_records = {
         r["ticker"]: {k: _normalise(v) for k, v in r.items()} for r in population.to_dict("records")
     }
     todo = [t for t in pop_records if t not in existing or _is_non_terminal(existing[t])]
 
     rows = dict(existing)
-    changed = False
+    if recovered is not None:
+        dropped = [t for t in rows if t not in set(recovered)]
+        for ticker in dropped:
+            del rows[ticker]
+        changed_by_drop = bool(dropped)
+    else:
+        changed_by_drop = False
+    changed = changed_by_drop
     n_stamped = 0
     for ticker, stage in pop_records.items():
         base = rows.get(ticker, {"brief_date": brief_date, "ticker": ticker})

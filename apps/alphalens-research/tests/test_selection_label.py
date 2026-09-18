@@ -405,7 +405,9 @@ class TestEnrichStore(unittest.TestCase):
         self.assertEqual(out.loc["AAA", "anchor_session"], T0)
 
     def test_history_date_published_after_the_open_is_excluded(self):
-        late_day = D(2026, 8, 18)  # in PUBLISHED_AFTER_OPEN_HISTORY
+        # 2026-06-09 is in PUBLISHED_AFTER_OPEN_HISTORY and had NO list before the open,
+        # so no recovered population replaces it.
+        late_day = D(2026, 6, 9)
         _brief([{"theme": "t", "ticker": "AAA"}], published_at=None).to_parquet(
             self.briefs / f"{late_day.isoformat()}.parquet"
         )
@@ -439,9 +441,10 @@ class TestEnrichStore(unittest.TestCase):
 
         self._write_book(make_book(stock_window=[0.01] * 40))
         _brief([{"theme": "t", "ticker": "AAA"}]).to_parquet(self.briefs / "2026-03-03.parquet")
-        # A date whose rows carry no value, no beta, no stamp and no themes proposed.
+        # A date whose rows carry no value, no beta, no stamp and no themes proposed:
+        # 2026-06-09 was set after the open and has no recovered list to replace it.
         _brief([{"theme": "t", "ticker": "AAA"}], published_at=None).to_parquet(
-            self.briefs / "2026-08-18.parquet"
+            self.briefs / "2026-06-09.parquet"
         )
         self._run()
         files = sorted(self.labels.glob("*.parquet"))
@@ -529,6 +532,122 @@ class TestEnrichStore(unittest.TestCase):
         report = self._run()
         self.assertEqual(report.status_counts_h20, {sl.STATUS_OK: 1})
         self.assertEqual(report.dates_written, 1)
+
+
+def _merge_books(*books):
+    """One price book holding every ticker of the books given."""
+    merged: dict[dt.date, dict[str, tuple[float | None, float | None]]] = {}
+    for book in books:
+        for session, bars in book.items():
+            merged.setdefault(session, {}).update(bars)
+    return merged
+
+
+class TestRecoveredPreOpenDates(unittest.TestCase):
+    """A date whose list was set after the open is labelled on the RECOVERED list (#1494)."""
+
+    # 2026-08-18 is in PUBLISHED_AFTER_OPEN_HISTORY and recovered exactly: TTD, ETSY.
+    RECOVERED_DAY = D(2026, 8, 18)
+    ANCHOR = D(2026, 8, 19)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.briefs, self.shadow, self.labels, self.grouped = (
+            root / "briefs",
+            root / "shadow",
+            root / "labels",
+            root / "grouped",
+        )
+        for path in (self.briefs, self.shadow, self.grouped):
+            path.mkdir()
+        book = _merge_books(
+            make_book(self.ANCHOR, ticker="TTD", stock_window=[0.01] * 10),
+            make_book(self.ANCHOR, ticker="ETSY", stock_window=[0.02] * 10),
+            make_book(self.ANCHOR, ticker="ADDED", stock_window=[0.03] * 10),
+        )
+        for session, bars in book.items():
+            rows = [{"T": t, "o": o, "c": c, "v": 1.0} for t, (o, c) in bars.items()]
+            pd.DataFrame(rows).to_parquet(self.grouped / f"{session.isoformat()}.parquet")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_stored_brief(self, tickers):
+        _brief([{"theme": "t1", "ticker": t} for t in tickers], published_at=None).to_parquet(
+            self.briefs / f"{self.RECOVERED_DAY.isoformat()}.parquet"
+        )
+
+    def _run(self):
+        return sl.enrich_selection_labels(
+            briefs_dir=self.briefs,
+            shadow_dir=self.shadow,
+            labels_dir=self.labels,
+            grouped_root=self.grouped,
+            now=dt.datetime(2026, 9, 1, 7, 0, tzinfo=dt.UTC),
+        )
+
+    def _read(self):
+        path = self.labels / f"{self.RECOVERED_DAY.isoformat()}.parquet"
+        return pd.read_parquet(path).set_index("ticker")
+
+    def test_the_date_is_labelled_instead_of_excluded(self):
+        self._write_stored_brief(["TTD", "ADDED"])
+        self._run()
+        out = self._read()
+        self.assertEqual(out.loc["TTD", "sel_label_status_1"], sl.STATUS_OK)
+        self.assertTrue(bool(out.loc["TTD", "published_before_open"]))
+
+    def test_a_name_added_after_the_open_is_removed_from_the_store(self):
+        self._write_stored_brief(["TTD", "ADDED"])
+        self._run()
+        self.assertEqual(sorted(self._read().index), ["ETSY", "TTD"])
+
+    def test_a_name_dropped_after_the_open_is_labelled_again(self):
+        self._write_stored_brief(["TTD", "ADDED"])
+        self._run()
+        out = self._read()
+        self.assertEqual(out.loc["ETSY", "sel_label_status_1"], sl.STATUS_OK)
+        self.assertTrue(bool(out.loc["ETSY", "briefed_any_theme"]))
+        self.assertEqual(list(out.loc["ETSY", "themes_briefed"]), [])
+
+    def test_every_row_says_which_population_it_came_from(self):
+        self._write_stored_brief(["TTD", "ADDED"])
+        self._run()
+        out = self._read()
+        self.assertEqual(set(out["population"]), {sl.POPULATION_PRE_OPEN_RECOVERED})
+
+    def test_a_recovered_date_reports_its_shadow_file_on_every_row(self):
+        # shadow_available is a fact about the date: a re-added name must not read as
+        # "no proposals were recorded that day".
+        self._write_stored_brief(["TTD", "ADDED"])
+        _shadow([{"theme": "t1", "ticker": "QQQ", "source": "llm"}]).to_parquet(
+            self.shadow / f"{self.RECOVERED_DAY.isoformat()}.parquet"
+        )
+        self._run()
+        out = self._read()
+        self.assertEqual(set(out["shadow_available"]), {True})
+        self.assertNotIn("QQQ", out.index)
+
+    def test_a_stage_value_of_a_kept_name_survives(self):
+        _brief(
+            [{"theme": "t1", "ticker": "TTD", "event_overlap": True}], published_at=None
+        ).to_parquet(self.briefs / f"{self.RECOVERED_DAY.isoformat()}.parquet")
+        self._run()
+        out = self._read()
+        self.assertTrue(bool(out.loc["TTD", "event_overlap"]))
+        self.assertEqual(list(out.loc["TTD", "themes_briefed"]), ["t1"])
+
+    def test_a_row_stamped_under_the_old_version_is_recomputed(self):
+        self._write_stored_brief(["TTD", "ADDED"])
+        self._run()
+        path = self.labels / f"{self.RECOVERED_DAY.isoformat()}.parquet"
+        stored = pd.read_parquet(path)
+        self.assertEqual(set(stored["sel_label_version"]), {sl.SEL_LABEL_VERSION})
+        stored["sel_label_version"] = "sel-label-v1"
+        stored.to_parquet(path)
+        self._run()
+        self.assertEqual(set(self._read()["sel_label_version"]), {sl.SEL_LABEL_VERSION})
 
 
 if __name__ == "__main__":
