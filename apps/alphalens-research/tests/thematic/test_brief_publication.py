@@ -24,6 +24,7 @@ HISTORY_CSV = REPO_ROOT / "docs/research/thematic_brief_publication_history_2026
 PRE_JOURNAL_CSV = (
     REPO_ROOT / "docs/research/thematic_brief_publication_history_pre_journal_2026_09_17.csv"
 )
+RECOVERED_NAMES_CSV = REPO_ROOT / "docs/research/pre_open_brief_names_2026_09_18.csv"
 
 ASOF = dt.date(2026, 9, 10)  # Thursday; arrival Friday 2026-09-11, open 13:30 UTC
 DEADLINE = dt.datetime(2026, 9, 11, 13, 30, tzinfo=dt.UTC)
@@ -198,6 +199,22 @@ class HistoryMatchesTheRecordTest(unittest.TestCase):
                     dt.datetime.fromisoformat(r["candidates_parquet_mtime_utc"]),
                     dt.datetime.fromisoformat(r["arrival_open_utc"]),
                 )
+
+
+class RecoveredNamesBelongToTheAfterOpenDatesTest(unittest.TestCase):
+    """The recovered pre-open lists exist only for dates the record calls after-open."""
+
+    def setUp(self) -> None:
+        self.rows = _read_csv(RECOVERED_NAMES_CSV)
+        self.dates = {dt.date.fromisoformat(r["asof"]) for r in self.rows}
+
+    def test_every_recovered_date_is_an_after_open_date(self) -> None:
+        self.assertTrue(self.dates <= publication.PUBLISHED_AFTER_OPEN_HISTORY)
+
+    def test_a_date_with_no_list_before_the_open_has_no_recovered_name(self) -> None:
+        # 2026-06-09 wrote no brief before the open; 2026-05-19 is older than the journal.
+        self.assertNotIn(dt.date(2026, 6, 9), self.dates)
+        self.assertNotIn(dt.date(2026, 5, 19), self.dates)
 
 
 if __name__ == "__main__":
