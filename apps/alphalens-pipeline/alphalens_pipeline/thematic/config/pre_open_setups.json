@@ -1,0 +1,4951 @@
+{
+  "2026-05-31": {
+    "DLB": {
+      "asof_close": 55.810001373291016,
+      "atr": 1.7700378292782932,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 50.37598523740665,
+      "entry_tiers": [
+        {
+          "alloc_pct": 32.31545490990177,
+          "atr_distance": 0.5000000000000003,
+          "label": "E1",
+          "limit": 54.92498245865187,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 67.68454509009824,
+          "atr_distance": 1.8982648589615472,
+          "label": "E2",
+          "limit": 52.45000076293945,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 18.681596420190704,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 4.314888057822395,
+          "tag": "overhead resistance",
+          "target": 65.6500015258789,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 5.4249081737281575,
+          "tag": "overhead resistance",
+          "target": 68.83999633789062,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 5.811154258367051,
+          "tag": "overhead resistance",
+          "target": 69.94999694824219,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "OSIS": {
+      "asof_close": 216.75,
+      "atr": 10.646845636952126,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 184.06418389455698,
+      "entry_tiers": [
+        {
+          "alloc_pct": 35.15031302343936,
+          "atr_distance": 0.5000000000000012,
+          "label": "E1",
+          "limit": 211.42657718152392,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 64.84968697656063,
+          "atr_distance": 1.765781499311724,
+          "label": "E2",
+          "limit": 197.9499969482422,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 10.991230245227381,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.0254452469576734,
+          "tag": "overhead resistance",
+          "target": 240.40666707356772,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 4.920630437503831,
+          "tag": "overhead resistance",
+          "target": 294.3233337402344,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 5.5540805639293485,
+          "tag": "overhead resistance",
+          "target": 306.1199951171875,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "OWL": {
+      "asof_close": 10.279999732971191,
+      "atr": 0.45515544517257556,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 7.494844364092561,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.750339945249493,
+          "atr_distance": 0.43940990135645924,
+          "label": "E1",
+          "limit": 10.079999923706055,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 34.28498607038622,
+          "atr_distance": 1.8055363846913273,
+          "label": "E2",
+          "limit": 9.458200016021728,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 37.964673984364296,
+          "atr_distance": 2.3200859553794526,
+          "label": "E3",
+          "limit": 9.223999977111816,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.683648396147773,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.38503367211198974,
+          "tag": "overhead resistance",
+          "target": 10.329999923706055,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.6708186084175001,
+          "tag": "overhead resistance",
+          "target": 10.914999961853027,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.0543076969022132,
+          "tag": "overhead resistance",
+          "target": 11.699999809265137,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "PKE": {
+      "asof_close": 31.8700008392334,
+      "atr": 2.049963616543168,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 20.580234651439895,
+      "entry_tiers": [
+        {
+          "alloc_pct": 22.132303311592654,
+          "atr_distance": 0.49999999999999967,
+          "label": "E1",
+          "limit": 30.845019030961815,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 28.447838255878956,
+          "atr_distance": 2.0000000000000004,
+          "label": "E2",
+          "limit": 27.77007360614706,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 49.41985843252839,
+          "atr_distance": 3.749042519846178,
+          "label": "E3",
+          "limit": 24.184600076675416,
+          "tag": "200-day MA"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.525716478998884,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.889216006727199,
+          "tag": "overhead resistance",
+          "target": 38.20000076293945,
+          "tranche_pct": 100.0
+        }
+      ]
+    },
+    "PSN": {
+      "asof_close": 59.099998474121094,
+      "atr": 2.4723901451462615,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 46.33261016002952,
+      "entry_tiers": [
+        {
+          "alloc_pct": 15.839250757345958,
+          "atr_distance": 0.5000000000000004,
+          "label": "E1",
+          "limit": 57.86380340154796,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 21.851972674531122,
+          "atr_distance": 1.999999999999999,
+          "label": "E2",
+          "limit": 54.15521818382857,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 62.308776568122916,
+          "atr_distance": 4.1639860881811925,
+          "label": "E3",
+          "limit": 48.80500030517578,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 10.560314136254384,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 3.2535147898226855,
+          "tag": "overhead resistance",
+          "target": 67.92500305175781,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.7809587290085647,
+          "tag": "overhead resistance",
+          "target": 70.60250091552734,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.574340700385026,
+          "tag": "overhead resistance",
+          "target": 74.62999725341797,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "RDW": {
+      "asof_close": 24.56999969482422,
+      "atr": 2.172527124833611,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 16.207642889559335,
+      "entry_tiers": [
+        {
+          "alloc_pct": 39.064731702532455,
+          "atr_distance": 0.5000000000000007,
+          "label": "E1",
+          "limit": 23.48373613240741,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 60.93526829746755,
+          "atr_distance": 1.9999999999999996,
+          "label": "E2",
+          "limit": 20.224945445156997,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.130989531836124,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.0,
+          "tag": "2R volatility target",
+          "target": 32.07866407251678,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.0,
+          "tag": "3R volatility target",
+          "target": 37.36900446683593,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.0,
+          "tag": "4R volatility target",
+          "target": 42.65934486115508,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "SPCE": {
+      "asof_close": 6.179999828338623,
+      "atr": 0.5061182224699379,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 4.122897158195549,
+      "entry_tiers": [
+        {
+          "alloc_pct": 39.9134298321816,
+          "atr_distance": 0.5000000000000004,
+          "label": "E1",
+          "limit": 5.926940717103654,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 60.086570167818394,
+          "atr_distance": 2.0,
+          "label": "E2",
+          "limit": 5.167763383398747,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.115612893649942,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.8674532041662296,
+          "tag": "overhead resistance",
+          "target": 6.639999866485596,
+          "tranche_pct": 100.0
+        }
+      ]
+    },
+    "TPG": {
+      "asof_close": 42.56999969482422,
+      "atr": 1.6384443962357464,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 35.311556366703705,
+      "entry_tiers": [
+        {
+          "alloc_pct": 16.38071784920732,
+          "atr_distance": 0.4025157900480229,
+          "label": "E1",
+          "limit": 41.91049995422363,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 25.453543404550395,
+          "atr_distance": 2.0000000000000018,
+          "label": "E2",
+          "limit": 39.29311090235272,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 58.16573874624228,
+          "atr_distance": 3.430082183317581,
+          "label": "E3",
+          "limit": 36.95000076293945,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 12.923919413057448,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.6927841109426742,
+          "tag": "overhead resistance",
+          "target": 46.5649995803833,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 5.3556976004224435,
+          "tag": "overhead resistance",
+          "target": 54.68000030517578,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 5.9619492117691975,
+          "tag": "overhead resistance",
+          "target": 56.52750015258789,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "2026-06-01": {
+    "DLB": {
+      "asof_close": 56.06999969482422,
+      "atr": 1.7457494346995424,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 50.70425132823991,
+      "entry_tiers": [
+        {
+          "alloc_pct": 30.455915096028097,
+          "atr_distance": 0.5000000000000014,
+          "label": "E1",
+          "limit": 55.197124977474445,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 69.5440849039719,
+          "atr_distance": 2.0000000000000018,
+          "label": "E2",
+          "limit": 52.57850082542513,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 20.169289672095328,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 4.500368761059122,
+          "tag": "overhead resistance",
+          "target": 65.4000015258789,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 5.787900173047507,
+          "tag": "overhead resistance",
+          "target": 68.83999633789062,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 6.203354477851571,
+          "tag": "overhead resistance",
+          "target": 69.94999694824219,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "HXL": {
+      "asof_close": 88.61000061035156,
+      "atr": 3.2859260699432817,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 61.662202561747456,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.511258002542014,
+          "atr_distance": 0.31650161731888726,
+          "label": "E1",
+          "limit": 87.56999969482422,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 32.09813773496636,
+          "atr_distance": 1.8259692617197458,
+          "label": "E2",
+          "limit": 82.61000061035156,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 40.39060426249164,
+          "atr_distance": 3.4651115879216037,
+          "label": "E3",
+          "limit": 77.2239001083374,
+          "tag": "200-day MA"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.095370107451658,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.666484707032476,
+          "tag": "overhead resistance",
+          "target": 95.22000122070312,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.7893934576620643,
+          "tag": "overhead resistance",
+          "target": 97.69499969482422,
+          "tranche_pct": 50.0
+        }
+      ]
+    },
+    "MRCY": {
+      "asof_close": 111.27999877929688,
+      "atr": 4.779602471860752,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 73.3619042833121,
+      "entry_tiers": [
+        {
+          "alloc_pct": 22.016067428440845,
+          "atr_distance": 0.5000000000000003,
+          "label": "E1",
+          "limit": 108.8901975433665,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 25.765930175026906,
+          "atr_distance": 2.0000000000000013,
+          "label": "E2",
+          "limit": 101.72079383557536,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 52.218002396532256,
+          "atr_distance": 5.485058354196398,
+          "label": "E3",
+          "limit": 85.0636003112793,
+          "tag": "50-day MA"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.640378856866619,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.0,
+          "tag": "2R volatility target",
+          "target": 137.07967406253942,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.0,
+          "tag": "3R volatility target",
+          "target": 158.31893065561522,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.0,
+          "tag": "4R volatility target",
+          "target": 179.558187248691,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "OWL": {
+      "asof_close": 10.470000267028809,
+      "atr": 0.46193006985559615,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 7.455734634519649,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.32725057765034,
+          "atr_distance": 0.5000000000000014,
+          "label": "E1",
+          "limit": 10.23903523210101,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.923002292860325,
+          "atr_distance": 1.999999999999998,
+          "label": "E2",
+          "limit": 9.546140127317617,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 38.74974712948934,
+          "atr_distance": 2.697378610373869,
+          "label": "E3",
+          "limit": 9.223999977111816,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.487265131730869,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.6052825188589279,
+          "tag": "overhead resistance",
+          "target": 10.914999961853027,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.9695640680076849,
+          "tag": "overhead resistance",
+          "target": 11.699999809265137,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.6192385602169774,
+          "tag": "overhead resistance",
+          "target": 13.100000381469727,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "PSN": {
+      "asof_close": 60.65999984741211,
+      "atr": 2.495791067047087,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 46.309209238128695,
+      "entry_tiers": [
+        {
+          "alloc_pct": 24.904057003279966,
+          "atr_distance": 0.36862037558279026,
+          "label": "E1",
+          "limit": 59.74000040690104,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 33.30245369143014,
+          "atr_distance": 1.9999999999999996,
+          "label": "E2",
+          "limit": 55.668417713317936,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 41.79348930528989,
+          "atr_distance": 2.8797281464064155,
+          "label": "E3",
+          "limit": 53.47280006408691,
+          "tag": "50-day MA"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 5.953498771175882,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.286037546821615,
+          "tag": "overhead resistance",
+          "target": 67.92500305175781,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.5692036752962726,
+          "tag": "overhead resistance",
+          "target": 70.60250091552734,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.995142594194516,
+          "tag": "overhead resistance",
+          "target": 74.62999725341797,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "TPG": {
+      "asof_close": 43.279998779296875,
+      "atr": 1.6771269611600348,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 35.27287380177942,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.943903135426748,
+          "atr_distance": 0.500000000000002,
+          "label": "E1",
+          "limit": 42.441435298716854,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 31.555536712026715,
+          "atr_distance": 1.075250742888074,
+          "label": "E2",
+          "limit": 41.47666676839193,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 40.50056015254654,
+          "atr_distance": 1.9999999999999998,
+          "label": "E3",
+          "limit": 39.925744856976806,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 7.0623579459042904,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.931844888528668,
+          "tag": "overhead resistance",
+          "target": 46.5649995803833,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 2.3201505962370557,
+          "tag": "overhead resistance",
+          "target": 54.68000030517578,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 2.636218908506762,
+          "tag": "overhead resistance",
+          "target": 56.52750015258789,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "2026-06-02": {
+    "CHWY": {
+      "asof_close": 21.469999313354492,
+      "atr": 1.056701963848647,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 18.2432972732119,
+      "entry_tiers": [
+        {
+          "alloc_pct": 30.86139358786828,
+          "atr_distance": 0.4999999999999994,
+          "label": "E1",
+          "limit": 20.94164833143017,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 69.13860641213172,
+          "atr_distance": 2.000000000000001,
+          "label": "E2",
+          "limit": 19.356595385657197,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 12.573809670299637,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 4.945021002351966,
+          "tag": "overhead resistance",
+          "target": 27.770000457763672,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 5.868596366422705,
+          "tag": "overhead resistance",
+          "target": 29.25,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 9.403768758120354,
+          "tag": "overhead resistance",
+          "target": 34.91499900817871,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "CRUS": {
+      "asof_close": 170.6199951171875,
+      "atr": 6.347350184612005,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 121.68550451989455,
+      "entry_tiers": [
+        {
+          "alloc_pct": 30.342756060741674,
+          "atr_distance": 0.5000000000000016,
+          "label": "E1",
+          "limit": 167.4463200248815,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.52131740868254,
+          "atr_distance": 1.4083034331118702,
+          "label": "E2",
+          "limit": 161.68100006103515,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 36.13592653057579,
+          "atr_distance": 2.0000000000000018,
+          "label": "E3",
+          "limit": 157.92529474796348,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.01981042082204,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.33938062404536773,
+          "tag": "overhead resistance",
+          "target": 175.77999877929688,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.419107910591957,
+          "tag": "overhead resistance",
+          "target": 179.0,
+          "tranche_pct": 50.0
+        }
+      ]
+    },
+    "MAN": {
+      "asof_close": 31.6200008392334,
+      "atr": 1.6082147394817417,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 23.44921030504848,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.055709215790657,
+          "atr_distance": 0.49999999999999895,
+          "label": "E1",
+          "limit": 30.81589346949253,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.493632800043166,
+          "atr_distance": 1.4299090385604933,
+          "label": "E2",
+          "limit": 29.320400047302247,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 38.450657984166185,
+          "atr_distance": 2.0000000000000004,
+          "label": "E3",
+          "limit": 28.403571360269915,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.970044372861318,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.6184593730898454,
+          "tag": "overhead resistance",
+          "target": 33.060001373291016,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.3813121843079414,
+          "tag": "overhead resistance",
+          "target": 37.59000015258789,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 2.543834801610856,
+          "tag": "overhead resistance",
+          "target": 44.49333190917969,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "NSP": {
+      "asof_close": 35.849998474121094,
+      "atr": 2.118117510897213,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 24.095439709303612,
+      "entry_tiers": [
+        {
+          "alloc_pct": 26.366403132321633,
+          "atr_distance": 0.4999999999999986,
+          "label": "E1",
+          "limit": 34.79093971867249,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 34.08324981013975,
+          "atr_distance": 1.9999999999999996,
+          "label": "E2",
+          "limit": 31.61376345232667,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 39.55034705753862,
+          "atr_distance": 2.617134511650334,
+          "label": "E3",
+          "limit": 30.306600036621095,
+          "tag": "50-day MA"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.112377025709014,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.7354874497468052,
+          "tag": "overhead resistance",
+          "target": 37.70000076293945,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 2.0672824647124024,
+          "tag": "overhead resistance",
+          "target": 48.13999938964844,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 3.225587327276271,
+          "tag": "overhead resistance",
+          "target": 57.220001220703125,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "PEGA": {
+      "asof_close": 36.61000061035156,
+      "atr": 1.8577245307224426,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 30.012234752126986,
+      "entry_tiers": [
+        {
+          "alloc_pct": 34.854738750260985,
+          "atr_distance": 0.3875715741467476,
+          "label": "E1",
+          "limit": 35.88999938964844,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 65.14526124973902,
+          "atr_distance": 2.0000000000000004,
+          "label": "E2",
+          "limit": 32.894551548906676,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 8.759300621724192,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.376594127707374,
+          "tag": "overhead resistance",
+          "target": 43.27000045776367,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 2.7204230549703845,
+          "tag": "overhead resistance",
+          "target": 44.6200008392334,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 3.6805965298557144,
+          "tag": "overhead resistance",
+          "target": 48.38999938964844,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "QRVO": {
+      "asof_close": 102.73999786376953,
+      "atr": 4.167883584542653,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 70.46207667120704,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.187362568175214,
+          "atr_distance": 0.5000000000000013,
+          "label": "E1",
+          "limit": 100.6560560714982,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.15701740771205,
+          "atr_distance": 1.9999999999999987,
+          "label": "E2",
+          "limit": 94.40423069468423,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 40.655620024112736,
+          "atr_distance": 3.5021366010030195,
+          "label": "E3",
+          "limit": 88.14350021362304,
+          "tag": "50-day MA"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.087250180501635,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.5516590293139911,
+          "tag": "overhead resistance",
+          "target": 106.30000305175781,
+          "tranche_pct": 100.0
+        }
+      ]
+    },
+    "RHI": {
+      "asof_close": 30.010000228881836,
+      "atr": 1.5285302284043836,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 20.30146969530167,
+      "entry_tiers": [
+        {
+          "alloc_pct": 26.264304644101323,
+          "atr_distance": 0.5000000000000006,
+          "label": "E1",
+          "limit": 29.245735114679643,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.548916978189744,
+          "atr_distance": 1.9999999999999998,
+          "label": "E2",
+          "limit": 26.95293977207307,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 41.18677837770894,
+          "atr_distance": 3.133729923370619,
+          "label": "E3",
+          "limit": 25.219999313354492,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.149833783298276,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.519672787728652,
+          "tag": "overhead resistance",
+          "target": 30.239999771118164,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.3361975408857523,
+          "tag": "overhead resistance",
+          "target": 35.58000183105469,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.749046509283825,
+          "tag": "overhead resistance",
+          "target": 38.279998779296875,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "W": {
+      "asof_close": 72.31999969482422,
+      "atr": 4.108927672625112,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 50.455566317877214,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.483326378612272,
+          "atr_distance": 0.3640852748521117,
+          "label": "E1",
+          "limit": 70.82399963378906,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 33.038302609567104,
+          "atr_distance": 1.2728389919777414,
+          "label": "E2",
+          "limit": 67.08999633789062,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 38.47837101182063,
+          "atr_distance": 2.0000000000000013,
+          "label": "E3",
+          "limit": 64.10214434957399,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.069217114516751,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.8614838431303365,
+          "tag": "overhead resistance",
+          "target": 81.25999959309895,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.9968450273078651,
+          "tag": "overhead resistance",
+          "target": 83.5,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.2021528022080166,
+          "tag": "overhead resistance",
+          "target": 86.89749908447266,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "2026-06-03": {
+    "APPF": {
+      "asof_close": 166.27000427246094,
+      "atr": 8.349008832089126,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 135.58598872650464,
+      "entry_tiers": [
+        {
+          "alloc_pct": 17.958392955441184,
+          "atr_distance": 0.49999999999999917,
+          "label": "E1",
+          "limit": 162.09549985641638,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 31.409066930882528,
+          "atr_distance": 2.0,
+          "label": "E2",
+          "limit": 149.57198660828269,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 50.63254011367629,
+          "atr_distance": 2.675168653316471,
+          "label": "E3",
+          "limit": 143.93499755859375,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 11.349598912668775,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.1562986706394445,
+          "tag": "overhead resistance",
+          "target": 177.82000732421875,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.3131738996279623,
+          "tag": "overhead resistance",
+          "target": 193.3000030517578,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 6.86152313023869,
+          "tag": "overhead resistance",
+          "target": 240.77999877929688,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "BAH": {
+      "asof_close": 78.5,
+      "atr": 3.128546550838201,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 65.71144978705243,
+      "entry_tiers": [
+        {
+          "alloc_pct": 25.470950466559724,
+          "atr_distance": 0.499999999999999,
+          "label": "E1",
+          "limit": 76.9357267245809,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.42727262124674,
+          "atr_distance": 1.4607421115724883,
+          "label": "E2",
+          "limit": 73.93000030517578,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 41.10177691219353,
+          "atr_distance": 2.0000000000000004,
+          "label": "E3",
+          "limit": 72.2429068983236,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 8.970223849904006,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.4025134266542982,
+          "tag": "overhead resistance",
+          "target": 85.62999725341797,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.9947428421304452,
+          "tag": "overhead resistance",
+          "target": 90.54000091552734,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 2.5737034048712766,
+          "tag": "overhead resistance",
+          "target": 95.33999633789062,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "NSP": {
+      "asof_close": 33.599998474121094,
+      "atr": 2.1539661912725965,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 23.156296240406288,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.464325701570974,
+          "atr_distance": 0.5000000000000012,
+          "label": "E1",
+          "limit": 32.52301537848479,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.39948482432656,
+          "atr_distance": 1.207074876409724,
+          "label": "E2",
+          "limit": 31.0,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 39.13618947410246,
+          "atr_distance": 2.0,
+          "label": "E3",
+          "limit": 29.2920660915759,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.066128988932578,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.9114322035460659,
+          "tag": "overhead resistance",
+          "target": 37.70000076293945,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 2.283527569561692,
+          "tag": "overhead resistance",
+          "target": 48.13999938964844,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 3.4768829406946176,
+          "tag": "overhead resistance",
+          "target": 57.220001220703125,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "RHI": {
+      "asof_close": 29.559999465942383,
+      "atr": 1.4800638099151744,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 20.349936113790882,
+      "entry_tiers": [
+        {
+          "alloc_pct": 26.505669554315272,
+          "atr_distance": 0.4999999999999994,
+          "label": "E1",
+          "limit": 28.819967560984797,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.153875874286726,
+          "atr_distance": 2.0,
+          "label": "E2",
+          "limit": 26.599871846112034,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 40.340454571398006,
+          "atr_distance": 2.9323061097187595,
+          "label": "E3",
+          "limit": 25.219999313354492,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.279060539280261,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.5744146490823531,
+          "tag": "overhead resistance",
+          "target": 30.239999771118164,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.4244979003731781,
+          "tag": "overhead resistance",
+          "target": 35.58000183105469,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.8543146230027399,
+          "tag": "overhead resistance",
+          "target": 38.279998779296875,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "VRNS": {
+      "asof_close": 33.5099983215332,
+      "atr": 1.6473457163666558,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 21.98013757032366,
+      "entry_tiers": [
+        {
+          "alloc_pct": 23.830538684386546,
+          "atr_distance": 0.5000000000000007,
+          "label": "E1",
+          "limit": 32.686325463349874,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 28.638950351519668,
+          "atr_distance": 2.0000000000000004,
+          "label": "E2",
+          "limit": 30.21530688879989,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 47.5305109640938,
+          "atr_distance": 4.377343647196784,
+          "label": "E3",
+          "limit": 26.299000015258787,
+          "tag": "50-day MA"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.270474426517197,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.0770343086559604,
+          "tag": "overhead resistance",
+          "target": 36.44166692097982,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.5844841825329383,
+          "tag": "overhead resistance",
+          "target": 53.900001525878906,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.232231804424687,
+          "tag": "overhead resistance",
+          "target": 58.40999984741211,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "2026-06-04": {
+    "FDS": {
+      "asof_close": 255.02000427246094,
+      "atr": 12.319707221157815,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 172.6802927788422,
+      "entry_tiers": [
+        {
+          "alloc_pct": 21.41462455839662,
+          "atr_distance": 0.36689218268907403,
+          "label": "E1",
+          "limit": 250.5,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 26.56196278750787,
+          "atr_distance": 1.9999999999999998,
+          "label": "E2",
+          "limit": 230.3805898301453,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 52.02341265409551,
+          "atr_distance": 4.628357090705452,
+          "label": "E3",
+          "limit": 198.0,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 5.010561743941584,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.9541618429812,
+          "tag": "overhead resistance",
+          "target": 306.1000061035156,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 5.215880542812745,
+          "tag": "overhead resistance",
+          "target": 453.4100036621094,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 5.68927381471896,
+          "tag": "overhead resistance",
+          "target": 474.7900085449219,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "GME": {
+      "asof_close": 22.270000457763672,
+      "atr": 0.8926601930919413,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 19.06733984505503,
+      "entry_tiers": [
+        {
+          "alloc_pct": 18.456068008575766,
+          "atr_distance": 0.3780835058841591,
+          "label": "E1",
+          "limit": 21.93250036239624,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 27.633307358303185,
+          "atr_distance": 1.5459422059980874,
+          "label": "E2",
+          "limit": 20.889999389648438,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 53.910624633121046,
+          "atr_distance": 2.5877712902324705,
+          "label": "E3",
+          "limit": 19.960000038146973,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 13.825433283600335,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.2586866138222548,
+          "tag": "overhead resistance",
+          "target": 24.0,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 2.7849925683442094,
+          "tag": "overhead resistance",
+          "target": 24.796667098999023,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 3.21000097905908,
+          "tag": "overhead resistance",
+          "target": 25.440000534057617,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "2026-06-07": {
+    "CTKB": {
+      "asof_close": 4.090000152587891,
+      "atr": 0.2617866639493315,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 2.8009755619585635,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.075698401748735,
+          "atr_distance": 0.5000000000000007,
+          "label": "E1",
+          "limit": 3.9591068206132247,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.65884443186075,
+          "atr_distance": 1.470664024949538,
+          "label": "E2",
+          "limit": 3.7049999237060547,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 38.265457166390526,
+          "atr_distance": 1.9999999999999991,
+          "label": "E3",
+          "limit": 3.566426824689228,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.0587061803042666,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.5981339925405341,
+          "tag": "overhead resistance",
+          "target": 4.275000095367432,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.7661843448118802,
+          "tag": "overhead resistance",
+          "target": 4.429999828338623,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.2215474568780675,
+          "tag": "overhead resistance",
+          "target": 4.849999904632568,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "ESTC": {
+      "asof_close": 61.790000915527344,
+      "atr": 3.6903216811482364,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 41.13251747890206,
+      "entry_tiers": [
+        {
+          "alloc_pct": 26.078672098589315,
+          "atr_distance": 0.4999999999999996,
+          "label": "E1",
+          "limit": 59.94484007495323,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.53937453025337,
+          "atr_distance": 2.0000000000000004,
+          "label": "E2",
+          "limit": 54.40935755323087,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 40.38195337115732,
+          "atr_distance": 2.764583113755526,
+          "label": "E3",
+          "limit": 51.587799911499026,
+          "tag": "50-day MA"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.072889803605696,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.5438811298924212,
+          "tag": "overhead resistance",
+          "target": 62.099998474121094,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.9112305085557133,
+          "tag": "overhead resistance",
+          "target": 80.66999816894531,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 2.770763480547479,
+          "tag": "overhead resistance",
+          "target": 92.3433329264323,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "GPRE": {
+      "asof_close": 14.970000267028809,
+      "atr": 0.8070576934604574,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 10.497552816846373,
+      "entry_tiers": [
+        {
+          "alloc_pct": 29.38510979562513,
+          "atr_distance": 0.5,
+          "label": "E1",
+          "limit": 14.56647142029858,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.26077708410716,
+          "atr_distance": 1.1027716488354873,
+          "label": "E2",
+          "limit": 14.079999923706055,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 38.35411312026772,
+          "atr_distance": 2.0,
+          "label": "E3",
+          "limit": 13.355884880107894,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.0609419973821534,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.49157211691948327,
+          "tag": "overhead resistance",
+          "target": 15.640000343322754,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.1586895032898372,
+          "tag": "overhead resistance",
+          "target": 17.940000534057617,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.318217339422881,
+          "tag": "overhead resistance",
+          "target": 18.489999771118164,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "HLI": {
+      "asof_close": 139.25,
+      "atr": 4.219528709131328,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 126.29604686296683,
+      "entry_tiers": [
+        {
+          "alloc_pct": 21.734892853394452,
+          "atr_distance": 0.5000000000000012,
+          "label": "E1",
+          "limit": 137.14023564543433,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 28.470073183167532,
+          "atr_distance": 1.1470466659976897,
+          "label": "E2",
+          "limit": 134.41000366210938,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 49.795033963438016,
+          "atr_distance": 1.9999999999999982,
+          "label": "E3",
+          "limit": 130.81094258173735,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 19.394967831493915,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 4.487745814645976,
+          "tag": "overhead resistance",
+          "target": 164.2449951171875,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 6.04301244909314,
+          "tag": "overhead resistance",
+          "target": 175.0,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 7.207112446258621,
+          "tag": "overhead resistance",
+          "target": 183.0500030517578,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "KBR": {
+      "asof_close": 35.560001373291016,
+      "atr": 1.3160802046638513,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 28.623920329393766,
+      "entry_tiers": [
+        {
+          "alloc_pct": 14.836449047600004,
+          "atr_distance": 0.20758708688891883,
+          "label": "E1",
+          "limit": 35.286800117492675,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 21.432788143494296,
+          "atr_distance": 2.0000000000000004,
+          "label": "E2",
+          "limit": 32.92784096396331,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 63.73076280890571,
+          "atr_distance": 4.270257100834398,
+          "label": "E3",
+          "limit": 29.940000534057617,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 11.898687961113357,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.91350005688514,
+          "tag": "overhead resistance",
+          "target": 39.385000228881836,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 4.315454928808426,
+          "tag": "overhead resistance",
+          "target": 43.2400016784668,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.762770934587693,
+          "tag": "overhead resistance",
+          "target": 44.470001220703125,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "MC": {
+      "asof_close": 67.86000061035156,
+      "atr": 2.3088333555166107,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 49.54347931783658,
+      "entry_tiers": [
+        {
+          "alloc_pct": 30.886669272968213,
+          "atr_distance": 0.02165728056480894,
+          "label": "E1",
+          "limit": 67.80999755859375,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 32.832453947645824,
+          "atr_distance": 0.6496787636994135,
+          "label": "E2",
+          "limit": 66.36000061035156,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 36.28087677938597,
+          "atr_distance": 1.5479680400497868,
+          "label": "E3",
+          "limit": 64.28600036621094,
+          "tag": "50-day MA"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.006319873115892,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.2979429456501347,
+          "tag": "overhead resistance",
+          "target": 70.9749984741211,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.45237686594390064,
+          "tag": "overhead resistance",
+          "target": 73.52499771118164,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 0.5477625973399595,
+          "tag": "overhead resistance",
+          "target": 75.0999984741211,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "MORN": {
+      "asof_close": 185.75999450683594,
+      "atr": 8.076280148620384,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 140.4383820720309,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.965815096460382,
+          "atr_distance": 0.5000000000000018,
+          "label": "E1",
+          "limit": 181.72185443252573,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.77132917385272,
+          "atr_distance": 1.2427247616550776,
+          "label": "E2",
+          "limit": 175.72340118408204,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 38.26285572968689,
+          "atr_distance": 2.0,
+          "label": "E3",
+          "limit": 169.60743420959517,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 5.065518812041907,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.5085936407170248,
+          "tag": "overhead resistance",
+          "target": 192.75999450683594,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.6285393912008731,
+          "tag": "overhead resistance",
+          "target": 196.9199981689453,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.057802608177607,
+          "tag": "overhead resistance",
+          "target": 315.85499572753906,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "PJT": {
+      "asof_close": 157.22000122070312,
+      "atr": 5.105170498952996,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 122.62483285798059,
+      "entry_tiers": [
+        {
+          "alloc_pct": 25.394463593684968,
+          "atr_distance": 0.4999999999999991,
+          "label": "E1",
+          "limit": 154.66741597122663,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 31.717132891211183,
+          "atr_distance": 2.000000000000002,
+          "label": "E2",
+          "limit": 147.00966022279712,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 42.888403515103846,
+          "atr_distance": 3.41810267684908,
+          "label": "E3",
+          "limit": 139.77000427246094,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 6.335939358561308,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.8517156921679022,
+          "tag": "overhead resistance",
+          "target": 165.6300048828125,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.1677610829752916,
+          "tag": "overhead resistance",
+          "target": 172.97000122070312,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.4601244552317003,
+          "tag": "overhead resistance",
+          "target": 179.75999450683594,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "VCYT": {
+      "asof_close": 48.72999954223633,
+      "atr": 2.2433737094179467,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 32.18911399753316,
+      "entry_tiers": [
+        {
+          "alloc_pct": 23.186164442194777,
+          "atr_distance": 0.5000000000000012,
+          "label": "E1",
+          "limit": 47.60831268752735,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 27.562512615750954,
+          "atr_distance": 1.9999999999999984,
+          "label": "E2",
+          "limit": 44.24325212340044,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 49.25132294205426,
+          "atr_distance": 4.791889980198232,
+          "label": "E3",
+          "limit": 37.97999954223633,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.438853568980112,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.8996496871562558,
+          "tag": "overhead resistance",
+          "target": 50.709999084472656,
+          "tranche_pct": 100.0
+        }
+      ]
+    },
+    "VIRT": {
+      "asof_close": 52.18000030517578,
+      "atr": 1.763941893495149,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 37.41310878752728,
+      "entry_tiers": [
+        {
+          "alloc_pct": 30.679487310017876,
+          "atr_distance": 0.4999999999999985,
+          "label": "E1",
+          "limit": 51.29802935842821,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.37335275415527,
+          "atr_distance": 1.3458494163561912,
+          "label": "E2",
+          "limit": 49.8060001373291,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 35.94715993582685,
+          "atr_distance": 2.000000000000002,
+          "label": "E3",
+          "limit": 48.65211651818548,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.014097616047441,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.1898575847502237,
+          "tag": "overhead resistance",
+          "target": 52.209999084472656,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.5332197594772928,
+          "tag": "overhead resistance",
+          "target": 56.47999954223633,
+          "tranche_pct": 50.0
+        }
+      ]
+    }
+  },
+  "2026-06-08": {
+    "BFH": {
+      "asof_close": 91.41999816894531,
+      "atr": 2.8672198929873063,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 64.44557128991163,
+      "entry_tiers": [
+        {
+          "alloc_pct": 29.038817763550323,
+          "atr_distance": 0.4999999999999978,
+          "label": "E1",
+          "limit": 89.98638822245167,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.249894932077,
+          "atr_distance": 2.000000000000001,
+          "label": "E2",
+          "limit": 85.6855583829707,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 37.71128730437268,
+          "atr_distance": 3.121489555137448,
+          "label": "E3",
+          "limit": 82.47000122070312,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.04428591316801,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.6301930373401815,
+          "tag": "overhead resistance",
+          "target": 99.12999725341797,
+          "tranche_pct": 100.0
+        }
+      ]
+    },
+    "KBR": {
+      "asof_close": 35.209999084472656,
+      "atr": 1.2792175508848487,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 28.66078298317277,
+      "entry_tiers": [
+        {
+          "alloc_pct": 15.302427567779562,
+          "atr_distance": 0.35959410043621576,
+          "label": "E1",
+          "limit": 34.75,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 21.938810080481787,
+          "atr_distance": 1.999999999999999,
+          "label": "E2",
+          "limit": 32.65156398270296,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 62.758762351738646,
+          "atr_distance": 4.119704695084682,
+          "label": "E3",
+          "limit": 29.940000534057617,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 12.431163236974133,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 3.1086609558415716,
+          "tag": "overhead resistance",
+          "target": 39.385000228881836,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 4.466821003163636,
+          "tag": "overhead resistance",
+          "target": 42.93000030517578,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 5.056825988014082,
+          "tag": "overhead resistance",
+          "target": 44.470001220703125,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "MORN": {
+      "asof_close": 181.50999450683594,
+      "atr": 7.806546070273058,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 141.27345576078164,
+      "entry_tiers": [
+        {
+          "alloc_pct": 24.60833427091744,
+          "atr_distance": 0.4999999999999991,
+          "label": "E1",
+          "limit": 177.60672147169942,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.91694207466421,
+          "atr_distance": 2.0,
+          "label": "E2",
+          "limit": 165.89690236628982,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 41.47472365441834,
+          "atr_distance": 2.654182917027015,
+          "label": "E3",
+          "limit": 160.7899932861328,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 6.621425398942279,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.0280701387868674,
+          "tag": "overhead resistance",
+          "target": 192.75999450683594,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.1919339255133465,
+          "tag": "overhead resistance",
+          "target": 196.9199981689453,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 5.876819001882131,
+          "tag": "overhead resistance",
+          "target": 315.85499572753906,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "NSP": {
+      "asof_close": 34.720001220703125,
+      "atr": 2.172125929480624,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 22.904673210534174,
+      "entry_tiers": [
+        {
+          "alloc_pct": 24.56609327880133,
+          "atr_distance": 0.5000000000000011,
+          "label": "E1",
+          "limit": 33.63393825596281,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 30.009285598224533,
+          "atr_distance": 1.712608449728609,
+          "label": "E2",
+          "limit": 31.0,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 45.42462112297414,
+          "atr_distance": 3.2410648111965936,
+          "label": "E3",
+          "limit": 27.68000030517578,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.253538788043995,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.0451678459464384,
+          "tag": "overhead resistance",
+          "target": 37.70000076293945,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 2.4882957136764814,
+          "tag": "overhead resistance",
+          "target": 48.13999938964844,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 3.743430331023218,
+          "tag": "overhead resistance",
+          "target": 57.220001220703125,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "OSK": {
+      "asof_close": 131.38999938964844,
+      "atr": 4.944110082944355,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 92.36050955389724,
+      "entry_tiers": [
+        {
+          "alloc_pct": 29.136038078381528,
+          "atr_distance": 0.4999999999999994,
+          "label": "E1",
+          "limit": 128.91794434817626,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.403500727735754,
+          "atr_distance": 1.5007752749159051,
+          "label": "E2",
+          "limit": 123.97000122070312,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 38.460461193882715,
+          "atr_distance": 2.7831099844840037,
+          "label": "E3",
+          "limit": 117.62999725341797,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 10,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.0344645808871755,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.5931115241019618,
+          "tag": "overhead resistance",
+          "target": 141.1300048828125,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.6966631516156193,
+          "tag": "overhead resistance",
+          "target": 144.3000030517578,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.1766375981894004,
+          "tag": "overhead resistance",
+          "target": 158.9933319091797,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "2026-06-10": {
+    "CRUS": {
+      "asof_close": 157.8699951171875,
+      "atr": 7.360684112629121,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 108.52154483127998,
+      "entry_tiers": [
+        {
+          "alloc_pct": 26.545611423898553,
+          "atr_distance": 0.19155774261466238,
+          "label": "E1",
+          "limit": 156.45999908447266,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 33.623639931340776,
+          "atr_distance": 1.9999999999999984,
+          "label": "E2",
+          "limit": 143.14862689192927,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 39.83074864476067,
+          "atr_distance": 2.921222349668178,
+          "label": "E3",
+          "limit": 136.36780017852783,
+          "tag": "200-day MA"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.098314752945194,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.9706379683487278,
+          "tag": "overhead resistance",
+          "target": 178.3999989827474,
+          "tranche_pct": 100.0
+        }
+      ]
+    },
+    "ESTC": {
+      "asof_close": 60.779998779296875,
+      "atr": 3.483227189618119,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 42.254249080865186,
+      "entry_tiers": [
+        {
+          "alloc_pct": 29.075205039099803,
+          "atr_distance": 0.5000000000000001,
+          "label": "E1",
+          "limit": 59.038385184487815,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.44368887615312,
+          "atr_distance": 1.171326989097352,
+          "label": "E2",
+          "limit": 56.70000076293945,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 38.48110608474709,
+          "atr_distance": 2.0000000000000004,
+          "label": "E3",
+          "limit": 53.813544400060636,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.032658415051172,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.41604630740016685,
+          "tag": "overhead resistance",
+          "target": 62.099998474121094,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.6572185271263548,
+          "tag": "overhead resistance",
+          "target": 65.4800033569336,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 0.8884008785740855,
+          "tag": "overhead resistance",
+          "target": 68.72000122070312,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "2026-06-11": {
+    "DFIN": {
+      "asof_close": 37.2400016784668,
+      "atr": 1.740017360399072,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 31.898148382041644,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.330127530266335,
+          "atr_distance": 0.0977013146602102,
+          "label": "E1",
+          "limit": 37.06999969482422,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 71.66987246973368,
+          "atr_distance": 2.0000000000000004,
+          "label": "E2",
+          "limit": 33.75996695766865,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 12.650218489569951,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 4.037176000657914,
+          "tag": "overhead resistance",
+          "target": 46.0,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 5.3052343694258175,
+          "tag": "overhead resistance",
+          "target": 49.54999923706055,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 5.79281176523559,
+          "tag": "overhead resistance",
+          "target": 50.91499900817871,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "KFY": {
+      "asof_close": 73.26000213623047,
+      "atr": 1.8181719917921702,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 57.13182877114728,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.81536413914407,
+          "atr_distance": 0.5000000000000038,
+          "label": "E1",
+          "limit": 72.35091614033438,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.61069988293419,
+          "atr_distance": 1.9999999999999996,
+          "label": "E2",
+          "limit": 69.62365815264613,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 39.573935977921735,
+          "atr_distance": 3.4186546599067236,
+          "label": "E3",
+          "limit": 67.04429998397828,
+          "tag": "200-day MA"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 5.697041984166349,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.5043877831248943,
+          "tag": "overhead resistance",
+          "target": 75.52999877929688,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.7259802160646044,
+          "tag": "overhead resistance",
+          "target": 78.2400016784668,
+          "tranche_pct": 50.0
+        }
+      ]
+    },
+    "PCVX": {
+      "asof_close": 47.290000915527344,
+      "atr": 2.2017696083290805,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 32.052129400655716,
+      "entry_tiers": [
+        {
+          "alloc_pct": 26.50809336820363,
+          "atr_distance": 0.5000000000000016,
+          "label": "E1",
+          "limit": 46.1891161113628,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.115431010254206,
+          "atr_distance": 1.9999999999999996,
+          "label": "E2",
+          "limit": 42.886461698869184,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 41.37647562154218,
+          "atr_distance": 3.3700174421399183,
+          "label": "E3",
+          "limit": 39.869998931884766,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.1084977687834305,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.7413877501157841,
+          "tag": "overhead resistance",
+          "target": 50.27000045776367,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.1686608021828633,
+          "tag": "overhead resistance",
+          "target": 54.7400016784668,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.2929235516271156,
+          "tag": "overhead resistance",
+          "target": 56.040000915527344,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "PJT": {
+      "asof_close": 153.97000122070312,
+      "atr": 5.235781218899223,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 122.12771745271142,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.989712102598972,
+          "atr_distance": 0.4999999999999983,
+          "label": "E1",
+          "limit": 151.35211061125352,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.42404486996393,
+          "atr_distance": 1.3894762963403344,
+          "label": "E2",
+          "limit": 146.69500732421875,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 37.58624302743709,
+          "atr_distance": 1.9999999999999987,
+          "label": "E3",
+          "limit": 143.49843878290469,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 5.954945931679729,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.7600931474158428,
+          "tag": "overhead resistance",
+          "target": 165.6300048828125,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.0570678128776734,
+          "tag": "overhead resistance",
+          "target": 172.97000122070312,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.3317894737357303,
+          "tag": "overhead resistance",
+          "target": 179.75999450683594,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "RDW": {
+      "asof_close": 17.09000015258789,
+      "atr": 2.455605711710055,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 10.74437455428282,
+      "entry_tiers": [
+        {
+          "alloc_pct": 37.16707330447675,
+          "atr_distance": 0.5000000000000002,
+          "label": "E1",
+          "limit": 15.862197296732862,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 62.832926695523255,
+          "atr_distance": 1.5521221795048283,
+          "label": "E2",
+          "limit": 13.278600063323974,
+          "tag": "50-day MA"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.1695553909242165,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.2925209293621975,
+          "tag": "overhead resistance",
+          "target": 22.25,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.5487903028524603,
+          "tag": "overhead resistance",
+          "target": 26.639999389648438,
+          "tranche_pct": 50.0
+        }
+      ]
+    },
+    "SONO": {
+      "asof_close": 15.4399995803833,
+      "atr": 0.7248840688567171,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 10.98033520516304,
+      "entry_tiers": [
+        {
+          "alloc_pct": 30.22825365742478,
+          "atr_distance": 0.44144947940285184,
+          "label": "E1",
+          "limit": 15.119999885559082,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 32.551618562086844,
+          "atr_distance": 0.9880194384161981,
+          "label": "E2",
+          "limit": 14.723800029754639,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 37.22012778048838,
+          "atr_distance": 1.8209804181599887,
+          "label": "E3",
+          "limit": 14.119999885559082,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.027655449817382,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.23118655982721542,
+          "tag": "overhead resistance",
+          "target": 15.460000038146973,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.5912257525196205,
+          "tag": "overhead resistance",
+          "target": 16.770000457763672,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 0.8175097916731218,
+          "tag": "overhead resistance",
+          "target": 17.593333562215168,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "2026-06-14": {
+    "BL": {
+      "asof_close": 28.729999542236328,
+      "atr": 1.875195644467587,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 22.824805118471865,
+      "entry_tiers": [
+        {
+          "alloc_pct": 32.55165280151915,
+          "atr_distance": 0.5000000000000003,
+          "label": "E1",
+          "limit": 27.792401720002534,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 67.44834719848085,
+          "atr_distance": 1.9999999999999996,
+          "label": "E2",
+          "limit": 24.979608253301155,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 8.593631302506095,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.838443312920376,
+          "tag": "overhead resistance",
+          "target": 31.540000915527344,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 2.9067028010924862,
+          "tag": "overhead resistance",
+          "target": 34.81999969482422,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.665423841653548,
+          "tag": "overhead resistance",
+          "target": 40.220001220703125,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "CMP": {
+      "asof_close": 31.459999084472656,
+      "atr": 1.5473399083744321,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 21.532830215796906,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.394290624248725,
+          "atr_distance": 0.5000000000000001,
+          "label": "E1",
+          "limit": 30.68632913028544,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.92430710695704,
+          "atr_distance": 2.0000000000000004,
+          "label": "E2",
+          "limit": 28.36531926772379,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 38.68140226879422,
+          "atr_distance": 2.6884848150671843,
+          "label": "E3",
+          "limit": 27.299999237060547,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.079214013100055,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.5386637493151755,
+          "tag": "overhead resistance",
+          "target": 32.38999938964844,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.837690263335048,
+          "tag": "overhead resistance",
+          "target": 34.5,
+          "tranche_pct": 50.0
+        }
+      ]
+    },
+    "CNS": {
+      "asof_close": 77.05000305175781,
+      "atr": 2.175733937639956,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 56.26696400007974,
+      "entry_tiers": [
+        {
+          "alloc_pct": 29.66703666966612,
+          "atr_distance": 0.5000000000000012,
+          "label": "E1",
+          "limit": 75.96213608293783,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 34.03167673429209,
+          "atr_distance": 1.9999999999999984,
+          "label": "E2",
+          "limit": 72.6985351764779,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 36.30128659604179,
+          "atr_distance": 2.599124137452297,
+          "label": "E3",
+          "limit": 71.39500045776367,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.333531581194977,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.26150874243673494,
+          "tag": "overhead resistance",
+          "target": 77.61999893188477,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.6378397589666651,
+          "tag": "overhead resistance",
+          "target": 83.98999786376953,
+          "tranche_pct": 50.0
+        }
+      ]
+    },
+    "CORZ": {
+      "asof_close": 27.600000381469727,
+      "atr": 1.7437211066635006,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 18.34441287432413,
+      "entry_tiers": [
+        {
+          "alloc_pct": 25.48036833939519,
+          "atr_distance": 0.4999999999999999,
+          "label": "E1",
+          "limit": 26.728139828137977,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.41036265070336,
+          "atr_distance": 1.9999999999999996,
+          "label": "E2",
+          "limit": 24.112558168142726,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 41.109269009901446,
+          "atr_distance": 2.7690209680035913,
+          "label": "E3",
+          "limit": 22.771600074768067,
+          "tag": "50-day MA"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.170658711595856,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.0593016315565769,
+          "tag": "overhead resistance",
+          "target": 30.459999084472656,
+          "tranche_pct": 100.0
+        }
+      ]
+    },
+    "FDS": {
+      "asof_close": 241.16000366210938,
+      "atr": 11.93602202168596,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 173.06397797831403,
+      "entry_tiers": [
+        {
+          "alloc_pct": 22.75100941862214,
+          "atr_distance": 0.5000000000000006,
+          "label": "E1",
+          "limit": 235.1919926512664,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 29.528639317878,
+          "atr_distance": 1.9999999999999998,
+          "label": "E2",
+          "limit": 217.28795961873746,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 47.72035126349986,
+          "atr_distance": 3.615945378091137,
+          "label": "E3",
+          "limit": 198.0,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 5.546424823770358,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.8997245810056173,
+          "tag": "overhead resistance",
+          "target": 247.3300018310547,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.5410148736803475,
+          "tag": "overhead resistance",
+          "target": 272.3999938964844,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 2.403061045653025,
+          "tag": "overhead resistance",
+          "target": 306.1000061035156,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "HIMS": {
+      "asof_close": 26.81999969482422,
+      "atr": 2.132544386850805,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 16.385520500938593,
+      "entry_tiers": [
+        {
+          "alloc_pct": 18.652808098285167,
+          "atr_distance": 0.49999999999999956,
+          "label": "E1",
+          "limit": 25.753727501398817,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 24.806155733818265,
+          "atr_distance": 2.0,
+          "label": "E2",
+          "limit": 22.55491092112261,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 56.54103616789656,
+          "atr_distance": 3.8451714797364733,
+          "label": "E3",
+          "limit": 18.6200008392334,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.912676207001952,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.4562736283897364,
+          "tag": "overhead resistance",
+          "target": 27.540000915527344,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 2.406458391766182,
+          "tag": "overhead resistance",
+          "target": 31.854999542236328,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.4180325761773585,
+          "tag": "overhead resistance",
+          "target": 40.9900016784668,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "LAC": {
+      "asof_close": 4.550000190734863,
+      "atr": 0.3564078992622351,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 3.0629296258587475,
+      "entry_tiers": [
+        {
+          "alloc_pct": 40.2011034498677,
+          "atr_distance": 0.48680228637914996,
+          "label": "E1",
+          "limit": 4.3765000104904175,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 59.798896550132284,
+          "atr_distance": 1.9999999999999998,
+          "label": "E2",
+          "limit": 3.837184392210393,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.14386516696605,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.3556164412963583,
+          "tag": "overhead resistance",
+          "target": 5.397500038146973,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.590212493502754,
+          "tag": "overhead resistance",
+          "target": 5.630000114440918,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 2.03417912800831,
+          "tag": "overhead resistance",
+          "target": 6.070000171661377,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "LNC": {
+      "asof_close": 37.29999923706055,
+      "atr": 1.0194110724573835,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 30.59058953789418,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.955487490999843,
+          "atr_distance": 0.500000000000002,
+          "label": "E1",
+          "limit": 36.79029370083185,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.85263192043512,
+          "atr_distance": 1.5279404482590189,
+          "label": "E2",
+          "limit": 35.742399826049805,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 37.19188058856504,
+          "atr_distance": 2.0502035038228046,
+          "label": "E3",
+          "limit": 35.209999084472656,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 6.83140687926687,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.47309886276540575,
+          "tag": "overhead resistance",
+          "target": 38.334999084472656,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.9058371032220204,
+          "tag": "overhead resistance",
+          "target": 40.61000061035156,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.1702351193419667,
+          "tag": "overhead resistance",
+          "target": 42.0,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "MTRN": {
+      "asof_close": 247.25999450683594,
+      "atr": 10.501992203318789,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 165.65498561892915,
+      "entry_tiers": [
+        {
+          "alloc_pct": 23.838478313642614,
+          "atr_distance": 0.49999999999999883,
+          "label": "E1",
+          "limit": 242.00899840517656,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 28.080125198359173,
+          "atr_distance": 2.000000000000001,
+          "label": "E2",
+          "limit": 226.25601010019835,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 48.08139648799822,
+          "atr_distance": 4.845537373304345,
+          "label": "E3",
+          "limit": 196.3721987915039,
+          "tag": "50-day MA"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.432001142296846,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.0,
+          "tag": "2R volatility target",
+          "target": 315.61821576205955,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.0,
+          "tag": "3R volatility target",
+          "target": 365.60595914310295,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.0,
+          "tag": "4R volatility target",
+          "target": 415.59370252414647,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "VSAT": {
+      "asof_close": 70.16999816894531,
+      "atr": 6.126914293122277,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 46.33241516905547,
+      "entry_tiers": [
+        {
+          "alloc_pct": 39.24990266412251,
+          "atr_distance": 0.49999999999999933,
+          "label": "E1",
+          "limit": 67.10654102238418,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 60.75009733587751,
+          "atr_distance": 1.9999999999999998,
+          "label": "E2",
+          "limit": 57.91616958270076,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.115034833207577,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.8607519105662973,
+          "tag": "overhead resistance",
+          "target": 89.79000091552734,
+          "tranche_pct": 100.0
+        }
+      ]
+    },
+    "WK": {
+      "asof_close": 48.93000030517578,
+      "atr": 2.568176197699207,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 40.77182395488868,
+      "entry_tiers": [
+        {
+          "alloc_pct": 32.353129187618876,
+          "atr_distance": 0.49999999999999906,
+          "label": "E1",
+          "limit": 47.64591220632618,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 67.64687081238114,
+          "atr_distance": 1.999999999999999,
+          "label": "E2",
+          "limit": 43.79364790977737,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 10.711844391784245,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.0102430697883555,
+          "tag": "overhead resistance",
+          "target": 53.619998931884766,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.276599702531146,
+          "tag": "overhead resistance",
+          "target": 59.025001525878906,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.781933960370844,
+          "tag": "overhead resistance",
+          "target": 65.44999694824219,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "2026-06-15": {
+    "AMC": {
+      "asof_close": 2.2799999713897705,
+      "atr": 0.18506588766971246,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 1.4455156388717023,
+      "entry_tiers": [
+        {
+          "alloc_pct": 22.121598527578406,
+          "atr_distance": 0.5000000000000006,
+          "label": "E1",
+          "limit": 2.187467027554914,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 30.860716007601948,
+          "atr_distance": 1.9999999999999998,
+          "label": "E2",
+          "limit": 1.9098681960503456,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 47.01768546481965,
+          "atr_distance": 3.0259490272943994,
+          "label": "E3",
+          "limit": 1.7200000286102295,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.4425088581230625,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 3.065347248301835,
+          "tag": "overhead resistance",
+          "target": 3.2200000286102295,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.9359277162258652,
+          "tag": "overhead resistance",
+          "target": 3.5999999046325684,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 5.035608709763803,
+          "tag": "overhead resistance",
+          "target": 4.079999923706055,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "COMP": {
+      "asof_close": 9.140000343322754,
+      "atr": 0.5519669398809862,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 5.977591646612675,
+      "entry_tiers": [
+        {
+          "alloc_pct": 24.475590386574616,
+          "atr_distance": 0.5000000000000011,
+          "label": "E1",
+          "limit": 8.86401687338226,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 31.114360233798912,
+          "atr_distance": 2.0000000000000013,
+          "label": "E2",
+          "limit": 8.03606646356078,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 44.41004937962648,
+          "atr_distance": 3.3607094227611083,
+          "label": "E3",
+          "limit": 7.284999847412109,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.18230625501673,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.8740723662247697,
+          "tag": "overhead resistance",
+          "target": 9.59000015258789,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.053054191151104,
+          "tag": "overhead resistance",
+          "target": 9.9350004196167,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 2.7105800850976403,
+          "tag": "overhead resistance",
+          "target": 13.130000114440918,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "DV": {
+      "asof_close": 10.25,
+      "atr": 0.46376822518733857,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 7.176231641298257,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.936275090381923,
+          "atr_distance": 0.4999999999999985,
+          "label": "E1",
+          "limit": 10.018115887406331,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 34.422537249746114,
+          "atr_distance": 2.0000000000000018,
+          "label": "E2",
+          "limit": 9.322463549625322,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 37.64118765987197,
+          "atr_distance": 2.50124908178763,
+          "label": "E3",
+          "limit": 9.09000015258789,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.206199945112197,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.7126717975193388,
+          "tag": "overhead resistance",
+          "target": 11.03499984741211,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.9700985916414661,
+          "tag": "overhead resistance",
+          "target": 11.615000247955322,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.2918818197454696,
+          "tag": "overhead resistance",
+          "target": 12.34000015258789,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "FDS": {
+      "asof_close": 235.86000061035156,
+      "atr": 11.970591746490197,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 173.0294082535098,
+      "entry_tiers": [
+        {
+          "alloc_pct": 22.985929488274877,
+          "atr_distance": 0.41934433242695046,
+          "label": "E1",
+          "limit": 230.84020080566407,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 31.36878730249616,
+          "atr_distance": 2.0000000000000004,
+          "label": "E2",
+          "limit": 211.91881711737116,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 45.64528320922896,
+          "atr_distance": 3.162750966045784,
+          "label": "E3",
+          "limit": 198.0,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 5.790541723367842,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.0143642546445546,
+          "tag": "overhead resistance",
+          "target": 247.3300018310547,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.6940371004357397,
+          "tag": "overhead resistance",
+          "target": 272.3999938964844,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 2.6076785224262746,
+          "tag": "overhead resistance",
+          "target": 306.1000061035156,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "HIMS": {
+      "asof_close": 30.170000076293945,
+      "atr": 2.227362715777268,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 18.85643713465047,
+      "entry_tiers": [
+        {
+          "alloc_pct": 19.51536103546833,
+          "atr_distance": 0.5,
+          "label": "E1",
+          "limit": 29.05631871840531,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 25.31696653963216,
+          "atr_distance": 1.938705359709823,
+          "label": "E2",
+          "limit": 25.85180004119873,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 55.167672424899514,
+          "atr_distance": 3.8790266751113296,
+          "label": "E3",
+          "limit": 21.530000686645508,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.865725627468043,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.4822996177178878,
+          "tag": "overhead resistance",
+          "target": 31.854999542236328,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.2267857846945955,
+          "tag": "overhead resistance",
+          "target": 40.9900016784668,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 5.327425450736558,
+          "tag": "overhead resistance",
+          "target": 51.9900016784668,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "MARA": {
+      "asof_close": 14.640000343322754,
+      "atr": 1.1040104483779865,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 10.164775467323677,
+      "entry_tiers": [
+        {
+          "alloc_pct": 26.94220553769346,
+          "atr_distance": 0.14492689024954353,
+          "label": "E1",
+          "limit": 14.479999542236328,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 31.050003560530207,
+          "atr_distance": 0.8423836083636155,
+          "label": "E2",
+          "limit": 13.710000038146973,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 42.00779090177634,
+          "atr_distance": 1.8779716997866251,
+          "label": "E3",
+          "limit": 12.566699965000153,
+          "tag": "200-day MA"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.151555004909908,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.575362861701857,
+          "tag": "overhead resistance",
+          "target": 15.319999694824219,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.0841630591105336,
+          "tag": "overhead resistance",
+          "target": 16.984999656677246,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.7885385079994036,
+          "tag": "overhead resistance",
+          "target": 19.290000915527344,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "MGNI": {
+      "asof_close": 16.75,
+      "atr": 0.7906400304041609,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 11.868071956376243,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.321036117056003,
+          "atr_distance": 0.01264827038510054,
+          "label": "E1",
+          "limit": 16.739999771118164,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 33.799462018417294,
+          "atr_distance": 1.3335398891481842,
+          "label": "E2",
+          "limit": 15.695649981498718,
+          "tag": "200-day MA"
+        },
+        {
+          "alloc_pct": 37.879501864526716,
+          "atr_distance": 1.9999999999999998,
+          "label": "E3",
+          "limit": 15.168719939191678,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.04412164289144,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.37290292217519017,
+          "tag": "overhead resistance",
+          "target": 17.255000114440918,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.1642378219750473,
+          "tag": "overhead resistance",
+          "target": 20.360000610351562,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 2.2728709335824404,
+          "tag": "overhead resistance",
+          "target": 24.710000038146973,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "OPEN": {
+      "asof_close": 4.610000133514404,
+      "atr": 0.3791161957014284,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 3.0983616896944253,
+      "entry_tiers": [
+        {
+          "alloc_pct": 26.788353349179232,
+          "atr_distance": 0.4999999999999997,
+          "label": "E1",
+          "limit": 4.42044203566369,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.2507783180221,
+          "atr_distance": 1.2858856388965842,
+          "label": "E2",
+          "limit": 4.122500061988831,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 40.96086833279867,
+          "atr_distance": 2.0,
+          "label": "E3",
+          "limit": 3.8517677421115475,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.160452591061798,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.8847221965040901,
+          "tag": "overhead resistance",
+          "target": 4.96999979019165,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.552692950052229,
+          "tag": "overhead resistance",
+          "target": 5.6333333651224775,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.8564683939816125,
+          "tag": "overhead resistance",
+          "target": 5.934999942779541,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "QRVO": {
+      "asof_close": 101.27999877929688,
+      "atr": 4.258240526113308,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 69.70175855835934,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.183256745569068,
+          "atr_distance": 0.4999999999999987,
+          "label": "E1",
+          "limit": 99.15087851624023,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.475961536822865,
+          "atr_distance": 2.0000000000000018,
+          "label": "E2",
+          "limit": 92.76351772707025,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 40.340781717608074,
+          "atr_distance": 3.3200564746973225,
+          "label": "E3",
+          "limit": 87.14239974975585,
+          "tag": "200-day MA"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.128587598778834,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.6243903806192372,
+          "tag": "overhead resistance",
+          "target": 106.30000305175781,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.7659763216550646,
+          "tag": "overhead resistance",
+          "target": 109.48999786376953,
+          "tranche_pct": 50.0
+        }
+      ]
+    },
+    "RITM": {
+      "asof_close": 9.1899995803833,
+      "atr": 0.20775974632476557,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 8.222240558851016,
+      "entry_tiers": [
+        {
+          "alloc_pct": 26.95217169751894,
+          "atr_distance": 0.4999999999999984,
+          "label": "E1",
+          "limit": 9.086119707220918,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.33210027145536,
+          "atr_distance": 1.2514420132237467,
+          "label": "E2",
+          "limit": 8.930000305175781,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 40.715728031025705,
+          "atr_distance": 2.000000000000002,
+          "label": "E3",
+          "limit": 8.77448008773377,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 13.007997458632069,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.6478029166513057,
+          "tag": "overhead resistance",
+          "target": 10.039999961853027,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.9828285437489848,
+          "tag": "overhead resistance",
+          "target": 10.270000457763672,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 2.2013224911796074,
+          "tag": "overhead resistance",
+          "target": 10.420000076293945,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "RYTM": {
+      "asof_close": 89.69999694824219,
+      "atr": 4.548344808224906,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 62.26507515063393,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.229915108340865,
+          "atr_distance": 0.397418681894478,
+          "label": "E1",
+          "limit": 87.89239974975585,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 33.62840757065289,
+          "atr_distance": 1.5950851484035562,
+          "label": "E2",
+          "limit": 82.44499969482422,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 38.141677321006235,
+          "atr_distance": 2.2645590553595443,
+          "label": "E3",
+          "limit": 79.4000015258789,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.049647535309159,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.38789142496919715,
+          "tag": "overhead resistance",
+          "target": 90.79499816894531,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.8113625078707396,
+          "tag": "overhead resistance",
+          "target": 99.5,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.1528633642863375,
+          "tag": "overhead resistance",
+          "target": 106.5199966430664,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "TTD": {
+      "asof_close": 19.270000457763672,
+      "atr": 1.2828002549295914,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 15.331803675129825,
+      "entry_tiers": [
+        {
+          "alloc_pct": 31.708048965295657,
+          "atr_distance": 0.49999999999999956,
+          "label": "E1",
+          "limit": 18.628600330298877,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 68.29195103470435,
+          "atr_distance": 2.000000000000001,
+          "label": "E2",
+          "limit": 16.704399947904488,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 8.910222486823319,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 3.154991585632299,
+          "tag": "overhead resistance",
+          "target": 23.56999969482422,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.810656224276437,
+          "tag": "overhead resistance",
+          "target": 24.8700008392334,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 7.860643042491448,
+          "tag": "overhead resistance",
+          "target": 32.900001525878906,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "2026-08-02": {
+    "ACLS": {
+      "asof_close": 130.3800048828125,
+      "atr": 11.657910351002824,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 87.8854764600554,
+      "entry_tiers": [
+        {
+          "alloc_pct": 41.44964829327173,
+          "atr_distance": 0.49999999999999944,
+          "label": "E1",
+          "limit": 124.5510497073111,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 58.55035170672827,
+          "atr_distance": 1.6604266398513765,
+          "label": "E2",
+          "limit": 111.0228999710083,
+          "tag": "200-day MA"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.097680256483287,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.9126847859247926,
+          "tag": "overhead resistance",
+          "target": 171.61000061035156,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 2.683954817328597,
+          "tag": "overhead resistance",
+          "target": 193.77999877929688,
+          "tranche_pct": 50.0
+        }
+      ]
+    },
+    "ESTC": {
+      "asof_close": 65.79000091552734,
+      "atr": 2.9420744966935235,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 44.98992011120123,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.137685020551704,
+          "atr_distance": 0.4758380011108077,
+          "label": "E1",
+          "limit": 64.39005006790161,
+          "tag": "200-day MA"
+        },
+        {
+          "alloc_pct": 32.390102853574774,
+          "atr_distance": 1.9062062644859823,
+          "label": "E2",
+          "limit": 60.181800079345706,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 40.47221212587352,
+          "atr_distance": 3.1984233771060593,
+          "label": "E3",
+          "limit": 56.380001068115234,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.076806243899031,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.6039008529452583,
+          "tag": "overhead resistance",
+          "target": 68.72000122070312,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.1060897739128828,
+          "tag": "overhead resistance",
+          "target": 76.1500015258789,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.3845578402667542,
+          "tag": "overhead resistance",
+          "target": 80.27000045776367,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "KTOS": {
+      "asof_close": 46.599998474121094,
+      "atr": 3.1896634939704227,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 36.8077315476319,
+      "entry_tiers": [
+        {
+          "alloc_pct": 19.955031455223228,
+          "atr_distance": 0.18497253823269974,
+          "label": "E1",
+          "limit": 46.0099983215332,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 33.0105597012623,
+          "atr_distance": 1.4829149065967862,
+          "label": "E2",
+          "limit": 41.869998931884766,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 47.03440884351448,
+          "atr_distance": 1.9999999999999991,
+          "label": "E3",
+          "limit": 40.22067148618025,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 8.351870017878449,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 3.3171841610614323,
+          "tag": "overhead resistance",
+          "target": 58.880001068115234,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.8687567125562,
+          "tag": "overhead resistance",
+          "target": 61.70000076293945,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.872149650330111,
+          "tag": "overhead resistance",
+          "target": 66.83000183105469,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "LYFT": {
+      "asof_close": 15.859999656677246,
+      "atr": 0.6787048175051367,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 11.931295316009267,
+      "entry_tiers": [
+        {
+          "alloc_pct": 21.805549799245398,
+          "atr_distance": 0.4346515137145209,
+          "label": "E1",
+          "limit": 15.5649995803833,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 27.790116736977062,
+          "atr_distance": 1.8461630611297184,
+          "label": "E2",
+          "limit": 14.606999893188476,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 50.40433346377755,
+          "atr_distance": 3.8136360065887156,
+          "label": "E3",
+          "limit": 13.271666526794434,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 6.548038718012162,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.0963733947665681,
+          "tag": "overhead resistance",
+          "target": 16.567500114440918,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.481852103488143,
+          "tag": "overhead resistance",
+          "target": 17.420000076293945,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.8797652475908533,
+          "tag": "overhead resistance",
+          "target": 18.299999237060547,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "MORN": {
+      "asof_close": 192.57000732421875,
+      "atr": 8.477157564195078,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 132.41944689947533,
+      "entry_tiers": [
+        {
+          "alloc_pct": 25.600380945988597,
+          "atr_distance": 0.4458401552940711,
+          "label": "E1",
+          "limit": 188.7905500793457,
+          "tag": "200-day MA"
+        },
+        {
+          "alloc_pct": 31.077067503446028,
+          "atr_distance": 2.000000000000001,
+          "label": "E2",
+          "limit": 175.6156921958286,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 43.32255155056537,
+          "atr_distance": 3.748899769459872,
+          "label": "E3",
+          "limit": 160.7899932861328,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.360698246929443,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.5375610610081328,
+          "tag": "overhead resistance",
+          "target": 194.14666239420572,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.5904867561192564,
+          "tag": "overhead resistance",
+          "target": 316.7099914550781,
+          "tranche_pct": 50.0
+        }
+      ]
+    },
+    "MRCY": {
+      "asof_close": 97.0999984741211,
+      "atr": 6.456680122622566,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 66.33149923817687,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.898687093408025,
+          "atr_distance": 0.5000000000000004,
+          "label": "E1",
+          "limit": 93.87165841280981,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.50945796905835,
+          "atr_distance": 1.44501476230198,
+          "label": "E2",
+          "limit": 87.77000038146973,
+          "tag": "200-day MA"
+        },
+        {
+          "alloc_pct": 38.591854937533626,
+          "atr_distance": 1.9999999999999998,
+          "label": "E3",
+          "limit": 84.18663822887596,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.072518106212319,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.7239026313525669,
+          "tag": "overhead resistance",
+          "target": 103.83999633789062,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.4008983392676078,
+          "tag": "overhead resistance",
+          "target": 118.56999969482422,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.5663554309208465,
+          "tag": "overhead resistance",
+          "target": 122.16999816894531,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "MTCH": {
+      "asof_close": 39.40999984741211,
+      "atr": 1.0882484327516677,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 27.721751033190714,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.597734066519365,
+          "atr_distance": 0.5000000000000007,
+          "label": "E1",
+          "limit": 38.865875631036275,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.09833511796528,
+          "atr_distance": 2.0000000000000027,
+          "label": "E2",
+          "limit": 37.23350298190877,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 39.303930815515365,
+          "atr_distance": 4.024817253391557,
+          "label": "E3",
+          "limit": 35.029998779296875,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.065084892091367,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.46043714422938464,
+          "tag": "overhead resistance",
+          "target": 41.029998779296875,
+          "tranche_pct": 100.0
+        }
+      ]
+    },
+    "SNAP": {
+      "asof_close": 4.690000057220459,
+      "atr": 0.20623972658927078,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 3.6037602161902704,
+      "entry_tiers": [
+        {
+          "alloc_pct": 15.186074988925062,
+          "atr_distance": 0.1939488696699439,
+          "label": "E1",
+          "limit": 4.650000095367432,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 21.692543859975423,
+          "atr_distance": 1.9999999999999982,
+          "label": "E2",
+          "limit": 4.277520604041918,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 63.12138115109952,
+          "atr_distance": 4.266879756844569,
+          "label": "E3",
+          "limit": 3.809999942779541,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 9.75562048842417,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.932402415493668,
+          "tag": "overhead resistance",
+          "target": 4.880000114440918,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.4029230887389135,
+          "tag": "overhead resistance",
+          "target": 5.519999980926514,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.367952657176687,
+          "tag": "overhead resistance",
+          "target": 5.940000057220459,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "UCTT": {
+      "asof_close": 83.30999755859375,
+      "atr": 10.67030455317174,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 51.744367893278074,
+      "entry_tiers": [
+        {
+          "alloc_pct": 32.90823162976148,
+          "atr_distance": 0.5000000000000003,
+          "label": "E1",
+          "limit": 77.97484528200788,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 67.09176837023853,
+          "atr_distance": 2.0,
+          "label": "E2",
+          "limit": 61.96938845225027,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.51662241825902,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 3.1231012762812376,
+          "tag": "overhead resistance",
+          "target": 115.62000274658203,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 4.9691994087085,
+          "tag": "overhead resistance",
+          "target": 144.22000122070312,
+          "tranche_pct": 50.0
+        }
+      ]
+    },
+    "WT": {
+      "asof_close": 19.3700008392334,
+      "atr": 0.7969852822864281,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 13.298595384044843,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.201428670241423,
+          "atr_distance": 0.5000000000000001,
+          "label": "E1",
+          "limit": 18.971508198090184,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.29248509854874,
+          "atr_distance": 2.0000000000000004,
+          "label": "E2",
+          "limit": 17.776030274660542,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 40.50608623120985,
+          "atr_distance": 3.4254101176787195,
+          "label": "E3",
+          "limit": 16.639999389648438,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.098102149905736,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.5086850590890067,
+          "tag": "overhead resistance",
+          "target": 19.850000381469727,
+          "tranche_pct": 50.0
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.8264770619070727,
+          "tag": "overhead resistance",
+          "target": 21.229999542236328,
+          "tranche_pct": 50.0
+        }
+      ]
+    }
+  },
+  "2026-08-18": {
+    "ETSY": {
+      "asof_close": 79.95999908447266,
+      "atr": 3.433875266079152,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 54.494850570785175,
+      "entry_tiers": [
+        {
+          "alloc_pct": 26.6197498422326,
+          "atr_distance": 0.5000000000000006,
+          "label": "E1",
+          "limit": 78.24306145143308,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 31.754711328573787,
+          "atr_distance": 2.000000000000002,
+          "label": "E2",
+          "limit": 73.09224855231435,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 41.62553882919362,
+          "atr_distance": 3.593606459672197,
+          "label": "E3",
+          "limit": 67.62000274658203,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.1256246531896625,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.8689021122950331,
+          "tag": "overhead resistance",
+          "target": 87.55699920654297,
+          "tranche_pct": 100.0
+        }
+      ]
+    },
+    "TTD": {
+      "asof_close": 13.420000076293945,
+      "atr": 1.0792122351978266,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 10.106818514236616,
+      "entry_tiers": [
+        {
+          "alloc_pct": 32.25806143412255,
+          "atr_distance": 0.4999999999999996,
+          "label": "E1",
+          "limit": 12.880393958695032,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 67.74193856587745,
+          "atr_distance": 2.0,
+          "label": "E2",
+          "limit": 11.261575605898292,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 7.1981501650980775,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 4.631142289130879,
+          "tag": "overhead resistance",
+          "target": 19.549999237060547,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 5.218516263491471,
+          "tag": "overhead resistance",
+          "target": 20.53499984741211,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 6.929949963612329,
+          "tag": "overhead resistance",
+          "target": 23.40499973297119,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  },
+  "2026-08-19": {
+    "AMBA": {
+      "asof_close": 74.58999633789062,
+      "atr": 5.175312175252245,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 51.70858379828053,
+      "entry_tiers": [
+        {
+          "alloc_pct": 27.53606700247295,
+          "atr_distance": 0.23105776241741666,
+          "label": "E1",
+          "limit": 73.39420028686523,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 30.754447036534064,
+          "atr_distance": 0.8272826812522147,
+          "label": "E2",
+          "limit": 70.30855020523072,
+          "tag": "200-day MA"
+        },
+        {
+          "alloc_pct": 41.709485960992986,
+          "atr_distance": 2.0,
+          "label": "E3",
+          "limit": 64.23937198738614,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.097007936745285,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.2819444094636354,
+          "tag": "overhead resistance",
+          "target": 90.31499862670898,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.4832069889625357,
+          "tag": "overhead resistance",
+          "target": 93.72000122070312,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.6490046884740244,
+          "tag": "overhead resistance",
+          "target": 96.5250015258789,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "IIPR": {
+      "asof_close": 56.20000076293945,
+      "atr": 1.6442275294025384,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 43.33343996123874,
+      "entry_tiers": [
+        {
+          "alloc_pct": 30.46850598742604,
+          "atr_distance": 0.5000000000000011,
+          "label": "E1",
+          "limit": 55.37788699823818,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.428358673581535,
+          "atr_distance": 1.30897378259397,
+          "label": "E2",
+          "limit": 54.047750034332275,
+          "tag": "200-day MA"
+        },
+        {
+          "alloc_pct": 36.10313533899242,
+          "atr_distance": 1.9002846131602906,
+          "label": "E3",
+          "limit": 53.07550048828125,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 5.0301055765647735,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.2350658844197218,
+          "tag": "overhead resistance",
+          "target": 56.63333384195963,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.3612819388499763,
+          "tag": "overhead resistance",
+          "target": 57.99250030517578,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 0.44555507725331295,
+          "tag": "overhead resistance",
+          "target": 58.900001525878906,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "IRDM": {
+      "asof_close": 48.709999084472656,
+      "atr": 1.7079844485798543,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 34.27143007488038,
+      "entry_tiers": [
+        {
+          "alloc_pct": 28.719909803994184,
+          "atr_distance": 0.41592835960102387,
+          "label": "E1",
+          "limit": 47.99959991455078,
+          "tag": "50-day MA"
+        },
+        {
+          "alloc_pct": 33.75320451572073,
+          "atr_distance": 1.9999999999999996,
+          "label": "E2",
+          "limit": 45.29403018731295,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 37.52688568028508,
+          "atr_distance": 2.83082149166688,
+          "label": "E3",
+          "limit": 43.875,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.0580804043464145,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.4190466606055775,
+          "tag": "overhead resistance",
+          "target": 50.2599983215332,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 0.595666930342299,
+          "tag": "overhead resistance",
+          "target": 52.25,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 0.735898143514137,
+          "tag": "overhead resistance",
+          "target": 53.83000183105469,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "MXL": {
+      "asof_close": 66.43000030517578,
+      "atr": 8.696774472788055,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 41.806007271337265,
+      "entry_tiers": [
+        {
+          "alloc_pct": 22.280916755368388,
+          "atr_distance": 0.49999999999999967,
+          "label": "E1",
+          "limit": 62.081613068781756,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 28.367855191504752,
+          "atr_distance": 1.1728487147568272,
+          "label": "E2",
+          "limit": 56.22999954223633,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 49.35122805312685,
+          "atr_distance": 2.0000000000000004,
+          "label": "E3",
+          "limit": 49.03645135959967,
+          "tag": "volatility support"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.580731569745641,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.875449896435399,
+          "tag": "overhead resistance",
+          "target": 89.0,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 3.3312019425869814,
+          "tag": "overhead resistance",
+          "target": 94.55000305175781,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 4.211911054890818,
+          "tag": "overhead resistance",
+          "target": 105.27499771118164,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "PL": {
+      "asof_close": 22.6200008392334,
+      "atr": 1.6267104588172434,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 15.225014341027773,
+      "entry_tiers": [
+        {
+          "alloc_pct": 26.75368851843164,
+          "atr_distance": 0.4999999999999999,
+          "label": "E1",
+          "limit": 21.806645609824777,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.92928069608611,
+          "atr_distance": 1.622907926046394,
+          "label": "E2",
+          "limit": 19.979999542236328,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 39.317030785482245,
+          "atr_distance": 2.1269925284288167,
+          "label": "E3",
+          "limit": 19.15999984741211,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.128101784479291,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 2.1847372252239508,
+          "tag": "overhead resistance",
+          "target": 30.898000717163086,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 2.8729725080880852,
+          "tag": "overhead resistance",
+          "target": 34.28499984741211,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 3.3565862713742223,
+          "tag": "overhead resistance",
+          "target": 36.66499900817871,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "RDW": {
+      "asof_close": 12.399999618530273,
+      "atr": 1.0139131440385734,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 8.150556488299118,
+      "entry_tiers": [
+        {
+          "alloc_pct": 25.301826465134944,
+          "atr_distance": 0.4999999999999992,
+          "label": "E1",
+          "limit": 11.893043046510988,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 33.61749576063969,
+          "atr_distance": 1.6963970962083281,
+          "label": "E2",
+          "limit": 10.680000305175781,
+          "tag": "swing-low"
+        },
+        {
+          "alloc_pct": 41.08067777422536,
+          "atr_distance": 2.2585760677010285,
+          "label": "E3",
+          "limit": 10.109999656677246,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 4.186582118201406,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 0.7242846697107356,
+          "tag": "overhead resistance",
+          "target": 12.637499809265137,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 1.1475796189054766,
+          "tag": "overhead resistance",
+          "target": 13.73900032043457,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 1.4592382567496298,
+          "tag": "overhead resistance",
+          "target": 14.550000190734863,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    },
+    "SMG": {
+      "asof_close": 61.130001068115234,
+      "atr": 2.6879687407498842,
+      "builder_config_version": "{\"cluster_radius_mult\":0.5,\"deep_fallback_mult\":2.0,\"default_risk_budget_pct\":1.0,\"disaster_floor_frac\":0.75,\"max_exposure_pct\":25.0,\"min_bars\":30,\"min_spacing_mult\":0.5,\"min_stop_dist_mult\":0.5,\"r_multiple_fallback\":[2.0,3.0,4.0],\"schema\":1,\"shallow_pullback_mult\":0.5,\"stop_atr_buffer\":1.0,\"swing_threshold_mult\":2.5}",
+      "disaster_stop": 49.412031640719846,
+      "entry_tiers": [
+        {
+          "alloc_pct": 21.069368936692694,
+          "atr_distance": 0.49999999999999933,
+          "label": "E1",
+          "limit": 59.786016697740294,
+          "tag": "shallow pullback"
+        },
+        {
+          "alloc_pct": 32.13998188803063,
+          "atr_distance": 2.0,
+          "label": "E2",
+          "limit": 55.754063586615466,
+          "tag": "volatility support"
+        },
+        {
+          "alloc_pct": 46.79064917527667,
+          "atr_distance": 2.8013728284256145,
+          "label": "E3",
+          "limit": 53.599998474121094,
+          "tag": "swing-low"
+        }
+      ],
+      "order_ttl_days": 7,
+      "schema_version": "1.1.0",
+      "status": "OK",
+      "suggested_size_pct": 9.11761434031535,
+      "tp_tranches": [
+        {
+          "label": "TP1",
+          "r_multiple": 1.561270312051272,
+          "tag": "overhead resistance",
+          "target": 65.25,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP2",
+          "r_multiple": 2.0609761755511142,
+          "tag": "overhead resistance",
+          "target": 68.34000015258789,
+          "tranche_pct": 33.333333333333336
+        },
+        {
+          "label": "TP3",
+          "r_multiple": 2.464460167176321,
+          "tag": "overhead resistance",
+          "target": 70.83499908447266,
+          "tranche_pct": 33.333333333333336
+        }
+      ]
+    }
+  }
+}

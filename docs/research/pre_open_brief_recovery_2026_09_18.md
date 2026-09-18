@@ -137,3 +137,52 @@ produces:
   rule changed for them.
 - The recompute reports, per date, how many rows were added, dropped and kept. It does not report,
   and must not be steered by, whether the rebuilt numbers are better or worse.
+
+## Addendum: the trade setup of a re-added name (2026-09-18, before the /edge recompute)
+
+The pre-registration above fixes WHICH names a rebuilt date carries. It does not say how a
+re-added name gets a trade setup, and it has to: that name was dropped before any brief parquet
+stored it, so it has no levels, and `/edge` cannot replay a ladder without them. The section above
+says outcomes come from "the unchanged code paths"; constructing a setup is not one of those. It is
+a new decision, and this is where it is fixed — before any `/edge` outcome is recomputed.
+
+The rule:
+
+1. The setup is `thematic.trade_setup.builder.build_trade_setup(ticker, asof, loader)` over the
+   frame the pipeline itself cached that day, `~/.alphalens/thematic_ohlcv/<TICKER>_<asof>.parquet`,
+   cut at the as-of. That is the same function and the same bytes the brief used; the builder takes
+   nothing else from brief time (no theme, no score, no catalyst).
+2. `order_ttl_days` is the single value the date's own stored setups carry, not today's default.
+   The default changed from 10 to 7 on 2026-06-11, and the ladder config token is derived from this
+   field, so today's default would pool a rebuilt row under a different token from its date-mates.
+   Each of the 14 dates carries exactly one value.
+3. A name whose cached frame is missing, or whose build returns `NO_STRUCTURE`, takes the
+   non-plannable path the existing code already gives a setup-less candidate. No substitute price
+   source, no nearest-date frame, no fallback.
+4. The rebuilt setups are frozen into
+   `apps/alphalens-pipeline/alphalens_pipeline/thematic/config/pre_open_setups.json` and committed
+   before the recompute runs, so the geometry cannot move after an outcome has been seen. Freezing
+   also puts a re-added name on the same footing as its date-mates, whose setups are likewise frozen
+   in the brief parquet and would not necessarily be reproduced by a later builder either.
+5. The recompute reports rows added, dropped and kept per date, and nothing about whether the
+   rebuilt outcomes are better or worse.
+
+### What the rule was checked against
+
+`apps/alphalens-research/scripts/verify_pre_open_setups.py`, run on the VPS on 2026-09-18:
+
+| population | names | close / ATR / entry tiers | stop / size / targets |
+|---|---|---|---|
+| recovered names a brief still stores | 61 | 61 / 61 | 61 / 61 |
+| every name on the 98 dates NOT being rebuilt | 866 | 866 / 866 | 864 / 866 |
+
+The second row is the arm that can refute the rule, and it did find something: ENPH and SEDG on
+2026-05-27 do not reproduce, because today's builder clamps their stop at the 25%-of-entry floor
+and the builder of that day did not (the derivation was touched by #654 on 2026-06-23). That is a
+real limit of any reconstruction, so it was bounded rather than argued away: **the floor binds on
+0 of the 155 recovered names**, so the one builder behaviour known to have changed since June does
+not reach this population. A future builder change could; each frozen entry records the
+`builder_config_version` it came from, which is what makes that visible.
+
+Read in order, the check is not circular: the rule is the production builder over the production
+cache, it was not tuned, and the 866 names are names it was never read from.
