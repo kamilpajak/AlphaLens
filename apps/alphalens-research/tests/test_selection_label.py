@@ -617,6 +617,18 @@ class TestRecoveredPreOpenDates(unittest.TestCase):
         out = self._read()
         self.assertEqual(set(out["population"]), {sl.POPULATION_PRE_OPEN_RECOVERED})
 
+    def test_a_recovered_date_reports_its_shadow_file_on_every_row(self):
+        # shadow_available is a fact about the date: a re-added name must not read as
+        # "no proposals were recorded that day".
+        self._write_stored_brief(["TTD", "ADDED"])
+        _shadow([{"theme": "t1", "ticker": "QQQ", "source": "llm"}]).to_parquet(
+            self.shadow / f"{self.RECOVERED_DAY.isoformat()}.parquet"
+        )
+        self._run()
+        out = self._read()
+        self.assertEqual(set(out["shadow_available"]), {True})
+        self.assertNotIn("QQQ", out.index)
+
     def test_a_stage_value_of_a_kept_name_survives(self):
         _brief(
             [{"theme": "t1", "ticker": "TTD", "event_overlap": True}], published_at=None

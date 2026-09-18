@@ -17,6 +17,10 @@ only computes and stores what it defines.
   21-40 and the pre-specified secondary ``sel_car_mean_20`` (D1). ``sel_zar_h`` is the
   label over the pre-window residual volatility: stored, not an owner decision.
 - Missing is a coded outcome, one status per horizon, never a dropped row.
+- On a date whose list was set after the open and later recovered (#1494),
+  ``population`` reads ``pre_open_recovered`` and ``published_before_open`` is True for
+  the RECOVERED list, whatever ``brief_published_at`` says: that stamp belongs to the run
+  that rewrote the list, not to the list being labelled.
 
 Prices come from the split-adjusted grouped-daily history (``rs_history``), where the
 memo's measurements were taken. That store never re-fetches a session already on disk,
@@ -465,13 +469,18 @@ def build_population(brief: pd.DataFrame | None, shadow: pd.DataFrame | None) ->
     return pd.DataFrame(rows, columns=["ticker", *STAGE_COLUMNS])
 
 
-def apply_pre_open_population(population: pd.DataFrame, recovered: Sequence[str]) -> pd.DataFrame:
+def apply_pre_open_population(
+    population: pd.DataFrame, recovered: Sequence[str], *, shadow_available: bool
+) -> pd.DataFrame:
     """Replace a date's population with the names its brief held at the arrival open.
 
     A name in both keeps the stage values the stored brief carries for it (its themes,
     the overlap flag, the mapper config). A name the later run dropped comes back with
     no theme, because the journal records names only. Every row is briefed by
     construction: it was on the published list a reader could have acted on.
+
+    ``shadow_available`` is a fact about the DATE, so it is the same on every row: a
+    re-added name must not read as "no proposals were recorded that day" when they were.
     """
     stored = {str(rec["ticker"]): rec for rec in population.to_dict("records")}
     rows = []
@@ -485,7 +494,7 @@ def apply_pre_open_population(population: pd.DataFrame, recovered: Sequence[str]
                 "briefed_any_theme": True,
                 "themes_briefed": rec.get("themes_briefed", []),
                 "themes_proposed": rec.get("themes_proposed", []),
-                "shadow_available": bool(rec.get("shadow_available", False)),
+                "shadow_available": shadow_available,
                 "event_overlap": bool(rec.get("event_overlap", False)),
                 "mapper_config_version": rec.get("mapper_config_version"),
                 BRIEF_PUBLISHED_AT: rec.get(BRIEF_PUBLISHED_AT),
@@ -672,7 +681,9 @@ def _stamp_date(
     population = build_population(brief, shadow)
     recovered = pre_open_names(brief_date)
     if recovered is not None:
-        population = apply_pre_open_population(population, recovered)
+        population = apply_pre_open_population(
+            population, recovered, shadow_available=shadow is not None
+        )
     out_path = labels_dir / f"{brief_date.isoformat()}.parquet"
     existing: dict[str, dict[str, Any]] = {}
     if out_path.exists():
