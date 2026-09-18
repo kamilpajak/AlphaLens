@@ -11,6 +11,7 @@ swallowed (never aborts the nightly timer).
 
 from __future__ import annotations
 
+import datetime as dt
 import unittest
 from unittest import mock
 
@@ -113,6 +114,136 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
         # A from-scratch store rebuild (#1416) must reach briefs older than the
         # nightly window.
         self.assertEqual(self._replay_kwargs(["--lookback-days", "120"])["lookback_days"], 120)
+
+    def _replay_calls(self, extra_args: list[str]) -> list:
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                return_value=[],
+            ) as replay,
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.enrich_store_with_size_fields",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.benchmark_excess.enrich_store_with_benchmark_excess",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.sector_excess.enrich_store_with_sector_excess",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.event_car.enrich_store_with_event_car",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.selection_label.enrich_selection_labels",
+                return_value=_EMPTY_LABEL_REPORT,
+            ),
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "feedback",
+                    "backfill-shadow-returns",
+                    "--briefs-dir",
+                    "/tmp/does-not-matter",
+                    *extra_args,
+                ],
+            )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        return list(replay.call_args_list)
+
+    def test_named_dates_are_replayed_one_at_a_time(self):
+        # The nightly sweep reaches 75 days back; a date older than that (the June
+        # pre-open rebuilds, #1494) can only be reached by naming it.
+        calls = self._replay_calls(["--date", "2026-06-04", "--date", "2026-06-15"])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            [c.kwargs["end_date"] for c in calls],
+            [dt.date(2026, 6, 4), dt.date(2026, 6, 15)],
+        )
+        for call in calls:
+            self.assertEqual(call.kwargs["lookback_days"], 0)
+
+    def test_without_named_dates_the_sweep_is_one_call_over_the_window(self):
+        calls = self._replay_calls([])
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(calls[0].kwargs.get("end_date"))
+
+    def test_naming_a_date_and_a_lookback_is_refused(self):
+        # The two describe different date sets; silently honouring one would make the
+        # command's own help a lie about what it just recomputed.
+        result = self.runner.invoke(
+            app,
+            [
+                "feedback",
+                "backfill-shadow-returns",
+                "--date",
+                "2026-06-04",
+                "--lookback-days",
+                "120",
+            ],
+        )
+        self.assertNotEqual(result.exit_code, 0)
+
+    def test_named_dates_still_settle_the_store_for_the_mirror(self):
+        # The mirror only ingests dates at or below the settled watermark, so a run
+        # that skipped it would leave /edge on the pre-rebuild rows.
+        from alphalens_cli.commands import feedback as feedback_cmd
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                return_value=[],
+            ),
+            mock.patch.object(feedback_cmd, "_enrich_population_benchmark_excess"),
+            mock.patch.object(feedback_cmd, "_enrich_population_event_car"),
+            mock.patch.object(feedback_cmd, "_enrich_population_sector_excess"),
+            mock.patch.object(feedback_cmd, "_enrich_population_size_fields"),
+            mock.patch.object(feedback_cmd, "_enrich_selection_labels"),
+            mock.patch.object(feedback_cmd, "_enrich_population_chart_payloads"),
+            mock.patch.object(feedback_cmd, "_write_ingest_watermark") as watermark,
+        ):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "backfill-shadow-returns", "--date", "2026-06-04"],
+            )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        watermark.assert_called_once()
+
+    def test_the_enrichment_tail_runs_once_however_many_dates_were_named(self):
+        # The enrichment passes sweep the WHOLE store, so running them per date would
+        # repeat the same work N times inside one wall-clock deadline.
+        from alphalens_cli.commands import feedback as feedback_cmd
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                return_value=[],
+            ),
+            mock.patch.object(feedback_cmd, "_enrich_population_benchmark_excess") as bench,
+            mock.patch.object(feedback_cmd, "_enrich_population_event_car"),
+            mock.patch.object(feedback_cmd, "_enrich_population_sector_excess"),
+            mock.patch.object(feedback_cmd, "_enrich_population_size_fields"),
+            mock.patch.object(feedback_cmd, "_enrich_selection_labels"),
+            mock.patch.object(feedback_cmd, "_enrich_population_chart_payloads"),
+            mock.patch.object(feedback_cmd, "_write_ingest_watermark"),
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "feedback",
+                    "backfill-shadow-returns",
+                    "--date",
+                    "2026-06-04",
+                    "--date",
+                    "2026-06-15",
+                ],
+            )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        bench.assert_called_once()
 
     def test_a_store_from_the_old_arrival_rule_stops_the_whole_chain(self):
         # Fail closed (#1416): no enrichment pass and no ingest watermark run on a

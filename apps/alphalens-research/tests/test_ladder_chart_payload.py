@@ -1427,8 +1427,11 @@ class _BudgetDeadline:
 # The FTRE regression geometry (memo §5 test 5): brief 2026-06-12, arrival
 # 2026-06-16, matured 2026-07-23, sequence E1 -> TP1 (TP1 sold). These are the
 # exact levels the live store row carried.
-_FTRE_ARRIVAL = dt.date(2026, 6, 16)
-_FTRE_BRIEF = dt.date(2026, 6, 15)  # a Monday brief arrives Tuesday (#1416)
+_FTRE_ARRIVAL = dt.date(2026, 6, 23)
+# A Monday brief arrives Tuesday (#1416). The incident's own 2026-06-15 cannot be used
+# as a fixture any more: it is one of the dates whose population comes from the recovered
+# pre-open list (#1494), so a brief written here would not be the population under test.
+_FTRE_BRIEF = dt.date(2026, 6, 22)
 _FTRE_MATURED = dt.date(2026, 7, 23)
 _FTRE_ENTRY = 15.988738606366711
 _FTRE_STOP = 10.855612341290005

@@ -1272,10 +1272,10 @@ def _setup_for(
 
 def _load_setups_for_date(brief_date: dt.date, briefs_dir: Path) -> dict[str, dict] | None:
     """``{TICKER: trade_setup}`` for one brief date, or ``None`` when unavailable."""
-    from alphalens_pipeline.paper.brief_loader import load_brief
+    from alphalens_pipeline.feedback.pre_open_population import load_brief_for_population
 
     try:
-        candidates = load_brief(brief_date, briefs_dir)
+        candidates = load_brief_for_population(brief_date, briefs_dir)
     except (FileNotFoundError, ValueError) as exc:
         logger.info(
             "chart-payload: no brief for %s — %s; leaving the date NULL.",

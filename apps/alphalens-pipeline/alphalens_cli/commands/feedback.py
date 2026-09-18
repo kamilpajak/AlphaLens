@@ -13,6 +13,7 @@ need on that path).
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import os
@@ -86,6 +87,16 @@ def backfill_shadow_returns_command(
             "window, 75). Raise it for a one-off store rebuild that must reach older briefs."
         ),
     ),
+    dates: list[dt.datetime] | None = typer.Option(
+        None,
+        "--date",
+        formats=["%Y-%m-%d"],
+        help=(
+            "Replay exactly this brief date, and repeat the option for more. Use it to "
+            "reach a date the nightly window no longer covers; the enrichment passes and "
+            "the settled watermark still run once at the end."
+        ),
+    ),
 ) -> None:
     """Backfill the broker-free population-monitor outcomes.
 
@@ -96,14 +107,31 @@ def backfill_shadow_returns_command(
     and the per-decision ladder replay went with the click ledger (#465).
     Idempotent and resilient: per-ticker fetch failures skip + warn, and one bad
     ticker never aborts the sweep.
+
+    ``--date`` names brief dates instead, one replay each. It exists because the
+    sweep is a contiguous window back from today and cannot reach an older date
+    without also recomputing everything in between.
     """
+    if dates and lookback_days is not None:
+        # They describe different date sets. Honouring one silently would make the
+        # run's own report a claim about dates it did not touch.
+        raise typer.BadParameter("--date and --lookback-days name different date sets; pass one.")
     # Population ladder monitor: the broker-free full-hold replay over EVERY brief
     # candidate. It uses its OWN ~42-session lookback (``MONITOR_LOOKBACK_DAYS``).
     # Never raises.
-    _refresh_population_ladders(briefs_dir, lookback_days=lookback_days)
+    _refresh_population_ladders(
+        briefs_dir,
+        lookback_days=lookback_days,
+        dates=[d.date() for d in dates] if dates else None,
+    )
 
 
-def _refresh_population_ladders(briefs_dir: Path, *, lookback_days: int | None = None) -> None:
+def _refresh_population_ladders(
+    briefs_dir: Path,
+    *,
+    lookback_days: int | None = None,
+    dates: list[dt.date] | None = None,
+) -> None:
     """Run the broker-free POPULATION ladder monitor (PR-2). Never raises.
 
     Replays EVERY brief candidate's ladder to terminal over the monitor's OWN
@@ -149,11 +177,24 @@ def _refresh_population_ladders(briefs_dir: Path, *, lookback_days: int | None =
         )
         deadline = _RunDeadline(max(total_s - reserve_s, 0.0))
         chart_deadline = _RunDeadline(total_s)
-        reports = replay_population_ladders(
-            briefs_dir,
-            lookback_days=MONITOR_LOOKBACK_DAYS if lookback_days is None else lookback_days,
-            deadline=deadline,
-        )
+        if dates:
+            # One replay per named date: the monitor sweeps a contiguous window, so a
+            # single call cannot express "these dates and nothing between them". Each
+            # call also gets its own fetch budget, which keeps a date with many
+            # brand-new names from starving the next one.
+            reports = []
+            for named in dates:
+                reports.extend(
+                    replay_population_ladders(
+                        briefs_dir, end_date=named, lookback_days=0, deadline=deadline
+                    )
+                )
+        else:
+            reports = replay_population_ladders(
+                briefs_dir,
+                lookback_days=MONITOR_LOOKBACK_DAYS if lookback_days is None else lookback_days,
+                deadline=deadline,
+            )
         terminal = sum(r.terminal for r in reports)
         ongoing = sum(r.ongoing for r in reports)
         typer.echo(

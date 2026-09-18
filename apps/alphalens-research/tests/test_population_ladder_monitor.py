@@ -2456,13 +2456,13 @@ class TestSizeEnrichmentHelpers(unittest.TestCase):
         self.assertFalse(_needs_size_enrichment({**base, "plannable": False}))
 
     def test_load_setups_for_date_broad_except_returns_none(self):
-        # An unanticipated load_brief error (not FileNotFoundError/ValueError) must be
+        # An unanticipated brief-load error (not FileNotFoundError/ValueError) must be
         # caught and yield None — the sweep continues (the zen-review hardening).
         from unittest.mock import patch
 
         from alphalens_pipeline.feedback import population_ladder_monitor as mon
 
-        with patch.object(mon, "load_brief", side_effect=RuntimeError("boom")):
+        with patch.object(mon, "load_brief_for_population", side_effect=RuntimeError("boom")):
             self.assertIsNone(mon._load_setups_for_date(dt.date(2026, 5, 1), Path("/nonexistent")))
 
 

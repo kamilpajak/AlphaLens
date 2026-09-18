@@ -14,7 +14,10 @@ store.
 Population = the paper-trading population, mirrored broker-free: every verified
 candidate with a plannable ``brief_trade_setup`` (the same predicate the paper
 planner applies via :func:`validate_trade_setup`). Enumeration is from the brief
-parquet (:func:`load_brief`), NEVER from any ledger / broker.
+parquet (:func:`load_brief_for_population`), NEVER from any ledger / broker. On the
+14 dates whose brief was rewritten after the arrival open, that helper substitutes
+the list the brief held AT the open (#1494); every other date is the parquet as
+stored.
 
 Telemetry ONLY — never a re-weighting loop. Click-orthogonal: this module reads
 briefs + Polygon ONLY, never the decisions / click ledger. It imports nothing
@@ -94,7 +97,8 @@ from alphalens_pipeline.feedback.ladder_replay import (
     replay_ladder,
     replay_ladder_grid,
 )
-from alphalens_pipeline.paper.brief_loader import CandidateBrief, load_brief
+from alphalens_pipeline.feedback.pre_open_population import load_brief_for_population
+from alphalens_pipeline.paper.brief_loader import CandidateBrief
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
@@ -1621,7 +1625,7 @@ def _replay_one_date(
     reserved forced budgets. Deferred rows carry their prior forward.
     """
     try:
-        candidates = load_brief(brief_date, briefs_dir)
+        candidates = load_brief_for_population(brief_date, briefs_dir)
     except (FileNotFoundError, ValueError):
         # Missing / unreadable brief: skip the date entirely (no crash, no store
         # write). This is NOT cache-poisoning — we simply do not touch the date.
@@ -3035,7 +3039,7 @@ def _load_setups_for_date(brief_date: dt.date, briefs_dir: Path) -> dict[str, di
     untouched.
     """
     try:
-        candidates = load_brief(brief_date, briefs_dir)
+        candidates = load_brief_for_population(brief_date, briefs_dir)
     except (FileNotFoundError, ValueError) as exc:
         logger.info(
             "size-enrichment: no brief for %s — %s; leaving the date NULL.",
