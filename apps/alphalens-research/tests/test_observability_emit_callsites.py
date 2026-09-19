@@ -1222,7 +1222,7 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
 
     _DEFERRED = 'alphalens_feedback_deferred_total{reason="%s"}'
     _UNPRICED = "alphalens_feedback_unpriced_rows"
-    _OLDEST = "alphalens_feedback_oldest_deferred_days"
+    _OLDEST = "alphalens_feedback_oldest_deferred_sessions"
 
     def test_every_completeness_series_is_zero_initialised(self) -> None:
         # Same doctrine as the guard labels: a series that vanishes on a healthy

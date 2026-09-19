@@ -1469,8 +1469,16 @@ groups:
       # night. The fixtures start from a long run of zeros, which is the state the
       # real series is in, so the boundary is tested rather than asserted.
       #
+      # Two consequences of reading a file rather than a run counter, both
+      # deliberate. A SKIPPED run writes nothing, so the previous run's value
+      # persists and this can fire without a second run having happened — which is
+      # the right answer (the rows are still unpriced and nothing is healing them),
+      # so the wording below says "nights", not "runs". A DELAYED run keeps the
+      # last 0 alive longer and pushes the first firing time out by the delay; at
+      # worst that costs one extra night before the page.
+      #
       # The companion alphalens_feedback_deferred_total{reason} and
-      # alphalens_feedback_oldest_deferred_days series deliberately carry NO
+      # alphalens_feedback_oldest_deferred_sessions series deliberately carry NO
       # alert: they say WHICH ceiling bound and how stale the tail is, and a
       # healthy night defers work routinely. No absent() rule either — these
       # series come out of the same emit call, hence the same .prom file, as the
@@ -1483,8 +1491,8 @@ groups:
           route: telegram
           unit: feedback-shadow-returns
         annotations:
-          summary: "nightly sweep left {{ $value }} row(s) with no price path on two consecutive runs"
-          description: "alphalens_feedback_unpriced_rows stayed > 0 across two consecutive nightly feedback-shadow-returns runs, so the work the first run deferred was not picked up by the second — the sweep is newest-date-first, so the oldest dates in the window starve when the per-run fetch budget is spent. The run still exits 0 and stamps the store settled, and the ML label stamper inside it leaves those rows unlabelled. Check `journalctl --user -u alphalens-feedback-shadow-returns.service | grep 'fetch budget exhausted'` and alphalens_feedback_deferred_total{reason} for which ceiling bound. Recovery: replay the starved dates with their own budget, `alphalens feedback backfill-shadow-returns --date <YYYY-MM-DD>` (repeatable). Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+          summary: "nightly sweep has left {{ $value }} row(s) with no price path on consecutive nights"
+          description: "alphalens_feedback_unpriced_rows stayed > 0 across consecutive nights, so work one run deferred was not picked up afterwards — the sweep is newest-date-first, so the oldest dates in the window starve when the per-run fetch budget is spent. The run still exits 0 and stamps the store settled, and the ML label stamper inside it leaves those rows unlabelled. A skipped run writes nothing, so the last value persists and this can also fire without a second run having happened — the rows are unpriced either way. Check `journalctl --user -u alphalens-feedback-shadow-returns.service | grep 'fetch budget exhausted'` and alphalens_feedback_deferred_total{reason} for which ceiling bound. Recovery: replay the starved dates with their own budget, `alphalens feedback backfill-shadow-returns --date <YYYY-MM-DD>` (repeatable). Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
 
       # broker-manager is a Type=simple daemon: ExecStopPost fires only on
       # crash/restart, so health = the per-tick heartbeat gauge the control loop

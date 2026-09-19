@@ -322,7 +322,7 @@ def _emit_nightly_metrics(reports: Any) -> None:
     (2026-09-19: 102 refusals, 19 rows left with no price path, no alert), so
     ``alphalens_feedback_unpriced_rows`` is the outcome the alert reads and the
     two ``deferred_total`` reasons say which ceiling bound.
-    ``alphalens_feedback_oldest_deferred_days`` is a MAX, not a sum: each report
+    ``alphalens_feedback_oldest_deferred_sessions`` is a MAX, not a sum: each report
     already holds a per-date maximum, and adding maxima invents an age no row has.
     It is also the only one of the four that sees a row which HAS a price path and
     merely failed to advance — ``unpriced_rows`` counts total absence, not staleness.
@@ -371,7 +371,7 @@ def _emit_nightly_metrics(reports: Any) -> None:
         metrics["alphalens_feedback_unpriced_rows"] = sum(
             getattr(report, "unpriced_rows", 0) for report in reports
         )
-        metrics["alphalens_feedback_oldest_deferred_days"] = max(
+        metrics["alphalens_feedback_oldest_deferred_sessions"] = max(
             (getattr(report, "oldest_deferred_touch_age", 0) for report in reports),
             default=0,
         )
