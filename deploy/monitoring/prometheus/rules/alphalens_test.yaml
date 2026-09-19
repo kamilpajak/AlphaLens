@@ -278,6 +278,92 @@ tests:
         alertname: AlphalensFeedbackGuardLookupFailed
         exp_alerts: []
 
+  # The claim in the rule comment, pinned: starting from a CLEAN series (the
+  # state the real gauge is in), 50h fires after the THIRD consecutive failing
+  # nightly run, not the second. Last 0 at t=23h; runs at 24h, 48h, 72h; the
+  # expression turns true at 73h+ and for:1h fires at 74h. The fixture above
+  # (1x60, no leading zero) cannot show this — it never has a 0 to age out.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_feedback_guard_total{disposition="lookup_failed"}'
+        values: '0x23 1x72'
+    alert_rule_test:
+      - eval_time: 60h  # after the SECOND failing run — still quiet
+        alertname: AlphalensFeedbackGuardLookupFailed
+        exp_alerts: []
+      - eval_time: 75h  # after the THIRD
+        alertname: AlphalensFeedbackGuardLookupFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: feedback-shadow-returns
+              disposition: lookup_failed
+            exp_annotations:
+              summary: "Implausible-move guard corporate-actions lookups failing on consecutive runs"
+              description: "alphalens_feedback_guard_total{disposition=\"lookup_failed\"} stayed > 0 across the last two nightly feedback-shadow-returns runs — the guard is carrying >60% movers unresolved instead of classifying them (the fail-closed arm has reverted to the pre-#1090 blindness). Check `journalctl --user -u alphalens-feedback-shadow-returns.service` for the Polygon reference-endpoint errors. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+
+  # ---------------------------------------------------------------------
+  # AlphalensFeedbackRowsUnpriced
+  # ---------------------------------------------------------------------
+  #
+  # The grid compresses the nightly cadence: one sample per hour, a run every
+  # 24h. The series starts CLEAN, which is the state the real gauge is in —
+  # a fixture that starts non-zero never exercises the ageing-out of the last 0
+  # and would pass whatever window the rule used.
+  #
+  # Last clean run writes 0 at t=0 (its samples run to t=23h). First short run
+  # at t=24h, second at t=48h. With [26h] the expression turns true just after
+  # t=49h and for:1h fires at t=50h — two hours after the SECOND consecutive
+  # short run.
+  - interval: 1h
+    input_series:
+      - series: alphalens_feedback_unpriced_rows
+        values: '0x23 1x48'
+    alert_rule_test:
+      - eval_time: 49h  # one hour after the second short run: the t=23h zero is still in the window
+        alertname: AlphalensFeedbackRowsUnpriced
+        exp_alerts: []
+      - eval_time: 52h
+        alertname: AlphalensFeedbackRowsUnpriced
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: feedback-shadow-returns
+            exp_annotations:
+              summary: "nightly sweep left 1 row(s) with no price path on two consecutive runs"
+              description: "alphalens_feedback_unpriced_rows stayed > 0 across two consecutive nightly feedback-shadow-returns runs, so the work the first run deferred was not picked up by the second — the sweep is newest-date-first, so the oldest dates in the window starve when the per-run fetch budget is spent. The run still exits 0 and stamps the store settled, and the ML label stamper inside it leaves those rows unlabelled. Check `journalctl --user -u alphalens-feedback-shadow-returns.service | grep 'fetch budget exhausted'` and alphalens_feedback_deferred_total{reason} for which ceiling bound. Recovery: replay the starved dates with their own budget, `alphalens feedback backfill-shadow-returns --date <YYYY-MM-DD>` (repeatable). Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+
+  # It healed overnight: one short run at t=24h, the next run at t=48h picks the
+  # work up and writes 0. This is the half that separates "starving" from
+  # "deferred, as designed" — and it is the common case.
+  - interval: 1h
+    input_series:
+      - series: alphalens_feedback_unpriced_rows
+        values: '0x23 1x23 0x24'
+    alert_rule_test:
+      - eval_time: 52h
+        alertname: AlphalensFeedbackRowsUnpriced
+        exp_alerts: []
+      - eval_time: 70h
+        alertname: AlphalensFeedbackRowsUnpriced
+        exp_alerts: []
+
+  # Alternating nights: every short run is followed by a clean one, so the
+  # window never runs out of zeros. Never fires.
+  - interval: 1h
+    input_series:
+      - series: alphalens_feedback_unpriced_rows
+        values: '0x23 1x23 0x23 1x23'
+    alert_rule_test:
+      - eval_time: 70h
+        alertname: AlphalensFeedbackRowsUnpriced
+        exp_alerts: []
+      - eval_time: 92h
+        alertname: AlphalensFeedbackRowsUnpriced
+        exp_alerts: []
+
   # ---------------------------------------------------------------------
   # AlphalensFeedbackGuardGaugeMissing
   # ---------------------------------------------------------------------

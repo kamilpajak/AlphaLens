@@ -209,6 +209,82 @@ class TestFetchBudgetCap(_MonitorTestBase):
         self.assertEqual(self._captured_forced_budget(env), 900)
 
 
+class TestIncompleteRunIsCountable(_MonitorTestBase):
+    """A run that spends its budget before reaching every date still exits 0 and
+    stamps the store settled (2026-09-19: 19 of 24 rows on three brief dates were
+    left with no price path and nothing reported it). The report must carry both
+    the CAUSE (refusals) and the OUTCOME (rows with no price path), because the
+    only surviving trace today is a log line.
+    """
+
+    _BRIEF_DATE = dt.date(2026, 6, 25)
+    _NOW = dt.datetime(2026, 7, 2, 21, 0, tzinfo=UTC)
+
+    def _priced_fetch(self, ticker, start, end):
+        """Two benign minute bars — enough for a real resolve, no guard trip."""
+        base = int(start.timestamp() * 1000)
+        return [
+            {"t": base, "o": 100.0, "h": 100.5, "l": 99.0, "c": 100.0, "v": 1000.0},
+            {
+                "t": base + 3 * 3600 * 1000,
+                "o": 101.0,
+                "h": 101.5,
+                "l": 100.5,
+                "c": 101.0,
+                "v": 2000.0,
+            },
+        ]
+
+    def _run(self, *, env: dict[str, str], setup=_OK_SETUP, bar_fetch=None):
+        from unittest import mock
+
+        _write_brief(self.briefs_dir, self._BRIEF_DATE, [{"ticker": "MRNA", "setup": setup}])
+        with mock.patch.dict("os.environ", env, clear=False):
+            reports = replay_population_ladders(
+                self.briefs_dir,
+                end_date=self._NOW.date(),
+                store_dir=self.store_dir,
+                bar_fetch=bar_fetch or self._priced_fetch,
+                grouped_fetch=lambda _d: {},
+                now=self._NOW,
+                lookback_days=(self._NOW.date() - self._BRIEF_DATE).days,
+            )
+        self.assertEqual(len(reports), 1)
+        return reports[0]
+
+    _STARVED = {"ALPHALENS_FEEDBACK_MAX_FETCHES": "0", "ALPHALENS_FEEDBACK_FORCED_BUDGET": "0"}
+
+    def test_a_budget_refusal_is_counted_not_only_logged(self):
+        # Both budgets are set to 0: a brand-new row draws on the forced
+        # sub-budget, so an override of the main budget alone would not
+        # exercise the path that starved on 2026-09-19.
+        report = self._run(env=self._STARVED)
+        self.assertGreater(report.fetch_budget_refused, 0)
+
+    def test_a_row_the_budget_never_reached_counts_as_unpriced(self):
+        report = self._run(env=self._STARVED)
+        self.assertEqual(report.unpriced_rows, 1)
+        stored = self._read_store(self._BRIEF_DATE)
+        self.assertTrue(stored["last_priced_session"].isna().all())
+
+    def test_a_fully_served_run_reports_no_unpriced_rows(self):
+        # The observation that refutes counting BEFORE the resolve pass: every
+        # plannable row is null-priced at construction time, so a count taken
+        # there would report the whole plannable population every night.
+        report = self._run(env={})
+        self.assertEqual(report.unpriced_rows, 0)
+        self.assertEqual(report.fetch_budget_refused, 0)
+
+    def test_a_non_plannable_row_is_not_counted_as_unpriced(self):
+        # _nonplannable_row writes the same null last_priced_session as the
+        # deferred placeholder does; only ``plannable`` tells them apart.
+        report = self._run(env=self._STARVED, setup=_NO_STRUCTURE_SETUP)
+        stored = self._read_store(self._BRIEF_DATE)
+        self.assertTrue(stored["last_priced_session"].isna().all())
+        self.assertFalse(bool(stored["plannable"].any()))
+        self.assertEqual(report.unpriced_rows, 0)
+
+
 class TestLadderArrivalAfterBrief(_MonitorTestBase):
     """A brief dated on a session is built after that session closes, so the
     replay window starts at the NEXT session (#1416)."""
@@ -4045,7 +4121,7 @@ class TestGuardMetricsEmissionFromFixtureRun(_MonitorTestBase):
         )
 
         with patch.object(feedback, "emit_domain_metrics") as emit:
-            feedback._emit_guard_metrics(reports)
+            feedback._emit_nightly_metrics(reports)
 
         emit.assert_called_once()
         kwargs = emit.call_args.kwargs

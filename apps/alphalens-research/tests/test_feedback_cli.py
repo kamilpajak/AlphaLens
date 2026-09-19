@@ -252,7 +252,7 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
                 "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
                 side_effect=RuntimeError("polygon down"),
             ),
-            mock.patch.object(feedback_cmd, "_emit_guard_metrics") as guard,
+            mock.patch.object(feedback_cmd, "_emit_nightly_metrics") as guard,
             mock.patch.object(feedback_cmd, "_enrich_population_benchmark_excess"),
             mock.patch.object(feedback_cmd, "_enrich_population_event_car"),
             mock.patch.object(feedback_cmd, "_enrich_population_sector_excess"),
