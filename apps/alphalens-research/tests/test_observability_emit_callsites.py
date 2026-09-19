@@ -1158,24 +1158,14 @@ class TestThematicIngestEmitsSourceRows(unittest.TestCase):
                 thematic.ingest(date="2026-05-29", cache_dir=Path(tmp))  # MUST NOT raise
 
 
-class TestBackfillEmitsGuardDispositionMetrics(unittest.TestCase):
-    """#1090 memo §4: the nightly population-monitor run emits
-    ``alphalens_feedback_guard_total{disposition=...}``.
+class _NightlyEmitHarness:
+    """Drives ``feedback._refresh_population_ladders`` with the replay and every
+    enrichment pass patched out, and hands back the ``emit_domain_metrics`` mock.
 
-    Every disposition label of the Amendment-1 tree (split_invalidated,
-    lookup_failed, extreme_validated, data_quality) is zero-initialised on
-    EVERY successful run — the theme-rollup zero-init doctrine: a series that
-    disappears on healthy nights is indistinguishable from a stopped
-    exporter, and the sustained-lookup_failed alert needs a clean run to
-    emit 0 so it CLEARS.
+    Shared by the guard-disposition and the run-completeness suites: the nightly
+    job has exactly ONE emit call, so both families of series come out of the
+    same mock and must be asserted against the same dict.
     """
-
-    _LABELS = (
-        "split_invalidated",
-        "lookup_failed",
-        "extreme_validated",
-        "data_quality",
-    )
 
     def _report(self, **overrides):
         import datetime as dt
@@ -1221,6 +1211,92 @@ class TestBackfillEmitsGuardDispositionMetrics(unittest.TestCase):
         ):
             feedback._refresh_population_ladders(Path(tmp) / "thematic_briefs")
         return emit
+
+
+class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.TestCase):
+    """A run that spends its fetch budget before reaching every date still exits
+    0 and stamps the store settled (2026-09-19: 19 of 24 rows on three brief
+    dates left with no price path, 102 deferrals, no alert). These four series
+    are what makes that night countable instead of greppable.
+    """
+
+    _DEFERRED = 'alphalens_feedback_deferred_total{reason="%s"}'
+    _UNPRICED = "alphalens_feedback_unpriced_rows"
+    _OLDEST = "alphalens_feedback_oldest_deferred_sessions"
+
+    def test_every_completeness_series_is_zero_initialised(self) -> None:
+        # Same doctrine as the guard labels: a series that vanishes on a healthy
+        # night reads exactly like a stopped exporter, and the unpriced-rows
+        # alert needs a clean run's 0 in the window to clear.
+        emit = self._run_refresh(reports=[self._report()])
+
+        metrics = emit.call_args.kwargs["metrics"]
+        for key in (
+            self._DEFERRED % "fetch_budget",
+            self._DEFERRED % "deadline",
+            self._UNPRICED,
+            self._OLDEST,
+        ):
+            self.assertIn(key, metrics)
+            self.assertEqual(metrics[key], 0)
+
+    def test_counts_sum_across_dates_but_the_age_is_a_max(self) -> None:
+        # The ages are already per-date maxima, so summing them would invent a
+        # number no row has. The fixture's sum (9) and max (7) differ on purpose.
+        emit = self._run_refresh(
+            reports=[
+                self._report(
+                    fetch_budget_refused=40,
+                    stopped_for_deadline=1,
+                    unpriced_rows=12,
+                    oldest_deferred_touch_age=2,
+                ),
+                self._report(
+                    fetch_budget_refused=62,
+                    stopped_for_deadline=3,
+                    unpriced_rows=7,
+                    oldest_deferred_touch_age=7,
+                ),
+            ]
+        )
+
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics[self._DEFERRED % "fetch_budget"], 102)
+        self.assertEqual(metrics[self._DEFERRED % "deadline"], 4)
+        self.assertEqual(metrics[self._UNPRICED], 19)
+        self.assertEqual(metrics[self._OLDEST], 7)
+
+    def test_the_completeness_series_share_the_guard_series_emit_call(self) -> None:
+        # The rules file adds no absent() guard for these series, on the grounds
+        # that the existing AlphalensFeedbackGuardGaugeMissing already watches
+        # this .prom file. That holds only while both families come out of the
+        # SAME emit call — the job is allowed exactly one.
+        emit = self._run_refresh(reports=[self._report()])
+
+        emit.assert_called_once()
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertIn('alphalens_feedback_guard_total{disposition="lookup_failed"}', metrics)
+        self.assertIn(self._UNPRICED, metrics)
+
+
+class TestBackfillEmitsGuardDispositionMetrics(_NightlyEmitHarness, unittest.TestCase):
+    """#1090 memo §4: the nightly population-monitor run emits
+    ``alphalens_feedback_guard_total{disposition=...}``.
+
+    Every disposition label of the Amendment-1 tree (split_invalidated,
+    lookup_failed, extreme_validated, data_quality) is zero-initialised on
+    EVERY successful run — the theme-rollup zero-init doctrine: a series that
+    disappears on healthy nights is indistinguishable from a stopped
+    exporter, and the sustained-lookup_failed alert needs a clean run to
+    emit 0 so it CLEARS.
+    """
+
+    _LABELS = (
+        "split_invalidated",
+        "lookup_failed",
+        "extreme_validated",
+        "data_quality",
+    )
 
     def test_emits_all_disposition_labels_zero_initialised(self) -> None:
         # A night with zero guard trips (the overwhelmingly common case) must

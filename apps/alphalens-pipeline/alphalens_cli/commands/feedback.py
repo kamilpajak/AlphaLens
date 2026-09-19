@@ -237,7 +237,7 @@ def _refresh_population_ladders(
     # any lookup having succeeded (the .prom file keeps last night's values —
     # standard textfile gauge semantics).
     if reports is not None:
-        _emit_guard_metrics(reports)
+        _emit_nightly_metrics(reports)
 
     if deadline is not None and deadline.stopped_reason:
         logger.warning(
@@ -312,11 +312,20 @@ def _enrich_selection_labels(briefs_dir: Path, *, deadline: Any = None) -> None:
         logger.exception("selection-label enrichment failed; continuing")
 
 
-def _emit_guard_metrics(reports: Any) -> None:
-    """Emit the implausible-guard disposition counters (#1090 memo §4). Never raises.
+def _emit_nightly_metrics(reports: Any) -> None:
+    """Emit the nightly run's guard dispositions and its completeness. Never raises.
 
     One ``alphalens_feedback_guard_total{disposition=...}`` series per arm of
-    the Amendment-1 tree, summed across the run's per-brief-date reports.
+    the Amendment-1 tree, summed across the run's per-brief-date reports, plus
+    four series that say how much of the sweep actually finished. The job exits
+    0 and stamps the store settled even when its fetch budget ran out mid-window
+    (2026-09-19: 102 refusals, 19 rows left with no price path, no alert), so
+    ``alphalens_feedback_unpriced_rows`` is the outcome the alert reads and the
+    two ``deferred_total`` reasons say which ceiling bound.
+    ``alphalens_feedback_oldest_deferred_sessions`` is a MAX, not a sum: each report
+    already holds a per-date maximum, and adding maxima invents an age no row has.
+    It is also the only one of the four that sees a row which HAS a price path and
+    merely failed to advance — ``unpriced_rows`` counts total absence, not staleness.
     EVERY label is emitted on EVERY successful run, zeros included — a series
     that disappears on healthy nights is indistinguishable from a stopped
     exporter, and the sustained-lookup_failed alert needs a clean run's 0 to
@@ -353,9 +362,22 @@ def _emit_guard_metrics(reports: Any) -> None:
             )
             for disposition in dispositions
         }
+        metrics['alphalens_feedback_deferred_total{reason="fetch_budget"}'] = sum(
+            getattr(report, "fetch_budget_refused", 0) for report in reports
+        )
+        metrics['alphalens_feedback_deferred_total{reason="deadline"}'] = sum(
+            getattr(report, "stopped_for_deadline", 0) for report in reports
+        )
+        metrics["alphalens_feedback_unpriced_rows"] = sum(
+            getattr(report, "unpriced_rows", 0) for report in reports
+        )
+        metrics["alphalens_feedback_oldest_deferred_sessions"] = max(
+            (getattr(report, "oldest_deferred_touch_age", 0) for report in reports),
+            default=0,
+        )
         emit_domain_metrics(job="feedback-shadow-returns", metrics=metrics)
     except Exception:
-        logger.exception("guard-disposition metric emit failed; continuing")
+        logger.exception("nightly metric emit failed; continuing")
 
 
 def _enrich_population_size_fields(briefs_dir: Path, *, deadline: Any = None) -> None:

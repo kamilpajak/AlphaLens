@@ -1410,11 +1410,16 @@ groups:
       # largest movers again while the nightly run still exits 0, so
       # AlphalensJobStale will NOT surface it. GAUGE not counter (the textfile
       # emitter overwrites the per-run value; the _total suffix follows the
-      # existing edgar/thematic naming): min_over_time(...[50h]) > 0 means
-      # BOTH of the last two nightly 06:30 UTC runs reported lookup failures —
-      # a single clean run emits 0 and clears it, so a one-off Polygon blip
-      # does not fire. DISTINCT alertname + NO job= label keep it out of the
-      # cron-keyed enums (the form4-transient-errors precedent).
+      # existing edgar/thematic naming): min_over_time(...[50h]) > 0 holds only
+      # once the last 0 has AGED OUT of the window, and the series carries the
+      # last written value at every scrape. With 06:30 UTC runs that is 50h
+      # after the final clean run, i.e. after the THIRD consecutive run to
+      # report failures (day1 06:30 writes the first 1 -> expr true day3 08:30).
+      # A single clean run emits 0 and clears it, so a one-off Polygon blip does
+      # not fire. (The window was left at 50h; AlphalensFeedbackRowsUnpriced
+      # below uses 26h where "did it heal overnight" is the question.)
+      # DISTINCT alertname + NO job= label keep it out of the cron-keyed enums
+      # (the form4-transient-errors precedent).
       - alert: AlphalensFeedbackGuardLookupFailed
         expr: min_over_time(alphalens_feedback_guard_total{disposition="lookup_failed"}[50h]) > 0
         for: 1h
@@ -1442,6 +1447,52 @@ groups:
         annotations:
           summary: "implausible-move guard disposition gauge missing"
           description: "No alphalens_feedback_guard_total series is being scraped: either the guard-metric emit has not succeeded since deploy, or the textfile collector / node_exporter scrape is broken — AlphalensFeedbackGuardLookupFailed is disarmed while this fires. Clears after the first successful nightly emit. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+
+      # The nightly sweep can finish a THIRD of its work and still exit 0
+      # (2026-09-19: the per-run fetch budget ran out before the sweep reached
+      # the oldest dates in its 75-day window, leaving 19 of 24 rows on three
+      # brief dates with no price path; it then stamped the store settled). Every
+      # other rule on this job was satisfied — AlphalensJobStale reads the last
+      # success, the /edge rules read the mirror watermark — so nothing fired.
+      # alphalens_feedback_unpriced_rows counts PLANNABLE rows written with no
+      # price path at all (a non-plannable row carries the same null by design
+      # and is excluded).
+      #
+      # WINDOW ARITHMETIC — 26h, not the 50h above. The .prom file persists
+      # between runs and is scraped continuously, so min_over_time is above zero
+      # only once the last 0 has aged out. With 06:30 UTC runs, 26h means the
+      # first firing time is 2h after the SECOND consecutive run to report
+      # unpriced rows; a clean run in between writes 0 and re-arms immediately.
+      # One night of deferred work is the design working (the next night is meant
+      # to pick it up) — failing to heal overnight is not, because the sweep runs
+      # newest-date-first and the oldest dates sit at the tail of the budget every
+      # night. The fixtures start from a long run of zeros, which is the state the
+      # real series is in, so the boundary is tested rather than asserted.
+      #
+      # Two consequences of reading a file rather than a run counter, both
+      # deliberate. A SKIPPED run writes nothing, so the previous run's value
+      # persists and this can fire without a second run having happened — which is
+      # the right answer (the rows are still unpriced and nothing is healing them),
+      # so the wording below says "nights", not "runs". A DELAYED run keeps the
+      # last 0 alive longer and pushes the first firing time out by the delay; at
+      # worst that costs one extra night before the page.
+      #
+      # The companion alphalens_feedback_deferred_total{reason} and
+      # alphalens_feedback_oldest_deferred_sessions series deliberately carry NO
+      # alert: they say WHICH ceiling bound and how stale the tail is, and a
+      # healthy night defers work routinely. No absent() rule either — these
+      # series come out of the same emit call, hence the same .prom file, as the
+      # gauge AlphalensFeedbackGuardGaugeMissing already watches.
+      - alert: AlphalensFeedbackRowsUnpriced
+        expr: min_over_time(alphalens_feedback_unpriced_rows[26h]) > 0
+        for: 1h
+        labels:
+          severity: warning
+          route: telegram
+          unit: feedback-shadow-returns
+        annotations:
+          summary: "nightly sweep has left {{ $value }} row(s) with no price path on consecutive nights"
+          description: "alphalens_feedback_unpriced_rows stayed > 0 across consecutive nights, so work one run deferred was not picked up afterwards — the sweep is newest-date-first, so the oldest dates in the window starve when the per-run fetch budget is spent. The run still exits 0 and stamps the store settled, and the ML label stamper inside it leaves those rows unlabelled. A skipped run writes nothing, so the last value persists and this can also fire without a second run having happened — the rows are unpriced either way. Check `journalctl --user -u alphalens-feedback-shadow-returns.service | grep 'fetch budget exhausted'` and alphalens_feedback_deferred_total{reason} for which ceiling bound. Recovery: replay the starved dates with their own budget, `alphalens feedback backfill-shadow-returns --date <YYYY-MM-DD>` (repeatable). Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
 
       # broker-manager is a Type=simple daemon: ExecStopPost fires only on
       # crash/restart, so health = the per-tick heartbeat gauge the control loop

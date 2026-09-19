@@ -115,6 +115,7 @@ The "Type" column below is the semantic type every rule treats them as.
 | `literature-scan-{weekly,monthly}` | `alphalens_literature_last_run_trigger{window}` |
 | `thematic-build` | `alphalens_thematic_briefs_total`, `alphalens_thematic_briefs_by_model{model}` |
 | `edge-mirror` (the Django `rebuild_ladder_outcomes_cache` command, #1436) | `alphalens_edge_mirror_watermark_timestamp_seconds` (`completed_at` of the ingest watermark the run read; `0` when none), `alphalens_edge_mirror_unsettled_dates` (dates refused because their parquet is newer than the watermark — non-zero for one hour every morning while the nightly is mid-run), `alphalens_edge_mirror_newest_brief_date_timestamp_seconds` (the newest brief date in the mirror's per-date ledger `edge_daymetaladderoutcome` after the run, midnight UTC; a 0-candidate day counts, `0` before the first ingest). Written by the container through the `/var/lib/node_exporter/textfile` bind mount on the `rebuild-ladder-outcomes` compose service; the Django image cannot import the pipeline writer, so `edge/ingest/textfile.py` is its mirror. |
+| `feedback-shadow-returns` (the nightly population monitor; all of these come from ONE `emit_domain_metrics` call, so they share one `.prom` file) | `alphalens_feedback_guard_total{disposition}` (implausible-move guard trips, one series per arm of the #1090 tree) plus four completeness series: `alphalens_feedback_unpriced_rows` (PLANNABLE rows the run wrote with no price path at all — a non-plannable row carries the same null by design and is excluded), `alphalens_feedback_deferred_total{reason="fetch_budget"}` (fetches refused because the per-run budget was spent), `alphalens_feedback_deferred_total{reason="deadline"}` (items deferred because the run deadline tripped), `alphalens_feedback_oldest_deferred_sessions` (sessions the oldest deferred TOUCHED row is behind — the only one of the four that sees a row which HAS a price path and merely failed to advance; a MAX across dates, never a sum). All are written on every successful run, zeros included. |
 | any job written by either Python writer (#1462) | `alphalens_textfile_invalid_samples{textfile}`: how many values this write DROPPED because they were not a finite number (a bool, a string, None, NaN, Inf). Written only when that count is above zero, so a healthy file carries no such line. |
 
 All metrics are **gauges** — they describe THIS run's outcome, not a
@@ -282,6 +283,33 @@ reads the mirror's `last_success` clock any more; `AlphalensJobFailed` still pag
 that exits non-zero. After the 2026-09-13 timeout kill node_exporter rejected the nightly's own
 job textfile, because the pre-#1441 hook had written a non-float exit code, so every series for
 that job vanished from the collector (#1437, fixed the same day; #1458 was a duplicate report).
+
+### Nightly sweep completeness: AlphalensFeedbackRowsUnpriced
+
+The three rules above answer "is `/edge` fresh". They cannot answer "did the nightly finish its
+work", and on 2026-09-19 that mattered: the run exited 0 after 38 of its 90 allowed minutes with
+19 of 24 rows on three brief dates left unpriced, because the per-run fetch budget was spent
+before the sweep reached the oldest dates in its 75-day window. It then stamped the store
+settled, so every freshness rule was satisfied and nothing fired.
+
+| Rule | Reads | Fires when |
+|---|---|---|
+| `AlphalensFeedbackRowsUnpriced` | `alphalens_feedback_unpriced_rows` | two consecutive nightly runs both left plannable rows with no price path. One night of deferred work is the design working — the next night is meant to pick it up; failing to heal overnight is the starvation shape, because the sweep runs newest-date-first and the oldest dates sit at the tail of the budget every night. |
+
+Why `min_over_time(...[26h]) > 0` and not a bare `> 0`: the `.prom` file persists between runs
+and is scraped continuously, so the series carries the last written value at every scrape and the
+minimum over a window stays at 0 until the last clean run's 0 ages out. With 06:30 UTC runs, 26h
+puts the first firing time two hours after the SECOND consecutive short run. The neighbouring
+`AlphalensFeedbackGuardLookupFailed` keeps its 50h, which by the same arithmetic means the third
+consecutive failing run — the right window for "sustained errors", the wrong one for "did it heal
+overnight". Both boundaries are pinned in `alphalens_test.yaml` by fixtures that start from a run
+of zeros; a fixture that starts non-zero passes whatever window the rule happens to use.
+
+`alphalens_feedback_deferred_total{reason}` and `alphalens_feedback_oldest_deferred_sessions` carry no
+alert on purpose: they say which ceiling bound and how stale the tail is, and a healthy night
+defers work routinely. Recovery for a starved date is to replay it with its own budget:
+`alphalens feedback backfill-shadow-returns --date <YYYY-MM-DD>` (repeatable), which is what the
+2026-09-19 repair used.
 
 ### Textfile integrity: AlphalensTextfileScrapeError, AlphalensJobFamilyMissing, AlphalensTextfileInvalidSample
 

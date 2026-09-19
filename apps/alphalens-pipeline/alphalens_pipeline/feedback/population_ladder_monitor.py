@@ -345,6 +345,11 @@ class PopulationMonitorReport:
         0  # max sessions a deferred-touch row is behind (dead-man-switch)
     )
     stopped_for_deadline: int = 0  # items deferred because the run deadline tripped
+    # Completeness of THIS run over THIS date. ``carried_forward`` conflates every
+    # reason a row did not advance; these two separate the cause from the outcome
+    # so a short night is countable rather than only greppable in the journal.
+    fetch_budget_refused: int = 0  # fetches refused because the run budget was spent
+    unpriced_rows: int = 0  # plannable rows written with no price path at all
     # Implausible-move guard dispositions this run (#1090) — one count per arm of
     # the Amendment-1 tree, so a sustained lookup_failed (the fail-closed arm
     # silently reverting to the old blindness) is countable, not just logged.
@@ -1593,9 +1598,15 @@ class _FetchBudget:
     def __init__(self, limit: int) -> None:
         self._limit = limit
         self.used = 0
+        # Refusals are counted HERE because this is the last place the reason is
+        # still known: ``_replay_candidate`` returns a bare ``None`` for a budget
+        # refusal, a failed fetch and "no bars" alike, so the caller cannot tell
+        # them apart (2026-09-19 — a run deferred 102 fetches and reported success).
+        self.refused = 0
 
     def take(self) -> bool:
         if self.used >= self._limit:
+            self.refused += 1
             return False
         self.used += 1
         return True
@@ -1634,6 +1645,7 @@ def _replay_one_date(
 
     existing = _read_existing_store(store_dir, brief_date)
     fetches_before = budget.used + forced_budget.used
+    refused_before = budget.refused + forced_budget.refused
 
     # ---- PASS 0: prefetch grouped-daily once for the union of needed sessions ----
     needed_sessions = _union_new_sessions(
@@ -1688,6 +1700,13 @@ def _replay_one_date(
     )
 
     rows = [rows_by_ticker[t] for t in order]
+    # Counted on the FINAL rows, after the resolve pass — never at construction
+    # time, where every plannable row is still null-priced and the count would be
+    # the whole plannable population. A non-plannable row carries the same null
+    # (``_nonplannable_row``), so ``plannable`` is what tells the two apart.
+    unpriced_rows = sum(
+        1 for row in rows if bool(row.get("plannable")) and row.get("last_priced_session") is None
+    )
     _write_store_atomic(store_dir, brief_date, rows)
     return PopulationMonitorReport(
         brief_date=brief_date,
@@ -1702,6 +1721,8 @@ def _replay_one_date(
         deferred_touches=len(deferred_ages),
         oldest_deferred_touch_age=max(deferred_ages, default=0),
         stopped_for_deadline=counts.get("stopped_for_deadline", 0),
+        fetch_budget_refused=(budget.refused + forced_budget.refused) - refused_before,
+        unpriced_rows=unpriced_rows,
         guard_split_invalidated=counts.get("guard_split_invalidated", 0),
         guard_lookup_failed=counts.get("guard_lookup_failed", 0),
         guard_extreme_validated=counts.get("guard_extreme_validated", 0),
