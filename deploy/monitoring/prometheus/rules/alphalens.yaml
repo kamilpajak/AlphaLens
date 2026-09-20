@@ -1456,7 +1456,12 @@ groups:
       # success, the /edge rules read the mirror watermark — so nothing fired.
       # alphalens_feedback_unpriced_rows counts PLANNABLE rows written with no
       # price path at all (a non-plannable row carries the same null by design
-      # and is excluded).
+      # and is excluded), on dates whose ARRIVAL session has already closed. The
+      # arrival exclusion is what makes the number mean "the run did not keep
+      # up" rather than "the market has not opened yet": the nightly runs at
+      # 06:30 UTC, before the open, so the newest brief date always has a full
+      # set of null price paths. Counting those fired this alert on its first
+      # day (2026-09-20 07:40 UTC) on 30 rows that could not have been priced.
       #
       # WINDOW ARITHMETIC — 26h, not the 50h above. The .prom file persists
       # between runs and is scraped continuously, so min_over_time is above zero

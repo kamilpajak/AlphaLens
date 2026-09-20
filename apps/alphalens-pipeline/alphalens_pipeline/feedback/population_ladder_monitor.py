@@ -1704,8 +1704,23 @@ def _replay_one_date(
     # time, where every plannable row is still null-priced and the count would be
     # the whole plannable population. A non-plannable row carries the same null
     # (``_nonplannable_row``), so ``plannable`` is what tells the two apart.
-    unpriced_rows = sum(
-        1 for row in rows if bool(row.get("plannable")) and row.get("last_priced_session") is None
+    #
+    # A date whose ARRIVAL session has not closed yet contributes 0: there is no
+    # bar to fetch, so a null price path says nothing about whether the run kept
+    # up. This is not a weekend special case — the nightly runs at 06:30 UTC,
+    # before the open, so the newest brief date is in this state every morning.
+    # Without it the metric reports the whole fresh population as "unpriced" and
+    # the alert pages daily (it did, on its first day: 2026-09-20 07:40 UTC, on
+    # the Friday and Saturday briefs whose arrival was the following Monday).
+    arrived = ladder_arrival_session(brief_date, exchange) <= last_closed_session
+    unpriced_rows = (
+        sum(
+            1
+            for row in rows
+            if bool(row.get("plannable")) and row.get("last_priced_session") is None
+        )
+        if arrived
+        else 0
     )
     _write_store_atomic(store_dir, brief_date, rows)
     return PopulationMonitorReport(

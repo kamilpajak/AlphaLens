@@ -235,19 +235,23 @@ class TestIncompleteRunIsCountable(_MonitorTestBase):
             },
         ]
 
-    def _run(self, *, env: dict[str, str], setup=_OK_SETUP, bar_fetch=None):
+    def _run(
+        self, *, env: dict[str, str], setup=_OK_SETUP, bar_fetch=None, brief_date=None, now=None
+    ):
         from unittest import mock
 
-        _write_brief(self.briefs_dir, self._BRIEF_DATE, [{"ticker": "MRNA", "setup": setup}])
+        brief_date = brief_date or self._BRIEF_DATE
+        now = now or self._NOW
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "MRNA", "setup": setup}])
         with mock.patch.dict("os.environ", env, clear=False):
             reports = replay_population_ladders(
                 self.briefs_dir,
-                end_date=self._NOW.date(),
+                end_date=now.date(),
                 store_dir=self.store_dir,
                 bar_fetch=bar_fetch or self._priced_fetch,
                 grouped_fetch=lambda _d: {},
-                now=self._NOW,
-                lookback_days=(self._NOW.date() - self._BRIEF_DATE).days,
+                now=now,
+                lookback_days=(now.date() - brief_date).days,
             )
         self.assertEqual(len(reports), 1)
         return reports[0]
@@ -283,6 +287,39 @@ class TestIncompleteRunIsCountable(_MonitorTestBase):
         self.assertTrue(stored["last_priced_session"].isna().all())
         self.assertFalse(bool(stored["plannable"].any()))
         self.assertEqual(report.unpriced_rows, 0)
+
+    # A date whose arrival session has NOT closed yet has nothing to price, so it
+    # must contribute 0 — not the whole plannable population. This is not a
+    # weekend edge case: the nightly runs at 06:30 UTC, before the open, so the
+    # newest brief date is in this state EVERY morning. Shipped without this
+    # exclusion (#1498), the alert fired on its first day (2026-09-20 07:40 UTC)
+    # on 30 rows from the Friday and Saturday briefs, whose arrival is Monday.
+    _FRIDAY_BRIEF = dt.date(2026, 9, 18)  # arrival = Mon 2026-09-21
+    _SUNDAY_NOW = dt.datetime(2026, 9, 20, 21, 0, tzinfo=UTC)  # last closed = Fri 2026-09-18
+
+    def test_a_date_whose_arrival_has_not_closed_reports_no_unpriced_rows(self):
+        from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
+
+        # The premise, asserted rather than assumed: the arrival really is after
+        # the last closed session, so no bar for it can exist.
+        self.assertGreater(
+            ladder_arrival_session(self._FRIDAY_BRIEF, _XNYS), self._SUNDAY_NOW.date()
+        )
+
+        report = self._run(env={}, brief_date=self._FRIDAY_BRIEF, now=self._SUNDAY_NOW)
+
+        stored = self._read_store(self._FRIDAY_BRIEF)
+        self.assertTrue(stored["plannable"].all())
+        self.assertTrue(stored["last_priced_session"].isna().all())
+        self.assertEqual(report.unpriced_rows, 0)
+
+    def test_the_same_date_is_counted_once_its_arrival_has_closed(self):
+        # The other half: the exclusion must be about the arrival, not about the
+        # date being recent. Same brief, a later "now" whose last closed session
+        # is past the arrival, and a starved budget -> the row counts again.
+        later = dt.datetime(2026, 9, 23, 21, 0, tzinfo=UTC)  # last closed = Tue 2026-09-22
+        report = self._run(env=self._STARVED, brief_date=self._FRIDAY_BRIEF, now=later)
+        self.assertEqual(report.unpriced_rows, 1)
 
 
 class TestLadderArrivalAfterBrief(_MonitorTestBase):
