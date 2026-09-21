@@ -65,6 +65,11 @@ EXIT_INCOMPLETE = 7
 #: The one index this lock resolves from. Anything else is refused.
 PYPI_SIMPLE = "https://pypi.org/simple"
 
+#: Source kinds that genuinely have no PyPI release to ask about: a git ref, a
+#: workspace member, a local path. Skipping these is a decision; skipping
+#: anything else would be an accident, so the set is explicit.
+_NO_PYPI_RECORD = frozenset({"git", "editable", "directory", "path", "virtual"})
+
 #: Per-version metadata. 116 KB against 2.1 MB for the whole-package form, and
 #: it carries ``info.yanked`` / ``info.yanked_reason`` for that exact version.
 _VERSION_JSON = "https://pypi.org/pypi/{name}/{version}/json"
@@ -81,8 +86,21 @@ _NO_REASON = "(no reason given)"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-class UnexpectedIndexError(ValueError):
+class LockShapeError(ValueError):
+    """The lockfile does not look the way this check knows how to read.
+
+    Its own category because the failure mode it guards is the one this whole
+    gate exists to stop: a lock entry nobody looked at, in a run that reported
+    clean. Anything unrecognised here is loud.
+    """
+
+
+class UnexpectedIndexError(LockShapeError):
     """The lock resolves a package from an index this check does not know."""
+
+
+class UnrecognisedSourceError(LockShapeError):
+    """A ``[[package]]`` source is neither PyPI nor a kind known to have no PyPI record."""
 
 
 class PermanentFetchError(RuntimeError):
@@ -140,18 +158,33 @@ def registry_pins(lock: dict[str, Any]) -> list[Pin]:
     same population ``pip-audit`` reaches through ``--no-emit-workspace`` plus
     ``grep -v '@ git+'``.
     """
+    if "package" not in lock:
+        raise LockShapeError(
+            "lockfile carries no [[package]] entries; the format moved and this "
+            "check would otherwise report a clean run over nothing"
+        )
     pins: list[Pin] = []
-    for package in lock.get("package", []):
+    for package in lock["package"]:
         source = package.get("source", {})
-        index = source.get("registry")
-        if index is None:
-            continue  # git or editable
-        if index != PYPI_SIMPLE:
-            raise UnexpectedIndexError(
-                f"{package.get('name')} resolves from {index!r}, not {PYPI_SIMPLE!r}; "
-                "teach this check about that index rather than skipping it"
+        kinds = set(source)
+        if "registry" in kinds:
+            index = source["registry"]
+            if index != PYPI_SIMPLE:
+                raise UnexpectedIndexError(
+                    f"{package.get('name')} resolves from {index!r}, not {PYPI_SIMPLE!r}; "
+                    "teach this check about that index rather than skipping it"
+                )
+            pins.append(Pin(package["name"], package["version"]))
+        elif not kinds & _NO_PYPI_RECORD:
+            # The failure this gate exists to stop, one level up: uv renaming or
+            # adding a source kind would make `source.get("registry")` return
+            # None for real PyPI pins, which a `continue` would drop silently
+            # while the run still said "clean". Unrecognised is loud.
+            raise UnrecognisedSourceError(
+                f"{package.get('name')} has source keys {sorted(kinds) or ['<none>']}, "
+                f"none of which this check knows; expected 'registry' or one of "
+                f"{sorted(_NO_PYPI_RECORD)}"
             )
-        pins.append(Pin(package["name"], package["version"]))
     return pins
 
 
@@ -225,8 +258,11 @@ def fetch_yank(pin: Pin, *, opener: Any = None, sleep: Any = time.sleep) -> PinR
             return PinResult(pin, UNCHECKED, str(exc))
         except TransientFetchError as exc:
             last = str(exc)
-            if attempt < len(_BACKOFF_S):
-                sleep(_BACKOFF_S[attempt])
+            if attempt < _ATTEMPTS - 1:
+                # Clamped rather than indexed straight: lowering _ATTEMPTS or
+                # shortening the backoff tuple should change the pace, never
+                # raise IndexError inside the retry.
+                sleep(_BACKOFF_S[min(attempt, len(_BACKOFF_S) - 1)])
     return PinResult(pin, UNCHECKED, last)
 
 
@@ -243,8 +279,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    with args.lock.open("rb") as handle:
-        pins = registry_pins(tomllib.load(handle))
+    try:
+        with args.lock.open("rb") as handle:
+            pins = registry_pins(tomllib.load(handle))
+    except LockShapeError as exc:
+        # A lockfile this check cannot read is an INCOMPLETE run, not a clean
+        # one, and it reads better as one line than as a traceback: the reader
+        # has to teach the script a new shape, not debug it.
+        report = Report(exit_code=EXIT_INCOMPLETE, checked=0, yanked=[], unchecked=[])
+        if args.report_json is not None:
+            args.report_json.write_text(json.dumps(report.as_json(), indent=2) + "\n")
+        print(f"UNREADABLE LOCK  {args.lock}  — {exc}")
+        return EXIT_INCOMPLETE
 
     results = [fetch_yank(pin) for pin in pins]
     report = verdict(results)

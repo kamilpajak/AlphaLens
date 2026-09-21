@@ -606,7 +606,9 @@ jobs:
       - name: Check uv.lock for yanked releases
         id: check
         env:
-          YANK_CHECK_LOCK: ${{ inputs.yank_check_lock }}
+          # `inputs` is empty on the schedule trigger; the fallback keeps that a
+          # defined empty string rather than a runner-version detail.
+          YANK_CHECK_LOCK: ${{ inputs.yank_check_lock || '' }}
         run: |
           set +e
           uv run --no-project python apps/alphalens-research/scripts/check_yanked_packages.py \
@@ -643,9 +645,13 @@ jobs:
           {
             echo "\`uv.lock\` pins a release PyPI has yanked. A yank is the maintainers saying \"do not use this build\"."
             echo
-            jq -r '.yanked[] | "- **\(.name)==\(.version)** — \(.reason)"' /tmp/yank-report.json
+            if [ -s /tmp/yank-report.json ]; then
+              jq -r '.yanked[] | "- **\(.name)==\(.version)** — \(.reason)"' /tmp/yank-report.json
+            else
+              echo "- (the run exited 1 but wrote no report file; read the run log for the package)"
+            fi
             echo
-            jq -r 'if (.unchecked | length) > 0 then "Also, \(.unchecked | length) pin(s) could not be checked this run." else empty end' /tmp/yank-report.json
+            [ -s /tmp/yank-report.json ] && jq -r 'if (.unchecked | length) > 0 then "Also, \(.unchecked | length) pin(s) could not be checked this run." else empty end' /tmp/yank-report.json
             echo "Fix: \`uv lock --upgrade-package <name>\`, then follow the three-artefact deploy in deploy/systemd/README.md."
             echo "Run log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           } > /tmp/issue-body.md
@@ -680,6 +686,9 @@ jobs:
               echo "The yank check did not run to completion (exit code '${{ steps.check.outputs.exit_code }}'), so no pin was verified this week."
             fi
             echo
+            if [ "${{ steps.probe.outcome }}" = "failure" ]; then
+              echo "The live shape probe ALSO failed, which points at PyPI's payload rather than a blip: it calls the gate's own fetch_yank, so a changed field name fails it."
+            fi
             echo "Usually a PyPI blip: re-run the job before investigating."
             echo "Run log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           } > /tmp/issue-body.md

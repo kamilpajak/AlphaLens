@@ -70,10 +70,45 @@ class TestWhichPinsGetQueried(unittest.TestCase):
                 _lock(_registry("internal", "1.0", index="https://pypi.example.com/simple"))
             )
 
+    def test_a_source_kind_this_check_does_not_know_is_loud(self):
+        # The review's attack, kept as a test: hide a yanked pin behind a source
+        # key the parser does not read. Under a `continue` for "anything that is
+        # not a registry" it would vanish and the run would still report clean —
+        # the gate's own failure mode, one level up. A uv format change that
+        # renamed or added a source kind looks exactly like this.
+        with self.assertRaises(gate.UnrecognisedSourceError):
+            gate.registry_pins(
+                _lock(
+                    {
+                        "name": "pandas",
+                        "version": "3.0.4",
+                        "source": {"url": "https://…/pandas.whl"},
+                    }
+                )
+            )
+
+    def test_a_lock_with_no_package_table_is_loud(self):
+        # `lock.get("package", [])` would have yielded a clean run over nothing.
+        with self.assertRaises(gate.LockShapeError):
+            gate.registry_pins({"version": 1})
+
+    def test_an_unreadable_lock_exits_incomplete_rather_than_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "uv.lock"
+            lock.write_text(
+                'version = 1\n[[package]]\nname = "x"\nversion = "1"\nsource = { url = "https://…" }\n'
+            )
+            out = Path(tmp) / "report.json"
+
+            code = gate.main(["--lock", str(lock), "--report-json", str(out)])
+
+            self.assertEqual(code, 7)
+            self.assertEqual(json.loads(out.read_text())["exit_code"], 7)
+
     def test_the_helper_can_return_nothing(self):
         # Positive control for the real-lock test below: the count it asserts
         # is only evidence if this function is capable of returning empty.
-        self.assertEqual(gate.registry_pins(_lock()), [])
+        self.assertEqual(gate.registry_pins({"version": 1, "package": []}), [])
 
 
 class TestTheGateCanSeeTheRealLock(unittest.TestCase):
