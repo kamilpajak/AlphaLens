@@ -28,9 +28,17 @@ _MEMO_FILENAME = "bezpazery_lens_design_2026_07_16.md"
 _POINTER_RE = re.compile(r"amendment\s+§\s*(\d+(?:\.\d+)*)\s+of\s+`?" + re.escape(_MEMO_FILENAME))
 _HEADING_RE = re.compile(r"^(#{2,4})\s+(\d+(?:\.\d+)*)\.?\s", re.MULTILINE)
 
+# The regex above names ONE memo, so a row pointing at any other memo was
+# unchecked — which is how the #1227 amendment (2026-09-21) would have shipped
+# with a pointer nobody verified. This second form is memo-agnostic and reads
+# the other word order the ledger actually uses:
+#   "`ml_label_registry_design_2026_09_16.md` §8 step 3" -> (memo, "8")
+_ANY_MEMO_POINTER_RE = re.compile(r"`([a-z0-9_]+\.md)`\s+§\s*(\d+(?:\.\d+)*)")
 
-def _memo_section_numbers() -> set[str]:
-    return {match.group(2) for match in _HEADING_RE.finditer(_MEMO.read_text(encoding="utf-8"))}
+
+def _memo_section_numbers(memo: Path | None = None) -> set[str]:
+    text = (memo or _MEMO).read_text(encoding="utf-8")
+    return {match.group(2) for match in _HEADING_RE.finditer(text)}
 
 
 class TestTheLedgerPointsAtRealMemoSections(unittest.TestCase):
@@ -53,6 +61,38 @@ class TestTheLedgerPointsAtRealMemoSections(unittest.TestCase):
         self.assertNotIn("99", sections)
         synthetic = f"amendment §99 of `{_MEMO_FILENAME}`"
         self.assertEqual(_POINTER_RE.findall(synthetic), ["99"])
+
+
+class TestEveryMemoPointerResolves(unittest.TestCase):
+    """The same guarantee as above, for every memo the ledger cites.
+
+    The single-memo regex made a pointer at any other design memo silently
+    unchecked. A ledger row is the only route from the budget to the text that
+    justifies a registration, so a §N that does not exist sends a later auditor
+    to nothing — regardless of which memo it names.
+    """
+
+    def test_each_cited_section_exists_in_the_memo_it_names(self):
+        pairs = _ANY_MEMO_POINTER_RE.findall(_LEDGER.read_text(encoding="utf-8"))
+        self.assertTrue(pairs, "positive control: the ledger cites at least one memo section")
+        for filename, section in pairs:
+            memo = _REPO_ROOT / "docs/research" / filename
+            with self.subTest(memo=filename, section=section):
+                self.assertTrue(
+                    memo.exists(), f"ledger cites {filename}, which is not in docs/research"
+                )
+                self.assertIn(
+                    section,
+                    _memo_section_numbers(memo),
+                    f"ledger points at §{section} of {filename}, which has no such heading",
+                )
+
+    def test_the_memo_agnostic_regex_can_refute(self):
+        # Anti-rot on the new regex itself, matching the older guard's shape.
+        synthetic = "`some_memo_2026_01_01.md` §99 step 1"
+        self.assertEqual(
+            _ANY_MEMO_POINTER_RE.findall(synthetic), [("some_memo_2026_01_01.md", "99")]
+        )
 
 
 class TestTheAmendmentRecordsTheCohortCaveat(unittest.TestCase):
