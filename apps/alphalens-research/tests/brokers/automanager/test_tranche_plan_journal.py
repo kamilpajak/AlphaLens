@@ -355,14 +355,16 @@ class TestADeclaredEmptyLadderIsJournaled(unittest.TestCase):
     "the writer never ran", and the arm gate's fail-closed stance (correct for
     the second) terminally cancelled the first.
 
-    The fix makes declared vacuity a POSITIVE fact: the WATCH path journals a
-    plan carrying an empty ladder, so ``no plan on record`` recovers its sharp
-    meaning and ``_governing_plan_lookup`` stays untouched.
+    The fix makes declared vacuity a POSITIVE fact: the line is journaled with
+    an empty ladder, so ``no plan on record`` recovers its sharp meaning and
+    ``_governing_plan_lookup`` stays untouched.
 
-    Scoped to the watch path on purpose. The bracket path shares this core but
-    stamps no ``pick_key``, and ``_retract_stale_tranche_plans`` never retracts
-    a keyless plan -- a vacuous keyless line would govern its uic forever and
-    survive every compaction."""
+    Scoped by RETRACTABILITY, not by caller. Only a line carrying a
+    ``pick_key`` is written, because ``_retract_stale_tranche_plans`` skips a
+    keyless plan -- a vacuous keyless line would govern its uic forever and
+    survive every compaction. Both identity-carrying callers write it (the
+    watch router, and the now-tranche split through ``override``); the plain
+    bracket call, which stamps no identity, stays silent."""
 
     def setUp(self) -> None:
         import tempfile
@@ -392,7 +394,7 @@ class TestADeclaredEmptyLadderIsJournaled(unittest.TestCase):
             return []
         return [json.loads(ln) for ln in self.path.read_text().splitlines() if ln.strip()]
 
-    def test_the_watch_path_journals_a_plan_carrying_no_tranches(self) -> None:
+    def test_a_call_carrying_an_identity_journals_a_plan_with_no_tranches(self) -> None:
         lines = self._journal_core(pick_key="KO:2026-09-21")
         plans = [ln for ln in lines if ln["kind"] == "tranche_plan"]
         self.assertEqual(len(plans), 1)
@@ -402,9 +404,12 @@ class TestADeclaredEmptyLadderIsJournaled(unittest.TestCase):
         self.assertEqual(plans[0]["reference_qty"], 10.0)
         self.assertEqual(plans[0]["stop_price"], 8.0)
 
-    def test_the_bracket_path_still_journals_nothing(self) -> None:
-        # A keyless vacuous plan can never be retracted, so the bracket path
-        # keeps its old silence. Pins the scoping, not an accident.
+    def test_a_keyless_call_still_journals_nothing(self) -> None:
+        # A keyless vacuous plan can never be retracted, so it is never
+        # written. Pins the scoping, not an accident: the discriminator is the
+        # identity on the line, NOT which caller produced it -- the
+        # now-tranche split reaches this core through the bracket wrapper and
+        # DOES carry a pick_key.
         self.assertEqual(self._journal_core(pick_key=None), [])
 
     def test_the_vacuous_line_folds_to_a_governing_plan_with_an_empty_ladder(self) -> None:

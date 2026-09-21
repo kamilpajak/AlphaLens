@@ -7901,15 +7901,19 @@ def _journal_tranche_plan_core(
     if not ladder and pick_key is None:
         # #1511: a document declaring ``tp_tranches: []`` is legal at the
         # arming door -- a stop-only pick that runs to its disaster stop. The
-        # WATCH path journals that vacuity as a POSITIVE fact below, so a later
-        # gate can tell "the author declared no take-profit" from "the writer
-        # never ran"; conflating the two is what used to cancel such a watch
+        # vacuity is journaled below as a POSITIVE fact, so a later gate can
+        # tell "the author declared no take-profit" from "the writer never
+        # ran"; conflating the two is what used to cancel such a watch
         # terminally at its first touch.
         #
-        # The BRACKET path keeps its silence, and the asymmetry is the point:
-        # it stamps no ``pick_key``, and ``_retract_stale_tranche_plans`` skips
-        # a keyless plan, so a vacuous keyless line would govern its uic
-        # FOREVER and be kept by every compaction.
+        # The discriminator is RETRACTABILITY, not which path called. A line
+        # is written only when it carries a ``pick_key``, because
+        # ``_retract_stale_tranche_plans`` skips a keyless plan -- a vacuous
+        # keyless line would govern its uic FOREVER and be kept by every
+        # compaction. Both identity-carrying callers therefore write it (the
+        # watch router, and the now-tranche split via ``override``); only the
+        # plain bracket call, which has no identity to stamp, keeps its
+        # silence. A non-empty ladder is journaled either way, as before.
         return
     _append_standalone_stop_journal(
         _build_tranche_plan_line(
