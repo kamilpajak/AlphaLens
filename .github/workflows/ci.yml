@@ -7,7 +7,16 @@ on:
     branches: [main]
   schedule:
     - cron: "0 2 * * 1"  # Weekly Monday 02:00 UTC — detect dependency drift
-  workflow_dispatch: {}  # manual trigger (e.g. re-run live-probes after fixing a vendor)
+  workflow_dispatch:  # manual trigger (e.g. re-run live-probes after fixing a vendor)
+    inputs:
+      yank_check_lock:
+        description: >-
+          Lockfile for yanked-deps to check instead of ./uv.lock. Exists so the
+          FAILURE path can be exercised on demand (point it at a lock pinning a
+          known-yanked release); otherwise that path first runs for real on the
+          first real yank.
+        required: false
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -554,3 +563,141 @@ jobs:
             --title "Weekly live-probes failed ($(date -u +%Y-%m-%d))" \
             --label "live-probe-failure" \
             --body "The weekly L4 live-probes job failed. Likely causes: a vendor changed response shape, a DeepSeek model retired (404 -> silent empty brief, incident #3), the SEC EX-99.1 index.htm format moved (incident #2), or a liquid ticker returned empty. Run log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  # -----------------------------------------------------------------------
+  # Yanked-dependency gate (#1507). `pandas==3.0.4` — withdrawn from PyPI for
+  # "Reported segfaults with datetime-related functionality" — sat in uv.lock
+  # from 2026-06-29 to 2026-09-21 and nothing reported it. Neither existing
+  # gate can: `uv lock --check` resolves FROM the lock without querying the
+  # index, and pip-audit scans advisories, which a yank is not.
+  #
+  # Scheduled-only, like live-probes, for two reasons. The failure that
+  # actually happened is a yank landing months AFTER the lock, which only a
+  # recurring run can catch; and a PyPI round trip on the blocking PR path is
+  # the trade this workflow has already refused (see the live-probes preamble).
+  # uv itself avoids yanked versions when it resolves, so the lock-it-fresh
+  # direction needs no gate here.
+  #
+  # The check itself needs no `uv sync`: it is stdlib-only, so a lock that
+  # moved since the last commit cannot kill the job with a --frozen mismatch
+  # before the check has run. The shape probe after it does need the dev env,
+  # which is why it runs second.
+  # -----------------------------------------------------------------------
+  yanked-deps:
+    name: yanked-deps (weekly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Job-level permissions REPLACE the default set, so contents: read has to
+    # be named alongside the issues: write the reporting steps need.
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python via uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Check uv.lock for yanked releases
+        id: check
+        env:
+          # `inputs` is empty on the schedule trigger; the fallback keeps that a
+          # defined empty string rather than a runner-version detail.
+          YANK_CHECK_LOCK: ${{ inputs.yank_check_lock || '' }}
+        run: |
+          set +e
+          uv run --no-project python apps/alphalens-research/scripts/check_yanked_packages.py \
+            ${YANK_CHECK_LOCK:+--lock "$YANK_CHECK_LOCK"} \
+            --report-json /tmp/yank-report.json
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit $code
+
+      # Runs whatever the check said. A reshaped PyPI payload is the one way
+      # this gate goes quietly blind, and it would surface as "everything
+      # unchecked" — so gating the probe on a clean check would skip it exactly
+      # when it is the diagnostic. It calls the gate's own fetch_yank, so it
+      # fails on a misparse here, not only on a change at PyPI.
+      - name: Live PyPI shape probe
+        id: probe
+        if: always()
+        env:
+          PYPI_YANK_LIVE_TEST: "1"
+        run: |
+          uv sync --group dev --frozen
+          uv run python -m unittest discover \
+            -s apps/alphalens-research/tests/live \
+            -t apps/alphalens-research -p 'test_pypi_yank_live.py' -v
+
+      # exit 1 — a pin is yanked. The condition persists until someone bumps
+      # the lock, so a fresh issue every Monday would be the noise the wake
+      # convention warns about: comment on the open one instead.
+      - name: Report a yanked dependency
+        if: always() && steps.check.outputs.exit_code == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "\`uv.lock\` pins a release PyPI has yanked. A yank is the maintainers saying \"do not use this build\"."
+            echo
+            if [ -s /tmp/yank-report.json ]; then
+              jq -r '.yanked[] | "- **\(.name)==\(.version)** — \(.reason)"' /tmp/yank-report.json
+            else
+              echo "- (the run exited 1 but wrote no report file; read the run log for the package)"
+            fi
+            echo
+            [ -s /tmp/yank-report.json ] && jq -r 'if (.unchecked | length) > 0 then "Also, \(.unchecked | length) pin(s) could not be checked this run." else empty end' /tmp/yank-report.json
+            echo "Fix: \`uv lock --upgrade-package <name>\`, then follow the three-artefact deploy in deploy/systemd/README.md."
+            echo "Run log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > /tmp/issue-body.md
+          existing=$(gh issue list --label yanked-dependency --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file /tmp/issue-body.md
+          else
+            gh issue create \
+              --title "Yanked dependency in uv.lock ($(date -u +%Y-%m-%d))" \
+              --label "yanked-dependency" \
+              --body-file /tmp/issue-body.md
+          fi
+
+      # exit 7, or the check never ran at all. Kept on its OWN label: sharing
+      # one with the yank report would let an outage issue collect a yank as a
+      # comment the following week, filing the actionable state somewhere
+      # nobody reads it.
+      - name: Report an incomplete check
+        # Enumerated rather than negated: an incomplete verdict, a check that
+        # never ran at all (empty output — an earlier step died), or a probe
+        # that failed. Exit codes are only 0/1/7, so this is the whole space.
+        if: always() && (steps.check.outputs.exit_code == '7' || steps.check.outputs.exit_code == '' || steps.probe.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            if [ -s /tmp/yank-report.json ]; then
+              echo "The yank check ran but could not reach a verdict for every pin. \"Could not check\" is not \"clean\", so it reports rather than passing."
+              echo
+              jq -r '.unchecked[] | "- \(.name)==\(.version) — \(.why)"' /tmp/yank-report.json
+            else
+              echo "The yank check did not run to completion (exit code '${{ steps.check.outputs.exit_code }}'), so no pin was verified this week."
+            fi
+            echo
+            if [ "${{ steps.probe.outcome }}" = "failure" ]; then
+              echo "The live shape probe ALSO failed, which points at PyPI's payload rather than a blip: it calls the gate's own fetch_yank, so a changed field name fails it."
+            fi
+            echo "Usually a PyPI blip: re-run the job before investigating."
+            echo "Run log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > /tmp/issue-body.md
+          existing=$(gh issue list --label yank-check-incomplete --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file /tmp/issue-body.md
+          else
+            gh issue create \
+              --title "Yank check incomplete ($(date -u +%Y-%m-%d))" \
+              --label "yank-check-incomplete" \
+              --body-file /tmp/issue-body.md
+          fi
