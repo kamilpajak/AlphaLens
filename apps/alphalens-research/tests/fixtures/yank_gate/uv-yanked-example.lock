@@ -1,0 +1,35 @@
+# A lockfile-shaped fixture whose only job is to make the yank gate's FAILURE
+# path runnable (#1507, #1508).
+#
+# The gate's happy path runs weekly against the real uv.lock. Its failure path
+# would otherwise first execute for real on the first real yank — so the CI job
+# takes a `yank_check_lock` dispatch input and this is what to point it at:
+#
+#   gh workflow run ci.yml --ref main \
+#     -f yank_check_lock=apps/alphalens-research/tests/fixtures/yank_gate/uv-yanked-example.lock
+#
+# pandas 3.0.4 was withdrawn from PyPI in 2026-09 for "Reported segfaults with
+# datetime-related functionality". A yank is permanent, so this stays a valid
+# example indefinitely and needs no upkeep. The other two entries are here so
+# the fixture exercises the real discrimination rather than a single row: a
+# clean registry pin that must come back clean, and an editable member that
+# must be skipped.
+#
+# NOT the repo's dependency set, and never read by anything that installs.
+version = 1
+requires-python = ">=3.13"
+
+[[package]]
+name = "pandas"
+version = "3.0.4"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "packaging"
+version = "25.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "alphalens-research"
+version = "0.1.0"
+source = { editable = "apps/alphalens-research" }
