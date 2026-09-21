@@ -132,6 +132,34 @@ class TestTheGateCanSeeTheRealLock(unittest.TestCase):
         self.assertNotIn("alphalens-pipeline", names)  # editable member
 
 
+class TestTheFailurePathFixture(unittest.TestCase):
+    """The lock the CI job is pointed at to exercise its FAILURE path.
+
+    That dispatch is the only place the issue-filing steps ever run before a
+    real yank happens, and it is driven by a path in the repo — so the fixture
+    has to keep parsing into the pin the gate is meant to trip on. A silent
+    reshape here would make the failure-path rehearsal pass over nothing, which
+    is the same class of defect the gate itself exists to catch.
+    """
+
+    _FIXTURE = (
+        _REPO_ROOT / "apps/alphalens-research/tests/fixtures/yank_gate/uv-yanked-example.lock"
+    )
+
+    def test_it_still_parses_into_the_known_yanked_pin(self):
+        import tomllib
+
+        with self._FIXTURE.open("rb") as handle:
+            pins = gate.registry_pins(tomllib.load(handle))
+
+        # pandas 3.0.4 was withdrawn in 2026-09; a yank is permanent, so this
+        # needs no upkeep. The clean pin beside it keeps the fixture exercising
+        # the discrimination, not just a single row.
+        self.assertIn(gate.Pin("pandas", "3.0.4"), pins)
+        self.assertEqual(len(pins), 2)
+        self.assertNotIn("alphalens-research", {pin.name for pin in pins})
+
+
 class TestReadingOnePayload(unittest.TestCase):
     def test_a_yanked_release_carries_its_reason(self):
         state = gate.yank_state_from_payload(
