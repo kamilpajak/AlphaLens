@@ -313,6 +313,36 @@ class TestIncompleteRunIsCountable(_MonitorTestBase):
         self.assertTrue(stored["last_priced_session"].isna().all())
         self.assertEqual(report.unpriced_rows, 0)
 
+    def test_the_exclusion_holds_whatever_the_budget(self):
+        # The arrival rule must not leak into the deferral counters: a refused
+        # fetch is a refused fetch whatever the date. Starving the budget on a
+        # not-yet-arrived date still reports no unpriced rows.
+        report = self._run(env=self._STARVED, brief_date=self._FRIDAY_BRIEF, now=self._SUNDAY_NOW)
+        self.assertEqual(report.unpriced_rows, 0)
+
+    def test_the_arrival_session_itself_is_counted(self):
+        # The `<=` boundary, measured rather than assumed. ``_last_closed_session``
+        # is conservative: it advances to session D only once D's calendar day is
+        # over in UTC (at Fri 23:00 UTC it still answers Thursday), which is what
+        # gives bar publication its margin. So the equality case for a Thursday
+        # brief — arrival Fri 2026-09-18 — falls on the Saturday.
+        from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            _last_closed_session,
+        )
+
+        thursday_brief = dt.date(2026, 9, 17)
+        saturday_now = dt.datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
+        self.assertEqual(
+            ladder_arrival_session(thursday_brief, _XNYS),
+            _last_closed_session(saturday_now, _XNYS),
+        )
+
+        report = self._run(env=self._STARVED, brief_date=thursday_brief, now=saturday_now)
+        # A `<` boundary would silence exactly the session the ladder starts on.
+        self.assertEqual(report.unpriced_rows, 1)
+        self.assertGreater(report.fetch_budget_refused, 0)
+
     def test_the_same_date_is_counted_once_its_arrival_has_closed(self):
         # The other half: the exclusion must be about the arrival, not about the
         # date being recent. Same brief, a later "now" whose last closed session
