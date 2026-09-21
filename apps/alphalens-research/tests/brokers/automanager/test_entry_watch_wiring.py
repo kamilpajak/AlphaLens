@@ -1416,6 +1416,21 @@ class TestBriefLadderArmGate(unittest.TestCase):
         self.assertEqual(len(cancelled), 1)
         self.assertIn("no exit plan", cancelled[0]["note"])
 
+    def test_a_declared_empty_ladder_arms(self) -> None:
+        # Issue #1511. This gate prices tp1; a document that declared NO
+        # take-profit has no tp1, so the gate is vacuous -- the same answer the
+        # immediate path has always given ("a pick with no take-profit has no
+        # TP1 to gate -- vacuous by design"). The position exits through its
+        # disaster stop and whatever trail it declared, neither of which reads
+        # this ladder. Distinct from the test below it: THAT one is a plan the
+        # writer never produced, and it must still refuse.
+        broker, lines, alerts = self._run_touch(
+            tp1_target=90.0, reference_qty=8.0, watch_qty=8.0, tranche_fracs=()
+        )
+        self.assertEqual(len(broker.trailing_orders), 1)
+        self.assertEqual([ln for ln in lines if ln["kind"] == entry_trails.KIND_CANCELLED], [])
+        self.assertEqual(alerts, [])
+
     def test_a_partial_coverage_plan_refuses_terminally(self) -> None:
         # A plan whose apportioned tranches sell only half the position leaves
         # the rest permanently stop-only — the exact defect class this gate
@@ -1960,10 +1975,18 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(tranche_lines[0]["pick_key"], "KO:2026-07-20")
 
-    def test_empty_static_ladder_journals_no_tranche_plan(self) -> None:
+    def test_an_empty_static_ladder_journals_a_vacuous_tranche_plan(self) -> None:
+        # #1511: it used to journal NOTHING, which made "the author declared no
+        # take-profit" indistinguishable from "the writer never ran" — and the
+        # arm gate, right to fail closed on the second, cancelled the first at
+        # its first touch. The watch path now records the vacuity as a fact.
         ok, tranche_lines, _trails, _stops = self._route(_plan((0, 10.0, 100)))
         self.assertTrue(ok)
-        self.assertEqual(tranche_lines, [])
+        self.assertEqual(len(tranche_lines), 1)
+        self.assertEqual(tranche_lines[0]["tp_tranches"], [])
+        # The identity has to ride along, or _retract_stale_tranche_plans could
+        # never retract this plan and it would govern its uic forever.
+        self.assertEqual(tranche_lines[0]["pick_key"], "KO:2026-07-20")
 
     def test_tranche_plan_is_appended_before_the_watch_open_lines(self) -> None:
         # Crash ordering: a crash between the two journals must never leave a

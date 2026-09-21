@@ -203,6 +203,22 @@ class TestBuildManagedExits(unittest.TestCase):
         )
         self.assertEqual(managed, [])
 
+    def test_a_uic_whose_plan_declares_no_tranches_is_skipped_too(self) -> None:
+        # Issue #1511: the watch path now journals a plan for a document that
+        # declared `tp_tranches: []`, so such a uic HAS a plan and no longer
+        # falls into the `plan is None` skip above. It must still be skipped:
+        # there is nothing to fire, and enrolling it would make run_live_exits
+        # spend a positions read plus a working-orders read on it every tick
+        # and stamp it MANAGED while planning nothing.
+        pos = _mk_pos(uic=486, qty=100.0)
+        managed = cl._build_managed_exits(
+            long_positions=[pos],
+            tranche_plans={486: ((), 100.0, 13.0)},
+            fired={},
+            trailed={},
+        )
+        self.assertEqual(managed, [])
+
     def test_fired_tags_flow_into_already_fired(self) -> None:
         pos = _mk_pos(uic=486, qty=50.0)
         tranche_plans = {486: ((_tr(0, 16.0, 0.5), _tr(1, 18.0, 0.3)), 100.0, 13.0)}

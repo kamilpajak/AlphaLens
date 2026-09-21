@@ -990,6 +990,16 @@ def _build_managed_exits(
             skipped += 1
             continue
         tp_tranches, reference_qty, stop_price = plan
+        if not tp_tranches:
+            # #1511: a pick that declared no take-profit now HAS a plan on
+            # record (the watch path journals the vacuity), so it no longer
+            # falls into the `plan is None` skip above. Skip it here instead:
+            # there is no tranche to fire, and enrolling it would spend a
+            # per-uic positions read plus a working-orders read every tick and
+            # stamp the uic MANAGED while planning nothing. Its disaster stop
+            # is a separate resting order this engine never touches.
+            skipped += 1
+            continue
         trailed_level = trailed.get(uic)
         if trailed_level is not None and trailed_level > stop_price:
             # The journaled ratchet floor outranks the plan's disaster stop, so
@@ -1026,7 +1036,7 @@ def _build_managed_exits(
             )
         )
     logger.info(
-        "live-exits: %d position(s) managed, %d skipped (no tranche_plan on record)",
+        "live-exits: %d position(s) managed, %d skipped (no take-profit ladder on record)",
         len(managed),
         skipped,
     )
@@ -3193,6 +3203,14 @@ def _brief_plan_arm_refusal(
     quantity ``live_exit_engine.plan_tranche_exits`` will sell there, so the arm
     bar and the exit bar coincide for the tranche this gate prices.
 
+    VACUOUS when the plan declares NO tranche (#1511): there is no tp1 to
+    price, so the gate has nothing to say, and the position is protected by its
+    disaster stop and managed by whatever exit policy it declared — neither of
+    which reads this ladder. Same answer :func:`_now_cost_gate_violation` has
+    always given on the immediate path. That branch became reachable only when
+    the watch path started journaling a declared-empty ladder as a plan; before
+    that such a uic had no plan at all and was refused by the lookup below.
+
     Scoped to watches WITHOUT an applied geometry target (the geometry path
     keeps its own pair of gates above). The journal-read stances — read failure
     defers (non-terminal), a missing plan refuses terminally (the router writes
@@ -3210,6 +3228,15 @@ def _brief_plan_arm_refusal(
     if plan is None:
         return lookup_refusal
     tranches, reference_qty, _stop = plan
+    if not tranches:
+        # #1511: this gate prices tp1, so a document that declared NO
+        # take-profit gives it nothing to price -- vacuous, the same answer
+        # `_now_cost_gate_violation` has always given on the immediate path.
+        # Such a position is protected by its disaster stop and managed by
+        # whatever exit policy it declared, and neither reads this ladder.
+        # Reachable only since the watch path began journaling the vacuity;
+        # before that this uic had no plan at all and was refused above.
+        return None
     quantities = apportion_tranche_quantities(
         reference_qty=reference_qty, tranche_fracs=tuple(t.tranche_frac for t in tranches)
     )
@@ -7871,7 +7898,18 @@ def _journal_tranche_plan_core(
         ladder, stop_price = geometry
     else:
         ladder = getattr(plan, "tp_tranches", None) or ()
-    if not ladder:
+    if not ladder and pick_key is None:
+        # #1511: a document declaring ``tp_tranches: []`` is legal at the
+        # arming door -- a stop-only pick that runs to its disaster stop. The
+        # WATCH path journals that vacuity as a POSITIVE fact below, so a later
+        # gate can tell "the author declared no take-profit" from "the writer
+        # never ran"; conflating the two is what used to cancel such a watch
+        # terminally at its first touch.
+        #
+        # The BRACKET path keeps its silence, and the asymmetry is the point:
+        # it stamps no ``pick_key``, and ``_retract_stale_tranche_plans`` skips
+        # a keyless plan, so a vacuous keyless line would govern its uic
+        # FOREVER and be kept by every compaction.
         return
     _append_standalone_stop_journal(
         _build_tranche_plan_line(
