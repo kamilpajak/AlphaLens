@@ -67,10 +67,13 @@ _ENV = entry_trails.ENTRY_TRAIL_BPS_ENV
 
 def _plan_l(*tiers: tuple[int, float, int]):
     """A SetupPlan with the brief's thirds TP ladder attached, targets far above
-    every price this file ticks — the router journals a ``tranche_plan`` only
-    for a non-empty ladder, and the #1112 brief-ladder arm gate fails CLOSED on
-    a missing plan, so a trancheless SetupPlan routes a watch production could
-    never produce."""
+    every price this file ticks, so nothing here fires a tranche.
+
+    A real ladder rather than an empty one because these files exercise the
+    MANAGED path. Since #1511 a trancheless SetupPlan is a legal shape the
+    router journals as a vacuous ``tranche_plan`` and the arm gate lets
+    through — it just skips the live-exit engine, which is not what this file
+    is about."""
     return _plan_with_tranches(
         tuple(tiers),
         (_tranche(0, 1000.0, 1 / 3), _tranche(1, 1005.0, 1 / 3), _tranche(2, 1010.0, 1 / 3)),

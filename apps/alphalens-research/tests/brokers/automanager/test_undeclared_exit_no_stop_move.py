@@ -360,29 +360,49 @@ class TestInheritedTrailedLevelCannotMoveAnUndeclaredPick(_ArmsThroughTheDoor):
         self.assertEqual(_fold_trailed_since_latest_plan([*earlier, retraction, manual_plan]), {})
 
     def test_a_no_tp_manual_pick_is_skipped_by_the_managed_exit_builder(self) -> None:
-        """The residual case the reset does NOT cover: an empty ``tp_tranches`` journals no
-        ``tranche_plan`` at all (``_journal_tranche_plan_core`` returns early on
-        an empty ladder), so an inherited level stays in the fold. It still
-        cannot be placed — ``_build_managed_exits`` skips a uic with no tranche
-        plan. Closed for a DIFFERENT reason than the case above, which is why
-        it is pinned separately."""
+        """The residual case the reset does NOT cover: a document with an empty
+        ``tp_tranches`` leaves an inherited level in the fold. It still cannot be
+        placed — ``_build_managed_exits`` skips the uic. Closed for a DIFFERENT
+        reason than the case above, which is why it is pinned separately.
+
+        Since #1511 the WATCH path journals such a pick as a ``tranche_plan``
+        carrying an empty ladder (so the arm gate can tell a declared vacuity
+        from a lost plan), so the skip is no longer "no plan on record" — it is
+        "a plan with no tranche to fire". Both shapes are pinned below."""
         # The premise: the door takes a document with no take-profit at all.
         armed = self.armed(_document(source="manual", tps=[]))
         self.assertEqual(armed.spec.tp_tranches, ())
-        managed = _build_managed_exits(
-            long_positions=[_position()],
-            tranche_plans={},  # empty tp_tranches: nothing journaled for this uic
-            fired={},
-            trailed={_UIC: _PLAN_STOP + 6.5},
-        )
-        self.assertEqual(managed, [])
+        for label, plans in (
+            ("bracket path: nothing journaled for this uic", {}),
+            ("watch path since #1511: a plan with no tranches", {_UIC: ((), _QTY, _PLAN_STOP)}),
+        ):
+            with self.subTest(label):
+                managed = _build_managed_exits(
+                    long_positions=[_position()],
+                    tranche_plans=plans,
+                    fired={},
+                    trailed={_UIC: _PLAN_STOP + 6.5},
+                )
+                self.assertEqual(managed, [])
 
     def test_positive_control_a_tranche_plan_does_let_the_level_through(self) -> None:
         """Without this the test above would pass even if the builder ignored
-        ``trailed`` entirely."""
+        ``trailed`` entirely. The ladder must be NON-empty: an empty one is the
+        very thing the test above asserts is skipped (#1511)."""
+        from broker_contract.sizing import TpTranchePlan
+
+        ladder = (
+            TpTranchePlan(
+                tranche_index=0,
+                target_price=_PLAN_STOP + 20.0,
+                tranche_frac=1.0,
+                r_multiple=1.0,
+                tag="tp1",
+            ),
+        )
         managed = _build_managed_exits(
             long_positions=[_position()],
-            tranche_plans={_UIC: ((), _QTY, _PLAN_STOP)},
+            tranche_plans={_UIC: (ladder, _QTY, _PLAN_STOP)},
             fired={},
             trailed={_UIC: _PLAN_STOP + 6.5},
         )

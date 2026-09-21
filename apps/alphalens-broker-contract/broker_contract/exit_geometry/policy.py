@@ -217,12 +217,13 @@ class BreakevenTrailPolicy:
     realizes through the research TP levels. 1R is the
     LENS risk unit — ``avg_price - plan_stop`` (filled blend minus the brief
     disaster floor), NOT an ATR multiple — and ``atr`` is ignored entirely
-    HERE. Read that narrowly: it means this method never reads ``atr``, NOT
-    that the value is irrelevant to whether this policy runs. The caller
-    (``position_manager._maybe_trail``) still refuses on a missing or
-    degenerate ``plan.reanchor.atr`` before it ever calls in, which is why a
-    pick armed without a geometry stamp never trails under this policy. That
-    mismatch is deliberate and load-bearing — see issue #1325.
+    HERE — and, since #1236/#1325, the caller does not need one either: a
+    ``TrailingStop`` primitive carries no ATR by design
+    (``position_manager._declared_atr`` returns ``None`` for it) and
+    ``_maybe_trail`` no longer vetoes on that. Until #1236 it did, which is why
+    a pick armed without a geometry stamp could not trail whatever policy was
+    active; whether an absent ATR is fatal is now the POLICY's answer, not the
+    caller's.
     Dark until the peak reaches ``avg_price + activation_r*R``; once armed the
     target is ``max(avg_price, avg_price + trail_frac*(peak - avg_price))``,
     which at the arming instant already sits at

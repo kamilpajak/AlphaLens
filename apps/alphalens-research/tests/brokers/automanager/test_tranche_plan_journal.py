@@ -348,5 +348,77 @@ class TestFoldRoundTripClosures(unittest.TestCase):
         self.assertEqual(out, {})
 
 
+class TestADeclaredEmptyLadderIsJournaled(unittest.TestCase):
+    """Issue #1511: a document declaring ``tp_tranches: []`` is legal at the
+    arming door, but the watch path used to journal NOTHING for it -- so in the
+    journal "the author declared no take-profit" was indistinguishable from
+    "the writer never ran", and the arm gate's fail-closed stance (correct for
+    the second) terminally cancelled the first.
+
+    The fix makes declared vacuity a POSITIVE fact: the line is journaled with
+    an empty ladder, so ``no plan on record`` recovers its sharp meaning and
+    ``_governing_plan_lookup`` stays untouched.
+
+    Scoped by RETRACTABILITY, not by caller. Only a line carrying a
+    ``pick_key`` is written, because ``_retract_stale_tranche_plans`` skips a
+    keyless plan -- a vacuous keyless line would govern its uic forever and
+    survive every compaction. Both identity-carrying callers write it (the
+    watch router, and the now-tranche split through ``override``); the plain
+    bracket call, which stamps no identity, stays silent."""
+
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        from alphalens_pipeline.brokers.automanager import control_loop as cl
+
+        self._cl = cl
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "standalone_stops.jsonl"
+        patcher = mock.patch.object(cl, "_standalone_stop_journal_path", lambda: self.path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _journal_core(self, *, pick_key: str | None) -> list[dict]:
+        self._cl._journal_tranche_plan_core(
+            plan=type("P", (), {"tp_tranches": ()})(),
+            exit_spec=None,
+            stop_price=8.0,
+            reference_qty=10.0,
+            uic=307,
+            pick_key=pick_key,
+        )
+        if not self.path.exists():
+            return []
+        return [json.loads(ln) for ln in self.path.read_text().splitlines() if ln.strip()]
+
+    def test_a_call_carrying_an_identity_journals_a_plan_with_no_tranches(self) -> None:
+        lines = self._journal_core(pick_key="KO:2026-09-21")
+        plans = [ln for ln in lines if ln["kind"] == "tranche_plan"]
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(plans[0]["tp_tranches"], [])
+        self.assertEqual(plans[0]["pick_key"], "KO:2026-09-21")
+        # The scalars the gate and the protection pass read must still be there.
+        self.assertEqual(plans[0]["reference_qty"], 10.0)
+        self.assertEqual(plans[0]["stop_price"], 8.0)
+
+    def test_a_keyless_call_still_journals_nothing(self) -> None:
+        # A keyless vacuous plan can never be retracted, so it is never
+        # written. Pins the scoping, not an accident: the discriminator is the
+        # identity on the line, NOT which caller produced it -- the
+        # now-tranche split reaches this core through the bracket wrapper and
+        # DOES carry a pick_key.
+        self.assertEqual(self._journal_core(pick_key=None), [])
+
+    def test_the_vacuous_line_folds_to_a_governing_plan_with_an_empty_ladder(self) -> None:
+        lines = self._journal_core(pick_key="KO:2026-09-21")
+        out = fold_tranche_plans(lines)
+        # A GENUINE entry, not an absence -- that is the whole point: the gate
+        # can now tell a declared vacuity from a lost plan.
+        self.assertEqual(out, {307: ((), 10.0, 8.0)})
+
+
 if __name__ == "__main__":
     unittest.main()
