@@ -1,9 +1,8 @@
 # A20 power preflight for #1227 — is the ATR test powered, and if not, when?
 
-**Status:** PRE-COMMITMENT RECORDED 2026-09-22, numbers pending. The decisions in
-§2 were written and committed **before** the preflight was run; §4 is filled in
-afterwards from a single recorded run. Nothing here registers #1227 and nothing
-here runs its confirmation.
+**Status:** COMPLETE 2026-09-22. The pre-commitments in §2 were written and
+committed in `1621be4b`, **before** the preflight ran; §4 is the single recorded
+run. Nothing here registers #1227 and nothing here runs its confirmation.
 
 ## 1. Why this exists
 
@@ -91,6 +90,16 @@ date. That is not a slip: it becomes a date derived by arithmetic from a
 measurement, which is what the wake convention requires, in place of one derived
 under the wrong maturity.
 
+> **Written after the run, and against the direction this clause anticipated.**
+> The computed date is 2026-09-25 — *earlier* than the Wake line, not later.
+> This paragraph only provided for the "later" case. The same rule applies:
+> a date computed from observed arrivals replaces one estimated under the wrong
+> maturity, in whichever direction it falls. Said plainly because moving a
+> deadline *closer* is the self-serving direction, and it is worth stating that
+> nothing here was chosen — the date follows from arrivals already on record,
+> the fixed 20-session maturity, and a power curve computed without reading one
+> held-out outcome.
+
 ## 3. Method
 
 Held-out **structure** (episodes per arrival session, filtered to the population
@@ -109,7 +118,76 @@ across it, so a single in-sample point estimate does not silently carry the gate
 
 ## 4. Results
 
-*(pending the single recorded run)*
+One run, 2026-09-22, on the pre-committed **briefed** population.
+`scripts/ml/a20_power.py`; 4 000 simulations at the gate, 2 000 per cluster count.
+
+**Burnt-panel A20 effects** (standardised, jointly fitted, 197 episodes; 90%
+cluster-bootstrap interval):
+
+| signal | effect | 90% interval |
+|---|---|---|
+| ATR | **−0.378** | −0.451 … −0.275 |
+| MA50 extension | −0.303 | −0.433 … −0.128 |
+| press gate | +0.026 | −0.054 … +0.116 |
+
+**The cost D5 warned about did not materialise.** July reported `rho = -0.35` for
+ATR on `car_10`; on `sel_ar_20` it is **−0.378**, slightly stronger. The delay
+below comes entirely from A20 taking twice as long to mature, not from a weaker
+signal.
+
+**Power at the gate** (50% of the discovery effect), held-out panel as it stands:
+34 matured clusters, 396 episodes, accrual 1.00 cluster/session, sd(y) 0.165,
+ICC 0.06.
+
+| signal | power | Monte Carlo SE |
+|---|---|---|
+| ATR | **77.3%** | ±0.7 |
+| MA50 | 61.8% | ±0.8 |
+| press gate | **4.1%** | ±0.3 |
+
+**Verdict: not yet.** The gate is ATR ≥ 80%; it stands at 77.3%.
+
+**When.** Power by cluster count, and the date each is reached — from arrival
+sessions **already on record** (55 exist, 34 have matured) plus the fixed
+20-session maturity:
+
+| clusters | ATR power | reached |
+|---|---|---|
+| 34 (now) | 77.3% ±0.7 | — |
+| 36 | 79.5% ±0.9 | 2026-09-23 |
+| **38** | **83.7% ±0.8** | **2026-09-25** |
+| 40 | 87.2% ±0.7 | 2026-09-29 |
+
+38 is the first count whose interval lies entirely above the gate; 36 straddles
+it. **So the preflight clears on 2026-09-25**, three sessions out — and the Wake
+line should move there from 2026-10-14.
+
+### 4.1 Two findings that are not about the gate
+
+**The press gate cannot be confirmed or refuted at this sample size, and waiting
+will not fix it.** Its burnt-panel effect is +0.026 with an interval straddling
+zero, and power is 4% — indistinguishable from the 5% a coin would give. Running
+#1227 spends its one look on all three; for the press gate that look will return
+nothing either way. That is worth knowing before the run, not after.
+
+**MA50 at 61.8% is below the gate too**, and #1227's gate condition names only
+ATR. A run on 2026-09-25 would therefore report one adequately powered test and
+two underpowered ones. Whether that is acceptable is a registration decision.
+
+### 4.2 A correction made during the run
+
+The first version of `gate_date` projected time for the missing arrivals to
+*happen* and then mature, giving 2026-10-26. That double-counts: 55 arrivals
+already exist in the held-out window and only 34 have matured, so what is
+missing is maturity, not arrivals. The unit test asserted the same wrong model,
+so it passed and confirmed the error. Both are fixed, and the test now says why
+it exists. The five-week difference between 2026-10-26 and 2026-09-25 is the
+size of that mistake.
+
+The same shape appeared in the power number itself: 200 simulations gave 76%,
+400 gave 79.75%, and both were reported to two significant figures while the
+Monte Carlo error was ±2 points. Only the 4 000-simulation run (±0.7) could tell
+"clears" from "does not".
 
 ## 5. Limitations, stated before the numbers
 

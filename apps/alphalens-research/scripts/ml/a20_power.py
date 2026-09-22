@@ -153,26 +153,36 @@ def sessions_between(start: dt.date, end: dt.date) -> int:
 
 def gate_date(
     *,
-    clusters_now: int,
+    observed_arrivals: list[str],
     clusters_needed: int,
     accrual_per_session: float,
     maturity_lag_sessions: int = A20_MATURITY_SESSIONS,
     today: dt.date | None = None,
 ) -> dt.date:
-    """When the held-out panel will hold ``clusters_needed`` MATURED clusters.
+    """When the panel will hold ``clusters_needed`` MATURED arrival clusters.
 
-    Two terms, and leaving out the second is the mistake #1227's own Wake
-    derivation makes after D5: the missing arrivals have to happen, and then
-    they have to mature.
+    ``observed_arrivals`` is every arrival session already in the held-out
+    window, matured or not — and reading it is the whole point. An arrival that
+    happened four weeks ago is already in flight; it only has to finish
+    maturing. An earlier version of this function projected the time for those
+    arrivals to HAPPEN as well, which double-counted and put the gate five weeks
+    later than it is. Measured 2026-09-22: 55 arrivals exist, 34 have matured.
+
+    The accrual projection survives only for the case it is actually for — when
+    fewer arrivals exist than are needed.
     """
     from alphalens_pipeline.paper.calendar import advance_trading_sessions
 
     today = today or dt.date.today()
-    missing = max(clusters_needed - clusters_now, 0)
-    if missing == 0:
+    arrivals = sorted(observed_arrivals)
+    if clusters_needed <= 0:
         return today
+    if len(arrivals) >= clusters_needed:
+        nth = dt.date.fromisoformat(arrivals[clusters_needed - 1])
+        return max(advance_trading_sessions(nth, maturity_lag_sessions), today)
     if accrual_per_session <= 0:
         raise ValueError("accrual_per_session must be positive")
+    missing = clusters_needed - len(arrivals)
     sessions = math.ceil(missing / accrual_per_session) + maturity_lag_sessions
     return advance_trading_sessions(today, sessions)
 
@@ -257,3 +267,321 @@ def load_held_out(labels_dir: Any) -> pd.DataFrame:
         if path.stem > DISCOVERY_CUTOFF
     ]
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+# --------------------------------------------------------------- burnt side
+#: The three #1227 hypotheses and the brief columns that carry them. These are
+#: the discovery columns unchanged — re-deriving any of them would be a second
+#: definition of a signal that already has one.
+SIGNALS = {
+    "atr": "technical_atr_pct",
+    "ma50": "technical_ma50_distance_pct",
+    "press": "n_gates_passed",
+}
+
+OUTCOME = "sel_ar_20"
+
+
+def _z(values: np.ndarray) -> np.ndarray:
+    sd = float(np.std(values))
+    return (values - float(np.mean(values))) / sd if sd > 0 else np.zeros_like(values)
+
+
+def burnt_panel(labels_dir: Any, briefs_dir: Any, *, population: str) -> pd.DataFrame:
+    """Burnt-side (<= 2026-07-05) labels joined to the brief signals.
+
+    Outcome values ARE read here, which is what the burnt side is for. The join
+    key is stringified on both sides deliberately: the two stores stamp
+    ``brief_date`` with different types, and a silent type mismatch would empty
+    the join and hand back a clean-looking empty panel.
+    """
+    from pathlib import Path
+
+    from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
+
+    label_cols = [
+        "brief_date",
+        "ticker",
+        "anchor_session",
+        "briefed_any_theme",
+        "sel_label_status_20",
+        OUTCOME,
+    ]
+    labels = pd.concat(
+        [
+            pd.read_parquet(path, columns=label_cols)
+            for path in sorted(Path(labels_dir).glob("*.parquet"))
+            if path.stem <= DISCOVERY_CUTOFF
+        ],
+        ignore_index=True,
+    )
+    briefs = pd.concat(
+        [
+            pd.read_parquet(path, columns=["ticker", *SIGNALS.values()]).assign(
+                brief_date=path.stem
+            )
+            for path in sorted(Path(briefs_dir).glob("*.parquet"))
+            if path.stem <= DISCOVERY_CUTOFF
+        ],
+        ignore_index=True,
+    )
+
+    labels["brief_date"] = labels["brief_date"].astype(str)
+    labels["ticker"] = labels["ticker"].astype(str).str.upper()
+    briefs["ticker"] = briefs["ticker"].astype(str).str.upper()
+
+    panel = labels.merge(briefs, on=["brief_date", "ticker"], how="inner", validate="m:1")
+    panel = panel[panel["sel_label_status_20"].astype(str) == _RESOLVED]
+    if population == POPULATION_BRIEFED:
+        panel = panel[panel["briefed_any_theme"].fillna(False).astype(bool)]
+    elif population != POPULATION_ALL:
+        raise ValueError(f"unknown population {population!r}")
+    panel = panel.dropna(subset=[OUTCOME, *SIGNALS.values()])
+    panel = panel.rename(columns={"anchor_session": "arrival"})
+    panel["arrival"] = panel["arrival"].astype(str)
+    return ticker_episode_dedup(panel)
+
+
+def standardised_effects(panel: pd.DataFrame) -> dict[str, float]:
+    """The three partial slopes of z(outcome) on z(signal), jointly.
+
+    Standardised on both sides so a slope reads as a correlation and the
+    25/50/75% shrinkage grid means what it says. Fitted jointly rather than one
+    at a time because the July memo's own verdict for MA50 and the press gate is
+    the ATR-partial one — a marginal slope would re-import the confound the
+    discovery already controlled for.
+    """
+    y = _z(panel[OUTCOME].astype(float).to_numpy())
+    X = np.column_stack(
+        [np.ones(len(panel))]
+        + [_z(panel[col].astype(float).to_numpy()) for col in SIGNALS.values()]
+    )
+    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    return {name: float(beta[i + 1]) for i, name in enumerate(SIGNALS)}
+
+
+def effect_ci(
+    panel: pd.DataFrame, *, n_boot: int = 999, seed: int = 20260922
+) -> dict[str, tuple[float, float]]:
+    """Cluster-bootstrap 90% interval for each standardised effect.
+
+    Resamples ARRIVAL SESSIONS, not rows: the dependence that matters is
+    same-day co-movement, and a row bootstrap would report an interval far too
+    tight and let one point estimate carry the whole gate.
+    """
+    rng = np.random.default_rng(seed)
+    clusters = panel["arrival"].to_numpy()
+    groups = [panel.iloc[np.flatnonzero(clusters == c)] for c in pd.unique(clusters)]
+    draws: dict[str, list[float]] = {name: [] for name in SIGNALS}
+    for _ in range(n_boot):
+        picked = rng.integers(0, len(groups), len(groups))
+        sample = pd.concat([groups[i] for i in picked], ignore_index=True)
+        for name, value in standardised_effects(sample).items():
+            draws[name].append(value)
+    return {
+        name: (float(np.percentile(v, 5)), float(np.percentile(v, 95))) for name, v in draws.items()
+    }
+
+
+# ------------------------------------------------------------------- driver
+def report(
+    *, labels_dir: Any, briefs_dir: Any, population: str, n_sims: int, wcb_boot: int, seed: int
+) -> dict[str, Any]:
+    """One population's answer: effects, power at each shrinkage, and the date."""
+    burnt = burnt_panel(labels_dir, briefs_dir, population=population)
+    effects = standardised_effects(burnt)
+    cis = effect_ci(burnt, seed=seed)
+
+    held = load_held_out(labels_dir)
+    sizes = held_out_structure(held, population=population)
+    by_anchor = dict(
+        zip(
+            *np.unique(
+                held["anchor_session"]
+                .astype(str)
+                .to_numpy()[held["sel_label_status_20"].astype(str).to_numpy() == _RESOLVED],
+                return_counts=True,
+            ),
+            strict=True,
+        )
+    )
+    accrual = measured_accrual(by_anchor)
+
+    y_b = burnt[OUTCOME].astype(float).to_numpy()
+    sd_y = float(np.std(y_b))
+    icc = estimate_icc_local(y_b, burnt["arrival"].to_numpy())
+    signals = np.column_stack([_z(burnt[c].astype(float).to_numpy()) for c in SIGNALS.values()])
+
+    powers: dict[float, dict[str, float]] = {}
+    for factor in SHRINKAGE_GRID:
+        powers[factor] = simulate_power(
+            burnt_signals=signals,
+            cluster_sizes=sizes,
+            effects={n: shrink(effects[n], factor) * sd_y for n in SIGNALS},
+            sd_y=sd_y,
+            icc=icc,
+            n_sims=n_sims,
+            wcb_boot=wcb_boot,
+            seed=seed,
+        )
+
+    needed = None
+    gate_when = None
+    if powers[GATE_SHRINKAGE]["atr"] < GATE_POWER:
+        needed = clusters_for_power(
+            burnt_signals=signals,
+            observed_sizes=sizes,
+            effects={n: shrink(effects[n], GATE_SHRINKAGE) * sd_y for n in SIGNALS},
+            sd_y=sd_y,
+            icc=icc,
+            n_sims=max(n_sims // 2, 60),
+            wcb_boot=wcb_boot,
+            seed=seed,
+        )
+        if needed is not None and accrual > 0:
+            gate_when = gate_date(
+                observed_arrivals=sorted(
+                    {str(x)[:10] for x in held["anchor_session"].astype(str).to_numpy()}
+                ),
+                clusters_needed=needed,
+                accrual_per_session=accrual,
+            )
+
+    return {
+        "clusters_needed_for_gate": needed,
+        "gate_date": gate_when,
+        "population": population,
+        "burnt_episodes": len(burnt),
+        "held_out_clusters": len(sizes),
+        "held_out_episodes": int(sum(sizes)),
+        "accrual_per_session": accrual,
+        "sd_y": sd_y,
+        "icc": icc,
+        "effects": effects,
+        "effect_ci": cis,
+        "power": powers,
+    }
+
+
+def estimate_icc_local(y: np.ndarray, clusters: np.ndarray) -> float:
+    """One-way ANOVA ICC, clamped to [0, 0.9]. Same estimator as the neighbour."""
+    frame = pd.DataFrame({"y": y, "c": clusters})
+    groups = [g["y"].to_numpy() for _, g in frame.groupby("c") if len(g) > 0]
+    k, n = len(groups), sum(len(g) for g in groups)
+    if k < 2 or n <= k:
+        return 0.0
+    grand = np.concatenate(groups).mean()
+    ssb = sum(len(g) * (g.mean() - grand) ** 2 for g in groups)
+    ssw = sum(((g - g.mean()) ** 2).sum() for g in groups)
+    msb, msw = ssb / (k - 1), ssw / (n - k)
+    n0 = (n - sum(len(g) ** 2 for g in groups) / n) / (k - 1)
+    icc = (msb - msw) / (msb + (n0 - 1) * msw) if msw > 0 else 0.0
+    return float(min(max(icc, 0.0), 0.9))
+
+
+def clusters_for_power(
+    *,
+    burnt_signals: np.ndarray,
+    observed_sizes: list[int],
+    effects: dict[str, float],
+    sd_y: float,
+    icc: float,
+    target: str = "atr",
+    target_power: float = GATE_POWER,
+    n_sims: int,
+    wcb_boot: int,
+    seed: int,
+    max_clusters: int = 200,
+) -> int | None:
+    """Smallest cluster count at which ``target`` reaches ``target_power``.
+
+    Extra clusters are drawn from the OBSERVED size distribution rather than
+    given an average size: the panel's clusters are far from uniform, and
+    pretending they are would make the projection optimistic in exactly the
+    direction that matters.
+    """
+    rng = np.random.default_rng(seed)
+    n = len(observed_sizes)
+    while n <= max_clusters:
+        sizes = list(observed_sizes) + [
+            int(observed_sizes[i])
+            for i in rng.integers(0, len(observed_sizes), max(n - len(observed_sizes), 0))
+        ]
+        power = simulate_power(
+            burnt_signals=burnt_signals,
+            cluster_sizes=sizes,
+            effects=effects,
+            sd_y=sd_y,
+            icc=icc,
+            n_sims=n_sims,
+            wcb_boot=wcb_boot,
+            seed=seed,
+        )
+        if power[target] >= target_power:
+            return n
+        n += 4
+    return None
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import json
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    home = Path.home() / ".alphalens"
+    parser.add_argument("--labels-dir", type=Path, default=home / "selection_labels")
+    parser.add_argument("--briefs-dir", type=Path, default=home / "thematic_briefs")
+    parser.add_argument("--n-sims", type=int, default=400)
+    parser.add_argument("--wcb-boot", type=int, default=399)
+    parser.add_argument("--seed", type=int, default=20260922)
+    parser.add_argument("--out-json", type=Path, default=None)
+    args = parser.parse_args(argv)
+
+    out = {}
+    for population in (POPULATION_BRIEFED, POPULATION_ALL):
+        r = report(
+            labels_dir=args.labels_dir,
+            briefs_dir=args.briefs_dir,
+            population=population,
+            n_sims=args.n_sims,
+            wcb_boot=args.wcb_boot,
+            seed=args.seed,
+        )
+        out[population] = r
+        print(f"\n=== population: {population} ===")
+        print(
+            f"burnt episodes {r['burnt_episodes']} | held-out {r['held_out_episodes']} episodes "
+            f"in {r['held_out_clusters']} clusters | accrual {r['accrual_per_session']:.2f}/session "
+            f"| sd(y) {r['sd_y']:.4f} icc {r['icc']:.2f}"
+        )
+        for name in SIGNALS:
+            lo, hi = r["effect_ci"][name]
+            print(
+                f"  burnt A20 effect {name:5s}: {r['effects'][name]:+.3f}  [90% {lo:+.3f}, {hi:+.3f}]"
+            )
+        for factor in SHRINKAGE_GRID:
+            row = "  ".join(f"{n}={r['power'][factor][n]:.0%}" for n in SIGNALS)
+            mark = "  <-- the gate" if factor == GATE_SHRINKAGE else ""
+            print(f"  power @ {factor:.0%} of the discovery effect: {row}{mark}")
+        atr_gate = r["power"][GATE_SHRINKAGE]["atr"]
+        print(f"  VERDICT: ATR power at the gate = {atr_gate:.0%} (needs {GATE_POWER:.0%})")
+        if r["clusters_needed_for_gate"]:
+            print(
+                f"  needs ~{r['clusters_needed_for_gate']} clusters (has {r['held_out_clusters']}) "
+                f"-> gate reached about {r['gate_date']}"
+            )
+        elif atr_gate < GATE_POWER:
+            print("  the gate is not reached within the search ceiling")
+
+    if args.out_json:
+        args.out_json.write_text(json.dumps(out, indent=2, default=str) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())

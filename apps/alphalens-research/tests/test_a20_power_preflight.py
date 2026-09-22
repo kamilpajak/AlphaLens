@@ -144,47 +144,62 @@ class TestHolm(unittest.TestCase):
 
 
 class TestTheGateDateArithmetic(unittest.TestCase):
-    """Turning 'we need N clusters' into a date, from measured accrual."""
+    """Turning 'we need N clusters' into a date.
 
-    def test_the_date_accounts_for_the_maturity_lag(self):
-        # 34 clusters today, 40 needed, 1.00 clusters per session, and an A20
-        # episode matures 20 sessions after its arrival: 6 more arrivals must
-        # happen AND then mature, so the answer is 6 + 20 sessions out.
+    The first version of this class asserted that the missing arrivals had to
+    HAPPEN and then mature, and the implementation obeyed it — so the test
+    passed and confirmed a bug that put the gate five weeks late. Arrivals
+    accrue daily and are already in flight; what is missing is maturity, not
+    the arrivals. Measured 2026-09-22: 55 arrivals existed, 34 had matured.
+    """
+
+    @staticmethod
+    def _arrivals(n: int = 50, start: dt.date = dt.date(2026, 7, 6)) -> list[str]:
+        """``n`` consecutive XNYS sessions — arrivals are sessions, not dates.
+
+        Built from the real calendar rather than a date range: a fixture with
+        weekends in it does not round-trip through the session arithmetic, and
+        the first version of this test failed for that reason rather than for
+        the behaviour it is about.
+        """
+        from alphalens_pipeline.paper.calendar import advance_trading_sessions
+
+        return [advance_trading_sessions(start, i).isoformat() for i in range(n)]
+
+    def test_an_arrival_that_already_happened_only_has_to_mature(self):
+        # The 38th arrival in this list is in the past; the answer is its
+        # maturity date, NOT today plus four sessions plus the lag.
         got = pre.gate_date(
-            clusters_now=34,
-            clusters_needed=40,
+            observed_arrivals=self._arrivals(),
+            clusters_needed=38,
             accrual_per_session=1.0,
             maturity_lag_sessions=20,
-            today=dt.date(2026, 9, 21),
+            today=dt.date(2026, 9, 22),
         )
-        self.assertEqual(pre.sessions_between(dt.date(2026, 9, 21), got), 26)
+        nth = dt.date.fromisoformat(sorted(self._arrivals())[37])
+        self.assertEqual(pre.sessions_between(nth, got), 20)
+        self.assertLess(got, dt.date(2026, 10, 14))
 
-    def test_a_gate_already_met_is_today(self):
+    def test_a_count_beyond_the_observed_arrivals_falls_back_to_accrual(self):
+        # The projection still exists for the case it is for.
         got = pre.gate_date(
-            clusters_now=60,
-            clusters_needed=40,
+            observed_arrivals=self._arrivals(10),
+            clusters_needed=20,
             accrual_per_session=1.0,
             maturity_lag_sessions=20,
-            today=dt.date(2026, 9, 21),
+            today=dt.date(2026, 9, 22),
         )
-        self.assertEqual(got, dt.date(2026, 9, 21))
+        self.assertEqual(pre.sessions_between(dt.date(2026, 9, 22), got), 30)
 
-    def test_a_slower_accrual_pushes_the_date_out(self):
-        fast = pre.gate_date(
-            clusters_now=34,
-            clusters_needed=44,
+    def test_a_gate_already_met_is_never_in_the_past(self):
+        got = pre.gate_date(
+            observed_arrivals=self._arrivals(),
+            clusters_needed=5,
             accrual_per_session=1.0,
             maturity_lag_sessions=20,
-            today=dt.date(2026, 9, 21),
+            today=dt.date(2026, 9, 22),
         )
-        slow = pre.gate_date(
-            clusters_now=34,
-            clusters_needed=44,
-            accrual_per_session=0.5,
-            maturity_lag_sessions=20,
-            today=dt.date(2026, 9, 21),
-        )
-        self.assertGreater(slow, fast)
+        self.assertEqual(got, dt.date(2026, 9, 22))
 
 
 class TestShrinkage(unittest.TestCase):
