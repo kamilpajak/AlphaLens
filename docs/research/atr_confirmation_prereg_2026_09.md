@@ -137,7 +137,12 @@ construction:
 **Disclosed before the run:** arm (iii) requires a point estimate inside roughly
 (−0.009, +0.009) and so has about a 13% chance even if the true effect is exactly
 zero. In practice this three-way will almost always land on (i) or (ii). Saying
-so now is the difference between a limitation and an excuse.
+so now is the difference between a limitation and an excuse. The interval is an
+equal-tail percentile interval over resampled clusters, which is wider than a
+studentised or BCa one would be; that makes arm (iii) *harder* to reach, so the
+conservatism runs toward "inconclusive" rather than toward a false "evidence
+against". Containment is strict — an interval whose endpoint sits exactly on
+±0.10 has not excluded it.
 
 **What retirement does not touch.** ATR's use in execution geometry — the bracket
 and stop sizing, the registered `atr_bracket_1p5` lenses — is a different estimand
@@ -145,8 +150,15 @@ on the §4.1 budget and is untouched by any outcome here. "Retired" here means
 "closed for brief selection and ordering", never "ATR is useless".
 
 **VOID is not a retirement.** If the panel falls below 300 episodes or 30 arrival
-clusters, or the join comes back empty, the run is abandoned and the look returns
-**unspent**. That is the absence of a run, not a result. Precedent:
+clusters, the join comes back empty, a signal column has no variance, or the
+computed statistic is non-finite, the run is abandoned and the look returns
+**unspent**. The last two were added during the review of this PR and are worth
+naming, because both fail *silently* rather than loudly: a zero-variance column
+standardises to zeros and the shared OLS uses a pseudo-inverse, so it returns a
+slope of exactly zero; and every comparison in the decision rule is False against
+NaN, so a non-finite statistic would have fallen through to "the July kill
+trigger fired, revert the live scorer". A statistic that does not exist is not a
+finding about ATR. That is the absence of a run, not a result. Precedent:
 [`exit_policy_comparison_prereg_2026_08_24.md`](exit_policy_comparison_prereg_2026_08_24.md)
 voided itself before its cohort opened and its slot was returned. The moment any
 feature-vs-outcome statistic is emitted, the look is spent.

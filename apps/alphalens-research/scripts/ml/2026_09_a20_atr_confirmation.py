@@ -50,6 +50,13 @@ PANEL (frozen)
   disclosure, not a detail.
 - Unit: ticker-episode (ledger rule 5), `ticker_episode_dedup`, chained
   5-session collapse. Clusters are ARRIVAL SESSIONS throughout.
+- ORDER: the status and completeness filters run BEFORE the episode collapse,
+  so an episode is represented by its first USABLE row rather than by a row
+  that was dropped. The order is deliberate and is the one `a20_power.py`
+  already used to read the panel structure the power gate was computed on;
+  changing it here would measure a different panel from the one that cleared
+  the gate. It has a known cost: dropping a middle row can split one chained
+  episode in two, which counts a ticker twice. Recorded rather than fixed.
 
 ESTIMAND (frozen)
 The standardised partial slope of z(`technical_atr_pct`) on z(`sel_ar_20`),
@@ -149,9 +156,15 @@ DISCLOSED rather than dropped: declining to spend the charge is legitimate,
 declining to say so is not.
 
 VOID CLAUSE. The look may be abandoned and re-registered UNSPENT only for
-defects visible without any feature-vs-outcome statistic: the panel falling
-below MIN_EPISODES or MIN_CLUSTERS, a join that comes back empty, or a
-store-integrity failure. A VOID is not a RETIRE - it is the absence of a run.
+defects that leave no verdict to report: the panel falling below MIN_EPISODES or
+MIN_CLUSTERS, a join that comes back empty, a signal column with no variance
+(which standardises to zeros and, because the shared OLS uses a pseudo-inverse,
+would quietly return a slope of zero rather than raise), or a NON-FINITE
+statistic. That last one is a VOID and never a verdict: every comparison in
+`decide` is False against NaN, so a numerical failure would otherwise fall
+through to "the July kill trigger fired, revert the live scorer". A statistic
+that does not exist is not a finding about ATR.
+A VOID is not a RETIRE - it is the absence of a run.
 The moment any feature-vs-outcome statistic is emitted, the look is spent.
 Precedent: `exit_policy_comparison_prereg_2026_08_24.md` voided itself before
 its cohort opened and its slot was returned.
@@ -195,6 +208,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import itertools
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -230,6 +244,11 @@ MIN_CLUSTERS = 30
 #: interaction is estimated at all.
 MIN_VOL_EPISODES = 4
 
+#: Arrival clusters a single regime arm needs before its slope is printed. A
+#: registration should not hide a number: this used to be MIN_CLUSTERS // 3
+#: computed inline, invisible to anyone reading the frozen constants.
+MIN_REGIME_CLUSTERS = 10
+
 #: The registration is merged before the look runs; the gap is what enforces it.
 RUN_NOT_BEFORE = dt.date(2026, 9, 24)
 
@@ -261,9 +280,21 @@ class Decision:
 
 
 def decide(*, beta: float, p_value: float, ci: tuple[float, float]) -> Decision:
-    """Apply the frozen rule. This function is the registration in code."""
-    promoted = p_value < ALPHA and beta <= -DELTA
+    """Apply the frozen rule. This function is the registration in code.
+
+    A non-finite input is a VOID, never a verdict. Every comparison below is
+    False against NaN, so a numerical failure would otherwise fall through to
+    ``tilt = "retired"`` — a broken computation reported as "the July kill
+    trigger fired, revert the live scorer". A statistic that does not exist is
+    not a finding about ATR.
+    """
     lo, hi = ci
+    if not all(math.isfinite(float(v)) for v in (beta, p_value, lo, hi)):
+        raise VoidError(
+            f"non-finite statistic (slope {beta}, p {p_value}, interval {ci}); "
+            f"the run did not compute and is NOT a verdict"
+        )
+    promoted = p_value < ALPHA and beta <= -DELTA
     inside = lo > -DELTA and hi < DELTA
     if promoted:
         conclusion = "cleared"
@@ -364,6 +395,13 @@ def held_out_panel(labels_dir: Any, briefs_dir: Any) -> pd.DataFrame:
     panel["arrival"] = panel["arrival"].astype(str)
     panel = ticker_episode_dedup(panel)
 
+    for column in (ATR, *COVARIATES):
+        # A zero-variance column standardises to zeros, and the shared OLS uses
+        # a pseudo-inverse, so this does not raise: it quietly returns a slope
+        # of zero, which the rule would read as a sign flip.
+        if float(np.std(panel[column].astype(float).to_numpy())) <= 0.0:
+            raise VoidError(f"{column} has no variance on the panel; the design is degenerate")
+
     clusters = panel["arrival"].nunique()
     if len(panel) < MIN_EPISODES or clusters < MIN_CLUSTERS:
         raise VoidError(
@@ -400,9 +438,17 @@ def _design(panel: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
 
 
 def atr_slope(panel: pd.DataFrame) -> float:
-    """The registered estimand: the standardised partial slope of ATR."""
+    """The registered estimand: the standardised partial slope of ATR.
+
+    Uses the SAME fit as the bootstrap (`_ols_beta`, a pseudo-inverse of X'X)
+    rather than a second solver. `np.linalg.lstsq` agrees with it on a
+    full-rank design and disagrees on a rank-deficient one, and the printed
+    estimate and the tested estimate must be one number, not two.
+    """
+    from alphalens_research.diagnostics.options_retro import _ols_beta
+
     y, X = _design(panel)
-    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    beta, _ = _ols_beta(y, X)
     return float(beta[1])
 
 
@@ -436,10 +482,20 @@ def slope_ci(
     Resamples arrival SESSIONS, not rows: the dependence that matters is
     same-day co-movement, and a row bootstrap would report an interval far too
     tight and hand the equivalence arm a confidence it has not earned.
+
+    Each draw is re-standardised, because :func:`atr_slope` standardises what it
+    is given. That is the consistent choice: the estimand is a standardised
+    slope, and the point estimate is standardised in-sample too, so the interval
+    covers the same quantity the point estimate reports. Freezing the original
+    sample's mean and scale would give an interval for a different statistic and
+    a slightly narrower one.
     """
     rng = np.random.default_rng(seed)
     arrivals = panel["arrival"].to_numpy()
-    groups = [panel.iloc[np.flatnonzero(arrivals == c)] for c in pd.unique(arrivals)]
+    # Sorted, not first-appearance order: with a fixed seed the draw maps
+    # integers onto this list, so a differently ordered panel would give a
+    # different interval for the same data.
+    groups = [panel.iloc[np.flatnonzero(arrivals == c)] for c in sorted(pd.unique(arrivals))]
     draws = []
     for _ in range(n_boot):
         picked = rng.integers(0, len(groups), len(groups))
@@ -454,6 +510,12 @@ def volatility_sufficiency(panel: pd.DataFrame) -> tuple[int, bool]:
     An EPISODE is a maximal run of consecutive arrival sessions sharing one
     regime label, which is the honest unit: forty days inside one high-vol
     stretch are one observation of "high vol", not forty.
+
+    Runs are counted over the sessions PRESENT in the panel, so a calendar gap
+    between two same-state stretches is invisible and they merge into one
+    episode. That direction is deliberate: it can only UNDERcount episodes, and
+    an undercount makes the sufficiency check refuse to estimate rather than
+    estimate on less independence than it thinks it has.
     """
     if REGIME_COLUMN not in panel.columns:
         return 0, False
@@ -554,7 +616,7 @@ def full_run(labels_dir: Any, briefs_dir: Any) -> Decision:
 def _report_interaction(panel: pd.DataFrame) -> None:
     """Per-regime slopes, printed only when the sufficiency check passed."""
     for state, part in panel.groupby(panel[REGIME_COLUMN].astype(str)):
-        if part["arrival"].nunique() < MIN_CLUSTERS // 3:
+        if part["arrival"].nunique() < MIN_REGIME_CLUSTERS:
             print(f"  {state}: {part['arrival'].nunique()} clusters — not estimated")
             continue
         print(f"  {state}: slope {atr_slope(part):+.4f} on {len(part)} episodes")

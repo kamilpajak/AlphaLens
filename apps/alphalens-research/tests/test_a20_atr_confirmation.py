@@ -274,6 +274,30 @@ class TestWhenTheRunIsVoid(unittest.TestCase):
             ]
             self.store.write(session, rows)
 
+    def test_a_non_finite_statistic_voids_instead_of_deciding(self):
+        # The defect this pins: NaN <= -DELTA is False and NaN < 0 is False, so
+        # a numerical failure used to fall through to tilt="retired" — a bug
+        # reported as "the July kill trigger fired, revert the live scorer".
+        for beta, p_value, ci in (
+            (float("nan"), 0.01, (-0.3, -0.1)),
+            (-0.2, float("nan"), (-0.3, -0.1)),
+            (-0.2, 0.01, (float("nan"), -0.1)),
+            (float("inf"), 0.01, (-0.3, -0.1)),
+        ):
+            with self.subTest(beta=beta, p_value=p_value, ci=ci), self.assertRaises(atr.VoidError):
+                atr.decide(beta=beta, p_value=p_value, ci=ci)
+
+    def test_a_degenerate_signal_column_voids(self):
+        # A zero-variance column standardises to zeros, and the shared OLS uses
+        # a pseudo-inverse, so this does NOT crash: it silently returns a slope
+        # of 0, which the rule would read as a sign flip.
+        rng = np.random.default_rng(11)
+        for i, session in enumerate(_sessions(32)):
+            rows = [(f"T{i:03d}X{j:03d}", float(rng.normal()), 4.0) for j in range(12)]
+            self.store.write(session, rows)
+        with self.assertRaises(atr.VoidError):
+            atr.held_out_panel(self.store.labels, self.store.briefs)
+
     def test_too_few_episodes_voids(self):
         self._fill(31, per_cluster=2)  # 62 episodes, clusters fine
         with self.assertRaises(atr.VoidError):
@@ -287,6 +311,32 @@ class TestWhenTheRunIsVoid(unittest.TestCase):
     def test_an_empty_store_voids_rather_than_returning_an_empty_panel(self):
         with self.assertRaises(atr.VoidError):
             atr.held_out_panel(self.store.labels, self.store.briefs)
+
+    def test_a_void_prints_no_statistic_before_it_refuses(self):
+        # If the slope were printed and THEN the run voided, the look would be
+        # spent while the output claimed it was not. The verdict must be
+        # decided before any feature-vs-outcome number reaches the screen.
+        import contextlib
+        import io
+
+        rng = np.random.default_rng(13)
+        for i, session in enumerate(_sessions(32)):
+            rows = [
+                (f"T{i:03d}X{j:03d}", float(rng.normal()), float(rng.normal() + 5.0))
+                for j in range(12)
+            ]
+            self.store.write(session, rows)
+
+        original = atr.atr_slope
+        setattr(atr, "atr_slope", lambda _panel: float("nan"))  # noqa: B010
+        self.addCleanup(setattr, atr, "atr_slope", original)
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), self.assertRaises(atr.VoidError):
+            atr.full_run(self.store.labels, self.store.briefs)
+        printed = buffer.getvalue()
+        self.assertNotIn("partial slope", printed)
+        self.assertNotIn("bootstrap p", printed)
 
     def test_a_void_is_not_a_decision(self):
         # Stated as a test because the whole point of VOID is that it must not
@@ -321,6 +371,30 @@ class TestTheEstimator(unittest.TestCase):
     def test_a_planted_negative_slope_is_recovered(self):
         slope = atr.atr_slope(self._panel(-0.5))
         self.assertLess(slope, -0.3)
+
+    def test_the_point_estimate_and_the_bootstrap_share_one_fit(self):
+        # The printed slope and the tested slope must be the SAME number. Two
+        # solvers agree on a full-rank design and diverge on a rank-deficient
+        # one, so the registration uses the bootstrap's own fit for both.
+        from alphalens_research.diagnostics.options_retro import _ols_beta
+
+        panel = self._panel(-0.4)
+        y, X = atr._design(panel)
+        beta, _ = _ols_beta(y, X)
+        self.assertEqual(atr.atr_slope(panel), float(beta[1]))
+
+    def test_the_interval_does_not_depend_on_the_order_clusters_are_listed(self):
+        # With a fixed seed the draw maps integers onto the group list, so a
+        # first-appearance ordering would give a different interval for the same
+        # data. Compared to 12 places, not exactly: summing a group's rows in a
+        # different order moves the last bit or two, and that is arithmetic
+        # rather than an ordering dependence.
+        panel = self._panel(-0.3)
+        shuffled = panel.sample(frac=1.0, random_state=7).reset_index(drop=True)
+        first = atr.slope_ci(panel, n_boot=199, seed=8)
+        second = atr.slope_ci(shuffled, n_boot=199, seed=8)
+        for a, b in zip(first, second, strict=True):
+            self.assertAlmostEqual(a, b, places=12)
 
     def test_a_planted_negative_slope_gives_a_small_one_sided_p(self):
         panel = self._panel(-0.5)
@@ -377,6 +451,18 @@ class TestTheVolatilityInteractionSufficiency(unittest.TestCase):
         episodes, estimable = atr.volatility_sufficiency(panel)
         self.assertEqual(episodes, 4)
         self.assertTrue(estimable)
+
+    def test_the_per_regime_cluster_floor_is_a_frozen_constant(self):
+        # It used to be computed inline as MIN_CLUSTERS // 3, which hides a
+        # number the registration's reader should be able to see.
+        self.assertIsInstance(atr.MIN_REGIME_CLUSTERS, int)
+        self.assertGreater(atr.MIN_REGIME_CLUSTERS, 0)
+
+    def test_a_regime_row_with_no_label_does_not_count_as_an_episode(self):
+        panel = self._panel(["low"] * 10 + ["high"] * 10)
+        panel.loc[5, "market_state"] = np.nan
+        episodes, _ = atr.volatility_sufficiency(panel)
+        self.assertEqual(episodes, 2)
 
     def test_a_missing_regime_column_is_insufficient_not_a_crash(self):
         panel = pd.DataFrame({"arrival": _sessions(5), "ticker": list("ABCDE")})
