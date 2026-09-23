@@ -170,7 +170,7 @@ def build_trade_setup_from_frame(
     )
     # Pick the tiers before the stop exists. Picking against -inf gives the
     # same set the ladder would give against the final stop: that stop sits
-    # >= 0.93*ATR under the deepest tier (jitter only LOWERS it), so the
+    # >= 1.0*ATR under the deepest tier (jitter only LOWERS it), so the
     # 0.5*ATR stop-distance filter cannot remove any picked tier. If the
     # jitter ever moved a stop UP, this would stop holding.
     picked = ladder.build_entry_tiers(close, atr, candidates, -math.inf)

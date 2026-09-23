@@ -31,11 +31,11 @@ class TestBuildEntryTiers(unittest.TestCase):
 
     def test_a_stop_far_below_every_candidate_removes_nothing(self):
         # The builder picks its tiers against -inf and only then derives the
-        # stop from them. That is safe because the old stop sat >= 0.93*ATR
+        # stop from them. That is safe because the stop sits >= 1.0*ATR
         # under every candidate, where the stop-distance filter never fires.
         close, atr = 100.0, 5.0
         cands = [(97.5, "shallow"), (93.0, "swing-low"), (90.0, "volatility"), (61.0, "old low")]
-        far_stop = min(p for p, _ in cands) - 0.93 * atr
+        far_stop = min(p for p, _ in cands) - 1.0 * atr
         self.assertEqual(
             ladder.build_entry_tiers(close, atr, cands, far_stop),
             ladder.build_entry_tiers(close, atr, cands, float("-inf")),

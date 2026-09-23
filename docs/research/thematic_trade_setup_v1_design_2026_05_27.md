@@ -196,7 +196,7 @@ deepest support *is* the deepest tier, and the floor "does not bind".
 3. Size the tiers against `S` (§7.3), then apply the −25% floor loop exactly as before.
 
 Picking without a stop gives the same tiers the ladder would give against the final stop. That
-stop is ≥ 0.93·ATR under every picked tier (jitter only lowers it), so the 0.5·ATR stop-distance
+stop is ≥ 1.0·ATR under every picked tier (jitter only lowers it), so the 0.5·ATR stop-distance
 filter cannot remove one. `structural_invalidation` (§7.5) was never defined and is dropped.
 
 **Effect.** Replay over all 355 OK brief setups of 2026-08/09, rebuilt from each brief's own
