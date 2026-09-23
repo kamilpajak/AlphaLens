@@ -53,6 +53,13 @@ class TestSetupBuilderConfigVersion(unittest.TestCase):
         self.assertEqual(parsed["min_bars"], 30)
         self.assertEqual(parsed["disaster_floor_frac"], 0.75)
 
+    def test_token_names_the_stop_anchor_rule(self):
+        # #1529 changed WHERE the stop is anchored without changing any
+        # numeric constant, so the rule itself must be part of the token.
+        parsed = json.loads(setup_builder_config_version())
+        self.assertEqual(parsed["stop_anchor"], "deepest_picked_tier")
+        self.assertEqual(parsed["schema"], 2)
+
     def test_token_changes_when_a_constant_changes(self):
         base = setup_builder_config_version()
         with mock.patch.object(builder_mod, "_SWING_THRESHOLD_MULT", 3.0):

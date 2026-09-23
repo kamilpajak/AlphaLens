@@ -1,9 +1,9 @@
 """Orchestrate a deterministic Trade Setup from cached daily OHLCV.
 
-Pipeline order (design memo §3): detect levels -> disaster stop -> entry
-tiers -> equal-risk sizing -> blended entry -> stop floor revalidation ->
-TP tranches -> assemble. The stop is computed BEFORE the tiers so the
-ladder's min-stop-distance filter can run; the -25% floor is applied AFTER
+Pipeline order (design memo §3, amended by §12): detect levels -> pick entry
+tiers -> disaster stop under the deepest PICKED tier -> equal-risk sizing ->
+blended entry -> stop floor revalidation -> TP tranches -> assemble. The
+tiers are picked before the stop exists; the -25% floor is applied AFTER
 sizing and the tiers are then re-validated against the (possibly raised)
 stop.
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import math
 from collections.abc import Callable
 
 import numpy as np
@@ -39,6 +40,10 @@ logger = logging.getLogger(__name__)
 _MIN_BARS = 30
 _SWING_THRESHOLD_MULT = 2.5
 _STOP_ATR_BUFFER = 1.0  # stop = deepest support - 1*ATR
+# "Deepest support" in memo §3.4 is the deepest entry tier actually picked,
+# not the deepest candidate (#1529, memo §12). A rule id, not a number, so the
+# config token names it explicitly.
+_STOP_ANCHOR = "deepest_picked_tier"
 _SHALLOW_PULLBACK_MULT = 0.5  # nearest fallback entry = close - 0.5*ATR
 _DEEP_FALLBACK_MULT = 2.0  # deep fallback entry = close - 2.0*ATR
 _DISASTER_FLOOR_FRAC = 0.75  # stop >= blended_entry * 0.75 (i.e. >= -25%)
@@ -163,7 +168,15 @@ def build_trade_setup_from_frame(
     candidates = _entry_candidates(
         close, atr, supports, _sma(close_series, 50), _sma(close_series, 200)
     )
-    deepest = min(p for p, _ in candidates)
+    # Pick the tiers before the stop exists. Picking against -inf gives the
+    # same set the ladder would give against the final stop: that stop sits
+    # >= 0.93*ATR under the deepest tier (jitter only LOWERS it), so the
+    # 0.5*ATR stop-distance filter cannot remove any picked tier. If the
+    # jitter ever moved a stop UP, this would stop holding.
+    picked = ladder.build_entry_tiers(close, atr, candidates, -math.inf)
+    if not picked:
+        return TradeSetup.no_structure(asof_close=close, atr=atr, order_ttl_days=order_ttl_days)
+    deepest = min(p for p, _ in picked)
     stop = _jitter_stop(close, deepest - _STOP_ATR_BUFFER * atr, atr)
 
     tiers, blended = _assemble_tiers(close, atr, candidates, stop, risk_distribution)

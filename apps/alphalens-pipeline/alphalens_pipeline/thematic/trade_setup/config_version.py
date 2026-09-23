@@ -19,7 +19,7 @@ import json
 # Bumped ONLY when the SHAPE of this stamp changes (a key added / removed /
 # renamed), NEVER when a constant's value changes — a value change must surface
 # as a different token, not a schema bump.
-_STAMP_SCHEMA = 1
+_STAMP_SCHEMA = 2
 
 
 def setup_builder_config_version() -> str:
@@ -32,6 +32,7 @@ def setup_builder_config_version() -> str:
         "min_bars": builder._MIN_BARS,
         "swing_threshold_mult": builder._SWING_THRESHOLD_MULT,
         "stop_atr_buffer": builder._STOP_ATR_BUFFER,
+        "stop_anchor": builder._STOP_ANCHOR,
         "shallow_pullback_mult": builder._SHALLOW_PULLBACK_MULT,
         "deep_fallback_mult": builder._DEEP_FALLBACK_MULT,
         "disaster_floor_frac": builder._DISASTER_FLOOR_FRAC,
