@@ -1635,14 +1635,7 @@ def _discarded_paths(sent: Any, rendered: Any, prefix: str = "") -> list[str]:
     if isinstance(sent, Mapping):
         if not isinstance(rendered, Mapping):
             return [here]
-        lost: list[str] = []
-        for key, value in sent.items():
-            where = f"{prefix}.{key}" if prefix else str(key)
-            if key not in rendered:
-                lost.append(where)
-            else:
-                lost.extend(_discarded_paths(value, rendered[key], where))
-        return lost
+        return _discarded_mapping_paths(sent, rendered, prefix)
     if isinstance(sent, list):
         if not isinstance(rendered, list) or len(rendered) != len(sent):
             return [here]
@@ -1652,6 +1645,21 @@ def _discarded_paths(sent: Any, rendered: Any, prefix: str = "") -> list[str]:
             for path in _discarded_paths(item, rendered[index], f"{prefix}[{index}]")
         ]
     return [] if _same_leaf(sent, rendered) else [here]
+
+
+def _discarded_mapping_paths(
+    sent: Mapping[Any, Any], rendered: Mapping[Any, Any], prefix: str
+) -> list[str]:
+    """:func:`_discarded_paths` for one object: a missing key is lost whole, a
+    present one is compared below it."""
+    lost: list[str] = []
+    for key, value in sent.items():
+        where = f"{prefix}.{key}" if prefix else str(key)
+        if key not in rendered:
+            lost.append(where)
+        else:
+            lost.extend(_discarded_paths(value, rendered[key], where))
+    return lost
 
 
 def _arming_now() -> dt.datetime:
@@ -1706,6 +1714,77 @@ def _echo_armed_intent(intent: Any, *, amounts: list[float], replaces: bool) -> 
         f"  tp:    {tps or 'none'}\n"
         f"  size:  {size.notional_acct:g} {size.currency}"
     )
+
+
+def _gated_completion(document: Any, *, env: str, picks_target: Path) -> Any:
+    """``arm``'s gates up to the pick key, in the published order: derived
+    fields, the wire schema, the version, the venue, the identity shapes and
+    the key. Returns the door's :class:`~intent_door.Completion`."""
+    from alphalens_pipeline.brokers.automanager import intent_door, state_paths
+    from alphalens_pipeline.brokers.automanager.picks import (
+        keys_with_any_submission,
+        read_pick_fold,
+    )
+    from alphalens_pipeline.brokers.submission_log import iter_submission_records
+    from alphalens_pipeline.data.alt_data.saxo_exchanges import (
+        UnsupportedVenueError,
+        ensure_supported_venue,
+    )
+
+    try:
+        intent_door.refuse_derived_fields(document)
+    except intent_door.DoorRefusalError as exc:
+        raise _refusal_to_exit(exc) from exc
+    _assert_published_shape(document)
+    _assert_version_is_spoken(document)
+
+    mic = document["instrument"]["mic"]
+    try:
+        # Before anything that reads a calendar: an unknown MIC has none.
+        ensure_supported_venue(mic)
+    except UnsupportedVenueError as exc:
+        raise _fail_with("venue_unsupported", str(exc), details={"mic": mic}) from exc
+
+    try:
+        intent_door.check_identity_shapes(document)
+        completion = intent_door.complete(
+            document,
+            now_utc=_arming_now(),
+            records=read_pick_fold(path=picks_target).records,
+            placed_keys=keys_with_any_submission(
+                iter_submission_records(state_paths.submissions_path(env=env))
+            ),
+            env=env,
+        )
+    except intent_door.DoorRefusalError as exc:
+        raise _refusal_to_exit(exc) from exc
+    return completion
+
+
+def _decoded_intent(document: Any, completed: dict[str, Any]) -> Any:
+    """``arm``'s gates after the key: decode, then nothing lost. ``document`` is
+    what the client SENT; ``completed`` is it with every derived and filled
+    field in place."""
+    from broker_contract.trade_intent.codec import (
+        TradeIntentDecodeError,
+        intent_from_jsonable,
+        intent_to_jsonable,
+    )
+
+    try:
+        intent = intent_from_jsonable(completed)
+    except TradeIntentDecodeError as exc:
+        raise _intent_malformed("undecodable", str(exc)) from exc
+
+    discarded = _discarded_paths(document, intent_to_jsonable(intent))
+    if discarded:
+        raise _intent_malformed(
+            "key_discarded",
+            f"the decoder would discard {', '.join(discarded)} — the pick would not carry "
+            "what you sent",
+            paths=discarded,
+        )
+    return intent
 
 
 @broker_app.command(name="arm")
@@ -1768,22 +1847,9 @@ def arm_command(
     refused while another pick on the same ticker and venue is armed and unplaced.
     """
     from alphalens_pipeline.brokers.automanager import intent_door, state_paths
-    from alphalens_pipeline.brokers.automanager.picks import (
-        arm_pick,
-        keys_with_any_submission,
-        read_pick_fold,
-    )
+    from alphalens_pipeline.brokers.automanager.picks import arm_pick
     from alphalens_pipeline.brokers.journal import JournalWriteError
-    from alphalens_pipeline.brokers.submission_log import iter_submission_records
-    from alphalens_pipeline.data.alt_data.saxo_exchanges import (
-        UnsupportedVenueError,
-        ensure_supported_venue,
-    )
-    from broker_contract.trade_intent.codec import (
-        TradeIntentDecodeError,
-        intent_from_jsonable,
-        intent_to_jsonable,
-    )
+    from broker_contract.trade_intent.codec import intent_to_jsonable
     from broker_contract.trade_intent.validate import IntentInvalidError, validate_intent
 
     resolved_format = _resolve_format(output_format)
@@ -1814,47 +1880,8 @@ def arm_command(
     _guard_state_layout()
 
     document = _parsed_document(_document_text(source))
-    try:
-        intent_door.refuse_derived_fields(document)
-    except intent_door.DoorRefusalError as exc:
-        raise _refusal_to_exit(exc) from exc
-    _assert_published_shape(document)
-    _assert_version_is_spoken(document)
-
-    mic = document["instrument"]["mic"]
-    try:
-        # Before anything that reads a calendar: an unknown MIC has none.
-        ensure_supported_venue(mic)
-    except UnsupportedVenueError as exc:
-        raise _fail_with("venue_unsupported", str(exc), details={"mic": mic}) from exc
-
-    try:
-        intent_door.check_identity_shapes(document)
-        completion = intent_door.complete(
-            document,
-            now_utc=_arming_now(),
-            records=read_pick_fold(path=picks_target).records,
-            placed_keys=keys_with_any_submission(
-                iter_submission_records(state_paths.submissions_path(env=env))
-            ),
-            env=env,
-        )
-    except intent_door.DoorRefusalError as exc:
-        raise _refusal_to_exit(exc) from exc
-
-    try:
-        intent = intent_from_jsonable(completion.document)
-    except TradeIntentDecodeError as exc:
-        raise _intent_malformed("undecodable", str(exc)) from exc
-
-    discarded = _discarded_paths(document, intent_to_jsonable(intent))
-    if discarded:
-        raise _intent_malformed(
-            "key_discarded",
-            f"the decoder would discard {', '.join(discarded)} — the pick would not carry "
-            "what you sent",
-            paths=discarded,
-        )
+    completion = _gated_completion(document, env=env, picks_target=picks_target)
+    intent = _decoded_intent(document, completion.document)
 
     try:
         validate_intent(intent)
@@ -1867,6 +1894,7 @@ def arm_command(
     amounts = intent_door.tier_amounts(intent)
     replaces = completion.replaces is not None
 
+    body: str | None = None
     if resolved_format == _FORMAT_JSON:
         # Render BEFORE the append: an unrenderable payload must refuse without
         # having armed anything.
@@ -1888,19 +1916,15 @@ def arm_command(
                 picks_journal=str(picks_target),
             )
         )
-        if not dry_run:
-            try:
-                arm_pick(intent, path=picks_target)
-            except JournalWriteError as exc:
-                raise _queue_write_failed(exc, journal=picks_target) from exc
-        typer.echo(body)
-        return
 
     if not dry_run:
         try:
             arm_pick(intent, path=picks_target)
         except JournalWriteError as exc:
             raise _queue_write_failed(exc, journal=picks_target) from exc
+    if body is not None:
+        typer.echo(body)
+        return
     _echo_armed_intent(intent, amounts=amounts, replaces=replaces)
     if dry_run:
         typer.echo("dry-run: passes every gate — nothing armed")
@@ -2525,6 +2549,23 @@ def _age_phrase(seconds: float | None) -> str:
     return f"{int(value)}s ago  "
 
 
+def _minutes_left(seconds: float | None) -> str:
+    return "-" if seconds is None else f"{seconds / 60:,.0f}m"
+
+
+def _status_token_line(token: Any) -> str:
+    """One ``token`` row of the health half."""
+    if token.error is not None:
+        return f"token     {token.role}: unreadable ({token.error})"
+    if not token.present:
+        return f"token     {token.role}: absent"
+    return (
+        f"token     {token.role}: access {_minutes_left(token.access_expires_in_s)} left, "
+        f"refresh {_minutes_left(token.refresh_expires_in_s)} left "
+        "(as of the last refresh, not a live probe)"
+    )
+
+
 def _render_status_health(health: Any, skewed: list[str]) -> None:
     """The half that needs no gateway (daemon, kill, prices, tokens)."""
     typer.echo(
@@ -2559,25 +2600,7 @@ def _render_status_health(health: Any, skewed: list[str]) -> None:
     )
     typer.echo(f"prices    {stream}")
     for token in health.tokens:
-        if token.error is not None:
-            typer.echo(f"token     {token.role}: unreadable ({token.error})")
-        elif not token.present:
-            typer.echo(f"token     {token.role}: absent")
-        else:
-            access = (
-                "-"
-                if token.access_expires_in_s is None
-                else f"{token.access_expires_in_s / 60:,.0f}m"
-            )
-            refresh = (
-                "-"
-                if token.refresh_expires_in_s is None
-                else f"{token.refresh_expires_in_s / 60:,.0f}m"
-            )
-            typer.echo(
-                f"token     {token.role}: access {access} left, refresh {refresh} left "
-                "(as of the last refresh, not a live probe)"
-            )
+        typer.echo(_status_token_line(token))
     if health.last_refusal:
         age = _age_phrase(health.last_refusal_age_s)
         typer.echo(f"refused   {age}{health.last_refusal}")
@@ -2589,54 +2612,62 @@ def _render_status_money(snapshot: Any) -> None:
     """Account, gross, slots, cash floor and the resting-order rows."""
     if snapshot.offline:
         typer.echo("account   skipped (--offline)")
+        return
+    account = snapshot.account
+    typer.echo(
+        f"account   {account.currency} cash {account.cash:,.2f}  "
+        f"total {account.total_value:,.2f}  "
+        f"margin {_status_money(account.margin_available)}"
+    )
+    _render_status_exposure(snapshot.exposure)
+    slots = snapshot.slots
+    typer.echo(
+        f"slots {slots.used}/{slots.limit}  free {slots.free}  "
+        f"(brackets {slots.brackets} + positions {slots.positions} + "
+        f"watch picks {slots.watch_picks})"
+    )
+    _render_status_cash_floor(snapshot.cash_floor)
+    typer.echo("")
+    _render_orders_human({"orders": [_order_row(state) for state in snapshot.orders]})
+
+
+def _render_status_exposure(exposure: Any) -> None:
+    """The ``gross`` rows, and the warning when unstamped positions fold raw."""
+    if exposure.blocked:
+        for reason in exposure.blocked:
+            typer.echo(f"gross     BLOCKED: {reason}")
     else:
-        account = snapshot.account
         typer.echo(
-            f"account   {account.currency} cash {account.cash:,.2f}  "
-            f"total {account.total_value:,.2f}  "
-            f"margin {_status_money(account.margin_available)}"
+            f"gross     used {_status_money(exposure.used)} / "
+            f"limit {_status_money(exposure.limit)} {exposure.currency}  "
+            f"headroom {_status_money(exposure.headroom)}"
+            + ("  (upper bound)" if exposure.headroom_is_upper_bound else "")
         )
-        exposure = snapshot.exposure
-        if exposure.blocked:
-            for reason in exposure.blocked:
-                typer.echo(f"gross     BLOCKED: {reason}")
-        else:
-            typer.echo(
-                f"gross     used {_status_money(exposure.used)} / "
-                f"limit {_status_money(exposure.limit)} {exposure.currency}  "
-                f"headroom {_status_money(exposure.headroom)}"
-                + ("  (upper bound)" if exposure.headroom_is_upper_bound else "")
-            )
-            typer.echo(
-                f"          working {_status_money(exposure.committed)} + "
-                f"filled {_status_money(exposure.filled)} + "
-                f"watching {_status_money(exposure.watching)}"
-            )
-        if exposure.unstamped_positions:
-            typer.echo(
-                f"WARN      {exposure.unstamped_positions} position(s) carry no stamped "
-                "currency and fold RAW — gross may be understated"
-            )
-        slots = snapshot.slots
         typer.echo(
-            f"slots {slots.used}/{slots.limit}  free {slots.free}  "
-            f"(brackets {slots.brackets} + positions {slots.positions} + "
-            f"watch picks {slots.watch_picks})"
+            f"          working {_status_money(exposure.committed)} + "
+            f"filled {_status_money(exposure.filled)} + "
+            f"watching {_status_money(exposure.watching)}"
         )
-        cash_floor = snapshot.cash_floor
-        if not cash_floor.applies:
-            typer.echo(f"cash      floor inert (sizing mode {cash_floor.mode})")
-        elif cash_floor.blocked:
-            for reason in cash_floor.blocked:
-                typer.echo(f"cash      BLOCKED: {reason}")
-        else:
-            typer.echo(
-                f"cash      reserved {_status_money(cash_floor.reserved)} / "
-                f"available {_status_money(cash_floor.available)}  "
-                f"headroom {_status_money(cash_floor.headroom)}"
-            )
-        typer.echo("")
-        _render_orders_human({"orders": [_order_row(state) for state in snapshot.orders]})
+    if exposure.unstamped_positions:
+        typer.echo(
+            f"WARN      {exposure.unstamped_positions} position(s) carry no stamped "
+            "currency and fold RAW — gross may be understated"
+        )
+
+
+def _render_status_cash_floor(cash_floor: Any) -> None:
+    """The ``cash`` rows: inert, blocked, or the reserved/available pair."""
+    if not cash_floor.applies:
+        typer.echo(f"cash      floor inert (sizing mode {cash_floor.mode})")
+    elif cash_floor.blocked:
+        for reason in cash_floor.blocked:
+            typer.echo(f"cash      BLOCKED: {reason}")
+    else:
+        typer.echo(
+            f"cash      reserved {_status_money(cash_floor.reserved)} / "
+            f"available {_status_money(cash_floor.available)}  "
+            f"headroom {_status_money(cash_floor.headroom)}"
+        )
 
 
 def _render_status_human(snapshot: Any, *, limits_source: str) -> None:
