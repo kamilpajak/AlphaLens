@@ -224,8 +224,9 @@ Counts under the new rule, out of 355:
   intent --frame` sizes as `suggested_size_pct × frame`.
 - **More of the ladder sits in the deepest tier.** Median 54%, p75 63%, p95 70%, against 58% in the §4 example. The deep tier is the one least likely to fill (§8 tension), so a larger share of the planned size often stays unfilled.
 - **A setup can end with no TP tranche.** When blend + kR ≤ close, the `target > close` rule (§1
-  #3) drops every R fallback. On LIVE such a pick is refused, so it fails closed. The fallback rule
-  is a separate follow-up.
+  #3) drops every R fallback. Since #1512 the LIVE drain accepts a pick with an empty ladder, so
+  such a brief pick arms and runs with only the disaster stop and the declared trailing stop. It
+  never takes profit at a target. The fallback rule is a separate follow-up (#1535).
 - **R-based /edge metrics change meaning at the cutover.** The cohort boundary is
   `setup_builder_config_version`: stamp `schema` 2 with `"stop_anchor": "deepest_picked_tier"`.
   Rows under schema 1 used the old rule. Published briefs are not rebuilt.
