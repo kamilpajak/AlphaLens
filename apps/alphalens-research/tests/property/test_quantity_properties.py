@@ -16,7 +16,20 @@ TWO WAYS THE PROSE OVERSTATES ITSELF, both found by running it:
   ``quantize_down(16777216.99999988, step=1)`` is ``16777217.0``. That is the
   slack doing its job -- absorbing representation dust -- and the overshoot is
   1.2e-07 of a share, but "can never reach a step" is still false. The property
-  below therefore bounds the overshoot BY THE SLACK rather than by zero.
+  below therefore bounds the overshoot by HALF A LATTICE STEP.
+
+  The first draft of this module bounded it by ``_slack(abs(qty))`` instead, and
+  that bound is FALSE inside the domain asserted here. Counterexample, found by
+  probing this module's own upper bound: ``quantize_down(974989319.5716939)`` on
+  a 1e-4 step returns ``974989319.5717``, which is 1.594x the slack above its
+  input. The reason is a scale mismatch, not a wrong constant -- the code
+  applies its slack to the value SCALED by ``10**precision`` (see
+  ``_scaled_units``), and a property applying it unscaled understates it by up
+  to ``10**precision``. Half a step is the honest bound and the economically
+  meaningful one: the arithmetic ceiling is ``32 * ulp(qty * 10**precision)``
+  step-units, at most ~0.064 of a step anywhere in this domain, and the worst
+  case measured over 172080 (quantity, lattice) combinations is 6.08e-02 of a
+  step. It also keeps the properties off this module's private helpers.
 * At extreme magnitudes the function breaks outright: at
   ``qty = 1_407_374_883_554.0`` on a 0.01 step it returns ``...554.01`` --
   above its input, off the lattice, and not idempotent. ``1e308`` raises
@@ -33,7 +46,6 @@ import unittest
 
 from broker_contract.quantity import (
     QuantityLattice,
-    _slack,
     allocate_units,
     is_on_lattice,
     is_tradable,
@@ -78,19 +90,22 @@ class QuantizeDownKeepsItsPromise(PropertyTestCase):
         # THE safety property of this module: a quantity that grew on the way
         # through would be a sell for shares that are not held.
         #
-        # "by more than its own representation slack" is the exact claim, and
-        # the qualifier is load-bearing. The `_ULP_SLACK` comment says the
-        # slack "can never reach a step, which is what makes the no-exceed
-        # property true rather than approximately true" -- that is FALSE as an
-        # absolute: at `qty = 16777216.99999988`, exactly 32 ULPs below 2**24,
-        # a whole-share lattice returns 16777217.0, which is 1.2e-07 ABOVE the
-        # input. Absorbing `0.1 + 0.2 == 0.30000000000000004` is what the slack
-        # is for, and rounding such a value UP to the integer it is dust below
-        # is the intended behaviour; the docstring just overstates it. A tenth
-        # of a microshare is not a share, so the bound is the slack, not zero.
+        # "by less than half a step" is the exact claim, and the qualifier is
+        # load-bearing. The `_ULP_SLACK` comment says the slack "can never reach
+        # a step, which is what makes the no-exceed property true rather than
+        # approximately true" -- that is FALSE as an absolute: at
+        # `qty = 16777216.99999988`, exactly 32 ULPs below 2**24, a whole-share
+        # lattice returns 16777217.0, which is 1.2e-07 ABOVE the input.
+        # Absorbing `0.1 + 0.2 == 0.30000000000000004` is what the slack is for,
+        # and rounding such a value UP to the integer it is dust below is the
+        # intended behaviour; the docstring just overstates it. So the bound is
+        # neither zero nor `_slack(qty)` (see the module docstring for the
+        # counterexample that kills that one) -- it is half a step, which is the
+        # quantity that matters: the result can never reach the NEXT lattice
+        # point, so it can never name a share that is not there.
         got = quantize_down(qty, lattice)
         event("quantized to zero" if got == 0.0 else "quantized to a positive count")
-        self.assertLessEqual(abs(got), abs(qty) + _slack(abs(qty)))
+        self.assertLessEqual(abs(got), abs(qty) + lattice.step / 2.0)
 
     @given(qty=quantities, lattice=lattices())
     def test_quantizing_an_already_quantized_quantity_changes_nothing(
@@ -110,15 +125,22 @@ class QuantizeDownKeepsItsPromise(PropertyTestCase):
         got = quantize_down(qty, lattice)
         if got != 0.0:
             self.assertEqual(got < 0, qty < 0, "flooring a signed value moved it away from zero")
-        self.assertLessEqual(abs(got), abs(qty) + _slack(abs(qty)))
+        self.assertLessEqual(abs(got), abs(qty) + lattice.step / 2.0)
 
     @given(lo=quantities, extra=quantities, lattice=lattices())
     def test_more_shares_never_quantize_to_fewer(
         self, lo: float, extra: float, lattice: QuantityLattice
     ) -> None:
+        # EXACT, with no tolerance, and that is not an accident: every step the
+        # function takes is monotone (multiply by a positive constant, add a
+        # slack that is itself non-decreasing in its argument, floor, integer
+        # divide, multiply, round), so the composition cannot invert an
+        # ordering. Measured: zero violations in 200000 random (lo, extra,
+        # lattice) draws. An earlier draft subtracted the slack here, which
+        # would have hidden a real regression.
         self.assertGreaterEqual(
             quantize_down(lo + extra, lattice),
-            quantize_down(lo, lattice) - _slack(lo + extra),
+            quantize_down(lo, lattice),
         )
 
     @given(value=UNUSABLE, lattice=lattices())
