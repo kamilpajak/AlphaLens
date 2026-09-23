@@ -222,7 +222,7 @@ Counts under the new rule, out of 355:
 **Known consequences.**
 - **Size grows about 2.5× for the same 1% risk budget.** This is the §3.1/§7.3 intent. `thematic
   intent --frame` sizes as `suggested_size_pct × frame`.
-- **The deeper allocation stays within §4's illustration** (58% in the example).
+- **More of the ladder sits in the deepest tier.** Median 54%, p75 63%, p95 70%, against 58% in the §4 example. The deep tier is the one least likely to fill (§8 tension), so a larger share of the planned size often stays unfilled.
 - **A setup can end with no TP tranche.** When blend + kR ≤ close, the `target > close` rule (§1
   #3) drops every R fallback. On LIVE such a pick is refused, so it fails closed. The fallback rule
   is a separate follow-up.
