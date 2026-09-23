@@ -15,9 +15,21 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
 from alphalens_pipeline.feedback import selection_label as sl
 from alphalens_pipeline.feedback.market_beta import BETA_ESTIMATED, BETA_FALLBACK_THIN
+from alphalens_pipeline.feedback.split_audit import UNANSWERED, SpanAudit
 from alphalens_pipeline.paper.calendar import advance_trading_sessions, n_sessions_before
+
+#: A second vendor that looked at the whole span and found nothing wrong. Passing this
+#: explicitly in every case is deliberate: the audit has no default, so a caller cannot
+#: forget it and silently get an unguarded label.
+CLEAN = SpanAudit(answered=True, breaks=frozenset(), unchecked=frozenset())
+
+
+def _audit(*, breaks=(), unchecked=()) -> SpanAudit:
+    return SpanAudit(answered=True, breaks=frozenset(breaks), unchecked=frozenset(unchecked))
+
 
 D = dt.date
 BRIEF_TUE = D(2026, 3, 3)  # Tuesday; a reader trades Wednesday 03-04
@@ -78,7 +90,9 @@ def make_book(
     return book
 
 
-def label(book, *, brief_date=BRIEF_TUE, published=True, now_session=LATE, newest=None, **kw):
+def label(
+    book, *, brief_date=BRIEF_TUE, published=True, now_session=LATE, newest=None, audit=CLEAN, **kw
+):
     return sl.compute_selection_label(
         book,
         "AAA",
@@ -86,6 +100,7 @@ def label(book, *, brief_date=BRIEF_TUE, published=True, now_session=LATE, newes
         published_before_open=published,
         last_closed_session=now_session,
         newest_session=newest if newest is not None else max(book, default=None),
+        audit=audit,
         **kw,
     )
 
@@ -193,16 +208,27 @@ class TestBeta(unittest.TestCase):
         self.assertEqual(result.pre.beta.source, BETA_FALLBACK_THIN)
         self.assertEqual(result.pre.beta.beta, 1.0)
 
-    def test_split_step_in_pre_window_is_dropped_and_counted(self):
+    def test_a_confirmed_break_in_the_pre_window_is_dropped_and_counted(self):
         book = make_book(beta=1.7, stock_window=[0.0])
         pre = _pre_sessions(T0)
         for s in pre[100:]:  # an unadjusted 1:2 step at session 100
             o, c = book[s]["AAA"]
             book[s]["AAA"] = (o * 0.5, c * 0.5)
-        result = label(book)
+        result = label(book, audit=_audit(breaks=[pre[100]]))
         self.assertEqual(result.pre.n_split_dropped, 1)
         self.assertAlmostEqual(result.pre.beta.beta, 1.7, places=9)
         self.assertEqual(result.pre.beta.n_observations, sl.BETA_WINDOW_SESSIONS - 2)
+
+    def test_an_unconfirmed_jump_in_the_pre_window_is_kept(self):
+        # The old band nulled any close whose ratio left (0.55, 1.8), which on the whole
+        # store meant three real moves dropped and no split ever caught. Beta is a
+        # nuisance parameter: a genuine move belongs in it.
+        book = make_book(beta=1.7, stock_window=[0.0])
+        pre = _pre_sessions(T0)
+        for s in pre[100:]:
+            o, c = book[s]["AAA"]
+            book[s]["AAA"] = (o * 0.5, c * 0.5)
+        self.assertEqual(label(book, audit=CLEAN).pre.n_split_dropped, 0)
 
     def test_a_given_pre_window_is_reused_not_recomputed(self):
         book = make_book(beta=1.7, stock_window=[0.02], iwm_window=[0.01])
@@ -261,21 +287,188 @@ class TestStatus(unittest.TestCase):
         self.assertEqual(result.statuses["sel_ar_3"], sl.STATUS_NO_CLOSE_AT_HORIZON)
         self.assertIsNone(result.values["sel_ar_3"])
 
-    def test_split_guard_inside_the_window(self):
-        result = label(make_book(stock_window=[0.0, -0.5, 0.0]))
-        self.assertEqual(result.statuses["sel_ar_1"], sl.STATUS_OK)
-        self.assertEqual(result.statuses["sel_ar_3"], sl.STATUS_SPLIT_GUARD)
-
-    def test_split_guard_covers_open_to_close_of_the_anchor_session(self):
-        result = label(make_book(stock_window=[0.9]))
-        self.assertEqual(result.statuses["sel_ar_1"], sl.STATUS_SPLIT_GUARD)
-
     def test_derived_values_take_the_status_of_their_longest_horizon(self):
         result = label(make_book(stock_window=[0.0] * 15))
         self.assertEqual(result.statuses["sel_ar_inc_1_10"], sl.STATUS_OK)
         self.assertEqual(result.statuses["sel_ar_inc_11_20"], sl.STATUS_IMMATURE)
         self.assertEqual(result.statuses["sel_car_mean_20"], sl.STATUS_IMMATURE)
         self.assertIsNone(result.values["sel_car_mean_20"])
+
+
+class TestTheReferenceCache(unittest.TestCase):
+    """One reference series per ticker per run, and a failure must not erase a success."""
+
+    def setUp(self):
+        self.calls: list[tuple[str, dt.date, dt.date]] = []
+
+    def _fetch(self, answers):
+        def fetch(ticker, start, end):
+            self.calls.append((ticker, start, end))
+            return answers.pop(0)
+
+        return fetch
+
+    @staticmethod
+    def _series(n=5):
+        days = [D(2026, 3, 2) + dt.timedelta(days=i) for i in range(n)]
+        return pd.Series([10.0] * n, index=pd.to_datetime(days), dtype=float)
+
+    def test_a_request_inside_a_held_span_does_not_refetch(self):
+        cache = sl._ReferenceCloses(self._fetch([self._series()]))
+        cache.closes("AAA", D(2026, 3, 1), D(2026, 3, 31))
+        cache.closes("aaa", D(2026, 3, 5), D(2026, 3, 20))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_wider_request_refetches_the_union_span(self):
+        cache = sl._ReferenceCloses(self._fetch([self._series(), self._series()]))
+        cache.closes("AAA", D(2026, 3, 1), D(2026, 3, 31))
+        cache.closes("AAA", D(2026, 2, 1), D(2026, 3, 10))
+        self.assertEqual(len(self.calls), 2)
+        _, start, end = self.calls[1]
+        self.assertEqual(start, D(2026, 2, 1))
+        self.assertGreater(end, D(2026, 3, 31))
+
+    def test_a_failed_widening_does_not_throw_away_the_series_already_held(self):
+        # Without this, one refused fetch on a wider span would turn every row that the
+        # narrower span had already answered into `split_unchecked` for the rest of the
+        # run - a vendor hiccup silently demoting work that was already done.
+        held = self._series()
+        cache = sl._ReferenceCloses(self._fetch([held, None]))
+        cache.closes("AAA", D(2026, 3, 1), D(2026, 3, 31))
+        self.assertIsNone(cache.closes("AAA", D(2026, 2, 1), D(2026, 3, 10)))
+        self.assertIs(cache.closes("AAA", D(2026, 3, 2), D(2026, 3, 20)), held)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_a_first_fetch_that_fails_is_not_retried_within_the_run(self):
+        cache = sl._ReferenceCloses(self._fetch([None]))
+        self.assertIsNone(cache.closes("AAA", D(2026, 3, 1), D(2026, 3, 31)))
+        self.assertIsNone(cache.closes("AAA", D(2026, 3, 5), D(2026, 3, 20)))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_raising_fetch_is_reported_as_no_answer_not_a_crash(self):
+        def boom(ticker, start, end):
+            raise RuntimeError("vendor down")
+
+        self.assertIsNone(sl._ReferenceCloses(boom).closes("AAA", D(2026, 3, 1), D(2026, 3, 31)))
+
+
+class TestTheCrossSourcedSplitGuard(unittest.TestCase):
+    """#1533: a second vendor decides, not the size of the jump.
+
+    The band this replaces never caught a split in the whole store and failed three rows
+    on one real -47% day. The cases below are the two halves of that: a confirmed
+    adjustment break must fail the row, and a large move both sources agree on must not.
+    """
+
+    def test_a_confirmed_break_inside_the_window_fails_that_horizon(self):
+        book = make_book(stock_window=[0.0, -0.5, 0.0])
+        result = label(book, audit=_audit(breaks=[advance_trading_sessions(T0, 1)]))
+        self.assertEqual(result.statuses["sel_ar_1"], sl.STATUS_OK)
+        self.assertEqual(result.statuses["sel_ar_3"], sl.STATUS_SPLIT_GUARD)
+        self.assertIsNone(result.values["sel_ar_3"])
+
+    def test_a_break_at_the_anchor_does_not_fail_the_window(self):
+        # The anchor is the first session of the window, so the step INTO it is never
+        # inside the window's own return. A uniform rescaling from the anchor onward
+        # cancels out of every horizon.
+        book = make_book(stock_window=[0.0] * 5)
+        result = label(book, audit=_audit(breaks=[T0]))
+        self.assertEqual(result.statuses["sel_ar_3"], sl.STATUS_OK)
+
+    def test_a_break_after_the_horizon_does_not_fail_the_shorter_horizons(self):
+        book = make_book(stock_window=[0.0] * 10)
+        result = label(book, audit=_audit(breaks=[advance_trading_sessions(T0, 7)]))
+        self.assertEqual(result.statuses["sel_ar_5"], sl.STATUS_OK)
+        self.assertEqual(result.statuses["sel_ar_10"], sl.STATUS_SPLIT_GUARD)
+
+    def test_a_large_move_both_sources_report_is_kept(self):
+        # The MYGN case, and the whole reason for the change: a genuine -47% session that
+        # the old band failed. Every firing the band ever produced was this shape.
+        book = make_book(stock_window=[0.0, -0.47, 0.0])
+        result = label(book, audit=CLEAN)
+        self.assertEqual(result.statuses["sel_ar_3"], sl.STATUS_OK)
+        self.assertIsNotNone(result.values["sel_ar_3"])
+
+    def test_a_within_session_move_is_never_an_adjustment_artefact(self):
+        # Open and close of one session come from the SAME store file, hence the same
+        # adjustment epoch, so no corporate action can sit between them. The old band
+        # checked open->close of the anchor and failed a +90% intraday move on it.
+        result = label(make_book(stock_window=[0.9]), audit=CLEAN)
+        self.assertEqual(result.statuses["sel_ar_1"], sl.STATUS_OK)
+
+    def test_an_unanswered_reference_makes_the_row_unchecked_not_ok(self):
+        book = make_book(stock_window=[0.0] * 5)
+        result = label(book, audit=UNANSWERED)
+        self.assertEqual(result.statuses["sel_ar_3"], sl.STATUS_SPLIT_UNCHECKED)
+        self.assertIsNone(result.values["sel_ar_3"])
+
+    def test_an_unchecked_session_inside_the_window_makes_that_horizon_unchecked(self):
+        book = make_book(stock_window=[0.0] * 5)
+        result = label(book, audit=_audit(unchecked=[advance_trading_sessions(T0, 2)]))
+        self.assertEqual(result.statuses["sel_ar_1"], sl.STATUS_OK)
+        self.assertEqual(result.statuses["sel_ar_3"], sl.STATUS_SPLIT_UNCHECKED)
+
+    def test_a_confirmed_break_outranks_an_unchecked_session(self):
+        # Both present: the row must report the stronger statement, which is the one the
+        # reference actually established.
+        book = make_book(stock_window=[0.0] * 5)
+        result = label(
+            book,
+            audit=_audit(
+                breaks=[advance_trading_sessions(T0, 1)],
+                unchecked=[advance_trading_sessions(T0, 2)],
+            ),
+        )
+        self.assertEqual(result.statuses["sel_ar_3"], sl.STATUS_SPLIT_GUARD)
+
+
+class TestWhenAnUncheckedRowStopsBeingRetried(unittest.TestCase):
+    """A ticker the reference will never serve must not be retried forever.
+
+    Retrying forever keeps the row non-terminal, so it never carries a usable label and
+    quietly leaves the panel. Names that vanish from a price vendor are disproportionately
+    delisted ones, so that silent shrinkage would be a selection effect correlated with
+    bad outcomes - worse than the artefact the guard exists to catch. After the grace
+    window the row becomes terminal and DISCLOSES that it was never checked.
+    """
+
+    def _row(self, status, anchor=T0):
+        row = {"sel_label_version": sl.SEL_LABEL_VERSION, "anchor_session": anchor}
+        for h in sl.HORIZONS:
+            row[sl.status_key(h)] = status
+        return row
+
+    def _at(self, days):
+        return dt.datetime.combine(T0 + dt.timedelta(days=days), dt.time(12, 0), dt.UTC)
+
+    def test_unchecked_is_retried_inside_the_grace_window(self):
+        row = self._row(sl.STATUS_SPLIT_UNCHECKED)
+        self.assertTrue(sl._is_non_terminal(row, self._at(sl.SPLIT_UNCHECKED_RETRY_DAYS - 1)))
+
+    def test_unchecked_becomes_terminal_after_it(self):
+        row = self._row(sl.STATUS_SPLIT_UNCHECKED)
+        self.assertFalse(sl._is_non_terminal(row, self._at(sl.SPLIT_UNCHECKED_RETRY_DAYS + 1)))
+
+    def test_the_grace_window_outlasts_the_longest_horizon(self):
+        # Retiring a row before its own 40-session window has even closed would strand it
+        # as unchecked while the reference still had every chance to answer.
+        last = advance_trading_sessions(T0, sl.MAX_HORIZON - 1)
+        self.assertGreater(sl.SPLIT_UNCHECKED_RETRY_DAYS, (last - T0).days)
+
+    def test_a_confirmed_guard_is_terminal_immediately(self):
+        self.assertFalse(sl._is_non_terminal(self._row(sl.STATUS_SPLIT_GUARD), self._at(1)))
+
+    def test_an_immature_row_is_still_retried_long_after_the_grace_window(self):
+        self.assertTrue(sl._is_non_terminal(self._row(sl.STATUS_IMMATURE), self._at(10_000)))
+
+    def test_a_row_written_by_an_older_version_is_always_recomputed(self):
+        row = self._row(sl.STATUS_OK)
+        row["sel_label_version"] = "sel-label-v2"
+        self.assertTrue(sl._is_non_terminal(row, self._at(10_000)))
+
+    def test_an_unchecked_row_with_no_anchor_is_retried(self):
+        row = self._row(sl.STATUS_SPLIT_UNCHECKED, anchor=None)
+        self.assertTrue(sl._is_non_terminal(row, self._at(10_000)))
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +536,39 @@ class TestPopulation(unittest.TestCase):
         self.assertEqual(pop.loc[0, "brief_published_at"], pd.Timestamp("2026-03-04T02:00:00Z"))
 
 
+def _reference_from_grouped(grouped: Path):
+    """A second vendor that agrees with the store on every session it holds.
+
+    Reading the store back as the reference makes the level ratio exactly 1.0
+    everywhere, so the audit is clean and these cases test the store pass rather than
+    the guard. The guard's own cases live in TestTheCrossSourcedSplitGuard, and a case
+    that wants a DISAGREEING vendor overrides this.
+    """
+
+    def fetch(ticker: str, start: dt.date, end: dt.date):
+        closes: dict[dt.date, float] = {}
+        for path in sorted(grouped.glob("*.parquet")):
+            try:
+                session = dt.date.fromisoformat(path.stem)
+            except ValueError:
+                continue
+            if not (start <= session < end):
+                continue
+            try:
+                frame = pd.read_parquet(path)
+            except (OSError, ValueError, pa.ArrowInvalid):
+                continue  # a case that plants an unreadable session file
+            hit = frame[frame["T"].astype(str).str.upper() == ticker.upper()]
+            if len(hit):
+                closes[session] = float(hit["c"].iloc[0])
+        if not closes:
+            return pd.Series(dtype=float)
+        ordered = sorted(closes)
+        return pd.Series([closes[s] for s in ordered], index=pd.to_datetime(ordered), dtype=float)
+
+    return fetch
+
+
 class _Deadline:
     def __init__(self, stop_after: int):
         self.calls = 0
@@ -376,7 +602,7 @@ class TestEnrichStore(unittest.TestCase):
             rows = [{"T": t, "o": o, "c": c, "v": 1.0} for t, (o, c) in bars.items()]
             pd.DataFrame(rows).to_parquet(self.grouped / f"{s.isoformat()}.parquet")
 
-    def _run(self, now=dt.datetime(2026, 9, 1, 7, 0, tzinfo=dt.UTC), deadline=None):
+    def _run(self, now=dt.datetime(2026, 9, 1, 7, 0, tzinfo=dt.UTC), deadline=None, reference=None):
         return sl.enrich_selection_labels(
             briefs_dir=self.briefs,
             shadow_dir=self.shadow,
@@ -384,6 +610,7 @@ class TestEnrichStore(unittest.TestCase):
             grouped_root=self.grouped,
             now=now,
             deadline=deadline,
+            reference_closes=reference or _reference_from_grouped(self.grouped),
         )
 
     def _read(self, d=BRIEF_TUE):
@@ -585,6 +812,7 @@ class TestRecoveredPreOpenDates(unittest.TestCase):
             labels_dir=self.labels,
             grouped_root=self.grouped,
             now=dt.datetime(2026, 9, 1, 7, 0, tzinfo=dt.UTC),
+            reference_closes=_reference_from_grouped(self.grouped),
         )
 
     def _read(self):

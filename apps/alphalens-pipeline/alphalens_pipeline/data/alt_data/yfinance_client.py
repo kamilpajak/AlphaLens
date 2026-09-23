@@ -209,6 +209,48 @@ class YFinanceClient:
             series.index = series.index.tz_localize(None)
         return series[np.isfinite(series)]
 
+    def split_adjusted_daily_closes(
+        self, ticker: str, *, start: dt.date, end: dt.date
+    ) -> pd.Series | None:
+        """SPLIT-adjusted, dividend-UNADJUSTED daily closes over ``[start, end)``.
+
+        Wraps ``yfinance.Ticker(T).history(auto_adjust=False)``. On Yahoo daily data that
+        flag does NOT control the split leg: the quote payload is already split-adjusted
+        upstream, and ``auto_adjust`` applies the further ``Adj Close / Close`` ratio,
+        which is the dividend and capital-gain leg. Measured and written up in
+        ``docs/research/atr_split_adjustment_gate_2026_09.md``.
+
+        Consumed by the selection-label split audit (#1533) as the UNIFORMLY ADJUSTED
+        reference against the per-session patchwork store. The basis has to match the
+        store's, which is why this exists beside :meth:`adjusted_daily_closes` rather
+        than reusing it: that one is dividend-adjusted, so every ex-dividend day would
+        read as a source disagreement.
+
+        Tri-state contract (mirrors :meth:`adjusted_daily_closes`): a tz-naive ``float``
+        Series on success (non-finite closes dropped), an EMPTY Series when Yahoo has no
+        usable rows, and ``None`` only on a permanent failure / exhausted retries. Never
+        raises. The audit fails closed on ``None``, so collapsing it into an empty Series
+        would turn an outage into a clean bill of health.
+        """
+        upper = ticker.upper()
+
+        def _fetch() -> pd.DataFrame | None:
+            import yfinance as yf
+
+            return yf.Ticker(upper).history(start=start, end=end, auto_adjust=False)
+
+        raw = self._call_with_retry(_fetch, what=f"raw_history({upper})", default=None)
+        if raw is None:
+            return None
+        if raw.empty or "Close" not in raw.columns:
+            return pd.Series(dtype=float)
+        # errors="coerce": a malformed vendor payload (string Close values) must degrade
+        # to dropped points, not break the never-raises contract.
+        series = pd.to_numeric(raw["Close"], errors="coerce").astype(float)
+        if isinstance(series.index, pd.DatetimeIndex) and series.index.tz is not None:
+            series.index = series.index.tz_localize(None)
+        return series[np.isfinite(series)]
+
     def splits(self, ticker: str) -> pd.Series | None:
         """All recorded stock-split actions for ``ticker`` as a date -> ratio Series.
 

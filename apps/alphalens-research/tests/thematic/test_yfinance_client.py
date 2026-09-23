@@ -826,5 +826,90 @@ class TestAdjustedDailyCloses(unittest.TestCase):
         self.assertEqual(list(series), [82.8])
 
 
+class TestSplitAdjustedDailyCloses(unittest.TestCase):
+    """``split_adjusted_daily_closes`` — the reference arm of the label split audit (#1533).
+
+    The deliberate difference from :class:`TestAdjustedDailyCloses` is the BASIS. The
+    label store is split-adjusted and dividend-UNadjusted, and on Yahoo daily data that
+    is what ``auto_adjust=False`` returns (its payload is already split-adjusted; the
+    flag only controls the further dividend leg). Comparing against the dividend-adjusted
+    series instead would read every ex-dividend day as a source disagreement.
+    """
+
+    def _frame(self):
+        return pd.DataFrame(
+            {
+                "Open": [16.0, 16.5],
+                "High": [16.8, 17.0],
+                "Low": [15.9, 16.2],
+                "Close": [16.24, 16.62],
+                "Volume": [1_243_454.0, 1_076_130.0],
+            },
+            index=pd.DatetimeIndex(["2026-06-30", "2026-07-01"], tz="America/New_York"),
+        )
+
+    def test_it_asks_yahoo_with_auto_adjust_off_and_returns_tz_naive_closes(self):
+        fake = MagicMock()
+        fake.history.return_value = self._frame()
+        with patch("yfinance.Ticker", return_value=fake) as patched:
+            series = _client().split_adjusted_daily_closes(
+                "mq", start=dt.date(2026, 6, 30), end=dt.date(2026, 7, 2)
+            )
+        patched.assert_called_once_with("MQ")
+        _, kwargs = fake.history.call_args
+        self.assertFalse(kwargs["auto_adjust"])
+        self.assertIsNotNone(series)
+        self.assertIsNone(series.index.tz)
+        self.assertEqual(list(series), [16.24, 16.62])
+
+    def test_a_permanent_failure_returns_none_not_an_empty_series(self):
+        # The whole point of the tri-state: "could not fetch" must stay distinguishable
+        # from "this ticker has no bars", because the audit fails closed on the first and
+        # would otherwise call an outage a clean span.
+        fake = MagicMock()
+        fake.history.side_effect = RuntimeError("delisted")
+        with patch("yfinance.Ticker", return_value=fake):
+            self.assertIsNone(
+                _client().split_adjusted_daily_closes(
+                    "DEAD", start=dt.date(2026, 7, 1), end=dt.date(2026, 8, 1)
+                )
+            )
+
+    def test_no_rows_returns_an_empty_series(self):
+        fake = MagicMock()
+        fake.history.return_value = pd.DataFrame()
+        with patch("yfinance.Ticker", return_value=fake):
+            series = _client().split_adjusted_daily_closes(
+                "MQ", start=dt.date(2026, 7, 1), end=dt.date(2026, 8, 1)
+            )
+        self.assertIsNotNone(series)
+        self.assertEqual(len(series), 0)
+
+    def test_a_payload_without_a_close_column_returns_an_empty_series(self):
+        fake = MagicMock()
+        fake.history.return_value = pd.DataFrame(
+            {"Open": [1.0]}, index=pd.DatetimeIndex(["2026-07-01"])
+        )
+        with patch("yfinance.Ticker", return_value=fake):
+            series = _client().split_adjusted_daily_closes(
+                "MQ", start=dt.date(2026, 7, 1), end=dt.date(2026, 8, 1)
+            )
+        self.assertEqual(len(series), 0)
+
+    def test_non_finite_and_non_numeric_closes_are_dropped_without_raising(self):
+        frame = pd.DataFrame(
+            {"Close": ["n/a", float("nan"), "16.62"]},
+            index=pd.DatetimeIndex(["2026-06-29", "2026-06-30", "2026-07-01"]),
+        )
+        fake = MagicMock()
+        fake.history.return_value = frame
+        with patch("yfinance.Ticker", return_value=fake):
+            series = _client().split_adjusted_daily_closes(
+                "MQ", start=dt.date(2026, 6, 29), end=dt.date(2026, 7, 2)
+            )
+        self.assertIsNotNone(series)
+        self.assertEqual(list(series), [16.62])
+
+
 if __name__ == "__main__":
     unittest.main()
