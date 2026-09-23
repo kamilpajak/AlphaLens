@@ -99,8 +99,13 @@ def population_mask(frame: pd.DataFrame, population: str) -> np.ndarray:
     return frame["briefed_any_theme"].fillna(False).astype(bool).to_numpy()
 
 
-def held_out_structure(frame: pd.DataFrame, *, population: str) -> list[int]:
+def held_out_episodes_by_arrival(frame: pd.DataFrame, *, population: str) -> dict[str, int]:
     """Episodes per arrival session on the held-out side. Structure only.
+
+    One read, one panel. The cluster sizes, the cluster COUNT and the arrival
+    calendar all come out of this mapping, because deriving them separately is
+    how they came to disagree: the accrual rate counted arrival sessions from
+    raw rows while the sizes came from something else.
 
     Reads nothing outside :data:`HELD_OUT_COLUMNS`, and takes every column as a
     named Series rather than masking the frame, so a test can watch exactly what
@@ -110,19 +115,34 @@ def held_out_structure(frame: pd.DataFrame, *, population: str) -> list[int]:
     held-out row while the confirmation runs on the briefed subset would inflate
     power by the ratio between them, and no assertion about label columns would
     catch it.
+
+    Neither is the unit. Ledger rule 5 counts ticker-EPISODES under the chained
+    5-session collapse, which is what ``burnt_panel`` applies on the other side.
+    Counting distinct ``(brief_date, ticker)`` pairs here instead would take the
+    effect size from collapsed episodes and the cluster sizes from uncollapsed
+    rows; measured on the real store 2026-09-23 the two differ by about a factor
+    of two, all of it in the direction of overstating power.
     """
+    from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
+
     status = frame["sel_label_status_20"].astype(str).to_numpy()
-    anchor = frame["anchor_session"].astype(str).to_numpy()
+    # Sliced to a date: the store stamps plain dates today, but an anchor that
+    # ever carried a time would silently split one session into several.
+    anchor = frame["anchor_session"].astype(str).str.slice(0, 10).to_numpy()
     brief_date = frame["brief_date"].astype(str).to_numpy()
     ticker = frame["ticker"].astype(str).to_numpy()
 
     keep = (status == _RESOLVED) & population_mask(frame, population)
 
-    # Ticker-episode is the unit of independence (ledger rule 5).
-    episodes = pd.DataFrame(
+    rows = pd.DataFrame(
         {"anchor": anchor[keep], "brief_date": brief_date[keep], "ticker": ticker[keep]}
     ).drop_duplicates(subset=["brief_date", "ticker"])
-    return episodes.groupby("anchor").size().tolist()
+    # The chained collapse keeps the FIRST row of each episode, so the surviving
+    # ``anchor`` is the episode's own arrival session, and an arrival session
+    # holding nothing but chained repeats drops out of the mapping entirely.
+    episodes = ticker_episode_dedup(rows)
+    counts = episodes.groupby("anchor").size()
+    return {str(k): int(v) for k, v in sorted(counts.items())}
 
 
 def holm_bars(m: int, alpha: float = FWER) -> list[float]:
@@ -525,21 +545,19 @@ def report(
     cis = effect_ci(burnt, seed=seed)
 
     held = load_held_out(labels_dir)
-    sizes = held_out_structure(held, population=population)
 
-    # Both of these must see the SAME population the simulation runs on. Taking
-    # the accrual rate or the arrival list from every held-out row while the
-    # confirmation runs on the briefed subset would date the gate off a panel
-    # that is not the one being tested.
-    in_population = population_mask(held, population)
-    resolved = held["sel_label_status_20"].astype(str).to_numpy() == _RESOLVED
-    anchors = held["anchor_session"].astype(str).to_numpy()
-
-    matured = anchors[in_population & resolved]
-    by_anchor = (
-        dict(zip(*np.unique(matured, return_counts=True), strict=True)) if len(matured) else {}
-    )
+    # One read for the whole panel. The sizes, the cluster count and the accrual
+    # rate must describe the same episodes on the same population; deriving the
+    # accrual rate from raw rows instead counted arrival sessions that hold only
+    # a chained repeat of an earlier episode.
+    by_anchor = held_out_episodes_by_arrival(held, population=population)
+    sizes = list(by_anchor.values())
     accrual = measured_accrual(by_anchor)
+
+    # The arrival LIST is deliberately wider than the matured panel: it dates
+    # the gate off every session the brief has reached, matured or not.
+    in_population = population_mask(held, population)
+    anchors = held["anchor_session"].astype(str).to_numpy()
     observed_arrivals = sorted({a[:10] for a in anchors[in_population]})
 
     y_b = burnt[OUTCOME].astype(float).to_numpy()

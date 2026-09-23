@@ -89,9 +89,8 @@ from scripts.ml.a20_power import (
     _z,
     burnt_panel,
     estimate_icc_local,
-    held_out_structure,
+    held_out_episodes_by_arrival,
     load_held_out,
-    population_mask,
     residual_variance,
     sessions_between,
     shrink,
@@ -451,17 +450,16 @@ def report(
     effects = standardised_effects(burnt)
 
     held = load_held_out(labels_dir)
-    sizes = held_out_structure(held, population=population)
 
-    resolved = held["sel_label_status_20"].astype(str).to_numpy() == "ok"
-    anchors = held["anchor_session"].astype(str).to_numpy()
-    matured = sorted({a[:10] for a in anchors[population_mask(held, population) & resolved]})
-    offsets = arrival_offsets_from_dates(matured)
-    if len(offsets) != len(sizes):
-        raise ValueError(
-            f"{len(offsets)} matured arrival sessions but {len(sizes)} cluster sizes; "
-            "the two reads disagree about the panel"
-        )
+    # Sizes and calendar come from ONE read, so they cannot describe different
+    # panels. They used to be derived separately and a consistency check stood
+    # here to catch the disagreement; the check is gone because the two reads
+    # are gone. The episode collapse removes whole arrival sessions (one that
+    # holds only a chained repeat of an earlier episode), which is exactly the
+    # disagreement that check would have reported.
+    by_anchor = held_out_episodes_by_arrival(held, population=population)
+    sizes = list(by_anchor.values())
+    offsets = arrival_offsets_from_dates(sorted(by_anchor))
 
     y_b = burnt[OUTCOME].astype(float).to_numpy()
     sd_y = float(np.std(y_b))

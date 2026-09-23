@@ -533,6 +533,67 @@ def volatility_sufficiency(panel: pd.DataFrame) -> tuple[int, bool]:
 
 
 # ------------------------------------------------------------------ driver
+def panel_shape(labels_dir: Any, briefs_dir: Any) -> tuple[int, int]:
+    """(episodes, arrival clusters) the run would build, WITHOUT the outcome.
+
+    Same joins, same filters and the same chained episode collapse as
+    :func:`held_out_panel`, minus the one column that would spend the look. The
+    floors are counted in ticker-episodes, so the preflight has to be too: the
+    resolved ROW count is about twice this on the real store, and comparing it
+    to ``MIN_EPISODES`` reads a certain VOID as a comfortable pass.
+
+    Upper bound, by one step: the run also drops rows whose outcome is null,
+    which this cannot see. A resolved label is not supposed to carry a null
+    outcome, so the two agree in practice, and the bound points the safe way —
+    the preflight can refute a run, never promise one.
+    """
+    from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
+
+    label_paths = [
+        path for path in sorted(Path(labels_dir).glob("*.parquet")) if path.stem > DISCOVERY_CUTOFF
+    ]
+    brief_paths = [
+        path for path in sorted(Path(briefs_dir).glob("*.parquet")) if path.stem > DISCOVERY_CUTOFF
+    ]
+    if not label_paths or not brief_paths:
+        return 0, 0
+
+    labels = pd.concat(
+        [
+            pd.read_parquet(
+                path,
+                columns=[
+                    "brief_date",
+                    "ticker",
+                    "anchor_session",
+                    "briefed_any_theme",
+                    "sel_label_status_20",
+                ],
+            )
+            for path in label_paths
+        ],
+        ignore_index=True,
+    )
+    briefs = pd.concat(
+        [
+            pd.read_parquet(path, columns=["ticker"]).assign(brief_date=path.stem)
+            for path in brief_paths
+        ],
+        ignore_index=True,
+    )
+    labels["brief_date"] = labels["brief_date"].astype(str)
+    labels["ticker"] = labels["ticker"].astype(str).str.upper()
+    briefs["ticker"] = briefs["ticker"].astype(str).str.upper()
+
+    panel = labels.merge(briefs, on=["brief_date", "ticker"], how="inner", validate="m:1")
+    panel = panel[panel["sel_label_status_20"].astype(str) == STATUS_RESOLVED]
+    panel = panel[panel["briefed_any_theme"].fillna(False).astype(bool)]
+    panel = panel.rename(columns={"anchor_session": "arrival"})
+    panel["arrival"] = panel["arrival"].astype(str)
+    panel = ticker_episode_dedup(panel)
+    return len(panel), int(panel["arrival"].nunique())
+
+
 def preflight(labels_dir: Any, briefs_dir: Any) -> None:
     """Outcome-blind checks. Emits no feature-vs-outcome statistic."""
     print("PREFLIGHT — outcome-blind. Nothing here spends the look.\n")
@@ -546,7 +607,23 @@ def preflight(labels_dir: Any, briefs_dir: Any) -> None:
     briefs = [p for p in sorted(Path(briefs_dir).glob("*.parquet")) if p.stem > DISCOVERY_CUTOFF]
     print(f"\nheld-out brief parquets available to join: {len(briefs)}")
     print(f"resolved rows available to the panel: {resolved}")
+
+    episodes, clusters = panel_shape(labels_dir, briefs_dir)
+    print(f"\nTHE PANEL: {episodes} ticker-episodes in {clusters} arrival clusters")
+    print(
+        "  (rows above, episodes here — ledger rule 5 collapses a ticker "
+        "reappearing within 5 sessions)"
+    )
     print(f"registration floors: >= {MIN_EPISODES} episodes, >= {MIN_CLUSTERS} arrival clusters")
+    if episodes < MIN_EPISODES or clusters < MIN_CLUSTERS:
+        short = []
+        if episodes < MIN_EPISODES:
+            short.append(f"{MIN_EPISODES - episodes} episodes")
+        if clusters < MIN_CLUSTERS:
+            short.append(f"{MIN_CLUSTERS - clusters} clusters")
+        print(f"VERDICT: the run WOULD VOID today — short by {' and '.join(short)}.")
+    else:
+        print("VERDICT: the panel clears both floors.")
     print("A panel below either floor is a VOID, not a RETIRE — the look returns unspent.")
 
 

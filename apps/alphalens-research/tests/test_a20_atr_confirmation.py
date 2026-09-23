@@ -14,11 +14,14 @@ retire).
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import importlib.util
+import io
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -253,6 +256,110 @@ class TestThePanel(unittest.TestCase):
         self.store.write("2026-09-01", [("SHADOW", 0.4, 4.0)], briefed=False)
         panel = atr.held_out_panel(self.store.labels, self.store.briefs)
         self.assertNotIn("SHADOW", set(panel["ticker"]))
+
+
+class TestThePreflight(unittest.TestCase):
+    """The preflight exists to say whether the run would VOID. It has to answer
+    in the unit the floor is written in.
+
+    It used to print the resolved ROW count next to a floor counted in
+    EPISODES, which invites the reader to compare two different things. On the
+    real store 2026-09-23 those were 419 and 205 against a floor of 300: the
+    same output reads as a clear pass and as a certain VOID depending on which
+    number you take.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.store = _Store(Path(self._tmp.name))
+        self.addCleanup(self._tmp.cleanup)
+
+    def _fill(self, n_clusters: int, per_cluster: int):
+        rng = np.random.default_rng(13)
+        for i, session in enumerate(_sessions(n_clusters)):
+            rows = [
+                (f"T{i:03d}X{j:03d}", float(rng.normal()), float(rng.normal() + 5.0))
+                for j in range(per_cluster)
+            ]
+            self.store.write(session, rows)
+
+    def test_the_shape_is_counted_in_episodes_not_rows(self):
+        # Every session repeats the previous session's first ticker, and the
+        # sessions are consecutive, so each repeat chains into the earlier
+        # episode and must not be counted twice.
+        rng = np.random.default_rng(17)
+        previous: str | None = None
+        for i, session in enumerate(_sessions(8)):
+            names = [f"T{i:03d}X{j:03d}" for j in range(4)]
+            if previous is not None:
+                names[-1] = previous
+            previous = names[0]
+            rows = [(t, float(rng.normal()), float(rng.normal() + 5.0)) for t in names]
+            self.store.write(session, rows)
+
+        episodes, clusters = atr.panel_shape(self.store.labels, self.store.briefs)
+        self.assertEqual(clusters, 8)
+        # 32 rows on disk; 7 of them are chained repeats.
+        self.assertEqual(episodes, 25)
+
+    def test_the_shape_matches_what_the_run_would_build(self):
+        # The preflight's promise is that it predicts the run. Checked against
+        # the run's own loader rather than against a hand-counted number.
+        self._fill(32, per_cluster=12)
+        episodes, clusters = atr.panel_shape(self.store.labels, self.store.briefs)
+        panel = atr.held_out_panel(self.store.labels, self.store.briefs)
+        self.assertEqual((episodes, clusters), (len(panel), panel["arrival"].nunique()))
+
+    def test_the_shape_is_read_without_the_outcome_column(self):
+        # Blindness: the preflight may say whether the panel is BIG ENOUGH and
+        # must not read what the labels resolved to.
+        seen: list[str] = []
+        real = pd.read_parquet
+
+        def _watched(path, columns=None, **kwargs):
+            seen.extend(columns or [])
+            return real(path, columns=columns, **kwargs)
+
+        self._fill(32, per_cluster=12)
+        with mock.patch.object(pd, "read_parquet", _watched):
+            atr.panel_shape(self.store.labels, self.store.briefs)
+        self.assertTrue(seen, "positive control: the watcher recorded nothing at all")
+        self.assertNotIn(atr.OUTCOME, seen)
+
+    def test_the_watcher_can_refute(self):
+        # Control for the control: the run's loader DOES read the outcome, so
+        # the assertion above would have failed had it been pointed at that.
+        seen: list[str] = []
+        real = pd.read_parquet
+
+        def _watched(path, columns=None, **kwargs):
+            seen.extend(columns or [])
+            return real(path, columns=columns, **kwargs)
+
+        self._fill(32, per_cluster=12)
+        with mock.patch.object(pd, "read_parquet", _watched):
+            atr.held_out_panel(self.store.labels, self.store.briefs)
+        self.assertIn(atr.OUTCOME, seen)
+
+    def test_the_printed_report_names_the_verdict_the_floors_imply(self):
+        self._fill(20, per_cluster=4)  # 80 episodes, far under MIN_EPISODES
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            atr.preflight(self.store.labels, self.store.briefs)
+        printed = buffer.getvalue()
+        self.assertIn("80 ticker-episodes in 20 arrival clusters", printed)
+        self.assertIn("WOULD VOID", printed)
+
+    def test_a_panel_over_both_floors_is_reported_as_such(self):
+        self._fill(32, per_cluster=12)  # 384 episodes over 32 clusters
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            atr.preflight(self.store.labels, self.store.briefs)
+        printed = buffer.getvalue()
+        self.assertIn("clears both floors", printed)
+        self.assertNotIn("WOULD VOID", printed)
 
 
 class TestWhenTheRunIsVoid(unittest.TestCase):

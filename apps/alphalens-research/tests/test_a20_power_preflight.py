@@ -71,7 +71,7 @@ class TestHeldOutBlindness(unittest.TestCase):
                 seen.extend([key] if isinstance(key, str) else list(key))
                 return super().__getitem__(key)
 
-        pre.held_out_structure(_Watched(frame), population=pre.POPULATION_BRIEFED)
+        pre.held_out_episodes_by_arrival(_Watched(frame), population=pre.POPULATION_BRIEFED)
 
         self.assertTrue(seen, "positive control: the watcher recorded nothing at all")
         self.assertTrue(
@@ -102,20 +102,82 @@ class TestTheStructureMatchesTheSimulatedPopulation(unittest.TestCase):
     ]
 
     def test_the_briefed_population_sees_only_its_own_clusters(self):
-        sizes = pre.held_out_structure(
+        by_arrival = pre.held_out_episodes_by_arrival(
             _held_out_frame(self._ROWS), population=pre.POPULATION_BRIEFED
         )
-        self.assertEqual(sorted(sizes), [2])  # one arrival session, two episodes
+        self.assertEqual(by_arrival, {"2026-07-07": 2})  # one arrival session, two episodes
 
     def test_the_wider_population_sees_more(self):
-        sizes = pre.held_out_structure(_held_out_frame(self._ROWS), population=pre.POPULATION_ALL)
-        self.assertEqual(sorted(sizes), [1, 3])
+        by_arrival = pre.held_out_episodes_by_arrival(
+            _held_out_frame(self._ROWS), population=pre.POPULATION_ALL
+        )
+        self.assertEqual(by_arrival, {"2026-07-07": 3, "2026-07-08": 1})
 
     def test_an_immature_row_is_not_a_cluster(self):
         frame = _held_out_frame(self._ROWS)
         frame.loc[frame["ticker"] == "AAA", "sel_label_status_20"] = "immature"
-        sizes = pre.held_out_structure(frame, population=pre.POPULATION_BRIEFED)
-        self.assertEqual(sorted(sizes), [1])
+        by_arrival = pre.held_out_episodes_by_arrival(frame, population=pre.POPULATION_BRIEFED)
+        self.assertEqual(by_arrival, {"2026-07-07": 1})
+
+
+class TestTheUnitIsTheTickerEpisode(unittest.TestCase):
+    """The held-out unit must be the one ledger rule 5 defines, and the one the
+    burnt side already uses.
+
+    Rule 5's unit is the ticker-EPISODE under the chained 5-session collapse, not
+    the distinct ``(brief_date, ticker)`` pair. ``burnt_panel`` runs
+    ``ticker_episode_dedup``; if the held-out branch does not, the simulation
+    takes its effect size from collapsed episodes and its cluster sizes from
+    uncollapsed rows. Every episode per cluster that is not really independent
+    inflates power, and no assertion about label columns would catch it.
+
+    Dates chosen against the real XNYS calendar: 2026-07-06 + 5 sessions is
+    2026-07-13, so a 07-09 reappearance chains and a 07-16 one does not.
+    """
+
+    _ROWS = [
+        ("2026-07-06", "AAA", "2026-07-07", True),
+        ("2026-07-09", "AAA", "2026-07-10", True),  # 3 sessions later: same episode
+        ("2026-07-06", "BBB", "2026-07-07", True),
+        ("2026-07-16", "BBB", "2026-07-17", True),  # 8 sessions later: new episode
+    ]
+
+    def test_a_reappearance_inside_the_window_is_not_a_second_episode(self):
+        by_arrival = pre.held_out_episodes_by_arrival(
+            _held_out_frame(self._ROWS), population=pre.POPULATION_BRIEFED
+        )
+        # AAA and BBB both arrive on 07-07; only BBB opens a second episode.
+        self.assertEqual(sorted(by_arrival.values()), [1, 2])
+
+    def test_an_arrival_session_carrying_only_chained_repeats_is_not_a_cluster(self):
+        # The other half of the same defect, and the one a size-only assertion
+        # misses: 2026-07-10 holds AAA's chained reappearance and nothing else.
+        # Counting it as an arrival session would overstate both the cluster
+        # count and the accrual rate the Wake date is derived from.
+        by_arrival = pre.held_out_episodes_by_arrival(
+            _held_out_frame(self._ROWS), population=pre.POPULATION_BRIEFED
+        )
+        self.assertEqual(sorted(by_arrival), ["2026-07-07", "2026-07-17"])
+
+    def test_the_held_out_unit_equals_the_burnt_unit(self):
+        # The two sides must agree by construction, not by coincidence: the
+        # comparison runs the burnt-side helper over the same rows.
+        from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
+
+        frame = _held_out_frame(self._ROWS)
+        expected = len(ticker_episode_dedup(frame[["brief_date", "ticker"]].copy()))
+        by_arrival = pre.held_out_episodes_by_arrival(frame, population=pre.POPULATION_BRIEFED)
+        self.assertEqual(sum(by_arrival.values()), expected)
+
+    def test_the_check_can_refute(self):
+        # Positive control: on these rows the collapsed and uncollapsed counts
+        # differ, so the cases above could have failed.
+        frame = _held_out_frame(self._ROWS)
+        uncollapsed = frame.drop_duplicates(subset=["brief_date", "ticker"])
+        self.assertEqual((len(uncollapsed), uncollapsed["anchor_session"].nunique()), (4, 3))
+        by_arrival = pre.held_out_episodes_by_arrival(frame, population=pre.POPULATION_BRIEFED)
+        self.assertNotEqual(sum(by_arrival.values()), 4)
+        self.assertNotEqual(len(by_arrival), 3)
 
 
 class TestHolm(unittest.TestCase):
