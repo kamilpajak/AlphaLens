@@ -1030,10 +1030,11 @@ def _build_managed_exits(
         if reanchored_level is not None and reanchored_level > stop_price:
             logger.info(
                 "uic %s: managed-exit stop raised by the journaled reanchored level "
-                "%.4f (previous %.4f)",
+                "%.4f (previous %.4f, from the %s)",
                 uic,
                 reanchored_level,
                 stop_price,
+                "trailed level" if trailed_level is not None else "plan stop",
             )
             stop_price = reanchored_level
         instrument_ccy, sizing_ccy, exchange_mic = (plan_currencies or {}).get(

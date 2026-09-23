@@ -5725,6 +5725,31 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertEqual(lines[0]["stop_price"], 91.5)
 
+    def test_a_trail_action_never_journals_a_reanchored_marker(self) -> None:
+        # A TRAIL AmendStop also carries `reanchor_avg_price`, so the only thing
+        # keeping it out of the re-anchor arm is that `reason == "trail"` is
+        # tested FIRST. That ordering is load-bearing and was documented in a
+        # comment but pinned by nothing: reorder the branches and a trail level
+        # would be written as a re-anchor floor, which #1518 then feeds into
+        # ManagedExit.stop_price. Raised by the pre-merge review.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)]
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                executor(
+                    _amend_action(reason="trail", reanchor_avg_price=95.0, stop_price=91.5),
+                    False,
+                    cl.TickReport(),
+                )
+                lines = list(cl._iter_standalone_stop_journal())
+        self.assertEqual(self._reanchored_lines(), [], "a trail is not a re-anchor")
+        self.assertEqual([ln["kind"] for ln in lines if ln.get("kind") == "trailed"], ["trailed"])
+
     def test_confirmed_success_without_reanchor_avg_price_never_journals(self) -> None:
         # A plain grow/downsize AmendStop (reanchor_avg_price=None, the default)
         # must NEVER journal a reanchored marker on success.
