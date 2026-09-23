@@ -5679,6 +5679,77 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
         self.assertEqual(lines[0]["avg_price"], 95.0)
         self.assertIsInstance(lines[0]["ts"], float)
 
+    def test_journal_reanchored_records_the_placed_level_when_given(self) -> None:
+        # Issue #1518: the marker has to carry the level, not just the blend.
+        # `avg_price` is the idempotence latch; the LEVEL is what the managed
+        # exit needs so a tranche fire cannot amend the stop back down.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                cl._journal_reanchored(_UIC, 95.0, stop_price=91.5, clock=lambda: 1234.5)
+                lines = self._reanchored_lines()
+        self.assertEqual(
+            lines,
+            [
+                {
+                    "kind": "reanchored",
+                    "uic": _UIC,
+                    "avg_price": 95.0,
+                    "stop_price": 91.5,
+                    "ts": 1234.5,
+                }
+            ],
+        )
+
+    def test_a_confirmed_reanchor_records_the_clamped_level_actually_placed(self) -> None:
+        # The level written must be `action.stop_price` — what the PATCH sent,
+        # already through the never-below-brief-floor envelope — not the
+        # policy's raw proposal, which the clamp may have refused or tightened.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)]
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                executor(
+                    _amend_action(
+                        reason="reanchor-on-fill", reanchor_avg_price=95.0, stop_price=91.5
+                    ),
+                    False,
+                    cl.TickReport(),
+                )
+                lines = self._reanchored_lines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["stop_price"], 91.5)
+
+    def test_a_trail_action_never_journals_a_reanchored_marker(self) -> None:
+        # A TRAIL AmendStop also carries `reanchor_avg_price`, so the only thing
+        # keeping it out of the re-anchor arm is that `reason == "trail"` is
+        # tested FIRST. That ordering is load-bearing and was documented in a
+        # comment but pinned by nothing: reorder the branches and a trail level
+        # would be written as a re-anchor floor, which #1518 then feeds into
+        # ManagedExit.stop_price. Raised by the pre-merge review.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)]
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                executor(
+                    _amend_action(reason="trail", reanchor_avg_price=95.0, stop_price=91.5),
+                    False,
+                    cl.TickReport(),
+                )
+                lines = list(cl._iter_standalone_stop_journal())
+        self.assertEqual(self._reanchored_lines(), [], "a trail is not a re-anchor")
+        self.assertEqual([ln["kind"] for ln in lines if ln.get("kind") == "trailed"], ["trailed"])
+
     def test_confirmed_success_without_reanchor_avg_price_never_journals(self) -> None:
         # A plain grow/downsize AmendStop (reanchor_avg_price=None, the default)
         # must NEVER journal a reanchored marker on success.
@@ -6039,6 +6110,61 @@ class TestFoldReanchoredMarkers(unittest.TestCase):
 
     def test_no_markers_folds_empty_dict(self) -> None:
         self.assertEqual(cl._fold_reanchored_markers([]), {})
+
+
+class TestFoldReanchoredStopLevels(unittest.TestCase):
+    """Issue #1518: the sibling fold that turns the ``reanchored`` marker's
+    LEVEL into the floor ``_build_managed_exits`` needs, so a take-profit fire
+    cannot amend a re-anchored stop back down to the placement-time plan stop.
+
+    Deliberately a SECOND fold rather than a wider return type on
+    ``_fold_reanchored_markers``: that one answers "which blend has already
+    been acted on" (the idempotence latch) and its consumer wants exactly
+    that. The level is a different question with a different consumer."""
+
+    def test_latest_level_wins_per_uic(self) -> None:
+        lines = [
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 95.0, "stop_price": 91.5, "ts": 100.0},
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 97.5, "stop_price": 94.0, "ts": 200.0},
+            {"kind": "reanchored", "uic": 99999, "avg_price": 10.0, "stop_price": 9.0, "ts": 50.0},
+        ]
+        self.assertEqual(cl._fold_reanchored_stop_levels(lines), {_UIC: 94.0, 99999: 9.0})
+
+    def test_a_marker_written_before_this_change_is_skipped(self) -> None:
+        # Back-compat, and it is the whole reason this is a separate fold: an
+        # older marker carries no level, so it contributes no floor and that
+        # uic keeps today's behaviour rather than inventing one.
+        lines = [{"kind": "reanchored", "uic": _UIC, "avg_price": 95.0, "ts": 100.0}]
+        self.assertEqual(cl._fold_reanchored_stop_levels(lines), {})
+
+    def test_a_non_finite_level_is_skipped(self) -> None:
+        lines = [
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 95.0, "stop_price": "x", "ts": 1.0},
+            {"kind": "reanchored", "uic": 99999, "avg_price": 9.0, "stop_price": 0.0, "ts": 1.0},
+        ]
+        self.assertEqual(cl._fold_reanchored_stop_levels(lines), {})
+
+    def test_no_markers_folds_empty_dict(self) -> None:
+        self.assertEqual(cl._fold_reanchored_stop_levels([]), {})
+
+    def test_the_election_and_this_fold_cannot_disagree(self) -> None:
+        # Found by reading my own diff. The boot compactor keeps the newest
+        # marker per uic elected on uic/avg_price/ts. If this fold elected on
+        # `stop_price` instead it would be a SECOND notion of "newest": here a
+        # levelless newer line and a levelled older one, where electing on the
+        # level answers 91.5 before compaction and {} after, because the older
+        # line is gone. Same defect class as the trailed-level identity tests.
+        lines = [
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 95.0, "stop_price": 91.5, "ts": 100.0},
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 97.5, "ts": 200.0},  # no level
+        ]
+        compacted = cl._elect_reanchored_lines(lines)
+        self.assertEqual(
+            cl._fold_reanchored_stop_levels(lines),
+            cl._fold_reanchored_stop_levels(compacted),
+            "the fold must answer the same before and after compaction",
+        )
+        self.assertEqual(cl._fold_reanchored_stop_levels(lines), {}, "the elected line has none")
 
 
 _INHERITED_TRAIL_MARKER = "raised by the journaled trailed level"
