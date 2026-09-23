@@ -963,6 +963,7 @@ def _build_managed_exits(
     fired: Mapping[int, frozenset[str]],
     trailed: Mapping[int, float],
     plan_currencies: Mapping[int, tuple[str | None, str | None, str | None]] | None = None,
+    reanchored: Mapping[int, float] | None = None,
 ) -> list[ManagedExit]:
     """Build this tick's managed-position list. Pure — no broker/journal I/O.
 
@@ -1018,6 +1019,23 @@ def _build_managed_exits(
                 stop_price,
             )
             stop_price = trailed_level
+        # #1518: the re-anchor's own floor. Same job as the trailed level, from
+        # the other arm of the declared-policy split — and until this landed it
+        # had nowhere to go, so a confirmed re-anchor raised the resting stop
+        # and then `execute_tranche_exit` wrote this stale one back on the
+        # first tranche fire. The HIGHER of the two wins, never the newer: both
+        # folds are journal-lifetime and a uic can carry both, and a stop floor
+        # that can fall is not a floor.
+        reanchored_level = (reanchored or {}).get(uic)
+        if reanchored_level is not None and reanchored_level > stop_price:
+            logger.info(
+                "uic %s: managed-exit stop raised by the journaled reanchored level "
+                "%.4f (previous %.4f)",
+                uic,
+                reanchored_level,
+                stop_price,
+            )
+            stop_price = reanchored_level
         instrument_ccy, sizing_ccy, exchange_mic = (plan_currencies or {}).get(
             uic, (None, None, None)
         )
@@ -1453,6 +1471,7 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         fired=_fold_fired_since_latest_plan(journal_lines),
         trailed=_fold_trailed_since_latest_plan(journal_lines),
         plan_currencies=fold_tranche_plan_currencies(journal_lines),
+        reanchored=_fold_reanchored_stop_levels(journal_lines),
     )
     # uic -> (ticker, venue) off the live positions just read. The venue must
     # survive: resolving a LIVE instrument by bare ticker is ambiguous for
@@ -6234,7 +6253,11 @@ def _journal_amend_ok(uic: int, qty: float, *, clock: Callable[[], float] = time
 
 
 def _journal_reanchored(
-    uic: int, avg_price: float, *, clock: Callable[[], float] = time.time
+    uic: int,
+    avg_price: float,
+    *,
+    stop_price: float | None = None,
+    clock: Callable[[], float] = time.time,
 ) -> None:
     """Persist a timestamped ``reanchored`` marker (PR-6b, broker-manager
     extraction memo §4.3). Written by the executor ONLY on a CONFIRMED
@@ -6244,10 +6267,26 @@ def _journal_reanchored(
     ``ProtectionView.reanchored_by_uic``, the PERMANENT per-blend idempotence
     latch (no TTL — unlike ``oco_placed`` / ``amend_failed``, a confirmed
     reanchor for a given avg_price never needs to re-fire for that same
-    blend)."""
-    _append_standalone_stop_journal(
-        {"kind": "reanchored", "uic": int(uic), "avg_price": float(avg_price), "ts": float(clock())}
-    )
+    blend).
+
+    ``stop_price`` is the LEVEL the PATCH actually placed — already through the
+    never-below-brief-floor envelope, so it can never sit under
+    ``plan.stop_price``. It is recorded because the latch alone was not enough
+    (#1518): ``_build_managed_exits`` raised its stop only from the ``trailed``
+    fold, so a re-anchored uic carried the placement-time plan stop into
+    ``ManagedExit``, and the amend that frees the first take-profit tranche
+    wrote that stale level back to the broker. Optional and omitted when
+    absent, so a marker written before #1518 folds to no floor and its uic
+    keeps the old behaviour rather than inventing one."""
+    record: dict[str, Any] = {
+        "kind": "reanchored",
+        "uic": int(uic),
+        "avg_price": float(avg_price),
+    }
+    if stop_price is not None:
+        record["stop_price"] = float(stop_price)
+    record["ts"] = float(clock())
+    _append_standalone_stop_journal(record)
 
 
 def _journal_trailed(
@@ -6338,6 +6377,54 @@ def _fold_reanchored_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, fl
             latest_ts[uic] = ts
             latest_avg_price[uic] = avg_price
     return latest_avg_price
+
+
+def _fold_reanchored_stop_levels(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
+    """Fold the ``reanchored`` markers into the LATEST (by ``ts``) stop LEVEL
+    per uic — the floor ``_build_managed_exits`` raises its stop to (#1518).
+
+    A SECOND fold rather than a wider return type on
+    :func:`_fold_reanchored_markers`: that one answers "which blend has already
+    been acted on" and its consumer (the idempotence latch) wants exactly that.
+    This answers "how high does this uic's stop stand", which is a different
+    question with a different consumer, and the two must be free to skip
+    different lines — a marker written before #1518 carries no level and
+    contributes no floor here while still latching there.
+
+    Selection is the LATCH's, not its own: the same ``uic``/``avg_price``/``ts``
+    parse guard elects the same line ``_fold_reanchored_markers`` and
+    ``_elect_reanchored_lines`` elect, and only THEN is the level read off it.
+    Electing on ``stop_price`` instead would be a second, different notion of
+    "newest", and the boot compactor keeps only the line the FIRST one elects —
+    so the fold could answer differently before and after a compaction. That is
+    the ``test_trailed_level_identity`` defect class; this ordering forecloses
+    it by construction.
+
+    A uic whose elected marker carries no usable level contributes no floor: a
+    floor is a safety value, so an unusable one yields nothing rather than a
+    guess or a stale older level."""
+    latest_ts: dict[int, float] = {}
+    latest_level: dict[int, float] = {}
+    for line in lines:
+        if line.get("kind") != "reanchored":
+            continue
+        try:
+            uic = int(line["uic"])
+            float(line["avg_price"])  # the election's parse guard, not a value we keep
+            ts = float(line["ts"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if uic in latest_ts and ts < latest_ts[uic]:
+            continue
+        latest_ts[uic] = ts
+        latest_level.pop(uic, None)
+        try:
+            level = float(line["stop_price"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(level) and level > 0:
+            latest_level[uic] = level
+    return latest_level
 
 
 def _select_trailed_lines(lines: Iterable[Mapping[str, Any]]) -> dict[int, Mapping[str, Any]]:
@@ -10357,8 +10444,13 @@ def _execute_amend_stop(
         )
     elif action.reanchor_avg_price is not None:
         reanchor_avg_price = action.reanchor_avg_price
+        # #1518: record the LEVEL as well as the blend. `action.stop_price` is
+        # what the PATCH just sent — the clamped level, not the policy's raw
+        # proposal — so the floor this writes can never sit below the brief
+        # disaster stop.
+        reanchor_level = action.stop_price
         _journal_outcome_best_effort(
-            lambda: _journal_reanchored(action.uic, reanchor_avg_price),
+            lambda: _journal_reanchored(action.uic, reanchor_avg_price, stop_price=reanchor_level),
             throttle,
             report,
             uic=action.uic,
