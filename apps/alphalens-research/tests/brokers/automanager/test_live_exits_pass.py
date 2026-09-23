@@ -219,6 +219,56 @@ class TestBuildManagedExits(unittest.TestCase):
         )
         self.assertEqual(managed, [])
 
+    def test_a_reanchored_level_raises_the_managed_exit_stop(self) -> None:
+        # Issue #1518. Without this the first tranche fire amends the resting
+        # stop back to the placement-time plan stop: execute_tranche_exit frees
+        # the tranche by amending to ManagedExit.stop_price, and a re-anchored
+        # uic was never in the only map that could raise it.
+        pos = _mk_pos(uic=486, qty=100.0)
+        managed = cl._build_managed_exits(
+            long_positions=[pos],
+            tranche_plans={486: ((_tr(0, 16.0, 1.0),), 100.0, 13.0)},
+            fired={},
+            trailed={},
+            reanchored={486: 14.5},
+        )
+        self.assertEqual(len(managed), 1)
+        self.assertEqual(managed[0].stop_price, 14.5)
+
+    def test_the_higher_of_trailed_and_reanchored_wins(self) -> None:
+        # The two floors are written by different arms of the same policy split
+        # and are mutually exclusive per pick, but the fold is journal-lifetime,
+        # so a uic can carry both. Never take the newer — take the higher; a
+        # stop floor that can fall is not a floor.
+        pos = _mk_pos(uic=486, qty=100.0)
+        for label, trailed, reanchored, expected in (
+            ("trailed higher", {486: 15.5}, {486: 14.5}, 15.5),
+            ("reanchored higher", {486: 14.0}, {486: 14.5}, 14.5),
+        ):
+            with self.subTest(label):
+                managed = cl._build_managed_exits(
+                    long_positions=[pos],
+                    tranche_plans={486: ((_tr(0, 16.0, 1.0),), 100.0, 13.0)},
+                    fired={},
+                    trailed=trailed,
+                    reanchored=reanchored,
+                )
+                self.assertEqual(managed[0].stop_price, expected)
+
+    def test_a_reanchored_level_below_the_plan_stop_never_lowers_it(self) -> None:
+        # The clamp already refuses anything below the brief floor, so this
+        # should be unreachable — pinned anyway, because a floor that can lower
+        # the stop is the defect this issue is about, only inverted.
+        pos = _mk_pos(uic=486, qty=100.0)
+        managed = cl._build_managed_exits(
+            long_positions=[pos],
+            tranche_plans={486: ((_tr(0, 16.0, 1.0),), 100.0, 13.0)},
+            fired={},
+            trailed={},
+            reanchored={486: 11.0},
+        )
+        self.assertEqual(managed[0].stop_price, 13.0)
+
     def test_fired_tags_flow_into_already_fired(self) -> None:
         pos = _mk_pos(uic=486, qty=50.0)
         tranche_plans = {486: ((_tr(0, 16.0, 0.5), _tr(1, 18.0, 0.3)), 100.0, 13.0)}

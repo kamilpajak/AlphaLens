@@ -28,9 +28,17 @@ _MEMO_FILENAME = "bezpazery_lens_design_2026_07_16.md"
 _POINTER_RE = re.compile(r"amendment\s+§\s*(\d+(?:\.\d+)*)\s+of\s+`?" + re.escape(_MEMO_FILENAME))
 _HEADING_RE = re.compile(r"^(#{2,4})\s+(\d+(?:\.\d+)*)\.?\s", re.MULTILINE)
 
+# The regex above names ONE memo, so a row pointing at any other memo was
+# unchecked — which is how the #1227 amendment (2026-09-21) would have shipped
+# with a pointer nobody verified. This second form is memo-agnostic and reads
+# the other word order the ledger actually uses:
+#   "`ml_label_registry_design_2026_09_16.md` §8 step 3" -> (memo, "8")
+_ANY_MEMO_POINTER_RE = re.compile(r"`([a-z0-9_]+\.md)`\s+§\s*(\d+(?:\.\d+)*)")
 
-def _memo_section_numbers() -> set[str]:
-    return {match.group(2) for match in _HEADING_RE.finditer(_MEMO.read_text(encoding="utf-8"))}
+
+def _memo_section_numbers(memo: Path | None = None) -> set[str]:
+    text = (memo or _MEMO).read_text(encoding="utf-8")
+    return {match.group(2) for match in _HEADING_RE.finditer(text)}
 
 
 class TestTheLedgerPointsAtRealMemoSections(unittest.TestCase):
@@ -55,6 +63,38 @@ class TestTheLedgerPointsAtRealMemoSections(unittest.TestCase):
         self.assertEqual(_POINTER_RE.findall(synthetic), ["99"])
 
 
+class TestEveryMemoPointerResolves(unittest.TestCase):
+    """The same guarantee as above, for every memo the ledger cites.
+
+    The single-memo regex made a pointer at any other design memo silently
+    unchecked. A ledger row is the only route from the budget to the text that
+    justifies a registration, so a §N that does not exist sends a later auditor
+    to nothing — regardless of which memo it names.
+    """
+
+    def test_each_cited_section_exists_in_the_memo_it_names(self):
+        pairs = _ANY_MEMO_POINTER_RE.findall(_LEDGER.read_text(encoding="utf-8"))
+        self.assertTrue(pairs, "positive control: the ledger cites at least one memo section")
+        for filename, section in pairs:
+            memo = _REPO_ROOT / "docs/research" / filename
+            with self.subTest(memo=filename, section=section):
+                self.assertTrue(
+                    memo.exists(), f"ledger cites {filename}, which is not in docs/research"
+                )
+                self.assertIn(
+                    section,
+                    _memo_section_numbers(memo),
+                    f"ledger points at §{section} of {filename}, which has no such heading",
+                )
+
+    def test_the_memo_agnostic_regex_can_refute(self):
+        # Anti-rot on the new regex itself, matching the older guard's shape.
+        synthetic = "`some_memo_2026_01_01.md` §99 step 1"
+        self.assertEqual(
+            _ANY_MEMO_POINTER_RE.findall(synthetic), [("some_memo_2026_01_01.md", "99")]
+        )
+
+
 class TestTheAmendmentRecordsTheCohortCaveat(unittest.TestCase):
     def test_the_memo_carries_a_subsection_naming_the_cohort(self):
         headings = [
@@ -67,3 +107,56 @@ class TestTheAmendmentRecordsTheCohortCaveat(unittest.TestCase):
             "the amendment must carry a subsection about the per-row cohort: the two "
             "anchors share the no-fill gate but not the constructibility gates",
         )
+
+
+class TestTheLedgerTablesAreNotShifted(unittest.TestCase):
+    """Every row of a ledger table must have the column count of its header.
+
+    A row with one cell too few does not render as broken - it renders with
+    every value after the gap sitting in the WRONG column, so the horizon ends
+    up under "Panel version" and the notes under "Cluster looks". The
+    2026-09-21 amendment shipped exactly that way and no test could see it.
+    """
+
+    @staticmethod
+    def _tables(text: str) -> list[tuple[int, list[str]]]:
+        """Each markdown table as (header line number, list of row lines)."""
+        lines = text.splitlines()
+        tables: list[tuple[int, list[str]]] = []
+        i = 0
+        while i < len(lines) - 1:
+            is_header = lines[i].startswith("|") and set(
+                lines[i + 1].replace("|", "").replace(" ", "")
+            ) <= {"-", ":"}
+            if is_header and lines[i + 1].startswith("|"):
+                rows = []
+                j = i + 2
+                while j < len(lines) and lines[j].startswith("|"):
+                    rows.append(lines[j])
+                    j += 1
+                tables.append((i + 1, [lines[i], *rows]))
+                i = j
+                continue
+            i += 1
+        return tables
+
+    def test_every_row_has_its_headers_column_count(self):
+        tables = self._tables(_LEDGER.read_text(encoding="utf-8"))
+        self.assertTrue(tables, "positive control: the ledger has markdown tables")
+        for start, rows in tables:
+            expected = rows[0].count("|") - 1
+            for offset, row in enumerate(rows[1:], start=2):
+                with self.subTest(line=start + offset - 1):
+                    self.assertEqual(
+                        row.count("|") - 1,
+                        expected,
+                        f"ledger line {start + offset - 1} has "
+                        f"{row.count('|') - 1} cells, header has {expected}: {row[:80]}",
+                    )
+
+    def test_the_shift_detector_can_refute(self):
+        shifted = "| a | b | c |\n|---|---|---|\n| 1 | 2 |\n"
+        tables = self._tables(shifted)
+        self.assertEqual(len(tables), 1)
+        header, row = tables[0][1]
+        self.assertNotEqual(row.count("|") - 1, header.count("|") - 1)
