@@ -1,0 +1,134 @@
+# A20 overlap inference — does the #1227 power gate survive the 20-session window?
+
+**Status:** IN PROGRESS 2026-09-23 — §5 holds the recorded run.
+**Amends:** [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §2.2 (the
+inference row) and §3 (the method). That memo's 83.9% is not withdrawn; this one asks whether the
+assumption under which it was computed holds, and §5 says.
+**Registers nothing. Runs no held-out outcome.** Burnt-panel reads and held-out STRUCTURE only,
+under the same allowlist the preflight fixed in its §2.3.
+
+---
+
+## 1. The hole
+
+The merged preflight simulates one **independent** random effect per arrival session and then
+computes its p-value with a wild cluster bootstrap clustered on arrival session. It generates and
+tests under the same assumption. That is internally consistent, and it is exactly why it cannot
+detect that the assumption is wrong.
+
+The panel is not built that way. `sel_ar_20` accumulates 20 trading sessions from the arrival open,
+and arrival clusters land at about one per session, so two adjacent clusters share up to 19 of their
+20 outcome sessions. #1227 anticipated this in its own body — "session clusters alone are not
+sufficient" — and wrote that when the primary was `car_10`, half as long.
+
+The direction matters. Understated standard errors inflate the statistic and make rejection
+**easier**. For a one-sided test whose rejection means "ATR is real", the exposure is CONFIRMING a
+hand-made penalty that does not work, and keeping it for good, because ledger rule 4 ends testing
+whichever way the single look lands.
+
+## 2. A withdrawn justification
+
+An earlier attempt to clear the concern measured two things on the burnt panel: the autocorrelation
+of **session-mean residuals** (lag 1 `+0.060`, lags 2–10 inside `[−0.24, +0.27]` on 16–25 pairs), and
+the CR1 cluster-robust standard error of the ATR coefficient under blocks of 1 / 2 / 5 / 10
+consecutive sessions (`×1.00 / ×0.93 / ×0.90 / ×0.86`). It concluded that the overlap does not bite.
+
+Two adversarial reviewers rejected that independently, and both were right:
+
+- the quantity that transmits dependence into a **coefficient** is the autocovariance of the score
+  contributions `X_t'û_t`, not of mean residuals — a mean-residual series can look clean while the
+  score does not;
+- a CR1 standard error that **falls** as the cluster coarsens to 13, 5 and 3 groups is more readily
+  small-G instability than evidence of independence, and at 3 groups the estimate means very little.
+
+That justification is withdrawn. It is recorded here rather than deleted because the memo it would
+have gone into is the one this amends, and a reader comparing the two should see why the second
+answer is not the first one restated.
+
+## 3. What replaces it
+
+### 3.1 A simulator in which the overlap is structural
+
+`scripts/ml/a20_overlap_power.py` shares a per-day shock across the **real** arrival calendar, so
+adjacent clusters share their windows by construction rather than by assumption. Calendar session
+offsets are used, not positions in the arrival list, so a gap in the calendar produces a real gap in
+the sharing.
+
+The calibration does not move. The same burnt-panel `sd_y` and `icc` are used, split so that:
+
+- within-cluster correlation is `icc` for **every** sharing fraction — the marginals are untouched;
+- correlation at a lag of `k` sessions is `φ · icc · (horizon − k) / horizon`, zero at `k ≥ horizon`;
+- **`φ = 0` reproduces the merged preflight exactly.**
+
+That last property is what makes this a measurement of the old assumption rather than a replacement
+of it. `φ = 1` is the conservative end, attributing *all* same-session correlation to the shared
+window; any part that is genuinely arrival-specific — one catalyst, one theme, one day's news — does
+not travel to the neighbour. The grid is reported rather than one value chosen.
+
+### 3.2 The channel that decides it
+
+A shared shock that moves every name arriving on a date by the **same** amount is a level shift, and
+a level shift is orthogonal to a mean-zero regressor. It therefore never reaches the coefficient, no
+matter how much the windows overlap. Measured on simulated panels: with full sharing and no loading,
+the lag-1 score autocorrelation is `+0.005 ± 0.014`, against `−0.029` for the small-sample bias line
+and against `+0.475` for the correlation of the **outcomes** themselves.
+
+That holds only while the shock hits every name equally. ATR measures volatility, so high-ATR names
+plausibly take more of a common move. The simulator scales each episode's share of the shared shock
+by `1 + κ · z(atr)`, renormalised so total variance is unchanged and only the dependence structure
+moves. This is the one channel through which overlapping windows can bias the ATR coefficient.
+
+The diagnostic responds to it — that is the refutation control, and without it the near-zero result
+above would be a check that could not fail:
+
+| κ | φ = 0 | φ = 1 |
+|---|---|---|
+| 0.0 | −0.035 | −0.002 |
+| 0.3 | −0.035 | **+0.067** |
+| 0.6 | −0.035 | **+0.166** |
+| 1.0 | −0.035 | **+0.245** |
+
+### 3.3 Size before power
+
+Power for a method whose level is wrong is not a power figure, so it is not computed. The bar is
+pre-specified at **0.075** for a nominal 0.05 (Bradley's liberal robustness criterion; the upper end
+is the one that matters, because the over-rejecting method is the one that hands back a confident
+wrong confirmation). A method above it gets no power number at all, so there is nothing to quote.
+
+## 4. The two calibration numbers, measured on the burnt panel
+
+| Quantity | Value | Why it matters |
+|---|---|---|
+| ICC over arrival sessions | **0.0605** | only 6% of residual variance is common to a session, so there is little to share in the first place |
+| κ, fitted ATR loading | **0.142** | the shared shock is close to a pure level shift, which the coefficient barely sees |
+| `sd_y` | 0.1653 | unchanged from the preflight |
+| burnt episodes, briefed | 197 | unchanged from the preflight |
+
+κ is fitted as `|residual| = a + b·z(atr)` on the burnt panel and reported as `b / a`: the
+proportional widening of an episode's response per standard deviation of the signal. It is clamped
+below at zero — a negative loading would mean high-ATR names react *less* to a common move, which is
+not a direction worth simulating and would make the overlap look harmless for the wrong reason.
+
+Both channels are narrow. That is a prediction, not the answer; §5 is the answer.
+
+## 5. Results
+
+*Placeholder — filled by a results commit that must not touch executable code.*
+
+## 6. Limitations, stated before the numbers
+
+- **κ is fitted on 197 burnt episodes over 26 arrival sessions.** It is a small-sample estimate of a
+  second-moment relationship, which is the noisiest kind. The grid is reported partly for that
+  reason.
+- **The simulated shared shock is a single common factor.** Real co-movement among briefed names has
+  sector and theme structure that one factor does not reproduce. A name-level factor structure would
+  be a different simulator and is not built here.
+- **`sel_ar_20` is already beta-adjusted against IWM**, so the largest common component is removed
+  before any of this. That is a reason the measured ICC is small, and it is also why this memo cannot
+  be carried over to an unadjusted outcome without re-measuring.
+- **This memo does not re-derive the 83.9%.** It asks whether the assumption under which that number
+  was computed holds. If it does, the number stands as computed; if it does not, the number needs a
+  new inference method and a new power run, and §5 says which.
+- **The registered test is one-sided; every rejection rate here is two-sided**, at the same bar the
+  merged preflight used, so the two memos are comparable. That is a level shift applied equally to
+  every row and does not change which method wins.
