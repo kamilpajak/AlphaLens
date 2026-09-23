@@ -47,6 +47,14 @@ class TestTheGuardBand(unittest.TestCase):
         self.assertAlmostEqual(hi, 1 / 0.55, places=6)
         self.assertFalse(gate.guard_sees((lo + hi) / 2))
 
+    def test_the_band_is_closed_so_its_own_edges_are_unseen(self):
+        # The guard compares strictly, so a step landing exactly on a bound does not
+        # fire and its ratio is inside the unseen set. Calling the band open would
+        # misdescribe the predicate by one point at each end.
+        lo, hi = gate.blind_band()
+        self.assertFalse(gate.guard_sees(lo))
+        self.assertFalse(gate.guard_sees(hi))
+
     def test_the_margin_on_a_plain_two_for_one_is_reported(self):
         # 0.5 against a 0.55 bound: a split day on which the stock also rises 10%
         # lands exactly on 0.55 and stops being visible. The number is small enough
@@ -77,18 +85,29 @@ class TestTrueRangeIsWhatAtrEats(unittest.TestCase):
         tr = gate.true_range_pct(
             high=np.array([10.0, 101.0]), low=np.array([9.8, 99.0]), close=np.array([10.0, 100.0])
         )
+        # Hand-computed, NOT compared against the module's own formula: the true range
+        # is max(101-99, |101-10|, |99-10|) = 91, against a close of 100. Checking this
+        # against `expected_raw_true_range_pct` alone would test the module on itself.
+        self.assertAlmostEqual(float(tr[0]), 91.0, places=10)
+        # And only then: the closed form agrees with the arithmetic.
         self.assertAlmostEqual(float(tr[0]), gate.expected_raw_true_range_pct(0.1), delta=2.0)
-        self.assertGreater(tr[0], 80.0)
 
     def test_a_series_shorter_than_two_bars_has_no_true_range(self):
         tr = gate.true_range_pct(high=np.array([10.0]), low=np.array([9.8]), close=np.array([10.0]))
         self.assertEqual(len(tr), 0)
 
-    def test_a_non_positive_close_does_not_become_an_infinite_range(self):
+    def test_an_unusable_bar_becomes_nan_and_does_not_shift_the_others(self):
+        # The alignment trap. Dropping the bad bar would shorten the array, so a caller
+        # that found the split bar at index k in the input frame would silently read
+        # index k of a different series. Length is part of the contract.
         tr = gate.true_range_pct(
-            high=np.array([10.0, 1.0]), low=np.array([9.8, 0.5]), close=np.array([10.0, 0.0])
+            high=np.array([10.0, 1.0, 10.4]),
+            low=np.array([9.8, 0.5, 10.0]),
+            close=np.array([10.0, 0.0, 10.2]),
         )
-        self.assertTrue(np.all(np.isfinite(tr)) or len(tr) == 0)
+        self.assertEqual(len(tr), 2)
+        self.assertTrue(np.isnan(tr[0]))
+        self.assertTrue(np.isfinite(tr[1]))
 
 
 class TestTheExpectedRawTrueRange(unittest.TestCase):

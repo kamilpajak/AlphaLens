@@ -98,7 +98,13 @@ def guard_sees(split_ratio: float) -> bool:
 
 
 def blind_band() -> tuple[float, float]:
-    """The open interval of split ratios the guard cannot see, as ``(lo, hi)``."""
+    """Split ratios the guard cannot see, as an INCLUSIVE ``[lo, hi]``.
+
+    Closed, not open. The guard fires on ``step < 0.55 or step > 1.8``, so a step landing
+    exactly on either bound does NOT fire and its ratio belongs to the unseen set. The
+    distinction never decides a real case, but calling the band open would misdescribe
+    the predicate a later reader is meant to trust.
+    """
     return 1.0 / SPLIT_RATIO_HI, 1.0 / SPLIT_RATIO_LO
 
 
@@ -118,6 +124,11 @@ def expected_raw_true_range_pct(split_ratio: float) -> float:
     ``|P/r - P|`` against a close of ``P/r``, and the ratio reduces to ``100 * |1 - r|``.
     It is strongly asymmetric: a 4-for-1 forward split reads about 300% because the
     denominator shrinks, while a 1-for-10 reverse reads about 90%.
+
+    It is a LOWER BOUND, not an identity: it counts the gap alone and ignores the bar's
+    own high-low spread, which can only add. That is the safe direction for a gate,
+    because the measured bar has to clear the bound to look clean, but it is a bound and
+    must not be quoted as an exact expectation.
 
     This is the number the ATR arm is tested against. Quoting one multiple for every
     split, as an earlier draft of this work did, overstates the reverse cases by an
@@ -141,6 +152,17 @@ def true_range_pct(*, high: np.ndarray, low: np.ndarray, close: np.ndarray) -> n
 
     This is the quantity ATR smooths, and the only one that can show a split artefact:
     a close series can look smooth while ``|high - prev_close|`` does not.
+
+    The result ALWAYS has ``len(close) - 1`` entries, with ``nan`` where a bar could not
+    be normalised. Dropping those instead would shorten the array and silently shift
+    every later index, so a caller that located the split bar in the input frame would
+    read a different bar's range and never know. Use ``np.nanmedian`` and friends.
+
+    Normalising each bar by its OWN close is deliberate and differs from
+    ``technicals_signal._compute_atr_pct``, which divides the smoothed ATR by the last
+    close of the series. This function is not reproducing that number; it asks whether
+    one bar's range is anomalous against the same series' typical range, and for that
+    the per-bar denominator is the like-for-like one.
     """
     high = np.asarray(high, dtype=float)
     low = np.asarray(low, dtype=float)
@@ -151,7 +173,8 @@ def true_range_pct(*, high: np.ndarray, low: np.ndarray, close: np.ndarray) -> n
     tr = np.maximum.reduce([high[1:] - low[1:], np.abs(high[1:] - prev), np.abs(low[1:] - prev)])
     here = close[1:]
     out = np.divide(100.0 * tr, here, out=np.full(len(here), np.nan, dtype=float), where=here > 0)
-    return out[np.isfinite(out)]
+    out[~np.isfinite(out)] = np.nan
+    return out
 
 
 def classify_step(*, store_step: float, reference_step: float | None) -> str:
