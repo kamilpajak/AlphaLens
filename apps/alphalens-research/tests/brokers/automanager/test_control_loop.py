@@ -2650,7 +2650,7 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
     keeps the brief's static ``placement.disaster_stop_price`` / ``tier.tp``.
     No environment is consulted — placement is the document's answer."""
 
-    def _run(self, *, exit_spec: Any, trade_setup: Any = None) -> tuple[int, list[dict[str, Any]]]:
+    def _run(self, *, exit_spec: Any) -> tuple[int, list[dict[str, Any]]]:
         journaled: list[dict[str, Any]] = []
         pkg = "alphalens_pipeline.brokers"
         with contextlib.ExitStack() as stack:
@@ -2663,7 +2663,6 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
                     _PlaceBroker(), _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), None
                 ),
                 _placement(),
-                trade_setup,
                 exit_spec,
             )
         return count, journaled
@@ -2755,7 +2754,6 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
                     _PlaceBroker(), _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), None
                 ),
                 _placement(),
-                None,
                 exit_spec,
                 plan=plan,
             )

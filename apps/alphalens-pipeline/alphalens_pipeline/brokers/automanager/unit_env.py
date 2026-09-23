@@ -240,6 +240,49 @@ def textfile_dir_for_env(env: str, *, run: Callable[[str, str], str] | None = No
     return parse_environment_payload(payload).get(TEXTFILE_DIR_ENV) or None
 
 
+def _banned_key_warnings(file_values: dict[str, str], path: Path) -> list[str]:
+    """systemd applies the file AFTER Environment=, so the file wins. A banned
+    key here is preserved (it IS what the daemon boots with next) and reported
+    by NAME, never by value."""
+    return [
+        f"WARN {key}: {path} overrides the unit pin — a banned key in the "
+        "shared environment file (#1209); the composed value is the FILE's"
+        for key in file_values
+        if key.startswith(_BANNED_FILE_PREFIX) or key in _BANNED_FILE_NAMES
+    ]
+
+
+def _apply_environment_files(
+    env_files_property: str,
+    values: dict[str, str],
+    *,
+    read_text: Callable[[Path], str],
+    recipe: str,
+) -> tuple[Path | None, list[str]]:
+    """Layer each ``EnvironmentFile=`` over ``values`` IN PLACE, in unit order.
+
+    Returns the last file read and the warnings it raised. A missing file marked
+    ``-`` (ignore errors) is skipped, as systemd skips it."""
+    warnings: list[str] = []
+    env_file: Path | None = None
+    for path, ignore_errors in parse_environment_files_property(env_files_property):
+        try:
+            text = read_text(path)
+        except OSError as exc:
+            if ignore_errors:
+                continue
+            raise UnitEnvError(
+                f"cannot read {path} ({exc}) — this is a CLI-side read failure, not a "
+                "statement about the daemon, which read the file at its own start and "
+                f"may still be running fine; {recipe}"
+            ) from exc
+        env_file = path
+        file_values = parse_environment_file(text)
+        warnings.extend(_banned_key_warnings(file_values, path))
+        values.update(file_values)
+    return env_file, warnings
+
+
 def compose_live_environment(
     *,
     env: str = ENV_LIVE,
@@ -279,31 +322,9 @@ def compose_live_environment(
             f"rails cannot come from it; {recipe}"
         )
 
-    warnings: list[str] = []
-    env_file: Path | None = None
-    for path, ignore_errors in parse_environment_files_property(env_files_property):
-        try:
-            text = read_text(path)
-        except OSError as exc:
-            if ignore_errors:
-                continue
-            raise UnitEnvError(
-                f"cannot read {path} ({exc}) — this is a CLI-side read failure, not a "
-                "statement about the daemon, which read the file at its own start and "
-                f"may still be running fine; {recipe}"
-            ) from exc
-        env_file = path
-        file_values = parse_environment_file(text)
-        # systemd applies the file AFTER Environment=, so the file wins. A
-        # banned key here is preserved (it IS what the daemon boots with next)
-        # and reported by NAME, never by value.
-        for key in file_values:
-            if key.startswith(_BANNED_FILE_PREFIX) or key in _BANNED_FILE_NAMES:
-                warnings.append(
-                    f"WARN {key}: {path} overrides the unit pin — a banned key in the "
-                    "shared environment file (#1209); the composed value is the FILE's"
-                )
-        values.update(file_values)
+    env_file, warnings = _apply_environment_files(
+        env_files_property, values, read_text=read_text, recipe=recipe
+    )
 
     if needs_reload:
         warnings.append(

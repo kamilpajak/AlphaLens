@@ -115,10 +115,12 @@ class SetupStaticPolicy:
     ) -> tuple[float, float] | None:
         return None
 
+    # Parameter names are pinned by the ``ExitPolicy`` Protocol (callers pass them by
+    # keyword), so the ones this policy ignores cannot be dropped or underscored.
     def decide_reanchor(
         self,
         avg_price: float,
-        atr: float | None,
+        atr: float | None,  # NOSONAR
         *,
         peak: float | None = None,
         last_price: float | None = None,
@@ -189,19 +191,27 @@ class ReanchorOnFillPolicy:
     min_stop_distance_frac: float = 0.002
     trails: bool = False
 
+    # Parameter names are pinned by the ``ExitPolicy`` Protocol (callers pass them by
+    # keyword), so the ones this policy ignores cannot be dropped or underscored.
     def decide_placement_geometry(
-        self, blended: float, atr: float, *, ceiling_price: float | None
+        self,
+        blended: float,
+        atr: float,
+        *,
+        ceiling_price: float | None,  # NOSONAR
     ) -> tuple[float, float] | None:
         return None
 
+    # Parameter names are pinned by the ``ExitPolicy`` Protocol (callers pass them by
+    # keyword), so the ones this policy ignores cannot be dropped or underscored.
     def decide_reanchor(
         self,
         avg_price: float,
         atr: float | None,
         *,
-        peak: float | None = None,
-        last_price: float | None = None,
-        plan_stop: float | None = None,
+        peak: float | None = None,  # NOSONAR
+        last_price: float | None = None,  # NOSONAR
+        plan_stop: float | None = None,  # NOSONAR
     ) -> float | None:
         if not _usable_atr(atr):
             return None
@@ -245,10 +255,12 @@ class BreakevenTrailPolicy:
     ) -> tuple[float, float] | None:
         return None
 
+    # Parameter names are pinned by the ``ExitPolicy`` Protocol (callers pass them by
+    # keyword), so the ones this policy ignores cannot be dropped or underscored.
     def decide_reanchor(
         self,
         avg_price: float,
-        atr: float | None,
+        atr: float | None,  # NOSONAR
         *,
         peak: float | None = None,
         last_price: float | None = None,

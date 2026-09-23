@@ -47,10 +47,7 @@ from broker_contract.contract import (
 )
 from broker_contract.exit_geometry.registry import resolve_declared_policy, resolve_policy
 from broker_contract.price_feed import SupportsSessionLow
-from broker_contract.trade_intent.codec import (
-    TradeIntentDecodeError,
-    _decode_reaction_primitive,
-)
+from broker_contract.trade_intent.codec import _decode_reaction_primitive
 
 from alphalens_pipeline.brokers.automanager import (
     entry_trail_geometry,
@@ -5503,7 +5500,7 @@ def _reaction_from_governing(governing: Mapping[str, Any]) -> Any:
         return None
     try:
         return _decode_reaction_primitive(raw)
-    except (TradeIntentDecodeError, TypeError, ValueError):
+    except (TypeError, ValueError):  # TradeIntentDecodeError is a ValueError
         logger.warning(
             "planned line for uic %s carries an undecodable reaction stamp %r — "
             "treating the pick as declaring nothing (its stop will not be moved)",
@@ -8096,7 +8093,6 @@ class _PickRefs:
 def _place_tiers(
     refs: _PickRefs,
     placement: Any,
-    spec: Any = None,
     exit_spec: Any = None,
     plan: Any = None,
     *,
@@ -8707,7 +8703,7 @@ _GEOMETRY_WITHOUT_TRAIL_ALERT_PREFIX = "geometry-without-entry-trail"
 _CLIENT_GEOMETRY_ALERT_PREFIX = "client-geometry-placed"
 
 
-def _announce_client_geometry(
+def _announce_client_geometry(  # NOSONAR -- returns `placed` by design, see docstring
     placed: bool,
     exit_spec: Any,
     ticker: str,
@@ -9194,7 +9190,6 @@ def _handle_now_tranche(
     placed = _place_tiers(
         refs,
         placement,
-        spec,
         exit_spec,
         plan=now_plan,
         entry_duration=duration,
@@ -9295,6 +9290,107 @@ def _refuse_now_above_cap(
             "cap (a replace keeps this tier done)",
             f"now-cap:{refs.ticker}",
         )
+
+
+def _post_sizing_money_gate_refuses(
+    plan: Any,
+    fx: Any,
+    *,
+    instrument: Any,
+    account: Any,
+    open_verdicts: Sequence[Any],
+    records: Sequence[Mapping[str, Any]],
+    positions: Sequence[Any],
+    entry_trail_fold: entry_trails.EntryTrailFold | None,
+    broker: Broker,
+    ticker: str,
+    trade_date: dt.date,
+    generation: int,
+    alert_throttled: Callable[[str, str], bool] | None,
+) -> bool:
+    """The three money gates that need the sized plan — fee floor, gross cap, cash
+    floor, in that order — for :func:`_place_pick`. The first violation is refused
+    TERMINAL (journaled + paged) and ``True`` returned; ``False`` means all passed.
+    """
+    # Fee floor (design memo §4) — computed AFTER the setup plan + fx are
+    # known, BEFORE any bracket construction/placement. A pick below the
+    # floor is refused terminal (never re-tried every tick) and NEVER placed;
+    # ALPHALENS_BROKER_MAX_FEE_BPS unset (SIM) skips the check entirely.
+    fee_violation = _check_fee_floor(
+        plan,
+        fx,
+        ticker=ticker,
+        instrument_currency=instrument.currency,
+        exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
+    )
+    if fee_violation is not None:
+        _refuse_pick_terminal(
+            ticker,
+            trade_date,
+            fee_violation,
+            f"fee-floor:{ticker}",
+            alert_throttled,
+            generation=generation,
+        )
+        return True
+
+    # (``entry_trail_fold`` is the snapshot `_place_pick` read ONCE before
+    # safety.check — the same one feeds these gates and its drain intercept.)
+
+    # Portfolio gross cap (broker sizing memo §3) — the ONLY gross rail since
+    # #1192 removed the currency-mismatched pre-sizing arm from safety.check.
+    # Account-currency, candidate included (see the section comment above
+    # _check_gross_cap). Same inputs already in scope — zero new broker I/O.
+    # Staleness bound: `positions`/`account` were snapshotted a few synchronous
+    # (non-network) steps above; at the 45s poll cadence that skew is benign.
+    # If a future change inserts broker I/O between the snapshot and this
+    # check, or drops the cadence to sub-second streaming, re-snapshot here.
+    gross_violation = _check_gross_cap(
+        plan,
+        fx,
+        account=account,
+        open_verdicts=open_verdicts,
+        records=records,
+        positions=positions,
+        ticker=ticker,
+        entry_trail_fold=entry_trail_fold,
+        broker=broker,
+    )
+    if gross_violation is not None:
+        _refuse_pick_terminal(
+            ticker,
+            trade_date,
+            gross_violation,
+            f"gross-cap:{ticker}",
+            alert_throttled,
+            generation=generation,
+        )
+        return True
+
+    # Cash floor (broker sizing declared-frame memo §4.2) — declared mode
+    # only; runs AFTER the gross cap (exposure first, funding second — and the
+    # gross cap's fail-closed unjoined check must win, see _check_cash_floor)
+    # and BEFORE classify, on the same post-sizing inputs. Zero new broker I/O.
+    cash_violation = _check_cash_floor(
+        plan,
+        fx,
+        account=account,
+        open_verdicts=open_verdicts,
+        records=records,
+        ticker=ticker,
+        entry_trail_fold=entry_trail_fold,
+    )
+    if cash_violation is not None:
+        _refuse_pick_terminal(
+            ticker,
+            trade_date,
+            cash_violation,
+            f"cash-floor:{ticker}",
+            alert_throttled,
+            generation=generation,
+        )
+        return True
+    return False
 
 
 def _place_pick(
@@ -9434,84 +9530,21 @@ def _place_pick(
         return False
     instrument, fx, plan = resolved
 
-    # Fee floor (design memo §4) — computed AFTER the setup plan + fx are
-    # known, BEFORE any bracket construction/placement. A pick below the
-    # floor is refused terminal (never re-tried every tick) and NEVER placed;
-    # ALPHALENS_BROKER_MAX_FEE_BPS unset (SIM) skips the check entirely.
-    fee_violation = _check_fee_floor(
+    if _post_sizing_money_gate_refuses(
         plan,
         fx,
-        ticker=ticker,
-        instrument_currency=instrument.currency,
-        exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
-    )
-    if fee_violation is not None:
-        _refuse_pick_terminal(
-            ticker,
-            trade_date,
-            fee_violation,
-            f"fee-floor:{ticker}",
-            alert_throttled,
-            generation=_pick_generation(intent),
-        )
-        return False
-
-    # (The entry-trailing reservation fold was read ONCE above, before
-    # safety.check — the same snapshot feeds the money gates here and the
-    # drain intercept below.)
-
-    # Portfolio gross cap (broker sizing memo §3) — the ONLY gross rail since
-    # #1192 removed the currency-mismatched pre-sizing arm from safety.check.
-    # Account-currency, candidate included (see the section comment above
-    # _check_gross_cap). Same inputs already in scope — zero new broker I/O.
-    # Staleness bound: `positions`/`account` were snapshotted a few synchronous
-    # (non-network) steps above; at the 45s poll cadence that skew is benign.
-    # If a future change inserts broker I/O between the snapshot and this
-    # check, or drops the cadence to sub-second streaming, re-snapshot here.
-    gross_violation = _check_gross_cap(
-        plan,
-        fx,
+        instrument=instrument,
         account=account,
         open_verdicts=open_verdicts,
         records=records,
         positions=positions,
-        ticker=ticker,
         entry_trail_fold=entry_trail_fold,
         broker=broker,
-    )
-    if gross_violation is not None:
-        _refuse_pick_terminal(
-            ticker,
-            trade_date,
-            gross_violation,
-            f"gross-cap:{ticker}",
-            alert_throttled,
-            generation=_pick_generation(intent),
-        )
-        return False
-
-    # Cash floor (broker sizing declared-frame memo §4.2) — declared mode
-    # only; runs AFTER the gross cap (exposure first, funding second — and the
-    # gross cap's fail-closed unjoined check must win, see _check_cash_floor)
-    # and BEFORE classify, on the same post-sizing inputs. Zero new broker I/O.
-    cash_violation = _check_cash_floor(
-        plan,
-        fx,
-        account=account,
-        open_verdicts=open_verdicts,
-        records=records,
         ticker=ticker,
-        entry_trail_fold=entry_trail_fold,
-    )
-    if cash_violation is not None:
-        _refuse_pick_terminal(
-            ticker,
-            trade_date,
-            cash_violation,
-            f"cash-floor:{ticker}",
-            alert_throttled,
-            generation=_pick_generation(intent),
-        )
+        trade_date=trade_date,
+        generation=_pick_generation(intent),
+        alert_throttled=alert_throttled,
+    ):
         return False
 
     # --- Immediate ("now") tranche (#1247, memo §3.2/§3.5/§3.6) -------------
@@ -9575,7 +9608,6 @@ def _place_pick(
             _place_tiers(
                 _PickRefs(broker, intent, ticker, instrument, account, fx),
                 placement,
-                spec,
                 exit_spec,
                 plan=plan,
                 tranche_plan_override=tranche_plan_override,
