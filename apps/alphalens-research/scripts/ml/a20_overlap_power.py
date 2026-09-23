@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import sys
 from typing import Any
 
 import numpy as np
@@ -288,12 +289,21 @@ def rejection_rate(
     seed: int,
     signal_loading: float = 0.0,
     alpha: float = FWER,
+    progress_every: int = 0,
 ) -> float:
     """Share of simulations rejecting ``coef_name``.
 
     With zero effects this is SIZE; with injected effects it is power. They are
     one function deliberately: a size and a power measured by different code
     could differ for reasons that have nothing to do with the panel.
+
+    ``progress_every`` writes a count to stderr every N simulations, because a
+    high-precision cell runs for over an hour and a silent loop forces the
+    caller to reconstruct progress from CPU time. It reports the COUNT only,
+    never the running rejection tally: that tally is a partial estimate of the
+    number the run exists to produce, and watching it before deciding whether to
+    keep going is optional stopping. It consumes no randomness, so a run with it
+    on and a run with it off return the same answer.
     """
     from alphalens_research.diagnostics.options_retro import wild_cluster_bootstrap_p
 
@@ -313,7 +323,7 @@ def rejection_rate(
 
     rng = np.random.default_rng(seed)
     hits = 0
-    for _ in range(n_sims):
+    for done in range(1, n_sims + 1):
         y, x_all, _clusters = simulate_overlapping_panel(
             burnt_signals=burnt_signals,
             arrival_offsets=arrival_offsets,
@@ -331,6 +341,13 @@ def rejection_rate(
         )
         if p <= alpha:
             hits += 1
+        if progress_every and done % progress_every == 0:
+            print(
+                f"  {method} phi={shared_fraction:.2f} kappa={signal_loading:.3f}: "
+                f"{done}/{n_sims} simulations",
+                file=sys.stderr,
+                flush=True,
+            )
     return hits / n_sims
 
 
@@ -377,6 +394,7 @@ def report(
     coef_name: str = "atr",
     horizon: int = HORIZON_SESSIONS,
     size_tolerance: float = SIZE_TOLERANCE,
+    progress_every: int = 0,
 ) -> dict[str, Any]:
     """Size first, then power only where size held.
 
@@ -425,6 +443,7 @@ def report(
                     "n_sims": n_sims,
                     "wcb_boot": wcb_boot,
                     "signal_loading": loading,
+                    "progress_every": progress_every,
                 }
                 size = rejection_rate(effects=null_effects, seed=seed, **common)
                 held_size = size <= size_tolerance
@@ -480,6 +499,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20260923)
     parser.add_argument("--out-json", type=Path, default=None)
     parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=0,
+        help="write a simulation count to stderr every N sims (0 = silent)",
+    )
+    parser.add_argument(
         "--population", choices=[POPULATION_BRIEFED, POPULATION_ALL], default=POPULATION_BRIEFED
     )
     args = parser.parse_args(argv)
@@ -491,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
         n_sims=args.n_sims,
         wcb_boot=args.wcb_boot,
         seed=args.seed,
+        progress_every=args.progress_every,
     )
 
     print(f"\n=== population: {r['population']} ===")

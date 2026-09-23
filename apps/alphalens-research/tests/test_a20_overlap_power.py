@@ -15,6 +15,8 @@ lag profile is asserted against a closed form rather than against "not zero".
 
 from __future__ import annotations
 
+import contextlib
+import io
 import unittest
 
 import numpy as np
@@ -318,6 +320,59 @@ class TestTheRejectionHarness(unittest.TestCase):
             ov.rejection_rate(
                 effects={"atr": 0.0}, **{**self._common("arrival", 0.0), "coef_name": "ma50"}
             )
+
+
+class TestProgressReporting(unittest.TestCase):
+    """An hour-long run that prints nothing forces the caller to guess."""
+
+    def _args(self):
+        return {
+            "burnt_signals": np.random.default_rng(1).normal(0.0, 1.0, (120, 1)),
+            "arrival_offsets": list(range(12)),
+            "cluster_sizes": [4] * 12,
+            "effects": {"atr": 0.0},
+            "sd_y": 1.0,
+            "icc": 0.3,
+            "shared_fraction": 0.5,
+            "horizon": 20,
+            "method": "arrival",
+            "coef_name": "atr",
+            "n_sims": 20,
+            "wcb_boot": 49,
+            "seed": 9,
+        }
+
+    def test_progress_goes_to_stderr_and_counts_simulations(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            ov.rejection_rate(progress_every=5, **self._args())
+        lines = [ln for ln in err.getvalue().splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 4)
+        self.assertIn("20/20", lines[-1])
+
+    def test_progress_never_reports_the_running_rejection_count(self):
+        # Deliberate. The running count is a partial estimate of the very number
+        # the run exists to produce at high precision; seeing it mid-run and then
+        # deciding whether to continue is optional stopping.
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            ov.rejection_rate(progress_every=5, **self._args())
+        self.assertNotIn("hits", err.getvalue())
+        self.assertNotIn("reject", err.getvalue().lower())
+
+    def test_reporting_progress_does_not_change_the_answer(self):
+        # The counter must not touch the random stream. If it ever did, every
+        # recorded run in the memo would stop reproducing.
+        quiet = ov.rejection_rate(**self._args())
+        with contextlib.redirect_stderr(io.StringIO()):
+            loud = ov.rejection_rate(progress_every=1, **self._args())
+        self.assertEqual(quiet, loud)
+
+    def test_silent_by_default(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            ov.rejection_rate(**self._args())
+        self.assertEqual(err.getvalue(), "")
 
 
 class TestArrivalOffsets(unittest.TestCase):

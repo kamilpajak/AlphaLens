@@ -1,6 +1,10 @@
 # A20 overlap inference — does the #1227 power gate survive the 20-session window?
 
-**Status:** IN PROGRESS 2026-09-23 — §5 holds the recorded run.
+**Status:** COMPLETE 2026-09-23 — **the assumption holds.** The arrival-session wild cluster
+bootstrap keeps its level on an overlap-aware panel in every cell of the grid, including the
+conservative corner (size 7.125%, 95% interval [6.87%, 7.38%], pre-specified bar 7.5%). The merged
+83.9% is not an artefact of the independence assumption, and the coarser blocks the literature
+prescribes are worse here, not better. §5 holds the run.
 **Amends:** [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §2.2 (the
 inference row) and §3 (the method). That memo's 83.9% is not withdrawn; this one asks whether the
 assumption under which it was computed holds, and §5 says.
@@ -113,7 +117,72 @@ Both channels are narrow. That is a prediction, not the answer; §5 is the answe
 
 ## 5. Results
 
-*Placeholder — filled by a results commit that must not touch executable code.*
+Run 2026-09-23, 2000 simulations x 399 bootstrap draws per cell, seed 20260923. Panel: 197 burnt
+episodes, 419 held-out episodes in 35 arrival clusters over 35 sessions.
+
+### 5.1 The arrival-session bootstrap holds its level
+
+| sharing φ | loading κ | size | power at the 50% gate |
+|---|---|---|---|
+| 0.00 | 0 *(the merged preflight's assumption)* | 6.1% | 92.9% |
+| 0.50 | 0 | 4.0% | 93.5% |
+| 0.50 | fitted 0.142 | 4.8% | 92.2% |
+| 1.00 | 0 | 5.5% | 93.3% |
+| 1.00 | fitted 0.142 *(the conservative corner)* | **7.1%** | 91.3% |
+
+Nominal level 5%, pre-specified bar 7.5%. Every cell sits under the bar, including the corner where
+**all** same-session correlation is attributed to the shared window.
+
+At 2000 simulations the Monte Carlo error on 7.1% is about ±1.1 points, so that one interval —
+[6.0, 8.2] — crosses the bar. By this project's own rule a number whose interval crosses its bar is
+not a verdict, so that cell was re-run alone at **40,000 simulations**: size **7.125%**, 95% interval
+**[6.87%, 7.38%]**. The interval lies entirely below the 7.5% bar, so the corner is resolved rather
+than rounded the right way.
+
+**It is resolved, not clean.** 7.1% against a nominal 5% is about 1.4x the intended rejection rate:
+in the conservative corner a test run at α 0.05 behaves closer to α 0.07. It clears the
+pre-specified bar, and the bar was written down before the number existed, but the registration
+should quote the measured level rather than the nominal one. At `φ = 0.5` with the fitted loading the
+size is 4.8%, so this overshoot belongs to the corner where **all** same-session correlation is
+assumed to travel, not to the likely case.
+
+### 5.2 Coarser blocks are worse, not better
+
+| method | groups on this calendar | size | power |
+|---|---|---|---|
+| arrival session | 35 | 4.0 – 7.1% ✓ | ~93% |
+| 5-session block | 7 | 4.5 – 6.0% ✓ | ~76% |
+| 10-session block | 4 | 3.4 – 4.0% ✓ | ~24% |
+| **20-session block** | **2** | **12.4 – 14.3% ✗** | not computed |
+
+The 20-session block is the remedy the overlapping-returns literature prescribes and the one both
+adversarial reviewers recommended: a block at least as long as the horizon. On this calendar it
+leaves two groups, and it **over-rejects at 12–14% in every cell — including `φ = 0`, where there is
+no cross-cluster dependence at all to protect against**. That is not the overlap; it is the
+cluster-robust estimator failing at two groups. Its size is wrong for a reason unrelated to the
+problem it was brought in to solve, so it gets no power figure.
+
+The 10-session block does hold its level, and costs two thirds of the power to protect against
+something the measurement does not find.
+
+### 5.3 Why the overlap does not reach the coefficient
+
+Three measured numbers compose into one account:
+
+1. **ICC 0.061** — only 6% of residual variance is common to an arrival session, so there is little
+   to share. `sel_ar_20` is already beta-adjusted against IWM, which removes the largest common
+   component before any of this.
+2. **κ 0.142** — what remains is close to a pure per-date level shift, and a level shift is
+   orthogonal to a mean-zero regressor.
+3. Consequently adjacent clusters' **outcomes** correlate at `φ · icc · 19/20`, while their **score
+   contributions** do not measurably correlate at all.
+
+### 5.4 A by-product: the power of a one-hypothesis family
+
+The `φ = 0, κ = 0, arrival` cell is the merged preflight's exact assumption with no Holm correction,
+and it returns **92.9%** against that memo's **83.9%**. The whole difference is the bar: 0.05 instead
+of 0.05/3. That is the family-of-one power figure #1227 needs if the look narrows to ATR alone, and
+it is recorded here rather than re-derived later.
 
 ## 6. Limitations, stated before the numbers
 
@@ -132,3 +201,28 @@ Both channels are narrow. That is a prediction, not the answer; §5 is the answe
 - **The registered test is one-sided; every rejection rate here is two-sided**, at the same bar the
   merged preflight used, so the two memos are comparable. That is a level shift applied equally to
   every row and does not change which method wins.
+
+## 7. What this settles, and what it does not
+
+**Settled.** The inference method #1227 should register is the one already in use: the wild cluster
+bootstrap on arrival-session clusters. #1227's body says "session clusters alone are not
+sufficient"; measured on this panel, for this coefficient, they are. That sentence was written
+against `car_10` and against no measurement, and the registration should supersede it with the
+numbers in §5 rather than quietly ignore it.
+
+**Settled.** The merged 83.9% stands as computed. At a family of one it is 92.9%.
+
+**Settled, and against expectation.** A block at least as long as the horizon — the standard remedy,
+and the one both adversarial reviewers recommended — is unusable here. It leaves two groups and
+over-rejects at 12–14% even with no dependence present. Recording this because the reasoning that
+produced the recommendation was sound; it was the sample size that made the remedy worse than the
+problem.
+
+**Not settled here.** Whether the look runs at all, on what family, against what smallest actionable
+effect, and what the three-way ATR outcome maps to. Those belong in the registration, which this
+memo does not write.
+
+**Not settled here.** The pre-run data-integrity gates. The yfinance stale-cache census was run for
+this memo's own calibration (three logged fallback events in the whole journal, all in the burnt
+window, none of the three rows present in the panel, zero in the held-out window) but the mixed
+price-adjustment check has not been done, and the journal does not reach back before 2026-05-25.
