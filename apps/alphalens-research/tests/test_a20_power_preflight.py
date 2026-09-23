@@ -856,3 +856,64 @@ class TestTheSearchAndTheTableAreOneComputation(unittest.TestCase):
         needed, table = pre.clusters_for_power(**args, max_clusters=7)
         self.assertIsNone(needed)
         self.assertTrue(table, "a failed search must still say what it tried")
+
+
+class TestThePopulationFlag(unittest.TestCase):
+    """One arm per process, so a machine with cores can run both at once.
+
+    The two arms share no state, so this is a scheduling choice and not a
+    methodological one - which is why the default stays "both".
+    """
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.store = _Store(self.root)
+
+    def _run(self, extra: list[str]) -> dict:
+        import contextlib
+        import io
+        import json
+
+        out_json = self.root / f"out{len(extra)}.json"
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = pre.main(
+                [
+                    "--labels-dir",
+                    str(self.store.labels),
+                    "--briefs-dir",
+                    str(self.store.briefs),
+                    "--n-sims",
+                    "2",
+                    "--wcb-boot",
+                    "9",
+                    "--max-clusters",
+                    "8",
+                    "--out-json",
+                    str(out_json),
+                    *extra,
+                ]
+            )
+        self.assertEqual(code, 0)
+        return json.loads(out_json.read_text())
+
+    def test_one_named_population_runs_only_that_one(self):
+        written = self._run(["--population", pre.POPULATION_BRIEFED])
+        self.assertEqual(set(written), {pre.POPULATION_BRIEFED})
+
+    def test_the_flag_repeats(self):
+        written = self._run(
+            ["--population", pre.POPULATION_BRIEFED, "--population", pre.POPULATION_ALL]
+        )
+        self.assertEqual(set(written), {pre.POPULATION_BRIEFED, pre.POPULATION_ALL})
+
+    def test_omitting_it_runs_both(self):
+        self.assertEqual(set(self._run([])), {pre.POPULATION_BRIEFED, pre.POPULATION_ALL})
+
+    def test_an_unknown_population_is_rejected_by_the_parser(self):
+        with self.assertRaises(SystemExit):
+            self._run(["--population", "everything"])

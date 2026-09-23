@@ -729,10 +729,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20260922)
     parser.add_argument("--max-clusters", type=int, default=200)
     parser.add_argument("--out-json", type=Path, default=None)
+    # One population per process is how this gets run on a machine with cores
+    # to spare: the two arms share no state, so splitting them halves the wall
+    # time and changes nothing about the numbers.
+    parser.add_argument(
+        "--population",
+        choices=[POPULATION_BRIEFED, POPULATION_ALL],
+        action="append",
+        default=None,
+        help="repeatable; default is both",
+    )
     args = parser.parse_args(argv)
 
     out = {}
-    for population in (POPULATION_BRIEFED, POPULATION_ALL):
+    for population in args.population or [POPULATION_BRIEFED, POPULATION_ALL]:
         r = report(
             labels_dir=args.labels_dir,
             briefs_dir=args.briefs_dir,
