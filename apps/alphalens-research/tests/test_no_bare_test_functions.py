@@ -116,6 +116,11 @@ class TheLoaderReallySkipsThemTest(unittest.TestCase):
     def test_unittest_collects_the_method_and_not_the_bare_function(self) -> None:
         import types
 
+        # The compiled filename is wrapped in ANGLE BRACKETS on purpose.
+        # `coverage` skips a filename of that shape (the same convention as
+        # `<string>`); a bare name like `_bare_probe` is taken for a real path,
+        # and the report step then fails the CI job with "No source for code"
+        # AFTER the suite has already reported OK. Measured: run 35853850593.
         module = types.ModuleType("_bare_probe")
         source = (
             "import unittest\n"
@@ -125,7 +130,7 @@ class TheLoaderReallySkipsThemTest(unittest.TestCase):
             "    def test_real(self):\n"
             "        pass\n"
         )
-        exec(compile(source, "_bare_probe", "exec"), module.__dict__)
+        exec(compile(source, "<bare test function probe>", "exec"), module.__dict__)
         suite = unittest.TestLoader().loadTestsFromModule(module)
         collected = [t.id().rsplit(".", 1)[-1] for t in suite._tests[0]]  # type: ignore[attr-defined]
         self.assertEqual(collected, ["test_real"])
