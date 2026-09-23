@@ -195,8 +195,8 @@ class ReanchorOnFillPolicy:
     # keyword), so the ones this policy ignores cannot be dropped or underscored.
     def decide_placement_geometry(
         self,
-        blended: float,
-        atr: float,
+        blended: float,  # NOSONAR
+        atr: float,  # NOSONAR
         *,
         ceiling_price: float | None,  # NOSONAR
     ) -> tuple[float, float] | None:
