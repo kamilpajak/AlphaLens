@@ -190,6 +190,70 @@ def _column_changed(df: pd.DataFrame, name: str, values: list[Any]) -> bool:
     return any(not _cell_equal(c, n) for c, n in zip(current, values, strict=True))
 
 
+def _row_sector_etf(row: pd.Series) -> str | None:
+    ticker = row.get("ticker")
+    return sector_etf_for_ticker(str(ticker)) if ticker else None
+
+
+def _window_exit_stamp(matured: dt.date, wret: float | None) -> str | None:
+    return matured.isoformat() if wret is not None else None
+
+
+def _sector_pair(
+    row: pd.Series,
+    etf: str,
+    matured: dt.date,
+    *,
+    fetch: BarFetch,
+    last_closed_session: dt.date,
+    exchange: str,
+    anchor_cache: AnchorCache,
+    exit_close_of: ExitCloseOf,
+) -> tuple[float | None, float | None, bool]:
+    """``(window return, excess, reused)`` for a row with a resolved ETF and a maturity."""
+    if _row_is_settled(row, etf):
+        wret = float(row["sector_etf_window_return"])
+        excess = float(row["sector_excess_return"])
+        _seed_sector_anchor(row, etf, matured, wret, anchor_cache, exit_close_of, exchange)
+        return wret, excess, True
+    # The SPY pass's cached primitive: a row with no forward_return
+    # returns (None, None) before touching the cache; a failed anchor
+    # fetch caches None on purpose (one attempt per anchor per run,
+    # retried next run); the exit close comes from the grouped cache.
+    wret, excess = _row_excess_cached(
+        dict(row),
+        fetch=fetch,
+        last_closed_session=last_closed_session,
+        benchmark_ticker=etf,
+        exchange=exchange,
+        anchor_cache=anchor_cache,
+        exit_close_of=exit_close_of,
+    )
+    return wret, excess, False
+
+
+def _seed_sector_anchor(
+    row: pd.Series,
+    etf: str,
+    matured: dt.date,
+    wret: float,
+    anchor_cache: AnchorCache,
+    exit_close_of: ExitCloseOf,
+    exchange: str,
+) -> None:
+    brief_date = _as_date(row.get("brief_date"))
+    arrival = ladder_arrival_session(brief_date, exchange) if brief_date is not None else None
+    key = (etf, arrival) if arrival is not None else None
+    if key is not None and key not in anchor_cache:
+        # Seed the anchor a gap sibling with the same arrival needs:
+        # close / (1 + window), within a few ULP of a fresh fetch (far
+        # inside the 1e-9 settle tolerance); skipped
+        # when the close is not on record or the arithmetic is unsafe.
+        reference = _anchor_from_pair(wret, exit_close_of(etf, matured))
+        if reference is not None:
+            anchor_cache[key] = reference
+
+
 def _enrich_one_file(
     path: Path,
     *,
@@ -222,8 +286,7 @@ def _enrich_one_file(
     for _, row in df.iterrows():
         if deadline is not None and deadline.should_stop():
             return 0, 0, 0, True
-        ticker = row.get("ticker")
-        etf = sector_etf_for_ticker(str(ticker)) if ticker else None
+        etf = _row_sector_etf(row)
         matured = _as_date(row.get("matured_at"))
         if etf is None or matured is None or row_is_quarantined(row):
             # Unresolvable sector, an ongoing row, or a SPLIT_INVALIDATED
@@ -235,43 +298,26 @@ def _enrich_one_file(
             excess_col.append(None)
             exit_col.append(None)
             continue
-        brief_date = _as_date(row.get("brief_date"))
-        arrival = ladder_arrival_session(brief_date, exchange) if brief_date is not None else None
-        key = (etf, arrival) if arrival is not None else None
-        if _row_is_settled(row, etf):
-            wret = float(row["sector_etf_window_return"])
-            excess = float(row["sector_excess_return"])
+        wret, excess, reused = _sector_pair(
+            row,
+            etf,
+            matured,
+            fetch=fetch,
+            last_closed_session=last_closed_session,
+            exchange=exchange,
+            anchor_cache=anchor_cache,
+            exit_close_of=exit_close_of,
+        )
+        if reused:
             n_reused += 1
-            n_enriched += 1
-            if key is not None and key not in anchor_cache:
-                # Seed the anchor a gap sibling with the same arrival needs:
-                # close / (1 + window), within a few ULP of a fresh fetch (far
-                # inside the 1e-9 settle tolerance); skipped
-                # when the close is not on record or the arithmetic is unsafe.
-                reference = _anchor_from_pair(wret, exit_close_of(etf, matured))
-                if reference is not None:
-                    anchor_cache[key] = reference
         else:
             n_fetched += 1
-            # The SPY pass's cached primitive: a row with no forward_return
-            # returns (None, None) before touching the cache; a failed anchor
-            # fetch caches None on purpose (one attempt per anchor per run,
-            # retried next run); the exit close comes from the grouped cache.
-            wret, excess = _row_excess_cached(
-                dict(row),
-                fetch=fetch,
-                last_closed_session=last_closed_session,
-                benchmark_ticker=etf,
-                exchange=exchange,
-                anchor_cache=anchor_cache,
-                exit_close_of=exit_close_of,
-            )
-            if excess is not None:
-                n_enriched += 1
+        if excess is not None:
+            n_enriched += 1
         etf_col.append(etf)
         wret_col.append(wret)
         excess_col.append(excess)
-        exit_col.append(matured.isoformat() if wret is not None else None)
+        exit_col.append(_window_exit_stamp(matured, wret))
 
     new_columns: dict[str, list[Any]] = {
         "sector_etf_ticker": etf_col,
@@ -280,11 +326,16 @@ def _enrich_one_file(
         "sector_window_exit": exit_col,
         "outcome_benchmark_version": [OUTCOME_BENCHMARK_VERSION] * len(df),
     }
+    _write_if_changed(path, df, new_columns)
+    return n_enriched, n_reused, n_fetched, False
+
+
+def _write_if_changed(path: Path, df: pd.DataFrame, new_columns: dict[str, list[Any]]) -> None:
+    """Rewrite the parquet only when at least one column would actually change."""
     if any(_column_changed(df, name, values) for name, values in new_columns.items()):
         for name, values in new_columns.items():
             df[name] = values
         _write_atomic(path, df)
-    return n_enriched, n_reused, n_fetched, False
 
 
 def enrich_store_with_sector_excess(

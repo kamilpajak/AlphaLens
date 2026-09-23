@@ -373,6 +373,14 @@ def compute_selection_label(
             if sigma is not None:
                 values[zar_key(h)] = path[h - 1] / (sigma * math.sqrt(h))
 
+    _stamp_derived(path, statuses, values)
+    return SelectionLabel(anchor, pre, values, statuses)
+
+
+def _stamp_derived(
+    path: Sequence[float], statuses: dict[str, str], values: dict[str, float | None]
+) -> None:
+    """Fill the increments and the path mean from the horizon statuses, in place."""
     for lo, hi in INCREMENTS:
         key = increment_key(lo, hi)
         statuses[key] = statuses[ar_key(hi)]
@@ -382,7 +390,6 @@ def compute_selection_label(
     statuses[PATH_MEAN_KEY] = statuses[ar_key(PATH_MEAN_HORIZON)]
     if statuses[PATH_MEAN_KEY] == STATUS_OK:
         values[PATH_MEAN_KEY] = sum(path[:PATH_MEAN_HORIZON]) / PATH_MEAN_HORIZON
-    return SelectionLabel(anchor, pre, values, statuses)
 
 
 def _abnormal_path(
@@ -422,6 +429,41 @@ def _first_present(values: Iterable[Any]) -> Any:
     return None
 
 
+def _collect_briefed(
+    brief: pd.DataFrame,
+    themes_briefed: dict[str, set[str]],
+    overlap: dict[str, bool],
+    config: dict[str, Any],
+) -> Any:
+    """Fold the thematic brief rows into the maps, in place; return its publication stamp."""
+    b = brief[
+        _column(brief, "source", LANE_THEMATIC).fillna(LANE_THEMATIC) != SOURCE_INSIDER_CLUSTER
+    ]
+    published_at = _first_present(_column(brief, BRIEF_PUBLISHED_AT, None))
+    for rec in b.to_dict("records"):
+        ticker = str(rec.get("ticker") or "").upper()
+        if not ticker:
+            continue
+        themes_briefed.setdefault(ticker, set()).add(str(rec.get("theme") or ""))
+        overlap[ticker] = overlap.get(ticker, False) or rec.get("event_overlap") is True
+        config.setdefault(ticker, rec.get("mapper_config_version"))
+    return published_at
+
+
+def _collect_proposed(
+    shadow: pd.DataFrame, themes_proposed: dict[str, set[str]], config: dict[str, Any]
+) -> None:
+    """Fold the LLM shadow proposals into the maps, in place."""
+    s = shadow[_column(shadow, "source", None) == SHADOW_SOURCE_LLM]
+    for rec in s.to_dict("records"):
+        ticker = str(rec.get("ticker") or "").upper()
+        if not ticker:
+            continue
+        themes_proposed.setdefault(ticker, set()).add(str(rec.get("theme") or ""))
+        if config.get(ticker) is None:
+            config[ticker] = rec.get("mapper_config_version")
+
+
 def build_population(brief: pd.DataFrame | None, shadow: pd.DataFrame | None) -> pd.DataFrame:
     """One row per ticker: thematic briefed names and LLM proposals, with stage columns."""
     themes_briefed: dict[str, set[str]] = {}
@@ -430,27 +472,10 @@ def build_population(brief: pd.DataFrame | None, shadow: pd.DataFrame | None) ->
     config: dict[str, Any] = {}
     published_at = None
     if brief is not None and len(brief):
-        b = brief[
-            _column(brief, "source", LANE_THEMATIC).fillna(LANE_THEMATIC) != SOURCE_INSIDER_CLUSTER
-        ]
-        published_at = _first_present(_column(brief, BRIEF_PUBLISHED_AT, None))
-        for rec in b.to_dict("records"):
-            ticker = str(rec.get("ticker") or "").upper()
-            if not ticker:
-                continue
-            themes_briefed.setdefault(ticker, set()).add(str(rec.get("theme") or ""))
-            overlap[ticker] = overlap.get(ticker, False) or rec.get("event_overlap") is True
-            config.setdefault(ticker, rec.get("mapper_config_version"))
+        published_at = _collect_briefed(brief, themes_briefed, overlap, config)
     shadow_available = shadow is not None
     if shadow is not None and len(shadow):
-        s = shadow[_column(shadow, "source", None) == SHADOW_SOURCE_LLM]
-        for rec in s.to_dict("records"):
-            ticker = str(rec.get("ticker") or "").upper()
-            if not ticker:
-                continue
-            themes_proposed.setdefault(ticker, set()).add(str(rec.get("theme") or ""))
-            if config.get(ticker) is None:
-                config[ticker] = rec.get("mapper_config_version")
+        _collect_proposed(shadow, themes_proposed, config)
     rows = [
         {
             "ticker": ticker,
@@ -663,6 +688,98 @@ def _write_labels_atomic(rows: Sequence[Mapping[str, Any]], path: Path) -> None:
         raise
 
 
+def _read_existing_labels(out_path: Path) -> dict[str, dict[str, Any]]:
+    """The stored label rows by ticker; empty when the file is absent or unreadable."""
+    existing: dict[str, dict[str, Any]] = {}
+    if out_path.exists():
+        try:
+            for rec in pd.read_parquet(out_path).to_dict("records"):
+                existing[str(rec["ticker"])] = {str(k): _normalise(v) for k, v in rec.items()}
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "selection-label: unreadable label file %s (%s); rebuilding", out_path, exc
+            )
+    return existing
+
+
+def _date_published_before_open(
+    brief_date: dt.date,
+    population: pd.DataFrame,
+    recovered: Sequence[str] | None,
+    exchange: str,
+) -> bool | None:
+    if recovered is not None:
+        # The recovered list IS the list that existed at the open, so the date is no
+        # longer "set final after open" — that is the whole point of recovering it.
+        return True
+    published_at = _first_present(population[BRIEF_PUBLISHED_AT]) if len(population) else None
+    return published_before_open(brief_date, published_at, exchange)
+
+
+def _merge_stage_rows(
+    rows: dict[str, dict[str, Any]],
+    pop_records: Mapping[Any, Mapping[Any, Any]],
+    recovered: Sequence[str] | None,
+    brief_date: dt.date,
+) -> bool:
+    """Drop names a recovered list no longer holds and merge the stage columns, in place.
+
+    Returns whether any row changed.
+    """
+    if recovered is not None:
+        dropped = [t for t in rows if t not in set(recovered)]
+        for ticker in dropped:
+            del rows[ticker]
+        changed_by_drop = bool(dropped)
+    else:
+        changed_by_drop = False
+    changed = changed_by_drop
+    for ticker, stage in pop_records.items():
+        base = rows.get(ticker, {"brief_date": brief_date, "ticker": ticker})
+        merged = {**base, **stage}
+        if merged != base:
+            changed = True
+        rows[ticker] = merged
+    return changed
+
+
+def _stamp_todo(
+    todo: Sequence[str],
+    book: PriceBook,
+    rows: dict[str, dict[str, Any]],
+    existing: Mapping[str, Mapping[str, Any]],
+    *,
+    brief_date: dt.date,
+    published: bool | None,
+    now: dt.datetime,
+    last_closed_session: dt.date,
+    newest_session: dt.date | None,
+    counts: Counter[str],
+    exchange: str,
+) -> int:
+    """Compute and merge the label of every ``todo`` ticker, in place; return how many changed."""
+    n_stamped = 0
+    for ticker in todo:
+        result = compute_selection_label(
+            book,
+            ticker,
+            brief_date=brief_date,
+            published_before_open=published,
+            last_closed_session=last_closed_session,
+            newest_session=newest_session,
+            pre=_reusable_pre(existing.get(ticker)),
+            exchange=exchange,
+        )
+        record = _label_record(result, published, now)
+        old = existing.get(ticker)
+        if old is not None and _same_label(old, record):
+            continue  # still immature / unknown with nothing new: keep the stored row
+        rows[ticker] = {**rows[ticker], **record}
+        counts[result.statuses[ar_key(PATH_MEAN_HORIZON)]] += 1
+        n_stamped += 1
+    return n_stamped
+
+
 def _stamp_date(
     brief_date: dt.date,
     *,
@@ -685,68 +802,35 @@ def _stamp_date(
             population, recovered, shadow_available=shadow is not None
         )
     out_path = labels_dir / f"{brief_date.isoformat()}.parquet"
-    existing: dict[str, dict[str, Any]] = {}
-    if out_path.exists():
-        try:
-            for rec in pd.read_parquet(out_path).to_dict("records"):
-                existing[str(rec["ticker"])] = {str(k): _normalise(v) for k, v in rec.items()}
-        except (OSError, ValueError) as exc:
-            logger.warning(
-                "selection-label: unreadable label file %s (%s); rebuilding", out_path, exc
-            )
+    existing = _read_existing_labels(out_path)
     if population.empty and not existing:
         return False, 0
 
-    if recovered is not None:
-        # The recovered list IS the list that existed at the open, so the date is no
-        # longer "set final after open" — that is the whole point of recovering it.
-        published = True
-    else:
-        published_at = _first_present(population[BRIEF_PUBLISHED_AT]) if len(population) else None
-        published = published_before_open(brief_date, published_at, exchange)
+    published = _date_published_before_open(brief_date, population, recovered, exchange)
     pop_records = {
         r["ticker"]: {k: _normalise(v) for k, v in r.items()} for r in population.to_dict("records")
     }
     todo = [t for t in pop_records if t not in existing or _is_non_terminal(existing[t])]
 
     rows = dict(existing)
-    if recovered is not None:
-        dropped = [t for t in rows if t not in set(recovered)]
-        for ticker in dropped:
-            del rows[ticker]
-        changed_by_drop = bool(dropped)
-    else:
-        changed_by_drop = False
-    changed = changed_by_drop
+    changed = _merge_stage_rows(rows, pop_records, recovered, brief_date)
     n_stamped = 0
-    for ticker, stage in pop_records.items():
-        base = rows.get(ticker, {"brief_date": brief_date, "ticker": ticker})
-        merged = {**base, **stage}
-        if merged != base:
-            changed = True
-        rows[ticker] = merged
-
     if todo:
         book = _book_for(todo, rows, brief_date, reader, published, exchange)
-        for ticker in todo:
-            result = compute_selection_label(
-                book,
-                ticker,
-                brief_date=brief_date,
-                published_before_open=published,
-                last_closed_session=last_closed_session,
-                newest_session=newest_session,
-                pre=_reusable_pre(existing.get(ticker)),
-                exchange=exchange,
-            )
-            record = _label_record(result, published, now)
-            old = existing.get(ticker)
-            if old is not None and _same_label(old, record):
-                continue  # still immature / unknown with nothing new: keep the stored row
-            rows[ticker] = {**rows[ticker], **record}
-            counts[result.statuses[ar_key(PATH_MEAN_HORIZON)]] += 1
-            n_stamped += 1
-            changed = True
+        n_stamped = _stamp_todo(
+            todo,
+            book,
+            rows,
+            existing,
+            brief_date=brief_date,
+            published=published,
+            now=now,
+            last_closed_session=last_closed_session,
+            newest_session=newest_session,
+            counts=counts,
+            exchange=exchange,
+        )
+        changed = changed or n_stamped > 0
 
     if not changed:
         return False, 0
