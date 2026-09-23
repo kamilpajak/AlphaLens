@@ -126,6 +126,52 @@ def backfill_shadow_returns_command(
     )
 
 
+def _replay_named_dates(
+    replay_population_ladders: Any,
+    briefs_dir: Path,
+    dates: list[dt.date],
+    *,
+    deadline: Any,
+) -> list[Any]:
+    """Replay each operator-named date on its own and return the concatenated reports.
+
+    Raises whatever the replay raises, so the caller's ``reports`` stays None on a
+    failed replay (see ``_refresh_population_ladders``).
+    """
+    # One replay per named date: the monitor sweeps a contiguous window, so a
+    # single call cannot express "these dates and nothing between them". Each
+    # call also gets its own fetch budget, which keeps a date with many
+    # brand-new names from starving the next one.
+    # Accumulate into a LOCAL: ``reports`` stays None until the loop finishes, so a
+    # replay that raises leaves it None and the guard counters below stay unsent.
+    # An empty list reads as "a completed replay found nothing" and would publish
+    # all-zero dispositions over a run that never looked anything up.
+    named_reports: list[Any] = []
+    empty: list[dt.date] = []
+    for named in dates:
+        one = replay_population_ladders(
+            briefs_dir, end_date=named, lookback_days=0, deadline=deadline
+        )
+        if not one:
+            # The monitor skips a date it has no brief parquet for, and a spent
+            # deadline makes every later date come back empty too. Either way the
+            # summary alone would read 0 across 0 dates for a date the operator
+            # named, so name the ones that came back empty.
+            empty.append(named)
+            logger.warning(
+                "population-monitor: %s produced no report — no brief parquet for it?",
+                named.isoformat(),
+            )
+        named_reports.extend(one)
+    if empty:
+        typer.echo(
+            "population-monitor: no report for "
+            + ", ".join(d.isoformat() for d in empty)
+            + " (no brief for the date, or the run's deadline was already spent)."
+        )
+    return named_reports
+
+
 def _refresh_population_ladders(
     briefs_dir: Path,
     *,
@@ -178,38 +224,9 @@ def _refresh_population_ladders(
         deadline = _RunDeadline(max(total_s - reserve_s, 0.0))
         chart_deadline = _RunDeadline(total_s)
         if dates:
-            # One replay per named date: the monitor sweeps a contiguous window, so a
-            # single call cannot express "these dates and nothing between them". Each
-            # call also gets its own fetch budget, which keeps a date with many
-            # brand-new names from starving the next one.
-            # Accumulate into a LOCAL: ``reports`` stays None until the loop finishes, so a
-            # replay that raises leaves it None and the guard counters below stay unsent.
-            # An empty list reads as "a completed replay found nothing" and would publish
-            # all-zero dispositions over a run that never looked anything up.
-            named_reports: list[Any] = []
-            empty: list[dt.date] = []
-            for named in dates:
-                one = replay_population_ladders(
-                    briefs_dir, end_date=named, lookback_days=0, deadline=deadline
-                )
-                if not one:
-                    # The monitor skips a date it has no brief parquet for, and a spent
-                    # deadline makes every later date come back empty too. Either way the
-                    # summary alone would read 0 across 0 dates for a date the operator
-                    # named, so name the ones that came back empty.
-                    empty.append(named)
-                    logger.warning(
-                        "population-monitor: %s produced no report — no brief parquet for it?",
-                        named.isoformat(),
-                    )
-                named_reports.extend(one)
-            if empty:
-                typer.echo(
-                    "population-monitor: no report for "
-                    + ", ".join(d.isoformat() for d in empty)
-                    + " (no brief for the date, or the run's deadline was already spent)."
-                )
-            reports = named_reports
+            reports = _replay_named_dates(
+                replay_population_ladders, briefs_dir, dates, deadline=deadline
+            )
         else:
             reports = replay_population_ladders(
                 briefs_dir,
@@ -226,7 +243,7 @@ def _refresh_population_ladders(
         # Fail closed (#1416): no enrichment and no ingest watermark over a store
         # that must be rebuilt, so /edge keeps its last complete state and the
         # staleness alerts surface the pending rebuild.
-        logger.error("population-monitor refused the store: %s", exc)
+        logger.error("population-monitor refused the store: %s", exc)  # NOSONAR
         return
     except Exception:
         logger.exception("population-monitor refresh failed; continuing")

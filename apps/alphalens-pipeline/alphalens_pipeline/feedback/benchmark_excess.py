@@ -325,6 +325,34 @@ def _frame_exit_sessions(
     return sessions
 
 
+def _iso_or_none(session: dt.date | None) -> str | None:
+    return session.isoformat() if session is not None else None
+
+
+def _fetched_row_columns(
+    row: pd.Series,
+    *,
+    fetch: BarFetch,
+    last_closed_session: dt.date,
+    benchmark_ticker: str,
+    exchange: str,
+    anchor_cache: AnchorCache,
+    exit_close_of: ExitCloseOf,
+) -> tuple[float | None, float | None, str | None]:
+    """``(benchmark, excess, window exit stamp)`` for a row that takes the fetch branch."""
+    bench, excess = _row_excess_cached(
+        dict(row),
+        fetch=fetch,
+        last_closed_session=last_closed_session,
+        benchmark_ticker=benchmark_ticker,
+        exchange=exchange,
+        anchor_cache=anchor_cache,
+        exit_close_of=exit_close_of,
+    )
+    matured = _as_date(row.get("matured_at"))
+    return bench, excess, matured.isoformat() if bench is not None and matured is not None else None
+
+
 def _enrich_frame_rows(
     df: pd.DataFrame,
     *,
@@ -381,7 +409,7 @@ def _enrich_frame_rows(
             # Carry the window stamp: the predicate just proved it equals
             # matured_at. Dropping it here would turn every reused row into a
             # gap on the next run and refetch the store forever.
-            exit_col.append(exit_session.isoformat() if exit_session is not None else None)
+            exit_col.append(_iso_or_none(exit_session))
             n_enriched += 1
             n_reused += 1
             # Seed the anchor cache so a GAP sibling with the same arrival is
@@ -395,8 +423,8 @@ def _enrich_frame_rows(
                 exchange=exchange,
             )
             continue
-        bench, excess = _row_excess_cached(
-            dict(row),
+        bench, excess, exit_stamp = _fetched_row_columns(
+            row,
             fetch=fetch,
             last_closed_session=last_closed_session,
             benchmark_ticker=benchmark_ticker,
@@ -406,8 +434,7 @@ def _enrich_frame_rows(
         )
         bench_col.append(bench)
         excess_col.append(excess)
-        matured = _as_date(row.get("matured_at"))
-        exit_col.append(matured.isoformat() if bench is not None and matured is not None else None)
+        exit_col.append(exit_stamp)
         # n_fetched counts rows that did NOT take the reuse branch: rows that
         # entered the fetch branch (including rows short-circuited by a missing
         # forward_return before any network call) and SPLIT_INVALIDATED

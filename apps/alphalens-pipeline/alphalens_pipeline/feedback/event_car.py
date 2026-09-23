@@ -192,6 +192,85 @@ def _write_atomic(path: Path, df: pd.DataFrame) -> None:
     os.replace(tmp, path)
 
 
+def _add_missing_columns(df: pd.DataFrame) -> bool:
+    """Add every absent event-CAR column as nulls, in place; return whether any was added."""
+    changed = False
+    for col in EVENT_CAR_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+            changed = True
+    return changed
+
+
+def _sessions_for(
+    records: list[dict[Any, Any]], todo: list[int], last_closed_session: dt.date, exchange: str
+) -> set[dt.date]:
+    """Every grouped-daily session the ``todo`` rows need."""
+    sessions: set[dt.date] = set()
+    for i in todo:
+        bd = _coerce_date(records[i].get("brief_date"))
+        if bd is not None:
+            sessions.update(_sessions_needed(bd, last_closed_session, exchange))
+    return sessions
+
+
+def _car_cell_changed(old: Any, value: float | None) -> bool:
+    old_real = _is_real(old)
+    return (value is None) == old_real or (
+        value is not None and old_real and abs(float(old) - value) > 1e-12
+    )
+
+
+def _stamp_row(
+    df: pd.DataFrame, i: int, record: dict[Any, Any], c20: float | None, c40: float | None
+) -> bool:
+    """Write row ``i``'s changed CAR cells and version stamp, in place; return whether any did."""
+    changed = False
+    for col, value in (("car_20_event", c20), ("car_40_event", c40)):
+        if _car_cell_changed(record.get(col), value):
+            df.at[df.index[i], col] = value
+            changed = True
+    if record.get("event_car_version") != EVENT_CAR_VERSION:
+        df.at[df.index[i], "event_car_version"] = EVENT_CAR_VERSION
+        changed = True
+    return changed
+
+
+def _write_if_changed(path: Path, df: pd.DataFrame, changed: bool) -> None:
+    if changed:
+        _write_atomic(path, df)
+
+
+def _stamp_todo(
+    df: pd.DataFrame,
+    records: list[dict[Any, Any]],
+    todo: list[int],
+    grouped: Any,
+    *,
+    last_closed_session: dt.date,
+    exchange: str,
+) -> tuple[bool, int]:
+    """Compute and write the CAR of every ``todo`` row, in place.
+
+    Returns ``(changed, n_new_real)``: whether any cell changed, and how many rows
+    gained a real ``car_20_event`` they did not carry before.
+    """
+    changed = False
+    n_new_real = 0
+    for i in todo:
+        c20, c40 = compute_event_car_for_row(
+            records[i],
+            grouped_by_session=grouped,
+            last_closed_session=last_closed_session,
+            exchange=exchange,
+        )
+        if _stamp_row(df, i, records[i], c20, c40):
+            changed = True
+        if c20 is not None and not _is_real(records[i].get("car_20_event")):
+            n_new_real += 1
+    return changed, n_new_real
+
+
 def _enrich_one_file(
     path: Path,
     *,
@@ -205,55 +284,26 @@ def _enrich_one_file(
     except (OSError, ValueError) as exc:
         logger.warning("event-car: bad store parquet %s — %s; skipping.", path, exc)
         return 0
-    changed = False
-    for col in EVENT_CAR_COLUMNS:
-        if col not in df.columns:
-            df[col] = None
-            changed = True
+    changed = _add_missing_columns(df)
     if "brief_date" not in df.columns or "ticker" not in df.columns:
-        if changed:
-            _write_atomic(path, df)
+        _write_if_changed(path, df, changed)
         return 0
 
     records = df.to_dict("records")
     todo = [i for i, r in enumerate(records) if is_event_row(r) and not _is_real(r["car_40_event"])]
     n_real = sum(1 for r in records if is_event_row(r) and _is_real(r["car_20_event"]))
     if not todo:
-        if changed:
-            _write_atomic(path, df)
+        _write_if_changed(path, df, changed)
         return n_real
 
-    sessions: set[dt.date] = set()
-    for i in todo:
-        bd = _coerce_date(records[i].get("brief_date"))
-        if bd is not None:
-            sessions.update(_sessions_needed(bd, last_closed_session, exchange))
+    sessions = _sessions_for(records, todo, last_closed_session, exchange)
     grouped = _prefetch_grouped_daily(store, sorted(sessions), grouped_fetch, exchange)
 
-    for i in todo:
-        c20, c40 = compute_event_car_for_row(
-            records[i],
-            grouped_by_session=grouped,
-            last_closed_session=last_closed_session,
-            exchange=exchange,
-        )
-        for col, value in (("car_20_event", c20), ("car_40_event", c40)):
-            old = records[i].get(col)
-            old_real = _is_real(old)
-            if (value is None) == old_real or (
-                value is not None and old_real and abs(float(old) - value) > 1e-12  # type: ignore[arg-type]
-            ):
-                df.at[df.index[i], col] = value
-                changed = True
-        if records[i].get("event_car_version") != EVENT_CAR_VERSION:
-            df.at[df.index[i], "event_car_version"] = EVENT_CAR_VERSION
-            changed = True
-        if c20 is not None and not _is_real(records[i].get("car_20_event")):
-            n_real += 1
-
-    if changed:
-        _write_atomic(path, df)
-    return n_real
+    stamped, n_new_real = _stamp_todo(
+        df, records, todo, grouped, last_closed_session=last_closed_session, exchange=exchange
+    )
+    _write_if_changed(path, df, changed or stamped)
+    return n_real + n_new_real
 
 
 def enrich_store_with_event_car(
