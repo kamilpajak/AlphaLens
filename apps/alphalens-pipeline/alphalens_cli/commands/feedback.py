@@ -305,12 +305,20 @@ def _enrich_selection_labels(briefs_dir: Path, *, deadline: Any = None) -> None:
     """Stamp the ML selection label (label registry memo section 5.1). Never raises.
 
     Writes its own store (``~/.alphalens/selection_labels``), which nothing on the wire
-    reads, so it does not touch the population store or the ingest watermark. Disk-only
-    over the split-adjusted grouped-daily history. The echo carries status counts only:
-    a label value printed in a journal would be an unregistered look.
+    reads, so it does not touch the population store or the ingest watermark. The echo
+    carries status counts only: a label value printed in a journal would be an
+    unregistered look.
+
+    NOT disk-only since #1533: the split guard cross-sources each ticker's price scale
+    against yfinance, roughly one fetch per distinct ticker per run. A window the
+    reference cannot adjudicate is stamped ``split_unchecked`` and retried, never
+    silently passed.
     """
     try:
-        from alphalens_pipeline.feedback.selection_label import enrich_selection_labels
+        from alphalens_pipeline.feedback.selection_label import (
+            default_reference_closes,
+            enrich_selection_labels,
+        )
 
         report = enrich_selection_labels(
             briefs_dir=briefs_dir,
@@ -318,6 +326,7 @@ def _enrich_selection_labels(briefs_dir: Path, *, deadline: Any = None) -> None:
             labels_dir=_ALPHALENS_HOME / "selection_labels",
             grouped_root=_ALPHALENS_HOME / "grouped_daily_history",
             deadline=deadline,
+            reference_closes=default_reference_closes,
         )
         counts = ", ".join(f"{k}={v}" for k, v in sorted(report.status_counts_h20.items()))
         typer.echo(

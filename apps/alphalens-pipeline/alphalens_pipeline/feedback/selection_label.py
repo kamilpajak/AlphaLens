@@ -27,19 +27,26 @@ memo's measurements were taken. That store never re-fetches a session already on
 so a label stamped under one version stays consistent with it: rows whose every
 horizon is terminal are never recomputed. Labels live in their own store, are not on
 the wire and are not read by ``/edge``. Nothing here logs a label value.
+
+Because the store is never re-fetched, it is a PATCHWORK: a split after a session file
+was written leaves one unadjusted step in it. Since #1533 that step is found by
+cross-sourcing the price scale against a uniformly adjusted second vendor
+(``split_audit``) instead of by guessing from the size of a price jump. A window the
+reference cannot adjudicate is stamped ``split_unchecked`` and retried for
+``SPLIT_UNCHECKED_RETRY_DAYS``, then kept as a disclosed unchecked row - never silently
+passed and never silently dropped.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import itertools
 import logging
 import math
 import os
 import statistics
 import tempfile
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -49,13 +56,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from alphalens_pipeline.data.rs_history import DEFAULT_RS_HISTORY_ROOT
-from alphalens_pipeline.events.insider_cluster import (
-    SOURCE_INSIDER_CLUSTER,
-    SPLIT_RATIO_HI,
-    SPLIT_RATIO_LO,
-)
+from alphalens_pipeline.events.insider_cluster import SOURCE_INSIDER_CLUSTER
 from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.feedback.market_beta import BetaEstimate, estimate_beta
+from alphalens_pipeline.feedback.split_audit import (
+    MIN_COMPARABLE_SESSIONS,
+    UNANSWERED,
+    SpanAudit,
+    audit_span,
+)
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
@@ -71,7 +80,7 @@ logger = logging.getLogger(__name__)
 # Poolability key. Bump on ANY change to: the anchor rule, the horizons, the benchmark
 # ticker, BETA_WINDOW_SESSIONS, MIN_BETA_OBS, the split bounds, RESID_WINDOW_SESSIONS,
 # MIN_RESID_OBS, the population rule or the status codes and their order.
-SEL_LABEL_VERSION = "sel-label-v2"  # v2: the recovered pre-open population (#1494)
+SEL_LABEL_VERSION = "sel-label-v3"  # v3: the cross-sourced split guard (#1533)
 
 HORIZONS: tuple[int, ...] = (1, 3, 5, 10, 20, 40)
 MAX_HORIZON = max(HORIZONS)
@@ -82,6 +91,11 @@ BETA_WINDOW_SESSIONS = 250  # daily returns ending at the close before the ancho
 MIN_BETA_OBS = 120  # fewer usable return pairs -> beta = 1 (recent listings; a stated bias)
 RESID_WINDOW_SESSIONS = 60  # daily residuals behind sel_zar_h
 MIN_RESID_OBS = 30  # fewer residuals -> no scaled label
+#: Sessions read BEFORE the anchor purely so the split audit has a level to compare the
+#: window against. Without it the audited span would shrink to the outcome window on any
+#: date whose beta is reused, and the same row would read OK on one pass and unchecked on
+#: the next - the store side of the audit must not depend on that optimisation.
+AUDIT_LEAD_SESSIONS = 20
 
 DEFAULT_LABELS_DIR = Path.home() / ".alphalens" / "selection_labels"
 DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
@@ -94,11 +108,22 @@ STATUS_GROUPED_SESSION_MISSING = "grouped_session_missing"
 STATUS_NO_OPEN = "no_open"
 STATUS_BENCHMARK_MISSING = "benchmark_missing"
 STATUS_NO_CLOSE_AT_HORIZON = "no_close_at_horizon"
+#: A second price source CONFIRMED that the store's scale changes inside the window, so
+#: the return across that step is fabricated. Terminal.
 STATUS_SPLIT_GUARD = "split_guard"
+#: The second source could not adjudicate this window. Never silently OK: an unexamined
+#: step is exactly the state the guard exists to refuse.
+STATUS_SPLIT_UNCHECKED = "split_unchecked"
 # A row with any of these is recomputed on the next pass; every other status is final.
 NON_TERMINAL_STATUSES = frozenset(
     {STATUS_PUBLICATION_UNKNOWN, STATUS_IMMATURE, STATUS_GROUPED_SESSION_MISSING}
 )
+#: How long after the anchor an unchecked row keeps being retried. Past this it becomes
+#: terminal and DISCLOSES that it was never checked. Retrying forever would keep a row
+#: non-terminal and therefore label-less, and the names a price vendor stops serving are
+#: disproportionately delisted ones - a silent panel shrinkage correlated with bad
+#: outcomes, which is a worse defect than the artefact being guarded against.
+SPLIT_UNCHECKED_RETRY_DAYS = 120
 
 POPULATION_BRIEFED_OR_PROPOSED = "briefed_or_llm_proposed"
 # A date whose stored list was set after the arrival open, replaced by the list the
@@ -232,11 +257,6 @@ def _bar(book: PriceBook, session: dt.date, ticker: str) -> tuple[float | None, 
     return _positive(o), _positive(c)
 
 
-def _out_of_bounds(prev: float, cur: float) -> bool:
-    ratio = cur / prev
-    return ratio < SPLIT_RATIO_LO or ratio > SPLIT_RATIO_HI
-
-
 def pre_window_sessions(anchor: dt.date, exchange: str = DEFAULT_EXCHANGE) -> list[dt.date]:
     """The ``BETA_WINDOW_SESSIONS + 1`` closes ending at the session before ``anchor``."""
     return [n_sessions_before(anchor, k, exchange) for k in range(BETA_WINDOW_SESSIONS + 1, 0, -1)]
@@ -247,22 +267,32 @@ def window_sessions(anchor: dt.date, n: int, exchange: str = DEFAULT_EXCHANGE) -
 
 
 def estimate_pre_window(
-    book: PriceBook, ticker: str, anchor: dt.date, exchange: str = DEFAULT_EXCHANGE
+    book: PriceBook,
+    ticker: str,
+    anchor: dt.date,
+    exchange: str = DEFAULT_EXCHANGE,
+    *,
+    audit: SpanAudit,
 ) -> PreWindow:
     """Raw OLS beta vs IWM and the residual sd, from closes strictly before ``anchor``.
 
     The store is split-adjusted as of each session's fetch, so a split after a fetch
-    leaves one unadjusted step. A close whose ratio to the previous close is outside
-    the split bounds is removed (both returns touching it drop) and counted.
+    leaves one unadjusted step. ``audit`` names the sessions where a second, uniformly
+    adjusted source says that happened; each such close is removed (both returns touching
+    it drop) and counted.
+
+    Only CONFIRMED breaks are dropped here, never merely unchecked sessions. Beta is a
+    nuisance parameter and a genuine move belongs in it; dropping on suspicion is what
+    the old jump band did, and over the whole store it discarded three real moves and
+    caught no split at all.
     """
     sessions = pre_window_sessions(anchor, exchange)
     stock: list[float | None] = [_bar(book, s, ticker)[1] for s in sessions]
     market: list[float | None] = [_bar(book, s, BENCHMARK_TICKER)[1] for s in sessions]
     cleaned = list(stock)
     n_dropped = 0
-    for i in range(1, len(stock)):
-        prev, cur = stock[i - 1], stock[i]
-        if prev is not None and cur is not None and _out_of_bounds(prev, cur):
+    for i, session in enumerate(sessions):
+        if i and stock[i] is not None and session in audit.breaks:
             cleaned[i] = None
             n_dropped += 1
     beta = estimate_beta(cleaned, market, min_observations=MIN_BETA_OBS)
@@ -300,6 +330,7 @@ def _horizon_status(
     iwm_close: Sequence[float | None],
     last_closed_session: dt.date,
     newest_session: dt.date | None,
+    audit: SpanAudit,
 ) -> str:
     end = sessions[h - 1]
     if end > last_closed_session or newest_session is None or end > newest_session:
@@ -313,9 +344,14 @@ def _horizon_status(
     closes = stock_close[:h]
     if any(c is None for c in closes):
         return STATUS_NO_CLOSE_AT_HORIZON
-    path: list[float] = [stock_open, *(c for c in closes if c is not None)]
-    if any(_out_of_bounds(a, b) for a, b in itertools.pairwise(path)):
+    # The open and the close of one session come from the SAME store file, so no
+    # adjustment change can sit between them; only a step BETWEEN sessions can be an
+    # artefact, which is why the window is judged on its sessions and not on the path.
+    window = sessions[:h]
+    if audit.corrupts(window):
         return STATUS_SPLIT_GUARD
+    if audit.has_unchecked(window):
+        return STATUS_SPLIT_UNCHECKED
     return STATUS_OK
 
 
@@ -327,13 +363,19 @@ def compute_selection_label(
     published_before_open: bool | None,
     last_closed_session: dt.date,
     newest_session: dt.date | None,
+    audit: SpanAudit,
     pre: PreWindow | None = None,
     exchange: str = DEFAULT_EXCHANGE,
 ) -> SelectionLabel:
     """The label of one (brief date, ticker). ``pre`` reuses an already estimated beta.
 
+    ``audit`` is what a second, uniformly adjusted price source says about this ticker's
+    span. It has no default on purpose: an unguarded label must not be reachable by
+    forgetting an argument.
+
     Status order, first match wins: publication after the open, publication unknown,
-    immature, a session file missing, no open, benchmark missing, no close, split guard.
+    immature, a session file missing, no open, benchmark missing, no close, split guard,
+    split unchecked.
     """
     anchor = ladder_arrival_session(brief_date, exchange)
     if published_before_open is False:
@@ -342,7 +384,7 @@ def compute_selection_label(
         return _uniform(STATUS_PUBLICATION_UNKNOWN, anchor, None)
     ticker = ticker.upper()
     if pre is None:
-        pre = estimate_pre_window(book, ticker, anchor, exchange)
+        pre = estimate_pre_window(book, ticker, anchor, exchange, audit=audit)
 
     sessions = window_sessions(anchor, MAX_HORIZON, exchange)
     file_present = [book.get(s) is not None for s in sessions]
@@ -365,6 +407,7 @@ def compute_selection_label(
             iwm_close=iwm_close,
             last_closed_session=last_closed_session,
             newest_session=newest_session,
+            audit=audit,
         )
         statuses[ar_key(h)] = statuses[zar_key(h)] = status
         if status == STATUS_OK:
@@ -605,12 +648,21 @@ def _normalise(value: Any) -> Any:
     return value
 
 
-def _is_non_terminal(row: Mapping[str, Any]) -> bool:
+def _is_non_terminal(row: Mapping[str, Any], now: dt.datetime) -> bool:
     if row.get("sel_label_version") != SEL_LABEL_VERSION:
         return True
-    return any(row.get(status_key(h)) in NON_TERMINAL_STATUSES for h in HORIZONS) or any(
-        row.get(status_key(h)) is None for h in HORIZONS
-    )
+    statuses = [row.get(status_key(h)) for h in HORIZONS]
+    if any(s is None or s in NON_TERMINAL_STATUSES for s in statuses):
+        return True
+    if STATUS_SPLIT_UNCHECKED not in statuses:
+        return False
+    # Retried, but not forever - see SPLIT_UNCHECKED_RETRY_DAYS. The anchor is the clock
+    # because it is already on every row; a row without one has nothing to age against
+    # and is retried.
+    anchor = _normalise(row.get("anchor_session"))
+    if not isinstance(anchor, dt.date):
+        return True
+    return now.date() <= anchor + dt.timedelta(days=SPLIT_UNCHECKED_RETRY_DAYS)
 
 
 def _reusable_pre(row: Mapping[str, Any] | None) -> PreWindow | None:
@@ -743,6 +795,75 @@ def _merge_stage_rows(
     return changed
 
 
+#: ``(ticker, start, end) -> `` split-adjusted closes over ``[start, end)``, or ``None``
+#: on a permanent fetch failure. Mirrors ``corporate_actions.AdjustedClosesFetch``.
+ReferenceClosesFetch = Callable[[str, dt.date, dt.date], "pd.Series | None"]
+
+
+def default_reference_closes(ticker: str, start: dt.date, end: dt.date) -> pd.Series | None:
+    """Production reference for the split audit: the canonical yfinance client (lazy)."""
+    from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
+
+    return get_default_yfinance_client().split_adjusted_daily_closes(ticker, start=start, end=end)
+
+
+class _ReferenceCloses:
+    """One reference series per ticker per run, widened to cover every span asked of it.
+
+    Brief dates are stamped newest-first and their spans overlap heavily, so a memo keyed
+    on ``(ticker, span)`` would miss on nearly every date. Holding one series per ticker
+    and refetching only when a request falls outside it turns roughly 1500 (date, ticker)
+    pairs into about one fetch per distinct ticker.
+
+    A failed fetch is cached as ``None`` for the rest of the run: the rows become
+    unchecked, which is non-terminal, so the next pass retries rather than this one
+    hammering a vendor that just said no.
+    """
+
+    def __init__(self, fetch: ReferenceClosesFetch) -> None:
+        self._fetch = fetch
+        self._span: dict[str, tuple[dt.date, dt.date]] = {}
+        self._series: dict[str, pd.Series | None] = {}
+
+    def closes(self, ticker: str, start: dt.date, end: dt.date) -> pd.Series | None:
+        upper = ticker.upper()
+        held = self._span.get(upper)
+        if held is not None and held[0] <= start and end <= held[1]:
+            return self._series[upper]
+        lo = min(start, held[0]) if held else start
+        hi = max(end, held[1]) if held else end
+        try:
+            # [start, end) fetch contract, so +1 day to include the last session itself.
+            series = self._fetch(upper, lo, hi + dt.timedelta(days=1))
+        except Exception as exc:  # a broken fetch is "could not check", never a crash
+            logger.warning("selection-label: reference closes failed for %s - %s", upper, exc)
+            series = None
+        self._span[upper] = (lo, hi)
+        self._series[upper] = series
+        return series
+
+
+def _audit_for(book: PriceBook, ticker: str, references: _ReferenceCloses) -> SpanAudit:
+    """What a second, uniformly adjusted source says about this ticker over the book.
+
+    The store side is taken from the book the label itself reads, so the audit can never
+    judge a session the label did not use. A book that carries only the outcome window
+    (the case where a stored beta is reused) therefore gives the audit less room to
+    confirm persistence near its edges; a break there reports UNCHECKED rather than
+    GUARD, which is the safe direction - both keep the value out of the label.
+    """
+    closes: dict[dt.date, float] = {}
+    for session in book:
+        close = _bar(book, session, ticker)[1]
+        if close is not None:
+            closes[session] = close
+    if len(closes) < MIN_COMPARABLE_SESSIONS:
+        return UNANSWERED
+    return audit_span(
+        store_closes=closes, reference=references.closes(ticker, min(closes), max(closes))
+    )
+
+
 def _stamp_todo(
     todo: Sequence[str],
     book: PriceBook,
@@ -756,6 +877,7 @@ def _stamp_todo(
     newest_session: dt.date | None,
     counts: Counter[str],
     exchange: str,
+    audits: Callable[[str], SpanAudit],
 ) -> int:
     """Compute and merge the label of every ``todo`` ticker, in place; return how many changed."""
     n_stamped = 0
@@ -767,6 +889,7 @@ def _stamp_todo(
             published_before_open=published,
             last_closed_session=last_closed_session,
             newest_session=newest_session,
+            audit=audits(ticker),
             pre=_reusable_pre(existing.get(ticker)),
             exchange=exchange,
         )
@@ -792,6 +915,7 @@ def _stamp_date(
     newest_session: dt.date | None,
     counts: Counter[str],
     exchange: str,
+    references: _ReferenceCloses,
 ) -> tuple[bool, int]:
     brief = pd.read_parquet(brief_path) if brief_path is not None else None
     shadow = pd.read_parquet(shadow_path) if shadow_path is not None else None
@@ -810,7 +934,7 @@ def _stamp_date(
     pop_records = {
         r["ticker"]: {k: _normalise(v) for k, v in r.items()} for r in population.to_dict("records")
     }
-    todo = [t for t in pop_records if t not in existing or _is_non_terminal(existing[t])]
+    todo = [t for t in pop_records if t not in existing or _is_non_terminal(existing[t], now)]
 
     rows = dict(existing)
     changed = _merge_stage_rows(rows, pop_records, recovered, brief_date)
@@ -822,6 +946,7 @@ def _stamp_date(
             book,
             rows,
             existing,
+            audits=lambda t: _audit_for(book, t, references),
             brief_date=brief_date,
             published=published,
             now=now,
@@ -857,10 +982,11 @@ def _book_for(
         return {}
     anchor = ladder_arrival_session(brief_date, exchange)
     tickers = {t.upper() for t in todo} | {BENCHMARK_TICKER}
-    sessions = window_sessions(anchor, MAX_HORIZON, exchange)
     if any(_reusable_pre(rows.get(t)) is None for t in todo):
-        sessions = pre_window_sessions(anchor, exchange) + sessions
-    return reader.book(sessions, tickers)
+        before = pre_window_sessions(anchor, exchange)
+    else:
+        before = [n_sessions_before(anchor, k, exchange) for k in range(AUDIT_LEAD_SESSIONS, 0, -1)]
+    return reader.book(before + window_sessions(anchor, MAX_HORIZON, exchange), tickers)
 
 
 def enrich_selection_labels(
@@ -872,6 +998,7 @@ def enrich_selection_labels(
     now: dt.datetime | None = None,
     exchange: str = DEFAULT_EXCHANGE,
     deadline: Any = None,
+    reference_closes: ReferenceClosesFetch,
 ) -> SelectionLabelReport:
     """Stamp every brief date newest-first. Never raises for one bad date.
 
@@ -884,6 +1011,7 @@ def enrich_selection_labels(
     grouped = _dated_files(Path(grouped_root))
     newest_session = max(grouped) if grouped else None
     reader = _SessionReader(Path(grouped_root))
+    references = _ReferenceCloses(reference_closes)
     report = SelectionLabelReport()
     counts: Counter[str] = Counter()
     for brief_date in sorted(set(briefs) | set(shadows), reverse=True):
@@ -901,6 +1029,7 @@ def enrich_selection_labels(
                 newest_session=newest_session,
                 counts=counts,
                 exchange=exchange,
+                references=references,
             )
         except Exception:  # one bad date must not stop the pass
             logger.exception("selection-label: failed on %s; continuing", brief_date)
@@ -917,11 +1046,16 @@ __all__ = [
     "NON_TERMINAL_STATUSES",
     "SEL_LABEL_COLUMNS",
     "SEL_LABEL_VERSION",
+    "SPLIT_UNCHECKED_RETRY_DAYS",
+    "STATUS_SPLIT_GUARD",
+    "STATUS_SPLIT_UNCHECKED",
     "PreWindow",
+    "ReferenceClosesFetch",
     "SelectionLabel",
     "SelectionLabelReport",
     "build_population",
     "compute_selection_label",
+    "default_reference_closes",
     "enrich_selection_labels",
     "estimate_pre_window",
 ]
