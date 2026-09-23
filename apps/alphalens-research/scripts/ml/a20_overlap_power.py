@@ -116,6 +116,10 @@ METHODS = ("arrival", "block5", "block10", "block20")
 #: Pre-specified here rather than chosen once the numbers are on screen.
 SIZE_TOLERANCE = 0.075
 
+#: A mean absolute residual at or below this counts as no residual spread at
+#: all. The outcome is standardised before the fit, so its own scale is 1.
+NO_SPREAD_LEFT = 1e-9
+
 
 def variance_split(
     *, var_resid: float, icc: float, shared_fraction: float, horizon: int
@@ -260,7 +264,14 @@ def estimate_signal_loading(panel: Any, *, signal: str = "atr") -> float:
         np.column_stack([np.ones(len(z_signal)), z_signal]), resid, rcond=None
     )
     intercept, slope = float(fit[0]), float(fit[1])
-    if intercept <= 0:
+    if intercept <= NO_SPREAD_LEFT:
+        # The intercept here is the MEAN absolute residual (the signal is
+        # standardised, so its mean is zero), which cannot be negative. It
+        # reaches zero only when the first regression fit the panel exactly -
+        # in floating point, "exactly" means residuals near 1e-17, and a bare
+        # `<= 0` test lets those through and returns a ratio of two numerical
+        # zeros as if it were a loading. The outcome is standardised, so a mean
+        # absolute residual this small is no spread at all, not a small one.
         return 0.0
     return max(0.0, slope / intercept)
 

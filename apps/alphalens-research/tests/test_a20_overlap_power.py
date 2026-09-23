@@ -17,12 +17,17 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re
 import unittest
 
 import numpy as np
 from scripts.ml import a20_overlap_power as ov
 from scripts.ml import a20_power
 from scripts.ml.a20_power import _z
+
+# The on-disk fixture pair is the merged preflight's, reused rather than copied:
+# both drivers read the same two stores, and a second copy would drift.
+from tests.test_a20_power_preflight import _Store
 
 
 def _episode_pairs(
@@ -119,22 +124,6 @@ class TestTheOverlapIsActuallySimulated(unittest.TestCase):
 
 class TestTheCalibrationSurvivesTheChange(unittest.TestCase):
     """Only the cross-cluster structure may move; the marginals must not."""
-
-    def _panel(self, shared_fraction: float, seed: int = 11):
-        rng = np.random.default_rng(seed)
-        sizes = [5] * 40
-        y, _x, clusters = ov.simulate_overlapping_panel(
-            burnt_signals=np.zeros((64, 1)),
-            arrival_offsets=list(range(40)),
-            cluster_sizes=sizes,
-            effects={"atr": 0.0},
-            sd_y=2.0,
-            icc=0.4,
-            shared_fraction=shared_fraction,
-            horizon=20,
-            rng=rng,
-        )
-        return y, clusters
 
     def _population_spread(self, *, shared_fraction, signal_loading, n_panels=20000):
         """Spread of ONE episode taken from each of many independent panels.
@@ -294,6 +283,61 @@ class TestBlockClusterLabels(unittest.TestCase):
         labels = ov.block_clusters(arrival_offsets=[0, 9], cluster_sizes=[1, 1], block_sessions=5)
         self.assertNotEqual(labels[0], labels[1])
 
+    def test_a_block_shorter_than_one_session_is_refused(self):
+        with self.assertRaises(ValueError):
+            ov.block_clusters(arrival_offsets=[0], cluster_sizes=[1], block_sessions=0)
+
+
+class TestTheFittedSignalLoading(unittest.TestCase):
+    """The one channel through which an overlapping window can bias the slope."""
+
+    @staticmethod
+    def _panel(outcome, atr, ma50, press):
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                ov.OUTCOME: outcome,
+                ov.SIGNALS["atr"]: atr,
+                ov.SIGNALS["ma50"]: ma50,
+                ov.SIGNALS["press"]: press,
+            }
+        )
+
+    def test_a_panel_with_no_spread_left_to_explain_loads_at_zero(self):
+        # Four rows and four parameters fit the panel, so the residuals are
+        # numerical zeros (about 1e-17) rather than true zeros. An `intercept
+        # <= 0` guard lets those through and returns a ratio of two of them as
+        # if it were a loading - this panel measured 0.0046 that way before the
+        # guard was made scale-aware.
+        panel = self._panel(
+            [0.1, -0.2, 0.3, -0.4],
+            [1.0, 2.0, 3.0, 5.0],
+            [0.5, -1.0, 2.0, 0.25],
+            [1.0, 4.0, 2.0, 3.0],
+        )
+        self.assertEqual(ov.estimate_signal_loading(panel, signal="atr"), 0.0)
+
+    def test_a_negative_loading_is_clamped_rather_than_simulated(self):
+        # High-signal names reacting LESS to a common move is not a direction
+        # worth simulating, and letting it through would make the overlap look
+        # harmless for the wrong reason.
+        rng = np.random.default_rng(11)
+        atr = rng.normal(size=200)
+        # Residual spread SHRINKS with the signal, the opposite of the loading.
+        noise = rng.normal(size=200) * np.exp(-0.6 * _z(atr))
+        panel = self._panel(noise, atr, rng.normal(size=200), rng.normal(size=200))
+        self.assertEqual(ov.estimate_signal_loading(panel, signal="atr"), 0.0)
+
+    def test_a_signal_that_widens_the_residual_loads_above_zero(self):
+        # The positive control: without it the two cases above would pass on an
+        # estimator that always returns zero.
+        rng = np.random.default_rng(12)
+        atr = rng.normal(size=400)
+        noise = rng.normal(size=400) * np.exp(0.6 * _z(atr))
+        panel = self._panel(noise, atr, rng.normal(size=400), rng.normal(size=400))
+        self.assertGreater(ov.estimate_signal_loading(panel, signal="atr"), 0.0)
+
 
 class TestVarianceSplit(unittest.TestCase):
     def test_the_pieces_add_back_to_the_residual_variance(self):
@@ -312,6 +356,16 @@ class TestVarianceSplit(unittest.TestCase):
     def test_a_sharing_fraction_outside_the_unit_interval_is_refused(self):
         with self.assertRaises(ValueError):
             ov.variance_split(var_resid=1.0, icc=0.2, shared_fraction=1.5, horizon=20)
+
+    def test_a_horizon_shorter_than_one_session_is_refused(self):
+        # A zero horizon would divide the shared variance by zero and return
+        # infinities rather than refusing, so the guard has to come first.
+        with self.assertRaises(ValueError):
+            ov.variance_split(var_resid=1.0, icc=0.2, shared_fraction=0.5, horizon=0)
+
+    def test_an_icc_outside_the_unit_interval_is_refused(self):
+        with self.assertRaises(ValueError):
+            ov.variance_split(var_resid=1.0, icc=1.4, shared_fraction=0.5, horizon=20)
 
 
 class TestTheScoreDiagnostic(unittest.TestCase):
@@ -505,6 +559,134 @@ class TestArrivalOffsets(unittest.TestCase):
         # days would inflate every gap and destroy sharing that really exists.
         friday_to_monday = ov.arrival_offsets_from_dates(["2026-07-10", "2026-07-13"])
         self.assertEqual(friday_to_monday[1], 1)
+
+
+class TestTheWholeDriverRuns(unittest.TestCase):
+    """End to end over the fixture stores, at simulation counts a test can afford.
+
+    The numbers are meaningless at four simulations; what this pins is that the
+    driver assembles a complete answer from disk, that the two reads of the
+    held-out side agree with each other, and that the size-before-power rule is
+    applied rather than merely documented.
+
+    The held-out arm is 45 sessions rather than the fixture default, because
+    ``block20`` needs more than one block to exist on the calendar. At the
+    default 12 sessions every episode lands in one group and the coarsest
+    method would never be exercised at all.
+    """
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.store = _Store(self.root, n_held=45)
+
+    def _report(self, **overrides):
+        args = {
+            "labels_dir": self.store.labels,
+            "briefs_dir": self.store.briefs,
+            "population": ov.POPULATION_BRIEFED,
+            "n_sims": 4,
+            "wcb_boot": 9,
+            "seed": 99,
+        }
+        return ov.report(**{**args, **overrides})
+
+    def test_the_report_carries_every_field_the_memo_quotes(self):
+        r = self._report()
+        for key in (
+            "population",
+            "burnt_episodes",
+            "held_out_clusters",
+            "held_out_episodes",
+            "calendar_span_sessions",
+            "sd_y",
+            "icc",
+            "signal_loading",
+            "fitted_arm_omitted_as_duplicate",
+            "size_tolerance",
+            "rows",
+        ):
+            self.assertIn(key, r)
+        self.assertGreater(r["burnt_episodes"], 0)
+        self.assertGreater(r["held_out_clusters"], 0)
+        self.assertGreaterEqual(r["calendar_span_sessions"], r["held_out_clusters"])
+
+    def test_the_grid_is_the_pre_specified_one(self):
+        r = self._report()
+        arms = 1 if r["fitted_arm_omitted_as_duplicate"] else 2
+        self.assertEqual(len(r["rows"]), len(ov.SHARED_FRACTION_GRID) * arms * len(ov.METHODS))
+        self.assertEqual(
+            {row["shared_fraction"] for row in r["rows"]}, set(ov.SHARED_FRACTION_GRID)
+        )
+        self.assertEqual({row["method"] for row in r["rows"]}, set(ov.METHODS))
+
+    def test_a_method_that_misses_the_size_bar_gets_no_power_figure(self):
+        # The two-stage rule is the point of the module, so it is asserted on
+        # the driver's own output rather than trusted to the docstring: power
+        # is present exactly when size held, and absent exactly when it did not.
+        r = self._report()
+        for row in r["rows"]:
+            self.assertEqual(row["size_held"], row["size"] <= r["size_tolerance"])
+            self.assertEqual(row["power"] is None, not row["size_held"])
+
+    def test_the_fitted_arm_is_omitted_only_when_it_would_repeat_the_control(self):
+        r = self._report()
+        loadings = {row["loading"] for row in r["rows"]}
+        if r["fitted_arm_omitted_as_duplicate"]:
+            self.assertEqual(r["signal_loading"], 0.0)
+            self.assertEqual(loadings, {"kappa=0"})
+        else:
+            self.assertGreater(r["signal_loading"], 0.0)
+            self.assertEqual(loadings, {"kappa=0", "kappa=fitted"})
+
+    def test_two_reads_that_disagree_about_the_panel_are_refused(self):
+        # The calendar comes from the anchor sessions and the cluster sizes from
+        # the structure read. They are two passes over the same rows, so a
+        # mismatch means one of them changed its mind about the population -
+        # which must stop the run, not silently truncate one of them.
+        from unittest import mock
+
+        with mock.patch.object(ov, "held_out_structure", return_value=[4]):
+            with self.assertRaises(ValueError) as caught:
+                self._report()
+        self.assertIn("disagree", str(caught.exception))
+
+    def test_main_prints_the_grid_and_writes_its_json(self):
+        import json
+
+        out_json = self.root / "out.json"
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = ov.main(
+                [
+                    "--labels-dir",
+                    str(self.store.labels),
+                    "--briefs-dir",
+                    str(self.store.briefs),
+                    "--n-sims",
+                    "4",
+                    "--wcb-boot",
+                    "9",
+                    "--out-json",
+                    str(out_json),
+                ]
+            )
+        self.assertEqual(code, 0)
+        printed = buffer.getvalue()
+        for method in ov.METHODS:
+            self.assertIn(method, printed)
+        self.assertIn("size bar", printed)
+
+        written = json.loads(out_json.read_text())
+        self.assertEqual(written["population"], ov.POPULATION_BRIEFED)
+        # Every row of the answer must reach the screen, not only the file: the
+        # table is what a reader of a two-hour run actually sees.
+        table = [line for line in printed.splitlines() if re.match(r"^ *\d\.\d{2} +kappa=", line)]
+        self.assertEqual(len(table), len(written["rows"]))
 
 
 if __name__ == "__main__":
