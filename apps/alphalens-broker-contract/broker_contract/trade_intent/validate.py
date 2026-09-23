@@ -61,6 +61,8 @@ from typing import Any, Final
 from broker_contract.failure import ContractError, Failure
 from broker_contract.sizing import planned_blended_entry_from_spec
 from broker_contract.trade_intent.schema import (
+    ExitGeometrySpec,
+    InitialLevels,
     ReanchorOnFill,
     TradeIntent,
     TradeSpec,
@@ -381,6 +383,138 @@ def _declared_numeric_fields(exit_spec: Any) -> Iterator[tuple[str, float, dict[
             yield "exit.reaction_plan.atr", primitive.atr, where
 
 
+def _initial_level_violations(levels: InitialLevels) -> list[Violation]:
+    """The PLACED pair: both prices positive, and the take-profit above the stop."""
+    violations: list[Violation] = []
+    non_positive = [
+        Violation(
+            reason="initial_level_non_positive",
+            message=f"exit.initial_levels.{name} {value} must be > 0",
+            where={},
+        )
+        for name, value in (("stop", levels.stop), ("tp", levels.tp))
+        if value <= 0
+    ]
+    violations.extend(non_positive)
+    # Ordering is only meaningful once both are real prices: a negative stop
+    # sits "below" every take-profit, so this rule would pass it and the
+    # reader would be told the wrong thing about the document.
+    if not non_positive and levels.tp <= levels.stop:
+        violations.append(
+            Violation(
+                reason="take_profit_not_above_stop",
+                message=(
+                    f"exit.initial_levels.tp {levels.tp} must sit above .stop "
+                    f"{levels.stop} — since #1414 these are PLACED, and an inverted "
+                    "pair journals a take-profit below its own stop"
+                ),
+                where={},
+            )
+        )
+    return violations
+
+
+def _reaction_shape_violations(exit_spec: ExitGeometrySpec) -> list[Violation]:
+    """At most one stop-management primitive, and only kinds the daemon honours."""
+    violations: list[Violation] = []
+    managing = [p for p in exit_spec.reaction_plan if isinstance(p, ReanchorOnFill | TrailingStop)]
+    unsupported = [
+        index
+        for index, p in enumerate(exit_spec.reaction_plan)
+        if not isinstance(p, ReanchorOnFill | TrailingStop)
+    ]
+    if len(managing) > 1:
+        violations.append(
+            Violation(
+                reason="reaction_plan_ambiguous",
+                message=(
+                    f"{len(managing)} stop-management primitives declared — "
+                    "the daemon manages one stop, so exactly one may be declared"
+                ),
+                where={},
+            )
+        )
+    violations.extend(
+        Violation(
+            reason="reaction_kind_unsupported",
+            message=(
+                f"reaction primitive {exit_spec.reaction_plan[index].kind!r} cannot be "
+                "honoured — its levels would arrive through a call that does not exist"
+            ),
+            where={"reaction_index": index},
+        )
+        for index in unsupported
+    )
+    return violations
+
+
+def _trailing_stop_violations(primitive: TrailingStop, where: dict[str, Any]) -> list[Violation]:
+    """A ``TrailingStop`` must arm after entry and give back a fraction in (0, 1]."""
+    violations: list[Violation] = []
+    if primitive.arm_trigger_r <= 0:
+        violations.append(
+            Violation(
+                reason="arm_trigger_r_non_positive",
+                message=(
+                    f"arm_trigger_r {primitive.arm_trigger_r} must be > 0 — "
+                    "a trail armed at or before entry is not a trail"
+                ),
+                where=where,
+            )
+        )
+    if not 0 < primitive.trail_frac <= 1:
+        violations.append(
+            Violation(
+                reason="trail_frac_out_of_range",
+                message=(
+                    f"trail_frac {primitive.trail_frac} must be in (0, 1] — "
+                    "it is the fraction of the excursion the stop gives back"
+                ),
+                where=where,
+            )
+        )
+    return violations
+
+
+def _reanchor_violations(primitive: ReanchorOnFill, where: dict[str, Any]) -> list[Violation]:
+    """A ``ReanchorOnFill`` needs a positive distance and multiplier, and no ceiling."""
+    violations: list[Violation] = []
+    if primitive.atr <= 0:
+        violations.append(
+            Violation(
+                reason="atr_non_positive",
+                message=(
+                    f"atr {primitive.atr} must be > 0 — it is the distance the "
+                    "re-anchor multiplies, and the daemon refuses a degenerate one "
+                    "silently"
+                ),
+                where=where,
+            )
+        )
+    if primitive.k_atr <= 0:
+        violations.append(
+            Violation(
+                reason="k_atr_non_positive",
+                message=f"k_atr {primitive.k_atr} must be > 0",
+                where=where,
+            )
+        )
+    # LEGACY(reanchor_ceiling_price) — see broker_contract.trade_intent.legacy
+    if primitive.ceiling_price is not None:
+        violations.append(
+            Violation(
+                reason="ceiling_price_unsupported",
+                message=(
+                    "ceiling_price caps the take-profit, not the stop, so it is a "
+                    "placement instruction this contract does not yet carry — "
+                    "omit it rather than have it silently discarded"
+                ),
+                where=where,
+            )
+        )
+    return violations
+
+
 def _exit_violations(intent: TradeIntent) -> list[Violation]:
     """The exit DECLARATION rules (#1236).
 
@@ -412,119 +546,15 @@ def _exit_violations(intent: TradeIntent) -> list[Violation]:
 
     violations: list[Violation] = []
     if levels is not None:
-        non_positive = [
-            Violation(
-                reason="initial_level_non_positive",
-                message=f"exit.initial_levels.{name} {value} must be > 0",
-                where={},
-            )
-            for name, value in (("stop", levels.stop), ("tp", levels.tp))
-            if value <= 0
-        ]
-        violations.extend(non_positive)
-        # Ordering is only meaningful once both are real prices: a negative stop
-        # sits "below" every take-profit, so this rule would pass it and the
-        # reader would be told the wrong thing about the document.
-        if not non_positive and levels.tp <= levels.stop:
-            violations.append(
-                Violation(
-                    reason="take_profit_not_above_stop",
-                    message=(
-                        f"exit.initial_levels.tp {levels.tp} must sit above .stop "
-                        f"{levels.stop} — since #1414 these are PLACED, and an inverted "
-                        "pair journals a take-profit below its own stop"
-                    ),
-                    where={},
-                )
-            )
-    managing = [p for p in exit_spec.reaction_plan if isinstance(p, ReanchorOnFill | TrailingStop)]
-    unsupported = [
-        index
-        for index, p in enumerate(exit_spec.reaction_plan)
-        if not isinstance(p, ReanchorOnFill | TrailingStop)
-    ]
-    if len(managing) > 1:
-        violations.append(
-            Violation(
-                reason="reaction_plan_ambiguous",
-                message=(
-                    f"{len(managing)} stop-management primitives declared — "
-                    "the daemon manages one stop, so exactly one may be declared"
-                ),
-                where={},
-            )
-        )
-    violations.extend(
-        Violation(
-            reason="reaction_kind_unsupported",
-            message=(
-                f"reaction primitive {exit_spec.reaction_plan[index].kind!r} cannot be "
-                "honoured — its levels would arrive through a call that does not exist"
-            ),
-            where={"reaction_index": index},
-        )
-        for index in unsupported
-    )
+        violations.extend(_initial_level_violations(levels))
+    violations.extend(_reaction_shape_violations(exit_spec))
 
     for index, primitive in enumerate(exit_spec.reaction_plan):
         where = {"reaction_index": index}
         if isinstance(primitive, TrailingStop):
-            if primitive.arm_trigger_r <= 0:
-                violations.append(
-                    Violation(
-                        reason="arm_trigger_r_non_positive",
-                        message=(
-                            f"arm_trigger_r {primitive.arm_trigger_r} must be > 0 — "
-                            "a trail armed at or before entry is not a trail"
-                        ),
-                        where=where,
-                    )
-                )
-            if not 0 < primitive.trail_frac <= 1:
-                violations.append(
-                    Violation(
-                        reason="trail_frac_out_of_range",
-                        message=(
-                            f"trail_frac {primitive.trail_frac} must be in (0, 1] — "
-                            "it is the fraction of the excursion the stop gives back"
-                        ),
-                        where=where,
-                    )
-                )
+            violations.extend(_trailing_stop_violations(primitive, where))
         elif isinstance(primitive, ReanchorOnFill):
-            if primitive.atr <= 0:
-                violations.append(
-                    Violation(
-                        reason="atr_non_positive",
-                        message=(
-                            f"atr {primitive.atr} must be > 0 — it is the distance the "
-                            "re-anchor multiplies, and the daemon refuses a degenerate one "
-                            "silently"
-                        ),
-                        where=where,
-                    )
-                )
-            if primitive.k_atr <= 0:
-                violations.append(
-                    Violation(
-                        reason="k_atr_non_positive",
-                        message=f"k_atr {primitive.k_atr} must be > 0",
-                        where=where,
-                    )
-                )
-            # LEGACY(reanchor_ceiling_price) — see broker_contract.trade_intent.legacy
-            if primitive.ceiling_price is not None:
-                violations.append(
-                    Violation(
-                        reason="ceiling_price_unsupported",
-                        message=(
-                            "ceiling_price caps the take-profit, not the stop, so it is a "
-                            "placement instruction this contract does not yet carry — "
-                            "omit it rather than have it silently discarded"
-                        ),
-                        where=where,
-                    )
-                )
+            violations.extend(_reanchor_violations(primitive, where))
     return violations
 
 
