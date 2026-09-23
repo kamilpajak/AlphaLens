@@ -107,3 +107,56 @@ class TestTheAmendmentRecordsTheCohortCaveat(unittest.TestCase):
             "the amendment must carry a subsection about the per-row cohort: the two "
             "anchors share the no-fill gate but not the constructibility gates",
         )
+
+
+class TestTheLedgerTablesAreNotShifted(unittest.TestCase):
+    """Every row of a ledger table must have the column count of its header.
+
+    A row with one cell too few does not render as broken - it renders with
+    every value after the gap sitting in the WRONG column, so the horizon ends
+    up under "Panel version" and the notes under "Cluster looks". The
+    2026-09-21 amendment shipped exactly that way and no test could see it.
+    """
+
+    @staticmethod
+    def _tables(text: str) -> list[tuple[int, list[str]]]:
+        """Each markdown table as (header line number, list of row lines)."""
+        lines = text.splitlines()
+        tables: list[tuple[int, list[str]]] = []
+        i = 0
+        while i < len(lines) - 1:
+            is_header = lines[i].startswith("|") and set(
+                lines[i + 1].replace("|", "").replace(" ", "")
+            ) <= {"-", ":"}
+            if is_header and lines[i + 1].startswith("|"):
+                rows = []
+                j = i + 2
+                while j < len(lines) and lines[j].startswith("|"):
+                    rows.append(lines[j])
+                    j += 1
+                tables.append((i + 1, [lines[i], *rows]))
+                i = j
+                continue
+            i += 1
+        return tables
+
+    def test_every_row_has_its_headers_column_count(self):
+        tables = self._tables(_LEDGER.read_text(encoding="utf-8"))
+        self.assertTrue(tables, "positive control: the ledger has markdown tables")
+        for start, rows in tables:
+            expected = rows[0].count("|") - 1
+            for offset, row in enumerate(rows[1:], start=2):
+                with self.subTest(line=start + offset - 1):
+                    self.assertEqual(
+                        row.count("|") - 1,
+                        expected,
+                        f"ledger line {start + offset - 1} has "
+                        f"{row.count('|') - 1} cells, header has {expected}: {row[:80]}",
+                    )
+
+    def test_the_shift_detector_can_refute(self):
+        shifted = "| a | b | c |\n|---|---|---|\n| 1 | 2 |\n"
+        tables = self._tables(shifted)
+        self.assertEqual(len(tables), 1)
+        header, row = tables[0][1]
+        self.assertNotEqual(row.count("|") - 1, header.count("|") - 1)
