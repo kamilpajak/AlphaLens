@@ -675,7 +675,7 @@ class TestTheWholeDriverRuns(unittest.TestCase):
     def test_the_search_gives_up_rather_than_running_forever(self):
         # An effect of zero can never reach 80% power, so the ceiling is the
         # only thing that ends the search.
-        got = pre.clusters_for_power(
+        got, _table = pre.clusters_for_power(
             burnt_signals=np.random.default_rng(2).normal(size=(40, 3)),
             observed_sizes=[4, 4, 4],
             effects={"atr": 0.0, "ma50": 0.0, "press": 0.0},
@@ -808,3 +808,51 @@ class TestABrokenJoinIsLoud(unittest.TestCase):
     def test_the_intact_store_is_the_positive_control(self):
         panel = pre.burnt_panel(self.store.labels, self.store.briefs, population=pre.POPULATION_ALL)
         self.assertGreaterEqual(len(panel), pre._MIN_BURNT_EPISODES)
+
+
+class TestTheSearchAndTheTableAreOneComputation(unittest.TestCase):
+    """The memo quotes a table beside a verdict, so they must be the same numbers.
+
+    They used to be two passes over the same cluster counts that merely ought
+    to agree - twice the work, and nothing checking that they did.
+    """
+
+    @staticmethod
+    def _args():
+        rng = np.random.default_rng(6)
+        return {
+            "burnt_signals": rng.normal(size=(80, 3)),
+            "observed_sizes": [4, 6, 3],
+            "effects": {"atr": -0.12, "ma50": -0.06, "press": 0.0},
+            "sd_y": 0.2,
+            "icc": 0.05,
+            "n_sims": 4,
+            "wcb_boot": 9,
+            "seed": 11,
+        }
+
+    def test_the_search_reports_every_count_it_tried(self):
+        needed, table = pre.clusters_for_power(**self._args(), max_clusters=9)
+        self.assertTrue(table, "positive control: the search evaluated something")
+        self.assertIn(3, table, "the first count tried is the observed cluster count")
+        if needed is not None:
+            self.assertEqual(max(table), needed)
+
+    def test_the_table_matches_a_standalone_run_at_the_same_counts(self):
+        # The equivalence the de-duplication rests on: same seed, same grown
+        # sizes, same simulation - so reusing the search's numbers cannot
+        # change what the memo reports.
+        args = self._args()
+        _needed, table = pre.clusters_for_power(**args, max_clusters=9)
+        standalone = pre.power_at_cluster_counts(**args, counts=sorted(table))
+        self.assertEqual(sorted(standalone), sorted(table))
+        for count in table:
+            for name in table[count]:
+                self.assertAlmostEqual(table[count][name], standalone[count][name], places=12)
+
+    def test_an_unreachable_target_returns_no_count_but_still_a_table(self):
+        args = self._args()
+        args["effects"] = {"atr": 0.0, "ma50": 0.0, "press": 0.0}
+        needed, table = pre.clusters_for_power(**args, max_clusters=7)
+        self.assertIsNone(needed)
+        self.assertTrue(table, "a failed search must still say what it tried")

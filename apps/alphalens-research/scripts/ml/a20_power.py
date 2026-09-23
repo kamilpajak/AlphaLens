@@ -565,7 +565,7 @@ def report(
     table: dict[int, dict[str, float]] = {}
     cluster_dates: dict[int, dt.date] = {}
     if powers[GATE_SHRINKAGE]["atr"] < GATE_POWER:
-        needed = clusters_for_power(
+        needed, table = clusters_for_power(
             burnt_signals=signals,
             observed_sizes=sizes,
             effects={n: shrink(effects[n], GATE_SHRINKAGE) * sd_y for n in SIGNALS},
@@ -576,23 +576,6 @@ def report(
             seed=seed,
             max_clusters=max_clusters,
         )
-        if needed is not None:
-            # The table a memo can quote: power at each count between here and
-            # the one that clears, plus the date each count is reached.
-            counts = list(range(len(sizes), needed + 1, _SEARCH_STEP))
-            if needed not in counts:
-                counts.append(needed)
-            table = power_at_cluster_counts(
-                burnt_signals=signals,
-                observed_sizes=sizes,
-                effects={n: shrink(effects[n], GATE_SHRINKAGE) * sd_y for n in SIGNALS},
-                sd_y=sd_y,
-                icc=icc,
-                counts=counts,
-                n_sims=max(n_sims // 2, 60),
-                wcb_boot=wcb_boot,
-                seed=seed,
-            )
         if needed is not None and (accrual > 0 or len(observed_arrivals) >= needed):
             gate_when = gate_date(
                 observed_arrivals=observed_arrivals,
@@ -655,18 +638,20 @@ def clusters_for_power(
     wcb_boot: int,
     seed: int,
     max_clusters: int = 200,
-) -> int | None:
-    """First cluster count at which ``target`` reaches ``target_power``.
+) -> tuple[int | None, dict[int, dict[str, float]]]:
+    """First cluster count reaching ``target_power``, AND every count it tried.
 
-    The search steps by :data:`_SEARCH_STEP`, so this is the first count ON THE
-    GRID that clears, not the true minimum. Use :func:`power_at_cluster_counts`
-    to report a table a memo can quote.
+    Returning the table is what lets the memo quote the search's own numbers
+    rather than a second computation that merely ought to agree with it. The
+    search steps by :data:`_SEARCH_STEP`, so the answer is the first count ON
+    THE GRID that clears, not the true minimum.
 
     Extra clusters are drawn from the OBSERVED size distribution rather than
     given an average size: the panel's clusters are far from uniform, and
     pretending they are would make the projection optimistic in exactly the
     direction that matters.
     """
+    seen: dict[int, dict[str, float]] = {}
     n = len(observed_sizes)
     while n <= max_clusters:
         power = simulate_power(
@@ -679,10 +664,11 @@ def clusters_for_power(
             wcb_boot=wcb_boot,
             seed=seed,
         )
+        seen[n] = power
         if power[target] >= target_power:
-            return n
+            return n, seen
         n += _SEARCH_STEP
-    return None
+    return None, seen
 
 
 def grown_cluster_sizes(observed_sizes: list[int], n_clusters: int, *, seed: int) -> list[int]:
