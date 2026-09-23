@@ -181,6 +181,55 @@ class TestWildClusterBootstrap(unittest.TestCase):
         self.assertEqual(p1, p2)
 
 
+class TestTheOneSidedWildClusterBootstrap(unittest.TestCase):
+    """A one-sided alternative, for a test whose direction is fixed in advance."""
+
+    def test_the_default_is_still_two_sided(self):
+        y, X, g = _clustered_data(n_clusters=20, per_cluster=6, beta=0.6, seed=11)
+        self.assertEqual(
+            wild_cluster_bootstrap_p(y, X, g, coef_idx=1, n_boot=499, seed=12),
+            wild_cluster_bootstrap_p(
+                y, X, g, coef_idx=1, n_boot=499, seed=12, alternative="two-sided"
+            ),
+        )
+
+    def test_an_effect_in_the_stated_direction_is_detected(self):
+        y, X, g = _clustered_data(n_clusters=25, per_cluster=8, beta=-1.5, seed=13)
+        p = wild_cluster_bootstrap_p(y, X, g, coef_idx=1, n_boot=999, seed=14, alternative="less")
+        self.assertLess(p, 0.01)
+
+    def test_an_effect_in_the_WRONG_direction_is_not_detected(self):
+        # The refutation control. A large POSITIVE slope would give a tiny
+        # two-sided p; a one-sided test of "less" must not reward it, or the
+        # registered direction would be decorative.
+        y, X, g = _clustered_data(n_clusters=25, per_cluster=8, beta=+1.5, seed=15)
+        two_sided = wild_cluster_bootstrap_p(y, X, g, coef_idx=1, n_boot=999, seed=16)
+        one_sided = wild_cluster_bootstrap_p(
+            y, X, g, coef_idx=1, n_boot=999, seed=16, alternative="less"
+        )
+        self.assertLess(two_sided, 0.01)
+        self.assertGreater(one_sided, 0.95)
+
+    def test_a_null_effect_yields_a_large_one_sided_p(self):
+        y, X, g = _clustered_data(n_clusters=25, per_cluster=8, beta=0.0, seed=17)
+        p = wild_cluster_bootstrap_p(y, X, g, coef_idx=1, n_boot=999, seed=18, alternative="less")
+        self.assertGreater(p, 0.05)
+
+    def test_the_greater_alternative_mirrors_the_less_one(self):
+        y, X, g = _clustered_data(n_clusters=25, per_cluster=8, beta=+1.5, seed=19)
+        p = wild_cluster_bootstrap_p(
+            y, X, g, coef_idx=1, n_boot=999, seed=20, alternative="greater"
+        )
+        self.assertLess(p, 0.01)
+
+    def test_an_unknown_alternative_is_refused(self):
+        y, X, g = _clustered_data(n_clusters=10, per_cluster=4, beta=0.0, seed=21)
+        with self.assertRaises(ValueError):
+            wild_cluster_bootstrap_p(
+                y, X, g, coef_idx=1, n_boot=99, seed=22, alternative="sideways"
+            )
+
+
 class TestClusterOls(unittest.TestCase):
     def test_beta_matches_lstsq(self):
         y, X, g = _clustered_data(n_clusters=20, per_cluster=6, beta=0.8, seed=7)
