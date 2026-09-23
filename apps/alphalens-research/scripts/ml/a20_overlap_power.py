@@ -220,6 +220,22 @@ def estimate_signal_loading(panel: Any, *, signal: str = "atr") -> float:
     response per one standard deviation of the signal. A burnt-panel read, so no
     ledger charge — the same footing as every other calibration quantity here.
 
+    Why the ratio is the right estimator, since the model is about a standard
+    deviation and the fit is on a mean absolute residual: if the residual has a
+    fixed shape and a scale ``sigma(z) = sigma_0 * (1 + kappa*z)``, then
+    ``E|e| = c * sigma_0 * (1 + kappa*z)`` for a shape constant ``c`` (``c =
+    sqrt(2/pi)`` under normality). So the fit returns ``a = c*sigma_0`` and
+    ``b = c*sigma_0*kappa``, and ``c`` and ``sigma_0`` both cancel in ``b / a``.
+    The estimate is free of the normality assumption as long as the SHAPE does
+    not itself change with the signal.
+
+    It reads the widening of the WHOLE residual, while the simulator applies
+    kappa only to the SHARED component. If the idiosyncratic part also widens
+    with the signal — very likely, since a high-ATR name is noisier in every
+    direction — this overstates the loading on the shared part. That direction
+    simulates more cross-cluster dependence than the panel has, which is the
+    safe way round for a gate.
+
     Clamped below at 0: a NEGATIVE loading would mean high-ATR names react LESS
     to a common move, which is not a direction worth simulating, and letting it
     through would make the overlap look harmless for the wrong reason.

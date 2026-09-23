@@ -21,6 +21,8 @@ import unittest
 
 import numpy as np
 from scripts.ml import a20_overlap_power as ov
+from scripts.ml import a20_power
+from scripts.ml.a20_power import _z
 
 
 def _episode_pairs(
@@ -134,14 +136,104 @@ class TestTheCalibrationSurvivesTheChange(unittest.TestCase):
         )
         return y, clusters
 
-    def test_total_spread_matches_sd_y_for_every_sharing_fraction(self):
+    def _population_spread(self, *, shared_fraction, signal_loading, n_panels=3000):
+        """Spread of ONE episode taken from each of many independent panels.
+
+        Pooling episodes inside a panel cannot measure this: with a shared
+        window the cluster effects are correlated, so the pooled sample spread
+        is shrunk by the dependence itself. That shrinkage is real and is
+        asserted separately below; it is not a variance leak, and reading it as
+        one would send someone hunting a bug that is not there.
+        """
+        signals = _z(np.random.default_rng(0).normal(0.0, 1.0, 300)).reshape(-1, 1)
+        drawn = []
+        for seed in range(n_panels):
+            rng = np.random.default_rng(seed)
+            y, _x, _c = ov.simulate_overlapping_panel(
+                burnt_signals=signals,
+                arrival_offsets=[0],
+                cluster_sizes=[1],
+                effects={"atr": 0.0},
+                sd_y=2.0,
+                icc=0.4,
+                shared_fraction=shared_fraction,
+                horizon=20,
+                rng=rng,
+                signal_loading=signal_loading,
+            )
+            drawn.append(y[0])
+        return float(np.std(drawn))
+
+    def test_the_population_spread_is_sd_y_for_every_sharing_and_loading(self):
+        # The real invariant. The kappa arm renormalises by sqrt(1 + kappa**2)
+        # precisely so that loading the shared shock onto the signal moves the
+        # DEPENDENCE and not the marginal variance. Dropping the cluster-local
+        # component instead would land near 1.55 here, far outside the band.
+        for phi, kappa in ((0.0, 0.0), (1.0, 0.0), (1.0, 0.5), (1.0, 1.0)):
+            with self.subTest(shared_fraction=phi, signal_loading=kappa):
+                self.assertAlmostEqual(
+                    self._population_spread(shared_fraction=phi, signal_loading=kappa),
+                    2.0,
+                    delta=0.12,
+                )
+
+    def test_the_pooled_sample_spread_shrinks_as_sharing_rises(self):
+        # A positive control for the dependence, built out of the thing that
+        # first looked like a defect. Correlated clusters shrink the POOLED
+        # sample spread even though the population variance is untouched, so a
+        # simulator that only pretended to share would not produce this slope.
+        spreads = []
         for phi in (0.0, 0.5, 1.0):
-            with self.subTest(shared_fraction=phi):
-                spreads = []
-                for seed in range(40):
-                    y, _c = self._panel(phi, seed=seed)
-                    spreads.append(float(np.std(y)))
-                self.assertAlmostEqual(float(np.mean(spreads)), 2.0, delta=0.25)
+            per_panel = []
+            for seed in range(60):
+                rng = np.random.default_rng(seed)
+                y, _x, _c = ov.simulate_overlapping_panel(
+                    burnt_signals=np.zeros((64, 1)),
+                    arrival_offsets=list(range(35)),
+                    cluster_sizes=[12] * 35,
+                    effects={"atr": 0.0},
+                    sd_y=2.0,
+                    icc=0.4,
+                    shared_fraction=phi,
+                    horizon=20,
+                    rng=rng,
+                )
+                per_panel.append(float(np.std(y)))
+            spreads.append(float(np.mean(per_panel)))
+        self.assertGreater(spreads[0], spreads[1])
+        self.assertGreater(spreads[1], spreads[2])
+        self.assertGreater(spreads[0] - spreads[2], 0.10)
+
+    def test_no_sharing_is_bit_identical_to_the_simulator_it_audits(self):
+        # The load-bearing claim of the whole module, pinned exactly rather than
+        # statistically: with nothing shared, this simulator must BE the one it
+        # is auditing, down to the random stream. If it drifts, every "phi = 0
+        # reproduces the merged preflight" sentence in the memo becomes false.
+        signals = np.random.default_rng(0).normal(0.0, 1.0, (50, 3))
+        effects = {"atr": 0.2, "ma50": -0.1, "press": 0.05}
+        sizes = [3, 4, 2, 5]
+        old = a20_power.simulate_panel(
+            burnt_signals=signals,
+            cluster_sizes=sizes,
+            effects=effects,
+            sd_y=1.0,
+            icc=0.4,
+            rng=np.random.default_rng(42),
+        )
+        new = ov.simulate_overlapping_panel(
+            burnt_signals=signals,
+            arrival_offsets=[0, 1, 2, 3],
+            cluster_sizes=sizes,
+            effects=effects,
+            sd_y=1.0,
+            icc=0.4,
+            shared_fraction=0.0,
+            horizon=20,
+            rng=np.random.default_rng(42),
+        )
+        for label, a, b in zip(("y", "X", "clusters"), old, new, strict=True):
+            with self.subTest(array=label):
+                self.assertTrue(np.array_equal(a, b))
 
     def test_the_within_cluster_correlation_is_the_icc_whatever_is_shared(self):
         # Same-cluster episodes share the whole window AND the cluster-local
