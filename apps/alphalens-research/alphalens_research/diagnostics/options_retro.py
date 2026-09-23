@@ -204,6 +204,7 @@ def wild_cluster_bootstrap_p(
     *,
     n_boot: int = 4999,
     seed: int = 0,
+    alternative: str = "two-sided",
 ) -> float:
     """Restricted wild cluster bootstrap p-value for one coefficient.
 
@@ -212,7 +213,18 @@ def wild_cluster_bootstrap_p(
     Rademacher weights, refit the FULL model each draw, and compare the
     studentized |t*| distribution (CR1-studentized, consistent on both
     sides) against the observed |t|.
+
+    ``alternative`` is ``"two-sided"`` (the default, unchanged), ``"less"`` or
+    ``"greater"``. The one-sided forms compare SIGNED statistics, which is what
+    a test whose direction was fixed before the data makes available: a slope
+    of the wrong sign then returns a p-value near 1 instead of near 0. Rademacher
+    weights make the bootstrap distribution symmetric, so no separate
+    calibration is needed for the one-sided tails.
     """
+    if alternative not in ("two-sided", "less", "greater"):
+        raise ValueError(
+            f"unknown alternative {alternative!r}; expected 'two-sided', 'less' or 'greater'"
+        )
     y = np.asarray(y, dtype=float)
     X = np.asarray(X, dtype=float)
     clusters = np.asarray(clusters)
@@ -245,9 +257,19 @@ def wild_cluster_bootstrap_p(
             continue
         valid += 1
         # Null imposed: beta* is centered on 0 for the tested coefficient.
-        if abs(beta_star[coef_idx] / se_star) >= abs(t_obs):
+        t_star = beta_star[coef_idx] / se_star
+        if _bootstrap_hit(t_star, t_obs, alternative):
             hits += 1
     return (1.0 + hits) / (1.0 + valid)
+
+
+def _bootstrap_hit(t_star: float, t_obs: float, alternative: str) -> bool:
+    """Does one bootstrap draw count against the observed statistic?"""
+    if alternative == "less":
+        return t_star <= t_obs
+    if alternative == "greater":
+        return t_star >= t_obs
+    return abs(t_star) >= abs(t_obs)
 
 
 def vif_table(df: pd.DataFrame, columns: list[str]) -> dict[str, float]:
