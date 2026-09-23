@@ -27,7 +27,7 @@ import dataclasses
 import datetime as dt
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from broker_contract.sizing import planned_blended_entry_from_spec
 from broker_contract.trade_intent.schema import TradeIntent
@@ -190,6 +190,103 @@ def _already_armed(
     )
 
 
+def _resolved_trade_date(
+    meta: Mapping[str, Any], *, source: Any, mic: Any, now_utc: dt.datetime
+) -> dt.date:
+    """A stated ``trade_date`` as stated; otherwise the next session of ``mic`` that
+    has not closed. A brief document must state it."""
+    if "trade_date" in meta:
+        return _parsed_trade_date(meta["trade_date"])
+    if source == _SOURCE_BRIEF:
+        raise TradeDateRequiredError(
+            'meta.trade_date is required on a "brief" document: day 1 of a brief pick is '
+            "the session after its brief date, which the door cannot know",
+        )
+    return session_not_closed(now_utc, mic)
+
+
+def _next_generation(same_day: Sequence[PickRecord], *, ticker: str, env: str) -> int:
+    """The generation a document that states none arms under — refused while any
+    generation of that day is still armed."""
+    live = [record for record in same_day if record.status == STATUS_ARMED]
+    if live:
+        raise _already_armed(
+            max(live, key=lambda record: record.generation),
+            ticker=ticker,
+            env=env,
+            generation=None,
+        )
+    return 1 + max((record.generation for record in same_day), default=0)
+
+
+def _stated_generation_target(
+    same_day: Sequence[PickRecord],
+    generation: int,
+    *,
+    ticker: str,
+    placed_keys: Collection[tuple[str, str]],
+    env: str,
+) -> PickRecord | None:
+    """The armed, unplaced line a stated generation replaces, or None for a new one."""
+    current = next((record for record in same_day if record.generation == generation), None)
+    if current is not None and current.status != STATUS_ARMED:
+        raise GenerationSpentError(
+            f"{ticker} @ {current.token} is {current.status} — a spent generation never "
+            "comes back; arm the next generation instead",
+            pick_key=current.token,
+            status=current.status,
+        )
+    if current is not None and (ticker, current.token) in placed_keys:
+        raise AlreadyPlacedError(
+            f"{ticker} @ {current.token} is already placed — the drain skips keys it has "
+            "submitted, so replacing this line would change the queue and not the market",
+            pick_key=current.token,
+        )
+    siblings = [
+        record
+        for record in same_day
+        if record.generation != generation and record.status == STATUS_ARMED
+    ]
+    if siblings:
+        raise _already_armed(
+            max(siblings, key=lambda record: record.generation),
+            ticker=ticker,
+            env=env,
+            generation=generation,
+        )
+    return current
+
+
+def _refuse_other_armed_date(
+    same_ticker: Sequence[PickRecord],
+    *,
+    ticker: str,
+    venue: str,
+    trade_date: dt.date,
+    generation: int,
+    stated: Any,
+    placed_keys: Collection[tuple[str, str]],
+    env: str,
+) -> None:
+    """Refuse while an armed, unplaced pick on the same ticker and venue waits
+    under any other key."""
+    blockers = [
+        record
+        for record in same_ticker
+        if record.status == STATUS_ARMED
+        and (record.ticker, record.token) not in placed_keys
+        and (record.trade_date, record.generation) != (trade_date, generation)
+        and (_recorded_mic(record) is None or _venue_class(_recorded_mic(record)) == venue)
+    ]
+    if blockers:
+        raise _already_armed(
+            max(blockers, key=lambda record: (record.trade_date, record.generation)),
+            ticker=ticker,
+            env=env,
+            generation=stated,
+        )
+
+
 def complete(
     document: Mapping[str, Any],
     *,
@@ -209,15 +306,7 @@ def complete(
     mic = document["instrument"]["mic"]
     source = meta["source"]
 
-    if "trade_date" in meta:
-        trade_date = _parsed_trade_date(meta["trade_date"])
-    elif source == _SOURCE_BRIEF:
-        raise TradeDateRequiredError(
-            'meta.trade_date is required on a "brief" document: day 1 of a brief pick is '
-            "the session after its brief date, which the door cannot know",
-        )
-    else:
-        trade_date = session_not_closed(now_utc, mic)
+    trade_date = _resolved_trade_date(meta, source=source, mic=mic, now_utc=now_utc)
 
     same_ticker = [record for record in records if record.ticker == ticker]
     same_day = [record for record in same_ticker if record.trade_date == trade_date]
@@ -225,61 +314,23 @@ def complete(
     replaces: PickRecord | None = None
 
     if stated is None:
-        live = [record for record in same_day if record.status == STATUS_ARMED]
-        if live:
-            raise _already_armed(
-                max(live, key=lambda record: record.generation),
-                ticker=ticker,
-                env=env,
-                generation=None,
-            )
-        generation = 1 + max((record.generation for record in same_day), default=0)
+        generation = _next_generation(same_day, ticker=ticker, env=env)
     else:
         generation = int(stated)
-        current = next((record for record in same_day if record.generation == generation), None)
-        if current is not None and current.status != STATUS_ARMED:
-            raise GenerationSpentError(
-                f"{ticker} @ {current.token} is {current.status} — a spent generation never "
-                "comes back; arm the next generation instead",
-                pick_key=current.token,
-                status=current.status,
-            )
-        if current is not None and (ticker, current.token) in placed_keys:
-            raise AlreadyPlacedError(
-                f"{ticker} @ {current.token} is already placed — the drain skips keys it has "
-                "submitted, so replacing this line would change the queue and not the market",
-                pick_key=current.token,
-            )
-        siblings = [
-            record
-            for record in same_day
-            if record.generation != generation and record.status == STATUS_ARMED
-        ]
-        if siblings:
-            raise _already_armed(
-                max(siblings, key=lambda record: record.generation),
-                ticker=ticker,
-                env=env,
-                generation=generation,
-            )
-        replaces = current
-
-    venue = _venue_class(mic)
-    blockers = [
-        record
-        for record in same_ticker
-        if record.status == STATUS_ARMED
-        and (record.ticker, record.token) not in placed_keys
-        and (record.trade_date, record.generation) != (trade_date, generation)
-        and (_recorded_mic(record) is None or _venue_class(_recorded_mic(record)) == venue)
-    ]
-    if blockers:
-        raise _already_armed(
-            max(blockers, key=lambda record: (record.trade_date, record.generation)),
-            ticker=ticker,
-            env=env,
-            generation=stated,
+        replaces = _stated_generation_target(
+            same_day, generation, ticker=ticker, placed_keys=placed_keys, env=env
         )
+
+    _refuse_other_armed_date(
+        same_ticker,
+        ticker=ticker,
+        venue=_venue_class(mic),
+        trade_date=trade_date,
+        generation=generation,
+        stated=stated,
+        placed_keys=placed_keys,
+        env=env,
+    )
 
     completed = copy.deepcopy(dict(document))
     completed_meta = completed["meta"]
@@ -333,7 +384,10 @@ def with_r_multiples(intent: TradeIntent) -> TradeIntent:
         dataclasses.replace(tranche, r_multiple=(tranche.price - blend) / risk)
         for tranche in spec.tp_tranches
     )
-    return dataclasses.replace(intent, spec=dataclasses.replace(spec, tp_tranches=tranches))
+    return cast(
+        "TradeIntent",
+        dataclasses.replace(intent, spec=dataclasses.replace(spec, tp_tranches=tranches)),
+    )
 
 
 def tier_amounts(intent: TradeIntent) -> list[float]:
