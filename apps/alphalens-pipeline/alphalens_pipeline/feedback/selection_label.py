@@ -838,6 +838,11 @@ class _ReferenceCloses:
         except Exception as exc:  # a broken fetch is "could not check", never a crash
             logger.warning("selection-label: reference closes failed for %s - %s", upper, exc)
             series = None
+        if series is None and held is not None and self._series[upper] is not None:
+            # A refused WIDENING must not evict a series that already answers the narrower
+            # span: that would demote rows this run had already checked. This one request
+            # goes unchecked; what is held stays held.
+            return None
         self._span[upper] = (lo, hi)
         self._series[upper] = series
         return series

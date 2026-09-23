@@ -123,6 +123,24 @@ class TestAPersistentShiftIsAnArtefact(unittest.TestCase):
         audit = sa.audit_span(store_closes=_store(s, store), reference=_reference(s, ref))
         self.assertEqual(audit.breaks, frozenset({s[20], s[40]}))
 
+    def test_two_breaks_closer_together_than_the_confirmation_window_are_both_found(self):
+        # A reviewer argued the second break would be masked, because the confirming
+        # median before it straddles the first break. Run: it is not. With only three
+        # sessions between them the median before the second break already sits on the
+        # intermediate level, so both are reported.
+        s = _sessions(43)
+        ref = [100.0] * 43
+        store = [25.0] * 20 + [100.0] * 3 + [105.0] * 20
+        audit = sa.audit_span(store_closes=_store(s, store), reference=_reference(s, ref))
+        self.assertEqual(audit.breaks, frozenset({s[20], s[23]}))
+
+    def test_even_two_sessions_apart_both_breaks_are_found(self):
+        s = _sessions(42)
+        ref = [100.0] * 42
+        store = [25.0] * 20 + [100.0] * 2 + [105.0] * 20
+        audit = sa.audit_span(store_closes=_store(s, store), reference=_reference(s, ref))
+        self.assertEqual(audit.breaks, frozenset({s[20], s[22]}))
+
     def test_a_five_percent_stock_dividend_is_found(self):
         # The case that killed the per-step threshold: 1/1.05 is a 4.76% artefact, which a
         # 5% per-session rule would pass and a 3.9%-noise-aware rule could not separate.
@@ -158,6 +176,30 @@ class TestASingleSessionExcursionIsNot(unittest.TestCase):
             sa.audit_span(store_closes=_store(s, store), reference=_reference(s, ref)).breaks,
             frozenset(),
         )
+
+    def test_a_level_that_jumps_away_and_returns_within_the_window_is_not_a_break(self):
+        # The boundary of the whole method, pinned rather than described. Two sessions on
+        # a different level and then back is NOT reported, and that is deliberate: it is
+        # the shape of vendor noise. It cannot be a store artefact either, because the
+        # store's session files are written forward and never re-fetched, so an
+        # adjustment epoch only ever changes one way. A store that could re-adjust a
+        # middle stretch and revert would defeat this test, and nothing here would say so.
+        s = _sessions(42)
+        ref = [100.0] * 42
+        store = [25.0] * 20 + [100.0] * 2 + [25.0] * 20
+        self.assertEqual(
+            sa.audit_span(store_closes=_store(s, store), reference=_reference(s, ref)).breaks,
+            frozenset(),
+        )
+
+    def test_a_long_enough_excursion_is_reported_as_two_breaks(self):
+        # The other side of that boundary: once the away-level lasts CONFIRM_SESSIONS it
+        # is no longer an excursion, and both edges are reported.
+        s = _sessions(45)
+        ref = [100.0] * 45
+        store = [25.0] * 20 + [100.0] * 5 + [25.0] * 20
+        audit = sa.audit_span(store_closes=_store(s, store), reference=_reference(s, ref))
+        self.assertEqual(audit.breaks, frozenset({s[20], s[25]}))
 
     def test_a_clean_span_reports_no_break(self):
         s = _sessions(40)

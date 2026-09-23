@@ -136,7 +136,15 @@ def level_ratios(
 
 
 def audit_span(*, store_closes: Mapping[dt.date, float], reference: pd.Series | None) -> SpanAudit:
-    """Find every adjustment break in one ticker's span, or report that nothing could be."""
+    """Find every adjustment break in one ticker's span, or report that nothing could be.
+
+    This ASSUMES the store's adjustment epochs are monotone: session files are written
+    forward in time and never re-fetched, so a scale change is one-directional and
+    permanent. The assumption is what lets a level that jumps away and comes back within
+    a few sessions be read as vendor noise rather than as two artefacts - which is the
+    whole noise-rejection property. A store that could re-adjust a middle stretch and
+    then revert would need a different test, and this one would stay silent on it.
+    """
     ratios = level_ratios(store_closes=store_closes, reference=reference)
     if len(ratios) < MIN_COMPARABLE_SESSIONS:
         return UNANSWERED

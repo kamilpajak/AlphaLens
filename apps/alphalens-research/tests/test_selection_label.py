@@ -295,6 +295,63 @@ class TestStatus(unittest.TestCase):
         self.assertIsNone(result.values["sel_car_mean_20"])
 
 
+class TestTheReferenceCache(unittest.TestCase):
+    """One reference series per ticker per run, and a failure must not erase a success."""
+
+    def setUp(self):
+        self.calls: list[tuple[str, dt.date, dt.date]] = []
+
+    def _fetch(self, answers):
+        def fetch(ticker, start, end):
+            self.calls.append((ticker, start, end))
+            return answers.pop(0)
+
+        return fetch
+
+    @staticmethod
+    def _series(n=5):
+        days = [D(2026, 3, 2) + dt.timedelta(days=i) for i in range(n)]
+        return pd.Series([10.0] * n, index=pd.to_datetime(days), dtype=float)
+
+    def test_a_request_inside_a_held_span_does_not_refetch(self):
+        cache = sl._ReferenceCloses(self._fetch([self._series()]))
+        cache.closes("AAA", D(2026, 3, 1), D(2026, 3, 31))
+        cache.closes("aaa", D(2026, 3, 5), D(2026, 3, 20))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_wider_request_refetches_the_union_span(self):
+        cache = sl._ReferenceCloses(self._fetch([self._series(), self._series()]))
+        cache.closes("AAA", D(2026, 3, 1), D(2026, 3, 31))
+        cache.closes("AAA", D(2026, 2, 1), D(2026, 3, 10))
+        self.assertEqual(len(self.calls), 2)
+        _, start, end = self.calls[1]
+        self.assertEqual(start, D(2026, 2, 1))
+        self.assertGreater(end, D(2026, 3, 31))
+
+    def test_a_failed_widening_does_not_throw_away_the_series_already_held(self):
+        # Without this, one refused fetch on a wider span would turn every row that the
+        # narrower span had already answered into `split_unchecked` for the rest of the
+        # run - a vendor hiccup silently demoting work that was already done.
+        held = self._series()
+        cache = sl._ReferenceCloses(self._fetch([held, None]))
+        cache.closes("AAA", D(2026, 3, 1), D(2026, 3, 31))
+        self.assertIsNone(cache.closes("AAA", D(2026, 2, 1), D(2026, 3, 10)))
+        self.assertIs(cache.closes("AAA", D(2026, 3, 2), D(2026, 3, 20)), held)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_a_first_fetch_that_fails_is_not_retried_within_the_run(self):
+        cache = sl._ReferenceCloses(self._fetch([None]))
+        self.assertIsNone(cache.closes("AAA", D(2026, 3, 1), D(2026, 3, 31)))
+        self.assertIsNone(cache.closes("AAA", D(2026, 3, 5), D(2026, 3, 20)))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_raising_fetch_is_reported_as_no_answer_not_a_crash(self):
+        def boom(ticker, start, end):
+            raise RuntimeError("vendor down")
+
+        self.assertIsNone(sl._ReferenceCloses(boom).closes("AAA", D(2026, 3, 1), D(2026, 3, 31)))
+
+
 class TestTheCrossSourcedSplitGuard(unittest.TestCase):
     """#1533: a second vendor decides, not the size of the jump.
 
