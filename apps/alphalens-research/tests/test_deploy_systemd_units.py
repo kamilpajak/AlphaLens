@@ -2173,6 +2173,29 @@ class TestTheTemplateIsDisarmed(unittest.TestCase):
         self.assertEqual(_composed_environment()[_ALLOW_ORDERS], "1")
 
 
+_AMEND_ENABLED = "ALPHALENS_BROKER_AMEND_ENABLED"
+
+
+class TestLiveStopAmendIsOn(unittest.TestCase):
+    """Without in-place amends, every entry fill after the first gets its OWN
+    standalone stop (B1 additive). ``_sole_standalone_stop`` then returns
+    ``None`` for the life of the position, so the declared trailing stop and
+    every take-profit tranche are skipped. Seen on LIVE for RHI and UBER
+    (issue #1514)."""
+
+    def test_the_composed_config_enables_amends(self):
+        self.assertEqual(_composed_environment()[_AMEND_ENABLED], "1")
+
+    def test_amend_lives_in_exactly_one_drop_in(self):
+        owners = [p.name for p in _dropin_files() if _AMEND_ENABLED in p.read_text()]
+        self.assertEqual(owners, ["60-amend.conf"])
+
+    def test_the_base_unit_leaves_amends_off(self):
+        # The base unit stays the conservative template: turning amends on is a
+        # production decision, recorded in its own drop-in like every other one.
+        self.assertNotIn(_AMEND_ENABLED, _base_environment())
+
+
 class TestTheDropInsAreReadableTheWayTheyAreApplied(unittest.TestCase):
     def test_every_environment_line_is_the_simple_form(self):
         for path in [LIVE_BROKER_MANAGER_SERVICE, *_dropin_files()]:
