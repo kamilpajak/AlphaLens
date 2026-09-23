@@ -136,7 +136,7 @@ class TestTheCalibrationSurvivesTheChange(unittest.TestCase):
         )
         return y, clusters
 
-    def _population_spread(self, *, shared_fraction, signal_loading, n_panels=3000):
+    def _population_spread(self, *, shared_fraction, signal_loading, n_panels=20000):
         """Spread of ONE episode taken from each of many independent panels.
 
         Pooling episodes inside a panel cannot measure this: with a shared
@@ -174,7 +174,12 @@ class TestTheCalibrationSurvivesTheChange(unittest.TestCase):
                 self.assertAlmostEqual(
                     self._population_spread(shared_fraction=phi, signal_loading=kappa),
                     2.0,
-                    delta=0.12,
+                    # 20,000 panels put the Monte Carlo error near 0.010, so this
+                    # is about 4 standard errors and catches a 2% bias in the
+                    # spread. The previous 0.12 was 40x the noise: wide enough to
+                    # hide exactly the kind of systematic narrowing that cost this
+                    # memo's predecessor four points of power.
+                    delta=0.04,
                 )
 
     def test_the_pooled_sample_spread_shrinks_as_sharing_rises(self):
@@ -257,6 +262,17 @@ class TestTheCalibrationSurvivesTheChange(unittest.TestCase):
                     a.append(y[0])
                     b.append(y[1])
                 self.assertAlmostEqual(float(np.corrcoef(a, b)[0, 1]), 0.4, delta=0.05)
+
+
+class TestTheScoreDiagnosticRefusesADegeneratePanel(unittest.TestCase):
+    def test_a_panel_with_no_score_variation_is_refused_not_called_independent(self):
+        y = np.zeros(8)
+        x_all = np.column_stack([np.ones(8), np.zeros(8)])
+        with self.assertRaises(ValueError) as caught:
+            ov.score_autocovariance(
+                y=y, x_all=x_all, clusters=np.array(list("aabbccdd")), coef_index=1, max_lag=2
+            )
+        self.assertIn("degenerate", str(caught.exception))
 
 
 class TestBlockClusterLabels(unittest.TestCase):
@@ -459,6 +475,19 @@ class TestProgressReporting(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             loud = ov.rejection_rate(progress_every=1, **self._args())
         self.assertEqual(quiet, loud)
+
+    def test_the_pass_name_tells_a_size_run_from_a_power_run(self):
+        # Every cell runs twice. Two identical progress lines would leave the
+        # reader unable to tell which half of a long run they are watching.
+        args = self._args()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            ov.rejection_rate(progress_every=20, **{**args, "effects": {"atr": 0.0}})
+        self.assertIn("size", err.getvalue())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            ov.rejection_rate(progress_every=20, **{**args, "effects": {"atr": 0.4}})
+        self.assertIn("power", err.getvalue())
 
     def test_silent_by_default(self):
         err = io.StringIO()

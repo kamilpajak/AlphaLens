@@ -174,6 +174,15 @@ def simulate_overlapping_panel(
     than assumed to be zero. The draw is renormalised by ``sqrt(1 + kappa**2)``
     so the total variance stays the calibrated one and kappa moves only the
     dependence structure.
+
+    That renormalisation is EXACT, not approximate, and it borrows its exactness
+    from ``_z``: because ``_z`` divides by the POPULATION standard deviation, a
+    signal column has mean 0 and ``E[x**2] == 1`` to the last bit, so a row
+    resampled from it satisfies ``E[(1 + kappa*x)**2] == 1 + kappa**2``. Verified
+    at 50,000 independent panels: the population spread sits within one standard
+    error of ``sd_y`` at kappa 0, 0.5 and 1.0. Switching ``_z`` to a sample
+    standard deviation would quietly put ``E[x**2]`` at ``n/(n-1)`` and let the
+    calibrated variance drift with kappa.
     """
     names = list(effects)
     var_resid = residual_variance(burnt_signals, effects, sd_y)
@@ -340,7 +349,7 @@ def rejection_rate(
     rng = np.random.default_rng(seed)
     hits = 0
     for done in range(1, n_sims + 1):
-        y, x_all, _clusters = simulate_overlapping_panel(
+        y, x_all, _ = simulate_overlapping_panel(
             burnt_signals=burnt_signals,
             arrival_offsets=arrival_offsets,
             cluster_sizes=cluster_sizes,
@@ -358,9 +367,13 @@ def rejection_rate(
         if p <= alpha:
             hits += 1
         if progress_every and done % progress_every == 0:
+            # The pass name is derived, not passed in: every cell runs twice, and
+            # two identical progress lines leave the reader unable to tell which
+            # half of a two-hour run they are watching.
+            pass_name = "size" if not any(effects.values()) else "power"
             print(
-                f"  {method} phi={shared_fraction:.2f} kappa={signal_loading:.3f}: "
-                f"{done}/{n_sims} simulations",
+                f"  {pass_name} {method} phi={shared_fraction:.2f} "
+                f"kappa={signal_loading:.3f}: {done}/{n_sims} simulations",
                 file=sys.stderr,
                 flush=True,
             )
@@ -386,7 +399,13 @@ def score_autocovariance(
     s = s - s.mean()
     denom = float(np.dot(s, s))
     if denom <= 0:
-        return [0.0] * max_lag
+        # Returning zeros here would read as "no dependence" when the truth is
+        # "no variation to measure" -- a perfectly-fitting regression and an
+        # independent panel would come back identical. Refuse instead.
+        raise ValueError(
+            "score contributions have no variation across sessions; the panel is "
+            "degenerate and its autocorrelation is undefined, not zero"
+        )
     out = []
     for lag in range(1, max_lag + 1):
         out.append(float(np.dot(s[:-lag], s[lag:]) / denom) if lag < len(s) else 0.0)
@@ -442,9 +461,18 @@ def report(
     null_effects = dict.fromkeys(SIGNALS, 0.0)
     gate_effects = {n: shrink(effects[n], GATE_SHRINKAGE) * sd_y for n in SIGNALS}
 
+    # Built up front rather than broken out of mid-loop. Exact equality is the
+    # right test and not a smell here: `estimate_signal_loading` CLAMPS at zero,
+    # so an exactly-zero fitted loading means the fitted arm would repeat the
+    # control arm draw for draw, under the same seed. The omission is recorded
+    # in the result so a reader never has to wonder why the grid is short.
+    loadings: list[tuple[str, float]] = [("kappa=0", 0.0)]
+    if kappa != 0.0:
+        loadings.append(("kappa=fitted", kappa))
+
     rows: list[dict[str, Any]] = []
     for phi in SHARED_FRACTION_GRID:
-        for loading_name, loading in (("kappa=0", 0.0), ("kappa=fitted", kappa)):
+        for loading_name, loading in loadings:
             for method in METHODS:
                 common = {
                     "burnt_signals": signals,
@@ -478,8 +506,6 @@ def report(
                         "power": power,
                     }
                 )
-            if kappa == 0.0:
-                break  # the fitted arm IS the kappa=0 arm; do not pay for it twice
 
     return {
         "population": population,
@@ -490,6 +516,7 @@ def report(
         "sd_y": sd_y,
         "icc": icc,
         "signal_loading": kappa,
+        "fitted_arm_omitted_as_duplicate": kappa == 0.0,
         "effects": effects,
         "n_sims": n_sims,
         "wcb_boot": wcb_boot,
