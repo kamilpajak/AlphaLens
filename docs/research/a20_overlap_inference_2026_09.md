@@ -222,7 +222,14 @@ problem.
 effect, and what the three-way ATR outcome maps to. Those belong in the registration, which this
 memo does not write.
 
-**Not settled here.** The pre-run data-integrity gates. The yfinance stale-cache census was run for
-this memo's own calibration (three logged fallback events in the whole journal, all in the burnt
-window, none of the three rows present in the panel, zero in the held-out window) but the mixed
-price-adjustment check has not been done, and the journal does not reach back before 2026-05-25.
+**Settled since, elsewhere.** The mixed price-adjustment gate ran on 2026-09-23 and **passes** —
+[`atr_split_adjustment_gate_2026_09.md`](atr_split_adjustment_gate_2026_09.md). Its premise is
+withdrawn: `auto_adjust=False` does not return split-unadjusted bars, so ATR and the label are both
+split-adjusted, and no corporate action reaches a held-out label window. The one real artefact in
+the stores is a patchwork step on MQ that lands in no window. The guard's blind band, and its three
+firings all being false positives, are recorded there as open items.
+
+**Not settled here.** The yfinance stale-cache census was run for this memo's own calibration
+(three logged fallback events in the whole journal, all in the burnt window, none of the three rows
+present in the panel, zero in the held-out window), and the journal does not reach back before
+2026-05-25.
