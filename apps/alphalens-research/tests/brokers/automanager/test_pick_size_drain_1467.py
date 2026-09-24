@@ -230,6 +230,9 @@ class TestTheDrainRefusesUnplacedPercentPicksOnce(_JournalCase):
 
         self.assertEqual(len(alerts), 1)
         self.assertIn("Re-arm it with an amount", alerts[0][0])
+        # #1552: the only command that took --notional is gone; point at the templates.
+        self.assertIn("examples/manual-pick", alerts[0][0])
+        self.assertNotIn("--notional", alerts[0][0])
         statuses = [r.status for r in picks.read_pick_fold(path=self.path).records]
         self.assertEqual(statuses, [picks.STATUS_REFUSED])
         deps.place_pick.assert_not_called()
@@ -255,6 +258,8 @@ class TestTheDrainRefusesUnplacedPercentPicksOnce(_JournalCase):
         self.assertEqual(len(alerts), 1)
         self.assertIn("now tranche is ALREADY placed", alerts[0][0])
         self.assertIn("pullback tiers only", alerts[0][0])
+        self.assertIn("examples/manual-pick", alerts[0][0])
+        self.assertNotIn("--notional", alerts[0][0])
 
 
 if __name__ == "__main__":

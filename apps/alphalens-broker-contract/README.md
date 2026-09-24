@@ -108,7 +108,7 @@ deployment take it (`venue_unsupported`, `pick_not_writable`).
 | | `schema_violation` | the document fails the published input JSON Schema; `details.path` locates it |
 | | `undecodable` | the shape passes but the decoder refuses it (e.g. `generation: 1.0` — JSON Schema calls that an integer, identity strings cannot) |
 | | `trade_date_malformed` | `meta.trade_date` is not a `YYYY-MM-DD` date |
-| | `trade_date_required` | a `"brief"` document with no `meta.trade_date`: day 1 of a brief pick is the session after its brief date, which the door cannot know |
+| | `trade_date_required` | a legacy `"brief"` document with no `meta.trade_date`: day 1 of a brief pick is the session after its brief date, which the door cannot know. Write `"manual"`: the brief producer was removed in #1552 |
 | | `key_discarded` | a key the decoder would DROP, so the arm would not carry what you sent; `details.paths` lists them |
 | `pick_not_writable` | `generation_spent` | that generation was disarmed or refused; a spent generation never comes back |
 | | `already_placed` | the daemon has already placed this pick, so rewriting it would change the queue and not the market |
@@ -209,7 +209,9 @@ described at all and is refused if sent; a **filled** field (`meta.trade_date`,
 `meta.generation`, the tier and tranche `tag`) is optional and its description says
 what the door puts there; `meta.source` is **required**, because its stored
 default `"brief"` exists for old journal lines and moves the day-1 gate by a
-session.
+session. Write `"manual"`: `"brief"` marked picks from the `thematic intent`
+producer, which #1552 removed, and is kept only as a LEGACY allowance
+(`source_brief`).
 
 ```
 python -m broker_contract.trade_intent.json_schema --write
@@ -310,9 +312,9 @@ The door then derives, and journals:
 
 | field | value |
 |---|---|
-| `intent_id` | `TICKER:DATE` for a brief pick, `TICKER:DATE:manual` for a manual one, `-g<N>` after generation 1 |
+| `intent_id` | `TICKER:DATE:manual` for a manual pick (`TICKER:DATE` for a legacy brief one), `-g<N>` after generation 1 |
 | `meta.armed_ts` | the moment of arming; a replace KEEPS the `armed_ts` of the line it replaces |
-| `meta.trade_date` | when absent: the next session of `instrument.mic` that has not closed (during a session, that session; after the close or on a holiday, the next one). Required on a `"brief"` document |
+| `meta.trade_date` | when absent: the next session of `instrument.mic` that has not closed (during a session, that session; after the close or on a holiday, the next one). Required on a legacy `"brief"` document |
 | `meta.generation` | when absent: the next free generation of (ticker, trade_date) |
 | tags | when absent: `T1`, `T2`, … and `TP1`, `TP2`, … |
 | `r_multiple` | `(price - blend) / (blend - stop)`, `blend` being the alloc-weighted planned entry |
@@ -404,7 +406,11 @@ appends, so two processes racing on one ticker can both pass it.
 
 ### Writing a manual pick (#1470)
 
-`broker arm` is the only arming command. There is no flag form: a manual pick is a
+`broker arm` is the only arming command, and since #1552 every pick is written by
+hand: the automatic producer from a brief row (`thematic intent`) was removed so
+that every decision in a pick (entries, stop, take-profits, size, and how the stop
+is managed) is one the author stated. To trade a brief idea, copy the levels you
+want from the brief card into a template. There is no flag form: a pick is a
 document. Start from one of these templates, change the ticker, the levels and the
 amount, and send it with `--dry-run` first:
 
@@ -449,8 +455,8 @@ jq -cR 'fromjson? | select(.ticker == "KO" and .status == "armed") | .intent
   it the next generation and the current session. Stating the old generation would
   mean "replace", and stating the old date would arm under that date.
 - The door refuses the copy while the original is still armed. `disarm` it first.
-- Manual picks only. A copied brief pick is refused (`trade_date_required`); produce
-  it again with `alphalens thematic intent`.
+- Manual picks only. A copied legacy brief pick is refused (`trade_date_required`);
+  write it again from a template with `"source": "manual"`.
 - For LIVE, read `broker_orders/live/picks.jsonl` and arm with `--env live`.
 - Lines armed before #1475 (2026-09-16) state a percent size or `meta.brief_date` and
   are refused by the door. Start from a template instead.

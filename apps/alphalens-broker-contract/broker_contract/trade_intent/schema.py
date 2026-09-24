@@ -385,17 +385,19 @@ class IntentMeta:
         "date; provenance lives in `source`, not in this field's name (#1252).",
         door="filled",
         when_absent="the next session of instrument.mic that has not closed at the "
-        'moment of arming. Refused when absent on a "brief" document: a brief\'s '
-        "date is a fact the door cannot derive.",
+        'moment of arming. Refused when absent on a legacy "brief" document: a '
+        "brief's date is a fact the door cannot derive.",
     )
     schema_version: str = contract_field(
         "Wire version of the document. A consumer reads this one.", default=SCHEMA_VERSION
     )
+    # LEGACY(source_brief) — see broker_contract.trade_intent.legacy
     source: Literal["brief", "manual"] = contract_field(
-        'Where the intent came from: "brief" (a brief row, written by `thematic intent`) '
-        'or "manual" (a document written by hand and armed with `broker arm`, #1235). '
-        "Journals and later measurement separate the two populations on this marker; "
-        'legacy payloads without the key decode to "brief".',
+        'Where the intent came from. Write "manual": every pick is a document written '
+        'by hand and armed with `broker arm` (#1235, #1552). "brief" is legacy: it '
+        "marked picks written by the removed `thematic intent` producer, and payloads "
+        "without the key decode to it. Journals and later measurement separate the two "
+        "populations on this marker.",
         default="brief",
         door="required",
     )
@@ -424,16 +426,15 @@ class TradeIntent:
     See ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``
     section 2.3 for the contract this formalizes.
 
-    ``exit`` is ``None`` when no geometry bracket is buildable from the source
-    brief (missing/degenerate ATR, no usable entry tiers, a non-constructible
-    bracket) — mirrors the daemon's pre-PR-7 ``exit_spec=None`` path, where the
-    placement falls back to the brief's static disaster-stop / tier TP levels
-    (memo section 5, PR-7).
+    ``exit`` is ``None`` when the document declares no exit: the stop is never
+    moved, and placement uses the ``spec`` ladder (the disaster stop and the TP
+    tranches). Every document is written by hand since #1552, so that is the
+    author's choice.
     """
 
     intent_id: str = contract_field(
-        'Identity label set by the arming door: "TICKER:DATE" for a brief pick, '
-        '"TICKER:DATE:manual" for a manual one, with "-g<N>" after generation 1.',
+        'Identity label set by the arming door: "TICKER:DATE:manual" for a manual '
+        'pick ("TICKER:DATE" for a legacy brief one), with "-g<N>" after generation 1.',
         door="derived",
     )
     instrument: InstrumentHint = contract_field("What is being traded, and where.")
@@ -443,7 +444,7 @@ class TradeIntent:
     # builtin `exit` as an attribute (safe: instance attribute, never called).
     exit: ExitGeometrySpec | None = contract_field(
         "Optional exit geometry: the levels to place, and how the stop is managed "
-        "afterwards. Null when the source brief yields no buildable bracket.",
+        "afterwards. Null, like an empty reaction plan, means the stop is never moved.",
         default=None,
     )
     account_id: str = contract_field(

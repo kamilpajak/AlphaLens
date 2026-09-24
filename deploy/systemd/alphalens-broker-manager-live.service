@@ -178,11 +178,10 @@ Environment=ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared
 # brief ladder is). `trailing_atr` was deleted with the variable — it was
 # reachable only by name and no name is resolved by name any more.
 #
-# To roll the trail back, change what the brief path DECLARES:
-# `paper/sizing.py::build_exit_declaration` reads its parameters off the
-# `breakeven_trail` registry entry, so the change is one edit plus a deploy.
-# That is deliberate: which trail runs is a research decision
-# (breakeven_trail_live_policy_design_2026_08_27.md), not an operator knob.
+# Which trail runs is what each pick DECLARES in `exit.reaction_plan`. Every
+# pick is a hand-written document since #1552 (the brief producer was removed),
+# so a pick is armed without the trail by writing `exit: null`, and an armed
+# one is changed by `disarm` plus a new document.
 #
 # To stop managing stops at all in an incident, disarm the picks — a pick that
 # declares nothing has its stop held where it is and never tightened.

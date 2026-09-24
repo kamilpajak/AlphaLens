@@ -1572,15 +1572,18 @@ rm ~/.alphalens/broker_orders/KILL
 
 ### 6. Arm ONE SIM test pick + go live
 
-Pick a ticker from a recent local brief (needs `~/.alphalens/thematic_briefs/<date>.parquet` on the VPS; a cheap ticker like `S` sizes to whole shares). US market should be open for a marketable tier to fill.
+Write a test pick by hand from a template in `apps/alphalens-broker-contract/examples/manual-pick/` (every pick is a hand-written document since #1552; a cheap ticker like `S` sizes to whole shares). US market should be open for a marketable tier to fill.
 
 ```bash
 # 6.1 arm it (attended CLI — this is the human "pick"):
-# The brief producer writes the document; the door arms it. pipefail, so a
-# producer that fails is reported as itself, not as the door's empty-input refusal.
-set -o pipefail
-.venv/bin/alphalens thematic intent S --date <YYYY-MM-DD> --frame <account-equity> --currency <ACCOUNT_CCY> \
-  | .venv/bin/alphalens broker arm - --env sim
+# Copy a template and EDIT it before arming: the ticker (S), the tier levels,
+# the stop, and spec.size (the amount AND the account currency — the templates
+# ship with KO in EUR, and the drain refuses a currency that is not the
+# account's), plus the exit. Check it with --dry-run, then arm it.
+cp apps/alphalens-broker-contract/examples/manual-pick/pullback-two-tiers.json /tmp/s.json
+$EDITOR /tmp/s.json
+.venv/bin/alphalens broker arm /tmp/s.json --env sim --dry-run
+.venv/bin/alphalens broker arm /tmp/s.json --env sim
 cat ~/.alphalens/broker_orders/sim/picks.jsonl        # one armed line
 
 # 6.2 turn on placement (the arm). Arming is the tracked drop-in
@@ -1601,7 +1604,7 @@ set -a && source /etc/alphalens/env && set +a
 # An empty journal answers with `"verdicts": []`, never with prose on stdout.
 ```
 
-Watch it on **saxotrader.com/sim** (same SIM login). Confirm the entry + standalone disaster stop appear and match the brief geometry.
+Watch it on **saxotrader.com/sim** (same SIM login). Confirm the entry + standalone disaster stop appear and match the document you armed.
 
 **Go live (daemon):**
 ```bash
@@ -1616,8 +1619,8 @@ journalctl --user -u alphalens-broker-manager.service -f      # per-tick loop
 | **Emergency stop (instant)** | `touch ~/.alphalens/broker_orders/sim/KILL` (this SIM instance only) or `touch ~/.alphalens/broker_orders/KILL` (GLOBAL — halts SIM and LIVE, ADR 0016 D3) — the loop stops placing, still reconciles + cancels |
 | Resume after kill | `rm` the KILL file you created |
 | **Disarm placement** (softer than kill) | `rm ~/.config/systemd/user/alphalens-broker-manager.service.d/10-allow-orders.conf` → `systemctl --user daemon-reload && systemctl --user restart alphalens-broker-manager.service` (runs inert). Re-arm by re-copying the tracked file. NEVER via `/etc/alphalens/env` — `EnvironmentFile=` overrides every `Environment=` line, in-unit and drop-in |
-| Arm a new pick | `set -o pipefail; .venv/bin/alphalens thematic intent TICKER --date YYYY-MM-DD --frame EQUITY --currency CCY \| .venv/bin/alphalens broker arm -` (the brief percent becomes a fixed amount, #1467; `--notional AMOUNT` instead of `--frame` states it directly; add `--dry-run` to the door to see the derived identity first; daemon picks it up next tick, joined to `submissions.jsonl` so it places once) (`--env sim\|live` selects the instance inbox; default sim — LIVE twin: §9.4) |
-| **Correct a pick armed today** (wrong geometry / size) | `.venv/bin/alphalens broker disarm TICKER --date <today> --env sim\|live` (refused while a native entry trail rests — `broker cancel <order_id>` first), then arm a corrected document with `broker arm FILE --env sim\|live` (a manual pick: edit a template or copy the armed line with the `jq` recipe in `apps/alphalens-broker-contract/README.md` "Writing a manual pick"; a brief pick: run `thematic intent` again): the new pick is the NEXT **generation** (#1371) — own watch crids, own submissions key; the disarmed generation stays retired |
+| Arm a new pick | write the document from a template in `apps/alphalens-broker-contract/examples/manual-pick/` (every pick is hand-written since #1552), check it with `.venv/bin/alphalens broker arm FILE --dry-run` (shows the derived identity), then `.venv/bin/alphalens broker arm FILE` (daemon picks it up next tick, joined to `submissions.jsonl` so it places once) (`--env sim\|live` selects the instance inbox; default sim — LIVE twin: §9.4) |
+| **Correct a pick armed today** (wrong geometry / size) | `.venv/bin/alphalens broker disarm TICKER --date <today> --env sim\|live` (refused while a native entry trail rests — `broker cancel <order_id>` first), then arm a corrected document with `broker arm FILE --env sim\|live` (edit a template or copy the armed line with the `jq` recipe in `apps/alphalens-broker-contract/README.md` "Writing a manual pick"): the new pick is the NEXT **generation** (#1371) — own watch crids, own submissions key; the disarmed generation stays retired |
 | Inspect | `journalctl --user -u alphalens-broker-manager.service -f` |
 | State files | picks: `~/.alphalens/broker_orders/sim/picks.jsonl`; placements: `~/.alphalens/broker_orders/sim/submissions.jsonl` (both append-only; LIVE twin under `broker_orders/live/`) |
 | Stop the daemon | `systemctl --user disable --now alphalens-broker-manager.service` |
@@ -1978,14 +1981,15 @@ systemctl --user restart alphalens-broker-manager-live.service
 # Confirm what actually took effect — the composed environment, not the files:
 systemctl --user show alphalens-broker-manager-live.service -p Environment
 
-set -o pipefail
-.venv/bin/alphalens thematic intent TICKER --date YYYY-MM-DD --frame 15000 --currency PLN \
-  | .venv/bin/alphalens broker arm - --env live
+# The pick is a hand-written document (#1552): a template with the ticker,
+# levels, stop, amount in the ACCOUNT currency, and exit filled in.
+.venv/bin/alphalens broker arm /tmp/pick.json --env live --dry-run
+.venv/bin/alphalens broker arm /tmp/pick.json --env live
 journalctl --user -u alphalens-broker-manager-live.service -f
 ```
 
 Watch it on saxotrader.com (LIVE, not SIM). Confirm the entry + standalone
-disaster stop appear and match the brief geometry before walking away.
+disaster stop appear and match the document before walking away.
 
 **Go/no-go for the first UNATTENDED night** (design memo §7 step 4, do not
 skip): ≥3 clean attended round-trips spanning entry→OCO exit, ≥1 trail

@@ -186,7 +186,7 @@ class TheCopyRecipeTurnsAnArmedLineBackIntoADocument(_InboxCase):
 
     def test_a_copied_brief_pick_is_refused_rather_than_re_sourced(self) -> None:
         """The recipe drops `trade_date`, which a brief document must state. A brief
-        pick is produced again with `thematic intent`, not copied."""
+        pick is written again from a template (#1552 removed `thematic intent`), not copied."""
         brief = _template("pullback-two-tiers.json")
         brief["meta"] = {"source": "brief", "trade_date": _TRADE_DATE}
         self.assertEqual(self.arm(brief).exit_code, 0)

@@ -23,9 +23,8 @@ Sub-packages / modules:
     broker_contract.sizing — the money-math half of position sizing (value
         types ``TierPlan``/``TpTranchePlan``/``SetupPlan``,
         ``TradeSetupNotPlannableError``, ``compute_setup_plan``,
-        ``setup_plan_gross_notional``); the
-        brief-parse / arm-time half
-        stays client-side in ``alphalens_pipeline.paper.sizing`` (2A-4a)
+        ``setup_plan_gross_notional``); the brief-reading helpers
+        stay client-side in ``alphalens_pipeline.paper.sizing`` (2A-4a)
 
 Dependency direction: this package must never import from
 ``alphalens_pipeline`` or ``alphalens_research`` — it is a pure leaf consumed

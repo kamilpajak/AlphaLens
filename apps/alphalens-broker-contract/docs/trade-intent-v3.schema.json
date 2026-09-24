@@ -7,7 +7,7 @@
   "properties": {
     "intent_id": {
       "type": "string",
-      "description": "Identity label set by the arming door: \"TICKER:DATE\" for a brief pick, \"TICKER:DATE:manual\" for a manual one, with \"-g<N>\" after generation 1."
+      "description": "Identity label set by the arming door: \"TICKER:DATE:manual\" for a manual pick (\"TICKER:DATE\" for a legacy brief one), with \"-g<N>\" after generation 1."
     },
     "instrument": {
       "$ref": "#/$defs/InstrumentHint",
@@ -30,7 +30,7 @@
           "type": "null"
         }
       ],
-      "description": "Optional exit geometry: the levels to place, and how the stop is managed afterwards. Null when the source brief yields no buildable bracket.",
+      "description": "Optional exit geometry: the levels to place, and how the stop is managed afterwards. Null, like an empty reaction plan, means the stop is never moved.",
       "default": null
     },
     "account_id": {
@@ -211,7 +211,7 @@
             "brief",
             "manual"
           ],
-          "description": "Where the intent came from: \"brief\" (a brief row, written by `thematic intent`) or \"manual\" (a document written by hand and armed with `broker arm`, #1235). Journals and later measurement separate the two populations on this marker; legacy payloads without the key decode to \"brief\".",
+          "description": "Where the intent came from. Write \"manual\": every pick is a document written by hand and armed with `broker arm` (#1235, #1552). \"brief\" is legacy: it marked picks written by the removed `thematic intent` producer, and payloads without the key decode to it. Journals and later measurement separate the two populations on this marker.",
           "default": "brief"
         },
         "generation": {

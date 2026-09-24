@@ -79,6 +79,14 @@ def _carries_size_pct(document: Mapping[str, Any]) -> bool:
     return isinstance(spec, Mapping) and "suggested_size_pct" in spec and "size" not in spec
 
 
+def _is_brief_sourced(document: Mapping[str, Any]) -> bool:
+    """A missing `meta.source` decodes to "brief" (the schema default), so it counts."""
+    meta = document.get("meta")
+    if not isinstance(meta, Mapping):
+        return False
+    return meta.get("source", "brief") == "brief"
+
+
 LEGACY_ALLOWANCES: Final[Mapping[str, LegacyAllowance]] = MappingProxyType(
     {
         "brief_date_key": LegacyAllowance(
@@ -124,6 +132,23 @@ LEGACY_ALLOWANCES: Final[Mapping[str, LegacyAllowance]] = MappingProxyType(
             "Journals are never rewritten, so in practice this means the oldest line still "
             "read is newer than #1467.",
             still_needed=_carries_size_pct,
+        ),
+        "source_brief": LegacyAllowance(
+            what='`meta.source: "brief"`: the schema value and its default (a line '
+            'without `source` decodes as "brief"), the door\'s `trade_date_required` rule '
+            "for it, and the day-1 anchor that starts a brief pick's first session AFTER "
+            "`trade_date` rather than on it.",
+            why="Brief picks were written by `alphalens thematic intent`, which #1552 "
+            "removed: every pick is now a hand-written document. #1552 removes the "
+            'PRODUCER only. The door still ACCEPTS a document that states "brief", and '
+            "journal lines written before #1552 (and every line older than the `source` "
+            "key) still decode as brief picks and keep their day-1 anchor.",
+            retires_when="No line of any picks journal has `meta.source` absent or equal "
+            'to "brief" — measured on 2026-09-24 over the journals\' documents as 26 of '
+            "37 SIM and 10 of 26 LIVE pick keys (31 of 42 and 15 of 31 lines). Retiring "
+            'it then makes the door refuse "brief" and drops the value '
+            "from the schema, a BREAKING change that bumps `SCHEMA_VERSION`.",
+            still_needed=_is_brief_sourced,
         ),
     }
 )

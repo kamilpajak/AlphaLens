@@ -38,8 +38,8 @@ from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 def explicit_mic_from_hint(hint_mic: str | None) -> str | None:
     """Map an intent's ``InstrumentHint.mic`` to the routing decision (#1238).
 
-    A US hint is ADVISORY: every brief pick stamps ``mic="XNYS"`` while its
-    real venue may be XNAS/XASE, so any hint inside
+    A US hint is ADVISORY: a document may state ``mic="XNYS"`` (every legacy
+    brief pick did) while the real venue is XNAS/XASE, so any hint inside
     :data:`US_MIC_PROBE_ORDER` (or an absent hint) returns ``None`` — the
     caller keeps probing exactly as before. A non-US hint (a manual
     document states the operator's venue, e.g. XWAR) is AUTHORITATIVE: it returns the
