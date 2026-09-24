@@ -253,3 +253,21 @@ them, so nothing in the pipeline places a bracket of its own.
   have done", not "what is the live rail doing" — which was already the honest
   reading after the 2026-08-24 pre-registration was voided on 2026-08-27, but
   was not written down here.
+
+### 8.4 Two other numbers in this memo have expired
+
+Found while writing this amendment, and recorded here rather than edited into
+the sections that state them, because those sections are the LOCKED record of
+what was true when they were written.
+
+- **§7.4 describes a telemetry fix that has since been undone.** It says the
+  one-sided floor was fixed "by adding `anchor_mode` and `tp_floor_frac` to the
+  stamp". #1414 cut the placement stamp back to three fields — `geometry_stop`,
+  `geometry_tp` and `applied` — so neither of those two is stamped any more.
+  The BEHAVIOUR §7.4 settles is unaffected: both sides still reach the floor
+  through the one shared `atr_bracket_levels` leaf. It is the telemetry half
+  that expired.
+- **The lens cap is 6, not 5.** §1, §3 and §7.3 all say
+  `MAX_REGISTERED_LENSES = 5`; `breakeven_lenses.py` sets 6, raised when
+  `be_0p5r_trail0p6_ttl7` was registered (issue #1232). This is not a #1414
+  consequence — it is simply a number that moved after this memo was locked.
