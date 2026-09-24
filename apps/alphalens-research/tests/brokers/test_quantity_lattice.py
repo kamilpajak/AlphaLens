@@ -32,6 +32,7 @@ from broker_contract.quantity import (
     is_on_lattice,
     is_tradable,
     lattice_units,
+    quantity_refusal,
     quantize_down,
     same_quantity,
     split_position,
@@ -196,6 +197,15 @@ class TestTheSlackCannotReachAWholeStep(unittest.TestCase):
         # forty times half a step above its input — with the cap in place.
         # A quantity this module cannot name on the lattice is unusable.
         self.assertEqual(quantize_down(1468956939670453.0, CENT), 0.0)
+
+    def test_the_refusal_says_why_rather_than_blaming_the_step(self) -> None:
+        # The new refusal also fails `is_on_lattice`, so without its own branch
+        # `quantity_refusal` told the operator the quantity "is not a multiple
+        # of the venue step 0.01" — which it is. Wrong diagnosis, wrong hunt.
+        reason = quantity_refusal(1468956939670453.0, CENT)
+        assert reason is not None
+        self.assertIn("too large to name exactly", reason)
+        self.assertNotIn("not a multiple", reason)
 
     def test_the_representation_slack_still_does_its_job(self) -> None:
         # NEGATIVE CONTROL, and the one the issue itself calls correct: this

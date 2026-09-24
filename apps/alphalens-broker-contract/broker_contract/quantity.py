@@ -95,9 +95,17 @@ _REL_TOL = 1e-12
 _ABS_TOL = 1e-15
 
 
-def _slack(value: float) -> float:
-    """Upward slack allowed at ``value``: its own representation error, no wider."""
-    return max(math.ulp(abs(value)) * _ULP_SLACK, _ABS_TOL)
+def _quantization_slack(value: float) -> float:
+    """Upward slack allowed at a SCALED ``value``, safe to add before flooring.
+
+    Named for the job rather than for the input, and capped inside rather than
+    at the call site, because the uncapped version was a footgun: it was called
+    ``_slack``, its docstring promised "its own representation error, no wider",
+    and above 2**47 scaled units it returned a whole scaled unit — the overshoot
+    #1520 exists to remove. A future caller reading that docstring would have
+    reasonably added it before a floor and reintroduced the defect.
+    """
+    return min(max(math.ulp(abs(value)) * _ULP_SLACK, _ABS_TOL), _MAX_SCALED_SLACK)
 
 
 @dataclass(frozen=True)
@@ -186,7 +194,7 @@ def _scaled_units(qty: float, lattice: QuantityLattice) -> int:
     scaled = abs(qty) * (10**lattice.precision)
     if not math.isfinite(scaled) or scaled > _SCALED_EXACT_LIMIT:
         return 0
-    return math.floor(scaled + min(_slack(scaled), _MAX_SCALED_SLACK))
+    return math.floor(scaled + _quantization_slack(scaled))
 
 
 def _step_units(lattice: QuantityLattice) -> int:
@@ -353,6 +361,17 @@ def quantity_refusal(
     value = float(qty)
     if value <= 0.0:
         return f"quantity {value!r} is not positive"
+    # Asked BEFORE the lattice question, because since #1520 an unrepresentable
+    # quantity also fails `is_on_lattice` — `quantize_down` refuses it and
+    # returns 0.0 — and reporting "not a multiple of the venue step" for a
+    # quantity that is a perfectly good multiple sends the reader after the
+    # wrong thing.
+    scaled = abs(value) * (10**lattice.precision)
+    if not math.isfinite(scaled) or scaled > _SCALED_EXACT_LIMIT:
+        return (
+            f"quantity {value!r} is too large to name exactly at venue precision "
+            f"{lattice.precision!r} — its scaled form exceeds 2**53"
+        )
     if not is_on_lattice(value, lattice):
         return f"quantity {value!r} is not a multiple of the venue step {lattice.step!r}"
     if value + lattice.step * _REL_TOL + _ABS_TOL < lattice.min_qty:
