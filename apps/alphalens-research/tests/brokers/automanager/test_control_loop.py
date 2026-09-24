@@ -3362,6 +3362,144 @@ class TestRunOnceAlertsEachOrphan(unittest.TestCase):
         self.assertTrue(any("99" in a and "[order]" in a for a in alerts))
 
 
+class _PositionRefsBroker:
+    """A broker exposing open orders (none) + open position references, i.e. the
+    SupportsFillCrossCheck surface the orphan sweep's position arm reads."""
+
+    name = "stub-position-refs"
+
+    def __init__(self, refs: list[str]) -> None:
+        self._refs = refs
+
+    def list_open_orders(self) -> list[OrderState]:
+        return []
+
+    def get_open_position_references(self) -> list[str]:
+        return list(self._refs)
+
+    def get_closed_position_rows(self) -> list[dict[str, Any]]:
+        return []
+
+
+class TestDefaultOrphanSweepReadsEntryTrailJournal(unittest.TestCase):
+    """#1556: the daemon's sweep treats ``<crid>-fire`` as a known position
+    reference only when ``<crid>`` is recorded in entry_trails.jsonl."""
+
+    _JOURNALED = "UBER-2026-09-08-entry-t0"
+    _JOURNALED_REF = "UBER-2026-09-08-entry-t0-fire"
+    _UNJOURNALED_REF = "UBER-2026-09-08-entry-t1-fire"
+
+    def _armed_line(self, crid: str) -> str:
+        import json
+
+        return json.dumps({"kind": "trail_armed", "crid": crid, "order_id": None})
+
+    def test_journaled_entry_trail_position_is_not_an_orphan(self) -> None:
+        _entry_trail_journal(self, [self._armed_line(self._JOURNALED)])
+        orphans = cl._sweep_orphans_with_entry_trails(
+            _PositionRefsBroker([self._JOURNALED_REF]), []
+        )
+        self.assertEqual(orphans, [])
+
+    def test_unjournaled_entry_trail_position_is_still_an_orphan(self) -> None:
+        _entry_trail_journal(self, [self._armed_line(self._JOURNALED)])
+        orphans = cl._sweep_orphans_with_entry_trails(
+            _PositionRefsBroker([self._UNJOURNALED_REF]), []
+        )
+        self.assertEqual([o.external_reference for o in orphans], [self._UNJOURNALED_REF])
+
+    def test_unreadable_entry_trail_journal_degrades_to_more_alerts(self) -> None:
+        # Fail-safe direction: a journal read that raises must not crash the
+        # sweep and must not hide anything — the position is flagged as before.
+        def _boom(**_kwargs: Any) -> Any:
+            raise RuntimeError("journal read failed")
+
+        with mock.patch.object(entry_trails, "read_entry_trail_fold", _boom):
+            orphans = cl._sweep_orphans_with_entry_trails(
+                _PositionRefsBroker([self._JOURNALED_REF]), []
+            )
+        self.assertEqual([o.external_reference for o in orphans], [self._JOURNALED_REF])
+
+    def test_missing_entry_trail_journal_flags_the_position(self) -> None:
+        _entry_trail_journal(self, None)
+        orphans = cl._sweep_orphans_with_entry_trails(
+            _PositionRefsBroker([self._JOURNALED_REF]), []
+        )
+        self.assertEqual([o.external_reference for o in orphans], [self._JOURNALED_REF])
+
+    def _terminal_line(self, kind: str) -> str:
+        import json
+
+        return json.dumps({"kind": kind, "crid": self._JOURNALED})
+
+    def _sweep_after(self, lines: list[str]) -> list[str]:
+        _entry_trail_journal(self, lines)
+        orphans = cl._sweep_orphans_with_entry_trails(
+            _PositionRefsBroker([self._JOURNALED_REF]), []
+        )
+        return [o.external_reference for o in orphans]
+
+    def test_fired_tier_position_is_not_an_orphan(self) -> None:
+        armed = self._armed_line(self._JOURNALED)
+        fired = self._terminal_line(entry_trails.KIND_FIRED)
+        self.assertEqual(self._sweep_after([armed, fired]), [])
+
+    def test_position_under_a_non_fill_terminal_is_still_an_orphan(self) -> None:
+        # Counterexample: a tier the journal ended WITHOUT a fill (cancelled,
+        # expired, suspended) cannot own a position. A position under its fire
+        # ref means a raced fill nothing manages any more, so it must be flagged.
+        for kind in (
+            entry_trails.KIND_CANCELLED,
+            entry_trails.KIND_EXPIRED,
+            entry_trails.KIND_SUSPENDED,
+        ):
+            with self.subTest(kind=kind):
+                lines = [self._armed_line(self._JOURNALED), self._terminal_line(kind)]
+                self.assertEqual(self._sweep_after(lines), [self._JOURNALED_REF])
+
+    def test_tier_that_never_armed_is_still_an_orphan(self) -> None:
+        # The trail_armed write-ahead precedes every POST, so a tier that only
+        # opened a watch never sent an order that could have filled.
+        self.assertEqual(
+            self._sweep_after([_watch_open_line(self._JOURNALED)]), [self._JOURNALED_REF]
+        )
+
+
+class TestBuildDefaultDepsWiresTheEntryTrailOrphanSweep(unittest.TestCase):
+    """#1556: the daemon's real ``sweep_orphans_fn`` (not only the helper)
+    reads entry_trails.jsonl for the position arm."""
+
+    _JOURNALED = "UBER-2026-09-08-entry-t0"
+
+    def _sweep_fn(self) -> Any:
+        import json
+
+        armed = json.dumps({"kind": "trail_armed", "crid": self._JOURNALED, "order_id": None})
+        _entry_trail_journal(self, [armed])
+        with (
+            _isolated_home(),
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_AmendCapableBroker(),
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+        ):
+            deps = cl.build_default_deps(
+                notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
+            )
+            return deps.sweep_orphans_fn
+
+    def test_journaled_entry_trail_position_is_not_an_orphan(self) -> None:
+        sweep_fn = self._sweep_fn()
+        self.assertEqual(sweep_fn(_PositionRefsBroker([f"{self._JOURNALED}-fire"])), [])
+
+    def test_unjournaled_entry_trail_position_is_still_an_orphan(self) -> None:
+        sweep_fn = self._sweep_fn()
+        unjournaled = "UBER-2026-09-08-entry-t1-fire"
+        orphans = sweep_fn(_PositionRefsBroker([unjournaled]))
+        self.assertEqual([o.external_reference for o in orphans], [unjournaled])
+
+
 class TestLatestPlannedSkipsMalformedLines(unittest.TestCase):
     def test_missing_keys_or_unparsable_price_are_skipped(self) -> None:
         lines = [

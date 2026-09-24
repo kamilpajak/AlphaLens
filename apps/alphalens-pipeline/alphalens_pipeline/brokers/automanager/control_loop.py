@@ -2883,6 +2883,55 @@ def _entry_fire_request_id(crid: str) -> str:
     return f"{crid}-fire"
 
 
+def _tier_can_own_a_fill(tier: entry_trails.EntryTrailTierState) -> bool:
+    """Whether the journal lets this tier own a filled position: a ``fired``
+    terminal, or a live tier whose latest kind is ``trail_armed`` (the crash
+    window between the fill and its ``fired`` line; the write-ahead precedes
+    every POST). A ``cancelled`` / ``expired`` / ``suspended`` terminal says the
+    tier ended WITHOUT a fill, so a position under it is a raced fill nothing
+    manages any more, and a tier that never armed never sent an order."""
+    if tier.terminal_kind is not None:
+        return tier.terminal_kind == entry_trails.KIND_FIRED
+    return tier.latest_kind == entry_trails.KIND_TRAIL_ARMED
+
+
+def _entry_trail_position_refs() -> frozenset[str]:
+    """The ``ExternalReference`` of every position an entry trail can have filled:
+    ``<crid>-fire`` for each crid RECORDED in ``entry_trails.jsonl`` whose state
+    can own a fill (#1556, :func:`_tier_can_own_a_fill`).
+
+    Read from the journal, never inferred from a reference's shape, so the
+    orphan sweep still flags an entry-trail position whose crid was never
+    journaled. Fail-safe: a read that raises yields the EMPTY set, so the sweep
+    degrades to MORE alerts (the pre-#1556 behaviour), never fewer, and never
+    crashes the tick (``_run_orphan_sweep`` only contains ``BrokerError``)."""
+    try:
+        fold = entry_trails.read_entry_trail_fold()
+    except Exception as exc:  # broad on purpose: a diagnostic read must not crash the tick
+        logger.warning("orphan sweep: entry-trails journal read failed: %s", exc)
+        return frozenset()
+    return frozenset(
+        _entry_fire_request_id(crid)
+        for crid, tier in fold.tiers.items()
+        if _tier_can_own_a_fill(tier)
+    )
+
+
+def _sweep_orphans_with_entry_trails(
+    broker: Broker, records: Iterable[Mapping[str, Any]]
+) -> list[Any]:
+    """The daemon's orphan sweep: the submission journal ``records`` plus the
+    entry-trail order marker and the journaled entry-trail position refs."""
+    from alphalens_pipeline.brokers.automanager import orphan_sweeper
+
+    return orphan_sweeper.sweep(
+        broker,
+        records,
+        entry_trail_ref_marker=_ENTRY_ORDER_REF_MARKER,
+        entry_trail_position_refs=_entry_trail_position_refs(),
+    )
+
+
 def _cancel_working_entry_orders(deps: LoopDeps, report: TickReport) -> None:
     """KILL cleanup (memo §3 G2): cancel every working ``-entry-`` family order.
 
@@ -4885,7 +4934,6 @@ def build_default_deps(
     state_paths.assert_no_legacy_flat_state()
 
     from alphalens_pipeline.brokers.automanager import (  # noqa: F401 (planner/safety used by _make_place_pick)
-        orphan_sweeper,
         picks,
         placement_planner,
         reconcile_bridge,
@@ -5072,9 +5120,7 @@ def build_default_deps(
         execute_protection=_make_protection_executor(
             broker, throttle, place_oco_exit=oco_placer, amend_stop=amend_placer
         ),
-        sweep_orphans_fn=lambda b: orphan_sweeper.sweep(
-            b, _read_records(), entry_trail_ref_marker=_ENTRY_ORDER_REF_MARKER
-        ),
+        sweep_orphans_fn=lambda b: _sweep_orphans_with_entry_trails(b, _read_records()),
         alert=base_alert,
         alert_throttled=_throttled,
         place_oco_exit=oco_placer,

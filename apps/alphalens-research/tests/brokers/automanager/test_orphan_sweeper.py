@@ -2,7 +2,8 @@
 
 On start it flags any open ORDER whose id the journal never recorded (entry +
 exit ids) and any open POSITION whose ExternalReference is absent from the
-journal's client_request_ids. Strictly read-only + alert-only; degrades to an
+journal's client_request_ids and from the fire references of the entry-trail
+crids journaled in entry_trails.jsonl. Strictly read-only + alert-only; degrades to an
 order-only sweep when the broker lacks the position-reference capability.
 """
 
@@ -141,6 +142,57 @@ class OrphanSweeperTests(unittest.TestCase):
         self.assertEqual(
             sweep(broker, [_record()]),
             [Orphan(order_id="TR-1", external_reference="", kind="order")],
+        )
+
+    def test_journaled_entry_trail_position_is_not_an_orphan(self) -> None:
+        # #1556: an entry-trail pick writes ``brackets: []`` to the submission
+        # journal, so its filled position's reference (<crid>-fire) is unknown
+        # there. The fire refs of crids journaled in entry_trails.jsonl are known.
+        broker = _FullStubBroker(
+            open_orders=[], open_refs=["rid-1", "UBER-2026-09-08-entry-t0-fire"]
+        )
+        orphans = sweep(
+            broker,
+            [_record()],
+            entry_trail_position_refs=frozenset({"UBER-2026-09-08-entry-t0-fire"}),
+        )
+        self.assertEqual(orphans, [])
+
+    def test_unjournaled_entry_trail_position_is_still_an_orphan(self) -> None:
+        # Counterexample: the exemption is a JOURNAL check, not a name check. A
+        # position whose ref has the entry-trail shape but whose crid is NOT
+        # journaled is a real place-before-journal orphan and must be flagged,
+        # even with the order-arm marker passed.
+        broker = _FullStubBroker(open_orders=[], open_refs=["RHI-2026-09-02-entry-t2-fire"])
+        orphans = sweep(
+            broker,
+            [_record()],
+            entry_trail_ref_marker="-entry-t",
+            entry_trail_position_refs=frozenset({"RHI-2026-09-02-entry-t0-fire"}),
+        )
+        self.assertEqual(
+            orphans,
+            [
+                Orphan(
+                    order_id="",
+                    external_reference="RHI-2026-09-02-entry-t2-fire",
+                    kind="position",
+                )
+            ],
+        )
+
+    def test_entry_trail_position_flagged_when_no_trail_refs_given(self) -> None:
+        # Default (no journal refs passed): the old behaviour holds.
+        broker = _FullStubBroker(open_orders=[], open_refs=["UBER-2026-09-08-entry-t0-fire"])
+        self.assertEqual(
+            sweep(broker, [_record()], entry_trail_ref_marker="-entry-t"),
+            [
+                Orphan(
+                    order_id="",
+                    external_reference="UBER-2026-09-08-entry-t0-fire",
+                    kind="position",
+                )
+            ],
         )
 
 
