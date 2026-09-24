@@ -130,6 +130,13 @@ That is deliberate: a document that says nothing about its exit has not asked fo
 one to be managed, and inheriting a server-side policy would move real stops that
 nobody asked to move.
 
+The brief producer makes the author state it too (#1530). `alphalens thematic
+intent` requires `--exit trail|none` and has no default: `trail` declares the
+deployment's trailing stop, with its numbers read off the policy registry, and
+`none` declares nothing, so the stop is never moved. Both commands print the
+declaration in plain words: the producer on stderr, and `broker arm` in its human
+output, with the price at which a trail would arm.
+
 Parameters are yours to choose within the rules below; they are used as declared,
 never replaced by this deployment's own numbers. `0.5R` is not a comparable
 quantity across hand-set stops — 1R is 6.8% of entry on one instrument and 29% on
@@ -450,7 +457,7 @@ jq -cR 'fromjson? | select(.ticker == "KO" and .status == "armed") | .intent
   mean "replace", and stating the old date would arm under that date.
 - The door refuses the copy while the original is still armed. `disarm` it first.
 - Manual picks only. A copied brief pick is refused (`trade_date_required`); produce
-  it again with `alphalens thematic intent`.
+  it again with `alphalens thematic intent ... --exit trail|none`.
 - For LIVE, read `broker_orders/live/picks.jsonl` and arm with `--env live`.
 - Lines armed before #1475 (2026-09-16) state a percent size or `meta.brief_date` and
   are refused by the door. Start from a template instead.

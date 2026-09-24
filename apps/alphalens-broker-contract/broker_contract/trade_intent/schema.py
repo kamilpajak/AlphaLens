@@ -443,7 +443,7 @@ class TradeIntent:
     # builtin `exit` as an attribute (safe: instance attribute, never called).
     exit: ExitGeometrySpec | None = contract_field(
         "Optional exit geometry: the levels to place, and how the stop is managed "
-        "afterwards. Null when the source brief yields no buildable bracket.",
+        "afterwards. Null, like an empty reaction plan, means the stop is never moved.",
         default=None,
     )
     account_id: str = contract_field(

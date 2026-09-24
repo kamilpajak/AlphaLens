@@ -56,7 +56,13 @@ def _candidate(ticker: str = "KBH", trade_setup: dict | None = None) -> Candidat
 def _document(candidates=None, **kwargs):
     from alphalens_pipeline.thematic.brief_intent import brief_intent_document
 
-    arguments = {"ticker": "KBH", "brief_date": BRIEF_DATE, "currency": "PLN", "frame": 24000.0}
+    arguments = {
+        "ticker": "KBH",
+        "brief_date": BRIEF_DATE,
+        "currency": "PLN",
+        "frame": 24000.0,
+        "exit_policy": "trail",
+    }
     arguments.update(kwargs)
     return brief_intent_document([_candidate()] if candidates is None else candidates, **arguments)
 
@@ -92,6 +98,31 @@ class TheDocumentIsWhatAnAuthorWrites(unittest.TestCase):
 
     def test_the_ticker_is_matched_without_case(self) -> None:
         self.assertEqual(_document(ticker="kbh")["instrument"]["ticker"], "KBH")
+
+
+class TheExitIsTheAuthorsChoice(unittest.TestCase):
+    """#1530: the exit used to be added silently; now the author states it."""
+
+    def test_trail_declares_the_registry_trail(self) -> None:
+        from alphalens_pipeline.paper.sizing import build_exit_declaration
+        from broker_contract.trade_intent.codec import author_jsonable
+
+        self.assertEqual(_document()["exit"], author_jsonable(build_exit_declaration()))
+
+    def test_none_declares_no_stop_management(self) -> None:
+        self.assertIsNone(_document(exit_policy="none")["exit"])
+
+    def test_an_unknown_choice_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            _document(exit_policy="chandelier")
+
+    def test_there_is_no_default(self) -> None:
+        from alphalens_pipeline.thematic.brief_intent import brief_intent_document
+
+        with self.assertRaises(TypeError):
+            brief_intent_document(
+                [_candidate()], ticker="KBH", brief_date=BRIEF_DATE, currency="PLN", frame=24000.0
+            )
 
 
 class TheSizeIsAnAmount(unittest.TestCase):

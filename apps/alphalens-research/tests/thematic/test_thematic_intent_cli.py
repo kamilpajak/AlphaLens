@@ -63,11 +63,12 @@ class _IntentCase(unittest.TestCase):
         self.briefs = Path(tmp.name) / "briefs"
         _write_brief(self.briefs, {"KBH": json.dumps(_setup())})
 
-    def invoke(self, *argv: str):
+    def invoke(self, *argv: str, exit_policy: str | None = "trail"):
         from alphalens_cli.main import app
 
+        stated = [] if exit_policy is None else ["--exit", exit_policy]
         return self.runner.invoke(
-            app, ["thematic", "intent", *argv, "--briefs-dir", str(self.briefs)]
+            app, ["thematic", "intent", *argv, *stated, "--briefs-dir", str(self.briefs)]
         )
 
     def assert_failed(self, result, exit_code: int, message: str) -> None:
@@ -126,6 +127,35 @@ class UsageErrors(_IntentCase):
                 result = self.invoke(*argv)
                 self.assertEqual(result.exit_code, EXIT_USAGE, result.output)
                 self.assertEqual(result.stdout, "")
+
+    def test_the_exit_must_be_stated(self) -> None:
+        # #1530: no silent default. The trail used to be added without a word.
+        argv = ["KBH", "--date", BRIEF_DATE, "--frame", "24000", "--currency", "PLN"]
+        for name, choice in {"absent": None, "unknown": "chandelier"}.items():
+            with self.subTest(name):
+                result = self.invoke(*argv, exit_policy=choice)
+                self.assertEqual(result.exit_code, EXIT_USAGE, result.output)
+                self.assertEqual(result.stdout, "")
+
+
+class TheExitIsStatedAndShown(_IntentCase):
+    ARGV = ("KBH", "--date", BRIEF_DATE, "--frame", "24000", "--currency", "PLN")
+
+    def test_trail_declares_the_trailing_stop_and_says_so(self) -> None:
+        result = self.invoke(*self.ARGV, exit_policy="trail")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        plan = json.loads(result.stdout)["exit"]["reaction_plan"]
+        self.assertEqual(plan, [{"kind": "trailing_stop", "arm_trigger_r": 0.5, "trail_frac": 0.6}])
+        self.assertIn("exit: trailing stop", result.stderr)
+
+    def test_none_declares_nothing_and_warns_about_the_lenses(self) -> None:
+        result = self.invoke(*self.ARGV, exit_policy="none")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIsNone(json.loads(result.stdout)["exit"])
+        self.assertIn("exit: none", result.stderr)
+        self.assertIn("/edge", result.stderr)
 
 
 class Refusals(_IntentCase):
@@ -200,6 +230,35 @@ class ThroughTheDoor(_IntentCase):
         self.assertEqual(by_generation[2].record["intent"]["intent_id"], "KBH:2026-08-21-g2")
 
 
+class NoneThroughTheDoor(_IntentCase):
+    def test_the_door_accepts_a_brief_pick_with_no_exit(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        home = self.briefs.parent / "home"
+        home.mkdir()
+        document = self.invoke(
+            "KBH",
+            "--date",
+            BRIEF_DATE,
+            "--frame",
+            "24000",
+            "--currency",
+            "PLN",
+            exit_policy="none",
+        ).stdout
+        moment = dt.datetime(2026, 9, 16, 15, 0, tzinfo=dt.UTC)
+        with (
+            mock.patch("pathlib.Path.home", return_value=home),
+            mock.patch("alphalens_cli.commands.broker._arming_now", return_value=moment),
+        ):
+            result = self.runner.invoke(
+                broker_app, ["arm", "-", "--dry-run", "--format", "json"], input=document
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIsNone(json.loads(result.stdout)["intent"]["exit"])
+
+
 class TheRealBinaryWritesOneJsonValue(unittest.TestCase):
     """Acceptance 2, on the process a shell pipe actually runs. `cwd` is a temp
     directory so `main()`'s `load_dotenv()` cannot load the repo's `.env`."""
@@ -221,6 +280,8 @@ class TheRealBinaryWritesOneJsonValue(unittest.TestCase):
                     "24000",
                     "--currency",
                     "PLN",
+                    "--exit",
+                    "trail",
                     "--briefs-dir",
                     str(briefs),
                 ],
@@ -234,6 +295,8 @@ class TheRealBinaryWritesOneJsonValue(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["instrument"]["ticker"], "KBH")
+        # The summary goes to stderr, so the pipe into `broker arm -` stays clean.
+        self.assertIn("exit: trailing stop", completed.stderr)
 
 
 if __name__ == "__main__":

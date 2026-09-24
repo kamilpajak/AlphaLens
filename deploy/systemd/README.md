@@ -1580,6 +1580,7 @@ Pick a ticker from a recent local brief (needs `~/.alphalens/thematic_briefs/<da
 # producer that fails is reported as itself, not as the door's empty-input refusal.
 set -o pipefail
 .venv/bin/alphalens thematic intent S --date <YYYY-MM-DD> --frame <account-equity> --currency <ACCOUNT_CCY> \
+    --exit trail \
   | .venv/bin/alphalens broker arm - --env sim
 cat ~/.alphalens/broker_orders/sim/picks.jsonl        # one armed line
 
@@ -1616,7 +1617,7 @@ journalctl --user -u alphalens-broker-manager.service -f      # per-tick loop
 | **Emergency stop (instant)** | `touch ~/.alphalens/broker_orders/sim/KILL` (this SIM instance only) or `touch ~/.alphalens/broker_orders/KILL` (GLOBAL — halts SIM and LIVE, ADR 0016 D3) — the loop stops placing, still reconciles + cancels |
 | Resume after kill | `rm` the KILL file you created |
 | **Disarm placement** (softer than kill) | `rm ~/.config/systemd/user/alphalens-broker-manager.service.d/10-allow-orders.conf` → `systemctl --user daemon-reload && systemctl --user restart alphalens-broker-manager.service` (runs inert). Re-arm by re-copying the tracked file. NEVER via `/etc/alphalens/env` — `EnvironmentFile=` overrides every `Environment=` line, in-unit and drop-in |
-| Arm a new pick | `set -o pipefail; .venv/bin/alphalens thematic intent TICKER --date YYYY-MM-DD --frame EQUITY --currency CCY \| .venv/bin/alphalens broker arm -` (the brief percent becomes a fixed amount, #1467; `--notional AMOUNT` instead of `--frame` states it directly; add `--dry-run` to the door to see the derived identity first; daemon picks it up next tick, joined to `submissions.jsonl` so it places once) (`--env sim\|live` selects the instance inbox; default sim — LIVE twin: §9.4) |
+| Arm a new pick | `set -o pipefail; .venv/bin/alphalens thematic intent TICKER --date YYYY-MM-DD --frame EQUITY --currency CCY --exit trail\|none \| .venv/bin/alphalens broker arm -` (`--exit` is required, #1530: `trail` = the registry trailing stop, `none` = the stop never moves; the brief percent becomes a fixed amount, #1467; `--notional AMOUNT` instead of `--frame` states it directly; add `--dry-run` to the door to see the derived identity first; daemon picks it up next tick, joined to `submissions.jsonl` so it places once) (`--env sim\|live` selects the instance inbox; default sim — LIVE twin: §9.4) |
 | **Correct a pick armed today** (wrong geometry / size) | `.venv/bin/alphalens broker disarm TICKER --date <today> --env sim\|live` (refused while a native entry trail rests — `broker cancel <order_id>` first), then arm a corrected document with `broker arm FILE --env sim\|live` (a manual pick: edit a template or copy the armed line with the `jq` recipe in `apps/alphalens-broker-contract/README.md` "Writing a manual pick"; a brief pick: run `thematic intent` again): the new pick is the NEXT **generation** (#1371) — own watch crids, own submissions key; the disarmed generation stays retired |
 | Inspect | `journalctl --user -u alphalens-broker-manager.service -f` |
 | State files | picks: `~/.alphalens/broker_orders/sim/picks.jsonl`; placements: `~/.alphalens/broker_orders/sim/submissions.jsonl` (both append-only; LIVE twin under `broker_orders/live/`) |
@@ -1980,6 +1981,7 @@ systemctl --user show alphalens-broker-manager-live.service -p Environment
 
 set -o pipefail
 .venv/bin/alphalens thematic intent TICKER --date YYYY-MM-DD --frame 15000 --currency PLN \
+    --exit trail \
   | .venv/bin/alphalens broker arm - --env live
 journalctl --user -u alphalens-broker-manager-live.service -f
 ```

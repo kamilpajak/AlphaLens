@@ -237,6 +237,26 @@ class TheHappyPath(_DoorCase):
             self.assertIn(fragment, result.stdout)
         self.assertEqual(self.inbox_bytes(), b"")
 
+    def test_the_human_output_shows_the_exit(self) -> None:
+        # #1530: the door's human output used to leave the exit out entirely.
+        trailing = {
+            **_document(),
+            "exit": {
+                "initial_levels": None,
+                "reaction_plan": [
+                    {"kind": "trailing_stop", "arm_trigger_r": 0.5, "trail_frac": 0.6}
+                ],
+            },
+        }
+        for name, document, fragment in (
+            ("trailing", trailing, "exit: trailing stop"),
+            ("none", _document(), "exit: none — the stop stays at 66"),
+        ):
+            with self.subTest(name):
+                result = self.arm(document, "--dry-run")
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertIn(fragment, result.stdout)
+
     def test_dry_run_compiles_and_appends_nothing(self) -> None:
         result = self.arm(_document(), "--dry-run", "--format", "json")
 
@@ -832,6 +852,8 @@ class TheOldBriefFormPointsAtTheProducer(_DoorCase):
                 "24000",
                 "--currency",
                 "PLN",
+                "--exit",
+                "<trail|none>",
             ],
         )
 
@@ -839,7 +861,10 @@ class TheOldBriefFormPointsAtTheProducer(_DoorCase):
         result = self.invoke(["arm", "KO", "--date", "2026-09-16", "--format", "json"])
 
         argv = self.assert_refused(result, "usage")["suggestions"][0]["argv"]
-        self.assertEqual(argv[-4:], ["--frame", "<FRAME>", "--currency", "<CURRENCY>"])
+        self.assertEqual(
+            argv[-6:],
+            ["--frame", "<FRAME>", "--currency", "<CURRENCY>", "--exit", "<trail|none>"],
+        )
 
     def test_a_file_named_like_the_ticker_is_never_read(self) -> None:
         document = self.home / "KO"

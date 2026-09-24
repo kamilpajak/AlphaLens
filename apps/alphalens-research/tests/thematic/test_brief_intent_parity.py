@@ -79,6 +79,7 @@ class TheProducerThroughTheDoorArmsWhatBrokerArmArmed(unittest.TestCase):
                     brief_date=dt.date.fromisoformat(fixture["brief_date"]),
                     currency=fixture["currency"],
                     frame=fixture["frame"],
+                    exit_policy="trail",
                 )
                 with (
                     mock.patch("pathlib.Path.home", return_value=home),

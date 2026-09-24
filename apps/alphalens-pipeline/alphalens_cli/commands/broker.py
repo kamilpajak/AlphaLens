@@ -1515,7 +1515,8 @@ def _document_text(source: str) -> str:
 _PRODUCER_HINT = (
     "`broker arm` takes a TradeIntent document (a file or - for stdin). A brief pick is "
     "written by the producer: alphalens thematic intent TICKER --date YYYY-MM-DD "
-    "(--frame EQUITY | --notional AMOUNT) --currency CCY | alphalens broker arm -"
+    "(--frame EQUITY | --notional AMOUNT) --currency CCY --exit trail|none "
+    "| alphalens broker arm -"
 )
 
 
@@ -1535,6 +1536,10 @@ def _producer_suggestion(
             "<FRAME>" if frame is None else frame,
             "--currency",
             "<CURRENCY>" if currency is None else currency,
+            # The exit is the author's choice with no default (#1530), so it is
+            # always a placeholder: the old form never carried it.
+            "--exit",
+            "<trail|none>",
         ),
         why=(
             "a brief pick is produced by `thematic intent` and piped into `broker arm -`; "
@@ -1685,6 +1690,8 @@ def _refusal_to_exit(exc: Any) -> typer.Exit:
 
 def _echo_armed_intent(intent: Any, *, amounts: list[float], replaces: bool) -> None:
     """Every field the door derived, so the author sees what is journaled."""
+    from alphalens_cli.exit_summary import describe_exit
+
     size = intent.spec.size
     tiers = ", ".join(
         f"{tier.tag or '-'} {tier.limit_price:g} ({tier.alloc_pct:g}% = {amount:.2f} "
@@ -1714,6 +1721,13 @@ def _echo_armed_intent(intent: Any, *, amounts: list[float], replaces: bool) -> 
         f"  tp:    {tps or 'none'}\n"
         f"  size:  {size.notional_acct:g} {size.currency}"
     )
+    # #1530: how the stop is managed after the fill used to be missing here.
+    for line in describe_exit(
+        intent.exit,
+        entry_tiers=intent.spec.entry_tiers,
+        disaster_stop=intent.spec.disaster_stop,
+    ):
+        typer.echo(f"  {line}")
 
 
 def _gated_completion(document: Any, *, env: str, picks_target: Path) -> Any:

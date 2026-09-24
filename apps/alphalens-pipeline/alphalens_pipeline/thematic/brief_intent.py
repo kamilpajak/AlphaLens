@@ -4,7 +4,7 @@ The arming door (``alphalens broker arm``) is the one way a pick enters a
 broker inbox. This module is what turns a thematic brief row into the document
 that door takes, so the broker group never reads a brief:
 
-    alphalens thematic intent TICKER --date D --frame F --currency C \\
+    alphalens thematic intent TICKER --date D --frame F --currency C --exit trail \\
       | alphalens broker arm - --env sim|live
 
 The document states the TRADE and nothing the door computes: no ``intent_id``,
@@ -12,6 +12,12 @@ The document states the TRADE and nothing the door computes: no ``intent_id``,
 a new pick and a re-run is refused while the first one is armed rather than
 silently replacing it. ``meta.trade_date`` is the brief date, which the door
 requires on a ``"brief"`` document: a brief's day 1 is the session after it.
+
+The exit is the author's choice, stated on every call (#1530). It used to be
+added silently, so an operator armed a trailing stop no card or output showed.
+``"trail"`` declares the deployment's trail, read off the registry by
+``build_exit_declaration`` so its numbers cannot drift; ``"none"`` declares no
+stop management, which the daemon reads as "never move the stop".
 
 A pure function over decoded brief rows. It imports nothing from
 ``alphalens_pipeline.brokers`` (pinned by ``test_module_dependencies.py``).
@@ -21,11 +27,12 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any, Final
 
 from broker_contract.sizing import TradeSetupNotPlannableError
 from broker_contract.trade_intent.codec import author_jsonable
-from broker_contract.trade_intent.schema import InstrumentHint
+from broker_contract.trade_intent.schema import ExitGeometrySpec, InstrumentHint, TradeSpec
 
 from alphalens_pipeline.paper.brief_loader import CandidateBrief
 from alphalens_pipeline.paper.sizing import (
@@ -42,6 +49,10 @@ BRIEF_INSTRUMENT_MIC: Final = "XNYS"
 
 _SOURCE_BRIEF: Final = "brief"
 _WHOLE_FRAME_PCT: Final = 100.0
+
+EXIT_TRAIL: Final = "trail"
+EXIT_NONE: Final = "none"
+EXIT_CHOICES: Final = (EXIT_TRAIL, EXIT_NONE)
 
 
 class BriefIntentRefusedError(Exception):
@@ -71,22 +82,43 @@ def _amount(trade_setup: dict, *, frame: float | None, notional: float | None) -
     return brief_notional(pct, frame)
 
 
-def brief_intent_document(
+def _exit_declaration(exit_policy: str) -> ExitGeometrySpec | None:
+    if exit_policy == EXIT_TRAIL:
+        return build_exit_declaration()
+    if exit_policy == EXIT_NONE:
+        return None
+    raise ValueError(f"exit_policy must be one of {EXIT_CHOICES}, got {exit_policy!r}")
+
+
+@dataclass(frozen=True)
+class BriefIntent:
+    """The document, plus the typed spec and exit it was rendered from, so a
+    caller can describe the exit to the author without decoding the JSON back."""
+
+    document: dict[str, Any]
+    spec: TradeSpec
+    exit: ExitGeometrySpec | None
+
+
+def build_brief_intent(
     candidates: Iterable[CandidateBrief],
     *,
     ticker: str,
     brief_date: dt.date,
     currency: str,
+    exit_policy: str,
     frame: float | None = None,
     notional: float | None = None,
 ) -> dict[str, Any]:
-    """The author document for ``ticker``'s row in the ``brief_date`` brief.
+    """The author document for ``ticker``'s row in the ``brief_date`` brief, with its parts.
 
     Sized from exactly one of ``frame`` (the brief's percent of it) and
-    ``notional`` (the amount as given), in ``currency``. Raises
+    ``notional`` (the amount as given), in ``currency``. ``exit_policy`` is one
+    of :data:`EXIT_CHOICES` and has no default. Raises
     :class:`BriefRowNotFoundError` when the brief has no such ticker and
     :class:`BriefIntentRefusedError` when the row cannot be planned.
     """
+    exit_declaration = _exit_declaration(exit_policy)
     rows = list(candidates)
     wanted = ticker.upper()
     candidate = next((c for c in rows if c.ticker.upper() == wanted), None)
@@ -103,18 +135,46 @@ def brief_intent_document(
     except TradeSetupNotPlannableError as exc:
         raise BriefIntentRefusedError(f"{wanted}: trade_setup not plannable — {exc}") from exc
 
-    return {
+    document = {
         "instrument": author_jsonable(InstrumentHint(ticker=wanted, mic=BRIEF_INSTRUMENT_MIC)),
         "spec": author_jsonable(spec),
-        "exit": author_jsonable(build_exit_declaration()),
+        "exit": None if exit_declaration is None else author_jsonable(exit_declaration),
         "meta": {"source": _SOURCE_BRIEF, "trade_date": brief_date.isoformat()},
     }
+    return BriefIntent(document=document, spec=spec, exit=exit_declaration)
+
+
+def brief_intent_document(
+    candidates: Iterable[CandidateBrief],
+    *,
+    ticker: str,
+    brief_date: dt.date,
+    currency: str,
+    exit_policy: str,
+    frame: float | None = None,
+    notional: float | None = None,
+) -> dict[str, Any]:
+    """Just the document of :func:`build_brief_intent`."""
+    return build_brief_intent(
+        candidates,
+        ticker=ticker,
+        brief_date=brief_date,
+        currency=currency,
+        exit_policy=exit_policy,
+        frame=frame,
+        notional=notional,
+    ).document
 
 
 __all__ = [
     "BRIEF_INSTRUMENT_MIC",
+    "EXIT_CHOICES",
+    "EXIT_NONE",
+    "EXIT_TRAIL",
+    "BriefIntent",
     "BriefIntentRefusedError",
     "BriefRowNotFoundError",
     "brief_intent_document",
     "brief_notional",
+    "build_brief_intent",
 ]

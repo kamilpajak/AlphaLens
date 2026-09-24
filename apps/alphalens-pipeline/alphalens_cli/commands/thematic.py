@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import os
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -1407,6 +1408,21 @@ _EXIT_NOT_FOUND = 4
 _EXIT_REFUSED = 1
 
 
+class IntentExit(StrEnum):
+    """How the stop is managed after the fill (#1530). No default on purpose."""
+
+    trail = "trail"
+    none = "none"
+
+
+# Printed with --exit none: the /edge what-if lenses replay every brief row with
+# the trail, so a pick armed without one is not what they measure.
+_NO_TRAIL_LENS_NOTE = (
+    "note: the /edge lenses model a trailing stop for every brief row; "
+    "this pick declares none, so they do not describe it"
+)
+
+
 def _intent_failure(message: str, exit_code: int) -> typer.Exit:
     typer.echo(message, err=True)
     return typer.Exit(exit_code)
@@ -1439,6 +1455,13 @@ def intent_command(
         help="The amount itself, in the account currency; the brief's percent is not "
         "used. Exactly one of --frame and --notional.",
     ),
+    exit_policy: IntentExit = typer.Option(
+        ...,
+        "--exit",
+        help="How the stop is managed after the fill. 'trail': the deployment's "
+        "trailing stop (registry policy breakeven_trail, read off the registry so "
+        "its numbers cannot drift). 'none': the stop is never moved. No default.",
+    ),
     briefs_dir: Path = typer.Option(
         brief_orchestrator.DEFAULT_OUTPUT_DIR, "--briefs-dir", help="Brief parquet root."
     ),
@@ -1450,7 +1473,12 @@ def intent_command(
     \b
       set -o pipefail
       alphalens thematic intent KBH --date 2026-08-21 --frame 24000 --currency PLN \\
-        | alphalens broker arm - --env sim
+        --exit trail | alphalens broker arm - --env sim
+
+    `--exit` is required: the stop management is stated, never added silently.
+    Stderr then says how the stop will be managed, with the price at which a
+    trail arms. Stderr is read only after the door has run, so look first with
+    `broker arm - --dry-run`.
 
     The document states the trade and leaves identity to the door, which
     derives `intent_id`, `armed_ts` and each `r_multiple` and assigns the
@@ -1464,8 +1492,10 @@ def intent_command(
     from alphalens_pipeline.thematic.brief_intent import (
         BriefIntentRefusedError,
         BriefRowNotFoundError,
-        brief_intent_document,
+        build_brief_intent,
     )
+
+    from alphalens_cli.exit_summary import describe_exit
 
     try:
         brief_date = dt.date.fromisoformat(date)
@@ -1484,11 +1514,12 @@ def intent_command(
         raise _intent_failure(str(exc), _EXIT_REFUSED) from exc
 
     try:
-        document = brief_intent_document(
+        intent = build_brief_intent(
             candidates,
             ticker=ticker,
             brief_date=brief_date,
             currency=currency.strip().upper(),
+            exit_policy=exit_policy.value,
             frame=frame,
             notional=notional,
         )
@@ -1498,13 +1529,21 @@ def intent_command(
         raise _intent_failure(str(exc), _EXIT_REFUSED) from exc
 
     try:
-        rendered = json.dumps(document, allow_nan=False, separators=(",", ":"))
+        rendered = json.dumps(intent.document, allow_nan=False, separators=(",", ":"))
     except ValueError as exc:
         raise _intent_failure(
             f"{ticker.upper()}: the document cannot be written as strict JSON — {exc}",
             _EXIT_REFUSED,
         ) from exc
     typer.echo(rendered)
+    for line in describe_exit(
+        intent.exit,
+        entry_tiers=intent.spec.entry_tiers,
+        disaster_stop=intent.spec.disaster_stop,
+    ):
+        typer.echo(line, err=True)
+    if exit_policy is IntentExit.none:
+        typer.echo(_NO_TRAIL_LENS_NOTE, err=True)
 
 
 @thematic_app.command("verify-cache")
