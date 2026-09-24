@@ -28,7 +28,7 @@ from broker_contract.exit_geometry.registry import resolve_exit_policy, resolve_
 
 
 class TestFractionalGivebackTarget(unittest.TestCase):
-    def test_target_is_entry_plus_frac_of_gain(self):
+    def test_target_is_entry_plus_kept_gain_frac_of_gain(self):
         self.assertAlmostEqual(fractional_giveback_target(100.0, 110.0, kept_gain_frac=0.6), 106.0)
 
     def test_floors_at_entry_when_peak_below_entry(self):
@@ -42,12 +42,12 @@ class TestFractionalGivebackTarget(unittest.TestCase):
         self.assertIsNone(fractional_giveback_target(math.nan, 110.0, kept_gain_frac=0.6))
         self.assertIsNone(fractional_giveback_target(100.0, math.inf, kept_gain_frac=0.6))
 
-    def test_frac_one_trails_at_the_peak(self):
-        # The upper bound is INCLUSIVE: frac=1.0 is a zero-giveback trail
+    def test_kept_gain_frac_one_trails_at_the_peak(self):
+        # The upper bound is INCLUSIVE: kept_gain_frac=1.0 is a zero-giveback trail
         # pinned to the peak itself.
         self.assertAlmostEqual(fractional_giveback_target(100.0, 110.0, kept_gain_frac=1.0), 110.0)
 
-    def test_none_on_frac_outside_unit_interval(self):
+    def test_none_on_kept_gain_frac_outside_unit_interval(self):
         self.assertIsNone(fractional_giveback_target(100.0, 110.0, kept_gain_frac=0.0))
         self.assertIsNone(fractional_giveback_target(100.0, 110.0, kept_gain_frac=-0.5))
         self.assertIsNone(fractional_giveback_target(100.0, 110.0, kept_gain_frac=1.5))
