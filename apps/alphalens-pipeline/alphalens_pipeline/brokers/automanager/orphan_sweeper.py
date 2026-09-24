@@ -4,9 +4,20 @@ _place_tiers journals each tier AFTER its POST, so a crash between the POST and 
 journal write leaves an order/position at Saxo the append-only journal never
 recorded. On start-of-process the sweeper flags them (design memo, Components
 §12): an open ORDER whose id is absent from the journal's known entry + exit
-order ids, and an open POSITION whose ExternalReference (the bracket
-client_request_id) is absent from the journal's client_request_ids. STRICTLY
-read-only + alert-only — never cancels an unrecorded order.
+order ids, and an open POSITION whose ExternalReference is absent from the
+known position references. STRICTLY read-only + alert-only — never cancels an
+unrecorded order.
+
+The known position references are the bracket client_request_ids of the
+submission journal PLUS the caller-supplied ``entry_trail_position_refs``: the
+``<crid>-fire`` references of the entry-trail crids RECORDED in
+entry_trails.jsonl (#1556). An entry-trail pick writes ``brackets: []`` to the
+submission journal and journals its orders to entry_trails.jsonl instead, so
+without them every entry-trail position is a false orphan on each restart. It
+is a journal check, not a name check: a position whose reference merely has the
+entry-trail shape but whose crid is NOT journaled is still flagged. It is sound
+because the entry trail journals its crid (``watch_open``, then ``trail_armed``
+with a null order id) BEFORE the order POST.
 
 The order arm considers ONLY entry-side orders. A protective SELL exit leg (a
 standalone stop or an OCO leg) is placed by the protection pass, journaled in a
@@ -21,7 +32,7 @@ order-only sweep (mirrors the reconcile engine's capability degradation).
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -69,6 +80,7 @@ def sweep(
     journal: Iterable[Mapping[str, Any]],
     *,
     entry_trail_ref_marker: str | None = None,
+    entry_trail_position_refs: Collection[str] = frozenset(),
 ) -> list[Orphan]:
     """Flag open orders/positions at the broker that the journal never recorded.
 
@@ -79,7 +91,14 @@ def sweep(
     family), so a BUY order whose reference contains it is a KNOWN entry-trail
     order — recognised by the deterministic reference even inside the G3
     write-ahead window before its id is journaled. ``None`` keeps the old
-    behaviour (no entry-trail feature)."""
+    behaviour (no entry-trail feature).
+
+    ``entry_trail_position_refs`` (#1556): the ``ExternalReference`` values of
+    positions filled by an entry trail whose crid is RECORDED in
+    ``entry_trails.jsonl`` — known position references in addition to the
+    bracket ``client_request_id`` values. The caller builds them from the
+    journal, never from the reference's shape, so an unjournaled entry-trail
+    position is still flagged. Empty (the default) keeps the old behaviour."""
     known_order_ids, known_refs = _journal_index(journal)
     orphans: list[Orphan] = []
     for state in broker.list_open_orders():
@@ -106,11 +125,11 @@ def sweep(
                 Orphan(order_id=str(state.order_id), external_reference="", kind="order")
             )
     if isinstance(broker, SupportsFillCrossCheck):
-        for reference in broker.get_open_position_references():
-            if str(reference) not in known_refs:
-                orphans.append(
-                    Orphan(order_id="", external_reference=str(reference), kind="position")
-                )
+        known_refs.update(entry_trail_position_refs)
+        for raw_reference in broker.get_open_position_references():
+            reference = str(raw_reference)
+            if reference not in known_refs:
+                orphans.append(Orphan(order_id="", external_reference=reference, kind="position"))
     return orphans
 
 

@@ -3362,6 +3362,72 @@ class TestRunOnceAlertsEachOrphan(unittest.TestCase):
         self.assertTrue(any("99" in a and "[order]" in a for a in alerts))
 
 
+class _PositionRefsBroker:
+    """A broker exposing open orders (none) + open position references, i.e. the
+    SupportsFillCrossCheck surface the orphan sweep's position arm reads."""
+
+    name = "stub-position-refs"
+
+    def __init__(self, refs: list[str]) -> None:
+        self._refs = refs
+
+    def list_open_orders(self) -> list[OrderState]:
+        return []
+
+    def get_open_position_references(self) -> list[str]:
+        return list(self._refs)
+
+    def get_closed_position_rows(self) -> list[dict[str, Any]]:
+        return []
+
+
+class TestDefaultOrphanSweepReadsEntryTrailJournal(unittest.TestCase):
+    """#1556: the daemon's sweep treats ``<crid>-fire`` as a known position
+    reference only when ``<crid>`` is recorded in entry_trails.jsonl."""
+
+    _JOURNALED = "UBER-2026-09-08-entry-t0"
+    _JOURNALED_REF = "UBER-2026-09-08-entry-t0-fire"
+    _UNJOURNALED_REF = "UBER-2026-09-08-entry-t1-fire"
+
+    def _armed_line(self, crid: str) -> str:
+        import json
+
+        return json.dumps({"kind": "trail_armed", "crid": crid, "order_id": None})
+
+    def test_journaled_entry_trail_position_is_not_an_orphan(self) -> None:
+        _entry_trail_journal(self, [self._armed_line(self._JOURNALED)])
+        orphans = cl._sweep_orphans_with_entry_trails(
+            _PositionRefsBroker([self._JOURNALED_REF]), []
+        )
+        self.assertEqual(orphans, [])
+
+    def test_unjournaled_entry_trail_position_is_still_an_orphan(self) -> None:
+        _entry_trail_journal(self, [self._armed_line(self._JOURNALED)])
+        orphans = cl._sweep_orphans_with_entry_trails(
+            _PositionRefsBroker([self._UNJOURNALED_REF]), []
+        )
+        self.assertEqual([o.external_reference for o in orphans], [self._UNJOURNALED_REF])
+
+    def test_unreadable_entry_trail_journal_degrades_to_more_alerts(self) -> None:
+        # Fail-safe direction: a journal read that raises must not crash the
+        # sweep and must not hide anything — the position is flagged as before.
+        def _boom(**_kwargs: Any) -> Any:
+            raise RuntimeError("journal read failed")
+
+        with mock.patch.object(entry_trails, "read_entry_trail_fold", _boom):
+            orphans = cl._sweep_orphans_with_entry_trails(
+                _PositionRefsBroker([self._JOURNALED_REF]), []
+            )
+        self.assertEqual([o.external_reference for o in orphans], [self._JOURNALED_REF])
+
+    def test_missing_entry_trail_journal_flags_the_position(self) -> None:
+        _entry_trail_journal(self, None)
+        orphans = cl._sweep_orphans_with_entry_trails(
+            _PositionRefsBroker([self._JOURNALED_REF]), []
+        )
+        self.assertEqual([o.external_reference for o in orphans], [self._JOURNALED_REF])
+
+
 class TestLatestPlannedSkipsMalformedLines(unittest.TestCase):
     def test_missing_keys_or_unparsable_price_are_skipped(self) -> None:
         lines = [
