@@ -17,15 +17,33 @@ read. `--run` refuses to execute before RUN_NOT_BEFORE without an explicit
 `--override-run-date`, which is a logged protocol deviation; the gap exists so
 this registration is merged before the look, never alongside it.
 
-WHY IT MAY RUN NOW
+WHY IT MAY NOT RUN YET  (amended 2026-09-24; it read "WHY IT MAY RUN NOW")
 The unblocking condition #1227 wrote for itself is ">= 80% power at 50% of the
-July discovery effect for the ATR test". Measured outcome-blind and recorded in
-`a20_power_preflight_2026_09.md`: 83.9% under a three-member Holm family, 92.9%
-at the family of one this registration uses. The inference method's SIZE was
-then verified on an overlap-aware simulator
-(`a20_overlap_inference_2026_09.md`): 4.0-7.1% against a nominal 5%, worst
-corner 7.125% with a 95% interval [6.87, 7.38] under a pre-specified 7.5% bar.
-Both pre-run data-integrity gates cleared: mixed price adjustment
+July discovery effect for the ATR test". IT IS NOT MET. The figures that said it
+was - 83.9% under a three-member Holm family, 92.9% at the family of one - were
+computed on a held-out panel counted as distinct (brief_date, ticker) pairs
+rather than the collapsed ticker-episodes ledger rule 5 defines and the panel
+loader below applies. Corrected and re-run on the same seeds: 46.2% and 66.7%,
+on 206 episodes in 33 arrival clusters rather than 419 in 35
+(`a20_power_preflight_2026_09.md` §7).
+
+RUN_NOT_BEFORE therefore moves to 2026-10-09, the date the frozen MIN_EPISODES
+floor is reached at the measured accrual. Nothing else in this registration
+changes: the estimand, the panel definition, DELTA, the decision rule, the
+conclusion language and the tilt mapping are all as frozen on 2026-09-23, and no
+held-out `sel_ar_20` value has been read at any point.
+
+A known mismatch, recorded rather than fixed: the power tooling measures a
+TWO-SIDED test while this registration tests one-sided ("less"), so both figures
+above understate the registered test - roughly 77% by normal approximation on the
+measured 66.7%, still under the bar. It is not corrected because it would move a
+failed gate upward right after it failed, and because it does not change the
+date: one-sided needs FEWER clusters than the episode floor does.
+
+The other pre-run gates DID clear and are unaffected. The inference method's SIZE
+was verified on an overlap-aware simulator (`a20_overlap_inference_2026_09.md`),
+re-confirmed on the corrected panel at 4.2-6.1% against a nominal 5% and a
+pre-specified 7.5% bar. Mixed price adjustment
 (`atr_split_adjustment_gate_2026_09.md`, premise withdrawn - both sources are
 split-adjusted) and the yfinance stale-OHLCV cache census (three logged
 fallbacks, all in the burnt window, none in the panel).
@@ -100,9 +118,12 @@ stricter form was rejected in the other direction too: it would retire a true
 effect of -0.15 about 60% of the time, and under rule 4 that retirement is
 permanent.
 
-OPERATING CHARACTERISTICS, disclosed in advance (normal approximation at the
-implied SE 0.0552, derived from the recorded power curve rather than measured
-directly; the memo says so):
+OPERATING CHARACTERISTICS, disclosed in advance. SUPERSEDED 2026-09-24: the
+implied SE 0.0552 was back-derived from the power curve that the correction above
+withdraws, so the row below describes a panel about twice the real one. It stays
+because it is what was disclosed before the look, and it must be re-derived before
+the look is spent. (Normal approximation at the implied SE 0.0552, derived from
+the recorded power curve rather than measured directly; the memo says so):
 
     true |rho|   0     0.05   0.10   0.15   0.189   0.25
     P(promote)   3.5%  18%    50%    82%    95%     99.7%
@@ -250,7 +271,14 @@ MIN_VOL_EPISODES = 4
 MIN_REGIME_CLUSTERS = 10
 
 #: The registration is merged before the look runs; the gap is what enforces it.
-RUN_NOT_BEFORE = dt.date(2026, 9, 24)
+#: AMENDED 2026-09-24 from 2026-09-24: the panel the power gate was computed on was
+#: counted in the wrong unit, and the real one does not clear MIN_EPISODES until
+#: about here. Derived as arithmetic on the FROZEN floor (300 episodes, ~6.24 per
+#: cluster, so ~48 clusters) and the measured accrual (0.917 clusters/session), not
+#: from the power search, whose stopping point is unresolved at the precision it ran
+#: at. This rail only ever REFUSES, so tightening it needs no new permission;
+#: loosening it would.
+RUN_NOT_BEFORE = dt.date(2026, 10, 9)
 
 DISCOVERY_CUTOFF = "2026-07-05"
 POPULATION = "briefed"

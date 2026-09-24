@@ -5,8 +5,10 @@ was computed on the held-out panel)
 **Cluster:** 1 (`technical_atr_pct`), §3 of [`edge_hypothesis_budget_2026_07.md`](edge_hypothesis_budget_2026_07.md)
 **Looks:** 2 used (Jun sweep, Jul re-run — both DISCOVERY), 1 charged by this study
 **Family:** 1 (ATR only). MA50 extension and the press gate are NOT in this look.
-**Run trigger:** on or after 2026-09-24, i.e. once this registration is merged.
-No further accrual condition — the power gate #1227 set for itself is met.
+**Run trigger:** AMENDED 2026-09-24 — on or after **2026-10-09**, and only once the
+panel clears the registered floors. The original trigger ("on or after 2026-09-24,
+no further accrual condition") rested on a power figure that was wrong; see the
+correction box.
 **Sunset:** none (cluster 1 carries no sunset date)
 **Frozen code:** [`apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py`](../../apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py)
 — its module docstring is the operative registration; this memo is the rationale
@@ -16,6 +18,45 @@ Ledger rule 4 makes this terminal. A cluster that cleared discovery and then fai
 its held-out confirmation is retired and is not re-tested. There is one look, it
 cannot be repeated, and the decision rule below was fixed before it ran.
 
+> ### CORRECTION — 2026-09-24 (the run has NOT happened)
+>
+> **The unblocking condition is not met.** The power figures this registration cites
+> in §1 were computed on a held-out panel counted in the wrong unit: distinct
+> `(brief_date, ticker)` pairs instead of the collapsed ticker-episodes ledger rule 5
+> defines and this registration's own panel loader applies. Account and re-run in
+> [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md); fix in `bf2f7b9a`.
+>
+> | | as registered | corrected |
+> |---|---|---|
+> | held-out panel | 419 episodes, 35 clusters | **206 episodes, 33 clusters** (2026-09-24) |
+> | ATR power at the gate, Holm(3) | 83.9% | **46.2%** |
+> | ATR power at the gate, family of 1 | 92.9% | **66.7%** |
+>
+> **Nothing below is withdrawn except the run trigger.** The estimand, the panel
+> definition, DELTA, the decision rule, the conclusion language and the tilt mapping
+> all stand exactly as frozen on 2026-09-23. They were frozen before any held-out
+> feature-vs-outcome statistic was computed and that is still true: no held-out
+> `sel_ar_20` value has been read, then or since. The correction is to a power
+> calculation, not to the test.
+>
+> **What changed in the code.** `RUN_NOT_BEFORE` moves from 2026-09-24 to 2026-10-09.
+> That is a TIGHTENING — the rail can only refuse more runs than before, never allow
+> one — which is why it is applied here rather than deferred. The date is arithmetic
+> on the frozen `MIN_EPISODES = 300` floor and the measured accrual of 0.917 clusters
+> per session, not on the power search, whose stopping point is not resolved at the
+> precision it was run at (preflight memo §7.1, §7.2).
+>
+> `MIN_EPISODES` and `MIN_CLUSTERS` are **unchanged**. Both were set against the
+> miscounted panel and `MIN_EPISODES` is now stricter than the power requirement
+> needs, but lowering a floor after watching a panel fail it is the move this
+> document exists to prevent. The cost of leaving it is three days.
+>
+> **How this was caught, and how it was not.** Not by review: two adversarial passes
+> read this registration and neither questioned the panel counts, because a reviewer
+> checks the argument and the counts arrive from code looking like facts. It was
+> caught by the owner asking for the preflight to be run after merge, which printed
+> the panel and did not match the remembered number.
+
 ## 1. Why now, and not later
 
 #1227 wrote its own unblocking condition: run when an outcome-blind power
@@ -24,7 +65,7 @@ ATR test. Three preflights answered it, and all three are recorded elsewhere:
 
 | question | answer | where |
 |---|---|---|
-| Is the ATR test powered? | 83.9% under a 3-member Holm family; **92.9% at the family of one used here** | [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) |
+| Is the ATR test powered? | ~~83.9% under a 3-member Holm family; **92.9% at the family of one used here**~~ **WITHDRAWN 2026-09-24: 46.2% and 66.7%. Not powered.** | [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §7 |
 | Does the 20-session window overlap break the inference? | No. Arrival-session WCB holds its level in every cell, worst corner 7.125% (95% CI [6.87, 7.38]) against a pre-specified 7.5% bar | [`a20_overlap_inference_2026_09.md`](a20_overlap_inference_2026_09.md) |
 | Does mixed price adjustment reach a held-out label window? | No. The premise was withdrawn — both sources are split-adjusted | [`atr_split_adjustment_gate_2026_09.md`](atr_split_adjustment_gate_2026_09.md) |
 
@@ -36,7 +77,14 @@ three rows present in the panel, zero in the held-out window.
 panel grows about one matured arrival cluster per session, so waiting to ~70
 clusters would take roughly seven weeks. What that buys, and what it does not:
 
-| true \|ρ\| | P(promote) at 35 clusters | at ~70 clusters |
+The table below is **superseded**; it describes a panel twice the size of the real
+one. It is kept because the argument it supported — that waiting does not change
+any decision under rule 4 — was made on it, and because the reasoning is what the
+record needs, not the arithmetic. Operating characteristics must be re-derived once
+the panel reaches the floors, and the implied SE they rest on was always
+back-derived rather than measured (§9).
+
+| true \|ρ\| | ~~P(promote) at 35 clusters~~ | ~~at ~70 clusters~~ |
 |---|---|---|
 | 0 | 3.5% | 0.5% |
 | 0.05 | 18% | 10% |
@@ -237,6 +285,10 @@ Fixed now:
   the real sampling distribution is skewed or the bootstrap critical values behave
   differently at 35 clusters. The verdict itself does not depend on it — the
   decision rule uses the bootstrap p-value and the bootstrap interval directly.
+  **2026-09-24:** this limitation turned out to be the smaller of two. The curve it
+  was derived FROM was itself computed on the wrong panel, so the number is wrong by
+  more than approximation error. Recorded here because a limitation that names the
+  right risk and misses the larger one is worth seeing again.
 - **The July ATR figure was row-level and early-weighted** (ρ = −0.35 over 523
   rows, 231 of which repeat a ticker within 3 days), and
   `selection_score_v2_ext_tilt_decision_2026_07_06.md` records that pure ATR rank
