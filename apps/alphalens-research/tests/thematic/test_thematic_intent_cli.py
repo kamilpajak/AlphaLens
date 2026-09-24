@@ -297,6 +297,7 @@ class TheRealBinaryWritesOneJsonValue(unittest.TestCase):
         self.assertEqual(json.loads(completed.stdout)["instrument"]["ticker"], "KBH")
         # The summary goes to stderr, so the pipe into `broker arm -` stays clean.
         self.assertIn("exit: trailing stop", completed.stderr)
+        self.assertNotIn("exit: trailing stop", completed.stdout)
 
 
 if __name__ == "__main__":
