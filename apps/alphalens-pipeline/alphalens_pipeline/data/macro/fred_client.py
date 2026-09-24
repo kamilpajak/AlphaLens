@@ -192,16 +192,22 @@ class FREDClient:
         processes read: Parquet keeps its metadata at the END, so a torn write is
         unreadable rather than merely short, and an in-place write has a window
         where exactly that is on disk.
+
+        The cache inherits ``mkstemp``'s 0600 rather than the umask default this
+        file used to be created at. That is a deliberate tightening, not an
+        oversight: every reader — the pipeline container, which runs as the same
+        uid via ``--user``, and the Mac-side research scripts — is the owning
+        user, so nothing needs group or world read. An explicit chmod back to
+        0644 was written first and then removed: CodeQL flagged it as an overly
+        permissive mask, and it was right, because "keep the old behaviour" here
+        meant keeping an umask rather than a requirement. A future consumer
+        running as another user will fail loudly on permissions instead of
+        silently reading a cache it should not own.
         """
         fd, tmp_name = tempfile.mkstemp(dir=str(cache.parent), suffix=".parquet.tmp")
         os.close(fd)
         try:
             series.to_frame(name=series_id).to_parquet(tmp_name)
-            # mkstemp creates 0600 and os.replace preserves it, so without this
-            # the atomic write silently tightens a file that used to be created
-            # at the umask default. Same reason observability/textfile.py
-            # chmods its output after an atomic write.
-            os.chmod(tmp_name, 0o644)
             os.replace(tmp_name, cache)
         except BaseException:
             with contextlib.suppress(OSError):

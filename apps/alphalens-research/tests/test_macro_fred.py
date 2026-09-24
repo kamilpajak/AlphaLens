@@ -338,10 +338,13 @@ class TestTheCacheMustReachTheDateItIsAskedFor(unittest.TestCase):
 
         self.assertEqual(session.get.call_count, 1)
 
-    def test_the_cache_file_stays_group_and_world_readable(self):
-        # `mkstemp` creates 0600 and `os.replace` preserves it, so the atomic
-        # write silently tightened a file that used to be created at the umask
-        # default. Same reason `observability/textfile.py` chmods its output.
+    def test_the_cache_file_is_not_readable_beyond_its_owner(self):
+        # The atomic write leaves `mkstemp`'s 0600 where the old in-place write
+        # took the umask default. That tightening is deliberate: every reader is
+        # the owning user, so nothing needs group or world read. An explicit
+        # chmod back to 0644 was written first and removed after CodeQL flagged
+        # it — "preserve the old behaviour" was preserving an umask, not a
+        # requirement, and this direction fails loudly rather than silently.
         import stat
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -350,7 +353,8 @@ class TestTheCacheMustReachTheDateItIsAskedFor(unittest.TestCase):
             client.fetch_series("VIXCLS", through=self._THROUGH)
             mode = stat.S_IMODE((Path(tmp) / "FRED_VIXCLS.parquet").stat().st_mode)
 
-        self.assertEqual(mode, 0o644, f"cache written {oct(mode)}, expected 0o644")
+        self.assertEqual(mode & 0o077, 0, f"cache written {oct(mode)}; group/other bits set")
+        self.assertEqual(mode & 0o600, 0o600, f"cache written {oct(mode)}; owner cannot read/write")
 
     def test_a_successful_write_leaves_no_temporary_file(self):
         # The parquet is now overwritten by a live pipeline while other processes
