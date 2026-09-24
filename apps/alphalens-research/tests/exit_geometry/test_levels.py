@@ -153,15 +153,64 @@ class TestEveryFloatParameterIsGuarded(unittest.TestCase):
         )
         self.assertIsNone(result)
 
-    def test_negative_tp_floor_frac_returns_none(self):
-        kwargs = {**self._BASE, "tp_floor_frac": -0.5}
-        self.assertIsNone(atr_bracket_levels(100.0, 10.0, **kwargs))
+    def test_a_take_profit_equal_to_the_entry_returns_none(self):
+        # Zero ATR distance AND a zero cost floor: the target lands exactly on
+        # the entry, so the bracket promises no profit at all.
+        result = atr_bracket_levels(2.0, 1.0, stop_atr_mult=1.5, tp_atr_mult=0.0, tp_floor_frac=0.0)
+        self.assertIsNone(result)
+
+
+class TestTheTakeProfitSideIsJudgedOnItsResult(unittest.TestCase):
+    """The degenerate thing is the TARGET, not the parameters that produce it.
+
+    A draft of #1521 refused `tp_atr_mult <= 0` and `tp_floor_frac < 0` on the
+    inputs. Measuring showed that rejects three coherent configurations out of
+    five, so the check moved to the result. These are the three that must keep
+    working."""
+
+    def test_zero_atr_multiple_with_a_cost_floor_is_a_valid_bracket(self):
+        # Upside from the cost floor alone, no ATR distance. Coherent: exit as
+        # soon as the move clears round-trip cost.
+        result = atr_bracket_levels(
+            2.0, 1.0, stop_atr_mult=1.5, tp_atr_mult=0.0, tp_floor_frac=0.006
+        )
+        assert result is not None
+        self.assertAlmostEqual(result[1], 2.012)
+
+    def test_negative_atr_multiple_rescued_by_the_floor_is_valid(self):
+        result = atr_bracket_levels(
+            2.0, 1.0, stop_atr_mult=1.5, tp_atr_mult=-2.0, tp_floor_frac=0.006
+        )
+        assert result is not None
+        self.assertAlmostEqual(result[1], 2.012)
+
+    def test_a_negative_floor_that_never_binds_is_valid(self):
+        # max(100*0.5, 100 + 1.5*10) = 115: the floor simply loses.
+        result = atr_bracket_levels(
+            100.0, 10.0, stop_atr_mult=1.5, tp_atr_mult=1.5, tp_floor_frac=-0.5
+        )
+        self.assertEqual(result, (85.0, 115.0))
+
+    def test_an_overflowing_cost_floor_returns_none(self):
+        # Every INPUT here is finite; the product is not. Found by the property,
+        # not by reading: blended * (1 + tp_floor_frac) overflows to inf, so a
+        # guard on the inputs alone cannot catch it.
+        result = atr_bracket_levels(
+            1.5095537870197658e150,
+            1.0,
+            stop_atr_mult=1.0,
+            tp_atr_mult=0.0,
+            tp_floor_frac=1e308,
+        )
+        self.assertIsNone(result)
 
     def test_ordinary_inputs_are_untouched_by_the_guards(self):
-        # The negative control. Guarding four parameters must not change any
-        # answer the function already gave.
+        # The negative control. None of the guards may change an answer the
+        # function already gave.
         self.assertEqual(
-            atr_bracket_levels(100.0, 10.0, **self._BASE),
+            atr_bracket_levels(
+                100.0, 10.0, stop_atr_mult=1.5, tp_atr_mult=1.5, tp_floor_frac=0.006
+            ),
             (85.0, 115.0),
         )
 

@@ -70,8 +70,17 @@ def atr_bracket_levels(
     ``atr`` / ``stop_atr_mult`` / ``tp_atr_mult`` / ``tp_floor_frac``, a
     non-positive ``atr``, a non-positive risk (``stop_atr_mult <= 0``), a
     bracket stop at/below zero (ATR wider than ~1/stop_atr_mult of the entry),
-    or a ceiling at/below the cost floor (bracket not constructible). A
-    ``None`` / non-finite ``ceiling_price`` leaves the TP uncapped.
+    a ceiling at/below the cost floor (bracket not constructible), or a
+    take-profit that is non-finite or does not sit ABOVE the entry. A ``None``
+    / non-finite ``ceiling_price`` leaves the TP uncapped.
+
+    The take-profit side is judged on its RESULT, not on its parameters. An
+    earlier draft refused ``tp_atr_mult <= 0`` and ``tp_floor_frac < 0``, and
+    measuring showed that rejects three coherent configurations out of five:
+    a zero ATR multiple with a positive floor is a bracket whose upside is the
+    cost floor alone, a negative multiple with a positive floor is the same
+    thing, and a negative floor with a positive multiple just means the floor
+    never binds. What is degenerate is a target at or below the entry.
 
     ALL FOUR float parameters are self-guarded, not just ``atr`` (issue #1521).
     The reason the docstring already gave for guarding ``atr`` — so a direct
@@ -93,13 +102,14 @@ def atr_bracket_levels(
         return None
     if stop_atr_mult <= 0:
         return None
-    # A take-profit BELOW the entry is not a take-profit. Both of these were
-    # unguarded and reachable: `tp_atr_mult=-2, tp_floor_frac=-1` on a blended
-    # of 2.0 returns a tp of exactly 0.0 — not a price, and the module promises
-    # a price tuple or `None`. Found by widening the property domain in #1521,
-    # not by the example tests.
-    if tp_atr_mult <= 0 or tp_floor_frac < 0:
-        return None
+    # NOTE: `tp_atr_mult` and `tp_floor_frac` are checked for FINITENESS only.
+    # A first draft also refused `tp_atr_mult <= 0` and `tp_floor_frac < 0`,
+    # and measuring showed that refused three coherent configurations out of
+    # five: `tp_atr_mult=0` with a positive floor is a bracket whose upside is
+    # the cost floor alone; a negative multiplier with a positive floor is the
+    # same thing; and a negative floor with a positive multiplier simply means
+    # the floor never binds. What is actually degenerate is the RESULT, and it
+    # is checked as such below.
     bracket_stop = blended - stop_atr_mult * atr
     if bracket_stop <= 0:
         return None
@@ -109,6 +119,20 @@ def atr_bracket_levels(
         if ceiling_price <= tp_floor:
             return None
         tp = min(tp, ceiling_price)
+    # The honest invariant, checked on the RESULT rather than guessed at from
+    # the inputs: a take-profit at or below the entry is not a take-profit.
+    # It catches `tp_atr_mult=0, tp_floor_frac=0` (tp == blended, zero profit)
+    # and `tp_atr_mult=-2, tp_floor_frac=-1` (tp == 0.0, not a price), while
+    # letting through every combination whose target really does sit above the
+    # entry. It also covers a ceiling that caps below the entry, which the
+    # `ceiling_price <= tp_floor` check misses when the floor is negative.
+    # `not finite` is the third way in, and the property found it rather than
+    # any reading: with a finite but enormous `tp_floor_frac`, the product
+    # `blended * (1 + tp_floor_frac)` overflows even though every INPUT is
+    # finite (blended=1.5e150, tp_floor_frac large -> tp == inf). Guarding the
+    # inputs cannot catch that; guarding the product can.
+    if not math.isfinite(tp) or tp <= blended:
+        return None
     return bracket_stop, tp
 
 
