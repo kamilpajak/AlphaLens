@@ -304,6 +304,40 @@ class TestTheCacheMustReachTheDateItIsAskedFor(unittest.TestCase):
         raw = [dt.date(2026, 9, 23), dt.date(2026, 1, 5)]
         self.assertNotEqual(raw[-1], sorted(raw)[-1])
 
+    def test_a_corrupt_cache_is_treated_as_a_miss_not_a_crash(self):
+        # The cache is now REWRITTEN by a live pipeline rather than written once
+        # and left, so a damaged file is a state the system can actually reach.
+        # Unguarded, `pd.read_parquet` raises before any freshness logic; because
+        # `market_state.enrich` is fail-soft, that would not crash the build - it
+        # would stamp 'unknown' every single day until a human deleted the file.
+        # Refetching is the obviously better answer and costs one request.
+        with tempfile.TemporaryDirectory() as tmp:
+            from alphalens_pipeline.data.macro.fred_client import FREDClient
+
+            (Path(tmp) / "FRED_VIXCLS.parquet").write_bytes(b"not a parquet file")
+            session = MagicMock()
+            session.get.return_value = _response(200, self._payload("2026-09-23"))
+            client = FREDClient(api_key="k", cache_dir=Path(tmp), session=session)
+            series = client.fetch_series("VIXCLS", through=self._THROUGH)
+
+        self.assertEqual(series.index[-1].date(), dt.date(2026, 9, 23))
+        self.assertEqual(session.get.call_count, 1)
+
+    def test_a_corrupt_cache_is_replaced_not_left_in_place(self):
+        # Control with teeth: the refetch must also OVERWRITE the bad file, or
+        # every later call pays a request and the corruption is permanent.
+        with tempfile.TemporaryDirectory() as tmp:
+            from alphalens_pipeline.data.macro.fred_client import FREDClient
+
+            (Path(tmp) / "FRED_VIXCLS.parquet").write_bytes(b"not a parquet file")
+            session = MagicMock()
+            session.get.return_value = _response(200, self._payload("2026-09-23"))
+            client = FREDClient(api_key="k", cache_dir=Path(tmp), session=session)
+            client.fetch_series("VIXCLS", through=self._THROUGH)
+            client.fetch_series("VIXCLS", through=self._THROUGH)
+
+        self.assertEqual(session.get.call_count, 1)
+
     def test_the_cache_file_stays_group_and_world_readable(self):
         # `mkstemp` creates 0600 and `os.replace` preserves it, so the atomic
         # write silently tightened a file that used to be created at the umask

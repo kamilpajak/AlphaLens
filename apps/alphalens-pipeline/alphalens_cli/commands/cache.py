@@ -65,9 +65,12 @@ def _fetch_vixcls() -> pd.Series:
     fetch per run serve this JSON cache AND ``market_state``, which was reading
     the same file and getting a 2026-07-01 print for three months.
 
-    ``through`` is today's date rather than a session, because this command's job
-    is "get me the newest print there is"; the client's own lag tolerance decides
-    what counts as current.
+    ``through`` is today's CALENDAR date rather than a session, because this
+    command's job is "get me the newest print there is". The client converts it
+    with session arithmetic, so a weekend or holiday invocation is not treated as
+    missing data. It therefore refetches on every invocation by design — the
+    command runs once per build, FRED allows 120 req/min, and the fetch is what
+    leaves the shared parquet current for `market_state` a few lines later.
     """
     from alphalens_pipeline.data.macro.fred_client import FREDClient
 

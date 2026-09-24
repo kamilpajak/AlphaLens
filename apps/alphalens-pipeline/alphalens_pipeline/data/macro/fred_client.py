@@ -143,7 +143,7 @@ class FREDClient:
         :class:`FREDStaleError`.
         """
         cache = self._cache_path(series_id)
-        cached = pd.read_parquet(cache).iloc[:, 0] if cache.exists() else None
+        cached = self._read_cache(cache)
 
         if cached is not None and (through is None or _reaches(cached, through, _REFETCH_LAG)):
             return cached
@@ -159,6 +159,25 @@ class FREDClient:
                 f"so FRED itself is behind."
             )
         return series
+
+    @staticmethod
+    def _read_cache(cache: Path) -> pd.Series | None:
+        """The cached series, or None if there is not a usable one.
+
+        A damaged file counts as a miss rather than an exception. This file is
+        now rewritten by a live pipeline instead of being written once and left,
+        so corruption is a state the system can reach — and because
+        ``market_state.enrich`` is fail-soft, an unguarded read would not crash
+        the build, it would stamp 'unknown' every day until a human noticed.
+        Refetching costs one request and repairs the file on the way past.
+        """
+        if not cache.exists():
+            return None
+        try:
+            return pd.read_parquet(cache).iloc[:, 0]
+        except (OSError, ValueError) as exc:
+            logger.warning("FRED cache %s is unreadable (%s); refetching.", cache, exc)
+            return None
 
     def _download(self, series_id: str) -> pd.Series:
         url = f"{_BASE_URL}?series_id={series_id}&api_key={self._api_key}&file_type=json"
