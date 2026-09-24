@@ -206,6 +206,83 @@ class TestHolm(unittest.TestCase):
         self.assertEqual(pre.holm_reject({"a": 0.05 / 3}, alpha=0.05), {"a"})
 
 
+class TestTheTestFAMILY(unittest.TestCase):
+    """Which family the power figure is computed under.
+
+    #1227 was scoped as three hypotheses under Holm, and the merged registration
+    then narrowed it to ATR alone as a dated amendment. Power computed under
+    Holm for a test that will run at a plain one-sided 0.05 understates it, and
+    the accrual projection reads directly off that number, so the family has to
+    be an argument rather than a constant.
+    """
+
+    _P = {"atr": 0.03, "ma50": 0.9, "press": 0.9}
+
+    def test_the_default_is_holm_across_every_hypothesis(self):
+        # 0.03 misses the 0.05/3 bar, so the step-down rejects nothing.
+        self.assertEqual(pre.rejected_under_family(self._P, family_size=None), set())
+        self.assertEqual(pre.rejected_under_family(self._P, family_size=3), set())
+
+    def test_a_family_of_one_judges_each_hypothesis_at_plain_alpha(self):
+        self.assertEqual(pre.rejected_under_family(self._P, family_size=1), {"atr"})
+
+    def test_a_family_size_nobody_has_defined_is_refused(self):
+        # A family of 2 among 3 hypotheses does not say WHICH two share the
+        # bar. Guessing an answer here would put an undefined correction into a
+        # registration; there are exactly two families this programme has.
+        with self.assertRaises(ValueError):
+            pre.rejected_under_family(self._P, family_size=2)
+
+    def test_the_family_of_one_never_rejects_less_than_holm(self):
+        # The direction is the load-bearing part: narrowing the family may only
+        # make rejection easier, so a power figure can never fall by narrowing.
+        for p in (0.001, 0.01, 0.02, 0.04, 0.2):
+            values = dict.fromkeys(("atr", "ma50", "press"), p)
+            with self.subTest(p=p):
+                self.assertLessEqual(
+                    len(pre.rejected_under_family(values, family_size=None)),
+                    len(pre.rejected_under_family(values, family_size=1)),
+                )
+
+
+class TestTheSimulatorHonoursTheFamily(unittest.TestCase):
+    def setUp(self):
+        rng = np.random.default_rng(3)
+        self.signals = rng.normal(size=(200, 3))
+        self.sizes = [6] * 12
+        self.effects = {"atr": -0.05, "ma50": -0.02, "press": 0.0}
+
+    def _power(self, **kwargs):
+        return pre.simulate_power(
+            burnt_signals=self.signals,
+            cluster_sizes=self.sizes,
+            effects=self.effects,
+            sd_y=0.165,
+            icc=0.06,
+            n_sims=40,
+            wcb_boot=99,
+            seed=101,
+            **kwargs,
+        )
+
+    def test_the_default_is_unchanged(self):
+        # Regression guard: the merged numbers were produced by the default
+        # path, so it must stay exactly what it was.
+        self.assertEqual(self._power(), self._power(family_size=None))
+
+    def test_narrowing_the_family_cannot_lower_power(self):
+        holm = self._power()
+        alone = self._power(family_size=1)
+        for name in holm:
+            with self.subTest(name=name):
+                self.assertGreaterEqual(alone[name], holm[name])
+
+    def test_this_fixture_can_tell_the_two_apart(self):
+        # Positive control: on a fixture where Holm and the family of one agree
+        # everywhere, the case above would pass without testing anything.
+        self.assertGreater(self._power(family_size=1)["atr"], self._power()["atr"])
+
+
 class TestTheGateDateArithmetic(unittest.TestCase):
     """Turning 'we need N clusters' into a date.
 
@@ -785,6 +862,46 @@ class TestTheWholeDriverRuns(unittest.TestCase):
 
         written = json.loads(out_json.read_text())
         self.assertEqual(set(written), {pre.POPULATION_BRIEFED, pre.POPULATION_ALL})
+        # Default: Holm across all three, which is what every merged number
+        # was computed under.
+        self.assertEqual(written[pre.POPULATION_BRIEFED]["family_size"], 3)
+        self.assertIn("family of 3", printed)
+
+    def test_main_carries_the_requested_family_into_the_answer(self):
+        # A power figure is meaningless without its family, so the flag has to
+        # reach both the printed header and the recorded JSON. Quoting a
+        # family-of-one number under a Holm heading is the mistake this pins.
+        import contextlib
+        import io
+        import json
+
+        out_json = self.root / "family.json"
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = pre.main(
+                [
+                    "--labels-dir",
+                    str(self.store.labels),
+                    "--briefs-dir",
+                    str(self.store.briefs),
+                    "--n-sims",
+                    "4",
+                    "--wcb-boot",
+                    "9",
+                    "--max-clusters",
+                    "16",
+                    "--family-size",
+                    "1",
+                    "--population",
+                    "briefed",
+                    "--out-json",
+                    str(out_json),
+                ]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("family of 1", buffer.getvalue())
+        written = json.loads(out_json.read_text())
+        self.assertEqual(written[pre.POPULATION_BRIEFED]["family_size"], 1)
 
 
 class TestTheClusterTableIsReproducible(unittest.TestCase):

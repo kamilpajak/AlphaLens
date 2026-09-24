@@ -168,6 +168,30 @@ def holm_reject(pvalues: dict[str, float], alpha: float = FWER) -> set[str]:
     return rejected
 
 
+def rejected_under_family(
+    pvalues: dict[str, float], *, family_size: int | None, alpha: float = FWER
+) -> set[str]:
+    """Which hypotheses reject, under a multiplicity family of ``family_size``.
+
+    ``None`` means "all of them", which is the three-member Holm family #1227
+    was first scoped as and the one every merged number was computed under.
+    ``1`` is the family the registration narrowed to, where each hypothesis
+    faces a plain one-sided ``alpha``.
+
+    Only those two are accepted. A family of two among three hypotheses does not
+    say which two share the bar, and inventing an answer would put an undefined
+    correction into a pre-registration.
+    """
+    if family_size is None or family_size == len(pvalues):
+        return holm_reject(pvalues, alpha)
+    if family_size == 1:
+        return {name for name, p in pvalues.items() if p <= alpha}
+    raise ValueError(
+        f"family_size {family_size} is undefined for {len(pvalues)} hypotheses; "
+        f"use 1 (the registered family) or {len(pvalues)} (Holm across all)"
+    )
+
+
 def shrink(effect: float, factor: float) -> float:
     """Shrink a discovery effect toward zero, keeping its sign.
 
@@ -352,8 +376,13 @@ def simulate_power(
     n_sims: int,
     wcb_boot: int,
     seed: int,
+    family_size: int | None = None,
 ) -> dict[str, float]:
-    """Power for each hypothesis under Holm, at the given injected effects.
+    """Power for each hypothesis at the given injected effects.
+
+    ``family_size`` picks the multiplicity family; see
+    :func:`rejected_under_family`. The default is Holm across all of them,
+    which is what every merged number was computed under.
 
     ``burnt_signals`` is a real (rows x hypotheses) matrix from the BURNT panel.
     Rows are resampled whole into the held-out cluster structure, so the
@@ -382,7 +411,7 @@ def simulate_power(
             )
             for i, name in enumerate(names)
         }
-        for name in holm_reject(pvalues):
+        for name in rejected_under_family(pvalues, family_size=family_size):
             wins[name] += 1
 
     return {name: wins[name] / n_sims for name in names}
@@ -538,8 +567,13 @@ def report(
     wcb_boot: int,
     seed: int,
     max_clusters: int = 200,
+    family_size: int | None = None,
 ) -> dict[str, Any]:
-    """One population's answer: effects, power at each shrinkage, and the date."""
+    """One population's answer: effects, power at each shrinkage, and the date.
+
+    ``family_size`` is carried into the result so a memo quoting a power figure
+    can never lose track of which multiplicity family produced it.
+    """
     burnt = burnt_panel(labels_dir, briefs_dir, population=population)
     effects = standardised_effects(burnt)
     cis = effect_ci(burnt, seed=seed)
@@ -576,6 +610,7 @@ def report(
             n_sims=n_sims,
             wcb_boot=wcb_boot,
             seed=seed,
+            family_size=family_size,
         )
 
     needed = None
@@ -593,6 +628,7 @@ def report(
             wcb_boot=wcb_boot,
             seed=seed,
             max_clusters=max_clusters,
+            family_size=family_size,
         )
         if needed is not None and (accrual > 0 or len(observed_arrivals) >= needed):
             gate_when = gate_date(
@@ -614,6 +650,7 @@ def report(
         "power_by_cluster_count": table,
         "date_by_cluster_count": cluster_dates,
         "search_sims": max(n_sims // 2, 60),
+        "family_size": family_size if family_size is not None else len(SIGNALS),
         "population": population,
         "burnt_episodes": len(burnt),
         "held_out_clusters": len(sizes),
@@ -656,6 +693,7 @@ def clusters_for_power(
     wcb_boot: int,
     seed: int,
     max_clusters: int = 200,
+    family_size: int | None = None,
 ) -> tuple[int | None, dict[int, dict[str, float]]]:
     """First cluster count reaching ``target_power``, AND every count it tried.
 
@@ -681,6 +719,7 @@ def clusters_for_power(
             n_sims=n_sims,
             wcb_boot=wcb_boot,
             seed=seed,
+            family_size=family_size,
         )
         seen[n] = power
         if power[target] >= target_power:
@@ -747,6 +786,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20260922)
     parser.add_argument("--max-clusters", type=int, default=200)
     parser.add_argument("--out-json", type=Path, default=None)
+    parser.add_argument(
+        "--family-size",
+        type=int,
+        default=None,
+        help=(
+            "multiplicity family: 1 for the registered ATR-only test, "
+            f"{len(SIGNALS)} (the default) for Holm across all three"
+        ),
+    )
     # One population per process is how this gets run on a machine with cores
     # to spare: the two arms share no state, so splitting them halves the wall
     # time and changes nothing about the numbers.
@@ -769,9 +817,10 @@ def main(argv: list[str] | None = None) -> int:
             wcb_boot=args.wcb_boot,
             seed=args.seed,
             max_clusters=args.max_clusters,
+            family_size=args.family_size,
         )
         out[population] = r
-        print(f"\n=== population: {population} ===")
+        print(f"\n=== population: {population} ===  family of {r['family_size']}")
         print(
             f"burnt episodes {r['burnt_episodes']} | held-out {r['held_out_episodes']} episodes "
             f"in {r['held_out_clusters']} clusters | accrual {r['accrual_per_session']:.2f}/session "
