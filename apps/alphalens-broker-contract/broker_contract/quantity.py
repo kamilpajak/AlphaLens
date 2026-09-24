@@ -52,13 +52,42 @@ from dataclasses import dataclass
 # rather than as a fraction of the quantity. That distinction is not cosmetic:
 # a fixed relative bound grows without limit, so at a million shares a 1e-12
 # fraction is 1e-6, wide enough to swallow a real gap and hand back a share
-# that is not held. An ULP-stated bound tracks representation error by
-# construction and can never reach a step, which is what makes the no-exceed
-# property in `quantize_down` true rather than approximately true.
+# that is not held. An ULP-stated bound tracks representation error instead.
 #
 # 32 ULPs leaves room for a value that arrived through a few arithmetic
 # operations while staying ~1e14 times tighter than any venue step.
 _ULP_SLACK = 32
+# The CEILING on that slack, in scaled units, and the reason the no-exceed
+# property is now true by construction rather than by luck of magnitude
+# (issue #1520).
+#
+# An ULP-stated bound does NOT stay below a step on its own. The slack is
+# applied to the value scaled by `10**precision`, and it is `_ULP_SLACK` = 2**5
+# ULPs of THAT. Since `ulp(2**47) == 2**-5`, a scaled value of 2**47 makes the
+# slack exactly 1.0 — one whole scaled unit, which on a one-unit step is one
+# whole STEP. Measured: `quantize_down(1_407_374_883_554.0)` on a 0.01 step
+# returned `...554.01`, above its input, off the lattice and not idempotent.
+#
+# Half a scaled unit is the ceiling, and it is a derivation rather than a
+# taste: a step is at least one scaled unit, so an overshoot under half a
+# scaled unit is under half a STEP — the same tolerance `same_quantity`,
+# `covers` and `exceeds` already use. Measured over 200 000 (quantity,
+# lattice) pairs across four lattices at 1e-3..5e6 shares: the ceiling binds
+# ZERO times and no answer changes. It starts binding at ~1.4e12 shares on a
+# two-decimal venue and ~1.4e10 on a four-decimal one.
+_MAX_SCALED_SLACK = 0.5
+# Above this the SCALING itself is lossy, and no slack policy can repair that.
+# `_scaled_units` treats `abs(qty) * 10**precision` as an exact integer count;
+# past 2**53 consecutive integers are no longer representable, so the product
+# and the later `units * step` both carry error the lattice cannot absorb.
+# Measured: `quantize_down(1_468_956_939_670_453.0)` on a 0.01 step returned
+# `...453.2`, 0.2 above its input — forty times half a step — WITH the slack
+# capped. Found by widening the property domain, not by reading.
+#
+# A quantity this module cannot name on the lattice is unusable, and `0.0` for
+# anything unusable is what `quantize_down` already promises. At two decimals
+# the limit is ~9e13 shares and at four ~9e11; neither is a share count.
+_SCALED_EXACT_LIMIT = 2**53
 # `step`-relative, therefore BOUNDED — safe to use for the membership and
 # minimum comparisons, which ask about a distance from a lattice point rather
 # than about the magnitude of the quantity itself.
@@ -66,9 +95,17 @@ _REL_TOL = 1e-12
 _ABS_TOL = 1e-15
 
 
-def _slack(value: float) -> float:
-    """Upward slack allowed at ``value``: its own representation error, no wider."""
-    return max(math.ulp(abs(value)) * _ULP_SLACK, _ABS_TOL)
+def _quantization_slack(value: float) -> float:
+    """Upward slack allowed at a SCALED ``value``, safe to add before flooring.
+
+    Named for the job rather than for the input, and capped inside rather than
+    at the call site, because the uncapped version was a footgun: it was called
+    ``_slack``, its docstring promised "its own representation error, no wider",
+    and above 2**47 scaled units it returned a whole scaled unit — the overshoot
+    #1520 exists to remove. A future caller reading that docstring would have
+    reasonably added it before a floor and reintroduced the defect.
+    """
+    return min(max(math.ulp(abs(value)) * _ULP_SLACK, _ABS_TOL), _MAX_SCALED_SLACK)
 
 
 @dataclass(frozen=True)
@@ -145,9 +182,19 @@ class QuantityLattice:
 
 
 def _scaled_units(qty: float, lattice: QuantityLattice) -> int:
-    """``abs(qty)`` in units of ``10**-precision``, floored, float error absorbed."""
+    """``abs(qty)`` in units of ``10**-precision``, floored, float error absorbed.
+
+    ``0`` when the scaling itself overflows. ``is_finite_quantity`` catches the
+    infinities, but a FINITE quantity can still scale past the float ceiling —
+    ``1e308`` at two decimals — and ``math.floor(inf)`` raises ``OverflowError``
+    out of a pure leaf, past every ``except BrokerError`` on the rail. Zero
+    units is what the caller's docstring already promises for anything
+    unusable (issue #1520).
+    """
     scaled = abs(qty) * (10**lattice.precision)
-    return math.floor(scaled + _slack(scaled))
+    if not math.isfinite(scaled) or scaled > _SCALED_EXACT_LIMIT:
+        return 0
+    return math.floor(scaled + _quantization_slack(scaled))
 
 
 def _step_units(lattice: QuantityLattice) -> int:
@@ -177,10 +224,20 @@ def quantize_down(qty: float, lattice: QuantityLattice) -> float:
 
     Sign-preserving by construction: the magnitude is floored and the sign
     restored, so a sell can only ever shrink. ``0.0`` for anything unusable —
-    a caller that cannot price a quantity must not act on one.
+    a caller that cannot price a quantity must not act on one, and since
+    #1520 that includes a finite quantity whose scaling overflows.
 
     The result is rounded to the venue's own ``precision`` so a caller never
     sees float dust like ``3.0000000000000004`` on the wire.
+
+    "Does not exceed" is exact up to the representation slack, and the slack is
+    now capped so that overshoot can never reach half a step (see
+    :data:`_MAX_SCALED_SLACK`). That is weaker than the absolute no-exceed
+    #1520 asks for, and it is the strongest statement compatible with having a
+    slack at all: a slack of zero would floor ``0.30000000000000004`` to
+    ``0.29``, which is the defect the slack exists to prevent. What the cap
+    removes is the case where the overshoot reached a WHOLE step, which is the
+    one that hands back a share nobody holds.
     """
     if not is_finite_quantity(qty):
         return 0.0
@@ -304,6 +361,17 @@ def quantity_refusal(
     value = float(qty)
     if value <= 0.0:
         return f"quantity {value!r} is not positive"
+    # Asked BEFORE the lattice question, because since #1520 an unrepresentable
+    # quantity also fails `is_on_lattice` — `quantize_down` refuses it and
+    # returns 0.0 — and reporting "not a multiple of the venue step" for a
+    # quantity that is a perfectly good multiple sends the reader after the
+    # wrong thing.
+    scaled = abs(value) * (10**lattice.precision)
+    if not math.isfinite(scaled) or scaled > _SCALED_EXACT_LIMIT:
+        return (
+            f"quantity {value!r} is too large to name exactly at venue precision "
+            f"{lattice.precision!r} — its scaled form exceeds 2**53"
+        )
     if not is_on_lattice(value, lattice):
         return f"quantity {value!r} is not a multiple of the venue step {lattice.step!r}"
     if value + lattice.step * _REL_TOL + _ABS_TOL < lattice.min_qty:

@@ -30,18 +30,29 @@ TWO WAYS THE PROSE OVERSTATES ITSELF, both found by running it:
   step-units, at most ~0.064 of a step anywhere in this domain, and the worst
   case measured over 172080 (quantity, lattice) combinations is 6.08e-02 of a
   step. It also keeps the properties off this module's private helpers.
-* At extreme magnitudes the function breaks outright: at
-  ``qty = 1_407_374_883_554.0`` on a 0.01 step it returns ``...554.01`` --
-  above its input, off the lattice, and not idempotent. ``1e308`` raises
-  ``OverflowError`` rather than returning the promised ``0.0``. The mechanism
-  is not the ULP slack but the final ``round(magnitude, precision)``. A
-  trillion shares is not a share count anything here will hold, so the
-  properties assert the realistic domain and this is filed as its own issue.
-  Pinning the broken behaviour would be pinning the bug.
+* At extreme magnitudes the function used to break outright: at
+  ``qty = 1_407_374_883_554.0`` on a 0.01 step it returned ``...554.01`` --
+  above its input, off the lattice, and not idempotent -- and ``1e308`` raised
+  ``OverflowError`` rather than returning the promised ``0.0``. Both are fixed
+  in #1520.
+
+  The mechanism recorded here was WRONG and is corrected: it is not the final
+  ``round(magnitude, precision)``, which leaves that value untouched. It is the
+  slack itself. The slack is ``_ULP_SLACK`` = 2**5 ULPs of the value SCALED by
+  ``10**precision``, and ``ulp(2**47) == 2**-5``, so at 2**47 scaled units the
+  slack is exactly one whole scaled unit -- one whole STEP on a one-unit step.
+  ``units`` was already one too many before any rounding happened. So the two
+  bullets above are ONE defect at two magnitudes, not two defects.
+
+  The fix caps the slack at half a scaled unit, which makes "the overshoot
+  never reaches half a step" true by construction instead of by luck of
+  magnitude. The properties below therefore no longer need their upper bound
+  for that claim.
 """
 
 from __future__ import annotations
 
+import math
 import unittest
 
 from broker_contract.quantity import (
@@ -77,6 +88,13 @@ def lattices(draw: st.DrawFn) -> QuantityLattice:
 # argue about here.
 quantities = st.floats(min_value=0.0, max_value=1e9, allow_nan=False, allow_infinity=False)
 signed_quantities = st.floats(min_value=-1e9, max_value=1e9, allow_nan=False, allow_infinity=False)
+# Every finite positive float, denormals and the ceiling included. ONE property
+# uses this — the half-step bound, which #1520 made true by construction. The
+# bounded strategy above stays bounded for the claims that really are about
+# realistic share counts.
+ANY_POSITIVE_QUANTITY = st.floats(
+    min_value=0.0, exclude_min=True, allow_nan=False, allow_infinity=False
+)
 UNUSABLE = st.sampled_from([float("nan"), float("inf"), float("-inf"), True, False, None, "3"])
 
 
@@ -106,6 +124,26 @@ class QuantizeDownKeepsItsPromise(PropertyTestCase):
         got = quantize_down(qty, lattice)
         event("quantized to zero" if got == 0.0 else "quantized to a positive count")
         self.assertLessEqual(abs(got), abs(qty) + lattice.step / 2.0)
+
+    @given(qty=ANY_POSITIVE_QUANTITY, lattice=lattices())
+    def test_the_half_step_bound_holds_at_every_magnitude(
+        self, qty: float, lattice: QuantityLattice
+    ) -> None:
+        """The same claim with NO upper bound on the quantity (#1520).
+
+        The bounded sibling above is bounded because 1e9 is a share count this
+        rail could hold. This one exists because the claim is now true by
+        CONSTRUCTION rather than by staying small: the slack is capped at half
+        a scaled unit, and a step is at least one scaled unit.
+
+        Before the cap this failed at 1.4e12 shares on a 0.01 step, where the
+        result exceeded its input by a whole step, and raised `OverflowError`
+        at 1e308 instead of returning 0.0. Both are asserted here rather than
+        in prose."""
+        got = quantize_down(qty, lattice)
+        event("unbounded: zero" if got == 0.0 else "unbounded: positive count")
+        self.assertLessEqual(abs(got), abs(qty) + lattice.step / 2.0)
+        self.assertTrue(math.isfinite(got), f"{got!r}")
 
     @given(qty=quantities, lattice=lattices())
     def test_quantizing_an_already_quantized_quantity_changes_nothing(
