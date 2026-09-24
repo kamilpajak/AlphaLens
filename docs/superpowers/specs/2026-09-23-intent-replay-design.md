@@ -32,6 +32,7 @@ multiplicity budget, and carries no accrued history.
 | `/edge` | shared envelope shape now, no `/edge` code now |
 | stop management | one implementation, extracted into the shared contract leaf |
 | intra-bar ties | always pessimistic — a fixed convention, never a configuration field (§4.4) |
+| future document fields | refuse what the interpreter did not read, never approximate (§4.3.1) |
 
 ---
 
@@ -257,6 +258,62 @@ system will not execute.
 The replay does **not** check venue, pick key or generation. Those are queue and
 deployment concerns, not policy.
 
+### 4.3.1 A fifth gate the door does not need
+
+The four gates above are the door's. They are not enough here, because the door
+and the replay finish in different places. The door's job ends at "a daemon that
+understands this document will execute it"; the replay must understand it
+ITSELF. So it needs one gate the door has no use for.
+
+**The replay refuses a document it did not fully consume.** The interpreter
+records which document paths it read; at the end, any path present in the input
+and absent from that set is a capability the replay ignored. The refusal names
+the paths, exactly as `key_discarded` does.
+
+This is the door's own round-trip gate applied one level deeper. Step 3 above
+asks "did the CODEC keep every key?". It cannot ask "did anything READ it",
+because at the door nothing has yet. Once the contract grows a field, the codec
+models it, the round trip passes, `validate_intent` says nothing — and an
+interpreter written before that field existed silently ignores it and still
+reports a number.
+
+Two rules follow, and without them the gate is decoration:
+
+- **The replay never resolves a policy through the degrading path.**
+  `resolve_declared_policy` returns the INERT policy for a primitive it cannot
+  honour rather than raising, because in the daemon it is reached from a journal
+  stamp inside the protection pass where a raise would starve the never-naked
+  backstop. That is correct in the daemon and poison here: it turns "I do not implement
+  this" into "the stop never moved", which is a plausible number. The replay
+  either uses its own resolver or a strict mode of that one.
+- **Adding a reaction primitive is a decision, not an edit.** `validate_intent`
+  refuses an unhonourable primitive today, but the check is an allowlist on
+  CLASS IDENTITY (`isinstance(p, ReanchorOnFill | TrailingStop)`), not on whether
+  the primitive carries what its own execution needs. The two coincide today by
+  luck: both honoured primitives are self-sufficient. `ReanchorOnFill` carries an
+  absolute `atr` snapshot precisely so no second fetch is needed, and
+  `TrailingStop` needs only `arm_trigger_r`, `trail_frac` and prices the walk
+  already has. Whoever adds a third class to that line must answer the question
+  the line does not ask.
+
+**The invariant this protects, stated once:** a document plus its bars is
+sufficient to replay every reaction the document declares. It holds today. It is
+not guaranteed by anything except the two rules above.
+
+#### The instance already queued
+
+This is not hypothetical. `ReanchorOnFill.ceiling_price` is a field in the
+published wire shape today, modelled by the codec, refused by the door
+(`ceiling_price_unsupported`) and marked `LEGACY(reanchor_ceiling_price)`.
+Meanwhile §3.3 treats the 52-week ceiling as run configuration defaulting to
+inert.
+
+The day that refusal is lifted, a document carrying a ceiling passes every gate
+while the replay reads its own `config.ceiling_price` — `null` — and computes a
+take-profit without the cap the document asked for. The number comes out, looks
+right, and describes a different policy. The consumed-paths gate is what turns
+that into a refusal.
+
 ### 4.4 Intra-bar ties: pessimistic, fixed, and counted
 
 A minute bar carries an open, a high, a low and a close. It does NOT carry the
@@ -451,6 +508,9 @@ Computed with the real functions during design, 2026-09-23:
 - bars that touch no entry produce `outcome: "no_fill"` and zero cash;
 - `ambiguous_bars` is zero whenever no bar touches two levels of opposite
   outcome, and positive whenever one does;
+- a document carrying a path the interpreter does not read is REFUSED, and the
+  refusal names that path (§4.3.1) — with a positive control, a document whose
+  every path IS read, so the gate cannot rot to "accepts everything";
 - two runs over the same input produce byte-identical output.
 
 The last one matters more than it looks: a research tool that returns a
@@ -481,6 +541,11 @@ TDD throughout: red before green, including for two-line fixes.
 **Step 1 — the replay.** Extract `stop_decision` into the contract, build
 `intent-replay`, wire the CLI. The daemon is **not touched**; the parity test
 holds the two implementations together.
+
+The consumed-path bookkeeping of §4.3.1 belongs to this step, not a later one.
+It is a record the interpreter keeps while it reads; retrofitting it into a
+finished interpreter means revisiting every read site and trusting that none
+was missed, which is the same check with none of the guarantee.
 
 **Step 2 — the daemon, separately and later.** `position_manager` drops its own
 copy and calls the leaf. Its own PR, its own review, with the step-1 parity test
