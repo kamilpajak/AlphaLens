@@ -592,6 +592,51 @@ adding an uncalled module to a package the daemon imports executes nothing.
   and is in-sample by construction. Nothing it produces is evidence of an edge;
   it answers "what would this have done", never "does this work".
 
+### 8.1 Four capabilities this design does not yet handle
+
+Found by a multi-agent survey of the arming surface on 2026-09-24 and each
+confirmed against the source before being written here. They share a shape worth
+naming: **all four move the answer in the FLATTERING direction.** A replay that
+silently ignores any of them reports a better number than the daemon would have
+produced, which is the failure mode hardest to notice.
+
+- **`entry_mode: "immediate"` is a second entry shape, and the design knows only
+  the first.** `EntryTierSpec.entry_mode` (#1247) takes `"pullback"` — a resting
+  rung below the market — or `"immediate"`, a tranche the daemon buys AT DRAIN,
+  for which `limit_price` is the operator's CAP rather than a pullback level. A
+  bar walk asking "did the low touch the limit" replays an immediate tranche as
+  a resting order that waits, which is not what happens and not what it costs.
+  `entry_mode_unknown` is a live refusal code, so the vocabulary is enforced —
+  the replay simply has no model of its second member.
+
+- **The reaction primitives need order-state inputs a replay does not have.**
+  §3.2 lists `has_sole_standalone_stop` and `amend_in_backoff` as required
+  fields of the minimal view, and insists they cross as the PREDICATE's result
+  rather than as order legs. A replay has no broker orders, so it must supply
+  both — and this document never says what. The choice is not a detail: `False`
+  means the trail never fires, `True` means it always does. That is the whole
+  result. Neither is obviously right, which is why it needs deciding here rather
+  than at the keyboard.
+
+- **A take-profit tranche is gated on clearing its own cost, and the replay has
+  no cost model.** `live_exit_engine._exit_clears_cost` refuses to fire a target
+  that does not cover the round trip. §2 makes cost a non-goal and the envelope
+  says `"costs": "none"`, which is coherent for MEASURING cash — but the gate is
+  not accounting, it is a REFUSAL that changes which exits happen. A costless
+  replay fires tranches the daemon would decline, so the trace diverges in
+  events, not only in cash.
+
+- **The day-1 anchor depends on `meta.source`, which the design never reads.**
+  `control_loop` passes `day1_includes_trade_date=source == "manual"` at two
+  sites: a manual pick counts `meta.trade_date` itself as day 1, a brief pick
+  starts the session after. That is a full session of difference in where the
+  walk begins, on every hand-authored pick — and hand-authored picks are exactly
+  the documents with `initial_levels`, the shape this tool exists to study.
+
+None of the four is a reason to change the architecture. Each is a decision the
+implementation would otherwise make silently, in the direction that looks
+better.
+
 ---
 
 ## 9. Relation to epic #1526
