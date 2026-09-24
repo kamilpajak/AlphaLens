@@ -181,6 +181,15 @@ def round_trip_fee_bps(
 
     A non-positive ``notional`` returns ``0.0`` — a caller's cap comparison then
     stays inert rather than dividing by zero.
+
+    A NON-FINITE ``notional`` returns ``NaN`` (``inf/inf``), and that is stated
+    rather than fixed: every comparison against a ``NaN`` is False, so a caller
+    must handle it before comparing. Today's only gating caller,
+    ``control_loop._check_fee_floor``, does so by accident in the safe
+    direction — ``fee_bps <= max_fee_bps`` is False, so the pick is refused.
+    Choosing a value here instead would flip that gate, which is a behaviour
+    decision rather than a fix. :func:`min_profitable_exit_price` guards its own
+    computed threshold and does not rely on this.
     """
     if notional <= 0:
         return 0.0
@@ -324,6 +333,16 @@ def min_profitable_exit_price(
     the fail-open policy above. ``price >= nan`` and ``price >= inf`` are both
     False, so the exit gate refuses the sale; ``exit_target < inf`` is True, so
     the arm gate refuses the arm.
+
+    ``None`` here means UNREPRESENTABLE, not undefined, and the distinction is
+    deliberate. The fee converges: ad valorem is proportional to the notional,
+    so ``round_trip_fee_bps`` tends to ``(2*rate + fx_rate) * 1e4`` — exactly
+    66 bps on the US card — and the overflowing case therefore HAS a finite
+    limit (1.0116e200 for ``entry_price=qty=1e200``). This function does not
+    chase it. A notional past the float ceiling is not a position, so pricing
+    it would mean a second fee formula on the money path reachable only by a
+    synthetic input. Refusing is the honest answer to an input that is not a
+    trade.
     """
     for value in (entry_price, qty):
         if not math.isfinite(value) or value <= 0.0:
