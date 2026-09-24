@@ -277,4 +277,4 @@ class BreakevenTrailPolicy:
             return None
         if peak < avg_price + self.activation_r * risk:
             return None
-        return fractional_giveback_target(avg_price, peak, frac=self.trail_frac)
+        return fractional_giveback_target(avg_price, peak, kept_gain_frac=self.trail_frac)
