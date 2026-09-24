@@ -207,3 +207,49 @@ the realised average fill (SMG: 59.9261, giving a target of 63.9581 against the
 realised-limit 63.818017) — and is what issue #1112 step 4 would move the live
 rail onto. Adding it is a third `AnchorMode` value, which is cheap precisely
 because the anchor is now a named argument with no default.
+
+## 8. Amendment 2026-09-24 — there is no live bracket to mirror any more (issue #1414)
+
+**Status of this amendment:** LOCKED. The pre-registered geometry of §2 is
+**unchanged**, and no lens parameter changes. This amendment changes what the
+memo CLAIMS, not what the lenses compute.
+
+### 8.1 What #1414 changed
+
+#1414 removed the exit geometry from the live placement path. `paper/sizing.py`
+no longer builds a bracket: `build_exit_declaration()` returns a declaration
+with no `initial_levels`, so a brief pick places the brief's own take-profit
+ladder and its disaster stop, and the stop is then managed by the declared
+trail. The same issue deleted `ALPHALENS_BROKER_EXIT_POLICY`, the environment
+variable that used to select one exit policy for the whole process.
+
+The consequence for this memo: the §7.2 column headed "mirrors" records the
+state on **2026-08-24**, not today. On that date `atr_bracket_1p5_planned` did
+mirror the live rail. Today **neither** bracket lens mirrors anything deployed —
+`atr_bracket_1p5` is resolved only by the `/edge` replay, and no production code
+path resolves it at all.
+
+### 8.2 What is still true
+
+The planned blend has not stopped being a live quantity. `planned_blended_entry`
+(and its spec-shaped twin `planned_blended_entry_from_spec`) still runs on the
+live path: the arming door labels every take-profit tranche with its distance in
+R against that blend, and `validate_intent` refuses a tranche priced at or below
+it. So the lens and the live door continue to share one blend helper, which is
+what §7.1 was about. What the blend is no longer is a **placement anchor**.
+
+Placement is now a document fact. A document that supplies `initial_levels` has
+them placed; one that omits them places the brief ladder. A hand-authored pick
+may therefore still carry bracket-shaped levels — but the rail does not compute
+them, so nothing in the pipeline places a bracket of its own.
+
+### 8.3 What this does NOT do to the measurement
+
+- No lens parameter, null condition or `preregistered_ref` changes. Values
+  already stamped are untouched and remain comparable.
+- The reading rule of §7.5 stands: compare the two bracket lenses only on rows
+  where both are non-null.
+- Both bracket lenses keep accruing. They now answer "what would this geometry
+  have done", not "what is the live rail doing" — which was already the honest
+  reading after the 2026-08-24 pre-registration was voided on 2026-08-27, but
+  was not written down here.

@@ -37,7 +37,8 @@ broker. It takes a parsed trade-setup dict + a list of OHLC bars and returns a
 write live in the caller (``population_ladder_monitor``). The one import from
 ``paper`` (``planned_blended_entry``, issue #1114) is a pure dict-to-float
 helper with no I/O — reused on purpose so the planned-anchor lens and the live
-rail cannot compute different blends.
+arming door cannot compute different blends. (The door still computes this
+blend; since #1414 nothing places a bracket around it.)
 
 Operator/researcher overview: ``alphalens_pipeline/feedback/README.md``.
 """
@@ -57,9 +58,11 @@ from alphalens_pipeline.paper.sizing import planned_blended_entry
 # They disagree on EVERY partial fill, so the lens must be told which policy it
 # is replaying -- there is deliberately no default anywhere in this module.
 ANCHOR_PLANNED = "planned"
-"""Alloc-weighted blend over ALL intended entry tiers -- what the LIVE rail
-places against (``paper.sizing.planned_blended_entry``, called directly below so
-the two cannot drift)."""
+"""Alloc-weighted blend over ALL intended entry tiers
+(``paper.sizing.planned_blended_entry``, called directly below so lens and door
+cannot drift). It is what the live bracket placed against until #1414 retired
+that bracket; the blend itself is still live, pricing the arming door's
+R-multiples and its ``tp_price_below_blend`` refusal."""
 
 ANCHOR_REALISED = "realised"
 """Alloc-weighted blend over the tiers that TOUCHED in the bar walk. NOTE: the
@@ -792,9 +795,10 @@ def replay_ladder_atr_bracket(
 
     ``anchor`` is REQUIRED and has no default (issue #1114): ``"realised"``
     reproduces the behaviour this lens shipped with (the blend over tiers that
-    TOUCHED, which is the repaired policy, not the live one); ``"planned"``
-    mirrors the live rail by calling ``paper.sizing.planned_blended_entry`` over
-    ALL intended tiers. The two disagree on every partial fill — on the SMG
+    TOUCHED, which is the repaired policy, not the one the rail then ran);
+    ``"planned"`` takes the rail's own anchor by calling
+    ``paper.sizing.planned_blended_entry`` over ALL intended tiers -- the anchor
+    it placed against until #1414 removed the bracket from the live path. The two disagree on every partial fill — on the SMG
     incident of 2026-08-24 by 4.19 on the anchor alone — and a caller that could
     fall back to either by accident is exactly the defect #1114 records.
 

@@ -4,7 +4,8 @@ Two anchors exist for the same bracket policy and they disagree on every partial
 fill:
 
 * ``"planned"`` — the alloc-weighted blend over ALL intended entry tiers. This is
-  what the live rail places against (``paper/sizing.py::planned_blended_entry``).
+  the anchor the live bracket placed against until #1414 retired it
+  (``paper/sizing.py::planned_blended_entry``, still live for the arming door).
 * ``"realised"`` — the alloc-weighted blend over the tiers that TOUCHED in the
   bar walk. This is what the lens replayed silently until #1114.
 

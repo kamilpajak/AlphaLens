@@ -28,9 +28,12 @@ Three lens KINDS today (dispatched by ``BreakevenLens.kind``):
   the ceiling from ``asof_close``. ``stop_atr_mult`` / ``tp_atr_mult`` /
   ``tp_floor_frac`` / ``anchor_mode``. The ``anchor_mode`` says WHICH entry blend
   the bracket is placed around and is mandatory (issue #1114): ``"planned"``
-  (all intended tiers — what the live rail places against) or ``"realised"``
-  (tiers that touched in the bar walk). Both are registered, so the pair is
-  measurable side by side; they differ on every partial fill.
+  (all intended tiers — the anchor the live bracket used until #1414 retired it)
+  or ``"realised"`` (tiers that touched in the bar walk). Both are registered, so
+  the pair is measurable side by side; they differ on every partial fill. The
+  blend itself is still a live quantity — the arming door prices its R-multiples
+  and its ``tp_price_below_blend`` refusal off it — but nothing places a bracket
+  around it any more.
 
 The registry is data-driven: adding a lens is one entry here, no schema or UI
 change (the stamped column is a JSON map and the ``/edge`` selector reads the
@@ -111,8 +114,8 @@ class BreakevenLens:
     tp_atr_mult: float | None = None  # atr_bracket-kind replay param
     tp_floor_frac: float | None = None  # atr_bracket-kind replay param
     # atr_bracket-kind ENTRY ANCHOR (issue #1114): "planned" (all intended
-    # tiers, what the live rail places against) or "realised" (tiers that
-    # touched in the bar walk). Unlike the three params above this one has NO
+    # tiers, the anchor the live bracket used until #1414 retired it) or
+    # "realised" (tiers that touched in the bar walk). Unlike the three params above this one has NO
     # module-level default -- an atr_bracket lens that leaves it None is
     # REFUSED at dispatch, because a what-if figure must name the policy it
     # replays. ``None`` on every other kind.
@@ -220,7 +223,8 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
         ),
     ),
     # The SAME bezpazery v1 bracket placed against the PLANNED blend — the
-    # anchor the live rail actually uses (issue #1114). Registered beside the
+    # anchor the live rail used when this was registered (issue #1114; #1414 has
+    # since removed the bracket from the live path altogether). Registered beside the
     # realised-anchor lens above rather than replacing it: the historical
     # ``atr_bracket_1p5`` id carries every already-stamped value, and the daily
     # path never recomputes a stamped row, so this one populates FORWARD-ONLY.
@@ -239,7 +243,8 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
             "the WHOLE exit - the brief TP tranches are discarded for a single 100% target at "
             "anchor +1.5xATR (floor +0.6%, capped at the 52-week high), with a static stop at "
             "anchor -1.5xATR (no ratchet, no trail); entry tiers are kept and the anchor is the "
-            "planned blend over ALL intended tiers, which is what the live rail places against"
+            "planned blend over ALL intended tiers, the anchor the live bracket used until "
+            "issue #1414 stopped the brief path placing one"
         ),
         status="in_sample",
         kind="atr_bracket",
