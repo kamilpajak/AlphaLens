@@ -1,7 +1,7 @@
 # Thematic Trade-Setup (Entry/TP Ladder) — Design Memo v1
 
 **Date:** 2026-05-27
-**Status:** **SHIPPED** (PR #262, merged to `main` `ff9322b` 2026-05-27). Zen design + code review passed; SonarCloud QG green. VPS Django + pipeline image deployed; trade-setup data populates from the next daily pipeline run. v1.1 deferred: LLM per-tier "strategic logic" prose (v1 uses deterministic derivation tags).
+**Status:** **SHIPPED** (PR #262, merged to `main` `ff9322b` 2026-05-27). Zen design + code review passed; SonarCloud QG green. VPS Django + pipeline image deployed; trade-setup data populates from the next daily pipeline run. v1.1 deferred: LLM per-tier "strategic logic" prose (v1 uses deterministic derivation tags). **Amended 2026-09-23 (#1529):** the stop anchor, see §12.
 **Track:** Thematic event-driven decision-support tool (parallel to factor-paradigm-search). NOT a paradigm test under project doctrine 3.5. Augments the WhatsApp investing group workflow — tool proposes, group discusses, each member decides.
 **Supersedes:** the legacy Layer-5 trade-management block (`brief_position_pct`, `brief_time_exit_weeks`, `brief_time_exit_on_catalyst_failure_weeks`, `brief_disaster_stop_pct`, `brief_entry_price_note`) — removed end-to-end in the same feature PR.
 
@@ -66,7 +66,7 @@ Computed per candidate at `asof` from the cached daily OHLCV (`~/.alphalens/them
 1. **Suggested size** — total position sized so loss-to-disaster-stop ≈ fixed risk budget `B` (config, default 1.0% of book). Reported as % of book and as the per-tier share split (below).
 2. **Entry ladder (1–3 tiers, ≤ C)** — geometry-safe (§7.1): candidate supports strictly below `C` (nearest swing-low zone; `SMA50`/`SMA200` only if `< C`; `C − k·ATR` volatility fallback), forced monotone `T1>T2>T3` with min-spacing `δ = max(spread_proxy, 0.5·ATR)`. Each tier carries: limit price, equal-risk allocation %, **distance in ATR units** (e.g. "−1.5 ATR"), and a derivation tag. The ladder **degrades gracefully to 1–2 tiers** when fewer valid supports exist; if none, the setup is emitted with `status="NO_STRUCTURE"` and no entry ladder (§6).
 3. **Take-profit ladder (≤3 tranches, > C)** — nearest overhead resistance zones (swing-high clusters); fallback to ATR R-multiples (`avg_entry + {2,3,4}·R`) when breaking into new highs (no overhead structure). Each: target, tranche %, R-multiple, derivation tag. Labelled drawdown-management.
-4. **Disaster stop** — `S = deepest_support − 1·ATR`, nudged by small jitter off round ATR multiples (anti stop-hunt). Hard floor `S ≥ blended_entry·(1 − 0.25)`.
+4. **Disaster stop** — `S = deepest_support − 1·ATR`, nudged by small jitter off round ATR multiples (anti stop-hunt). Hard floor `S ≥ blended_entry·(1 − 0.25)`. *("deepest support" = deepest picked entry tier — §12.)*
 5. **Honesty layer** — card footer: *"Reference levels as of {date} close — coordination points, not a forecast. Verify against live price."* Per-tier prose from the LLM describes the derivation, never a reversal claim.
 
 ---
@@ -136,7 +136,7 @@ Equal-risk: `shares_i = (B/n)/(E_i−S)`. If all fill and price hits stop, each 
 
 **§7.4 Volatility-adjusted distance (displayed metric, revised post-zen §4b).** Display each tier's distance below close in ATR units: `atr_distance_i = (C − E_i) / ATR`. This is the honest, defensible heuristic. The earlier plan to display an analytic first-passage *probability* (`2·Φ(−d/(σ√N))` with `σ≈ATR`) is **dropped**: ATR is a range estimator that over-states close-to-close σ (typically ~1.3–1.6×), so the implied probability would be biased high AND the "%" framing manufactures false precision the §2 evidence cannot support. ATR-distance conveys the same "deep tier is far / rarely fills" signal without the unbacked probabilistic claim.
 
-**§7.5 Disaster stop.** `S = min(deepest_support − 1·ATR, structural_invalidation)`; jitter off exact `{1.0,1.5,2.0}·ATR` distances; floor `S ≥ blended_entry·0.75`. Computed before tiers so §7.3's min-distance pre-filter can run.
+**§7.5 Disaster stop.** `S = min(deepest_support − 1·ATR, structural_invalidation)`; jitter off exact `{1.0,1.5,2.0}·ATR` distances; floor `S ≥ blended_entry·0.75`. Computed before tiers so §7.3's min-distance pre-filter can run. *(Superseded by §12: the tiers are picked first, `structural_invalidation` is dropped.)*
 
 ---
 
@@ -176,3 +176,59 @@ Not raised by zen (noted): zen did not contest the feature's existence given "no
 ## §11. Process
 
 LOCKED memo → **zen adversarial review (gemini-3.1-pro-preview, thinking high)** → apply findings → TDD build → zen codereview on the PR → CI green → merge → CF Pages auto-deploy. Removal of the legacy block + the new build land in one feature PR.
+
+---
+
+## §12. Amendment 2026-09-23 — the stop anchor (#1529)
+
+**Problem.** §3.4/§7.5 say `S = deepest_support − 1·ATR` without defining "deepest support". The
+builder read it as the deepest entry *candidate*: every swing-low zone in the 400-day window,
+SMA50/200 and the ATR fallbacks, including zones that never become a tier. An old swing low far
+below the ladder then pulled the stop down to the −25% floor in most briefs. R = blend − stop
+feeds the TP fallbacks (2R/3R/4R), the live trailing stop (+0.5R) and the `be_0p5r_trail0p6`
+lens, so all of them moved far away too. The §4 worked example never shows this. There, the
+deepest support *is* the deepest tier, and the floor "does not bind".
+
+**Rule.** "Deepest support" is the **deepest entry tier actually picked**:
+
+1. Pick ≤3 tiers from the candidates (§7.1) with no stop constraint.
+2. `S = jitter(deepest_picked_tier − 1·ATR)`.
+3. Size the tiers against `S` (§7.3), then apply the −25% floor loop exactly as before.
+
+Picking without a stop gives the same tiers the ladder would give against the final stop. That
+stop is ≥ 1.0·ATR under every picked tier (jitter only lowers it), so the 0.5·ATR stop-distance
+filter cannot remove one. `structural_invalidation` (§7.5) was never defined and is dropped.
+
+**Effect.** Replay over all 355 OK brief setups of 2026-08/09, rebuilt from each brief's own
+cached OHLCV. The old rule reproduces 355 of 355 stored stops.
+
+| Median (p25–p75) | Old rule | New rule |
+|---|---|---|
+| Stop below blended entry | 24.2% (19.8–24.7) | 9.6% (7.2–12.7) |
+| R in ATR | 3.93 (2.31–5.39) | 1.70 (1.60–1.97) |
+| TP1 above blend | 20.2% (12.1–34.9) | 19.6% (13.0–29.3) |
+| `suggested_size_pct` | 4.2% (4.1–5.3) | 10.6% (8.3–14.2) |
+| Allocation to the deepest tier | 42% (39–53) | 54% (50–63) |
+
+Counts under the new rule, out of 355:
+
+| Case | Count |
+|---|---|
+| Floor still binds | 14 |
+| Size at the 25% cap | 13 |
+| Fewer TP tranches than before | 3 |
+| No TP tranche at all | 1 (ITGR 2026-08-31) |
+
+**Known consequences.**
+- **Size grows about 2.5× for the same 1% risk budget.** This is the §3.1/§7.3 intent. `thematic
+  intent --frame` sizes as `suggested_size_pct × frame`.
+- **More of the ladder sits in the deepest tier.** Median 54%, p75 63%, p95 70%, against 58% in the §4 example. The deep tier is the one least likely to fill (§8 tension), so a larger share of the planned size often stays unfilled.
+- **A setup can end with no TP tranche.** When blend + kR ≤ close, the `target > close` rule (§1
+  #3) drops every R fallback. Since #1512 the LIVE drain accepts a pick with an empty ladder, so
+  such a brief pick arms and runs with only the disaster stop and the declared trailing stop. It
+  never takes profit at a target. The fallback rule is a separate follow-up (#1535).
+- **R-based /edge metrics change meaning at the cutover.** The cohort boundary is
+  `setup_builder_config_version`: stamp `schema` 2 with `"stop_anchor": "deepest_picked_tier"`.
+  Rows under schema 1 used the old rule. Published briefs are not rebuilt.
+- **The frozen pre-open setups (`thematic/config/pre_open_setups.json`) keep the old rule** so they
+  match the briefs of their own dates.

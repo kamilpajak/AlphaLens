@@ -29,6 +29,31 @@ class TestBuildEntryTiers(unittest.TestCase):
         self.assertNotIn(81.0, [p for p, _ in tiers])
         self.assertTrue(all((p - stop) >= 0.5 * atr for p, _ in tiers))
 
+    def test_a_stop_far_below_every_candidate_removes_nothing(self):
+        # The builder picks its tiers against -inf and only then derives the
+        # stop from them. That is safe because the stop sits >= 1.0*ATR
+        # under every candidate, where the stop-distance filter never fires.
+        close, atr = 100.0, 5.0
+        cands = [(97.5, "shallow"), (93.0, "swing-low"), (90.0, "volatility"), (61.0, "old low")]
+        far_stop = min(p for p, _ in cands) - 1.0 * atr
+        self.assertEqual(
+            ladder.build_entry_tiers(close, atr, cands, far_stop),
+            ladder.build_entry_tiers(close, atr, cands, float("-inf")),
+        )
+
+    def test_raising_the_stop_removes_only_a_suffix_of_tiers(self):
+        # 195 is skipped behind 200 (spacing, then max_tiers). When a higher
+        # stop removes 200, 195 is even closer to that stop, so it can never
+        # come in and pull the deepest tier DOWN.
+        close, atr = 320.0, 60.0
+        cands = [(280.0, "a"), (240.0, "b"), (200.0, "c"), (195.0, "d")]
+        previous = ladder.build_entry_tiers(close, atr, cands, float("-inf"))
+        for stop in (135.8, 164.5, 175.2):
+            tiers = ladder.build_entry_tiers(close, atr, cands, stop)
+            self.assertEqual(tiers, previous[: len(tiers)])
+            previous = tiers
+        self.assertEqual([p for p, _ in previous], [280.0, 240.0])
+
     def test_enforces_min_spacing(self):
         # 95 and 94.5 are 0.5 apart < 0.5*ATR(=2.5): only the first survives.
         close, atr, stop = 100.0, 5.0, 80.0

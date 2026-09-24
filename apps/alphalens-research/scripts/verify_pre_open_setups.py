@@ -13,6 +13,11 @@ It also re-derives the committed artefact and refuses if it does not reproduce b
 and it counts the names whose stop is clamped by the 25%-of-entry floor — the one builder
 behaviour known to have changed since June, which matters only if it reaches this population.
 
+Every step re-runs the LIVE builder, so the check only applies while the live builder rule is
+the one the artefact was built under. After a rule change (#1529 moved the stop anchor) it
+stops and says so instead of reporting a reproduction failure. The artefact is NOT rebuilt:
+it must keep the geometry of the briefs of its own dates.
+
 Read-only. Needs the cached daily frames, so run it on the host that has them (the VPS):
 
     .venv/bin/python apps/alphalens-research/scripts/verify_pre_open_setups.py
@@ -30,6 +35,7 @@ from typing import Any
 from alphalens_pipeline.thematic.pre_open_brief import PRE_OPEN_BRIEF_NAMES
 from alphalens_pipeline.thematic.pre_open_setup import SETUPS_PATH
 from alphalens_pipeline.thematic.trade_setup.builder import build_trade_setup
+from alphalens_pipeline.thematic.trade_setup.config_version import setup_builder_config_version
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_pre_open_setups import (
@@ -82,6 +88,21 @@ def _floor_binds(setup: dict[str, Any]) -> bool:
     return abs(float(setup["disaster_stop"]) - FLOOR_FRAC * blended) < 1e-6
 
 
+def rule_mismatch(committed: dict[str, Any], live_token: str) -> str | None:
+    """Say why the check does not apply, or ``None`` when the artefact matches the live rule."""
+    tokens = {
+        str(setup.get("builder_config_version"))
+        for day in committed.values()
+        for setup in day.values()
+    }
+    if tokens == {live_token}:
+        return None
+    return (
+        f"the artefact was built under builder rule(s) {sorted(tokens)}, the live builder is "
+        f"{live_token}; this check re-derives setups with the live builder, so it does not apply"
+    )
+
+
 def _stored_setups(path: Path) -> dict[str, dict[str, Any]]:
     import pandas as pd
 
@@ -101,6 +122,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ohlcv-dir", type=Path, default=DEFAULT_OHLCV_DIR)
     args = parser.parse_args(argv)
 
+    committed = SETUPS_PATH.read_text(encoding="utf-8")
+    mismatch = rule_mismatch(json.loads(committed), setup_builder_config_version())
+    if mismatch is not None:
+        print(f"NOT APPLICABLE: {mismatch}", file=sys.stderr)
+        return 1
+
     loader = _cache_loader(args.ohlcv_dir)
     recovered_dates = set(PRE_OPEN_BRIEF_NAMES)
     failures: list[str] = []
@@ -109,7 +136,6 @@ def main(argv: list[str] | None = None) -> int:
     fresh = json.dumps(
         build_setups(briefs_dir=args.briefs_dir, ohlcv_dir=args.ohlcv_dir), **_JSON_KWARGS
     )
-    committed = SETUPS_PATH.read_text(encoding="utf-8")
     if fresh + "\n" != committed:
         failures.append(f"{SETUPS_PATH} is not what the builder produces from these caches")
     print(f"artefact reproduces: {fresh + chr(10) == committed}")

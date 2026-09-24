@@ -11,15 +11,15 @@ from alphalens_pipeline.thematic.trade_setup.model import (
 )
 
 
-def _synth_frame(closes: list[float]) -> pd.DataFrame:
-    """Build an OHLCV frame (lowercase yfinance schema) with ~2% daily range."""
+def _synth_frame(closes: list[float], half_range: float = 0.01) -> pd.DataFrame:
+    """Build an OHLCV frame (lowercase yfinance schema); default ~2% daily range."""
     idx = pd.date_range("2024-01-01", periods=len(closes), freq="B")
     close = np.asarray(closes, dtype=float)
     return pd.DataFrame(
         {
             "open": close,
-            "high": close * 1.01,
-            "low": close * 0.99,
+            "high": close * (1 + half_range),
+            "low": close * (1 - half_range),
             "close": close,
             "volume": np.full(len(closes), 1_000_000.0),
         },
@@ -121,6 +121,57 @@ class TestBuildFromFrame(unittest.TestCase):
 
         setup = builder.build_trade_setup_from_frame(_synth_frame(_oscillating_uptrend()))
         self.assertEqual(setup.to_dict()["order_ttl_days"], DEFAULT_ORDER_TTL_DAYS)
+
+
+def _recovery_after_a_crash() -> list[float]:
+    """100 -> 40 -> 100, then oscillate near 100: one swing low far below the ladder."""
+    crash = np.linspace(100.0, 40.0, 40)
+    recovery = np.linspace(40.0, 100.0, 60)
+    chop = 100.0 + 6.0 * np.sin(2 * np.pi * np.arange(160) / 40.0)
+    return [*crash, *recovery, *chop]
+
+
+_JITTER_ATR = 0.07  # _jitter_stop may lower the stop by this much
+
+
+def _blended(setup) -> float:
+    from alphalens_pipeline.thematic.trade_setup import sizing
+
+    return sizing.blended_entry(
+        [t.limit for t in setup.entry_tiers], [t.alloc_pct for t in setup.entry_tiers]
+    )
+
+
+class TestStopAnchor(unittest.TestCase):
+    """#1529: the stop sits 1 ATR under the deepest PICKED tier, not under
+    the deepest candidate. An old swing low that never becomes a tier must not
+    drag the stop down to the -25% floor."""
+
+    def test_stop_sits_one_atr_under_the_deepest_picked_tier(self):
+        setup = builder.build_trade_setup_from_frame(_synth_frame(_recovery_after_a_crash()))
+
+        deepest = min(t.limit for t in setup.entry_tiers)
+        gap_atr = (deepest - setup.disaster_stop) / setup.atr
+        self.assertGreaterEqual(gap_atr, 1.0 - 1e-9)
+        self.assertLessEqual(gap_atr, 1.0 + _JITTER_ATR + 1e-9)
+
+    def test_the_floor_does_not_bind_when_the_ladder_is_shallow(self):
+        # The old low near 40 used to pull the stop to the -25% floor.
+        setup = builder.build_trade_setup_from_frame(_synth_frame(_recovery_after_a_crash()))
+
+        self.assertGreater(setup.disaster_stop, _blended(setup) * 0.75 + setup.atr)
+
+    def test_the_floor_still_binds_on_a_deep_volatile_ladder(self):
+        # ATR ~18% of price: the -2 ATR fallback tier minus 1 ATR is deeper
+        # than 25% under the blend, so the floor raises the stop.
+        closes = [20.0] * 60 + list(np.linspace(20.0, 12.0, 60))
+        setup = builder.build_trade_setup_from_frame(_synth_frame(closes, half_range=0.08))
+
+        self.assertEqual(setup.status, STATUS_OK)
+        self.assertAlmostEqual(setup.disaster_stop, _blended(setup) * 0.75, places=6)
+        self.assertTrue(
+            all(t.limit - setup.disaster_stop >= 0.5 * setup.atr for t in setup.entry_tiers)
+        )
 
 
 class TestBuildViaLoader(unittest.TestCase):
