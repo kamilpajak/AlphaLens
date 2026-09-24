@@ -3465,6 +3465,41 @@ class TestDefaultOrphanSweepReadsEntryTrailJournal(unittest.TestCase):
         )
 
 
+class TestBuildDefaultDepsWiresTheEntryTrailOrphanSweep(unittest.TestCase):
+    """#1556: the daemon's real ``sweep_orphans_fn`` (not only the helper)
+    reads entry_trails.jsonl for the position arm."""
+
+    _JOURNALED = "UBER-2026-09-08-entry-t0"
+
+    def _sweep_fn(self) -> Any:
+        import json
+
+        armed = json.dumps({"kind": "trail_armed", "crid": self._JOURNALED, "order_id": None})
+        _entry_trail_journal(self, [armed])
+        with (
+            _isolated_home(),
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_AmendCapableBroker(),
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+        ):
+            deps = cl.build_default_deps(
+                notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
+            )
+            return deps.sweep_orphans_fn
+
+    def test_journaled_entry_trail_position_is_not_an_orphan(self) -> None:
+        sweep_fn = self._sweep_fn()
+        self.assertEqual(sweep_fn(_PositionRefsBroker([f"{self._JOURNALED}-fire"])), [])
+
+    def test_unjournaled_entry_trail_position_is_still_an_orphan(self) -> None:
+        sweep_fn = self._sweep_fn()
+        unjournaled = "UBER-2026-09-08-entry-t1-fire"
+        orphans = sweep_fn(_PositionRefsBroker([unjournaled]))
+        self.assertEqual([o.external_reference for o in orphans], [unjournaled])
+
+
 class TestLatestPlannedSkipsMalformedLines(unittest.TestCase):
     def test_missing_keys_or_unparsable_price_are_skipped(self) -> None:
         lines = [
