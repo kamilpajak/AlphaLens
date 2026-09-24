@@ -237,7 +237,7 @@ class TheDeclarationDecides(unittest.TestCase):
         self.assertAlmostEqual(amend.stop_price, 61.268, places=3)
 
     def test_the_declared_parameters_are_the_ones_that_run(self):
-        """A different giveback fraction must give a different stop, or the
+        """A different KEPT fraction must give a different stop, or the
         declaration is decorative."""
         wide = _actions(reaction=TrailingStop(arm_trigger_r=0.5, trail_frac=0.25))[0]
         assert isinstance(wide, AmendStop)

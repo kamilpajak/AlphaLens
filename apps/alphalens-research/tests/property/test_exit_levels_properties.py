@@ -76,7 +76,7 @@ class TheTotalFunctionsAreTotalOverEveryFloat(PropertyTestCase):
     def test_fractional_giveback_never_returns_a_bad_level(
         self, entry: float, peak: float, frac: float
     ) -> None:
-        self.assertTrue(_usable(fractional_giveback_target(entry, peak, frac=frac)))
+        self.assertTrue(_usable(fractional_giveback_target(entry, peak, kept_gain_frac=frac)))
 
     @given(prior=ANY_FLOAT, proposed=ANY_FLOAT, anchor=ANY_FLOAT, min_dist=ANY_FLOAT)
     def test_clamp_never_returns_a_bad_stop(
@@ -108,7 +108,7 @@ class TheMoneyGuarantees(PropertyTestCase):
     def test_the_giveback_target_never_sits_below_entry(
         self, entry: float, peak: float, frac: float
     ) -> None:
-        got = fractional_giveback_target(entry, peak, frac=frac)
+        got = fractional_giveback_target(entry, peak, kept_gain_frac=frac)
         if got is not None:
             self.assertGreaterEqual(got, entry)
 
@@ -123,8 +123,8 @@ class TheMoneyGuarantees(PropertyTestCase):
     ) -> None:
         # The ratchet: the level this returns may only ever move up as the
         # favourable excursion grows. Monotone, not merely bounded.
-        low = fractional_giveback_target(entry, lo, frac=frac)
-        high = fractional_giveback_target(entry, lo + gain, frac=frac)
+        low = fractional_giveback_target(entry, lo, kept_gain_frac=frac)
+        high = fractional_giveback_target(entry, lo + gain, kept_gain_frac=frac)
         if low is not None and high is not None:
             self.assertGreaterEqual(high, low - 1e-9)
 
