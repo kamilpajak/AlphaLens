@@ -140,7 +140,8 @@ INTENT_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         "ceiling_price_unsupported": "ceiling_price caps a take-profit, which this contract "
         "does not yet place.",
         "arm_trigger_r_non_positive": "The trailing arm trigger is zero or negative.",
-        "trail_frac_out_of_range": "The trailing giveback fraction is outside (0, 1].",
+        "trail_frac_out_of_range": "The fraction of the excursion the trailing stop "
+        "keeps is outside (0, 1].",
         "k_atr_non_positive": "The re-anchor ATR multiple is zero or negative.",
         "atr_non_positive": "The declared ATR snapshot is zero or negative.",
         "initial_level_non_positive": "An initial level is zero or negative.",
