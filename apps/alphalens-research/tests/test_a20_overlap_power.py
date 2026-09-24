@@ -643,17 +643,40 @@ class TestTheWholeDriverRuns(unittest.TestCase):
             self.assertGreater(r["signal_loading"], 0.0)
             self.assertEqual(loadings, {"kappa=0", "kappa=fitted"})
 
-    def test_two_reads_that_disagree_about_the_panel_are_refused(self):
-        # The calendar comes from the anchor sessions and the cluster sizes from
-        # the structure read. They are two passes over the same rows, so a
-        # mismatch means one of them changed its mind about the population -
-        # which must stop the run, not silently truncate one of them.
-        from unittest import mock
+    def test_the_calendar_and_the_cluster_sizes_describe_one_panel(self):
+        # These used to be two passes over the same rows guarded by a
+        # consistency check. Now they are one read, so the property to pin is
+        # that the panel the simulation sees is the COLLAPSED one: ledger rule
+        # 5 counts ticker-episodes, and the fixture repeats a ticker inside the
+        # 5-session window on purpose.
+        from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
 
-        with mock.patch.object(ov, "held_out_structure", return_value=[4]):
-            with self.assertRaises(ValueError) as caught:
-                self._report()
-        self.assertIn("disagree", str(caught.exception))
+        r = self._report()
+        rows = ov.load_held_out(self.store.labels)
+        briefed = rows[rows["briefed_any_theme"].fillna(False).astype(bool)]
+        resolved = briefed[briefed["sel_label_status_20"].astype(str) == "ok"]
+        collapsed = ticker_episode_dedup(
+            resolved[["brief_date", "ticker", "anchor_session"]]
+            .astype({"brief_date": str})
+            .drop_duplicates(subset=["brief_date", "ticker"])
+        )
+
+        self.assertEqual(r["held_out_episodes"], len(collapsed))
+        self.assertEqual(r["held_out_clusters"], collapsed["anchor_session"].nunique())
+
+    def test_the_collapse_is_actually_exercised_by_this_fixture(self):
+        # Positive control for the case above: without a chained repeat on
+        # disk, the collapsed and uncollapsed panels would be identical and the
+        # assertions could not have failed.
+        r = self._report()
+        rows = ov.load_held_out(self.store.labels)
+        briefed = rows[rows["briefed_any_theme"].fillna(False).astype(bool)]
+        uncollapsed = len(
+            briefed[briefed["sel_label_status_20"].astype(str) == "ok"].drop_duplicates(
+                subset=["brief_date", "ticker"]
+            )
+        )
+        self.assertLess(r["held_out_episodes"], uncollapsed)
 
     def test_main_prints_the_grid_and_writes_its_json(self):
         import json

@@ -1,10 +1,41 @@
 # A20 power preflight for #1227 — is the ATR test powered, and if not, when?
 
-**Status:** COMPLETE 2026-09-23. The pre-commitments in §2 were written and
-committed in `1621be4b`, **before** the preflight ran; §4 is the recorded
-answer. **The gate is met**: ATR power at 50% shrinkage on the pre-committed
-briefed population is 83.9% against a bar of 80%. Nothing here registers #1227
-and nothing here runs its confirmation.
+**Status:** CORRECTED 2026-09-24 — **the gate is NOT met.** The answer recorded on
+2026-09-23 was computed on a panel counted in the wrong unit. The correction is
+below and the re-run is §7. The pre-commitments in §2 were written and committed
+in `1621be4b`, **before** the preflight ran, and they stand unchanged. Nothing
+here registers #1227 and nothing here runs its confirmation.
+
+> ### CORRECTION — 2026-09-24
+>
+> **What was wrong.** `held_out_structure` counted distinct `(brief_date, ticker)`
+> pairs. Ledger rule 5 counts ticker-episodes after the chained 5-session collapse,
+> which is what `burnt_panel` applied on the other side of the same module. The
+> simulation took its effect size from collapsed episodes and its cluster structure
+> from uncollapsed rows. The comment directly above the defect read
+> `# Ticker-episode is the unit of independence (ledger rule 5).`
+>
+> **What the panel actually is.** 205 episodes in 32 arrival clusters as of
+> 2026-09-23, not 419 in 35; 206 in 33 by 2026-09-24, because the store grows about
+> one cluster per session. The wider arm is 284 in 33, not 610. The accrual rate was
+> also overstated (1.00 -> 0.92 clusters per session): arrival sessions carrying only
+> a chained repeat of an earlier episode were being counted as clusters.
+>
+> **What the answer actually is**, re-run on the corrected unit with the same seeds
+> and the same simulation counts:
+>
+> | ATR power at the 50% gate, briefed arm | recorded 2026-09-23 | corrected 2026-09-24 |
+> |---|---|---|
+> | Holm across three hypotheses | 83.9% | **46.2% ±0.8** |
+> | family of one (the registered test) | 92.9% | **66.7% ±0.7** |
+>
+> **Everything in §4 is superseded.** It stays in place because it records what was
+> believed and when, which is the point of a pre-registration document. §7 holds the
+> corrected run.
+>
+> **Fix:** `bf2f7b9a`. One function now returns episodes per arrival session, and the
+> cluster sizes, the cluster count and the accrual rate all derive from it. They were
+> three separate reads and they described three different panels.
 
 ## 1. Why this exists
 
@@ -137,7 +168,12 @@ instead. The Wilson form is used rather than `p ± z·SE` because the plain form
 collapses at the boundary: 4 rejections out of 4 gives a standard error of
 exactly zero and would claim certainty.
 
-## 4. Results
+## 4. Results — SUPERSEDED 2026-09-24
+
+> Every power figure and every panel count in this section was computed on the
+> wrong unit. Read it as the record of a mistake, not as an answer. The corrected
+> run is §7. The burnt-panel effects in the first table are NOT affected — the
+> burnt side always collapsed episodes correctly.
 
 One run, 2026-09-23, `scripts/ml/a20_power.py`, 4 000 simulations at the gate.
 The numbers in §4.2 and §4.3 come from earlier runs of the same script and are
@@ -296,3 +332,92 @@ the answer as "unresolved, re-run with more simulations", not as "failed".
   `alphalens_research/backtest/romano_wolf.py` already exists and is tested.
   #1227 pre-registered Holm, so swapping it is a registration change and belongs
   in that decision, not here.
+
+## 7. Corrected results — 2026-09-24
+
+Same script, same seeds (20260922), same simulation counts, corrected unit. The
+burnt-panel effects are unchanged (ATR −0.378, MA50 −0.303, press +0.026,
+sd(y) 0.1653, ICC 0.06): the burnt side was always collapsed correctly.
+
+**The panel.** Briefed arm 206 episodes in 33 arrival clusters, accrual 0.917
+clusters per session, mean 6.24 episodes per cluster. Read 2026-09-24; the store
+grows, and the 2026-09-23 run saw 205 in 32.
+
+| shrinkage | signal | briefed, Holm(3) | briefed, family of 1 | all, Holm(3) |
+|---|---|---|---|---|
+| 25% | ATR | 9% | 22% | 15% |
+| **50% — the gate** | **ATR** | **46.2% ±0.8** | **66.7% ±0.7** | **65.4% ±0.8** |
+| 50% | MA50 | 33% | 48% | 46% |
+| 50% | press gate | 3% | 6% | 4% |
+| 75% | ATR | 89% | 95% | 97% |
+
+**Verdict: the gate is NOT met, under either family.** The widest reading
+available — the family of one this registration actually uses — is 66.7% with a
+95% interval of 65.3–68.1%, against a bar of 80%. The interval lies entirely
+below the bar, so this is resolved and not a rounding.
+
+### 7.1 When the gate is reached
+
+The search steps by 2 clusters, so the answer is the first count on the grid that
+clears, never the true minimum.
+
+| family | clusters needed | date | projected episodes |
+|---|---|---|---|
+| Holm across three | ~58 | 2026-10-26 | ~362 |
+| **family of one** | **~45** | **2026-10-06** | ~281 |
+
+**Neither stopping point is resolved at 2 000 search simulations.** At the family
+of one, 43 clusters gives 79.2% [77.4, 81.0] and 45 gives 81.2% [79.5, 82.9];
+both intervals cross the 80% bar. The crossing is somewhere between 43 and 47
+clusters and this run cannot say where. Under Holm the path is worse behaved
+still — 42 clusters reads 68.0% [66.0, 70.1] and 44 reads 60.6% [58.4, 62.7],
+intervals that do not overlap, because `grown_cluster_sizes` draws a fresh set of
+added cluster sizes for every count. That wobble is the panel draw, not Monte
+Carlo error on the power estimate.
+
+### 7.2 The registration floor binds later than the power gate
+
+`MIN_EPISODES = 300` is the frozen floor in
+`2026_09_a20_atr_confirmation.py`. At 6.24 episodes per cluster it needs about 48
+clusters, reached about **2026-10-09** — later than the ~45 clusters the power
+gate needs. So the binding constraint is the episode floor, not the power
+simulation, and the date that satisfies both is the floor's.
+
+That is the useful property here: the floor is a frozen threshold and a measured
+accrual rate, so its date is arithmetic. The power search's date is the stopping
+point of a noisy search that §7.1 says is unresolved. Deriving a `Wake:` line from
+the floor avoids quoting a number this memo cannot defend.
+
+Caveat on that projection: the tooling projects CLUSTERS, not episodes. Turning 48
+clusters into 300 episodes uses the current mean of 6.24 episodes per cluster, and
+the observed clusters run from 1 to 20 episodes. Treat 48 as accurate to a few
+clusters.
+
+### 7.3 A third mismatch, found while fixing the first two — NOT corrected here
+
+Three things had to agree between this tooling and the registered test. Two are
+now fixed and one is open:
+
+| | tooling before | registered test | state |
+|---|---|---|---|
+| unit | `(brief_date, ticker)` pairs | ticker-episodes | fixed, `bf2f7b9a` |
+| family | Holm across three | one | fixed, `bc7420e4` |
+| **direction** | **two-sided** | **one-sided, `alternative="less"`** | **open** |
+
+`simulate_power` calls `wild_cluster_bootstrap_p` without `alternative`, so it
+measures a two-sided test. The registration fixes the direction from discovery and
+tests one-sided, which is the more powerful test, so **every power figure in §7
+understates the registered test.**
+
+It is left open deliberately. The first two corrections moved the answer DOWN and
+were adopted immediately; this one moves it UP, and adopting a method change that
+rescues a failed gate, straight after the gate failed, is the move a
+pre-registration exists to prevent. It is recorded here so the next reader finds
+it rather than rediscovers it.
+
+**It does not change the decision.** Normal approximation on the measured 66.7%:
+a one-sided test at the same precision gives roughly 77%, still under 80%. That is
+arithmetic on this memo's own number and not a measurement, which is why it is
+written as "roughly". More to the point, one-sided power is HIGHER, so it needs
+FEWER clusters than the ~45 above, while the episode floor still needs ~48. The
+binding constraint in §7.2 is unaffected, and so is the date.

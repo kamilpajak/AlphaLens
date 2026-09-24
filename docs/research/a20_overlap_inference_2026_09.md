@@ -1,15 +1,36 @@
 # A20 overlap inference — does the #1227 power gate survive the 20-session window?
 
-**Status:** COMPLETE 2026-09-23 — **the assumption holds.** The arrival-session wild cluster
-bootstrap keeps its level on an overlap-aware panel in every cell of the grid, including the
-conservative corner (size 7.125%, 95% interval [6.87%, 7.38%], pre-specified bar 7.5%). The merged
-83.9% is not an artefact of the independence assumption, and the coarser blocks the literature
-prescribes are worse here, not better. §5 holds the run.
+**Status:** COMPLETE 2026-09-23, **re-run 2026-09-24 on a corrected panel — the assumption still
+holds, but the power figures are withdrawn.** The arrival-session wild cluster bootstrap keeps its
+level on an overlap-aware panel in every cell of the grid, and that verdict survives the correction
+intact. The power column does not: it was computed on a panel counted in the wrong unit. See the
+correction box; §5 holds the original run and §6 the re-run.
 **Amends:** [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §2.2 (the
 inference row) and §3 (the method). That memo's 83.9% is not withdrawn; this one asks whether the
 assumption under which it was computed holds, and §5 says.
 **Registers nothing. Runs no held-out outcome.** Burnt-panel reads and held-out STRUCTURE only,
 under the same allowlist the preflight fixed in its §2.3.
+
+> ### CORRECTION — 2026-09-24
+>
+> This study consumed `held_out_structure` from `a20_power.py`, which counted distinct
+> `(brief_date, ticker)` pairs where ledger rule 5 counts collapsed ticker-episodes. The panel was
+> 205 episodes in 32 arrival clusters, not 419 in 35. Full account in
+> [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md); fix in `bf2f7b9a`.
+>
+> **What survives.** The size result, which is this memo's actual subject. Re-run on the corrected
+> panel the arrival-session bootstrap holds its level in every cell, 4.2–6.1% against a nominal 5%
+> and a pre-specified 7.5% bar — better behaved than before, since the conservative corner fell from
+> 7.1% to 6.1%. The ranking of methods is unchanged: 5-session blocks 47%, 10-session 18%,
+> 20-session still breaks size at 13–14% and still gets no power figure.
+>
+> **What is withdrawn.** Every power number in §5, including the "~93%". Corrected: **64.6–66.2%**
+> across the grid, against a bar of 80%. §6 holds the re-run.
+>
+> **What this says about the review that passed it.** Nothing in this memo could have caught the
+> error, because the panel arrived from a function this study called rather than from a claim it
+> examined. Two adversarial review passes read the argument and not the input. The agreement between
+> this memo and the preflight was never corroboration — both read the same line of code.
 
 ---
 
@@ -115,7 +136,10 @@ not a direction worth simulating and would make the overlap look harmless for th
 
 Both channels are narrow. That is a prediction, not the answer; §5 is the answer.
 
-## 5. Results
+## 5. Results — power figures SUPERSEDED 2026-09-24
+
+> The size verdict below stands and was re-confirmed on the corrected panel. Every POWER figure in
+> this section is superseded; see §6.
 
 Run 2026-09-23, 2000 simulations x 399 bootstrap draws per cell, seed 20260923. Panel: 197 burnt
 episodes, 419 held-out episodes in 35 arrival clusters over 35 sessions.
@@ -233,3 +257,31 @@ firings all being false positives, are recorded there as open items.
 (three logged fallback events in the whole journal, all in the burnt window, none of the three rows
 present in the panel, zero in the held-out window), and the journal does not reach back before
 2026-05-25.
+
+## 6. Re-run on the corrected panel — 2026-09-24
+
+Same script, same seed (20260923), same 2000 simulations x 399 bootstrap draws. Panel: 197 burnt
+episodes, **205 held-out episodes in 32 arrival clusters** over 35 sessions. sd(y) 0.1653, ICC 0.061,
+fitted signal loading kappa 0.142 — all three unchanged, because they come from the burnt side.
+
+| sharing phi | loading kappa | size | power at the 50% gate |
+|---|---|---|---|
+| 0.00 | 0 *(the merged preflight's assumption)* | 4.2% | 66.1% |
+| 0.50 | 0 | 4.4% | 65.5% |
+| 0.50 | fitted 0.142 | 5.1% | 64.6% |
+| 1.00 | 0 | 5.2% | 66.2% |
+| 1.00 | fitted 0.142 *(the conservative corner)* | **6.1%** | 64.8% |
+
+**Size: the conclusion is unchanged and slightly stronger.** Every cell sits under the 7.5% bar, and
+the conservative corner improved from 7.1% to 6.1% — far enough under the bar that the 40 000-run
+re-check §5.1 needed is not required here. Smaller clusters mean less within-session correlation for
+the bootstrap to mishandle.
+
+**Power: 64.6–66.2%, against a bar of 80%.** At 2000 simulations the Monte Carlo error is about
+±1.1 points, so the widest reading is [64.0, 68.1]. The bar is not in that interval.
+
+**A corroboration that is not an echo.** `a20_power.py` reports 66.7% at the family of one on the
+2026-09-24 panel; this module reports 66.1% on the 2026-09-23 one. The two use DIFFERENT data
+generating processes and different code paths for the simulation, so their agreement is real evidence
+about the simulator. They share the panel read, so it is no evidence at all about the panel — which
+is exactly the distinction the original error turned on.

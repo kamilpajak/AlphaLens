@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -85,6 +86,10 @@ DISCOVERY_CUTOFF = "2026-07-05"
 #: that clears, never the true minimum - the memo must say so when it quotes it.
 _SEARCH_STEP = 2
 
+#: An arrival session, as the label store stamps it. Measured 2026-09-24: every
+#: one of 1001 held-out rows matches, at exactly 10 characters.
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
 
 def population_mask(frame: pd.DataFrame, population: str) -> np.ndarray:
     """Row mask for the confirmation population. Reads one allowlisted column.
@@ -99,8 +104,13 @@ def population_mask(frame: pd.DataFrame, population: str) -> np.ndarray:
     return frame["briefed_any_theme"].fillna(False).astype(bool).to_numpy()
 
 
-def held_out_structure(frame: pd.DataFrame, *, population: str) -> list[int]:
+def held_out_episodes_by_arrival(frame: pd.DataFrame, *, population: str) -> dict[str, int]:
     """Episodes per arrival session on the held-out side. Structure only.
+
+    One read, one panel. The cluster sizes, the cluster COUNT and the arrival
+    calendar all come out of this mapping, because deriving them separately is
+    how they came to disagree: the accrual rate counted arrival sessions from
+    raw rows while the sizes came from something else.
 
     Reads nothing outside :data:`HELD_OUT_COLUMNS`, and takes every column as a
     named Series rather than masking the frame, so a test can watch exactly what
@@ -110,19 +120,51 @@ def held_out_structure(frame: pd.DataFrame, *, population: str) -> list[int]:
     held-out row while the confirmation runs on the briefed subset would inflate
     power by the ratio between them, and no assertion about label columns would
     catch it.
+
+    Neither is the unit. Ledger rule 5 counts ticker-EPISODES under the chained
+    5-session collapse, which is what ``burnt_panel`` applies on the other side.
+    Counting distinct ``(brief_date, ticker)`` pairs here instead would take the
+    effect size from collapsed episodes and the cluster sizes from uncollapsed
+    rows; measured on the real store 2026-09-23 the two differ by about a factor
+    of two, all of it in the direction of overstating power.
     """
+    from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
+
     status = frame["sel_label_status_20"].astype(str).to_numpy()
-    anchor = frame["anchor_session"].astype(str).to_numpy()
+    # Sliced to a date: the store stamps plain dates today, but an anchor that
+    # ever carried a time would silently split one session into several.
+    anchor = frame["anchor_session"].astype(str).str.slice(0, 10).to_numpy()
     brief_date = frame["brief_date"].astype(str).to_numpy()
     ticker = frame["ticker"].astype(str).to_numpy()
 
     keep = (status == _RESOLVED) & population_mask(frame, population)
 
-    # Ticker-episode is the unit of independence (ledger rule 5).
-    episodes = pd.DataFrame(
+    # Refuse an unusable arrival HERE rather than let it reach the grouping.
+    # Measured 2026-09-24: `.str.slice` hands a missing value back as float NaN
+    # even after `astype(str)`, and `groupby` DROPS a NaN key by default — so an
+    # episode with no arrival session silently leaves the panel, shrinking the
+    # count with nothing raised anywhere. It does not inflate the cluster count,
+    # which was the intuition; it deletes an episode.
+    # Checked against the panel, not the file: an unusable anchor on a row this
+    # panel excludes anyway is not a reason to refuse a run.
+    unusable = {a for a in anchor[keep] if not (isinstance(a, str) and _ISO_DATE.fullmatch(a))}
+    if unusable:
+        raise ValueError(
+            f"anchor_session is unusable on {len(unusable)} value(s) in the panel: "
+            f"{sorted(map(repr, unusable))[:5]}. An arrival session must be an ISO date."
+        )
+
+    rows = pd.DataFrame(
         {"anchor": anchor[keep], "brief_date": brief_date[keep], "ticker": ticker[keep]}
     ).drop_duplicates(subset=["brief_date", "ticker"])
-    return episodes.groupby("anchor").size().tolist()
+    # The chained collapse keeps the FIRST row of each episode, so the surviving
+    # ``anchor`` is the episode's own arrival session, and an arrival session
+    # holding nothing but chained repeats drops out of the mapping entirely.
+    episodes = ticker_episode_dedup(rows)
+    counts = episodes.groupby("anchor").size()
+    # Ascending by arrival date, and callers may rely on it: the overlap simulator
+    # pairs cluster sizes with calendar offsets by position.
+    return {str(k): int(v) for k, v in sorted(counts.items())}
 
 
 def holm_bars(m: int, alpha: float = FWER) -> list[float]:
@@ -146,6 +188,30 @@ def holm_reject(pvalues: dict[str, float], alpha: float = FWER) -> set[str]:
         else:
             break
     return rejected
+
+
+def rejected_under_family(
+    pvalues: dict[str, float], *, family_size: int | None, alpha: float = FWER
+) -> set[str]:
+    """Which hypotheses reject, under a multiplicity family of ``family_size``.
+
+    ``None`` means "all of them", which is the three-member Holm family #1227
+    was first scoped as and the one every merged number was computed under.
+    ``1`` is the family the registration narrowed to, where each hypothesis
+    faces a plain one-sided ``alpha``.
+
+    Only those two are accepted. A family of two among three hypotheses does not
+    say which two share the bar, and inventing an answer would put an undefined
+    correction into a pre-registration.
+    """
+    if family_size is None or family_size == len(pvalues):
+        return holm_reject(pvalues, alpha)
+    if family_size == 1:
+        return {name for name, p in pvalues.items() if p <= alpha}
+    raise ValueError(
+        f"family_size {family_size} is undefined for {len(pvalues)} hypotheses; "
+        f"use 1 (the registered family) or {len(pvalues)} (Holm across all)"
+    )
 
 
 def shrink(effect: float, factor: float) -> float:
@@ -332,8 +398,13 @@ def simulate_power(
     n_sims: int,
     wcb_boot: int,
     seed: int,
+    family_size: int | None = None,
 ) -> dict[str, float]:
-    """Power for each hypothesis under Holm, at the given injected effects.
+    """Power for each hypothesis at the given injected effects.
+
+    ``family_size`` picks the multiplicity family; see
+    :func:`rejected_under_family`. The default is Holm across all of them,
+    which is what every merged number was computed under.
 
     ``burnt_signals`` is a real (rows x hypotheses) matrix from the BURNT panel.
     Rows are resampled whole into the held-out cluster structure, so the
@@ -362,7 +433,7 @@ def simulate_power(
             )
             for i, name in enumerate(names)
         }
-        for name in holm_reject(pvalues):
+        for name in rejected_under_family(pvalues, family_size=family_size):
             wins[name] += 1
 
     return {name: wins[name] / n_sims for name in names}
@@ -518,28 +589,31 @@ def report(
     wcb_boot: int,
     seed: int,
     max_clusters: int = 200,
+    family_size: int | None = None,
 ) -> dict[str, Any]:
-    """One population's answer: effects, power at each shrinkage, and the date."""
+    """One population's answer: effects, power at each shrinkage, and the date.
+
+    ``family_size`` is carried into the result so a memo quoting a power figure
+    can never lose track of which multiplicity family produced it.
+    """
     burnt = burnt_panel(labels_dir, briefs_dir, population=population)
     effects = standardised_effects(burnt)
     cis = effect_ci(burnt, seed=seed)
 
     held = load_held_out(labels_dir)
-    sizes = held_out_structure(held, population=population)
 
-    # Both of these must see the SAME population the simulation runs on. Taking
-    # the accrual rate or the arrival list from every held-out row while the
-    # confirmation runs on the briefed subset would date the gate off a panel
-    # that is not the one being tested.
-    in_population = population_mask(held, population)
-    resolved = held["sel_label_status_20"].astype(str).to_numpy() == _RESOLVED
-    anchors = held["anchor_session"].astype(str).to_numpy()
-
-    matured = anchors[in_population & resolved]
-    by_anchor = (
-        dict(zip(*np.unique(matured, return_counts=True), strict=True)) if len(matured) else {}
-    )
+    # One read for the whole panel. The sizes, the cluster count and the accrual
+    # rate must describe the same episodes on the same population; deriving the
+    # accrual rate from raw rows instead counted arrival sessions that hold only
+    # a chained repeat of an earlier episode.
+    by_anchor = held_out_episodes_by_arrival(held, population=population)
+    sizes = list(by_anchor.values())
     accrual = measured_accrual(by_anchor)
+
+    # The arrival LIST is deliberately wider than the matured panel: it dates
+    # the gate off every session the brief has reached, matured or not.
+    in_population = population_mask(held, population)
+    anchors = held["anchor_session"].astype(str).to_numpy()
     observed_arrivals = sorted({a[:10] for a in anchors[in_population]})
 
     y_b = burnt[OUTCOME].astype(float).to_numpy()
@@ -558,6 +632,7 @@ def report(
             n_sims=n_sims,
             wcb_boot=wcb_boot,
             seed=seed,
+            family_size=family_size,
         )
 
     needed = None
@@ -575,6 +650,7 @@ def report(
             wcb_boot=wcb_boot,
             seed=seed,
             max_clusters=max_clusters,
+            family_size=family_size,
         )
         if needed is not None and (accrual > 0 or len(observed_arrivals) >= needed):
             gate_when = gate_date(
@@ -596,6 +672,7 @@ def report(
         "power_by_cluster_count": table,
         "date_by_cluster_count": cluster_dates,
         "search_sims": max(n_sims // 2, 60),
+        "family_size": family_size if family_size is not None else len(SIGNALS),
         "population": population,
         "burnt_episodes": len(burnt),
         "held_out_clusters": len(sizes),
@@ -638,6 +715,7 @@ def clusters_for_power(
     wcb_boot: int,
     seed: int,
     max_clusters: int = 200,
+    family_size: int | None = None,
 ) -> tuple[int | None, dict[int, dict[str, float]]]:
     """First cluster count reaching ``target_power``, AND every count it tried.
 
@@ -663,6 +741,7 @@ def clusters_for_power(
             n_sims=n_sims,
             wcb_boot=wcb_boot,
             seed=seed,
+            family_size=family_size,
         )
         seen[n] = power
         if power[target] >= target_power:
@@ -729,6 +808,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20260922)
     parser.add_argument("--max-clusters", type=int, default=200)
     parser.add_argument("--out-json", type=Path, default=None)
+    parser.add_argument(
+        "--family-size",
+        type=int,
+        default=None,
+        help=(
+            "multiplicity family: 1 for the registered ATR-only test, "
+            f"{len(SIGNALS)} (the default) for Holm across all three"
+        ),
+    )
     # One population per process is how this gets run on a machine with cores
     # to spare: the two arms share no state, so splitting them halves the wall
     # time and changes nothing about the numbers.
@@ -751,9 +839,10 @@ def main(argv: list[str] | None = None) -> int:
             wcb_boot=args.wcb_boot,
             seed=args.seed,
             max_clusters=args.max_clusters,
+            family_size=args.family_size,
         )
         out[population] = r
-        print(f"\n=== population: {population} ===")
+        print(f"\n=== population: {population} ===  family of {r['family_size']}")
         print(
             f"burnt episodes {r['burnt_episodes']} | held-out {r['held_out_episodes']} episodes "
             f"in {r['held_out_clusters']} clusters | accrual {r['accrual_per_session']:.2f}/session "

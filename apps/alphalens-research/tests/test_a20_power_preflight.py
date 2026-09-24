@@ -71,7 +71,7 @@ class TestHeldOutBlindness(unittest.TestCase):
                 seen.extend([key] if isinstance(key, str) else list(key))
                 return super().__getitem__(key)
 
-        pre.held_out_structure(_Watched(frame), population=pre.POPULATION_BRIEFED)
+        pre.held_out_episodes_by_arrival(_Watched(frame), population=pre.POPULATION_BRIEFED)
 
         self.assertTrue(seen, "positive control: the watcher recorded nothing at all")
         self.assertTrue(
@@ -102,20 +102,151 @@ class TestTheStructureMatchesTheSimulatedPopulation(unittest.TestCase):
     ]
 
     def test_the_briefed_population_sees_only_its_own_clusters(self):
-        sizes = pre.held_out_structure(
+        by_arrival = pre.held_out_episodes_by_arrival(
             _held_out_frame(self._ROWS), population=pre.POPULATION_BRIEFED
         )
-        self.assertEqual(sorted(sizes), [2])  # one arrival session, two episodes
+        self.assertEqual(by_arrival, {"2026-07-07": 2})  # one arrival session, two episodes
 
     def test_the_wider_population_sees_more(self):
-        sizes = pre.held_out_structure(_held_out_frame(self._ROWS), population=pre.POPULATION_ALL)
-        self.assertEqual(sorted(sizes), [1, 3])
+        by_arrival = pre.held_out_episodes_by_arrival(
+            _held_out_frame(self._ROWS), population=pre.POPULATION_ALL
+        )
+        self.assertEqual(by_arrival, {"2026-07-07": 3, "2026-07-08": 1})
 
     def test_an_immature_row_is_not_a_cluster(self):
         frame = _held_out_frame(self._ROWS)
         frame.loc[frame["ticker"] == "AAA", "sel_label_status_20"] = "immature"
-        sizes = pre.held_out_structure(frame, population=pre.POPULATION_BRIEFED)
-        self.assertEqual(sorted(sizes), [1])
+        by_arrival = pre.held_out_episodes_by_arrival(frame, population=pre.POPULATION_BRIEFED)
+        self.assertEqual(by_arrival, {"2026-07-07": 1})
+
+
+class TestAnUnusableArrivalIsRefusedAtTheSource(unittest.TestCase):
+    """A missing arrival session must be named here, not crash 40 lines later.
+
+    The failure mode is worse than it looks. ``.str.slice`` hands a missing value
+    back as float ``NaN`` even after ``astype(str)``, and ``groupby`` drops a NaN
+    key by default — so an episode with no arrival session leaves the panel with
+    NOTHING raised anywhere and the count quietly one lower. It does not create a
+    phantom cluster, which was the first guess; it deletes an episode. A panel
+    that shrinks in silence is the exact failure this whole change is a
+    correction for, so the single definition of the panel refuses its own bad
+    input.
+
+    Measured on the real store 2026-09-24: 0 null anchors in 1001 held-out rows,
+    every anchor string exactly 10 characters. So this guards a case that does
+    not occur today, which is the point of guarding it.
+    """
+
+    _GOOD = ("2026-07-06", "AAA", "2026-07-07", True)
+
+    def test_an_unusable_anchor_would_otherwise_vanish(self):
+        # The refutation control, and the reason this guard is not decoration:
+        # without it the grouping drops the row and reports a smaller panel.
+        rows = pd.DataFrame({"anchor": ["2026-07-07", float("nan")], "n": [1, 1]})
+        self.assertEqual(rows.groupby("anchor").size().to_dict(), {"2026-07-07": 1})
+
+    def test_a_missing_arrival_is_named(self):
+        frame = _held_out_frame([self._GOOD, ("2026-07-06", "BBB", "2026-07-07", True)])
+        frame.loc[frame["ticker"] == "BBB", "anchor_session"] = None
+        with self.assertRaises(ValueError) as caught:
+            pre.held_out_episodes_by_arrival(frame, population=pre.POPULATION_BRIEFED)
+        self.assertIn("anchor_session", str(caught.exception))
+
+    def test_a_row_the_panel_excludes_cannot_trigger_it(self):
+        # The guard must look at the panel, not the file. An unusable anchor on a
+        # row that is immature, or that the brief never carried, is not this
+        # panel's problem and must not block a run.
+        for column, value in (("sel_label_status_20", "immature"), ("briefed_any_theme", False)):
+            with self.subTest(column=column):
+                frame = _held_out_frame([self._GOOD, ("2026-07-06", "BBB", "2026-07-07", True)])
+                frame.loc[frame["ticker"] == "BBB", "anchor_session"] = None
+                frame.loc[frame["ticker"] == "BBB", column] = value
+                self.assertEqual(
+                    pre.held_out_episodes_by_arrival(frame, population=pre.POPULATION_BRIEFED),
+                    {"2026-07-07": 1},
+                )
+
+    def test_a_clean_panel_passes(self):
+        # Positive control: the guard must not refuse the ordinary case.
+        self.assertEqual(
+            pre.held_out_episodes_by_arrival(
+                _held_out_frame([self._GOOD]), population=pre.POPULATION_BRIEFED
+            ),
+            {"2026-07-07": 1},
+        )
+
+
+class TestTheUnitIsTheTickerEpisode(unittest.TestCase):
+    """The held-out unit must be the one ledger rule 5 defines, and the one the
+    burnt side already uses.
+
+    Rule 5's unit is the ticker-EPISODE under the chained 5-session collapse, not
+    the distinct ``(brief_date, ticker)`` pair. ``burnt_panel`` runs
+    ``ticker_episode_dedup``; if the held-out branch does not, the simulation
+    takes its effect size from collapsed episodes and its cluster sizes from
+    uncollapsed rows. Every episode per cluster that is not really independent
+    inflates power, and no assertion about label columns would catch it.
+
+    Dates chosen against the real XNYS calendar: 2026-07-06 + 5 sessions is
+    2026-07-13, so a 07-09 reappearance chains and a 07-16 one does not.
+    """
+
+    _ROWS = [
+        ("2026-07-06", "AAA", "2026-07-07", True),
+        ("2026-07-09", "AAA", "2026-07-10", True),  # 3 sessions later: same episode
+        ("2026-07-06", "BBB", "2026-07-07", True),
+        ("2026-07-16", "BBB", "2026-07-17", True),  # 8 sessions later: new episode
+    ]
+
+    def test_a_reappearance_inside_the_window_is_not_a_second_episode(self):
+        by_arrival = pre.held_out_episodes_by_arrival(
+            _held_out_frame(self._ROWS), population=pre.POPULATION_BRIEFED
+        )
+        # AAA and BBB both arrive on 07-07; only BBB opens a second episode.
+        self.assertEqual(sorted(by_arrival.values()), [1, 2])
+
+    def test_an_arrival_session_carrying_only_chained_repeats_is_not_a_cluster(self):
+        # The other half of the same defect, and the one a size-only assertion
+        # misses: 2026-07-10 holds AAA's chained reappearance and nothing else.
+        # Counting it as an arrival session would overstate both the cluster
+        # count and the accrual rate the Wake date is derived from.
+        by_arrival = pre.held_out_episodes_by_arrival(
+            _held_out_frame(self._ROWS), population=pre.POPULATION_BRIEFED
+        )
+        self.assertEqual(sorted(by_arrival), ["2026-07-07", "2026-07-17"])
+
+    def test_the_mapping_is_ordered_by_arrival_date(self):
+        # Not cosmetic. The overlap simulator zips cluster sizes against calendar
+        # offsets by POSITION, so a mapping in some other order would give every
+        # cluster someone else's arrival date while every count stayed right.
+        # Rows are written newest-first here so insertion order cannot pass by
+        # accident.
+        rows = list(reversed(self._ROWS))
+        by_arrival = pre.held_out_episodes_by_arrival(
+            _held_out_frame(rows), population=pre.POPULATION_BRIEFED
+        )
+        self.assertEqual(list(by_arrival), sorted(by_arrival))
+        self.assertEqual(list(by_arrival), ["2026-07-07", "2026-07-17"])
+
+    def test_the_held_out_unit_equals_the_burnt_unit(self):
+        # The two sides must agree by construction, not by coincidence: the
+        # comparison runs the burnt-side helper over the same rows.
+        from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
+
+        frame = _held_out_frame(self._ROWS)
+        expected = len(ticker_episode_dedup(frame[["brief_date", "ticker"]].copy()))
+        by_arrival = pre.held_out_episodes_by_arrival(frame, population=pre.POPULATION_BRIEFED)
+        self.assertEqual(sum(by_arrival.values()), expected)
+
+    def test_the_check_can_refute(self):
+        # Positive control: on these rows the collapsed and uncollapsed counts
+        # differ, so the cases above could have failed.
+        frame = _held_out_frame(self._ROWS)
+        uncollapsed = frame.drop_duplicates(subset=["brief_date", "ticker"])
+        self.assertEqual((len(uncollapsed), uncollapsed["anchor_session"].nunique()), (4, 3))
+        by_arrival = pre.held_out_episodes_by_arrival(frame, population=pre.POPULATION_BRIEFED)
+        self.assertNotEqual(sum(by_arrival.values()), 4)
+        self.assertNotEqual(len(by_arrival), 3)
 
 
 class TestHolm(unittest.TestCase):
@@ -142,6 +273,83 @@ class TestHolm(unittest.TestCase):
     def test_a_tie_at_the_bar_is_rejected(self):
         # p <= bar, not p < bar: the boundary belongs to the rejection region.
         self.assertEqual(pre.holm_reject({"a": 0.05 / 3}, alpha=0.05), {"a"})
+
+
+class TestTheTestFAMILY(unittest.TestCase):
+    """Which family the power figure is computed under.
+
+    #1227 was scoped as three hypotheses under Holm, and the merged registration
+    then narrowed it to ATR alone as a dated amendment. Power computed under
+    Holm for a test that will run at a plain one-sided 0.05 understates it, and
+    the accrual projection reads directly off that number, so the family has to
+    be an argument rather than a constant.
+    """
+
+    _P = {"atr": 0.03, "ma50": 0.9, "press": 0.9}
+
+    def test_the_default_is_holm_across_every_hypothesis(self):
+        # 0.03 misses the 0.05/3 bar, so the step-down rejects nothing.
+        self.assertEqual(pre.rejected_under_family(self._P, family_size=None), set())
+        self.assertEqual(pre.rejected_under_family(self._P, family_size=3), set())
+
+    def test_a_family_of_one_judges_each_hypothesis_at_plain_alpha(self):
+        self.assertEqual(pre.rejected_under_family(self._P, family_size=1), {"atr"})
+
+    def test_a_family_size_nobody_has_defined_is_refused(self):
+        # A family of 2 among 3 hypotheses does not say WHICH two share the
+        # bar. Guessing an answer here would put an undefined correction into a
+        # registration; there are exactly two families this programme has.
+        with self.assertRaises(ValueError):
+            pre.rejected_under_family(self._P, family_size=2)
+
+    def test_the_family_of_one_never_rejects_less_than_holm(self):
+        # The direction is the load-bearing part: narrowing the family may only
+        # make rejection easier, so a power figure can never fall by narrowing.
+        for p in (0.001, 0.01, 0.02, 0.04, 0.2):
+            values = dict.fromkeys(("atr", "ma50", "press"), p)
+            with self.subTest(p=p):
+                self.assertLessEqual(
+                    len(pre.rejected_under_family(values, family_size=None)),
+                    len(pre.rejected_under_family(values, family_size=1)),
+                )
+
+
+class TestTheSimulatorHonoursTheFamily(unittest.TestCase):
+    def setUp(self):
+        rng = np.random.default_rng(3)
+        self.signals = rng.normal(size=(200, 3))
+        self.sizes = [6] * 12
+        self.effects = {"atr": -0.05, "ma50": -0.02, "press": 0.0}
+
+    def _power(self, **kwargs):
+        return pre.simulate_power(
+            burnt_signals=self.signals,
+            cluster_sizes=self.sizes,
+            effects=self.effects,
+            sd_y=0.165,
+            icc=0.06,
+            n_sims=40,
+            wcb_boot=99,
+            seed=101,
+            **kwargs,
+        )
+
+    def test_the_default_is_unchanged(self):
+        # Regression guard: the merged numbers were produced by the default
+        # path, so it must stay exactly what it was.
+        self.assertEqual(self._power(), self._power(family_size=None))
+
+    def test_narrowing_the_family_cannot_lower_power(self):
+        holm = self._power()
+        alone = self._power(family_size=1)
+        for name in holm:
+            with self.subTest(name=name):
+                self.assertGreaterEqual(alone[name], holm[name])
+
+    def test_this_fixture_can_tell_the_two_apart(self):
+        # Positive control: on a fixture where Holm and the family of one agree
+        # everywhere, the case above would pass without testing anything.
+        self.assertGreater(self._power(family_size=1)["atr"], self._power()["atr"])
 
 
 class TestTheGateDateArithmetic(unittest.TestCase):
@@ -723,6 +931,46 @@ class TestTheWholeDriverRuns(unittest.TestCase):
 
         written = json.loads(out_json.read_text())
         self.assertEqual(set(written), {pre.POPULATION_BRIEFED, pre.POPULATION_ALL})
+        # Default: Holm across all three, which is what every merged number
+        # was computed under.
+        self.assertEqual(written[pre.POPULATION_BRIEFED]["family_size"], 3)
+        self.assertIn("family of 3", printed)
+
+    def test_main_carries_the_requested_family_into_the_answer(self):
+        # A power figure is meaningless without its family, so the flag has to
+        # reach both the printed header and the recorded JSON. Quoting a
+        # family-of-one number under a Holm heading is the mistake this pins.
+        import contextlib
+        import io
+        import json
+
+        out_json = self.root / "family.json"
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = pre.main(
+                [
+                    "--labels-dir",
+                    str(self.store.labels),
+                    "--briefs-dir",
+                    str(self.store.briefs),
+                    "--n-sims",
+                    "4",
+                    "--wcb-boot",
+                    "9",
+                    "--max-clusters",
+                    "16",
+                    "--family-size",
+                    "1",
+                    "--population",
+                    "briefed",
+                    "--out-json",
+                    str(out_json),
+                ]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("family of 1", buffer.getvalue())
+        written = json.loads(out_json.read_text())
+        self.assertEqual(written[pre.POPULATION_BRIEFED]["family_size"], 1)
 
 
 class TestTheClusterTableIsReproducible(unittest.TestCase):

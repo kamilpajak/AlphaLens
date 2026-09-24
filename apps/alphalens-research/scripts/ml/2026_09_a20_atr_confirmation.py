@@ -17,15 +17,33 @@ read. `--run` refuses to execute before RUN_NOT_BEFORE without an explicit
 `--override-run-date`, which is a logged protocol deviation; the gap exists so
 this registration is merged before the look, never alongside it.
 
-WHY IT MAY RUN NOW
+WHY IT MAY NOT RUN YET  (amended 2026-09-24; it read "WHY IT MAY RUN NOW")
 The unblocking condition #1227 wrote for itself is ">= 80% power at 50% of the
-July discovery effect for the ATR test". Measured outcome-blind and recorded in
-`a20_power_preflight_2026_09.md`: 83.9% under a three-member Holm family, 92.9%
-at the family of one this registration uses. The inference method's SIZE was
-then verified on an overlap-aware simulator
-(`a20_overlap_inference_2026_09.md`): 4.0-7.1% against a nominal 5%, worst
-corner 7.125% with a 95% interval [6.87, 7.38] under a pre-specified 7.5% bar.
-Both pre-run data-integrity gates cleared: mixed price adjustment
+July discovery effect for the ATR test". IT IS NOT MET. The figures that said it
+was - 83.9% under a three-member Holm family, 92.9% at the family of one - were
+computed on a held-out panel counted as distinct (brief_date, ticker) pairs
+rather than the collapsed ticker-episodes ledger rule 5 defines and the panel
+loader below applies. Corrected and re-run on the same seeds: 46.2% and 66.7%,
+on 206 episodes in 33 arrival clusters rather than 419 in 35
+(`a20_power_preflight_2026_09.md` §7).
+
+RUN_NOT_BEFORE therefore moves to 2026-10-09, the date the frozen MIN_EPISODES
+floor is reached at the measured accrual. Nothing else in this registration
+changes: the estimand, the panel definition, DELTA, the decision rule, the
+conclusion language and the tilt mapping are all as frozen on 2026-09-23, and no
+held-out `sel_ar_20` value has been read at any point.
+
+A known mismatch, recorded rather than fixed: the power tooling measures a
+TWO-SIDED test while this registration tests one-sided ("less"), so both figures
+above understate the registered test - roughly 77% by normal approximation on the
+measured 66.7%, still under the bar. It is not corrected because it would move a
+failed gate upward right after it failed, and because it does not change the
+date: one-sided needs FEWER clusters than the episode floor does.
+
+The other pre-run gates DID clear and are unaffected. The inference method's SIZE
+was verified on an overlap-aware simulator (`a20_overlap_inference_2026_09.md`),
+re-confirmed on the corrected panel at 4.2-6.1% against a nominal 5% and a
+pre-specified 7.5% bar. Mixed price adjustment
 (`atr_split_adjustment_gate_2026_09.md`, premise withdrawn - both sources are
 split-adjusted) and the yfinance stale-OHLCV cache census (three logged
 fallbacks, all in the burnt window, none in the panel).
@@ -100,9 +118,12 @@ stricter form was rejected in the other direction too: it would retire a true
 effect of -0.15 about 60% of the time, and under rule 4 that retirement is
 permanent.
 
-OPERATING CHARACTERISTICS, disclosed in advance (normal approximation at the
-implied SE 0.0552, derived from the recorded power curve rather than measured
-directly; the memo says so):
+OPERATING CHARACTERISTICS, disclosed in advance. SUPERSEDED 2026-09-24: the
+implied SE 0.0552 was back-derived from the power curve that the correction above
+withdraws, so the row below describes a panel about twice the real one. It stays
+because it is what was disclosed before the look, and it must be re-derived before
+the look is spent. (Normal approximation at the implied SE 0.0552, derived from
+the recorded power curve rather than measured directly; the memo says so):
 
     true |rho|   0     0.05   0.10   0.15   0.189   0.25
     P(promote)   3.5%  18%    50%    82%    95%     99.7%
@@ -250,7 +271,14 @@ MIN_VOL_EPISODES = 4
 MIN_REGIME_CLUSTERS = 10
 
 #: The registration is merged before the look runs; the gap is what enforces it.
-RUN_NOT_BEFORE = dt.date(2026, 9, 24)
+#: AMENDED 2026-09-24 from 2026-09-24: the panel the power gate was computed on was
+#: counted in the wrong unit, and the real one does not clear MIN_EPISODES until
+#: about here. Derived as arithmetic on the FROZEN floor (300 episodes, ~6.24 per
+#: cluster, so ~48 clusters) and the measured accrual (0.917 clusters/session), not
+#: from the power search, whose stopping point is unresolved at the precision it ran
+#: at. This rail only ever REFUSES, so tightening it needs no new permission;
+#: loosening it would.
+RUN_NOT_BEFORE = dt.date(2026, 10, 9)
 
 DISCOVERY_CUTOFF = "2026-07-05"
 POPULATION = "briefed"
@@ -346,24 +374,37 @@ def status_census(labels_dir: Any) -> dict[str, int]:
     return {str(k): int(v) for k, v in frame["sel_label_status_20"].value_counts().items()}
 
 
-def held_out_panel(labels_dir: Any, briefs_dir: Any) -> pd.DataFrame:
-    """The frozen confirmation panel, or :class:`VoidError` if it cannot be built.
+_LABEL_KEY_COLUMNS = ("brief_date", "ticker", "anchor_session", "briefed_any_theme")
 
-    Reads outcome values, so calling this IS the start of the look. The
-    stringified join key is deliberate: the two stores stamp ``brief_date`` with
-    different types and a silent type mismatch would empty the join and hand
-    back a clean-looking empty panel.
+
+def _held_out_episodes(
+    labels_dir: Any,
+    briefs_dir: Any,
+    *,
+    with_signals: bool,
+) -> pd.DataFrame:
+    """The held-out episodes, joined and filtered exactly once.
+
+    ONE definition of the panel, used by both the run and the preflight. They
+    used to be two copies of the same eight-step chain, which is the shape of
+    defect this whole module is a correction for: two reads of one quantity
+    agree until they quietly do not, and nothing fails when they stop.
+
+    ``with_signals`` is the only difference the two callers need. The run reads
+    the outcome and the three signal columns and drops rows missing any of them;
+    the preflight reads NEITHER, because it must stay outcome-blind, and so it
+    cannot apply that completeness drop. Its count is therefore an upper bound
+    on the run's by however many resolved rows carry a null outcome or a null
+    signal — in practice none, since a resolved label is not supposed to carry
+    one, and the bound points the safe way: the preflight can refute a run,
+    never promise one.
+
+    ORDER IS LOAD-BEARING and identical on both paths: status and completeness
+    filters run BEFORE the episode collapse, so an episode is represented by its
+    first USABLE row rather than by one that was dropped.
     """
     from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
 
-    label_cols = [
-        "brief_date",
-        "ticker",
-        "anchor_session",
-        "briefed_any_theme",
-        "sel_label_status_20",
-        OUTCOME,
-    ]
     label_paths = [
         path for path in sorted(Path(labels_dir).glob("*.parquet")) if path.stem > DISCOVERY_CUTOFF
     ]
@@ -376,11 +417,14 @@ def held_out_panel(labels_dir: Any, briefs_dir: Any) -> pd.DataFrame:
             f"({len(label_paths)} label, {len(brief_paths)} brief)"
         )
 
+    label_cols = [*_LABEL_KEY_COLUMNS, "sel_label_status_20"]
+    if with_signals:
+        label_cols.append(OUTCOME)
     labels = pd.concat(
         [pd.read_parquet(path, columns=label_cols) for path in label_paths], ignore_index=True
     )
     briefs = pd.concat(
-        [_read_brief(path) for path in brief_paths],
+        [_read_brief(path) if with_signals else _read_brief_keys(path) for path in brief_paths],
         ignore_index=True,
     )
     labels["brief_date"] = labels["brief_date"].astype(str)
@@ -390,10 +434,22 @@ def held_out_panel(labels_dir: Any, briefs_dir: Any) -> pd.DataFrame:
     panel = labels.merge(briefs, on=["brief_date", "ticker"], how="inner", validate="m:1")
     panel = panel[panel["sel_label_status_20"].astype(str) == STATUS_RESOLVED]
     panel = panel[panel["briefed_any_theme"].fillna(False).astype(bool)]
-    panel = panel.dropna(subset=[OUTCOME, ATR, *COVARIATES])
+    if with_signals:
+        panel = panel.dropna(subset=[OUTCOME, ATR, *COVARIATES])
     panel = panel.rename(columns={"anchor_session": "arrival"})
     panel["arrival"] = panel["arrival"].astype(str)
-    panel = ticker_episode_dedup(panel)
+    return ticker_episode_dedup(panel)
+
+
+def held_out_panel(labels_dir: Any, briefs_dir: Any) -> pd.DataFrame:
+    """The frozen confirmation panel, or :class:`VoidError` if it cannot be built.
+
+    Reads outcome values, so calling this IS the start of the look. The
+    stringified join key is deliberate: the two stores stamp ``brief_date`` with
+    different types and a silent type mismatch would empty the join and hand
+    back a clean-looking empty panel.
+    """
+    panel = _held_out_episodes(labels_dir, briefs_dir, with_signals=True)
 
     for column in (ATR, *COVARIATES):
         # A zero-variance column standardises to zeros, and the shared OLS uses
@@ -410,6 +466,13 @@ def held_out_panel(labels_dir: Any, briefs_dir: Any) -> pd.DataFrame:
             f"The look is NOT spent."
         )
     return panel.reset_index(drop=True)
+
+
+def _read_brief_keys(path: Path) -> pd.DataFrame:
+    """Just the join key. The outcome-blind path must not read signal columns:
+    the allowlist in ``a20_power.py`` bars held-out signals as well as labels,
+    and being loose with an allowlist is how the panel came to be miscounted."""
+    return pd.read_parquet(path, columns=["ticker"]).assign(brief_date=path.stem)
 
 
 def _read_brief(path: Path) -> pd.DataFrame:
@@ -533,6 +596,26 @@ def volatility_sufficiency(panel: pd.DataFrame) -> tuple[int, bool]:
 
 
 # ------------------------------------------------------------------ driver
+def panel_shape(labels_dir: Any, briefs_dir: Any) -> tuple[int, int]:
+    """(episodes, arrival clusters) the run would build, WITHOUT reading outcomes.
+
+    Same join, same filters and the same chained collapse as
+    :func:`held_out_panel` — literally the same function — minus the columns that
+    would spend the look. The floors are counted in ticker-episodes, so the
+    preflight has to be too: the resolved ROW count is about twice this on the
+    real store, and comparing that to ``MIN_EPISODES`` reads a certain VOID as a
+    comfortable pass.
+
+    See :func:`_held_out_episodes` for why this is an upper bound by at most the
+    number of resolved rows carrying a null outcome or signal.
+    """
+    try:
+        panel = _held_out_episodes(labels_dir, briefs_dir, with_signals=False)
+    except VoidError:
+        return 0, 0
+    return len(panel), int(panel["arrival"].nunique())
+
+
 def preflight(labels_dir: Any, briefs_dir: Any) -> None:
     """Outcome-blind checks. Emits no feature-vs-outcome statistic."""
     print("PREFLIGHT — outcome-blind. Nothing here spends the look.\n")
@@ -546,7 +629,23 @@ def preflight(labels_dir: Any, briefs_dir: Any) -> None:
     briefs = [p for p in sorted(Path(briefs_dir).glob("*.parquet")) if p.stem > DISCOVERY_CUTOFF]
     print(f"\nheld-out brief parquets available to join: {len(briefs)}")
     print(f"resolved rows available to the panel: {resolved}")
+
+    episodes, clusters = panel_shape(labels_dir, briefs_dir)
+    print(f"\nTHE PANEL: {episodes} ticker-episodes in {clusters} arrival clusters")
+    print(
+        "  (rows above, episodes here — ledger rule 5 collapses a ticker "
+        "reappearing within 5 sessions)"
+    )
     print(f"registration floors: >= {MIN_EPISODES} episodes, >= {MIN_CLUSTERS} arrival clusters")
+    if episodes < MIN_EPISODES or clusters < MIN_CLUSTERS:
+        short = []
+        if episodes < MIN_EPISODES:
+            short.append(f"{MIN_EPISODES - episodes} episodes")
+        if clusters < MIN_CLUSTERS:
+            short.append(f"{MIN_CLUSTERS - clusters} clusters")
+        print(f"VERDICT: the run WOULD VOID today — short by {' and '.join(short)}.")
+    else:
+        print("VERDICT: the panel clears both floors.")
     print("A panel below either floor is a VOID, not a RETIRE — the look returns unspent.")
 
 
