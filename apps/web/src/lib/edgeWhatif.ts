@@ -62,7 +62,7 @@ export const WHATIF_LENS_REGISTRY: Record<string, WhatIfLensMeta> = {
 		status: 'in_sample',
 		category: 'whole exit',
 		replaces:
-			'the WHOLE exit - the brief TP tranches are discarded for a single 100% target at anchor +1.5xATR (floor +0.6%, capped at the 52-week high), with a static stop at anchor -1.5xATR (no ratchet, no trail); entry tiers are kept and the anchor is the planned blend over ALL intended tiers, which is what the live rail places against'
+			'the WHOLE exit - the brief TP tranches are discarded for a single 100% target at anchor +1.5xATR (floor +0.6%, capped at the 52-week high), with a static stop at anchor -1.5xATR (no ratchet, no trail); entry tiers are kept and the anchor is the planned blend over ALL intended tiers, the anchor the live bracket used until issue #1414 stopped the brief path placing one'
 	},
 	be_0p5r_trail0p6_ttl7: {
 		label: 'break-even +0.5R · trail 0.6 · entry TTL 7',

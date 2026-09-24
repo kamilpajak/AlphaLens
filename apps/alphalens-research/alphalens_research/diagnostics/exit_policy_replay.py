@@ -13,9 +13,11 @@ defaultless ``arm``:
   (:func:`alphalens_pipeline.feedback.ladder_replay.replay_ladder`) and
   rendered into cash — one engine, two renderings, so the fill convention
   cannot drift from the ``/edge`` store.
-* **Arm B — live operational policy** (§5.2/§5.3): the planned-anchor ATR
+* **Arm B — the ATR bracket policy** (§5.2/§5.3): the planned-anchor ATR
   bracket with the #1112 step-3 take-profit clamp and the ``ReanchorOnFill``
-  dynamic stop, all REUSED from the live composition
+  dynamic stop. This was the LIVE composition when the memo was written; #1414
+  retired it, so today no deployment places this bracket and the arm measures a
+  policy nobody runs. The pieces are still REUSED rather than retyped
   (``resolve_exit_policy("atr_bracket_1p5")`` +
   :func:`broker_contract.exit_geometry.levels.clamp_reanchor_target` +
   :func:`alphalens_pipeline.paper.sizing.first_brief_tp_target`). When the
@@ -66,24 +68,27 @@ __status__ = "RESEARCH_ONLY"
 ARM_A = "brief_tranches"
 """Arm A — the brief's staged take-profit ladder with its static disaster stop."""
 
-ARM_B = "live_atr_bracket"
-"""Arm B — the live planned-anchor ATR bracket policy with the step-3 clamp,
-the reanchor-on-fill stop, and the declared per-tier-bracket fallback."""
+ARM_B = "atr_bracket"
+"""Arm B — the planned-anchor ATR bracket policy with the step-3 clamp, the
+reanchor-on-fill stop, and the declared per-tier-bracket fallback. It said
+``live_atr_bracket`` until #1414 removed the rail that placed it; the value is
+an internal key of this module only, never written to disk."""
 
-Arm = Literal["brief_tranches", "live_atr_bracket"]
+Arm = Literal["brief_tranches", "atr_bracket"]
 
 _ARMS: frozenset[str] = frozenset({ARM_A, ARM_B})
 
-# The live behavioral policy arm B mirrors. Resolved from the registry so the
-# bracket parameters (stop/tp ATR multiples, cost floor) and the reanchor
-# semantics (decide_reanchor + min_stop_distance_frac) are the LIVE objects,
-# never constants retyped here. The DEFINITION is pinned
-# against the shared atr_bracket_levels leaf (tests/diagnostics/
-# test_exit_policy_replay.py::TestSmgIncidentPin); it was a HALT tripwire during
-# the 2026-08-24 accrual, which was voided before its cohort opened. Resolved
-# once at import: the registry is static configuration, and the parity test
-# breaks loudly if the resolved object ever drifts from the live composition.
-_LIVE_POLICY = resolve_exit_policy("atr_bracket_1p5")
+# The behavioral policy arm B replays. Resolved from the registry so the bracket
+# parameters (stop/tp ATR multiples, cost floor) and the reanchor semantics
+# (decide_reanchor + min_stop_distance_frac) come from the shared objects, never
+# from constants retyped here. It was named _LIVE_POLICY while a deployment
+# actually ran it; since #1414 this module is the ONLY resolver of
+# "atr_bracket_1p5" outside tests, so "live" had become a claim about nothing.
+# The DEFINITION is pinned against the shared atr_bracket_levels leaf
+# (tests/diagnostics/test_exit_policy_replay.py::TestSmgIncidentPin); it was a
+# HALT tripwire during the 2026-08-24 accrual, which was voided before its
+# cohort opened. Resolved once at import: the registry is static configuration.
+_BRACKET_POLICY = resolve_exit_policy("atr_bracket_1p5")
 
 _BPS = 10_000.0
 
@@ -205,7 +210,7 @@ def _per_fill_fee(fill_notional: float) -> float:
 
 
 # --------------------------------------------------------------------------
-# Arm B geometry — the live composition, reused not retyped.
+# Arm B geometry — the composition #1414 retired, reused not retyped.
 # --------------------------------------------------------------------------
 
 
@@ -216,7 +221,7 @@ def arm_b_initial_levels(
     anchor_blend: float | None = None,
     apply_clamp: bool = True,
 ) -> Levels | None:
-    """The placement-time (stop, tp) of the live policy, WITH the step-3 clamp.
+    """The placement-time (stop, tp) of the bracket policy, WITH the step-3 clamp.
 
     ``None`` means the bracket is not constructible and arm B takes the §5.3
     fallback. Composes the same leaf the live builder used before #1414 removed
@@ -232,11 +237,11 @@ def arm_b_initial_levels(
     if atr is None or not math.isfinite(atr) or atr <= 0:
         return None
     ceiling = ceiling_from_52w_high(trade_setup, pct_off_52w_high)
-    levels = _LIVE_POLICY.decide_placement_geometry(blended, atr, ceiling_price=ceiling)
+    levels = _BRACKET_POLICY.decide_placement_geometry(blended, atr, ceiling_price=ceiling)
     if levels is None:
         return None
     stop, tp = levels
-    uncapped = _LIVE_POLICY.decide_placement_geometry(blended, atr, ceiling_price=None)
+    uncapped = _BRACKET_POLICY.decide_placement_geometry(blended, atr, ceiling_price=None)
     tp_uncapped = uncapped[1] if uncapped is not None else tp
     if apply_clamp:
         first_target = first_brief_tp_target(trade_setup)
@@ -249,21 +254,21 @@ def arm_b_initial_levels(
 def arm_b_reanchored_stop(
     fill_blend: float, atr: float, *, brief_disaster_stop: float
 ) -> float | None:
-    """The reanchor-on-fill stop target, exactly as the live arm composes it.
+    """The reanchor-on-fill stop target, exactly as arm B composes it.
 
     ``policy.decide_reanchor(fill_blend, atr)`` clamped by
     ``clamp_reanchor_target`` against the BRIEF disaster floor with the
     policy's own ``min_stop_distance_frac`` — the same call shape as
     ``position_manager._maybe_reanchor``. ``None`` = do not re-anchor.
     """
-    proposed = _LIVE_POLICY.decide_reanchor(fill_blend, atr)
+    proposed = _BRACKET_POLICY.decide_reanchor(fill_blend, atr)
     if proposed is None:
         return None
     return clamp_reanchor_target(
         brief_disaster_stop,
         proposed,
         anchor_price=fill_blend,
-        min_distance_frac=_LIVE_POLICY.min_stop_distance_frac,
+        min_distance_frac=_BRACKET_POLICY.min_stop_distance_frac,
     )
 
 
@@ -830,7 +835,7 @@ def replay_arm(
             last_close=_last_close(bars),
         )
 
-    # §8.3 variants (analysis-script sensitivities ONLY — the §5.2 live arm B
+    # §8.3 variants (analysis-script sensitivities ONLY — the §5.2 arm B
     # is the default): "realised" anchors the bracket on the blend of the
     # tiers that TOUCH in a pre-walk (the lens's two-walk trick, under the
     # same cutoffs); apply_clamp=False drops the step-3 tp floor;
