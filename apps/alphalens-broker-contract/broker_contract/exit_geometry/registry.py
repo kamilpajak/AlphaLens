@@ -121,10 +121,13 @@ def resolve_declared_policy(reaction: Any) -> ExitPolicy:
     """The exit policy a DOCUMENT's reaction primitive asks for (#1236).
 
     The counterpart to :func:`resolve_exit_policy`, which answers the same
-    question from a process-wide environment variable. Here the answer comes from
-    the intent itself, so an external producer states what it wants instead of
-    inheriting whatever this deployment is configured for — and the #1406 door
-    has something concrete to accept and to refuse.
+    question from a name its caller passes in. A process-wide environment
+    variable used to supply that name on the live path; #1414 deleted it, so the
+    only callers left are ``paper.sizing`` (reading the deployed trail) and the
+    ``/edge`` replay. Here the answer comes from the intent itself, so an
+    external producer states what it wants instead of inheriting whatever this
+    deployment is configured for — and the #1406 door has something concrete to
+    accept and to refuse.
 
     ``None`` -> the inert policy. That is THE MIGRATION RULE, not a default:
     every pick armed before this existed declares nothing, and a manual pick
