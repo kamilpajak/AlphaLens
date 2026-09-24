@@ -50,6 +50,14 @@ from .base import PropertyTestCase
 cards = st.sampled_from([US_FEE_CARD, WSE_FEE_CARD, XETR_FEE_CARD])
 # Strictly positive: see the module docstring for the step at zero.
 notionals = st.floats(min_value=1e-3, max_value=1e9, allow_nan=False, allow_infinity=False)
+# Every positive float, denormals and the ceiling included. Only
+# `min_profitable_exit_price` is asserted over this: since #1522 it guards its
+# computed threshold, so its "None on degenerate input" promise holds with no
+# domain bound. The bounded strategies below stay bounded — see the module
+# docstring for which claims stop being true outside them.
+ANY_POSITIVE_FLOAT = st.floats(
+    min_value=0.0, exclude_min=True, allow_nan=False, allow_infinity=False
+)
 prices = st.floats(min_value=1e-2, max_value=1e5, allow_nan=False, allow_infinity=False)
 # Bounded well below 2**53, where `round(ref * sum(fracs))` stops being able to
 # name the integer it is comparing against. A real position is nowhere near it.
@@ -131,6 +139,36 @@ class TheProfitableExitThreshold(PropertyTestCase):
         got = min_profitable_exit_price(entry_price=entry, qty=qty)
         if got is not None:
             self.assertGreaterEqual(got, entry * (1.0 + EXIT_EDGE_MIN_BPS / 1e4) - 1e-9)
+
+    @given(entry=ANY_POSITIVE_FLOAT, qty=ANY_POSITIVE_FLOAT)
+    def test_the_threshold_is_never_a_non_finite_number(self, entry: float, qty: float) -> None:
+        """Issue #1522, and the one property here with NO domain bound.
+
+        The three properties above are bounded because the claims they make are
+        about realistic prices. This one is about the function's own promise —
+        ``None`` on any degenerate input — and a promise with a bound is not the
+        promise the docstring makes. The notional reaches a float extreme from
+        BOTH ends: ``entry * qty`` overflows to ``inf`` (fee ``inf/inf`` ->
+        ``NaN``), and it also vanishes while staying finite, where the per-fill
+        minimum divided by it overflows (-> ``inf``).
+
+        The events are not decoration. A property that never draws an extreme
+        pair asserts nothing, so the run has to show it reached the refusal.
+
+        FINITENESS ONLY, and that is deliberate. A first draft also asserted the
+        threshold sits ABOVE the entry, the way the bounded sibling above does,
+        and running it refuted that at the denormal floor: at
+        ``entry=5e-324, qty=0.5`` the notional underflows to zero, the fee is
+        therefore ``0.0``, and ``5e-324 * 1.005`` has no representable value
+        distinct from ``5e-324`` — so the threshold comes back EQUAL to the
+        entry. That is float representation at the extreme, not a defect, and
+        the strictly-above claim keeps its bounded domain where it is true."""
+        got = min_profitable_exit_price(entry_price=entry, qty=qty)
+        if got is None:
+            event("unbounded threshold: refused")
+            return
+        event("unbounded threshold: priced")
+        self.assertTrue(math.isfinite(got), f"{got!r}")
 
 
 class TheApportionmentHandsOutTheDeclaredCoverage(PropertyTestCase):

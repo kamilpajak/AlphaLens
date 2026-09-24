@@ -8,6 +8,7 @@ claimed the opposite; the claim is refuted by
 
 from __future__ import annotations
 
+import math
 import unittest
 
 from alphalens_pipeline.brokers.automanager import costs, entry_trail_geometry, live_exit_engine
@@ -109,6 +110,41 @@ class TestNoDocstringClaimsTheGatesShareAThreshold(unittest.TestCase):
                     "the docstring must say the threshold depends on the quantity "
                     "it is evaluated at",
                 )
+
+
+class TestTheThresholdIsNeverANonFiniteNumber(unittest.TestCase):
+    """Issue #1522. The docstring promises ``None`` on degenerate input, and the
+    callers are built on that promise: both fail OPEN on ``None`` because a gate
+    that refuses on unusable data stops the rail.
+
+    A non-finite threshold breaks the promise in the direction the docstring
+    argues against. ``price >= nan`` and ``price >= inf`` are both False, so the
+    exit gate REFUSES the sale instead of passing it; ``exit_target < inf`` is
+    True, so the arm gate REFUSES the arm. Neither is reachable at real prices
+    and share counts — both need a notional at a float extreme — which is why
+    these are float-domain probes rather than trade-shaped ones."""
+
+    def test_an_overflowing_notional_refuses_instead_of_returning_nan(self) -> None:
+        # entry * qty overflows to inf; inf <= 0 is False so the input guard
+        # does not fire, and the fee becomes inf / inf = nan.
+        self.assertIsNone(min_profitable_exit_price(entry_price=1e200, qty=1e200))
+
+    def test_a_vanishing_notional_refuses_instead_of_returning_inf(self) -> None:
+        # The other end, and NOT the one #1522 was filed for: the notional here
+        # is FINITE (1e-305). The per-fill minimum divided by it overflows, so
+        # the threshold is inf. A guard on the notional would miss this; only a
+        # guard on the computed threshold catches both ends.
+        self.assertIsNone(min_profitable_exit_price(entry_price=1e-300, qty=1e-5))
+
+    def test_a_large_but_finite_threshold_is_still_returned(self) -> None:
+        # The negative control. At a notional of 1e-302 the commission minimum
+        # genuinely does need an astronomical multiple of the entry to clear, so
+        # this number is honest arithmetic, not a defect. The guard is for
+        # non-finite, never for "large".
+        got = min_profitable_exit_price(entry_price=1e-2, qty=1e-300)
+        assert got is not None
+        self.assertTrue(math.isfinite(got))
+        self.assertGreater(got, 1e-2)
 
 
 if __name__ == "__main__":

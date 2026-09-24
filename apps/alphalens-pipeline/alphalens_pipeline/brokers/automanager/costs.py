@@ -181,6 +181,15 @@ def round_trip_fee_bps(
 
     A non-positive ``notional`` returns ``0.0`` — a caller's cap comparison then
     stays inert rather than dividing by zero.
+
+    A NON-FINITE ``notional`` returns ``NaN`` (``inf/inf``), and that is stated
+    rather than fixed: every comparison against a ``NaN`` is False, so a caller
+    must handle it before comparing. Today's only gating caller,
+    ``control_loop._check_fee_floor``, does so by accident in the safe
+    direction — ``fee_bps <= max_fee_bps`` is False, so the pick is refused.
+    Choosing a value here instead would flip that gate, which is a behaviour
+    decision rather than a fix. :func:`min_profitable_exit_price` guards its own
+    computed threshold and does not rely on this.
     """
     if notional <= 0:
         return 0.0
@@ -304,9 +313,36 @@ def min_profitable_exit_price(
     exit gate will draw for that same tranche.
 
     ``None`` (never raises) on any degenerate input — a non-finite or
-    non-positive ``entry_price`` / ``qty``. Callers fail OPEN on ``None``: a
-    gate that silently refuses on unusable data would stop the rail, which is
-    worse than the defect it prevents.
+    non-positive ``entry_price`` / ``qty``, and (issue #1522) a computed
+    threshold that is not finite. Callers fail OPEN on ``None``: a gate that
+    silently refuses on unusable data would stop the rail, which is worse than
+    the defect it prevents.
+
+    The RESULT is guarded, not just the inputs, because the notional reaches a
+    float extreme from both ends and only one of them shows up in the inputs.
+    ``entry_price * qty`` can overflow to ``inf``, which makes the fee
+    ``inf / inf`` and the threshold ``NaN``. It can also VANISH while staying
+    finite — at a notional of 1e-305 the per-fill minimum divided by it
+    overflows, and the threshold is ``inf``. A guard on the notional would
+    catch the first and miss the second. A large but finite threshold is not
+    guarded: on a tiny notional the commission minimum genuinely does need an
+    astronomical multiple of the entry to clear, so that number is honest.
+
+    Both ends are unreachable at real prices and share counts. They are guarded
+    because a non-finite threshold does not merely fail to price — it inverts
+    the fail-open policy above. ``price >= nan`` and ``price >= inf`` are both
+    False, so the exit gate refuses the sale; ``exit_target < inf`` is True, so
+    the arm gate refuses the arm.
+
+    ``None`` here means UNREPRESENTABLE, not undefined, and the distinction is
+    deliberate. The fee converges: ad valorem is proportional to the notional,
+    so ``round_trip_fee_bps`` tends to ``(2*rate + fx_rate) * 1e4`` — exactly
+    66 bps on the US card — and the overflowing case therefore HAS a finite
+    limit (1.0116e200 for ``entry_price=qty=1e200``). This function does not
+    chase it. A notional past the float ceiling is not a position, so pricing
+    it would mean a second fee formula on the money path reachable only by a
+    synthetic input. Refusing is the honest answer to an input that is not a
+    trade.
     """
     for value in (entry_price, qty):
         if not math.isfinite(value) or value <= 0.0:
@@ -319,7 +355,10 @@ def min_profitable_exit_price(
         min_commission_applies=facts.min_commission_applies,
         card=facts.card,
     )
-    return entry_price * (1.0 + (cost_bps + EXIT_EDGE_MIN_BPS) / _BPS_PER_UNIT)
+    threshold = entry_price * (1.0 + (cost_bps + EXIT_EDGE_MIN_BPS) / _BPS_PER_UNIT)
+    if not math.isfinite(threshold):
+        return None
+    return threshold
 
 
 def single_full_position_tranche_violation(
