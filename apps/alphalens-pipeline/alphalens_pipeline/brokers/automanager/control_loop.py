@@ -2883,9 +2883,22 @@ def _entry_fire_request_id(crid: str) -> str:
     return f"{crid}-fire"
 
 
+def _tier_can_own_a_fill(tier: entry_trails.EntryTrailTierState) -> bool:
+    """Whether the journal lets this tier own a filled position: a ``fired``
+    terminal, or a live tier whose latest kind is ``trail_armed`` (the crash
+    window between the fill and its ``fired`` line; the write-ahead precedes
+    every POST). A ``cancelled`` / ``expired`` / ``suspended`` terminal says the
+    tier ended WITHOUT a fill, so a position under it is a raced fill nothing
+    manages any more, and a tier that never armed never sent an order."""
+    if tier.terminal_kind is not None:
+        return tier.terminal_kind == entry_trails.KIND_FIRED
+    return tier.latest_kind == entry_trails.KIND_TRAIL_ARMED
+
+
 def _entry_trail_position_refs() -> frozenset[str]:
     """The ``ExternalReference`` of every position an entry trail can have filled:
-    ``<crid>-fire`` for each crid RECORDED in ``entry_trails.jsonl`` (#1556).
+    ``<crid>-fire`` for each crid RECORDED in ``entry_trails.jsonl`` whose state
+    can own a fill (#1556, :func:`_tier_can_own_a_fill`).
 
     Read from the journal, never inferred from a reference's shape, so the
     orphan sweep still flags an entry-trail position whose crid was never
@@ -2897,7 +2910,11 @@ def _entry_trail_position_refs() -> frozenset[str]:
     except Exception as exc:  # broad on purpose: a diagnostic read must not crash the tick
         logger.warning("orphan sweep: entry-trails journal read failed: %s", exc)
         return frozenset()
-    return frozenset(_entry_fire_request_id(crid) for crid in fold.tiers)
+    return frozenset(
+        _entry_fire_request_id(crid)
+        for crid, tier in fold.tiers.items()
+        if _tier_can_own_a_fill(tier)
+    )
 
 
 def _sweep_orphans_with_entry_trails(

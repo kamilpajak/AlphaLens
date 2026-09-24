@@ -3427,6 +3427,43 @@ class TestDefaultOrphanSweepReadsEntryTrailJournal(unittest.TestCase):
         )
         self.assertEqual([o.external_reference for o in orphans], [self._JOURNALED_REF])
 
+    def _terminal_line(self, kind: str) -> str:
+        import json
+
+        return json.dumps({"kind": kind, "crid": self._JOURNALED})
+
+    def _sweep_after(self, lines: list[str]) -> list[str]:
+        _entry_trail_journal(self, lines)
+        orphans = cl._sweep_orphans_with_entry_trails(
+            _PositionRefsBroker([self._JOURNALED_REF]), []
+        )
+        return [o.external_reference for o in orphans]
+
+    def test_fired_tier_position_is_not_an_orphan(self) -> None:
+        armed = self._armed_line(self._JOURNALED)
+        fired = self._terminal_line(entry_trails.KIND_FIRED)
+        self.assertEqual(self._sweep_after([armed, fired]), [])
+
+    def test_position_under_a_non_fill_terminal_is_still_an_orphan(self) -> None:
+        # Counterexample: a tier the journal ended WITHOUT a fill (cancelled,
+        # expired, suspended) cannot own a position. A position under its fire
+        # ref means a raced fill nothing manages any more, so it must be flagged.
+        for kind in (
+            entry_trails.KIND_CANCELLED,
+            entry_trails.KIND_EXPIRED,
+            entry_trails.KIND_SUSPENDED,
+        ):
+            with self.subTest(kind=kind):
+                lines = [self._armed_line(self._JOURNALED), self._terminal_line(kind)]
+                self.assertEqual(self._sweep_after(lines), [self._JOURNALED_REF])
+
+    def test_tier_that_never_armed_is_still_an_orphan(self) -> None:
+        # The trail_armed write-ahead precedes every POST, so a tier that only
+        # opened a watch never sent an order that could have filled.
+        self.assertEqual(
+            self._sweep_after([_watch_open_line(self._JOURNALED)]), [self._JOURNALED_REF]
+        )
+
 
 class TestLatestPlannedSkipsMalformedLines(unittest.TestCase):
     def test_missing_keys_or_unparsable_price_are_skipped(self) -> None:

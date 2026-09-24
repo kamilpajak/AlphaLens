@@ -11,7 +11,9 @@ unrecorded order.
 The known position references are the bracket client_request_ids of the
 submission journal PLUS the caller-supplied ``entry_trail_position_refs``: the
 ``<crid>-fire`` references of the entry-trail crids RECORDED in
-entry_trails.jsonl (#1556). An entry-trail pick writes ``brackets: []`` to the
+entry_trails.jsonl in a state that can own a fill (#1556): a ``fired`` terminal,
+or a live ``trail_armed`` tier. A tier journaled as ``cancelled`` / ``expired``
+/ ``suspended`` is left out, so a raced fill under it is still flagged. An entry-trail pick writes ``brackets: []`` to the
 submission journal and journals its orders to entry_trails.jsonl instead, so
 without them every entry-trail position is a false orphan on each restart. It
 is a journal check, not a name check: a position whose reference merely has the
