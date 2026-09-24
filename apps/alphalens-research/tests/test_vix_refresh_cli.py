@@ -1,9 +1,9 @@
 """Tests for `alphalens cache refresh-vix` (Track A v2 PR-2).
 
-The refresh command force-pulls VIXCLS through the canonical FREDClient
-(into a throwaway cache_dir so the shared FRED parquet is never touched),
-takes the last non-null observation, and writes the tiny JSON VIX cache
-atomically. The FRED fetch is injected here so the tests never hit the
+The refresh command pulls VIXCLS through the canonical FREDClient, takes the
+last non-null observation, and writes the tiny JSON VIX cache atomically. Since
+#1524 it refreshes the SHARED FRED parquet rather than a throwaway directory —
+the temp-dir workaround existed only because the client had no cache expiry. The FRED fetch is injected here so the tests never hit the
 network.
 """
 
@@ -109,6 +109,77 @@ class TestRefreshVixCommand(unittest.TestCase):
         written = json.loads(self.path.read_text())
         self.assertEqual(written["vix"], 16.3)
         self.assertIn("VIXCLS", result.stdout)
+
+
+class TestTheRefreshUsesTheSharedCache(unittest.TestCase):
+    """#1524 retired the throwaway-temp-dir workaround.
+
+    `_fetch_vixcls` used to fetch into a `TemporaryDirectory` precisely because
+    the client "returned an existing parquet forever", and its docstring said so
+    in as many words. Now that the client honours `through`, keeping it would
+    leave a comment asserting a defect that no longer exists — and refreshing the
+    SHARED parquet is what lets one fetch serve `market_state` too.
+    """
+
+    def test_it_uses_the_shared_cache_and_asks_for_a_current_series(self):
+        from unittest import mock
+
+        captured: dict = {}
+
+        class _Client:
+            def fetch_series(self, series_id, *, through=None):
+                captured["series_id"] = series_id
+                captured["through"] = through
+                return _series([("2026-09-22", 14.21)])
+
+        def _from_env(*, cache_dir=None):
+            captured["cache_dir"] = cache_dir
+            return _Client()
+
+        with mock.patch("alphalens_pipeline.data.macro.fred_client.FREDClient.from_env", _from_env):
+            cache_cmd._fetch_vixcls()
+
+        self.assertEqual(captured["series_id"], "VIXCLS")
+        # None means the client's default, i.e. the SHARED ~/.alphalens/macro dir.
+        self.assertIsNone(captured["cache_dir"])
+        self.assertIsNotNone(captured["through"], "the refresh must demand a current series")
+
+    def test_no_throwaway_directory_is_opened(self):
+        # The refutation control. Without it the assertions above would still
+        # pass if someone reintroduced a temp dir and merely defaulted the
+        # cache_dir argument, which is exactly the shape of the old workaround.
+        #
+        # Walked as an AST, not grepped: the docstring names TemporaryDirectory
+        # to explain what was removed, and a substring check cannot tell a
+        # mention from a call. A grep here failed on its own explanation.
+        import ast
+        import inspect
+        import textwrap
+
+        tree = ast.parse(textwrap.dedent(inspect.getsource(cache_cmd._fetch_vixcls)))
+        opened = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "TemporaryDirectory"
+        ]
+        self.assertEqual(opened, [])
+
+    def test_the_ast_control_can_refute(self):
+        # Control for the control: the walk above must actually find the call it
+        # is looking for when one is present.
+        import ast
+
+        tree = ast.parse("with tempfile.TemporaryDirectory() as tmp:\n    pass\n")
+        found = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "TemporaryDirectory"
+        ]
+        self.assertEqual(len(found), 1)
 
 
 if __name__ == "__main__":

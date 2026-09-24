@@ -63,7 +63,13 @@ BB_K = 2.0
 KC_WIN = 20
 KC_MULT = 1.5
 
-MARKET_STATE_CONFIG_VERSION = "mstate-v1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED"
+# Bumped v1 -> v1.1 on 2026-09-24 (#1524). No threshold changed; the VIX INPUT
+# did. Every row stamped between 2026-07-06 and that date carries a VIX frozen at
+# the 2026-07-01 print (16.59) because the FRED disk cache had no expiry, so
+# `market_state_vix` and `market_state_vix_decile` are not comparable across the
+# boundary. The rows are NOT pooled with v1.1 rows; see the dated note in
+# docs/research/market_state_signal_design_2026_07_05.md.
+MARKET_STATE_CONFIG_VERSION = "mstate-v1.1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED"
 
 # The columns this signal stamps onto every (broadcast) row. ``market_state`` is
 # the label; the rest are the raw continuous drivers + the poolability key.
@@ -301,7 +307,11 @@ def classify(
         from alphalens_pipeline.data.macro.fred_client import FREDClient
 
         fred_client = FREDClient.from_env()
-    vix = fred_client.fetch_series(VIX_SERIES_ID)
+    # `through=asof` is load-bearing, not a hint (#1524). The truncation below is
+    # a PIT guard against a FUTURE print; it does nothing about a series that
+    # STOPS before asof, which is how a frozen cache stamped one July VIX onto 79
+    # brief dates. Asking the client to reach asof is what makes that loud.
+    vix = fred_client.fetch_series(VIX_SERIES_ID, through=asof)
     vix = vix[vix.index <= pd.Timestamp(asof)]  # PIT: never a future VIX print
     return classify_state(close=close, high=high, low=low, vix=vix)
 

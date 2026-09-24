@@ -111,7 +111,23 @@ Store the label as a **string** (`market_state`) plus the raw continuous drivers
 | `VIX_LOW` / `VIX_HIGH` | 15 / 25 | reuse `feedback/regime.py::classify_vix` buckets |
 | `BB_WIN`/`BB_K`, `KC_WIN`/`KC_MULT` | 20/2.0, 20/1.5 | TTM squeeze — **telemetry flag only**, not a state |
 
-Proposed token: `MARKET_STATE_CONFIG_VERSION = "mstate-v1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED"`. Bump on ANY parameter change (mirrors `disagreement.PANEL_CONFIG_VERSION`, `selection_score.SCORER_CONFIG_VERSION`).
+Proposed token: `MARKET_STATE_CONFIG_VERSION = "mstate-v1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED"`.
+
+> **Amendment 2026-09-24 (#1524) — bumped to `mstate-v1.1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED`.**
+> No threshold changed. The VIX **input** did: the FRED disk cache had no expiry, so from 2026-07-06
+> every stamp carried the 2026-07-01 print (16.59). `market_state_vix` is that frozen number on 79
+> brief dates and `market_state_vix_decile` is its rank within the 252 sessions ending 2026-07-01.
+>
+> **v1 rows are NOT pooled with v1.1 rows.** The deferred forward study restarts its episode count.
+>
+> For information, and explicitly **not** a licence to pool: VIX never reached the 25 threshold
+> between 2026-07-01 and 2026-09-22 (60 observations, min 14.21, max 20.66), so the implied leg of
+> `ATR%-quantile >= 0.70 OR VIX >= 25` could not have fired and the **label** on those rows equals
+> what a live VIX would have produced. That was measured *after* the defect was found, on the very
+> rows it would license pooling — which is the shape of reasoning §5 exists to forbid. It is recorded
+> so a future analyst knows the fact, not so anyone may act on it. An adversarial review of the fix
+> plan settled the point with one question: if VIX had spiked to 30 in those ten weeks, would the
+> argument still have been made? No. So it is data-dependent, and the rule stands. Bump on ANY parameter change (mirrors `disagreement.PANEL_CONFIG_VERSION`, `selection_score.SCORER_CONFIG_VERSION`).
 
 ### 2.3 ATR% as a realized-vol quantile (the key equity re-calibration)
 The crypto bot used fixed ATR% cutoffs; equity ATR% has a different scale and drifts across decades, so the threshold is a **quantile of the index's own trailing realized vol** (`rolling_quantile_rank`), reusing the exact `data/macro/signals.py::vix_decile` idiom (rolling rank / length) on the ATR% series. This self-normalizes across regimes.

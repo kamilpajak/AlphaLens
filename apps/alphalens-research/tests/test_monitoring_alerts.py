@@ -1114,6 +1114,62 @@ class TestVixCacheStaleness(unittest.TestCase):
             )
 
 
+class TestTheFredObservationAgeAlerts(unittest.TestCase):
+    """Pin the pair added by #1524, which watches the DATA rather than the request.
+
+    The VIX-cache pair above measures ``fetched_at`` — when the refresher last
+    ASKED FRED. That gauge stayed green for the three months the shared VIXCLS
+    parquet was frozen at a 2026-07-01 print, because the refresher ran on
+    schedule and fetched successfully into a throwaway directory while
+    ``market_state`` read the stale file. A request-age metric structurally
+    cannot see a publisher, or a cache, that has stopped moving.
+
+    Same isolation contract as the pair above: a distinct alertname and no
+    ``job=`` label, because the refresh runs inline in run_thematic_day.sh and
+    has no systemd unit for the cron-keyed parity tests to match.
+    """
+
+    METRIC = "alphalens_fred_series_last_observation_timestamp_seconds"
+    STALE = "AlphalensFredSeriesStale"
+    MISSING = "AlphalensFredSeriesObservationMetricMissing"
+    # 604800s = 7 days. Worst NORMAL observation age is about 5: FRED publishes
+    # a close the next business morning (+1) and a Friday close stays newest
+    # through a Monday-holiday weekend until Tuesday (+4). The real incident was
+    # 79 days, so seven catches it by a factor of eleven without ever firing on
+    # a legitimate calendar.
+    THRESHOLD = 604800
+
+    def _one(self, alertname: str) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == alertname]
+        self.assertEqual(len(matches), 1, f"Expected exactly one {alertname}, got {len(matches)}.")
+        return matches[0]
+
+    def test_the_stale_alert_thresholds_the_observation_gauge(self) -> None:
+        expr = self._one(self.STALE)["expr"]
+        self.assertNotIn("absent(", expr)
+        self.assertRegex(
+            expr,
+            rf"time\(\)\s*-\s*{re.escape(self.METRIC)}(\{{[^}}]*\}})?\s*>\s*{self.THRESHOLD}\b",
+        )
+
+    def test_it_is_a_different_metric_from_the_fetch_age_pair(self) -> None:
+        # The control that gives this class its point: if both pairs watched the
+        # same gauge, the new one would have been just as blind.
+        self.assertNotIn("alphalens_vix_cache_fetched_at", self._one(self.STALE)["expr"])
+
+    def test_the_missing_alert_wraps_absent_without_a_duration(self) -> None:
+        rule = self._one(self.MISSING)
+        self.assertIn(f"absent({self.METRIC}", rule["expr"])
+        for field in ("summary", "description"):
+            self.assertNotIn("humanizeDuration", rule.get("annotations", {}).get(field, ""))
+
+    def test_both_route_to_telegram_and_carry_no_job_label(self) -> None:
+        for alertname in (self.STALE, self.MISSING):
+            rule = self._one(alertname)
+            self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+            self.assertIsNone(re.search(r'job="[^"]+"', rule["expr"]))
+
+
 class TestEdgarNoDispatchTradingDays(unittest.TestCase):
     """Pin the calendar-aware no-dispatch alert.
 

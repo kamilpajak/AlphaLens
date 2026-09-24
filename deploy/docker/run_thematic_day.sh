@@ -67,6 +67,27 @@ if [ "${ALPHALENS_EVENT_LANE:-0}" = "1" ]; then
         || echo "WARN: events insider-clusters failed; event lane absent or stale this slot" >&2
 fi
 
+# VIX refresh (Track A v2 PR-2), moved AHEAD of `score` by #1524. It used to run
+# last, after brief, which meant that even a working refresher was too late to
+# help the same run's market_state stamp — and it wrote to a throwaway temp dir,
+# so it never helped that stamp at all. It now refreshes the SHARED FRED parquet,
+# so this one fetch serves both the feedback POST path's JSON cache and the
+# market_state VIX read in `score` below.
+#
+# Best-effort on purpose: a FRED blip must not fail the build. If this step dies,
+# `score` asks the client for a current series itself and stamps market_state
+# 'unknown' rather than a stale value, and the feedback POST path degrades to
+# 'unknown' once the JSON cache passes 96h.
+#
+# Warn to stderr so the failure is visible in journald (StandardError=journal).
+# On success this emits alphalens_vix_cache_fetched_at_timestamp_seconds, which
+# the AlphalensVixCache{Stale,MetricMissing} rules in
+# deploy/monitoring/prometheus/rules/alphalens.yaml alert on (live rules are
+# hand-synced on the VPS, outside this repo).
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] cache refresh-vix"
+alphalens cache refresh-vix \
+    || echo "WARN: vix refresh failed; market_state and regime stamps degrade to unknown" >&2
+
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic score"
 alphalens thematic score
 
@@ -117,21 +138,5 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] experts enrich"
 QUAL_DATE="$(date -u -d 'yesterday' +%Y-%m-%d)"
 alphalens experts enrich "$QUAL_DATE" --all --scuttlebutt \
     || echo "WARN: experts enrich failed for $QUAL_DATE; deep-read drawer absent until next run" >&2
-
-# VIX regime cache refresh (Track A v2 PR-2). Best-effort: a FRED blip must
-# NOT fail the whole thematic build (the brief is already written above). The
-# feedback POST path degrades to a "unknown" regime stamp if this cache goes
-# stale, so `|| true` under `set -e` keeps a transient FRED error non-fatal.
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] cache refresh-vix"
-# Warn to stderr so the failure is visible in journald (StandardError=journal)
-# even though the step is non-fatal. A persistently dead refresher ages the
-# cache past 96h and the feedback POST path degrades to "unknown". On success
-# this command emits alphalens_vix_cache_fetched_at_timestamp_seconds, which
-# the AlphalensVixCache{Stale,MetricMissing} rules in
-# deploy/monitoring/prometheus/rules/alphalens.yaml alert on (live rules are
-# hand-synced on the VPS, outside this repo) — so a silently-dead refresher
-# now pages instead of degrading stamps unnoticed.
-alphalens cache refresh-vix \
-    || echo "WARN: vix refresh failed; regime stamps degrade to unknown" >&2
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] DONE"
