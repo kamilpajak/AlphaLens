@@ -178,6 +178,11 @@ class FREDClient:
         os.close(fd)
         try:
             series.to_frame(name=series_id).to_parquet(tmp_name)
+            # mkstemp creates 0600 and os.replace preserves it, so without this
+            # the atomic write silently tightens a file that used to be created
+            # at the umask default. Same reason observability/textfile.py
+            # chmods its output after an atomic write.
+            os.chmod(tmp_name, 0o644)
             os.replace(tmp_name, cache)
         except BaseException:
             with contextlib.suppress(OSError):
@@ -227,4 +232,12 @@ def _parse_observations(payload: dict, series_id: str) -> pd.Series:
         dates.append(pd.Timestamp(row["date"]))
     if not values:
         raise FREDError(f"no valid observations for {series_id}")
-    return pd.Series(values, index=pd.DatetimeIndex(dates, name="date"), name=series_id)
+    # Sorted, so that "the last row" and "the newest observation" are the same
+    # thing by construction. Every freshness check here, and
+    # `refresh_vix_cache`'s "last non-null observation", reads `.iloc[-1]`. FRED
+    # returns ascending today; trusting a latent property of an upstream feed is
+    # what #1524 was about, and an out-of-order response would otherwise look
+    # like a stale series and pick the wrong value.
+    return pd.Series(
+        values, index=pd.DatetimeIndex(dates, name="date"), name=series_id
+    ).sort_index()

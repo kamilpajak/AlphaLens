@@ -272,6 +272,52 @@ class TestTheCacheMustReachTheDateItIsAskedFor(unittest.TestCase):
             self.assertEqual(session.get.call_count, 0)
             self.assertEqual(series.index[-1].date(), dt.date(2026, 7, 1))
 
+    def test_an_out_of_order_response_is_not_mistaken_for_a_stale_one(self):
+        # Found by probing, not by reading. Every freshness check here, and
+        # `refresh_vix_cache`'s "last non-null observation", reads `.iloc[-1]` —
+        # the last ROW, not the newest DATE. FRED returns ascending today, so
+        # this is latent; trusting a latent property of an upstream feed is
+        # exactly what cost three months in #1524. The parser now sorts, so the
+        # assumption is true by construction.
+        with tempfile.TemporaryDirectory() as tmp:
+            from alphalens_pipeline.data.macro.fred_client import FREDClient
+
+            session = MagicMock()
+            session.get.return_value = _response(
+                200,
+                {
+                    "observations": [
+                        {"date": "2026-09-23", "value": "17.0"},
+                        {"date": "2026-01-05", "value": "12.0"},
+                    ]
+                },
+            )
+            client = FREDClient(api_key="k", cache_dir=Path(tmp), session=session)
+            series = client.fetch_series("VIXCLS", through=self._THROUGH)
+
+        self.assertEqual(series.index[-1].date(), dt.date(2026, 9, 23))
+        self.assertEqual(list(series.index), sorted(series.index))
+
+    def test_the_sort_control_can_refute(self):
+        # Without the sort the series would end on the older date, so the
+        # assertion above could have failed.
+        raw = [dt.date(2026, 9, 23), dt.date(2026, 1, 5)]
+        self.assertNotEqual(raw[-1], sorted(raw)[-1])
+
+    def test_the_cache_file_stays_group_and_world_readable(self):
+        # `mkstemp` creates 0600 and `os.replace` preserves it, so the atomic
+        # write silently tightened a file that used to be created at the umask
+        # default. Same reason `observability/textfile.py` chmods its output.
+        import stat
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client, session = self._client(tmp, "2026-07-01")
+            session.get.return_value = _response(200, self._payload("2026-09-23"))
+            client.fetch_series("VIXCLS", through=self._THROUGH)
+            mode = stat.S_IMODE((Path(tmp) / "FRED_VIXCLS.parquet").stat().st_mode)
+
+        self.assertEqual(mode, 0o644, f"cache written {oct(mode)}, expected 0o644")
+
     def test_a_successful_write_leaves_no_temporary_file(self):
         # The parquet is now overwritten by a live pipeline while other processes
         # read it, and parquet keeps its metadata at the END of the file, so a
