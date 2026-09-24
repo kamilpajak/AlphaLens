@@ -211,7 +211,7 @@
             "brief",
             "manual"
           ],
-          "description": "Where the intent came from: \"brief\" (a brief row, written by `thematic intent`) or \"manual\" (a document written by hand and armed with `broker arm`, #1235). Journals and later measurement separate the two populations on this marker; legacy payloads without the key decode to \"brief\".",
+          "description": "Where the intent came from. Write \"manual\": every pick is a document written by hand and armed with `broker arm` (#1235, #1552). \"brief\" is legacy: it marked picks written by the removed `thematic intent` producer, and payloads without the key decode to it. Journals and later measurement separate the two populations on this marker.",
           "default": "brief"
         },
         "generation": {

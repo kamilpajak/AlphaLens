@@ -15,9 +15,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 _BROKER_CLI = (
     _REPO_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli" / "commands" / "broker.py"
 )
-_THEMATIC_CLI = (
-    _REPO_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli" / "commands" / "thematic.py"
-)
 
 
 def _function(source: Path, name: str) -> ast.FunctionDef:
@@ -44,20 +41,13 @@ class WhereTheValidatorRunsTest(unittest.TestCase):
     """Every document that reaches a pick inbox passed `validate_intent`.
 
     Since #1470 the door is the only arming command. Until #1469 the brief path
-    (the old brief-reading `broker arm`) deliberately skipped it, on the
-    grounds that `parse_brief_to_spec` carries non-positive limit rows the
-    validator refuses. Measured on the VPS briefs on 2026-09-16, 0 of 995
-    plannable rows carry one, and the brief producer now sends its document
-    through the door like any other author.
+    (the old brief-reading `broker arm`) deliberately skipped it. Since #1552
+    there is no brief producer at all: every pick is a hand-written document,
+    and the door is the only way one arms.
     """
 
     def test_the_door_calls_it(self) -> None:
         self.assertIn("validate_intent", _calls(_function(_BROKER_CLI, "arm_command")))
-
-    def test_the_brief_producer_does_not_bypass_the_door(self) -> None:
-        # Positive control for the claim above: the producer writes a document
-        # and appends nothing, so the door is the only way its picks arm.
-        self.assertNotIn("arm_pick", _calls(_function(_THEMATIC_CLI, "intent_command")))
 
 
 class NoImportCycleTest(unittest.TestCase):

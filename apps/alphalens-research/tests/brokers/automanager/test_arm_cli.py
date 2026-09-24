@@ -791,12 +791,12 @@ class TheDefaultInstanceMirrorsTheSeam(unittest.TestCase):
         self.assertEqual(broker._DEFAULT_ARM_ENV, state_paths.ENV_SIM)
 
 
-class TheOldBriefFormPointsAtTheProducer(_DoorCase):
-    """#1470: `arm` is the door. The brief form it had until #1469
-    (`arm TICKER --date D --frame F --currency C`) is a usage error that names
-    the producer, and it never reads TICKER as a document path."""
+class AMissingDocumentPointsAtTheTemplates(_DoorCase):
+    """#1552: there is no brief producer any more. Every pick is a hand-written
+    document, so a path the door cannot read points at the templates, and the
+    old brief form (`arm TICKER --date D ...`) is an ordinary usage error."""
 
-    OLD_FORM = ["arm", "KO", "--date", "2026-09-16", "--frame", "24000", "--currency", "PLN"]
+    TEMPLATE_ARGV = ["alphalens", "broker", "arm", "<FILE>", "--dry-run"]
 
     def test_help_lists_arm_and_no_other_arming_command(self) -> None:
         from alphalens_cli.commands.broker import broker_app
@@ -806,87 +806,30 @@ class TheOldBriefFormPointsAtTheProducer(_DoorCase):
         self.assertNotIn("arm-intent", names)
         self.assertNotIn("arm-manual", names)
 
-    def test_the_old_form_exits_2_naming_the_producer(self) -> None:
-        result = self.invoke(self.OLD_FORM)
-
-        self.assertEqual(result.exit_code, 2, result.output)
-        self.assertIn("alphalens thematic intent", result.stderr)
-        self.assertEqual(result.stdout, "")
-        self.assertFalse(self.inbox.exists())
-
-    def test_the_json_failure_carries_a_runnable_producer_argv(self) -> None:
-        result = self.invoke([*self.OLD_FORM, "--format", "json"])
-
-        failure = self.assert_refused(result, "usage")
-        self.assertEqual(result.stdout, "")
-        self.assertEqual(
-            failure["suggestions"][0]["argv"],
-            [
-                "alphalens",
-                "thematic",
-                "intent",
-                "KO",
-                "--date",
-                "2026-09-16",
-                "--frame",
-                "24000",
-                "--currency",
-                "PLN",
-            ],
-        )
-
-    def test_an_option_that_was_not_passed_is_a_placeholder(self) -> None:
-        result = self.invoke(["arm", "KO", "--date", "2026-09-16", "--format", "json"])
-
-        argv = self.assert_refused(result, "usage")["suggestions"][0]["argv"]
-        self.assertEqual(argv[-4:], ["--frame", "<FRAME>", "--currency", "<CURRENCY>"])
-
-    def test_a_file_named_like_the_ticker_is_never_read(self) -> None:
-        document = self.home / "KO"
-        document.write_text(json.dumps(_document()), encoding="utf-8")
-        result = self.invoke(["arm", str(document), "--date", "2026-09-16"])
-
-        self.assertEqual(result.exit_code, 2, result.output)
-        self.assertFalse(self.inbox.exists())
-
-    def test_stdin_with_an_old_option_reads_nothing(self) -> None:
-        result = self.invoke(["arm", "-", "--date", "2026-09-16"], stdin=json.dumps(_document()))
-
-        self.assertEqual(result.exit_code, 2, result.output)
-        self.assertFalse(self.inbox.exists())
-
-    def test_an_empty_old_option_still_counts(self) -> None:
-        result = self.invoke(["arm", "KO", "--date", ""])
-
-        self.assertEqual(result.exit_code, 2, result.output)
-        self.assertIn("alphalens thematic intent", result.stderr)
-
-    def test_the_hint_comes_before_the_ambient_instance_guard(self) -> None:
-        with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ENVIRONMENT": "live"}):
-            result = self.invoke([*self.OLD_FORM, "--format", "json"])
-
-        self.assert_refused(result, "usage")
-
-    def test_a_ticker_that_is_not_a_file_also_gets_the_hint(self) -> None:
-        """`arm KO` alone reads KO as a path; when there is no such file the
-        usage refusal points at the producer as well."""
-        result = self.invoke(["arm", "KO", "--format", "json"])
-
-        failure = self.assert_refused(result, "usage")
-        self.assertEqual(failure["suggestions"][0]["argv"][:3], ["alphalens", "thematic", "intent"])
-
-
-class AMissingDocumentPathGetsNoProducerHint(_DoorCase):
-    """Only a bare name reads like the old brief form. A mistyped document path
-    is not a ticker, and pointing it at `thematic intent` would mislead."""
-
-    def test_a_missing_json_file_carries_no_suggestion(self) -> None:
-        for source in (str(self.home / "my-pick.json"), "picks/KO"):
+    def test_a_missing_path_suggests_starting_from_a_template(self) -> None:
+        for source in ("KO", str(self.home / "my-pick.json"), "picks/KO"):
             with self.subTest(source=source):
                 result = self.invoke(["arm", source, "--format", "json"])
 
                 failure = self.assert_refused(result, "usage")
-                self.assertEqual(failure["suggestions"], [])
+                self.assertEqual(result.stdout, "")
+                (suggestion,) = failure["suggestions"]
+                self.assertEqual(suggestion["argv"], self.TEMPLATE_ARGV)
+                self.assertIn("examples/manual-pick", suggestion["why"])
+
+    def test_the_old_brief_form_is_a_usage_error_that_arms_nothing(self) -> None:
+        result = self.invoke(
+            ["arm", "KO", "--date", "2026-09-16", "--frame", "24000", "--currency", "PLN"]
+        )
+
+        self.assertEqual(result.exit_code, 2, result.output)
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(self.inbox.exists())
+
+    def test_no_output_names_the_removed_producer(self) -> None:
+        result = self.invoke(["arm", "KO"])
+
+        self.assertNotIn("thematic intent", result.output)
 
 
 class TheImmediateTierRulesHoldAtTheDoor(_DoorCase):

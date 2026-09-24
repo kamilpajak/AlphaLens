@@ -73,9 +73,10 @@ def exit_policy_registry() -> dict[str, ExitPolicy]:
 
     Since #1414 no ENV VAR selects from here. The daemon resolves a policy from
     the document (:func:`resolve_declared_policy`); what is left of this registry
-    is the research surface — ``paper.sizing`` reads ``breakeven_trail`` so the
-    brief's declaration cannot drift from the deployed numbers, and the ``/edge``
-    replay reads ``atr_bracket_1p5``. ``trailing_atr`` went with the variable: it
+    is the research surface — the ``/edge`` replay reads ``atr_bracket_1p5``.
+    ``breakeven_trail`` stays as the named reference for the trail a document
+    declares with ``TrailingStop``; its brief-path reader went with the brief
+    producer in #1552. ``trailing_atr`` went with the variable: it
     was reachable only by name, and no name is resolved by name any more.
 
     Exposed (rather than inlined in :func:`resolve_exit_policy`) so a test can
@@ -122,9 +123,9 @@ def resolve_declared_policy(reaction: Any) -> ExitPolicy:
 
     The counterpart to :func:`resolve_exit_policy`, which answers the same
     question from a name its caller passes in. A process-wide environment
-    variable used to supply that name on the live path; #1414 deleted it, so the
-    only callers left are ``paper.sizing`` (reading the deployed trail) and the
-    ``/edge`` replay. Here the answer comes from the intent itself, so an
+    variable used to supply that name on the live path; #1414 deleted it, and
+    #1552 removed the brief path that read the deployed trail, so the only
+    caller left is the ``/edge`` replay. Here the answer comes from the intent itself, so an
     external producer states what it wants instead of inheriting whatever this
     deployment is configured for — and the #1406 door has something concrete to
     accept and to refuse.

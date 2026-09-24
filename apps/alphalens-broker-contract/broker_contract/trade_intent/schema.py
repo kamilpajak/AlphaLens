@@ -385,17 +385,19 @@ class IntentMeta:
         "date; provenance lives in `source`, not in this field's name (#1252).",
         door="filled",
         when_absent="the next session of instrument.mic that has not closed at the "
-        'moment of arming. Refused when absent on a "brief" document: a brief\'s '
-        "date is a fact the door cannot derive.",
+        'moment of arming. Refused when absent on a legacy "brief" document: a '
+        "brief's date is a fact the door cannot derive.",
     )
     schema_version: str = contract_field(
         "Wire version of the document. A consumer reads this one.", default=SCHEMA_VERSION
     )
+    # LEGACY(source_brief) — see broker_contract.trade_intent.legacy
     source: Literal["brief", "manual"] = contract_field(
-        'Where the intent came from: "brief" (a brief row, written by `thematic intent`) '
-        'or "manual" (a document written by hand and armed with `broker arm`, #1235). '
-        "Journals and later measurement separate the two populations on this marker; "
-        'legacy payloads without the key decode to "brief".',
+        'Where the intent came from. Write "manual": every pick is a document written '
+        'by hand and armed with `broker arm` (#1235, #1552). "brief" is legacy: it '
+        "marked picks written by the removed `thematic intent` producer, and payloads "
+        "without the key decode to it. Journals and later measurement separate the two "
+        "populations on this marker.",
         default="brief",
         door="required",
     )

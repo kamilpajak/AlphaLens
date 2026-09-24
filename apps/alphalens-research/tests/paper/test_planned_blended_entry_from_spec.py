@@ -5,8 +5,9 @@ section 5): the daemon's geometry SHADOW stamp loses the brief dict at drain
 time (arm-time now owns the parse) but still needs the planned blend, so it
 consumes the already-parsed :class:`TradeSpec`. This must return the SAME
 value as the dict-based ``planned_blended_entry`` for the equivalent spec —
-``parse_brief_to_spec(setup, ...)`` fed to ``planned_blended_entry_from_spec`` must
-equal ``planned_blended_entry(setup)``.
+the spec parsed from ``setup`` (``spec_from_brief``, the test-only copy of the
+parse #1552 removed) fed to ``planned_blended_entry_from_spec`` must equal
+``planned_blended_entry(setup)``.
 """
 
 from __future__ import annotations
@@ -14,10 +15,11 @@ from __future__ import annotations
 import unittest
 
 from alphalens_pipeline.paper.sizing import (
-    parse_brief_to_spec,
     planned_blended_entry,
     planned_blended_entry_from_spec,
 )
+
+from tests.paper.sizing_test_helpers import spec_from_brief
 
 
 def _setup(*, entry_tiers) -> dict:
@@ -33,7 +35,7 @@ def _setup(*, entry_tiers) -> dict:
 class TestParityWithDictVersion(unittest.TestCase):
     def _assert_parity(self, entry_tiers: list[dict]) -> None:
         setup = _setup(entry_tiers=entry_tiers)
-        spec = parse_brief_to_spec(setup, notional_acct=5_000.0, currency="USD")
+        spec = spec_from_brief(setup, notional_acct=5_000.0, currency="USD")
         expected = planned_blended_entry(setup)
         actual = planned_blended_entry_from_spec(spec)
         if expected is None:
@@ -67,7 +69,7 @@ class TestParityWithDictVersion(unittest.TestCase):
         )
 
     def test_empty_after_sanitisation_returns_none(self) -> None:
-        # parse_brief_to_spec would reject all-non-positive-limit tiers at
+        # spec_from_brief would reject all-non-positive-limit tiers at
         # validate_trade_setup, so this exercises the standalone function via
         # a spec built directly with a single non-positive tier.
         from broker_contract.trade_intent.schema import EntryTierSpec, PickSize, TradeSpec

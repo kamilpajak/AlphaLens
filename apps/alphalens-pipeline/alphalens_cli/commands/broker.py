@@ -11,7 +11,8 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker arm FILE|- [--env sim|live]  — the arming door:
         validate a TradeIntent document, derive its identity, append an
         "armed" pick to <env>/picks.jsonl (the auto-manager hand-off seam).
-        A brief pick is written by `alphalens thematic intent` and piped in
+        Every pick is a hand-written document; templates live in
+        apps/alphalens-broker-contract/examples/manual-pick/ (#1552)
     alphalens broker orders [--format json]  — open orders with side, type,
         resting amount, instrument (symbol, else `uic <n>`), ExternalReference
         + its human label (#1375)
@@ -1499,48 +1500,25 @@ def _document_text(source: str) -> str:
     try:
         return Path(source).read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        # `arm KO` was the brief form until #1469. Only a bare name reads like a
-        # ticker; a mistyped document path gets no producer hint.
-        bare_name = Path(source).name == source and not Path(source).suffix
+        # Every pick is a hand-written document (#1552), so a path the door
+        # cannot read points at where documents start.
         raise _fail_with(
             "usage",
             f"cannot read {source}: {exc}",
             details={"path": source},
-            suggestions=(_producer_suggestion(source, None, None, None),) if bare_name else (),
+            suggestions=(_TEMPLATE_SUGGESTION,),
         ) from exc
     except OSError as exc:
         raise _fail_with("usage", f"cannot read {source}: {exc}", details={"path": source}) from exc
 
 
-_PRODUCER_HINT = (
-    "`broker arm` takes a TradeIntent document (a file or - for stdin). A brief pick is "
-    "written by the producer: alphalens thematic intent TICKER --date YYYY-MM-DD "
-    "(--frame EQUITY | --notional AMOUNT) --currency CCY | alphalens broker arm -"
+_TEMPLATE_SUGGESTION = Suggestion(
+    argv=("alphalens", "broker", "arm", "<FILE>", "--dry-run"),
+    why=(
+        "a pick is a TradeIntent document you write; start from a template in "
+        "apps/alphalens-broker-contract/examples/manual-pick/ and check it with --dry-run"
+    ),
 )
-
-
-def _producer_suggestion(
-    ticker: str, date: str | None, frame: str | None, currency: str | None
-) -> Suggestion:
-    """The `thematic intent` argv for a brief pick; placeholders for what was not given."""
-    return Suggestion(
-        argv=(
-            "alphalens",
-            "thematic",
-            "intent",
-            ticker,
-            "--date",
-            "<YYYY-MM-DD>" if date is None else date,
-            "--frame",
-            "<FRAME>" if frame is None else frame,
-            "--currency",
-            "<CURRENCY>" if currency is None else currency,
-        ),
-        why=(
-            "a brief pick is produced by `thematic intent` and piped into `broker arm -`; "
-            "angle-bracket values are placeholders to fill in"
-        ),
-    )
 
 
 def _parsed_document(text: str) -> Any:
@@ -1802,12 +1780,6 @@ def arm_command(
         False, "--dry-run", help="Validate, derive and echo the intent, append nothing."
     ),
     output_format: str | None = _FORMAT_OPTION,
-    # The brief form this command had until #1469. Hidden and untyped, so an old
-    # command line reaches the hint below instead of a bare "No such option".
-    retired_date: str | None = typer.Option(None, "--date", hidden=True),
-    retired_frame: str | None = typer.Option(None, "--frame", hidden=True),
-    retired_currency: str | None = typer.Option(None, "--currency", hidden=True),
-    retired_briefs_dir: str | None = typer.Option(None, "--briefs-dir", hidden=True),
 ) -> None:
     """Arm a pick from a TradeIntent document (#1406) — the client-agnostic door.
 
@@ -1815,7 +1787,7 @@ def arm_command(
     ladder, size and `meta.source`. The door DERIVES `intent_id`,
     `meta.armed_ts` and every `r_multiple` and refuses them on input; it FILLS
     `meta.trade_date` (the next session of the MIC that has not closed; required
-    on a "brief" document), `meta.generation` (the next free one) and tags
+    on a legacy "brief" document), `meta.generation` (the next free one) and tags
     (T1.., TP1..) when they are absent (#1468). The journal stores the full
     document.
 
@@ -1853,23 +1825,6 @@ def arm_command(
     from broker_contract.trade_intent.validate import IntentInvalidError, validate_intent
 
     resolved_format = _resolve_format(output_format)
-    # Before every other guard and before the source is read: `arm KO --date D`
-    # must never read KO as a document path, and the hint must win over an
-    # ambient-instance refusal that would send the operator the wrong way.
-    retired = (retired_date, retired_frame, retired_currency, retired_briefs_dir)
-    if any(value is not None for value in retired):
-        raise _fail_with(
-            "usage",
-            _PRODUCER_HINT,
-            suggestions=(
-                _producer_suggestion(
-                    "<TICKER>" if source == "-" else Path(source).name,
-                    retired_date,
-                    retired_frame,
-                    retired_currency,
-                ),
-            ),
-        )
     env = _guard_ambient_instance(env, default=_DEFAULT_ARM_ENV)
 
     try:

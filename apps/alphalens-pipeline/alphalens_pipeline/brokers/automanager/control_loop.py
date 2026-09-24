@@ -7163,14 +7163,15 @@ def _resolve_and_size(
     (logged) — one bad pick must never crash a tick.
 
     ``hint_mic`` is the intent's ``InstrumentHint.mic`` (#1238):
-    ``explicit_mic_from_hint`` keeps US hints on the probe path (a brief pick
-    hints XNYS while its real venue may be XNAS) and turns a non-US hint
+    ``explicit_mic_from_hint`` keeps US hints on the probe path (a legacy brief
+    pick hints XNYS while its real venue may be XNAS) and turns a non-US hint
     (an operator's venue on a manual document, e.g. XWAR) into an explicit
     single-venue resolve.
 
-    PR-7 (broker-manager extraction memo §5): the brief-side parse
-    (``parse_brief_to_spec``) and the exit-geometry build moved to arm time,
-    client-side — this helper now only runs the money half
+    PR-7 (broker-manager extraction memo §5): the brief-side parse and the
+    exit-geometry build moved to arm time, client-side (#1552 later removed the
+    brief producer; every pick is a hand-written document) — this helper runs
+    only the money half
     (``compute_setup_plan``) on the already-parsed ``spec`` the daemon received
     on the drained ``TradeIntent``. #1414 then retired that builder outright, so
     nothing on this path computes a bracket at all: the brief path declares how
@@ -8444,7 +8445,9 @@ def _day1_gap_gate_decision(
         logger.warning("day1 gap gate: pick carries no E1 limit — gate cannot evaluate, passing")
         return "pass"
     info = _day1_gap_gate_session_info(
-        trade_date, exchange_mic, day1_includes_trade_date=source == "manual"
+        trade_date,
+        exchange_mic,
+        day1_includes_trade_date=source == "manual",  # LEGACY(source_brief)
     )
     if info is None:
         return "pass"
@@ -8497,7 +8500,9 @@ def _evaluate_day1_gap_gate(
     probe_price: float | None = None
     if e1_limit is not None and probe is not None:
         info = _day1_gap_gate_session_info(
-            trade_date, exchange_mic, day1_includes_trade_date=source == "manual"
+            trade_date,
+            exchange_mic,
+            day1_includes_trade_date=source == "manual",  # LEGACY(source_brief)
         )
         if info is not None:
             day1, day1_open = info

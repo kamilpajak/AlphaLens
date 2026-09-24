@@ -241,12 +241,13 @@ RULES = (
         "exemptions": set(),
     },
     {
-        # #1469: the brief producer (`alphalens thematic intent`) writes a
-        # document for the arming door and pipes it into `broker arm`.
-        # It must not import the broker layer, not even lazily inside the
-        # command body: that coupling is what moving the brief read out of the
-        # broker group removed. The rule names a module FILE, not a package.
-        "name": "the thematic CLI must not import brokers (#1469: the brief producer only writes a document)",
+        # The thematic commands build and read briefs; they never arm a pick.
+        # #1469 moved the brief read out of the broker group, and #1552 removed
+        # the brief producer altogether: every pick is a hand-written document
+        # armed through `broker arm`. The thematic CLI must not import the
+        # broker layer, not even lazily inside a command body. The rule names a
+        # module FILE, not a package.
+        "name": "the thematic CLI must not import brokers (#1552: picks are hand-written documents)",
         "from_pkg": "alphalens_cli.commands.thematic",
         "forbidden_prefix": "alphalens_pipeline.brokers",
         "exemptions": set(),
@@ -562,11 +563,11 @@ class TestModuleDependencies(unittest.TestCase):
         )
 
     def test_the_thematic_cli_module_brokers_tripwire_positive_control(self):
-        """#1469: the brief producer (`thematic intent`) emits a document for the
-        arming door and must not reach into the broker layer, lazily or not. The
-        rule names a single MODULE file, which the walker used to resolve to a
-        directory that does not exist and scan nothing: pin that it scans exactly
-        that file, and that a function-scope import there is caught."""
+        """The thematic CLI must not reach into the broker layer, lazily or not
+        (#1552: no thematic command arms a pick). The rule names a single MODULE
+        file, which the walker used to resolve to a directory that does not
+        exist and scan nothing: pin that it scans exactly that file, and that a
+        function-scope import there is caught."""
         import tempfile
 
         rules = [
@@ -585,7 +586,7 @@ class TestModuleDependencies(unittest.TestCase):
         )
 
         synthetic = (
-            "def intent_command():\n"
+            "def some_thematic_command():\n"
             "    from alphalens_pipeline.brokers.automanager.picks import arm_pick\n"
             "    return arm_pick\n"
         )

@@ -178,7 +178,8 @@ class RetirementCensusOnARealJournal(unittest.TestCase):
     Opt-in on a path, like the L4 vendor probes and #1405's journal check: CI has
     no journal, and a gate that silently skips when its data is missing would be
     a gate that disappears. Measured 2026-09-11 on the VPS journals (63 armed
-    documents): brief_date_key 51, reanchor_ceiling_price 45.
+    documents): brief_date_key 51, reanchor_ceiling_price 45. `source_brief`
+    was added on 2026-09-24 (#1552); its pick-key census is in its entry.
     """
 
     def test_it_reports_what_each_allowance_still_carries(self) -> None:

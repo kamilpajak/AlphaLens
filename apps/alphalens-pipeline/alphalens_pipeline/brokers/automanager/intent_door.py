@@ -36,6 +36,7 @@ from alphalens_pipeline.brokers.automanager.picks import STATUS_ARMED, PickRecor
 from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 from alphalens_pipeline.paper.calendar import session_not_closed
 
+# LEGACY(source_brief) — see broker_contract.trade_intent.legacy
 _SOURCE_BRIEF = "brief"
 _SOURCE_MANUAL = "manual"
 _US_VENUE = "US"
@@ -197,7 +198,7 @@ def _resolved_trade_date(
     has not closed. A brief document must state it."""
     if "trade_date" in meta:
         return _parsed_trade_date(meta["trade_date"])
-    if source == _SOURCE_BRIEF:
+    if source == _SOURCE_BRIEF:  # LEGACY(source_brief)
         raise TradeDateRequiredError(
             'meta.trade_date is required on a "brief" document: day 1 of a brief pick is '
             "the session after its brief date, which the door cannot know",

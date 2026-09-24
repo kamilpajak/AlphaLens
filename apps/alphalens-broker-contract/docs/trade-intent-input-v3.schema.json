@@ -182,7 +182,7 @@
       "properties": {
         "trade_date": {
           "type": "string",
-          "description": "YYYY-MM-DD. Date key of the record — pick identity, TTL anchor, reconcile join, day-1 gap gate anchor. For a manual pick (no brief row) this is the arm date; provenance lives in `source`, not in this field's name (#1252). When absent: the next session of instrument.mic that has not closed at the moment of arming. Refused when absent on a \"brief\" document: a brief's date is a fact the door cannot derive."
+          "description": "YYYY-MM-DD. Date key of the record — pick identity, TTL anchor, reconcile join, day-1 gap gate anchor. For a manual pick (no brief row) this is the arm date; provenance lives in `source`, not in this field's name (#1252). When absent: the next session of instrument.mic that has not closed at the moment of arming. Refused when absent on a legacy \"brief\" document: a brief's date is a fact the door cannot derive."
         },
         "schema_version": {
           "type": "string",
@@ -195,7 +195,7 @@
             "brief",
             "manual"
           ],
-          "description": "Where the intent came from: \"brief\" (a brief row, written by `thematic intent`) or \"manual\" (a document written by hand and armed with `broker arm`, #1235). Journals and later measurement separate the two populations on this marker; legacy payloads without the key decode to \"brief\"."
+          "description": "Where the intent came from. Write \"manual\": every pick is a document written by hand and armed with `broker arm` (#1235, #1552). \"brief\" is legacy: it marked picks written by the removed `thematic intent` producer, and payloads without the key decode to it. Journals and later measurement separate the two populations on this marker."
         },
         "generation": {
           "type": "integer",

@@ -32,11 +32,11 @@ the analysis pipeline needs to be able to detect.
 Broker-manager extraction 2A-4a (design memo
 ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``
 §2.1/§2.3) relocated this money-math half into the shared, dependency-free
-``broker_contract`` leaf. The brief-parsing / arm-time half
-(``parse_brief_to_spec``, ``validate_trade_setup``, ``build_exit_declaration``,
-``planned_blended_entry``) stays client-side in ``alphalens_pipeline.paper.sizing``
-— it reads a thematic brief dict, a client concern that must not leak into this
-leaf.
+``broker_contract`` leaf. The brief-reading helpers (``validate_trade_setup``,
+``planned_blended_entry``) stay client-side in ``alphalens_pipeline.paper.sizing``
+— they read a thematic brief dict, a client concern that must not leak into this
+leaf. The brief-to-spec parse went with the brief producer in #1552: every pick
+is a hand-written document now.
 
 ``planned_blended_entry_from_spec`` was originally listed alongside its
 dict-reading sibling as client-side, but the reason given never applied to it:
@@ -65,7 +65,8 @@ def _blend_priced_tiers(priced: list[tuple[float, float]]) -> float | None:
     weights sum to 0; ``None`` for an empty ``priced`` list. Extracted so
     ``alphalens_pipeline.paper.sizing.planned_blended_entry`` and
     :func:`planned_blended_entry_from_spec` cannot drift — both must produce
-    identical results for ``parse_brief_to_spec(setup)`` vs ``setup`` (PR-7).
+    identical results for a brief ``setup`` and the spec that states the same
+    tiers (PR-7).
     """
     if not priced:
         return None
@@ -232,8 +233,7 @@ def compute_setup_plan(
     into a concrete :class:`SetupPlan`.
 
     Args:
-        spec: parsed, unsized trade spec — see
-            :func:`~alphalens_pipeline.paper.sizing.parse_brief_to_spec`.
+        spec: the unsized trade spec of a TradeIntent document.
         fx: ``None`` on the same-currency path (strict no-op — the plan is
             byte-identical to the pre-FX-leg output). When the instrument
             currency differs from the account currency the caller passes a
@@ -246,11 +246,10 @@ def compute_setup_plan(
     (non-positive rate, same-currency ``FxConversion`` — same-currency must
     pass ``fx=None``), a ``disaster_stop`` that is not a finite positive
     price, plus "no usable entry tiers after sanitisation" when
-    every tier in ``spec`` has a non-positive ``limit_price``. The brief-side
-    plannability checks (status != OK, missing size percent, …) now
-    run earlier, inside
-    :func:`~alphalens_pipeline.paper.sizing.parse_brief_to_spec` /
-    :func:`~alphalens_pipeline.paper.sizing.validate_trade_setup`.
+    every tier in ``spec`` has a non-positive ``limit_price``. Whether the
+    document itself is coherent is the door's question
+    (``trade_intent.validate.validate_intent``), answered before anything
+    reaches here.
     """
     if fx is not None:
         if fx.account_currency == fx.instrument_currency:

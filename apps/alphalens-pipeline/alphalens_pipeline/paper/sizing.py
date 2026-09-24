@@ -1,20 +1,17 @@
-"""Brief-parse / arm-time half of the paper-trade sizing pipeline.
+"""Read-side helpers over a brief's ``brief_trade_setup`` dict.
 
-Translates a raw ``brief_trade_setup`` dict (a thematic-brief concern) into
-an unsized :class:`~broker_contract.trade_intent.schema.TradeSpec`, and
-builds the ``atr_bracket_1p5`` exit-geometry spec off the same brief dict.
-This module reads a thematic brief dict — a client concern — so it stays
-client-side; the money-math half (the sizing VALUE TYPES, the FX-aware
-notional/qty arithmetic) moved to the shared, dependency-free
-``broker_contract.sizing`` leaf (broker-manager extraction 2A-4a, design memo
-``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``
-§2.1/§2.3). Import :class:`~broker_contract.sizing.SetupPlan`,
-:func:`~broker_contract.sizing.compute_setup_plan`,
-:class:`~broker_contract.sizing.TradeSetupNotPlannableError`, and friends
-directly from ``broker_contract.sizing``.
+The brief row is a thematic-brief concern, so these stay client-side:
+:func:`validate_trade_setup` answers "is this row plannable" for the population
+monitor, and :func:`planned_blended_entry` / :func:`first_brief_tp_target` read
+the planned blend and first target for the ``/edge`` replays.
 
-See ``docs/research/paper_trading_capital_sizing_2026_05_28.md`` §2.3 / §3
-for the locked sizing formula this module's downstream consumers apply.
+Nothing here turns a brief into a pick any more. The brief producer
+(``thematic intent``) was removed in #1552: every pick is a hand-written
+TradeIntent document. The money math lives in the shared
+``broker_contract.sizing`` leaf; import
+:class:`~broker_contract.sizing.SetupPlan`,
+:func:`~broker_contract.sizing.compute_setup_plan` and
+:class:`~broker_contract.sizing.TradeSetupNotPlannableError` from there.
 """
 
 from __future__ import annotations
@@ -23,20 +20,10 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from broker_contract.exit_geometry import resolve_exit_policy
-from broker_contract.exit_geometry.policy import BreakevenTrailPolicy
 from broker_contract.sizing import (
     TradeSetupNotPlannableError,
     _blend_priced_tiers,
     planned_blended_entry_from_spec,
-)
-from broker_contract.trade_intent.schema import (
-    EntryTierSpec,
-    ExitGeometrySpec,
-    PickSize,
-    TpTrancheSpec,
-    TradeSpec,
-    TrailingStop,
 )
 
 
@@ -45,9 +32,7 @@ def validate_trade_setup(brief_trade_setup: dict) -> float:
 
     Exposed so a caller can ask "is this brief row plannable" without building
     a :class:`~broker_contract.trade_intent.schema.TradeSpec` (the population
-    monitor does). The percent is the BRIEF's field; turning it into an amount
-    needs a frame, which only the brief producer takes
-    (``alphalens_pipeline.thematic.brief_intent``).
+    monitor does). The percent is the BRIEF's field.
     """
     if not isinstance(brief_trade_setup, dict):
         raise TradeSetupNotPlannableError(
@@ -90,72 +75,6 @@ def validate_trade_setup(brief_trade_setup: dict) -> float:
         raise TradeSetupNotPlannableError("no usable entry tiers (all limits <= 0)")
 
     return float(suggested_size_pct)
-
-
-def parse_brief_to_spec(
-    brief_trade_setup: dict, *, notional_acct: float, currency: str
-) -> TradeSpec:
-    """Parse a raw ``brief_trade_setup`` dict into a :class:`TradeSpec`.
-
-    The brief states its size as a percent; the spec states an amount (#1467).
-    The caller decides the amount (``notional_acct``, in ``currency``, the
-    account currency) and passes it in, never the environment: the brief
-    producer turns the percent into an amount against a frame the operator
-    names, or takes the amount as given (#1469).
-
-    Kept in ``paper/sizing.py`` beside :func:`validate_trade_setup`, which the
-    population monitor also reads; its one production caller is the brief
-    producer, ``alphalens_pipeline.thematic.brief_intent``.
-
-    Runs :func:`validate_trade_setup` FIRST so the same unplannable briefs
-    raise :class:`~broker_contract.sizing.TradeSetupNotPlannableError` here as
-    they did inside the pre-split ``compute_setup_plan``. Every raw entry
-    tier / TP tranche is carried through IN ORDER (including non-positive
-    ``limit``/``target`` rows) — the money half
-    (:func:`~broker_contract.sizing.compute_setup_plan`) is what drops them,
-    so ``tier_index``/``tranche_index`` downstream stay the raw enumerate
-    index either way.
-    """
-    validate_trade_setup(brief_trade_setup)
-    if not math.isfinite(notional_acct) or notional_acct <= 0:
-        raise TradeSetupNotPlannableError(
-            f"notional_acct={notional_acct!r} must be a positive finite amount"
-        )
-
-    entry_tiers_raw = brief_trade_setup["entry_tiers"]
-    entry_tiers = tuple(
-        EntryTierSpec(
-            limit_price=float(raw["limit"]),
-            alloc_pct=float(raw.get("alloc_pct", 0.0)),
-            tag=str(raw.get("tag", "")),
-        )
-        for raw in entry_tiers_raw
-    )
-
-    tp_tranches_raw = brief_trade_setup.get("tp_tranches") or ()
-    tp_tranches = tuple(
-        TpTrancheSpec(
-            price=float(raw["target"]),
-            tranche_pct=float(raw.get("tranche_pct", 0.0)),
-            r_multiple=float(raw.get("r_multiple", 0.0)),
-            tag=str(raw.get("tag", "")),
-        )
-        for raw in tp_tranches_raw
-    )
-
-    disaster_stop = float(brief_trade_setup["disaster_stop"])
-    order_ttl_days = int(
-        brief_trade_setup.get("order_ttl_days") or 0
-    )  # 0 sentinel preserved — must NOT fall through to TradeSpec's default (7)
-
-    return TradeSpec(
-        entry_tiers=entry_tiers,
-        disaster_stop=disaster_stop,
-        tp_tranches=tp_tranches,
-        size=PickSize(notional_acct=notional_acct, currency=currency),
-        order_ttl_days=order_ttl_days,
-        side="long",
-    )
 
 
 def planned_blended_entry(brief_trade_setup: Mapping[str, Any]) -> float | None:
@@ -224,59 +143,8 @@ def first_brief_tp_target(brief_trade_setup: Mapping[str, Any]) -> float | None:
     return target
 
 
-def _deployed_trail() -> BreakevenTrailPolicy:
-    """The stop-management policy this deployment runs, and therefore the one the
-    brief path declares.
-
-    Read off the registry rather than retyped, so the declaration cannot drift
-    from the policy an operator reads in a log line. The narrowing assert is what
-    makes that read type-safe: the registry is declared as returning the
-    ``ExitPolicy`` protocol, and the parameters below belong to this family."""
-    policy = resolve_exit_policy("breakeven_trail")
-    assert isinstance(policy, BreakevenTrailPolicy)
-    return policy
-
-
-def build_exit_declaration() -> ExitGeometrySpec:
-    """What a brief pick DECLARES about its exit (#1414).
-
-    A declaration and nothing else: how the stop is to be MANAGED after fill,
-    with no ``initial_levels``. Since #1414 the presence of levels is the whole
-    placement instruction — supply them and they are placed, omit them and the
-    brief's own ladder is. This path omits them, which is what it has effectively
-    done all along: it used to compute an ATR bracket that the deployed policy
-    (``applies_geometry=False``) journaled and never placed, so the document said
-    one thing and the broker saw another.
-
-    Takes no arguments, which is the point rather than an oversight. The trail is
-    read off the registry (``_deployed_trail``) instead of retyped, so the
-    declaration cannot drift from the policy an operator reads in a log line, and
-    it does not vary per brief: every brief pick runs the same stop management.
-    The old builder returned ``None`` when the ATR was missing or the bracket was
-    degenerate; there is no bracket left to fail to build, and declining to say
-    how a stop is managed because a geometry we do not place could not be
-    computed was never coherent. Measured before the change: over the 45 sessions
-    to 2026-09-10, 287 of 287 plannable candidates had a usable ATR, so no live
-    pick took that branch.
-
-    The ceiling and the never-below-brief-TP1 clamp went with the bracket. They
-    survive where they are still read: the ``/edge`` what-if lens
-    (``feedback/ladder_replay``) and the research replay
-    (``alphalens_research.diagnostics.exit_policy_replay``), both through the
-    shared ``atr_bracket_levels`` leaf.
-    """
-    trail = _deployed_trail()
-    return ExitGeometrySpec(
-        reaction_plan=(
-            TrailingStop(arm_trigger_r=trail.activation_r, trail_frac=trail.trail_frac),
-        ),
-    )
-
-
 __all__ = [
-    "build_exit_declaration",
     "first_brief_tp_target",
-    "parse_brief_to_spec",
     "planned_blended_entry",
     "planned_blended_entry_from_spec",
     "validate_trade_setup",
