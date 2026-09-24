@@ -122,7 +122,7 @@ cannot honour rather than quietly doing something else:
 | declaration | the daemon |
 |---|---|
 | absent, or an `exit` with an empty plan | never moves the stop |
-| `TrailingStop(arm_trigger_r, trail_frac)` | arms a break-even trail at `arm_trigger_r` R of favourable excursion, then gives back `trail_frac` of it |
+| `TrailingStop(arm_trigger_r, trail_frac)` | arms a break-even trail at `arm_trigger_r` R of favourable excursion, then trails at `entry + trail_frac * (peak - entry)` — it KEEPS `trail_frac` of the excursion and gives back the rest, so `1.0` parks the stop at the peak |
 | `ReanchorOnFill(k_atr, atr)` | re-anchors the stop once, on fill-complete, to `avg_price - k_atr*atr` |
 
 Absent means **the stop is never moved**, not "use this deployment's default".
