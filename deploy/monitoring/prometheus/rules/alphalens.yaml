@@ -718,6 +718,46 @@ groups:
           description: "No VIX cache freshness metric. The refresh-vix step has not succeeded since metrics were enabled, or the textfile collector / node_exporter scrape is broken. New feedback decisions risk stamping market_regime_at_entry='unknown'. Clears after the first successful refresh."
 
       # ---------------------------------------------------------------
+      # FRED DATA age, as opposed to REQUEST age (#1524).
+      #
+      # The pair above watches fetched_at: when we last ASKED FRED. That stayed
+      # green for the three months ~/.alphalens/macro/FRED_VIXCLS.parquet was
+      # frozen at a 2026-07-01 print, because the refresher ran on schedule and
+      # fetched successfully — into a throwaway directory, while market_state
+      # read the stale shared file and stamped one VIX onto 79 brief dates.
+      # A metric that measures the request cannot see a publisher, or a cache,
+      # that has stopped moving. This pair measures the OBSERVATION.
+      #
+      # 604800s = 7 days. The worst NORMAL observation age is about 5: FRED
+      # publishes a session's close the next business morning (+1), and a Friday
+      # close is the newest print through a Monday-holiday weekend until Tuesday
+      # (+4 calendar days). Seven clears that with margin and still catches the
+      # real incident — 79 days — by a factor of eleven. GAUGE → threshold on
+      # ``time() - metric`` / ``absent()``, never increase()/rate().
+      # ---------------------------------------------------------------
+      - alert: AlphalensFredSeriesStale
+        expr: time() - alphalens_fred_series_last_observation_timestamp_seconds{series="VIXCLS"} > 604800
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: vix-cache-refresh
+        annotations:
+          summary: "FRED VIXCLS data older than 7 days (the request may still be succeeding)"
+          description: "The newest VIXCLS observation is {{ $value | humanizeDuration }} old. This is about the DATA, not the fetch — the refresh step can be green while the series is frozen, which is exactly how #1524 went unnoticed for three months. Check FRED for an outage, then `journalctl --user -u alphalens-thematic-build.service` on the VPS. market_state stamps 'unknown' once the series falls more than 5 sessions behind the brief date."
+
+      - alert: AlphalensFredSeriesObservationMetricMissing
+        expr: absent(alphalens_fred_series_last_observation_timestamp_seconds{series="VIXCLS"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: vix-cache-refresh
+        annotations:
+          summary: "FRED VIXCLS observation-age metric missing"
+          description: "No FRED observation-age metric. The refresh-vix step has not succeeded since this gauge was added, or the textfile collector / node_exporter scrape is broken. Without it a frozen series is invisible again. Clears after the first successful refresh."
+
+      # ---------------------------------------------------------------
       # Failure — fires on any non-zero exit. Hard fail, immediate
       # debounce (1m so one cron failure does not wait 5m to page).
       # ---------------------------------------------------------------
