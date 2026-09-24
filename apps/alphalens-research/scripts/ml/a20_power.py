@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -84,6 +85,10 @@ DISCOVERY_CUTOFF = "2026-07-05"
 #: Step of the cluster-count search. The answer is the first count ON THIS GRID
 #: that clears, never the true minimum - the memo must say so when it quotes it.
 _SEARCH_STEP = 2
+
+#: An arrival session, as the label store stamps it. Measured 2026-09-24: every
+#: one of 1001 held-out rows matches, at exactly 10 characters.
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def population_mask(frame: pd.DataFrame, population: str) -> np.ndarray:
@@ -134,6 +139,21 @@ def held_out_episodes_by_arrival(frame: pd.DataFrame, *, population: str) -> dic
 
     keep = (status == _RESOLVED) & population_mask(frame, population)
 
+    # Refuse an unusable arrival HERE rather than let it reach the grouping.
+    # Measured 2026-09-24: `.str.slice` hands a missing value back as float NaN
+    # even after `astype(str)`, and `groupby` DROPS a NaN key by default — so an
+    # episode with no arrival session silently leaves the panel, shrinking the
+    # count with nothing raised anywhere. It does not inflate the cluster count,
+    # which was the intuition; it deletes an episode.
+    # Checked against the panel, not the file: an unusable anchor on a row this
+    # panel excludes anyway is not a reason to refuse a run.
+    unusable = {a for a in anchor[keep] if not (isinstance(a, str) and _ISO_DATE.fullmatch(a))}
+    if unusable:
+        raise ValueError(
+            f"anchor_session is unusable on {len(unusable)} value(s) in the panel: "
+            f"{sorted(map(repr, unusable))[:5]}. An arrival session must be an ISO date."
+        )
+
     rows = pd.DataFrame(
         {"anchor": anchor[keep], "brief_date": brief_date[keep], "ticker": ticker[keep]}
     ).drop_duplicates(subset=["brief_date", "ticker"])
@@ -142,6 +162,8 @@ def held_out_episodes_by_arrival(frame: pd.DataFrame, *, population: str) -> dic
     # holding nothing but chained repeats drops out of the mapping entirely.
     episodes = ticker_episode_dedup(rows)
     counts = episodes.groupby("anchor").size()
+    # Ascending by arrival date, and callers may rely on it: the overlap simulator
+    # pairs cluster sizes with calendar offsets by position.
     return {str(k): int(v) for k, v in sorted(counts.items())}
 
 

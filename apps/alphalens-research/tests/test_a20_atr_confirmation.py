@@ -343,6 +343,18 @@ class TestThePreflight(unittest.TestCase):
             atr.held_out_panel(self.store.labels, self.store.briefs)
         self.assertIn(atr.OUTCOME, seen)
 
+    def test_an_empty_store_is_a_shape_of_zero_not_a_crash(self):
+        # The preflight must survive a store with nothing in it: reporting
+        # "0 episodes, would VOID" is the useful answer, and a traceback here
+        # would send the operator looking for a broken script instead.
+        self.assertEqual(atr.panel_shape(self.store.labels, self.store.briefs), (0, 0))
+
+    def test_the_run_refuses_the_same_empty_store(self):
+        # Control for the case above: the two paths share one loader, and the
+        # run must still RAISE where the preflight reports a zero.
+        with self.assertRaises(atr.VoidError):
+            atr.held_out_panel(self.store.labels, self.store.briefs)
+
     def test_the_printed_report_names_the_verdict_the_floors_imply(self):
         self._fill(20, per_cluster=4)  # 80 episodes, far under MIN_EPISODES
         buffer = io.StringIO()

@@ -374,24 +374,37 @@ def status_census(labels_dir: Any) -> dict[str, int]:
     return {str(k): int(v) for k, v in frame["sel_label_status_20"].value_counts().items()}
 
 
-def held_out_panel(labels_dir: Any, briefs_dir: Any) -> pd.DataFrame:
-    """The frozen confirmation panel, or :class:`VoidError` if it cannot be built.
+_LABEL_KEY_COLUMNS = ("brief_date", "ticker", "anchor_session", "briefed_any_theme")
 
-    Reads outcome values, so calling this IS the start of the look. The
-    stringified join key is deliberate: the two stores stamp ``brief_date`` with
-    different types and a silent type mismatch would empty the join and hand
-    back a clean-looking empty panel.
+
+def _held_out_episodes(
+    labels_dir: Any,
+    briefs_dir: Any,
+    *,
+    with_signals: bool,
+) -> pd.DataFrame:
+    """The held-out episodes, joined and filtered exactly once.
+
+    ONE definition of the panel, used by both the run and the preflight. They
+    used to be two copies of the same eight-step chain, which is the shape of
+    defect this whole module is a correction for: two reads of one quantity
+    agree until they quietly do not, and nothing fails when they stop.
+
+    ``with_signals`` is the only difference the two callers need. The run reads
+    the outcome and the three signal columns and drops rows missing any of them;
+    the preflight reads NEITHER, because it must stay outcome-blind, and so it
+    cannot apply that completeness drop. Its count is therefore an upper bound
+    on the run's by however many resolved rows carry a null outcome or a null
+    signal — in practice none, since a resolved label is not supposed to carry
+    one, and the bound points the safe way: the preflight can refute a run,
+    never promise one.
+
+    ORDER IS LOAD-BEARING and identical on both paths: status and completeness
+    filters run BEFORE the episode collapse, so an episode is represented by its
+    first USABLE row rather than by one that was dropped.
     """
     from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
 
-    label_cols = [
-        "brief_date",
-        "ticker",
-        "anchor_session",
-        "briefed_any_theme",
-        "sel_label_status_20",
-        OUTCOME,
-    ]
     label_paths = [
         path for path in sorted(Path(labels_dir).glob("*.parquet")) if path.stem > DISCOVERY_CUTOFF
     ]
@@ -404,11 +417,14 @@ def held_out_panel(labels_dir: Any, briefs_dir: Any) -> pd.DataFrame:
             f"({len(label_paths)} label, {len(brief_paths)} brief)"
         )
 
+    label_cols = [*_LABEL_KEY_COLUMNS, "sel_label_status_20"]
+    if with_signals:
+        label_cols.append(OUTCOME)
     labels = pd.concat(
         [pd.read_parquet(path, columns=label_cols) for path in label_paths], ignore_index=True
     )
     briefs = pd.concat(
-        [_read_brief(path) for path in brief_paths],
+        [_read_brief(path) if with_signals else _read_brief_keys(path) for path in brief_paths],
         ignore_index=True,
     )
     labels["brief_date"] = labels["brief_date"].astype(str)
@@ -418,10 +434,22 @@ def held_out_panel(labels_dir: Any, briefs_dir: Any) -> pd.DataFrame:
     panel = labels.merge(briefs, on=["brief_date", "ticker"], how="inner", validate="m:1")
     panel = panel[panel["sel_label_status_20"].astype(str) == STATUS_RESOLVED]
     panel = panel[panel["briefed_any_theme"].fillna(False).astype(bool)]
-    panel = panel.dropna(subset=[OUTCOME, ATR, *COVARIATES])
+    if with_signals:
+        panel = panel.dropna(subset=[OUTCOME, ATR, *COVARIATES])
     panel = panel.rename(columns={"anchor_session": "arrival"})
     panel["arrival"] = panel["arrival"].astype(str)
-    panel = ticker_episode_dedup(panel)
+    return ticker_episode_dedup(panel)
+
+
+def held_out_panel(labels_dir: Any, briefs_dir: Any) -> pd.DataFrame:
+    """The frozen confirmation panel, or :class:`VoidError` if it cannot be built.
+
+    Reads outcome values, so calling this IS the start of the look. The
+    stringified join key is deliberate: the two stores stamp ``brief_date`` with
+    different types and a silent type mismatch would empty the join and hand
+    back a clean-looking empty panel.
+    """
+    panel = _held_out_episodes(labels_dir, briefs_dir, with_signals=True)
 
     for column in (ATR, *COVARIATES):
         # A zero-variance column standardises to zeros, and the shared OLS uses
@@ -438,6 +466,13 @@ def held_out_panel(labels_dir: Any, briefs_dir: Any) -> pd.DataFrame:
             f"The look is NOT spent."
         )
     return panel.reset_index(drop=True)
+
+
+def _read_brief_keys(path: Path) -> pd.DataFrame:
+    """Just the join key. The outcome-blind path must not read signal columns:
+    the allowlist in ``a20_power.py`` bars held-out signals as well as labels,
+    and being loose with an allowlist is how the panel came to be miscounted."""
+    return pd.read_parquet(path, columns=["ticker"]).assign(brief_date=path.stem)
 
 
 def _read_brief(path: Path) -> pd.DataFrame:
@@ -562,63 +597,22 @@ def volatility_sufficiency(panel: pd.DataFrame) -> tuple[int, bool]:
 
 # ------------------------------------------------------------------ driver
 def panel_shape(labels_dir: Any, briefs_dir: Any) -> tuple[int, int]:
-    """(episodes, arrival clusters) the run would build, WITHOUT the outcome.
+    """(episodes, arrival clusters) the run would build, WITHOUT reading outcomes.
 
-    Same joins, same filters and the same chained episode collapse as
-    :func:`held_out_panel`, minus the one column that would spend the look. The
-    floors are counted in ticker-episodes, so the preflight has to be too: the
-    resolved ROW count is about twice this on the real store, and comparing it
-    to ``MIN_EPISODES`` reads a certain VOID as a comfortable pass.
+    Same join, same filters and the same chained collapse as
+    :func:`held_out_panel` — literally the same function — minus the columns that
+    would spend the look. The floors are counted in ticker-episodes, so the
+    preflight has to be too: the resolved ROW count is about twice this on the
+    real store, and comparing that to ``MIN_EPISODES`` reads a certain VOID as a
+    comfortable pass.
 
-    Upper bound, by one step: the run also drops rows whose outcome is null,
-    which this cannot see. A resolved label is not supposed to carry a null
-    outcome, so the two agree in practice, and the bound points the safe way —
-    the preflight can refute a run, never promise one.
+    See :func:`_held_out_episodes` for why this is an upper bound by at most the
+    number of resolved rows carrying a null outcome or signal.
     """
-    from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
-
-    label_paths = [
-        path for path in sorted(Path(labels_dir).glob("*.parquet")) if path.stem > DISCOVERY_CUTOFF
-    ]
-    brief_paths = [
-        path for path in sorted(Path(briefs_dir).glob("*.parquet")) if path.stem > DISCOVERY_CUTOFF
-    ]
-    if not label_paths or not brief_paths:
+    try:
+        panel = _held_out_episodes(labels_dir, briefs_dir, with_signals=False)
+    except VoidError:
         return 0, 0
-
-    labels = pd.concat(
-        [
-            pd.read_parquet(
-                path,
-                columns=[
-                    "brief_date",
-                    "ticker",
-                    "anchor_session",
-                    "briefed_any_theme",
-                    "sel_label_status_20",
-                ],
-            )
-            for path in label_paths
-        ],
-        ignore_index=True,
-    )
-    briefs = pd.concat(
-        [
-            pd.read_parquet(path, columns=["ticker"]).assign(brief_date=path.stem)
-            for path in brief_paths
-        ],
-        ignore_index=True,
-    )
-    labels["brief_date"] = labels["brief_date"].astype(str)
-    labels["ticker"] = labels["ticker"].astype(str).str.upper()
-    briefs["ticker"] = briefs["ticker"].astype(str).str.upper()
-
-    panel = labels.merge(briefs, on=["brief_date", "ticker"], how="inner", validate="m:1")
-    panel = panel[panel["sel_label_status_20"].astype(str) == STATUS_RESOLVED]
-    panel = panel[panel["briefed_any_theme"].fillna(False).astype(bool)]
-    panel = panel.rename(columns={"anchor_session": "arrival"})
-    panel["arrival"] = panel["arrival"].astype(str)
-    panel = ticker_episode_dedup(panel)
     return len(panel), int(panel["arrival"].nunique())
 
 

@@ -120,6 +120,62 @@ class TestTheStructureMatchesTheSimulatedPopulation(unittest.TestCase):
         self.assertEqual(by_arrival, {"2026-07-07": 1})
 
 
+class TestAnUnusableArrivalIsRefusedAtTheSource(unittest.TestCase):
+    """A missing arrival session must be named here, not crash 40 lines later.
+
+    The failure mode is worse than it looks. ``.str.slice`` hands a missing value
+    back as float ``NaN`` even after ``astype(str)``, and ``groupby`` drops a NaN
+    key by default — so an episode with no arrival session leaves the panel with
+    NOTHING raised anywhere and the count quietly one lower. It does not create a
+    phantom cluster, which was the first guess; it deletes an episode. A panel
+    that shrinks in silence is the exact failure this whole change is a
+    correction for, so the single definition of the panel refuses its own bad
+    input.
+
+    Measured on the real store 2026-09-24: 0 null anchors in 1001 held-out rows,
+    every anchor string exactly 10 characters. So this guards a case that does
+    not occur today, which is the point of guarding it.
+    """
+
+    _GOOD = ("2026-07-06", "AAA", "2026-07-07", True)
+
+    def test_an_unusable_anchor_would_otherwise_vanish(self):
+        # The refutation control, and the reason this guard is not decoration:
+        # without it the grouping drops the row and reports a smaller panel.
+        rows = pd.DataFrame({"anchor": ["2026-07-07", float("nan")], "n": [1, 1]})
+        self.assertEqual(rows.groupby("anchor").size().to_dict(), {"2026-07-07": 1})
+
+    def test_a_missing_arrival_is_named(self):
+        frame = _held_out_frame([self._GOOD, ("2026-07-06", "BBB", "2026-07-07", True)])
+        frame.loc[frame["ticker"] == "BBB", "anchor_session"] = None
+        with self.assertRaises(ValueError) as caught:
+            pre.held_out_episodes_by_arrival(frame, population=pre.POPULATION_BRIEFED)
+        self.assertIn("anchor_session", str(caught.exception))
+
+    def test_a_row_the_panel_excludes_cannot_trigger_it(self):
+        # The guard must look at the panel, not the file. An unusable anchor on a
+        # row that is immature, or that the brief never carried, is not this
+        # panel's problem and must not block a run.
+        for column, value in (("sel_label_status_20", "immature"), ("briefed_any_theme", False)):
+            with self.subTest(column=column):
+                frame = _held_out_frame([self._GOOD, ("2026-07-06", "BBB", "2026-07-07", True)])
+                frame.loc[frame["ticker"] == "BBB", "anchor_session"] = None
+                frame.loc[frame["ticker"] == "BBB", column] = value
+                self.assertEqual(
+                    pre.held_out_episodes_by_arrival(frame, population=pre.POPULATION_BRIEFED),
+                    {"2026-07-07": 1},
+                )
+
+    def test_a_clean_panel_passes(self):
+        # Positive control: the guard must not refuse the ordinary case.
+        self.assertEqual(
+            pre.held_out_episodes_by_arrival(
+                _held_out_frame([self._GOOD]), population=pre.POPULATION_BRIEFED
+            ),
+            {"2026-07-07": 1},
+        )
+
+
 class TestTheUnitIsTheTickerEpisode(unittest.TestCase):
     """The held-out unit must be the one ledger rule 5 defines, and the one the
     burnt side already uses.
@@ -158,6 +214,19 @@ class TestTheUnitIsTheTickerEpisode(unittest.TestCase):
             _held_out_frame(self._ROWS), population=pre.POPULATION_BRIEFED
         )
         self.assertEqual(sorted(by_arrival), ["2026-07-07", "2026-07-17"])
+
+    def test_the_mapping_is_ordered_by_arrival_date(self):
+        # Not cosmetic. The overlap simulator zips cluster sizes against calendar
+        # offsets by POSITION, so a mapping in some other order would give every
+        # cluster someone else's arrival date while every count stayed right.
+        # Rows are written newest-first here so insertion order cannot pass by
+        # accident.
+        rows = list(reversed(self._ROWS))
+        by_arrival = pre.held_out_episodes_by_arrival(
+            _held_out_frame(rows), population=pre.POPULATION_BRIEFED
+        )
+        self.assertEqual(list(by_arrival), sorted(by_arrival))
+        self.assertEqual(list(by_arrival), ["2026-07-07", "2026-07-17"])
 
     def test_the_held_out_unit_equals_the_burnt_unit(self):
         # The two sides must agree by construction, not by coincidence: the

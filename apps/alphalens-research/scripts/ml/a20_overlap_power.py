@@ -458,8 +458,14 @@ def report(
     # holds only a chained repeat of an earlier episode), which is exactly the
     # disagreement that check would have reported.
     by_anchor = held_out_episodes_by_arrival(held, population=population)
-    sizes = list(by_anchor.values())
-    offsets = arrival_offsets_from_dates(sorted(by_anchor))
+    # Sizes and offsets are zipped POSITIONALLY downstream, so cluster j's size
+    # must be cluster j's calendar slot. Both are taken from one sorted pass for
+    # that reason: `list(by_anchor.values())` would agree only because the mapping
+    # happens to be built in key order, and a silent mis-pairing here would give
+    # every cluster someone else's arrival date without changing any count.
+    arrivals = sorted(by_anchor)
+    sizes = [by_anchor[a] for a in arrivals]
+    offsets = arrival_offsets_from_dates(arrivals)
 
     y_b = burnt[OUTCOME].astype(float).to_numpy()
     sd_y = float(np.std(y_b))
