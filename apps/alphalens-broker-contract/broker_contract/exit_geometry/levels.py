@@ -22,6 +22,20 @@ def ceiling_from_52w_high(
     Returns ``None`` (-> UNCAPPED TP, memo §4.2) when the pct or the setup's
     ``asof_close`` is missing / non-finite / degenerate — a missing 52w history
     is coverage, not a null.
+
+    The RESULT is guarded too (issue #1521). The ``denom <= 0`` check does not
+    stop a positive DENORMAL denominator from overflowing the division, and an
+    ``inf`` peak is the worst possible answer here: downstream it reads as "no
+    ceiling", which is the opposite of the cap this value exists to impose.
+
+    The guard is ``not finite or <= 0``, and the second half is not decoration:
+    an underflowing division reaches exactly ``0.0`` (``asof_close=1.1e-308``,
+    ``pct=4.5e17``), and a zero peak is not a price. A denormal that stays
+    ABOVE zero — ``5e-324`` — is still returned, because that is a finite
+    positive price and honest arithmetic, and it already fails safe where it is
+    used: a ceiling below the cost floor makes the bracket non-constructible
+    and :func:`atr_bracket_levels` answers ``None``. The guard is for "not a
+    usable price", never for "small".
     """
     if trade_setup is None or pct_off_52w_high is None:
         return None
@@ -35,7 +49,10 @@ def ceiling_from_52w_high(
     denom = 1.0 + pct / 100.0
     if denom <= 0:
         return None
-    return asof_close / denom
+    peak = asof_close / denom
+    if not math.isfinite(peak) or peak <= 0.0:
+        return None
+    return peak
 
 
 def atr_bracket_levels(
@@ -49,18 +66,50 @@ def atr_bracket_levels(
 ) -> tuple[float, float] | None:
     """Compute the (stop, tp) pair for a symmetric ATR bracket exit.
 
-    Returns ``None`` for any degenerate input: a non-finite / non-positive
-    ``atr``, a non-positive risk (``stop_atr_mult <= 0``), a bracket stop
-    at/below zero (ATR wider than ~1/stop_atr_mult of the entry), or a
-    ceiling at/below the cost floor (bracket not constructible). A ``None`` /
-    non-finite ``ceiling_price`` leaves the TP uncapped. The function
-    self-guards ``atr`` so future direct callers cannot poison the arithmetic
-    into NaN levels; the current feedback callpath still pre-validates it.
+    Returns ``None`` for any degenerate input: a non-finite ``blended`` /
+    ``atr`` / ``stop_atr_mult`` / ``tp_atr_mult`` / ``tp_floor_frac``, a
+    non-positive ``atr``, a non-positive risk (``stop_atr_mult <= 0``), a
+    bracket stop at/below zero (ATR wider than ~1/stop_atr_mult of the entry),
+    a ceiling at/below the cost floor (bracket not constructible), or a
+    take-profit that is non-finite or does not sit ABOVE the entry. A ``None``
+    / non-finite ``ceiling_price`` leaves the TP uncapped.
+
+    The take-profit side is judged on its RESULT, not on its parameters. An
+    earlier draft refused ``tp_atr_mult <= 0`` and ``tp_floor_frac < 0``, and
+    measuring showed that rejects three coherent configurations out of five:
+    a zero ATR multiple with a positive floor is a bracket whose upside is the
+    cost floor alone, a negative multiple with a positive floor is the same
+    thing, and a negative floor with a positive multiple just means the floor
+    never binds. What is degenerate is a target at or below the entry.
+
+    ALL FOUR float parameters are self-guarded, not just ``atr`` (issue #1521).
+    The reason the docstring already gave for guarding ``atr`` — so a direct
+    caller cannot poison the arithmetic into NaN levels — never applied to one
+    parameter only, and the other three were reachable:
+
+    * a NaN ``blended`` passed the ``bracket_stop <= 0`` check, because every
+      comparison against NaN is False, and returned ``(nan, nan)``;
+    * a NaN ``stop_atr_mult`` returned ``(nan, 100.5)``;
+    * a NaN ``tp_atr_mult`` was the dangerous one and did NOT surface as NaN:
+      ``max(tp_floor, blended + nan)`` returns ``tp_floor``, so the function
+      handed back a finite, plausible take-profit built from a poisoned input,
+      which nothing downstream could detect.
     """
-    if not math.isfinite(atr) or atr <= 0:
+    for value in (blended, atr, stop_atr_mult, tp_atr_mult, tp_floor_frac):
+        if not math.isfinite(value):
+            return None
+    if atr <= 0:
         return None
     if stop_atr_mult <= 0:
         return None
+    # NOTE: `tp_atr_mult` and `tp_floor_frac` are checked for FINITENESS only.
+    # A first draft also refused `tp_atr_mult <= 0` and `tp_floor_frac < 0`,
+    # and measuring showed that refused three coherent configurations out of
+    # five: `tp_atr_mult=0` with a positive floor is a bracket whose upside is
+    # the cost floor alone; a negative multiplier with a positive floor is the
+    # same thing; and a negative floor with a positive multiplier simply means
+    # the floor never binds. What is actually degenerate is the RESULT, and it
+    # is checked as such below.
     bracket_stop = blended - stop_atr_mult * atr
     if bracket_stop <= 0:
         return None
@@ -70,6 +119,20 @@ def atr_bracket_levels(
         if ceiling_price <= tp_floor:
             return None
         tp = min(tp, ceiling_price)
+    # The honest invariant, checked on the RESULT rather than guessed at from
+    # the inputs: a take-profit at or below the entry is not a take-profit.
+    # It catches `tp_atr_mult=0, tp_floor_frac=0` (tp == blended, zero profit)
+    # and `tp_atr_mult=-2, tp_floor_frac=-1` (tp == 0.0, not a price), while
+    # letting through every combination whose target really does sit above the
+    # entry. It also covers a ceiling that caps below the entry, which the
+    # `ceiling_price <= tp_floor` check misses when the floor is negative.
+    # `not finite` is the third way in, and the property found it rather than
+    # any reading: with a finite but enormous `tp_floor_frac`, the product
+    # `blended * (1 + tp_floor_frac)` overflows even though every INPUT is
+    # finite (blended=1.5e150, tp_floor_frac large -> tp == inf). Guarding the
+    # inputs cannot catch that; guarding the product can.
+    if not math.isfinite(tp) or tp <= blended:
+        return None
     return bracket_stop, tp
 
 
