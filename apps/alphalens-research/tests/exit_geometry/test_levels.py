@@ -104,6 +104,68 @@ class TestAtrBracketLevels(unittest.TestCase):
         self.assertEqual(result, (99.85, 100.6))
 
 
+class TestEveryFloatParameterIsGuarded(unittest.TestCase):
+    """Issue #1521. The module promises every function is total, and the
+    docstring gives the reason ``atr`` is self-guarded: "so future direct
+    callers cannot poison the arithmetic into NaN levels". The same argument
+    covers the other three floats, which were not checked.
+
+    ``tp_atr_mult`` is the one that matters most and the one the issue missed.
+    A NaN there does NOT surface as a NaN level: ``max(tp_floor, blended +
+    nan)`` returns ``tp_floor``, so the function hands back a finite,
+    plausible-looking take-profit built from a poisoned input. The other three
+    produce a NaN a caller could at least detect."""
+
+    _BASE = {"stop_atr_mult": 1.5, "tp_atr_mult": 1.5, "tp_floor_frac": 0.006}
+
+    def test_non_finite_blended_returns_none(self):
+        for bad in (math.nan, math.inf, -math.inf):
+            with self.subTest(blended=bad):
+                self.assertIsNone(atr_bracket_levels(bad, 1.0, **self._BASE))
+
+    def test_non_finite_stop_atr_mult_returns_none(self):
+        for bad in (math.nan, math.inf):
+            with self.subTest(stop_atr_mult=bad):
+                kwargs = {**self._BASE, "stop_atr_mult": bad}
+                self.assertIsNone(atr_bracket_levels(99.0, 1.0, **kwargs))
+
+    def test_non_finite_tp_atr_mult_returns_none(self):
+        # The silent one: without a guard this returns (97.5, 99.594) — a
+        # finite pair with no NaN in it, from a NaN input.
+        for bad in (math.nan, math.inf):
+            with self.subTest(tp_atr_mult=bad):
+                kwargs = {**self._BASE, "tp_atr_mult": bad}
+                self.assertIsNone(atr_bracket_levels(99.0, 1.0, **kwargs))
+
+    def test_non_finite_tp_floor_frac_returns_none(self):
+        for bad in (math.nan, math.inf):
+            with self.subTest(tp_floor_frac=bad):
+                kwargs = {**self._BASE, "tp_floor_frac": bad}
+                self.assertIsNone(atr_bracket_levels(99.0, 1.0, **kwargs))
+
+    def test_a_take_profit_at_or_below_zero_returns_none(self):
+        # Not in #1521 — found by widening the property domain while fixing it.
+        # `stop_atr_mult` was guarded against <= 0 and the take-profit side was
+        # not, so a negative multiplier with a -1 floor yields a tp of exactly
+        # 0.0: a "price tuple" containing something that is not a price.
+        result = atr_bracket_levels(
+            2.0, 1.0, stop_atr_mult=1.5, tp_atr_mult=-2.0, tp_floor_frac=-1.0
+        )
+        self.assertIsNone(result)
+
+    def test_negative_tp_floor_frac_returns_none(self):
+        kwargs = {**self._BASE, "tp_floor_frac": -0.5}
+        self.assertIsNone(atr_bracket_levels(100.0, 10.0, **kwargs))
+
+    def test_ordinary_inputs_are_untouched_by_the_guards(self):
+        # The negative control. Guarding four parameters must not change any
+        # answer the function already gave.
+        self.assertEqual(
+            atr_bracket_levels(100.0, 10.0, **self._BASE),
+            (85.0, 115.0),
+        )
+
+
 class TestCeilingFrom52wHigh(unittest.TestCase):
     def test_reconstructs_known_peak(self):
         # peak=125, last=100 -> pct = 100*(100-125)/125 = -20.
@@ -138,6 +200,33 @@ class TestCeilingFrom52wHigh(unittest.TestCase):
         # pct <= -100 -> denom = 1 + pct/100 <= 0.
         result = ceiling_from_52w_high({"asof_close": 100.0}, -150.0)
         self.assertIsNone(result)
+
+    def test_overflowing_division_returns_none(self):
+        # Issue #1521. The `denom <= 0` guard does not stop a positive
+        # DENORMAL denominator from overflowing the division, so the peak came
+        # back as `inf` — which reads downstream as "no ceiling at all", the
+        # opposite of the cap this value exists to impose.
+        result = ceiling_from_52w_high({"asof_close": 1e308}, -100 + 1e-13)
+        self.assertIsNone(result)
+
+    def test_underflow_all_the_way_to_zero_returns_none(self):
+        # Also not in #1521, which said the underflow bottoms out at a
+        # denormal. It reaches exactly 0.0, and a zero peak is not a price.
+        result = ceiling_from_52w_high(
+            {"asof_close": 1.1125369292536007e-308}, 4.5035996273704954e17
+        )
+        self.assertIsNone(result)
+
+    def test_underflow_to_a_denormal_is_still_returned(self):
+        # The negative control, and a correction to the issue, which said this
+        # returns 0.0. It returns 5e-324: a FINITE, positive price. The guard
+        # is for non-finite results only. A denormal ceiling is honest
+        # arithmetic and it already fails safe at the call site, where a
+        # ceiling below the cost floor makes the bracket non-constructible.
+        result = ceiling_from_52w_high({"asof_close": 1.1459e-156}, 4.63e169)
+        assert result is not None
+        self.assertTrue(math.isfinite(result))
+        self.assertGreater(result, 0.0)
 
 
 class ClampReanchorTargetTest(unittest.TestCase):

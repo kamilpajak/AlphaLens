@@ -7,21 +7,25 @@ degenerate cases -- each one probes a guard the code HAS. None probe overflow,
 underflow, denormals, or a parameter the code does not guard, which is why they
 find nothing here and a generator does.
 
-WHAT THE DOMAIN BOUNDS MEAN. Two of the five functions are total over the
-realistic price domain asserted below and NOT total over every float:
+WHAT THE DOMAIN BOUNDS MEAN. All five functions are now total over every float
+and asserted as such. Until #1521 two of them were not, and the history is kept
+here because it is what the bounds below were originally for:
 
-* ``ceiling_from_52w_high`` returns ``inf`` when ``pct`` is a hair above -100
-  (the ``denom <= 0`` guard does not stop a positive DENORMAL denominator from
-  overflowing the division) and ``0.0`` when ``pct`` is astronomically large.
-* ``atr_bracket_levels`` self-guards ``atr`` -- its docstring says so
-  explicitly -- but not ``blended`` or ``tp_floor_frac``, so a non-finite
-  ``blended`` passes straight through (``bracket_stop <= 0`` is False for NaN).
+* ``ceiling_from_52w_high`` returned ``inf`` when ``pct`` sat a hair above -100
+  — the ``denom <= 0`` guard does not stop a positive DENORMAL denominator from
+  overflowing the division. It now guards its RESULT.
+* ``atr_bracket_levels`` self-guarded ``atr`` and nothing else, so a NaN in any
+  of the other three floats passed straight through. The one that mattered was
+  ``tp_atr_mult``: it did not even surface as a NaN, because
+  ``max(tp_floor, blended + nan)`` returns ``tp_floor``, so the function handed
+  back a finite, plausible take-profit built from a poisoned input. All four
+  floats are guarded now.
 
-Both are unreachable from any real feed and both fail SAFE at their call sites
-(an ``inf`` ceiling reads as uncapped, a ``0.0`` one falls below the cost floor
-and yields ``None``). They are under-specified contracts, not rail defects, and
-they are filed as their own issues. Asserting them here would be asserting a
-bug; asserting the realistic domain is asserting the contract.
+One thing #1521 deliberately did NOT change: an UNDERFLOWING division in
+``ceiling_from_52w_high`` still returns a denormal (``5e-324``), because that is
+a finite positive price and honest arithmetic, and it fails safe where it is
+used. The bounded properties further down stay bounded — their claims are about
+realistic prices, not about totality.
 
 ORACLE INDEPENDENCE: no property below recomputes the function under test. The
 round trip inverts a DIFFERENT formula (percent-off-peak) to recover its input.
@@ -44,16 +48,17 @@ from hypothesis import strategies as st
 
 from .base import PropertyTestCase
 
-# A price a venue could actually quote. Wide enough to cross the whole realistic
-# range (penny stock to Berkshire-A) without reaching the float extremes where
-# the two unguarded parameters above stop being total.
+# A price a venue could actually quote: penny stock to Berkshire-A. The bound is
+# about what the CLAIMS below are about (ordering, the cost floor, a binding
+# ceiling), not about totality any more — since #1521 every function is total
+# over every float and the class above asserts exactly that.
 prices = st.floats(min_value=1e-2, max_value=1e6, allow_nan=False, allow_infinity=False)
 # An ATR is a distance in the instrument's currency, never a multiple.
 atrs = st.floats(min_value=1e-6, max_value=1e5, allow_nan=False, allow_infinity=False)
 multiples = st.floats(min_value=1e-3, max_value=10.0, allow_nan=False, allow_infinity=False)
 fractions = st.floats(min_value=0.0, max_value=0.5, allow_nan=False, allow_infinity=False)
 
-# The three functions that ARE total over every float, per the module promise.
+# Every float there is. All five functions answer `None` or a usable price here.
 ANY_FLOAT = st.floats(allow_nan=True, allow_infinity=True)
 
 
@@ -63,8 +68,12 @@ def _usable(value: object) -> bool:
 
 
 class TheTotalFunctionsAreTotalOverEveryFloat(PropertyTestCase):
-    """These three keep the module promise without any domain bound: NaN, the
-    infinities, zero and denormals all answer ``None`` or a usable price."""
+    """All five keep the module promise without any domain bound: NaN, the
+    infinities, zero and denormals all answer ``None`` or a usable price.
+
+    It was three until #1521 guarded the two that were not (see the module
+    docstring). The last two properties here are what makes that a checked
+    claim rather than a fixed docstring."""
 
     @given(avg_price=ANY_FLOAT, atr=ANY_FLOAT, k=ANY_FLOAT)
     def test_reanchor_target_never_returns_a_bad_stop(
@@ -86,6 +95,48 @@ class TheTotalFunctionsAreTotalOverEveryFloat(PropertyTestCase):
             prior, proposed, anchor_price=anchor, min_distance_frac=min_dist
         )
         self.assertTrue(_usable(got))
+
+    @given(
+        blended=ANY_FLOAT,
+        atr=ANY_FLOAT,
+        stop_mult=ANY_FLOAT,
+        tp_mult=ANY_FLOAT,
+        floor=ANY_FLOAT,
+        ceiling=st.one_of(st.none(), ANY_FLOAT),
+    )
+    def test_the_atr_bracket_never_returns_a_bad_pair(
+        self,
+        blended: float,
+        atr: float,
+        stop_mult: float,
+        tp_mult: float,
+        floor: float,
+        ceiling: float | None,
+    ) -> None:
+        got = atr_bracket_levels(
+            blended,
+            atr,
+            stop_atr_mult=stop_mult,
+            tp_atr_mult=tp_mult,
+            tp_floor_frac=floor,
+            ceiling_price=ceiling,
+        )
+        if got is None:
+            event("bracket over every float: refused")
+            return
+        event("bracket over every float: priced")
+        stop, tp = got
+        self.assertTrue(_usable(stop), f"stop {stop!r}")
+        self.assertTrue(_usable(tp), f"tp {tp!r}")
+
+    @given(asof_close=ANY_FLOAT, pct=ANY_FLOAT)
+    def test_the_52w_ceiling_never_returns_a_bad_price(self, asof_close: float, pct: float) -> None:
+        got = ceiling_from_52w_high({"asof_close": asof_close}, pct)
+        if got is None:
+            event("ceiling over every float: refused")
+            return
+        event("ceiling over every float: priced")
+        self.assertTrue(_usable(got), f"{got!r}")
 
 
 class TheMoneyGuarantees(PropertyTestCase):
