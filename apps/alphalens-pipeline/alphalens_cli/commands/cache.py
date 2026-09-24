@@ -45,22 +45,33 @@ _VIX_SERIES = "VIXCLS"
 # runs inline in run_thematic_day.sh), so it has no ExecStopPost emit hook
 # and must stay out of the cron job enumerations.
 _VIX_METRIC = "alphalens_vix_cache_fetched_at_timestamp_seconds"
+#: Age of the DATA, not of the request (#1524). The gauge above says when we last
+#: ASKED FRED; it stayed green through three months of a VIXCLS parquet frozen at
+#: a 2026-07-01 print, because the refresher kept running and kept fetching into a
+#: throwaway directory. Only the observation date can catch a publisher — or a
+#: cache — that has stopped moving. Consumed by
+#: AlphalensFredSeries{Stale,ObservationMetricMissing}.
+_OBSERVATION_METRIC = "alphalens_fred_series_last_observation_timestamp_seconds"
 _VIX_JOB = "vix-cache-refresh"
 
 
 def _fetch_vixcls() -> pd.Series:
-    """Force-pull the VIXCLS series from FRED into a THROWAWAY cache dir.
+    """Pull VIXCLS through the canonical client, into the SHARED cache.
 
-    FREDClient.fetch_series has no TTL — it returns an existing parquet
-    forever — so a fresh value requires fetching into a temp directory that
-    is never reused. This deliberately does NOT touch the shared
-    ``~/.alphalens/macro/FRED_VIXCLS.parquet`` consumed by other modules.
+    This used to fetch into a throwaway ``TemporaryDirectory`` because the client
+    had no cache expiry and "returned an existing parquet forever" — the defect
+    fixed in #1524. With ``through`` honoured, the workaround is not merely
+    unnecessary, it is harmful: refreshing the shared parquet is what lets one
+    fetch per run serve this JSON cache AND ``market_state``, which was reading
+    the same file and getting a 2026-07-01 print for three months.
+
+    ``through`` is today's date rather than a session, because this command's job
+    is "get me the newest print there is"; the client's own lag tolerance decides
+    what counts as current.
     """
     from alphalens_pipeline.data.macro.fred_client import FREDClient
 
-    with tempfile.TemporaryDirectory() as tmp:
-        client = FREDClient.from_env(cache_dir=Path(tmp))
-        return client.fetch_series(_VIX_SERIES)
+    return FREDClient.from_env().fetch_series(_VIX_SERIES, through=dt.date.today())
 
 
 def refresh_vix_cache(
@@ -119,7 +130,12 @@ def refresh_vix_cache(
     try:
         emit_domain_metrics(
             job=_VIX_JOB,
-            metrics={f'{_VIX_METRIC}{{series="{_VIX_SERIES}"}}': int(now.timestamp())},
+            metrics={
+                f'{_VIX_METRIC}{{series="{_VIX_SERIES}"}}': int(now.timestamp()),
+                f'{_OBSERVATION_METRIC}{{series="{_VIX_SERIES}"}}': int(
+                    dt.datetime.fromisoformat(observation_date).replace(tzinfo=dt.UTC).timestamp()
+                ),
+            },
         )
     except Exception:
         logger.exception("emit_domain_metrics failed; vix-cache-refresh run succeeded")

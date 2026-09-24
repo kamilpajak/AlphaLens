@@ -184,6 +184,18 @@ class TestConfigVersion(unittest.TestCase):
         self.assertTrue(MARKET_STATE_CONFIG_VERSION.startswith("mstate-v1"))
         self.assertTrue(MARKET_STATE_CONFIG_VERSION.endswith("UNVALIDATED"))
 
+    def test_the_version_is_the_one_bumped_for_the_stale_vix_defect(self):
+        # Pinned literally, not by prefix. This key partitions a pre-registered
+        # forward study, so a silent edit is a data-integrity change, not a
+        # refactor. Bumped 2026-09-24 (#1524): rows before it carry a VIX frozen
+        # at the 2026-07-01 print.
+        from alphalens_pipeline.market.market_state import MARKET_STATE_CONFIG_VERSION
+
+        self.assertEqual(
+            MARKET_STATE_CONFIG_VERSION,
+            "mstate-v1.1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED",
+        )
+
     def test_columns_include_label_and_config_version(self):
         from alphalens_pipeline.market.market_state import MARKET_STATE_COLUMNS
 
@@ -211,8 +223,14 @@ def _fake_fred(dates, *, last: float = 10.0, body: float = 15.0):
     series = pd.Series(v, index=pd.DatetimeIndex([pd.Timestamp(d) for d in dates]))
 
     class _Fred:
-        def fetch_series(self, series_id):
+        """Records `through` so a test can prove the freshness requirement is passed."""
+
+        def __init__(self):
+            self.through_seen = []
+
+        def fetch_series(self, series_id, *, through=None):
             assert series_id == "VIXCLS"
+            self.through_seen.append(through)
             return series
 
     return _Fred()
@@ -269,7 +287,7 @@ class TestEnrichBroadcast(unittest.TestCase):
         from alphalens_pipeline.market.market_state import MARKET_STATE_COLUMNS, enrich
 
         class _BoomFred:
-            def fetch_series(self, series_id):
+            def fetch_series(self, series_id, *, through=None):
                 raise RuntimeError("FRED down")
 
         # A store/FRED hiccup must degrade to 'unknown', never abort the score stage.
@@ -283,6 +301,41 @@ class TestEnrichBroadcast(unittest.TestCase):
         for col in MARKET_STATE_COLUMNS:
             self.assertIn(col, out.columns)
         self.assertTrue((out["market_state"] == "unknown").all())
+
+    def test_the_vix_read_demands_a_series_reaching_the_asof(self):
+        # #1524: without this the PIT truncation `vix[vix.index <= asof]` is a
+        # no-op on a series that ENDS BEFORE asof, and a frozen cache is
+        # indistinguishable from a quiet market. Asserted on what the client was
+        # ASKED for, because the classifier cannot tell the difference itself.
+        from alphalens_pipeline.market.market_state import enrich
+
+        fred = _fake_fred(self.dates, last=10.0)
+        enrich(
+            pd.DataFrame({"ticker": ["AAA"]}),
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=fred,
+        )
+        self.assertEqual(fred.through_seen, [self.asof])
+
+    def test_a_stale_series_degrades_to_unknown_and_does_not_abort(self):
+        # The whole point of raising in the client: the score stage must keep
+        # running and stamp the first-class 'unknown' token, not die.
+        from alphalens_pipeline.data.macro.fred_client import FREDStaleError
+        from alphalens_pipeline.market.market_state import enrich
+
+        class _StaleFred:
+            def fetch_series(self, series_id, *, through=None):
+                raise FREDStaleError("series ends 2026-07-01, 2026-09-24 requested")
+
+        out = enrich(
+            pd.DataFrame({"ticker": ["AAA", "BBB"]}),
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=_StaleFred(),
+        )
+        self.assertTrue((out["market_state"] == "unknown").all())
+        self.assertEqual(len(out), 2)
 
     def test_broadcast_squeeze_column_is_nullable_boolean(self):
         from alphalens_pipeline.market.market_state import enrich

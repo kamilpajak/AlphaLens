@@ -904,6 +904,51 @@ class TestCacheRefreshVixEmitsDomainMetrics(unittest.TestCase):
                 int(now.timestamp()),
             )
 
+    def test_refresh_vix_emits_the_observation_age_gauge(self) -> None:
+        # #1524: the fetched_at gauge above measures when we ASKED, not how old
+        # the answer is. It stayed green for the three months the VIXCLS parquet
+        # was frozen at a 2026-07-01 print, because the refresher kept running
+        # and kept fetching - into a throwaway directory. Only the OBSERVATION
+        # date can catch a publisher, or a cache, that has stopped moving.
+        import datetime as dt
+
+        from alphalens_cli.commands import cache
+
+        now = dt.datetime(2026, 6, 1, 6, 30, tzinfo=dt.UTC)
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "vix_regime_cache.json"
+            with patch.object(cache, "emit_domain_metrics") as emit:
+                cache.refresh_vix_cache(cache_path, fred_fetch=self._series, now=now)
+
+            metrics = emit.call_args.kwargs["metrics"]
+            key = 'alphalens_fred_series_last_observation_timestamp_seconds{series="VIXCLS"}'
+            self.assertIn(key, metrics)
+            # The fixture's single observation is 2026-06-01.
+            self.assertEqual(
+                metrics[key],
+                int(dt.datetime(2026, 6, 1, tzinfo=dt.UTC).timestamp()),
+            )
+
+    def test_the_two_gauges_measure_different_things(self) -> None:
+        # The control that makes the case above mean something: if both gauges
+        # carried the same number, the new one could not have caught the
+        # incident either. Here the fetch is 6.5h after the observation date.
+        import datetime as dt
+
+        from alphalens_cli.commands import cache
+
+        now = dt.datetime(2026, 6, 1, 6, 30, tzinfo=dt.UTC)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(cache, "emit_domain_metrics") as emit:
+                cache.refresh_vix_cache(Path(tmp) / "vix.json", fred_fetch=self._series, now=now)
+            metrics = emit.call_args.kwargs["metrics"]
+            self.assertNotEqual(
+                metrics['alphalens_vix_cache_fetched_at_timestamp_seconds{series="VIXCLS"}'],
+                metrics[
+                    'alphalens_fred_series_last_observation_timestamp_seconds{series="VIXCLS"}'
+                ],
+            )
+
 
 class TestEmitFailureDoesNotPoisonSuccessPath(unittest.TestCase):
     """A transient metrics-dir failure (disk full, permission flip)

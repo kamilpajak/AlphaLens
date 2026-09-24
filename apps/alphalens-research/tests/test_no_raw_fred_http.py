@@ -5,7 +5,13 @@ Tactical Sector Rotation layer, refreshed daily on the live VPS via
 ``alphalens cache refresh-vix`` — goes through
 :class:`alphalens_pipeline.data.macro.fred_client.FREDClient`. FRED's free tier
 is 120 req/min per API key; an uncoordinated shadow ``requests.get`` would drain
-that shared budget and bypass the client's one-day-per-series disk cache.
+that shared budget and bypass the client's disk cache.
+
+That cache had NO expiry until #1524 — this docstring used to call it a
+"one-day-per-series disk cache", which was never true and helped a VIXCLS
+parquet sit frozen from 2026-07-06 for three months. It is now refreshed when a
+caller passes ``through=<date>``, and returned unconditionally when one does
+not.
 
 This test closes the same enforcement gap the yfinance migration (PR #573)
 exposed: FREDClient already exists and is correctly used, but nothing stopped a
