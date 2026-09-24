@@ -468,7 +468,7 @@ def _trailing_stop_violations(primitive: TrailingStop, where: dict[str, Any]) ->
                 reason="trail_frac_out_of_range",
                 message=(
                     f"trail_frac {primitive.trail_frac} must be in (0, 1] — "
-                    "it is the fraction of the excursion the stop gives back"
+                    "it is the fraction of the excursion the stop KEEPS"
                 ),
                 where=where,
             )

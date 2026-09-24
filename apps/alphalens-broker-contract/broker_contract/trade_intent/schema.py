@@ -310,7 +310,9 @@ class TrailingStop:
         "Favourable excursion, in R (multiples of initial risk), at which the trail arms."
     )
     trail_frac: float = contract_field(
-        "FRACTION in (0, 1] of the peak excursion the stop gives back — a fraction "
+        "FRACTION in (0, 1] of the peak excursion the stop KEEPS, so it gives back "
+        "1 - trail_frac of it: the stop sits at entry + trail_frac * (peak - entry). "
+        "1.0 therefore parks the stop AT the peak and surrenders nothing. A fraction "
         "here, unlike the _pct fields elsewhere in this contract."
     )
     kind: Literal["trailing_stop"] = contract_field(
