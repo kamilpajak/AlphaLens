@@ -46,15 +46,22 @@ HOW A LENS VALUE GETS INTO THE STORE — two paths, not one. The DAILY path stam
 forward only: it never recomputes a row that already carries a value. History is
 nevertheless written retroactively, by a from-scratch rebuild of the
 population-ladder store (last run 2026-09-12, issue #1416) or by a per-key merge
-backfill script. ADR 0013 R3 allows exactly this: the what-if layer is the sole
-retroactive surface. So a per-lens "populates forward only" note below describes
+backfill script. ADR 0013 R3 allows the LENS part of that: its rule is that
+existing rows are never restamped and terminals stay frozen, and the what-if
+layer is named as the sole exception, recomputable at any time over cached bars.
+R3 does not cover everything a rebuild does — the 2026-09-12 run also moved
+frozen terminal rows outside the lens layer (``realized_r`` on 21.1% of the 418
+comparable rows, 38 ladder classifications). So a per-lens "populates forward
+only" note below describes
 the daily path, NOT the store — every lens registered so far carries values on
 terminal rows that matured before it existed. Two consequences worth knowing:
 the store records NO provenance for a lens value, so a forward-stamped cell and
 a backfilled cell are indistinguishable (``breakeven_realized_r_json`` is the
-only lens-bearing column); and a rebuild is not purely additive — the 2026-09-12
-run LOST 31 previously stamped ``be_0p5r_trail0p6_ttl7`` values while the other
-five lenses gained.
+only lens-bearing column); and a rebuild REPLACES lens history rather than adding
+to it. On the 591 rows terminal both before and after the 2026-09-12 run, EVERY
+lens lost some values it used to hold (between 5 and 34 of them). Five gained
+more than they lost; ``be_0p5r_trail0p6_ttl7`` did not, ending at 420 values
+where it held 452 (measured 2026-09-24 against the retained pre-rebuild store).
 
 NAMING NOTE: the historical module / ``BREAKEVEN_LENSES`` / ``breakeven_grid`` /
 ``breakeven_realized_r_json`` names predate the second (fill-anchored) kind and are
