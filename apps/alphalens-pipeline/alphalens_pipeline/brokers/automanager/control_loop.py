@@ -45,7 +45,7 @@ from broker_contract.contract import (
     _is_sell_orders_already_exist,
     _is_too_far_from_market,
 )
-from broker_contract.exit_geometry.registry import resolve_declared_policy, resolve_policy
+from broker_contract.exit_geometry.registry import resolve_declared_policy
 from broker_contract.price_feed import SupportsSessionLow
 from broker_contract.trade_intent.codec import _decode_reaction_primitive
 
@@ -7169,13 +7169,14 @@ def _resolve_and_size(
     single-venue resolve.
 
     PR-7 (broker-manager extraction memo §5): the brief-side parse
-    (``parse_brief_to_spec``) and the exit-geometry build
-    (``build_exit_geometry_spec``) moved to arm time, client-side — this
-    helper now only runs the money half (``compute_setup_plan``) on the
-    already-parsed ``spec`` the daemon received on the drained
-    ``TradeIntent``. The caller reads ``intent.exit`` directly for the
-    (possibly ``None``) exit-geometry spec; this helper never touches a
-    brief."""
+    (``parse_brief_to_spec``) and the exit-geometry build moved to arm time,
+    client-side — this helper now only runs the money half
+    (``compute_setup_plan``) on the already-parsed ``spec`` the daemon received
+    on the drained ``TradeIntent``. #1414 then retired that builder outright, so
+    nothing on this path computes a bracket at all: the brief path declares how
+    its stop is managed and supplies no levels. The caller reads ``intent.exit``
+    directly for the (possibly ``None``) exit-geometry spec; this helper never
+    touches a brief."""
     from broker_contract.contract import BrokerError
     from broker_contract.sizing import TradeSetupNotPlannableError, compute_setup_plan
 
@@ -7824,26 +7825,6 @@ def _is_journalable_price(value: float | None) -> bool:
     so a None/NaN/zero level from a future geometry policy must be caught HERE
     rather than poisoning the ladder the live-exit engine folds back."""
     return value is not None and math.isfinite(value) and value > 0
-
-
-# The exit-geometry policy whose numbers `build_exit_geometry_spec` builds. NOTE:
-# this is the GEOMETRY policy, not the behavioural exit policy the live rail runs
-# (that is `trailing_atr` per #1008), so the stamped `policy_name` is still
-# narrower than it reads. Fixing that means threading the resolved policy's name
-# through the placement path, which is out of scope for #1114.
-_GEOMETRY_STAMP_POLICY_NAME = "atr_bracket_1p5"
-
-# The entry anchor `build_exit_geometry_spec` places against: the alloc-weighted
-# blend over ALL intended tiers (`planned_blended_entry`). Mirrors
-# `alphalens_pipeline.feedback.ladder_replay.ANCHOR_PLANNED` without importing
-# the feedback tier into the broker daemon's hot path.
-_GEOMETRY_STAMP_ANCHOR_MODE = "planned"
-
-# The take-profit cost floor the geometry policy applies, resolved ONCE at import
-# time. `resolve_policy` raises ValueError on an unknown name and the stamp runs
-# on every watch_open inside the unattended drain, where nothing may raise — so
-# an unknown name must fail the daemon at startup, not on a tick hours later.
-_GEOMETRY_STAMP_TP_FLOOR_FRAC = resolve_policy(_GEOMETRY_STAMP_POLICY_NAME).tp_floor_frac
 
 
 def _declared_reaction(exit_spec: Any) -> Any:

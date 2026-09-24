@@ -178,9 +178,10 @@ class ReanchorOnFillPolicy:
     declaration the executor silently overrode with its own number would be a
     door that accepts a field it does not honour.
 
-    It places NO geometry. A declared reaction says how a stop is MANAGED; what
-    gets PLACED is still the env-selected policy's business until that, too,
-    becomes a document fact."""
+    It places NO geometry. A declared reaction says how a stop is MANAGED, and
+    since #1414 what gets PLACED is a separate DOCUMENT fact — ``initial_levels``
+    on the same exit spec. Both halves now come from the intent; neither is a
+    deployment setting any more."""
 
     k_atr: float
     # Required and keyword-only — see AtrBracketPolicy.name.

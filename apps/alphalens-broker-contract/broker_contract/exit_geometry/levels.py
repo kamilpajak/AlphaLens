@@ -139,10 +139,12 @@ def atr_bracket_levels(
 def reanchor_target(avg_price: float, atr: float, *, k: float) -> float | None:
     """Fill-complete re-anchor level for a long: ``avg_price - k*atr``.
 
-    The shared arithmetic behind BOTH re-anchoring policies — the env-selected
-    ``AtrBracketPolicy``, whose ``k`` comes from its wrapped geometry, and the
-    per-document ``ReanchorOnFillPolicy`` (#1236), whose ``k`` is declared by the
-    intent. Two copies of one formula is the #1114 fork-the-arithmetic defect,
+    The shared arithmetic behind BOTH re-anchoring policies — the
+    registry-resolved ``AtrBracketPolicy``, whose ``k`` comes from its wrapped
+    geometry, and the per-document ``ReanchorOnFillPolicy`` (#1236), whose ``k``
+    is declared by the intent. The bracket used to be selected for the whole
+    process by an environment variable; #1414 deleted it, and today only the
+    ``/edge`` replay resolves that policy. Two copies of one formula is the #1114 fork-the-arithmetic defect,
     which is why the multiplier is a parameter and the leaf is one function.
 
     Returns ``None`` on any degenerate input or a non-positive target — never a
