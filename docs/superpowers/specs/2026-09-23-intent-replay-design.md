@@ -1,7 +1,9 @@
 # intent-replay — a document-driven backtester
 
-**Status:** DRAFT (design agreed in brainstorming 2026-09-23; revised after adversarial review the same day; not yet implemented)
-**Date:** 2026-09-23
+**Status:** DRAFT (design agreed in brainstorming 2026-09-23; revised after adversarial review the
+same day; revised again 2026-09-24 after an arming-surface survey and a second adversarial review
+that refuted several statements of the first revision — see §3.3, §4.3.1, §8; not yet implemented)
+**Date:** 2026-09-23, last revised 2026-09-24
 **Baseline:** `origin/main` `a444f6b2`
 **Related:** epic #1526 (express every `/edge` what-if lens as a TradeIntent document),
 `docs/research/bracket_keeper_repo_split_stage1_design_2026_08_02.md` (PARKED blueprint),
@@ -32,7 +34,7 @@ multiplicity budget, and carries no accrued history.
 | `/edge` | shared envelope shape now, no `/edge` code now |
 | stop management | one implementation, extracted into the shared contract leaf |
 | intra-bar ties | always pessimistic — a fixed convention, never a configuration field (§4.4) |
-| future document fields | refuse what the interpreter did not read, never approximate (§4.3.1) |
+| every input path | classified here as interpreted, translated or out of scope; an unclassified path is refused, never approximated (§4.3.1) |
 
 ---
 
@@ -175,19 +177,43 @@ the boundary is wrong and the design stops rather than widening the contract.
 
 ### 3.3 What the document does not say
 
-Four execution facts are not in the wire document today:
+Four execution facts are not fully stated by the wire document today. An earlier
+revision of this section listed them as one class. They are four different
+things, and the differences decide how the replay must treat each.
 
-| fact | where it lives today |
-|---|---|
-| entry trailing | `ALPHALENS_BROKER_ENTRY_TRAIL_BPS`; `_entry_trail_eligible` reads no document field |
-| 52-week ceiling | computed client-side; `ceiling_price` is refused at the door |
-| position time stop | no wire form, by decision |
-| take-profit resting at the broker as an OCO pair | `ALPHALENS_BROKER_OCO_ENABLED` |
+| fact | wire form | what it does today | consequence for the replay |
+|---|---|---|---|
+| entry trailing | **partial**: `EntryTierSpec.entry_mode` decides which tiers reach the machine and `spec.disaster_stop` is required to arm it, but the trail distance is not in the document | **places a native trailing order at the broker**, and on the deployed configuration it is the path every armed pick takes | the largest gap in this design: the replay has no model of the path positions actually enter through |
+| 52-week ceiling on a take-profit | **has one**: `ReanchorOnFill.ceiling_price`, modelled by the codec and refused at the door | no consumer on the live broker path; the only code that computes it reads a brief column | the one fact of the four that becomes a document fact by LIFTING a refusal rather than by designing a field (§4.3.1) |
+| position time stop | none, by decision | no live consumer since ADR 0012 removed the paper-trade harness; `TIME_STOP_DAYS = 42` is read only by the `/edge` replay | a measurement convention of another instrument, not an execution rule — a run that applies it is not replaying the document |
+| take-profit resting at the broker as an OCO pair | none | gated by `ALPHALENS_BROKER_OCO_ENABLED`, default off; **retired on SIM by decision** (position-attached exits do not work on a netting account) and unset on LIVE | changes WHO resolves the exit, which this design cannot yet express (below) |
+
+Three things the table cannot carry:
+
+**"Defaults to the inert value" means something different in every row.** For
+the OCO pair it means a working capability that a deployment decision retired.
+For the time stop it means a number belonging to a different tool. For entry
+trailing it means switching off the path the money currently takes. A run
+configuration that presents all four as equivalent switches invites a reader to
+treat a default run as neutral, and for entry trailing it is not.
+
+**All four feed §4.4, not only one.** Each adds or moves a level, so each
+changes how often the tie convention has to decide and therefore what
+`ambiguous_bars` reports. Entry trailing is the hardest: its trigger is a
+running low that ratchets down, plus a distance, so whether it fires inside a
+bar depends on whether the low came before the retrace — which OHLC cannot say.
+That is a third row of §4.4's table, not an exception to it, and §4.4 already
+anticipates it.
+
+**The OCO row is a modelling gap, not a switch.** A pair resting at the broker
+resolves on a touch; an engine resolves at its next observation. This document
+does not state what that observation is relative to a bar, so there is nothing
+here to configure yet. §8.1 is where that belongs.
 
 The replay takes these as an explicit run configuration, separate from the
-document, each defaulting to the inert value. A default run therefore replays
-only what the document actually carries, and the trace records which of the
-four were active.
+document, each defaulting to the inert value, and the trace records which were
+active. That is correct for three of the rows and insufficient for entry
+trailing, which §8 states as a risk rather than hiding in a default.
 
 ---
 
@@ -219,6 +245,15 @@ One consequence: `spec.order_ttl_days` counts TRADING sessions, which the leaf
 cannot resolve. The client converts it to an absolute cutoff timestamp and
 passes it in the run configuration. The existing replay already does exactly
 this with its `entry_expiry_ms`.
+
+Passing the timestamp alone is not enough, for two reasons. The first is that
+the result then records a number without the rule that produced it, which §5.2
+forbids for the facts of §3.3 and should forbid here for the same reason. The
+second is worse: the running deployments do not agree on the rule, and one of
+them does not read the field at all. §8.1 states that as an open decision. So
+the run configuration carries the deadline with its provenance, in the shape
+§5.1 already uses for the R denominator, and `spec.order_ttl_days` is a
+TRANSLATED path in the sense of §4.3.1 rather than an unread one.
 
 ### 4.2 Flow
 
@@ -256,7 +291,8 @@ that could not be armed is once again an instrument measuring a policy the
 system will not execute.
 
 The replay does **not** check venue, pick key or generation. Those are queue and
-deployment concerns, not policy.
+deployment concerns, not policy — which is why §4.3.1 has to classify them as
+out of scope rather than leave them unread.
 
 ### 4.3.1 A fifth gate the door does not need
 
@@ -265,24 +301,69 @@ and the replay finish in different places. The door's job ends at "a daemon that
 understands this document will execute it"; the replay must understand it
 ITSELF. So it needs one gate the door has no use for.
 
-**The replay refuses a document it did not fully consume.** The interpreter
-records which document paths it read; at the end, any path present in the input
-and absent from that set is a capability the replay ignored. The refusal names
-the paths, exactly as `key_discarded` does.
+**The replay refuses a document it did not CLASSIFY.** An earlier revision of
+this section asked a different question — "did the interpreter read this path?"
+— and that version does not work. It is recorded here rather than deleted,
+because the way it fails is the reason for the shape that replaces it.
 
-**"Read" means CONSUMED BY INTERPRETATION, and the distinction is the whole
-gate.** A path counts as read when its value changed what the replay did — an
-order it placed, a level it moved, a bar at which something fired, or a refusal
-it raised. **Copying a value into the result envelope does not count.** Without
-that sentence the gate has a second reading under which an echo satisfies it,
-and under that reading it protects nothing.
+Every path of the published input schema belongs to exactly one of three
+classes, and the classification is part of THIS document, not of a caller's
+input:
 
-`instrument.mic` is the proof rather than the illustration. The envelope of §5
-echoes it, so under the echo reading the path is "read" and the gate is silent —
-while the MIC's actual semantics (which calendar the sessions come from, which
-fee card applies, which currency the position settles in) are honoured by
-nothing in this design. A gate satisfied by an echo would have passed the one
-capability it most needed to catch.
+- **interpreted** — the interpreter reads it and its value changes what the
+  replay does: an order it places, a level it moves, a bar at which something
+  fires, or a refusal it raises. Copying a value into the result envelope is not
+  interpretation; an echo changes nothing.
+- **translated** — the replay cannot resolve it, because resolving it needs a
+  calendar, a fee card or a fill. The client resolves it and passes the result
+  in the run configuration, which carries the rule as well as the value (§4.1,
+  §5.2). The set is closed and listed here.
+- **out of scope** — a queue or deployment concern the replay deliberately
+  ignores. Today: `meta.generation`, and the venue and pick-key checks §4.3
+  already declines.
+
+*Interpreted* is not listed, because the interpreter proves that class at
+runtime by actually reading the path. The other two ARE listed, here, and this
+table is the whole of them:
+
+| path | class | why |
+|---|---|---|
+| `instrument.ticker` | out of scope | identity. The walk is over the bars it is handed; nothing resolves a symbol |
+| `instrument.mic` | translated (calendar) + out of scope (fee card, settlement currency) | the calendar reaches the replay through `entry_deadline` (§4.1); costs are a non-goal per §2 and `spec.size` is already in the account currency |
+| `spec.size.currency` | out of scope | it labels the unit of the cash answer; it changes nothing the replay does, and §4.3.1 does not count a label as interpretation |
+| `spec.order_ttl_days` | translated | sessions the leaf cannot count (§4.1) |
+| `meta.generation`, `meta.armed_ts`, `intent_id` | out of scope | queue and identity concerns, the same ones §4.3 already declines |
+| `meta.schema_version`, `spec.schema_version` | out of scope | the door is the only gate that reads a version; the codec and `validate_intent` stay version-blind on purpose, and so does this |
+
+One path is interpreted in a way a reader can miss: `spec.side` is pinned to
+`long`, and gate 4 of §4.3 refuses anything else with `side_not_long`. Raising a
+refusal is interpretation by the definition above, so `side` needs no row — but
+only because the gate runs. A replay that skipped `validate_intent` would walk a
+short document as a long one.
+
+A path that is neither read by the interpreter nor in this table is refused, and
+the refusal names it (`path_unclassified`, §5.4). Two consequences are intended.
+`meta.source` is absent from the table AND unread, so every document refuses
+until §8.1's day-1 anchor is decided — the gate is doing its job, not
+malfunctioning. `meta.trade_date` refuses with it and for the same reason: the
+two together are what the anchor is computed from, so neither gets a class until
+that decision lands. And adding a row is an edit to this section, so the set of
+things this tool quietly does not honour cannot grow without someone writing it
+down.
+
+**Why not "did the interpreter read it".** Two required paths settle it.
+`instrument.mic` is read by nothing: the envelope of §5 echoes it, while the
+MIC's actual semantics — which calendar the sessions come from, which fee card
+applies, which currency the position settles in — are honoured nowhere in this
+design. `meta.source` is read by nothing either, and §8.1 shows it decides where
+the walk begins. Under the read question both are unread, so the gate refuses
+every document that can exist, and §6.3's positive control — a document whose
+every path is read — cannot be constructed at all. Under the classify question
+`instrument.mic` is *translated* for its calendar, through the deadline of §4.1,
+and its fee card and settlement currency are *out of scope* because §2 makes
+cost a non-goal and `spec.size` is already in the account currency. Both halves
+had to be written down to get there, which is exactly the work the gate exists
+to force.
 
 This is the door's own round-trip gate applied one level deeper. Step 3 above
 asks "did the CODEC keep every key?". It cannot ask "did anything READ it",
@@ -310,9 +391,15 @@ Two rules follow, and without them the gate is decoration:
   already has. Whoever adds a third class to that line must answer the question
   the line does not ask.
 
-**The invariant this protects, stated once:** a document plus its bars is
-sufficient to replay every reaction the document declares. It holds today. It is
-not guaranteed by anything except the two rules above.
+**The invariant this protects, stated once:** a document, its bars AND the
+declared run configuration are together sufficient to replay every reaction the
+document declares.
+
+The document alone is not, and an earlier revision claimed it was. §8.1 names
+two reactions whose inputs come from neither the document nor the tape: the
+order-state predicates a trail consults, and the cost gate a take-profit tranche
+must clear. Until those are decided, sufficiency is a goal of this design rather
+than a property of it, and the two rules above are what keep the gap visible.
 
 #### The instance already queued
 
@@ -325,8 +412,9 @@ inert.
 The day that refusal is lifted, a document carrying a ceiling passes every gate
 while the replay reads its own `config.ceiling_price` — `null` — and computes a
 take-profit without the cap the document asked for. The number comes out, looks
-right, and describes a different policy. The consumed-paths gate is what turns
-that into a refusal.
+right, and describes a different policy. The classification gate is what turns
+that into a refusal: a lifted refusal makes `ceiling_price` a path no class
+covers, and no class covers it until someone edits §4.3.1 to say which.
 
 ### 4.4 Intra-bar ties: pessimistic, fixed, and counted
 
@@ -392,7 +480,13 @@ scale. R itself is the problem" — and replaced R with net cash.
   "instrument": {"ticker": "KO", "mic": "XNYS"},
   "window": {"from_t": 1758000000000, "to_t": 1761000000000, "bars": 16380},
   "config": {
-    "entry_deadline_t": null,
+    "entry_deadline": {
+      "kind": "order_ttl_sessions",
+      "value": 1760976000000,
+      "unit": "epoch_ms_utc",
+      "source": "spec.order_ttl_days",
+      "formula": "session_close_utc(advance_trading_sessions(2026-09-24, 7, XNYS))"
+    },
     "entry_trail_bps": null,
     "ceiling_price": null,
     "time_stop_t": null,
@@ -451,6 +545,23 @@ of the world that produced it. The absence of exactly this is why every
 `atr_bracket_1p5` value stamped before 2026-08-24 describes a different policy
 than a reader would assume, discoverable only from a memo.
 
+The block carries two more keys, and neither is decoration. `costs` belongs with
+the four, not with the measurement settings: §8.1 shows the cost gate decides
+WHICH take-profit tranches fire, so a costless run diverges in events and not
+only in cash. `entry_deadline` is the one TRANSLATED path of §4.3.1, and it
+follows a rule the rest of the block does not need:
+
+> A config value that TRANSLATES a document path carries the
+> `kind`/`value`/`unit`/`source`/`formula` object of §5.1. A config value that is
+> a plain run switch stays a bare scalar.
+
+The anchor and the boundary rule live inside `formula` as resolved values rather
+than as free-text sibling keys, because a reader can check a formula against the
+numbers beside it and cannot check a label. `null` remains the form for "no
+deadline". The rule exists because the alternative — a caller asserting "I
+translated this path" with nothing able to check the assertion — is an echo with
+a story attached, and §4.3.1 rules out echoes.
+
 `ambiguous_bars` serves the same purpose for the one assumption that is NOT
 configurable (§4.4).
 
@@ -474,7 +585,10 @@ A faulty document gets the same code it would get at arming —
 `intent_invalid` or `intent_malformed` with `details.reason` — because the
 replay refuses what the door refuses, so it should refuse the same way. New
 codes only for its own failures: `bars_unordered`, `bars_empty`,
-`window_too_short`.
+`window_too_short`, and `path_unclassified` for the gate of §4.3.1, carrying
+`details.paths`. That refusal needs its own code rather than borrowing
+`key_discarded`: at the door `key_discarded` means the codec lost a key, which
+is a different fact and would send a reader to the wrong place.
 
 Errors go to stderr, stdout stays empty, the exit status is non-zero: `0` ok,
 `2` usage, `1` everything else. Suggestions are an `argv` array.
@@ -522,9 +636,13 @@ Computed with the real functions during design, 2026-09-23:
 - bars that touch no entry produce `outcome: "no_fill"` and zero cash;
 - `ambiguous_bars` is zero whenever no bar touches two levels of opposite
   outcome, and positive whenever one does;
-- a document carrying a path the interpreter does not read is REFUSED, and the
-  refusal names that path (§4.3.1) — with a positive control, a document whose
-  every path IS read, so the gate cannot rot to "accepts everything";
+- a document carrying a path §4.3.1 classifies in none of its three classes is
+  REFUSED, and the refusal names that path — with a positive control, a document
+  whose every path IS classified, so the gate cannot rot to "accepts
+  everything". The published examples in `examples/manual-pick/` are that
+  control, which is also what ties this property to §6.4: if the classes of
+  §4.3.1 do not cover every required path of the input schema, every example
+  refuses and both tests go red at once;
 - two runs over the same input produce byte-identical output.
 
 The last one matters more than it looks: a research tool that returns a
@@ -552,14 +670,17 @@ TDD throughout: red before green, including for two-line fixes.
 
 ## 7. Staging
 
-**Step 1 — the replay.** Extract `stop_decision` into the contract, build
+**Step 1 — the replay.** COPY `stop_decision` into the contract, build
 `intent-replay`, wire the CLI. The daemon is **not touched**; the parity test
-holds the two implementations together.
+holds the two implementations together. Copy, not extract: step 1 deliberately
+leaves two implementations standing (§6.1), and calling it an extraction is what
+would make the safety argument below sound stronger than it is.
 
-The consumed-path bookkeeping of §4.3.1 belongs to this step, not a later one.
-It is a record the interpreter keeps while it reads; retrofitting it into a
-finished interpreter means revisiting every read site and trusting that none
-was missed, which is the same check with none of the guarantee.
+The path bookkeeping of §4.3.1 belongs to this step, not a later one. It is a
+record the interpreter keeps while it reads, checked against the classification
+this document publishes; retrofitting it into a finished interpreter means
+revisiting every read site and trusting that none was missed, which is the same
+check with none of the guarantee.
 
 **Step 2 — the daemon, separately and later.** `position_manager` drops its own
 copy and calls the leaf. Its own PR, its own review, with the step-1 parity test
@@ -573,11 +694,18 @@ adding an uncalled module to a package the daemon imports executes nothing.
 
 ## 8. Risks and open questions
 
-- **Entry trailing cannot be replayed** until it becomes a document fact. It is
-  the last policy still selected by a deployment environment variable rather
-  than by the document — the shape #1414 removed for exits. Until then a run
-  with entry trailing configured is a model of a policy the document does not
-  declare, and the trace must say so.
+- **Entry trailing cannot be replayed, and it is the path production uses.**
+  An earlier revision called it the last policy still selected by a deployment
+  environment variable. That was wrong twice: the OCO pair is selected the same
+  way, and entry trailing is not selected by the flag alone — `entry_mode`
+  decides which tiers reach the machine and the flag also decides which arm
+  gates run. The serious half is simpler. On both deployments the flag is set,
+  so an eligible pick rests a native trailing order instead of the three limit
+  entries this design models, and the trail distance is nowhere in the document.
+  A replay of such a document therefore describes an entry ladder that did not
+  happen. This is the one item on this list that could be a reason to change the
+  architecture rather than a gap to note, and deciding that is out of scope
+  here.
 - **The extraction boundary is a claim, not yet a fact.** §3.2 lists the
   minimal view field by field, and the two order-state questions cross as
   booleans. If implementation finds it needs an order leg, a journal handle or a
@@ -592,13 +720,17 @@ adding an uncalled module to a package the daemon imports executes nothing.
   and is in-sample by construction. Nothing it produces is evidence of an edge;
   it answers "what would this have done", never "does this work".
 
-### 8.1 Four capabilities this design does not yet handle
+### 8.1 Capabilities this design does not yet handle
 
 Found by a multi-agent survey of the arming surface on 2026-09-24 and each
-confirmed against the source before being written here. They share a shape worth
-naming: **all four move the answer in the FLATTERING direction.** A replay that
-silently ignores any of them reports a better number than the daemon would have
-produced, which is the failure mode hardest to notice.
+confirmed against the source before being written here. The heading carried a
+count until the list grew, which is the usual fate of a count in a heading.
+
+Some of these move the answer in the FLATTERING direction — a replay that
+silently ignores them reports a better number than the daemon would have
+produced, which is the failure mode hardest to notice. The rest are not
+directional at all; they simply have no defensible default, which is why each
+needs deciding here rather than at the keyboard.
 
 - **`entry_mode: "immediate"` is a second entry shape, and the design knows only
   the first.** `EntryTierSpec.entry_mode` (#1247) takes `"pullback"` — a resting
@@ -632,10 +764,28 @@ produced, which is the failure mode hardest to notice.
   starts the session after. That is a full session of difference in where the
   walk begins, on every hand-authored pick — and hand-authored picks are exactly
   the documents with `initial_levels`, the shape this tool exists to study.
+  `meta.source` is therefore a required path that §4.3.1 gives NO class, so the
+  gate refuses every document until this is decided. That is the gate working:
+  the alternative is an anchor chosen at the keyboard and never written down.
 
-None of the four is a reason to change the architecture. Each is a decision the
-implementation would otherwise make silently, in the direction that looks
-better.
+- **The entry deadline is a fact of PLACEMENT, not of the document.** Four live
+  implementations resolve `spec.order_ttl_days` four ways, and they disagree on
+  the anchor, the calendar and whether the cutoff session is tradeable. The
+  entry-trail watch — the deployed path — anchors on `meta.trade_date`, uses the
+  instrument's MIC, cuts at the session close, and reads a CONSTANT rather than
+  the document's own field. The Saxo bracket anchors on the day the daemon
+  actually placed, so queue latency alone moves the deadline. `/edge` anchors on
+  the first session after the brief and cuts at the session open, one session
+  earlier in effect. The reconciler anchors on the submission record. The
+  published field description says the sessions are XNYS whatever the instrument
+  is, which the code does not do. The replay cannot derive the deadline from the
+  document and must be given it (§4.1); this design does not say which of the
+  four it is given, and that choice moves the entry window by whole sessions.
+
+None of these is a reason to change the architecture, with the entry-trailing
+risk of §8 as the possible exception. Each is a decision the implementation
+would otherwise make silently — some in the direction that looks better, the
+rest with no defensible default at all.
 
 ---
 
