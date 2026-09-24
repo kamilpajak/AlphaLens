@@ -117,17 +117,21 @@ class TestQuantizeDown(unittest.TestCase):
         self.assertEqual(quantize_down(qty, WHOLE), 999_999.0)
         self.assertLess(quantize_down(qty, WHOLE), qty)
 
-    def test_the_slack_can_never_reach_a_step(self) -> None:
-        # The honest statement of the safety property, and the reason the
-        # tolerance is stated in ULPs. Absorbing representation error means the
-        # result CAN exceed the input — but only by the float's own resolution
-        # there, ~7e-15 of the quantity. Two bounds, both pinned:
+    def test_the_slack_never_reaches_half_a_step(self) -> None:
+        # Renamed in #1520: the old name said "can never reach a step", which
+        # was false — at ~1.4e14 scaled units the slack was exactly one whole
+        # step. The body below was always honest, and its own comment named the
+        # threshold ("~1e14 steps' worth of position"). A cap on the slack now
+        # makes the second bound true EVERYWHERE rather than only here.
+        #
+        # Absorbing representation error means the result CAN exceed the input,
+        # but only by the float's own resolution there, ~7e-15 of the quantity.
+        # Two bounds, both pinned:
         #
         #   1. the overshoot stays proportional to the QUANTITY, so it does not
         #      grow relative to itself the way a fixed relative tolerance does;
-        #   2. it stays far below half a STEP, which is the unit that matters —
-        #      crossing one is selling a share that is not held. It would take
-        #      ~1e14 steps' worth of position before the slack got that wide.
+        #   2. it stays below half a STEP, which is the unit that matters —
+        #      crossing one is selling a share that is not held.
         for lattice in (WHOLE, MILLI, NICKEL):
             for qty in (0.9999999999, 999.9999999999, 9_214_075.715999965, 1e7 - 1e-9):
                 with self.subTest(step=lattice.step, qty=qty):
@@ -145,6 +149,67 @@ class TestQuantizeDown(unittest.TestCase):
                     qty = decade - gap
                     with self.subTest(step=lattice.step, qty=qty):
                         self.assertLessEqual(quantize_down(qty, lattice), qty)
+
+
+CENT = QuantityLattice(step=0.01, min_qty=0.01, precision=2)
+
+
+class TestTheSlackCannotReachAWholeStep(unittest.TestCase):
+    """Issue #1520. The `_ULP_SLACK` comment argued an ULP-stated bound "can
+    never reach a step, which is what makes the no-exceed property in
+    `quantize_down` true rather than approximately true".
+
+    It reaches a step, and the threshold is derivable rather than accidental.
+    The slack is applied to the value SCALED by `10**precision`, and it is 32 =
+    2**5 ULPs of that. `ulp(2**47) == 2**-5`, so at a scaled value of 2**47 the
+    slack is exactly 1.0 — one whole scaled unit, which on a one-unit step is
+    one whole STEP.
+
+    #1520 attributes this to the final `round(magnitude, precision)`. That is
+    wrong: at the counterexample, `units` is already one too many before any
+    rounding happens, and `round` leaves the value unchanged."""
+
+    def test_a_whole_step_is_never_handed_back(self) -> None:
+        # Measured counterexample from the issue. At a scaled value of
+        # 1.407e14 the slack is exactly 1.0 scaled unit.
+        qty = 1407374883554.0
+        got = quantize_down(qty, CENT)
+        self.assertLessEqual(got, qty, f"{got!r} exceeds its input by a whole step")
+
+    def test_the_result_stays_on_the_lattice_and_is_idempotent(self) -> None:
+        qty = 1407374883554.0
+        once = quantize_down(qty, CENT)
+        self.assertTrue(is_on_lattice(once, CENT))
+        self.assertEqual(quantize_down(once, CENT), once)
+
+    def test_a_finite_but_unrepresentable_quantity_returns_zero(self) -> None:
+        # The docstring promises "0.0 for anything unusable". `is_finite_quantity`
+        # catches the infinities; a finite 1e308 scaled by 100 overflows and
+        # reached `math.floor(inf)`, which raises out of a pure leaf and past
+        # every `except BrokerError` on the rail.
+        self.assertEqual(quantize_down(1e308, CENT), 0.0)
+
+    def test_a_quantity_the_lattice_cannot_name_exactly_returns_zero(self) -> None:
+        # Found by the widened property, not by the issue and not by reading.
+        # Capping the slack is not enough on its own: past 2**53 SCALED units
+        # the scaling is itself lossy, so `...453.0` came back as `...453.2` —
+        # forty times half a step above its input — with the cap in place.
+        # A quantity this module cannot name on the lattice is unusable.
+        self.assertEqual(quantize_down(1468956939670453.0, CENT), 0.0)
+
+    def test_the_representation_slack_still_does_its_job(self) -> None:
+        # NEGATIVE CONTROL, and the one the issue itself calls correct: this
+        # overshoot is 1.2e-07 of a share and it is the slack absorbing
+        # representation dust, not a real gap. It must SURVIVE the cap.
+        self.assertEqual(quantize_down(16777216.99999988, WHOLE), 16777217.0)
+
+    def test_ordinary_quantities_are_unchanged_by_the_cap(self) -> None:
+        # The second negative control. At realistic sizes 32 ULPs of the scaled
+        # value is ~1e-9 and smaller, so the cap never binds and no answer moves.
+        for lattice in (WHOLE, MILLI, NICKEL, CENT):
+            for qty in (0.0001, 0.669, 1.4, 99.999, 1234.5678, 250000.0, 4_999_999.5):
+                with self.subTest(step=lattice.step, qty=qty):
+                    self.assertLessEqual(quantize_down(qty, lattice), qty + 1e-9)
 
 
 class TestPredicates(unittest.TestCase):
