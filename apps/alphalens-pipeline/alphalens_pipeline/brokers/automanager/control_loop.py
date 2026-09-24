@@ -691,14 +691,17 @@ def _refuse_legacy_size_pct_picks(
         if key in any_submission:
             violation = (
                 f"{pick.ticker} @ {pick.token}: armed before #1467 with a percent size, and "
-                "its now tranche is ALREADY placed — refused. Re-arm the pullback tiers only "
-                "(with --notional/--currency); a full re-arm would buy the now tranche again"
+                "its now tranche is ALREADY placed — refused. Re-arm the pullback tiers only, "
+                "as a document that states spec.size (a template in "
+                "apps/alphalens-broker-contract/examples/manual-pick/); a full re-arm would "
+                "buy the now tranche again"
             )
         else:
             violation = (
                 f"{pick.ticker} @ {pick.token}: armed before #1467 with a percent size, which "
-                "the daemon can no longer size — refused. Re-arm it with an amount "
-                "(--notional/--currency)"
+                "the daemon can no longer size — refused. Re-arm it with an amount: a "
+                "document that states spec.size (a template in "
+                "apps/alphalens-broker-contract/examples/manual-pick/)"
             )
         _refuse_pick_terminal(
             pick.ticker,
@@ -7174,8 +7177,8 @@ def _resolve_and_size(
     only the money half
     (``compute_setup_plan``) on the already-parsed ``spec`` the daemon received
     on the drained ``TradeIntent``. #1414 then retired that builder outright, so
-    nothing on this path computes a bracket at all: the brief path declares how
-    its stop is managed and supplies no levels. The caller reads ``intent.exit``
+    nothing on this path computes a bracket at all: the document declares how
+    its stop is managed and may supply levels. The caller reads ``intent.exit``
     directly for the (possibly ``None``) exit-geometry spec; this helper never
     touches a brief."""
     from broker_contract.contract import BrokerError

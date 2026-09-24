@@ -1576,9 +1576,12 @@ Write a test pick by hand from a template in `apps/alphalens-broker-contract/exa
 
 ```bash
 # 6.1 arm it (attended CLI — this is the human "pick"):
-# Edit a copy of a template (ticker, levels, stop, amount, exit), check it with
-# --dry-run, then arm it.
+# Copy a template and EDIT it before arming: the ticker (S), the tier levels,
+# the stop, and spec.size (the amount AND the account currency — the templates
+# ship with KO in EUR, and the drain refuses a currency that is not the
+# account's), plus the exit. Check it with --dry-run, then arm it.
 cp apps/alphalens-broker-contract/examples/manual-pick/pullback-two-tiers.json /tmp/s.json
+$EDITOR /tmp/s.json
 .venv/bin/alphalens broker arm /tmp/s.json --env sim --dry-run
 .venv/bin/alphalens broker arm /tmp/s.json --env sim
 cat ~/.alphalens/broker_orders/sim/picks.jsonl        # one armed line
@@ -1601,7 +1604,7 @@ set -a && source /etc/alphalens/env && set +a
 # An empty journal answers with `"verdicts": []`, never with prose on stdout.
 ```
 
-Watch it on **saxotrader.com/sim** (same SIM login). Confirm the entry + standalone disaster stop appear and match the brief geometry.
+Watch it on **saxotrader.com/sim** (same SIM login). Confirm the entry + standalone disaster stop appear and match the document you armed.
 
 **Go live (daemon):**
 ```bash
@@ -1979,7 +1982,7 @@ systemctl --user restart alphalens-broker-manager-live.service
 systemctl --user show alphalens-broker-manager-live.service -p Environment
 
 # The pick is a hand-written document (#1552): a template with the ticker,
-# levels, stop, amount and exit filled in.
+# levels, stop, amount in the ACCOUNT currency, and exit filled in.
 .venv/bin/alphalens broker arm /tmp/pick.json --env live --dry-run
 .venv/bin/alphalens broker arm /tmp/pick.json --env live
 journalctl --user -u alphalens-broker-manager-live.service -f

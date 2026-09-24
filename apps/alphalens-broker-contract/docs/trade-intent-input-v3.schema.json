@@ -26,7 +26,7 @@
           "type": "null"
         }
       ],
-      "description": "Optional exit geometry: the levels to place, and how the stop is managed afterwards. Null when the source brief yields no buildable bracket.",
+      "description": "Optional exit geometry: the levels to place, and how the stop is managed afterwards. Null, like an empty reaction plan, means the stop is never moved.",
       "default": null
     },
     "account_id": {

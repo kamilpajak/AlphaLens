@@ -426,16 +426,15 @@ class TradeIntent:
     See ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``
     section 2.3 for the contract this formalizes.
 
-    ``exit`` is ``None`` when no geometry bracket is buildable from the source
-    brief (missing/degenerate ATR, no usable entry tiers, a non-constructible
-    bracket) — mirrors the daemon's pre-PR-7 ``exit_spec=None`` path, where the
-    placement falls back to the brief's static disaster-stop / tier TP levels
-    (memo section 5, PR-7).
+    ``exit`` is ``None`` when the document declares no exit: the stop is never
+    moved, and placement uses the ``spec`` ladder (the disaster stop and the TP
+    tranches). Every document is written by hand since #1552, so that is the
+    author's choice.
     """
 
     intent_id: str = contract_field(
-        'Identity label set by the arming door: "TICKER:DATE" for a brief pick, '
-        '"TICKER:DATE:manual" for a manual one, with "-g<N>" after generation 1.',
+        'Identity label set by the arming door: "TICKER:DATE:manual" for a manual '
+        'pick ("TICKER:DATE" for a legacy brief one), with "-g<N>" after generation 1.',
         door="derived",
     )
     instrument: InstrumentHint = contract_field("What is being traded, and where.")
@@ -445,7 +444,7 @@ class TradeIntent:
     # builtin `exit` as an attribute (safe: instance attribute, never called).
     exit: ExitGeometrySpec | None = contract_field(
         "Optional exit geometry: the levels to place, and how the stop is managed "
-        "afterwards. Null when the source brief yields no buildable bracket.",
+        "afterwards. Null, like an empty reaction plan, means the stop is never moved.",
         default=None,
     )
     account_id: str = contract_field(
