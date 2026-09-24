@@ -270,6 +270,20 @@ records which document paths it read; at the end, any path present in the input
 and absent from that set is a capability the replay ignored. The refusal names
 the paths, exactly as `key_discarded` does.
 
+**"Read" means CONSUMED BY INTERPRETATION, and the distinction is the whole
+gate.** A path counts as read when its value changed what the replay did — an
+order it placed, a level it moved, a bar at which something fired, or a refusal
+it raised. **Copying a value into the result envelope does not count.** Without
+that sentence the gate has a second reading under which an echo satisfies it,
+and under that reading it protects nothing.
+
+`instrument.mic` is the proof rather than the illustration. The envelope of §5
+echoes it, so under the echo reading the path is "read" and the gate is silent —
+while the MIC's actual semantics (which calendar the sessions come from, which
+fee card applies, which currency the position settles in) are honoured by
+nothing in this design. A gate satisfied by an echo would have passed the one
+capability it most needed to catch.
+
 This is the door's own round-trip gate applied one level deeper. Step 3 above
 asks "did the CODEC keep every key?". It cannot ask "did anything READ it",
 because at the door nothing has yet. Once the contract grows a field, the codec
