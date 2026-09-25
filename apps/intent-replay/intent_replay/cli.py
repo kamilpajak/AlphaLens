@@ -26,8 +26,9 @@ JSON object) and ``usage`` (the invocation: a bad option, or a file it names
 cannot be read). :data:`FAILURE_CODES` is the whole registry and is what
 ``schema`` publishes; the package README carries the same table.
 
-ADAPTER module: stdlib and ``broker_contract``; it may import ``jsonschema``
-and does not need to (the door does).
+ADAPTER module: stdlib and ``broker_contract``. It does not import
+``jsonschema``; the door does, and this module reaches the validator through
+it.
 """
 
 from __future__ import annotations
@@ -137,7 +138,8 @@ _ENGINE_CODES: Final[Mapping[str, FailureCode]] = _registry(
     _code(
         config.CONFIG_INVALID_CODE,
         "A stated configuration value nothing can use; `details.keys` and "
-        "`details.reason` name it.",
+        "`details.reason` name it. A file that parses but is not an object is refused "
+        "here too, with `<root>` standing for the whole block.",
     ),
     _code(
         classification.PATH_UNCLASSIFIED_CODE,
@@ -155,8 +157,10 @@ _CLI_CODES: Final[Mapping[str, FailureCode]] = _registry(
     ),
     _code(
         "config_malformed",
-        "The configuration file is not one JSON object: not JSON, or a repeated "
-        "key. `details.reason` names which, `details.path` the file.",
+        "The configuration file could not be PARSED: not a UTF-8 JSON document, or an "
+        "object in it repeats a key. `details.reason` names which, `details.path` the "
+        "file. A file that parses and is not an object is `config_invalid`, because "
+        "the block model is what refuses it.",
     ),
     _code(
         "usage",

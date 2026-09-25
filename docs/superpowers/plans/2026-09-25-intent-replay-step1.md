@@ -42,7 +42,7 @@ Step 1 of spec §7 only: the contract copy, the replay, the CLI. Out of scope: `
 
 ## Nine PRs, with one owner per refusal code
 
-Ordered so a runnable command exists at PR 4. The code column exists because revision 1 claimed PR 4 made "every refusal code reachable", which was false — PR 4 owns two of the nine engine-side codes, plus the two CLI-only ones (`config_malformed`, `usage`) it added.
+Ordered so a runnable command exists at PR 4. The code column exists because revision 1 claimed PR 4 made "every refusal code reachable", which was false — PR 4 owns the two DOCUMENT codes (`intent_invalid`, owned by the contract, and `intent_malformed`, owned by this tool's CLI: the leaf never names it, §5.4), plus the two invocation codes it added (`config_malformed`, `usage`). It owns none of the engine's own codes.
 
 | # | what it lands | refusal codes it owns |
 |---|---|---|

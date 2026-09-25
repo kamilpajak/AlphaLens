@@ -44,10 +44,14 @@ renderer in v1). `intent-replay schema` prints a JSON description of the command
 tree, its options, exit codes and failure codes, so a script or an agent need not
 parse `--help`.
 
-The command runs the gates of the arming door in the door's order (derived
-fields, the published input JSON Schema, the codec, the fixed point,
-`validate_intent`) on the completed document, then parses the configuration
-block. **In this version an accepted document has nothing to print:** the
+The command runs the gates of the arming door in the door's order: derived
+fields, the published input JSON Schema, completion, the codec, the fixed
+point, `validate_intent`. Which document each gate judges is load-bearing and
+is the same split the arming door makes. The first two and the fixed point
+judge what the AUTHOR wrote, because the input shape does not describe the
+fields a door derives and because the fixed point exists to catch what the
+author sent and did not get back; the codec and `validate_intent` judge the
+completed document. Then the configuration block is parsed. **In this version an accepted document has nothing to print:** the
 command exits 0 with empty stdout and empty stderr. The result envelope arrives
 with the bar walk. A refusal is exactly one JSON object on stderr, the last line,
 with stdout empty; exit status `0` accepted, `2` usage, `130` interrupted with
@@ -101,11 +105,11 @@ reasons onto it).
 | `bars_invalid` | engine | no | A bar carries a price that cannot be compared (NaN or infinite); `details.reason` and `details.field` name it. |
 | `window_too_short` | engine | no | The bars do not cover the stated `walk_start`; `details.reason` says which side. |
 | `config_incomplete` | engine | no | A required configuration value was not stated; `details.keys` names every missing key. |
-| `config_invalid` | engine | no | A stated configuration value nothing can use; `details.keys` and `details.reason` name it. |
+| `config_invalid` | engine | no | A stated configuration value nothing can use; `details.keys` and `details.reason` name it. A file that parses but is not an object is refused here too, with `<root>` standing for the whole block. |
 | `path_unclassified` | engine | no | The document carries a path the replay neither interprets, translates nor lists as out of scope; `details.paths` names them. |
 | `intent_invalid` | contract | no | The document is internally inconsistent (`validate_intent`); `details.reason` names the rule, as at the arming door. |
 | `intent_malformed` | CLI | no | The document is not the published input contract; `details.reason` names which rule, see below. |
-| `config_malformed` | CLI | no | The configuration file is not one JSON object; `details.reason` names which, `details.path` the file. |
+| `config_malformed` | CLI | no | The configuration file could not be PARSED: not a UTF-8 JSON document, or an object in it repeats a key. `details.reason` names which, `details.path` the file. |
 | `usage` | CLI | no | The invocation is malformed (a bad option or value), or a file it names cannot be read (`details.path`). |
 
 `intent_malformed` carries the reasons of the arming door that apply to a

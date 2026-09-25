@@ -285,20 +285,20 @@ RULES = (
         "name": "intent_replay engine imports stdlib and broker_contract only",
         "from_pkg": "intent_replay",
         "allowed_prefixes": ("broker_contract",),
-        # door.py is the one file that imports jsonschema (gate 1). cli.py is
-        # NOT exempt: it reaches jsonschema only through door.py, so an entry
-        # here would be a dead exemption (test_exemptions_still_exist).
+        # Rules COMPOSE: every one of them must pass, so an adapter row cannot
+        # widen what this row allows for a file this row still scans. door.py is
+        # exempt because it is the file that imports jsonschema (gate 1). cli.py
+        # is not, because it reaches jsonschema only through door.py and an
+        # exemption naming no live violation is refused by
+        # test_exemptions_still_exist. Spec section 3.1 permits the cli that
+        # import too; the day it needs one, add "cli.py" here AND a dedicated
+        # allow-list row for `intent_replay.cli`, in the same commit as the
+        # import itself.
         "exemptions": {"door.py"},
     },
     {
         "name": "intent_replay.door may import jsonschema",
         "from_pkg": "intent_replay.door",
-        "allowed_prefixes": ("broker_contract", "jsonschema"),
-        "exemptions": set(),
-    },
-    {
-        "name": "intent_replay.cli may import jsonschema",
-        "from_pkg": "intent_replay.cli",
         "allowed_prefixes": ("broker_contract", "jsonschema"),
         "exemptions": set(),
     },
@@ -352,15 +352,15 @@ def _package_root(top: str, path: Path, package: str) -> Path | None:
     """The directory of top-level package ``top``: a known workspace package, or
     the scanned file's own package root (so a synthetic package in a temp
     directory resolves the same way)."""
-    known = PACKAGE_DIRS.get(top)
-    if known is not None:
-        return known
-    if package.split(".", maxsplit=1)[0] != top:
-        return None
-    directory = path.parent
-    while directory.name != top and (directory.parent / "__init__.py").is_file():
-        directory = directory.parent
-    return directory if directory.name == top else None
+    # The scanned file's OWN package wins over the workspace map, so a
+    # synthetic package that borrows a real name resolves against itself.
+    if package.split(".", maxsplit=1)[0] == top:
+        directory = path.parent
+        while directory.name != top and (directory.parent / "__init__.py").is_file():
+            directory = directory.parent
+        if directory.name == top:
+            return directory
+    return PACKAGE_DIRS.get(top)
 
 
 def _level0_targets(node: ast.ImportFrom, path: Path, package: str) -> list[str]:
@@ -483,7 +483,14 @@ def _violates(rule: dict, module: str) -> bool:
     if len(kinds) != 1:
         raise ValueError(f"rule {rule.get('name')!r} must carry exactly one kind, has {kinds}")
     if "forbidden_prefix" in rule:
-        return module.startswith(rule["forbidden_prefix"])
+        prefix = rule["forbidden_prefix"]
+        # A prefix written WITH a trailing dot names a package, so the package
+        # itself breaks the rule too: `from alphalens_research import attribution`
+        # resolves to `alphalens_research.attribution`, which `startswith` alone
+        # would miss. A prefix written WITHOUT one is deliberately a string
+        # match (`alphalens_pipeline.data.alt_data.telegram` must catch
+        # `telegram_client`), so it keeps the bare comparison.
+        return (prefix.endswith(".") and module == prefix[:-1]) or module.startswith(prefix)
     top = module.split(".", maxsplit=1)[0]
     if top in sys.stdlib_module_names or top == rule["from_pkg"].split(".")[0]:
         return False
@@ -1018,12 +1025,14 @@ class TestModuleDependencies(unittest.TestCase):
         engine may not reach an adapter module (and through it jsonschema).
         Each exemption names the ONE file that legitimately breaks the rule."""
         by_name = {rule["name"]: rule for rule in RULES}
-        for module in ("door", "cli"):
-            with self.subTest(adapter=module):
-                rule = by_name[f"intent_replay.{module} may import jsonschema"]
-                self.assertEqual(rule["from_pkg"], f"intent_replay.{module}")
-                self.assertEqual(rule["allowed_prefixes"], ("broker_contract", "jsonschema"))
-                self.assertEqual(rule["exemptions"], set())
+        door_allow = by_name["intent_replay.door may import jsonschema"]
+        self.assertEqual(door_allow["from_pkg"], "intent_replay.door")
+        self.assertEqual(door_allow["allowed_prefixes"], ("broker_contract", "jsonschema"))
+        self.assertEqual(door_allow["exemptions"], set())
+        # cli.py has no allow-list row of its own, and must not grow one while
+        # the engine row still scans it: the rules compose, so the row would
+        # publish a permission the engine row refuses.
+        self.assertNotIn("intent_replay.cli may import jsonschema", by_name)
         door_rule = by_name["intent_replay engine must not import the door"]
         self.assertEqual(door_rule["from_pkg"], "intent_replay")
         self.assertEqual(door_rule["forbidden_prefix"], "intent_replay.door")
@@ -1073,6 +1082,57 @@ class TestModuleDependencies(unittest.TestCase):
             [
                 ("attribute.py", "synthetic_pkg.door"),
                 ("lazy_dotted.py", "synthetic_pkg.door"),
+                ("relative.py", "synthetic_pkg.door"),
+            ],
+        )
+
+    def test_a_trailing_dot_rule_sees_the_package_itself(self):
+        """The other rule shape in this file, with the same three spellings.
+
+        Ten rules write their prefix WITH a trailing dot (the ADR 0007 layer
+        rules and the cross-tier ones). Before the level-0 resolution,
+        `from alphalens_research import attribution` walked as the bare
+        `alphalens_research` and no rule saw it; after it, the resolved name is
+        the package itself, which a bare `startswith` on a dotted prefix still
+        misses. `_violates` therefore matches the parent exactly for that shape
+        — and only for it, because a prefix written without the dot is a
+        deliberate string match (the telegram tripwire catches
+        `telegram_client`)."""
+        import tempfile
+
+        rule = {
+            "name": "synthetic layer rule",
+            "from_pkg": "synthetic_pkg",
+            "forbidden_prefix": "synthetic_pkg.door.",
+            "exemptions": set(),
+        }
+        sources = {
+            "attribute.py": "from synthetic_pkg import door\n",
+            "dotted.py": "from synthetic_pkg.door import admit\n",
+            "relative.py": "from . import door\n",
+            "sibling.py": "from synthetic_pkg import doorway\n",
+            "door.py": "",
+            "doorway.py": "",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            for name, source in sources.items():
+                (pkg / name).write_text(source)
+            flagged = sorted(
+                (Path(rel).name, module)
+                for _, rel, module in _violations_for(rule, _python_files(pkg))
+            )
+        # Two things at once. `doorway` shares the prefix as a STRING and is not
+        # the package, so the dotted rule leaves it alone. And `admit` is a
+        # function rather than a module, so the dotted import resolves to the
+        # package it names, which is the resolution rule this file added.
+        self.assertEqual(
+            flagged,
+            [
+                ("attribute.py", "synthetic_pkg.door"),
+                ("dotted.py", "synthetic_pkg.door"),
                 ("relative.py", "synthetic_pkg.door"),
             ],
         )

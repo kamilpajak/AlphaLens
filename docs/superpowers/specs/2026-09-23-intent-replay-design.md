@@ -721,7 +721,7 @@ scale. R itself is the problem" — and replaced R with net cash.
   "schema": "intent_replay.result/v1",
   "intent_id": "REPLAY",
   "instrument": {"ticker": "KO", "mic": "XNYS"},
-  "window": {"from_t": 1790100000000, "to_t": 1791300000000, "bars": 16380},
+  "window": {"from_t": 1790170200000, "to_t": 1791230400000, "bars": 3510},
   "config": {
     "entry_deadline": {
       "kind": "order_ttl_sessions",
@@ -860,8 +860,12 @@ codes only for its own failures: `bars_unordered`, `bars_empty`,
 `details.paths`), `config_incomplete` for a required configuration value the
 caller did not state (§2.1, carrying `details.keys`), `config_invalid` for a
 configuration value the caller stated but nothing can use (below, carrying
-`details.keys`), and `entry_mode_unsupported` for the `immediate` tranche v1
-does not model (§4.3.1, carrying `details.tiers`).
+`details.keys`), `config_malformed` for a configuration FILE the CLI cannot
+parse at all (below, added 2026-09-25 by PR 4, carrying `details.path`), and
+`entry_mode_unsupported` for the `immediate` tranche v1 does not model
+(§4.3.1, carrying `details.tiers`). `usage` is not in that list: it is the
+invocation's own code, inherited from the arming door, and it never describes
+a document or a block.
 
 **`config_invalid` is a stated value nothing can use; `config_incomplete` stays
 "not stated".** Added 2026-09-25 by PR 3, on the argument that gave `bars_invalid`

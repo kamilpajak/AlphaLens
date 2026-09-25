@@ -12,7 +12,9 @@ requires-python = ">=3.13"
 # modules (bars, config, interpreter, walk, trace, measures, envelope) import
 # stdlib and broker_contract only; the ADAPTER modules (door, cli) may also
 # import jsonschema, which exists for one purpose: validating the published
-# input schema at the door. The AST gate in
+# input schema at the door. Only door.py takes that permission today; cli.py
+# reaches the validator through it, so the AST gate grants the exemption to
+# door.py alone. The AST gate in
 # apps/alphalens-research/tests/test_module_dependencies.py is the ONLY barrier
 # enforcing that split; this list cannot express it.
 dependencies = ["alphalens-broker-contract", "jsonschema>=4.0.0"]

@@ -82,6 +82,14 @@ def _invalid(test: unittest.TestCase, action: Callable[[], Any]) -> str:
 
 
 class AcceptanceTest(unittest.TestCase):
+    def test_the_directory_holds_exactly_the_published_templates(self) -> None:
+        """Spec section 6.3 makes the published examples the acceptance control,
+        so the control must be the DIRECTORY and not a list that can fall behind
+        it. A fourth template is a red build a human resolves loop by loop, not a
+        file the replay silently never sees. The arming door keeps the same
+        guard one directory over (`test_manual_pick_templates.py`)."""
+        self.assertEqual({path.stem for path in EXAMPLES.glob("*.json")}, set(TEMPLATE_NAMES))
+
     def test_every_published_template_with_a_stated_date_is_admitted(self) -> None:
         for name in TEMPLATE_NAMES:
             with self.subTest(template=name):

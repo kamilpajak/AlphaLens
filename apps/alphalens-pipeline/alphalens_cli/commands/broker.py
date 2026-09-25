@@ -87,12 +87,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import typer
-from broker_contract.failure import CONTRACT_FAILURE_CODES, Failure, FailureCode, Suggestion
 
 # Top-level rather than lazy (module docstring's lazy-CLI doctrine): the whole
 # of `broker_contract` costs ~2.6ms to import, nearly all of it `datetime`,
 # which this module imports anyway. The doctrine exists for the ~913ms
-# research tier, and `_fail` needs the registry on every refusal path.
+# research tier, and `_fail` needs the registry on every refusal path. The
+# codec import below rides the same already-paid cost and is the door's fixed
+# point, which every `arm` runs.
+from broker_contract.failure import CONTRACT_FAILURE_CODES, Failure, FailureCode, Suggestion
 from broker_contract.trade_intent.codec import discarded_paths as _discarded_paths
 
 if TYPE_CHECKING:
