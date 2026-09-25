@@ -275,30 +275,66 @@ class TestTrailingPathEmitsAmendAndTrailedMarker(unittest.TestCase):
         self.assertEqual(_markers(journal, "reanchored"), [])
 
 
+class _RecordingFeedFactory:
+    """Records every ``(uic_to_instrument, scope)`` build; the feed it hands back
+    refuses to be read, so a test can tell a scope RELEASE from a price fetch."""
+
+    def __init__(self, *, raise_on_build: bool = False) -> None:
+        self.builds: list[tuple[dict, str]] = []
+        self._raise_on_build = raise_on_build
+
+    def __call__(self, uic_to_instrument: object, *, scope: str) -> object:
+        self.builds.append((dict(uic_to_instrument), scope))  # type: ignore[call-overload]
+        if self._raise_on_build:
+            raise RuntimeError("simulated feed/network/auth failure")
+        return _UnreadableFeed()
+
+
+class _UnreadableFeed:
+    def latest(self, uic: int) -> PricePoint | None:
+        raise AssertionError("a non-trailing tick must never read a price")
+
+
 class TestDefaultPolicyNeverFetchesFeed(unittest.TestCase):
     """A pick that DECLARES no trail takes the exact 2-arg build call with NO
-    peak fetch: the feed factory is never invoked and no ``trailed`` marker is
-    written.
+    peak fetch: no price is read and no ``trailed`` marker is written.
 
     The gate moved with #1236. It used to read the daemon-wide policy, so one env
     var decided whether the whole deployment fetched peaks; trailing is a property
-    of an individual pick now, so the gate asks the plans."""
+    of an individual pick now, so the gate asks the plans.
 
-    def test_a_pick_declaring_no_trail_never_touches_the_feed(self) -> None:
-        broker = _Broker(positions=[_pos()], sells=[_stop_leg()], by_uic={_UIC: _pos()})
-        feed = _ScriptedFeedFactory([{_UIC: 110.0}])  # would raise IndexError if popped
+    Since #1587 the peak update owns its own "peaks" scope of the shared
+    price-stream subscription, and a non-trailing tick hands that scope back with
+    an EMPTY build. That is the only factory call such a tick makes."""
+
+    def _run(self, feed: _RecordingFeedFactory, broker: _Broker) -> tuple[list[str], list]:
         sink: list[str] = []
-        report = cl.TickReport()
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal, reaction=None)  # declares nothing
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, feed_factory=feed, sink=sink)
-                cl._run_protection_pass(deps, [], False, report)
+                cl._run_protection_pass(deps, [], False, cl.TickReport())
                 trailed = _markers(journal, "trailed")
+        return sink, trailed
 
-        self.assertEqual(feed.calls, 0)  # the non-trailing path NEVER fetches
+    def test_a_pick_declaring_no_trail_never_fetches_a_price(self) -> None:
+        broker = _Broker(positions=[_pos()], sells=[_stop_leg()], by_uic={_UIC: _pos()})
+        feed = _RecordingFeedFactory()
+
+        _, trailed = self._run(feed, broker)
+
+        self.assertEqual(feed.builds, [({}, "peaks")])  # a release, never a fetch
         self.assertEqual(trailed, [])  # and never journals a trailed marker
+
+    def test_a_failing_release_still_covers_the_naked_long(self) -> None:
+        broker = _Broker(positions=[_pos()], sells=[], by_uic={_UIC: _pos()})
+        feed = _RecordingFeedFactory(raise_on_build=True)
+
+        self._run(feed, broker)
+
+        self.assertEqual(feed.builds, [({}, "peaks")])  # the release was attempted
+        self.assertEqual(len(broker.placed), 1)  # never-naked backstop still ran
 
 
 class TestCrossTickRatchet(unittest.TestCase):

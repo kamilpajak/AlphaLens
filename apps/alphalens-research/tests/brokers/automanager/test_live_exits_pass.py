@@ -867,10 +867,10 @@ class TestLiveExitsScopeMaintenance(_JournalCase):
     slice of the shared price-stream subscription in step with the live long
     positions EVERY tick it runs — including the quiet ticks with no managed
     position. Returning before the feed build left the scope holding closed
-    positions' uics forever under a non-trailing exit policy (the peak
-    updater, the only other "exits"-scope writer, runs only when the policy
-    trails): the union never shrank, so the reader kept a WebSocket plus a
-    server-side subscription streaming uics nobody reads."""
+    positions' uics forever (since #1587 the peak updater writes its own
+    "peaks" scope, so this pass is the only "exits"-scope writer): the union
+    never shrank, so the reader kept a WebSocket plus a server-side
+    subscription streaming uics nobody reads."""
 
     def _capturing_factory(self, calls: list[tuple[dict[int, tuple[str, str]], str]]) -> object:
         def factory(uic_to_instrument: Mapping[int, tuple[str, str]], *, scope: str) -> _FakeFeed:
@@ -903,10 +903,9 @@ class TestLiveExitsScopeMaintenance(_JournalCase):
 
     def test_unmanaged_long_position_keeps_the_scope_on_the_position_uics(self) -> None:
         # A long position with NO tranche plan folds to zero managed exits,
-        # but the scope must stay on the open-position uics — the same set the
-        # trailing peak updater writes. An empty write here would flip-flop
-        # the shared subscription against the peak updater every tick,
-        # reintroducing the churn the scope split exists to kill.
+        # but the scope must stay on the open-position uics. An empty write
+        # here would drop its quote from the shared subscription, and every
+        # later write that re-adds it re-creates the server-side subscription.
         broker = FakeBroker()
         uic = broker.uic_of("KO")
         broker.set_position("KO", 100, avg_price=15.0)
