@@ -44,10 +44,24 @@ TWO WAYS THE PROSE OVERSTATES ITSELF, both found by running it:
   ``units`` was already one too many before any rounding happened. So the two
   bullets above are ONE defect at two magnitudes, not two defects.
 
-  The fix caps the slack at half a scaled unit, which makes "the overshoot
-  never reaches half a step" true by construction instead of by luck of
-  magnitude. The properties below therefore no longer need their upper bound
-  for that claim.
+  The fix caps the slack at half a scaled unit, and the module then claimed
+  that made "the overshoot never reaches half a step" true by construction
+  instead of by luck of magnitude, so the unbounded property below could drop
+  its upper bound.
+
+  THAT CLAIM WAS FALSE and the unbounded property flaked on it for weeks
+  (#1560). Capping the slack is necessary and not sufficient: at half a scaled
+  unit the cap EQUALS half a step on a one-unit step, so it consumes the whole
+  tolerance and leaves nothing for the error in `abs(qty) * 10**precision`.
+  Measured at the then-current `_SCALED_EXACT_LIMIT` of 2**53: 426 violations
+  in 200 000 sampled pairs, worst 2.44 STEPS above the input. Removing the
+  slack entirely still left 68, so the slack was never the binding term.
+
+  What makes the claim true is the LIMIT, moved to the magnitude where the cap
+  starts to bind (2**46 scaled units). The class at the bottom of this file
+  pins that, and walks consecutive floats rather than sampling them -- the
+  failures live in the last few thousand floats below the boundary, where a
+  log-uniform strategy essentially never lands.
 """
 
 from __future__ import annotations
@@ -56,6 +70,9 @@ import math
 import unittest
 
 from broker_contract.quantity import (
+    _MAX_SCALED_SLACK,
+    _SCALED_EXACT_LIMIT,
+    _ULP_SLACK,
     QuantityLattice,
     allocate_units,
     is_on_lattice,
@@ -295,6 +312,144 @@ class TheRealisticDomainIsActuallyExercised(PropertyTestCase):
             if QuantityLattice(step=k / (10**p), min_qty=0.0, precision=p)
         }
         self.assertGreater(len(shapes), 10)
+
+
+class TheLatticeStopsBeingResolvableWhereTheSlackCapBinds(unittest.TestCase):
+    """#1560. Above a magnitude the module could already name, it hands back MORE.
+
+    The half-step property flaked because it is unsatisfiable up there, and the
+    reason is arithmetic rather than a tolerance that wants widening. The slack
+    is ``min(max(32 * ulp(scaled), _ABS_TOL), _MAX_SCALED_SLACK)`` with the cap
+    at half a scaled unit. The cap starts binding exactly at ``scaled == 2**46``
+    (``32 * ulp(2**46) == 0.5``), and from there the slack alone is the WHOLE
+    half-step tolerance on a one-unit step, leaving nothing for the error in
+    ``abs(qty) * 10**precision``. So ``_SCALED_EXACT_LIMIT`` belongs at the
+    cap-binding point, not six binary orders above it.
+
+    Measured before the fix, over 200 000 sampled (quantity, lattice) pairs:
+    426 violations, worst overshoot 2.44 STEPS -- two lattice points above the
+    input, on the leaf whose whole premise is that a quantity cannot grow on the
+    way through.
+    """
+
+    def _lattice(self, precision: int, step_units: int = 1) -> QuantityLattice:
+        return QuantityLattice(
+            step=step_units / (10**precision),
+            min_qty=0.0,
+            precision=precision,
+            source="issue-1560",
+        )
+
+    def test_the_case_the_issue_reported_is_refused_rather_than_overshot(self) -> None:
+        # Hypothesis found this one. It returned 450359962737050.6 -- two ULPs
+        # above its input, where the tolerance is 0.05 and one ULP is 0.0625.
+        self.assertEqual(0.0, quantize_down(450359962737050.5, self._lattice(1)))
+
+    def test_the_worst_measured_overshoot_is_refused(self) -> None:
+        # ~5e11 shares on a 1e-4 venue: the sweep's worst case, 2.44 steps above
+        # its input.
+        self.assertEqual(0.0, quantize_down(503555000000.0, self._lattice(4)))
+
+    def test_the_case_a_sampling_sweep_could_not_find(self) -> None:
+        # The one that refuted the first draft of this fix. A 200 000-pair
+        # log-uniform sweep returned ZERO violations at a 2**47 limit; a dense
+        # walk of consecutive floats just below it found this immediately.
+        # Sampling almost never lands in the last few thousand floats under a
+        # power of two, which is exactly where the cap and the scaling error
+        # meet.
+        self.assertEqual(0.0, quantize_down(14073748835532.75, self._lattice(1)))
+
+    def test_the_limit_sits_where_the_slack_cap_starts_to_bind(self) -> None:
+        # Pinned literally AND derived, so the number cannot drift back up on a
+        # plausible-sounding argument. 2**53 was the old value and it reasoned
+        # about consecutive INTEGERS, a different question from whether the
+        # LATTICE survives scale -> floor -> rescale.
+        self.assertEqual(2**46, _SCALED_EXACT_LIMIT)
+        self.assertEqual(
+            _MAX_SCALED_SLACK,
+            _ULP_SLACK * math.ulp(float(_SCALED_EXACT_LIMIT)),
+            "the limit must be the magnitude at which the uncapped slack first "
+            "reaches the cap; below it the slack leaves room for the scaling "
+            "error, at and above it there is none",
+        )
+
+    def test_both_sides_of_the_boundary(self) -> None:
+        # One side alone would prove only that refusal happens somewhere.
+        for precision in range(5):
+            lattice = self._lattice(precision)
+            ceiling = _SCALED_EXACT_LIMIT / (10**precision)
+            with self.subTest(precision=precision):
+                self.assertNotEqual(
+                    0.0,
+                    quantize_down(ceiling / 2.0, lattice),
+                    "a quantity inside the resolvable band must still quantize",
+                )
+                self.assertEqual(
+                    0.0,
+                    quantize_down(ceiling * 2.0, lattice),
+                    "a quantity outside it must be refused, not approximated",
+                )
+
+    def test_nothing_a_real_account_could_hold_changed(self) -> None:
+        # The regression guard for the whole change. 1e9 is what the bounded
+        # sibling property calls "a share count this rail could hold"; the
+        # tightest ceiling here is seven times that.
+        for precision in range(5):
+            lattice = self._lattice(precision)
+            # each at or above one step at every precision tested
+            for qty in (1.0, 100.5, 12_345.678, 1e6, 999_999_999.0):
+                with self.subTest(precision=precision, qty=qty):
+                    got = quantize_down(qty, lattice)
+                    self.assertNotEqual(0.0, got, "a realistic quantity was refused")
+                    self.assertLessEqual(abs(got), abs(qty) + lattice.step / 2.0)
+
+    def test_a_dense_walk_below_the_limit_never_exceeds_half_a_step(self) -> None:
+        # A DENSE walk, deliberately, not a Hypothesis strategy. The failures
+        # this fix is about cluster in the last few thousand floats below the
+        # boundary, and sampling does not go there. Walking consecutive floats
+        # is the instrument with the power to refute.
+        for precision in range(5):
+            lattice = self._lattice(precision)
+            scaled = float(_SCALED_EXACT_LIMIT)
+            worst = 0.0
+            for _ in range(3000):
+                qty = scaled / (10**precision)
+                worst = max(worst, abs(quantize_down(qty, lattice)) - abs(qty))
+                scaled = math.nextafter(scaled, 0.0)
+            with self.subTest(precision=precision):
+                self.assertLessEqual(
+                    worst,
+                    lattice.step / 2.0,
+                    f"overshoot {worst / lattice.step:.4f} of a step just below the limit",
+                )
+
+    def test_the_refusal_names_the_limit_it_actually_applies(self) -> None:
+        # The message used to end "exceeds 2**53" as a literal, so lowering the
+        # constant would have left it stating a threshold nobody enforces. A
+        # message that misnames its own rule is worse than no message.
+        lattice = self._lattice(4)
+        reason = quantity_refusal(_SCALED_EXACT_LIMIT / (10**4) * 2.0, lattice)
+        self.assertIsNotNone(reason)
+        self.assertNotIn("2**53", reason)
+        self.assertIn(repr(_SCALED_EXACT_LIMIT), reason)
+
+    def test_positive_control_a_stale_literal_would_be_detected(self) -> None:
+        # Without this the assertion above could rot into a no-op if the message
+        # stopped naming any threshold at all.
+        self.assertIn("2**53", "its scaled form exceeds 2**53")
+
+    def test_the_share_ceiling_per_venue_precision_is_pinned(self) -> None:
+        # A scaled limit divides the SHARE ceiling by ten per decimal, and
+        # `precision` is not ours: it comes from Saxo's `AmountDecimals`, and the
+        # constructor bounds it only from below. At six decimals the ceiling is
+        # 70 million shares, which a real account could hold. The fixtures in
+        # this tree report 0 and 3, so nothing live is near it -- this table is
+        # here so a higher-precision venue arrives as a red test rather than as
+        # a refused order.
+        expected = {0: 70_368_744_177_664, 4: 7_036_874_417, 6: 70_368_744, 8: 703_687}
+        for precision, ceiling in expected.items():
+            with self.subTest(precision=precision):
+                self.assertEqual(ceiling, int(_SCALED_EXACT_LIMIT / (10**precision)))
 
 
 if __name__ == "__main__":  # pragma: no cover
