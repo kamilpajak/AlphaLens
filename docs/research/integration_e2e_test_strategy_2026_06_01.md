@@ -174,7 +174,7 @@ what L2 hermetic tests provably can't reach (they run in the dev venv from sourc
   env path, not `Path.home()`). Catches #7 (jsonschema) and #6 (Path.home) at real
   import time.
 - **VPS `deploy/scripts/postdeploy_check.sh`** (operator gate, not CI):
-  `promtool check rules` + diff repo rules vs live `/home/jacoren/monitoring/...`
+  `promtool check rules` + diff the origin/main rules blob vs live `/home/jacoren/monitoring/...`
   + compare running container image SHA vs the GHCR tag for the current `main`
   commit. Catches #5 (stale image) and #10 (rule drift). Fails loud on drift.
 

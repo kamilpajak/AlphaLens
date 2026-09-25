@@ -61,7 +61,7 @@ docker compose pull
 docker compose up -d
 docker compose ps
 curl -fsS http://127.0.0.1:8000/healthz
-# Verify running image == intended commit + rules synced + migrations applied:
+# Verify running image == intended commit, live rules == origin/main (a rules change merged in the last hour may still be pending), migrations applied:
 bash ~/AlphaLens/deploy/scripts/postdeploy_check.sh --with-migrate
 ```
 
