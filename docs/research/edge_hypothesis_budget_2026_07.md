@@ -111,6 +111,19 @@ counts). Append-only:
 | 2026-08-24 | Registered what-if lens `atr_bracket_1p5_planned` (the SAME bezpazery v1 bracket placed against the PLANNED blend — the anchor the live rail uses; issue #1114 option 1, amendment §7 of `bezpazery_lens_design_2026_07_16.md`) | realized_r counterfactual (fwd-only accrual from this PR) | PENDING — first look at the Sep exit walk-forward, no interim peeks | 1 policy look → Sep walk-forward (ADR 0013 R4) | 5th of cap-5 — the registry is now FULL, any further lens is one-in-one-out. Its parameters are unchanged from the 2026-07-16 pre-registration; only the anchor differs. Populates forward-only, so a head-to-head of the two anchors is invalid until this lens accrues its own N. Even then, compare the two lenses ONLY on rows where both are non-null — the two anchors share the no-fill gate but not the constructibility gates, so their null sets differ on the ceiling-capped rows (amendment §7.5) |
 | 2026-08-24 | Exit-policy head-to-head: brief tranche ladder (arm A) vs the live operational ATR-bracket policy (arm B, planned anchor + #1112 step-3 clamp + declared fallback); pre-registered `exit_policy_comparison_prereg_2026_08_24.md` | net USD P&L per candidate at a common notional, horizon H=42 sessions, forward cohort only | VOID 2026-08-27, slot returned — the prereg voided itself under its §11 item 1 (arm B stops being the live policy: owner adopted `breakeven_trail`) BEFORE the cohort opened (the first stamping nightly was held; no boundary date exists). The look was never consumed | 1 policy look -> Sep exit walk-forward (ADR 0013 R4) | Additional to the two lens registrations above: those charge for the lenses, this charges for the contrast. Primary is NOT computable from the stamped columns (the lenses omit the live take-profit clamp and the two stamped R columns have different denominators) |
 
+**Appended note 2026-09-25 — the header clause above is superseded, the rows are not.** The
+header of this annex says "ADR 0013 R4: every evaluated policy, registered lens or not, counts".
+The 2026-09-25 amendment to R4 narrows that: a look charges when its result is quoted in a
+decision, a memo, an issue or a PR that changes what ships — whatever tool produced it. Not
+stamping is necessary for a look to be exploratory and never sufficient, which is why the eleven
+policy looks of 2026-07-14 STAND AS CHARGED even though the scripts that produced them stamped
+nothing. An exploratory look charges 0 only under three conditions, all required: it reads
+outcomes matured on or before a stated burn date; it is appended here with that date, the number
+of variants examined and `charges: 0 (exploration)`; and nothing it produced is cited as evidence
+for what ships. Rule 1 ("No look happens off-ledger") is unchanged and now covers exploratory
+looks explicitly. Per the append-only convention the header sentence is left as written — this
+note is the correction. See ADR 0013 R4, amendment 2026-09-25.
+
 
 ## 5. Cross-reference: the mechanical-vs-LLM selection test (own track)
 
