@@ -82,8 +82,8 @@ fi
 # Warn to stderr so the failure is visible in journald (StandardError=journal).
 # On success this emits alphalens_vix_cache_fetched_at_timestamp_seconds, which
 # the AlphalensVixCache{Stale,MetricMissing} rules in
-# deploy/monitoring/prometheus/rules/alphalens.yaml alert on (live rules are
-# hand-synced on the VPS, outside this repo).
+# deploy/monitoring/prometheus/rules/alphalens.yaml alert on (those rules reach
+# the VPS on their own, within an hour of a merge; THIS script does not).
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] cache refresh-vix"
 alphalens cache refresh-vix \
     || echo "WARN: vix refresh failed; market_state and regime stamps degrade to unknown" >&2

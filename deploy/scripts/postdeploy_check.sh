@@ -25,8 +25,10 @@ COMPOSE_DIR="$REPO/deploy/docker/django-prod"
 COMPOSE_FILE="$COMPOSE_DIR/docker-compose.yaml"
 IMAGE="ghcr.io/kamilpajak/alphalens-django"
 PROM_CONTAINER="${PROM_CONTAINER:-prometheus}"
-# Live Prometheus rules are a hand-synced copy bind-mounted to /etc/prometheus,
-# NOT the repo file. Override via env if the host layout moves.
+# Live Prometheus rules are a COPY bind-mounted to /etc/prometheus, NOT the repo
+# file — still worth comparing, because the copy is converged hourly from the
+# origin/main blob and can therefore lag a just-merged change by up to an hour.
+# Override via env if the host layout moves.
 LIVE_RULES="${LIVE_RULES:-/home/jacoren/monitoring/prometheus/alphalens.rules}"
 REPO_RULES="$REPO/deploy/monitoring/prometheus/rules/alphalens.yaml"
 

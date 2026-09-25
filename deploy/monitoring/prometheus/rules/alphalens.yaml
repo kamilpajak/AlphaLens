@@ -996,8 +996,11 @@ groups:
       # a one-slot LLM hiccup that the next slot's rerun heals must
       # not page. Prometheus-only by user decision — the CLI emits no
       # Telegram for this condition.
-      # NOTE: live rules on the VPS are hand-synced (not repo-mounted)
-      # — copy this file over and HUP prometheus after editing.
+      # NOTE: the live rules are a COPY at ~/monitoring/prometheus/alphalens.rules
+      # (this file is NOT bind-mounted), converged hourly from the origin/main
+      # blob by alphalens-prometheus-rules-sync since PR #1107. MERGING IS THE
+      # DEPLOY. A manual copy + HUP is an emergency override and is overwritten
+      # within the hour.
       - alert: AlphalensThematicBriefUnavailableHigh
         expr: |
           alphalens_thematic_brief_unavailable_count
@@ -1029,8 +1032,11 @@ groups:
       # candidate day from tripping on a single failure; ``for: 6h`` means the
       # condition survived at least two 4-hourly slots, so a one-slot hiccup the
       # next rerun heals does not page.
-      # NOTE: live rules on the VPS are hand-synced (not repo-mounted)
-      # — copy this file over and HUP prometheus after editing.
+      # NOTE: the live rules are a COPY at ~/monitoring/prometheus/alphalens.rules
+      # (this file is NOT bind-mounted), converged hourly from the origin/main
+      # blob by alphalens-prometheus-rules-sync since PR #1107. MERGING IS THE
+      # DEPLOY. A manual copy + HUP is an emergency override and is overwritten
+      # within the hour.
       - alert: AlphalensThematicChannelAssessFailureHigh
         expr: |
           alphalens_thematic_channel_assess_failed_total
@@ -1137,8 +1143,11 @@ groups:
       # is carried entirely by the three clauses above.
       # Numerator and denominator come from the SAME thematic-build emit,
       # so the ratio is same-run consistent and label-compatible.
-      # NOTE: live rules on the VPS are hand-synced (not repo-mounted)
-      # — copy this file over and HUP prometheus after editing.
+      # NOTE: the live rules are a COPY at ~/monitoring/prometheus/alphalens.rules
+      # (this file is NOT bind-mounted), converged hourly from the origin/main
+      # blob by alphalens-prometheus-rules-sync since PR #1107. MERGING IS THE
+      # DEPLOY. A manual copy + HUP is an emergency override and is overwritten
+      # within the hour.
       - alert: AlphalensThematicBriefLadderUsableLow
         expr: |
           alphalens_thematic_brief_usable_ladder_ratio < 0.5
@@ -1202,8 +1211,11 @@ groups:
       # ``for: 6h`` = the condition survived at least one further 4-hourly slot,
       # so a deciding slot that failed and was re-derived by the next one (its
       # candidate set having been degraded / empty) does not page.
-      # NOTE: live rules on the VPS are hand-synced (not repo-mounted)
-      # — copy this file over and HUP prometheus after editing.
+      # NOTE: the live rules are a COPY at ~/monitoring/prometheus/alphalens.rules
+      # (this file is NOT bind-mounted), converged hourly from the origin/main
+      # blob by alphalens-prometheus-rules-sync since PR #1107. MERGING IS THE
+      # DEPLOY. A manual copy + HUP is an emergency override and is overwritten
+      # within the hour.
       - alert: AlphalensThematicThemeRollupLost
         expr: |
           (max_over_time(alphalens_thematic_theme_rollup_write{outcome="failed"}[24h]) > 0)
@@ -1596,9 +1608,10 @@ groups:
         # arrived for >300s (the LivePriceStreamStale shape on the order
         # stream). Suppressed while a breaker episode is open — that state is
         # already reported by its own pages and the BreakerOpen rule. `unless`
-        # (NOT `and == 0`) so an ABSENT breaker gauge (live rules are
-        # hand-synced and may lead the daemon) leaves the alert exactly as
-        # before.
+        # (NOT `and == 0`) so an ABSENT breaker gauge leaves the alert exactly
+        # as before. Rules DO lead the daemon, and by more than the old
+        # "hand-synced" wording implied: they converge within an hour of a
+        # merge, while the code that emits a gauge waits for a manual deploy.
         expr: >-
           alphalens_broker_manager_stream_last_message_age_seconds{job="broker-manager-sim"} > 300
           and alphalens_broker_manager_stream_reader_up{job="broker-manager-sim"} == 1
@@ -1657,9 +1670,9 @@ groups:
         # reader_up=1 and subscribed_uics>0 — the exact signature above. The
         # stream flips session_asleep on each sleep/wake edge; drop that
         # state via `unless == 1`. `unless` (NOT `and == 0`) so an ABSENT
-        # gauge (older stream code / gate never wired; live rules are
-        # hand-synced and may lead the daemon) leaves the alert exactly as
-        # before. Residual: a predicate wrongly returning False DURING a
+        # gauge (older stream code / gate never wired; rules converge within an
+        # hour of a merge while the emitting code waits for a manual deploy, so
+        # they DO lead the daemon) leaves the alert exactly as before. Residual: a predicate wrongly returning False DURING a
         # session silences the stream and this alert together — that mode is
         # pinned by the window-math unit tests, and a RAISING predicate
         # fails open stream-side (treated as in-session).
