@@ -166,6 +166,11 @@ else
     # merges, which is what this repo does today, give the same answer either
     # way.
     RULES_COMMIT_TS="$(git -C "$REPO" log -1 --first-parent --format=%ct origin/main -- "$RULES_REPO_PATH" 2>/dev/null)"
+    # Both clocks below can be unavailable, and both fail towards a FAIL. A
+    # non-numeric `git log` answer leaves RULES_AGE_S empty; a `date -u +%s`
+    # that produces nothing leaves the arithmetic negative. The first arm
+    # catches either, reports that the age could not be read, and never lets an
+    # unreadable clock become a pending-copy WARN.
     RULES_AGE_S=""
     case "$RULES_COMMIT_TS" in
       ''|*[!0-9]*) ;;

@@ -102,6 +102,16 @@ exec /bin/date "$@"
 
 _STUB_FAILING_MKTEMP = "#!/bin/sh\nexit 1\n"
 
+# A `date` whose `-d` refuses every argument, standing in for a BSD date or a
+# systemd timestamp GNU date cannot parse. `+%s` still works, so only the
+# sync-unit read degrades.
+_STUB_DATE_CANNOT_PARSE = """#!/bin/sh
+if [ "$1" = "-d" ]; then
+  exit 1
+fi
+exec /bin/date "$@"
+"""
+
 
 def _load_sync_module():
     """Import sync_prometheus_rules.py by path — scripts/ is not a package."""
@@ -472,6 +482,67 @@ class TestTheGraceArmAsksWhetherTheSyncActuallyRan(unittest.TestCase):
             run.has_line_starting("--- origin/main") and run.has_line_starting("+++ live"),
             "the WARN arm must show WHAT differs; without it a corrupt live file "
             f"looks exactly like a one-minute-old pending copy.\n{run.stdout}",
+        )
+
+
+class TestAnUnparseableSyncTimestampDegradesToTheAgeWindow(unittest.TestCase):
+    """`date -d` is GNU-only, and the timestamp it reads is a human string.
+
+    On the VPS this parses (verified 2026-09-25: ``Fri 2026-09-25 13:27:33
+    CEST`` resolves). Anywhere it does not, the sync-unit read must degrade to
+    the commit-age window WITHOUT inventing a run — and the operator text must
+    say the run could not be read rather than describing one.
+
+    The degradation is not free, and this class is where that cost is written
+    down: the same host state that reports drift with a working ``date -d``
+    reports a pending copy without one. It is safe only because the live host
+    has GNU date; it is not safe in general.
+    """
+
+    GRACE_AGE_S = 600
+
+    def _now(self) -> int:
+        return int(dt.datetime.now(dt.UTC).timestamp())
+
+    def _run_with_a_sync_after_the_commit(self, date_stub: str) -> ScriptRun:
+        return _run_fixture(
+            rules_commit_age_seconds=self.GRACE_AGE_S,
+            live_content="",
+            working_tree_content=STALE_WORKING_TREE_CONTENT,
+            stubs={
+                "systemctl": _stub_systemctl(exit_status="0", exit_timestamp=f"@{self._now()}"),
+                "date": date_stub,
+            },
+        )
+
+    def test_an_unparseable_timestamp_never_claims_a_sync_run_happened(self) -> None:
+        run = self._run_with_a_sync_after_the_commit(_STUB_DATE_CANNOT_PARSE)
+        self.assertIn(
+            "the sync unit's last run could not be read from here",
+            run.stdout,
+            "with no readable exit time the script must say so, not describe a run "
+            f"it could not read.\n{run.stdout}",
+        )
+        self.assertNotIn(
+            "its last run exited",
+            run.stdout,
+            f"the script described a run whose timestamp it could not parse.\n{run.stdout}",
+        )
+
+    def test_the_degradation_costs_a_verdict_and_the_control_proves_it(self) -> None:
+        # Same host state, two dates. This is the documented cost, not a bug:
+        # without a readable exit time the script cannot tell drift from a
+        # pending copy and falls back to the age window.
+        degraded = self._run_with_a_sync_after_the_commit(_STUB_DATE_CANNOT_PARSE)
+        self.assertTrue(
+            degraded.has_line_starting("WARN live rules are behind origin/main"),
+            f"expected the age-only arm once the exit time is unreadable.\n{degraded.stdout}",
+        )
+        working = self._run_with_a_sync_after_the_commit(_STUB_GNU_DATE)
+        self.assertTrue(
+            working.has_line_starting("FAIL live rules do not match origin/main"),
+            "positive control: with a readable exit time the SAME state is drift. "
+            f"If this warns too, the sync-unit read is dead, not degraded.\n{working.stdout}",
         )
 
 
