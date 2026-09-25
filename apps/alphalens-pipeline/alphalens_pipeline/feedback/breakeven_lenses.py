@@ -42,6 +42,27 @@ gate, then ``"validated"`` — a flag flip, not a code change. The design doctri
 (default-realized, in-sample labelling, registry-driven selector) lives in
 ``docs/research/edge_whatif_lens_registry_plan_2026_06_30.md``.
 
+HOW A LENS VALUE GETS INTO THE STORE — two paths, not one. The DAILY path stamps
+forward only: it never recomputes a row that already carries a value. History is
+nevertheless written retroactively, by a from-scratch rebuild of the
+population-ladder store (last run 2026-09-12, issue #1416) or by a per-key merge
+backfill script. ADR 0013 R3 allows the LENS part of that: its rule is that
+existing rows are never restamped and terminals stay frozen, and the what-if
+layer is named as the sole exception, recomputable at any time over cached bars.
+R3 does not cover everything a rebuild does — the 2026-09-12 run also moved
+frozen terminal rows outside the lens layer (``realized_r`` on 21.1% of the 418
+comparable rows, 38 ladder classifications). So a per-lens "populates forward
+only" note below describes
+the daily path, NOT the store — every lens registered so far carries values on
+terminal rows that matured before it existed. Two consequences worth knowing:
+the store records NO provenance for a lens value, so a forward-stamped cell and
+a backfilled cell are indistinguishable (``breakeven_realized_r_json`` is the
+only lens-bearing column); and a rebuild REPLACES lens history rather than adding
+to it. On the 591 rows terminal both before and after the 2026-09-12 run, EVERY
+lens lost some values it used to hold (between 5 and 34 of them). Five gained
+more than they lost; ``be_0p5r_trail0p6_ttl7`` did not, ending at 420 values
+where it held 452 (measured 2026-09-24 against the retained pre-rebuild store).
+
 NAMING NOTE: the historical module / ``BREAKEVEN_LENSES`` / ``breakeven_grid`` /
 ``breakeven_realized_r_json`` names predate the second (fill-anchored) kind and are
 kept to avoid a data migration on the live stamped column. Read them as the general
@@ -177,8 +198,12 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     # trails at 0.6 of the peak gain instead of sitting flat at break-even.
     # Parameters were fixed in the memo BEFORE registration, so its forward
     # sample is a clean read — but it is still in_sample until that forward
-    # N crosses the gate. Populates FORWARD-ONLY (frozen terminal rows keep
-    # their stamped grid; PR #747).
+    # N crosses the gate. The DAILY path populates it forward only (a frozen
+    # terminal row keeps its stamped grid; PR #747), but its history was
+    # written retroactively by the 2026-09-12 rebuild: 116 of the 157 terminal
+    # rows that matured before this lens was registered carry a value
+    # (measured 2026-09-24). See the module docstring for why that is allowed
+    # and why a backfilled cell cannot be told apart from a forward one.
     BreakevenLens(
         lens_id="be_0p5r_trail0p6",
         label="break-even +0.5R · trail 0.6",
@@ -200,8 +225,11 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     # max(cost floor +0.6%, +1.5xATR)). No day-flatten (deliberate deviation —
     # every lens shares the same bar window). Parameters were fixed in the memo
     # BEFORE registration, so its forward sample is a clean read — but it is
-    # still in_sample until that forward N crosses the gate. Populates
-    # FORWARD-ONLY (frozen terminal rows keep their stamped grid; PR #747).
+    # still in_sample until that forward N crosses the gate. The DAILY path
+    # populates it forward only (a frozen terminal row keeps its stamped grid;
+    # PR #747), but its history was written retroactively by the 2026-09-12
+    # rebuild: 116 of the 157 terminal rows that matured before this lens was
+    # registered carry a value (measured 2026-09-24). See the module docstring.
     BreakevenLens(
         lens_id="atr_bracket_1p5",
         label="ATR bracket 1.5 (bezpazery) · realised-fill anchor",
@@ -227,11 +255,15 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     # since removed the bracket from the live path altogether). Registered beside the
     # realised-anchor lens above rather than replacing it: the historical
     # ``atr_bracket_1p5`` id carries every already-stamped value, and the daily
-    # path never recomputes a stamped row, so this one populates FORWARD-ONLY.
-    # A head-to-head of the two means is therefore invalid until this lens
-    # accrues its own N — before that it compares cohorts, not anchors. Even
-    # after that, compare them ONLY on rows where both are non-null: the two
-    # anchors share the no-fill gate but not the bracket-constructibility gates
+    # path never recomputes a stamped row, so the DAILY path gives this one
+    # forward rows only. Its history came from the 2026-09-12 rebuild instead:
+    # 454 of the 563 terminal rows that matured before this lens was registered
+    # carry a value, and both anchors now hold 633 non-null terminal values
+    # (measured 2026-09-24). The two are therefore no longer a registration
+    # date apart, which is what used to make a head-to-head of the means a
+    # comparison of cohorts rather than of anchors. Still compare them ONLY on
+    # rows where both are non-null: the two anchors share the no-fill gate but
+    # not the bracket-constructibility gates
     # (bezpazery_lens_design_2026_07_16.md §7.5).
     # Charges its own row in the ~2026-09 walk-forward multiplicity budget
     # (ADR 0013 R4).
