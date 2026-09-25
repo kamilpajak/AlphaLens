@@ -34,7 +34,7 @@ name: alphalens-prod
 x-django-base: &django-base
   image: ghcr.io/kamilpajak/alphalens-django:${ALPHALENS_DJANGO_TAG:-latest}
   # `pull_policy: always` makes `docker compose up -d` re-check the
-  # registry every bring-up. Combined with immutable sha-<short> tags
+  # registry every bring-up. Combined with immutable sha-<commit> tags
   # from the build-django-image workflow, this is the cheapest minimal-
   # downtime path: edit ALPHALENS_DJANGO_TAG in .env, re-run up -d.
   # NOT zero downtime — Compose stops the old container before starting

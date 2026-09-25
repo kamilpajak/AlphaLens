@@ -26,6 +26,14 @@ REPO="${REPO:-$HOME/AlphaLens}"
 COMPOSE_DIR="$REPO/deploy/docker/django-prod"
 COMPOSE_FILE="$COMPOSE_DIR/docker-compose.yaml"
 IMAGE="ghcr.io/kamilpajak/alphalens-django"
+# Prefix of the per-commit registry tag. KEEP IN SYNC with the
+# `type=sha,prefix=...,format=long` entry in
+# .github/workflows/django-image.yml — that workflow writes the tag this script
+# reads. The tag carries the WHOLE commit SHA: an abbreviation has an adaptive
+# length on the git side and a fixed one on the workflow side, and the two
+# stopped matching without saying so (#1569). Pinned by
+# apps/alphalens-research/tests/test_django_image_tag_scheme_parity.py.
+IMAGE_TAG_PREFIX="sha-"
 PROM_CONTAINER="${PROM_CONTAINER:-prometheus}"
 # Live Prometheus rules are a COPY bind-mounted to /etc/prometheus, NOT the repo
 # file. The comparison reference is the origin/main BLOB — never this checkout:
@@ -56,7 +64,7 @@ SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 # The exact on.push.paths of .github/workflows/django-image.yml. The image is
 # only (re)built when a main commit touches one of these, so the "expected"
 # image commit is the latest origin/main commit touching THEM — NOT HEAD (a
-# docs/research commit builds no image, and comparing against sha-<HEAD> would
+# docs/research commit builds no image, and comparing against the tag of HEAD would
 # false-fail every time). KEEP IN SYNC with the workflow — pinned by
 # apps/alphalens-research/tests/test_postdeploy_check_paths_parity.py.
 DJANGO_TRIGGER_PATHS=(
@@ -210,24 +218,24 @@ echo "== Check 2/3: running Django image == current main django build =="
 # an old container and silently PASS a real image drift (false-pass is worse
 # than false-fail for a gate).
 EXPECTED_SHA=""
-SHORT=""
+EXPECTED_TAG=""
 if [ -n "$ORIGIN_MAIN_ERR" ]; then
   bad "$ORIGIN_MAIN_ERR — cannot resolve the expected image commit; image-drift check skipped"
 else
   EXPECTED_SHA="$(git -C "$REPO" log -1 --format=%H origin/main -- "${DJANGO_TRIGGER_PATHS[@]}" 2>/dev/null)"
-  SHORT="$(git -C "$REPO" rev-parse --short "$EXPECTED_SHA" 2>/dev/null)"
-  if [ -z "$EXPECTED_SHA" ] || [ -z "$SHORT" ]; then
+  if [ -z "$EXPECTED_SHA" ]; then
     bad "could not resolve a django build commit on origin/main from the trigger paths"
-    EXPECTED_SHA=""
+  else
+    EXPECTED_TAG="$IMAGE_TAG_PREFIX$EXPECTED_SHA"
   fi
 fi
 
 if [ -n "$EXPECTED_SHA" ]; then
   RUN_REV="$(docker inspect "$CONTAINER" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)"
   if [ "$RUN_REV" = "$EXPECTED_SHA" ]; then
-    ok "running image revision matches latest main django build (sha-$SHORT)"
+    ok "running image revision matches latest main django build ($EXPECTED_TAG)"
   else
-    bad "running revision '${RUN_REV:-<none>}' != expected '$EXPECTED_SHA' (sha-$SHORT) — VPS has not pulled the current main image: 'docker compose pull && docker compose up -d'"
+    bad "running revision '${RUN_REV:-<none>}' != expected '$EXPECTED_SHA' — VPS has not pulled the current main image: 'docker compose pull && docker compose up -d'"
   fi
   # Registry cross-check (best-effort). RepoDigest is the pullable digest; .Image
   # is the LOCAL config-blob id and must NOT be compared to the registry. A
@@ -235,15 +243,44 @@ if [ -n "$EXPECTED_SHA" ]; then
   # registry-free authority that already FAILs on real drift.
   RUN_IMGID="$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null)"
   RUN_DIGEST="$(docker image inspect "$RUN_IMGID" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' 2>/dev/null | sed 's/.*@//')"
-  EXP_DIGEST="$(docker buildx imagetools inspect "$IMAGE:sha-$SHORT" 2>/dev/null | awk '/^Digest:/{print $2; exit}')"
+  # An empty digest had ONE message for several causes with opposite
+  # lifetimes, and that is what hid #1569 for months: a permanent mismatch
+  # read as a passing network problem. Split on the EXIT STATUS first, because
+  # it is the only signal that says whether the registry answered at all;
+  # text-matching alone cannot tell a failed call from an answer with an
+  # unexpected shape. Only when the call FAILED is the text consulted, to
+  # separate "no such tag" from everything else. One call, its output and its
+  # status captured together — never two calls, which could disagree.
+  # All three stay WARN: the revision-label check above is the registry-free
+  # authority and already FAILs on real drift. What changes is what the
+  # operator is told to go and do.
+  IMAGETOOLS_OUT="$(docker buildx imagetools inspect "$IMAGE:$EXPECTED_TAG" 2>&1)"
+  IMAGETOOLS_RC=$?
+  EXP_DIGEST=""
+  if [ "$IMAGETOOLS_RC" -eq 0 ]; then
+    EXP_DIGEST="$(printf '%s\n' "$IMAGETOOLS_OUT" | awk '/^Digest:/{print $2; exit}')"
+  fi
   if [ -z "$EXP_DIGEST" ]; then
-    warn "could not resolve GHCR digest for $IMAGE:sha-$SHORT (registry unreachable or image not built) — relied on the revision-label check above"
+    if [ "$IMAGETOOLS_RC" -eq 0 ]; then
+      warn "GHCR answered for $IMAGE:$EXPECTED_TAG but the answer carries no digest, so nothing was compared. The output shape may have changed. Relied on the revision-label check above. Registry said: $(printf '%s' "$IMAGETOOLS_OUT" | head -1)"
+    else
+      case "$IMAGETOOLS_OUT" in
+        *"not found"*)
+          # GHCR reports a package the caller may not READ as absent, so this
+          # arm covers an expired login as well as a genuinely missing tag.
+          warn "GHCR has no tag $EXPECTED_TAG, or will not show it to this host. This will not fix itself by waiting. Check, in order: that your credentials are current (docker login ghcr.io), that the image workflow published for that commit, and that the tag scheme in .github/workflows/django-image.yml still matches the one this script builds. Relied on the revision-label check above."
+          ;;
+        *)
+          warn "could not reach GHCR for $IMAGE:$EXPECTED_TAG, so the digest was not compared (the tag may well exist). Relied on the revision-label check above. Registry said: $(printf '%s' "$IMAGETOOLS_OUT" | head -1)"
+          ;;
+      esac
+    fi
   elif [ -z "$RUN_DIGEST" ]; then
     warn "running image has no RepoDigest (built locally, never pulled?) — relied on the revision-label check above"
   elif [ "$RUN_DIGEST" = "$EXP_DIGEST" ]; then
-    ok "running image digest matches GHCR sha-$SHORT"
+    ok "running image digest matches GHCR $EXPECTED_TAG"
   else
-    bad "running digest $RUN_DIGEST != GHCR $EXP_DIGEST for sha-$SHORT"
+    bad "running digest $RUN_DIGEST != GHCR $EXP_DIGEST for $EXPECTED_TAG"
   fi
 fi
 
