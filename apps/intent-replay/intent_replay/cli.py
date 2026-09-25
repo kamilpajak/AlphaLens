@@ -110,68 +110,59 @@ CONFIG_MALFORMED_REASONS: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _engine(code: str, meaning: str) -> tuple[str, FailureCode]:
-    return code, FailureCode(name=code, retryable=False, meaning=meaning)
+def _code(name: str, meaning: str) -> FailureCode:
+    return FailureCode(name=name, retryable=False, meaning=meaning)
 
 
-def _cli(code: str, meaning: str) -> tuple[str, FailureCode]:
-    return code, FailureCode(name=code, retryable=False, meaning=meaning)
+def _registry(*codes: FailureCode) -> Mapping[str, FailureCode]:
+    return MappingProxyType({code.name: code for code in codes})
 
 
-_ENGINE_CODES: Final[Mapping[str, FailureCode]] = MappingProxyType(
-    dict(
-        [
-            _engine(bars.BARS_EMPTY_CODE, "No bars were supplied."),
-            _engine(bars.BARS_UNORDERED_CODE, "The bars are not strictly increasing in time."),
-            _engine(
-                bars.BARS_INVALID_CODE,
-                "A bar carries a price that cannot be compared (NaN or infinite); "
-                "`details.reason` and `details.field` name it.",
-            ),
-            _engine(
-                bars.WINDOW_TOO_SHORT_CODE,
-                "The bars do not cover the stated `walk_start`; `details.reason` says which side.",
-            ),
-            _engine(
-                config.CONFIG_INCOMPLETE_CODE,
-                "A required configuration value was not stated; `details.keys` names "
-                "every missing key.",
-            ),
-            _engine(
-                config.CONFIG_INVALID_CODE,
-                "A stated configuration value nothing can use; `details.keys` and "
-                "`details.reason` name it.",
-            ),
-            _engine(
-                classification.PATH_UNCLASSIFIED_CODE,
-                "The document carries a path the replay neither interprets, translates "
-                "nor lists as out of scope; `details.paths` names them.",
-            ),
-        ]
-    )
+_ENGINE_CODES: Final[Mapping[str, FailureCode]] = _registry(
+    _code(bars.BARS_EMPTY_CODE, "No bars were supplied."),
+    _code(bars.BARS_UNORDERED_CODE, "The bars are not strictly increasing in time."),
+    _code(
+        bars.BARS_INVALID_CODE,
+        "A bar carries a price that cannot be compared (NaN or infinite); "
+        "`details.reason` and `details.field` name it.",
+    ),
+    _code(
+        bars.WINDOW_TOO_SHORT_CODE,
+        "The bars do not cover the stated `walk_start`; `details.reason` says which side.",
+    ),
+    _code(
+        config.CONFIG_INCOMPLETE_CODE,
+        "A required configuration value was not stated; `details.keys` names every missing key.",
+    ),
+    _code(
+        config.CONFIG_INVALID_CODE,
+        "A stated configuration value nothing can use; `details.keys` and "
+        "`details.reason` name it.",
+    ),
+    _code(
+        classification.PATH_UNCLASSIFIED_CODE,
+        "The document carries a path the replay neither interprets, translates "
+        "nor lists as out of scope; `details.paths` names them.",
+    ),
 )
-_CLI_CODES: Final[Mapping[str, FailureCode]] = MappingProxyType(
-    dict(
-        [
-            _cli(
-                "intent_malformed",
-                "The document is not the published input contract: not JSON, a repeated "
-                "key, a derived field, a schema violation, a missing or malformed trade "
-                "date, undecodable, or carrying a key the decoder would discard. "
-                "`details.reason` names which.",
-            ),
-            _cli(
-                "config_malformed",
-                "The configuration file is not one JSON object: not JSON, or a repeated "
-                "key. `details.reason` names which, `details.path` the file.",
-            ),
-            _cli(
-                "usage",
-                "The invocation is malformed (a bad option or value), or a file it names "
-                "cannot be read (`details.path`).",
-            ),
-        ]
-    )
+_CLI_CODES: Final[Mapping[str, FailureCode]] = _registry(
+    _code(
+        "intent_malformed",
+        "The document is not the published input contract: not JSON, a repeated "
+        "key, a derived field, a schema violation, a missing or malformed trade "
+        "date, undecodable, or carrying a key the decoder would discard. "
+        "`details.reason` names which.",
+    ),
+    _code(
+        "config_malformed",
+        "The configuration file is not one JSON object: not JSON, or a repeated "
+        "key. `details.reason` names which, `details.path` the file.",
+    ),
+    _code(
+        "usage",
+        "The invocation is malformed (a bad option or value), or a file it names "
+        "cannot be read (`details.path`).",
+    ),
 )
 FAILURE_CODES: Final[Mapping[str, FailureCode]] = MappingProxyType(
     {
@@ -492,7 +483,7 @@ def _read(source: str, *, suggestions: tuple[Suggestion, ...] = ()) -> bytes:
     if source == "-":
         return sys.stdin.buffer.read()
     try:
-        return Path(source).read_bytes()
+        return Path(source).read_bytes()  # NOSONAR S8707: reading the named file is the job
     except OSError as exc:
         raise _RefusalError(
             Failure(
