@@ -239,7 +239,7 @@ COMMANDS: Final[tuple[Command, ...]] = (
             Argument(
                 name="DOCUMENT",
                 dest="document",
-                help="path to a TradeIntent JSON document, or - to read one from stdin",
+                help="path to a TradeIntent JSON document, or - to read one from stdin (to EOF)",
             ),
         ),
         options=(
