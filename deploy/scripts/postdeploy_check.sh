@@ -243,23 +243,38 @@ if [ -n "$EXPECTED_SHA" ]; then
   # registry-free authority that already FAILs on real drift.
   RUN_IMGID="$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null)"
   RUN_DIGEST="$(docker image inspect "$RUN_IMGID" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' 2>/dev/null | sed 's/.*@//')"
-  # Keep stderr: an empty digest has two causes with opposite lifetimes, and
-  # one message for both is what hid #1569 for months. `not found` means the
-  # tag is not in the registry and will not appear by waiting; anything else
-  # (DNS, auth, a 5xx) is a blip. Both stay WARN, because the revision-label
-  # check above is the registry-free authority — but the operator must be able
-  # to tell "come back later" from "go and look".
+  # An empty digest had ONE message for several causes with opposite
+  # lifetimes, and that is what hid #1569 for months: a permanent mismatch
+  # read as a passing network problem. Split on the EXIT STATUS first, because
+  # it is the only signal that says whether the registry answered at all;
+  # text-matching alone cannot tell a failed call from an answer with an
+  # unexpected shape. Only when the call FAILED is the text consulted, to
+  # separate "no such tag" from everything else. One call, its output and its
+  # status captured together — never two calls, which could disagree.
+  # All three stay WARN: the revision-label check above is the registry-free
+  # authority and already FAILs on real drift. What changes is what the
+  # operator is told to go and do.
   IMAGETOOLS_OUT="$(docker buildx imagetools inspect "$IMAGE:$EXPECTED_TAG" 2>&1)"
-  EXP_DIGEST="$(printf '%s\n' "$IMAGETOOLS_OUT" | awk '/^Digest:/{print $2; exit}')"
+  IMAGETOOLS_RC=$?
+  EXP_DIGEST=""
+  if [ "$IMAGETOOLS_RC" -eq 0 ]; then
+    EXP_DIGEST="$(printf '%s\n' "$IMAGETOOLS_OUT" | awk '/^Digest:/{print $2; exit}')"
+  fi
   if [ -z "$EXP_DIGEST" ]; then
-    case "$IMAGETOOLS_OUT" in
-      *"not found"*)
-        warn "GHCR has no tag $EXPECTED_TAG. This will not fix itself: either the image workflow did not publish for that commit, or the tag scheme in .github/workflows/django-image.yml no longer matches the one this script builds. Relied on the revision-label check above."
-        ;;
-      *)
-        warn "could not reach GHCR for $IMAGE:$EXPECTED_TAG, so the digest was not compared (the tag may well exist). Relied on the revision-label check above. Registry said: $(printf '%s' "$IMAGETOOLS_OUT" | head -1)"
-        ;;
-    esac
+    if [ "$IMAGETOOLS_RC" -eq 0 ]; then
+      warn "GHCR answered for $IMAGE:$EXPECTED_TAG but the answer carries no digest, so nothing was compared. The output shape may have changed. Relied on the revision-label check above. Registry said: $(printf '%s' "$IMAGETOOLS_OUT" | head -1)"
+    else
+      case "$IMAGETOOLS_OUT" in
+        *"not found"*)
+          # GHCR reports a package the caller may not READ as absent, so this
+          # arm covers an expired login as well as a genuinely missing tag.
+          warn "GHCR has no tag $EXPECTED_TAG, or will not show it to this host. This will not fix itself by waiting. Check, in order: that your credentials are current (docker login ghcr.io), that the image workflow published for that commit, and that the tag scheme in .github/workflows/django-image.yml still matches the one this script builds. Relied on the revision-label check above."
+          ;;
+        *)
+          warn "could not reach GHCR for $IMAGE:$EXPECTED_TAG, so the digest was not compared (the tag may well exist). Relied on the revision-label check above. Registry said: $(printf '%s' "$IMAGETOOLS_OUT" | head -1)"
+          ;;
+      esac
+    fi
   elif [ -z "$RUN_DIGEST" ]; then
     warn "running image has no RepoDigest (built locally, never pulled?) — relied on the revision-label check above"
   elif [ "$RUN_DIGEST" = "$EXP_DIGEST" ]; then

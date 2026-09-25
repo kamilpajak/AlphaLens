@@ -27,8 +27,10 @@ against the real registry the first time the gate runs after a deploy, not here.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -47,6 +49,116 @@ _PREFIX_ASSIGN_RE = re.compile(r'^IMAGE_TAG_PREFIX="(?P<value>[^"]*)"', re.MULTI
 # it is the one whose right-hand side is not the empty string.
 _TAG_ASSIGN_RE = re.compile(r'^\s*(?P<line>EXPECTED_TAG=(?!""$).+)$', re.MULTILINE)
 _ABBREVIATION_RE = re.compile(r"rev-parse\s+--short")
+
+_RUNNING_DIGEST = "sha256:" + "a" * 64
+_LOCAL_IMAGE_ID = "sha256:" + "b" * 64
+
+# `docker buildx imagetools inspect` answers, as (stdout+stderr, exit status).
+_IMAGETOOLS_OK = 'printf "Digest: $REGISTRY_DIGEST\\n"; exit 0'
+_IMAGETOOLS_EMPTY_OK = 'printf "Name: something\\n"; exit 0'
+_IMAGETOOLS_NOT_FOUND = 'printf "ERROR: %s: not found\\n" "$2" >&2; exit 1'
+_IMAGETOOLS_DOWN = (
+    'printf "failed to do request: dial tcp: lookup ghcr.io: no such host\\n" >&2; exit 1'
+)
+
+_DOCKER_STUB = """#!/usr/bin/env bash
+# Only the four verbs postdeploy_check.sh uses. Anything else is a test bug,
+# not a pass: exit non-zero loudly rather than pretending.
+case "$*" in
+  *"compose"*"ps -q django"*) printf 'fake-container\\n' ;;
+  *"inspect"*"org.opencontainers.image.revision"*) printf '%s\\n' "$EXPECTED_REVISION" ;;
+  *"image inspect"*RepoDigests*) printf '%s\\n' "$RUNNING_DIGEST" ;;
+  *"inspect"*".Image"*) printf '%s\\n' "$LOCAL_IMAGE_ID" ;;
+  *"buildx imagetools inspect"*) IMAGETOOLS_BODY ;;
+  *"exec"*promtool*) exit 1 ;;
+  *) printf 'docker stub: unhandled verb: %s\\n' "$*" >&2; exit 97 ;;
+esac
+"""
+
+
+def _run_check_two(*, imagetools: str, registry_digest: str) -> str:
+    """Build a repo whose newest trigger-path commit is known, then run the script.
+
+    Check 2 only reaches the digest arm when it can resolve an expected commit
+    from a django image trigger path, so the fixture commits one (`uv.lock`).
+    The live-rules and promtool checks fail in here and are ignored; this
+    fixture is about check 2's registry branch and nothing else.
+    """
+    env_base = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_AUTHOR_NAME": "Fixture",
+        "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+        "GIT_COMMITTER_NAME": "Fixture",
+        "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+    }
+
+    def git(cwd: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            check=True,
+            env=env_base,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        origin = root / "origin.git"
+        subprocess.run(
+            ["git", "init", "--bare", "-b", "main", str(origin)],
+            check=True,
+            env=env_base,
+            capture_output=True,
+        )
+        clone = root / "clone"
+        subprocess.run(
+            ["git", "clone", str(origin), str(clone)],
+            check=True,
+            env=env_base,
+            capture_output=True,
+        )
+        (clone / "uv.lock").write_text("# a django image trigger path\n")
+        git(clone, "add", "-A")
+        git(clone, "commit", "-m", "touch a trigger path")
+        git(clone, "push", "origin", "main")
+        expected_revision = git(clone, "rev-parse", "HEAD")
+
+        stub_dir = root / "stubs"
+        stub_dir.mkdir()
+        stub = stub_dir / "docker"
+        stub.write_text(_DOCKER_STUB.replace("IMAGETOOLS_BODY", imagetools))
+        stub.chmod(0o755)
+
+        live = root / "live.rules"
+        live.write_text("groups: []\n")
+
+        env = dict(env_base)
+        env.update(
+            {
+                "PATH": f"{stub_dir}:{env_base['PATH']}",
+                "REPO": str(clone),
+                "LIVE_RULES": str(live),
+                "PROM_CONTAINER": "no-such-container-tag-fixture",
+                "EXPECTED_REVISION": expected_revision,
+                "RUNNING_DIGEST": f"ghcr.io/x/y@{_RUNNING_DIGEST}",
+                "REGISTRY_DIGEST": registry_digest,
+                "LOCAL_IMAGE_ID": _LOCAL_IMAGE_ID,
+            }
+        )
+        done = subprocess.run(
+            ["bash", str(SCRIPT)],
+            env=env,
+            capture_output=True,
+            text=True,
+            cwd=str(root),
+        )
+        if "unhandled verb" in done.stdout + done.stderr:
+            raise AssertionError(
+                f"the docker stub was asked something it does not model:\n{done.stderr}"
+            )
+        return done.stdout
 
 
 def _workflow_sha_tag_params() -> dict[str, str]:
@@ -208,3 +320,52 @@ class TestTheRegistryFailureStatesAreToldApart(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheDigestArmTellsItsThreeOutcomesApart(unittest.TestCase):
+    """Run the script against a stubbed registry and read what it says.
+
+    The digest cross-check is best-effort: none of these outcomes changes the
+    exit status, because the revision label read off the running container is
+    the registry-free authority. What they change is what the operator is told
+    to do, and #1569 is a case where that text sent them after the wrong thing
+    for months.
+    """
+
+    def _run(self, *, imagetools: str, registry_digest: str = _RUNNING_DIGEST) -> str:
+        return _run_check_two(imagetools=imagetools, registry_digest=registry_digest)
+
+    def test_a_matching_digest_passes(self) -> None:
+        out = self._run(imagetools=_IMAGETOOLS_OK)
+        self.assertIn("running image digest matches GHCR", out, out)
+
+    def test_a_differing_digest_fails_the_gate(self) -> None:
+        out = self._run(imagetools=_IMAGETOOLS_OK, registry_digest="sha256:" + "0" * 64)
+        self.assertTrue(
+            any(line.startswith("FAIL running digest") for line in out.splitlines()),
+            f"a real digest mismatch must still fail the gate.\n{out}",
+        )
+
+    def test_an_absent_tag_says_so_and_names_credentials(self) -> None:
+        out = self._run(imagetools=_IMAGETOOLS_NOT_FOUND)
+        self.assertIn("GHCR has no tag", out, out)
+        # GHCR hides a package the caller may not read, so `not found` is also
+        # what an expired `docker login` looks like. A message that names only
+        # the workflow and the tag scheme sends the operator after the wrong
+        # thing.
+        self.assertIn("docker login", out, f"the absent-tag arm never mentions credentials.\n{out}")
+
+    def test_an_unreachable_registry_is_not_reported_as_an_absent_tag(self) -> None:
+        out = self._run(imagetools=_IMAGETOOLS_DOWN)
+        self.assertNotIn("GHCR has no tag", out, out)
+        self.assertIn("could not reach GHCR", out, out)
+
+    def test_a_successful_call_with_no_digest_is_not_blamed_on_the_registry(self) -> None:
+        # Exit status 0 means the registry answered. If the answer carries no
+        # Digest line, neither "no such tag" nor "could not reach" is true, and
+        # guessing between them by matching text is how the two got confused in
+        # the first place.
+        out = self._run(imagetools=_IMAGETOOLS_EMPTY_OK)
+        self.assertNotIn("GHCR has no tag", out, out)
+        self.assertNotIn("could not reach GHCR", out, out)
+        self.assertIn("no digest", out, f"the unexpected-answer arm is missing.\n{out}")
