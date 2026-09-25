@@ -114,7 +114,29 @@ fault.
   its own row in the multiplicity budget. One-in-one-out was rejected because
   retirement does not refund the budget (this rule), every removable lens is an
   accruing pre-registered forward read, and the no-TTL sibling must keep
-  stamping — the TTL-vs-no-TTL drift is itself the measurement.* Evidence: the break-even lens flipped mean R −0.371 → +0.069 in-sample
+  stamping — the TTL-vs-no-TTL drift is itself the measurement.*
+  *Amendment 2026-09-25: the charge follows the CLAIM, not the replay. A look
+  charges this budget when its result can SELECT a policy or stand as evidence
+  about one. That is what registration means here: a registered lens accrues a
+  pre-registered forward read and is read at the walk-forward. An EXPLORATORY
+  replay — run to compare, observe or understand, never cited as evidence of
+  edge — charges nothing, and the boundary is mechanical rather than a promise
+  to remember: a tool that writes no value into the stamped store accrues no
+  series, so no walk-forward can read one. `intent-replay` is that tool by
+  design (stamps nothing, no accrued history), and it, not this registry, is
+  where free experimentation belongs. What does NOT change: a registered lens
+  charges whether or not it is later retired, retirement refunds nothing, and
+  promotion from exploration to a registered lens needs FRESH pre-registration
+  and a fresh forward sample — exploratory history cannot be carried in,
+  because its parameters were chosen after those outcomes were known. Why the
+  change: the cap was binding on experiments rather than on candidates, which
+  is the wrong constraint. Of the six lenses registered on 2026-09-25, two
+  carry no `preregistered_ref` (`be_0p5r`, `fill_anchored_0p5atr`), three have
+  no row in the §4.1 looks annex of `edge_hypothesis_budget_2026_07.md`
+  (`fill_anchored_0p5atr`, `be_0p5r_trail0p6`, `be_0p5r_trail0p6_ttl7`), and
+  `be_0p5r_trail0p6` has a live port shipped as `BreakevenTrailPolicy`
+  (`activation_r=0.5, trail_frac=0.6`) while still labelled `in_sample`.*
+  Evidence: the break-even lens flipped mean R −0.371 → +0.069 in-sample
   (`exit_geometry_reward_risk_2026_06_30.md` §4) and was still held to
   display-only, correctly — §5 lists why in-sample counterfactuals overstate.
 - **R5 — Failures attribute to exactly ONE layer.** ADR 0007's founding
@@ -163,7 +185,8 @@ fault.
      its artifact (candidate parquet / trade_setup / outcome rows).
    - Lens registry: every `BREAKEVEN_LENSES` entry carries
      `status="in_sample"` until a graduation record exists; registry length
-     ≤ `MAX_REGISTERED_LENSES` (5).
+     ≤ `MAX_REGISTERED_LENSES` (6 since the 2026-09-01 R4 amendment; this line
+     said 5 until 2026-09-25).
    - Existing sort-lock tests (`_NON_EXPERT_SORT_ALLOWLIST`) already pin R2's
      DISPLAY-side twin (display fields never enter ordering); keep them.
 
