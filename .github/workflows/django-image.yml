@@ -5,7 +5,7 @@ name: build-django-image
 # docker-compose.yaml (`image: ghcr.io/kamilpajak/alphalens-django:...`).
 #
 # Trigger surface:
-#   - push to main → tags `sha-<short>` + `latest`
+#   - push to main → tags `sha-<full commit sha>` + `latest`
 #   - workflow_dispatch → manual rebuild (e.g. after base-image CVE bump)
 
 on:
@@ -64,11 +64,21 @@ jobs:
         with:
           images: ghcr.io/kamilpajak/alphalens-django
           # Tag scheme:
-          #   - sha-<short>      every push (immutable, used by VPS for pinning)
+          #   - sha-<full commit sha>  every push (immutable, used by VPS for
+          #     pinning). `format=long`, NOT `short`: a short tag is a fixed
+          #     7-character truncation, while a reader that abbreviates with git
+          #     gets an ADAPTIVE length that grows with the repository. The two
+          #     silently stopped matching once git moved to 8, and
+          #     deploy/scripts/postdeploy_check.sh could no longer resolve any
+          #     tag (#1569). The whole SHA has no length to disagree about, and
+          #     it equals the `org.opencontainers.image.revision` label the same
+          #     check reads off the running container. Parity with the reader is
+          #     pinned by
+          #     apps/alphalens-research/tests/test_django_image_tag_scheme_parity.py.
           #   - <branch>         convenience alias (e.g. `feature-django-migration`)
           #   - latest           main branch only
           tags: |
-            type=sha,prefix=sha-,format=short
+            type=sha,prefix=sha-,format=long
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
 

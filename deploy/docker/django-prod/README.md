@@ -52,11 +52,17 @@ cp .env.example .env
 echo $GHCR_PAT | docker login ghcr.io -u kamilpajak --password-stdin
 
 # Deploy / re-deploy — pin the immutable sha of the merged commit, then bring up.
-# Resolve the sha-<short> CI just published (the manifest also tagged `latest`):
-gh api /users/kamilpajak/packages/container/alphalens-django/versions \
-  --jq 'map(select(.metadata.container.tags | index("latest")))[0].metadata.container.tags[]' \
-  | grep '^sha-'                                  # e.g. sha-da21050
-sed -i 's/^ALPHALENS_DJANGO_TAG=.*/ALPHALENS_DJANGO_TAG=sha-<short>/' .env
+# The tag is `sha-` + the WHOLE commit sha, so it can be computed without asking
+# the registry. Use the newest main commit that touched a django image trigger
+# path (a docs-only commit builds no image):
+TAG="sha-$(git -C ~/AlphaLens log -1 --format=%H origin/main -- \
+  apps/alphalens-django pyproject.toml uv.lock \
+  deploy/docker/django-prod/Dockerfile .github/workflows/django-image.yml)"
+sed -i "s/^ALPHALENS_DJANGO_TAG=.*/ALPHALENS_DJANGO_TAG=$TAG/" .env
+# To read it off the registry instead (the manifest is also tagged `latest`):
+# gh api /users/kamilpajak/packages/container/alphalens-django/versions \
+#   --jq 'map(select(.metadata.container.tags | index("latest")))[0].metadata.container.tags[]' \
+#   | grep '^sha-'
 docker compose pull
 docker compose up -d
 docker compose ps
@@ -65,8 +71,10 @@ curl -fsS http://127.0.0.1:8000/healthz
 bash ~/AlphaLens/deploy/scripts/postdeploy_check.sh --with-migrate
 ```
 
-**Rollback** — edit `ALPHALENS_DJANGO_TAG` in `.env` to a prior `sha-<short>`
-(e.g. `sha-883574d`) and re-run `docker compose up -d`. Do NOT pin inline
+**Rollback** — edit `ALPHALENS_DJANGO_TAG` in `.env` to a prior `sha-<commit>`
+and re-run `docker compose up -d`. Images published before 2026-09-25 carry a
+7-character tag instead (e.g. `sha-883574d`); those tags still resolve, they are
+just shorter. Do NOT pin inline
 (`ALPHALENS_DJANGO_TAG=... docker compose up -d`) — the next `up -d`
 without it would silently roll forward to `:latest`. The `.env` file is
 the single source of truth.
