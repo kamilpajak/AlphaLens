@@ -24,7 +24,9 @@ below with a one-line reason — making the trade-off explicit and reviewable.
 from __future__ import annotations
 
 import ast
+import sys
 import unittest
+from collections.abc import Iterable
 from pathlib import Path
 
 # Workspace root = repo top dir (two levels above this test file:
@@ -37,6 +39,7 @@ PACKAGE_DIRS: dict[str, Path] = {
     "alphalens_research": WORKSPACE_ROOT / "apps" / "alphalens-research" / "alphalens_research",
     "alphalens_cli": WORKSPACE_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli",
     "broker_contract": WORKSPACE_ROOT / "apps" / "alphalens-broker-contract" / "broker_contract",
+    "intent_replay": WORKSPACE_ROOT / "apps" / "intent-replay" / "intent_replay",
 }
 
 RULES = (
@@ -270,11 +273,52 @@ RULES = (
         "forbidden_prefix": "alphalens_research",
         "exemptions": set(),
     },
+    {
+        # intent-replay (spec section 3.1): the ENGINE modules import stdlib and
+        # broker_contract only, so the measurement half can be lifted into a
+        # standalone package carrying no dependency but the contract. This is
+        # an ALLOW-list, not a forbid-list, because the risk is the NEXT
+        # third-party import, which no list of known-bad prefixes can name.
+        # The adapter modules (door, cli) may also import jsonschema; their
+        # rows arrive with the files (PR 4 of #1571), since a rule must resolve
+        # to an existing module and an exemption must name an existing file.
+        "name": "intent_replay engine imports stdlib and broker_contract only",
+        "from_pkg": "intent_replay",
+        "allowed_prefixes": ("broker_contract",),
+        "exemptions": set(),
+    },
 )
 
 
+def _package_name_of(path: Path) -> str:
+    """The dotted package a module file belongs to, read off the tree: every
+    ancestor directory that carries an ``__init__.py``. Empty for a module
+    outside any package (the synthetic files the positive controls write)."""
+    parts: list[str] = []
+    directory = path.parent
+    while (directory / "__init__.py").is_file():
+        parts.append(directory.name)
+        directory = directory.parent
+    return ".".join(reversed(parts))
+
+
+def _resolve_relative(package: str, level: int, module: str | None) -> str:
+    """``from ..b import y`` inside ``pkg.sub`` -> ``pkg.b``; ``from . import z``
+    resolves to the package ``pkg.sub`` (the caller appends the imported
+    names, because each of them is a module). A level deeper than the package
+    is an error: Python refuses it at import time, and a static gate must not
+    quietly turn it into a bare name that might happen to be legal."""
+    base = package.split(".") if package else []
+    if level > len(base):
+        raise ValueError(
+            f"relative import level {level} reaches past the top of package {package!r}"
+        )
+    base = base[: len(base) - (level - 1)]
+    return ".".join(part for part in (*base, module) if part)
+
+
 def _iter_imports(path: Path, *, include_function_scope: bool):
-    """Yield every imported module name in ``path``.
+    """Yield every imported module name in ``path``, relative imports resolved.
 
     Covers both ``import X`` and ``from X import Y`` shapes (using ``ast.Import``
     + ``ast.ImportFrom`` respectively). Walks into all non-function nodes so
@@ -287,6 +331,7 @@ def _iter_imports(path: Path, *, include_function_scope: bool):
     imports, including lazy ones, are emitted.
     """
     tree = ast.parse(path.read_text(), filename=str(path))
+    package = _package_name_of(path)
 
     class _ImportCollector(ast.NodeVisitor):
         def __init__(self) -> None:
@@ -299,7 +344,14 @@ def _iter_imports(path: Path, *, include_function_scope: bool):
             self.generic_visit(node)
 
         def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-            if node.module:
+            if node.level:
+                base = _resolve_relative(package, node.level, node.module)
+                if node.module is None:
+                    # `from . import x, y`: each name is a MODULE of the package.
+                    self.modules.extend(f"{base}.{alias.name}" for alias in node.names)
+                else:
+                    self.modules.append(base)
+            elif node.module:
                 self.modules.append(node.module)
             self.generic_visit(node)
 
@@ -347,29 +399,66 @@ def _resolve_pkg_dir(from_pkg: str) -> Path:
     raise FileNotFoundError(f"rule package {from_pkg!r} resolves to no directory or module")
 
 
+def _violates(rule: dict, module: str) -> bool:
+    """Does importing ``module`` from inside ``rule["from_pkg"]`` break the rule?
+
+    Two rule KINDS. ``forbidden_prefix``: the import breaks the rule when it
+    starts with the prefix. ``allowed_prefixes``: the import is fine when it is
+    stdlib, the rule's own top-level package, or one of the listed prefixes
+    (exactly, or as a dotted parent); anything else breaks the rule. A rule
+    with both keys or neither is a defect, reported loudly rather than as a
+    rule that forbids nothing.
+    """
+    kinds = {"forbidden_prefix", "allowed_prefixes"} & set(rule)
+    if len(kinds) != 1:
+        raise ValueError(f"rule {rule.get('name')!r} must carry exactly one kind, has {kinds}")
+    if "forbidden_prefix" in rule:
+        return module.startswith(rule["forbidden_prefix"])
+    top = module.split(".", maxsplit=1)[0]
+    if top in sys.stdlib_module_names or top == rule["from_pkg"].split(".")[0]:
+        return False
+    return not any(
+        module == prefix or module.startswith(f"{prefix}.") for prefix in rule["allowed_prefixes"]
+    )
+
+
+def _violations_for(rule: dict, files: Iterable[Path]) -> list[tuple[str, str, str]]:
+    """Every (rule name, file, module) triple where ``files`` break ``rule``.
+
+    The one loop both ``test_rules`` and the positive controls run, so a
+    control exercises the same code path a real violation would take.
+    """
+    # Cross-tier pipeline rule: skip function-scope imports because the CLI is
+    # allowed to lazy-import the research tier inside command bodies (see the
+    # module docstring).
+    top_level_only = rule.get("top_level_only", False) or rule["from_pkg"] == "alphalens_pipeline"
+    violations: list[tuple[str, str, str]] = []
+    for path in files:
+        rel = (
+            str(path.relative_to(WORKSPACE_ROOT))
+            if path.is_relative_to(WORKSPACE_ROOT)
+            else str(path)
+        )
+        # Exemptions are keyed by BASENAME intentionally: the packages these
+        # rules scan are flat, so a basename is unambiguous, and it keeps the
+        # RULES entries readable (bare filename, not a workspace-relative path).
+        # If a scanned package ever grows subdirectories, switch this + the
+        # anti-rot check in test_exemptions_still_exist to relative paths.
+        if path.name in rule["exemptions"]:
+            continue
+        for module in _iter_imports(path, include_function_scope=not top_level_only):
+            if _violates(rule, module):
+                violations.append((rule["name"], rel, module))
+    return violations
+
+
 class TestModuleDependencies(unittest.TestCase):
     def test_rules(self):
         violations: list[tuple[str, str, str]] = []
         for rule in RULES:
-            pkg_dir = _resolve_pkg_dir(rule["from_pkg"])
-            # Cross-tier pipeline rule: skip function-scope imports because the
-            # CLI is allowed to lazy-import the research tier inside command
-            # bodies (see module docstring).
-            top_level_only = (
-                rule.get("top_level_only", False) or rule["from_pkg"] == "alphalens_pipeline"
+            violations.extend(
+                _violations_for(rule, _python_files(_resolve_pkg_dir(rule["from_pkg"])))
             )
-            for path in _python_files(pkg_dir):
-                rel = str(path.relative_to(WORKSPACE_ROOT))
-                # Exemptions are keyed by BASENAME intentionally: the packages these
-                # rules scan are flat, so a basename is unambiguous, and it keeps the
-                # RULES entries readable (bare filename, not a workspace-relative path).
-                # If a scanned package ever grows subdirectories, switch this + the
-                # anti-rot check in test_exemptions_still_exist to relative paths.
-                if path.name in rule["exemptions"]:
-                    continue
-                for module in _iter_imports(path, include_function_scope=not top_level_only):
-                    if module.startswith(rule["forbidden_prefix"]):
-                        violations.append((rule["name"], rel, module))
 
         self.assertEqual(
             violations,
@@ -401,7 +490,7 @@ class TestModuleDependencies(unittest.TestCase):
 
         self.assertIn("alphalens_pipeline.brokers.registry", modules)
         brokers_rules = [
-            rule for rule in RULES if rule["forbidden_prefix"] == "alphalens_pipeline.brokers"
+            rule for rule in RULES if rule.get("forbidden_prefix") == "alphalens_pipeline.brokers"
         ]
         self.assertGreaterEqual(
             len(brokers_rules), 3, "thematic + feedback + paper brokers rules must all exist"
@@ -757,6 +846,146 @@ class TestModuleDependencies(unittest.TestCase):
                     f"rule {rule['name']!r} would not catch the synthetic violation",
                 )
 
+    def test_relative_imports_resolve_to_absolute_names(self):
+        """A relative import is reported as the absolute module it names.
+
+        Before this the walker never read ``node.level``: ``from .bars import
+        Bar`` surfaced as a bare ``bars`` and ``from . import x`` vanished. A
+        forbid-list rule never noticed, because no forbidden prefix is bare;
+        an allow-list rule would flag every intra-package import as foreign.
+        Resolving to the absolute name fixes both and lets a rule name a
+        sibling module (``intent_replay.door``) as forbidden.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "pkg"
+            (pkg / "sub").mkdir(parents=True)
+            (pkg / "__init__.py").write_text("")
+            (pkg / "sub" / "__init__.py").write_text("")
+            module = pkg / "sub" / "mod.py"
+            module.write_text(
+                "from .a import x\nfrom ..b import y\nfrom . import z, q\nfrom pkg.c import w\n"
+            )
+            modules = list(_iter_imports(module, include_function_scope=True))
+
+        # `from . import z` names the MODULE pkg.sub.z, not the package: a rule
+        # forbidding a sibling module must see it (the intent_replay engine ->
+        # door edge of PR 4 is exactly that shape).
+        self.assertEqual(modules, ["pkg.sub.a", "pkg.b", "pkg.sub.z", "pkg.sub.q", "pkg.c"])
+
+    def test_a_relative_import_beyond_the_package_root_is_an_error(self):
+        """Python refuses `from ... import x` past the top-level package at
+        import time; a static gate must not quietly resolve it to a bare name
+        that might happen to be legal."""
+        with self.assertRaises(ValueError):
+            _resolve_relative("pkg.sub", 3, "x")
+        with self.assertRaises(ValueError):
+            _resolve_relative("", 1, "x")
+
+    def test_resolved_relative_imports_change_no_existing_verdict(self):
+        """Pins the measurement that made the walker change safe: across every
+        package the rules scan, no resolved relative import violates the rule
+        scanning it (72 relative imports, 0 hits when measured). If one ever
+        does, the rule author must decide, not the walker."""
+        seen = 0
+        for rule in RULES:
+            pkg_dir = _resolve_pkg_dir(rule["from_pkg"])
+            for path in _python_files(pkg_dir):
+                tree = ast.parse(path.read_text(), filename=str(path))
+                relative = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.level]
+                if not relative:
+                    continue
+                seen += len(relative)
+                package = _package_name_of(path)
+                for node in relative:
+                    resolved = _resolve_relative(package, node.level, node.module)
+                    self.assertFalse(
+                        _violates(rule, resolved),
+                        f"{path.name}: relative import resolved to {resolved!r} "
+                        f"violates rule {rule['name']!r}",
+                    )
+        self.assertGreater(seen, 0, "the scanned packages carry relative imports today")
+
+    def test_every_rule_carries_exactly_one_kind(self):
+        """A rule is a forbid-list (``forbidden_prefix``) or an allow-list
+        (``allowed_prefixes``), never both and never neither. The predicate is
+        only invoked per import, so a rule over a package with no imports would
+        never reach it; this test asks the RULES table directly."""
+        for rule in RULES:
+            with self.subTest(rule=rule["name"]):
+                kinds = {"forbidden_prefix", "allowed_prefixes"} & set(rule)
+                self.assertEqual(len(kinds), 1, f"rule {rule['name']!r} has kinds {kinds}")
+        base = {"name": "synthetic", "from_pkg": "broker_contract", "exemptions": set()}
+        with self.assertRaises(ValueError):
+            _violates(base, "os")
+        with self.assertRaises(ValueError):
+            _violates({**base, "forbidden_prefix": "x", "allowed_prefixes": ("y",)}, "os")
+
+    def test_intent_replay_engine_rule_exists_once(self):
+        """The intent_replay engine rule is the only barrier keeping the engine
+        importable without a library (spec section 3.1); it must exist once,
+        in the allow-list kind, with no escape hatch."""
+        rules = [rule for rule in RULES if rule["from_pkg"] == "intent_replay"]
+        self.assertEqual(len(rules), 1, "the intent_replay engine rule must exist exactly once")
+        rule = rules[0]
+        self.assertEqual(rule["allowed_prefixes"], ("broker_contract",))
+        self.assertNotIn("forbidden_prefix", rule)
+        self.assertNotIn("top_level_only", rule, "lazy imports must be caught too")
+        self.assertEqual(rule["exemptions"], set())
+        self.assertTrue(_python_files(_resolve_pkg_dir(rule["from_pkg"])))
+
+    def test_allowed_prefixes_rule_kind_positive_control(self):
+        """The allow-list kind cannot rot silently.
+
+        Runs the REAL collection loop (``_violations_for``) over a synthetic
+        engine directory. The engine shape must flag a third-party import, a
+        second third-party import that the adapter shape allows, and a lazy
+        first-party import; it must pass stdlib, the contract and a relative
+        sibling. The adapter shape must pass ``jsonschema`` and still flag
+        ``pandas`` — that difference is the per-module split of spec 3.1, the
+        one rule with no precedent in this file.
+        """
+        import tempfile
+
+        engine_rule = {
+            "name": "synthetic engine",
+            "from_pkg": "synthetic_engine",
+            "allowed_prefixes": ("broker_contract",),
+            "exemptions": set(),
+        }
+        adapter_rule = {**engine_rule, "name": "synthetic adapter"}
+        adapter_rule["allowed_prefixes"] = ("broker_contract", "jsonschema")
+        sources = {
+            "uses_pandas.py": "import pandas\n",
+            "uses_jsonschema.py": "import jsonschema\n",
+            "lazy_pipeline.py": (
+                "def f():\n    from alphalens_pipeline.data.factors import x\n    return x\n"
+            ),
+            "clean.py": (
+                "from __future__ import annotations\n"
+                "import math\n"
+                "from broker_contract.trade_intent.codec import intent_to_jsonable\n"
+                "from .bars import Bar\n"
+            ),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_engine"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            for name, source in sources.items():
+                (pkg / name).write_text(source)
+            files = _python_files(pkg)
+            engine = _violations_for(engine_rule, files)
+            adapter = _violations_for(adapter_rule, files)
+
+        flagged = sorted(module for _, _, module in engine)
+        self.assertEqual(flagged, ["alphalens_pipeline.data.factors", "jsonschema", "pandas"])
+        self.assertEqual(
+            sorted(module for _, _, module in adapter),
+            ["alphalens_pipeline.data.factors", "pandas"],
+        )
+
     def test_exemptions_still_exist(self):
         """A documented exemption must stay tied to a real violation.
 
@@ -780,10 +1009,9 @@ class TestModuleDependencies(unittest.TestCase):
                 assert path is not None  # narrow for the type checker (assertIsNotNone does not)
                 modules = list(_iter_imports(path, include_function_scope=True))
                 self.assertTrue(
-                    any(m.startswith(rule["forbidden_prefix"]) for m in modules),
-                    f"dead exemption: {name} no longer imports "
-                    f"{rule['forbidden_prefix']!r} — remove it from rule "
-                    f"{rule['name']!r}",
+                    any(_violates(rule, m) for m in modules),
+                    f"dead exemption: {name} no longer breaks rule "
+                    f"{rule['name']!r} — remove it from the rule's exemptions",
                 )
 
 

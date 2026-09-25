@@ -781,7 +781,7 @@ A faulty document gets the same code it would get at arming —
 `intent_invalid` or `intent_malformed` with `details.reason` — because the
 replay refuses what the door refuses, so it should refuse the same way. New
 codes only for its own failures: `bars_unordered`, `bars_empty`,
-`window_too_short`, `path_unclassified` for the gate of §4.3.1 (carrying
+`bars_invalid`, `window_too_short`, `path_unclassified` for the gate of §4.3.1 (carrying
 `details.paths`), `config_incomplete` for a required configuration value the
 caller did not state (§2.1, carrying `details.keys`), and
 `entry_mode_unsupported` for the `immediate` tranche v1 does not model (§4.3.1,
@@ -818,6 +818,17 @@ caller's input silently produces a wrong answer that leaves no trace.
 The check is a pure function of the bar sequence and ONE timestamp. It lives in
 `bars`, takes the stated `walk_start` as an argument, and does not read the
 configuration itself — so it can exist before the configuration model does.
+
+**`bars_invalid` is a bar that cannot be compared.** Added 2026-09-25 when the
+first implementation found a refusal the list above did not name: a bar whose
+price is NaN or infinite. `json.loads` accepts a bare `NaN`, and a NaN answers
+False to every ordering comparison, so a bar carrying one would pass every
+check downstream and describe a fill that never happened. The value type
+refuses it at construction, with `details.reason = numeric_not_finite` — the
+word `validate_intent` already publishes for the same fact in a document — and
+`details.field` naming the price. It is its own code rather than a reason under
+`bars_unordered` because it is a different failure mode: the sequence may be
+perfectly ordered and still carry a value nothing can compare.
 
 `entry_mode_unsupported` is a refusal and not a warning on purpose. The daemon
 buys an `immediate` tranche AT DRAIN, where `limit_price` is the operator's cap

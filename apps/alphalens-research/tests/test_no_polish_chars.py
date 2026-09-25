@@ -27,6 +27,7 @@ SCAN_DIRS = (
     "apps/alphalens-pipeline/alphalens_cli",
     "apps/alphalens-research/alphalens_research",
     "apps/alphalens-research/tests",
+    "apps/intent-replay/intent_replay",
 )
 
 # This test file must contain the Polish letters in its regex; exempt itself

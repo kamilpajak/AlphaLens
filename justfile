@@ -33,7 +33,7 @@ deadcode:
 
 # Lint Python (all members) + check web TS
 lint:
-    uv run ruff check apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
+    uv run ruff check apps/intent-replay apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
     cd apps/web && pnpm run check
 
 # Lint the Prometheus rules with promtool (PromQL syntax — the unit tests
@@ -87,7 +87,7 @@ lint-alertmanager:
 
 # Format Python (all members)
 fmt:
-    uv run ruff format apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
+    uv run ruff format apps/intent-replay apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
 
 # -------------------------------------------------------------------------
 # Tests

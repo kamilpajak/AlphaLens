@@ -61,6 +61,26 @@ def _python_test_sources():
         yield path
 
 
+def _directories_missing_a_package_marker(root: Path) -> list[Path]:
+    """Directories under ``root`` that hold a ``.py`` file somewhere beneath them
+    and carry no ``__init__.py`` of their own.
+
+    "Somewhere beneath" rather than "directly inside" on purpose: the loader
+    stops at the first non-package directory, so a data directory sitting ABOVE
+    a proper test package hides that package just as surely as a missing marker
+    on the package itself. ``root`` is the start directory and is not judged.
+    """
+    offenders: list[Path] = []
+    for directory in sorted(p for p in root.rglob("*") if p.is_dir()):
+        if "__pycache__" in directory.parts:
+            continue
+        if (directory / "__init__.py").exists():
+            continue
+        if any("__pycache__" not in f.parts for f in directory.rglob("*.py")):
+            offenders.append(directory)
+    return offenders
+
+
 class NoBareTestFunctionTest(unittest.TestCase):
     def test_no_module_level_test_function_exists(self) -> None:
         offenders: list[str] = []
@@ -137,6 +157,58 @@ class TheLoaderReallySkipsThemTest(unittest.TestCase):
         result = unittest.TestResult()
         suite.run(result)
         self.assertEqual((result.failures, result.errors), ([], []))
+
+
+class EveryDirectoryWithTestCodeIsAPackageTest(unittest.TestCase):
+    """`unittest discover` descends only through PACKAGES: a directory without
+    `__init__.py` is skipped together with everything beneath it, and the run
+    stays green having collected nothing. The rule is scoped to directories that
+    hold Python code somewhere below them; fixture directories (JSON, parquet,
+    cassettes, hive partitions such as `transaction_year=2023`) are data and are
+    not asked to be packages."""
+
+    def test_every_directory_holding_python_code_is_a_package(self) -> None:
+        offenders = _directories_missing_a_package_marker(WORKSPACE_ROOT / TEST_TREE)
+        self.assertEqual(
+            [str(p.relative_to(WORKSPACE_ROOT)) for p in offenders],
+            [],
+            "these directories hold test code but no __init__.py, so `unittest discover` "
+            "never enters them and their tests silently never run",
+        )
+
+    def test_the_scan_reaches_a_real_number_of_packages(self) -> None:
+        # Anti-rot: the rule is only as strong as the set it walks. The tree had
+        # 26 code-bearing directories when this was written.
+        code_dirs = [
+            d
+            for d in (WORKSPACE_ROOT / TEST_TREE).rglob("*")
+            if d.is_dir() and "__pycache__" not in d.parts and any(d.rglob("*.py"))
+        ]
+        self.assertGreater(len(code_dirs), 10)
+
+    def test_positive_control_three_shapes(self) -> None:
+        """The predicate must flag the two shapes that hide tests and pass the
+        data shape. Nothing here is imported, so the run stays coverage-safe."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # (a) data only: no .py anywhere beneath -> not a package, not flagged
+            (root / "data").mkdir()
+            (root / "data" / "rows.json").write_text("{}")
+            # (b) test code directly inside a non-package -> flagged
+            (root / "sub").mkdir()
+            (root / "sub" / "test_x.py").write_text("")
+            # (c) a proper package nested under a non-package -> the OUTER is flagged
+            (root / "outer" / "inner").mkdir(parents=True)
+            (root / "outer" / "inner" / "__init__.py").write_text("")
+            (root / "outer" / "inner" / "test_y.py").write_text("")
+
+            flagged = sorted(
+                p.relative_to(root).as_posix() for p in _directories_missing_a_package_marker(root)
+            )
+
+        self.assertEqual(flagged, ["outer", "sub"])
 
 
 if __name__ == "__main__":  # pragma: no cover
