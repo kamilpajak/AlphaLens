@@ -103,6 +103,16 @@ _MAX_SCALED_SLACK = 0.5
 # from below, so the share ceiling falls by 10x per decimal: a six-decimal
 # venue would refuse above 70 million shares. The tree's fixtures report 0 and
 # 3. Pinned per precision in test_quantity_properties.py.
+#
+# The refusal reaches more than `quantize_down`. A quantity above this also
+# fails `is_on_lattice` and therefore `is_tradable`, EVEN WHEN it is an exact
+# whole number of steps: `is_on_lattice(1_407_374_883_554.0)` on a 0.01 step is
+# False, because `quantize_down` refused it rather than because it sits off the
+# lattice. That is the safe answer — the module cannot name the quantity, so it
+# must not be traded — but it is not visible from the call site, hence this
+# note. `quantity_refusal` asks the limit question FIRST for the same reason,
+# so the operator reads "too large to name" and not "not a multiple".
+
 _SCALED_EXACT_LIMIT = 2**46
 # `step`-relative, therefore BOUNDED — safe to use for the membership and
 # minimum comparisons, which ask about a distance from a lattice point rather
