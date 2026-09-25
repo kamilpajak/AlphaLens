@@ -15,8 +15,29 @@ Design (memo §1.3):
   and an implied proxy (VIX ≥ 25). The OR is a single pre-committed a-priori
   choice (crypto-origin), logged in the config version.
 - neutral trend folds to up/down by ``sign(dist200)``; the (trend, vol) grid maps
-  to the four named states. Any missing/insufficient input → ``unknown`` (a
-  first-class token, never silently mapped to a real state).
+  to the four named states. A missing/insufficient input → ``unknown`` (a
+  first-class token, never silently mapped to a real state) — with ONE exception,
+  below.
+
+An OR does not always need both operands (#1559). With the realized leg at or
+above ``ATR_HIGH_Q`` the vol axis is 'high' whatever the VIX is, so the label is
+fully determined and blanking it would discard a decided answer. Only the other
+branch — realized leg low, VIX absent — is genuinely undetermined, because a VIX
+at or above ``VIX_HIGH`` would have flipped it. So ``vix`` is the one decision
+input that is not unconditionally required.
+
+Two partitions a forward study will want, both computable from columns already
+stamped — no extra column carries them:
+
+* **did the implied leg take part** — among rows the classifier DECIDED,
+  ``market_state_vix`` is NaN exactly when it did not, whatever the reason
+  (empty series, non-finite print, a refused fetch). Restrict to
+  ``market_state != 'unknown'`` first: :func:`_unknown_result` NaNs the same
+  column when the whole classification failed, so an unfiltered read mixes
+  "decided without the implied leg" with "decided nothing at all";
+* **did the implied leg DECIDE anything** — a present VIX is not a VIX that
+  mattered. Where ``market_state_atr_pct_q >= ATR_HIGH_Q`` the realized leg
+  settled the axis alone and the VIX is decoration.
 
 ``MARKET_STATE_CONFIG_VERSION`` is the sole poolability key for the label + all
 telemetry; the deferred forward study partitions rows by it, never pools across
@@ -69,7 +90,16 @@ KC_MULT = 1.5
 # `market_state_vix` and `market_state_vix_decile` are not comparable across the
 # boundary. The rows are NOT pooled with v1.1 rows; see the dated note in
 # docs/research/market_state_signal_design_2026_07_05.md.
-MARKET_STATE_CONFIG_VERSION = "mstate-v1.1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED"
+#
+# Bumped v1.1 -> v1.2 on 2026-09-25 (#1559). No threshold changed and no label
+# changed: for every row where both legs were finite the mapping is identical,
+# and all 8 rows ever stamped v1.1 had a present VIX. What changed is WHEN a
+# label is emitted — v1.2 decides a high-realized-vol day that v1.1 blanked. A
+# version string has to name exactly one emission rule, or it identifies nothing;
+# that, not a threshold edit, is what forces the bump. Kept in step with
+# docs/research/preregistration/ledger.json (pinned by a test — the v1.1 bump
+# never reached the ledger because nothing checked it).
+MARKET_STATE_CONFIG_VERSION = "mstate-v1.2-spy-sma50x200-atrq70-vix15_25-UNVALIDATED"
 
 # The columns this signal stamps onto every (broadcast) row. ``market_state`` is
 # the label; the rest are the raw continuous drivers + the poolability key.
@@ -108,10 +138,22 @@ def _trend_axis(c: float, sma50: float, sma200: float, slope: float, dist200: fl
     return "neutral"
 
 
-def _vol_axis(atr_pct_q: float, vix: float) -> str:
+def _vol_axis(atr_pct_q: float, vix: float) -> str | None:
     """Vol axis {low, high}: OR of a realized (ATR% quantile) and an implied (VIX)
-    proxy — either elevation flips the state to 'high' (memo §1.3)."""
-    return "high" if (atr_pct_q >= ATR_HIGH_Q or vix >= VIX_HIGH) else "low"
+    proxy — either elevation flips the state to 'high' (memo §1.3).
+
+    Returns ``None`` for the one case the OR cannot settle: the realized leg is
+    low and the VIX is unavailable, where a VIX at or above ``VIX_HIGH`` would
+    have flipped the answer (#1559). A high realized leg settles it alone, so an
+    absent VIX costs nothing there.
+
+    The thresholds are frozen a-priori and are NOT touched by that split.
+    """
+    if atr_pct_q >= ATR_HIGH_Q:
+        return "high"
+    if math.isfinite(vix):
+        return "high" if vix >= VIX_HIGH else "low"
+    return None
 
 
 def _unknown_result() -> dict[str, Any]:
@@ -149,9 +191,11 @@ def classify_state(
     so the SPY session and the VIX print may fall on slightly different calendar
     dates — acceptable for a daily regime label; the caller (:func:`classify`)
     is responsible for the ``<= asof`` PIT constraint on both.
-    Returns the label under ``market_state`` plus the raw driver telemetry. Any
-    missing/insufficient input yields ``market_state == 'unknown'`` with NaN
-    telemetry where a driver could not be computed. Pure — no I/O.
+    Returns the label under ``market_state`` plus the raw driver telemetry, with
+    NaN telemetry where a driver could not be computed. Every input except
+    ``vix`` must be finite or the label is ``'unknown'``; an absent VIX blanks it
+    only when the realized leg cannot settle the vol axis alone (see
+    :func:`_vol_axis` and the module docstring). Pure — no I/O.
     """
     telemetry: dict[str, Any] = {
         "market_state_atr_pct": float("nan"),
@@ -199,15 +243,21 @@ def classify_state(
             rolling_quantile_rank(vix, lookback=ATR_QUANTILE_LOOKBACK)
         )
 
-    # Any decision input missing/insufficient → unknown (first-class token).
-    decision_inputs = (c, sma50_now, sma200_now, slope_now, dist200, atr_pct_q_now, vix_now)
+    # Any REQUIRED decision input missing/insufficient → unknown (first-class
+    # token). `vix_now` is deliberately absent from this tuple: the vol axis
+    # decides without it whenever the realized leg is elevated (#1559), so
+    # demanding it here would blank labels the disjunction had already settled.
+    decision_inputs = (c, sma50_now, sma200_now, slope_now, dist200, atr_pct_q_now)
     if not all(math.isfinite(x) for x in decision_inputs):
+        return {"market_state": _UNKNOWN, **telemetry}
+
+    vol = _vol_axis(atr_pct_q_now, vix_now)
+    if vol is None:  # realized leg low and no VIX — genuinely undetermined
         return {"market_state": _UNKNOWN, **telemetry}
 
     trend = _trend_axis(c, sma50_now, sma200_now, slope_now, dist200)
     if trend == "neutral":
         trend = "up" if dist200 >= 0 else "down"
-    vol = _vol_axis(atr_pct_q_now, vix_now)
 
     return {"market_state": _STATE_MAP[(trend, vol)], **telemetry}
 
@@ -311,8 +361,36 @@ def classify(
     # a PIT guard against a FUTURE print; it does nothing about a series that
     # STOPS before asof, which is how a frozen cache stamped one July VIX onto 79
     # brief dates. Asking the client to reach asof is what makes that loud.
-    vix = fred_client.fetch_series(VIX_SERIES_ID, through=asof)
-    vix = vix[vix.index <= pd.Timestamp(asof)]  # PIT: never a future VIX print
+    #
+    # FREDStaleError is caught here and NOTHING WIDER (#1559). Its own docstring
+    # invites a display caller to catch it: the request succeeded and FRED simply
+    # has no data that recent, which is a fact about the data and says nothing
+    # about this host. The other members of the taxonomy must stay loud:
+    # FREDAuthError and a bare FREDError (a 4xx — which is what a REVOKED api key
+    # looks like — or a 5xx surviving three retries) are indefinite faults, and
+    # degrading them to a realized-leg-only label would keep the banner looking
+    # healthy for weeks on one warning a day. They propagate to `enrich`, which
+    # stamps 'unknown' with a traceback.
+    #
+    # A transient blip never reaches here: the client already retries 5xx three
+    # times with exponential backoff.
+    from alphalens_pipeline.data.macro.fred_client import FREDStaleError
+
+    try:
+        vix = fred_client.fetch_series(VIX_SERIES_ID, through=asof)
+    except FREDStaleError:
+        # Deliberately NOT falling back to `through=None`. The series the refusal
+        # was raised over is the frozen-cache defect of #1524 in another dress;
+        # absent is the honest reading, and the vol axis decides without it
+        # whenever the realized leg is elevated.
+        logger.warning(
+            "market_state: FRED has no VIX reaching %s — classifying without the "
+            "implied leg; the label survives only if the realized leg settles it",
+            asof,
+        )
+        vix = pd.Series([], dtype=float)
+    else:
+        vix = vix[vix.index <= pd.Timestamp(asof)]  # PIT: never a future VIX print
     return classify_state(close=close, high=high, low=low, vix=vix)
 
 

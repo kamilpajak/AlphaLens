@@ -41,6 +41,21 @@ def _ohlc(
     )
 
 
+def _ohlc_high_atr(n: int = 300, *, drift: float = 0.0008):
+    """The mirror of :func:`_ohlc`: an EXPANDING range, so recent ATR% sits at the
+    top of its own trailing distribution (measured ``atr_pct_q == 1.0``).
+
+    This is the fixture that exercises the decided half of the OR: with the
+    realized leg above ``ATR_HIGH_Q`` the vol axis is 'high' whatever the VIX is,
+    or is not."""
+    return _ohlc(n=n, drift=drift, spread_start=0.3, spread_end=4.0)
+
+
+def _no_vix():
+    """The VIX series a caller has when FRED could not supply one."""
+    return pd.Series([], dtype=float)
+
+
 def _vix(n: int = 300, *, last: float = 10.0, body: float = 15.0):
     idx = pd.date_range("2019-01-01", periods=n, freq="B")
     v = np.full(n, body)
@@ -136,7 +151,9 @@ class TestClassifyStateUnknown(unittest.TestCase):
 
         self.assertEqual(out["market_state"], "unknown")
 
-    def test_missing_vix_is_unknown(self):
+    def test_missing_vix_with_low_realized_vol_is_unknown(self):
+        # The one branch a missing VIX genuinely leaves undetermined (#1559): the
+        # realized leg is low, so a VIX at or above 25 would have flipped the OR.
         from alphalens_pipeline.market.market_state import classify_state
 
         close, high, low = _ohlc(drift=0.0008)
@@ -187,13 +204,15 @@ class TestConfigVersion(unittest.TestCase):
     def test_the_version_is_the_one_bumped_for_the_stale_vix_defect(self):
         # Pinned literally, not by prefix. This key partitions a pre-registered
         # forward study, so a silent edit is a data-integrity change, not a
-        # refactor. Bumped 2026-09-24 (#1524): rows before it carry a VIX frozen
-        # at the 2026-07-01 print.
+        # refactor. v1 -> v1.1 on 2026-09-24 (#1524): rows before it carry a VIX
+        # frozen at the 2026-07-01 print. v1.1 -> v1.2 on 2026-09-25 (#1559): the
+        # label mapping is unchanged, but a version string must name exactly one
+        # EMISSION rule and v1.2 emits a label where v1.1 emitted 'unknown'.
         from alphalens_pipeline.market.market_state import MARKET_STATE_CONFIG_VERSION
 
         self.assertEqual(
             MARKET_STATE_CONFIG_VERSION,
-            "mstate-v1.1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED",
+            "mstate-v1.2-spy-sma50x200-atrq70-vix15_25-UNVALIDATED",
         )
 
     def test_columns_include_label_and_config_version(self):
@@ -203,13 +222,25 @@ class TestConfigVersion(unittest.TestCase):
         self.assertIn("market_state_config_version", MARKET_STATE_COLUMNS)
 
 
-def _seed_store(root: Path, *, n: int = 300, drift: float = 0.0008):
-    """Populate a temp grouped-daily store with SPY (+ a NOISE ticker) bars."""
+def _seed_store(
+    root: Path,
+    *,
+    n: int = 300,
+    drift: float = 0.0008,
+    spread_start: float = 4.0,
+    spread_end: float = 0.3,
+):
+    """Populate a temp grouped-daily store with SPY (+ a NOISE ticker) bars.
+
+    The default range SHRINKS, so recent ATR% sits at the bottom of its own
+    trailing distribution and the vol axis is pinned on the VIX leg. Reverse the
+    two spreads (:func:`_seed_store_high_atr`) to pin it on the realized leg.
+    """
     from alphalens_pipeline.data.rs_history import write_grouped_day_atomic
 
     dates = pd.bdate_range("2019-01-01", periods=n)
     closes = 100.0 * (1.0 + drift) ** np.arange(n)
-    spreads = np.linspace(4.0, 0.3, n)
+    spreads = np.linspace(spread_start, spread_end, n)
     for d, c, sp in zip(dates, closes, spreads, strict=True):
         spy = {"t": 0, "o": c, "h": c + sp / 2, "l": c - sp / 2, "c": c, "v": 1000, "vw": c}
         noise = {"t": 0, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1, "vw": 1}
@@ -318,9 +349,10 @@ class TestEnrichBroadcast(unittest.TestCase):
         )
         self.assertEqual(fred.through_seen, [self.asof])
 
-    def test_a_stale_series_degrades_to_unknown_and_does_not_abort(self):
-        # The whole point of raising in the client: the score stage must keep
-        # running and stamp the first-class 'unknown' token, not die.
+    def test_a_stale_series_on_a_quiet_tape_is_unknown_and_does_not_abort(self):
+        # This store is the LOW-ATR one, so the realized leg cannot settle the OR
+        # and a missing VIX genuinely leaves the label undetermined (#1559). The
+        # score stage must still keep running and stamp the first-class token.
         from alphalens_pipeline.data.macro.fred_client import FREDStaleError
         from alphalens_pipeline.market.market_state import enrich
 
@@ -336,6 +368,10 @@ class TestEnrichBroadcast(unittest.TestCase):
         )
         self.assertTrue((out["market_state"] == "unknown").all())
         self.assertEqual(len(out), 2)
+        # ...but the drivers that WERE computable must survive. Before #1559 the
+        # exception escaped classify() and enrich() blanked every column.
+        self.assertTrue(np.isfinite(out["market_state_atr_pct_q"]).all())
+        self.assertTrue(np.isfinite(out["market_state_dist200"]).all())
 
     def test_broadcast_squeeze_column_is_nullable_boolean(self):
         from alphalens_pipeline.market.market_state import enrich
@@ -378,6 +414,257 @@ class TestEnrichEmptyAndUnknown(unittest.TestCase):
             )
 
             self.assertTrue((out["market_state"] == "unknown").all())
+
+
+class TestTheVolAxisDecidesWhatTheDisjunctionCanDecide(unittest.TestCase):
+    """#1559. The vol axis is an OR, and an OR does not always need both operands.
+
+    With the realized leg at or above ``ATR_HIGH_Q`` the answer is 'high' whatever
+    the VIX is, so blanking the whole label discards a decided answer. Only the
+    other branch is genuinely undetermined.
+    """
+
+    def test_high_realized_vol_decides_the_label_without_a_vix(self):
+        from alphalens_pipeline.market.market_state import classify_state
+
+        close, high, low = _ohlc_high_atr()
+        out = classify_state(close=close, high=high, low=low, vix=_no_vix())
+
+        self.assertEqual(out["market_state"], "bull_volatile")
+        # the drivers that were computable are still reported
+        self.assertGreaterEqual(out["market_state_atr_pct_q"], 0.70)
+        self.assertTrue(np.isnan(out["market_state_vix"]))
+
+    def test_low_realized_vol_without_a_vix_stays_undetermined(self):
+        # A VIX at or above 25 would have flipped this, so there is no answer to
+        # keep. Anything other than 'unknown' here is an invented label.
+        from alphalens_pipeline.market.market_state import classify_state
+
+        close, high, low = _ohlc(drift=0.0008)
+        out = classify_state(close=close, high=high, low=low, vix=_no_vix())
+
+        self.assertEqual(out["market_state"], "unknown")
+
+    def test_the_realized_boundary_is_unmoved_by_this_change(self):
+        # ATR_HIGH_Q and VIX_HIGH are frozen a-priori. #1559 changes WHEN a label
+        # is emitted, never where the thresholds sit.
+        from alphalens_pipeline.market.market_state import (
+            ATR_HIGH_Q,
+            VIX_HIGH,
+            _vol_axis,
+        )
+
+        self.assertEqual(_vol_axis(ATR_HIGH_Q, 10.0), "high")
+        self.assertEqual(_vol_axis(ATR_HIGH_Q - 1e-9, 10.0), "low")
+        self.assertEqual(_vol_axis(0.1, VIX_HIGH), "high")
+        self.assertEqual(_vol_axis(0.1, VIX_HIGH - 1e-9), "low")
+
+    def test_the_axis_returns_none_only_on_the_undetermined_branch(self):
+        from alphalens_pipeline.market.market_state import ATR_HIGH_Q, _vol_axis
+
+        nan = float("nan")
+        self.assertEqual(_vol_axis(ATR_HIGH_Q, nan), "high")
+        self.assertIsNone(_vol_axis(ATR_HIGH_Q - 1e-9, nan))
+
+
+def _seed_store_high_atr(root: Path, *, n: int = 300, drift: float = 0.0008):
+    """:func:`_seed_store` with an EXPANDING range, so the realized leg is high."""
+    return _seed_store(root, n=n, drift=drift, spread_start=0.3, spread_end=4.0)
+
+
+class TestAnAbsentVixReachesTheClassifierInsteadOfBlankingEverything(unittest.TestCase):
+    """The half of #1559 that the issue's own proposal would have missed.
+
+    In production an unavailable VIX arrives as an EXCEPTION, not as an empty
+    series: ``classify`` calls ``fetch_series(through=asof)``, the client raises
+    ``FREDStaleError``, and before this change ``enrich``'s broad ``except``
+    stamped ``_unknown_result()`` — blanking every column, ATR telemetry with it.
+    A fix confined to ``classify_state`` would have been dead code.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.root = Path(cls._tmp.name)
+        cls.dates = _seed_store_high_atr(cls.root, n=300)
+        cls.asof = cls.dates[-1].date()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def test_a_stale_series_still_yields_the_label_the_realized_leg_decided(self):
+        from alphalens_pipeline.data.macro.fred_client import FREDStaleError
+        from alphalens_pipeline.market.market_state import enrich
+
+        class _StaleFred:
+            def fetch_series(self, series_id, *, through=None):
+                raise FREDStaleError("series ends 2026-07-01, 2026-09-24 requested")
+
+        out = enrich(
+            pd.DataFrame({"ticker": ["AAA", "BBB"]}),
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=_StaleFred(),
+        )
+
+        self.assertTrue((out["market_state"] == "bull_volatile").all())
+        self.assertTrue(np.isfinite(out["market_state_atr_pct"]).all())
+        self.assertTrue(out["market_state_vix"].isna().all())
+
+    def test_the_unfresh_series_is_never_read_as_a_fallback(self):
+        # The tempting "helpful" edit is to retry without `through=` when the
+        # freshness check refuses. That is the frozen-cache defect of #1524 in
+        # another dress. This client hands back a stale QUIET series on the
+        # unfresh call, over a LOW-ATR tape: a fallback implementation answers
+        # 'bull_quiet', a correct one answers 'unknown'.
+        from alphalens_pipeline.data.macro.fred_client import FREDStaleError
+        from alphalens_pipeline.market.market_state import enrich
+
+        with tempfile.TemporaryDirectory() as d:
+            quiet_root = Path(d)
+            quiet_dates = _seed_store(quiet_root, n=300)
+
+            class _StaleFredWithAFallback:
+                def fetch_series(self, series_id, *, through=None):
+                    if through is not None:
+                        raise FREDStaleError("too far behind")
+                    return _fake_fred(quiet_dates, last=10.0).fetch_series(series_id)
+
+            out = enrich(
+                pd.DataFrame({"ticker": ["AAA"]}),
+                asof=quiet_dates[-1].date(),
+                grouped_root=quiet_root,
+                fred_client=_StaleFredWithAFallback(),
+            )
+
+            self.assertEqual(out["market_state"].iloc[0], "unknown")
+
+    def test_a_plain_fred_error_still_blanks_everything(self):
+        # The narrow catch is the point. A revoked FRED_API_KEY surfaces as a
+        # bare FREDError (FRED answers 400), and it is INDEFINITE: degrading it
+        # to a realized-leg-only label would keep the banner looking healthy for
+        # weeks. Widening the catch to the base class turns this red.
+        from alphalens_pipeline.data.macro.fred_client import FREDError
+        from alphalens_pipeline.market.market_state import enrich
+
+        class _RevokedKeyFred:
+            def fetch_series(self, series_id, *, through=None):
+                raise FREDError("FRED returned 400 for series VIXCLS")
+
+        out = enrich(
+            pd.DataFrame({"ticker": ["AAA"]}),
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=_RevokedKeyFred(),
+        )
+
+        self.assertEqual(out["market_state"].iloc[0], "unknown")
+        self.assertTrue(out["market_state_atr_pct"].isna().all())
+
+    def test_the_vix_telemetry_is_the_partition_key_for_the_forward_study(self):
+        # `market_state_vix` is NaN exactly when the implied leg took no part, so
+        # a study can separate the two kinds of decided label without a new
+        # column. Both halves asserted, or the claim is only half tested.
+        from alphalens_pipeline.data.macro.fred_client import FREDStaleError
+        from alphalens_pipeline.market.market_state import enrich
+
+        class _StaleFred:
+            def fetch_series(self, series_id, *, through=None):
+                raise FREDStaleError("too far behind")
+
+        without = enrich(
+            pd.DataFrame({"ticker": ["AAA"]}),
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=_StaleFred(),
+        )
+        with_vix = enrich(
+            pd.DataFrame({"ticker": ["AAA"]}),
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=_fake_fred(self.dates, last=10.0),
+        )
+
+        self.assertTrue(without["market_state_vix"].isna().all())
+        self.assertTrue(np.isfinite(with_vix["market_state_vix"]).all())
+        # Same decided label either way — the realized leg settled both.
+        self.assertEqual(without["market_state"].iloc[0], with_vix["market_state"].iloc[0])
+        # ...and both rows were DECIDED, which is the qualifier the partition
+        # needs: a fail-soft blank NaNs this column too, so a study that does not
+        # exclude 'unknown' first mixes "decided without the implied leg" with
+        # "decided nothing at all".
+        self.assertNotEqual(without["market_state"].iloc[0], "unknown")
+
+    def test_a_blanked_row_also_has_a_nan_vix_so_the_partition_needs_the_label(self):
+        # The trap the docstring now names. This row is NaN-vix and carries no
+        # decision at all; only `market_state != 'unknown'` tells the two apart.
+        from alphalens_pipeline.market.market_state import enrich
+
+        class _BoomFred:
+            def fetch_series(self, series_id, *, through=None):
+                raise RuntimeError("not a FRED failure at all")
+
+        blanked = enrich(
+            pd.DataFrame({"ticker": ["AAA"]}),
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=_BoomFred(),
+        )
+
+        self.assertEqual(blanked["market_state"].iloc[0], "unknown")
+        self.assertTrue(blanked["market_state_vix"].isna().all())
+
+
+class TestTheLedgerRecordsTheVersionTheCodeStamps(unittest.TestCase):
+    """The pre-registration is the frozen record; it must not be the stale copy.
+
+    #1524 bumped the code to v1.1 and never touched the ledger, so the two
+    disagreed from 2026-09-24 until #1559. Nothing checked it, which is why.
+    """
+
+    LEDGER = (
+        Path(__file__).resolve().parents[3]
+        / "docs"
+        / "research"
+        / "preregistration"
+        / "ledger.json"
+    )
+    ENTRY_CLASS = "market_regime_signals_2026_07"
+
+    def _frozen_version(self) -> str:
+        import json
+
+        ledger = json.loads(self.LEDGER.read_text())
+        # `params_frozen` is a dict on some entries and a free-text string on
+        # others, so the isinstance guard is load-bearing, not defensive noise.
+        matches = [
+            frozen["version"]
+            for entry in ledger["entries"]
+            for frozen in [entry.get("params_frozen")]
+            if isinstance(frozen, dict) and frozen.get("class") == self.ENTRY_CLASS
+        ]
+        self.assertEqual(
+            1,
+            len(matches),
+            f"expected exactly one ledger entry of class {self.ENTRY_CLASS}, "
+            f"found {len(matches)}. The parser, not the pin, needs updating.",
+        )
+        return matches[0]
+
+    def test_the_ledger_version_equals_the_code_constant(self):
+        from alphalens_pipeline.market.market_state import MARKET_STATE_CONFIG_VERSION
+
+        self.assertEqual(
+            MARKET_STATE_CONFIG_VERSION,
+            self._frozen_version(),
+            "the emitter and its pre-registration name different versions. Bump "
+            "both in one commit, and record what the old one orphaned.",
+        )
+
+    def test_positive_control_a_diverging_version_is_detected(self):
+        # A fabricated drift MUST be caught, or this pin is a no-op.
+        self.assertNotEqual(self._frozen_version(), "mstate-vX-never-shipped")
 
 
 if __name__ == "__main__":

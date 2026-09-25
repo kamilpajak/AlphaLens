@@ -2510,7 +2510,7 @@
       "scorer_path": "apps/alphalens-research/scripts/analyze_market_state_edge.py (DEFERRED — harness not yet built; forward-log already running via the thematic pipeline)",
       "params_frozen": {
         "class": "market_regime_signals_2026_07",
-        "version": "mstate-v1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED",
+        "version": "mstate-v1.2-spy-sma50x200-atrq70-vix15_25-UNVALIDATED",
         "design_memo": "docs/research/market_state_signal_design_2026_07_05.md (design RFC, PR #753)",
         "nature": "OBSERVATIONAL forward-log — NOT a backtest strategy and NOT a capital-deployment candidate. The market_state label is display-only and is ALREADY stamped forward on every Brief (market_state + market_state_* telemetry), with the sector-relative outcome (sector_excess_return) stamped on every matured LadderOutcome. No scorer is run. The hypotheses are tested LATER, once >=30 independent regime EPISODES accumulate, by the deferred analyze_market_state_edge.py harness. This entry exists to lock the estimand + Bonferroni family + threshold + poolability key BEFORE the first look, so the eventual win/loss-by-regime analysis is credible pre-registration and not post-hoc data-dredging.",
         "signal_definition": {
@@ -2569,7 +2569,7 @@
       "registered_at": "2026-07-06",
       "status": "registered",
       "outcome": null,
-      "notes": ""
+      "notes": "AMENDMENT 2026-09-25 (#1559). params_frozen.version now reads mstate-v1.2-spy-sma50x200-atrq70-vix15_25-UNVALIDATED. The version has been bumped twice since registration and the ledger records both here, because the first bump never reached this file. (1) v1 -> v1.1 on 2026-09-24 (#1524): no threshold changed, the VIX INPUT did. The FRED disk cache had no expiry, so every row stamped between 2026-07-06 and 2026-09-23 carries the 2026-07-01 VIX print (16.59) and its decile is the rank of that one value. Measured on 2026-09-25: across all 81 v1 brief dates the market_state_vix column holds ONE distinct value and no date reached VIX_HIGH, so every 'high' label in the v1 window came from the realized (ATR quantile) leg alone. THIS LEDGER WAS NOT UPDATED AT THE TIME; the code and the pre-registration named different versions from 2026-09-24 until this amendment. A parity test now pins them together (apps/alphalens-research/tests/test_market_state.py). (2) v1.1 -> v1.2 on 2026-09-25 (#1559): no threshold changed and no label changed. For every row where both legs of the volatility OR were finite the mapping is identical. What changed is when a label is emitted at all: the classifier no longer requires the VIX when the realized leg is at or above ATR_HIGH_Q, because the OR is already settled there. Only the other branch (realized leg low, VIX absent) still yields 'unknown'. A version string has to name exactly one emission rule, so the bump is required even though no existing row would be labelled differently. ROWS ORPHANED BY (2): the v1.1 cohort is 1 brief date (2026-09-24) and 8 rows, counted from production Postgres on 2026-09-25. All 8 had a present VIX, so none of them would be labelled differently under v1.2; they are nevertheless not pooled with v1.2 rows, per the poolability_key rule. PARTITIONS AVAILABLE TO THE DEFERRED HARNESS, from columns already stamped: market_state_vix is NaN exactly when the implied leg took no part in the decision; market_state_atr_pct_q >= ATR_HIGH_Q marks the rows the realized leg settled alone, where a present VIX did not matter."
     },
     {
       "id": "mom_lowvol_combo_2026_04_29",
