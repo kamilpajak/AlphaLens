@@ -873,7 +873,10 @@ Computed with the real functions during design, 2026-09-23:
   everything". The published examples in `examples/manual-pick/` are that
   control, which is also what ties this property to §6.4: if the classes of
   §4.3.1 do not cover every required path of the input schema, every example
-  refuses and both tests go red at once;
+  refuses and both tests go red at once. Note what the control is run on: a
+  COMPLETED example, per §6.4. An uncompleted template refuses in the codec, which
+  is a different failure that would make this property look satisfied for the
+  wrong reason;
 - two runs over the same input produce byte-identical output.
 
 The last one matters more than it looks: a research tool that returns a
@@ -882,7 +885,41 @@ different number on a repeat invalidates every conclusion drawn from it.
 ### 6.4 Door agreement
 
 A test pushes every example in `examples/manual-pick/` through the replay. What
-the door accepts, the replay accepts, including the round-trip gate of §4.3.
+the door accepts, the replay accepts, including the round-trip gate of §4.3 — with
+exactly one published exception, and one step that has to happen first. Both were
+found by running the codec over the three files on 2026-09-25, and both are
+recorded here because the sentence above was written without doing that.
+
+**The examples are TEMPLATES, not complete documents.** Their `meta` carries only
+`source`, so all three fail the CODEC before any gate runs:
+`IntentMeta.__init__() missing 2 required positional arguments: 'armed_ts' and
+'trade_date'`. Completing a template is the door's job and the fill lives
+pipeline-side (`intent_door.complete()`), which §3.1 forbids this package from
+importing. So the adapter module completes them itself, and the classification of
+§4.3.1 says how:
+
+| field | class | how the adapter supplies it |
+|---|---|---|
+| `intent_id` | out of scope | a fixed sentinel. Out of scope means it changes nothing the replay does, so any value is as good as any other |
+| `meta.armed_ts` | out of scope | the same |
+| `meta.trade_date` | translated | NOT a sentinel. It is what `walk_start` is computed from, so a replay input carries it, or the adapter derives it from the stated `walk_start` |
+
+This is deliberately not a `divergences` entry. §5.2 reserves that list for facts
+the replay LACKS; an out-of-scope field is one the replay does not need, which is
+the opposite case, and conflating them would make the divergence list mean two
+things.
+
+**The one exception.** `immediate-plus-pullback.json` declares `entry_mode:
+"immediate"` on tier 0, and the door ACCEPTS it — `_ALLOWED_ENTRY_MODES`
+(`validate.py:229`) admits the value, and only an unknown value raises
+`entry_mode_unknown`. §5.4 requires the replay to REFUSE it with
+`entry_mode_unsupported`. So this test asserts two different things: the two
+pullback examples are accepted, and that one file is refused with exactly that
+code, naming tier 0 in `details.tiers`.
+
+Whoever meets the red here should not drop the file from the test or soften the
+code to a warning. Either would quietly undo the §8.1 decision, and the decision
+is the point.
 
 ### 6.5 CI
 
