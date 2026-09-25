@@ -43,9 +43,15 @@ LIVE_RULES="${LIVE_RULES:-/home/jacoren/monitoring/prometheus/alphalens.rules}"
 RULES_REPO_PATH="deploy/monitoring/prometheus/rules/alphalens.yaml"
 RULES_SYNC_UNIT="alphalens-prometheus-rules-sync.service"
 # The live copy is converged from the origin/main blob hourly at :27 UTC by
-# RULES_SYNC_UNIT, so a difference YOUNGER than one cadence is expected, not
-# drift: 3600s cadence + 300s of slack for the run itself.
+# RULES_SYNC_UNIT, so a difference YOUNGER than one cadence MAY be expected:
+# 3600s cadence + 300s of slack for the run itself. This is a fallback bound,
+# not the primary test — the primary test is whether the sync has completed a
+# run since the rules commit (see SYNC_EXIT_EPOCH below). The minute in the
+# operator text is pinned against the timer file by
+# apps/alphalens-research/tests/test_postdeploy_check_rules_source.py.
 RULES_SYNC_GRACE_SECONDS=3900
+# Overridable so a test can substitute a stub; the VPS has the real binary.
+SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 
 # The exact on.push.paths of .github/workflows/django-image.yml. The image is
 # only (re)built when a main commit touches one of these, so the "expected"
@@ -91,32 +97,97 @@ BLOB_TMP=""
 cleanup() { if [ -n "$BLOB_TMP" ]; then rm -f "$BLOB_TMP"; fi; return 0; }
 trap cleanup EXIT
 
+# --- Last completed run of the rules sync ------------------------------------
+# Check 1 must NOT decide "pending copy" from the age of the rules commit
+# alone. A sync that already ran and left the difference in place is drift
+# however young the commit is, and the worst shape of that — a live file that
+# is empty or months old — reached the same age-only WARN as a one-minute-old
+# pending copy, printed "there is nothing to do", and added no problem.
+# `systemctl --user show` is a read and answers exactly the right question.
+# A unit that has NEVER run reports an empty ExecMainExitTimestamp while still
+# reporting Result=success, so the timestamp — not the result — is what says a
+# run happened (verified on the VPS 2026-09-25). A run in flight still reports
+# the PREVIOUS run's exit, which errs towards "not yet", never towards a pass.
+# Anything unreadable (no systemd, no such unit, a timestamp `date -d` cannot
+# parse) leaves these empty and check 1 falls back to the commit-age window.
+SYNC_EXIT_EPOCH=""
+SYNC_EXIT_HUMAN=""
+SYNC_EXIT_STATUS=""
+read_sync_unit_state() {
+  local key value
+  while IFS='=' read -r key value; do
+    case "$key" in
+      ExecMainStatus) SYNC_EXIT_STATUS="$value" ;;
+      ExecMainExitTimestamp)
+        if [ -n "$value" ]; then
+          SYNC_EXIT_HUMAN="$value"
+          SYNC_EXIT_EPOCH="$(date -d "$value" +%s 2>/dev/null)"
+        fi
+        ;;
+    esac
+  done
+}
+if command -v "$SYSTEMCTL" >/dev/null 2>&1; then
+  read_sync_unit_state < <("$SYSTEMCTL" --user show "$RULES_SYNC_UNIT" \
+    -p ExecMainStatus -p ExecMainExitTimestamp 2>/dev/null)
+fi
+case "$SYNC_EXIT_EPOCH" in ''|*[!0-9]*) SYNC_EXIT_EPOCH="" ;; esac
+if [ -n "$SYNC_EXIT_EPOCH" ]; then
+  SYNC_LAST_RUN="its last run exited ${SYNC_EXIT_STATUS:-?} at $SYNC_EXIT_HUMAN"
+else
+  SYNC_LAST_RUN="the sync unit's last run could not be read from here"
+fi
+
 echo "== Check 1/3: Prometheus rules (origin/main vs live + validity) =="
+# Always show WHAT differs — including in the WARN arm, so a corrupt or empty
+# live file cannot look like a young pending copy.
+show_rules_diff() {
+  diff -u --label origin/main --label live "$BLOB_TMP" "$LIVE_RULES" 2>&1 | head -40 || true
+}
 if [ ! -f "$LIVE_RULES" ]; then
   bad "live rules file missing: $LIVE_RULES — the sync creates it: systemctl --user start $RULES_SYNC_UNIT"
 elif [ -n "$ORIGIN_MAIN_ERR" ]; then
   bad "cannot read origin/main ($ORIGIN_MAIN_ERR), so the live rules were not checked. This check never compares against your local checkout, because the checkout can be older than origin/main."
 else
-  BLOB_TMP="$(mktemp)"
-  if ! git -C "$REPO" show "origin/main:$RULES_REPO_PATH" >"$BLOB_TMP" 2>/dev/null; then
+  BLOB_TMP="$(mktemp)" || BLOB_TMP=""
+  if [ -z "$BLOB_TMP" ]; then
+    # Without this arm the empty redirection target below fails and the next
+    # branch blames a rules path that never moved.
+    bad "live rules were not checked: could not create a temp file for the origin/main blob (full filesystem, or an unwritable TMPDIR?)"
+  elif ! git -C "$REPO" show "origin/main:$RULES_REPO_PATH" >"$BLOB_TMP" 2>/dev/null; then
     bad "origin/main has no $RULES_REPO_PATH, so the live rules were not checked (did the rules file move? update RULES_REPO_PATH and sync_prometheus_rules.py together)"
   elif diff -q "$BLOB_TMP" "$LIVE_RULES" >/dev/null 2>&1; then
     ok "live rules match origin/main ($RULES_REPO_PATH)"
   else
-    RULES_COMMIT_TS="$(git -C "$REPO" log -1 --format=%ct origin/main -- "$RULES_REPO_PATH" 2>/dev/null)"
+    # --first-parent dates the change by when it REACHED main, not by when it
+    # was written. On a true merge commit the two differ: a change authored on
+    # a branch last week and merged seconds ago would otherwise read as a week
+    # old and hard-FAIL a host that has simply not had a sync run yet. Squash
+    # merges, which is what this repo does today, give the same answer either
+    # way.
+    RULES_COMMIT_TS="$(git -C "$REPO" log -1 --first-parent --format=%ct origin/main -- "$RULES_REPO_PATH" 2>/dev/null)"
     RULES_AGE_S=""
     case "$RULES_COMMIT_TS" in
       ''|*[!0-9]*) ;;
       *) RULES_AGE_S=$(( $(date -u +%s) - RULES_COMMIT_TS )) ;;
     esac
+    SYNC_RAN_SINCE_THE_COMMIT=no
+    if [ -n "$SYNC_EXIT_EPOCH" ] && [ -n "$RULES_AGE_S" ] \
+      && [ "$SYNC_EXIT_EPOCH" -ge "$RULES_COMMIT_TS" ]; then
+      SYNC_RAN_SINCE_THE_COMMIT=yes
+    fi
     if [ -z "$RULES_AGE_S" ] || [ "$RULES_AGE_S" -lt 0 ]; then
       bad "live rules do not match origin/main, and the age of the last rules change on origin/main could not be read, so this cannot be confirmed as a pending sync. Do NOT copy your checkout over the live file — your checkout can be older than origin/main. Read the sync log: journalctl --user -u $RULES_SYNC_UNIT -n 50"
-      diff -u --label origin/main --label live "$BLOB_TMP" "$LIVE_RULES" 2>&1 | head -40 || true
+      show_rules_diff
+    elif [ "$SYNC_RAN_SINCE_THE_COMMIT" = yes ]; then
+      bad "live rules do not match origin/main, and the sync has already completed a run since that change ($SYNC_LAST_RUN). That makes this drift, not a pending copy, whatever the age of the commit. Do NOT copy your checkout over the live file — your checkout can be older than origin/main. Read the sync log: journalctl --user -u $RULES_SYNC_UNIT -n 50 ; then re-run the sync: systemctl --user start $RULES_SYNC_UNIT"
+      show_rules_diff
     elif [ "$RULES_AGE_S" -lt "$RULES_SYNC_GRACE_SECONDS" ]; then
-      warn "live rules are behind origin/main, and that is expected. The rules changed on main $((RULES_AGE_S / 60)) minute(s) ago; the sync runs hourly at :27 UTC and will copy it. There is nothing to do — run this check again after the next :27 UTC. To copy it now: systemctl --user start $RULES_SYNC_UNIT"
+      warn "live rules are behind origin/main. The rules changed on main $((RULES_AGE_S / 60)) minute(s) ago, no sync run has completed since then ($SYNC_LAST_RUN), and the sync runs hourly at :27 UTC. No action yet. This is NOT a statement that the live file is otherwise correct — read the difference below. If it is still there after the next :27 UTC run, the sync is failing: journalctl --user -u $RULES_SYNC_UNIT -n 50. To copy it now: systemctl --user start $RULES_SYNC_UNIT"
+      show_rules_diff
     else
-      bad "live rules do not match origin/main, and the hourly sync has had time to run (the rules changed on main $((RULES_AGE_S / 60)) minute(s) ago). Do NOT copy your checkout over the live file — your checkout can be older than origin/main, so copying it would replace correct rules with older ones. Read the sync log: journalctl --user -u $RULES_SYNC_UNIT -n 50 ; then re-run the sync: systemctl --user start $RULES_SYNC_UNIT"
-      diff -u --label origin/main --label live "$BLOB_TMP" "$LIVE_RULES" 2>&1 | head -40 || true
+      bad "live rules do not match origin/main, and the hourly sync has had time to run (the rules changed on main $((RULES_AGE_S / 60)) minute(s) ago; $SYNC_LAST_RUN). Do NOT copy your checkout over the live file — your checkout can be older than origin/main, so copying it would replace correct rules with older ones. Read the sync log: journalctl --user -u $RULES_SYNC_UNIT -n 50 ; then re-run the sync: systemctl --user start $RULES_SYNC_UNIT"
+      show_rules_diff
     fi
   fi
 fi
