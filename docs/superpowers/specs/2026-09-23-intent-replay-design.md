@@ -251,10 +251,19 @@ by field:
 | `has_sole_standalone_stop` | bool | the PREDICATE's result, never the order legs |
 | `amend_in_backoff` | bool | same — a result, not the failure history |
 | `last_trailed_level` | float \| None | the ratchet floor |
+| `already_reanchored` | bool | the re-anchor arm's idempotence latch, as the PREDICATE's result: a confirmed re-anchor already fired for this average fill (`reanchored_by_uic`, compared by the daemon with its own tolerance); a replay knows this from its own trace |
 
-Nothing here is broker-order-shaped: the two order-state questions cross as
+Nothing here is broker-order-shaped: the three state questions cross as
 booleans. If the extraction turns out to need more than this, that is a signal
 the boundary is wrong and the design stops rather than widening the contract.
+The ninth row was not in the first revision of this table, although the table
+claimed to have been read off both arms: the review of the PR 2 plan
+(2026-09-25) found `_maybe_reanchor` reading the latch, and the owner decided
+it crosses as a boolean like the two guards above it, with the daemon's
+`1e-6` blend tolerance staying in the daemon the way the backoff TTL does.
+The daemon's latch is journal-lifetime (a marker from an earlier position on
+the same instrument suppresses a later re-anchor); a replay does not model
+that, and reports it as a divergence (section 5.2).
 
 **What the replay passes for those two booleans, and why it is not a choice.** An
 earlier revision listed this as an open decision, on the grounds that `False`

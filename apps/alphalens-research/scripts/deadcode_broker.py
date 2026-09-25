@@ -86,6 +86,10 @@ UNWIRED_ALLOWED: Mapping[str, str] = {
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/yfinance_price_feed.py": (
         "interim and fallback price feed kept on purpose; not wired into the daemon yet"
     ),
+    "apps/alphalens-broker-contract/broker_contract/stop_decision.py": (
+        "intent-replay PR 2 (#1573): the copy of the daemon's stop decision, held by the parity "
+        "test until PR 6 (#1577) imports it; step 2 (#1581) retires the daemon's own"
+    ),
 }
 
 # Every vulture finding: "unused function 'x'", "unused import 'os'",
