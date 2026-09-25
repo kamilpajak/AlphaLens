@@ -235,17 +235,18 @@ class TestUpdatePeaksPerUicFaultIsolation(unittest.TestCase):
 
 
 class TestUpdatePeaksFeedScope(unittest.TestCase):
-    def test_update_peaks_requests_the_exits_scope(self) -> None:
-        """The peak update watches the SAME open-position uics as the exits
-        pass, so it must REPLACE the exits slice of the shared price-stream
-        subscription — its own scope would double-subscribe, and no scope at
-        all would refight the 2026-08-18 subscription churn."""
+    def test_update_peaks_requests_its_own_peaks_scope(self) -> None:
+        """The peak update watches only the trailing positions (#1236), a
+        subset of the exits pass's set. Sharing the "exits" scope made that
+        slice flip between the two sets every tick, and each flip forgot the
+        other positions' quotes (#1587). Its own scope cannot double-subscribe:
+        the wire subscription is the union across scopes."""
         factory = _ScriptedFeedFactory([{100: 10.0}])
         deps = _deps(live_exits_feed_factory=factory)
 
         cl._update_peaks(deps, [_mk_pos(uic=100)])
 
-        self.assertEqual(factory.scopes, ["exits"])
+        self.assertEqual(factory.scopes, ["peaks"])
 
 
 class TestUpdatePeaksPruning(unittest.TestCase):

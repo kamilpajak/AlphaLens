@@ -1206,9 +1206,14 @@ class _NullPriceFeed:
 
 # Scopes of the shared price-stream subscription, one per feed-building call
 # site (SaxoPriceStream.ensure_subscribed keys its per-caller desired sets by
-# these). The exits pass and the peak update watch the SAME open-position uics,
-# so they share one scope; the entry-watch pass owns its own.
+# these). The wire subscription is the UNION across scopes, so a uic held by two
+# scopes is still subscribed once. Two call sites must never share a scope with
+# DIFFERENT uic sets: each write replaces the whole slice, so the slice
+# alternates every tick, and every uic that leaves the union has its quote
+# forgotten and the server-side subscription re-created (#1587 — the exits pass
+# writes every long, the peak update only the trailing ones).
 _FEED_SCOPE_EXITS = "exits"
+_FEED_SCOPE_PEAKS = "peaks"
 _FEED_SCOPE_ENTRY_WATCH = "entry-watch"
 
 
@@ -1304,7 +1309,7 @@ def _default_live_exits_feed_factory(
     returns a feed that vetoes every uic rather than quietly downgrading.
 
     ``scope`` is forwarded to ``stream.ensure_subscribed`` so each of the
-    tick's feed builds (exits/peaks vs entry-watch) replaces only its own
+    tick's feed builds (exits, peaks, entry-watch) replaces only its own
     slice of the shared subscription — passing the whole set from every call
     site made the builds fight and churn the single server-side subscription
     every tick (2026-08-18 incident)."""
@@ -1408,10 +1413,11 @@ def _update_peaks(
         if (uic := _position_uic(pos)) is not None
     }
     feed_factory = deps.live_exits_feed_factory or _default_live_exits_feed_factory
-    # Same scope as the exits pass: both watch the SAME open-position uics, so
-    # this build must replace (not duplicate) the exits slice of the shared
-    # price-stream subscription.
-    feed = feed_factory(uic_to_instrument, scope=_FEED_SCOPE_EXITS)
+    # Its OWN scope, not the exits pass's: since #1236 this build watches only
+    # the positions whose plan declares a trail, a subset of the exits pass's
+    # set. Sharing "exits" made the slice flip between the two sets every tick
+    # and dropped the other positions' quotes (#1587).
+    feed = feed_factory(uic_to_instrument, scope=_FEED_SCOPE_PEAKS)
     peak_by_uic: dict[int, float] = {}
     last_price_by_uic: dict[int, float] = {}
     new_peaks = dict(deps.peak_tracker)
@@ -1486,10 +1492,9 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     # "exits" slice of the shared price-stream subscription off the live long
     # positions, and that write must happen on quiet ticks too — when the last
     # managed position closes, the scope must shrink with it (a skipped write
-    # would stream the closed positions' uics forever), and it must hold the
-    # SAME long-position set the trailing peak updater writes (an empty write
-    # here would flip-flop the shared subscription against ``_update_peaks``
-    # every tick while an unmanaged long position is open).
+    # would stream the closed positions' uics forever). An unmanaged long still
+    # belongs in the set: an empty write would drop its quote, and the peak
+    # update (its own "peaks" scope) may need it too.
     feed = _build_live_exits_feed(deps, uic_to_instrument, report)
     if not managed:
         return
@@ -1737,6 +1742,10 @@ def _run_protection_pass(
                 last_price_by_uic=last_price_by_uic,
             )
         else:
+            # No plan trails this tick: hand back the peaks slice, or it keeps the
+            # last trailing uics subscribed for the daemon's lifetime (mirrors the
+            # exits and entry-watch quiet-tick releases). Never raises.
+            _release_feed_scope(deps, _FEED_SCOPE_PEAKS)
             protection_view = deps.build_protection_view(deps.broker, records)
     except BrokerError as exc:
         if deps.alert_throttled(
