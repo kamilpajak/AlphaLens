@@ -29,8 +29,12 @@ input that is not unconditionally required.
 Two partitions a forward study will want, both computable from columns already
 stamped — no extra column carries them:
 
-* **did the implied leg take part** — ``market_state_vix`` is NaN exactly when it
-  did not, whatever the reason (empty series, non-finite print, a refused fetch);
+* **did the implied leg take part** — among rows the classifier DECIDED,
+  ``market_state_vix`` is NaN exactly when it did not, whatever the reason
+  (empty series, non-finite print, a refused fetch). Restrict to
+  ``market_state != 'unknown'`` first: :func:`_unknown_result` NaNs the same
+  column when the whole classification failed, so an unfiltered read mixes
+  "decided without the implied leg" with "decided nothing at all";
 * **did the implied leg DECIDE anything** — a present VIX is not a VIX that
   mattered. Where ``market_state_atr_pct_q >= ATR_HIGH_Q`` the realized leg
   settled the axis alone and the VIX is decoration.

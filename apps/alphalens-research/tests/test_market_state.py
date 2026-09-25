@@ -590,6 +590,30 @@ class TestAnAbsentVixReachesTheClassifierInsteadOfBlankingEverything(unittest.Te
         self.assertTrue(np.isfinite(with_vix["market_state_vix"]).all())
         # Same decided label either way — the realized leg settled both.
         self.assertEqual(without["market_state"].iloc[0], with_vix["market_state"].iloc[0])
+        # ...and both rows were DECIDED, which is the qualifier the partition
+        # needs: a fail-soft blank NaNs this column too, so a study that does not
+        # exclude 'unknown' first mixes "decided without the implied leg" with
+        # "decided nothing at all".
+        self.assertNotEqual(without["market_state"].iloc[0], "unknown")
+
+    def test_a_blanked_row_also_has_a_nan_vix_so_the_partition_needs_the_label(self):
+        # The trap the docstring now names. This row is NaN-vix and carries no
+        # decision at all; only `market_state != 'unknown'` tells the two apart.
+        from alphalens_pipeline.market.market_state import enrich
+
+        class _BoomFred:
+            def fetch_series(self, series_id, *, through=None):
+                raise RuntimeError("not a FRED failure at all")
+
+        blanked = enrich(
+            pd.DataFrame({"ticker": ["AAA"]}),
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=_BoomFred(),
+        )
+
+        self.assertEqual(blanked["market_state"].iloc[0], "unknown")
+        self.assertTrue(blanked["market_state_vix"].isna().all())
 
 
 class TestTheLedgerRecordsTheVersionTheCodeStamps(unittest.TestCase):
