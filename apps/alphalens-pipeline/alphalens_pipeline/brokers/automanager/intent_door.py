@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
 from broker_contract.sizing import planned_blended_entry_from_spec
+from broker_contract.trade_intent.codec import supplied_derived_paths
 from broker_contract.trade_intent.schema import TradeIntent
 
 from alphalens_pipeline.brokers.automanager.picks import STATUS_ARMED, PickRecord
@@ -91,31 +92,6 @@ REFUSALS: tuple[type[DoorRefusalError], ...] = (
     GenerationSpentError,
     AlreadyPlacedError,
 )
-
-
-def supplied_derived_paths(document: Any) -> list[str]:
-    """Every derived field the author sent, as a path.
-
-    Walked defensively: a container of the wrong kind is the schema's refusal to
-    make, with a better message than this one could give.
-    """
-    if not isinstance(document, Mapping):
-        return []
-    paths: list[str] = []
-    if "intent_id" in document:
-        paths.append("intent_id")
-    meta = document.get("meta")
-    if isinstance(meta, Mapping) and "armed_ts" in meta:
-        paths.append("meta.armed_ts")
-    spec = document.get("spec")
-    tranches = spec.get("tp_tranches") if isinstance(spec, Mapping) else None
-    if isinstance(tranches, list):
-        paths.extend(
-            f"spec.tp_tranches[{index}].r_multiple"
-            for index, tranche in enumerate(tranches)
-            if isinstance(tranche, Mapping) and "r_multiple" in tranche
-        )
-    return paths
 
 
 def refuse_derived_fields(document: Any) -> None:

@@ -17,6 +17,9 @@ requires-python = ">=3.13"
 # enforcing that split; this list cannot express it.
 dependencies = ["alphalens-broker-contract", "jsonschema>=4.0.0"]
 
+[project.scripts]
+intent-replay = "intent_replay.cli:main"
+
 [tool.uv.sources]
 alphalens-broker-contract = { workspace = true }
 

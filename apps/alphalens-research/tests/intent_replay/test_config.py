@@ -40,14 +40,14 @@ from intent_replay.config import (
 CANONICAL: Mapping[str, Any] = {
     "entry_deadline": {
         "kind": "order_ttl_sessions",
-        "value": 1760976000000,
+        "value": 1791230400000,
         "unit": "epoch_ms_utc",
         "source": "spec.order_ttl_days",
         "formula": "session_close_utc(advance_trading_sessions(2026-09-24, 7, XNYS))",
     },
     "walk_start": {
         "kind": "day1_session_open",
-        "value": 1758547800000,
+        "value": 1790170200000,
         "unit": "epoch_ms_utc",
         "source": "meta.source + meta.trade_date",
         "formula": "session_open_utc(2026-09-23); source=manual counts trade_date itself as day 1",
@@ -88,7 +88,7 @@ def _all_stated() -> dict[str, Any]:
     data = _canonical()
     data["entry_trail_bps"] = None
     data["ceiling_price"] = 120.5
-    data["time_stop_t"] = 1761000000000
+    data["time_stop_t"] = 1790900000000
     return data
 
 
@@ -134,7 +134,7 @@ class CanonicalExampleTest(unittest.TestCase):
             config.walk_start,
             Translated(
                 kind="day1_session_open",
-                value=1758547800000,
+                value=1790170200000,
                 unit="epoch_ms_utc",
                 source="meta.source + meta.trade_date",
                 formula=(
@@ -142,7 +142,7 @@ class CanonicalExampleTest(unittest.TestCase):
                 ),
             ),
         )
-        self.assertEqual(config.entry_deadline.value, 1760976000000)
+        self.assertEqual(config.entry_deadline.value, 1791230400000)
         self.assertEqual(config.entry_trail_bps, 50)
         self.assertIsNone(config.ceiling_price)
         self.assertIsNone(config.time_stop_t)
@@ -158,11 +158,28 @@ class CanonicalExampleTest(unittest.TestCase):
             ),
         )
 
+    def test_the_canonical_epochs_equal_their_formulas(self) -> None:
+        """The two translated values are stated beside the rule that produced
+        them, and a reader checks the number against the rule (spec section 5.2).
+        The check is done here once, without a calendar: the formulas name
+        2026-09-23 (a Wednesday, XNYS open 13:30 UTC) and the seventh session
+        after 2026-09-24, which is 2026-10-05 (close 20:00 UTC)."""
+        import datetime as dt
+
+        config = RunConfig.from_jsonable(_canonical())
+        as_utc = lambda ms: dt.datetime.fromtimestamp(ms / 1000, dt.UTC)  # noqa: E731
+        self.assertEqual(
+            as_utc(config.walk_start.value), dt.datetime(2026, 9, 23, 13, 30, tzinfo=dt.UTC)
+        )
+        self.assertEqual(
+            as_utc(config.entry_deadline.value), dt.datetime(2026, 10, 5, 20, 0, tzinfo=dt.UTC)
+        )
+
     def test_the_all_stated_variant_parses(self) -> None:
         config = RunConfig.from_jsonable(_all_stated())
         self.assertIsNone(config.entry_trail_bps)
         self.assertEqual(config.ceiling_price, 120.5)
-        self.assertEqual(config.time_stop_t, 1761000000000)
+        self.assertEqual(config.time_stop_t, 1790900000000)
 
     def test_to_jsonable_is_the_spec_block(self) -> None:
         # Dict equality first, then the rendered text: dict equality treats

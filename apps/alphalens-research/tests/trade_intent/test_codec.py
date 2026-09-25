@@ -515,3 +515,86 @@ class TestTheOutputIsActuallyJsonShaped(unittest.TestCase):
             json.dumps(dataclasses.asdict(intent), sort_keys=True),
             json.dumps(intent_to_jsonable(intent), sort_keys=True),
         )
+
+
+class TestTheDoorHelpersLiveInTheCodec(unittest.TestCase):
+    """The two door gates that are properties of the codec, published by it (#1575).
+
+    ``supplied_derived_paths`` is the other half of :func:`author_jsonable`: one
+    strips the derived fields, the other reports them. ``discarded_paths`` is the
+    codec's fixed point: what decode + re-render gives back unchanged. Both used
+    to live pipeline-side; the replay door (a second user that may not import
+    the pipeline) is why they moved. The arming door keeps calling them through
+    the same names, pinned here by identity so the two doors cannot drift apart.
+    """
+
+    def test_the_derived_role_names_exactly_the_three_fields_the_helper_walks(self) -> None:
+        import dataclasses
+
+        from broker_contract.trade_intent import schema as contract_schema
+
+        derived = {
+            field.name
+            for value in vars(contract_schema).values()
+            if isinstance(value, type) and dataclasses.is_dataclass(value)
+            for field in dataclasses.fields(value)
+            if field.metadata.get("door") == "derived"
+        }
+        self.assertEqual(derived, {"intent_id", "armed_ts", "r_multiple"})
+
+    def test_supplied_derived_paths_reports_every_derived_field_as_a_path(self) -> None:
+        from broker_contract.trade_intent.codec import supplied_derived_paths
+
+        stored = intent_to_jsonable(_trailing_intent())
+        self.assertEqual(
+            supplied_derived_paths(stored),
+            [
+                "intent_id",
+                "meta.armed_ts",
+                "spec.tp_tranches[0].r_multiple",
+                "spec.tp_tranches[1].r_multiple",
+            ],
+        )
+        self.assertEqual(supplied_derived_paths(author_jsonable(_trailing_intent())), [])
+
+    def test_supplied_derived_paths_is_total_over_wrong_containers(self) -> None:
+        from broker_contract.trade_intent.codec import supplied_derived_paths
+
+        for document in ([], "abc", None, 1.5, {"meta": 3, "spec": {"tp_tranches": {"x": 1}}}):
+            with self.subTest(document=document):
+                self.assertEqual(supplied_derived_paths(document), [])
+
+    def test_discarded_paths_names_what_was_sent_and_not_given_back(self) -> None:
+        from broker_contract.trade_intent.codec import discarded_paths
+
+        sent = {"a": 1, "b": {"c": 2, "typo": 3}, "items": [{"x": 1}, {"y": 2}]}
+        rendered = {"a": 1, "b": {"c": 2}, "items": [{"x": 1}, {}], "added": True}
+        self.assertEqual(discarded_paths(sent, rendered), ["b.typo", "items[1].y"])
+
+    def test_discarded_paths_reports_a_container_of_another_kind_or_length_whole(self) -> None:
+        from broker_contract.trade_intent.codec import discarded_paths
+
+        self.assertEqual(discarded_paths({"a": [1, 2]}, {"a": [1]}), ["a"])
+        self.assertEqual(discarded_paths({"a": {"b": 1}}, {"a": 1}), ["a"])
+        self.assertEqual(discarded_paths([1], {"a": 1}), ["$"])
+        self.assertEqual(discarded_paths(1, 2), ["$"])
+
+    def test_discarded_paths_treats_a_nan_leaf_as_unchanged(self) -> None:
+        from broker_contract.trade_intent.codec import discarded_paths
+
+        self.assertEqual(discarded_paths({"p": float("nan")}, {"p": float("nan")}), [])
+        self.assertEqual(discarded_paths({"p": float("nan")}, {"p": 1.0}), ["p"])
+
+    def test_the_arming_door_calls_the_codec_functions(self) -> None:
+        from alphalens_cli.commands import broker
+        from alphalens_pipeline.brokers.automanager import intent_door
+        from broker_contract.trade_intent import codec
+
+        self.assertIs(broker._discarded_paths, codec.discarded_paths)
+        self.assertIs(intent_door.supplied_derived_paths, codec.supplied_derived_paths)
+
+    def test_both_are_part_of_the_published_codec_api(self) -> None:
+        from broker_contract.trade_intent import codec
+
+        self.assertIn("discarded_paths", codec.__all__)
+        self.assertIn("supplied_derived_paths", codec.__all__)

@@ -19,7 +19,6 @@ record for review the spec describes, never the gate's source of truth.
 
 from __future__ import annotations
 
-import copy
 import dataclasses
 import json
 import re
@@ -54,15 +53,15 @@ from intent_replay.classification import (
     document_paths,
     unclassified_paths,
 )
+from intent_replay.door import complete
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 SPEC = WORKSPACE_ROOT / "docs" / "superpowers" / "specs" / "2026-09-23-intent-replay-design.md"
 EXAMPLES = WORKSPACE_ROOT / "apps" / "alphalens-broker-contract" / "examples" / "manual-pick"
 
-# The completion of spec section 6.4: two out-of-scope sentinels and a stated
-# trade date. Nothing else is filled — in particular no tags.
-SENTINEL_INTENT_ID = "REPLAY"
-SENTINEL_ARMED_TS = "1970-01-01T00:00:00+00:00"
+# The completion of spec section 6.4 is the door's (`intent_replay.door.complete`):
+# two out-of-scope sentinels over a document that states its trade date. Nothing
+# else is filled — in particular no tags.
 STATED_TRADE_DATE = "2026-09-23"
 
 # Every one of the input schema's paths, by hand from the schema: two
@@ -300,14 +299,8 @@ def expected_interpreted() -> frozenset[str]:
 
 
 def _completed(document: Mapping[str, Any]) -> dict[str, Any]:
-    completed = copy.deepcopy(dict(document))
-    completed["intent_id"] = SENTINEL_INTENT_ID
-    completed["meta"] = {
-        **completed["meta"],
-        "armed_ts": SENTINEL_ARMED_TS,
-        "trade_date": STATED_TRADE_DATE,
-    }
-    return completed
+    dated = {**document, "meta": {**document["meta"], "trade_date": STATED_TRADE_DATE}}
+    return complete(dated)
 
 
 def _example(name: str) -> dict[str, Any]:

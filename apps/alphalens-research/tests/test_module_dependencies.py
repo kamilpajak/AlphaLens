@@ -285,7 +285,38 @@ RULES = (
         "name": "intent_replay engine imports stdlib and broker_contract only",
         "from_pkg": "intent_replay",
         "allowed_prefixes": ("broker_contract",),
+        # door.py is the one file that imports jsonschema (gate 1). cli.py is
+        # NOT exempt: it reaches jsonschema only through door.py, so an entry
+        # here would be a dead exemption (test_exemptions_still_exist).
+        "exemptions": {"door.py"},
+    },
+    {
+        "name": "intent_replay.door may import jsonschema",
+        "from_pkg": "intent_replay.door",
+        "allowed_prefixes": ("broker_contract", "jsonschema"),
         "exemptions": set(),
+    },
+    {
+        "name": "intent_replay.cli may import jsonschema",
+        "from_pkg": "intent_replay.cli",
+        "allowed_prefixes": ("broker_contract", "jsonschema"),
+        "exemptions": set(),
+    },
+    {
+        # The allow-list treats the rule's own package as legal, so an engine
+        # module could reach jsonschema THROUGH the door with the rule above
+        # green. These two rows close that: only cli.py may import the door,
+        # and only __main__.py may import the cli.
+        "name": "intent_replay engine must not import the door",
+        "from_pkg": "intent_replay",
+        "forbidden_prefix": "intent_replay.door",
+        "exemptions": {"cli.py"},
+    },
+    {
+        "name": "intent_replay engine must not import the cli",
+        "from_pkg": "intent_replay",
+        "forbidden_prefix": "intent_replay.cli",
+        "exemptions": {"__main__.py"},
     },
 )
 
@@ -315,6 +346,45 @@ def _resolve_relative(package: str, level: int, module: str | None) -> str:
         )
     base = base[: len(base) - (level - 1)]
     return ".".join(part for part in (*base, module) if part)
+
+
+def _package_root(top: str, path: Path, package: str) -> Path | None:
+    """The directory of top-level package ``top``: a known workspace package, or
+    the scanned file's own package root (so a synthetic package in a temp
+    directory resolves the same way)."""
+    known = PACKAGE_DIRS.get(top)
+    if known is not None:
+        return known
+    if package.split(".", maxsplit=1)[0] != top:
+        return None
+    directory = path.parent
+    while directory.name != top and (directory.parent / "__init__.py").is_file():
+        directory = directory.parent
+    return directory if directory.name == top else None
+
+
+def _level0_targets(node: ast.ImportFrom, path: Path, package: str) -> list[str]:
+    """What a level-0 ``from X import a, b`` imports: ``X.a`` for every name that
+    is a MODULE of ``X`` on disk (``X/a.py`` or ``X/a/__init__.py``), and ``X``
+    itself when any name is not — ``from intent_replay import door`` names the
+    door module and used to walk as the bare package, invisible to every rule."""
+    assert node.module is not None
+    parts = node.module.split(".")
+    root = _package_root(parts[0], path, package)
+    directory = root.joinpath(*parts[1:]) if root is not None else None
+    targets: list[str] = []
+    unresolved = False
+    for alias in node.names:
+        if directory is not None and (
+            (directory / f"{alias.name}.py").is_file()
+            or (directory / alias.name / "__init__.py").is_file()
+        ):
+            targets.append(f"{node.module}.{alias.name}")
+        else:
+            unresolved = True
+    if unresolved or not targets:
+        targets.append(node.module)
+    return targets
 
 
 def _iter_imports(path: Path, *, include_function_scope: bool):
@@ -352,7 +422,7 @@ def _iter_imports(path: Path, *, include_function_scope: bool):
                 else:
                     self.modules.append(base)
             elif node.module:
-                self.modules.append(node.module)
+                self.modules.extend(_level0_targets(node, path, package))
             self.generic_visit(node)
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -926,14 +996,86 @@ class TestModuleDependencies(unittest.TestCase):
         """The intent_replay engine rule is the only barrier keeping the engine
         importable without a library (spec section 3.1); it must exist once,
         in the allow-list kind, with no escape hatch."""
-        rules = [rule for rule in RULES if rule["from_pkg"] == "intent_replay"]
+        rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "intent_replay" and "allowed_prefixes" in rule
+        ]
         self.assertEqual(len(rules), 1, "the intent_replay engine rule must exist exactly once")
         rule = rules[0]
         self.assertEqual(rule["allowed_prefixes"], ("broker_contract",))
-        self.assertNotIn("forbidden_prefix", rule)
         self.assertNotIn("top_level_only", rule, "lazy imports must be caught too")
-        self.assertEqual(rule["exemptions"], set())
+        # The one escape hatch is the adapter file that imports jsonschema (spec
+        # section 3.1); cli.py needs none, because it reaches jsonschema only
+        # through door.py, and test_exemptions_still_exist would call a cli.py
+        # entry a dead exemption.
+        self.assertEqual(rule["exemptions"], {"door.py"})
         self.assertTrue(_python_files(_resolve_pkg_dir(rule["from_pkg"])))
+
+    def test_intent_replay_adapter_rows(self):
+        """The per-module split of spec section 3.1, as four rows: each adapter
+        module may import jsonschema and nothing else third-party, and the
+        engine may not reach an adapter module (and through it jsonschema).
+        Each exemption names the ONE file that legitimately breaks the rule."""
+        by_name = {rule["name"]: rule for rule in RULES}
+        for module in ("door", "cli"):
+            with self.subTest(adapter=module):
+                rule = by_name[f"intent_replay.{module} may import jsonschema"]
+                self.assertEqual(rule["from_pkg"], f"intent_replay.{module}")
+                self.assertEqual(rule["allowed_prefixes"], ("broker_contract", "jsonschema"))
+                self.assertEqual(rule["exemptions"], set())
+        door_rule = by_name["intent_replay engine must not import the door"]
+        self.assertEqual(door_rule["from_pkg"], "intent_replay")
+        self.assertEqual(door_rule["forbidden_prefix"], "intent_replay.door")
+        self.assertEqual(door_rule["exemptions"], {"cli.py"})
+        cli_rule = by_name["intent_replay engine must not import the cli"]
+        self.assertEqual(cli_rule["from_pkg"], "intent_replay")
+        self.assertEqual(cli_rule["forbidden_prefix"], "intent_replay.cli")
+        self.assertEqual(cli_rule["exemptions"], {"__main__.py"})
+
+    def test_intent_replay_engine_must_not_reach_the_adapter_positive_control(self):
+        """Every spelling of "import the door" is seen by the forbid rule: the
+        dotted form, the relative form, and `from intent_replay import door`,
+        which names the module as an ATTRIBUTE of the package and used to
+        walk as the bare package name, invisible to any rule.
+
+        Runs the real collection loop over a synthetic package on disk, so a
+        rule copied from RULES with the package name swapped exercises the same
+        resolution a real violation would."""
+        import tempfile
+
+        sources = {
+            "lazy_dotted.py": "def f():\n    from synthetic_pkg.door import admit\n    return admit\n",
+            "attribute.py": "from synthetic_pkg import door\n",
+            "relative.py": "from . import door\n",
+            "clean.py": "import math\nfrom synthetic_pkg import bars\n",
+            "door.py": "import jsonschema\n",
+            "bars.py": "",
+        }
+        rule = {
+            "name": "synthetic forbid door",
+            "from_pkg": "synthetic_pkg",
+            "forbidden_prefix": "synthetic_pkg.door",
+            "exemptions": set(),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            for name, source in sources.items():
+                (pkg / name).write_text(source)
+            flagged = sorted(
+                (Path(rel).name, module)
+                for _, rel, module in _violations_for(rule, _python_files(pkg))
+            )
+        self.assertEqual(
+            flagged,
+            [
+                ("attribute.py", "synthetic_pkg.door"),
+                ("lazy_dotted.py", "synthetic_pkg.door"),
+                ("relative.py", "synthetic_pkg.door"),
+            ],
+        )
 
     def test_allowed_prefixes_rule_kind_positive_control(self):
         """The allow-list kind cannot rot silently.
