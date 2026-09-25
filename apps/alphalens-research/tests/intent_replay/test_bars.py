@@ -67,8 +67,9 @@ class SequenceOrderingTest(unittest.TestCase):
         self.assertEqual(_refusal(ctx.exception), (BARS_EMPTY_CODE, None))
 
     def test_an_ordered_sequence_is_returned_unchanged(self) -> None:
-        bars = _bars(1, 2, 3)
-        self.assertEqual(validate_sequence(list(bars)), bars)
+        for label, bars in {"three bars": _bars(1, 2, 3), "a single bar": _bars(1)}.items():
+            with self.subTest(label):
+                self.assertEqual(validate_sequence(list(bars)), bars)
 
 
 class BarValueTest(unittest.TestCase):

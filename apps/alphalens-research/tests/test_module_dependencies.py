@@ -304,11 +304,16 @@ def _package_name_of(path: Path) -> str:
 
 def _resolve_relative(package: str, level: int, module: str | None) -> str:
     """``from ..b import y`` inside ``pkg.sub`` -> ``pkg.b``; ``from . import z``
-    -> ``pkg.sub``. A relative import from outside any package resolves to the
-    bare module name, which is what the walker used to report for every
-    relative import."""
+    resolves to the package ``pkg.sub`` (the caller appends the imported
+    names, because each of them is a module). A level deeper than the package
+    is an error: Python refuses it at import time, and a static gate must not
+    quietly turn it into a bare name that might happen to be legal."""
     base = package.split(".") if package else []
-    base = base[: len(base) - (level - 1)] if level > 1 else base
+    if level > len(base):
+        raise ValueError(
+            f"relative import level {level} reaches past the top of package {package!r}"
+        )
+    base = base[: len(base) - (level - 1)]
     return ".".join(part for part in (*base, module) if part)
 
 
@@ -340,9 +345,12 @@ def _iter_imports(path: Path, *, include_function_scope: bool):
 
         def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
             if node.level:
-                resolved = _resolve_relative(package, node.level, node.module)
-                if resolved:
-                    self.modules.append(resolved)
+                base = _resolve_relative(package, node.level, node.module)
+                if node.module is None:
+                    # `from . import x, y`: each name is a MODULE of the package.
+                    self.modules.extend(f"{base}.{alias.name}" for alias in node.names)
+                else:
+                    self.modules.append(base)
             elif node.module:
                 self.modules.append(node.module)
             self.generic_visit(node)
@@ -857,11 +865,23 @@ class TestModuleDependencies(unittest.TestCase):
             (pkg / "sub" / "__init__.py").write_text("")
             module = pkg / "sub" / "mod.py"
             module.write_text(
-                "from .a import x\nfrom ..b import y\nfrom . import z\nfrom pkg.c import w\n"
+                "from .a import x\nfrom ..b import y\nfrom . import z, q\nfrom pkg.c import w\n"
             )
             modules = list(_iter_imports(module, include_function_scope=True))
 
-        self.assertEqual(modules, ["pkg.sub.a", "pkg.b", "pkg.sub", "pkg.c"])
+        # `from . import z` names the MODULE pkg.sub.z, not the package: a rule
+        # forbidding a sibling module must see it (the intent_replay engine ->
+        # door edge of PR 4 is exactly that shape).
+        self.assertEqual(modules, ["pkg.sub.a", "pkg.b", "pkg.sub.z", "pkg.sub.q", "pkg.c"])
+
+    def test_a_relative_import_beyond_the_package_root_is_an_error(self):
+        """Python refuses `from ... import x` past the top-level package at
+        import time; a static gate must not quietly resolve it to a bare name
+        that might happen to be legal."""
+        with self.assertRaises(ValueError):
+            _resolve_relative("pkg.sub", 3, "x")
+        with self.assertRaises(ValueError):
+            _resolve_relative("", 1, "x")
 
     def test_resolved_relative_imports_change_no_existing_verdict(self):
         """Pins the measurement that made the walker change safe: across every
