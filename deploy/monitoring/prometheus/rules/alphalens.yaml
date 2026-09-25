@@ -5,7 +5,12 @@
 # file is the SoT; the live copy (~/monitoring/prometheus/alphalens.rules) is
 # converged to the origin/main blob by the hourly
 # alphalens-prometheus-rules-sync timer, so MERGING TO MAIN IS THE DEPLOY —
-# live picks a change up within ~1h. Emergency override only (sync broken):
+# live picks a change up within ~1h. It is a DEFERRED and CONDITIONAL deploy,
+# not an instant one: a dead timer or a promtool rejection leaves the merge
+# undelivered. Neither is silent (AlphalensPrometheusRulesSyncFailed +
+# AlphalensJobStale@2h), but if a change is not live after an hour, read
+# `journalctl --user -u alphalens-prometheus-rules-sync.service` before
+# suspecting the rule. Emergency override only (sync broken):
 # copy this file over the live one, then:
 #
 #     docker exec prometheus kill -HUP 1
@@ -13,6 +18,14 @@
 # Lint locally with ``just lint-rules`` (containerised promtool, pinned to the
 # VPS Prometheus version — no native install needed). The same command runs as
 # the CI job "prometheus rules (promtool)".
+#
+# RULES DEPLOY THEMSELVES; THE CODE THAT EMITS A METRIC DOES NOT. A rule reaches
+# the VPS within ~1h of a merge, while the emitting code waits for a manual pull
+# and image rebuild. promtool checks that an expression PARSES, never that the
+# series it names is produced by anything. So an ``absent()`` alert merged
+# alongside its own emitter has no state in which it stays quiet, and pages for
+# the length of that gap — #1558 did exactly this. Ship a
+# ``{Stale, MetricMissing}`` pair in a SEPARATE, LATER PR than its emitter.
 #
 # PromQL EXPRESSION SYNTAX is checked ONLY by that promtool gate. The unit
 # tests below parse this file as YAML, where ``expr`` is an opaque string; a
@@ -996,8 +1009,6 @@ groups:
       # a one-slot LLM hiccup that the next slot's rerun heals must
       # not page. Prometheus-only by user decision — the CLI emits no
       # Telegram for this condition.
-      # NOTE: live rules on the VPS are hand-synced (not repo-mounted)
-      # — copy this file over and HUP prometheus after editing.
       - alert: AlphalensThematicBriefUnavailableHigh
         expr: |
           alphalens_thematic_brief_unavailable_count
@@ -1029,8 +1040,6 @@ groups:
       # candidate day from tripping on a single failure; ``for: 6h`` means the
       # condition survived at least two 4-hourly slots, so a one-slot hiccup the
       # next rerun heals does not page.
-      # NOTE: live rules on the VPS are hand-synced (not repo-mounted)
-      # — copy this file over and HUP prometheus after editing.
       - alert: AlphalensThematicChannelAssessFailureHigh
         expr: |
           alphalens_thematic_channel_assess_failed_total
@@ -1137,8 +1146,6 @@ groups:
       # is carried entirely by the three clauses above.
       # Numerator and denominator come from the SAME thematic-build emit,
       # so the ratio is same-run consistent and label-compatible.
-      # NOTE: live rules on the VPS are hand-synced (not repo-mounted)
-      # — copy this file over and HUP prometheus after editing.
       - alert: AlphalensThematicBriefLadderUsableLow
         expr: |
           alphalens_thematic_brief_usable_ladder_ratio < 0.5
@@ -1202,8 +1209,6 @@ groups:
       # ``for: 6h`` = the condition survived at least one further 4-hourly slot,
       # so a deciding slot that failed and was re-derived by the next one (its
       # candidate set having been degraded / empty) does not page.
-      # NOTE: live rules on the VPS are hand-synced (not repo-mounted)
-      # — copy this file over and HUP prometheus after editing.
       - alert: AlphalensThematicThemeRollupLost
         expr: |
           (max_over_time(alphalens_thematic_theme_rollup_write{outcome="failed"}[24h]) > 0)
@@ -1596,9 +1601,9 @@ groups:
         # arrived for >300s (the LivePriceStreamStale shape on the order
         # stream). Suppressed while a breaker episode is open — that state is
         # already reported by its own pages and the BreakerOpen rule. `unless`
-        # (NOT `and == 0`) so an ABSENT breaker gauge (live rules are
-        # hand-synced and may lead the daemon) leaves the alert exactly as
-        # before.
+        # (NOT `and == 0`) so an ABSENT breaker gauge leaves the alert exactly
+        # as before — the gauge can legitimately not exist yet, because rules
+        # and the code that emits them deploy separately (see the file header).
         expr: >-
           alphalens_broker_manager_stream_last_message_age_seconds{job="broker-manager-sim"} > 300
           and alphalens_broker_manager_stream_reader_up{job="broker-manager-sim"} == 1
@@ -1657,8 +1662,8 @@ groups:
         # reader_up=1 and subscribed_uics>0 — the exact signature above. The
         # stream flips session_asleep on each sleep/wake edge; drop that
         # state via `unless == 1`. `unless` (NOT `and == 0`) so an ABSENT
-        # gauge (older stream code / gate never wired; live rules are
-        # hand-synced and may lead the daemon) leaves the alert exactly as
+        # gauge (older stream code, gate never wired, or the emitter simply not
+        # deployed yet — see the file header) leaves the alert exactly as
         # before. Residual: a predicate wrongly returning False DURING a
         # session silences the stream and this alert together — that mode is
         # pinned by the window-math unit tests, and a RAISING predicate
