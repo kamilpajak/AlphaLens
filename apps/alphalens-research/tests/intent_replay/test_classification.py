@@ -264,10 +264,15 @@ def spec_tables() -> dict[str, list[_SpecRow]]:
         if set(cells[0]) <= {"-", " "}:
             continue
         class_text = cells[1].lower()
+        classes = frozenset(word for word in _CLASS_WORDS if word in class_text)
+        if not classes:
+            # A row whose class column names no class would classify nothing
+            # and silently pass every equality below; refuse to parse it.
+            raise ValueError(f"section 4.3.1 row with no class word in column 2: {line!r}")
         tables[header].append(
             _SpecRow(
                 paths=frozenset(_BACKTICK.findall(cells[0])),
-                classes=frozenset(word for word in _CLASS_WORDS if word in class_text),
+                classes=classes,
                 gate4="gate 4" in class_text,
             )
         )

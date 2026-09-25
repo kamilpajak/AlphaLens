@@ -330,9 +330,11 @@ anticipates it.
 
 **The OCO row is a modelling gap, not a switch.** A pair resting at the broker
 resolves on a touch; an engine resolves at its next observation. This document
-does not state what that observation is relative to a bar, so there is nothing
-here to configure yet. §8.1 is where that belongs, and since 2026-09-25 it
-carries the decision: `oco` is stated, and only `false` is accepted in v1.
+does not state what that observation is relative to a bar, so at the time this
+row was written there was nothing here to configure. §8.1 is where that
+belongs, and since 2026-09-25 it carries the decision: `oco` is stated, and only
+`false` is accepted in v1 — the switch exists so that the run says who decided
+it, and the model does not.
 
 The replay takes these as an explicit run configuration, separate from the
 document, and the trace records which were active. Per §2.1 none of them carries

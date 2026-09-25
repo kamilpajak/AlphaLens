@@ -23,8 +23,10 @@ Two codes, one failure mode each, both with a closed reason vocabulary:
   place.
 
 Missing keys win. When keys are both missing and invalid, only the missing ones
-are reported; the caller hears about values on the next pass. A missing key is
-ONE fact, so no value rule runs on an absent key.
+are reported — every ``config_invalid`` violation, unknown keys included, is
+held back until the block is complete, and the caller hears about values on
+the next pass. A missing key is ONE fact, so no value rule runs on an absent
+key.
 
 ``unknown_key`` is here because the contract's codec DROPS a key it does not
 model with only a warning, which is why the arming door needs its fixed-point
@@ -251,6 +253,9 @@ class _Violation:
         return entry
 
 
+_UNSET: Final = object()
+
+
 @dataclass(slots=True)
 class _Reader:
     missing: list[str] = field(default_factory=list)
@@ -259,12 +264,13 @@ class _Reader:
     def miss(self, key: str) -> None:
         self.missing.append(key)
 
-    def reject(self, key: str, reason: str, message: str, **expected: Any) -> None:
-        if expected:
-            ((_, value),) = expected.items()
-            self.invalid.append(_Violation(key, reason, message, value, True))
-        else:
+    def reject(self, key: str, reason: str, message: str, *, expected: Any = _UNSET) -> None:
+        """Record a violation; ``expected`` (any value, ``False`` included) is
+        published beside it when given."""
+        if expected is _UNSET:
             self.invalid.append(_Violation(key, reason, message))
+        else:
+            self.invalid.append(_Violation(key, reason, message, expected, True))
 
     def raise_if_any(self) -> None:
         if self.missing:
