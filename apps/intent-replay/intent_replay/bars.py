@@ -19,7 +19,8 @@ Every refusal is a :class:`BarsError` carrying a ``Failure`` whose ``code``
 is one of the four engine-owned bar codes and whose ``details["reason"]``
 names the rule, on the project's rule of one code per failure mode with a
 closed reason vocabulary (the shape ``broker_contract.trade_intent.validate``
-already uses for ``intent_invalid``).
+already uses for ``intent_invalid``). The builder that enforces the vocabulary
+at the raise site is shared with the other engine modules (``refusal.py``).
 """
 
 from __future__ import annotations
@@ -30,7 +31,9 @@ from dataclasses import dataclass, fields
 from types import MappingProxyType
 from typing import Any, Final
 
-from broker_contract.failure import ContractError, Failure
+from broker_contract.failure import ContractError
+
+from intent_replay.refusal import refuse
 
 BARS_EMPTY_CODE: Final = "bars_empty"
 BARS_UNORDERED_CODE: Final = "bars_unordered"
@@ -60,10 +63,7 @@ class BarsError(ContractError):
 
 
 def _refuse(code: str, message: str, **details: Any) -> BarsError:
-    reason = details.get("reason")
-    if reason is not None and reason not in BARS_REASONS:
-        raise ValueError(f"unregistered bars reason: {reason!r}")
-    return BarsError(Failure(code=code, message=message, retryable=False, details=details))
+    return refuse(BarsError, code, message, reasons=BARS_REASONS, **details)
 
 
 @dataclass(frozen=True, slots=True)

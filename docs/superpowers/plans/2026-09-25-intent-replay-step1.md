@@ -48,7 +48,7 @@ Ordered so a runnable command exists at PR 4. The code column exists because rev
 |---|---|---|
 | 1 | package, `bars.py`, the AST gate + its new rule kind, six repo-wide gate configs | `bars_unordered`, `bars_empty`, `bars_invalid`, `window_too_short` |
 | 2 | `stop_decision` COPIED into the contract + the parity property test | — |
-| 3 | `config.py` + the §4.3.1 classification bookkeeping | `config_incomplete`, `path_unclassified` |
+| 3 | `config.py` + the §4.3.1 classification bookkeeping | `config_incomplete`, `config_invalid`, `path_unclassified` |
 | 4 | `door.py`: template completion, the four door gates, a CLI that decodes and refuses | `intent_invalid`, `intent_malformed` |
 | 5 | interpreter: pullback rungs → pending orders | `entry_mode_unsupported` |
 | 6 | bar walk + tie convention + `ambiguous_bars` + trace | — |
@@ -150,6 +150,9 @@ Named here so they are not discovered as red builds.
 - **PR 9's §6.4 asserts two different things**: the two pullback examples are accepted, and `immediate-plus-pullback.json` is refused with exactly `entry_mode_unsupported` naming tier 0 in `details.tiers`. Do not fix that red by dropping the file or softening the code — either quietly undoes a spec §8.1 decision.
 - **PR 7 owns both output formats.** Revision 1 dropped `ndjson` and the multi-document stream, which spec §0 and §5.3 both require.
 - **PR 7 owns `divergences`**, including `daemon_trail_guards`, which revision 1 named nowhere.
+- **PR 3 landed three codes, not two.** `config_invalid` (a stated value nothing can use) was split from `config_incomplete` (a value not stated) on the `bars_invalid` argument, and spec §5.4 carries both. PR 3 also decided, with the owner: a null `entry_deadline` is refused, `oco: true` is refused in v1, and `spec.entry_tiers[].tag`, `spec.tp_tranches[].tag` and `account_id` are out of scope. The FX gap (the costs block carries no rate, and the replay cannot detect a cross-currency run) is recorded on #1576/#1577/#1578 and decided in its own issue; until then no later PR prices a cross-currency run with a constant or an implicit 1:1.
+- **PR 5 must produce the gate's `read` set from a RECORDING accessor, never from a hand-typed list.** `intent_replay.classification.check_classified(document, read)` subtracts the listed classes and `read`; the interpreter is the only source of `read`, and a list typed by hand is exactly the trusted list the gate exists to refute. The paths the interpreter must prove by reading are the `interpreted` rows of the three §4.3.1 tables minus the two in `REFUSED_BY_DOOR`; `tests/intent_replay/test_classification.py` reads them off the spec.
+- **PR 4 loads the configuration file with a duplicate-key refusal BEFORE `RunConfig.from_jsonable`** (`json.loads` keeps the last of a repeated key; the arming door already refuses `duplicate_key` with an `object_pairs_hook`), and completes a template with the three fields of spec §6.4 only — it does not fill tags, since the gate's universe is the completed wire document and a filled tag is a path the author did not write.
 - **PR 4's success path is deliberately incomplete.** A valid document before the envelope exists has nothing to print, so PR 4 prints the refusal shape only and exits 0 with empty `stdout` on an accepted document. Say so in its PR body rather than leave a reviewer to find it.
 
 ---
