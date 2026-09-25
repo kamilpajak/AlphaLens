@@ -799,6 +799,26 @@ The leaf never names it. The two CLIs therefore agree on the STRING without
 sharing a definition, which is what the split already accepts for the broker's own
 commands.
 
+**`window_too_short` fires when the supplied bars do not COVER `walk_start`.**
+Decided 2026-09-25, after the implementation plan found the code published here
+with no trigger defined anywhere. One code, two reasons in `details.reason`, on
+the project's rule of one code per failure mode with a closed reason vocabulary:
+
+| `details.reason` | when | why a truncated walk would be wrong |
+|---|---|---|
+| `ends_before_walk_start` | the last bar precedes the stated `walk_start` | there is nothing to walk; a result would describe no session at all |
+| `begins_after_walk_start` | the first bar follows it | the entry ladder was live over an interval the tape does not cover, and a walk starting at the first available bar would report those rungs as unfilled over a stretch it never saw |
+
+The second reason is the one that matters. A replay that quietly started at the
+first bar it had would produce a number, and the number would be about a
+narrower window than the caller asked for — the same failure §4.5 refuses for
+unordered input, for the same reason: in a research tool, adjusting the
+caller's input silently produces a wrong answer that leaves no trace.
+
+The check is a pure function of the bar sequence and ONE timestamp. It lives in
+`bars`, takes the stated `walk_start` as an argument, and does not read the
+configuration itself — so it can exist before the configuration model does.
+
 `entry_mode_unsupported` is a refusal and not a warning on purpose. The daemon
 buys an `immediate` tranche AT DRAIN, where `limit_price` is the operator's cap
 rather than a pullback level, so a bar walk asking "did the low touch the limit"
