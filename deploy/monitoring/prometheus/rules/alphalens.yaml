@@ -5,7 +5,12 @@
 # file is the SoT; the live copy (~/monitoring/prometheus/alphalens.rules) is
 # converged to the origin/main blob by the hourly
 # alphalens-prometheus-rules-sync timer, so MERGING TO MAIN IS THE DEPLOY —
-# live picks a change up within ~1h. Emergency override only (sync broken):
+# live picks a change up within ~1h. It is a DEFERRED and CONDITIONAL deploy,
+# not an instant one: a dead timer or a promtool rejection leaves the merge
+# undelivered. Neither is silent (AlphalensPrometheusRulesSyncFailed +
+# AlphalensJobStale@2h), but if a change is not live after an hour, read
+# `journalctl --user -u alphalens-prometheus-rules-sync.service` before
+# suspecting the rule. Emergency override only (sync broken):
 # copy this file over the live one, then:
 #
 #     docker exec prometheus kill -HUP 1
@@ -1597,9 +1602,8 @@ groups:
         # stream). Suppressed while a breaker episode is open — that state is
         # already reported by its own pages and the BreakerOpen rule. `unless`
         # (NOT `and == 0`) so an ABSENT breaker gauge leaves the alert exactly
-        # as before. Rules DO lead the daemon, and by more than the old
-        # "hand-synced" wording implied: they converge within an hour of a
-        # merge, while the code that emits a gauge waits for a manual deploy.
+        # as before — the gauge can legitimately not exist yet, because rules
+        # and the code that emits them deploy separately (see the file header).
         expr: >-
           alphalens_broker_manager_stream_last_message_age_seconds{job="broker-manager-sim"} > 300
           and alphalens_broker_manager_stream_reader_up{job="broker-manager-sim"} == 1
@@ -1658,9 +1662,9 @@ groups:
         # reader_up=1 and subscribed_uics>0 — the exact signature above. The
         # stream flips session_asleep on each sleep/wake edge; drop that
         # state via `unless == 1`. `unless` (NOT `and == 0`) so an ABSENT
-        # gauge (older stream code / gate never wired; rules converge within an
-        # hour of a merge while the emitting code waits for a manual deploy, so
-        # they DO lead the daemon) leaves the alert exactly as before. Residual: a predicate wrongly returning False DURING a
+        # gauge (older stream code, gate never wired, or the emitter simply not
+        # deployed yet — see the file header) leaves the alert exactly as
+        # before. Residual: a predicate wrongly returning False DURING a
         # session silences the stream and this alert together — that mode is
         # pinned by the window-math unit tests, and a RAISING predicate
         # fails open stream-side (treated as in-session).
