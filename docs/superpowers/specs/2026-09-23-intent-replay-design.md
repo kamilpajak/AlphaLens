@@ -158,6 +158,8 @@ apps/intent-replay/                      NEW leaf, depends only on the contract
   intent_replay/
     bars.py          price-input contract          ENGINE
     config.py        the stated run configuration   ENGINE
+    classification.py the path classes of 4.3.1     ENGINE
+    refusal.py       the one refusal builder         ENGINE
     interpreter.py   document -> pending orders     ENGINE
     walk.py          bar walk                       ENGINE
     trace.py         event trace                    ENGINE
@@ -328,8 +330,11 @@ anticipates it.
 
 **The OCO row is a modelling gap, not a switch.** A pair resting at the broker
 resolves on a touch; an engine resolves at its next observation. This document
-does not state what that observation is relative to a bar, so there is nothing
-here to configure yet. §8.1 is where that belongs.
+does not state what that observation is relative to a bar, so at the time this
+row was written there was nothing here to configure. §8.1 is where that
+belongs, and since 2026-09-25 it carries the decision: `oco` is stated, and only
+`false` is accepted in v1 — the switch exists so that the run says who decided
+it, and the model does not.
 
 The replay takes these as an explicit run configuration, separate from the
 document, and the trace records which were active. Per §2.1 none of them carries
@@ -383,7 +388,12 @@ deadline is a REQUIRED configuration value, and the caller states which rule
 produced it inside `formula`. Picking one here — even the deployed one — would be
 the replay inheriting a deployment fact, which §2.1 forbids, and it would make
 every result depend on a choice its reader cannot see. A run that omits the
-deadline is refused with `config_incomplete`, not walked to the last bar.
+deadline is refused with `config_incomplete`, not walked to the last bar. A run
+that states `null` for it is refused too (`config_invalid`, decided 2026-09-25
+with PR 3): every decoded document carries `spec.order_ttl_days` — the codec
+defaults it, and `0` is a legal sentinel — so a null would translate a present
+path into nothing, with no `formula` a reader could check. A run that wants no
+deadline states one past its last bar and says so in `formula`.
 
 The same reasoning fixes the day-1 anchor. `meta.source` decides whether
 `meta.trade_date` is itself day 1 or the session before day 1, and resolving "the
@@ -454,13 +464,20 @@ input:
   calendar, a fee card or a fill. The client resolves it and passes the result
   in the run configuration, which carries the rule as well as the value (§4.1,
   §5.2). The set is closed and listed here.
-- **out of scope** — a queue or deployment concern the replay deliberately
-  ignores. Today: `meta.generation`, and the venue and pick-key checks §4.3
-  already declines.
+- **out of scope** — a queue or deployment concern, an identity, or a label
+  the envelope may echo but nothing reads; the replay deliberately ignores it.
+  Today: `meta.generation`, the venue and pick-key checks §4.3 already declines,
+  and the rung and tranche labels. The label clause was added on 2026-09-25 with
+  PR 3: the table already carried `instrument.ticker`, `spec.size.currency` and
+  the two `schema_version` rows, none of which the first sentence admitted.
 
 *Interpreted* is not listed, because the interpreter proves that class at
-runtime by actually reading the path. The other two ARE listed, here, and this
-table is the whole of them:
+runtime by actually reading the path — with one exception, two paths that gate
+4 proves by REFUSING rather than by a read (`spec.side`, `ceiling_price`; the
+optional-path table below), which `validate_intent` cannot report and which
+are therefore written down in `intent_replay.classification.REFUSED_BY_DOOR`,
+each pinned by a test that runs the refusal. The other two classes ARE listed,
+here, and this table is the whole of them:
 
 | path | class | why |
 |---|---|---|
@@ -472,6 +489,13 @@ table is the whole of them:
 | `meta.schema_version`, `spec.schema_version` | out of scope | the door is the only gate that reads a version; the codec and `validate_intent` stay version-blind on purpose, and so does this |
 | `meta.source`, `meta.trade_date` | translated | together they fix the first session of the walk, and "the next session" needs a calendar (§4.1). The client resolves it and states `walk_start` |
 | `spec.entry_tiers[].entry_mode` | interpreted | `pullback` is a resting rung the walk can test; `immediate` is refused with `entry_mode_unsupported` (§5.4), and a refusal is interpretation by the definition above |
+| `spec.entry_tiers[].tag`, `spec.tp_tranches[].tag` | out of scope | labels with no sizing semantics (the schema's own words); an echo in the trace is not a read |
+| `account_id` | out of scope | a reserved tenant dimension with one value; a deployment concern like `meta.generation` |
+
+The last two rows were added on 2026-09-25 by PR 3 (#1574), the third time the
+coverage check below fired: enumerating EVERY path of the input schema, not only
+the required ones, left exactly those three without a class, and a pick copied
+with the README's `jq` recipe carries all of them.
 
 **Completeness: the sixteen REQUIRED paths.** The table above lists only the two
 classes that need listing, which leaves a reader unable to check that every
@@ -501,16 +525,40 @@ argued above, and this table going stale cannot make the gate wrong.
 | `spec.tp_tranches[].tranche_pct` | interpreted | the share of the position exited there |
 
 The count and the list come from the schema, not from reading this document:
-enumerate `required` recursively through `$defs` and compare against the two
+enumerate `required` recursively through `$defs` — descending only through
+properties a `required` list names, arrays as `[]` — and compare against the
 tables. Doing that on 2026-09-25 is what produced the six `interpreted` rows
 above — the first pass of this section had none of them, and a check that cannot
-produce a missing row has tested nothing.
+produce a missing row has tested nothing. PR 3 (#1574) promoted the check to a
+test that also enumerates EVERY path of the schema and holds the three tables of
+this section equal to the module's listed classes in both directions; the
+optional paths land here:
 
-One path is interpreted in a way a reader can miss: `spec.side` is pinned to
-`long`, and gate 4 of §4.3 refuses anything else with `side_not_long`. Raising a
-refusal is interpretation by the definition above, so `side` needs no row — but
-only because the gate runs. A replay that skipped `validate_intent` would walk a
-short document as a long one.
+| optional path | class | note |
+|---|---|---|
+| `exit` | container | `null` means the stop is never moved (§6.3) |
+| `exit.initial_levels` | container | |
+| `exit.initial_levels.stop` | interpreted | the level placed, and the R denominator (§5.1) |
+| `exit.initial_levels.tp` | interpreted | the level placed |
+| `exit.reaction_plan` | container | |
+| `exit.reaction_plan[].kind` | interpreted | routes the stop decision (§3.2) |
+| `exit.reaction_plan[].k_atr`, `exit.reaction_plan[].atr` | interpreted | the re-anchor arm's inputs (§3.2) |
+| `exit.reaction_plan[].arm_trigger_r`, `exit.reaction_plan[].trail_frac` | interpreted | the trail arm's inputs (§3.2) |
+| `exit.reaction_plan[].ceiling_price` | interpreted (gate 4 refusal: `ceiling_price_unsupported`) | the instance already queued, below; a lifted refusal makes this row false and the reachability test red |
+| `spec.side` | interpreted (gate 4 refusal: `side_not_long`) | pinned to `long`; a replay that skipped `validate_intent` would walk a short document as a long one |
+| `spec.entry_tiers[].entry_mode` | interpreted | above |
+| `spec.order_ttl_days`, `meta.trade_date` | translated | above |
+| `spec.schema_version`, `meta.schema_version`, `meta.generation` | out of scope | above |
+| `spec.entry_tiers[].tag`, `spec.tp_tranches[].tag`, `account_id` | out of scope | above |
+
+The two gate-4 rows are interpreted paths a reader can miss, because the proof
+is a refusal rather than a read: raising a refusal is interpretation by the
+definition above, but `validate_intent` reports nothing about the paths it
+examined, so the interpreter's read set cannot carry them. They are listed in
+`REFUSED_BY_DOOR` for that reason only, and the list is pinned by a test that
+builds each offending document and asserts the named reason is RAISED — a test on
+membership of the reason in the vocabulary would stay green after the refusal
+was lifted.
 
 A path that is neither read by the interpreter nor in this table is refused, and
 the refusal names it (`path_unclassified`, §5.4). Adding a row is an edit to this
@@ -750,8 +798,9 @@ default to none. `entry_deadline` and `walk_start` are the TRANSLATED paths of
 
 The anchor and the boundary rule live inside `formula` as resolved values rather
 than as free-text sibling keys, because a reader can check a formula against the
-numbers beside it and cannot check a label. `null` remains the form for "no
-deadline". The rule exists because the alternative — a caller asserting "I
+numbers beside it and cannot check a label. There is no null form for "no
+deadline" (§4.1): an earlier revision kept one from the days the block had inert
+defaults, and PR 3 removed it. The rule exists because the alternative — a caller asserting "I
 translated this path" with nothing able to check the assertion — is an echo with
 a story attached, and §4.3.1 rules out echoes.
 
@@ -792,9 +841,25 @@ replay refuses what the door refuses, so it should refuse the same way. New
 codes only for its own failures: `bars_unordered`, `bars_empty`,
 `bars_invalid`, `window_too_short`, `path_unclassified` for the gate of §4.3.1 (carrying
 `details.paths`), `config_incomplete` for a required configuration value the
-caller did not state (§2.1, carrying `details.keys`), and
-`entry_mode_unsupported` for the `immediate` tranche v1 does not model (§4.3.1,
-carrying `details.tiers`).
+caller did not state (§2.1, carrying `details.keys`), `config_invalid` for a
+configuration value the caller stated but nothing can use (below, carrying
+`details.keys`), and `entry_mode_unsupported` for the `immediate` tranche v1
+does not model (§4.3.1, carrying `details.tiers`).
+
+**`config_invalid` is a stated value nothing can use; `config_incomplete` stays
+"not stated".** Added 2026-09-25 by PR 3, on the argument that gave `bars_invalid`
+its own code: a complete configuration can still carry a value nothing can use,
+and answering that caller with "you did not state this" — the published meaning
+of `config_incomplete` and of its `details.keys` — sends them to the wrong place.
+One code, a closed `details.reason` vocabulary: `unknown_key` (a key the block
+does not model — the codec drops such a key with a warning, which is why the
+door needs its fixed-point gate, and a misspelt `entry_trail_bp` must not switch
+entry trailing off in a run whose author believes the distance was stated),
+`wrong_type` (a stated `null` where none is allowed included), `numeric_not_finite`,
+`not_positive`, `negative`, `unit_mismatch`, `empty_string` and `oco_unsupported`
+(§8.1). Missing keys win: when keys are both missing and unusable, the run is
+refused `config_incomplete` naming only the missing ones, and hears about values
+on the next pass.
 
 **`intent_malformed` is a CLI-owned code, and this tool's CLI owns its own copy.**
 The broker's code registry is deliberately SPLIT: `broker_contract/failure.py`
@@ -1144,6 +1209,19 @@ reader needs and a rewritten bullet loses it.
   tool inheriting a deployment fact (§2.1) and would hide the choice from whoever
   reads the result. §4.1 carries the decision; omitting the deadline is
   `config_incomplete`.
+
+- **The OCO pair has a stated switch and no model (added 2026-09-25 by PR 3).**
+  §3.3 lists `oco` among the four facts a run states and calls the pair "a
+  modelling gap, not a switch", pointing here — and until PR 3 nothing here
+  decided what a stated `true` means. The config block travels in the result
+  (§5.2), so a run accepting `true` over a walk that models no pair would be a
+  result claiming a policy the run did not apply: the `ceiling_price` shape of
+  §4.3.1 on the configuration side.
+
+  **Decided: `oco` is required and only `false` is accepted in v1.** A stated
+  `true` is refused with `config_invalid` (`oco_unsupported`, §5.4), never
+  echoed. Modelling the pair means stating what "the engine's next observation"
+  is relative to a bar (§3.3), which is a design edit here, not a knob.
 
 None of these changed the architecture. The entry-trailing risk of §8 was the
 possible exception and in the end it did not: modelling the native order adds a
