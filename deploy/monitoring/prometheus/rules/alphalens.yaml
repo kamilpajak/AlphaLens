@@ -14,6 +14,14 @@
 # VPS Prometheus version — no native install needed). The same command runs as
 # the CI job "prometheus rules (promtool)".
 #
+# RULES DEPLOY THEMSELVES; THE CODE THAT EMITS A METRIC DOES NOT. A rule reaches
+# the VPS within ~1h of a merge, while the emitting code waits for a manual pull
+# and image rebuild. promtool checks that an expression PARSES, never that the
+# series it names is produced by anything. So an ``absent()`` alert merged
+# alongside its own emitter has no state in which it stays quiet, and pages for
+# the length of that gap — #1558 did exactly this. Ship a
+# ``{Stale, MetricMissing}`` pair in a SEPARATE, LATER PR than its emitter.
+#
 # PromQL EXPRESSION SYNTAX is checked ONLY by that promtool gate. The unit
 # tests below parse this file as YAML, where ``expr`` is an opaque string; a
 # malformed expression passes every one of them and then makes Prometheus
@@ -996,11 +1004,6 @@ groups:
       # a one-slot LLM hiccup that the next slot's rerun heals must
       # not page. Prometheus-only by user decision — the CLI emits no
       # Telegram for this condition.
-      # NOTE: the live rules are a COPY at ~/monitoring/prometheus/alphalens.rules
-      # (this file is NOT bind-mounted), converged hourly from the origin/main
-      # blob by alphalens-prometheus-rules-sync since PR #1107. MERGING IS THE
-      # DEPLOY. A manual copy + HUP is an emergency override and is overwritten
-      # within the hour.
       - alert: AlphalensThematicBriefUnavailableHigh
         expr: |
           alphalens_thematic_brief_unavailable_count
@@ -1032,11 +1035,6 @@ groups:
       # candidate day from tripping on a single failure; ``for: 6h`` means the
       # condition survived at least two 4-hourly slots, so a one-slot hiccup the
       # next rerun heals does not page.
-      # NOTE: the live rules are a COPY at ~/monitoring/prometheus/alphalens.rules
-      # (this file is NOT bind-mounted), converged hourly from the origin/main
-      # blob by alphalens-prometheus-rules-sync since PR #1107. MERGING IS THE
-      # DEPLOY. A manual copy + HUP is an emergency override and is overwritten
-      # within the hour.
       - alert: AlphalensThematicChannelAssessFailureHigh
         expr: |
           alphalens_thematic_channel_assess_failed_total
@@ -1143,11 +1141,6 @@ groups:
       # is carried entirely by the three clauses above.
       # Numerator and denominator come from the SAME thematic-build emit,
       # so the ratio is same-run consistent and label-compatible.
-      # NOTE: the live rules are a COPY at ~/monitoring/prometheus/alphalens.rules
-      # (this file is NOT bind-mounted), converged hourly from the origin/main
-      # blob by alphalens-prometheus-rules-sync since PR #1107. MERGING IS THE
-      # DEPLOY. A manual copy + HUP is an emergency override and is overwritten
-      # within the hour.
       - alert: AlphalensThematicBriefLadderUsableLow
         expr: |
           alphalens_thematic_brief_usable_ladder_ratio < 0.5
@@ -1211,11 +1204,6 @@ groups:
       # ``for: 6h`` = the condition survived at least one further 4-hourly slot,
       # so a deciding slot that failed and was re-derived by the next one (its
       # candidate set having been degraded / empty) does not page.
-      # NOTE: the live rules are a COPY at ~/monitoring/prometheus/alphalens.rules
-      # (this file is NOT bind-mounted), converged hourly from the origin/main
-      # blob by alphalens-prometheus-rules-sync since PR #1107. MERGING IS THE
-      # DEPLOY. A manual copy + HUP is an emergency override and is overwritten
-      # within the hour.
       - alert: AlphalensThematicThemeRollupLost
         expr: |
           (max_over_time(alphalens_thematic_theme_rollup_write{outcome="failed"}[24h]) > 0)
