@@ -307,11 +307,13 @@ class TestMaybeTrailDark(unittest.TestCase):
         """Moved to the RE-ANCHOR arm by #1236, and the move is the finding.
 
         A declared trail proposes ``max(avg_price, ...)``, and the brief floor
-        sits below entry by construction — so the never-below-brief-floor
-        refusal can never fire on the trailing arm any more. It is very much
-        reachable on the re-anchor arm, where a deep gap-down fill drags the
-        target under the floor, so that is where the refusal (and its
-        policy-naming log line) is pinned.
+        sits below entry by construction — so the PROPOSAL can never sit below
+        the floor on the trailing arm any more. The refusal itself still can,
+        through the live-price anchor (``0.998 * last_price < plan_stop`` on a
+        pullback); ``tests/brokers/test_stop_decision.py`` pins that route on
+        the contract copy. It is more plainly reachable on the re-anchor arm,
+        where a deep gap-down fill drags the target under the floor, so that is
+        where the refusal (and its policy-naming log line) is pinned here.
 
         The naming half is #1138/#1139: substring-only assertions are what let a
         mislabelled policy survive, so the value is asserted."""

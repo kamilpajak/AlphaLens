@@ -135,9 +135,9 @@ In that style, permanently:
 
 `stop_decision` is COPIED into the contract, not extracted. Spec §7 is explicit: step 1 leaves two implementations standing, and calling it an extraction makes the safety argument sound stronger than it is. The parity test holds them together until step 2 retires one.
 
-The minimal view is spec §3.2's eight fields. **If the copy needs a ninth — an order leg, a journal handle, a calendar — the boundary is wrong and the work STOPS** rather than widening the contract. That is a stop condition, not a discussion point.
+The minimal view is spec §3.2's nine fields. **If the copy needs a tenth — an order leg, a journal handle, a calendar — the boundary is wrong and the work STOPS** rather than widening the contract. That is a stop condition, not a discussion point. The ninth field, `already_reanchored`, was found by the PR 2 plan review on 2026-09-25: the spec's table had been read off both daemon arms but omitted the re-anchor arm's idempotence latch (`reanchored_by_uic`). It crosses as the latch predicate's RESULT, a bool, the same shape as the two order-state booleans below; the owner decided that on #1573.
 
-Two of those eight fields are not policy: `has_sole_standalone_stop` and `amend_in_backoff` ask about resting broker orders and a refused amend, and a replay has neither. The replay passes the values meaning "no broker obstacle" and reports the resulting optimism as the `daemon_trail_guards` divergence (spec §3.2).
+Three of those nine fields are not policy: `has_sole_standalone_stop` and `amend_in_backoff` ask about resting broker orders and a refused amend, and a replay has neither. The replay passes the values meaning "no broker obstacle" and reports the resulting optimism as the `daemon_trail_guards` divergence (spec §3.2).
 
 ---
 

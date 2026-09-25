@@ -14,7 +14,10 @@ The package holds the broker contract (`contract.py`), the failure contract
 (`failure.py`), sizing and quantity arithmetic (`sizing.py`, `quantity.py`,
 `fx.py`, `constants.py`), the price-feed protocol (`price_feed.py`), the
 `TradeIntent` document (`trade_intent/`: schema, codec, validation, JSON Schema
-generator, legacy register) and the exit-geometry leaf (`exit_geometry/`).
+generator, legacy register), the exit-geometry leaf (`exit_geometry/`) and the
+post-fill stop decision (`stop_decision.py`: a copy of the daemon's trail and
+re-anchor arms over a nine-field view, held equal to the daemon by a parity
+test until the daemon calls it, #1581).
 
 ## The failure contract (#1389)
 
