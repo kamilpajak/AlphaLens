@@ -58,7 +58,7 @@ Ordered so a runnable command exists at PR 4. The code column exists because rev
 
 Two notes on that column:
 
-- **`window_too_short` has a published code and no defined trigger.** Spec §5.4 lists it; nothing anywhere says when it fires. Proposed trigger: the bar window ends before the stated `walk_start`, so the walk cannot begin. If accepted it needs one sentence in the spec — inventing it at the keyboard is what §2.1 exists to stop.
+- **`window_too_short` fires when the bars do not cover `walk_start`** — decided 2026-09-25 and now in spec §5.4, with two `details.reason` values: `ends_before_walk_start` and `begins_after_walk_start`. Revision 2 of this plan found the code published with no trigger and proposed only the first reason; the spec adds the second because a walk that silently starts late reports rungs as unfilled over a stretch it never saw. The check takes `walk_start` as an argument, so it belongs to PR 1 even though the configuration that supplies the value arrives in PR 3.
 - **`entry_mode_unsupported` is not a door gate.** The door ACCEPTS `immediate` (`broker_contract/trade_intent/validate.py:229`), so the code belongs to the interpreter.
 
 ---
@@ -86,7 +86,7 @@ Two notes on that column:
 - [ ] **1. Declare the member, and join all six repo-wide gates.** `test_ci_gate_workspace_parity.py` derives its expectation from `[tool.uv.workspace] members` and asserts every member appears in pyright's `include`, in three `ci.yml` lint steps, and in `sonar.sources`. Running its own helper against a proposed `apps/intent-replay` reports it missing from all five, in three test methods. `uv lock --check` is a separate blocking CI step that runs before any lint or test; the last member added (#957) relocked in the same commit. Verify with `uv lock --check` and `python -m unittest tests.test_ci_gate_workspace_parity -v`.
 - [ ] **2. Create the package with no `__status__`.** `test_layer_status.py` discovers only under `LAYER_ROOTS`, all of which are inside `alphalens_research`, so a package at `apps/intent-replay/` is never visited. Neither `broker_contract` nor `alphalens_feedback` carries the marker. Adding one would be a convention nothing checks.
 - [ ] **3. Confirm the package is importable from a worktree.** `uv sync` **from the worktree**, then `python -c "import intent_replay"`. This repo's rule is that a worktree needs its own `uv sync`; a member that imports fine in the checkout that created it can still fail in CI.
-- [ ] **4. Write the bars red phase** (six tests, below), run it, see each fail for its stated reason.
+- [ ] **4. Write the bars red phase** (eight tests, below), run it, see each fail for its stated reason.
 - [ ] **5. Implement `bars.py`** until green.
 - [ ] **6. Add the direction rules and the new rule KIND** to the shared AST walker (below).
 - [ ] **7. Write the AST-gate positive controls** in the neighbouring style, permanently in the tree (below).
@@ -94,14 +94,16 @@ Two notes on that column:
 - [ ] **9. Assert a non-zero test count**, not just a zero exit, from `unittest discover` over the new directory.
 - [ ] **10. Zen pre-merge review with `deepseek/deepseek-v4-pro`, `review_validation_type: external`.** PR 1 touches six repo-wide config files plus an AST walker twenty-odd other rules share, so it is a shared-surface PR. Revision 1 asserted PR 2 was the only one; that was wrong.
 
-### Red phase (step 4)
+### Red phase (step 4) — eight tests
 
 1. `test_bar_sequence_refuses_unordered` — `t` not strictly increasing raises `bars_unordered`.
 2. `test_bar_sequence_refuses_duplicate_timestamps` — equal `t` refuses. A different input reaching the same rule; spec §4.5 names both.
 3. `test_bar_sequence_refuses_empty` — `bars_empty`.
 4. `test_an_unsorted_sequence_is_not_silently_sorted` — hands a DESCENDING sequence and asserts the refusal rather than a sorted result. Revision 1 had this as a fourth test that could not produce an observation test 1 would miss; the difference is that this one asserts the absence of a REPAIR. The existing `/edge` replay sorts silently, and spec §4.5 deliberately deviates.
 5. `test_bar_rejects_non_finite_prices` — NaN or infinite OHLC refuses at construction. NaN survives `json.loads` and every comparison in this project, so the value type is where it stops.
-6. `test_window_too_short_when_bars_end_before_walk_start` — only if the trigger above is accepted.
+6. `test_window_too_short_when_bars_end_before_walk_start` — the last bar precedes the given `walk_start`; refuses with `details.reason == "ends_before_walk_start"`.
+7. `test_window_too_short_when_bars_begin_after_walk_start` — the first bar follows it; refuses with `details.reason == "begins_after_walk_start"`. This is the case a naive implementation passes: it has bars, so it walks them. The test asserts the refusal, not a walk that starts late.
+8. `test_window_covering_walk_start_is_accepted` — the positive control: a sequence whose first bar is at or before `walk_start` and whose last bar is after it passes the check. Without it the two refusals above could be satisfied by a check that refuses everything.
 
 ### The direction rules, and the walker change they need (step 6)
 
