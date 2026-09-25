@@ -42,11 +42,11 @@ Step 1 of spec §7 only: the contract copy, the replay, the CLI. Out of scope: `
 
 ## Nine PRs, with one owner per refusal code
 
-Ordered so a runnable command exists at PR 4. The code column exists because revision 1 claimed PR 4 made "every refusal code reachable", which was false — PR 4 reaches two of eight.
+Ordered so a runnable command exists at PR 4. The code column exists because revision 1 claimed PR 4 made "every refusal code reachable", which was false — PR 4 reaches two of nine.
 
 | # | what it lands | refusal codes it owns |
 |---|---|---|
-| 1 | package, `bars.py`, the AST gate + its new rule kind, six repo-wide gate configs | `bars_unordered`, `bars_empty`, `window_too_short` |
+| 1 | package, `bars.py`, the AST gate + its new rule kind, six repo-wide gate configs | `bars_unordered`, `bars_empty`, `bars_invalid`, `window_too_short` |
 | 2 | `stop_decision` COPIED into the contract + the parity property test | — |
 | 3 | `config.py` + the §4.3.1 classification bookkeeping | `config_incomplete`, `path_unclassified` |
 | 4 | `door.py`: template completion, the four door gates, a CLI that decodes and refuses | `intent_invalid`, `intent_malformed` |
@@ -86,7 +86,7 @@ Two notes on that column:
 - [ ] **1. Declare the member, and join all six repo-wide gates.** `test_ci_gate_workspace_parity.py` derives its expectation from `[tool.uv.workspace] members` and asserts every member appears in pyright's `include`, in three `ci.yml` lint steps, and in `sonar.sources`. Running its own helper against a proposed `apps/intent-replay` reports it missing from all five, in three test methods. `uv lock --check` is a separate blocking CI step that runs before any lint or test; the last member added (#957) relocked in the same commit. Verify with `uv lock --check` and `python -m unittest tests.test_ci_gate_workspace_parity -v`.
 - [ ] **2. Create the package with no `__status__`.** `test_layer_status.py` discovers only under `LAYER_ROOTS`, all of which are inside `alphalens_research`, so a package at `apps/intent-replay/` is never visited. Neither `broker_contract` nor `alphalens_feedback` carries the marker. Adding one would be a convention nothing checks.
 - [ ] **3. Confirm the package is importable from a worktree.** `uv sync` **from the worktree**, then `python -c "import intent_replay"`. This repo's rule is that a worktree needs its own `uv sync`; a member that imports fine in the checkout that created it can still fail in CI.
-- [ ] **4. Write the bars red phase** (eight tests, below), run it, see each fail for its stated reason.
+- [x] **4. Write the bars red phase** (ten tests, below), run it, see each fail for its stated reason.
 - [ ] **5. Implement `bars.py`** until green.
 - [ ] **6. Add the direction rules and the new rule KIND** to the shared AST walker (below).
 - [ ] **7. Write the AST-gate positive controls** in the neighbouring style, permanently in the tree (below).
@@ -94,7 +94,7 @@ Two notes on that column:
 - [ ] **9. Assert a non-zero test count**, not just a zero exit, from `unittest discover` over the new directory.
 - [ ] **10. Zen pre-merge review with `deepseek/deepseek-v4-pro`, `review_validation_type: external`.** PR 1 touches six repo-wide config files plus an AST walker twenty-odd other rules share, so it is a shared-surface PR. Revision 1 asserted PR 2 was the only one; that was wrong.
 
-### Red phase (step 4) — eight tests
+### Red phase (step 4) — ten tests
 
 1. `test_bar_sequence_refuses_unordered` — `t` not strictly increasing raises `bars_unordered`.
 2. `test_bar_sequence_refuses_duplicate_timestamps` — equal `t` refuses. A different input reaching the same rule; spec §4.5 names both.
@@ -104,6 +104,8 @@ Two notes on that column:
 6. `test_window_too_short_when_bars_end_before_walk_start` — the last bar precedes the given `walk_start`; refuses with `details.reason == "ends_before_walk_start"`.
 7. `test_window_too_short_when_bars_begin_after_walk_start` — the first bar follows it; refuses with `details.reason == "begins_after_walk_start"`. This is the case a naive implementation passes: it has bars, so it walks them. The test asserts the refusal, not a walk that starts late.
 8. `test_window_covering_walk_start_is_accepted` — the positive control: a sequence whose first bar is at or before `walk_start` and whose last bar is after it passes the check. Without it the two refusals above could be satisfied by a check that refuses everything.
+9. `test_window_check_refuses_empty` — the window check refuses an empty sequence with `bars_empty` rather than raising `IndexError`; added when the first implementation showed the plan's "empty goes first" ordering was a sentence nothing pinned.
+10. `test_an_ordered_sequence_is_returned_unchanged` — the positive control for the ordering check. Test 5 now refuses with `bars_invalid`, a ninth code added to spec §5.4 on 2026-09-25; the plan's earlier list had no code for a non-finite price.
 
 ### The direction rules, and the walker change they need (step 6)
 

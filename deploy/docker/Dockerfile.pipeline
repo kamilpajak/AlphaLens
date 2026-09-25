@@ -44,8 +44,11 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/
 
 WORKDIR /app
 
-# Cache layer for deps — copy workspace root + every member's manifest first.
-# uv needs all member pyproject.toml files present to resolve the lockfile.
+# Cache layer for deps — copy the workspace root plus the manifests of the
+# members inside the `--package alphalens-pipeline` closure. uv resolves the
+# frozen lockfile without the manifests of members OUTSIDE that closure
+# (verified 2026-09-25 with research and django removed: both syncs below
+# pass), so a member the pipeline does not depend on needs no COPY here.
 COPY pyproject.toml uv.lock README.md ./
 COPY apps/alphalens-feedback/pyproject.toml ./apps/alphalens-feedback/pyproject.toml
 COPY apps/alphalens-feedback/README.md ./apps/alphalens-feedback/README.md

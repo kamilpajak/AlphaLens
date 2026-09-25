@@ -12,6 +12,7 @@
 # Members:
 #   - apps/alphalens-broker-contract (shared, dependency-free broker-contract leaf: exit_geometry today, contract/intent/sizing/fx/constants/calendar later)
 #   - apps/alphalens-feedback   (shared, dependency-free feedback primitives: VIX regime + dead-table teardown, consumed by pipeline AND django)
+#   - apps/intent-replay        (research backtester over a TradeIntent document; depends on broker-contract + jsonschema, stamps nothing)
 #   - apps/alphalens-pipeline   (live infrastructure + thematic + watchdog + literature_review + alphalens CLI binary)
 #   - apps/alphalens-research   (research lab: screeners, backtest, attribution, overlays, gates, preaudit, diagnostics, retrospective_audit)
 #   - apps/alphalens-django     (DRF briefs API)
@@ -21,12 +22,13 @@
 #
 # Per-member install (rare):
 #   uv pip install -e apps/alphalens-broker-contract
+#   uv pip install -e apps/intent-replay
 #   uv pip install -e apps/alphalens-pipeline
 #   uv pip install -e apps/alphalens-research
 #   uv pip install -e apps/alphalens-django
 
 [tool.uv.workspace]
-members = ["apps/alphalens-broker-contract", "apps/alphalens-feedback", "apps/alphalens-pipeline", "apps/alphalens-research", "apps/alphalens-django"]
+members = ["apps/alphalens-broker-contract", "apps/alphalens-feedback", "apps/intent-replay", "apps/alphalens-pipeline", "apps/alphalens-research", "apps/alphalens-django"]
 
 [dependency-groups]
 # Shared dev tools — installed for every workspace member by `uv sync --group dev`.

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intent-replay"
+version = "0.1.0"
+description = "Research backtester that replays a TradeIntent document over price bars. Stamps nothing, charges no multiplicity budget."
+readme = "README.md"
+requires-python = ">=3.13"
+# Two dependencies, and the rule is per MODULE (spec section 3.1): the ENGINE
+# modules (bars, config, interpreter, walk, trace, measures, envelope) import
+# stdlib and broker_contract only; the ADAPTER modules (door, cli) may also
+# import jsonschema, which exists for one purpose: validating the published
+# input schema at the door. The AST gate in
+# apps/alphalens-research/tests/test_module_dependencies.py is the ONLY barrier
+# enforcing that split; this list cannot express it.
+dependencies = ["alphalens-broker-contract", "jsonschema>=4.0.0"]
+
+[tool.uv.sources]
+alphalens-broker-contract = { workspace = true }
+
+[tool.setuptools.packages.find]
+include = ["intent_replay*"]

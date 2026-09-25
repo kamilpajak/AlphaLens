@@ -69,10 +69,10 @@ jobs:
         # project-wide `ignore = [...]` in pyproject.toml encode the
         # research-code posture (PLR0911 verdict ladders, capital-X math
         # notation in screeners, Polish-language docstrings, etc).
-        run: uv run ruff check apps/alphalens-broker-contract/ apps/alphalens-feedback/ apps/alphalens-pipeline/ apps/alphalens-research/
+        run: uv run ruff check apps/alphalens-broker-contract/ apps/alphalens-feedback/ apps/intent-replay/ apps/alphalens-pipeline/ apps/alphalens-research/
 
       - name: Ruff format check (pipeline + research + shared leaves)
-        run: uv run ruff format --check apps/alphalens-broker-contract/ apps/alphalens-feedback/ apps/alphalens-pipeline/ apps/alphalens-research/
+        run: uv run ruff format --check apps/alphalens-broker-contract/ apps/alphalens-feedback/ apps/intent-replay/ apps/alphalens-pipeline/ apps/alphalens-research/
 
       - name: Bandit security scan
         # Gate: low-and-above severity (-ll). XML parsing on untrusted SEC
@@ -81,7 +81,7 @@ jobs:
         # alphavantage_client, polygon_client). The single
         # urllib.request.urlopen call to GDELT is # nosec B310 — URL built
         # from a constant base + querystring, file:// not reachable.
-        run: uv run bandit -r apps/alphalens-broker-contract/broker_contract/ apps/alphalens-feedback/alphalens_feedback/ apps/alphalens-pipeline/alphalens_pipeline/ apps/alphalens-pipeline/alphalens_cli/ apps/alphalens-research/alphalens_research/ -ll -q
+        run: uv run bandit -r apps/alphalens-broker-contract/broker_contract/ apps/alphalens-feedback/alphalens_feedback/ apps/intent-replay/intent_replay/ apps/alphalens-pipeline/alphalens_pipeline/ apps/alphalens-pipeline/alphalens_cli/ apps/alphalens-research/alphalens_research/ -ll -q
 
       - name: pip-audit (CVE scan against uv.lock)
         # uv export --no-emit-workspace strips editable installs of the

@@ -27,11 +27,15 @@ dependencies = [
     # feedback + exit_geometry tests import broker_contract.exit_geometry
     # directly.
     "alphalens-broker-contract",
+    # The intent-replay leaf; its tests live under this member's tests/ tree
+    # (the one root CI discovers) and import intent_replay directly.
+    "intent-replay",
 ]
 
 [tool.uv.sources]
 alphalens-pipeline = { workspace = true }
 alphalens-broker-contract = { workspace = true }
+intent-replay = { workspace = true }
 
 [tool.setuptools.packages.find]
 include = ["alphalens_research*"]
