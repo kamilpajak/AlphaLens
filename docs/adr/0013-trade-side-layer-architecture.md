@@ -115,27 +115,50 @@ fault.
   retirement does not refund the budget (this rule), every removable lens is an
   accruing pre-registered forward read, and the no-TTL sibling must keep
   stamping — the TTL-vs-no-TTL drift is itself the measurement.*
-  *Amendment 2026-09-25: the charge follows the CLAIM, not the replay. A look
-  charges this budget when its result can SELECT a policy or stand as evidence
-  about one. That is what registration means here: a registered lens accrues a
-  pre-registered forward read and is read at the walk-forward. An EXPLORATORY
-  replay — run to compare, observe or understand, never cited as evidence of
-  edge — charges nothing, and the boundary is mechanical rather than a promise
-  to remember: a tool that writes no value into the stamped store accrues no
-  series, so no walk-forward can read one. `intent-replay` is that tool by
-  design (stamps nothing, no accrued history), and it, not this registry, is
-  where free experimentation belongs. What does NOT change: a registered lens
-  charges whether or not it is later retired, retirement refunds nothing, and
-  promotion from exploration to a registered lens needs FRESH pre-registration
-  and a fresh forward sample — exploratory history cannot be carried in,
-  because its parameters were chosen after those outcomes were known. Why the
-  change: the cap was binding on experiments rather than on candidates, which
-  is the wrong constraint. Of the six lenses registered on 2026-09-25, two
-  carry no `preregistered_ref` (`be_0p5r`, `fill_anchored_0p5atr`), three have
-  no row in the §4.1 looks annex of `edge_hypothesis_budget_2026_07.md`
-  (`fill_anchored_0p5atr`, `be_0p5r_trail0p6`, `be_0p5r_trail0p6_ttl7`), and
-  `be_0p5r_trail0p6` has a live port shipped as `BreakevenTrailPolicy`
-  (`activation_r=0.5, trail_frac=0.6`) while still labelled `in_sample`.*
+  *Amendment 2026-09-25: the charge follows the CLAIM, not the tool. A look
+  charges this budget the moment its result is quoted in a decision, a memo, an
+  issue or a PR that changes what ships — whatever produced it, and whether or
+  not a stamped column exists. **Not stamping is NECESSARY for a look to be
+  exploratory and never sufficient**: the eleven policy looks charged on
+  2026-07-14 (§4.1 annex) all came from ad-hoc replay scripts that stamped
+  nothing, and the first of them killed three policies, which is a selection.
+  This SUPERSEDES the §4.1 annex header clause of
+  `edge_hypothesis_budget_2026_07.md` ("every evaluated policy, registered lens
+  or not, counts"); those eleven stand as charged and the annex takes a dated
+  appended note, never an edit. An EXPLORATORY look charges nothing under three
+  conditions, all required: it reads only outcomes matured on or before a
+  stated BURN DATE, recorded with the look (rule 3 of that ledger, extended
+  from clusters to policies); it is appended to the §4.1 annex with that date,
+  the number of variants examined and `charges: 0 (exploration)`, because
+  charging nothing is not recording nothing and rule 1 still holds; and nothing
+  it produced is cited as evidence for what ships. Promotion out of exploration
+  needs FRESH pre-registration and a forward sample beginning after the burn
+  date, tested EXACTLY ONCE. That sample does not exist by default: R3 lets the
+  what-if layer be recomputed at any time and `breakeven_realized_r_json`
+  carries no provenance, so a rebuild gives a newly registered lens values on
+  rows that matured long before it (67.5%–80.6% of such rows are filled today,
+  #1526). Until a lens value carries its own stamp date, a promoted lens is
+  read ONLY on rows maturing after its registration, and applying that filter
+  is a named step of the walk-forward rather than an assumption. What does NOT
+  change: a registered lens charges whether or not it is later retired, and
+  retirement refunds nothing. A THIRD kind fits neither box — a lens whose
+  parameters equal the DEPLOYED policy (`be_0p5r_trail0p6` and its TTL twin
+  against `BreakevenTrailPolicy(activation_r=0.5, trail_frac=0.6)`) is a
+  production monitor: it holds a slot but selects nothing at the walk-forward,
+  because that policy already shipped under
+  `breakeven_trail_live_policy_design_2026_08_27.md` §6, which deliberately
+  created no new pre-registration. It charges only when its number is read as
+  evidence for keeping, changing or rolling back that policy, and that read is
+  its own pre-registration. Why the change: the cap was binding on EXPERIMENTS
+  rather than on candidates (`bezpazery_lens_design_2026_07_16.md` §3 records a
+  variant left unregistered for that reason alone). The registry's own
+  pre-registration and ledger gaps are a separate hygiene matter (#1526,
+  #1562), not evidence for this rule. Caveat: `intent-replay` is designed to be
+  the exploratory tool (its spec §0 claims exactly this exemption) but is a
+  DRAFT and is not built. Until it exists an ad-hoc replay script is an
+  exploratory look under the three conditions above, not an exemption from
+  them; and if that tool later generates the stamped lens series (spec §9),
+  this boundary has to be restated.*
   Evidence: the break-even lens flipped mean R −0.371 → +0.069 in-sample
   (`exit_geometry_reward_risk_2026_06_30.md` §4) and was still held to
   display-only, correctly — §5 lists why in-sample counterfactuals overstate.
