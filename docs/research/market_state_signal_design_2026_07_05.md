@@ -71,9 +71,16 @@ atr_pct    = ATR(14) / close
 atr_pct_q  = rolling_quantile_rank(atr_pct, ATR_QUANTILE_LOOKBACK)   # in [0,1]
 vix_regime = classify_vix(vix_asof)                                  # low/mid/high (reuse feedback/regime.py)
 
-high ⟺ atr_pct_q ≥ ATR_HIGH_Q  OR  vix_regime == "high"
-low  ⟺ otherwise
+high         ⟺ atr_pct_q ≥ ATR_HIGH_Q  OR  vix_regime == "high"
+low          ⟺ atr_pct_q < ATR_HIGH_Q  AND vix present and below VIX_HIGH
+undetermined ⟺ atr_pct_q < ATR_HIGH_Q  AND vix absent          # → unknown
 ```
+**Amendment 2026-09-25 (#1559) — the axis has three outcomes, not two.** An OR does not always
+need both operands. With `atr_pct_q ≥ ATR_HIGH_Q` the answer is `high` whatever the VIX is, so the
+label is fully determined and blanking it discards a decided answer. Only the low-realized branch
+is genuinely undetermined, because a VIX at or above `VIX_HIGH` would have flipped it. The
+thresholds are untouched; what changed is **when a label is emitted at all**. Before #1524 the VIX
+was never missing (only silently wrong), so this branch could not be reached.
 The **OR combiner is a single, pre-committed a-priori choice** (not "let forward data pick" — see §7 HIGH-4). It is labelled a crypto-origin hypothesis: either realized (ATR%) or implied (VIX) elevation flips to volatile. To change it to AND / 2-of-3 is a *new* `config_version` and a *new* pre-registered test, counted in Bonferroni.
 
 **Neutral fold + state map:**
@@ -83,7 +90,7 @@ neutral → nearest of {bull_*, bear_*} by sign(dist200), keeping the vol axis
 (up,   high) → bull_volatile
 (down, high) → bear_volatile
 (down, low)  → bear_quiet
-missing input → unknown
+missing input → unknown            # except an absent VIX on a high-realized-vol day (#1559)
 ```
 
 Store the label as a **string** (`market_state`) plus the raw continuous drivers (`market_state_atr_pct`, `market_state_atr_pct_q`, `market_state_dist200`, `market_state_vix`, `market_state_vix_decile`, `market_state_squeeze_on`). The forward study correlates the **continuous** drivers, never only the bucket — same discipline as `disagreement.py`.
@@ -128,6 +135,32 @@ Proposed token: `MARKET_STATE_CONFIG_VERSION = "mstate-v1-spy-sma50x200-atrq70-v
 > so a future analyst knows the fact, not so anyone may act on it. An adversarial review of the fix
 > plan settled the point with one question: if VIX had spiked to 30 in those ten weeks, would the
 > argument still have been made? No. So it is data-dependent, and the rule stands. Bump on ANY parameter change (mirrors `disagreement.PANEL_CONFIG_VERSION`, `selection_score.SCORER_CONFIG_VERSION`).
+
+> **Amendment 2026-09-25 (#1559) — bumped to `mstate-v1.2-spy-sma50x200-atrq70-vix15_25-UNVALIDATED`.**
+> No threshold changed and **no label changed**: wherever both legs of the OR were finite the
+> mapping is identical. What changed is when a label is emitted — see the §1.3 amendment.
+>
+> The bump is not compelled by the "thresholds or inputs" sentence in the ledger, and claiming it
+> was would be a non-sequitur. The reason is narrower and holds on its own: **a version string has
+> to name exactly one emission rule.** Leave it at v1.1 and future rows follow a different rule from
+> the eight already stamped, and the key identifies nothing.
+>
+> **Cost, counted from production Postgres on 2026-09-25:** the v1.1 cohort is **one brief date
+> (2026-09-24) and eight rows**. All eight had a present VIX, so none would be labelled differently
+> under v1.2; they are orphaned anyway, because the key is not an argument to be won per cohort.
+> v1 carries 81 dates / 680 rows and the pre-signal window 47 dates / 486 rows.
+>
+> **Two partitions the deferred harness gets for free**, from columns already stamped, so no new
+> column was added: `market_state_vix` is NaN exactly when the implied leg took no part in the
+> decision; `market_state_atr_pct_q >= ATR_HIGH_Q` marks the rows the realized leg settled alone,
+> where a present VIX did not matter. The second is the one that is easy to miss — *a present VIX is
+> not a VIX that mattered.*
+>
+> **Known interaction, not fixed here.** `scripts/ml/2026_09_a20_atr_confirmation.py::volatility_sufficiency`
+> counts regime EPISODES as maximal runs of one label, so `unknown` currently acts as an episode
+> splitter and a data outage manufactures an extra episode. This change removes some of those
+> artificial splits. Measured 2026-09-25: **zero `unknown` dates exist in the live window**, so the
+> interaction is latent today. Recorded on #1227, which owns that counter.
 
 ### 2.3 ATR% as a realized-vol quantile (the key equity re-calibration)
 The crypto bot used fixed ATR% cutoffs; equity ATR% has a different scale and drifts across decades, so the threshold is a **quantile of the index's own trailing realized vol** (`rolling_quantile_rank`), reusing the exact `data/macro/signals.py::vix_decile` idiom (rolling rank / length) on the ATR% series. This self-normalizes across regimes.
