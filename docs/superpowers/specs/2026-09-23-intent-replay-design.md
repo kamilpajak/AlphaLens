@@ -4,7 +4,9 @@
 review the same day; revised again 2026-09-24 after an arming-surface survey and a second
 adversarial review that refuted several statements of the first revision — see §3.3, §4.3.1, §8;
 closed 2026-09-25 by deciding the five items §8.1 left open and the entry-trailing question of §8,
-under the rule now stated as §2.1; not yet implemented)
+under the rule now stated as §2.1; §3.1 and §5.4 corrected the same day after an
+adversarial review of the implementation plan found the JSON Schema gate
+unimplementable under the old per-package dependency rule; not yet implemented)
 **Date:** 2026-09-23, last revised 2026-09-25
 **Baseline:** `origin/main` `a444f6b2`
 **Related:** epic #1526 (express every `/edge` what-if lens as a TradeIntent document),
@@ -43,6 +45,7 @@ multiplicity budget, and carries no accrued history.
 | the take-profit cost gate | its threshold is a required, stated configuration value; absent is a refusal, not a costless run (§2.1, §5.2) |
 | `entry_mode: "immediate"` | refused in v1 with its own code; modelling it is a later version (§4.3.1, §5.4) |
 | entry trailing | MODELLED, with the trail distance stated in the configuration. The alternative was a tool describing an entry ladder production does not use (§3.3, §8) |
+| the dependency rule | per MODULE, not per distribution: engine modules stay stdlib plus contract, the door and CLI may use `jsonschema` for gate 1. One barrier — the AST gate — not two (§3.1) |
 
 ---
 
@@ -153,13 +156,15 @@ apps/alphalens-broker-contract/          shared leaf, dependencies = []
 
 apps/intent-replay/                      NEW leaf, depends only on the contract
   intent_replay/
-    bars.py          price-input contract
-    interpreter.py   document -> pending orders
-    walk.py          bar walk
-    trace.py         event trace
-    measures.py      measures with units
-    envelope.py      versioned result envelope
-    cli.py           one-shot CLI
+    bars.py          price-input contract          ENGINE
+    config.py        the stated run configuration   ENGINE
+    interpreter.py   document -> pending orders     ENGINE
+    walk.py          bar walk                       ENGINE
+    trace.py         event trace                    ENGINE
+    measures.py      measures with units            ENGINE
+    envelope.py      versioned result envelope      ENGINE
+    door.py          the five gates of 4.3 / 4.3.1  ADAPTER
+    cli.py           one-shot CLI                   ADAPTER
 
 apps/alphalens-pipeline/                 one possible client
 ```
@@ -171,18 +176,50 @@ the same mislabelling as the closed #1160.
 
 ### 3.1 Dependency rules
 
+**The rule is per MODULE, not per distribution.** A Python distribution declares
+its dependencies as a whole — there is no per-file declaration — so "this package
+is dependency-free" cannot be the rule here. Gate 1 of §4.3 validates the
+published JSON Schema, and the validator is third-party. What CAN be a rule is
+which modules may import it.
+
 | from | to | allowed |
 |---|---|---|
-| `broker_contract` | anything | no — stdlib only, `dependencies = []` |
-| `intent_replay` | `broker_contract` | yes, and only this |
-| `intent_replay` | `alphalens_pipeline`, pandas, anything else | no |
+| `broker_contract`, any module | anything third-party | no — stdlib only, `dependencies = []` |
+| `intent_replay`, any module | `broker_contract` | yes |
+| `intent_replay` ENGINE modules | anything third-party | **no** — stdlib and `broker_contract` only |
+| `intent_replay` ADAPTER modules (`door`, `cli`) | `jsonschema` | yes, and nothing else third-party |
+| `intent_replay`, any module | `alphalens_pipeline`, `alphalens_research`, pandas | never |
 | `alphalens_pipeline` | `intent_replay` | yes |
-| `intent_replay` | `alphalens_pipeline` | never |
 
-Two independent barriers enforce this. `dependencies = []` in `pyproject` fails
-the build. An AST gate modelled on the existing
-`tests/test_module_dependencies.py` catches the lazy in-function import that the
-first barrier does not see.
+`jsonschema` is the distribution's ONE third-party dependency and it exists for
+one purpose: gate 1. Note what does NOT cross the boundary — the schema TEXT is
+not third-party. `generate_schema` lives in
+`broker_contract/trade_intent/json_schema.py`, inside the dependency-free leaf. So
+the contract still produces the schema and only the validation of it needs a
+library, which is exactly the split the arming door already has: the schema is
+generated in the contract and validated in `alphalens_cli`.
+
+**The engine is where the purity claim lives, and it is the half that matters.**
+The measurement modules can be lifted into a standalone package carrying no
+dependency but the contract, which is the property §3's placement argument rests
+on. `door` and `cli` are the adapter edge, and an adapter is allowed a library —
+the same doctrine the broker failure codes follow, where the adapter reports and
+the contract does not decide.
+
+**One barrier, not two.** An earlier revision of this section claimed two
+independent barriers and named `dependencies = []` as the first. That was wrong
+for this package. `dependencies = []` is `broker_contract`'s barrier;
+`intent_replay` necessarily declares at least the contract, and now `jsonschema`
+as well. So the AST gate is the ONLY barrier here, modelled on the existing
+`tests/test_module_dependencies.py`, and it carries the whole rule including the
+per-module split — which the existing gate's rule schema does not express today,
+so it grows a rule KIND rather than a row.
+
+A gate that is the only barrier needs a positive control: a fixture that MUST be
+flagged, asserted to be flagged, in the same test file. Every
+`test_no_raw_<vendor>_http.py` in this repo carries one for this reason. Without
+it the gate silently rots to empty the first time the package is reorganised, and
+the one barrier becomes none.
 
 ### 3.2 Why `stop_decision` belongs to the contract
 
@@ -749,6 +786,18 @@ codes only for its own failures: `bars_unordered`, `bars_empty`,
 caller did not state (§2.1, carrying `details.keys`), and
 `entry_mode_unsupported` for the `immediate` tranche v1 does not model (§4.3.1,
 carrying `details.tiers`).
+
+**`intent_malformed` is a CLI-owned code, and this tool's CLI owns its own copy.**
+The broker's code registry is deliberately SPLIT: `broker_contract/failure.py`
+holds the nine codes the contract owns, while `intent_malformed` is defined in
+`alphalens_cli/commands/broker.py` because it names a CLI concept, and putting a
+CLI concept in the shared package is the #1122 mistake. That constraint applies
+here unchanged, so the sentence above must not be read as "the leaf returns
+`intent_malformed`". The engine modules raise typed exceptions; `intent_replay.cli`
+maps them to codes, and that is where `intent_malformed` is defined for this tool.
+The leaf never names it. The two CLIs therefore agree on the STRING without
+sharing a definition, which is what the split already accepts for the broker's own
+commands.
 
 `entry_mode_unsupported` is a refusal and not a warning on purpose. The daemon
 buys an `immediate` tranche AT DRAIN, where `limit_price` is the operator's cap
