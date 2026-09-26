@@ -8,7 +8,8 @@ the three cannot drift. Output rules, in the order a caller meets them:
   the option takes the name and nothing else.
 * stdout carries the result only. In this version an ACCEPTED document has
   nothing to print (the envelope is PR 7), so the command exits 0 with empty
-  stdout and empty stderr.
+  stdout and empty stderr — although it has been admitted, interpreted and
+  checked against the path classes by then.
 * a refusal goes to stderr as exactly one line that is a JSON object, and that
   line is the LAST one (a library may log a warning above it); stdout stays
   empty. The object has the five doctrine keys ``code``, ``message``,
@@ -52,7 +53,7 @@ from broker_contract.failure import (
     Suggestion,
 )
 
-from intent_replay import bars, classification, config, door
+from intent_replay import bars, classification, config, door, interpreter
 from intent_replay.config import RunConfig
 
 __all__ = [
@@ -145,6 +146,12 @@ _ENGINE_CODES: Final[Mapping[str, FailureCode]] = _registry(
         classification.PATH_UNCLASSIFIED_CODE,
         "The document carries a path the replay neither interprets, translates "
         "nor lists as out of scope; `details.paths` names them.",
+    ),
+    _code(
+        interpreter.ENTRY_MODE_UNSUPPORTED_CODE,
+        "An entry tier declares an entry_mode v1 does not model; `details.tiers` "
+        "names them. The arming door ADMITS `immediate`, so this refusal is the "
+        "interpreter's and not the door's.",
     ),
 )
 _CLI_CODES: Final[Mapping[str, FailureCode]] = _registry(
@@ -556,12 +563,19 @@ def _load_config(source: str) -> Any:
 
 
 def _run(args: argparse.Namespace) -> int:
-    """Document first, so a caller fixes the primary input before the block."""
+    """Document first, so a caller fixes the primary input before the block.
+
+    The document is admitted, then INTERPRETED — which is where the fifth gate
+    of section 4.3.1 runs and where an unmodelled entry mode is refused — and
+    the configuration is parsed last. An accepted document still prints nothing
+    in this version: the envelope is PR 7.
+    """
     document = _load_document(args.document)
     try:
-        door.admit(document)
+        admitted = door.admit(document)
     except door.DoorRefusalError as exc:
         raise _intent_malformed(exc.reason, exc.message, **exc.details) from exc
+    interpreter.interpret(admitted.intent, admitted.document)
     RunConfig.from_jsonable(_load_config(args.config))
     return EXIT_OK
 

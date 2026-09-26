@@ -51,7 +51,19 @@ is the same split the arming door makes. The first two and the fixed point
 judge what the AUTHOR wrote, because the input shape does not describe the
 fields a door derives and because the fixed point exists to catch what the
 author sent and did not get back; the codec and `validate_intent` judge the
-completed document. Then the configuration block is parsed. **In this version an accepted document has nothing to print:** the
+completed document.
+
+The document is then INTERPRETED, which is where the fifth gate runs. The
+interpreter reads the entry ladder into resting rungs (each with its share of
+`spec.size.notional_acct` in the account currency — no share quantity, because
+the FX rate and the venue's quantity lattice are not stated), the declared exit
+levels, the take-profit ladder and the declared reaction, and it records every
+path it read. `intent-replay` then refuses a path no class covers
+(`path_unclassified`) and an entry tier whose mode it does not model
+(`entry_mode_unsupported`). Nothing here says which declared level would REST
+at a broker: a document may supply both `spec.disaster_stop` and
+`exit.initial_levels.stop`, and which one the walk places is not settled yet.
+Then the configuration block is parsed. **In this version an accepted document has nothing to print:** the
 command exits 0 with empty stdout and empty stderr. The result envelope arrives
 with the bar walk. A refusal is exactly one JSON object on stderr, the last line,
 with stdout empty; exit status `0` accepted, `2` usage, `130` interrupted with
@@ -83,10 +95,15 @@ This differs from the copy recipe in the contract README, which also deletes
 date; the replay wants the date the pick was armed under.
 
 In this version `run` can refuse with `usage`, `intent_malformed`,
-`config_malformed`, `intent_invalid`, `config_incomplete` and `config_invalid`.
-The bar and classification codes in the table below are raised by the engine's
-Python API (`intent_replay.bars`, `intent_replay.classification`) and reach the
-command once it takes bars and runs the classification gate.
+`config_malformed`, `intent_invalid`, `config_incomplete`, `config_invalid` and
+`entry_mode_unsupported`. The bar codes in the table below are raised by the
+engine's Python API (`intent_replay.bars`) and reach the command once it takes
+bars. `path_unclassified` is wired in and no document can provoke it today: once
+the interpreter has read the paths it reads, every path of the published input
+schema is classified, the one path that is not
+(`spec.tp_tranches[].r_multiple`) is refused as a derived field, and any other
+key an author adds is refused by the fixed point. It is a tripwire for the day
+the contract grows a field — which is exactly what it is for.
 
 ## Refusal codes
 
@@ -107,6 +124,7 @@ reasons onto it).
 | `config_incomplete` | engine | no | A required configuration value was not stated; `details.keys` names every missing key. |
 | `config_invalid` | engine | no | A stated configuration value nothing can use; `details.keys` and `details.reason` name it. A file that parses but is not an object is refused here too, with `<root>` standing for the whole block. |
 | `path_unclassified` | engine | no | The document carries a path the replay neither interprets, translates nor lists as out of scope; `details.paths` names them. |
+| `entry_mode_unsupported` | engine | no | An entry tier declares an `entry_mode` v1 does not model; `details.tiers` names them. Only `pullback` rests as a rung a bar walk can test, and the arming door ADMITS `immediate`, so this refusal is the interpreter's. |
 | `intent_invalid` | contract | no | The document is internally inconsistent (`validate_intent`); `details.reason` names the rule, as at the arming door. |
 | `intent_malformed` | CLI | no | The document is not the published input contract; `details.reason` names which rule, see below. |
 | `config_malformed` | CLI | no | The configuration file could not be PARSED: not a UTF-8 JSON document, or an object in it repeats a key. `details.reason` names which, `details.path` the file. |

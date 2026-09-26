@@ -7,9 +7,11 @@ carries exactly one line that is a JSON object and that line is the last one,
 the object has the five doctrine keys, and the exit status is coarse (0 ok,
 2 usage, 1 everything else, 130 interrupted with nothing written).
 
-In PR 4 the success path is deliberately empty: an accepted document exits 0
-with nothing on either stream, because nothing exists yet to print (the
-envelope is PR 7). That is asserted here as the contract of this version.
+The success path is deliberately empty: an accepted document exits 0 with
+nothing on either stream, because nothing exists yet to print (the envelope is
+PR 7). That is asserted here as the contract of this version, and it holds
+although `run` now also INTERPRETS the document — the interpreter's two
+refusals are reachable while its success is silent.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from unittest import mock
 
 import intent_replay
 from broker_contract.failure import CONTRACT_FAILURE_CODES, ContractError, Failure
-from intent_replay import cli
+from intent_replay import classification, cli
 from intent_replay.cli import (
     CONFIG_MALFORMED_REASONS,
     EXIT_FAILED,
@@ -308,6 +310,35 @@ class UsageTest(_Files):
         self._usage("schema", "walk")
 
 
+class InterpreterRefusalTest(_Files):
+    """The interpreter's own refusals, reached through `run` (PR 5)."""
+
+    def test_an_immediate_tranche_is_refused_naming_its_tier(self) -> None:
+        path = self.write("immediate.json", _document("immediate-plus-pullback"))
+        run = self.run_cli("run", path, "--config", self.config)
+        failure = run.failure(self)
+        self.assertEqual((run.code, failure["code"]), (EXIT_FAILED, "entry_mode_unsupported"))
+        self.assertEqual(failure["details"]["tiers"], [0])
+
+    def test_an_unclassified_path_is_mapped_with_the_paths_it_names(self) -> None:
+        # No admissible document can provoke the gate: once the interpreter has
+        # read the interpreted paths, every path of the published input schema is
+        # classified, the one that is not (`spec.tp_tranches[].r_multiple`) is
+        # refused by door gate 0, and any other key an author adds is refused by
+        # the fixed point. So what this proves is the MAPPING, with one class row
+        # removed — the shape `test_classification.py` uses on the gate itself.
+        thinner = {
+            path: why
+            for path, why in classification.OUT_OF_SCOPE.items()
+            if path != "instrument.ticker"
+        }
+        with mock.patch.object(classification, "OUT_OF_SCOPE", thinner):
+            run = self.run_cli("run", self.document, "--config", self.config)
+        failure = run.failure(self)
+        self.assertEqual((run.code, failure["code"]), (EXIT_FAILED, "path_unclassified"))
+        self.assertEqual(failure["details"]["paths"], ["instrument.ticker"])
+
+
 class UnexpectedPathsTest(_Files):
     def test_an_unregistered_code_is_rendered_as_it_is_and_logged(self) -> None:
         error = ContractError(Failure(code="made_up", message="?", retryable=False))
@@ -405,7 +436,7 @@ class RegistryTest(unittest.TestCase):
             engine_codes.update(
                 getattr(module, name) for name in dir(module) if name.endswith("_CODE")
             )
-        self.assertGreaterEqual(len(engine_codes), 7, "positive control: the engine has codes")
+        self.assertGreaterEqual(len(engine_codes), 8, "positive control: the engine has codes")
         self.assertTrue(engine_codes <= set(FAILURE_CODES), engine_codes - set(FAILURE_CODES))
         self.assertIn("intent_invalid", FAILURE_CODES)
         self.assertEqual(FAILURE_CODES["intent_invalid"], CONTRACT_FAILURE_CODES["intent_invalid"])
