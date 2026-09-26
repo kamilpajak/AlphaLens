@@ -6,8 +6,9 @@ The three published templates are the acceptance control. They carry no
 arming door fills it from, so every accepted example here is the template plus
 one stated date (decided 2026-09-25 with PR 4). ``immediate-plus-pullback`` is
 ACCEPTED by the door: the door admits ``entry_mode: "immediate"``, and the
-refusal ``entry_mode_unsupported`` belongs to the interpreter (PR 5), which
-flips that assertion.
+refusal ``entry_mode_unsupported`` belongs to the interpreter. That assertion
+therefore STAYS as it is; ``test_interpreter.py`` runs the refusal on the same
+file.
 
 Every refusal is asserted by its reason AND its details, and one test walks a
 document that is wrong in five ways through the gates one refusal at a time,
@@ -101,8 +102,8 @@ class AcceptanceTest(unittest.TestCase):
 
     def test_the_immediate_template_passes_the_door(self) -> None:
         """The door admits `entry_mode: "immediate"` as the arming door does;
-        `entry_mode_unsupported` is the interpreter's refusal (spec 6.4), and
-        PR 5 turns this assertion around."""
+        `entry_mode_unsupported` is the interpreter's refusal (spec 6.4), so
+        this assertion stands and `test_interpreter.py` carries the refusal."""
         admitted = admit(_example("immediate-plus-pullback"))
         self.assertEqual(admitted.intent.spec.entry_tiers[0].entry_mode, "immediate")
 

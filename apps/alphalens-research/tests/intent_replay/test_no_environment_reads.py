@@ -1,12 +1,17 @@
 """A tripwire on spec section 2.1: the engine modules that hold the run
-configuration and the path classes must not reach the environment, a file or a
-deployment value.
+configuration, the path classes and the interpretation must not reach the
+environment, a file or a deployment value.
 
 This is a TRIPWIRE, not the proof. The proof that nothing is filled in on the
 caller's behalf is behavioural and lives in ``test_config.py`` (an empty
 mapping names every key, removing any leaf names exactly that leaf, no
 dataclass field carries a default). What this file adds is an early, cheap
 signal when a later edit reaches for ``os.environ`` or ``open``.
+
+``bars.py`` and ``refusal.py`` carry no row yet: ``DENIED_NAMES`` holds
+``open``, and ``bars.py`` declares the OHLC field ``Bar.open``, so covering
+it needs the scanner narrowed (an ``ast.Name`` only in a ``Load`` context)
+rather than an exemption that would blind the arm in that very module.
 
 Why a local test and not a second rule in ``test_module_dependencies.py``: the
 engine rule there is an allow-list that admits EVERY stdlib module (``os``,
@@ -52,6 +57,19 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "types",
             "typing",
             "broker_contract.failure",
+            "intent_replay.refusal",
+        }
+    ),
+    "interpreter.py": frozenset(
+        {
+            "__future__",
+            "collections.abc",
+            "dataclasses",
+            "types",
+            "typing",
+            "broker_contract.failure",
+            "broker_contract.trade_intent.schema",
+            "intent_replay.classification",
             "intent_replay.refusal",
         }
     ),

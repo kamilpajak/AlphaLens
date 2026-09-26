@@ -12,9 +12,19 @@ Three sources are held together here, in both directions:
 * the module's own listed classes, which the gate subtracts.
 
 ``interpreted`` is not a list in the module: the interpreter proves it at
-runtime by reading. Until PR 5 exists, this file carries the expected set
-READ OFF THE SPEC TABLES, and hands it to the gate as ``read`` — the coverage
-record for review the spec describes, never the gate's source of truth.
+runtime by reading. This file carries the expected set READ OFF THE SPEC TABLES
+and hands it to the gate as ``read``, and it keeps doing so now that the
+interpreter exists, on purpose: the tests here police the MODULE against the
+spec tables, and several of them need a read set no interpreter can produce. A
+document carrying every path of the schema declares BOTH reaction kinds, which
+``validate_intent`` refuses (``reaction_plan_ambiguous``); the published
+``immediate`` example is refused before a plan exists; and two tests exist
+precisely to hand the gate a set with one path removed or one path added.
+
+Where the interpreter's OWN read set is held to these same tables, in both
+directions, is ``tests/intent_replay/test_interpreter.py``: every path it reads
+is one the spec calls interpreted, and the union over a set of documents is
+exactly that class. ``expected_interpreted`` below is shared with that file.
 """
 
 from __future__ import annotations
