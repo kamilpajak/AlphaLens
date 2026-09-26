@@ -42,14 +42,14 @@ Step 1 of spec §7 only: the contract copy, the replay, the CLI. Out of scope: `
 
 ## Nine PRs, with one owner per refusal code
 
-Ordered so a runnable command exists at PR 4. The code column exists because revision 1 claimed PR 4 made "every refusal code reachable", which was false — PR 4 reaches two of nine.
+Ordered so a runnable command exists at PR 4. The code column exists because revision 1 claimed PR 4 made "every refusal code reachable", which was false — PR 4 owns the two DOCUMENT codes (`intent_invalid`, owned by the contract, and `intent_malformed`, owned by this tool's CLI: the leaf never names it, §5.4), plus the two invocation codes it added (`config_malformed`, `usage`). It owns none of the engine's own codes.
 
 | # | what it lands | refusal codes it owns |
 |---|---|---|
 | 1 | package, `bars.py`, the AST gate + its new rule kind, six repo-wide gate configs | `bars_unordered`, `bars_empty`, `bars_invalid`, `window_too_short` |
 | 2 | `stop_decision` COPIED into the contract + the parity property test | — |
 | 3 | `config.py` + the §4.3.1 classification bookkeeping | `config_incomplete`, `config_invalid`, `path_unclassified` |
-| 4 | `door.py`: template completion, the four door gates, a CLI that decodes and refuses | `intent_invalid`, `intent_malformed` |
+| 4 | `door.py`: template completion, the four door gates, a CLI that decodes and refuses | `intent_invalid`, `intent_malformed`, `config_malformed`, `usage` |
 | 5 | interpreter: pullback rungs → pending orders | `entry_mode_unsupported` |
 | 6 | bar walk + tie convention + `ambiguous_bars` + trace | — |
 | 7 | measures, envelope, `divergences`, both output formats | — |
@@ -154,6 +154,9 @@ Named here so they are not discovered as red builds.
 - **PR 5 must produce the gate's `read` set from a RECORDING accessor, never from a hand-typed list.** `intent_replay.classification.check_classified(document, read)` subtracts the listed classes and `read`; the interpreter is the only source of `read`, and a list typed by hand is exactly the trusted list the gate exists to refute. The paths the interpreter must prove by reading are the `interpreted` rows of the three §4.3.1 tables minus the two in `REFUSED_BY_DOOR`; `tests/intent_replay/test_classification.py` reads them off the spec.
 - **PR 4 loads the configuration file with a duplicate-key refusal BEFORE `RunConfig.from_jsonable`** (`json.loads` keeps the last of a repeated key; the arming door already refuses `duplicate_key` with an `object_pairs_hook`), and completes a template with the three fields of spec §6.4 only — it does not fill tags, since the gate's universe is the completed wire document and a filled tag is a path the author did not write.
 - **PR 4's success path is deliberately incomplete.** A valid document before the envelope exists has nothing to print, so PR 4 prints the refusal shape only and exits 0 with empty `stdout` on an accepted document. Say so in its PR body rather than leave a reviewer to find it.
+- **PR 4 landed, and what it hands on.** `door.admit(document)` returns `Admitted(intent, document)`; `document` is the COMPLETED wire document and is the classification gate's universe for PR 5, never the author's. `meta.trade_date` is stated in the document (spec §6.4), so every test that pushes a template through the door adds one. `test_door.py` asserts that the door ADMITS `immediate-plus-pullback`; PR 5 turns that assertion into `entry_mode_unsupported` naming tier 0. `discarded_paths` and `supplied_derived_paths` now live in `broker_contract.trade_intent.codec` (second use); the arming door imports them.
+- **PR 6 adds `--bars` as an `Option` on the `run` `Command` in `intent_replay.cli.COMMANDS`.** Help, the `schema` manifest and the manifest-vs-parser test grow from that one tuple; the bar file's shape is PR 6's decision (`bars.py` has no jsonable form). The `test_module_dependencies.py` walker now resolves a level-0 `from X import y` to `X.y` when `X/y.py` exists, so `from intent_replay import door` is seen by the forbid rules.
+- **PR 7's envelope `intent_id` echoes the PR 4 sentinel `REPLAY`** (spec §4.3.1: the envelope may echo, nothing reads; the §5 example says so). Per-line identity in `ndjson` is `sequence`, never `intent_id`: two variants of one pick would collide on the door's `TICKER:DATE:manual`. The stream's input shape (a configuration per document) is PR 7's decision; `run` takes one document until then, and `--format ndjson` is accepted but indistinguishable from `json`.
 
 ---
 

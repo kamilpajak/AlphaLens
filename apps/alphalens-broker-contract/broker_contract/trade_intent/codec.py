@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -103,6 +104,83 @@ def author_jsonable(value: Any) -> Any:
     if isinstance(value, tuple | list):
         return [author_jsonable(item) for item in value]
     return value
+
+
+def _same_leaf(sent: Any, rendered: Any) -> bool:
+    """Equality that treats NaN as unchanged.
+
+    Not indulgence: a non-finite number must reach `validate_intent`, which
+    refuses it as `numeric_not_finite`. Reporting it here as a discarded key
+    would name the wrong rule for a document that is wrong for another reason.
+    """
+    if isinstance(sent, float) and isinstance(rendered, float) and math.isnan(sent):
+        return math.isnan(rendered)
+    return sent == rendered
+
+
+def discarded_paths(sent: Any, rendered: Any, prefix: str = "") -> list[str]:
+    """Every path the client sent that decoding did not give back unchanged.
+
+    The decoder DROPS keys it does not model, with only a log line (forward
+    compatibility for a newer client). Through a door that arms real money that
+    is the wrong default: `limit_pirce` vanishes and the pick carries the price
+    the client did not send. Defaults we ADD are not losses — only what the
+    client sent and did not get back counts.
+    """
+    here = prefix or "$"
+    if isinstance(sent, Mapping):
+        if not isinstance(rendered, Mapping):
+            return [here]
+        return _discarded_mapping_paths(sent, rendered, prefix)
+    if isinstance(sent, list):
+        if not isinstance(rendered, list) or len(rendered) != len(sent):
+            return [here]
+        return [
+            path
+            for index, item in enumerate(sent)
+            for path in discarded_paths(item, rendered[index], f"{prefix}[{index}]")
+        ]
+    return [] if _same_leaf(sent, rendered) else [here]
+
+
+def _discarded_mapping_paths(
+    sent: Mapping[Any, Any], rendered: Mapping[Any, Any], prefix: str
+) -> list[str]:
+    """:func:`discarded_paths` for one object: a missing key is lost whole, a
+    present one is compared below it."""
+    lost: list[str] = []
+    for key, value in sent.items():
+        where = f"{prefix}.{key}" if prefix else str(key)
+        if key not in rendered:
+            lost.append(where)
+        else:
+            lost.extend(discarded_paths(value, rendered[key], where))
+    return lost
+
+
+def supplied_derived_paths(document: Any) -> list[str]:
+    """Every derived field the author sent, as a path.
+
+    Walked defensively: a container of the wrong kind is the schema's refusal to
+    make, with a better message than this one could give.
+    """
+    if not isinstance(document, Mapping):
+        return []
+    paths: list[str] = []
+    if "intent_id" in document:
+        paths.append("intent_id")
+    meta = document.get("meta")
+    if isinstance(meta, Mapping) and "armed_ts" in meta:
+        paths.append("meta.armed_ts")
+    spec = document.get("spec")
+    tranches = spec.get("tp_tranches") if isinstance(spec, Mapping) else None
+    if isinstance(tranches, list):
+        paths.extend(
+            f"spec.tp_tranches[{index}].r_multiple"
+            for index, tranche in enumerate(tranches)
+            if isinstance(tranche, Mapping) and "r_multiple" in tranche
+        )
+    return paths
 
 
 def _require_mapping(data: Any, *, what: str) -> Mapping[str, Any]:
@@ -226,6 +304,8 @@ def intent_from_jsonable(data: Mapping[str, Any]) -> TradeIntent:
 __all__ = [
     "TradeIntentDecodeError",
     "author_jsonable",
+    "discarded_paths",
     "intent_from_jsonable",
     "intent_to_jsonable",
+    "supplied_derived_paths",
 ]

@@ -77,7 +77,6 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import math
 import os
 import re
 import sys
@@ -92,8 +91,11 @@ import typer
 # Top-level rather than lazy (module docstring's lazy-CLI doctrine): the whole
 # of `broker_contract` costs ~2.6ms to import, nearly all of it `datetime`,
 # which this module imports anyway. The doctrine exists for the ~913ms
-# research tier, and `_fail` needs the registry on every refusal path.
+# research tier, and `_fail` needs the registry on every refusal path. The
+# codec import below rides the same already-paid cost and is the door's fixed
+# point, which every `arm` runs.
 from broker_contract.failure import CONTRACT_FAILURE_CODES, Failure, FailureCode, Suggestion
+from broker_contract.trade_intent.codec import discarded_paths as _discarded_paths
 
 if TYPE_CHECKING:
     # Type-only imports for helper signatures. Guarded by
@@ -1586,58 +1588,6 @@ def _assert_version_is_spoken(document: Mapping[str, Any]) -> None:
             declared=declared,
             supported=SCHEMA_VERSION,
         )
-
-
-def _same_leaf(sent: Any, rendered: Any) -> bool:
-    """Equality that treats NaN as unchanged.
-
-    Not indulgence: a non-finite number must reach `validate_intent`, which
-    refuses it as `numeric_not_finite`. Reporting it here as a discarded key
-    would name the wrong rule for a document that is wrong for another reason.
-    """
-    if isinstance(sent, float) and isinstance(rendered, float) and math.isnan(sent):
-        return math.isnan(rendered)
-    return sent == rendered
-
-
-def _discarded_paths(sent: Any, rendered: Any, prefix: str = "") -> list[str]:
-    """Every path the client sent that decoding did not give back unchanged.
-
-    The decoder DROPS keys it does not model, with only a log line (forward
-    compatibility for a newer client). Through a door that arms real money that
-    is the wrong default: `limit_pirce` vanishes and the pick carries the price
-    the client did not send. Defaults we ADD are not losses — only what the
-    client sent and did not get back counts.
-    """
-    here = prefix or "$"
-    if isinstance(sent, Mapping):
-        if not isinstance(rendered, Mapping):
-            return [here]
-        return _discarded_mapping_paths(sent, rendered, prefix)
-    if isinstance(sent, list):
-        if not isinstance(rendered, list) or len(rendered) != len(sent):
-            return [here]
-        return [
-            path
-            for index, item in enumerate(sent)
-            for path in _discarded_paths(item, rendered[index], f"{prefix}[{index}]")
-        ]
-    return [] if _same_leaf(sent, rendered) else [here]
-
-
-def _discarded_mapping_paths(
-    sent: Mapping[Any, Any], rendered: Mapping[Any, Any], prefix: str
-) -> list[str]:
-    """:func:`_discarded_paths` for one object: a missing key is lost whole, a
-    present one is compared below it."""
-    lost: list[str] = []
-    for key, value in sent.items():
-        where = f"{prefix}.{key}" if prefix else str(key)
-        if key not in rendered:
-            lost.append(where)
-        else:
-            lost.extend(_discarded_paths(value, rendered[key], where))
-    return lost
 
 
 def _arming_now() -> dt.datetime:

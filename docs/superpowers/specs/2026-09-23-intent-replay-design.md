@@ -429,7 +429,24 @@ Step 3 is not optional and an earlier draft of this document omitted it. The
 codec DROPS keys it does not model with only a warning, so a document carrying
 `limit_pirce` passes every other gate and replays at a price its author never
 wrote. It is the same gate, for the same reason, that stops such a document
-arming.
+arming. (Read `limit_pirce` as an ADDED key beside `limit_price`: that is what
+reaches gate 3. A REPLACEMENT fails gate 1, because `limit_price` is required.)
+
+**Two wire checks copied from the door, and one deliberately not.** Added
+2026-09-25 by PR 4, after running the input schema over the three templates:
+the published input shape has no `additionalProperties: false`, so a supplied
+`intent_id`, `meta.armed_ts` or `r_multiple`, a `meta.trade_date` that is not a
+date, and a stated `meta.schema_version` of any value all pass the four gates
+above. The replay therefore runs the door's derived-field refusal
+(`derived_field_supplied`; it refuses the PRESENCE of a field the adapter fills
+and reads no value, so it interprets nothing §4.3.1 classes out of scope) and
+the door's date check (`trade_date_malformed`, with the stated date normalised
+to `YYYY-MM-DD` as the door normalises it, so a spelling that parses but is not
+canonical is `key_discarded` at gate 3, the door's own reason). It does NOT
+read `meta.schema_version`: §4.3.1 classes both version paths out of scope
+because the codec and `validate_intent` are version-blind on purpose, and a
+later-version document carrying something this contract cannot model is
+refused by gate 3 instead; a test pins that a stated `"4"` is admitted.
 
 An incoherent document gets the same refusal code it would get at arming, not a
 number. This is the point of the design, not caution: backtesting a document
@@ -702,20 +719,20 @@ scale. R itself is the problem" — and replaced R with net cash.
 ```json
 {
   "schema": "intent_replay.result/v1",
-  "intent_id": "KO:2026-09-23:manual",
+  "intent_id": "REPLAY",
   "instrument": {"ticker": "KO", "mic": "XNYS"},
-  "window": {"from_t": 1758000000000, "to_t": 1761000000000, "bars": 16380},
+  "window": {"from_t": 1790170200000, "to_t": 1791230400000, "bars": 3510},
   "config": {
     "entry_deadline": {
       "kind": "order_ttl_sessions",
-      "value": 1760976000000,
+      "value": 1791230400000,
       "unit": "epoch_ms_utc",
       "source": "spec.order_ttl_days",
       "formula": "session_close_utc(advance_trading_sessions(2026-09-24, 7, XNYS))"
     },
     "walk_start": {
       "kind": "day1_session_open",
-      "value": 1758547800000,
+      "value": 1790170200000,
       "unit": "epoch_ms_utc",
       "source": "meta.source + meta.trade_date",
       "formula": "session_open_utc(2026-09-23); source=manual counts trade_date itself as day 1"
@@ -843,8 +860,12 @@ codes only for its own failures: `bars_unordered`, `bars_empty`,
 `details.paths`), `config_incomplete` for a required configuration value the
 caller did not state (§2.1, carrying `details.keys`), `config_invalid` for a
 configuration value the caller stated but nothing can use (below, carrying
-`details.keys`), and `entry_mode_unsupported` for the `immediate` tranche v1
-does not model (§4.3.1, carrying `details.tiers`).
+`details.keys`), `config_malformed` for a configuration FILE the CLI cannot
+parse at all (below, added 2026-09-25 by PR 4, carrying `details.path`), and
+`entry_mode_unsupported` for the `immediate` tranche v1 does not model
+(§4.3.1, carrying `details.tiers`). `usage` is not in that list: it is the
+invocation's own code, inherited from the arming door, and it never describes
+a document or a block.
 
 **`config_invalid` is a stated value nothing can use; `config_incomplete` stays
 "not stated".** Added 2026-09-25 by PR 3, on the argument that gave `bars_invalid`
@@ -872,6 +893,17 @@ maps them to codes, and that is where `intent_malformed` is defined for this too
 The leaf never names it. The two CLIs therefore agree on the STRING without
 sharing a definition, which is what the split already accepts for the broker's own
 commands.
+
+This CLI's `intent_malformed` reason vocabulary is the door's minus the venue,
+pick-key and generation reasons (§4.3) and the version reason (§4.3.1), plus the
+parser's `not_json` and `duplicate_key`; the package README publishes the table.
+**`config_malformed`**, added 2026-09-25 by PR 4, is the same shape for the
+configuration FILE (`not_json`, `duplicate_key`, with `details.path`): a file that
+is not one JSON object is a content failure and not `usage`, on the argument that
+split `config_invalid` from `config_incomplete` — the wrong code sends the caller
+to the wrong place, and `usage` says "fix the invocation". `usage` stays what it
+is at the arming door: a bad option, or a file the invocation names that cannot
+be read.
 
 **`window_too_short` fires when the supplied bars do not COVER `walk_start`.**
 Decided 2026-09-25, after the implementation plan found the code published here
@@ -913,7 +945,10 @@ is about a different order. That refusal needs its own code rather than borrowin
 is a different fact and would send a reader to the wrong place.
 
 Errors go to stderr, stdout stays empty, the exit status is non-zero: `0` ok,
-`2` usage, `1` everything else. Suggestions are an `argv` array.
+`2` usage, `130` interrupted with nothing written (added 2026-09-25 by PR 4: the
+interpreter's own status for an interrupt, caught so that the last line of
+stderr is never a traceback), `1` everything else. Suggestions are an `argv`
+array.
 
 ---
 
@@ -979,7 +1014,8 @@ Computed with the real functions during design, 2026-09-23:
   control, which is also what ties this property to §6.4: if the classes of
   §4.3.1 do not cover every required path of the input schema, every example
   refuses and both tests go red at once. Note what the control is run on: a
-  COMPLETED example, per §6.4. An uncompleted template refuses in the codec, which
+  COMPLETED example, per §6.4 — the published template plus a stated
+  `meta.trade_date`. An uncompleted template refuses in the codec, which
   is a different failure that would make this property look satisfied for the
   wrong reason;
 - two runs over the same input produce byte-identical output.
@@ -991,9 +1027,11 @@ different number on a repeat invalidates every conclusion drawn from it.
 
 A test pushes every example in `examples/manual-pick/` through the replay. What
 the door accepts, the replay accepts, including the round-trip gate of §4.3 — with
-exactly one published exception, and one step that has to happen first. Both were
-found by running the codec over the three files on 2026-09-25, and both are
-recorded here because the sentence above was written without doing that.
+two published exceptions, and one step that has to happen first. The first
+exception and the step were found by running the codec over the three files on
+2026-09-25, and are recorded here because the sentence above was written without
+doing that; the second exception was decided on 2026-09-25 with PR 4 and is the
+`meta.trade_date` row of the table below.
 
 **The examples are TEMPLATES, not complete documents.** Their `meta` carries only
 `source`, so all three fail the CODEC before any gate runs:
@@ -1007,14 +1045,21 @@ importing. So the adapter module completes them itself, and the classification o
 |---|---|---|
 | `intent_id` | out of scope | a fixed sentinel. Out of scope means it changes nothing the replay does, so any value is as good as any other |
 | `meta.armed_ts` | out of scope | the same |
-| `meta.trade_date` | translated | NOT a sentinel. It is what `walk_start` is computed from, so a replay input carries it, or the adapter derives it from the stated `walk_start` |
+| `meta.trade_date` | translated | NOT a sentinel, and not derived: STATED in the document, for every `source`, and normalised to `YYYY-MM-DD` as the door normalises it (decided 2026-09-25 with PR 4). The arming door fills a missing date from its clock and the venue's calendar (`session_not_closed`), and this leaf has neither (§4.1); deriving it from `walk_start` would be a calendar claim, and the UTC date of a session open is not the session's date for a venue that opens before 00:00 UTC. Absent is `intent_malformed` / `trade_date_required` — the door's reason for a legacy brief document, here for every document. A spelling that parses but is not canonical is `key_discarded`, as at the door |
 
 This is deliberately not a `divergences` entry. §5.2 reserves that list for facts
 the replay LACKS; an out-of-scope field is one the replay does not need, which is
 the opposite case, and conflating them would make the divergence list mean two
 things.
 
-**The one exception.** `immediate-plus-pullback.json` declares `entry_mode:
+**The second exception is that date.** The arming door ACCEPTS a `manual`
+template without `meta.trade_date` and fills it; the replay REFUSES it. The
+door's fill is "the session that has not closed at the moment of arming", a
+fact about the clock, and a replay has no moment of arming. So the test pushes
+the templates through with the date stated, and asserts that a template as
+published is refused with `trade_date_required`.
+
+**The other exception.** `immediate-plus-pullback.json` declares `entry_mode:
 "immediate"` on tier 0, and the door ACCEPTS it — `_ALLOWED_ENTRY_MODES`
 (`validate.py:229`) admits the value, and only an unknown value raises
 `entry_mode_unknown`. §5.4 requires the replay to REFUSE it with

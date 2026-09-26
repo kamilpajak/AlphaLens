@@ -10,9 +10,9 @@ signal when a later edit reaches for ``os.environ`` or ``open``.
 
 Why a local test and not a second rule in ``test_module_dependencies.py``: the
 engine rule there is an allow-list that admits EVERY stdlib module (``os``,
-``posix``, ``sys``, ``importlib`` included), and that file pins exactly one
-``intent_replay`` rule. So this scanner is the only barrier for this
-predicate, and it carries one positive control per arm, in the style of
+``posix``, ``sys``, ``importlib`` included), and none of that file's
+``intent_replay`` rows names a stdlib module. So this scanner is the only
+barrier for this predicate, and it carries one positive control per arm, in the style of
 ``tests/brokers/test_broker_cli_places_nothing.py``.
 
 What it does not catch, stated so nobody mistakes it for a proof: a bare
