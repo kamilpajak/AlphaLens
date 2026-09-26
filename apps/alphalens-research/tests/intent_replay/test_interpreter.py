@@ -334,6 +334,26 @@ class ReactionTest(unittest.TestCase):
             interpret(intent, admitted.document)
         self.assertIn("model", str(caught.exception))
 
+    def test_a_second_managing_primitive_is_a_programming_error(self) -> None:
+        # The door refuses this shape (`reaction_plan_ambiguous`, checked by
+        # running), and the plan holds ONE primitive. Reading a second one's
+        # inputs would record paths whose values land in no field of the plan —
+        # the invariant this module rests on — so it is loud rather than
+        # silently truncated: the engine's API is callable without the door.
+        admitted = admit(_document(exit={"reaction_plan": [dict(TRAILING_REACTION)]}))
+        assert admitted.intent.exit is not None
+        both = dataclasses.replace(
+            admitted.intent.exit,
+            reaction_plan=(
+                TrailingStop(arm_trigger_r=0.5, trail_frac=0.6),
+                ReanchorOnFill(k_atr=1.5, atr=1.2),
+            ),
+        )
+        intent = dataclasses.replace(admitted.intent, exit=both)
+        with self.assertRaises(ValueError) as caught:
+            interpret(intent, admitted.document)
+        self.assertIn("one stop-management primitive", str(caught.exception))
+
     def test_the_honoured_kinds_are_the_contract_union_minus_the_reserved_tag(self) -> None:
         # The ONLY barrier against a fourth primitive class arriving in the
         # contract and being silently degraded to the inert policy: nothing

@@ -37,6 +37,15 @@ What this module deliberately leaves out: share quantities, the FX rate and
 whole-share flooring (a venue fact the run configuration does not carry —
 issue #1592), the bar walk, the tie convention and the result envelope.
 
+This module takes a document the DOOR has already admitted, and says so here
+because it relies on that: the entry ladder is non-empty, the allocations sum
+to 100, the stop sits below every rung, at most one stop-management primitive
+is declared and every declared kind is one the contract honours. None of those
+rules is re-checked here — a stricter copy would refuse a document the door
+admits. A path this module cannot navigate, or a value of the wrong type, is a
+programming error and surfaces as a traceback rather than as a refusal, the
+rule ``refusal.py`` states for the package.
+
 ENGINE module: stdlib and ``broker_contract`` only.
 """
 
@@ -168,7 +177,12 @@ class _Reader:
 
     @property
     def node(self) -> Any:
-        """The object this reader reads. Handing it on is not a read of its fields."""
+        """The object this reader reads. Handing it on is not a read of its fields.
+
+        It is the decoded object itself, shared with the caller's intent and
+        frozen; the plan carries it rather than a copy, so a field the copy
+        would have dropped cannot go missing.
+        """
         return self._node
 
     def _path(self, path: str) -> str:
@@ -268,6 +282,18 @@ def _declared_reaction(exit_reader: _Reader | None) -> ReactionPrimitive | None:
         return None
     declared: ReactionPrimitive | None = None
     for item in exit_reader.each("reaction_plan"):
+        if declared is not None:
+            # The plan holds ONE primitive. Reading a second one's inputs would
+            # record paths whose values land in no field, which is the invariant
+            # this module rests on, and skipping them would hide a declaration
+            # the walk will not honour. The door refuses the shape
+            # (`reaction_plan_ambiguous`), so this is a programming error — and
+            # it stays local, because the engine's API is callable without it.
+            raise ValueError(
+                "the plan holds one stop-management primitive and this document declares "
+                "more; the door refuses that shape, so reaching here would read the second "
+                "primitive's inputs into no field at all"
+            )
         kind = item.text("kind")
         inputs = _REACTION_INPUTS.get(kind)
         if inputs is None:
