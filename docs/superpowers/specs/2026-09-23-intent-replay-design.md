@@ -6,8 +6,10 @@ adversarial review that refuted several statements of the first revision — see
 closed 2026-09-25 by deciding the five items §8.1 left open and the entry-trailing question of §8,
 under the rule now stated as §2.1; §3.1 and §5.4 corrected the same day after an
 adversarial review of the implementation plan found the JSON Schema gate
-unimplementable under the old per-package dependency rule; not yet implemented)
-**Date:** 2026-09-23, last revised 2026-09-25
+unimplementable under the old per-package dependency rule; §5.1 corrected
+2026-09-26 after PR 5 ran both placement paths and refuted its claim about which
+stop rests, #1597; implementation under way, epic #1571, PR 1-5 merged)
+**Date:** 2026-09-23, last revised 2026-09-26
 **Baseline:** `origin/main` `a444f6b2`
 **Related:** epic #1526 (express every `/edge` what-if lens as a TradeIntent document),
 `docs/research/bracket_keeper_repo_split_stage1_design_2026_08_02.md` (PARKED blueprint),
@@ -45,6 +47,8 @@ multiplicity budget, and carries no accrued history.
 | the take-profit cost gate | its threshold is a required, stated configuration value; absent is a refusal, not a costless run (§2.1, §5.2) |
 | `entry_mode: "immediate"` | refused in v1 with its own code; modelling it is a later version (§4.3.1, §5.4) |
 | entry trailing | MODELLED, with the trail distance stated in the configuration. The alternative was a tool describing an entry ladder production does not use (§3.3, §8) |
+| the R denominator | `spec.disaster_stop`, in every document — the level both deployments actually place. The earlier choice of `exit.initial_levels.stop` rested on a claim about the daemon that running it refuted (§5.1) |
+| which take-profit ladder fires | the one the daemon places: a document supplying `exit.initial_levels` fires ONE tranche of 100% at its `tp`, and its own `spec.tp_tranches` never fires (§5.1) |
 | the dependency rule | per MODULE, not per distribution: engine modules stay stdlib plus contract, the door and CLI may use `jsonschema` for gate 1. One barrier — the AST gate — not two (§3.1) |
 
 ---
@@ -533,7 +537,7 @@ argued above, and this table going stale cannot make the gate wrong.
 | `spec.size` | container | |
 | `spec.size.currency` | out of scope | above |
 | `spec.size.notional_acct` | interpreted | the budget the entry ladder spends |
-| `spec.disaster_stop` | interpreted | the R denominator when the document supplies no `initial_levels` (§5.1), and the condition under which an entry trail arms (§3.3) |
+| `spec.disaster_stop` | interpreted | the level that rests, and therefore the R denominator (§5.1), and the condition under which an entry trail arms (§3.3) |
 | `spec.entry_tiers` | container | |
 | `spec.entry_tiers[].limit_price` | interpreted | the rung the walk tests, or the operator's cap on an `immediate` tranche — which v1 refuses (§5.4) |
 | `spec.entry_tiers[].alloc_pct` | interpreted | the share of the budget at that rung |
@@ -555,8 +559,8 @@ optional paths land here:
 |---|---|---|
 | `exit` | container | `null` means the stop is never moved (§6.3) |
 | `exit.initial_levels` | container | |
-| `exit.initial_levels.stop` | interpreted | the level placed, and the R denominator (§5.1) |
-| `exit.initial_levels.tp` | interpreted | the level placed |
+| `exit.initial_levels.stop` | interpreted | the stop the document declares; the live-exit ladder's stop reference, not the level that rests (§5.1) |
+| `exit.initial_levels.tp` | interpreted | the level placed, and the whole take-profit ladder for a document that supplies it: one tranche of 100% here (§5.1) |
 | `exit.reaction_plan` | container | |
 | `exit.reaction_plan[].kind` | interpreted | routes the stop decision (§3.2) |
 | `exit.reaction_plan[].k_atr`, `exit.reaction_plan[].atr` | interpreted | the re-anchor arm's inputs (§3.2) |
@@ -765,7 +769,7 @@ scale. R itself is the problem" — and replaced R with net cash.
         "kind": "placed_stop",
         "value": 1.63,
         "unit": "USD",
-        "source": "exit.initial_levels.stop",
+        "source": "spec.disaster_stop",
         "formula": "avg_entry_price - placed_stop"
       }
     },
@@ -778,22 +782,56 @@ scale. R itself is the problem" — and replaced R with net cash.
 
 ### 5.1 The denominator is the stop that was actually placed
 
-`denominator.kind` is always `placed_stop`, and the level it measures to is
-`exit.initial_levels.stop` when the document supplies one, `spec.disaster_stop`
-otherwise. `denominator.source` names which.
+`denominator.kind` is always `placed_stop`, and on both deployments the level
+actually placed is `spec.disaster_stop` — in every document, including one that
+supplies `exit.initial_levels`. `denominator.source` names it.
 
-An earlier draft made the denominator `spec.disaster_stop` unconditionally, on
-the argument that it is mandatory in every document and therefore always
-computable. That was wrong, and wrong precisely for the documents this tool
-exists to study. `_geometry_tranche_ladder` journals `initial_levels.stop` as
-the plan stop, and the never-naked cover places THAT. For any document
-supplying its own levels, `spec.disaster_stop` is a number nothing protects the
-position with, so an R measured against it names a risk nobody took.
+An earlier revision of this section made the denominator
+`exit.initial_levels.stop` when the document supplied one. Running both
+placement paths on 2026-09-26, during PR 5, refuted the sentence that choice
+rested on (#1597).
 
-Comparability survives because the KIND is one concept — the distance to the
-stop actually resting — even though its derivation differs per document. The
-current `/edge` lenses carry two different denominators under one name; this
-carries one denominator that says where it came from.
+What rests on the book comes from the `planned` journal line:
+`_fold_planned_exits` turns it into `PlannedExit.stop_price`, `PlaceStop` places
+that, and `position_manager._maybe_trail` and `_maybe_reanchor` both read it as
+the never-below floor and as the 1R denominator (§3.2, `plan_stop`). On the
+entry-trail path — the deployed one — that line is written by
+`control_loop._journal_entry_planned_disaster`, which reads
+`record["disaster_stop"]` (`control_loop.py:3012,3026`), off a `watch_open` line
+carrying `float(plan.disaster_stop)` (`control_loop.py:2148`). The
+geometry-aware writer `_planned_exit_levels` exists only on the classic bracket
+path, and a document supplying its own levels reaches it on neither deployment:
+with `ALPHALENS_BROKER_ENTRY_TRAIL_BPS` set, which is the versioned drop-in on
+SIM and on LIVE, the pick is intercepted into the entry-trail watch; with the
+trail off, `_refuse_geometry_without_trail` (`control_loop.py:9740`) refuses the
+pick rather than placing it. What `exit.initial_levels.stop` does reach is the
+`tranche_plan` line, as the live-exit ladder's stop reference, so the replay
+reads it — it simply never rests.
+
+The earlier revision argued the other way: for a document supplying its own
+levels, `spec.disaster_stop` is a number nothing protects the position with, so
+an R measured against it names a risk nobody took. The rule is right and its
+premise was backwards. Applied to what runs, the same rule selects the disaster
+stop, because `exit.initial_levels.stop` is the level nothing places today.
+Following this section as it was written would have measured every hand-authored
+pick against a level resting on neither deployment, which is what the rule
+exists to prevent.
+
+**Which take-profit ladder fires.** One function decides both halves, and it
+decides this half the other way. When a document supplies `initial_levels`,
+`_geometry_tranche_ladder` returns ONE tranche of 100% at `initial_levels.tp`,
+and `_journal_tranche_plan_core` journals that instead of `spec.tp_tranches`, so
+the author's declared ladder never fires. The replay fires what the daemon
+fires: one tranche of 100% at `exit.initial_levels.tp` for such a document, and
+`spec.tp_tranches` for a document that supplies no levels. Both paths are read
+(§4.3.1), and the trace names the ladder the run used.
+
+Comparability is stronger than the earlier shape promised: the KIND is one
+concept — the distance to the stop actually resting — and now one path supplies
+it in every document. `denominator.source` stays in the envelope anyway. The
+current `/edge` lenses carry two different denominators under one name, and a
+reader of a v1 result should not have to find this section to learn where the
+number came from.
 
 ### 5.2 The config block travels in the result
 
@@ -1141,6 +1179,20 @@ adding an uncalled module to a package the daemon imports executes nothing.
   the weakest evidence anywhere in this design. The run therefore reports it as
   the `native_entry_trail_is_a_broker_model` divergence (§5.2) instead of letting
   a reader assume a test covers it.
+- **This design stated something about the live path that running it refuted,
+  and the same run left a live-side question open.** §5.1 chose its R
+  denominator on the sentence "`_geometry_tranche_ladder` journals
+  `initial_levels.stop` as the plan stop, and the never-naked cover places
+  THAT". Driving both placement paths during PR 5 showed the opposite: the level
+  that rests is `spec.disaster_stop`, and a document's own stop reaches only the
+  ladder reference. §5.1 now follows what runs, which carries two consequences.
+  The section is pinned to the deployed behaviour of one function, so a keeper
+  change moves it — that is the risk, and it is why §5.1 cites the two writers by
+  line. And whether the keeper SHOULD place a document's declared stop, and
+  refuse or flag the declared take-profit ladder it supersedes, is an open
+  question on the live side (#1598). The replay does not wait for that answer: a
+  tool reporting what a document would have done reports the deployment that
+  runs, and the day the keeper changes, this section changes with it.
 - **The extraction boundary is a claim, not yet a fact.** §3.2 lists the
   minimal view field by field, and the two order-state questions cross as
   booleans. If implementation finds it needs an order leg, a journal handle or a
