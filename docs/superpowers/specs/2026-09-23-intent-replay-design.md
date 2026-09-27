@@ -43,7 +43,8 @@ multiplicity budget, and carries no accrued history.
 | `/edge` | shared envelope shape now, no `/edge` code now |
 | stop management | one implementation, extracted into the shared contract leaf |
 | intra-bar ties | always pessimistic — a fixed convention, never a configuration field (§4.4) |
-| a rung below a stop that has MOVED | unreachable: it expires unfilled. A long cannot reach a price below the resting stop without the stop firing there first, and filling it books a purchase at a price the same bar had already sold at (§4.4) |
+| a rung below a stop that has MOVED | skipped on every bar the stop sits above it, never cancelled. Filling it books a purchase at a price the same bar had already sold at, and a fill after the position closes is a re-entry this tool does not model (§4.4) |
+| which bars count as ambiguous | only the bars whose ordering the tape cannot settle. A same-bar rung fill and stop-out is forced by the levels and is NOT counted, against the existing `/edge` replay (§4.4) |
 | the gap-open fill price | it follows the tape wherever the order RESTS at the broker — a rung and the disaster stop fill at the bar's open when the open is already through them. A take-profit rests nowhere in v1, so it fills at its level (§4.4) |
 | the cost gate's FX leg | its rate is not stated, so `fx_applies: true` is refused in v1. The omitted term is 50 bps on every tranche; pricing it is #1592 (§5.4, §8.1) |
 | every input path | classified here as interpreted, translated or out of scope; an unclassified path is refused, never approximated (§4.3.1) |
@@ -705,12 +706,27 @@ moved.** Nothing constrains a trailed or re-anchored stop against a rung still
 resting below it, and the published templates reach that state: on
 `pullback-trailing-stop.json` (rungs 68.00 and 66.50, `trailing_stop` 0.5 /
 0.6) a fill at 68.00 and a peak of 70.60 put the stop at 69.56 with the 66.50
-rung still live. A bar that then trades down to 66.00 cannot fill that rung:
-the price must cross 69.56 first, and the stop closes the position there. So a
-rung below the resting stop is UNREACHABLE and expires unfilled. Filling it
-books a purchase at a price the same bar had already sold at, which on the run
-that found this was 57% of the reported result, in the flattering direction.
-Decided 2026-09-26 with PR 6 (#1577).
+rung still live. **The walk SKIPS such a rung on every bar the stop sits above
+it**, the gap-open rule below included, and does not fill it. It is skipped and
+not cancelled: the re-anchor arm can put the stop back below the rung (§6.3),
+and the rung is live again on the first bar where it is.
+
+Two reasons, separated because only the first is about the tape. For a bar whose
+low reaches the rung, continuity settles it: the price must cross 69.56 first,
+and the stop closes the position there. For a bar that OPENS below both, both
+resting orders execute in the same auction and the tape settles nothing — the
+walk still does not fill, because a fill at or after the position closes is a
+RE-ENTRY, a second position this tool does not model. That half is a scope
+boundary, not a claim about the broker: on both deployed paths the entry order is
+still working after the stop fills, so live it would fill, and nothing cancels
+it. It is deliberately not a `divergences` entry either, for the reason §6.4
+gives about an out-of-scope field: §5.2 reserves that list for facts the replay
+LACKS, and a re-entry v1 declines to model is the opposite case.
+
+Filling such a rung is what a first implementation did, and it booked a purchase
+at a price the same bar had already sold at — 57% of the reported result on the
+template above, in the flattering direction. Decided 2026-09-26 with PR 6
+(#1577).
 
 **The gap rule is separate from the tie convention, and it does not reach
 every leg.** A bar that opens already through a level is not ambiguous — the
@@ -718,10 +734,14 @@ open is the first trade — so an order that RESTS at the broker fills there: a
 rung at `min(open, limit)`, the disaster stop at `min(open, stop)`. A
 take-profit is the exception, for §3.3's reason: the OCO pair is retired on
 SIM and unset on LIVE, a run must state `oco: false`, so no take-profit rests
-anywhere. An engine realises it at its next observation and sells at the
-market then, so crediting a gap-open print to a tranche would credit a price
-nothing observed. A take-profit therefore fills AT its level. Decided
-2026-09-26 with PR 6.
+anywhere. An engine realises it at its next observation and market-sells at
+whatever the bid is by then, which the bar's open bounds in neither direction.
+What the replay lacks is the engine's observation TIME, not a price, so it
+cannot say which print the engine saw; a take-profit therefore fills AT the
+level the document names. The residual is a fact the replay lacks and is
+reported as the `take_profit_observation_time` divergence (§5.2), because what
+it leaves open is WHETHER a tranche fired at all and no price convention closes
+that. Decided 2026-09-26 with PR 6.
 
 **No optimistic mode is offered.** A `tp_first` switch would be a knob whose
 only use is making a result look better, and in a research tool such a knob is
@@ -734,6 +754,11 @@ the summary carries `ambiguous_bars` — the count of bars where the convention
 actually had to decide something. Zero means the assumption carried nothing and
 the result is hard data. A large count means much of the result comes from the
 rule rather than from the tape, and the reader is entitled to know which.
+
+One scoping note, from the same 2026-09-26 decision. Outside a run that states
+an entry-trail distance only row 1 can be counted, and row 1 ends the walk, so
+the count is 0 or 1 and reads as a flag. The magnitude reading above is the
+trailing-entry row's.
 
 ### 4.5 Bars out of order
 
@@ -794,7 +819,11 @@ scale. R itself is the problem" — and replaced R with net cash.
       "exit_edge_min_bps":     {"value": 5.0,    "unit": "bps"}
     }
   },
-  "divergences": ["daemon_trail_guards", "native_entry_trail_is_a_broker_model"],
+  "divergences": [
+    "daemon_trail_guards",
+    "native_entry_trail_is_a_broker_model",
+    "take_profit_observation_time"
+  ],
   "outcome": "closed_tp",
   "summary": {
     "filled_fraction": 0.6,
@@ -906,12 +935,17 @@ configurable (§4.4).
 **`divergences` is the list a knob would have hidden.** It names, per run, each
 place where the replay is known to differ from the daemon for a reason no
 configuration value can close, because the replay LACKS a fact rather than a
-setting. Two entries exist at v1: `daemon_trail_guards` (§3.2 — the replay trails
+setting. Three entries exist at v1: `daemon_trail_guards` (§3.2 — the replay trails
 at least as often as the daemon, because the two order-state guards cannot be
-evaluated without orders) and `native_entry_trail_is_a_broker_model` (§8 — the
+evaluated without orders), `native_entry_trail_is_a_broker_model` (§8 — the
 entry trail is a model of Saxo's server-side order type, which no local
-implementation can be compared against). Both flatter the result, which is why
-they are printed rather than footnoted. An entry is added by editing this section,
+implementation can be compared against) and `take_profit_observation_time`
+(§4.4, added 2026-09-26 by PR 6 — no take-profit rests anywhere in v1, so the
+engine's own observation decides when a tranche fires and at what bid; the
+replay has neither the poll time nor the quote, fills at the level and says so).
+The first two flatter the result, which is why
+they are printed rather than footnoted; the third can run either way. An entry
+is added by editing this section,
 on the same reasoning as §4.3.1: a divergence that can appear without anyone
 writing it down is a divergence nobody will find.
 
@@ -1100,7 +1134,10 @@ Computed with the real functions during design, 2026-09-23:
   fills it is not, and this section said otherwise until 2026-09-26: the
   re-anchor arm clamps against `plan_stop` rather than against the level
   standing, so a later and lower rung fill re-anchors LOWER — run during PR 6,
-  66.20 then 65.70 on rungs 68.00 and 67.00 with `k_atr` 1.5 and `atr` 1.20.
+  66.20 then 65.70 on rungs 68.00 and 67.00 with `k_atr` 1.5, `atr` 1.20 and
+  `spec.disaster_stop` 63.00. The floor is part of the measurement, because the
+  clamp refuses any target below it: with a floor in (65.70, 66.20] only the
+  FIRST re-anchor fires, and above 66.20 neither does.
   The trail arm IS monotone across the whole trace, because its ratchet
   compares the CLAMPED level against the last trailed one. The replay
   reproduces both arms rather than adding a never-down rule of its own, which
@@ -1339,25 +1376,50 @@ reader needs and a rewritten bullet loses it.
   rather than reversing it: the non-goal bounds what the tool computes, and the
   gate needs a threshold, not a model.
 
-  **One of those five is a switch and not a threshold, and running the gate
-  during PR 6 showed the difference matters.** `fx_applies` says WHETHER the
-  conversion leg applies; the block carries no RATE for it, and the daemon
-  reads a constant (`FX_ROUND_TRIP_RATE`, 0.0050) that §2.1 forbids
-  inheriting. The omitted term is exactly 50 bps at every notional — the whole
+  **Two of those five are switches, and only one of the two gates a magnitude
+  the block carries; running the gate during PR 6 showed the difference
+  matters.** `min_commission_applies` gates `min_commission`, which is stated.
+  `fx_applies` gates a round-trip rate that is not, and the daemon reads a
+  constant (`FX_ROUND_TRIP_RATE`, 0.0050) that §2.1 forbids inheriting. The
+  omitted term is exactly 50 bps at every notional — the whole
   `exit_edge_min_bps` buffer of the §5 example, ten times over on a small
   tranche. So `fx_applies: true` is refused in v1 (`fx_cost_not_stated`,
   §5.4). That is #1592's own standing rule rather than a new decision: "no
   later PR prices a cross-currency run with a constant or an implicit 1:1
-  rate; such a run is refused". Stating the rate is #1592's other option and
-  costs more than one key — a mid rate with its sizing buffer in the §5.1
-  provenance shape, the instrument's currency stated somewhere, and two rows
-  of §4.3.1 reclassified. Until then the gate is exact only when the account
-  and the instrument share a currency. A run stating `fx_applies: false` on a
-  cross-currency document still carries the per-fill minimum's own currency
-  error, measured 2026-09-26 on a PLN account at USDPLN 3.70: 0 bps on a full
-  8 000 PLN tranche, -11.75 bps at 2 667, -21.00 at 2 000 and -54.00 at 1 000.
-  The sign says the replay's threshold is too LOW, so it fires tranches the
-  daemon declines.
+  rate; such a run is refused".
+
+  **The refusal is not about the difficulty of stating a rate.** The FX term is
+  a rate times a notional over that same notional, so in bps it IS the rate EM
+  measured 50.0000 bps at notionals from 100 to 1 000 000, and the same in any
+  currency. One stated fraction would price it. What `fx_applies: true` DECLARES
+  is the problem: no document path states the instrument's currency (§4.3.1
+  puts the settlement currency of `instrument.mic` out of scope), so that key is
+  the only place a caller says the run is cross-currency — and on such a run
+  the per-fill minimum is still priced on the ACCOUNT-currency budget, an
+  implicit 1:1 of exactly the kind the rule above forbids. Pricing the
+  conversion leg alone would satisfy the arithmetic and keep the forbidden rate.
+  That is a third option #1592 does not list, and it belongs on that issue
+  rather than in an implementation PR.
+
+  **The gate is not exact even when the currencies match, and the boundary is
+  the fee card's knee.** The replay prices the stated budget; the daemon prices
+  the WHOLE-SHARE notional. Above `min_commission / commission_rate` — 1 250 on
+  the US card — the fee is pure ad valorem and therefore scale-invariant, so
+  the two thresholds are identical to full precision. Below that knee the
+  per-fill minimum binds unequally on the two amounts: measured 2026-09-26, a
+  budget of 1 000 against a whole-share notional of 950 is 1.05 bps apart, 250
+  against 210 is 15.24 bps, and 100 against 84 is 38.10 bps, in every case with
+  the replay's threshold too LOW, so it fires tranches the daemon declines. The
+  whole-share floor is the step-1 plan's deferral and is recorded there.
+
+  The cross-currency case adds its own error on top, and the block cannot detect
+  it: a caller may state `fx_applies: false` on a cross-currency document.
+  Measured 2026-09-26 on a PLN account at USDPLN 3.70: 0 bps on a full 8 000 PLN
+  tranche, -11.75 bps at 2 667, -21.00 at 2 000 and -54.00 at 1 000, the same
+  direction. The §5.2 worked example is such a document — a 1 500 EUR budget
+  on a KO/XNYS instrument, stating `fx_applies: false` — and v1 accepts it.
+  #1592 schedules correcting that example under either of its options, so it
+  stays as it is until that decision.
 
 - **The day-1 anchor depends on `meta.source`, which the design never reads.**
   `control_loop` passes `day1_includes_trade_date=source == "manual"` at two
