@@ -125,8 +125,11 @@ _ENGINE_CODES: Final[Mapping[str, FailureCode]] = _registry(
     _code(bars.BARS_UNORDERED_CODE, "The bars are not strictly increasing in time."),
     _code(
         bars.BARS_INVALID_CODE,
-        "A bar carries a price that cannot be compared (NaN or infinite); "
-        "`details.reason` and `details.field` name it.",
+        "A bar that cannot be compared, or bar input that is not the published shape: "
+        "a non-finite price, input that is not a JSON array, a bar that is not an object, "
+        "a missing key, a key a bar does not model, or a field of the wrong type. "
+        "`details.reason` names which, with `details.index` and `details.field` where "
+        "they apply.",
     ),
     _code(
         bars.WINDOW_TOO_SHORT_CODE,

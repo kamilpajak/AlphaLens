@@ -52,10 +52,22 @@ BARS_REASONS: Final[Mapping[str, str]] = MappingProxyType(
             "The first bar follows walk_start; the entry ladder was live over an "
             "interval the tape does not cover."
         ),
+        "not_a_list": "The bar input is not one JSON array of bar objects.",
+        "wrong_type": (
+            "A bar is not an object, or one of its fields is not the type the published "
+            "shape names."
+        ),
+        "missing_key": "A bar does not carry one of t, open, high, low, close.",
+        "unknown_key": (
+            "A bar carries a key the shape does not model. Ignoring it would replay a bar "
+            "its author did not send."
+        ),
     }
 )
 
 _PRICE_FIELDS: Final = ("open", "high", "low", "close")
+# The published bar shape, in the order the README prints it.
+_BAR_KEYS: Final = ("t", *_PRICE_FIELDS)
 
 
 class BarsError(ContractError):
@@ -100,6 +112,86 @@ class Bar:
                     field=field.name,
                     t=self.t,
                 )
+
+
+def parse_bars(data: Any) -> tuple[Bar, ...]:
+    """Turn the PARSED bar input into bars, or refuse (spec section 5.4).
+
+    The published shape is one JSON array of ``{t, open, high, low, close}``
+    objects. The ENGINE owns that shape; the CLI only reads the file, so bytes
+    that are not JSON at all are a CLI concern (``bars_malformed``) and never
+    reach here — the same split ``config_malformed`` has against
+    ``config_invalid``.
+
+    Every refusal WIDENS ``bars_invalid`` instead of adding a code: a bar that
+    is not a list entry, is not an object, lacks a field or carries a field the
+    shape does not model all say "this is not a usable bar", which is the
+    failure mode that code already names.
+
+    Order and emptiness are NOT judged here. ``bars_empty`` and
+    ``bars_unordered`` belong to :func:`validate_sequence`, and answering them
+    in two places would let the caller's order of checks decide the code.
+    """
+    if not isinstance(data, list):
+        raise _refuse(
+            BARS_INVALID_CODE,
+            f"the bars must be one JSON array of bar objects, got {type(data).__name__}",
+            reason="not_a_list",
+        )
+    return tuple(_parse_bar(entry, index) for index, entry in enumerate(data))
+
+
+def _number(entry: Mapping[str, Any], field: str, index: int) -> float:
+    """One price, as a float. ``bool`` is refused explicitly because it is an
+    ``int`` subclass, so a bare numeric check would read ``true`` as 1.0."""
+    value = entry[field]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _refuse(
+            BARS_INVALID_CODE,
+            f"bar {index} field {field} must be a number, got {value!r}",
+            reason="wrong_type",
+            index=index,
+            field=field,
+        )
+    return float(value)
+
+
+def _parse_bar(entry: Any, index: int) -> Bar:
+    if not isinstance(entry, Mapping):
+        raise _refuse(
+            BARS_INVALID_CODE,
+            f"bar {index} must be an object, got {type(entry).__name__}",
+            reason="wrong_type",
+            index=index,
+        )
+    missing = [key for key in _BAR_KEYS if key not in entry]
+    if missing:
+        raise _refuse(
+            BARS_INVALID_CODE,
+            f"bar {index} is missing {', '.join(missing)}",
+            reason="missing_key",
+            index=index,
+            keys=missing,
+        )
+    unknown = sorted(set(entry) - set(_BAR_KEYS))
+    if unknown:
+        raise _refuse(
+            BARS_INVALID_CODE,
+            f"bar {index} carries {', '.join(unknown)}, which a bar does not model",
+            reason="unknown_key",
+            index=index,
+            keys=unknown,
+        )
+    t = entry["t"]
+    if isinstance(t, bool) or not isinstance(t, int):
+        raise _refuse(
+            BARS_INVALID_CODE,
+            f"bar {index} field t must be an integer, got {t!r}",
+            reason="wrong_type",
+            index=index,
+            field="t",
+        )
+    return Bar(t=t, **{field: _number(entry, field, index) for field in _PRICE_FIELDS})
 
 
 def validate_sequence(bars: Iterable[Bar]) -> tuple[Bar, ...]:

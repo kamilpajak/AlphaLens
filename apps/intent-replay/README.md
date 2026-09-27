@@ -119,7 +119,7 @@ reasons onto it).
 |---|---|---|---|
 | `bars_empty` | engine | no | No bars were supplied. |
 | `bars_unordered` | engine | no | The bars are not strictly increasing in time. |
-| `bars_invalid` | engine | no | A bar carries a price that cannot be compared (NaN or infinite); `details.reason` and `details.field` name it. |
+| `bars_invalid` | engine | no | A bar that cannot be compared, or bar input that is not the published shape: a non-finite price, input that is not a JSON array, a bar that is not an object, a missing key, a key a bar does not model, or a field of the wrong type. `details.reason` names which, with `details.index` and `details.field` where they apply. |
 | `window_too_short` | engine | no | The bars do not cover the stated `walk_start`; `details.reason` says which side. |
 | `config_incomplete` | engine | no | A required configuration value was not stated; `details.keys` names every missing key. |
 | `config_invalid` | engine | no | A stated configuration value nothing can use; `details.keys` and `details.reason` name it. A file that parses but is not an object is refused here too, with `<root>` standing for the whole block. |
