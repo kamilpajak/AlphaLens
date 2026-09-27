@@ -19,13 +19,15 @@ the three cannot drift. Output rules, in the order a caller meets them:
 
 Codes. The engine modules raise typed :class:`ContractError` exceptions whose
 ``failure.code`` is already set, and this module passes the object through
-unchanged. Three codes are this CLI's own, because they name CLI concepts a
+unchanged. Four codes are this CLI's own, because they name CLI concepts a
 leaf never would (the #1122 split, spec section 5.4): ``intent_malformed`` (the
 document is not the published wire shape; the door raises the REASON, this
 module names the code), ``config_malformed`` (the configuration file is not one
-JSON object) and ``usage`` (the invocation: a bad option, or a file it names
-cannot be read). :data:`FAILURE_CODES` is the whole registry and is what
-``schema`` publishes; the package README carries the same table.
+JSON object), ``bars_malformed`` (the bar file is not one JSON document - the
+engine owns the SHAPE of a bar and refuses it as ``bars_invalid``, this module
+owns only reading the file) and ``usage`` (the invocation: a bad option, or a
+file it names cannot be read). :data:`FAILURE_CODES` is the whole registry and
+is what ``schema`` publishes; the package README carries the same table.
 
 ADAPTER module: stdlib and ``broker_contract``. It does not import
 ``jsonschema``; the door does, and this module reaches the validator through
@@ -53,10 +55,11 @@ from broker_contract.failure import (
     Suggestion,
 )
 
-from intent_replay import bars, classification, config, door, interpreter
+from intent_replay import bars, classification, config, door, interpreter, walk
 from intent_replay.config import RunConfig
 
 __all__ = [
+    "BARS_MALFORMED_REASONS",
     "COMMANDS",
     "CONFIG_MALFORMED_REASONS",
     "EXIT_FAILED",
@@ -108,6 +111,12 @@ CONFIG_MALFORMED_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         "not_json": "the configuration file is not a UTF-8 JSON document",
         "duplicate_key": "an object in the configuration file repeats a key; "
         "`details.keys` lists them",
+    }
+)
+BARS_MALFORMED_REASONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "not_json": "the bar file is not a UTF-8 JSON document",
+        "duplicate_key": "an object in the bar file repeats a key; `details.keys` lists them",
     }
 )
 
@@ -171,6 +180,13 @@ _CLI_CODES: Final[Mapping[str, FailureCode]] = _registry(
         "object in it repeats a key. `details.reason` names which, `details.path` the "
         "file. A file that parses and is not an object is `config_invalid`, because "
         "the block model is what refuses it.",
+    ),
+    _code(
+        "bars_malformed",
+        "The bar file could not be PARSED: not a UTF-8 JSON document, or an object in it "
+        "repeats a key. `details.reason` names which, `details.path` the file. A file that "
+        "parses and is not the published bar shape is `bars_invalid`, because the engine "
+        "owns that shape.",
     ),
     _code(
         "usage",
@@ -255,6 +271,13 @@ COMMANDS: Final[tuple[Command, ...]] = (
                 help="path to the run configuration block (spec section 5.2)",
                 required=True,
             ),
+            Option(
+                flags=("--bars",),
+                dest="bars",
+                kind="path",
+                help="path to one JSON array of {t, open, high, low, close} bars",
+                required=True,
+            ),
             _FORMAT_OPTION,
         ),
         output=(
@@ -262,8 +285,8 @@ COMMANDS: Final[tuple[Command, ...]] = (
             "object on stderr"
         ),
         examples=(
-            "intent-replay run pick.json --config run.json",
-            "intent-replay run pick.json --config run.json --format ndjson",
+            "intent-replay run pick.json --config run.json --bars bars.json",
+            "intent-replay run pick.json --config run.json --bars bars.json --format ndjson",
         ),
     ),
     Command(
@@ -562,24 +585,50 @@ def _load_config(source: str) -> Any:
         ) from exc
 
 
+def _load_bars(source: str) -> Any:
+    """The file, as JSON. The SHAPE inside it is the engine's: this function
+    knows only that a bar file is one JSON document with no repeated keys, which
+    is a fact about the file and not about a bar."""
+    data = _read(source)
+    try:
+        return _parsed(data)
+    except _MalformedError as exc:
+        raise _RefusalError(
+            Failure(
+                code="bars_malformed",
+                message=f"{source}: {exc.message}",
+                retryable=False,
+                details={"reason": exc.reason, **exc.details, "path": source},
+            )
+        ) from exc
+
+
 # --- the commands ---------------------------------------------------------------
 
 
 def _run(args: argparse.Namespace) -> int:
-    """Document first, so a caller fixes the primary input before the block.
+    """Document, then block, then bars — a caller fixes the primary input first.
 
-    The document is admitted, then INTERPRETED — which is where the fifth gate
-    of section 4.3.1 runs and where an unmodelled entry mode is refused — and
-    the configuration is parsed last. An accepted document still prints nothing
-    in this version: the envelope is PR 7.
+    The document is admitted and then INTERPRETED, which is where the fifth gate
+    of section 4.3.1 runs and where an unmodelled entry mode is refused. The
+    configuration comes next, and the price input last: its three checks are the
+    shape of each bar, the ordering of the sequence, and whether the window
+    covers the stated `walk_start`.
+
+    An accepted document still prints nothing in this version. The walk RUNS —
+    its trace and its counter are computed — and the envelope that would render
+    them is PR 7.
     """
     document = _load_document(args.document)
     try:
         admitted = door.admit(document)
     except door.DoorRefusalError as exc:
         raise _intent_malformed(exc.reason, exc.message, **exc.details) from exc
-    interpreter.interpret(admitted.intent, admitted.document)
-    RunConfig.from_jsonable(_load_config(args.config))
+    plan = interpreter.interpret(admitted.intent, admitted.document)
+    run_config = RunConfig.from_jsonable(_load_config(args.config))
+    series = bars.validate_sequence(bars.parse_bars(_load_bars(args.bars)))
+    bars.check_window_covers(series, run_config.walk_start.value)
+    walk.walk(plan, run_config, series)
     return EXIT_OK
 
 

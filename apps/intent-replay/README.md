@@ -39,16 +39,24 @@ unit, an unknown key, `oco: true`, `costs.fx_applies: true` — is
 ## Command line
 
 ```
-intent-replay run DOCUMENT --config PATH [--format json|ndjson]
+intent-replay run DOCUMENT --config PATH --bars PATH [--format json|ndjson]
 intent-replay schema [COMMAND] [--format json]
 ```
 
 `DOCUMENT` is a TradeIntent JSON file, the same bare document `alphalens broker
 arm` takes, or `-` to read it from stdin. `--config` names the run configuration
-block above. `--format` takes `json` or `ndjson` (spec section 5.3: no human
+block above. `--bars` names the price input: ONE JSON array of
+`{t, open, high, low, close}` objects, `t` in epoch milliseconds UTC, strictly
+increasing, with no key a bar does not model and no key missing. It is required,
+because there is no bar series to invent and a run without one would answer
+about nothing. `--format` takes `json` or `ndjson` (spec section 5.3: no human
 renderer in v1). `intent-replay schema` prints a JSON description of the command
 tree, its options, exit codes and failure codes, so a script or an agent need not
 parse `--help`.
+
+```json
+[{"t": 1790170200000, "open": 68.0, "high": 68.2, "low": 67.9, "close": 68.0}]
+```
 
 The command runs the gates of the arming door in the door's order: derived
 fields, the published input JSON Schema, completion, the codec, the fixed
@@ -67,13 +75,35 @@ levels, the take-profit ladder and the declared reaction, and it records every
 path it read. `intent-replay` then refuses a path no class covers
 (`path_unclassified`) and an entry tier whose mode it does not model
 (`entry_mode_unsupported`). Nothing here says which declared level would REST
-at a broker: a document may supply both `spec.disaster_stop` and
-`exit.initial_levels.stop`, and which one the walk places is not settled yet.
-Then the configuration block is parsed. **In this version an accepted document has nothing to print:** the
-command exits 0 with empty stdout and empty stderr. The result envelope arrives
-with the bar walk. A refusal is exactly one JSON object on stderr, the last line,
-with stdout empty; exit status `0` accepted, `2` usage, `130` interrupted with
-nothing written, `1` everything else.
+at a broker: the walk places `spec.disaster_stop`, because that is the level
+that rests at the broker in both deployments, and carries
+`exit.initial_levels.stop` without placing it.
+
+Then the configuration block is parsed, and the bars last: each bar's shape, the
+ordering of the sequence, and whether the window covers the stated `walk_start`.
+Then the walk runs. **In this version an accepted document still has nothing to
+print:** the command exits 0 with empty stdout and empty stderr. The walk's
+trace, its `ambiguous_bars` counter and its fill figures are computed and the
+envelope that renders them arrives in the next change. A refusal is exactly one
+JSON object on stderr, the last line, with stdout empty; exit status `0`
+accepted, `2` usage, `130` interrupted with nothing written, `1` everything
+else.
+
+Two choices inside the walk are worth stating here, because both are models and
+not copies of a live system. The stop decision is taken at each bar's HIGH: the
+minimum-distance clamp in `broker_contract.stop_decision` is anchored on the
+price handed to it, the daemon polls many times inside one bar and its ratchet
+keeps the best level any poll produced, so the high is the only choice that
+reproduces the level the spec publishes for its own example. And a take-profit
+does not rest at the broker in this model, so a bar that gaps above a tranche
+fills AT the tranche's level, not at the open; the gap rule reaches only the
+legs that really rest there, a rung and the disaster stop.
+
+`ceiling_price` is accepted in the configuration block and not read. A document
+that carries a take-profit ceiling is refused by `validate_intent`
+(`ceiling_price_unsupported`), and on the live side only the producer-side
+bracket builder reads one, so a replay that capped tranches with it would apply
+a rule no deployment applies.
 
 The published templates in `apps/alphalens-broker-contract/examples/manual-pick/`
 carry no `meta.trade_date`. The arming door fills it from its clock and the
@@ -100,11 +130,12 @@ This differs from the copy recipe in the contract README, which also deletes
 `meta.trade_date` and `meta.generation` because the door gives a NEW pick a new
 date; the replay wants the date the pick was armed under.
 
-In this version `run` can refuse with `usage`, `intent_malformed`,
-`config_malformed`, `intent_invalid`, `config_incomplete`, `config_invalid` and
-`entry_mode_unsupported`. The bar codes in the table below are raised by the
-engine's Python API (`intent_replay.bars`) and reach the command once it takes
-bars. `path_unclassified` is wired in and no document can provoke it today: once
+In this version `run` can refuse with every code in the table below except
+`path_unclassified`. The bar codes became reachable from the command when it
+started taking `--bars`; the engine owns the SHAPE of a bar, so a file that
+parses and is not a JSON array of bars is `bars_invalid`, while a file that is
+not one JSON document at all is the CLI's own `bars_malformed`.
+`path_unclassified` is wired in and no document can provoke it today: once
 the interpreter has read the paths it reads, every path of the published input
 schema is classified, the one path that is not
 (`spec.tp_tranches[].r_multiple`) is refused as a derived field, and any other
@@ -134,6 +165,7 @@ reasons onto it).
 | `intent_invalid` | contract | no | The document is internally inconsistent (`validate_intent`); `details.reason` names the rule, as at the arming door. |
 | `intent_malformed` | CLI | no | The document is not the published input contract; `details.reason` names which rule, see below. |
 | `config_malformed` | CLI | no | The configuration file could not be PARSED: not a UTF-8 JSON document, or an object in it repeats a key. `details.reason` names which, `details.path` the file. |
+| `bars_malformed` | CLI | no | The bar file could not be PARSED: not a UTF-8 JSON document, or an object in it repeats a key. `details.reason` names which, `details.path` the file. A file that parses and is not the published bar shape is `bars_invalid`. |
 | `usage` | CLI | no | The invocation is malformed (a bad option or value), or a file it names cannot be read (`details.path`). |
 
 `intent_malformed` carries the reasons of the arming door that apply to a
@@ -153,6 +185,8 @@ read (section 4.3.1).
 | | `key_discarded` | a key the decoder would DROP, so the replay would not carry what was sent; `details.paths` lists them. A `meta.trade_date` that parses but is not spelled `YYYY-MM-DD` lands here, as at the door |
 | `config_malformed` | `not_json` | the configuration file is not a UTF-8 JSON document |
 | | `duplicate_key` | an object in the configuration file repeats a key; `details.keys` lists them |
+| `bars_malformed` | `not_json` | the bar file is not a UTF-8 JSON document |
+| | `duplicate_key` | an object in the bar file repeats a key; `details.keys` lists them |
 
 Design: `docs/superpowers/specs/2026-09-23-intent-replay-design.md`.
 Implementation plan: `docs/superpowers/plans/2026-09-25-intent-replay-step1.md`.

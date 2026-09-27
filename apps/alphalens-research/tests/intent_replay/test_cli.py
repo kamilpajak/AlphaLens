@@ -38,6 +38,7 @@ import intent_replay
 from broker_contract.failure import CONTRACT_FAILURE_CODES, ContractError, Failure
 from intent_replay import classification, cli
 from intent_replay.cli import (
+    BARS_MALFORMED_REASONS,
     CONFIG_MALFORMED_REASONS,
     EXIT_FAILED,
     EXIT_INTERRUPTED,
@@ -46,6 +47,7 @@ from intent_replay.cli import (
     FAILURE_CODES,
     INTENT_MALFORMED_REASONS,
     MANIFEST_SCHEMA,
+    OWNERS,
     build_parser,
     main,
     manifest,
@@ -58,6 +60,14 @@ from tests.intent_replay.test_config import CANONICAL
 WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 EXAMPLES = WORKSPACE_ROOT / "apps" / "alphalens-broker-contract" / "examples" / "manual-pick"
 HELP_HEADINGS = ("USAGE", "OPTIONS", "OUTPUT", "EXIT CODES", "EXAMPLES")
+
+# Two bars straddling the canonical `walk_start`, taken FROM the config block so
+# the pair cannot drift apart: the window check refuses bars that miss it.
+WALK_START = CANONICAL["walk_start"]["value"]
+BARS = [
+    {"t": WALK_START, "open": 68.0, "high": 68.2, "low": 67.9, "close": 68.0},
+    {"t": WALK_START + 60_000, "open": 68.0, "high": 68.3, "low": 67.8, "close": 68.1},
+]
 ADAPTER_MODULES = frozenset({"door", "cli", "__main__"})
 
 
@@ -114,6 +124,7 @@ class _Files(unittest.TestCase):
         self.addCleanup(lambda: _rmtree(self.directory))
         self.document = self.write("pick.json", _document())
         self.config = self.write("run.json", CANONICAL)
+        self.bars = self.write("bars.json", BARS)
 
     def write(self, name: str, value: Any) -> str:
         return self.write_text(name, json.dumps(value))
@@ -138,30 +149,36 @@ def _rmtree(directory: Path) -> None:
 
 class AcceptedDocumentTest(_Files):
     def test_an_accepted_document_exits_zero_with_nothing_on_either_stream(self) -> None:
-        run = self.run_cli("run", self.document, "--config", self.config)
+        run = self.run_cli("run", self.document, "--config", self.config, "--bars", self.bars)
         self.assertEqual((run.code, run.stdout, run.stderr), (EXIT_OK, "", ""))
 
     def test_the_document_may_come_from_stdin(self) -> None:
         data = json.dumps(_document()).encode("utf-8")
-        run = self.run_cli("run", "-", "--config", self.config, stdin=data)
+        run = self.run_cli("run", "-", "--config", self.config, "--bars", self.bars, stdin=data)
         self.assertEqual((run.code, run.stdout, run.stderr), (EXIT_OK, "", ""))
 
     def test_ndjson_is_accepted_as_a_format_name(self) -> None:
-        run = self.run_cli("run", self.document, "--config", self.config, "--format", "ndjson")
+        run = self.run_cli(
+            "run", self.document, "--config", self.config, "--bars", self.bars, "--format", "ndjson"
+        )
         self.assertEqual((run.code, run.stdout, run.stderr), (EXIT_OK, "", ""))
 
 
 class DocumentRefusalTest(_Files):
     def test_bytes_that_are_not_json(self) -> None:
         path = self.write_text("bad.json", "{not json")
-        failure = self.run_cli("run", path, "--config", self.config).failure(self)
+        failure = self.run_cli("run", path, "--config", self.config, "--bars", self.bars).failure(
+            self
+        )
         self.assertEqual(
             (failure["code"], failure["details"]["reason"]), ("intent_malformed", "not_json")
         )
 
     def test_bytes_that_are_not_utf8(self) -> None:
         path = self.write_bytes("bad.json", b'{"a": "\xff\xfe"}')
-        failure = self.run_cli("run", path, "--config", self.config).failure(self)
+        failure = self.run_cli("run", path, "--config", self.config, "--bars", self.bars).failure(
+            self
+        )
         self.assertEqual(
             (failure["code"], failure["details"]["reason"]), ("intent_malformed", "not_json")
         )
@@ -170,7 +187,9 @@ class DocumentRefusalTest(_Files):
         path = self.write_text(
             "dup.json", '{"instrument": 1, "instrument": 2, "spec": 1, "spec": 2}'
         )
-        failure = self.run_cli("run", path, "--config", self.config).failure(self)
+        failure = self.run_cli("run", path, "--config", self.config, "--bars", self.bars).failure(
+            self
+        )
         self.assertEqual(failure["code"], "intent_malformed")
         self.assertEqual(
             failure["details"], {"reason": "duplicate_key", "keys": ["instrument", "spec"]}
@@ -182,13 +201,17 @@ class DocumentRefusalTest(_Files):
             "-",
             "--config",
             self.config,
+            "--bars",
+            self.bars,
             stdin=b'{"meta": {"source": "manual", "source": "brief"}}',
         ).failure(self)
         self.assertEqual(failure["details"], {"reason": "duplicate_key", "keys": ["source"]})
 
     def test_a_document_that_is_not_an_object(self) -> None:
         path = self.write_text("list.json", "[1, 2, 3]")
-        failure = self.run_cli("run", path, "--config", self.config).failure(self)
+        failure = self.run_cli("run", path, "--config", self.config, "--bars", self.bars).failure(
+            self
+        )
         self.assertEqual(
             (failure["code"], failure["details"]["reason"]),
             ("intent_malformed", "schema_violation"),
@@ -196,7 +219,9 @@ class DocumentRefusalTest(_Files):
         self.assertEqual(failure["details"]["path"], "$")
 
     def test_a_missing_document_file_is_usage_with_a_runnable_suggestion(self) -> None:
-        run = self.run_cli("run", str(self.directory / "absent.json"), "--config", self.config)
+        run = self.run_cli(
+            "run", str(self.directory / "absent.json"), "--config", self.config, "--bars", self.bars
+        )
         failure = run.failure(self)
         self.assertEqual((run.code, failure["code"]), (EXIT_USAGE, "usage"))
         self.assertEqual(failure["details"]["path"], str(self.directory / "absent.json"))
@@ -205,7 +230,7 @@ class DocumentRefusalTest(_Files):
 
     def test_a_door_refusal_is_intent_malformed_with_the_doors_reason(self) -> None:
         path = self.write("template.json", _document(dated=False))
-        run = self.run_cli("run", path, "--config", self.config)
+        run = self.run_cli("run", path, "--config", self.config, "--bars", self.bars)
         failure = run.failure(self)
         self.assertEqual(run.code, EXIT_FAILED)
         self.assertEqual(
@@ -217,7 +242,9 @@ class DocumentRefusalTest(_Files):
         document = _document()
         document["spec"]["entry_tiers"][0]["limit_pirce"] = 1.0
         path = self.write("typo.json", document)
-        failure = self.run_cli("run", path, "--config", self.config).failure(self)
+        failure = self.run_cli("run", path, "--config", self.config, "--bars", self.bars).failure(
+            self
+        )
         self.assertEqual(
             failure["details"],
             {"reason": "key_discarded", "paths": ["spec.entry_tiers[0].limit_pirce"]},
@@ -227,7 +254,7 @@ class DocumentRefusalTest(_Files):
         document = _document()
         document["spec"]["disaster_stop"] = 1000.0
         path = self.write("incoherent.json", document)
-        run = self.run_cli("run", path, "--config", self.config)
+        run = self.run_cli("run", path, "--config", self.config, "--bars", self.bars)
         failure = run.failure(self)
         self.assertEqual(run.code, EXIT_FAILED)
         self.assertEqual(
@@ -238,7 +265,7 @@ class DocumentRefusalTest(_Files):
 class ConfigRefusalTest(_Files):
     def test_an_empty_block_is_config_incomplete_naming_the_seven_keys(self) -> None:
         path = self.write("empty.json", {})
-        run = self.run_cli("run", self.document, "--config", path)
+        run = self.run_cli("run", self.document, "--config", path, "--bars", self.bars)
         failure = run.failure(self)
         self.assertEqual((run.code, failure["code"]), (EXIT_FAILED, "config_incomplete"))
         self.assertEqual(len(failure["details"]["keys"]), 7)
@@ -247,28 +274,32 @@ class ConfigRefusalTest(_Files):
         config = copy.deepcopy(CANONICAL)
         config["oco"] = True
         path = self.write("oco.json", config)
-        failure = self.run_cli("run", self.document, "--config", path).failure(self)
+        failure = self.run_cli("run", self.document, "--config", path, "--bars", self.bars).failure(
+            self
+        )
         self.assertEqual(
             (failure["code"], failure["details"]["reason"]), ("config_invalid", "oco_unsupported")
         )
 
     def test_a_config_that_is_not_json_is_config_malformed(self) -> None:
         path = self.write_text("bad.json", "nope")
-        run = self.run_cli("run", self.document, "--config", path)
+        run = self.run_cli("run", self.document, "--config", path, "--bars", self.bars)
         failure = run.failure(self)
         self.assertEqual((run.code, failure["code"]), (EXIT_FAILED, "config_malformed"))
         self.assertEqual(failure["details"], {"reason": "not_json", "path": path})
 
     def test_a_config_with_a_repeated_key_is_config_malformed(self) -> None:
         path = self.write_text("dup.json", '{"oco": false, "oco": true}')
-        failure = self.run_cli("run", self.document, "--config", path).failure(self)
+        failure = self.run_cli("run", self.document, "--config", path, "--bars", self.bars).failure(
+            self
+        )
         self.assertEqual(
             failure["details"], {"reason": "duplicate_key", "keys": ["oco"], "path": path}
         )
 
     def test_a_missing_config_file_is_usage(self) -> None:
         absent = str(self.directory / "absent.json")
-        run = self.run_cli("run", self.document, "--config", absent)
+        run = self.run_cli("run", self.document, "--config", absent, "--bars", self.bars)
         failure = run.failure(self)
         self.assertEqual(
             (run.code, failure["code"], failure["details"]["path"]), (EXIT_USAGE, "usage", absent)
@@ -277,8 +308,77 @@ class ConfigRefusalTest(_Files):
     def test_the_document_is_judged_before_the_config(self) -> None:
         template = self.write("template.json", _document(dated=False))
         empty = self.write("empty.json", {})
-        failure = self.run_cli("run", template, "--config", empty).failure(self)
+        failure = self.run_cli("run", template, "--config", empty, "--bars", self.bars).failure(
+            self
+        )
         self.assertEqual(failure["code"], "intent_malformed")
+
+
+class BarRefusalTest(_Files):
+    """The four bar codes shipped in PR 1 and were unreachable from the command
+    until it took bars; `bars_malformed` is the CLI's own half, the file that is
+    not one JSON document at all."""
+
+    def _refuse(self, bars_path: str) -> dict[str, Any]:
+        return self.run_cli(
+            "run", self.document, "--config", self.config, "--bars", bars_path
+        ).failure(self)
+
+    def test_a_bars_file_that_is_not_json_is_bars_malformed(self) -> None:
+        path = self.write_text("bad.json", "nope")
+        run = self.run_cli("run", self.document, "--config", self.config, "--bars", path)
+        failure = run.failure(self)
+        self.assertEqual((run.code, failure["code"]), (EXIT_FAILED, "bars_malformed"))
+        self.assertEqual(failure["details"], {"reason": "not_json", "path": path})
+
+    def test_a_bars_file_with_a_repeated_key_is_bars_malformed(self) -> None:
+        path = self.write_text("dup.json", '[{"t": 1, "t": 2}]')
+        failure = self._refuse(path)
+        self.assertEqual(
+            failure["details"], {"reason": "duplicate_key", "keys": ["t"], "path": path}
+        )
+
+    def test_a_missing_bars_file_is_usage(self) -> None:
+        absent = str(self.directory / "absent.json")
+        run = self.run_cli("run", self.document, "--config", self.config, "--bars", absent)
+        failure = run.failure(self)
+        self.assertEqual(
+            (run.code, failure["code"], failure["details"]["path"]), (EXIT_USAGE, "usage", absent)
+        )
+
+    def test_bar_input_that_is_not_the_published_shape_is_bars_invalid(self) -> None:
+        path = self.write("typo.json", [{**BARS[0], "hgih": 1.0}])
+        failure = self._refuse(path)
+        self.assertEqual(
+            (failure["code"], failure["details"]["reason"]), ("bars_invalid", "unknown_key")
+        )
+
+    def test_an_empty_bar_array_is_bars_empty(self) -> None:
+        self.assertEqual(self._refuse(self.write("empty.json", []))["code"], "bars_empty")
+
+    def test_unordered_bars_are_bars_unordered(self) -> None:
+        failure = self._refuse(self.write("unordered.json", [BARS[1], BARS[0]]))
+        self.assertEqual(
+            (failure["code"], failure["details"]["reason"]), ("bars_unordered", "decreasing")
+        )
+
+    def test_bars_that_miss_the_walk_start_are_window_too_short(self) -> None:
+        early = [{**BARS[0], "t": WALK_START - 120_000}, {**BARS[1], "t": WALK_START - 60_000}]
+        failure = self._refuse(self.write("early.json", early))
+        self.assertEqual(
+            (failure["code"], failure["details"]["reason"]),
+            ("window_too_short", "ends_before_walk_start"),
+        )
+
+    def test_the_config_is_judged_before_the_bars(self) -> None:
+        # The bars are the LAST gate: a caller fixes the document, then the
+        # block, then the price input.
+        empty = self.write("empty-config.json", {})
+        bad_bars = self.write_text("bad-bars.json", "nope")
+        failure = self.run_cli("run", self.document, "--config", empty, "--bars", bad_bars).failure(
+            self
+        )
+        self.assertEqual(failure["code"], "config_incomplete")
 
 
 class UsageTest(_Files):
@@ -291,17 +391,24 @@ class UsageTest(_Files):
     def test_no_command(self) -> None:
         self._usage()
 
-    def test_a_missing_required_option(self) -> None:
-        self._usage("run", self.document)
+    def test_a_missing_config_option(self) -> None:
+        self._usage("run", self.document, "--bars", self.bars)
+
+    def test_a_missing_bars_option(self) -> None:
+        # Required, not optional-with-a-default: there is no bar series to
+        # invent, and a run without bars would answer about nothing.
+        self._usage("run", self.document, "--config", self.config)
 
     def test_an_unknown_format(self) -> None:
-        self._usage("run", self.document, "--config", self.config, "--format", "human")
+        self._usage(
+            "run", self.document, "--config", self.config, "--bars", self.bars, "--format", "human"
+        )
 
     def test_an_abbreviated_option_is_not_understood(self) -> None:
-        self._usage("run", self.document, "--conf", self.config)
+        self._usage("run", self.document, "--conf", self.config, "--bars", self.bars)
 
     def test_an_unknown_option(self) -> None:
-        self._usage("run", self.document, "--config", self.config, "--bogus")
+        self._usage("run", self.document, "--config", self.config, "--bars", self.bars, "--bogus")
 
     def test_an_unknown_command(self) -> None:
         self._usage("walk")
@@ -315,7 +422,7 @@ class InterpreterRefusalTest(_Files):
 
     def test_an_immediate_tranche_is_refused_naming_its_tier(self) -> None:
         path = self.write("immediate.json", _document("immediate-plus-pullback"))
-        run = self.run_cli("run", path, "--config", self.config)
+        run = self.run_cli("run", path, "--config", self.config, "--bars", self.bars)
         failure = run.failure(self)
         self.assertEqual((run.code, failure["code"]), (EXIT_FAILED, "entry_mode_unsupported"))
         self.assertEqual(failure["details"]["tiers"], [0])
@@ -333,7 +440,7 @@ class InterpreterRefusalTest(_Files):
             if path != "instrument.ticker"
         }
         with mock.patch.object(classification, "OUT_OF_SCOPE", thinner):
-            run = self.run_cli("run", self.document, "--config", self.config)
+            run = self.run_cli("run", self.document, "--config", self.config, "--bars", self.bars)
         failure = run.failure(self)
         self.assertEqual((run.code, failure["code"]), (EXIT_FAILED, "path_unclassified"))
         self.assertEqual(failure["details"]["paths"], ["instrument.ticker"])
@@ -346,14 +453,14 @@ class UnexpectedPathsTest(_Files):
             mock.patch("intent_replay.door.admit", side_effect=error),
             self.assertLogs("intent_replay.cli", level="WARNING") as logs,
         ):
-            run = self.run_cli("run", self.document, "--config", self.config)
+            run = self.run_cli("run", self.document, "--config", self.config, "--bars", self.bars)
         failure = run.failure(self)
         self.assertEqual((run.code, failure["code"]), (EXIT_FAILED, "made_up"))
         self.assertTrue(any("made_up" in line for line in logs.output))
 
     def test_an_interrupt_exits_130_with_nothing_written(self) -> None:
         with mock.patch("intent_replay.door.admit", side_effect=KeyboardInterrupt):
-            run = self.run_cli("run", self.document, "--config", self.config)
+            run = self.run_cli("run", self.document, "--config", self.config, "--bars", self.bars)
         self.assertEqual((run.code, run.stdout, run.stderr), (EXIT_INTERRUPTED, "", ""))
 
 
@@ -441,8 +548,12 @@ class RegistryTest(unittest.TestCase):
         self.assertIn("intent_invalid", FAILURE_CODES)
         self.assertEqual(FAILURE_CODES["intent_invalid"], CONTRACT_FAILURE_CODES["intent_invalid"])
 
-    def test_the_cli_owns_three_codes(self) -> None:
-        for code in ("intent_malformed", "config_malformed", "usage"):
+    def test_the_cli_owns_exactly_these_codes(self) -> None:
+        # The SET, not a membership loop: the old shape stayed green when a
+        # fourth CLI code arrived, so it could not report the thing it was for.
+        owned = {code for code, owner in OWNERS.items() if owner == "CLI"}
+        self.assertEqual(owned, {"intent_malformed", "config_malformed", "bars_malformed", "usage"})
+        for code in owned:
             self.assertIn(code, FAILURE_CODES)
             self.assertFalse(FAILURE_CODES[code].retryable)
 
@@ -457,6 +568,7 @@ class RegistryTest(unittest.TestCase):
             set(INTENT_MALFORMED_REASONS), set(DOOR_REASONS) | {"not_json", "duplicate_key"}
         )
         self.assertEqual(set(CONFIG_MALFORMED_REASONS), {"not_json", "duplicate_key"})
+        self.assertEqual(set(BARS_MALFORMED_REASONS), {"not_json", "duplicate_key"})
 
 
 class EntryPointTest(unittest.TestCase):
