@@ -21,6 +21,11 @@ from intent_replay.cli import (
 )
 
 README = Path(__file__).resolve().parents[4] / "apps" / "intent-replay" / "README.md"
+# Both tables live under this heading, and only rows under it are published
+# codes. Reading the whole file let a two-cell row from any earlier table in
+# (the configuration block's `| `oco` | `false` |`), and a CONTINUATION row
+# there would attach a real reason to whatever code was last matched.
+SECTION = "## Refusal codes"
 
 # `| `code` | owner | ... ` — the owner column is the second cell.
 _CODE_ROW = re.compile(r"^\|\s*`([a-z_]+)`\s*\|\s*(engine|contract|CLI)\s*\|", re.MULTILINE)
@@ -29,7 +34,10 @@ _REASON_ROW = re.compile(r"^\|\s*(?:`([a-z_]+)`)?\s*\|\s*`([a-z_]+)`\s*\|", re.M
 
 
 def _text() -> str:
-    return README.read_text(encoding="utf-8")
+    """The refusal-codes section alone, from its heading to the end of the file."""
+    whole = README.read_text(encoding="utf-8")
+    start = whole.index(SECTION)
+    return whole[start:]
 
 
 def published_codes() -> dict[str, str]:
@@ -52,6 +60,12 @@ class TheCodeTableAndTheRegistryAgree(unittest.TestCase):
     def test_the_table_was_parsed_at_all(self) -> None:
         self.assertGreaterEqual(len(self.rows), len(FAILURE_CODES))
 
+    def test_the_section_heading_is_still_there(self) -> None:
+        # `_text` slices on this heading. Renaming it raises out of a helper, so
+        # this says what broke instead of leaving a reader a ValueError from
+        # inside `published_codes`.
+        self.assertIn(SECTION, README.read_text(encoding="utf-8"))
+
     def test_every_registered_code_is_published(self) -> None:
         self.assertEqual(sorted(set(FAILURE_CODES) - set(self.rows)), [])
 
@@ -65,6 +79,13 @@ class TheCodeTableAndTheRegistryAgree(unittest.TestCase):
 
 
 class TheReasonTablesAndTheVocabulariesAgree(unittest.TestCase):
+    def test_no_reason_row_comes_from_outside_the_refusal_section(self) -> None:
+        # The parser used to read the WHOLE file, so the configuration table's
+        # `| `oco` | `false` |` row arrived as a reason of a code called "oco".
+        # That one was harmless; a CONTINUATION row in any earlier table is not,
+        # because it attaches a real reason to whatever code was last seen.
+        self.assertEqual(sorted(set(published_reasons()) - set(FAILURE_CODES)), [])
+
     def test_intent_malformed_reasons(self) -> None:
         self.assertEqual(published_reasons()["intent_malformed"], set(INTENT_MALFORMED_REASONS))
 

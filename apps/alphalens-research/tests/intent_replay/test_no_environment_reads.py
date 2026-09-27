@@ -8,10 +8,17 @@ mapping names every key, removing any leaf names exactly that leaf, no
 dataclass field carries a default). What this file adds is an early, cheap
 signal when a later edit reaches for ``os.environ`` or ``open``.
 
-``bars.py`` and ``refusal.py`` carry no row yet: ``DENIED_NAMES`` holds
-``open``, and ``bars.py`` declares the OHLC field ``Bar.open``, so covering
-it needs the scanner narrowed (an ``ast.Name`` only in a ``Load`` context)
-rather than an exemption that would blind the arm in that very module.
+``bars.py``, ``walk.py``, ``trace.py`` and ``refusal.py`` carry no row:
+``DENIED_NAMES`` holds ``open``, and each of the first three states that word
+for its own reason - ``bars.py`` declares the OHLC field ``Bar.open``,
+``walk.py`` reads ``bar.open`` on every bar, and ``trace.py`` publishes
+``open`` as the name of an OUTCOME. Covering them needs the scanner narrowed
+in three different places (an ``ast.Name`` only in a ``Load`` context, an
+attribute arm that would stop catching ``os.environ``, and a string arm that
+would stop catching ``getattr(m, "environ")``), and the last two would weaken
+the arms for the modules already covered. A row that costs the scanner an arm
+buys nothing, so these modules stay uncovered and the reason stays written
+here.
 
 Why a local test and not a second rule in ``test_module_dependencies.py``: the
 engine rule there is an allow-list that admits EVERY stdlib module (``os``,
@@ -35,7 +42,7 @@ WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 PACKAGE_DIR = WORKSPACE_ROOT / "apps" / "intent-replay" / "intent_replay"
 PACKAGE = "intent_replay"
 
-# Every import the two modules are allowed to make. An addition is a
+# Every import the covered modules are allowed to make. An addition is a
 # deliberate edit of this list, never an incidental one.
 ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
     "config.py": frozenset(
@@ -58,6 +65,14 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "typing",
             "broker_contract.failure",
             "intent_replay.refusal",
+        }
+    ),
+    "cost_gate.py": frozenset(
+        {
+            "__future__",
+            "math",
+            "typing",
+            "intent_replay.config",
         }
     ),
     "interpreter.py": frozenset(
