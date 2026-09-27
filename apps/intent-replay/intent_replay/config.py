@@ -131,6 +131,10 @@ CONFIG_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         "unit_mismatch": "The unit is not the one the walk compares against.",
         "empty_string": "A provenance field or a currency code with no text.",
         "oco_unsupported": "v1 models no OCO pair; the key is stated false or the run is refused.",
+        "fx_cost_not_stated": (
+            "A conversion is stated to apply but no key states its rate. The omitted term is "
+            "50 bps of the notional, so accepting it would price every round trip too cheap."
+        ),
     }
 )
 
@@ -431,6 +435,27 @@ def _quantity(reader: _Reader, node: Any, path: str, expected_unit: str | None) 
     return Quantity(value=value, unit=unit)
 
 
+def _fx_applies(reader: _Reader, node: Any, path: str) -> bool | None:
+    """``fx_applies``: false is modelled, true is refused.
+
+    The term this block leaves out is a number, not a detail: the daemon adds
+    ``FX_ROUND_TRIP_RATE``, exactly 50 bps of any notional, when a conversion
+    applies, and nothing here states that rate. Section 2.1 forbids inheriting a
+    production constant, so the honest answer is a refusal rather than a cost
+    gate that is 50 bps too generous on every tranche. Pricing it is #1592.
+    """
+    applies = _boolean(reader, node, path)
+    if applies:
+        reader.reject(
+            path,
+            "fx_cost_not_stated",
+            "no key states the conversion rate; state false or price it first",
+            expected=False,
+        )
+        return None
+    return applies
+
+
 def _costs(reader: _Reader, node: Any, path: str) -> Costs | None:
     node = _mapping(reader, node, path, _COSTS_KEYS)
     if node is None:
@@ -451,7 +476,7 @@ def _costs(reader: _Reader, node: Any, path: str) -> Costs | None:
         else None
     )
     fx_applies = (
-        _boolean(reader, node["fx_applies"], _path(path, "fx_applies"))
+        _fx_applies(reader, node["fx_applies"], _path(path, "fx_applies"))
         if "fx_applies" in node
         else None
     )

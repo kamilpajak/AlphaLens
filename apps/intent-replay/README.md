@@ -26,9 +26,15 @@ and rendered back into the result by `to_jsonable`:
 | `oco` | `false` | v1 models no OCO pair; `true` is refused |
 | `costs` | five keys, see the spec | the threshold the take-profit cost gate compares against |
 
+Inside `costs`, `fx_applies` must be `false`. A conversion costs 50 bps of the
+notional round trip and no key in this block states that rate, so a run that
+accepted `true` would price every take-profit tranche too cheap. Pricing it is
+issue #1592.
+
 A missing key is `config_incomplete` (`details.keys` names every missing key).
 A stated value nothing can use — the wrong type, a non-finite number, a wrong
-unit, an unknown key, `oco: true` — is `config_invalid`. Nothing is defaulted.
+unit, an unknown key, `oco: true`, `costs.fx_applies: true` — is
+`config_invalid`. Nothing is defaulted.
 
 ## Command line
 
