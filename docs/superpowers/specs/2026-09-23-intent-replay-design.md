@@ -53,7 +53,7 @@ multiplicity budget, and carries no accrued history.
 | the trail's two order-state guards | not a configuration field. A replay has no order legs and no amend history, so both are inapplicable; the resulting divergence is REPORTED (§3.2) |
 | the take-profit cost gate | its threshold is a required, stated configuration value; absent is a refusal, not a costless run (§2.1, §5.2) |
 | `entry_mode: "immediate"` | refused in v1 with its own code; modelling it is a later version (§4.3.1, §5.4) |
-| entry trailing | MODELLED, with the trail distance stated in the configuration. The alternative was a tool describing an entry ladder production does not use (§3.3, §8) |
+| entry trailing | MODELLED, with the trail distance stated in the configuration. The alternative was a tool describing an entry ladder production does not use (§3.3, §8). Until the model lands, a stated distance is REFUSED rather than echoed, so no result claims a policy its run did not apply (§5.4) |
 | the R denominator | `spec.disaster_stop`, in every document — the level both deployments actually place. The earlier choice of `exit.initial_levels.stop` rested on a claim about the daemon that running it refuted (§5.1) |
 | which take-profit ladder fires | the one the daemon places: a document supplying `exit.initial_levels` fires ONE tranche of 100% at its `tp`, and its own `spec.tp_tranches` never fires (§5.1) |
 | the dependency rule | per MODULE, not per distribution: engine modules stay stdlib plus contract, the door and CLI may use `jsonschema` for gate 1. One barrier — the AST gate — not two (§3.1) |
@@ -298,6 +298,17 @@ The replay passes the values that mean "no broker obstacle", and that is the onl
 coherent reading: a guard about resting orders cannot be evaluated where there
 are none. The document decides whether the stop trails, which is what #1236
 intended.
+
+**Both guards sit on the RE-ANCHOR arm as well, and this section missed that
+until 2026-09-28.** `stop_decision._reanchor` checks `has_sole_standalone_stop`
+and `amend_in_backoff` in the same order `_trail` does, and the walk supplies
+both unconditionally for whichever arm the declared policy selects. So a
+document declaring `reanchor_on_fill` is exactly as free of broker obstacles as
+one declaring `trailing_stop`, and the divergence §5.2 names covers it. The
+reading above stays correct for the trailing arm; it was simply not the whole
+surface. A static run is the one place the guards are unreachable rather than
+assumed: `_reanchor` returns at `if not policy.requires_amend_stop` before either
+is read.
 
 This is NOT the same as reproducing the daemon. The daemon does decline to trail
 for reasons no document mentions — an OCO shape, an amend inside the backoff
@@ -672,7 +683,7 @@ whose outcomes differ, the data cannot say which happened first, and the replay
 must assume.
 
 **The convention: whichever resolution is worse for the position wins.** It is
-a named convention, not a configuration field. Three situations fall under it,
+a named convention, not a configuration field. Four situations fall under it,
 and the first two are already resolved this way by the existing replay:
 
 | one bar touches | resolution | why this is the worse one |
@@ -680,6 +691,7 @@ and the first two are already resolved this way by the existing replay:
 | the stop and a take-profit | the stop | +1R becomes −1R |
 | a lower entry rung and the stop | fill first, then stop out | without the fill there would be no loss |
 | a new low and the trailing entry trigger | the trigger fires on the PRE-BAR trough | the trough had not ratcheted down yet, so the buy pays the higher trigger |
+| a rung BELOW the bar's open and a take-profit | the take-profit fires first, on the position held before that rung filled | it sells fewer units, and a sweep that completes closes the position so the deeper rung never fills at all |
 
 The third row arrived on 2026-09-25 with the decision to model entry trailing
 (§3.3) — which is what the earlier text anticipated in saying the convention
@@ -689,6 +701,29 @@ rather than at fixed rungs meets the convention on every bar that makes a new lo
 and then retraces. For such a document `ambiguous_bars` is not a footnote; it is
 the number that says how much of the answer came from the rule.
 
+**The fourth row arrived on 2026-09-28, from PR 7's plan review, and it names a
+tie the walk had been resolving the FLATTERING way.** The distinction is where
+the rung sits relative to the bar's OPEN. A rung whose limit is at or above the
+open is already through at the first print, so its fill is not in question. A
+rung BELOW the open fills somewhere inside the bar, and if the same bar also
+reaches an unfired take-profit the tape does not say which came first — so the
+convention applies, and the tranche goes first, sized on the position held
+before that rung filled.
+
+Measured 2026-09-28 on the published template (rungs 68.00 and 66.50 carrying
+60% and 40% of 1500, one tranche of 100% at 68.50, disaster stop 63.00) with a
+bar `open 67.00 / high 68.60 / low 66.40` and then a bar falling to 62.00:
+
+| reading, both consistent with the bar | units sold | net cash |
+|---|---|---|
+| the low reaches rung 2, then the high reaches the tranche | 22.2579 | +37.898054 |
+| the high reaches the tranche, the sweep completes, rung 2 never fills | 13.2353 | +19.852941 |
+
+The gap is 18.045113, which is exactly rung 2's profit — 9.0226 units times the
+2.00 between its limit and the tranche. Taking the larger number is the failure
+mode this whole section exists to prevent, so the smaller one wins and the bar
+is counted.
+
 **Which bars are COUNTED, and why it is not every bar the table covers.** Row
 2 is resolved by the convention and NOT counted, because its order is forced
 by the levels rather than assumed: `validate_intent` requires
@@ -697,9 +732,11 @@ reach the stop — and the same holds when the bar opens below the stop, because
 there is no position to protect until the rung has filled. Counting it would
 put bars where the rule changed nothing into a number whose published meaning
 is how much of the answer came from the rule. So `ambiguous_bars` counts the
-bars of rows 1 and 3, the two where both orderings are consistent with the bar
-and lead to different money. Decided 2026-09-26 with PR 6, against the
-existing `/edge` replay, which counts a same-bar entry fill as ambiguous.
+bars of rows 1, 3 and 4, the three where both orderings are consistent with the
+bar and lead to different money. Decided 2026-09-26 with PR 6, against the
+existing `/edge` replay, which counts a same-bar entry fill as ambiguous; row 4
+was added on 2026-09-28 under the same test, which it passes for the same reason
+rows 1 and 3 do.
 
 **Row 2's guarantee covers the stop the document DECLARED, not one that has
 moved.** Nothing constrains a trailed or re-anchored stop against a rung still
@@ -755,10 +792,14 @@ actually had to decide something. Zero means the assumption carried nothing and
 the result is hard data. A large count means much of the result comes from the
 rule rather than from the tape, and the reader is entitled to know which.
 
-One scoping note, from the same 2026-09-26 decision. Outside a run that states
-an entry-trail distance only row 1 can be counted, and row 1 ends the walk, so
-the count is 0 or 1 and reads as a flag. The magnitude reading above is the
-trailing-entry row's.
+One scoping note. Until row 4 was added on 2026-09-28 this paragraph said the
+count is 0 or 1 outside a run that states an entry-trail distance, because row 1
+was then the only countable row and row 1 ends the walk. Row 4 lifts that
+ceiling for every document: a take-profit that sells only part of the position
+leaves the walk running, so a ladder with several tranches can meet row 4 on
+several bars. The count is therefore a magnitude for a laddered exit as well as
+for a trailing entry, and reads as a flag only for a document whose first
+take-profit takes the whole position.
 
 ### 4.5 Bars out of order
 
@@ -776,6 +817,15 @@ An ordered list of events, each carrying `t`, a kind, and kind-specific fields:
 
 `stop_moved` carries the reason (`trail`, `reanchor-on-fill`,
 `tp-tranche-resize`) and the level before and after.
+
+`horizon_open` carries the units still held AND the `price` they are valued at:
+the CLOSE of the last bar the walk saw. Added 2026-09-28 by PR 7's plan, for one
+reason — without it the envelope's cash would depend on a number that is in
+neither the trace nor the summary, and §5 promises a summary its own trace can
+reproduce. Both replay engines in this repo already mark an open remainder to the
+last close, and the research one says why in a comment: a mark is a valuation,
+not a fill, so it pays no fee and takes no slippage. The cost gate is not
+consulted for it either.
 
 ---
 
@@ -822,23 +872,24 @@ scale. R itself is the problem" — and replaced R with net cash.
   "divergences": [
     "daemon_trail_guards",
     "native_entry_trail_is_a_broker_model",
-    "take_profit_observation_time"
+    "take_profit_observation_time",
+    "cost_gate_prices_the_account_currency"
   ],
   "outcome": "closed_tp",
   "summary": {
     "filled_fraction": 0.6,
     "ambiguous_bars": 3,
     "notional_spent":   {"value": 900.0, "unit": "EUR"},
-    "avg_entry_price":  {"value": 67.83, "unit": "USD"},
+    "avg_entry_price":  {"value": 67.83, "unit": "instrument_currency"},
     "pnl_cash":         {"value": 41.20, "unit": "EUR"},
     "pnl_pct_of_spent": {"value": 4.58,  "unit": "percent"},
     "r_multiple": {
-      "value": 0.72,
+      "value": 1.90,
       "unit": "R",
       "denominator": {
         "kind": "placed_stop",
         "value": 1.63,
-        "unit": "USD",
+        "unit": "instrument_currency",
         "source": "spec.disaster_stop",
         "formula": "avg_entry_price - placed_stop"
       }
@@ -850,11 +901,78 @@ scale. R itself is the problem" — and replaced R with net cash.
 }
 ```
 
+**Five things about that block, added 2026-09-28 while planning PR 7 — the first
+version that EMITS it.**
+
+**The R it printed was impossible, and the identity that catches it is one
+line.** For any definition where `pnl = proceeds − spend`, `spend = units × avg`
+and the denominator is per share, `r = (pnl_pct / 100) × avg / den` holds without
+knowing how R is computed. Run against this block's own numbers, that reads
+**1.9049734**, and the block printed 0.72 — out by a factor of 2.65. Holding
+spend, avg, pnl and den, R is 1.90 and the block now says so. Had 0.72 been the
+intended figure, `pnl_cash` would read 15.5719 and `pnl_pct_of_spent` 1.7302.
+The identity is a §6.3 property, so this class of error cannot come back.
+
+**Two fields cannot name a currency, and now say so.** `avg_entry_price` and
+`denominator` are prices in the INSTRUMENT's currency. No DOCUMENT path states
+it and §4.3.1 puts the settlement currency of `instrument.mic` out of scope, so
+the replay must not resolve it; both carry the symbolic unit
+`instrument_currency`. The cash fields are different: `spec.size.currency` IS
+stated, so `notional_spent` and `pnl_cash` carry a real code. This block is
+still the cross-currency document §8.1 describes — a 1500 EUR budget on a
+KO/XNYS instrument declaring `fx_applies: false` — and #1592 owns that; changing
+a unit the tool cannot know is a different edit from changing the currency pair
+it was handed.
+
+**`pnl_cash` is GROSS.** The `costs` block decides WHICH take-profit tranches
+fire and never reduces the cash. §2 makes cost a non-goal and §8.1 says the
+replay is handed a threshold rather than modelling execution economics; this is
+the first place a reader could take the number for a net one.
+
+**`notional_spent` is the STATED budget, not what the drain would spend.** The
+drain buys whole shares (`floor(tier_notional / limit)`); the replay works in
+fractional units, which is the step-1 plan's recorded scope cut and not a fact
+the replay lacks, so it is not a `divergences` entry. It is not small. Measured
+2026-09-28: on this ladder at a 1500 budget the drain spends 1482.50 against the
+replay's 1500.00, a gap of 17.50; at 8000 on rungs 120.00 and 115.00 the gap is
+130.00; at 1000 on rungs 196.13 and 175.40 it is 60.81, and there the entry anchor
+moves too — 187.83800 against 187.27654, which is 0.56 in price or about 30 bps,
+and the denominator moves with it.
+
+**The denominator is not held away from zero.** On this block's own cash a
+denominator of 1e-10 publishes an R near 2.9e10, and that is the document's
+geometry rather than a defect. It cannot reach infinity: the denominator is a
+difference of two prices of the same size, so its smallest non-zero value is one
+unit in the last place — 7.1e-15 at a price near 63, which caps R around 4.0e14,
+a large finite number. That is why `allow_nan=False` is enough to keep stdout
+strict. Not positive is a different case and §5.1 handles it.
+
 ### 5.1 The denominator is the stop that was actually placed
 
 `denominator.kind` is always `placed_stop`, and on both deployments the level
 actually placed is `spec.disaster_stop` — in every document, including one that
 supplies `exit.initial_levels`. `denominator.source` names it.
+
+**When the denominator is NOT POSITIVE, `r_multiple.value`, `mfe` and `mae` are
+`null` and the `denominator` object is still carried**, so a reader sees why
+rather than a missing key. `allow_nan=False` forbids a NaN on the wire, so null
+is the only form available; `/edge` answers the same way, returning no realized R
+when its own risk is not positive.
+
+This is not a paper case. The walk books a fill at `min(bar.open, limit)` and
+places the stop only AFTER the first fill, so a bar that opens below
+`spec.disaster_stop` fills beneath the floor. `validate_intent` constrains the
+stop only against the rung LIMITS, never against an opening price. Measured
+2026-09-28 over two bars: a rung at 64.00 filling at 64.00, then a bar
+`50.00 / 51.00 / 49.00 / 50.00` that fills a second rung at 50.00 and stops out
+at 50.00, gives `notional_spent` 893.7008, `avg_entry_price` 56.9725, a
+denominator of −6.0275 and `pnl_cash` of −109.375. Without the rule that reports
+**+1.1568 R** for a loss of 109 units.
+
+"Not positive" rather than "negative", because exactly `0.0` is reachable too: a
+bar opening exactly AT the disaster stop fills there, so the average entry is the
+floor and the difference is zero. Dividing by it raises, rather than returning a
+number anyone could argue about.
 
 An earlier revision of this section made the denominator
 `exit.initial_levels.stop` when the document supplied one. Running both
@@ -935,19 +1053,48 @@ configurable (§4.4).
 **`divergences` is the list a knob would have hidden.** It names, per run, each
 place where the replay is known to differ from the daemon for a reason no
 configuration value can close, because the replay LACKS a fact rather than a
-setting. Three entries exist at v1: `daemon_trail_guards` (§3.2 — the replay trails
-at least as often as the daemon, because the two order-state guards cannot be
-evaluated without orders), `native_entry_trail_is_a_broker_model` (§8 — the
-entry trail is a model of Saxo's server-side order type, which no local
-implementation can be compared against) and `take_profit_observation_time`
-(§4.4, added 2026-09-26 by PR 6 — no take-profit rests anywhere in v1, so the
-engine's own observation decides when a tranche fires and at what bid; the
-replay has neither the poll time nor the quote, fills at the level and says so).
-The first two flatter the result, which is why
-they are printed rather than footnoted; the third can run either way. An entry
-is added by editing this section,
-on the same reasoning as §4.3.1: a divergence that can appear without anyone
-writing it down is a divergence nobody will find.
+setting. Five entries exist at v1.
+
+| entry | what the replay lacks | emitted when |
+|---|---|---|
+| `daemon_trail_guards` | orders, so neither order-state guard can be evaluated (§3.2) | the declared policy moves the stop at all: `policy.trails or policy.requires_amend_stop` |
+| `daemon_reanchor_latch_is_journal_lifetime` | the journal, so the daemon's idempotence latch cannot be reproduced | the reaction is `reanchor_on_fill` |
+| `native_entry_trail_is_a_broker_model` | any local implementation to compare against (§8) | the run states an entry-trail distance |
+| `take_profit_observation_time` | the poll time and the quote (§4.4) | the resolved take-profit ladder is not empty |
+| `cost_gate_prices_the_account_currency` | the instrument's currency, which no document path states (§8.1, #1592) | the ladder is not empty and `min_commission_applies` is true |
+
+`daemon_trail_guards` reads "trails" for a historical reason and covers BOTH
+stop arms. `stop_decision._reanchor` checks `has_sole_standalone_stop` and
+`amend_in_backoff` exactly as `_trail` does, and the walk supplies both
+unconditionally, so a re-anchoring document is as optimistic as a trailing one.
+§3.2 reads only `_maybe_trail` guard by guard, and that is a gap in this
+document rather than in the code. A static run (`exit: null`) is the one case
+where silence is honest: `_reanchor` returns at `if not policy.requires_amend_stop`
+before either guard is reached.
+
+`daemon_reanchor_latch_is_journal_lifetime` was added 2026-09-28. The daemon
+holds `reanchored_by_uic`, a map from instrument to the average price a confirmed
+re-anchor fired at, folded from JOURNAL lines, and suppresses a re-anchor when
+the new average is within 1e-6 of the stored one. The replay computes the same
+predicate from its own trace, with EXACT equality and only within one run, so it
+differs twice over: in lifetime and in tolerance. The direction is not uniform —
+a re-anchor can move the stop DOWN after a lower fill (§6.3) — so this entry
+makes no claim about flattering.
+
+`cost_gate_prices_the_account_currency` was added 2026-09-28. The replay prices
+the stated budget in the ACCOUNT currency while the daemon prices the whole-share
+notional in the INSTRUMENT's. Above the fee card's knee the fee is pure ad
+valorem and the two thresholds agree to full precision; below it the per-fill
+minimum binds unequally, and the replay's threshold is too LOW by 1.05, 15.24 and
+38.10 bps at the points §8.1 measures, so it fires tranches the daemon declines.
+
+Three of the five flatter the result, which is why they are printed rather than
+footnoted; `take_profit_observation_time` can run either way and the re-anchor
+latch depends on the path. An entry is added by editing this section, on the same
+reasoning as §4.3.1: a divergence that can appear without anyone writing it down
+is a divergence nobody will find. The per-run column is part of that: an entry
+printed on every run regardless of the document would carry no information, and
+one printed on no run would be a promise rather than a report.
 
 ### 5.3 Formats
 
@@ -962,6 +1109,32 @@ call site.
 
 The trace is in the envelope for a single document and omitted for a stream
 unless requested.
+
+**The stream line has its own schema, published here 2026-09-28.** A line is a
+transport envelope; the §5 result rides inside it as `data`:
+
+```
+{"schema":"intent_replay.stream/v1","type":"result","sequence":1,"data":{ …the §5 envelope… }}
+{"schema":"intent_replay.stream/v1","type":"summary","sequence":2,"documents":1}
+```
+
+The alternative — putting `type` and `sequence` into the result envelope itself —
+was rejected because it would leave one identifier, `intent_replay.result/v1`,
+describing two different objects depending on a `--format` value the consumer
+cannot see in `schema`. With the wrapper there is one identifier per shape,
+`data` is byte-identical to what `--format json` prints, `type` is reserved for
+transport so it can never collide with a result field, and a future `error` event
+has somewhere to go without changing the line. The cost is real and small: a `jq`
+filter over a stream needs a `.data` prefix that the single-value form does not.
+Every line carries `schema`, the `summary` line included, so the summary's own
+shape can be versioned when a stream longer than one document arrives.
+
+`sequence` is the line's own 1-based index. Per-line identity is never
+`intent_id`: two variants of one pick collide on the arming door's
+`TICKER:DATE:manual`.
+
+A single document is a stream of length one (§0), so this shape is what v1
+prints. The INPUT shape for more than one document is not decided here.
 
 ### 5.4 Errors
 
@@ -993,11 +1166,30 @@ door needs its fixed-point gate, and a misspelt `entry_trail_bp` must not switch
 entry trailing off in a run whose author believes the distance was stated),
 `wrong_type` (a stated `null` where none is allowed included), `numeric_not_finite`,
 `not_positive`, `negative`, `unit_mismatch`, `empty_string`, `oco_unsupported`
-(§8.1) and `fx_cost_not_stated` (a stated `fx_applies: true` whose round-trip rate the
-block does not carry; added 2026-09-26 by PR 6, §8.1). Missing keys win: when
+(§8.1), `fx_cost_not_stated` (a stated `fx_applies: true` whose round-trip rate the
+block does not carry; added 2026-09-26 by PR 6, §8.1) and `entry_trail_not_modelled`
+(below; added 2026-09-28 by PR 7). Missing keys win: when
 keys are both missing and unusable, the run is
 refused `config_incomplete` naming only the missing ones, and hears about values
 on the next pass.
+
+**`entry_trail_not_modelled` is TEMPORARY and says so.** §3.3 and the §0
+decision table both say entry trailing is MODELLED, with the distance stated in
+the configuration — and it is, from PR 8 onward. PR 7 is the first version that
+PRINTS, and until PR 8 the walk parses the distance and ignores it, so echoing a
+stated value into the result would be a result claiming a policy the run did not
+apply. That is the shape §4.3.1 refuses for `ceiling_price` and §8.1 refuses for
+`oco`, so it is refused here too, and PR 8 removes the reason along with the
+refusal. The type and range checks run FIRST, so `true` is still `wrong_type` and
+`0` is still `not_positive`; this reason only answers a well-formed distance.
+
+One published consequence: the §5.2 example states `entry_trail_bps: 50`, so v1
+refuses the very block this document prints as canonical. The example stays as it
+is, because nulling the distance would make its `ambiguous_bars: 3` disagree with
+§4.4 and would strand `native_entry_trail_is_a_broker_model` in its own
+`divergences` list. PR 8 makes the example runnable again. A test fixture that
+copies the block therefore departs from it in exactly this one key, and must say
+so rather than keep calling itself verbatim.
 
 **`intent_malformed` is a CLI-owned code, and this tool's CLI owns its own copy.**
 The broker's code registry is deliberately SPLIT: `broker_contract/failure.py`
@@ -1143,6 +1335,19 @@ Computed with the real functions during design, 2026-09-23:
   reproduces both arms rather than adding a never-down rule of its own, which
   would be the idealised-policy defect §3.2 exists to remove;
 - the sign of `pnl_cash` agrees with the sign of `r_multiple`;
+- `r_multiple` satisfies `r == (pnl_pct_of_spent / 100) × avg_entry_price /
+  denominator` whenever the denominator is positive. The identity follows from
+  `pnl = proceeds − spend` and `spend = units × avg` alone, so it holds for any
+  definition of R and needs no knowledge of how the summary computed it. Added
+  2026-09-28, after this document's own §5 example printed an R that the identity
+  refutes;
+- `mfe` is never negative and `mae` never positive, whenever the denominator is
+  positive. The walk books every fill at `min(bar.open, limit)`, which lies
+  inside its own bar, and the extremes are tracked from the first fill onward, so
+  the trough never exceeds the average entry and the peak never falls below it.
+  `/edge` can produce the opposite signs because it books a fill AT the limit
+  even on a bar that traded entirely below it; this engine cannot, and a test
+  asserting it could would assert nothing;
 - a document with `exit: null` produces zero `stop_moved` events;
 - bars that touch no entry produce `outcome: "no_fill"` and zero cash;
 - `ambiguous_bars` is zero whenever no bar touches two levels whose ordering
