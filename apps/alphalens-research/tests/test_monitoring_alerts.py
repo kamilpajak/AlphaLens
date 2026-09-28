@@ -664,10 +664,23 @@ class TestTemplateEngineMonitoring(unittest.TestCase):
     ``1-(1-t)**N`` — for five templates at 20% that is 67%, against the
     20-35% the design memo expects and the 21.6% measured. The rule
     therefore paged every day from 2026-08-26 while the engine worked
-    exactly as designed. #1201 replaces it with a self-relative threshold
-    once 30 days of history exist. Until then the tests below pin the
-    removal, so the same absolute-threshold shape cannot return by
-    accident.
+    exactly as designed.
+
+    ``AlphalensTemplateMatchRateCollapsed`` (#1201) is the replacement,
+    added once 30 days of history existed. It compares a template's 7d
+    match share against its OWN 30d share instead of against a constant,
+    which is what makes it immune to the shared denominator: the barren
+    part of the denominator sits in both windows and cancels. Measured on
+    2026-09-27 over the production series, the 7d/30d ratio for
+    ``earnings_surprise`` is 0.68 counting every run, 0.68 with the barren
+    00-01 UTC slot dropped and 0.66 counting only the 04-05 UTC slot; for
+    ``financing_announcement`` 0.91 / 0.90 / 0.90. The cancellation is not
+    an argument, it is those three columns.
+
+    The tests below pin the removed rule's shape as still removed, and pin
+    the parts of the new rule that were derived from measurement rather
+    than chosen: the minimum-match guard, the 0.30 threshold and ``for:
+    1d``.
     """
 
     def _rules(self) -> list[dict]:
@@ -682,26 +695,146 @@ class TestTemplateEngineMonitoring(unittest.TestCase):
             "Read #1201 before re-adding any per-template rate alert.",
         )
 
-    def test_no_alert_thresholds_a_per_template_match_share(self) -> None:
-        # Generalised guard: the defect is the SHAPE — an absolute threshold on
-        # a share whose denominator is shared across templates — not the name.
-        # Renaming the rule must not slip the same expression back in.
+    def test_every_match_share_alert_compares_against_a_baseline(self) -> None:
+        # This assertion used to read "no alert may mention
+        # alphalens_template_match_total at all", which was the right bound
+        # while no self-relative rule existed. #1201 relaxes it, and this is
+        # the relaxation the old comment asked someone to re-read.
         #
-        # Deliberately broad. Matching only the exact `< 0.20` / `>= 50` shape
-        # would wave through the identical defect written as `< 0.19`. #1201's
-        # self-relative rule WILL have to relax this assertion — that is the
-        # point: the relaxation is where someone re-reads the bound above.
+        # The defect being guarded is the SHAPE, not the name: a per-template
+        # share compared to a bare constant. Renaming the rule must not slip
+        # that expression back in, and matching only the literal `< 0.20`
+        # would wave through the identical defect written as `< 0.19`. So the
+        # rule is: an alert may threshold the share only if it also carries a
+        # baseline window to compare it against.
         offenders = [
             r.get("alert")
             for r in self._rules()
             if "alphalens_template_match_total" in r.get("expr", "")
+            and "[30d]" not in r.get("expr", "")
         ]
         self.assertEqual(
             offenders,
             [],
-            "No alert may threshold alphalens_template_match_total until #1201 "
-            f"defines a self-relative rule; found: {offenders}",
+            "A per-template match share may only be compared to that template's "
+            f"own 30d baseline, never to a constant (#1200); found: {offenders}",
         )
+
+    def test_positive_control_the_removed_shape_would_still_be_caught(self) -> None:
+        # Without this, the guard above could rot into a no-op if the rules
+        # file stopped mentioning the metric at all.
+        removed_shape = {
+            "alert": "AlphalensTemplateMatchRateLow",
+            "expr": (
+                "increase(alphalens_template_match_total[7d]) "
+                "/ increase(alphalens_template_attempt_total[7d]) < 0.20"
+            ),
+        }
+        self.assertIn("alphalens_template_match_total", removed_shape["expr"])
+        self.assertNotIn("[30d]", removed_shape["expr"])
+
+    # ------------------------------------------------------------------
+    # The replacement rule (#1201).
+    # ------------------------------------------------------------------
+
+    COLLAPSED = "AlphalensTemplateMatchRateCollapsed"
+
+    def _collapsed(self) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == self.COLLAPSED]
+        self.assertEqual(len(matches), 1, f"{self.COLLAPSED} must exist exactly once.")
+        return matches[0]
+
+    def test_the_replacement_rule_is_self_relative(self) -> None:
+        # The whole point of #1201. A 7d share on its own is the #1200 defect;
+        # the 30d term is what makes the shared denominator cancel.
+        expr = self._collapsed()["expr"]
+        self.assertIn("increase(alphalens_template_match_total[7d])", expr)
+        self.assertIn("increase(alphalens_template_attempt_total[7d])", expr)
+        self.assertIn("increase(alphalens_template_match_total[30d])", expr)
+        self.assertIn("increase(alphalens_template_attempt_total[30d])", expr)
+
+    def test_the_guard_counts_matches_not_attempts(self) -> None:
+        # #1200's guard was `increase(attempt_total[7d]) >= 50`, which every
+        # template clears trivially: attempts are plentiful and matches are
+        # what is thin. Measured over 30 days to 2026-09-28, matches per
+        # template were 124, 214, 0, 0 and 16 against 2648-2986 attempts each.
+        # A guard on attempts would therefore have admitted all five, including
+        # the two with no baseline at all.
+        expr = self._collapsed()["expr"]
+        self.assertIn("increase(alphalens_template_match_total[30d]) >= 30", expr)
+
+    def test_the_minimum_match_count_excludes_every_template_that_cannot_be_judged(
+        self,
+    ) -> None:
+        # The guard is a number, but it is chosen to be a CLASSIFIER, and this
+        # test records which side of it the five shipped templates fall on, as
+        # measured over the 30 days to 2026-09-28. It names no template in the
+        # rule itself, so a template that revives is covered automatically.
+        matches_per_30d = {
+            "earnings_surprise": 124,
+            "financing_announcement": 214,
+            "guidance_update": 0,
+            "m_and_a_press_release": 0,
+            "regulatory_action": 16,
+        }
+        admitted = sorted(t for t, n in matches_per_30d.items() if n >= 30)
+        self.assertEqual(
+            admitted,
+            ["earnings_surprise", "financing_announcement"],
+            "Only templates with a baseline thick enough to judge may be "
+            "admitted. guidance_update and m_and_a_press_release have no "
+            "baseline at all (#1607); regulatory_action averages 3.7 matches a "
+            "week, where a drop to one is ordinary Poisson noise with "
+            "probability 0.11 — and that is a LOWER bound, because news "
+            "arrives in clusters.",
+        )
+
+    def test_the_threshold_sits_below_every_healthy_ratio_ever_measured(self) -> None:
+        # Derived, not chosen. Five non-overlapping weeks to 2026-09-28 give
+        # eight independent week-against-prior-weeks ratios for the two
+        # admitted templates: 0.74, 1.07, 0.37, 0.51 (earnings_surprise) and
+        # 0.78, 1.34, 1.18, 0.85 (financing_announcement). The lowest healthy
+        # value in the record is 0.37. The threshold has to sit below it or the
+        # rule pages on behaviour that has already been observed without an
+        # incident.
+        #
+        # The threshold is READ OUT OF THE RULE rather than compared as one
+        # literal against another, so raising it in the YAML turns this test
+        # red instead of leaving two constants agreeing with each other.
+        lowest_healthy_ratio = 0.37
+        match = re.search(r"<\s*([0-9.]+)\s*\*", self._collapsed()["expr"])
+        self.assertIsNotNone(match, "The rule must threshold the 30d term.")
+        threshold = float(match.group(1))
+        self.assertEqual(threshold, 0.30)
+        self.assertLess(
+            threshold,
+            lowest_healthy_ratio,
+            f"A threshold of {threshold} would page on a ratio of "
+            f"{lowest_healthy_ratio}, which a healthy template already reached "
+            "without an incident.",
+        )
+
+    def test_for_one_day_is_what_keeps_the_measured_excursion_silent(self) -> None:
+        # Load-bearing, not cosmetic. Running the exact expression against the
+        # stored series over every hour a 30d baseline exists, earnings_surprise
+        # went below 0.30 — reaching 0.291 — and stayed there for 8 CONTIGUOUS
+        # hours on 2026-09-23/24 before recovering to 0.68. `for: 1d` is what
+        # turns that into silence. Shortening it to 6h would have sent a
+        # Telegram message about a template that was fine four days later.
+        self.assertEqual(self._collapsed().get("for"), "1d")
+
+    def test_the_replacement_routes_and_names_the_template(self) -> None:
+        rule = self._collapsed()
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertIn("{{ $labels.template_id }}", rule["annotations"]["summary"])
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        # Same cheap pin the VIX and FRED rules carry. The template metrics
+        # arrive from node-exporter, not from a systemd unit's emit hook, so a
+        # job= matcher would falsely register this as an orphan cron rule in
+        # the job-keyed parity tests above.
+        self.assertIsNone(re.search(r'job="[^"]+"', self._collapsed()["expr"]))
 
     def test_template_metrics_missing_alert_survives(self) -> None:
         # Over-deletion guard: dropping the match-rate rule must not take the
