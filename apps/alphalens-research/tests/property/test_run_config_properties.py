@@ -53,7 +53,9 @@ _BLOCK = st.fixed_dictionaries(
                 "commission_rate": _quantity(st.just(FRACTION)),
                 "min_commission": _quantity(_CURRENCY),
                 "min_commission_applies": st.booleans(),
-                "fx_applies": st.booleans(),
+                # Refused when true, like `oco` three lines up: the block states no
+                # conversion rate, so the walk cannot price one.
+                "fx_applies": st.just(False),
                 "exit_edge_min_bps": _quantity(st.just(BPS)),
             }
         ),

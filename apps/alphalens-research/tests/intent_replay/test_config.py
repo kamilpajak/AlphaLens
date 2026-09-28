@@ -465,6 +465,35 @@ class OcoTest(unittest.TestCase):
         )
 
 
+class FxTest(unittest.TestCase):
+    def test_fx_applies_true_is_refused(self) -> None:
+        # The omitted term is a NUMBER: the daemon adds FX_ROUND_TRIP_RATE, which
+        # is exactly 50 bps of any notional, and no key in this block states it.
+        # Section 2.1 forbids inheriting a production constant, so a run that
+        # accepted true would price the round trip 50 bps too cheap and fire
+        # take-profit tranches the daemon declines. Pricing it is #1592.
+        with self.assertRaises(ConfigError) as ctx:
+            data = _canonical()
+            data["costs"]["fx_applies"] = True
+            RunConfig.from_jsonable(data)
+        self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "fx_cost_not_stated"))
+        self.assertEqual(
+            ctx.exception.failure.details["violations"],
+            [
+                {
+                    "key": "costs.fx_applies",
+                    "reason": "fx_cost_not_stated",
+                    "expected": False,
+                }
+            ],
+        )
+
+    def test_fx_applies_false_is_accepted(self) -> None:
+        data = _canonical()
+        data["costs"]["fx_applies"] = False
+        self.assertIs(RunConfig.from_jsonable(data).costs.fx_applies, False)
+
+
 class AggregationTest(unittest.TestCase):
     def test_every_invalid_value_is_reported_at_once(self) -> None:
         data = _with(_with(_canonical(), "oco", True), "ceiling_price", 0)
@@ -496,6 +525,7 @@ class ReasonVocabularyTest(unittest.TestCase):
                 "unit_mismatch",
                 "empty_string",
                 "oco_unsupported",
+                "fx_cost_not_stated",
             },
         )
 
