@@ -99,6 +99,25 @@ does not rest at the broker in this model, so a bar that gaps above a tranche
 fills AT the tranche's level, not at the open; the gap rule reaches only the
 legs that really rest there, a rung and the disaster stop.
 
+A third choice is forced on the walk and is NOT published. On one bar a rung
+and a take-profit can both be touched: the low reaches the rung, the high
+reaches the tranche, and the bar does not say which came first. Section 4.4
+gives a row for the stop against a take-profit and a row for a rung against
+the stop, but no row for a rung against a take-profit. The walk fills entries
+first. That is what the two published rows already imply — rungs before the
+stop, the stop before take-profits — and no order of steps can keep both rows
+and also put take-profits before rungs. The choice is not free. Filling first
+buys the position and sells it into the same bar's high; taking profit first
+leaves the position to whatever the next bars do. Measured on the published
+template's ladder (rungs 68.00 and 66.50 carrying 60% and 40% of 1500, one
+tranche of 100% at 68.50, disaster stop 63.00) with a bar
+`open 67.00 / high 68.60 / low 66.40` and then a bar that falls to 62.00:
+filling first nets +37.90, taking profit first nets -84.52. The gap is the
+whole distance from the tranche to the stop, 5.50 a unit over 22.2578 units.
+How wide it gets depends on what follows the tie bar, and this run is the wide
+end. The bar is not counted in `ambiguous_bars`: that counter is closed to the
+rows section 4.4 publishes.
+
 `ceiling_price` is accepted in the configuration block and not read. A document
 that carries a take-profit ceiling is refused by `validate_intent`
 (`ceiling_price_unsupported`), and on the live side only the producer-side
