@@ -648,6 +648,30 @@ class RungAndTakeProfitTieTest(unittest.TestCase):
         self.assertEqual(result.units_filled, 900.0 / 68.0 + 600.0 / 66.5)
         self.assertEqual(result.outcome, "closed_tp")
 
+    def test_a_ladder_wanting_exactly_what_is_held_still_decides_the_money(self) -> None:
+        # The boundary the appetite test sits on, found by the pre-merge review.
+        # At EQUALITY the clamp does not bind, but the CLOSURE does: selling
+        # exactly what is held ends the walk with `tp_complete` and the deep rung
+        # never fills, while filling it first leaves those units unsold. Equal
+        # units, different money - so the bar counts, and the comparison has to
+        # be inclusive.
+        equal = (
+            PendingEntry(tier_index=0, limit_price=100.0, notional=1000.0),
+            PendingEntry(tier_index=1, limit_price=50.0, notional=500.0),
+        )
+        plan = _plan(
+            entries=equal,
+            notional=1500.0,
+            floor=40.0,
+            tranches=(DeclaredTranche(tranche_index=0, price=110.0, fraction=0.5),),
+        )
+        # 1000/100 and 500/50 are ten units each, so the ladder's half of the
+        # intended twenty is exactly the ten held after the shallow rung.
+        result = walk(plan, _config(), (_bar(WALK_START, 60.0, 110.5, 49.0),))
+        self.assertEqual(result.units_filled, 10.0)
+        self.assertEqual(result.outcome, "closed_tp")
+        self.assertEqual(result.ambiguous_bars, 1)
+
     def test_a_bar_that_also_reaches_the_stop_fills_every_rung_and_stops_out(self) -> None:
         # Rows 1, 2 and 4 are pairwise inconsistent on a bar that touches all
         # three levels, and the convention settles it: filling both rungs and

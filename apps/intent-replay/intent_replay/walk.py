@@ -204,10 +204,16 @@ def _deep_rung_tie(
 
     Three conditions. A rung below the open that this bar would fill; a tranche
     still unfired that the bar reaches and the cost gate affords; and a ladder
-    whose appetite EXCEEDS what is held right now, because that is the only way
-    the cumulative clamp can bind differently in the two orders. A ladder wanting
-    fewer units than are held sells the same units either way, so the bar decided
-    nothing — the argument that keeps row 2 out of the count.
+    whose appetite REACHES what is held right now. A ladder wanting strictly
+    fewer units than are held sells the same units either way and leaves the rung
+    to fill in both, so the bar decided nothing — the argument that keeps row 2
+    out of the count.
+
+    The comparison is inclusive, and the boundary is why. At exact equality the
+    cumulative clamp does NOT bind, but the CLOSURE does: selling precisely what
+    is held meets ``units_filled`` and ends the walk with ``tp_complete``, so the
+    deep rung never fills, while filling it first leaves those units unsold.
+    Equal units, different money. A strict ``>`` read that bar as settled.
 
     Known residual: a bar on which the position OPENS through a deep rung is not
     counted, because with nothing held the gate has no entry price to measure a
@@ -228,7 +234,7 @@ def _deep_rung_tie(
         and bar.high >= tranche.price
         and _clears(state, tranche, intended=intended, costs=costs)
     )
-    return appetite > 0.0 and appetite * intended > _held(state)
+    return appetite > 0.0 and appetite * intended >= _held(state)
 
 
 def _track_extremes(state: _WalkState, bar: Bar) -> None:
