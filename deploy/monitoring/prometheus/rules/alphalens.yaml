@@ -1295,8 +1295,11 @@ groups:
       # direction for this rule -- the 7d share jumps while the 30d
       # baseline lags, pushing the ratio above 1 -- but the reverse, a
       # NEW barren slot, would divide every template's share at once and
-      # is the #1200 failure in a new dress. Whoever fixes #1606 should
-      # silence this alert for 30 days while the baseline catches up.
+      # is the #1200 failure in a new dress. Whoever fixes #1606 must first
+      # silence this alert for 30 days while the baseline catches up:
+      # `amtool silence add alertname=AlphalensTemplateMatchRateCollapsed
+      # --duration 720h --comment "#1606 changed the run mix"`. Nothing
+      # silences it automatically.
       #
       # The counters reset on every CLI invocation, so ``increase()``
       # disagrees with a run-by-run count: measured over these 30 days it
@@ -1306,6 +1309,25 @@ groups:
       # 09-28), so it cannot be treated as a safety margin. Near the
       # threshold it happened to be small. A per-run rate GAUGE would
       # remove the whole question and is the right long-term shape.
+      #
+      # Both numbers below were therefore checked in the units the rule
+      # actually computes, not only in run-by-run counts. On the live
+      # server ``increase(match_total[30d]) >= 30`` selects exactly
+      # earnings_surprise (119) and financing_announcement (211), and the
+      # full expression evaluated hour by hour over every instant a 30d
+      # baseline exists reached a minimum of 0.291 -- BELOW 0.30, for
+      # eight contiguous hours, with only ``for: 1d`` between it and a
+      # page. The run-by-run minimum over the same period is 0.37. That
+      # gap is the honest margin on this threshold, and #1608 re-derives
+      # it once 60 days of history exist.
+      #
+      # No explicit ``on(...)`` is needed on the division or the ``and``,
+      # unlike the ``ignoring(outcome)`` rule above. Both counters are
+      # written by the same loop in
+      # thematic/extraction/templates/holdout.py::flush, each carrying
+      # exactly one label, ``template_id``, so their label sets are equal
+      # by construction. The promtool cases in alphalens_test.yaml
+      # EVALUATE that matching rather than assuming it.
 
       - alert: AlphalensTemplateMatchRateCollapsed
         expr: |

@@ -827,3 +827,117 @@ tests:
       - eval_time: 4h
         alertname: AlphalensTextfileInvalidSample
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensTemplateMatchRateCollapsed (#1201)
+  # ---------------------------------------------------------------------
+  #
+  # The unit tests in test_monitoring_alerts.py pin this rule as YAML TEXT.
+  # They cannot see whether the PromQL means what the text says: the four
+  # `increase()` terms could be divided the wrong way round, the `and` could
+  # match on nothing, or a 0/0 window could page, and every string assertion
+  # would still pass. These cases evaluate the shipped rule.
+  #
+  # `interval: 6h` mirrors the real cadence closely enough for the windows to
+  # be meaningful (a 30d window is 120 points, a 7d window 28) while keeping
+  # the fixture small.
+
+  # Healthy: matches accrue at a steady rate, so the 7d share equals the 30d
+  # share and the ratio sits at 1. This is the case that must stay silent, and
+  # it is the one a rule with its operands swapped would fail.
+  - interval: 6h
+    input_series:
+      - series: 'alphalens_template_attempt_total{template_id="earnings_surprise"}'
+        values: '0+10x140'
+      - series: 'alphalens_template_match_total{template_id="earnings_surprise"}'
+        values: '0+5x140'
+    alert_rule_test:
+      - eval_time: 33d
+        alertname: AlphalensTemplateMatchRateCollapsed
+        exp_alerts: []
+
+  # The incident the rule exists for: one template stops matching while its
+  # attempts continue. Matches accrue for 23 days and then flatline, so the 7d
+  # share is 0 against a 30d share of about 0.38.
+  #
+  # The eval_times straddle the `for: 1d` boundary, and they were found by
+  # probing rather than guessed: with the debounce removed, the condition
+  # first becomes active at 28d6h. So 28d is before it starts, 29d is the
+  # condition HOLDING for 18 hours and still silent — the shape of the
+  # measured 8-hour excursion on 2026-09-23 that must not page — and 29d6h is
+  # exactly one day in, where it pages.
+  #
+  # An earlier draft of this fixture asserted silence at 23d, where the
+  # condition is not true at all. It passed, and it proved nothing: shortening
+  # `for` to 1m left it green. These two times are what make the debounce
+  # load-bearing.
+  - interval: 6h
+    input_series:
+      - series: 'alphalens_template_attempt_total{template_id="earnings_surprise"}'
+        values: '0+10x140'
+      - series: 'alphalens_template_match_total{template_id="earnings_surprise"}'
+        values: '0+5x92 460+0x48'
+    alert_rule_test:
+      - eval_time: 28d
+        alertname: AlphalensTemplateMatchRateCollapsed
+        exp_alerts: []
+      - eval_time: 29d
+        alertname: AlphalensTemplateMatchRateCollapsed
+        exp_alerts: []
+      - eval_time: 29d6h
+        alertname: AlphalensTemplateMatchRateCollapsed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: thematic-build
+              template_id: earnings_surprise
+            exp_annotations:
+              summary: "Template earnings_surprise match share collapsed against its own baseline"
+              description: "earnings_surprise matched a share of the articles that reached it below 30% of its own 30-day share, for a whole day. The comparison is against the template itself, so a quiet week moves the baseline with it and does not fire. Read the template's YAML for pattern rot, and check AlphalensTemplateMetricsMissing and the holdout-by-reason panel first: a collapse shared by every template is an ingest or entity-resolution problem, not a pattern problem. The `>= 30 matches in 30 days` guard admits only templates whose baseline is thick enough to judge — today earnings_surprise and financing_announcement. Do not lower it to cover the others; a template with no baseline is #1607, not an alert."
+
+  # The admission guard. Identical collapse to the case above, but the
+  # template only ever matched 20 articles, so `>= 30` excludes it. Without
+  # the guard this is regulatory_action paging on ordinary Poisson noise.
+  - interval: 6h
+    input_series:
+      - series: 'alphalens_template_attempt_total{template_id="regulatory_action"}'
+        values: '0+10x140'
+      - series: 'alphalens_template_match_total{template_id="regulatory_action"}'
+        values: '0+1x20 20+0x120'
+    alert_rule_test:
+      - eval_time: 33d
+        alertname: AlphalensTemplateMatchRateCollapsed
+        exp_alerts: []
+
+  # A template that has never matched. `guidance_update` and
+  # `m_and_a_press_release` are in this state today (#1607). Both shares are
+  # 0/N = 0, so the comparison is `0 < 0` — false — and the guard excludes it
+  # anyway. It must not page: an alert repeating a known fact daily is how
+  # alerts get ignored, which is the #1200 lesson.
+  - interval: 6h
+    input_series:
+      - series: 'alphalens_template_attempt_total{template_id="guidance_update"}'
+        values: '0+10x140'
+      - series: 'alphalens_template_match_total{template_id="guidance_update"}'
+        values: '0+0x140'
+    alert_rule_test:
+      - eval_time: 33d
+        alertname: AlphalensTemplateMatchRateCollapsed
+        exp_alerts: []
+
+  # The 0/0 edge. The whole stage stopped running, so attempts stop accruing
+  # too and both shares are NaN. A NaN comparison drops the element, so the
+  # rule is silent — correctly: a dead stage is AlphalensJobStale's and
+  # AlphalensTemplateMetricsMissing's business, not a claim about one
+  # template's patterns.
+  - interval: 6h
+    input_series:
+      - series: 'alphalens_template_attempt_total{template_id="earnings_surprise"}'
+        values: '0+10x92 920+0x48'
+      - series: 'alphalens_template_match_total{template_id="earnings_surprise"}'
+        values: '0+5x92 460+0x48'
+    alert_rule_test:
+      - eval_time: 33d
+        alertname: AlphalensTemplateMatchRateCollapsed
+        exp_alerts: []
