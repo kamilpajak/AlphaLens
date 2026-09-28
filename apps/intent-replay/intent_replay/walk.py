@@ -212,9 +212,13 @@ def _a_tranche_would_have_fired(
     same question of any unhit tranche. A tranche the cost gate would decline
     could not have fired first either way, so a bar carrying only those decided
     nothing and is not counted.
+
+    Only ``_exit_on_stop`` asks, and only once a stop RESTS, which happens on
+    the first fill. So something is always held here: ``units`` never shrinks,
+    ``units_sold`` is clamped to what is held, and the bar on which the two
+    meet ends the walk with ``tp_complete``. ``_clears`` may therefore divide
+    by ``state.units`` without a guard of its own.
     """
-    if _held(state) <= 0.0:
-        return False
     return any(
         bar.high >= tranche.price and _clears(state, tranche, intended=intended, costs=costs)
         for tranche in ladder
