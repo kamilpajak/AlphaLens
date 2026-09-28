@@ -89,6 +89,47 @@ class BarValueTest(unittest.TestCase):
                 self.assertEqual(ctx.exception.failure.details["field"], field)
 
 
+class BarCoherenceTest(unittest.TestCase):
+    """Four finite prices are not yet a bar. The walk reads `low` to decide a
+    rung and the stop, `high` to decide a tranche, and `open` to price a gap,
+    so a quadruple that contradicts itself books trades the tape never carried:
+    an `open` of 50.00 under a `low` of 67.00 fills a rung at 50.00 and carries
+    that into `avg_entry_price`, which is the base of the cost gate and of
+    every measure the envelope derives.
+
+    Refused rather than repaired, for the reason `validate_sequence` refuses
+    rather than sorts (spec section 4.5): a research tool that fixes its input
+    answers a question nobody asked.
+    """
+
+    def test_a_high_below_the_low_is_refused(self) -> None:
+        with self.assertRaises(BarsError) as ctx:
+            Bar(t=WALK_START, open=68.0, high=60.0, low=75.0, close=68.0)
+        self.assertEqual(_refusal(ctx.exception), (BARS_INVALID_CODE, "incoherent"))
+        self.assertEqual(ctx.exception.failure.details["field"], "high")
+
+    def test_an_open_or_close_outside_the_range_is_refused(self) -> None:
+        cases = {
+            "open below the low": ({"open": 50.0}, "open"),
+            "open above the high": ({"open": 99.0}, "open"),
+            "close below the low": ({"close": 50.0}, "close"),
+            "close above the high": ({"close": 99.0}, "close"),
+        }
+        for label, (override, field) in cases.items():
+            with self.subTest(label):
+                values = {"open": 68.0, "high": 68.5, "low": 67.0, "close": 68.0} | override
+                with self.assertRaises(BarsError) as ctx:
+                    Bar(t=WALK_START, **values)
+                self.assertEqual(_refusal(ctx.exception), (BARS_INVALID_CODE, "incoherent"))
+                self.assertEqual(ctx.exception.failure.details["field"], field)
+
+    def test_a_bar_that_touches_its_own_bounds_is_accepted(self) -> None:
+        # The boundaries are INCLUSIVE, and a bar that never moved is a real
+        # bar: a refusal here would reject an untraded minute.
+        Bar(t=WALK_START, open=67.0, high=68.5, low=67.0, close=68.5)
+        Bar(t=WALK_START, open=68.0, high=68.0, low=68.0, close=68.0)
+
+
 class WindowCoverageTest(unittest.TestCase):
     def test_window_too_short_when_bars_end_before_walk_start(self) -> None:
         with self.assertRaises(BarsError) as ctx:
@@ -142,6 +183,7 @@ class ReasonVocabularyTest(unittest.TestCase):
                 "wrong_type",
                 "missing_key",
                 "unknown_key",
+                "incoherent",
             },
         )
 

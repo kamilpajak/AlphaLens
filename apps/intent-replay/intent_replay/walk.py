@@ -309,7 +309,13 @@ def _decide_stop(state: _WalkState, bar: Bar, plan: Plan, *, trails: bool) -> No
     trace: the latch holds the average it fired on, so any fill that CHANGES the
     average releases it without a release step of its own.
     """
-    if state.closed is not None or state.units <= 0.0 or state.stop is None:
+    # One condition, because the other two cannot decide anything. The caller
+    # breaks the loop before this runs whenever the position closed, and a
+    # resting stop exists only after a fill, so "no units" never arrives
+    # without "no stop". Measured: a raise in place of the closed arm leaves
+    # the package suite green; a raise in place of the units arm turns 11
+    # tests red, all of them with no stop resting either.
+    if state.stop is None:
         return
     average = state.cash / state.units
     level = decide_stop(

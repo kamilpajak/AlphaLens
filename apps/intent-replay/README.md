@@ -47,7 +47,11 @@ intent-replay schema [COMMAND] [--format json]
 arm` takes, or `-` to read it from stdin. `--config` names the run configuration
 block above. `--bars` names the price input: ONE JSON array of
 `{t, open, high, low, close}` objects, `t` in epoch milliseconds UTC, strictly
-increasing, with no key a bar does not model and no key missing. It is required,
+increasing, with no key a bar does not model and no key missing. The four prices
+must agree with each other: the high is not below the low, and the open and the
+close are inside `[low, high]`. A bar is refused rather than repaired, because a
+quadruple that contradicts itself would book trades at prices the bar never
+carried — an open of 50.00 under a low of 67.00 fills a rung at 50.00. It is required,
 because there is no bar series to invent and a run without one would answer
 about nothing. `--format` takes `json` or `ndjson` (spec section 5.3: no human
 renderer in v1). `intent-replay schema` prints a JSON description of the command
@@ -175,7 +179,7 @@ reasons onto it).
 |---|---|---|---|
 | `bars_empty` | engine | no | No bars were supplied. |
 | `bars_unordered` | engine | no | The bars are not strictly increasing in time. |
-| `bars_invalid` | engine | no | A bar that cannot be compared, or bar input that is not the published shape: a non-finite price, input that is not a JSON array, a bar that is not an object, a missing key, a key a bar does not model, or a field of the wrong type. `details.reason` names which, with `details.index` and `details.field` where they apply. |
+| `bars_invalid` | engine | no | A bar that cannot be compared, or bar input that is not the published shape: a non-finite price, prices that contradict each other (a high below the low, or an open or close outside `[low, high]`), input that is not a JSON array, a bar that is not an object, a missing key, a key a bar does not model, or a field of the wrong type. `details.reason` names which, with `details.index` and `details.field` where they apply. |
 | `window_too_short` | engine | no | The bars do not cover the stated `walk_start`; `details.reason` says which side. |
 | `config_incomplete` | engine | no | A required configuration value was not stated; `details.keys` names every missing key. |
 | `config_invalid` | engine | no | A stated configuration value nothing can use; `details.keys` and `details.reason` name it. A file that parses but is not an object is refused here too, with `<root>` standing for the whole block. |

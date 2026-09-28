@@ -62,6 +62,10 @@ BARS_REASONS: Final[Mapping[str, str]] = MappingProxyType(
             "A bar carries a key the shape does not model. Ignoring it would replay a bar "
             "its author did not send."
         ),
+        "incoherent": (
+            "A bar's prices contradict each other: high below low, or open or close outside "
+            "[low, high]. The walk would book trades at prices the bar never carried."
+        ),
     }
 )
 
@@ -110,6 +114,41 @@ class Bar:
                     f"bar {field.name} must be a finite number, got {value!r}",
                     reason="numeric_not_finite",
                     field=field.name,
+                    t=self.t,
+                )
+        self._check_coherence()
+
+    def _check_coherence(self) -> None:
+        """Four finite prices are not yet a bar.
+
+        The walk reads ``low`` to decide a rung and the resting stop, ``high``
+        to decide a tranche, and ``open`` to price a gap. A quadruple that
+        contradicts itself therefore books trades the tape never carried - an
+        ``open`` of 50.00 under a ``low`` of 67.00 fills a rung at 50.00 and
+        carries that into the average entry price, which is the base of the
+        cost gate and of every measure the envelope derives. Refused rather
+        than repaired, for the reason ``validate_sequence`` refuses rather
+        than sorts.
+
+        The bounds are INCLUSIVE: a bar that opened on its low, or never moved
+        at all, is an ordinary bar.
+        """
+        if self.high < self.low:
+            raise _refuse(
+                BARS_INVALID_CODE,
+                f"bar high {self.high!r} is below its low {self.low!r}",
+                reason="incoherent",
+                field="high",
+                t=self.t,
+            )
+        for name in ("open", "close"):
+            value: float = getattr(self, name)
+            if not self.low <= value <= self.high:
+                raise _refuse(
+                    BARS_INVALID_CODE,
+                    f"bar {name} {value!r} is outside [{self.low!r}, {self.high!r}]",
+                    reason="incoherent",
+                    field=name,
                     t=self.t,
                 )
 

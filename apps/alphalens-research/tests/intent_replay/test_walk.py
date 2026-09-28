@@ -619,6 +619,20 @@ class DeadlineTest(unittest.TestCase):
         self.assertEqual(expired.reason, "deadline")
         self.assertEqual(result.outcome, "no_fill")
 
+    def test_a_bar_at_the_deadline_expires_a_rung_it_also_reaches(self) -> None:
+        # The boundary that decides money, stated on its own. `DEEP` has a low
+        # of 59.00, under BOTH rungs, and is stamped exactly at the deadline.
+        # It expires them instead of filling them, because `_expire` runs
+        # before `_fill_entries` and the comparison is not strict. A strict
+        # comparison here would buy a ladder the live side had already pulled.
+        deadline = WALK_START + MINUTE
+        self.assertEqual(self.DEEP.t, deadline)
+        self.assertLess(self.DEEP.low, RUNGS[1].limit_price)
+        result = walk(_plan(), _config(entry_deadline=_deadline(deadline)), (self.DEEP,))
+        self.assertEqual(_kinds(result), ["entry_expired"])
+        self.assertEqual(result.outcome, "no_fill")
+        self.assertEqual(result.units_filled, 0.0)
+
     def test_a_bar_before_the_deadline_still_fills(self) -> None:
         result = walk(
             _plan(),
