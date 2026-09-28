@@ -797,9 +797,22 @@ class TestTemplateEngineMonitoring(unittest.TestCase):
         # value in the record is 0.37. The threshold has to sit below it or the
         # rule pages on behaviour that has already been observed without an
         # incident.
+        #
+        # The threshold is READ OUT OF THE RULE rather than compared as one
+        # literal against another, so raising it in the YAML turns this test
+        # red instead of leaving two constants agreeing with each other.
         lowest_healthy_ratio = 0.37
-        self.assertIn("< 0.30 *", self._collapsed()["expr"])
-        self.assertLess(0.30, lowest_healthy_ratio)
+        match = re.search(r"<\s*([0-9.]+)\s*\*", self._collapsed()["expr"])
+        self.assertIsNotNone(match, "The rule must threshold the 30d term.")
+        threshold = float(match.group(1))
+        self.assertEqual(threshold, 0.30)
+        self.assertLess(
+            threshold,
+            lowest_healthy_ratio,
+            f"A threshold of {threshold} would page on a ratio of "
+            f"{lowest_healthy_ratio}, which a healthy template already reached "
+            "without an incident.",
+        )
 
     def test_for_one_day_is_what_keeps_the_measured_excursion_silent(self) -> None:
         # Load-bearing, not cosmetic. Running the exact expression against the
@@ -815,6 +828,13 @@ class TestTemplateEngineMonitoring(unittest.TestCase):
         self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
         self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
         self.assertIn("{{ $labels.template_id }}", rule["annotations"]["summary"])
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        # Same cheap pin the VIX and FRED rules carry. The template metrics
+        # arrive from node-exporter, not from a systemd unit's emit hook, so a
+        # job= matcher would falsely register this as an orphan cron rule in
+        # the job-keyed parity tests above.
+        self.assertIsNone(re.search(r'job="[^"]+"', self._collapsed()["expr"]))
 
     def test_template_metrics_missing_alert_survives(self) -> None:
         # Over-deletion guard: dropping the match-rate rule must not take the
