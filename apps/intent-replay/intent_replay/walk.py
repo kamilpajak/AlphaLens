@@ -129,23 +129,37 @@ def _time_stop(state: _WalkState, bar: Bar, *, at: int | None) -> None:
     state.closed = "time_stop"
 
 
-def _fill_entries(state: _WalkState, bar: Bar, plan: Plan) -> None:
-    """Every rung the bar reached, shallowest first.
+def _reachable(state: _WalkState, bar: Bar, rung: PendingEntry) -> bool:
+    """Whether this bar fills ``rung`` at all, ignoring WHEN inside the bar.
 
-    The fill price is ``min(open, limit)``: a bar that opens already through a
-    resting limit order fills at the open, because the open is the first trade
-    and there is nothing ambiguous about it.
+    A rung at or below the resting stop is SKIPPED, not cancelled: the price
+    cannot reach it without passing the stop, so a fill would book a purchase at
+    a price this bar has already sold at. At equality, reaching the rung IS
+    reaching the stop. The rung stays pending, because the re-anchor arm can put
+    the stop back below it.
+    """
+    if state.stop is not None and rung.limit_price <= state.stop:
+        return False
+    return bar.low <= rung.limit_price
+
+
+def _fill_entries(state: _WalkState, bar: Bar, plan: Plan, *, inside_bar: bool) -> None:
+    """The rungs of ONE pass, shallowest first.
+
+    The fill price is ``min(open, limit)``, and which side of the open a rung
+    sits on decides more than its price. A rung at or above the open is already
+    through at the FIRST print of the bar, so it fills at the open and nothing
+    about its timing is in question: ``inside_bar=False`` is that pass, and it
+    runs before the exits. A rung BELOW the open fills somewhere inside the bar,
+    at its own limit, and the tape does not say whether that came before or
+    after the high reached a take-profit — so ``inside_bar=True`` is a separate
+    pass the caller places according to section 4.4 row 4.
     """
     for index in sorted(state.pending):
         rung = state.pending[index]
-        # A rung at or below the resting stop is SKIPPED, not cancelled: the
-        # price cannot reach it without passing the stop, so a fill would book a
-        # purchase at a price this bar has already sold at. At equality,
-        # reaching the rung IS reaching the stop. The rung stays pending,
-        # because the re-anchor arm can put the stop back below it.
-        if state.stop is not None and rung.limit_price <= state.stop:
+        if (rung.limit_price < bar.open) is not inside_bar:
             continue
-        if bar.low > rung.limit_price:
+        if not _reachable(state, bar, rung):
             continue
         price = min(bar.open, rung.limit_price)
         units = rung.notional / rung.limit_price
@@ -159,6 +173,62 @@ def _fill_entries(state: _WalkState, bar: Bar, plan: Plan) -> None:
         if state.stop is None:
             state.stop = plan.declared_floor
             state.events.append(StopPlaced(t=bar.t, level=plan.declared_floor))
+
+
+def _stop_reached(state: _WalkState, bar: Bar, plan: Plan) -> bool:
+    """Whether this bar reaches the stop that RESTS, or the floor a first fill on
+    this bar would place.
+
+    A bar the stop reaches is settled by the stop, and that decides where the
+    deep-rung pass goes. Rows 1, 2 and 4 of the section 4.4 table are pairwise
+    inconsistent on a bar touching a rung, the stop and a take-profit — row 2
+    wants the rung before the stop, row 1 the stop before the tranche, row 4 the
+    tranche before the rung — and the convention settles the cycle: filling every
+    touched rung and then stopping out is the WORST reading, so the stop
+    dominates and row 4 does not apply there.
+    """
+    level = state.stop if state.stop is not None else plan.declared_floor
+    return bar.low <= level
+
+
+def _deep_rung_tie(
+    state: _WalkState,
+    bar: Bar,
+    *,
+    ladder: tuple[DeclaredTranche, ...],
+    intended: float,
+    costs: Costs,
+) -> bool:
+    """Row 4: does this bar's ordering of a deep rung against the ladder change
+    the money?
+
+    Three conditions. A rung below the open that this bar would fill; a tranche
+    still unfired that the bar reaches and the cost gate affords; and a ladder
+    whose appetite EXCEEDS what is held right now, because that is the only way
+    the cumulative clamp can bind differently in the two orders. A ladder wanting
+    fewer units than are held sells the same units either way, so the bar decided
+    nothing — the argument that keeps row 2 out of the count.
+
+    Known residual: a bar on which the position OPENS through a deep rung is not
+    counted, because with nothing held the gate has no entry price to measure a
+    tranche against. Both orders do differ there, so the counter understates on
+    that one shape.
+    """
+    if _held(state) <= 0.0:
+        return False
+    if not any(
+        rung.limit_price < bar.open and _reachable(state, bar, rung)
+        for rung in state.pending.values()
+    ):
+        return False
+    appetite = sum(
+        tranche.fraction
+        for tranche in ladder
+        if tranche.tranche_index not in state.fired
+        and bar.high >= tranche.price
+        and _clears(state, tranche, intended=intended, costs=costs)
+    )
+    return appetite > 0.0 and appetite * intended > _held(state)
 
 
 def _track_extremes(state: _WalkState, bar: Bar) -> None:
@@ -217,7 +287,9 @@ def _a_tranche_would_have_fired(
     the first fill. So something is always held here: ``units`` never shrinks,
     ``units_sold`` is clamped to what is held, and the bar on which the two
     meet ends the walk with ``tp_complete``. ``_clears`` may therefore divide
-    by ``state.units`` without a guard of its own.
+    by ``state.units`` without a guard of its own. :func:`_deep_rung_tie` calls
+    ``_clears`` too and does NOT inherit that guarantee, which is why it checks
+    ``_held`` first.
     """
     return any(
         bar.high >= tranche.price and _clears(state, tranche, intended=intended, costs=costs)
@@ -364,6 +436,53 @@ def _resolve_ladder(plan: Plan) -> tuple[str, tuple[DeclaredTranche, ...]]:
     return "tp_tranches", plan.declared_tranches
 
 
+def _walk_one_bar(
+    state: _WalkState,
+    bar: Bar,
+    plan: Plan,
+    config: RunConfig,
+    *,
+    ladder: tuple[DeclaredTranche, ...],
+    ladder_name: str,
+    intended: float,
+    trails: bool,
+) -> None:
+    """One bar, in the order section 4.4 fixes. Returns as soon as the position
+    closes, so the caller only has to ask whether it did."""
+    _expire(state, bar, deadline=config.entry_deadline.value)
+    # The deep pass runs BEFORE the exits on a bar the stop reaches, where row 2
+    # keeps its order, and AFTER the ladder otherwise, which is row 4.
+    dominated_by_stop = _stop_reached(state, bar, plan)
+    _fill_entries(state, bar, plan, inside_bar=False)
+    if dominated_by_stop:
+        _fill_entries(state, bar, plan, inside_bar=True)
+    _track_extremes(state, bar)
+    _exit_on_stop(state, bar, ladder=ladder, intended=intended, costs=config.costs)
+    if state.closed is not None:
+        return
+    if _deep_rung_tie(state, bar, ladder=ladder, intended=intended, costs=config.costs):
+        state.ambiguous += 1
+    _fire_tranches(
+        state,
+        bar,
+        ladder=ladder,
+        ladder_name=ladder_name,
+        intended=intended,
+        costs=config.costs,
+    )
+    if state.closed is not None:
+        return
+    _fill_entries(state, bar, plan, inside_bar=True)
+    # A fill never closes a position, so nothing is checked between these two:
+    # the position may have OPENED just now, and it was live for this bar's
+    # whole range.
+    _track_extremes(state, bar)
+    _time_stop(state, bar, at=config.time_stop_t)
+    if state.closed is not None:
+        return
+    _decide_stop(state, bar, plan, trails=trails)
+
+
 def walk(plan: Plan, config: RunConfig, bars: tuple[Bar, ...]) -> WalkResult:
     """Walk ``bars`` from ``config.walk_start`` and report what happened."""
     state = _WalkState(pending={rung.tier_index: rung for rung in plan.entries})
@@ -377,24 +496,18 @@ def walk(plan: Plan, config: RunConfig, bars: tuple[Bar, ...]) -> WalkResult:
         if bar.t < config.walk_start.value:
             continue
         last_t = bar.t
-        _expire(state, bar, deadline=config.entry_deadline.value)
-        _fill_entries(state, bar, plan)
-        _track_extremes(state, bar)
-        _exit_on_stop(state, bar, ladder=ladder, intended=intended, costs=config.costs)
-        if state.closed is None:
-            _fire_tranches(
-                state,
-                bar,
-                ladder=ladder,
-                ladder_name=ladder_name,
-                intended=intended,
-                costs=config.costs,
-            )
-        if state.closed is None:
-            _time_stop(state, bar, at=config.time_stop_t)
+        _walk_one_bar(
+            state,
+            bar,
+            plan,
+            config,
+            ladder=ladder,
+            ladder_name=ladder_name,
+            intended=intended,
+            trails=trails,
+        )
         if state.closed is not None:
             break
-        _decide_stop(state, bar, plan, trails=trails)
     filled_any = state.units > 0.0
     if filled_any and state.closed is None and last_t is not None:
         state.events.append(HorizonOpen(t=last_t, units=_held(state)))

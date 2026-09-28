@@ -588,6 +588,82 @@ class AmbiguousBarsTest(unittest.TestCase):
         self.assertEqual(result.ambiguous_bars, 0)
 
 
+class RungAndTakeProfitTieTest(unittest.TestCase):
+    """Row 4 of the section 4.4 table: a rung BELOW the bar's open and a
+    take-profit on the same bar.
+
+    A rung at or above the open is already through at the first print, so its
+    fill is not in question. A rung below the open fills somewhere inside the
+    bar, and the tape does not say whether that happened before or after the
+    high reached a tranche. The convention takes the worse reading: the tranche
+    fires on the position held BEFORE that rung filled.
+    """
+
+    # The published template's ladder, one tranche above the blend, and a bar
+    # whose open sits BETWEEN the two rungs so rung 1 is the deep one.
+    TIE = _bar(WALK_START, 67.0, 68.6, 66.4)
+    TRANCHE = 68.5
+
+    def _walk(self, fraction: float, *bars: Bar, first: Bar | None = None) -> Any:
+        plan = _plan(
+            entries=RUNGS,
+            notional=1500.0,
+            tranches=(DeclaredTranche(tranche_index=0, price=self.TRANCHE, fraction=fraction),),
+        )
+        return walk(plan, _config(), ((first or self.TIE), *bars))
+
+    def test_the_tranche_fires_on_what_was_held_before_the_deep_rung(self) -> None:
+        # Measured 2026-09-28: taking the other reading nets +37.898054, which is
+        # this one plus exactly rung 1's profit (9.0226 units x 2.00 = 18.045113).
+        result = self._walk(1.0, _bar(WALK_START + MINUTE, 66.0, 66.5, 62.0))
+        self.assertEqual(
+            _kinds(result), ["entry_filled", "stop_placed", "tp_fired", "position_closed"]
+        )
+        fired = next(event for event in result.events if event.kind == "tp_fired")
+        self.assertEqual(fired.units, 900.0 / 68.0)
+        self.assertEqual(result.units_filled, 900.0 / 68.0)
+        self.assertEqual(result.outcome, "closed_tp")
+        self.assertEqual(result.ambiguous_bars, 1)
+
+    def test_a_ladder_that_wants_less_than_is_held_decides_nothing(self) -> None:
+        # The counter must measure what it NAMES. When the whole touched ladder
+        # wants fewer units than are already held, the clamp cannot bind, so both
+        # orders sell the same units at the same price and the bar decided
+        # nothing - the same argument that keeps row 2 out of the count.
+        result = self._walk(0.5)
+        # The tranche still fires BEFORE the deep rung - that order is the rule,
+        # not the exception. What differs is that here it changes nothing.
+        self.assertEqual(
+            _kinds(result),
+            ["entry_filled", "stop_placed", "tp_fired", "entry_filled", "horizon_open"],
+        )
+        self.assertEqual(result.ambiguous_bars, 0)
+        self.assertEqual(result.units_filled, 900.0 / 68.0 + 600.0 / 66.5)
+
+    def test_a_rung_at_or_above_the_open_is_never_in_question(self) -> None:
+        # Both rungs are through at the open here, so there is no intra-bar fill
+        # to order against the tranche.
+        result = self._walk(1.0, first=_bar(WALK_START, 66.0, 68.6, 65.9))
+        self.assertEqual(result.ambiguous_bars, 0)
+        self.assertEqual(result.units_filled, 900.0 / 68.0 + 600.0 / 66.5)
+        self.assertEqual(result.outcome, "closed_tp")
+
+    def test_a_bar_that_also_reaches_the_stop_fills_every_rung_and_stops_out(self) -> None:
+        # Rows 1, 2 and 4 are pairwise inconsistent on a bar that touches all
+        # three levels, and the convention settles it: filling both rungs and
+        # then stopping out is the worst reading, so the stop dominates and row 4
+        # does not apply. Without this the deep rung would escape the loss.
+        result = self._walk(1.0, first=_bar(WALK_START, 67.0, 68.6, 62.0))
+        self.assertEqual(
+            _kinds(result), ["entry_filled", "stop_placed", "entry_filled", "position_closed"]
+        )
+        closed = result.events[-1]
+        self.assertEqual((closed.reason, closed.price), ("stop", FLOOR))
+        self.assertEqual(closed.units, 900.0 / 68.0 + 600.0 / 66.5)
+        self.assertEqual(result.outcome, "closed_stop")
+        self.assertEqual(result.ambiguous_bars, 1)
+
+
 def _deadline(value: int) -> dict[str, Any]:
     """The section 5.2 deadline block with a different instant. Everything else
     stays as published, so the test moves one number and nothing else."""
