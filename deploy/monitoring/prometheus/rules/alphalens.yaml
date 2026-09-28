@@ -1277,13 +1277,57 @@ groups:
       # `repeat_interval: 24h` sent one identical Telegram message per
       # day while the engine worked exactly as designed.
       #
-      # #1201 restores per-template rot detection with a SELF-RELATIVE
-      # threshold (7d share against the template's own 30d baseline),
-      # which is immune both to this shared denominator and to a niche
-      # template having a legitimately quiet week. It waits until 30 days
-      # of history exist (metrics start 2026-08-24) so the threshold is
-      # derived rather than invented. Read #1201 before adding any new
-      # alert over alphalens_template_match_total.
+      # ``AlphalensTemplateMatchRateCollapsed`` below is the replacement
+      # (#1201). It compares a template's 7d match share against its OWN
+      # 30d share, so the shared denominator sits in both windows and
+      # cancels instead of having to be reasoned about. That cancellation
+      # was measured, not assumed: on 2026-09-27 the 7d/30d ratio for
+      # earnings_surprise was 0.68 over every run, 0.68 with the barren
+      # 00-01 UTC slot dropped and 0.66 over the 04-05 UTC slot alone;
+      # for financing_announcement 0.91 / 0.90 / 0.90.
+      #
+      # WHY THE DENOMINATOR NEEDS WATCHING ANYWAY. The 00:30 UTC slot
+      # fetches the SEC daily index before the SEC publishes it and gets
+      # a 403 on all 31 of 31 runs (the later slots fail only on days the
+      # SEC does not publish). It therefore contributes 60% of the
+      # attempts and 1% of the matches, and dropping it would multiply
+      # every template's measured share by about 2.5. That is the SAFE
+      # direction for this rule -- the 7d share jumps while the 30d
+      # baseline lags, pushing the ratio above 1 -- but the reverse, a
+      # NEW barren slot, would divide every template's share at once and
+      # is the #1200 failure in a new dress. Whoever fixes #1606 should
+      # silence this alert for 30 days while the baseline catches up.
+      #
+      # The counters reset on every CLI invocation, so ``increase()``
+      # disagrees with a run-by-run count: measured over these 30 days it
+      # undercounts attempts by 1.6% to 23.5% depending on the template
+      # and the window. The bias is NOT consistently signed on the ratio
+      # (0.318 against a true 0.336 on 09-23, 0.820 against 0.680 on
+      # 09-28), so it cannot be treated as a safety margin. Near the
+      # threshold it happened to be small. A per-run rate GAUGE would
+      # remove the whole question and is the right long-term shape.
+
+      - alert: AlphalensTemplateMatchRateCollapsed
+        expr: |
+          (
+            increase(alphalens_template_match_total[7d])
+            / increase(alphalens_template_attempt_total[7d])
+          )
+          < 0.30 *
+          (
+            increase(alphalens_template_match_total[30d])
+            / increase(alphalens_template_attempt_total[30d])
+          )
+          and
+          increase(alphalens_template_match_total[30d]) >= 30
+        for: 1d
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "Template {{ $labels.template_id }} match share collapsed against its own baseline"
+          description: "{{ $labels.template_id }} matched a share of the articles that reached it below 30% of its own 30-day share, for a whole day. The comparison is against the template itself, so a quiet week moves the baseline with it and does not fire. Read the template's YAML for pattern rot, and check AlphalensTemplateMetricsMissing and the holdout-by-reason panel first: a collapse shared by every template is an ingest or entity-resolution problem, not a pattern problem. The `>= 30 matches in 30 days` guard admits only templates whose baseline is thick enough to judge — today earnings_surprise and financing_announcement. Do not lower it to cover the others; a template with no baseline is #1607, not an alert."
 
       # Missing-family guard (zen review of PR #1109, same rationale as
       # the AlphalensJobMetricMissing companions above): the production
