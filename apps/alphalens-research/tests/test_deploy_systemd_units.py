@@ -385,28 +385,43 @@ DECIDING_SLOT_FLOOR_UTC = dt.time(4, 0)
 # then too, so every slot has to start before it.
 ARRIVAL_OPEN_UTC = dt.time(13, 30)
 
+_ONCALENDAR_LINE_RE = re.compile(r"^OnCalendar=.*$", re.MULTILINE)
 _ONCALENDAR_RE = re.compile(
-    r"^OnCalendar=\*-\*-\* (?P<hours>[\d,]+):(?P<minute>\d{2}):(?P<second>\d{2}) UTC\s*$",
-    re.MULTILINE,
+    r"^OnCalendar=\*-\*-\* (?P<hours>[\d,]+):(?P<minute>\d{2}):(?P<second>\d{2}) UTC\s*$"
 )
 
 
 def _slot_times(timer_text: str) -> list[dt.time]:
-    """The wall-clock UTC times a ``OnCalendar=*-*-* H[,H...]:MM:SS UTC`` line fires.
+    """Every wall-clock UTC time the timer's ``OnCalendar=`` lines fire, sorted.
 
-    Returns them sorted. Raises rather than returning ``[]`` on a line shape it
-    does not model: a silent empty list would make every assertion below pass
-    vacuously, which is the failure mode this whole block exists to prevent.
+    systemd UNIONS repeated ``OnCalendar=`` lines, so all of them are read, not
+    just the first. Two rules keep the assertions that depend on this from
+    passing vacuously:
+
+    - no ``OnCalendar=`` line at all raises, rather than returning ``[]``;
+    - an ``OnCalendar=`` line this parser does not model raises too, rather
+      than being skipped. Skipping one would hide a slot from every check
+      below while the remaining lines still looked fine.
     """
-    match = _ONCALENDAR_RE.search(timer_text)
-    if match is None:
+    lines = _ONCALENDAR_LINE_RE.findall(timer_text)
+    if not lines:
         raise AssertionError(
-            "no OnCalendar=*-*-* H[,H...]:MM:SS UTC line found. If the timer "
-            "moved to another OnCalendar shape, teach this parser the new one "
-            "— do not delete the slot assertions."
+            "no OnCalendar= line found. If the timer moved to another "
+            "scheduling directive, teach this parser that shape — do not "
+            "delete the slot assertions."
         )
-    minute, second = int(match["minute"]), int(match["second"])
-    return sorted(dt.time(int(h), minute, second) for h in match["hours"].split(","))
+    slots: list[dt.time] = []
+    for line in lines:
+        match = _ONCALENDAR_RE.match(line)
+        if match is None:
+            raise AssertionError(
+                f"unmodelled OnCalendar line {line!r}. systemd unions every "
+                "OnCalendar= line, so one this parser skips is a slot no test "
+                "below can see. Teach the parser the new shape."
+            )
+        minute, second = int(match["minute"]), int(match["second"])
+        slots.extend(dt.time(int(h), minute, second) for h in match["hours"].split(","))
+    return sorted(slots)
 
 
 def _service_start_timeout(service_text: str) -> dt.timedelta:
@@ -441,6 +456,23 @@ class TestSlotTimeParser(unittest.TestCase):
     def test_it_refuses_a_line_shape_it_does_not_model(self) -> None:
         with self.assertRaises(AssertionError):
             _slot_times("OnCalendar=*-*-* *:00/15:00 UTC\n")
+
+    def test_it_refuses_a_timer_with_no_oncalendar_line_at_all(self) -> None:
+        with self.assertRaises(AssertionError):
+            _slot_times("[Timer]\nOnBootSec=15min\n")
+
+    def test_it_unions_repeated_oncalendar_lines(self) -> None:
+        # systemd unions them; reading only the first would hide a slot.
+        self.assertEqual(
+            _slot_times("OnCalendar=*-*-* 04:30:00 UTC\nOnCalendar=*-*-* 09:15:00 UTC\n"),
+            [dt.time(4, 30), dt.time(9, 15)],
+        )
+
+    def test_it_refuses_when_only_the_second_oncalendar_line_is_unmodelled(self) -> None:
+        # The first line parses, so a parser using search() would return a
+        # plausible answer and silently drop the second slot.
+        with self.assertRaises(AssertionError):
+            _slot_times("OnCalendar=*-*-* 04:30:00 UTC\nOnCalendar=Mon *-*-* 09:15:00 UTC\n")
 
     def test_the_timeout_reader_reads_minutes(self) -> None:
         self.assertEqual(

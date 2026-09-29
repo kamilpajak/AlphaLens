@@ -22,7 +22,19 @@
 # median 02:05, p99 03:31. Not one of the 310 existed before 01:30 UTC.
 # The old 00:30 slot therefore 403'd on 31 of 31 runs over a month while
 # the 04:30 and 08:30 slots failed only on days the SEC publishes nothing.
-# 04:30 clears the observed latest by 59 min.
+#
+# A FIXED UTC SLOT IS SAFE ACROSS THE DST CHANGE, which is the reason this
+# is a UTC calendar and not an America/New_York one. The SEC job runs on
+# Eastern wall-clock, so its UTC time shifts an hour in November. Split by
+# offset, the 310 dates say:
+#
+#   EDT (228 dates)  median 22:04 ET, latest 22:43:36 ET -> 02:43:36 UTC
+#   EST ( 82 dates)  median 22:05 ET, latest 22:31:02 ET -> 03:31:02 UTC
+#
+# The job keeps the same Eastern wall-clock in both regimes, so winter only
+# moves it to 03:0x UTC. Even the worst tail ever seen (22:43 ET, a summer
+# date) would land at 03:43 UTC if it happened in winter — still 47 min
+# before this slot. Zero of the 310 published at or after 04:30 UTC.
 #
 # What that cost, measured over 2026-09-04..09-28: EDGAR press releases are
 # 24-48% of a trading day's news rows (985 of 4112) and carry 292 of the
