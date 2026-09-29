@@ -35,7 +35,8 @@ from __future__ import annotations
 import unittest
 
 from intent_replay import cost_gate
-from intent_replay.config import BPS, FRACTION, Costs, Quantity
+from intent_replay.config import Costs
+from intent_replay.units import BPS, FRACTION, Quantity
 
 RATE, MIN_COMMISSION, EDGE_BPS = 0.0008, 1.0, 50.0
 

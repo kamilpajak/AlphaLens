@@ -69,30 +69,29 @@ from typing import Any, Final
 from broker_contract.failure import ContractError
 
 from intent_replay.refusal import refuse
+from intent_replay.units import (
+    BPS,
+    EPOCH_MS_UTC,
+    FRACTION,
+    QUANTITY_KEYS,
+    TRANSLATED_KEYS,
+    Quantity,
+    Translated,
+)
 
 __all__ = [
-    "BPS",
     "CONFIG_INCOMPLETE_CODE",
     "CONFIG_INCOMPLETE_REASONS",
     "CONFIG_INVALID_CODE",
     "CONFIG_INVALID_REASONS",
     "CONFIG_KEYS",
-    "EPOCH_MS_UTC",
-    "FRACTION",
     "ConfigError",
     "Costs",
-    "Quantity",
     "RunConfig",
-    "Translated",
 ]
 
 CONFIG_INCOMPLETE_CODE: Final = "config_incomplete"
 CONFIG_INVALID_CODE: Final = "config_invalid"
-
-# The published unit strings of spec section 5.2.
-EPOCH_MS_UTC: Final = "epoch_ms_utc"
-FRACTION: Final = "fraction"
-BPS: Final = "bps"
 
 # The block's keys in the order section 5.2 prints them; ``to_jsonable`` keeps it.
 CONFIG_KEYS: Final = (
@@ -104,8 +103,6 @@ CONFIG_KEYS: Final = (
     "oco",
     "costs",
 )
-_TRANSLATED_KEYS: Final = ("kind", "value", "unit", "source", "formula")
-_QUANTITY_KEYS: Final = ("value", "unit")
 _COSTS_KEYS: Final = (
     "commission_rate",
     "min_commission",
@@ -144,35 +141,6 @@ class ConfigError(ContractError):
 
 
 @dataclass(frozen=True, slots=True)
-class Translated:
-    """The section 5.1 provenance shape of a TRANSLATED document path (section 5.2).
-
-    ``value`` is epoch milliseconds, UTC, as an int: that is what the walk
-    compares against ``Bar.t``.
-    """
-
-    kind: str
-    value: int
-    unit: str
-    source: str
-    formula: str
-
-    def to_jsonable(self) -> dict[str, Any]:
-        return {key: getattr(self, key) for key in _TRANSLATED_KEYS}
-
-
-@dataclass(frozen=True, slots=True)
-class Quantity:
-    """A number that carries its unit (the section 5.2 costs block)."""
-
-    value: float
-    unit: str
-
-    def to_jsonable(self) -> dict[str, Any]:
-        return {"value": self.value, "unit": self.unit}
-
-
-@dataclass(frozen=True, slots=True)
 class Costs:
     """The threshold the take-profit cost gate compares against (section 8.1)."""
 
@@ -196,8 +164,8 @@ class Costs:
 class RunConfig:
     """The seven stated keys of the section 5.2 config block."""
 
-    walk_start: Translated
-    entry_deadline: Translated
+    walk_start: Translated[int]
+    entry_deadline: Translated[int]
     entry_trail_bps: int | None
     ceiling_price: float | None
     time_stop_t: int | None
@@ -303,8 +271,8 @@ class _Reader:
 
 @dataclass(slots=True)
 class _Parsed:
-    walk_start: Translated | None = None
-    entry_deadline: Translated | None = None
+    walk_start: Translated[int] | None = None
+    entry_deadline: Translated[int] | None = None
     entry_trail_bps: int | None = None
     ceiling_price: float | None = None
     time_stop_t: int | None = None
@@ -376,8 +344,8 @@ def _number(reader: _Reader, node: Any, path: str) -> float | None:
     return node
 
 
-def _translated(reader: _Reader, node: Any, path: str) -> Translated | None:
-    node = _mapping(reader, node, path, _TRANSLATED_KEYS)
+def _translated(reader: _Reader, node: Any, path: str) -> Translated[int] | None:
+    node = _mapping(reader, node, path, TRANSLATED_KEYS)
     if node is None:
         return None
     texts = {
@@ -420,7 +388,7 @@ def _unit(reader: _Reader, node: Any, path: str, expected: str | None) -> str | 
 
 
 def _quantity(reader: _Reader, node: Any, path: str, expected_unit: str | None) -> Quantity | None:
-    node = _mapping(reader, node, path, _QUANTITY_KEYS)
+    node = _mapping(reader, node, path, QUANTITY_KEYS)
     if node is None:
         return None
     value = _number(reader, node["value"], _path(path, "value")) if "value" in node else None

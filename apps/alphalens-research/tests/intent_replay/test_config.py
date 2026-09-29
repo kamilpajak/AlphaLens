@@ -20,20 +20,16 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 from intent_replay.config import (
-    BPS,
     CONFIG_INCOMPLETE_CODE,
     CONFIG_INCOMPLETE_REASONS,
     CONFIG_INVALID_CODE,
     CONFIG_INVALID_REASONS,
     CONFIG_KEYS,
-    EPOCH_MS_UTC,
-    FRACTION,
     ConfigError,
     Costs,
-    Quantity,
     RunConfig,
-    Translated,
 )
+from intent_replay.units import BPS, EPOCH_MS_UTC, FRACTION, Quantity, Translated
 
 # The config block of spec section 5.2, verbatim, with the entry deadline as
 # the provenance object section 4.1 requires and ``oco`` stated false.

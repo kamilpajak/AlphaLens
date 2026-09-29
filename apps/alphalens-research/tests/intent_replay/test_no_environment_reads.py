@@ -55,6 +55,7 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "typing",
             "broker_contract.failure",
             "intent_replay.refusal",
+            "intent_replay.units",
         }
     ),
     "classification.py": frozenset(

@@ -16,7 +16,8 @@ import json
 
 from hypothesis import given
 from hypothesis import strategies as st
-from intent_replay.config import BPS, EPOCH_MS_UTC, FRACTION, RunConfig
+from intent_replay.config import RunConfig
+from intent_replay.units import BPS, EPOCH_MS_UTC, FRACTION
 
 from .base import PropertyTestCase
 
