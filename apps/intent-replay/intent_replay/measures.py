@@ -136,9 +136,17 @@ def summarise(result: WalkResult, *, declared_floor: float) -> Measures:
     )
 
 
-def _excursion(extreme: float | None, average: float, denominator: float) -> float | None:
-    """One extreme in R. Both marks exist exactly when a fill happened, so the
-    guard answers the type checker rather than a reachable state."""
-    if extreme is None:
-        return None
+def _excursion(extreme: float | None, average: float, denominator: float) -> float:
+    """One extreme in R.
+
+    ``WalkResult`` types both marks as optional, but ``_track_extremes`` sets
+    them on the same bar as the first fill, and this runs only when there WAS
+    a fill. Measured 2026-09-29: neither the 373 replay tests nor the 136
+    property runs reach the absent case with a ``raise`` in its place. So it is
+    an invariant, not a branch, and it says so rather than returning a null a
+    reader would take for a real "no excursion" answer. Same shape as
+    ``config._present``.
+    """
+    if extreme is None:  # pragma: no cover - a fill happened, so both marks are set
+        raise RuntimeError("an excursion mark is absent although the position was filled")
     return (extreme - average) / denominator
