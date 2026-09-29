@@ -167,7 +167,7 @@ class RestingStopTest(unittest.TestCase):
         # and the bar is NOT counted as ambiguous.
         result = walk(_plan(entries=RUNGS[:1]), _config(), (_bar(WALK_START, 68.0, 68.2, 62.0),))
         self.assertEqual(_kinds(result), ["entry_filled", "stop_placed", "position_closed"])
-        self.assertEqual(result.ambiguous_bars, 0)
+        self.assertEqual(result.snu_bars, 0)
 
     def test_bars_after_the_close_are_not_walked(self) -> None:
         # A fill at or after the close is a RE-ENTRY, a second position this tool
@@ -190,7 +190,7 @@ class RestingStopTest(unittest.TestCase):
         )
         self.assertEqual(result.units_filled, 900.0 / 68.0 + 600.0 / 66.5)
         self.assertEqual(result.events[-1].units, result.units_filled)
-        self.assertEqual(result.ambiguous_bars, 0)
+        self.assertEqual(result.snu_bars, 0)
 
     def test_the_extremes_cover_the_bar_that_closes_the_position(self) -> None:
         # The position was live during that bar, so its high and low belong to
@@ -553,7 +553,7 @@ class AmbiguousBarsTest(unittest.TestCase):
         )
         self.assertEqual(result.events[-1].reason, "stop")
         self.assertEqual([e for e in result.events if e.kind == "tp_fired"], [])
-        self.assertEqual(result.ambiguous_bars, 1)
+        self.assertEqual(result.snu_bars, 1)
 
     def test_the_bar_is_not_ambiguous_when_the_gate_refuses_the_tranche(self) -> None:
         # The counter must measure what it NAMES. A tranche the cost gate would
@@ -564,7 +564,7 @@ class AmbiguousBarsTest(unittest.TestCase):
             _bar(WALK_START + MINUTE, 67.0, 68.5, 62.0),
         )
         self.assertLess(REFUSED_LEVEL, THRESHOLDS[1.0])
-        self.assertEqual(result.ambiguous_bars, 0)
+        self.assertEqual(result.snu_bars, 0)
 
     def test_any_unfired_tranche_makes_the_bar_ambiguous_not_only_the_leading_one(self) -> None:
         # The ladder need not rise, so "the leading tranche" is not a thing to
@@ -575,7 +575,7 @@ class AmbiguousBarsTest(unittest.TestCase):
             DeclaredTranche(tranche_index=1, price=74.0, fraction=0.5),
         )
         result = self._walk(tranches, _bar(WALK_START + MINUTE, 72.0, 74.5, 62.0))
-        self.assertEqual(result.ambiguous_bars, 1)
+        self.assertEqual(result.snu_bars, 1)
 
     def test_a_tranche_that_already_fired_leaves_a_later_stop_bar_unambiguous(self) -> None:
         result = self._walk(
@@ -585,76 +585,57 @@ class AmbiguousBarsTest(unittest.TestCase):
         )
         self.assertEqual(len([e for e in result.events if e.kind == "tp_fired"]), 1)
         self.assertEqual(result.events[-1].reason, "stop")
-        self.assertEqual(result.ambiguous_bars, 0)
+        self.assertEqual(result.snu_bars, 0)
 
 
-class RungAndTakeProfitTieTest(unittest.TestCase):
-    """Row 4 of the section 4.4 table: a rung BELOW the bar's open and a
+class RungAndTakeProfitSnuTest(unittest.TestCase):
+    """Section 4.4's fourth situation: a rung BELOW the bar's open and a
     take-profit on the same bar.
 
-    A rung at or above the open is already through at the first print, so its
-    fill is not in question. A rung below the open fills somewhere inside the
-    bar, and the tape does not say whether that happened before or after the
-    high reached a tranche. The convention takes the worse reading: the tranche
-    fires on the position held BEFORE that rung filled.
+    The walk does NOT resolve it. No resolution is a bound for a laddered
+    document, so the declared rule stands - every touched rung fills, then the
+    ladder is reviewed - and `snu_bars` says when that rule decided money.
     """
 
-    # The published template's ladder, one tranche above the blend, and a bar
-    # whose open sits BETWEEN the two rungs so rung 1 is the deep one.
     TIE = _bar(WALK_START, 67.0, 68.6, 66.4)
     TRANCHE = 68.5
 
-    def _walk(self, fraction: float, *bars: Bar, first: Bar | None = None) -> Any:
-        plan = _plan(
-            entries=RUNGS,
-            notional=1500.0,
-            tranches=(DeclaredTranche(tranche_index=0, price=self.TRANCHE, fraction=fraction),),
-        )
-        return walk(plan, _config(), ((first or self.TIE), *bars))
+    def _walk(self, *tranches: DeclaredTranche, first: Bar | None = None, then: Bar | None = None):
+        plan = _plan(entries=RUNGS, notional=1500.0, tranches=tranches)
+        bars = ((first or self.TIE),) + ((then,) if then else ())
+        return walk(plan, _config(), bars)
 
-    def test_the_tranche_fires_on_what_was_held_before_the_deep_rung(self) -> None:
-        # Measured 2026-09-28: taking the other reading nets +37.898054, which is
-        # this one plus exactly rung 1's profit (9.0226 units x 2.00 = 18.045113).
-        result = self._walk(1.0, _bar(WALK_START + MINUTE, 66.0, 66.5, 62.0))
-        self.assertEqual(
-            _kinds(result), ["entry_filled", "stop_placed", "tp_fired", "position_closed"]
-        )
-        fired = next(event for event in result.events if event.kind == "tp_fired")
-        self.assertEqual(fired.units, 900.0 / 68.0)
-        self.assertEqual(result.units_filled, 900.0 / 68.0)
-        self.assertEqual(result.outcome, "closed_tp")
-        self.assertEqual(result.ambiguous_bars, 1)
-
-    def test_a_ladder_that_wants_less_than_is_held_decides_nothing(self) -> None:
-        # The counter must measure what it NAMES. When the whole touched ladder
-        # wants fewer units than are already held, the clamp cannot bind, so both
-        # orders sell the same units at the same price and the bar decided
-        # nothing - the same argument that keeps row 2 out of the count.
-        result = self._walk(0.5)
-        # The tranche still fires BEFORE the deep rung - that order is the rule,
-        # not the exception. What differs is that here it changes nothing.
+    def test_the_declared_rule_fills_every_touched_rung_first_and_counts_the_bar(self) -> None:
+        # Measured 2026-09-28: this reading nets +37.898054 and the other
+        # +19.852941, a gap of exactly rung 2's profit. The rule takes the
+        # first; the COUNT is what tells the reader a rule decided 18.045113.
+        result = self._walk(DeclaredTranche(tranche_index=0, price=self.TRANCHE, fraction=1.0))
         self.assertEqual(
             _kinds(result),
-            ["entry_filled", "stop_placed", "tp_fired", "entry_filled", "horizon_open"],
+            ["entry_filled", "stop_placed", "entry_filled", "tp_fired", "position_closed"],
         )
-        self.assertEqual(result.ambiguous_bars, 0)
-        self.assertEqual(result.units_filled, 900.0 / 68.0 + 600.0 / 66.5)
+        fired = next(event for event in result.events if event.kind == "tp_fired")
+        self.assertEqual(fired.units, 900.0 / 68.0 + 600.0 / 66.5)
+        self.assertEqual(result.snu_bars, 1)
 
-    def test_a_rung_at_or_above_the_open_is_never_in_question(self) -> None:
-        # Both rungs are through at the open here, so there is no intra-bar fill
-        # to order against the tranche.
-        result = self._walk(1.0, first=_bar(WALK_START, 66.0, 68.6, 65.9))
-        self.assertEqual(result.ambiguous_bars, 0)
+    def test_a_ladder_that_wants_less_than_is_held_decides_nothing(self) -> None:
+        # The counter must measure what it NAMES. When the touched ladder wants
+        # fewer units than are already held, the clamp cannot bind either way,
+        # the deep rung fills in both readings, and the bar decided nothing.
+        # The second tranche sits ABOVE this bar's high, so it is untouched and
+        # must not feed the appetite: a level the bar never reached cannot have
+        # fired in either reading.
+        result = self._walk(
+            DeclaredTranche(tranche_index=0, price=self.TRANCHE, fraction=0.5),
+            DeclaredTranche(tranche_index=1, price=80.0, fraction=0.5),
+        )
+        self.assertEqual(result.snu_bars, 0)
         self.assertEqual(result.units_filled, 900.0 / 68.0 + 600.0 / 66.5)
-        self.assertEqual(result.outcome, "closed_tp")
 
     def test_a_ladder_wanting_exactly_what_is_held_still_decides_the_money(self) -> None:
-        # The boundary the appetite test sits on, found by the pre-merge review.
-        # At EQUALITY the clamp does not bind, but the CLOSURE does: selling
-        # exactly what is held ends the walk with `tp_complete` and the deep rung
-        # never fills, while filling it first leaves those units unsold. Equal
-        # units, different money - so the bar counts, and the comparison has to
-        # be inclusive.
+        # The boundary: at equality the clamp does not bind, but the CLOSURE
+        # does. Selling precisely what is held ends the walk, so the deep rung
+        # never fills in that reading while it does in this one.
         equal = (
             PendingEntry(tier_index=0, limit_price=100.0, notional=1000.0),
             PendingEntry(tier_index=1, limit_price=50.0, notional=500.0),
@@ -665,27 +646,68 @@ class RungAndTakeProfitTieTest(unittest.TestCase):
             floor=40.0,
             tranches=(DeclaredTranche(tranche_index=0, price=110.0, fraction=0.5),),
         )
-        # 1000/100 and 500/50 are ten units each, so the ladder's half of the
-        # intended twenty is exactly the ten held after the shallow rung.
         result = walk(plan, _config(), (_bar(WALK_START, 60.0, 110.5, 49.0),))
-        self.assertEqual(result.units_filled, 10.0)
-        self.assertEqual(result.outcome, "closed_tp")
-        self.assertEqual(result.ambiguous_bars, 1)
+        self.assertEqual(result.snu_bars, 1)
 
-    def test_a_bar_that_also_reaches_the_stop_fills_every_rung_and_stops_out(self) -> None:
-        # Rows 1, 2 and 4 are pairwise inconsistent on a bar that touches all
-        # three levels, and the convention settles it: filling both rungs and
-        # then stopping out is the worst reading, so the stop dominates and row 4
-        # does not apply. Without this the deep rung would escape the loss.
-        result = self._walk(1.0, first=_bar(WALK_START, 67.0, 68.6, 62.0))
-        self.assertEqual(
-            _kinds(result), ["entry_filled", "stop_placed", "entry_filled", "position_closed"]
+    def test_a_rung_at_or_above_the_open_is_never_in_question(self) -> None:
+        # Both rungs are through at the first print, so no fill is in question.
+        result = self._walk(
+            DeclaredTranche(tranche_index=0, price=self.TRANCHE, fraction=1.0),
+            first=_bar(WALK_START, 66.0, 68.6, 65.9),
         )
-        closed = result.events[-1]
-        self.assertEqual((closed.reason, closed.price), ("stop", FLOOR))
-        self.assertEqual(closed.units, 900.0 / 68.0 + 600.0 / 66.5)
+        self.assertEqual(result.snu_bars, 0)
+        self.assertEqual(result.outcome, "closed_tp")
+
+    def test_a_bar_the_stop_closed_is_counted_once_by_row_one(self) -> None:
+        # Rows 1 and 4 both look at this bar. It is ONE bar, so it counts once,
+        # and row 1 is the one that asks - the stop settles the bar.
+        result = self._walk(
+            DeclaredTranche(tranche_index=0, price=self.TRANCHE, fraction=1.0),
+            first=_bar(WALK_START, 67.0, 68.6, 62.0),
+        )
         self.assertEqual(result.outcome, "closed_stop")
-        self.assertEqual(result.ambiguous_bars, 1)
+        self.assertEqual(result.snu_bars, 1)
+
+    def test_the_bar_counts_when_the_cost_gate_verdict_turns_on_the_order(self) -> None:
+        # The deep fill lowers the average entry and every threshold with it, so
+        # a tranche refused on the small position is afforded on the blended
+        # one: it fires in one reading and not the other. Measured 2026-09-29 at
+        # this fraction, the gate's threshold is 68.258640 before the deep rung
+        # and 67.650288 after, so 67.70 flips. The clamp never binds here
+        # (0.4 x intended is 8.90 against 13.24 held), so the appetite arm
+        # cannot catch it and only the gate arm can.
+        result = self._walk(
+            DeclaredTranche(tranche_index=0, price=67.7, fraction=0.4),
+            first=_bar(WALK_START, 68.0, 68.0, 67.99),
+            then=_bar(WALK_START + MINUTE, 67.0, 68.0, 66.4),
+        )
+        self.assertEqual(result.snu_bars, 1)
+
+    def test_a_ladder_blocked_by_a_refused_tranche_decides_nothing(self) -> None:
+        # `_fire_tranches` RETURNS on the first refusal, so a level behind one
+        # the gate declines cannot fire in either reading and must not feed the
+        # appetite. Counting it would report a bar where nothing moved.
+        result = self._walk(
+            DeclaredTranche(tranche_index=0, price=REFUSED_LEVEL, fraction=0.05),
+            DeclaredTranche(tranche_index=1, price=self.TRANCHE, fraction=1.0),
+            first=_bar(WALK_START, 68.0, 68.0, 67.99),
+            then=_bar(WALK_START + MINUTE, 67.0, 68.6, 66.4),
+        )
+        self.assertEqual(result.snu_bars, 0)
+
+    def test_a_bar_that_opens_the_position_is_a_known_blind_spot(self) -> None:
+        # Section 6.3 names this one: with nothing held the cost gate has no
+        # entry price to measure a tranche against, so the replay cannot say
+        # whether the tranche would have fired. Measured worth: 18.045113.
+        # Pinned so the gap is discoverable rather than folklore.
+        plan = _plan(
+            entries=(PendingEntry(tier_index=0, limit_price=66.5, notional=600.0),),
+            notional=600.0,
+            tranches=(DeclaredTranche(tranche_index=0, price=self.TRANCHE, fraction=1.0),),
+        )
+        result = walk(plan, _config(), (self.TIE,))
+        self.assertEqual(result.units_filled, 600.0 / 66.5)
+        self.assertEqual(result.snu_bars, 0)
 
 
 def _deadline(value: int) -> dict[str, Any]:
