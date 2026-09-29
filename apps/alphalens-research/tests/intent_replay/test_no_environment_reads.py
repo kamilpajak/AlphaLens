@@ -68,6 +68,24 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "intent_replay.refusal",
         }
     ),
+    "envelope.py": frozenset(
+        {
+            "__future__",
+            "collections.abc",
+            "types",
+            "typing",
+            "broker_contract.exit_geometry.registry",
+            "broker_contract.trade_intent.schema",
+            "intent_replay.bars",
+            "intent_replay.config",
+            "intent_replay.interpreter",
+            "intent_replay.measures",
+            "intent_replay.trace",
+            "intent_replay.units",
+            "intent_replay.walk",
+        }
+    ),
+    "units.py": frozenset({"__future__", "dataclasses", "typing"}),
     "measures.py": frozenset(
         {
             "__future__",

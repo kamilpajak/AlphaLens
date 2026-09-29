@@ -36,7 +36,7 @@ from intent_replay.trace import (
     TraceEvent,
 )
 
-__all__ = ["WalkResult", "walk"]
+__all__ = ["WalkResult", "resolve_ladder", "walk"]
 
 # Which outcome a close reason produces. One mapping so the two words cannot
 # drift apart in separate branches.
@@ -455,12 +455,19 @@ def _decide_stop(state: _WalkState, bar: Bar, plan: Plan, *, trails: bool) -> No
         state.latched_avg = average
 
 
-def _resolve_ladder(plan: Plan) -> tuple[str, tuple[DeclaredTranche, ...]]:
+def resolve_ladder(plan: Plan) -> tuple[str, tuple[DeclaredTranche, ...]]:
     """Which take-profit ladder the run replays (section 5.1).
 
     A document that placed its own bracket is replayed against THAT instruction:
     one tranche for the whole position at the level it published. The author's
     own ladder does not fire, because it never reached the broker.
+
+    PUBLIC because two `divergences` predicates of section 5.2 ask whether the
+    RESOLVED ladder is empty, and `WalkResult.ladder` carries only the NAME
+    (`tp_tranches` comes back for an empty tuple too). Re-deriving the rule in
+    the envelope would put one quantity in two functions, which is the defect
+    this repo has already paid for once: the day this rule changes, the
+    published `divergences` list would quietly stop describing the run.
     """
     if plan.declared_take_profit is not None:
         single = DeclaredTranche(tranche_index=0, price=plan.declared_take_profit, fraction=1.0)
@@ -513,7 +520,7 @@ def _walk_one_bar(
 def walk(plan: Plan, config: RunConfig, bars: tuple[Bar, ...]) -> WalkResult:
     """Walk ``bars`` from ``config.walk_start`` and report what happened."""
     state = _WalkState(pending={rung.tier_index: rung for rung in plan.entries})
-    ladder_name, ladder = _resolve_ladder(plan)
+    ladder_name, ladder = resolve_ladder(plan)
     # Resolved ONCE, with the function ``decide_stop`` itself routes on, so the
     # reason a trace event carries cannot disagree with the arm that produced it.
     trails = resolve_declared_policy(plan.reaction).trails
