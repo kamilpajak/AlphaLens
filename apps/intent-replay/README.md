@@ -20,7 +20,7 @@ and rendered back into the result by `to_jsonable`:
 |---|---|---|
 | `entry_deadline` | `{kind, value, unit, source, formula}` | the entry-order cutoff, epoch ms UTC, with the rule that produced it; never null |
 | `walk_start` | the same shape | the first timestamp of the walk, with the rule that produced it |
-| `entry_trail_bps` | integer >= 1, or `null` | the native entry-trail distance; `null` is trailing OFF |
+| `entry_trail_bps` | `null` only, in this version | the native entry-trail distance. A well-formed distance is REFUSED until entry trailing is modelled (`entry_trail_not_modelled`); the type and range checks still run first |
 | `ceiling_price` | number > 0, or `null` | the take-profit cap |
 | `time_stop_t` | epoch ms UTC, or `null` | the position time stop |
 | `oco` | `false` | v1 models no OCO pair; `true` is refused |
@@ -33,8 +33,9 @@ issue #1592.
 
 A missing key is `config_incomplete` (`details.keys` names every missing key).
 A stated value nothing can use — the wrong type, a non-finite number, a wrong
-unit, an unknown key, `oco: true`, `costs.fx_applies: true` — is
-`config_invalid`. Nothing is defaulted.
+unit, an unknown key, `oco: true`, `costs.fx_applies: true`, or an
+`entry_trail_bps` distance this version does not apply — is `config_invalid`.
+The full reason table is with the refusal codes below. Nothing is defaulted.
 
 ## Command line
 
@@ -189,7 +190,7 @@ The envelope has ten keys, in this order:
 | `config` | the configuration block, echoed key for key |
 | `divergences` | the places this run is known to differ from the daemon |
 | `intrabar_rule` | the name of the order the walk resolves a bar in |
-| `outcome` | `closed_stop`, `closed_tp`, `closed_time_stop`, `no_fill` or an open position |
+| `outcome` | one of `closed_stop`, `closed_tp`, `closed_time_stop`, `open`, `no_fill` |
 | `summary` | the nine measures below |
 | `trace` | every event the walk emitted, in order |
 
@@ -207,9 +208,20 @@ means at least one bar's ordering changed the money. A count of zero means no
 such bar was DETECTED, which is weaker than none having occurred, so it is not a
 certificate. One shape is known to go uncounted and is measured: a bar on which
 the position OPENS through a rung below the open, where nothing is held yet, so
-the cost gate has no entry price to measure a tranche against. On the published
-template that bar is worth 18.045113. The honest use of the count is deciding
-whether to trust the result at all, never adjusting it.
+the cost gate has no entry price to measure a tranche against.
+
+That shape is worth **18.045113** — but read the construction before replaying
+it. The figure comes from a SINGLE rung, the published template's deeper one
+(600 at 66.50) with a tranche at 68.50, against a bar 67.00 / 68.60 / 66.40. It
+is pinned by `test_a_bar_that_opens_the_position_is_a_known_blind_spot`.
+Replaying the WHOLE two-rung template against that same bar gives a different
+answer — 37.898054, with `snu_bars` reading 1, because the 68.00 rung fills
+first and the bar is then detected. The blind spot is still reachable on the
+full template, but only for a bar that opens ABOVE 68.00, where every rung it
+can reach lies below the open. All four figures measured 2026-09-29.
+
+The honest use of the count is deciding whether to trust the result at all,
+never adjusting it.
 
 The count is a frequency, never a size: two runs can both report 1 while the bar
 decided 18.05 in one and 30.92 in the other. It also has no upper limit. A

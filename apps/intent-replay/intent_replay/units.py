@@ -8,9 +8,11 @@ second consumer: the config block renders a ``Translated`` per translated
 document path and a ``Quantity`` per cost, and the summary renders a
 ``Quantity`` per measure and a ``Translated`` for the R denominator. Moving
 them rather than importing them across keeps ONE definition of "a number that
-names its unit"; the move is complete, with no re-export left behind, because
-a package with two import paths for one class has two definitions in every
-sense that matters to a reader.
+names its unit". The move left no re-export: neither name is in ``config``'s
+``__all__`` any more. Python still resolves ``from intent_replay.config import
+Quantity``, because ``config`` imports it for its own fields and every
+module-level name is importable -- that is a property of the language, not a
+second published path, and nothing in this package uses it.
 
 ``Translated`` is generic in its value type and both parameters are real: the
 config block translates an epoch to an ``int`` (what the walk compares against
@@ -83,4 +85,7 @@ class Quantity:
     unit: str
 
     def to_jsonable(self) -> dict[str, Any]:
-        return {"value": self.value, "unit": self.unit}
+        # Through the key tuple, as ``Translated`` does. A hand-written literal
+        # here renders the same keys and is not checked against the published
+        # order by anything, because a dict comparison ignores order.
+        return {key: getattr(self, key) for key in QUANTITY_KEYS}
