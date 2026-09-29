@@ -180,7 +180,7 @@ sweep); the two LLM-derived features carry non-classical measurement error
 under a single frozen prompt regime (`buffett-pre-registry-v0`), so a null on
 candor/understandable is a null for THIS instrument, not the construct.
 
-Last run: NOT YET RUN (registration only; scheduled 2026-09-29/30).
+Last run: 2026-09-29 — verdict RETIRE (memo section 6). Cluster 15 spent.
 """
 
 import argparse
