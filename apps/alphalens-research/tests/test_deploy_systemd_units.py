@@ -434,9 +434,9 @@ def _service_start_timeout(service_text: str) -> dt.timedelta:
     match = re.search(r"^TimeoutStartSec=(\d+)min\s*$", service_text, re.MULTILINE)
     if match is None:
         raise AssertionError(
-            "no TimeoutStartSec=<n>min line in the service unit. If the unit "
-            "now states the timeout in another form, teach this helper that "
-            "form — do not drop the slot-spacing assertion."
+            "no TimeoutStartSec=<n>min line in the service unit. Keep the "
+            "unit on the <n>min form, or teach this helper the new one — do "
+            "not drop the slot-spacing assertion."
         )
     return dt.timedelta(minutes=int(match.group(1)))
 

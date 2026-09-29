@@ -6,7 +6,15 @@
 #              yesterday (UTC). A published brief is final
 #              (alphalens_pipeline/thematic/publication.py).
 #   08:30 UTC  repair: publishes the date only if the 04:30 run failed,
-#   12:30 UTC  and fills in options telemetry the earlier slot missed.
+#              and fills in options telemetry the earlier slot missed.
+#   12:30 UTC  telemetry only, in practice. It is still allowed to publish
+#              a missing brief, but a deciding run needs 69 min median and
+#              104 min at worst to reach the brief stage, and
+#              publication.deadline_utc refuses to create one from the
+#              13:30 UTC arrival open onward — so a 12:30 start misses the
+#              deadline on a median day. Before #1606 the third slot ran at
+#              08:30 and could publish; that third chance is what the move
+#              costs, against 0 failed runs in the 66 post-#1330 slots.
 #
 # WHY 04:30 AND NOT 00:30 (#1606). The deciding run is the only one whose
 # news corpus reaches a reader, and the EDGAR press-release source
