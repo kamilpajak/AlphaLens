@@ -475,7 +475,34 @@ def resolve_ladder(plan: Plan) -> tuple[str, tuple[DeclaredTranche, ...]]:
     return "tp_tranches", plan.declared_tranches
 
 
-def _walk_one_bar(
+def _match_orders(
+    state: _WalkState,
+    bar: Bar,
+    plan: Plan,
+    config: RunConfig,
+    *,
+    ladder: tuple[DeclaredTranche, ...],
+    intended: float,
+) -> bool:
+    """What the bar's own levels decide: the deadline, the entry fills, the
+    excursion marks and the resting stop.
+
+    Returns whether section 4.4's fourth situation changed the money on this
+    bar. The COUNT is not applied here: the resting stop runs after the fills
+    and ends the walk on its own bar, and row 1 has already counted such a bar,
+    so the caller applies the flag only if the position is still open.
+    """
+    _expire(state, bar, deadline=config.entry_deadline.value)
+    # Asked BEFORE the fills, while the deep rung is still pending and the
+    # question is still answerable.
+    deep_snu = _deep_rung_snu(state, bar, ladder=ladder, intended=intended, costs=config.costs)
+    _fill_entries(state, bar, plan)
+    _track_extremes(state, bar)
+    _exit_on_stop(state, bar, ladder=ladder, intended=intended, costs=config.costs)
+    return deep_snu
+
+
+def _advance_state(
     state: _WalkState,
     bar: Bar,
     plan: Plan,
@@ -485,20 +512,14 @@ def _walk_one_bar(
     ladder_name: str,
     intended: float,
     trails: bool,
+    deep_snu: bool,
 ) -> None:
-    """One bar, in the order section 4.4 fixes. Returns as soon as the position
-    closes, so the caller only has to ask whether it did."""
-    _expire(state, bar, deadline=config.entry_deadline.value)
-    # Asked BEFORE the fills, while the deep rung is still pending and the
-    # question is still answerable.
-    deep_snu = _deep_rung_snu(state, bar, ladder=ladder, intended=intended, costs=config.costs)
-    _fill_entries(state, bar, plan)
-    _track_extremes(state, bar)
-    _exit_on_stop(state, bar, ladder=ladder, intended=intended, costs=config.costs)
-    if state.closed is not None:
-        # A bar the stop closed has already been asked its question, by row 1.
-        # Counting the fourth situation too would count one bar twice.
-        return
+    """What the position does once the bar's orders have been matched: the
+    take-profit review, the replay's own horizon, and the protection pass.
+
+    Each step can close the position, and every later step is skipped when one
+    does - the walk models one position, not a re-entry.
+    """
     if deep_snu:
         state.snu += 1
     _fire_tranches(
@@ -515,6 +536,43 @@ def _walk_one_bar(
     if state.closed is not None:
         return
     _decide_stop(state, bar, plan, trails=trails)
+
+
+def _walk_one_bar(
+    state: _WalkState,
+    bar: Bar,
+    plan: Plan,
+    config: RunConfig,
+    *,
+    ladder: tuple[DeclaredTranche, ...],
+    ladder_name: str,
+    intended: float,
+    trails: bool,
+) -> None:
+    """One bar, in the order section 4.4 fixes: match this bar's orders, then
+    advance the position. Returns as soon as the position closes, so the caller
+    only has to ask whether it did.
+
+    The two halves are separate functions because section 6.5 says so: the bar
+    loop is the natural candidate to exceed the cognitive-complexity gate, and
+    splitting it is a design decision rather than a rescue after a red run.
+    """
+    deep_snu = _match_orders(state, bar, plan, config, ladder=ladder, intended=intended)
+    if state.closed is not None:
+        # A bar the stop closed has already been asked its question, by row 1.
+        # Counting the fourth situation too would count one bar twice.
+        return
+    _advance_state(
+        state,
+        bar,
+        plan,
+        config,
+        ladder=ladder,
+        ladder_name=ladder_name,
+        intended=intended,
+        trails=trails,
+        deep_snu=deep_snu,
+    )
 
 
 def walk(plan: Plan, config: RunConfig, bars: tuple[Bar, ...]) -> WalkResult:
