@@ -112,6 +112,9 @@ class _WalkState:
     # ``pending`` as well: it is still unfilled, so the deadline must expire it
     # with the others (section 4.6 publishes one cause, and this is it).
     armed: dict[int, _ArmedTrail] = field(default_factory=dict)
+    # Rungs the depth rule retired before they could arm. They stay in
+    # ``pending`` so the deadline still accounts for them.
+    barred: set[int] = field(default_factory=set)
     units: float = 0.0
     units_sold: float = 0.0
     fired: set[int] = field(default_factory=set)
@@ -196,6 +199,21 @@ def _book_entry(
         state.events.append(StopPlaced(t=bar.t, level=plan.declared_floor))
 
 
+def _next_listed_limits(plan: Plan) -> dict[int, float]:
+    """Each rung's NEXT-LISTED sibling limit, by tier index.
+
+    LISTED, not cheapest: ``validate_intent`` does not require the entry ladder
+    to descend, and the live loop reads ``tiers[index + 1]``, so the rung with
+    nowhere to hand a deeper move is the one listed last rather than the one
+    priced lowest.
+    """
+    entries = plan.entries
+    return {
+        rung.tier_index: entries[position + 1].limit_price
+        for position, rung in enumerate(entries[:-1])
+    }
+
+
 def _trail_snu(bar: Bar, trail: _ArmedTrail, *, level: float) -> bool:
     """Does this bar's high/low ORDER change the money for an armed rung?
 
@@ -215,6 +233,40 @@ def _trail_snu(bar: Bar, trail: _ArmedTrail, *, level: float) -> bool:
     return bar.high >= bar.low + trail.distance
 
 
+def _arm(
+    state: _WalkState,
+    bar: Bar,
+    rung: PendingEntry,
+    index: int,
+    *,
+    bps: int,
+    next_limits: dict[int, float],
+) -> _ArmedTrail | None:
+    """Place this rung's trailing order, or decline and say nothing.
+
+    The reference is ``min(open, limit)``: the touch happens at the first print
+    when the bar gapped through the level, and at the level otherwise. The
+    distance is frozen here, once, because the wire field is an absolute price
+    distance and the server ratchets from it.
+
+    Two ways to decline. A rung the resting stop puts out of reach is skipped
+    and stays pending, exactly as a limit rung is. And a bar whose FIRST price
+    is already below the next-listed rung hands the move to that rung: the live
+    depth rule, which lives on this bar alone because the wire arms on the touch
+    tick and an armed tier is terminal for the watcher.
+    """
+    if not _reachable(state, bar, rung):
+        return None
+    next_limit = next_limits.get(rung.tier_index)
+    if next_limit is not None and bar.open < next_limit:
+        state.barred.add(index)
+        return None
+    reference = min(bar.open, rung.limit_price)
+    trail = _ArmedTrail(distance=reference * bps / _BPS_PER_UNIT, trough=reference)
+    state.armed[index] = trail
+    return trail
+
+
 def _advance_trails(state: _WalkState, bar: Bar, plan: Plan, *, bps: int) -> bool:
     """Arm, fire and ratchet the native entry trails, shallowest rung first.
 
@@ -228,20 +280,30 @@ def _advance_trails(state: _WalkState, bar: Bar, plan: Plan, *, bps: int) -> boo
     That resolution is the worse one where a worse one is well defined: had the
     low come first, the trough would already have fallen and the buy would pay
     less.
+
+    Returns whether any rung's high/low order changed the money on this bar.
     """
+    # The open is the first print. If it is already through the resting stop the
+    # position closed there, and a purchase after that is a RE-ENTRY - a second
+    # position this tool does not model (section 4.4). Continuity settles it
+    # rather than a convention, and it is why the test is the bar's OPEN and not
+    # its low: a bar that opens ABOVE the stop reached the trigger first, so the
+    # fill stands and the stop takes it out afterwards, which is the worse
+    # resolution and the one section 4.4 keeps.
+    if state.stop is not None and bar.open <= state.stop:
+        return False
     decided = False
+    next_limits = _next_listed_limits(plan)
     for index in sorted(state.pending):
+        if index in state.barred:
+            continue
         rung = state.pending[index]
         trail = state.armed.get(index)
         arming = trail is None
-        # ``if trail is None`` rather than ``if arming``: the narrowing has to be
-        # on the expression, or every later read of ``trail`` is optional.
         if trail is None:
-            if not _reachable(state, bar, rung):
+            trail = _arm(state, bar, rung, index, bps=bps, next_limits=next_limits)
+            if trail is None:
                 continue
-            reference = min(bar.open, rung.limit_price)
-            trail = _ArmedTrail(distance=reference * bps / _BPS_PER_UNIT, trough=reference)
-            state.armed[index] = trail
         level = trail.trough + trail.distance
         # Asked BEFORE the ratchet, because it is about the trough this bar
         # INHERITED - on the arming bar, the touch reference itself.
@@ -252,8 +314,9 @@ def _advance_trails(state: _WalkState, bar: Bar, plan: Plan, *, bps: int) -> boo
             # cannot precede the open. So an arming bar takes the trigger
             # however high it opened, and a later bar that opens through the
             # trigger takes its open, the first print.
-            price = level if arming else max(bar.open, level)
-            _book_entry(state, bar, plan, index, rung, price=price)
+            _book_entry(
+                state, bar, plan, index, rung, price=level if arming else max(bar.open, level)
+            )
             continue
         trail.trough = min(trail.trough, bar.low)
     return decided

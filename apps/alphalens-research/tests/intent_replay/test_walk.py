@@ -301,6 +301,99 @@ class EntryTrailTest(unittest.TestCase):
         self.assertEqual(result.events[0].price, 68.3)
         self.assertEqual(result.snu_bars, 0)
 
+    def _laddered(self, *bars: Bar) -> Any:
+        """Both published rungs, so a later one can arm while a stop rests."""
+        return walk(_plan(), _config(entry_trail_bps=50), bars)
+
+    def test_a_bar_that_opens_ABOVE_the_stop_fires_and_then_stops_out(self) -> None:
+        # Section 4.4 keeps the worse resolution where one is well defined, and
+        # a fill followed by a stop-out IS the worse one: without it there is no
+        # loss. The open is 66.00, above the 63.00 stop, so the price reached the
+        # 66.33 trigger before it reached the stop and both legs executed.
+        bars = (
+            _bar(WALK_START, 68.05, 68.4, 67.9),
+            _bar(WALK_START + MINUTE, 66.0, 66.4, 62.0),
+        )
+        result = self._laddered(*bars)
+        self.assertEqual(
+            _kinds(result), ["entry_filled", "stop_placed", "entry_filled", "position_closed"]
+        )
+        self.assertEqual(result.events[0].price, 68.34)
+        self.assertEqual(result.events[2].price, 66.0 * 1.005)
+        self.assertEqual(result.events[3].price, FLOOR)
+
+    def test_a_bar_that_opens_BELOW_the_stop_does_not_fire_the_trail(self) -> None:
+        # Continuity settles this one rather than a convention: the open is
+        # already through the stop, so the position closed at the first print and
+        # a purchase after it is a RE-ENTRY - a second position this tool does
+        # not model (section 4.4). The trigger being above the stop does not
+        # help; nothing was there to buy for.
+        bars = (
+            _bar(WALK_START, 68.05, 68.4, 67.9),
+            _bar(WALK_START + MINUTE, 62.5, 66.4, 62.0),
+        )
+        result = self._laddered(*bars)
+        self.assertEqual(_kinds(result), ["entry_filled", "stop_placed", "position_closed"])
+        self.assertEqual(result.events[2].price, 62.5)
+
+    def test_a_bar_that_gaps_past_the_NEXT_rung_bars_the_shallower_one(self) -> None:
+        # The live depth suspend, measured against the engine on 2026-09-29: it
+        # fires only when the FIRST price at or below a rung is already below the
+        # next one, because the wire arms on the touch tick and an armed tier is
+        # terminal for the watcher. In bar terms that first price is the open.
+        # A deeper move is the next rung's job; the shallower one never arms.
+        result = self._laddered(_bar(WALK_START, 66.0, 68.0, 65.0))
+        filled = [event for event in result.events if event.kind == "entry_filled"]
+        self.assertEqual([event.tier_index for event in filled], [1])
+        self.assertEqual(filled[0].price, 66.0 * 1.005)
+
+    def test_the_same_depth_on_a_LATER_bar_does_not_bar_an_armed_rung(self) -> None:
+        # Measured on the live engine: a price walking DOWN through the rung arms
+        # on the touch and a later depth never suspends it, because the watcher
+        # is already terminal. Barring it here would starve fills the deployed
+        # path makes.
+        bars = (
+            _bar(WALK_START, 68.05, 68.1, 67.9),
+            _bar(WALK_START + MINUTE, 67.0, 68.5, 65.0),
+        )
+        result = self._laddered(*bars)
+        filled = [event for event in result.events if event.kind == "entry_filled"]
+        self.assertIn(0, [event.tier_index for event in filled])
+
+    def test_the_last_listed_rung_never_bars_itself(self) -> None:
+        # There is no next rung to hand the move to. `validate_intent` does not
+        # require the ladder to descend, so the rule is about the rung LISTED
+        # last, not the cheapest one.
+        result = self._walk(_bar(WALK_START, 60.0, 68.5, 59.0))
+        self.assertEqual(result.events[0].price, 60.0 * 1.005)
+
+    def _to_deadline(self, *bars: Bar) -> Any:
+        config = _config(entry_trail_bps=50, entry_deadline=_deadline(WALK_START + MINUTE))
+        return walk(_plan(), config, bars)
+
+    def test_an_armed_rung_expires_at_the_deadline_like_any_other(self) -> None:
+        # A resting trailing order dies with the ladder's window. It is still an
+        # unfilled rung, so it leaves through the one published cause rather
+        # than through a second kind of event.
+        result = self._to_deadline(
+            _bar(WALK_START, 68.05, 68.1, 67.9),
+            _bar(WALK_START + MINUTE, 68.0, 68.1, 67.95),
+        )
+        self.assertEqual(_kinds(result), ["entry_expired"])
+        self.assertEqual(result.events[0].tiers, (0, 1))
+        self.assertEqual(result.events[0].reason, "deadline")
+
+    def test_a_barred_rung_expires_too_rather_than_vanishing(self) -> None:
+        # The depth rule retires a rung without an event of its own, so the
+        # deadline is where the trace accounts for it. Dropping it from
+        # ``pending`` instead would leave a rung the trace never mentions.
+        result = self._to_deadline(
+            _bar(WALK_START, 66.0, 68.0, 65.0),
+            _bar(WALK_START + MINUTE, 66.5, 66.6, 66.4),
+        )
+        expired = [event for event in result.events if event.kind == "entry_expired"]
+        self.assertEqual([event.tiers for event in expired], [(0,)])
+
 
 class RestingStopTest(unittest.TestCase):
     def test_the_resting_stop_closes_the_position_at_its_level(self) -> None:
