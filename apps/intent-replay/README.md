@@ -20,7 +20,7 @@ and rendered back into the result by `to_jsonable`:
 |---|---|---|
 | `entry_deadline` | `{kind, value, unit, source, formula}` | the entry-order cutoff, epoch ms UTC, with the rule that produced it; never null |
 | `walk_start` | the same shape | the first timestamp of the walk, with the rule that produced it |
-| `entry_trail_bps` | `null` only, in this version | the native entry-trail distance. A well-formed distance is REFUSED until entry trailing is modelled (`entry_trail_not_modelled`); the type and range checks still run first |
+| `entry_trail_bps` | integer >= 1, or `null` | the native entry-trail distance. `null` is OFF and is NOT the neutral run: on both deployments the flag is set, so `null` replays an entry ladder production does not use. No upper bound here, but the live rail caps the flag at 150 and reads anything outside `[0, 150]` as 0 — the three-limit ladder, the opposite policy — so a larger value is a run no deployment will make |
 | `ceiling_price` | number > 0, or `null` | the take-profit cap |
 | `time_stop_t` | epoch ms UTC, or `null` | the position time stop |
 | `oco` | `false` | v1 models no OCO pair; `true` is refused |
@@ -33,8 +33,8 @@ issue #1592.
 
 A missing key is `config_incomplete` (`details.keys` names every missing key).
 A stated value nothing can use — the wrong type, a non-finite number, a wrong
-unit, an unknown key, `oco: true`, `costs.fx_applies: true`, or an
-`entry_trail_bps` distance this version does not apply — is `config_invalid`.
+unit, an unknown key, `oco: true`, or `costs.fx_applies: true` — is
+`config_invalid`.
 The full reason table is with the refusal codes below. Nothing is defaulted.
 
 ## Command line
@@ -316,11 +316,6 @@ runs it applies to:
 | `take_profit_observation_time` | the resolved take-profit ladder is not empty |
 | `cost_gate_prices_the_account_currency` | the ladder is not empty and `min_commission_applies` is true |
 
-In THIS version `native_entry_trail_is_a_broker_model` cannot appear. The code
-emits it, but a stated entry-trail distance is refused before the walk starts
-(see `entry_trail_not_modelled` in the refusal table). The next change models
-entry trailing, removes the refusal, and makes the entry reachable.
-
 `cost_gate_prices_the_account_currency` is an admission the tool publishes about
 itself: it prices the stated budget in the ACCOUNT currency while the daemon
 prices the whole-share notional in the INSTRUMENT's. Above the fee card's knee
@@ -390,7 +385,6 @@ missing and unusable, only the missing ones are reported.
 | | `empty_string` | a provenance field or a currency code with no text |
 | | `oco_unsupported` | `oco` is stated `true`; v1 models no OCO pair, and the block travels in the result, so accepting it would describe a policy the run did not apply |
 | | `fx_cost_not_stated` | `fx_applies` is `true` and no key states the rate. The omitted term is 50 basis points of the notional, so accepting it would price every round trip too cheap |
-| | `entry_trail_not_modelled` | a well-formed entry-trail distance. TEMPORARY: this version parses the distance and does not apply it, so carrying it into the result would claim a policy the run never ran. State `null` until the next change models entry trailing. The type and range checks run first, so `true` is still `wrong_type` and `0` is still `not_positive`. One published consequence: the design document's own section 5.2 block states `entry_trail_bps: 50`, so this version refuses the very block it prints as canonical |
 
 Design: `docs/superpowers/specs/2026-09-23-intent-replay-design.md`.
 Implementation plan: `docs/superpowers/plans/2026-09-25-intent-replay-step1.md`.

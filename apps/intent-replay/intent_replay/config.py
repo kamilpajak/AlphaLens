@@ -132,11 +132,6 @@ CONFIG_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
             "A conversion is stated to apply but no key states its rate. The omitted term is "
             "50 bps of the notional, so accepting it would price every round trip too cheap."
         ),
-        "entry_trail_not_modelled": (
-            "TEMPORARY, and removed with the refusal by PR 8. This version parses the entry "
-            "trail distance and does not apply it, so carrying the stated value into the "
-            "result would claim a policy the run never ran. State null until then."
-        ),
     }
 )
 
@@ -474,11 +469,11 @@ def _trail_distance(reader: _Reader, node: Any) -> int | None:
     The live flag reads 0 as OFF, so a 0 here is ambiguous and is refused with
     the form to use instead.
 
-    A well-formed distance is then refused outright until PR 8 models entry
-    trailing (section 5.4). The order is load-bearing and stated there: the
-    type and range checks run FIRST, so ``true`` stays ``wrong_type`` and ``0``
-    stays ``not_positive``, and this reason only answers a distance nothing
-    else can fault.
+    No UPPER bound, deliberately. The live rail caps the flag at 150 and a
+    value outside ``[0, 150]`` makes the deployment's own reader fall back to
+    0 - the three-limit ladder, which is the OPPOSITE policy - but that is a
+    deployment rail, not a property of the document, and section 5.2 publishes
+    the key as an integer >= 1. The README says what no deployment will run.
     """
     if node is None:
         return None
@@ -490,13 +485,7 @@ def _trail_distance(reader: _Reader, node: Any) -> int | None:
             "entry_trail_bps", "not_positive", "must be >= 1; entry trailing OFF is stated as null"
         )
         return None
-    reader.reject(
-        "entry_trail_bps",
-        "entry_trail_not_modelled",
-        "this version does not apply an entry trail; state null until PR 8",
-        expected=None,
-    )
-    return None
+    return distance
 
 
 def _ceiling(reader: _Reader, node: Any) -> float | None:
