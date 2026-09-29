@@ -519,10 +519,14 @@ def walk(plan: Plan, config: RunConfig, bars: tuple[Bar, ...]) -> WalkResult:
     trails = resolve_declared_policy(plan.reaction).trails
     intended = sum(rung.notional / rung.limit_price for rung in plan.entries)
     last_t: int | None = None
+    # The close the horizon mark values an open position at. Set beside
+    # ``last_t`` so a skipped bar can supply neither.
+    last_close: float | None = None
     for bar in bars:
         if bar.t < config.walk_start.value:
             continue
         last_t = bar.t
+        last_close = bar.close
         _walk_one_bar(
             state,
             bar,
@@ -536,8 +540,8 @@ def walk(plan: Plan, config: RunConfig, bars: tuple[Bar, ...]) -> WalkResult:
         if state.closed is not None:
             break
     filled_any = state.units > 0.0
-    if filled_any and state.closed is None and last_t is not None:
-        state.events.append(HorizonOpen(t=last_t, units=_held(state)))
+    if filled_any and state.closed is None and last_t is not None and last_close is not None:
+        state.events.append(HorizonOpen(t=last_t, units=_held(state), price=last_close))
     return WalkResult(
         events=tuple(state.events),
         outcome=_outcome(state, filled_any=filled_any),

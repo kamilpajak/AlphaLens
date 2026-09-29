@@ -119,6 +119,16 @@ class SerializationTest(unittest.TestCase):
             {"t": 7, "kind": "stop_moved", "reason": "trail", "before": 63.0, "after": 69.56},
         )
 
+    def test_the_horizon_mark_carries_the_price_the_units_are_valued_at(self) -> None:
+        # Section 4.6: the mark is the CLOSE of the last bar the walk saw. A
+        # units-only event would leave the envelope unable to value an open
+        # position from the trace alone.
+        event = trace.HorizonOpen(t=9, units=2.0, price=64.5)
+        self.assertEqual(
+            trace.to_jsonable(event),
+            {"t": 9, "kind": "horizon_open", "units": 2.0, "price": 64.5},
+        )
+
     def test_every_field_of_every_kind_reaches_the_output(self) -> None:
         # One serializer over ``dataclasses.fields``: a field added to any kind
         # cannot be forgotten in the rendering.
@@ -136,7 +146,7 @@ class SerializationTest(unittest.TestCase):
                 "ladder": "tp_tranches",
             },
             trace.PositionClosed: {"t": 1, "reason": "stop", "price": 63.0, "units": 1.0},
-            trace.HorizonOpen: {"t": 1, "units": 1.0},
+            trace.HorizonOpen: {"t": 1, "units": 1.0, "price": 64.5},
         }
         self.assertEqual(set(built), set(trace.EVENT_TYPES))
         for cls, kwargs in built.items():

@@ -142,6 +142,27 @@ class EntriesFillTest(unittest.TestCase):
         self.assertEqual(result.events[-1].kind, "horizon_open")
         self.assertEqual(result.events[-1].units, 900.0 / 68.0)
 
+    def test_the_horizon_mark_is_the_close_of_the_last_bar_the_walk_saw(self) -> None:
+        # Section 4.6: the mark values the units at the LAST bar's close, which
+        # is not the bar's open and not the last fill price.
+        bars = (
+            _bar(WALK_START, 68.0, 68.6, 67.9, close=68.4),
+            _bar(WALK_START + MINUTE, 68.5, 69.0, 68.2, close=68.9),
+        )
+        result = walk(_plan(entries=RUNGS[:1]), _config(), bars)
+        self.assertEqual(result.events[-1].kind, "horizon_open")
+        self.assertEqual(result.events[-1].price, 68.9)
+
+    def test_a_bar_before_walk_start_does_not_supply_the_horizon_mark(self) -> None:
+        # The skipped bar is not one the walk saw, so its close must not become
+        # the valuation of an open position.
+        bars = (
+            _bar(WALK_START - MINUTE, 50.0, 50.0, 50.0, close=50.0),
+            _bar(WALK_START, 68.0, 68.6, 67.9, close=68.4),
+        )
+        result = walk(_plan(entries=RUNGS[:1]), _config(), bars)
+        self.assertEqual(result.events[-1].price, 68.4)
+
 
 class RestingStopTest(unittest.TestCase):
     def test_the_resting_stop_closes_the_position_at_its_level(self) -> None:
