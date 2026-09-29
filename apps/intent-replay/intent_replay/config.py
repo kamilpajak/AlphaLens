@@ -132,6 +132,11 @@ CONFIG_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
             "A conversion is stated to apply but no key states its rate. The omitted term is "
             "50 bps of the notional, so accepting it would price every round trip too cheap."
         ),
+        "entry_trail_not_modelled": (
+            "TEMPORARY, and removed with the refusal by PR 8. This version parses the entry "
+            "trail distance and does not apply it, so carrying the stated value into the "
+            "result would claim a policy the run never ran. State null until then."
+        ),
     }
 )
 
@@ -467,16 +472,31 @@ def _costs(reader: _Reader, node: Any, path: str) -> Costs | None:
 def _trail_distance(reader: _Reader, node: Any) -> int | None:
     """``entry_trail_bps``: null is OFF; an int is a distance and must be >= 1.
     The live flag reads 0 as OFF, so a 0 here is ambiguous and is refused with
-    the form to use instead."""
+    the form to use instead.
+
+    A well-formed distance is then refused outright until PR 8 models entry
+    trailing (section 5.4). The order is load-bearing and stated there: the
+    type and range checks run FIRST, so ``true`` stays ``wrong_type`` and ``0``
+    stays ``not_positive``, and this reason only answers a distance nothing
+    else can fault.
+    """
     if node is None:
         return None
     distance = _integer(reader, node, "entry_trail_bps")
-    if distance is not None and distance < 1:
+    if distance is None:
+        return None
+    if distance < 1:
         reader.reject(
             "entry_trail_bps", "not_positive", "must be >= 1; entry trailing OFF is stated as null"
         )
         return None
-    return distance
+    reader.reject(
+        "entry_trail_bps",
+        "entry_trail_not_modelled",
+        "this version does not apply an entry trail; state null until PR 8",
+        expected=None,
+    )
+    return None
 
 
 def _ceiling(reader: _Reader, node: Any) -> float | None:

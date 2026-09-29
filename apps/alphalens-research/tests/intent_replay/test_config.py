@@ -31,8 +31,14 @@ from intent_replay.config import (
 )
 from intent_replay.units import BPS, EPOCH_MS_UTC, FRACTION, Quantity, Translated
 
-# The config block of spec section 5.2, verbatim, with the entry deadline as
-# the provenance object section 4.1 requires and ``oco`` stated false.
+# The config block of spec section 5.2, with the entry deadline as the
+# provenance object section 4.1 requires and ``oco`` stated false.
+#
+# It departs from the printed block in EXACTLY ONE key, and section 5.4 asks
+# for that to be said rather than for the fixture to keep calling itself
+# verbatim: the block states ``entry_trail_bps: 50``, and this version refuses
+# a stated distance (``entry_trail_not_modelled``), so the fixture states null.
+# PR 8 models entry trailing and makes the printed block runnable again.
 CANONICAL: Mapping[str, Any] = {
     "entry_deadline": {
         "kind": "order_ttl_sessions",
@@ -48,7 +54,7 @@ CANONICAL: Mapping[str, Any] = {
         "source": "meta.source + meta.trade_date",
         "formula": "session_open_utc(2026-09-23); source=manual counts trade_date itself as day 1",
     },
-    "entry_trail_bps": 50,
+    "entry_trail_bps": None,
     "ceiling_price": None,
     "time_stop_t": None,
     "oco": False,
@@ -80,9 +86,9 @@ def _canonical() -> dict[str, Any]:
 
 
 def _all_stated() -> dict[str, Any]:
-    """The variant with every optional scalar stated and the trail OFF."""
+    """The variant with every optional scalar stated. The trail stays OFF: a
+    stated distance is refused in this version (section 5.4)."""
     data = _canonical()
-    data["entry_trail_bps"] = None
     data["ceiling_price"] = 120.5
     data["time_stop_t"] = 1790900000000
     return data
@@ -139,7 +145,7 @@ class CanonicalExampleTest(unittest.TestCase):
             ),
         )
         self.assertEqual(config.entry_deadline.value, 1791230400000)
-        self.assertEqual(config.entry_trail_bps, 50)
+        self.assertIsNone(config.entry_trail_bps)
         self.assertIsNone(config.ceiling_price)
         self.assertIsNone(config.time_stop_t)
         self.assertFalse(config.oco)
@@ -507,6 +513,36 @@ class AggregationTest(unittest.TestCase):
         )
 
 
+class EntryTrailNotModelledTest(unittest.TestCase):
+    """Spec section 5.4: until PR 8 the walk parses the distance and ignores
+    it, so echoing a stated value into the result would claim a policy the run
+    did not apply. The refusal is TEMPORARY and the reason says so."""
+
+    def test_a_well_formed_distance_is_refused_as_not_modelled(self) -> None:
+        for value in (1, 50, 10_000):
+            with self.subTest(value):
+                with self.assertRaises(ConfigError) as ctx:
+                    RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", value))
+                self.assertEqual(
+                    _refusal(ctx.exception),
+                    (CONFIG_INVALID_CODE, "entry_trail_not_modelled"),
+                )
+                self.assertEqual(ctx.exception.failure.details["keys"], ["entry_trail_bps"])
+
+    def test_the_trail_stated_off_is_still_accepted(self) -> None:
+        config = RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", None))
+        self.assertIsNone(config.entry_trail_bps)
+
+    def test_the_type_and_range_checks_still_run_first(self) -> None:
+        # Section 5.4: ``true`` stays wrong_type and ``0`` stays not_positive;
+        # this reason only answers a WELL-FORMED distance.
+        for value, reason in ((True, "wrong_type"), (0, "not_positive"), (-1, "not_positive")):
+            with self.subTest(repr(value)):
+                with self.assertRaises(ConfigError) as ctx:
+                    RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", value))
+                self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, reason))
+
+
 class ReasonVocabularyTest(unittest.TestCase):
     def test_the_vocabularies_are_closed(self) -> None:
         self.assertEqual(set(CONFIG_INCOMPLETE_REASONS), {"missing_key"})
@@ -522,6 +558,7 @@ class ReasonVocabularyTest(unittest.TestCase):
                 "empty_string",
                 "oco_unsupported",
                 "fx_cost_not_stated",
+                "entry_trail_not_modelled",
             },
         )
 
