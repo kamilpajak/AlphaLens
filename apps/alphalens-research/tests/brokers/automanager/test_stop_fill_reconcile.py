@@ -295,6 +295,132 @@ def _filled_broker() -> _StopBroker:
     )
 
 
+def _filled(order_id: str, qty: float, price: float, *, partial: bool = False) -> OrderState:
+    return OrderState(
+        order_id=order_id,
+        status=OrderStatus.PARTIALLY_FILLED if partial else OrderStatus.FILLED,
+        instrument=None,
+        filled_quantity=qty,
+        raw_status="PartiallyFilled" if partial else "Filled",
+        avg_fill_price=price,
+    )
+
+
+class TestStopFillAlertNamesTheStop(unittest.TestCase):
+    """#1621: the alert says WHICH stop filled. The reason is the newest
+    stop-move marker (``trailed`` / ``reanchored``) written AT OR AFTER the
+    standing stop was placed; a marker older than the stop belongs to an earlier
+    position on the same uic, because every new stop is placed at the plan
+    level."""
+
+    def _alert_for(self, *lines: dict[str, Any], outcome: OrderState) -> str:
+        path = _stop_journal(self)
+        _seed(path, *lines)
+        alerts: list[str] = []
+        cl._run_stop_fill_reconcile_pass(
+            _deps(_StopBroker(outcome=outcome), alerts), cl.TickReport()
+        )
+        self.assertEqual(len(alerts), 1, alerts)
+        return alerts[0]
+
+    def test_asts_29_09_real_journal_lines_render_the_trailed_stop(self) -> None:
+        # Verbatim LIVE standalone_stops.jsonl lines for ASTS (uic 22312740).
+        uic, order_id, ref = 22312740, "5446399206", "ASTS-2026-09-23-entry-t0-fire-stop-0"
+        text = self._alert_for(
+            {
+                "kind": "stop_placed",
+                "order_id": order_id,
+                "qty": 7.0,
+                "ref": ref,
+                "ts": 1790256634.7613068,
+                "uic": uic,
+            },
+            {"kind": "amend_seq", "seq": 0, "uic": uic},
+            {"kind": "amend_ok", "qty": 7.0, "ts": 1790688665.3827596, "uic": uic},
+            {
+                "kind": "trailed",
+                "last_price": 64.52,
+                "level": 62.42304,
+                "peak": 64.52,
+                "ts": 1790688665.389362,
+                "uic": uic,
+            },
+            outcome=_filled(order_id, 7.0, 62.37),
+        )
+        self.assertEqual(
+            text, "SELL ASTS 7 @ 62.37 - trailed stop 62.42 - position closed (order 5446399206)"
+        )
+
+    def test_uber_28_09_real_journal_line_renders_the_plan_stop(self) -> None:
+        # A stop_placed written before #1621 carries no level: "plan stop" alone.
+        uic, order_id = 13697176, "5440923753"
+        text = self._alert_for(
+            {
+                "kind": "stop_placed",
+                "order_id": order_id,
+                "qty": 2.0,
+                "ref": "UBER-2026-09-08-entry-t0-fire-stop-0",
+                "ts": 1788879007.3986554,
+                "uic": uic,
+            },
+            outcome=_filled(order_id, 8.0, 67.99),
+        )
+        self.assertEqual(
+            text, "SELL UBER 8 @ 67.99 - plan stop - position closed (order 5440923753)"
+        )
+
+    def test_the_placed_level_is_shown_for_the_plan_stop(self) -> None:
+        text = self._alert_for(
+            {**_stop_placed(), "stop_price": 17.2}, outcome=_filled(_STOP_ID, 16.0, 17.1)
+        )
+        self.assertIn("- plan stop 17.20 -", text)
+
+    def test_a_marker_older_than_the_stop_is_ignored(self) -> None:
+        # The uic traded before: its old trailed marker precedes this stop.
+        text = self._alert_for(
+            {"kind": "trailed", "uic": _UIC, "level": 30.0, "ts": 50.0},
+            _stop_placed(ts=100.0),
+            outcome=_filled(_STOP_ID, 16.0, 17.1),
+        )
+        self.assertIn("- plan stop -", text)
+        self.assertNotIn("trailed", text)
+
+    def test_another_uics_marker_is_ignored(self) -> None:
+        text = self._alert_for(
+            _stop_placed(ts=100.0),
+            {"kind": "trailed", "uic": _UIC + 1, "level": 30.0, "ts": 150.0},
+            outcome=_filled(_STOP_ID, 16.0, 17.1),
+        )
+        self.assertIn("- plan stop -", text)
+
+    def test_the_newest_of_a_reanchor_and_a_trail_wins(self) -> None:
+        text = self._alert_for(
+            _stop_placed(ts=100.0),
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 18.0, "stop_price": 17.0, "ts": 110.0},
+            {"kind": "trailed", "uic": _UIC, "level": 19.5, "ts": 120.0},
+            outcome=_filled(_STOP_ID, 16.0, 19.4),
+        )
+        self.assertIn("- trailed stop 19.50 -", text)
+
+    def test_a_reanchored_stop_shows_its_level(self) -> None:
+        text = self._alert_for(
+            _stop_placed(ts=100.0),
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 18.0, "stop_price": 17.0, "ts": 110.0},
+            outcome=_filled(_STOP_ID, 16.0, 16.9),
+        )
+        self.assertIn("- re-anchored stop 17.00 -", text)
+
+    def test_a_partial_fill_says_the_position_is_still_open(self) -> None:
+        text = self._alert_for(_stop_placed(), outcome=_filled(_STOP_ID, 6.0, 17.1, partial=True))
+        self.assertTrue(text.endswith("- position still open (order S-7727)"), text)
+
+    def test_a_ref_without_a_ticker_falls_back_to_the_uic(self) -> None:
+        text = self._alert_for(
+            _stop_placed(ref="some-classic-bracket-id"), outcome=_filled(_STOP_ID, 16.0, 17.1)
+        )
+        self.assertTrue(text.startswith(f"SELL uic {_UIC} 16 @"), text)
+
+
 class TestSiblingRetireOnStopFill(unittest.TestCase):
     """#1198 option B: a stop fill retires the pick's still-open sibling
     watch tiers (backtest: exercised re-entries net R -0.03..-0.07 vs +0.365R
@@ -577,7 +703,7 @@ class TestPartialStopFill(unittest.TestCase):
         self.assertEqual(len(filled), 1)
         self.assertTrue(filled[0]["partial"])
         self.assertEqual([ln for ln in _lines(entries) if ln["kind"] == "cancelled"], [])
-        self.assertTrue(any("filled 8" in a for a in alerts))
+        self.assertTrue(any(a.startswith("SELL GME 8 @ 18.51") for a in alerts), alerts)
         self.assertFalse(any("retired" in a for a in alerts))
 
 

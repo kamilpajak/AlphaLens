@@ -21,7 +21,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
-from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
+from alphalens_pipeline.brokers.automanager import entry_trails, state_paths, trade_alerts
 from alphalens_pipeline.brokers.automanager.costs import round_trip_fee_bps
 from alphalens_pipeline.brokers.automanager.live_rails import (
     MAX_FEE_BPS_ENV,
@@ -4589,6 +4589,24 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
         self.assertEqual(lines[0]["uic"], _UIC)
         self.assertEqual(lines[0]["qty"], 46.0)
         self.assertIsInstance(lines[0]["ts"], float)
+        # #1621: the level the stop was placed at, so the fill alert can name it
+        # as a fact instead of inferring it.
+        self.assertEqual(lines[0]["stop_price"], 216.48)
+
+    def test_journal_stop_placed_records_the_level_when_given(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                cl._journal_stop_placed(
+                    _UIC,
+                    46.0,
+                    order_id="S-1",
+                    ref="KO-2026-08-01-entry-t0-stop-1",
+                    stop_price=216.48,
+                    clock=lambda: 1234.5,
+                )
+                lines = self._stop_placed_lines()
+        self.assertEqual(lines[0]["stop_price"], 216.48)
 
     def test_clamped_qty_is_journaled_when_position_shrank(self) -> None:
         # The live re-check clips 46 -> 20; the journal must carry the 20 actually
@@ -5769,6 +5787,50 @@ class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
             [m.get("uic") for m in failed_lines], [_UIC], "amend_failed keeps its behavior"
         )
         self.assertEqual(report.exits_placed, 0)
+
+
+class TestEveryStopMoveMarkerHasAnAlertReason(unittest.TestCase):
+    """#1621: the stop-fill alert names WHY the stop stood where it filled, by
+    reading the newest stop-move marker the executor journaled for that stop.
+    This drives the REAL amend-success branch for each stop-moving amend reason
+    and asserts the marker it writes is one the alert formatter knows. A marker
+    renamed or added here without a reason in ``trade_alerts`` makes this red;
+    the formatter would otherwise fall back to a bare "stop"."""
+
+    _BOOKKEEPING = frozenset({"amend_ok", "amend_seq", "envelope_clamped"})
+
+    def _written_marker_kinds(self, action: AmendStop) -> set[str]:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)]
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                executor(action, False, cl.TickReport())
+                kinds = {str(ln.get("kind")) for ln in cl._iter_standalone_stop_journal()}
+        return kinds - self._BOOKKEEPING
+
+    def test_each_stop_moving_amend_writes_a_marker_the_formatter_knows(self) -> None:
+        cases = {
+            "trail": _amend_action(reason="trail", reanchor_avg_price=95.0, stop_price=91.5),
+            "reanchor-on-fill": _amend_action(
+                reason="reanchor-on-fill", reanchor_avg_price=95.0, stop_price=91.5
+            ),
+        }
+        for reason, action in cases.items():
+            with self.subTest(reason=reason):
+                markers = self._written_marker_kinds(action)
+                self.assertEqual(len(markers), 1, markers)
+                marker = markers.pop()
+                # The stop-fill pass looks for it, and the formatter can name it.
+                self.assertIn(marker, cl._STOP_MOVE_LEVEL_KEY)
+                self.assertIn(marker, trade_alerts.REASON_BY_STOP_MARKER)
+
+    def test_the_pass_and_the_formatter_know_the_same_markers(self) -> None:
+        self.assertEqual(set(cl._STOP_MOVE_LEVEL_KEY), set(trade_alerts.REASON_BY_STOP_MARKER))
 
 
 class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):

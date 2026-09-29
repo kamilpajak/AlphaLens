@@ -200,6 +200,17 @@ class TestCeilingBreachIsMeasuredAndAnnounced(unittest.TestCase):
             "exactly one breach alert, on its own throttle key",
         )
         self.assertEqual(reasons.count(f"entry-trail:fired:{_CRID}"), 1, "the fired alert stands")
+        breach = [message for message, reason in alerts if "ceiling-breach" in reason]
+        # #1621: the breach line names the ticker, not only the tier label.
+        self.assertTrue(breach[0].startswith("entry-trail KO E1: filled 10.12 ABOVE"), breach)
+
+    def test_the_fired_alert_is_one_buy_line_with_ticker_price_and_order(self) -> None:
+        # #1621: the old text had no ticker and no price ("entry-trail E1: native
+        # trail TR-1 filled 100 shares -> fired"), so two fills on one day could
+        # not be told apart without the order id.
+        _fired, alerts = self._fire(ceiling=10.07, fill=10.05)
+        fired = [message for message, reason in alerts if reason == f"entry-trail:fired:{_CRID}"]
+        self.assertEqual(fired, ["BUY KO E1 100 @ 10.05 (order TR-1)"])
 
     def test_a_fill_under_the_ceiling_is_stamped_clean_and_never_alerts(self) -> None:
         fired, alerts = self._fire(ceiling=10.07, fill=10.05)
