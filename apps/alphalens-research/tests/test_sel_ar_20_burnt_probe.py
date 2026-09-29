@@ -12,6 +12,7 @@ of merging it, would pass every straightforward case.
 
 from __future__ import annotations
 
+import ast
 import datetime as dt
 import importlib.util
 import unittest
@@ -79,6 +80,55 @@ class TestPickNewsTimestamp(unittest.TestCase):
         )
         self.assertEqual(got, _ts("2026-06-01T02:00:00"))
         self.assertNotEqual(got, max([_ts("2026-06-01T02:00:00"), _ts("2026-06-09T23:00:00")]))
+
+
+class TestTheAnchorIsReadNeverRecomputed(unittest.TestCase):
+    """A source gate, because no behavioural test would catch this.
+
+    The label store carries `anchor_session` — the first session AFTER the
+    brief date (owner decision D4). `session_on_or_after` returns the brief
+    date itself whenever that date is a trading session, so recomputing the
+    anchor with it disagrees with the stored value on 296 of 466 burnt rows.
+    The first run of this probe did exactly that and measured 65 articles as
+    published after their own anchor open; they were not.
+
+    A test that merely checked "the panel has an arrival column" would pass
+    either way, so this reads the source instead.
+    """
+
+    @staticmethod
+    def _called_names(source: str) -> set[str]:
+        called = set()
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name):
+                called.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                called.add(func.attr)
+        return called
+
+    def test_the_module_never_calls_session_on_or_after(self) -> None:
+        self.assertNotIn(
+            "session_on_or_after",
+            self._called_names(_SCRIPT.read_text()),
+            "the arrival anchor is READ from the label store's `anchor_session`; "
+            "recomputing it is a second definition of the label",
+        )
+
+    def test_the_gate_reads_calls_and_not_prose(self) -> None:
+        """Positive control, both ways. A substring check would fire on the
+        docstring that explains the rule, and would miss a call written as an
+        attribute."""
+        self.assertIn("session_on_or_after", _SCRIPT.read_text())  # named in prose
+        self.assertIn("f", self._called_names("f(1)"))
+        self.assertIn("g", self._called_names("mod.g(1)"))
+        self.assertNotIn("h", self._called_names('"""h is forbidden"""'))
+
+    def test_the_module_does_read_the_stored_anchor(self) -> None:
+        """A file that dropped the anchor entirely would satisfy the gate."""
+        self.assertIn("anchor_session", _SCRIPT.read_text())
 
 
 class TestContiguousBlockFolds(unittest.TestCase):

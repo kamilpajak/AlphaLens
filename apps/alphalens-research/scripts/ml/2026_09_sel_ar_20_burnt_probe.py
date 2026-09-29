@@ -32,8 +32,9 @@ PANEL (frozen before the run)
 - `selection_labels` rows with `sel_label_status_20 == "ok"` and
   `brief_date <= 2026-07-05`, inner-joined to `thematic_briefs` on
   (brief_date, ticker), then collapsed by `ticker_episode_dedup`.
-- Measured 2026-09-29: 391 pre-dedup rows -> **198 ticker-episodes in 27
-  arrival-session clusters**. The episode count is the unit (README rule 1,
+- Measured 2026-09-29: 391 pre-dedup rows -> **198 ticker-episodes in 26
+  arrival-session clusters** (the 27 an earlier draft carried came from the
+  recomputed anchor the note below retracts). The episode count is the unit (README rule 1,
   ledger rule 5); quoting the 391 would repeat the error that voided the #1227
   power gate on 2026-09-24.
 - `briefed_any_theme` is true on every row here, so the briefed and all-rows
@@ -42,9 +43,22 @@ PANEL (frozen before the run)
 - The insider-cluster event lane cannot appear: it went live 2026-09-06, two
   months after this window closes (verified: 0 rows at or before 2026-07-05).
 
-OUTCOME
-`sel_ar_20` as STAMPED in the label store, never recomputed here — recomputing
-a label is a new definition (`ml_label_registry_design_2026_09_16.md` §8).
+OUTCOME AND ANCHOR
+`sel_ar_20` AND the `anchor_session` it is measured from are both READ from
+the label store, never recomputed — recomputing either is a new definition
+(`ml_label_registry_design_2026_09_16.md` §8). The anchor is the first session
+AFTER the brief date (owner decision D4), which `session_on_or_after` does NOT
+return when the brief date is itself a session: the two disagree on 296 of 466
+burnt rows. The first run of this probe recomputed it and measured 65 articles
+as published after their own anchor open, which was an artefact of that error
+and not a property of the data. A source gate in the test file now forbids the
+call outright.
+
+Known limitation, recorded not fixed: `ticker_episode_dedup` derives its own
+chaining arrival internally via `session_on_or_after`. That only sets the
+5-session window for collapsing repeats of one ticker, a relative comparison a
+uniform one-session shift barely moves, and the shared helper is out of scope
+for an exploratory probe.
 
 REGRESSORS (frozen; standardised, so coefficients read against the published
 burnt A20 table in `a20_power_preflight_2026_09.md` §4.1: ATR -0.378,
@@ -124,7 +138,41 @@ SEEDS: base 0; coefficient bootstrap 1. The secondary carries NO inference
 on purpose — a bootstrap interval around a knowingly leaking comparison
 would put false precision on a biased number. It prints point values only.
 
-Last run: NOT YET RUN.
+RESULT (run 2026-09-29; the run of record is the SECOND — see the note below)
+Panel 198 episodes / 26 arrival clusters, 194 complete cases. PIT violations 0,
+3 rows unresolved against the news store.
+
+  control    atr               beta -0.0594  t -7.66  p_wcb 0.0006
+  control    ma50_dist         beta -0.0500  t -3.74  p_wcb 0.0050
+  candidate  catalyst_age_h    beta +0.0056  t +0.57  p_wcb 0.5557
+  candidate  catalyst_strength beta +0.0123  t +0.94  p_wcb 0.4242
+  candidate  ma200_slope       beta -0.0176  t -1.76  p_wcb 0.0847
+
+NULL on the news axis. Nothing approaches the 0.0167 reference line, and only
+`ma200_slope` clears even a plain 0.05 on neither reading (0.0847 jointly,
+0.0601 with the controls alone).
+
+Independent reproduction of the known structure: coefficients here are in raw
+label units per 1 sd of feature. sd(`sel_ar_20`) on this panel is 0.1713, so in
+the published table's units ATR is -0.347 against its -0.378 and MA50 -0.292
+against -0.303. Two panels built by different code agree to within a few
+hundredths. `ma200_slope` converts to -0.103, which lands on the 0.10 smallest
+actionable effect #1227 froze — and is still indistinguishable from zero at this
+N, is one of three exploratory coefficients, and is not a finding.
+
+Secondary, LEAKING as declared: baseline A (fit-free -ATR) +0.253, baseline B
+(ATR + MA50, fitted) +0.315, model (all five) +0.314. Model minus B is -0.002.
+The leak was the model's advantage and it still did not beat the structure
+already known to be real; it beats A by +0.061 only because it contains MA50.
+
+FIRST RUN DISCARDED, recorded rather than hidden: it recomputed the arrival
+anchor with `session_on_or_after` instead of reading `anchor_session`, which
+disagrees on 296 of 466 burnt rows and made 65 articles look published after
+their own anchor open. The candidates read null in both runs, but the feature
+was mis-specified, so only the second run stands. The test file now forbids the
+call with an AST gate.
+
+Last run: 2026-09-29 (second run). Verdict: null on the news axis.
 """
 
 from __future__ import annotations
@@ -135,7 +183,7 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
-from alphalens_pipeline.paper.calendar import session_on_or_after, session_open_utc
+from alphalens_pipeline.paper.calendar import session_open_utc
 from alphalens_research.diagnostics import edge_stores
 from alphalens_research.diagnostics.options_retro import (
     cluster_ols,
@@ -249,7 +297,14 @@ def build_panel():
         if isinstance(brief, pd.DataFrame):
             brief = brief.iloc[0]
         rows.append(
-            {"brief_date": r["brief_date"], "ticker": key[1], LABEL: r[LABEL], **brief.to_dict()}
+            {
+                "brief_date": r["brief_date"],
+                "ticker": key[1],
+                # READ, never recomputed — see OUTCOME AND ANCHOR.
+                "arrival": r["anchor_session"],
+                LABEL: r[LABEL],
+                **brief.to_dict(),
+            }
         )
     panel = pd.DataFrame(rows)
     diag["joined"] = len(panel)
@@ -258,11 +313,9 @@ def build_panel():
     diag["episodes"] = len(panel)
 
     news = load_news_index()
-    arrivals, ages = [], []
+    ages = []
     for _, r in panel.iterrows():
-        arrival = session_on_or_after(r["brief_date"], EX)
-        arrivals.append(arrival)
-        open_utc = session_open_utc(arrival, EX)
+        open_utc = session_open_utc(r["arrival"], EX)
         stamped = r.get("source_event_published_at")
         parsed = pd.to_datetime(stamped, errors="coerce") if stamped is not None else pd.NaT
         stamped_date = parsed.date() if not pd.isna(parsed) else None
@@ -274,9 +327,8 @@ def build_panel():
         if chosen >= open_utc:
             diag["pit_violations"] += 1
         ages.append((open_utc - chosen).total_seconds() / 3600.0)
-    panel["arrival"] = arrivals
     panel["catalyst_age_h"] = ages
-    diag["clusters"] = pd.Series([str(a) for a in arrivals]).nunique()
+    diag["clusters"] = panel["arrival"].astype(str).nunique()
     return panel, diag
 
 
