@@ -5799,7 +5799,7 @@ class TestEveryStopMoveMarkerHasAnAlertReason(unittest.TestCase):
 
     _BOOKKEEPING = frozenset({"amend_ok", "amend_seq", "envelope_clamped"})
 
-    def _written_marker_kinds(self, action: AmendStop) -> set[str]:
+    def _written_markers(self, action: AmendStop) -> list[dict[str, Any]]:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             broker = _ProtBroker(
@@ -5810,8 +5810,8 @@ class TestEveryStopMoveMarkerHasAnAlertReason(unittest.TestCase):
             )
             with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(action, False, cl.TickReport())
-                kinds = {str(ln.get("kind")) for ln in cl._iter_standalone_stop_journal()}
-        return kinds - self._BOOKKEEPING
+                lines = list(cl._iter_standalone_stop_journal())
+        return [ln for ln in lines if str(ln.get("kind")) not in self._BOOKKEEPING]
 
     def test_each_stop_moving_amend_writes_a_marker_the_formatter_knows(self) -> None:
         cases = {
@@ -5822,12 +5822,15 @@ class TestEveryStopMoveMarkerHasAnAlertReason(unittest.TestCase):
         }
         for reason, action in cases.items():
             with self.subTest(reason=reason):
-                markers = self._written_marker_kinds(action)
-                self.assertEqual(len(markers), 1, markers)
-                marker = markers.pop()
+                written = self._written_markers(action)
+                self.assertEqual(len(written), 1, written)
+                marker = str(written[0]["kind"])
                 # The stop-fill pass looks for it, and the formatter can name it.
                 self.assertIn(marker, cl._STOP_MOVE_LEVEL_KEY)
                 self.assertIn(marker, trade_alerts.REASON_BY_STOP_MARKER)
+                # And the level the alert prints is on the record under the key
+                # the pass reads (a renamed field would print no level).
+                self.assertEqual(written[0][cl._STOP_MOVE_LEVEL_KEY[marker]], 91.5)
 
     def test_the_pass_and_the_formatter_know_the_same_markers(self) -> None:
         self.assertEqual(set(cl._STOP_MOVE_LEVEL_KEY), set(trade_alerts.REASON_BY_STOP_MARKER))

@@ -3785,8 +3785,8 @@ class _StandingStop:
     # When the stop was placed, and at what level when the record says so
     # (#1621). A stop-move marker older than ``placed_ts`` moved an EARLIER
     # stop on the same uic: every new stop is placed at the plan level.
-    placed_ts: float = 0.0
-    placed_level: float | None = None
+    placed_ts: float
+    placed_level: float | None
 
 
 def _fold_standing_stop_ids(lines: Iterable[Mapping[str, Any]]) -> dict[int, _StandingStop]:
