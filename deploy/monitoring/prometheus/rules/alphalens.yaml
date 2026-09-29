@@ -144,11 +144,12 @@ groups:
           summary: "literature-scan-monthly success metric missing"
           description: "No success metric for literature-scan-monthly. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
-      # thematic-build runs at 00:30, 04:30 and 08:30 UTC (#1479; 6× a day
-      # before). The normal gap from the 08:30 run to the next 00:30 run is
-      # about 16.5h, and about 20h when the 00:30 run fails and 04:30
-      # repairs it, so 86400s = 24h pages only when no slot succeeded for a
-      # whole day. A day without a success is a day without a brief.
+      # thematic-build runs at 04:30, 08:30 and 12:30 UTC (#1479; 6× a day
+      # before; the whole schedule moved 4h later in #1606 so the deciding
+      # run can see the SEC daily index). The normal gap from the 12:30 run
+      # to the next 04:30 run is 16h, and 20h when the 04:30 run fails and
+      # 08:30 repairs it, so 86400s = 24h pages only when no slot succeeded
+      # for a whole day. A day without a success is a day without a brief.
       - alert: AlphalensJobStale
         expr: time() - alphalens_job_last_success_timestamp_seconds{job="thematic-build"} > 86400
         for: 5m
@@ -157,7 +158,7 @@ groups:
           route: telegram
           unit: thematic-build
         annotations:
-          summary: "thematic-build stale > 24h (runs at 00:30, 04:30 and 08:30 UTC)"
+          summary: "thematic-build stale > 24h (runs at 04:30, 08:30 and 12:30 UTC)"
           description: "Last successful run was {{ $value | humanizeDuration }} ago."
 
       - alert: AlphalensJobMetricMissing
@@ -1286,20 +1287,24 @@ groups:
       # 00-01 UTC slot dropped and 0.66 over the 04-05 UTC slot alone;
       # for financing_announcement 0.91 / 0.90 / 0.90.
       #
-      # WHY THE DENOMINATOR NEEDS WATCHING ANYWAY. The 00:30 UTC slot
-      # fetches the SEC daily index before the SEC publishes it and gets
-      # a 403 on all 31 of 31 runs (the later slots fail only on days the
-      # SEC does not publish). It therefore contributes 60% of the
-      # attempts and 1% of the matches, and dropping it would multiply
-      # every template's measured share by about 2.5. That is the SAFE
-      # direction for this rule -- the 7d share jumps while the 30d
-      # baseline lags, pushing the ratio above 1 -- but the reverse, a
-      # NEW barren slot, would divide every template's share at once and
-      # is the #1200 failure in a new dress. Whoever fixes #1606 must first
-      # silence this alert for 30 days while the baseline catches up:
+      # WHY THE DENOMINATOR NEEDS WATCHING ANYWAY. Until #1606 the 00:30
+      # UTC slot fetched the SEC daily index before the SEC published it
+      # and got a 403 on all 31 of 31 runs (the later slots fail only on
+      # days the SEC does not publish). It contributed 60% of the attempts
+      # and 1% of the matches, so removing it multiplies every template's
+      # measured share by about 2.5. That is the SAFE direction for this
+      # rule -- the 7d share jumps while the 30d baseline lags, pushing the
+      # ratio above 1 -- but the reverse, a NEW barren slot, would divide
+      # every template's share at once and is the #1200 failure in a new
+      # dress.
+      #
+      # #1606 moved the schedule to 04:30 / 08:30 / 12:30 UTC on
+      # 2026-09-29, which is exactly that run-mix change. This alert has to
+      # be silenced for 30 days while the 30d baseline catches up; nothing
+      # silences it automatically:
       # `amtool silence add alertname=AlphalensTemplateMatchRateCollapsed
-      # --duration 720h --comment "#1606 changed the run mix"`. Nothing
-      # silences it automatically.
+      # --duration 720h --comment "#1606 changed the run mix"`.
+      # The same recipe applies to any future change to the slot list.
       #
       # The counters reset on every CLI invocation, so ``increase()``
       # disagrees with a run-by-run count: measured over these 30 days it

@@ -35,7 +35,7 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic ingest"
 # --force: the per-UTC-day read-through cache at
 # alphalens_pipeline/thematic/sources/polygon_news.py:124 would
 # otherwise short-circuit every run after the first of the day. The
-# 04:30 and 08:30 UTC repair slots still re-fetch the day's news: it feeds
+# 08:30 and 12:30 UTC repair slots still re-fetch the day's news: it feeds
 # later dates' theme rollups, and never changes a published brief (#1479). Polygon
 # Stocks Basic ($0/mo) has no daily cap, only a 5 req/min rate
 # limit, so forced re-fetch is free. See

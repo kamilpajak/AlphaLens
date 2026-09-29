@@ -1,6 +1,13 @@
-# Trigger the bracket-cost replay daily at 03:30 UTC — between the form4
-# incremental (02:30) and the thematic build (04:30), clear of the nightly
-# feedback sweep (06:30), so the Polygon quota is never contended.
+# Trigger the bracket-cost replay daily at 03:30 UTC — after the form4
+# incremental (02:30) and before the nightly feedback sweep (06:30), the two
+# other jobs that lean on the same per-key Polygon budget.
+#
+# It does NOT get the window to itself: the replay runs about 2h (03:30-05:50
+# UTC measured 2026-09-23..09-29), so it overlaps the thematic build's 04:30
+# slot, which fetches Polygon news. That overlap predates #1606 and the
+# measured ingest cost at 04:30 (9.6 min mean) is within a couple of minutes
+# of the uncontended 00:30 one (8.4 min), so it is a real overlap with no
+# measured price — not the clean separation this comment used to claim.
 #
 # Persistent=true so a missed fire runs on next boot. Catching up is safe and
 # cheap: --prepare freezes days already written and the monitor advances rows

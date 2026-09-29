@@ -43,9 +43,10 @@
 #   --benchmark  fill the benchmark-excess columns, which the monitor writes as
 #                null because the index leg needs its own fetch.
 #
-# 03:30 UTC sits between the form4 incremental (02:30) and the thematic build
-# (04:30), and well clear of the nightly feedback sweep (06:30), so the Polygon
-# quota is never contended.
+# 03:30 UTC sits after the form4 incremental (02:30) and before the nightly
+# feedback sweep (06:30). The replay runs about 2h, so it does overlap the
+# thematic build's 04:30 Polygon news fetch; see the timer unit for the
+# measurement that says the overlap costs nothing worth moving a slot for.
 [Unit]
 Description=AlphaLens market-cap bracket-cost replay
 After=network-online.target

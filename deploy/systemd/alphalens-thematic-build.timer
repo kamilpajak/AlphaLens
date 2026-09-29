@@ -2,18 +2,91 @@
 # Fires the companion alphalens-thematic-build.service 3× per day, all
 # before the NYSE open (#1479).
 #
-#   00:30 UTC  the deciding run: builds and publishes the brief for
+#   04:30 UTC  the deciding run: builds and publishes the brief for
 #              yesterday (UTC). A published brief is final
 #              (alphalens_pipeline/thematic/publication.py).
-#   04:30 UTC  repair: publishes the date only if the 00:30 run failed,
-#   08:30 UTC  and fills in options telemetry the earlier slot missed.
+#   08:30 UTC  repair: publishes the date only if the 04:30 run failed,
+#              and fills in options telemetry the earlier slot missed.
+#   12:30 UTC  telemetry only, in practice. It is still allowed to publish
+#              a missing brief, but a deciding run needs 69 min median and
+#              104 min at worst to reach the brief stage, and
+#              publication.deadline_utc refuses to create one from the
+#              13:30 UTC arrival open onward — so a 12:30 start misses the
+#              deadline on a median day. Before #1606 the third slot ran at
+#              08:30 and could publish; that third chance is what the move
+#              costs, against 0 failed runs in the 66 post-#1330 slots.
+#
+# WHY 04:30 AND NOT 00:30 (#1606). The deciding run is the only one whose
+# news corpus reaches a reader, and the EDGAR press-release source
+# (alphalens_pipeline/thematic/sources/edgar_press_release.py) discovers
+# every 8-K of the day from one SEC daily index, form.<D>.idx. The SEC
+# writes that file LATE ON D ITSELF, so it is not there at the start of
+# D+1 and SEC answers 403 for the missing path.
+#
+# Measured 2026-09-29, not estimated. Over 310 filing dates
+# (2025-07-01..2026-09-28) the file's publication instant, read from the
+# quarter listing's last-modified field and pinned to UTC against the
+# file's own HTTP Last-Modified header, lands at 02:01-03:31 UTC on D+1:
+# median 02:05, p99 03:31. Not one of the 310 existed before 01:30 UTC.
+# The old 00:30 slot therefore 403'd on 31 of 31 runs over a month while
+# the 04:30 and 08:30 slots failed only on days the SEC publishes nothing.
+#
+# A FIXED UTC SLOT IS SAFE ACROSS THE DST CHANGE, which is the reason this
+# is a UTC calendar and not an America/New_York one. The SEC job runs on
+# Eastern wall-clock, so its UTC time shifts an hour in November. Split by
+# offset, the 310 dates say:
+#
+#   EDT (228 dates)  median 22:04 ET, latest 22:43:36 ET -> 02:43:36 UTC
+#   EST ( 82 dates)  median 22:05 ET, latest 22:31:02 ET -> 03:31:02 UTC
+#
+# The job keeps the same Eastern wall-clock in both regimes, so winter only
+# moves it to 03:0x UTC. Even the worst tail ever seen (22:43 ET, a summer
+# date) would land at 03:43 UTC if it happened in winter — still 47 min
+# before this slot. Zero of the 310 published at or after 04:30 UTC.
+#
+# What that cost, measured over 2026-09-04..09-28: EDGAR press releases are
+# 24-48% of a trading day's news rows (985 of 4112) and carry 292 of the
+# day's template events, and NONE of them were in the corpus the deciding
+# run published from. Across 30 brief dates, 0 of 232 rows cite a catalyst
+# from the asof session; the SEC-sourced ones the briefs do cite are 2-7
+# days old, arriving through catalyst_resolver's 30-day rolling window
+# after a later slot had re-ingested that older date.
+#
+# The residual is an SEC-side delay no slot time can fix: on 3 of the 310
+# dates the index appeared many hours late, and for 2026-07-10 the journal
+# shows every slot that day failing, through 12:33 UTC. The repair slots
+# absorb those.
+#
+# COST OF THE MOVE. The brief now lands later. The old 00:30 slot reached
+# the brief stage in 69 min median and 104 min at worst over 22 post-#1330
+# runs (2026-09-08..09-29). The new deciding run also pays for the EDGAR
+# rows the old one never saw, which is a REAL addition and not free: over
+# the same 22 runs `thematic extract` cost 25.5 min mean at 00:30 (a corpus
+# with no EDGAR in it) and a further 9.7 min at 04:30 (mostly the EDGAR rows
+# the 00:30 run had missed). The corpus is capped at 200 items
+# (news_ingest.DEFAULT_MAX_ITEMS), so EDGAR rows DISPLACE lower-priority
+# ones rather than adding to the count — which bounds the new deciding run's
+# extract by the 35 min those two stages cost together today, about 10 min
+# over the old 25.5. That puts the brief at roughly 05:49 UTC median and
+# 06:24 at the observed worst.
+#
+# The owner reads the brief around 07:00-08:00 UTC, so it is there — but the
+# margin is about 35 min at the worst observed run, where it used to be over
+# five hours. A run that went to the full TimeoutStartSec=150min would
+# finish at 07:00 UTC, inside the reading window; no run has since #1330.
+#
+# Polygon contention does not change. `thematic ingest --force` already runs
+# at 04:30 every day, inside the bracket-cost replay's 03:30-05:50 UTC
+# window, and the ingest stage costs 8.4 min at 00:30 against 9.6 at 04:30
+# and 10.0 at 08:30 — the spread tracks the EDGAR per-filing fetches, not
+# contention. What is new in that window is the LLM and yfinance work of the
+# deciding run, which shares no quota with bracket-cost.
 #
 # Until #1479 the build ran 6× a day (00/04/08/12/16/20:30, PR-F #300).
-# Since the idempotent freeze the 00:30 slot set the list on every date,
-# and the later slots could only CHANGE it: 16 of 114 dates were
+# Since the idempotent freeze the deciding slot sets the list on every
+# date, and the later slots could only CHANGE it: 16 of 114 dates were
 # recomputed after the open, so /edge measured lists the owner never read
-# (docs/research/thematic_brief_publication_history_2026_09_16.md). The
-# owner reads the brief around 07:00-08:00 UTC and before the open.
+# (docs/research/thematic_brief_publication_history_2026_09_16.md).
 #
 # HH:30 keeps the schedule readable in `systemctl --user list-timers` and
 # out of the every-15-min EDGAR-detect fires.
@@ -22,11 +95,11 @@
 # run once at next boot. A catch-up run after the arrival open publishes
 # nothing for that date (the deadline), so a late boot cannot create a
 # brief nobody read before trading.
-Description=Trigger AlphaLens thematic build 3× daily (00:30, 04:30, 08:30 UTC)
+Description=Trigger AlphaLens thematic build 3× daily (04:30, 08:30, 12:30 UTC)
 After=network-online.target
 
 [Timer]
-OnCalendar=*-*-* 00,04,08:30:00 UTC
+OnCalendar=*-*-* 04,08,12:30:00 UTC
 Persistent=true
 # 5min jitter deflects the boot-storm thundering herd: a VPS that
 # missed a day of slots fires the catch-up at boot+0, which collides with
