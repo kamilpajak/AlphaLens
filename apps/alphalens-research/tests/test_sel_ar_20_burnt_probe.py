@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import datetime as dt
 import importlib.util
+import math
 import unittest
 from pathlib import Path
 
@@ -129,6 +130,32 @@ class TestTheAnchorIsReadNeverRecomputed(unittest.TestCase):
     def test_the_module_does_read_the_stored_anchor(self) -> None:
         """A file that dropped the anchor entirely would satisfy the gate."""
         self.assertIn("anchor_session", _SCRIPT.read_text())
+
+
+class TestCatalystAgeHours(unittest.TestCase):
+    """An article at or after the anchor open is not a lag, so it is EXCLUDED.
+
+    The first version counted the violation and still entered the negative
+    value. Zero rows hit it once the anchor was read rather than recomputed,
+    but a counter is not an exclusion.
+    """
+
+    def test_a_normal_lag_is_returned_in_hours(self) -> None:
+        got = probe.catalyst_age_hours(_ts("2026-06-01T13:30:00"), _ts("2026-06-02T13:30:00"))
+        self.assertAlmostEqual(got, 24.0)
+
+    def test_an_article_after_the_open_is_excluded_not_negated(self) -> None:
+        got = probe.catalyst_age_hours(_ts("2026-06-02T18:00:00"), _ts("2026-06-02T13:30:00"))
+        self.assertTrue(math.isnan(got))
+
+    def test_an_article_exactly_at_the_open_is_excluded(self) -> None:
+        """Positive control on the boundary — a strict `>` would let it through
+        with an age of exactly zero."""
+        moment = _ts("2026-06-02T13:30:00")
+        self.assertTrue(math.isnan(probe.catalyst_age_hours(moment, moment)))
+
+    def test_no_timestamp_is_excluded(self) -> None:
+        self.assertTrue(math.isnan(probe.catalyst_age_hours(None, _ts("2026-06-02T13:30:00"))))
 
 
 class TestContiguousBlockFolds(unittest.TestCase):

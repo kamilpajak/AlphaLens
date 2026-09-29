@@ -148,6 +148,10 @@ Panel 198 episodes / 26 arrival clusters, 194 complete cases. PIT violations 0,
   candidate  catalyst_strength beta +0.0123  t +0.94  p_wcb 0.4242
   candidate  ma200_slope       beta -0.0176  t -1.76  p_wcb 0.0847
 
+Re-run after the review hardening (PIT rows excluded rather than counted,
+duplicate-brief branch made loud): identical to the digit, because zero rows
+hit either guard.
+
 NULL on the news axis. Nothing approaches the 0.0167 reference line, and only
 `ma200_slope` clears even a plain 0.05 on neither reading (0.0847 jointly,
 0.0601 with the controls alone).
@@ -256,6 +260,20 @@ def contiguous_block_folds(sessions, block_sessions=BLOCK_SESSIONS):
     return blocks
 
 
+def catalyst_age_hours(chosen, open_utc):
+    """Hours from publication to the anchor open, or NaN if that is not a lag.
+
+    An article at or after the open is not a point-in-time feature, so it is
+    excluded rather than entered with a negative value. Counting the violation
+    and keeping the row would put a future-stamped value on the money side of
+    the fit. Zero rows hit this after the anchor fix; the guard is here so a
+    future store change cannot reintroduce it silently.
+    """
+    if chosen is None or chosen >= open_utc:
+        return float("nan")
+    return (open_utc - chosen).total_seconds() / 3600.0
+
+
 def load_news_index():
     """url -> list of tz-aware UTC publication timestamps, from the news store."""
     index = defaultdict(list)
@@ -295,7 +313,11 @@ def build_panel():
             diag["no_brief"] += 1
             continue
         if isinstance(brief, pd.DataFrame):
-            brief = brief.iloc[0]
+            # Measured 2026-09-29: zero duplicated (brief_date, ticker) in the
+            # brief store and zero on the label side after the status filter,
+            # so this cannot happen today. If the store shape ever changes,
+            # picking row zero would silently choose one brief over another.
+            raise AssertionError(f"the brief store holds more than one row for {key}")
         rows.append(
             {
                 "brief_date": r["brief_date"],
@@ -322,11 +344,9 @@ def build_panel():
         chosen = pick_news_timestamp(news.get(str(r.get("source_event_url"))) or [], stamped_date)
         if chosen is None:
             diag["news_unresolved"] += 1
-            ages.append(np.nan)
-            continue
-        if chosen >= open_utc:
+        elif chosen >= open_utc:
             diag["pit_violations"] += 1
-        ages.append((open_utc - chosen).total_seconds() / 3600.0)
+        ages.append(catalyst_age_hours(chosen, open_utc))
     panel["catalyst_age_h"] = ages
     diag["clusters"] = panel["arrival"].astype(str).nunique()
     return panel, diag
