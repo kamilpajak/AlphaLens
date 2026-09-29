@@ -12,7 +12,14 @@ stop rests, #1597; implementation under way, epic #1571, PR 1-5 merged;
 sections 4.4, 5.4, 6.3 and 8.1 revised 2026-09-26 before PR 6, after running the stop arms and the
 cost gate: the re-anchor arm can LOWER the resting stop, a rung below a stop
 that has moved is unreachable, and the cost gate's FX leg has no stated rate)
-**Date:** 2026-09-23, last revised 2026-09-26
+**Date:** 2026-09-23, last revised 2026-09-29
+(2026-09-28, PR 7's plan: sections 4.4, 4.6, 5, 5.1, 5.2, 5.3 and 5.4 revised — among them a
+FOURTH tie row, which fixed the rung/take-profit order as "the take-profit first".
+2026-09-29: that row's RESOLUTION is WITHDRAWN. Running it showed it is not a bound in
+either direction, and the literature this section was re-deriving says why: for a document
+with more than one entry or exit a unique worst case need not exist at all. The row's
+DETECTION survives, the section stops claiming pessimism it cannot deliver, and the
+vocabulary becomes the published one — see the revision note in 4.4)
 **Baseline:** `origin/main` `a444f6b2`
 **Related:** epic #1526 (express every `/edge` what-if lens as a TradeIntent document),
 `docs/research/bracket_keeper_repo_split_stage1_design_2026_08_02.md` (PARKED blueprint),
@@ -42,9 +49,9 @@ multiplicity budget, and carries no accrued history.
 | language | Python, sharing the contract's own arithmetic |
 | `/edge` | shared envelope shape now, no `/edge` code now |
 | stop management | one implementation, extracted into the shared contract leaf |
-| intra-bar ties | always pessimistic — a fixed convention, never a configuration field (§4.4) |
+| intra-bar ties | ONE declared decision rule, fixed, never a configuration field. Pessimistic where a worse resolution is well defined per period; NOT a bound on the run, and for a laddered document a unique worst case need not exist (§4.4) |
 | a rung below a stop that has MOVED | skipped on every bar the stop sits above it, never cancelled. Filling it books a purchase at a price the same bar had already sold at, and a fill after the position closes is a re-entry this tool does not model (§4.4) |
-| which bars count as ambiguous | only the bars whose ordering the tape cannot settle. A same-bar rung fill and stop-out is forced by the levels and is NOT counted, against the existing `/edge` replay (§4.4) |
+| which bars count as SNUs | only the bars whose ordering the tape cannot settle AND where it changes the money. A same-bar rung fill and stop-out is forced by the levels and is NOT counted, against the existing `/edge` replay. The count detects; it does not certify, and it is a frequency rather than a magnitude (§4.4, §6.3) |
 | the gap-open fill price | it follows the tape wherever the order RESTS at the broker — a rung and the disaster stop fill at the bar's open when the open is already through them. A take-profit rests nowhere in v1, so it fills at its level (§4.4) |
 | the cost gate's FX leg | its rate is not stated, so `fx_applies: true` is refused in v1. The omitted term is 50 bps on every tranche; pricing it is #1592 (§5.4, §8.1) |
 | every input path | classified here as interpreted, translated or out of scope; an unclassified path is refused, never approximated (§4.3.1) |
@@ -344,7 +351,7 @@ inheriting it says nothing.
 
 **All four feed §4.4, not only one.** Each adds or moves a level, so each
 changes how often the tie convention has to decide and therefore what
-`ambiguous_bars` reports. Entry trailing is the hardest: its trigger is a
+`snu_bars` reports. Entry trailing is the hardest: its trigger is a
 running low that ratchets down, plus a distance, so whether it fires inside a
 bar depends on whether the low came before the retrace — which OHLC cannot say.
 That is a third row of §4.4's table, not an exception to it, and §4.4 already
@@ -675,40 +682,120 @@ right, and describes a different policy. The classification gate is what turns
 that into a refusal: a lifted refusal makes `ceiling_price` a path no class
 covers, and no class covers it until someone edits §4.3.1 to say which.
 
-### 4.4 Intra-bar ties: pessimistic, fixed, and counted
+### 4.4 Intra-bar ties: what the tape cannot settle, and what the replay does
 
 A minute bar carries an open, a high, a low and a close. It does NOT carry the
 ORDER in which the high and the low occurred. When one bar touches two levels
 whose outcomes differ, the data cannot say which happened first, and the replay
 must assume.
 
-**The convention: whichever resolution is worse for the position wins.** It is
-a named convention, not a configuration field. Four situations fall under it,
-and the first two are already resolved this way by the existing replay:
+**The field has a name for this and a published taxonomy; this section used
+neither until 2026-09-29.** Maier-Paape and Platen call such a bar an **SNU** —
+their abbreviation for "situation which is not unique" — in *Backtest of Trading
+Systems on Candle Charts* (arXiv:1412.5558, Institut für Mathematik, RWTH
+Aachen). Their words: "there are always situations, which can not or not
+uniquely (SNU: situation which is not unique) be determined". They propose four
+modes a backtester may offer the user — worst case (`wc`), best case (`bc`),
+ignore the trade (`ig`) and load finer data (`ex`) — and AgenaTrader ships them
+as a "Decision Mode" setting. This replay offers none of the four as a switch.
+It applies ONE stated decision rule and reports how often that rule decided
+money. That is a fifth thing, and naming it is the point of this revision.
+
+**The INTENT is still pessimistic: where a worse resolution is well defined, it
+wins.** Three facts fix how far that reaches, and the section claimed more than
+all three allow until 2026-09-29.
+
+**It is per PERIOD, not per run.** The same authors need the same restriction:
+their best and worst cases are taken "on premise that it is best/worst for the
+current period only", because exiting at a target now may be worse than holding
+for a better exit later. A rule that is worse on this bar is not thereby a lower
+bound on the run.
+
+**For a document with more than one entry or exit, a unique worst case need not
+EXIST.** Löw, Maier-Paape and Platen restrict their whole theory to "setups
+which allow for at most one entry execution and ... at most one entry and one
+exit", and close with: "Many of those concepts can be generalized to more
+complex situations with more than one entry or exit. It remains to be shown how
+our results can be transferred to these setups. Furthermore, in that case there
+would no longer necessarily be unique worst cases and best cases."
+(*Correctness of Backtest Engines*, arXiv:1509.08248.) Every document this tool
+replays is that shape: a laddered entry, a laddered exit and a disaster stop. So
+the convention below is a DECLARED DECISION RULE, not an approximation of a
+worst case that may not exist.
+
+**Measured, which is what forced this revision.** On 2026-09-28 a fourth row was
+added here fixing the rung/take-profit order as "the take-profit first", on the
+argument that it sells fewer units and is therefore worse. Running it showed the
+rule is not a bound in either direction: it ended 39.83 units BETTER than a
+tape-consistent alternative on one input and 144.68 units WORSE on another,
+because a take-profit whose clamp sweeps the whole position TERMINATES the trade
+and so escapes every later loss. The resolution is withdrawn; its DETECTION is
+kept below.
+
+Three situations have a resolution that is worse in the per-period sense, and
+they are the ones the existing replay already resolves this way:
 
 | one bar touches | resolution | why this is the worse one |
 |---|---|---|
 | the stop and a take-profit | the stop | +1R becomes −1R |
 | a lower entry rung and the stop | fill first, then stop out | without the fill there would be no loss |
 | a new low and the trailing entry trigger | the trigger fires on the PRE-BAR trough | the trough had not ratcheted down yet, so the buy pays the higher trigger |
-| a rung BELOW the bar's open and a take-profit | the take-profit fires first, on the position held before that rung filled | it sells fewer units, and a sweep that completes closes the position so the deeper rung never fills at all |
+
+Row 1 is not this tool's invention: QuantConnect's Lean says the same thing in
+prose where it resolves a contingent pair — "we can't know which one would of
+happen first, so we make the pessimistic assumption: stop orders, like the stop
+loss, go first". Not every engine agrees. NautilusTrader walks a bar
+open→high→low→close by default, which on a long resolves the same pair the other
+way, and offers the open-proximity heuristic only as an opt-in. TradingView and
+NinjaTrader both pick the order from whether the open sits nearer the high or the
+low, so neither declares a fixed path at all. This replay's order is FIXED
+because section 6.3 requires two runs over one input to be byte-identical.
 
 The third row arrived on 2026-09-25 with the decision to model entry trailing
 (§3.3) — which is what the earlier text anticipated in saying the convention
 covers the class rather than the cases. It is also the row that fires most often.
 The trigger is a running low plus a distance, so a document entering on a trail
 rather than at fixed rungs meets the convention on every bar that makes a new low
-and then retraces. For such a document `ambiguous_bars` is not a footnote; it is
+and then retraces. For such a document `snu_bars` is not a footnote; it is
 the number that says how much of the answer came from the rule.
 
-**The fourth row arrived on 2026-09-28, from PR 7's plan review, and it names a
-tie the walk had been resolving the FLATTERING way.** The distinction is where
-the rung sits relative to the bar's OPEN. A rung whose limit is at or above the
-open is already through at the first print, so its fill is not in question. A
-rung BELOW the open fills somewhere inside the bar, and if the same bar also
-reaches an unfired take-profit the tape does not say which came first — so the
-convention applies, and the tranche goes first, sized on the position held
-before that rung filled.
+**A FOURTH situation is an SNU that this section does NOT resolve, and says so.**
+A rung whose limit is at or above the bar's open is through at the first print,
+so its fill is not in question. A rung BELOW the open fills somewhere inside the
+bar, and if that same bar also reaches an unfired take-profit, the tape does not
+say which came first. It is deliberately not a row of the table above, because
+the table's third column is a claim this case cannot support.
+
+The reason is the clamp. A tranche sells `min(fraction × intended, held)`, so
+whether it sweeps the WHOLE position depends on how much is held when it fires —
+which is exactly what the unknown order decides. Three bands, and the boundary
+between them is computable from the bar without looking ahead:
+
+| band | what the two readings do | can a worse one be named? |
+|---|---|---|
+| the touched ladder wants FEWER units than are already held | both sell the same units at the same price, and the rung fills in both | no SNU at all |
+| the ladder's appetite reaches what is held even AFTER the deep rung fills | both readings sweep the position on this bar, so there is no later tape to escape | YES, per period: tranche-first sells fewer units and is worse |
+| in between — the ladder sweeps only the smaller position | one reading ends the trade here, the other carries a residue into later bars | NO. This is the case the paragraph above measured at 39.83 one way and 144.68 the other |
+
+The third band is why no resolution is published for this case. A rule that is
+worse per period is better or worse per RUN depending on bars the replay has not
+read, and by Löw et al. a unique worst case for a laddered document need not
+exist to be found.
+
+**And the second band is not a place to apply the convention selectively, for a
+reason that has nothing to do with convenience.** The boundary between bands 2
+and 3 is drawn by the take-profit COST GATE: which tranches count toward the
+ladder's appetite depends on what the gate affords, and the gate's verdict
+itself moves with the order, because a deep fill lowers the average entry and
+lowers the threshold with it. Making the FILL ORDER depend on that boundary
+would make it depend on the stated commission — a document would fill different
+rungs because its `costs` block changed. Execution order must not be a function
+of the cost model.
+
+So the walk keeps ONE order for every bar: each touched rung fills, then the
+ladder is reviewed. That order is a DECLARED RULE with no pessimism claimed for
+it, and in the second band it knowingly leaves a nameable worse reading untaken.
+What the replay owes the reader here is the COUNT, which is what says so.
 
 Measured 2026-09-28 on the published template (rungs 68.00 and 66.50 carrying
 60% and 40% of 1500, one tranche of 100% at 68.50, disaster stop 63.00) with a
@@ -716,13 +803,14 @@ bar `open 67.00 / high 68.60 / low 66.40` and then a bar falling to 62.00:
 
 | reading, both consistent with the bar | units sold | net cash |
 |---|---|---|
-| the low reaches rung 2, then the high reaches the tranche | 22.2579 | +37.898054 |
+| the low reaches rung 2, then the high reaches the tranche (the declared rule) | 22.2579 | +37.898054 |
 | the high reaches the tranche, the sweep completes, rung 2 never fills | 13.2353 | +19.852941 |
 
-The gap is 18.045113, which is exactly rung 2's profit — 9.0226 units times the
-2.00 between its limit and the tranche. Taking the larger number is the failure
-mode this whole section exists to prevent, so the smaller one wins and the bar
-is counted.
+That bar sits in the SECOND band — both readings sweep — so there the worse
+reading is nameable and it is the second one. The rule does not take it, and
+the count is what says so. An earlier revision of this section published the
+opposite and called it pessimism; a third input, where only one reading sweeps,
+is what refuted that.
 
 **Which bars are COUNTED, and why it is not every bar the table covers.** Row
 2 is resolved by the convention and NOT counted, because its order is forced
@@ -731,12 +819,20 @@ by the levels rather than assumed: `validate_intent` requires
 reach the stop — and the same holds when the bar opens below the stop, because
 there is no position to protect until the rung has filled. Counting it would
 put bars where the rule changed nothing into a number whose published meaning
-is how much of the answer came from the rule. So `ambiguous_bars` counts the
-bars of rows 1, 3 and 4, the three where both orderings are consistent with the
-bar and lead to different money. Decided 2026-09-26 with PR 6, against the
-existing `/edge` replay, which counts a same-bar entry fill as ambiguous; row 4
-was added on 2026-09-28 under the same test, which it passes for the same reason
-rows 1 and 3 do.
+is how much of the answer came from the rule. So `snu_bars` counts the bars of
+rows 1 and 3 and the fourth situation's second and third bands — the ones where
+both orderings are consistent with the bar and lead to different money. Decided
+2026-09-26 with PR 6, against the existing `/edge` replay, which counts a
+same-bar entry fill as ambiguous.
+
+**The field is named `snu_bars`, not `ambiguous_bars`, from 2026-09-29.**
+`ambiguous_bars` is already a published name on the `/edge` side — an integer on
+the ladder-outcome model, in its serializer and in the parity OpenAPI — carrying
+the NARROWER meaning of one SL-first flag. Epic #1526 exists to express `/edge`
+lenses as documents this tool replays, so two different integers were on course
+to meet under one name. `snu_bars` cannot collide, and a reader who looks the
+term up lands on arXiv:1412.5558 rather than on a word this project invented.
+The rename is free now and expensive after a consumer exists.
 
 **Row 2's guarantee covers the stop the document DECLARED, not one that has
 moved.** Nothing constrains a trailed or re-anchored stop against a rung still
@@ -787,19 +883,29 @@ eventually turned and then forgotten.
 The cost of the convention is not uniform across policies: a tight stop meets
 ambiguous bars far more often than a 1.5 x ATR bracket, so the assumption
 enters any comparison BETWEEN policies, not just the level of one. That is why
-the summary carries `ambiguous_bars` — the count of bars where the convention
-actually had to decide something. Zero means the assumption carried nothing and
-the result is hard data. A large count means much of the result comes from the
-rule rather than from the tape, and the reader is entitled to know which.
+the summary carries `snu_bars` — the count of bars where the rule actually had to
+decide something. A large count means much of the result comes from the rule
+rather than from the tape, and the reader is entitled to know which.
 
-One scoping note. Until row 4 was added on 2026-09-28 this paragraph said the
-count is 0 or 1 outside a run that states an entry-trail distance, because row 1
-was then the only countable row and row 1 ends the walk. Row 4 lifts that
-ceiling for every document: a take-profit that sells only part of the position
-leaves the walk running, so a ladder with several tranches can meet row 4 on
-several bars. The count is therefore a magnitude for a laddered exit as well as
-for a trailing entry, and reads as a flag only for a document whose first
-take-profit takes the whole position.
+**What zero does NOT mean.** An earlier revision said zero means "the assumption
+carried nothing and the result is hard data". That is false and was false when
+it was written. The counter is produced by the same single pass that produces
+the cash, so it can only detect what that pass can see; section 6.3 lists the
+shapes it is known to miss. Zero means no SNU was DETECTED, which is weaker than
+no SNU occurring, and a reader must not read it as a certificate.
+
+**And the count is a frequency, never a magnitude.** Two runs can both report 1
+while the bar decided 18.05 units in one and 30.92 in the other. Pricing an SNU
+needs both readings carried forward to the end of the tape, which is a different
+engine and an open question rather than a scheduled feature (§8), so until then
+the honest use of `snu_bars` is to decide whether to trust a result at all, not
+to correct it.
+
+One scoping note. The fourth situation lifts the ceiling the count used to have:
+a take-profit that sells only part of the position leaves the walk running, so a
+laddered exit can meet it on several bars. Before that, only row 1 could be
+counted outside a run stating an entry-trail distance, and row 1 ends the walk,
+so the count was 0 or 1 and read as a flag.
 
 ### 4.5 Bars out of order
 
@@ -875,10 +981,11 @@ scale. R itself is the problem" — and replaced R with net cash.
     "take_profit_observation_time",
     "cost_gate_prices_the_account_currency"
   ],
+  "intrabar_rule": "entries_then_stop_then_ladder",
   "outcome": "closed_tp",
   "summary": {
     "filled_fraction": 0.6,
-    "ambiguous_bars": 3,
+    "snu_bars": 3,
     "notional_spent":   {"value": 900.0, "unit": "EUR"},
     "avg_entry_price":  {"value": 67.83, "unit": "instrument_currency"},
     "pnl_cash":         {"value": 41.20, "unit": "EUR"},
@@ -901,8 +1008,17 @@ scale. R itself is the problem" — and replaced R with net cash.
 }
 ```
 
-**Five things about that block, added 2026-09-28 while planning PR 7 — the first
-version that EMITS it.**
+**Six things about that block, added 2026-09-28 and 2026-09-29 while planning
+PR 7 — the first version that EMITS it.**
+
+**`intrabar_rule` names the decision rule, and the cash is NOT a bound.** The
+key was added 2026-09-29, after §4.4 had claimed pessimism for five days that it
+cannot deliver for a laddered document. A reader who saw that claim would take
+`pnl_cash` for a conservative number; it is one outcome under one stated rule,
+and `snu_bars` says how often the rule had to decide. The precedent is in this
+repo on the other side: `/edge`'s chart payload already publishes
+`intrabar_rule: "sl_first"` beside its own count, for the same reason — a result
+cannot be read out of the world that produced it (§5.2).
 
 **The R it printed was impossible, and the identity that catches it is one
 line.** For any definition where `pnl = proceeds − spend`, `spend = units × avg`
@@ -1047,7 +1163,7 @@ defaults, and PR 3 removed it. The rule exists because the alternative — a cal
 translated this path" with nothing able to check the assertion — is an echo with
 a story attached, and §4.3.1 rules out echoes.
 
-`ambiguous_bars` serves the same purpose for the one assumption that is NOT
+`snu_bars` serves the same purpose for the one assumption that is NOT
 configurable (§4.4).
 
 **`divergences` is the list a knob would have hidden.** It names, per run, each
@@ -1185,7 +1301,7 @@ refusal. The type and range checks run FIRST, so `true` is still `wrong_type` an
 
 One published consequence: the §5.2 example states `entry_trail_bps: 50`, so v1
 refuses the very block this document prints as canonical. The example stays as it
-is, because nulling the distance would make its `ambiguous_bars: 3` disagree with
+is, because nulling the distance would make its `snu_bars: 3` disagree with
 §4.4 and would strand `native_entry_trail_is_a_broker_model` in its own
 `divergences` list. PR 8 makes the example runnable again. A test fixture that
 copies the block therefore departs from it in exactly this one key, and must say
@@ -1305,7 +1421,7 @@ compare against:
 | the intra-bar tie convention | it resolves what the data cannot say (§4.4). Both answers are consistent with the bar, so no test distinguishes a right one |
 
 Each is covered instead by a named divergence in the result (§5.2) or by
-`ambiguous_bars`. That is weaker than a test and is the honest strength of the
+`snu_bars`. That is weaker than a test and is the honest strength of the
 claim.
 
 ### 6.2 Golden cases
@@ -1350,10 +1466,18 @@ Computed with the real functions during design, 2026-09-23:
   asserting it could would assert nothing;
 - a document with `exit: null` produces zero `stop_moved` events;
 - bars that touch no entry produce `outcome: "no_fill"` and zero cash;
-- `ambiguous_bars` is zero whenever no bar touches two levels whose ordering
-  the bar cannot settle, and positive whenever one does. A same-bar entry fill
-  and stop-out is not such a bar: the rung sits above the stop the document
-  declared, so the order is forced rather than assumed (§4.4);
+- `snu_bars` is positive ONLY when at least one bar's ordering the tape cannot
+  settle changed the money. The converse does NOT hold, and this bullet claimed
+  it until 2026-09-29: a biconditional cannot be implemented by the single pass
+  that also produces the cash, because detecting every SNU means evaluating the
+  readings it did not take. Two shapes are known to go uncounted, both measured:
+  a bar on which the position OPENS through a rung below the open, where nothing
+  is held so the cost gate has no entry price to measure a tranche against
+  (worth 18.045113 on the published template); and a bar where the gate's own
+  verdict flips with the order, because a deep fill lowers the average entry and
+  the threshold with it. A same-bar entry fill and stop-out is not an SNU at all:
+  the rung sits above the stop the document declared, so the order is forced
+  rather than assumed (§4.4);
 - a document carrying a path §4.3.1 classifies in none of its three classes is
   REFUSED, and the refusal names that path — with a positive control, a document
   whose every path IS classified, so the gate cannot rot to "accepts
@@ -1459,6 +1583,21 @@ adding an uncalled module to a package the daemon imports executes nothing.
 
 ## 8. Risks and open questions
 
+- **Pricing an SNU instead of counting it is an OPEN QUESTION, not a roadmap
+  item, and the literature is why.** The obvious next step is to carry both
+  readings of an SNU forward and report the spread — what Maier-Paape and Platen
+  call running `wc` and `bc`, and what econometrics would call reporting an
+  identified set rather than a point. Two things have to be settled before it can
+  be promised. First, whether a worst case is even WELL DEFINED here: Löw et al.
+  restrict their results to at most one entry and one exit and say that beyond
+  that "there would no longer necessarily be unique worst cases and best cases",
+  and every document this tool takes is laddered on both sides. Second, whether
+  the spread computed from the readings this engine can see would be a SHARP
+  identified set or merely an outer one — the local-versus-global gap §4.4
+  describes is exactly the reason to expect the latter. A spread that is neither
+  well defined nor sharp, published beside a point estimate, would read as a
+  bound and be none. Its own issue, and the issue's first job is that question,
+  not the implementation.
 - **Entry trailing is modelled as of 2026-09-25, and the model is of a BROKER
   rather than of our code.** An earlier revision called it the last policy still
   selected by a deployment environment variable. That was wrong twice: the OCO

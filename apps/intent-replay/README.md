@@ -87,7 +87,7 @@ Then the configuration block is parsed, and the bars last: each bar's shape, the
 ordering of the sequence, and whether the window covers the stated `walk_start`.
 Then the walk runs. **In this version an accepted document still has nothing to
 print:** the command exits 0 with empty stdout and empty stderr. The walk's
-trace, its `ambiguous_bars` counter and its fill figures are computed and the
+trace, its `snu_bars` counter and its fill figures are computed and the
 envelope that renders them arrives in the next change. A refusal is exactly one
 JSON object on stderr, the last line, with stdout empty; exit status `0`
 accepted, `2` usage, `130` interrupted with nothing written, `1` everything
@@ -103,24 +103,30 @@ does not rest at the broker in this model, so a bar that gaps above a tranche
 fills AT the tranche's level, not at the open; the gap rule reaches only the
 legs that really rest there, a rung and the disaster stop.
 
-A third choice is forced on the walk and is NOT published. On one bar a rung
-and a take-profit can both be touched: the low reaches the rung, the high
-reaches the tranche, and the bar does not say which came first. Section 4.4
-gives a row for the stop against a take-profit and a row for a rung against
-the stop, but no row for a rung against a take-profit. The walk fills entries
-first. That is what the two published rows already imply — rungs before the
-stop, the stop before take-profits — and no order of steps can keep both rows
-and also put take-profits before rungs. The choice is not free. Filling first
-buys the position and sells it into the same bar's high; taking profit first
-leaves the position to whatever the next bars do. Measured on the published
-template's ladder (rungs 68.00 and 66.50 carrying 60% and 40% of 1500, one
-tranche of 100% at 68.50, disaster stop 63.00) with a bar
-`open 67.00 / high 68.60 / low 66.40` and then a bar that falls to 62.00:
-filling first nets +37.90, taking profit first nets -84.52. The gap is the
-whole distance from the tranche to the stop, 5.50 a unit over 22.2578 units.
-How wide it gets depends on what follows the tie bar, and this run is the wide
-end. The bar is not counted in `ambiguous_bars`: that counter is closed to the
-rows section 4.4 publishes.
+A third choice is forced on the walk, and since 2026-09-29 it IS published —
+as a count, never as a claim. On one bar a rung and a take-profit can both be
+touched: the low reaches the rung, the high reaches the tranche, and the bar
+does not say which came first. The literature calls such a bar an SNU, a
+"situation which is not unique" (arXiv:1412.5558). The walk fills entries
+first, the same order it uses for every other pair, and `snu_bars` counts the
+bar when that order decided money.
+
+**No pessimism is claimed for this one, and that is a correction.** Measured on
+the published template's ladder (rungs 68.00 and 66.50 carrying 60% and 40% of
+1500, one tranche of 100% at 68.50, disaster stop 63.00) with a bar
+`open 67.00 / high 68.60 / low 66.40` and then a bar falling to 62.00: filling
+first nets **+37.898054**, taking profit first nets **+19.852941**. The gap,
+18.045113, is exactly the deeper rung's profit.
+
+An earlier version of this paragraph printed **-84.52** for the second reading.
+That number came from running the tranche before ANY rung had filled, which is
+not an order the bar permits, and it is retracted. It also said "no order of
+steps can keep both rows and also put take-profits before rungs" — also false;
+making the order conditional on whether the bar reaches the stop does exactly
+that. What is true is narrower and is why the convention stops here: a
+take-profit whose clamp sweeps the whole position ENDS the trade, so the two
+readings can differ in whether the position survives, and then neither is a
+bound. Section 4.4 has the three bands and the measurements.
 
 `ceiling_price` is accepted in the configuration block and not read. A document
 that carries a take-profit ceiling is refused by `validate_intent`
