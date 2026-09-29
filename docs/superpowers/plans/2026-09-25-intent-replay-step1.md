@@ -51,7 +51,7 @@ Ordered so a runnable command exists at PR 4. The code column exists because rev
 | 3 | `config.py` + the §4.3.1 classification bookkeeping | `config_incomplete`, `config_invalid`, `path_unclassified` |
 | 4 | `door.py`: template completion, the four door gates, a CLI that decodes and refuses | `intent_invalid`, `intent_malformed`, `config_malformed`, `usage` |
 | 5 | interpreter: the document DECLARED as pending rungs, exit levels and a reaction, plus the §4.3.1 gate wired into `run` | `entry_mode_unsupported` |
-| 6 | bar walk + tie convention + `ambiguous_bars` + trace | `bars_malformed` |
+| 6 | bar walk + tie convention + `snu_bars` + trace | `bars_malformed` |
 | 7 | measures, envelope, `divergences`, both output formats | — |
 | 8 | the native entry-trail model | — |
 | 9 | §6.2 golden cases, §6.3 walk properties, §6.4 door agreement | — |
@@ -167,7 +167,7 @@ Named here so they are not discovered as red builds.
   `fx_cost_not_stated`. Refusing `fx_applies: true` also turns `tests/property/test_run_config_properties.py`
   red, which draws `st.booleans()` for that key; the fix is `st.just(False)`, the shape the `oco` row three
   lines above it already has.
-- **PR 8 reads `Plan.declared_floor`** as the entry-trail arming condition (spec §3.3) and is where `interpret` grows the stated trail distance; today it takes no configuration at all.
+- **PR 8 changed neither `interpret` nor `Plan`, and both halves of this line were wrong.** `walk(plan, config, bars)` already carries the configuration, so the distance never needed to reach the interpreter; and the arming condition is a PRICE one - the first bar whose low reaches a rung - not `Plan.declared_floor`. `spec.disaster_stop` is what the live watch requires to exist before it arms, which every admitted document has, so the replay writes no branch for it.
 - **PR 6 adds `--bars` as an `Option` on the `run` `Command` in `intent_replay.cli.COMMANDS`.** Help, the `schema` manifest and the manifest-vs-parser test grow from that one tuple, but `Command.examples` does NOT: the example lines are hand-written literals and a new option has to be spelled into each one by hand (`test_every_example_parses` only checks that what is written there still parses). The bar file's shape is PR 6's decision (`bars.py` has no jsonable form). The `test_module_dependencies.py` walker now resolves a level-0 `from X import y` to `X.y` when `X/y.py` exists, so `from intent_replay import door` is seen by the forbid rules.
 - **PR 7's envelope `intent_id` echoes the PR 4 sentinel `REPLAY`** (spec §4.3.1: the envelope may echo, nothing reads; the §5 example says so). Per-line identity in `ndjson` is `sequence`, never `intent_id`: two variants of one pick would collide on the door's `TICKER:DATE:manual`. The stream's input shape (a configuration per document) is PR 7's decision; `run` takes one document until then, and `--format ndjson` is accepted but indistinguishable from `json`.
 

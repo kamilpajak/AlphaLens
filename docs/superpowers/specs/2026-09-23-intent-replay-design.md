@@ -58,9 +58,9 @@ multiplicity budget, and carries no accrued history.
 | `/edge` | shared envelope shape now, no `/edge` code now |
 | stop management | one implementation, extracted into the shared contract leaf |
 | intra-bar ties | ONE declared decision rule, fixed, never a configuration field. Pessimistic where a worse resolution is well defined per period; NOT a bound on the run, and for a laddered document a unique worst case need not exist (§4.4) |
-| a rung below a stop that has MOVED | skipped on every bar the stop sits above it, never cancelled. Filling it books a purchase at a price the same bar had already sold at, and a fill after the position closes is a re-entry this tool does not model (§4.4) |
-| which bars count as SNUs | only the bars whose ordering the tape cannot settle AND where it changes the money. A same-bar rung fill and stop-out is forced by the levels and is NOT counted, against the existing `/edge` replay. The count detects; it does not certify, and it is a frequency rather than a magnitude (§4.4, §6.3) |
-| the gap-open fill price | it follows the tape wherever the order RESTS at the broker — a rung and the disaster stop fill at the bar's open when the open is already through them. A take-profit rests nowhere in v1, so it fills at its level (§4.4) |
+| a rung below a stop that has MOVED | skipped on every bar the stop sits above it, never cancelled. Filling it books a purchase at a price the same bar had already sold at, and a fill after the position closes is a re-entry this tool does not model. Under a trail the level tested is the TRIGGER and the boundary is the bar's OPEN, not its low: a bar opening above the stop reached the trigger first, so the fill stands and the stop takes it out after (§4.4) |
+| which bars count as SNUs | only the bars whose ordering the tape cannot settle AND where it changes the money. A same-bar LIMIT-rung fill and stop-out is forced by the levels and is NOT counted, against the existing `/edge` replay; under a trail that argument does not carry, and §4.4 says what replaces it. The count detects; it does not certify, and it is a frequency rather than a magnitude (§4.4, §6.3) |
+| the gap-open fill price | it follows the tape wherever the order RESTS at the broker — a rung, the disaster stop, and a trailing entry order once placed, all fill at the bar's open when the open is already through them. The bar that ARMS a trail is the exception: its order is placed at the touch, which cannot precede the open, so it takes its trigger however high the bar opened. A take-profit rests nowhere in v1, so it fills at its level (§4.4) |
 | the cost gate's FX leg | its rate is not stated, so `fx_applies: true` is refused in v1. The omitted term is 50 bps on every tranche; pricing it is #1592 (§5.4, §8.1) |
 | every input path | classified here as interpreted, translated or out of scope; an unclassified path is refused, never approximated (§4.3.1) |
 | where a run value comes from | the document, or STATED in the run configuration — never inherited from a deployment, an environment variable or a production constant (§2.1) |
@@ -68,7 +68,7 @@ multiplicity budget, and carries no accrued history.
 | the trail's two order-state guards | not a configuration field. A replay has no order legs and no amend history, so both are inapplicable; the resulting divergence is REPORTED (§3.2) |
 | the take-profit cost gate | its threshold is a required, stated configuration value; absent is a refusal, not a costless run (§2.1, §5.2) |
 | `entry_mode: "immediate"` | refused in v1 with its own code; modelling it is a later version (§4.3.1, §5.4) |
-| entry trailing | MODELLED, with the trail distance stated in the configuration. The alternative was a tool describing an entry ladder production does not use (§3.3, §8). Until the model lands, a stated distance is REFUSED rather than echoed, so no result claims a policy its run did not apply (§5.4) |
+| entry trailing | MODELLED, with the trail distance stated in the configuration. The alternative was a tool describing an entry ladder production does not use (§3.3, §8). A rung stops resting: the first bar to reach it ARMS a trailing order referenced on `min(open, limit)`, whose trigger is `trough + distance` with the distance absolute and frozen at the arm (§4.4) |
 | the R denominator | `spec.disaster_stop`, in every document — the level both deployments actually place. The earlier choice of `exit.initial_levels.stop` rested on a claim about the daemon that running it refuted (§5.1) |
 | which take-profit ladder fires | the one the daemon places: a document supplying `exit.initial_levels` fires ONE tranche of 100% at its `tp`, and its own `spec.tp_tranches` never fires (§5.1) |
 | the dependency rule | per MODULE, not per distribution: engine modules stay stdlib plus contract, the door and CLI may use `jsonschema` for gate 1. One barrier — the AST gate — not two (§3.1) |
@@ -761,11 +761,43 @@ because section 6.3 requires two runs over one input to be byte-identical.
 
 The third row arrived on 2026-09-25 with the decision to model entry trailing
 (§3.3) — which is what the earlier text anticipated in saying the convention
-covers the class rather than the cases. It is also the row that fires most often.
-The trigger is a running low plus a distance, so a document entering on a trail
-rather than at fixed rungs meets the convention on every bar that makes a new low
-and then retraces. For such a document `snu_bars` is not a footnote; it is
-the number that says how much of the answer came from the rule.
+covers the class rather than the cases. The trigger is a running low plus a
+distance, so a document entering on a trail rather than at fixed rungs can meet
+the convention on any bar that makes a new low and retraces.
+
+**The rule that decides which of those bars COUNT is the one at the end of this
+section, not "makes a new low and retraces".** That phrase is looser than the
+criterion and an earlier revision left it standing alone. A bar counts when both
+readings are consistent with it AND lead to different money, which for a trail
+means all three of: the open did not gap through the inherited trigger (a gap is
+the first print and forced), the low could have fallen below the trough the bar
+inherited, and the retrace reached `low + distance` so that the low-first reading
+would have fired. A bar making a new low and retracing five basis points at a
+fifty-basis-point distance satisfies the phrase and changes nothing.
+
+**And the model, published here because §4.4 is where a reader checks a bar
+against it.** With `entry_trail_bps` stated, nothing rests at a rung:
+
+| | |
+|---|---|
+| arming | the first bar whose low reaches the rung, referenced on `min(open, limit)` — the touch is the first print when the bar gapped through the level, and the level otherwise |
+| the trigger | `trough + distance`, the distance ABSOLUTE and frozen at the arm. The wire field is a price distance computed once, so the trigger is not `trough x (1 + d)`; the two agree at the touch and part as the trough falls, by 21 bps at a 30% drawdown on a 50 bps distance |
+| the order inside a bar | the trigger is tested against the trough the bar INHERITED, and only then does the bar's low ratchet it down — row 3 above |
+| the arming bar | can fire, at `reference + distance`, and takes that level however high it opened: its order is placed at the touch, which cannot precede the open. Seeding the trough at the reference makes this fall out of the same rule as every later bar rather than needing a case of its own |
+| the resting stop | a bar opening ABOVE it fires and is then stopped out; a bar opening BELOW it closed the position at the first print, and buying after that is the re-entry this document declines to model |
+| depth | a bar whose FIRST price is already below the NEXT-LISTED rung hands the move on, and the shallower rung never arms. LISTED, not cheapest: `validate_intent` does not order the ladder. Measured against the live engine 2026-09-29 — the wire arms on the touch tick and an armed tier is terminal for its watcher, so a depth reached later suspends nothing |
+| the deadline | an armed or a handed-on rung expires with the others, under the one cause §4.6 publishes |
+| quantity | from the rung's LIMIT, as in the drain. A trailing fire changes when and at what price a rung executes, never how much it buys |
+
+**How often the convention decides, for a trail, measured.** Over 20 sessions of
+real daily bars, 11 654 names with a complete history and one eight-bar watch
+each at 50 bps: the mean number of bars meeting the predicate is **0.23**, and
+**79.7%** of watches meet it on no bar at all — 94.7% of watches fire, most
+immediately, because a 50 bps rebound is small against a 1.53% median daily
+range. So `snu_bars` is usually 0 from this source on daily bars, and the
+frequency is a function of the bar's granularity against the distance rather than
+a property of the model. An earlier revision of this paragraph said the row
+"fires most often"; that was the frequency of one CONJUNCT, not of the rule.
 
 **A FOURTH situation is an SNU that this section does NOT resolve, and says so.**
 A rung whose limit is at or above the bar's open is through at the first print,
@@ -825,7 +857,12 @@ is what refuted that.
 by the levels rather than assumed: `validate_intent` requires
 `spec.disaster_stop` below every rung, so a long has to cross the rung to
 reach the stop — and the same holds when the bar opens below the stop, because
-there is no position to protect until the rung has filled. Counting it would
+there is no position to protect until the rung has filled. **That reason is about
+the LIMIT and does not carry to a trail:** nothing constrains a TRIGGER against
+the stop, since the trigger sits above the trough, the trough can be above the
+stop, and a price walking down from the open need never pass the trigger on its
+way there. Under a trail the two orderings are different money and the bar is
+counted, by row 3's own predicate. Counting it would
 put bars where the rule changed nothing into a number whose published meaning
 is how much of the answer came from the rule. So `snu_bars` counts the bars of
 rows 1 and 3 and the fourth situation's second and third bands — the ones where
@@ -848,7 +885,13 @@ resting below it, and the published templates reach that state: on
 `pullback-trailing-stop.json` (rungs 68.00 and 66.50, `trailing_stop` 0.5 /
 0.6) a fill at 68.00 and a peak of 70.60 put the stop at 69.56 with the 66.50
 rung still live. **The walk SKIPS such a rung on every bar the stop sits above
-it**, the gap-open rule below included, and does not fill it. It is skipped and
+it**, the gap-open rule below included, and does not fill it. Under a trail the
+level to test is the TRIGGER rather than the limit, and one boundary the limit
+case does not need appears: the bar's OPEN against the stop. A bar opening ABOVE
+the stop reached the trigger first, so the fill stands and the stop takes it out
+afterwards — a loss, and the worse resolution this section keeps. A bar opening at
+or BELOW the stop closed the position at its first print, and a purchase after
+that is the re-entry this section declines two paragraphs down. It is skipped and
 not cancelled: the re-anchor arm can put the stop back below the rung (§6.3),
 and the rung is live again on the first bar where it is.
 
@@ -872,7 +915,10 @@ template above, in the flattering direction. Decided 2026-09-26 with PR 6
 **The gap rule is separate from the tie convention, and it does not reach
 every leg.** A bar that opens already through a level is not ambiguous — the
 open is the first trade — so an order that RESTS at the broker fills there: a
-rung at `min(open, limit)`, the disaster stop at `min(open, stop)`. A
+rung at `min(open, limit)`, the disaster stop at `min(open, stop)`, and a
+trailing entry order already placed at `max(open, trigger)`. The bar that ARMS a
+trail is outside the rule: its order goes on at the touch, which cannot precede
+the open, so it takes its trigger however high the bar opened. A
 take-profit is the exception, for §3.3's reason: the OCO pair is retired on
 SIM and unset on LIVE, a run must state `oco: false`, so no take-profit rests
 anywhere. An engine realises it at its next observation and market-sells at
@@ -1053,7 +1099,14 @@ fire and never reduces the cash. §2 makes cost a non-goal and §8.1 says the
 replay is handed a threshold rather than modelling execution economics; this is
 the first place a reader could take the number for a net one.
 
-**`notional_spent` is the STATED budget, not what the drain would spend.** The
+**`notional_spent` is what the walk BOOKED, and with a trail it can land on
+either side of the declared budget.** The quantity is fixed from the rung's limit
+when the order is composed, so a trailing fire above the limit spends more than
+the rung's share and one below it spends less. Without a trail the fill price is
+`min(open, limit)` and the spend can only come in at or under the budget, which
+is the case the rest of this paragraph is about.
+
+The whole-share gap is a separate matter and points one way. The
 drain buys whole shares (`floor(tier_notional / limit)`); the replay works in
 fractional units, which is the step-1 plan's recorded scope cut and not a fact
 the replay lacks, so it is not a `divergences` entry. It is not small. Measured
@@ -1083,7 +1136,8 @@ rather than a missing key. `allow_nan=False` forbids a NaN on the wire, so null
 is the only form available; `/edge` answers the same way, returning no realized R
 when its own risk is not positive.
 
-This is not a paper case. The walk books a fill at `min(bar.open, limit)` and
+This is not a paper case. The walk books a limit fill at `min(bar.open, limit)`
+— a trailing fire prices elsewhere (§4.4) — and
 places the stop only AFTER the first fill, so a bar that opens below
 `spec.disaster_stop` fills beneath the floor. `validate_intent` constrains the
 stop only against the rung LIMITS, never against an opening price. Measured
@@ -1183,7 +1237,7 @@ setting. Five entries exist at v1.
 |---|---|---|
 | `daemon_trail_guards` | orders, so neither order-state guard can be evaluated (§3.2) | the declared policy moves the stop at all: `policy.trails or policy.requires_amend_stop` |
 | `daemon_reanchor_latch_is_journal_lifetime` | the journal, so the daemon's idempotence latch cannot be reproduced | the reaction is `reanchor_on_fill` |
-| `native_entry_trail_is_a_broker_model` | any local implementation to compare against (§8) | the run states an entry-trail distance |
+| `native_entry_trail_is_a_broker_model` | any local implementation of the ratchet and the fire to compare against (§8) — and, for the watch that PLACES the order, the quotes, the session boundaries and the account state its other gates read | the run states an entry-trail distance |
 | `take_profit_observation_time` | the poll time and the quote (§4.4) | the resolved take-profit ladder is not empty |
 | `cost_gate_prices_the_account_currency` | the instrument's currency, which no document path states (§8.1, #1592) | the ladder is not empty and `min_commission_applies` is true |
 
@@ -1290,30 +1344,33 @@ door needs its fixed-point gate, and a misspelt `entry_trail_bp` must not switch
 entry trailing off in a run whose author believes the distance was stated),
 `wrong_type` (a stated `null` where none is allowed included), `numeric_not_finite`,
 `not_positive`, `negative`, `unit_mismatch`, `empty_string`, `oco_unsupported`
-(§8.1), `fx_cost_not_stated` (a stated `fx_applies: true` whose round-trip rate the
-block does not carry; added 2026-09-26 by PR 6, §8.1) and `entry_trail_not_modelled`
-(below; added 2026-09-28 by PR 7). Missing keys win: when
+(§8.1) and `fx_cost_not_stated` (a stated `fx_applies: true` whose round-trip rate
+the block does not carry; added 2026-09-26 by PR 6, §8.1). Missing keys win: when
 keys are both missing and unusable, the run is
 refused `config_incomplete` naming only the missing ones, and hears about values
 on the next pass.
 
-**`entry_trail_not_modelled` is TEMPORARY and says so.** §3.3 and the §0
-decision table both say entry trailing is MODELLED, with the distance stated in
-the configuration — and it is, from PR 8 onward. PR 7 is the first version that
-PRINTS, and until PR 8 the walk parses the distance and ignores it, so echoing a
-stated value into the result would be a result claiming a policy the run did not
-apply. That is the shape §4.3.1 refuses for `ceiling_price` and §8.1 refuses for
-`oco`, so it is refused here too, and PR 8 removes the reason along with the
-refusal. The type and range checks run FIRST, so `true` is still `wrong_type` and
-`0` is still `not_positive`; this reason only answers a well-formed distance.
+**A stated distance is a POLICY the walk applies, and there is no reason for
+refusing one.** There was: `entry_trail_not_modelled` stood here while the walk
+parsed the distance and ignored it, because echoing a stated value into the
+result would have claimed a policy the run did not apply — the shape §4.3.1
+refuses for `ceiling_price` and §8.1 for `oco`. The walk models the trail now
+(§4.4), so the reason is gone with the refusal. The type and range checks are
+unchanged and still run first, which is what keeps `true` a `wrong_type` and
+`0` a `not_positive` rather than letting either reach the walk as a distance.
 
-One published consequence: the §5.2 example states `entry_trail_bps: 50`, so v1
-refuses the very block this document prints as canonical. The example stays as it
-is, because nulling the distance would make its `snu_bars: 3` disagree with
-§4.4 and would strand `native_entry_trail_is_a_broker_model` in its own
-`divergences` list. PR 8 makes the example runnable again. A test fixture that
-copies the block therefore departs from it in exactly this one key, and must say
-so rather than keep calling itself verbatim.
+There is no UPPER bound either, and that is a decision rather than an omission.
+The live rail caps the flag at 150 and its reader treats anything outside
+`[0, 150]` as 0 — the three-limit ladder, which is the opposite policy — but a
+deployment rail is not a fact of the document, and §5.2 publishes the key as an
+integer `>= 1`. A larger value describes a run no deployment will make, and the
+package README says so rather than the block refusing it.
+
+One consequence for anyone reproducing a number from this document: the §5.2
+example states `entry_trail_bps: 50`, so it is a TRAILING run. Its `snu_bars: 3`
+and its cash are that run's, and the figures §4.4 and §6.3 quote from the
+published template are the LIMIT ladder's — they were measured with the distance
+null and do not reproduce from the canonical block.
 
 **`intent_malformed` is a CLI-owned code, and this tool's CLI owns its own copy.**
 The broker's code registry is deliberately SPLIT: `broker_contract/failure.py`
@@ -1424,7 +1481,7 @@ compare against:
 
 | part | why parity cannot reach it |
 |---|---|
-| the native entry trail | our code stops at arming; the ratchet and the fire belong to the broker (§8). There is no local implementation, so there is nothing to disagree with |
+| the native entry trail | the ratchet and the fire belong to the broker (§8), so there is no local implementation of THOSE to disagree with. The watch that places the order is ours, and one member of it — the depth rule that hands a move to the next-listed rung — is modelled, so parity could in principle reach that one member; the rest of the watch reads quotes, sessions and account state a replay lacks |
 | the two order-state guards | they are inapplicable rather than implemented differently (§3.2); a parity run would have to invent the very facts a replay lacks |
 | the intra-bar tie convention | it resolves what the data cannot say (§4.4). Both answers are consistent with the bar, so no test distinguishes a right one |
 
@@ -1466,8 +1523,12 @@ Computed with the real functions during design, 2026-09-23:
   2026-09-28, after this document's own §5 example printed an R that the identity
   refutes;
 - `mfe` is never negative and `mae` never positive BEYOND ONE ULP of the average
-  entry, whenever the denominator is positive. The walk books every fill at
-  `min(bar.open, limit)`, which lies inside its own bar, and the extremes are
+  entry, whenever the denominator is positive. Every fill lies inside its own
+  bar, and that is what the argument needs rather than any one formula: a limit
+  fill is `min(open, limit)`, which is at most the open; a trailing fire is
+  `max(open, trigger)` where the fire condition already gives `trigger <= high`,
+  and when the trigger is above the open it is above the low as well. So the
+  price is never outside `[low, high]` either way. The extremes are
   tracked from the first fill onward, so the trough never exceeds the average
   entry and the peak never falls below it. That argument is about the FILL
   PRICES. The average is `cash / units`, and the division can land one ulp below
@@ -1483,7 +1544,10 @@ Computed with the real functions during design, 2026-09-23:
   — it books a fill AT the limit even on a bar that traded entirely below it — so
   a test asserting THAT would still assert nothing;
 - a document with `exit: null` produces zero `stop_moved` events;
-- bars that touch no entry produce `outcome: "no_fill"` and zero cash;
+- bars that touch no entry produce `outcome: "no_fill"` and zero cash. Under a
+  trail "touch" splits in two and the property is about the second: reaching a
+  rung ARMS an order, and only reaching its trigger fills one, so a run whose
+  bars touch every rung and never retrace far enough is `no_fill` too;
 - `snu_bars` is positive ONLY when at least one bar's ordering the tape cannot
   settle changed the money. The converse does NOT hold, and this bullet claimed
   it until 2026-09-29: a biconditional cannot be implemented by the single pass
@@ -1501,9 +1565,11 @@ Computed with the real functions during design, 2026-09-23:
   pins at `snu_bars == 1`. The bullet described the detector as it stood before
   #1613 repaired it: #1614 wrote this section earlier the same day, #1613 changed
   the code and not the document, and nothing brought the two back together.
-  A same-bar entry fill and stop-out is not an SNU at all: the rung sits above
-  the stop the document declared, so the order is forced rather than assumed
-  (§4.4);
+  A same-bar LIMIT fill and stop-out is not an SNU at all: the rung sits above
+  the stop the document declared, so the order is forced rather than assumed.
+  That guarantee is the limit's, not entry's in general — nothing constrains a
+  trailing TRIGGER against the stop, so such a bar IS counted, by row 3's own
+  predicate (§4.4);
 - a document carrying a path §4.3.1 classifies in none of its three classes is
   REFUSED, and the refusal names that path — with a positive control, a document
   whose every path IS classified, so the gate cannot rot to "accepts
@@ -1630,8 +1696,9 @@ adding an uncalled module to a package the daemon imports executes nothing.
   pair is selected the same way, and entry trailing is not selected by the flag
   alone — `entry_mode` decides which tiers reach the machine and the flag also
   decides which arm gates run. The serious half was simpler. On both deployments
-  the flag is set, so an eligible pick rests a native trailing order instead of
-  the three limit entries, and the trail distance is nowhere in the document. A
+  the flag is set, so an eligible pick rests a native trailing order PER TIER
+  instead of the three limit entries, and the trail distance is nowhere in the
+  document. A
   replay that ignored this would describe an entry ladder that did not happen.
 
   The decision was to model it, with the distance stated in the configuration
@@ -1648,7 +1715,7 @@ adding an uncalled module to a package the daemon imports executes nothing.
   MARKET order rather than a limit — the `StopLimitPrice` ceiling does not bind,
   which a live probe established and a reading of our code would not have. Two
   consequences. The parity test of §6.1 cannot cover this path at all, because
-  there is no local implementation to compare against: our code stops at arming.
+  there is no local implementation of the ratchet or the fire to compare against.
   And the model rests on a vendor's documented behaviour plus one probe, which is
   the weakest evidence anywhere in this design. The run therefore reports it as
   the `native_entry_trail_is_a_broker_model` divergence (§5.2) instead of letting
