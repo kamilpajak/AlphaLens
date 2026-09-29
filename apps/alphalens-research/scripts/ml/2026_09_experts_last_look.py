@@ -295,6 +295,10 @@ def unexpected_shared_columns(outcomes_columns, briefs_columns):
     script reads the brief side through ``bix.loc`` on an explicitly selected
     column list rather than merging, so the tripwire guards the STORES' shape,
     not this one join — which is why widening it needs a positive control.
+
+    Do NOT delete this on noticing that the script performs no merge. It is a
+    merge-prevention guard aimed at whoever changes the join strategy next: it
+    fires before their merge can suffix a column nobody declared.
     """
     return sorted((set(outcomes_columns) & set(briefs_columns)) - SHARED_KEY_COLUMNS)
 
@@ -371,6 +375,11 @@ def build_panel():
         "pit_nulled": 0,
         "lane_dropped": lane_dropped,
     }
+    # The lane filter runs BEFORE this dedup, so an insider row can never take
+    # the (brief_date, ticker) key from a thematic one. Measured 2026-09-29: no
+    # plannable key appears in two lanes, and the held-out cut carries no
+    # duplicate key at all, so the order changes nothing today. It is ordered
+    # this way so it stays correct if either of those facts changes.
     for _, r in plannable.drop_duplicates(subset=["brief_date", "ticker"]).iterrows():
         # brief_date stays the NATIVE datetime.date — both stores stamp dates,
         # and a str key here silently empties the bix join (KeyError -> None).
@@ -530,8 +539,15 @@ def preflight_power_sim(dd, n_sims=300, wcb_boot=499):
     ]
     # A no-op on this window (the lane went live 2026-09-06, two months after
     # the 2026-07-05 discovery freeze), applied so the scale that calibrates
-    # the power sim comes from the same population as the panel it sizes.
+    # the power sim comes from the same population as the panel it sizes. The
+    # assert turns that temporal invariant into a runtime check: a rebuilt
+    # discovery store carrying lane rows would move sd(y) and icc silently.
+    disc_rows = len(disc)
     disc, _ = thematic_lane_only(disc)
+    assert len(disc) == disc_rows, (
+        f"lane rows in the discovery panel would shift the calibration: "
+        f"{disc_rows - len(disc)} dropped"
+    )
     y_d = disc["market_excess_return"].astype(float).to_numpy()
     cl_d = disc["brief_date"].astype(str).to_numpy()
     sd_y = float(np.std(y_d))

@@ -178,12 +178,58 @@ outcome-blind on the run-date store:
 | insider_cluster | 6 |
 
 Six rows, six distinct tickers, four brief dates (2026-09-05, 09-09, 09-10,
-09-11) — at most 6 of 266 episodes and 4 of 47 clusters. The owner chose to
+09-11). The owner chose to
 **restrict the panel to `source == "thematic"`**, keeping the estimand the one
 that was designed and reviewed (the thematic screened candidate population)
 rather than silently widening it to two screeners for a 1% row gain. A row
 carrying no lane stamp is dropped too and counted, because a missing stamp
 cannot be assumed thematic.
+
+### Preflight on the run date, after the filter
+
+```
+panel: 260 episodes | 47 arrival-session clusters (62 brief-dates) | 205 tickers | 2026-07-06 -> 2026-09-14
+guards: split-dropped 0 | car_10-missing 0 | immature 124 | qual PIT-nulled rows 0
+lane filter: kept source == 'thematic' | dropped 18 rows {'insider_cluster': 18}
+cluster sizes: mean 5.5 | max 18 (7% of episodes) | cv 0.68
+coverage (post-dedup complete-case episodes / clusters):
+  buffett_quality_score               147 ep /  43 clusters
+  buffett_roic_3y_avg                 132 ep /  40 clusters
+  expert_spread                       146 ep /  43 clusters
+  oneil_earnings_growth_yoy_pct       153 ep /  41 clusters
+  candor_ord                          251 ep /  47 clusters
+  understandable_f                    256 ep /  47 clusters
+  [model] technical_atr_pct           100%
+  [model] oneil_pct_off_52w_high      100%
+  [model] oneil_ma200_slope_pct_per_day  100%
+  [model] oneil_ma200_distance_pct    100%
+  [model] oneil_earnings_growth_yoy_pct   59%
+  [model] candor_ord                   97%
+  [model] understandable_f             98%
+  mfr-veto subset (earnings & mfr & atr)    70 ep /  24 clusters
+power sim inputs: discovery sd(y)=0.1994 icc=0.01 | held-out clusters=47 episodes=260
+  rho=0.1: P(clear family bar) ~ 8%  (300 sims)
+  rho=0.2: P(clear family bar) ~ 59%  (300 sims)
+  rho=0.3: P(clear family bar) ~ 96%  (300 sims)
+  rho=0.4: P(clear family bar) ~ 100%  (300 sims)
+```
+
+**Two lane counts appear, and they measure different cuts.** The diagnostics
+line reports 18 because the filter runs on the held-out *plannable* rows, where
+all 18 insider-cluster rows sit. Only 6 of those reach the matured panel; the
+other 12 have brief dates from 2026-09-17 onward and were excluded by calendar
+maturity anyway. The cost of the decision is therefore the 6 rows, and the
+panel confirms it exactly: 266 episodes before the filter, 260 after, with the
+cluster count unchanged at 47.
+
+Every feasibility floor (>= 50 episodes and >= 15 arrival-session clusters) is
+met after the filter, including the `magic_formula_rank` veto subset, which was
+46 / 15 at registration and is 70 / 24 now. Simulated power is unchanged to
+within the simulation noise.
+
+Compared against the registration-time preflight (§5): 171 -> 260 episodes and
+29 -> 47 clusters, against the ~240 / ~50 that justified waiting for the sunset
+window.
 
 The registered script was NOT edited to obtain any number in §5 — those came
 from a scratch copy with the tripwire alone widened. The amendments above

@@ -132,6 +132,20 @@ class TestThematicLaneOnly(unittest.TestCase):
         self.assertEqual(len(frame), 2)
         self.assertEqual(dropped, {})
 
+    def test_it_keeps_the_surviving_rows_in_their_original_order(self) -> None:
+        """Boolean masking preserves order; a groupby-based rewrite would not,
+        and the panel loop reads these rows in sequence."""
+        frame, _ = look.thematic_lane_only(
+            _population(
+                [
+                    ("2026-07-06", "AAA", "thematic"),
+                    ("2026-07-07", "BBB", "insider_cluster"),
+                    ("2026-07-08", "CCC", "thematic"),
+                ]
+            )
+        )
+        self.assertEqual(list(frame["ticker"]), ["AAA", "CCC"])
+
     def test_a_row_with_no_lane_stamp_is_dropped_and_counted(self) -> None:
         """A missing stamp cannot be assumed thematic — the conservative choice
         keeps the estimand narrow, and the count makes the drop visible."""
