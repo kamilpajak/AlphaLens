@@ -238,6 +238,69 @@ class EntryTrailTest(unittest.TestCase):
         self.assertEqual(filled[0].t, WALK_START + 3 * MINUTE)
         self.assertAlmostEqual(filled[0].price, 60.34, places=10)
 
+    def test_a_LATER_bar_that_opens_above_the_trigger_fills_at_the_open(self) -> None:
+        # By then the order RESTS at the broker, so the gap rule of section 4.4
+        # reaches it: the open is the first print and nothing about that is in
+        # question. Bar 1 arms and ratchets the trough to 67.90, leaving a
+        # 68.24 trigger; bar 2 opens above it.
+        bars = (
+            _bar(WALK_START, 68.05, 68.2, 67.9),
+            _bar(WALK_START + MINUTE, 68.5, 68.6, 68.3),
+        )
+        result = self._walk(*bars)
+        filled = [event for event in result.events if event.kind == "entry_filled"]
+        self.assertEqual(len(filled), 1)
+        self.assertEqual(filled[0].price, 68.5)
+
+    def test_the_ARMING_bar_never_fills_at_its_open_however_high_that_is(self) -> None:
+        # The gap rule reaches the legs that REST there, and on the arming bar
+        # this one did not: it is placed at the touch, which cannot precede the
+        # open. So a bar opening at 68.40, dipping to the 68.00 rung and
+        # reaching 68.50 fires at the 68.34 trigger, not at 68.40 - the open is
+        # a price the order was not yet there to take.
+        result = self._walk(_bar(WALK_START, 68.4, 68.5, 67.9))
+        self.assertEqual(result.events[0].price, 68.34)
+
+    def test_a_bar_whose_low_could_have_fired_it_cheaper_is_counted(self) -> None:
+        # Row 3 of section 4.4, and the criterion at :831 is that both orderings
+        # are consistent with the bar and lead to different money. Here they do:
+        # the declared reading tests the 68.34 trigger and does not fire, while
+        # "the low came first" tests 67.50 + 0.34 = 67.84 and does. One fill
+        # against none is the largest difference the rule can make.
+        result = self._walk(_bar(WALK_START, 68.05, 68.1, 67.5))
+        self.assertEqual(_kinds(result), [])
+        self.assertEqual(result.snu_bars, 1)
+
+    def test_a_bar_whose_low_IS_the_touch_decides_nothing(self) -> None:
+        # With the low at the reference the trough cannot move inside the bar,
+        # so the trigger is the same under either ordering - forced by the
+        # levels, exactly the ground on which section 4.4 excludes row 2.
+        result = self._walk(_bar(WALK_START, 68.0, 68.4, 68.0))
+        self.assertEqual(result.events[0].price, 68.34)
+        self.assertEqual(result.snu_bars, 0)
+
+    def test_an_armed_bar_that_makes_a_new_low_and_retraces_is_counted(self) -> None:
+        bars = (
+            _bar(WALK_START, 68.05, 68.1, 67.9),
+            _bar(WALK_START + MINUTE, 67.4, 67.5, 67.0),
+        )
+        result = self._walk(*bars)
+        self.assertEqual(_kinds(result), [])
+        self.assertEqual(result.snu_bars, 1)
+
+    def test_a_gap_through_the_trigger_decides_nothing_even_on_a_new_low(self) -> None:
+        # The gap row wins over the new-low row: the open is the first print, so
+        # the fill is at the open under either ordering and the money is the
+        # same. Counting it would put a bar where the rule changed nothing into
+        # a number whose published meaning is how much came from the rule.
+        bars = (
+            _bar(WALK_START, 68.05, 68.1, 67.9),
+            _bar(WALK_START + MINUTE, 68.3, 68.4, 67.0),
+        )
+        result = self._walk(*bars)
+        self.assertEqual(result.events[0].price, 68.3)
+        self.assertEqual(result.snu_bars, 0)
+
 
 class RestingStopTest(unittest.TestCase):
     def test_the_resting_stop_closes_the_position_at_its_level(self) -> None:

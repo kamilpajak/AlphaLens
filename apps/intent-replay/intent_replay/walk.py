@@ -196,7 +196,26 @@ def _book_entry(
         state.events.append(StopPlaced(t=bar.t, level=plan.declared_floor))
 
 
-def _advance_trails(state: _WalkState, bar: Bar, plan: Plan, *, bps: int) -> None:
+def _trail_snu(bar: Bar, trail: _ArmedTrail, *, level: float) -> bool:
+    """Does this bar's high/low ORDER change the money for an armed rung?
+
+    Section 4.4's criterion, applied to row 3: both readings must be consistent
+    with the bar and lead to different money.
+
+    * A bar that opens through the trigger is forced - the open is the first
+      print and both readings fill there, so nothing is assumed.
+    * A bar whose low cannot fall below the trough it already carries leaves the
+      trigger where it is, so both readings test the same level.
+    * Otherwise the declared reading tests ``level`` and "the low came first"
+      tests ``low + distance``, which is lower. Either they fire at two prices
+      or only the second fires, and both are different money.
+    """
+    if bar.open >= level or bar.low >= trail.trough:
+        return False
+    return bar.high >= bar.low + trail.distance
+
+
+def _advance_trails(state: _WalkState, bar: Bar, plan: Plan, *, bps: int) -> bool:
     """Arm, fire and ratchet the native entry trails, shallowest rung first.
 
     One order of operations, and section 4.4 row 3 fixes it: the trigger is
@@ -210,9 +229,13 @@ def _advance_trails(state: _WalkState, bar: Bar, plan: Plan, *, bps: int) -> Non
     low come first, the trough would already have fallen and the buy would pay
     less.
     """
+    decided = False
     for index in sorted(state.pending):
         rung = state.pending[index]
         trail = state.armed.get(index)
+        arming = trail is None
+        # ``if trail is None`` rather than ``if arming``: the narrowing has to be
+        # on the expression, or every later read of ``trail`` is optional.
         if trail is None:
             if not _reachable(state, bar, rung):
                 continue
@@ -220,13 +243,23 @@ def _advance_trails(state: _WalkState, bar: Bar, plan: Plan, *, bps: int) -> Non
             trail = _ArmedTrail(distance=reference * bps / _BPS_PER_UNIT, trough=reference)
             state.armed[index] = trail
         level = trail.trough + trail.distance
+        # Asked BEFORE the ratchet, because it is about the trough this bar
+        # INHERITED - on the arming bar, the touch reference itself.
+        decided = _trail_snu(bar, trail, level=level) or decided
         if bar.high >= level:
-            _book_entry(state, bar, plan, index, rung, price=level)
+            # The gap rule reaches the legs that REST at the broker, and on the
+            # arming bar this one does not: it is placed at the touch, which
+            # cannot precede the open. So an arming bar takes the trigger
+            # however high it opened, and a later bar that opens through the
+            # trigger takes its open, the first print.
+            price = level if arming else max(bar.open, level)
+            _book_entry(state, bar, plan, index, rung, price=price)
             continue
         trail.trough = min(trail.trough, bar.low)
+    return decided
 
 
-def _fill_entries(state: _WalkState, bar: Bar, plan: Plan, config: RunConfig) -> None:
+def _fill_entries(state: _WalkState, bar: Bar, plan: Plan, config: RunConfig) -> bool:
     """Every rung the bar reached, shallowest first.
 
     Without a stated trail distance the fill price is ``min(open, limit)``: a
@@ -234,15 +267,19 @@ def _fill_entries(state: _WalkState, bar: Bar, plan: Plan, config: RunConfig) ->
     because the open is the first trade and nothing about that is in question.
 
     With one, nothing rests at the rung and :func:`_advance_trails` decides.
+
+    Returns whether a trailing rung's high/low order changed the money, for the
+    same reason the fourth situation's flag is returned rather than applied:
+    the resting stop runs after the fills and one bar is counted once.
     """
     if config.entry_trail_bps is not None:
-        _advance_trails(state, bar, plan, bps=config.entry_trail_bps)
-        return
+        return _advance_trails(state, bar, plan, bps=config.entry_trail_bps)
     for index in sorted(state.pending):
         rung = state.pending[index]
         if not _reachable(state, bar, rung):
             continue
         _book_entry(state, bar, plan, index, rung, price=min(bar.open, rung.limit_price))
+    return False
 
 
 def _track_extremes(state: _WalkState, bar: Bar) -> None:
@@ -567,10 +604,10 @@ def _match_orders(
     # Asked BEFORE the fills, while the deep rung is still pending and the
     # question is still answerable.
     deep_snu = _deep_rung_snu(state, bar, ladder=ladder, intended=intended, costs=config.costs)
-    _fill_entries(state, bar, plan, config)
+    trail_snu = _fill_entries(state, bar, plan, config)
     _track_extremes(state, bar)
     _exit_on_stop(state, bar, ladder=ladder, intended=intended, costs=config.costs)
-    return deep_snu
+    return deep_snu or trail_snu
 
 
 def _advance_state(
