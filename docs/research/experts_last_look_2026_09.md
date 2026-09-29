@@ -1,7 +1,8 @@
 # Experts × EDGE calibration — pre-registration of the final cluster-15 look
 
-**Status:** REGISTERED (frozen 2026-09-01). Run window: **2026-09-29/30** (the
-cluster's 2026-10 sunset). Results: §6 (placeholder until the run).
+**Status:** RUN AND CLOSED. Registered (frozen) 2026-09-01, run 2026-09-29
+inside the registered window. Verdict **RETIRE** — see §6. Cluster 15 has now
+spent all 3 of its lifetime looks.
 **Script (canonical spec):** `apps/alphalens-research/scripts/ml/2026_09_experts_last_look.py`
 — the module docstring is the frozen registration; this memo carries the
 rationale, the outcome-blind sample measurements, the power table and the
@@ -236,13 +237,98 @@ from a scratch copy with the tripwire alone widened. The amendments above
 landed as their own commit before the run, which is why §6 can still be filled
 by a results commit that touches no executable code.
 
-## 6. Results (placeholder — filled by the results commit, which must not touch executable code)
+## 6. Results (run 2026-09-29, single execution, verdict printed by the code)
 
-- Part A per-member table: PENDING
-- Part B model vs ATR: PENDING
-- Verification: PENDING
-- VERDICT: PENDING
-- Deviations log: PENDING (empty = none)
+Panel as it went in: **260 episodes / 47 arrival-session clusters / 205
+tickers**, brief dates 2026-07-06 → 2026-09-14. Guards: 0 split-dropped, 0
+car_10-missing, 124 immature, 0 PIT-nulled, 18 held-out plannable rows dropped
+by the lane filter (of which 6 would have reached the matured panel).
+
+### Part A — six per-member tests, family bar 0.00714
+
+| member | n | clusters | beta | t_cr2 | p_wcb | partial rho | 99.286% CI |
+|---|---|---|---|---|---|---|---|
+| `buffett_quality_score` | 147 | 43 | +0.0007 | +1.09 | 0.3003 | −0.030 | [−0.307, +0.239] |
+| `buffett_roic_3y_avg` (residual-vs-ATR) | 132 | 40 | +0.0001 | +0.93 | 0.3649 | +0.128 | [−0.138, +0.362] |
+| `expert_spread` | 146 | 43 | +0.0001 | +0.46 | 0.6492 | +0.018 | [−0.191, +0.230] |
+| `oneil_earnings_growth_yoy_pct` | 153 | 41 | +0.0000 | +0.88 | 0.3840 | +0.071 | [−0.182, +0.287] |
+| `management_candor` (ordinal) | 251 | 47 | −0.0040 | −0.29 | 0.7732 | +0.052 | [−0.156, +0.260] |
+| `understandable` (0/1) | 256 | 47 | −0.0101 | −1.10 | 0.5670 | −0.105 | [−0.316, +0.120] |
+
+No member came within an order of magnitude of the bar; the smallest p is
+0.30. Every member met its feasibility floor, including the
+`magic_formula_rank` veto subset (70 episodes / 24 clusters against 50 / 15),
+so the mfr veto never had to fall back to its conservative-null branch and
+member 4 was tested as designed.
+
+### Part B — elastic net vs the fixed −ATR baseline, purged block folds
+
+Purge counts per fold (train / purged / validation): 126/58/76, 104/93/63,
+114/110/36, 151/54/55, 184/46/30.
+
+| alpha | pooled OOF rank Spearman | note |
+|---|---|---|
+| 0.0051 (0.05 × sd) | +0.011 | descriptive sensitivity |
+| **0.0154 (0.15 × sd)** | **−0.036** | **PRIMARY, pre-committed** |
+| 0.0514 (0.5 × sd) | −0.003 | degenerate in 4 of 5 folds |
+
+Baseline −ATR pooled rank-within-fold Spearman **+0.089**. Model minus
+baseline **delta = −0.125**, cluster-bootstrap two-sided **p = 0.0666**,
+99.286% CI [−0.304, +0.055], 0 of 10,000 draws skipped. The delta is
+negative: the panel-feature model ranked car_10 *worse* than the fit-free ATR
+baseline. It does not clear the bar in either direction.
+
+### Verification battery
+
+Not run. It is defined only for a clearing member or a clearing model, and
+nothing cleared.
+
+### VERDICT — RETIRE, and the pre-committed language that goes with it
+
+`VERDICT: RETIRE — cluster 15 closed (operational stop rule).`
+
+Which of the three pre-committed conclusions applies is decided per member by
+the CI, not by the analyst. **Every one of the six CIs still covers
+|ρ| ≥ 0.10**, so branch (ii) applies across the board:
+
+> inconclusive; family retired OPERATIONALLY, not scientifically falsified.
+
+Branch (iii) — *evidence against actionable effects* — requires a CI lying
+entirely inside (−0.10, +0.10), and no member produced one. **This result is
+not evidence that the expert panel carries no signal.** It is a decision to
+stop spending looks on it. The simulated power recorded in §5b is the reason:
+a true |ρ| of 0.2 would have cleared the family bar only about 59% of the
+time, so a real but moderate effect was always more likely than not to end
+here. That asymmetry was accepted at registration as the price of a hard look
+cap over monthly peeking.
+
+Consequence, as registered: the experts stay **display-only**. Nothing enters
+`_BRIEF_SORT_KEYS` or the selection funnel. No promotion object was frozen,
+because a promotion object is created only on SURVIVES.
+
+### Descriptive (whole panel, never cut by any signal)
+
+`ladder_classification`: NO_FILL 67, OPEN 51, TIME_STOP 47, TP_FULL 46,
+PARTIAL_TP_OPEN 33, SL_HIT 12, PARTIAL_TP_THEN_SL 4.
+`realized_r`: n=109, mean +0.222, median +0.298.
+`market_excess_return` present on 260 rows; its sign differs from car_10 on 61.
+
+These are composition figures only. Cutting any of them by a signal would be a
+separate §4.1 charge and was not done.
+
+### Deviations log
+
+Two, both pre-hoc, both recorded in §5b and on #541 before the run, both
+merged as PR #1615 ahead of the run commit:
+
+1. The join tripwire allowlist was widened by three columns the two stores
+   gained after the freeze.
+2. The panel was restricted to `source == "thematic"`, excluding the
+   insider-cluster event lane that went live five days after the freeze.
+
+No deviation was made after any feature-vs-outcome statistic was computed. The
+run was a single execution; there was no second run, no alpha rescue, no
+horizon shopping and no re-encoding.
 
 ## 7. Review trail
 
