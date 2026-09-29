@@ -199,6 +199,22 @@ def _book_entry(
         state.events.append(StopPlaced(t=bar.t, level=plan.declared_floor))
 
 
+@dataclass(frozen=True, slots=True)
+class _Prospect:
+    """What a rung's trailing order would do on one bar, computed WITHOUT doing
+    it, so the classification in :func:`_staged` and the fill in
+    :func:`_advance_trails` answer with one function. Deriving the level twice
+    is the defect this repo has already paid for once."""
+
+    trough: float
+    distance: float
+    arming: bool
+
+    @property
+    def level(self) -> float:
+        return self.trough + self.distance
+
+
 def _next_listed_limits(plan: Plan) -> dict[int, float]:
     """Each rung's NEXT-LISTED sibling limit, by tier index.
 
@@ -233,6 +249,63 @@ def _trail_snu(bar: Bar, trail: _ArmedTrail, *, level: float) -> bool:
     return bar.high >= bar.low + trail.distance
 
 
+def _hands_on_to_the_next_rung(bar: Bar, rung: PendingEntry, next_limits: dict[int, float]) -> bool:
+    """The live depth rule: the bar's FIRST price is already below the rung
+    listed after this one, so the move is that rung's job."""
+    next_limit = next_limits.get(rung.tier_index)
+    return next_limit is not None and bar.open < next_limit
+
+
+def _prospect(
+    state: _WalkState,
+    bar: Bar,
+    rung: PendingEntry,
+    index: int,
+    *,
+    bps: int,
+    next_limits: dict[int, float],
+) -> _Prospect | None:
+    """This rung's trailing order on this bar, or ``None`` if it has none."""
+    if index in state.barred:
+        return None
+    trail = state.armed.get(index)
+    if trail is not None:
+        return _Prospect(trough=trail.trough, distance=trail.distance, arming=False)
+    if not _reachable(state, bar, rung) or _hands_on_to_the_next_rung(bar, rung, next_limits):
+        return None
+    reference = min(bar.open, rung.limit_price)
+    return _Prospect(trough=reference, distance=reference * bps / _BPS_PER_UNIT, arming=True)
+
+
+def _would_fill(
+    state: _WalkState,
+    bar: Bar,
+    rung: PendingEntry,
+    index: int,
+    *,
+    config: RunConfig,
+    next_limits: dict[int, float],
+) -> tuple[float, bool] | None:
+    """``(price, in_question)`` if this bar fills the rung, else ``None``.
+
+    ``in_question`` is section 4.4's fourth-situation test: does the fill land
+    somewhere INSIDE the bar rather than at its first print. For a resting
+    limit that is ``limit < open``; for a buy STOP the sign inverts, because a
+    trigger at or below the open is the one already through at the first print.
+    An arming bar is always in question - its order is placed at the touch,
+    which cannot be the open.
+    """
+    if config.entry_trail_bps is None:
+        if not _reachable(state, bar, rung):
+            return None
+        return min(bar.open, rung.limit_price), rung.limit_price < bar.open
+    found = _prospect(state, bar, rung, index, bps=config.entry_trail_bps, next_limits=next_limits)
+    if found is None or bar.high < found.level:
+        return None
+    price = found.level if found.arming else max(bar.open, found.level)
+    return price, found.arming or found.level > bar.open
+
+
 def _arm(
     state: _WalkState,
     bar: Bar,
@@ -255,19 +328,19 @@ def _arm(
     depth rule, which lives on this bar alone because the wire arms on the touch
     tick and an armed tier is terminal for the watcher.
     """
-    if not _reachable(state, bar, rung):
+    found = _prospect(state, bar, rung, index, bps=bps, next_limits=next_limits)
+    if found is None:
+        if _reachable(state, bar, rung) and _hands_on_to_the_next_rung(bar, rung, next_limits):
+            state.barred.add(index)
         return None
-    next_limit = next_limits.get(rung.tier_index)
-    if next_limit is not None and bar.open < next_limit:
-        state.barred.add(index)
-        return None
-    reference = min(bar.open, rung.limit_price)
-    trail = _ArmedTrail(distance=reference * bps / _BPS_PER_UNIT, trough=reference)
+    trail = _ArmedTrail(distance=found.distance, trough=found.trough)
     state.armed[index] = trail
     return trail
 
 
-def _advance_trails(state: _WalkState, bar: Bar, plan: Plan, *, bps: int) -> bool:
+def _advance_trails(
+    state: _WalkState, bar: Bar, plan: Plan, *, bps: int, next_limits: dict[int, float]
+) -> bool:
     """Arm, fire and ratchet the native entry trails, shallowest rung first.
 
     One order of operations, and section 4.4 row 3 fixes it: the trigger is
@@ -293,7 +366,6 @@ def _advance_trails(state: _WalkState, bar: Bar, plan: Plan, *, bps: int) -> boo
     if state.stop is not None and bar.open <= state.stop:
         return False
     decided = False
-    next_limits = _next_listed_limits(plan)
     for index in sorted(state.pending):
         if index in state.barred:
             continue
@@ -322,7 +394,14 @@ def _advance_trails(state: _WalkState, bar: Bar, plan: Plan, *, bps: int) -> boo
     return decided
 
 
-def _fill_entries(state: _WalkState, bar: Bar, plan: Plan, config: RunConfig) -> bool:
+def _fill_entries(
+    state: _WalkState,
+    bar: Bar,
+    plan: Plan,
+    config: RunConfig,
+    *,
+    next_limits: dict[int, float],
+) -> bool:
     """Every rung the bar reached, shallowest first.
 
     Without a stated trail distance the fill price is ``min(open, limit)``: a
@@ -336,7 +415,9 @@ def _fill_entries(state: _WalkState, bar: Bar, plan: Plan, config: RunConfig) ->
     the resting stop runs after the fills and one bar is counted once.
     """
     if config.entry_trail_bps is not None:
-        return _advance_trails(state, bar, plan, bps=config.entry_trail_bps)
+        return _advance_trails(
+            state, bar, plan, bps=config.entry_trail_bps, next_limits=next_limits
+        )
     for index in sorted(state.pending):
         rung = state.pending[index]
         if not _reachable(state, bar, rung):
@@ -410,24 +491,36 @@ def _a_tranche_would_have_fired(
     )
 
 
-def _staged(state: _WalkState, bar: Bar) -> tuple[tuple[float, float], tuple[float, float]]:
+def _staged(
+    state: _WalkState,
+    bar: Bar,
+    *,
+    config: RunConfig,
+    next_limits: dict[int, float],
+) -> tuple[tuple[float, float], tuple[float, float]]:
     """The position this bar produces, in the two stages the SNU is about.
 
-    A rung at or above the open is through at the FIRST print, so it belongs to
-    both readings and is not in question. The pair returned is therefore
-    ``(cash, units)`` after those rungs only, and then after the DEEP ones as
-    well. The difference between the two is the whole subject of section 4.4's
-    fourth situation: it moves the held quantity, and it moves the average entry
-    that every cost threshold is computed from.
+    A rung through at the FIRST print belongs to both readings and is not in
+    question. The pair returned is therefore ``(cash, units)`` after those only,
+    and then after the ones that fill somewhere INSIDE the bar as well. The
+    difference between the two is the whole subject of section 4.4's fourth
+    situation: it moves the held quantity, and it moves the average entry that
+    every cost threshold is computed from.
+
+    Which rungs are which is :func:`_would_fill`'s answer, not a second reading
+    of the levels - under a trail the test inverts, because a buy STOP at or
+    below the open is the one already through.
     """
     cash, units = state.cash, state.units
+    shallow = (cash, units)
     for deep in (False, True):
         for index in sorted(state.pending):
             rung = state.pending[index]
-            if (rung.limit_price < bar.open) is not deep or not _reachable(state, bar, rung):
+            found = _would_fill(state, bar, rung, index, config=config, next_limits=next_limits)
+            if found is None or found[1] is not deep:
                 continue
             filled = rung.notional / rung.limit_price
-            cash += filled * min(bar.open, rung.limit_price)
+            cash += filled * found[0]
             units += filled
         if not deep:
             shallow = (cash, units)
@@ -441,6 +534,8 @@ def _deep_rung_snu(
     ladder: tuple[DeclaredTranche, ...],
     intended: float,
     costs: Costs,
+    config: RunConfig,
+    next_limits: dict[int, float],
 ) -> bool:
     """Does this bar's rung-against-take-profit order change the MONEY?
 
@@ -464,11 +559,15 @@ def _deep_rung_snu(
     so the replay cannot say whether the tranche would have fired at all.
     """
     if not any(
-        rung.limit_price < bar.open and _reachable(state, bar, rung)
-        for rung in state.pending.values()
+        (found := _would_fill(state, bar, rung, index, config=config, next_limits=next_limits))
+        is not None
+        and found[1]
+        for index, rung in state.pending.items()
     ):
         return False
-    (cash_before, units_before), (cash_after, units_after) = _staged(state, bar)
+    (cash_before, units_before), (cash_after, units_after) = _staged(
+        state, bar, config=config, next_limits=next_limits
+    )
     if units_before <= 0.0:
         return False
     held, held_after = units_before - state.units_sold, units_after - state.units_sold
@@ -664,10 +763,19 @@ def _match_orders(
     so the caller applies the flag only if the position is still open.
     """
     _expire(state, bar, deadline=config.entry_deadline.value)
-    # Asked BEFORE the fills, while the deep rung is still pending and the
-    # question is still answerable.
-    deep_snu = _deep_rung_snu(state, bar, ladder=ladder, intended=intended, costs=config.costs)
-    trail_snu = _fill_entries(state, bar, plan, config)
+    next_limits = _next_listed_limits(plan)
+    # Asked BEFORE the fills, while the rung is still pending and the question
+    # is still answerable.
+    deep_snu = _deep_rung_snu(
+        state,
+        bar,
+        ladder=ladder,
+        intended=intended,
+        costs=config.costs,
+        config=config,
+        next_limits=next_limits,
+    )
+    trail_snu = _fill_entries(state, bar, plan, config, next_limits=next_limits)
     _track_extremes(state, bar)
     _exit_on_stop(state, bar, ladder=ladder, intended=intended, costs=config.costs)
     return deep_snu or trail_snu

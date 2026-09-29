@@ -367,6 +367,39 @@ class EntryTrailTest(unittest.TestCase):
         result = self._walk(_bar(WALK_START, 60.0, 68.5, 59.0))
         self.assertEqual(result.events[0].price, 60.0 * 1.005)
 
+    def test_the_fourth_situation_is_classified_by_the_TRAIL_not_by_the_limit(self) -> None:
+        """Section 4.4's fourth situation asks whether a rung filled INSIDE the
+        bar while a take-profit was also reached. For a resting limit the test is
+        ``limit < open``; for a buy STOP the sign inverts, because a trigger at or
+        below the open is the one already through at the first print.
+
+        Reading it off the LIMIT under a trail counts the wrong bars. This ladder
+        is one of five in three thousand random trailing runs where the two
+        readings disagree, found by search on 2026-09-30 rather than by guessing
+        a shape; the limit reading reports one such bar and the trail reading
+        none. The cash is asserted beside it because it must NOT move: the
+        detector feeds ``snu_bars`` alone and can never change what was bought.
+        """
+        rungs = (
+            PendingEntry(tier_index=0, limit_price=33.0191, notional=1184.638231),
+            PendingEntry(tier_index=1, limit_price=32.2963, notional=315.361769),
+        )
+        tranches = (
+            DeclaredTranche(tranche_index=0, price=33.1557, fraction=0.333333),
+            DeclaredTranche(tranche_index=1, price=34.3689, fraction=0.333333),
+            DeclaredTranche(tranche_index=2, price=35.9811, fraction=0.333333),
+        )
+        bars = (
+            _bar(WALK_START, 34.0063, 34.4642, 32.9773, close=33.0864),
+            _bar(WALK_START + MINUTE, 33.0864, 34.6038, 32.2753, close=33.2156),
+            _bar(WALK_START + 2 * MINUTE, 33.2156, 33.4895, 32.8876, close=33.3813),
+            _bar(WALK_START + 3 * MINUTE, 33.3813, 34.4894, 31.9653, close=33.6468),
+        )
+        plan = _plan(entries=rungs, notional=1500.0, floor=29.0041, tranches=tranches)
+        result = walk(plan, _config(entry_trail_bps=50), bars)
+        self.assertEqual(result.snu_bars, 0)
+        self.assertAlmostEqual(result.notional_spent, 1507.5, places=4)
+
     def _to_deadline(self, *bars: Bar) -> Any:
         config = _config(entry_trail_bps=50, entry_deadline=_deadline(WALK_START + MINUTE))
         return walk(_plan(), config, bars)
