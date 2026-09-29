@@ -68,6 +68,14 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "intent_replay.refusal",
         }
     ),
+    "measures.py": frozenset(
+        {
+            "__future__",
+            "dataclasses",
+            "intent_replay.trace",
+            "intent_replay.walk",
+        }
+    ),
     "cost_gate.py": frozenset(
         {
             "__future__",
