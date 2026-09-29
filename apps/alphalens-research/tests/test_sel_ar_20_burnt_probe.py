@@ -13,11 +13,16 @@ of merging it, would pass every straightforward case.
 from __future__ import annotations
 
 import ast
+import contextlib
 import datetime as dt
 import importlib.util
+import io
 import math
 import unittest
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 _SCRIPT = (
     Path(__file__).resolve().parents[1] / "scripts" / "ml" / "2026_09_sel_ar_20_burnt_probe.py"
@@ -205,3 +210,205 @@ class TestContiguousBlockFolds(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _synthetic_panel(n_clusters: int = 10, per_cluster: int = 6):
+    """A panel with the columns the fit and the fold comparison need.
+
+    Built so one regressor genuinely drives the outcome and the rest are
+    noise, which is what lets the assertions below distinguish a working fit
+    from one that returns anything at all.
+    """
+    rng = np.random.default_rng(7)
+    sessions = [dt.date(2026, 6, 1) + dt.timedelta(days=i) for i in range(n_clusters)]
+    rows = []
+    for c, session in enumerate(sessions):
+        for k in range(per_cluster):
+            atr = float(rng.normal())
+            rows.append(
+                {
+                    "brief_date": session,
+                    "ticker": f"T{c}{k}",
+                    "arrival": session,
+                    "technical_atr_pct": atr,
+                    "technical_ma50_distance_pct": float(rng.normal()),
+                    "technical_ma200_slope_pct_per_day": float(rng.normal()),
+                    "catalyst_strength": float(rng.normal()),
+                    "catalyst_age_h": float(rng.normal()),
+                    probe.LABEL: -0.4 * atr + float(rng.normal(scale=0.2)),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+_NAMES = [n for _, n in probe.CONTROLS] + [n for _, n in probe.CANDIDATES]
+
+
+def _named(panel):
+    out = panel.copy()
+    for src, name in probe.CONTROLS + probe.CANDIDATES:
+        source = out[src] if src in out.columns else out.get(name)
+        out[name] = pd.to_numeric(source, errors="coerce")
+    return out
+
+
+class TestStandardise(unittest.TestCase):
+    def test_each_column_ends_at_zero_mean_and_unit_spread(self) -> None:
+        out = probe.standardise(_named(_synthetic_panel()), _NAMES)
+        for name in _NAMES:
+            self.assertAlmostEqual(out[name].mean(), 0.0, places=9)
+            self.assertAlmostEqual(out[name].std(ddof=0), 1.0, places=9)
+
+    def test_a_constant_column_becomes_nan_rather_than_dividing_by_zero(self) -> None:
+        """Positive control — a naive implementation raises or returns inf."""
+        panel = _named(_synthetic_panel())
+        panel["atr"] = 3.0
+        out = probe.standardise(panel, ["atr"])
+        self.assertTrue(out["atr"].isna().all())
+
+    def test_it_does_not_mutate_the_frame_it_was_given(self) -> None:
+        panel = _named(_synthetic_panel())
+        before = panel["atr"].tolist()
+        probe.standardise(panel, _NAMES)
+        self.assertEqual(panel["atr"].tolist(), before)
+
+
+class TestJointFit(unittest.TestCase):
+    def setUp(self) -> None:
+        self._boot = probe.N_BOOT
+        probe.N_BOOT = 199  # the bootstrap is the slow part; 199 is enough to exercise it
+
+    def tearDown(self) -> None:
+        probe.N_BOOT = self._boot
+
+    def test_it_recovers_the_regressor_that_drives_the_outcome(self) -> None:
+        out = probe.joint_fit(probe.standardise(_named(_synthetic_panel()), _NAMES), _NAMES)
+        self.assertIsNotNone(out)
+        assert out is not None
+        by_name = {r["name"]: r for r in out}
+        self.assertEqual(sorted(by_name), sorted(_NAMES))
+        self.assertLess(by_name["atr"]["beta"], 0.0)
+        self.assertLess(by_name["atr"]["p_wcb"], 0.05)
+
+    def test_it_reports_clusters_not_rows(self) -> None:
+        panel = probe.standardise(_named(_synthetic_panel(n_clusters=8, per_cluster=5)), _NAMES)
+        out = probe.joint_fit(panel, _NAMES)
+        assert out is not None
+        self.assertEqual(out[0]["n"], 40)
+        self.assertEqual(out[0]["clusters"], 8)
+
+    def test_a_panel_too_small_to_fit_returns_none_rather_than_a_number(self) -> None:
+        """Positive control — returning a fit on 12 rows would be worse than
+        refusing, because the caller prints whatever it gets."""
+        small = probe.standardise(_named(_synthetic_panel(n_clusters=3, per_cluster=4)), _NAMES)
+        self.assertIsNone(probe.joint_fit(small, _NAMES))
+
+    def test_rows_missing_a_regressor_are_dropped_complete_case(self) -> None:
+        panel = probe.standardise(_named(_synthetic_panel()), _NAMES)
+        panel.loc[panel.index[:7], "catalyst_age_h"] = np.nan
+        out = probe.joint_fit(panel, _NAMES)
+        assert out is not None
+        self.assertEqual(out[0]["n"], len(panel) - 7)
+
+
+class TestFoldComparison(unittest.TestCase):
+    def test_it_scores_the_model_and_both_baselines_on_the_same_folds(self) -> None:
+        panel = probe.standardise(_named(_synthetic_panel(n_clusters=20, per_cluster=6)), _NAMES)
+        out = probe.fold_comparison(panel, _NAMES)
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertEqual(sorted(out["scores"]), ["atr_ma50", "atr_only", "model"])
+        self.assertEqual(len(out["per_fold"]), 4)
+        for score in out["scores"].values():
+            self.assertGreaterEqual(score, -1.0)
+            self.assertLessEqual(score, 1.0)
+
+    def test_the_fit_free_baseline_tracks_the_outcome_it_was_built_to_track(self) -> None:
+        """The synthetic outcome is driven by -ATR, so the fixed-direction
+        baseline must score positively. A sign error would show up here."""
+        panel = probe.standardise(_named(_synthetic_panel(n_clusters=20, per_cluster=6)), _NAMES)
+        out = probe.fold_comparison(panel, _NAMES)
+        assert out is not None
+        self.assertGreater(out["scores"]["atr_only"], 0.0)
+
+    def test_too_few_sessions_to_split_returns_none(self) -> None:
+        panel = probe.standardise(_named(_synthetic_panel(n_clusters=4, per_cluster=6)), _NAMES)
+        self.assertIsNone(probe.fold_comparison(panel, _NAMES))
+
+
+class TestRankWithinFold(unittest.TestCase):
+    def test_every_fold_is_mapped_onto_the_same_zero_to_one_range(self) -> None:
+        """This is what makes folds of different sizes poolable, and it is what
+        README house rule 8 prescribes. Normalising by the POOLED total instead
+        would compress a small fold into a slice of the range."""
+        small = probe._rank_within_fold(np.array([3.0, 1.0, 2.0]))
+        large = probe._rank_within_fold(np.arange(100.0))
+        self.assertAlmostEqual(float(np.max(small)), 1.0)
+        self.assertAlmostEqual(float(np.max(large)), 1.0)
+        self.assertAlmostEqual(float(np.min(small)), 1 / 3)
+        self.assertAlmostEqual(float(np.min(large)), 1 / 100)
+
+    def test_it_ranks_rather_than_rescaling(self) -> None:
+        got = probe._rank_within_fold(np.array([10.0, 1000.0, 20.0]))
+        self.assertEqual(list(got), [1 / 3, 1.0, 2 / 3])
+
+
+class TestOlsPredict(unittest.TestCase):
+    def test_it_reproduces_a_line_it_was_fitted_on(self) -> None:
+        frame = pd.DataFrame({"x": [0.0, 1.0, 2.0, 3.0]})
+        y = np.array([1.0, 3.0, 5.0, 7.0])  # 1 + 2x
+        got = probe._ols_predict(frame, frame, y, ["x"])
+        for expected, actual in zip(y, got, strict=True):
+            self.assertAlmostEqual(actual, expected, places=9)
+
+    def test_it_scores_the_validation_frame_not_the_training_one(self) -> None:
+        train = pd.DataFrame({"x": [0.0, 1.0, 2.0]})
+        val = pd.DataFrame({"x": [10.0]})
+        got = probe._ols_predict(train, val, np.array([0.0, 1.0, 2.0]), ["x"])
+        self.assertEqual(len(got), 1)
+        self.assertAlmostEqual(float(got[0]), 10.0, places=6)
+
+
+class TestRunPrintsTheWholeReport(unittest.TestCase):
+    """Smoke test of the reporting path over a synthetic panel.
+
+    `build_panel` reads three stores and cannot run here, so it is replaced.
+    Everything downstream of it is real, which is the half that formats the
+    numbers a reader will act on.
+    """
+
+    def test_it_reports_every_section(self) -> None:
+        panel = _named(_synthetic_panel(n_clusters=20, per_cluster=6))
+        diag = {
+            "pre_join": 200,
+            "joined": 130,
+            "episodes": len(panel),
+            "clusters": 20,
+            "no_brief": 70,
+            "news_unresolved": 1,
+            "pit_violations": 0,
+        }
+        boot = probe.N_BOOT
+        build = probe.build_panel
+        probe.N_BOOT = 199
+        probe.build_panel = lambda: (panel, diag)
+        buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buffer):
+                probe.run()
+        finally:
+            probe.N_BOOT = boot
+            probe.build_panel = build
+        out = buffer.getvalue()
+        for expected in (
+            "BURNT-PANEL NEWS-AXIS PROBE",
+            "PRIMARY — jointly fitted",
+            "PER-CANDIDATE",
+            "SECONDARY — unpurged contiguous block folds. THIS LEAKS",
+            "baseline A",
+            "baseline B",
+            "charges 0",
+        ):
+            self.assertIn(expected, out)
+        self.assertIn("20 arrival-session clusters", out)
+        self.assertIn("PIT violations (article at/after the arrival open) 0", out)
