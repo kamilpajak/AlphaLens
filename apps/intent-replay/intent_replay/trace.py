@@ -194,11 +194,17 @@ class PositionClosed:
 
 @dataclass(frozen=True, slots=True)
 class HorizonOpen:
-    """The bars ran out with the position still open."""
+    """The bars ran out with the position still open.
+
+    ``price`` is the CLOSE of the last bar the walk saw, and the units are
+    valued at it (section 4.6). A mark is a valuation and not a fill, so it
+    pays no fee, takes no slippage, and the cost gate is NOT consulted for it.
+    """
 
     kind: ClassVar[str] = "horizon_open"
     t: int
     units: float
+    price: float
 
 
 TraceEvent = (

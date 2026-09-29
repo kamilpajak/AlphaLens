@@ -55,6 +55,7 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "typing",
             "broker_contract.failure",
             "intent_replay.refusal",
+            "intent_replay.units",
         }
     ),
     "classification.py": frozenset(
@@ -65,6 +66,32 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "typing",
             "broker_contract.failure",
             "intent_replay.refusal",
+        }
+    ),
+    "envelope.py": frozenset(
+        {
+            "__future__",
+            "collections.abc",
+            "types",
+            "typing",
+            "broker_contract.exit_geometry.registry",
+            "broker_contract.trade_intent.schema",
+            "intent_replay.bars",
+            "intent_replay.config",
+            "intent_replay.interpreter",
+            "intent_replay.measures",
+            "intent_replay.trace",
+            "intent_replay.units",
+            "intent_replay.walk",
+        }
+    ),
+    "units.py": frozenset({"__future__", "dataclasses", "typing"}),
+    "measures.py": frozenset(
+        {
+            "__future__",
+            "dataclasses",
+            "intent_replay.trace",
+            "intent_replay.walk",
         }
     ),
     "cost_gate.py": frozenset(
@@ -150,6 +177,37 @@ class EngineModulesReadNothingTest(unittest.TestCase):
             with self.subTest(name):
                 source = (PACKAGE_DIR / name).read_text(encoding="utf-8")
                 self.assertEqual(denied_name_uses(source), [])
+
+
+# The modules deliberately NOT covered, each for the reason in the module
+# docstring: three state the word ``open`` for their own purposes and
+# ``refusal.py`` is trivial, while ``door.py``, ``cli.py`` and ``__main__.py``
+# are ADAPTERS rather than engine modules.
+UNCOVERED: frozenset[str] = frozenset(
+    {"bars.py", "walk.py", "trace.py", "refusal.py", "door.py", "cli.py", "__main__.py"}
+)
+
+
+class EveryModuleIsEitherScannedOrExcusedTest(unittest.TestCase):
+    """Without this, a NEW engine module is silently unscanned.
+
+    ``ALLOWED_IMPORTS`` is a hand-written dict and the scanner iterates it, so
+    a module nobody adds a row for is not merely uncovered -- it is uncovered
+    with no signal at all. This turns that into a red test, which is what the
+    rows for ``units.py``, ``measures.py`` and ``envelope.py`` would otherwise
+    have depended on somebody remembering.
+    """
+
+    def test_every_module_in_the_package_is_accounted_for(self) -> None:
+        on_disk = {path.name for path in PACKAGE_DIR.glob("*.py") if path.name != "__init__.py"}
+        self.assertEqual(on_disk - set(ALLOWED_IMPORTS) - UNCOVERED, set())
+
+    def test_no_excuse_outlives_its_module(self) -> None:
+        # The other direction: a name in either list that no longer exists is
+        # a stale promise, and would hide the next module added under it.
+        on_disk = {path.name for path in PACKAGE_DIR.glob("*.py")}
+        self.assertEqual(UNCOVERED - on_disk, set())
+        self.assertEqual(set(ALLOWED_IMPORTS) - on_disk, set())
 
 
 class ScannerPositiveControlsTest(unittest.TestCase):

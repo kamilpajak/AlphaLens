@@ -69,30 +69,29 @@ from typing import Any, Final
 from broker_contract.failure import ContractError
 
 from intent_replay.refusal import refuse
+from intent_replay.units import (
+    BPS,
+    EPOCH_MS_UTC,
+    FRACTION,
+    QUANTITY_KEYS,
+    TRANSLATED_KEYS,
+    Quantity,
+    Translated,
+)
 
 __all__ = [
-    "BPS",
     "CONFIG_INCOMPLETE_CODE",
     "CONFIG_INCOMPLETE_REASONS",
     "CONFIG_INVALID_CODE",
     "CONFIG_INVALID_REASONS",
     "CONFIG_KEYS",
-    "EPOCH_MS_UTC",
-    "FRACTION",
     "ConfigError",
     "Costs",
-    "Quantity",
     "RunConfig",
-    "Translated",
 ]
 
 CONFIG_INCOMPLETE_CODE: Final = "config_incomplete"
 CONFIG_INVALID_CODE: Final = "config_invalid"
-
-# The published unit strings of spec section 5.2.
-EPOCH_MS_UTC: Final = "epoch_ms_utc"
-FRACTION: Final = "fraction"
-BPS: Final = "bps"
 
 # The block's keys in the order section 5.2 prints them; ``to_jsonable`` keeps it.
 CONFIG_KEYS: Final = (
@@ -104,8 +103,6 @@ CONFIG_KEYS: Final = (
     "oco",
     "costs",
 )
-_TRANSLATED_KEYS: Final = ("kind", "value", "unit", "source", "formula")
-_QUANTITY_KEYS: Final = ("value", "unit")
 _COSTS_KEYS: Final = (
     "commission_rate",
     "min_commission",
@@ -135,41 +132,17 @@ CONFIG_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
             "A conversion is stated to apply but no key states its rate. The omitted term is "
             "50 bps of the notional, so accepting it would price every round trip too cheap."
         ),
+        "entry_trail_not_modelled": (
+            "TEMPORARY, and removed with the refusal by PR 8. This version parses the entry "
+            "trail distance and does not apply it, so carrying the stated value into the "
+            "result would claim a policy the run never ran. State null until then."
+        ),
     }
 )
 
 
 class ConfigError(ContractError):
     """The stated configuration cannot be used; nothing was computed."""
-
-
-@dataclass(frozen=True, slots=True)
-class Translated:
-    """The section 5.1 provenance shape of a TRANSLATED document path (section 5.2).
-
-    ``value`` is epoch milliseconds, UTC, as an int: that is what the walk
-    compares against ``Bar.t``.
-    """
-
-    kind: str
-    value: int
-    unit: str
-    source: str
-    formula: str
-
-    def to_jsonable(self) -> dict[str, Any]:
-        return {key: getattr(self, key) for key in _TRANSLATED_KEYS}
-
-
-@dataclass(frozen=True, slots=True)
-class Quantity:
-    """A number that carries its unit (the section 5.2 costs block)."""
-
-    value: float
-    unit: str
-
-    def to_jsonable(self) -> dict[str, Any]:
-        return {"value": self.value, "unit": self.unit}
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,8 +169,8 @@ class Costs:
 class RunConfig:
     """The seven stated keys of the section 5.2 config block."""
 
-    walk_start: Translated
-    entry_deadline: Translated
+    walk_start: Translated[int]
+    entry_deadline: Translated[int]
     entry_trail_bps: int | None
     ceiling_price: float | None
     time_stop_t: int | None
@@ -303,8 +276,8 @@ class _Reader:
 
 @dataclass(slots=True)
 class _Parsed:
-    walk_start: Translated | None = None
-    entry_deadline: Translated | None = None
+    walk_start: Translated[int] | None = None
+    entry_deadline: Translated[int] | None = None
     entry_trail_bps: int | None = None
     ceiling_price: float | None = None
     time_stop_t: int | None = None
@@ -376,8 +349,8 @@ def _number(reader: _Reader, node: Any, path: str) -> float | None:
     return node
 
 
-def _translated(reader: _Reader, node: Any, path: str) -> Translated | None:
-    node = _mapping(reader, node, path, _TRANSLATED_KEYS)
+def _translated(reader: _Reader, node: Any, path: str) -> Translated[int] | None:
+    node = _mapping(reader, node, path, TRANSLATED_KEYS)
     if node is None:
         return None
     texts = {
@@ -420,7 +393,7 @@ def _unit(reader: _Reader, node: Any, path: str, expected: str | None) -> str | 
 
 
 def _quantity(reader: _Reader, node: Any, path: str, expected_unit: str | None) -> Quantity | None:
-    node = _mapping(reader, node, path, _QUANTITY_KEYS)
+    node = _mapping(reader, node, path, QUANTITY_KEYS)
     if node is None:
         return None
     value = _number(reader, node["value"], _path(path, "value")) if "value" in node else None
@@ -499,16 +472,31 @@ def _costs(reader: _Reader, node: Any, path: str) -> Costs | None:
 def _trail_distance(reader: _Reader, node: Any) -> int | None:
     """``entry_trail_bps``: null is OFF; an int is a distance and must be >= 1.
     The live flag reads 0 as OFF, so a 0 here is ambiguous and is refused with
-    the form to use instead."""
+    the form to use instead.
+
+    A well-formed distance is then refused outright until PR 8 models entry
+    trailing (section 5.4). The order is load-bearing and stated there: the
+    type and range checks run FIRST, so ``true`` stays ``wrong_type`` and ``0``
+    stays ``not_positive``, and this reason only answers a distance nothing
+    else can fault.
+    """
     if node is None:
         return None
     distance = _integer(reader, node, "entry_trail_bps")
-    if distance is not None and distance < 1:
+    if distance is None:
+        return None
+    if distance < 1:
         reader.reject(
             "entry_trail_bps", "not_positive", "must be >= 1; entry trailing OFF is stated as null"
         )
         return None
-    return distance
+    reader.reject(
+        "entry_trail_bps",
+        "entry_trail_not_modelled",
+        "this version does not apply an entry trail; state null until PR 8",
+        expected=None,
+    )
+    return None
 
 
 def _ceiling(reader: _Reader, node: Any) -> float | None:

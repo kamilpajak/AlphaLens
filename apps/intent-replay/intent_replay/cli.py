@@ -6,10 +6,10 @@ the three cannot drift. Output rules, in the order a caller meets them:
 
 * ``--format json|ndjson``; there is no human renderer in v1 (section 5.3), so
   the option takes the name and nothing else.
-* stdout carries the result only. In this version an ACCEPTED document has
-  nothing to print (the envelope is PR 7), so the command exits 0 with empty
-  stdout and empty stderr — although it has been admitted, interpreted and
-  checked against the path classes by then.
+* stdout carries the result only, and stderr stays empty on success.
+  ``--format json`` writes EXACTLY ONE JSON value; ``--format ndjson`` writes
+  the section 5.3 transport lines, a ``result`` then a ``summary``, whose
+  ``data`` is byte-identical to the single-value form.
 * a refusal goes to stderr as exactly one line that is a JSON object, and that
   line is the LAST one (a library may log a warning above it); stdout stays
   empty. The object has the five doctrine keys ``code``, ``message``,
@@ -55,8 +55,9 @@ from broker_contract.failure import (
     Suggestion,
 )
 
-from intent_replay import bars, classification, config, door, interpreter, walk
+from intent_replay import bars, classification, config, door, envelope, interpreter, walk
 from intent_replay.config import RunConfig
+from intent_replay.measures import summarise
 
 __all__ = [
     "BARS_MALFORMED_REASONS",
@@ -89,7 +90,7 @@ EXIT_USAGE: Final = 2
 EXIT_INTERRUPTED: Final = 130
 EXIT_CODES: Final[Mapping[str, str]] = MappingProxyType(
     {
-        str(EXIT_OK): "accepted; in this version nothing is printed",
+        str(EXIT_OK): "accepted; the result envelope is on stdout",
         str(EXIT_FAILED): "refused; the failure object is the last line on stderr",
         str(EXIT_USAGE): "the invocation is malformed, or a file it names cannot be read",
         str(EXIT_INTERRUPTED): "interrupted; nothing was written",
@@ -281,8 +282,8 @@ COMMANDS: Final[tuple[Command, ...]] = (
             _FORMAT_OPTION,
         ),
         output=(
-            "nothing on an accepted document in this version; a refusal is one JSON "
-            "object on stderr"
+            "one result envelope on stdout (json), or one result line and one summary "
+            "line (ndjson); a refusal is one JSON object on stderr"
         ),
         examples=(
             "intent-replay run pick.json --config run.json --bars bars.json",
@@ -615,9 +616,9 @@ def _run(args: argparse.Namespace) -> int:
     shape of each bar, the ordering of the sequence, and whether the window
     covers the stated `walk_start`.
 
-    An accepted document still prints nothing in this version. The walk RUNS —
-    its trace and its counter are computed — and the envelope that would render
-    them is PR 7.
+    Nothing is written before the last refusal can be raised: the envelope is
+    built only after the walk has run, so a refusal can never follow a partial
+    result onto stdout.
     """
     document = _load_document(args.document)
     try:
@@ -628,8 +629,36 @@ def _run(args: argparse.Namespace) -> int:
     run_config = RunConfig.from_jsonable(_load_config(args.config))
     series = bars.validate_sequence(bars.parse_bars(_load_bars(args.bars)))
     bars.check_window_covers(series, run_config.walk_start.value)
-    walk.walk(plan, run_config, series)
+    result = walk.walk(plan, run_config, series)
+    built = envelope.build(
+        intent=admitted.intent,
+        plan=plan,
+        config=run_config,
+        result=result,
+        measures=summarise(result, declared_floor=plan.declared_floor),
+        bars=series,
+    )
+    _write_result(built, args.format)
     return EXIT_OK
+
+
+def _write_result(built: Mapping[str, Any], fmt: str) -> None:
+    """Section 5.3. ``json`` is one value; ``ndjson`` is the transport lines.
+
+    ``allow_nan=False`` is what keeps an infinity or a NaN off stdout: the
+    writer REFUSES them with a ValueError rather than emitting tokens no strict
+    JSON reader accepts. It is not a claim that every number is finite.
+    """
+    if fmt == "ndjson":
+        lines: tuple[Mapping[str, Any], ...] = (
+            envelope.stream_line(built, sequence=1),
+            envelope.stream_summary(sequence=2, documents=1),
+        )
+    else:
+        lines = (built,)
+    sys.stdout.write(
+        "".join(json.dumps(line, allow_nan=False, default=str) + "\n" for line in lines)
+    )
 
 
 def _schema(args: argparse.Namespace) -> int:

@@ -7,11 +7,12 @@ carries exactly one line that is a JSON object and that line is the last one,
 the object has the five doctrine keys, and the exit status is coarse (0 ok,
 2 usage, 1 everything else, 130 interrupted with nothing written).
 
-The success path is deliberately empty: an accepted document exits 0 with
-nothing on either stream, because nothing exists yet to print (the envelope is
-PR 7). That is asserted here as the contract of this version, and it holds
-although `run` now also INTERPRETS the document — the interpreter's two
-refusals are reachable while its success is silent.
+The success path PRINTS from this version on: `--format json` writes exactly
+one JSON value on stdout and `--format ndjson` writes the section 5.3 transport
+lines, both with stderr empty. The assertion with the most refuting power is
+that the `data` of the stream's `result` line EQUALS the whole `--format json`
+object: section 5.3 gives that byte-identity as the reason the wrapper exists
+at all.
 """
 
 from __future__ import annotations
@@ -148,20 +149,171 @@ def _rmtree(directory: Path) -> None:
 
 
 class AcceptedDocumentTest(_Files):
-    def test_an_accepted_document_exits_zero_with_nothing_on_either_stream(self) -> None:
-        run = self.run_cli("run", self.document, "--config", self.config, "--bars", self.bars)
-        self.assertEqual((run.code, run.stdout, run.stderr), (EXIT_OK, "", ""))
+    def _json(self, *extra: str, stdin: bytes | None = None) -> tuple[_Run, Any]:
+        run = self.run_cli(
+            "run", self.document, "--config", self.config, "--bars", self.bars, *extra, stdin=stdin
+        )
+        self.assertEqual((run.code, run.stderr), (EXIT_OK, ""))
+        return run, json.loads(run.stdout)
+
+    def test_an_accepted_document_prints_exactly_one_json_value(self) -> None:
+        run, value = self._json()
+        self.assertEqual(run.stdout.count("\n"), 1)
+        self.assertTrue(run.stdout.endswith("\n"))
+        self.assertEqual(value["schema"], "intent_replay.result/v1")
+        self.assertEqual(value["intent_id"], "REPLAY")
+
+    def test_the_command_hands_the_envelope_the_documents_own_floor(self) -> None:
+        # The wiring between this command and the envelope was untested for
+        # VALUES: every assertion looked at ``schema`` and ``intent_id``, so
+        # passing 0.0 as the R denominator floor changed every published R
+        # number and left the whole suite green. The document's disaster stop
+        # is 63.00 and the single fill is at 68.00, so the denominator is 5.00.
+        _, value = self._json()
+        summary = value["summary"]
+        self.assertEqual(summary["avg_entry_price"]["value"], 68.0)
+        self.assertEqual(summary["r_multiple"]["denominator"]["value"], 5.0)
+        self.assertEqual(summary["notional_spent"], {"value": 900.0, "unit": "EUR"})
+        self.assertEqual(value["outcome"], "open")
+
+    def test_the_command_hands_the_envelope_the_series_it_read(self) -> None:
+        _, value = self._json()
+        self.assertEqual(
+            value["window"],
+            {"from_t": BARS[0]["t"], "to_t": BARS[-1]["t"], "bars": len(BARS)},
+        )
+
+    def test_no_non_finite_number_can_reach_stdout(self) -> None:
+        # ``allow_nan=False`` on the writer; the reader refuses the tokens a
+        # non-strict writer would have emitted.
+        run, _ = self._json()
+
+        def refuse(token: str) -> float:
+            raise AssertionError(f"non-finite token on stdout: {token}")
+
+        json.loads(run.stdout, parse_constant=refuse)
 
     def test_the_document_may_come_from_stdin(self) -> None:
-        data = json.dumps(_document()).encode("utf-8")
-        run = self.run_cli("run", "-", "--config", self.config, "--bars", self.bars, stdin=data)
-        self.assertEqual((run.code, run.stdout, run.stderr), (EXIT_OK, "", ""))
+        _, value = self._json(stdin=json.dumps(_document()).encode("utf-8"))
+        self.assertEqual(value["schema"], "intent_replay.result/v1")
 
-    def test_ndjson_is_accepted_as_a_format_name(self) -> None:
+    def test_stdin_and_a_file_print_the_same_object(self) -> None:
+        _, from_file = self._json()
         run = self.run_cli(
-            "run", self.document, "--config", self.config, "--bars", self.bars, "--format", "ndjson"
+            "run",
+            "-",
+            "--config",
+            self.config,
+            "--bars",
+            self.bars,
+            stdin=json.dumps(_document()).encode("utf-8"),
         )
-        self.assertEqual((run.code, run.stdout, run.stderr), (EXIT_OK, "", ""))
+        self.assertEqual(json.loads(run.stdout), from_file)
+
+    def test_ndjson_prints_a_result_line_and_a_summary_line(self) -> None:
+        run = self.run_cli(
+            "run",
+            self.document,
+            "--config",
+            self.config,
+            "--bars",
+            self.bars,
+            "--format",
+            "ndjson",
+        )
+        self.assertEqual((run.code, run.stderr), (EXIT_OK, ""))
+        lines = [json.loads(line) for line in run.stdout.splitlines()]
+        self.assertEqual(len(lines), 2)
+        self.assertEqual([line["type"] for line in lines], ["result", "summary"])
+        self.assertEqual([line["sequence"] for line in lines], [1, 2])
+
+    def test_every_stream_line_carries_the_transport_schema(self) -> None:
+        # Section 5.3: EVERY line, the summary included, so the summary's own
+        # shape can be versioned later.
+        run = self.run_cli(
+            "run",
+            self.document,
+            "--config",
+            self.config,
+            "--bars",
+            self.bars,
+            "--format",
+            "ndjson",
+        )
+        for line in run.stdout.splitlines():
+            self.assertEqual(json.loads(line)["schema"], "intent_replay.stream/v1")
+
+    def test_the_summary_line_has_exactly_the_four_published_keys(self) -> None:
+        # Section 5.3 prints it as a COMPLETE literal with no ellipsis, unlike
+        # the result line, whose payload it abbreviates.
+        run = self.run_cli(
+            "run",
+            self.document,
+            "--config",
+            self.config,
+            "--bars",
+            self.bars,
+            "--format",
+            "ndjson",
+        )
+        summary = json.loads(run.stdout.splitlines()[1])
+        self.assertEqual(set(summary), {"schema", "type", "sequence", "documents"})
+        self.assertEqual(summary["documents"], 1)
+
+    def test_the_stream_payload_is_byte_identical_to_the_single_value_form(self) -> None:
+        # Section 5.3 says BYTE-identical, and that byte-identity is the stated
+        # reason the transport wrapper exists at all. Comparing the PARSED
+        # objects would accept a different key order, which is exactly the
+        # difference a consumer reading raw bytes would see.
+        run_single = self.run_cli(
+            "run", self.document, "--config", self.config, "--bars", self.bars
+        )
+        run_stream = self.run_cli(
+            "run",
+            self.document,
+            "--config",
+            self.config,
+            "--bars",
+            self.bars,
+            "--format",
+            "ndjson",
+        )
+        line = run_stream.stdout.splitlines()[0]
+        marker = '"data": '
+        payload_bytes = line[line.index(marker) + len(marker) : -1]
+        self.assertEqual(payload_bytes, run_single.stdout.rstrip("\n"))
+
+    def test_the_stream_payload_equals_the_single_value_form(self) -> None:
+        # Section 5.3: ``data`` is byte-identical to what ``--format json``
+        # prints. This is why the trace is NOT routed by format.
+        _, single = self._json()
+        run = self.run_cli(
+            "run",
+            self.document,
+            "--config",
+            self.config,
+            "--bars",
+            self.bars,
+            "--format",
+            "ndjson",
+        )
+        self.assertEqual(json.loads(run.stdout.splitlines()[0])["data"], single)
+
+    def test_the_trace_is_present_in_both_formats(self) -> None:
+        _, single = self._json()
+        run = self.run_cli(
+            "run",
+            self.document,
+            "--config",
+            self.config,
+            "--bars",
+            self.bars,
+            "--format",
+            "ndjson",
+        )
+        streamed = json.loads(run.stdout.splitlines()[0])["data"]
+        self.assertIn("trace", single)
+        self.assertEqual(streamed["trace"], single["trace"])
 
 
 class DocumentRefusalTest(_Files):
@@ -476,6 +628,19 @@ class HelpTest(unittest.TestCase):
                 text = self._help(*argv)
                 positions = [text.index(heading) for heading in HELP_HEADINGS]
                 self.assertEqual(positions, sorted(positions))
+
+    def test_the_help_body_does_not_still_promise_an_empty_success(self) -> None:
+        # Until PR 7 six published sentences said an accepted document prints
+        # nothing, and NONE of them had a gate: the manifest test asserts only
+        # the SET of exit-code keys and the headings test only their order, so
+        # both bodies went unread. One assertion covers the OUTPUT section and
+        # the EXIT CODES table at once.
+        text = render_help("run")
+        body = text[text.index("OUTPUT") :]
+        self.assertNotIn("nothing is printed", body)
+        self.assertNotIn("nothing on an accepted document", body)
+        self.assertIn("stdout", body)
+        self.assertIn("ndjson", body)
 
     def test_help_wins_over_a_missing_required_argument(self) -> None:
         self.assertIn("USAGE", self._help("run", "pick.json", "--help"))

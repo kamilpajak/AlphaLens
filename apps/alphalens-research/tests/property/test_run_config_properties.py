@@ -16,7 +16,8 @@ import json
 
 from hypothesis import given
 from hypothesis import strategies as st
-from intent_replay.config import BPS, EPOCH_MS_UTC, FRACTION, RunConfig
+from intent_replay.config import RunConfig
+from intent_replay.units import BPS, EPOCH_MS_UTC, FRACTION
 
 from .base import PropertyTestCase
 
@@ -40,7 +41,10 @@ _BLOCK = st.fixed_dictionaries(
     {
         "entry_deadline": _translated(EPOCH_MS_UTC),
         "walk_start": _translated(EPOCH_MS_UTC),
-        "entry_trail_bps": st.one_of(st.none(), st.integers(min_value=1, max_value=10_000)),
+        # A stated distance is refused in this version (section 5.4,
+        # ``entry_trail_not_modelled``), so the only value that round-trips
+        # is null. PR 8 widens this back to a distance.
+        "entry_trail_bps": st.none(),
         "ceiling_price": st.one_of(
             st.none(),
             st.integers(min_value=1, max_value=100_000),
