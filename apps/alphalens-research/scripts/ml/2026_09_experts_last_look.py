@@ -30,6 +30,18 @@ PANEL (frozen)
 - Split guard [0.55, 1.8] on day-over-day closes in the window (drop + count).
 - Unit: `ticker_episode_dedup` (chained 5-session collapse). Clusters =
   ARRIVAL SESSIONS everywhere (OLS CR2, WCB, bootstrap, CV blocks).
+- PIT guard: the qual enrich runs by convention the NEXT morning
+  (`experts enrich <yesterday>`, 00:30-08:30 UTC — before the D+1 session
+  opens; measured at registration: computed_at - brief_date == +1 day on
+  478/478 held-out rows). A row whose `buffett_qual_computed_at` date is
+  LATER than brief_date + 1 day (a backfill outside that convention, unknown
+  provenance) gets its qual-derived features (candor_ord, understandable_f)
+  nulled (counted + printed). The standard D+1-pre-open stamp is accepted and
+  disclosed as a limitation: the car_10 window includes day D, so the
+  scuttlebutt web channel could in principle embed day-0 news — the same
+  day-0-overlap class already recorded for ALL brief features (which are
+  computed from day-D closes).
+
 LANE DEVIATION (pre-hoc, recorded 2026-09-29 BEFORE any `--run`)
 The insider-cluster event lane (#1307, #1340) went live on 2026-09-06, five
 days AFTER this registration froze, and lands on the same (brief_date, ticker)
@@ -42,18 +54,6 @@ the decision: 6 of 554 matured rows, 6 distinct tickers, 4 arrival sessions.
 Owner decision recorded on #541 before the run. A row carrying no lane stamp
 cannot be assumed thematic, so it is dropped too; every drop is counted and
 printed by the diagnostics.
-
-- PIT guard: the qual enrich runs by convention the NEXT morning
-  (`experts enrich <yesterday>`, 00:30-08:30 UTC — before the D+1 session
-  opens; measured at registration: computed_at - brief_date == +1 day on
-  478/478 held-out rows). A row whose `buffett_qual_computed_at` date is
-  LATER than brief_date + 1 day (a backfill outside that convention, unknown
-  provenance) gets its qual-derived features (candor_ord, understandable_f)
-  nulled (counted + printed). The standard D+1-pre-open stamp is accepted and
-  disclosed as a limitation: the car_10 window includes day D, so the
-  scuttlebutt web channel could in principle embed day-0 news — the same
-  day-0-overlap class already recorded for ALL brief features (which are
-  computed from day-D closes).
 
 FAMILY = 7 TESTS, BAR = 0.05/7 ≈ 0.00714 (Bonferroni; program charge = 1
 cluster-15 look regardless of member count; the denominator never shrinks
