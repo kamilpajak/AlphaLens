@@ -222,8 +222,8 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             "edgar-detect": 1800,  # 30m = 2× 15-min cadence
             "literature-scan-weekly": 1209600,  # 14d = 2× 7d cadence
             "literature-scan-monthly": 6048000,  # 70d = 2.3× 30d cadence (looser, scan is high-cost)
-            # 24h (#1479): three slots at 00:30 / 04:30 / 08:30 UTC leave a
-            # normal ~16.5h gap between the last run of one day and the first
+            # 24h (#1479): three slots at 04:30 / 08:30 / 12:30 UTC leave a
+            # normal ~16h gap between the last run of one day and the first
             # of the next, so 24h pages when no slot succeeded for a day.
             "thematic-build": 86400,
             # 48h = 2× the daily collection cadence (#1330). The unit is

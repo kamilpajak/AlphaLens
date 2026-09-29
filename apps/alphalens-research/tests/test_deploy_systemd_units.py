@@ -15,6 +15,7 @@ literature-scan-monthly — covered by the ``TestMigratedLaunchdUnits`` and
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 import stat
 import unittest
@@ -359,6 +360,163 @@ def _assert_wall_clock_anchored(tc: unittest.TestCase, timer_text: str) -> None:
             "dormant in production on 2026-08-30. Schedule on the wall "
             "clock (OnCalendar) instead.",
         )
+
+
+# --- thematic-build slot times (#1606) -------------------------------------
+# The SEC publishes ``form.<D>.idx`` — the daily index the EDGAR press-release
+# source discovers every 8-K from — LATE ON D ITSELF, not at the start of D+1.
+# Measured 2026-09-29 over 310 filing dates (2025-07-01..2026-09-28) from the
+# ``last-modified`` field of the quarter's ``daily-index/<Y>/QTR<n>/index.json``
+# listing, and pinned to UTC against the file's own HTTP ``Last-Modified``
+# header (which RFC 9110 requires to be GMT): the listing reports America/
+# New_York, and publication lands at 02:01-03:31 UTC on D+1. Median 02:05,
+# p99 03:31. NOT ONE of the 310 was there before 01:30 UTC.
+#
+# A run that asks earlier gets 403, because SEC serves 403 for a path that does
+# not exist yet. That is what the 00:30 UTC slot did on 31 of 31 runs while the
+# later slots failed only on days the SEC publishes nothing (#1606).
+SEC_DAILY_INDEX_LATEST_OBSERVED_UTC = dt.time(3, 31)
+# The deciding slot must clear that tail, not sit inside it. 04:00 is the floor;
+# the timer uses 04:30, which leaves 59 min over the observed latest.
+DECIDING_SLOT_FLOOR_UTC = dt.time(4, 0)
+# publication.deadline_utc(asof) is the arrival session's open — 13:30 UTC on a
+# standard XNYS day. A slot starting after it can publish nothing for the date,
+# and the options-telemetry stamp window (session close -> next open) closes
+# then too, so every slot has to start before it.
+ARRIVAL_OPEN_UTC = dt.time(13, 30)
+
+_ONCALENDAR_RE = re.compile(
+    r"^OnCalendar=\*-\*-\* (?P<hours>[\d,]+):(?P<minute>\d{2}):(?P<second>\d{2}) UTC\s*$",
+    re.MULTILINE,
+)
+
+
+def _slot_times(timer_text: str) -> list[dt.time]:
+    """The wall-clock UTC times a ``OnCalendar=*-*-* H[,H...]:MM:SS UTC`` line fires.
+
+    Returns them sorted. Raises rather than returning ``[]`` on a line shape it
+    does not model: a silent empty list would make every assertion below pass
+    vacuously, which is the failure mode this whole block exists to prevent.
+    """
+    match = _ONCALENDAR_RE.search(timer_text)
+    if match is None:
+        raise AssertionError(
+            "no OnCalendar=*-*-* H[,H...]:MM:SS UTC line found. If the timer "
+            "moved to another OnCalendar shape, teach this parser the new one "
+            "— do not delete the slot assertions."
+        )
+    minute, second = int(match["minute"]), int(match["second"])
+    return sorted(dt.time(int(h), minute, second) for h in match["hours"].split(","))
+
+
+def _service_start_timeout(service_text: str) -> dt.timedelta:
+    """``TimeoutStartSec=`` from a unit file, as a timedelta.
+
+    Only the ``<n>min`` form this repo uses is modelled; anything else raises
+    rather than defaulting, so a unit rewritten in seconds cannot quietly turn
+    the spacing assertion into a comparison against zero.
+    """
+    match = re.search(r"^TimeoutStartSec=(\d+)min\s*$", service_text, re.MULTILINE)
+    if match is None:
+        raise AssertionError(
+            "no TimeoutStartSec=<n>min line in the service unit. If the unit "
+            "now states the timeout in another form, teach this helper that "
+            "form — do not drop the slot-spacing assertion."
+        )
+    return dt.timedelta(minutes=int(match.group(1)))
+
+
+class TestSlotTimeParser(unittest.TestCase):
+    """Positive control for :func:`_slot_times` (it guards every test below)."""
+
+    def test_it_reads_every_hour_off_a_multi_hour_line(self) -> None:
+        self.assertEqual(
+            _slot_times("[Timer]\nOnCalendar=*-*-* 04,08,12:30:00 UTC\n"),
+            [dt.time(4, 30), dt.time(8, 30), dt.time(12, 30)],
+        )
+
+    def test_it_reads_a_single_hour_line(self) -> None:
+        self.assertEqual(_slot_times("OnCalendar=*-*-* 06:30:00 UTC\n"), [dt.time(6, 30)])
+
+    def test_it_refuses_a_line_shape_it_does_not_model(self) -> None:
+        with self.assertRaises(AssertionError):
+            _slot_times("OnCalendar=*-*-* *:00/15:00 UTC\n")
+
+    def test_the_timeout_reader_reads_minutes(self) -> None:
+        self.assertEqual(
+            _service_start_timeout("[Service]\nTimeoutStartSec=150min\n"),
+            dt.timedelta(minutes=150),
+        )
+
+    def test_the_timeout_reader_refuses_a_form_it_does_not_model(self) -> None:
+        with self.assertRaises(AssertionError):
+            _service_start_timeout("TimeoutStartSec=9000\n")
+
+
+class TestThematicBuildSlotsClearTheSecDailyIndex(unittest.TestCase):
+    """The run that DECIDES the brief must be able to see the day's 8-K exhibits.
+
+    A published brief is final (``thematic/publication.py``), so whichever slot
+    publishes is the only one whose news corpus reaches the reader. Before
+    #1606 that was the 00:30 UTC slot, which asks the SEC for an index that
+    does not exist for another 1.5-3 hours: measured over 2026-09-04..09-28,
+    EDGAR press releases are 24-48% of a trading day's news rows and carry 292
+    of the day's template events, and NONE of it reached the deciding run.
+    """
+
+    def setUp(self) -> None:
+        self.slots = _slot_times(TIMER_PATH.read_text())
+
+    def test_the_deciding_slot_runs_after_the_sec_daily_index_is_published(self) -> None:
+        deciding = self.slots[0]
+        self.assertGreaterEqual(
+            deciding,
+            DECIDING_SLOT_FLOOR_UTC,
+            f"the earliest slot fires at {deciding:%H:%M} UTC, but the SEC daily "
+            f"index for the date being built appears as late as "
+            f"{SEC_DAILY_INDEX_LATEST_OBSERVED_UTC:%H:%M} UTC (310 dates measured). "
+            "A deciding run inside that window publishes a brief with no issuer "
+            "press releases in it (#1606).",
+        )
+
+    def test_every_slot_starts_before_the_arrival_open(self) -> None:
+        for slot in self.slots:
+            self.assertLess(
+                slot,
+                ARRIVAL_OPEN_UTC,
+                f"the {slot:%H:%M} UTC slot starts at or after the arrival open "
+                f"({ARRIVAL_OPEN_UTC:%H:%M} UTC). publication.deadline_utc refuses "
+                "to create a brief nobody could read before trading, and the "
+                "options-telemetry stamp window closes at the same instant.",
+            )
+
+    def test_the_timer_keeps_three_slots(self) -> None:
+        self.assertEqual(
+            len(self.slots),
+            3,
+            "one deciding run plus two repair slots (#1482). Moving the deciding "
+            "run later must not be paid for by dropping a repair slot.",
+        )
+
+    def test_the_repair_slots_are_spaced_far_enough_apart_to_not_queue(self) -> None:
+        # systemd queues a fire that lands while the previous one still runs,
+        # so slots closer together than the service's own start timeout can
+        # silently collapse into fewer runs. Read that timeout off the service
+        # rather than restating it: it has already been raised three times
+        # (45 -> 75 -> 110 -> 150 min), and a fourth raise past the slot gap is
+        # exactly the change this test exists to catch.
+        timeout = _service_start_timeout(SERVICE_PATH.read_text())
+        for earlier, later in zip(self.slots, self.slots[1:], strict=False):
+            gap = dt.datetime.combine(dt.date(2026, 1, 1), later) - dt.datetime.combine(
+                dt.date(2026, 1, 1), earlier
+            )
+            self.assertGreaterEqual(
+                gap,
+                timeout,
+                f"{earlier:%H:%M} -> {later:%H:%M} UTC is {gap} apart, inside the "
+                "service's TimeoutStartSec=150min. A wedged run would swallow the "
+                "next slot instead of being repaired by it.",
+            )
 
 
 class TestMigratedLaunchdUnits(unittest.TestCase):
@@ -864,32 +1022,38 @@ class TestThematicBuildCadence(unittest.TestCase):
     """Thematic-build cadence: one deciding run and two repair runs a day (#1479).
 
     PR-F (issue #300) ran the build 6× a day. Since the idempotent freeze the
-    00:30 UTC slot decides the list on every date, and the later slots could
+    first slot decides the list on every date, and the later slots could
     only change it after the owner had read it (16 of 114 dates were recomputed
     after the open). The brief is now published once and kept
     (``thematic/publication.py``), so only three slots remain:
 
-    1. Timer ``OnCalendar`` lists 00:30, 04:30 and 08:30 UTC. The two later
+    1. Timer ``OnCalendar`` lists 04:30, 08:30 and 12:30 UTC. The two later
        slots publish a date whose first run failed and fill in late options
        telemetry; every slot is before the NYSE open.
     2. ``run_thematic_day.sh`` passes ``--force`` to ``thematic ingest`` so a
        repair slot still re-fetches the day's news for later dates' rollups.
     3. Prometheus staleness threshold for ``thematic-build`` is 24h: the normal
-       gap from the 08:30 run to the next 00:30 run is about 16h.
+       gap from the 12:30 run to the next 04:30 run is about 16h.
+
+    The whole schedule moved 4h later in #1606 so the DECIDING run can see the
+    SEC daily index; :class:`TestThematicBuildSlotsClearTheSecDailyIndex` holds
+    that derivation. The literal pin below and those derived assertions are
+    deliberately both here: editing this pin to match a new schedule does not
+    silence them.
     """
 
     def test_timer_fires_three_times_before_the_open(self) -> None:
-        # 00:30 decides; 04:30 and 08:30 only publish a date whose first run
+        # 04:30 decides; 08:30 and 12:30 only publish a date whose first run
         # failed. No slot runs after the NYSE open (13:30 UTC in summer), when
         # a changed list would no longer be the list the owner read (#1479).
         timer_text = TIMER_PATH.read_text()
         self.assertRegex(
             timer_text,
             re.compile(
-                r"^OnCalendar=\*-\*-\* 00,04,08:30:00 UTC\s*$",
+                r"^OnCalendar=\*-\*-\* 04,08,12:30:00 UTC\s*$",
                 re.MULTILINE,
             ),
-            "Expected the 00:30 / 04:30 / 08:30 UTC schedule (#1479).",
+            "Expected the 04:30 / 08:30 / 12:30 UTC schedule (#1479, moved by #1606).",
         )
 
     def test_timer_keeps_persistent_true(self) -> None:
@@ -1006,8 +1170,8 @@ class TestThematicBuildCadence(unittest.TestCase):
     def test_thematic_build_staleness_alert_threshold_is_24h(self) -> None:
         # Slots at 00:30 / 04:30 / 08:30 UTC: the normal gap from the last
         # success (~09:00) to the next (~01:30) is ~16.5h, and ~20h when the
-        # 00:30 run fails and 04:30 repairs it. 12h would page every day; 24h
-        # pages when no slot succeeded for a whole day (#1479).
+        # first run fails and the next slot repairs it. 12h would page every
+        # day; 24h pages when no slot succeeded for a whole day (#1479).
         rules_path = REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
         rules_text = rules_path.read_text()
         self.assertRegex(
@@ -1023,13 +1187,28 @@ class TestThematicBuildCadence(unittest.TestCase):
         # Summary string is the operator-facing description; out-of-sync
         # with the threshold expression is the kind of drift that wastes
         # an incident-response cycle. Pin both halves together.
+        #
+        # The slot list is DERIVED from the timer, not written out here: when
+        # #1606 moved the schedule, a hand-written copy in this assertion was
+        # one of four places that had to be found by hand. Deriving it means
+        # the next schedule change fails this test with the real reason
+        # ("the alert still says the old hours") instead of passing.
+        slots = _slot_times(TIMER_PATH.read_text())
+        rendered = [f"{slot:%H:%M}" for slot in slots]
+        joined = (
+            " and ".join([", ".join(rendered[:-1]), rendered[-1]])
+            if len(rendered) > 1
+            else rendered[0]
+        )
+        expected = f"runs at {joined} UTC"
         rules_path = REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
         rules_text = rules_path.read_text()
-        self.assertRegex(
+        self.assertIn(
+            f'"thematic-build stale > 24h ({expected})"',
             rules_text,
-            re.compile(r'"thematic-build stale > 24h \(runs at 00:30, 04:30 and 08:30 UTC\)"'),
-            "Summary annotation must reflect the 24h threshold and the three "
-            "slots so operator-facing text matches the expression.",
+            "Summary annotation must reflect the 24h threshold and the slot "
+            "times the timer actually fires at, so operator-facing text "
+            "matches both the expression and the schedule.",
         )
 
 

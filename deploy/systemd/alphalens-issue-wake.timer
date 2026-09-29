@@ -1,8 +1,10 @@
-# Trigger the wake-date notifier daily at 05:30 UTC — in the gap between the
-# bracket-cost replay (03:30) and the nightly feedback sweep (06:30), and clear
-# of the thematic build slots (HH:30 on 00/04/08/12/16/20). The job costs two
-# `gh` calls, so the slot is about landing in a quiet window rather than
-# contending for any quota.
+# Trigger the wake-date notifier daily at 05:30 UTC. The job costs two `gh`
+# calls and shares no quota with anything else on the box, so the slot is about
+# readability, not contention — which is just as well, because 05:30 UTC is no
+# longer a quiet window: the bracket-cost replay (03:30) runs until about 05:50
+# and, since #1606 moved the thematic build to 04:30 / 08:30 / 12:30, the
+# deciding build run is in flight too. The nightly feedback sweep (06:30) still
+# starts after it.
 #
 # Persistent=true so a missed fire runs on next boot. Catching up is safe and
 # idempotent: the wake test is "date <= today", so a day of downtime makes the
