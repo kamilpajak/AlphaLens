@@ -75,7 +75,11 @@ DIVERGENCES: Final[Mapping[str, str]] = MappingProxyType(
             "within one run, so it differs in lifetime and in tolerance."
         ),
         "native_entry_trail_is_a_broker_model": (
-            "any local implementation to compare against: the entry trail is the broker's."
+            "any local implementation to compare against: once the order rests, the server "
+            "owns the ratchet and the fire. The watch that PLACES it is ours, and the replay "
+            "lacks the quotes, the session boundaries and the account state its gates read, "
+            "so its sampling, its rejections, its DayOrder lifetime and its money gates are "
+            "outside the model too."
         ),
         "take_profit_observation_time": (
             "the poll time and the quote, so the moment a tranche is observed is not the "

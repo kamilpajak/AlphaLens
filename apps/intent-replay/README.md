@@ -93,15 +93,22 @@ exactly one JSON object on stderr, the last line, with stdout empty; exit status
 `0` accepted, `2` usage, `130` interrupted with nothing written, `1` everything
 else.
 
-Two choices inside the walk are worth stating here, because both are models and
-not copies of a live system. The stop decision is taken at each bar's HIGH: the
-minimum-distance clamp in `broker_contract.stop_decision` is anchored on the
-price handed to it, the daemon polls many times inside one bar and its ratchet
-keeps the best level any poll produced, so the high is the only choice that
-reproduces the level the spec publishes for its own example. And a take-profit
+Three choices inside the walk are worth stating here, because all three are
+models and not copies of a live system. The stop decision is taken at each bar's
+HIGH: the minimum-distance clamp in `broker_contract.stop_decision` is anchored
+on the price handed to it, the daemon polls many times inside one bar and its
+ratchet keeps the best level any poll produced, so the high is the only choice
+that reproduces the level the spec publishes for its own example. A take-profit
 does not rest at the broker in this model, so a bar that gaps above a tranche
-fills AT the tranche's level, not at the open; the gap rule reaches only the
-legs that really rest there, a rung and the disaster stop.
+fills AT the tranche's level, not at the open; the gap rule reaches only the legs
+that really rest there — a rung, the disaster stop, and a trailing entry order
+once it is placed.
+
+And the third is the **native entry trail**, which is the weakest-evidenced part
+of this tool and has its own section below. It is a model of the BROKER's order
+type rather than of our code, resting on a vendor's documented behaviour plus a
+handful of live fires, and it is why `native_entry_trail_is_a_broker_model`
+appears in `divergences` on every run that states a distance.
 
 A third choice is forced on the walk, and since 2026-09-29 it IS published —
 as a count, never as a claim. On one bar a rung and a take-profit can both be
@@ -112,8 +119,11 @@ first, the same order it uses for every other pair, and `snu_bars` counts the
 bar when that order decided money.
 
 **No pessimism is claimed for this one, and that is a correction.** Measured on
-the published template's ladder (rungs 68.00 and 66.50 carrying 60% and 40% of
-1500, one tranche of 100% at 68.50, disaster stop 63.00) with a bar
+the published template's ladder with `entry_trail_bps: null`, so these are
+limit-ladder numbers and a reader who reproduces them from the design document's
+canonical block — which states a distance — will get different ones. Rungs 68.00
+and 66.50 carrying 60% and 40% of 1500, one tranche of 100% at 68.50, disaster
+stop 63.00, with a bar
 `open 67.00 / high 68.60 / low 66.40` and then a bar falling to 62.00: filling
 first nets **+37.898054**, taking profit first nets **+19.852941**. The gap,
 18.045113, is exactly the deeper rung's profit.
@@ -208,7 +218,10 @@ means at least one bar's ordering changed the money. A count of zero means no
 such bar was DETECTED, which is weaker than none having occurred, so it is not a
 certificate. One shape is known to go uncounted and is measured: a bar on which
 the position OPENS through a rung below the open, where nothing is held yet, so
-the cost gate has no entry price to measure a tranche against.
+the cost gate has no entry price to measure a tranche against. Under a stated
+trail distance the inventory is not the same, because what "below the open"
+classifies is then a TRIGGER and the sign of the test inverts; the figures below
+are the limit ladder's.
 
 That shape is worth **18.045113** — but read the construction before replaying
 it. The figure comes from a SINGLE rung, the published template's deeper one
@@ -226,15 +239,25 @@ never adjusting it.
 The count is a frequency, never a size: two runs can both report 1 while the bar
 decided 18.05 in one and 30.92 in the other. It also has no upper limit. A
 tranche that sells only PART of the position leaves the run alive, so a later
-bar can raise the count again.
+bar can raise the count again — and with a stated trail distance the dominant
+source is not that tranche but the trail itself, which can meet the convention
+on any bar that makes a new low and retraces far enough. How often that is, and
+what bounds it, is in the entry-trail section below.
 
 **`pnl_cash` is gross.** The `costs` block decides which take-profit tranches
 fire. It never reduces the cash.
 
-**`notional_spent` is the budget the document declared, not what an order would
-spend.** The live drain buys whole shares; the replay works in fractional units.
-That is a deliberate scope cut rather than a fact the replay lacks, so it is not
-a `divergences` entry. It is not small either. Section 5 of the design document
+**`notional_spent` is what the walk booked, and with a trail it can land on
+either side of the declared budget.** The quantity is fixed from the rung's
+LIMIT when the order is composed, as in the drain, so a trailing fire above the
+limit spends MORE than the rung's share and one below it spends less. Without a
+trail the fill price is `min(open, limit)`, so the spend can only come in at or
+under the budget.
+
+The whole-share gap is a separate matter and points one way. The live drain buys
+whole shares; the replay works in fractional units. That is a deliberate scope
+cut rather than a fact the replay lacks, so it is not a `divergences` entry. It
+is not small either. Section 5 of the design document
 measures the gap at 17.50 on a 1500 budget, 130.00 on 8000 with rungs 120.00 and
 115.00, and 60.81 on 1000 with rungs 196.13 and 175.40 — where the entry anchor
 also moves by 0.56 in price, about 30 basis points, and the R denominator moves
@@ -316,12 +339,87 @@ runs it applies to:
 | `take_profit_observation_time` | the resolved take-profit ladder is not empty |
 | `cost_gate_prices_the_account_currency` | the ladder is not empty and `min_commission_applies` is true |
 
+`native_entry_trail_is_a_broker_model` covers more than its name suggests, and
+the entry-trail section above has the list. The server owns the ratchet and the
+fire once the order rests, so there is nothing local to disagree with — but the
+watch that PLACES the order is ours, and the replay lacks the quotes, the session
+boundaries and the account state its gates read. Two of those omissions move the
+answer in the tool's favour.
+
 `cost_gate_prices_the_account_currency` is an admission the tool publishes about
 itself: it prices the stated budget in the ACCOUNT currency while the daemon
 prices the whole-share notional in the INSTRUMENT's. Above the fee card's knee
 the two agree; below it the replay's threshold is too low, so it fires tranches
 the daemon would decline.
 
+
+### The native entry trail
+
+With `entry_trail_bps` stated, nothing rests at a rung. The first bar to reach it
+places a trailing buy order that follows the running low down and fires on a
+rebound of the stated distance. On both deployments the flag is set, so this is
+the path every armed pick takes and `null` is not the neutral run.
+
+**What is modelled is the BROKER's order type, not our code.** Once the order
+rests, the server owns the ratchet and the fire. There is no local implementation
+to compare against, so the parity test cannot reach this path at all, and the
+model rests on a vendor's documented behaviour plus a handful of live fires. That
+is the weakest evidence anywhere in this tool, and it is why every run stating a
+distance prints `native_entry_trail_is_a_broker_model`.
+
+The rules, each stated so a reader can check it against a bar:
+
+| | |
+|---|---|
+| arming | the first bar whose low reaches the rung, referenced on `min(open, limit)` — the touch happens at the first print when the bar gapped through the level, and at the level otherwise |
+| trigger | `trough + distance`, where `distance` is ABSOLUTE and frozen at the arm. The wire field is a price distance to the market, computed once, so the trigger is not `trough × (1 + d)`. The two agree at the touch and part as the trough falls — 21 bps at a 30% drawdown on a 50 bps distance |
+| the order inside a bar | the trigger is tested against the trough the bar INHERITED, and only then does the bar's own low ratchet it down. Had the low come first the buy would pay less, so this is the worse reading where a worse one is well defined |
+| the arming bar | can fire, at `reference + distance`. It takes that level however high it opened: the order is placed at the touch, which cannot precede the open |
+| a later bar | that opens through the trigger fills at the OPEN. By then the order rests, so the gap rule reaches it |
+| the resting stop | a bar that opens ABOVE it fires and is then stopped out — a loss, and the worse reading. A bar that opens BELOW it closed the position at the first print, and buying after that is a re-entry this tool does not model |
+| depth | a bar whose FIRST price is already below the NEXT-LISTED rung hands the move to that rung, and the shallower one never arms. Listed, not cheapest: `validate_intent` does not require the ladder to descend |
+| the deadline | an armed or barred rung expires with the others, through the one published cause |
+| quantity | from the rung's LIMIT, as in the drain. A trailing fire changes when and at what price a rung executes, not how much it buys |
+
+**How often the convention decides, measured.** Over 20 sessions of real daily
+bars, 11 654 names with a complete history, one 8-bar watch each and a 50 bps
+distance: the mean number of bars meeting the trail's own SNU predicate is
+**0.23**, and **79.7%** of watches meet it on no bar at all. 94.7% of watches
+fire, most of them immediately, because a 50 bps rebound is small against a
+median daily range of 1.53%. So on daily bars a trailing run usually reports
+`snu_bars: 0` from this source. The frequency is a function of the bar's
+granularity against the distance, not a property of the model; on minute bars,
+whose range is two orders smaller, it is smaller again.
+
+**Where the fill price stands against the record.** The convention fills at the
+trigger. Of the fires frozen in `tests/incident_1317_fixture.py`, **one of the
+five LIVE ones** executed above the trigger its order carried, by 28.4 bps; the
+LIVE median is −23.8 bps and none filled exactly at the trigger. The other 18
+rows are SIM, whose fills are synthetic, so they say nothing about the real
+matching engine and are not pooled here. The historical figures are measured
+against the FIRST computed trigger rather than the ratcheted one, so they bound
+the error from one side only and cannot be turned into a correction.
+
+**What the model does NOT carry.** Each of these is a fact the replay lacks
+rather than a setting it could be handed, and the two marked FLATTERS move the
+answer in the tool's favour:
+
+| | |
+|---|---|
+| the trail rides the whole entry window | **FLATTERS.** Live the order is a DayOrder: it dies at every session close, and re-arming returns the tier to watching, needing a fresh touch AND a new low of the whole watch. Every live fire on record happened in the session of its touch |
+| the server ratchets from PLACEMENT, not from the touch | **FLATTERS.** The replay's trough includes the whole arming bar, so its trigger is systematically lower |
+| the touch is sampled about every 45 s | missed touches measured at 2.9% overall, 4.5% on the second rung, 6.7% on the third |
+| the reference is a BID and the fill pays an ASK | the replay has trade prices, not quotes. One measured midday spread on a name that needed nine retries: 29 bps, against a 50 bps distance |
+| wrong-side rejections and their retries | 6 of 34 fires, median 68 bps worse against the first trigger versus −28 bps for the rest. The issue that measured it calls that a hint and not a result |
+| the coarse ratchet step | a deliberate scope cut, not a missing fact: the step is a tenth of the distance floored at one tick, which is 11% of the distance at the median and up to 26% on cheap names, and it holds the live trigger higher than the modelled one |
+| the exit-region refusal, the watch-capacity cap, the day-1 gap gate, the cash floor at fire, partial fills, sibling retirement | live gates that change WHICH rungs fill. None is modelled |
+| the `StopLimitPrice` ceiling | not modelled because it does not bind: 8 of 23 recorded fires executed above it, by up to 53.5 bps |
+
+A stated distance has no upper bound here, because section 5.2 publishes the key
+as an integer `>= 1` and a deployment rail is not a document fact. But the live
+reader caps the flag at 150 and treats anything outside `[0, 150]` as 0 — the
+three-limit ladder, the opposite policy — so a larger value describes a run no
+deployment will make.
 
 ## Refusal codes
 
