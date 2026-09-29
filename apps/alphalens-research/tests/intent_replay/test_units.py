@@ -60,7 +60,11 @@ class ShapeTest(unittest.TestCase):
             translated.value = 0  # type: ignore[misc]
 
     def test_a_quantity_renders_value_then_unit(self) -> None:
-        self.assertEqual(Quantity(5.0, BPS).to_jsonable(), {"value": 5.0, "unit": "bps"})
+        # ``assertEqual`` on two dicts ignores ORDER, so the mapping check
+        # alone cannot see the property this test is named for.
+        rendered = Quantity(5.0, BPS).to_jsonable()
+        self.assertEqual(list(rendered), ["value", "unit"])
+        self.assertEqual(rendered, {"value": 5.0, "unit": "bps"})
 
     def test_a_translated_renders_the_five_provenance_keys_in_order(self) -> None:
         rendered = Translated(

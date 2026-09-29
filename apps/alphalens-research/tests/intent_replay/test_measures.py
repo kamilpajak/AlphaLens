@@ -216,6 +216,25 @@ class ParityWithTheWalkTest(unittest.TestCase):
             {"entries": RUNGS},
             (_bar(WALK_START, 68.0, 68.6, 66.0, 68.2),),
         ),
+        # THREE fills, and the count is what gives this suite its teeth. At two
+        # addends a naive left fold and a compensated sum are bitwise identical
+        # -- Neumaier's residual rounds back into the total -- so every
+        # two-fill case agrees under every summation strategy. Divergence
+        # starts at three. Measured 2026-09-29 over 40 000 random ladders: at
+        # k == 2 the strategies never differed, at k >= 3 they differed on
+        # 7418. This fixture is red under ``sum()`` and green under the fold.
+        "three fills, open": (
+            {
+                "entries": (
+                    PendingEntry(0, 69.16, 1685.13 * 2 / 11),
+                    PendingEntry(1, 65.93, 1685.13 * 1 / 11),
+                    PendingEntry(2, 61.30, 1685.13 * 8 / 11),
+                ),
+                "notional": 1685.13,
+                "floor": 58.30,
+            },
+            (_bar(WALK_START, 69.16, 69.5058, 61.29, 69.16),),
+        ),
         "no fill": ({}, (_bar(WALK_START, 70.0, 71.0, 69.0),)),
     }
 
@@ -227,13 +246,16 @@ class ParityWithTheWalkTest(unittest.TestCase):
                 self.assertEqual(measures.units_filled, result.units_filled)
                 self.assertEqual(measures.avg_entry_price, result.avg_entry_price)
 
-    def test_more_than_one_fill_is_actually_exercised(self) -> None:
-        # Without this the parity test could hold on single-fill runs alone,
-        # where every summation strategy agrees and the property is untested.
-        plan_kwargs, bars = self.CASES["two fills, stop out"]
+    def test_at_least_three_fills_are_actually_exercised(self) -> None:
+        # THREE, not two. A two-fill case cannot produce the disproving
+        # observation: for two addends every summation strategy returns the
+        # same bits, so a suite that tops out at two agrees with ``sum()`` and
+        # ``math.fsum`` and pins nothing. This assertion is what stops the
+        # fixture set from silently shrinking back to that state.
+        plan_kwargs, bars = self.CASES["three fills, open"]
         result, _ = _summarise(_plan(**plan_kwargs), bars)
         fills = [event for event in result.events if event.kind == "entry_filled"]
-        self.assertEqual(len(fills), 2)
+        self.assertGreaterEqual(len(fills), 3)
 
 
 class ClosedFormIdentityTest(unittest.TestCase):

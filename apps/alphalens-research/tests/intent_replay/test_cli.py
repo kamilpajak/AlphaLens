@@ -163,6 +163,26 @@ class AcceptedDocumentTest(_Files):
         self.assertEqual(value["schema"], "intent_replay.result/v1")
         self.assertEqual(value["intent_id"], "REPLAY")
 
+    def test_the_command_hands_the_envelope_the_documents_own_floor(self) -> None:
+        # The wiring between this command and the envelope was untested for
+        # VALUES: every assertion looked at ``schema`` and ``intent_id``, so
+        # passing 0.0 as the R denominator floor changed every published R
+        # number and left the whole suite green. The document's disaster stop
+        # is 63.00 and the single fill is at 68.00, so the denominator is 5.00.
+        _, value = self._json()
+        summary = value["summary"]
+        self.assertEqual(summary["avg_entry_price"]["value"], 68.0)
+        self.assertEqual(summary["r_multiple"]["denominator"]["value"], 5.0)
+        self.assertEqual(summary["notional_spent"], {"value": 900.0, "unit": "EUR"})
+        self.assertEqual(value["outcome"], "open")
+
+    def test_the_command_hands_the_envelope_the_series_it_read(self) -> None:
+        _, value = self._json()
+        self.assertEqual(
+            value["window"],
+            {"from_t": BARS[0]["t"], "to_t": BARS[-1]["t"], "bars": len(BARS)},
+        )
+
     def test_no_non_finite_number_can_reach_stdout(self) -> None:
         # ``allow_nan=False`` on the writer; the reader refuses the tokens a
         # non-strict writer would have emitted.
@@ -239,6 +259,29 @@ class AcceptedDocumentTest(_Files):
         summary = json.loads(run.stdout.splitlines()[1])
         self.assertEqual(set(summary), {"schema", "type", "sequence", "documents"})
         self.assertEqual(summary["documents"], 1)
+
+    def test_the_stream_payload_is_byte_identical_to_the_single_value_form(self) -> None:
+        # Section 5.3 says BYTE-identical, and that byte-identity is the stated
+        # reason the transport wrapper exists at all. Comparing the PARSED
+        # objects would accept a different key order, which is exactly the
+        # difference a consumer reading raw bytes would see.
+        run_single = self.run_cli(
+            "run", self.document, "--config", self.config, "--bars", self.bars
+        )
+        run_stream = self.run_cli(
+            "run",
+            self.document,
+            "--config",
+            self.config,
+            "--bars",
+            self.bars,
+            "--format",
+            "ndjson",
+        )
+        line = run_stream.stdout.splitlines()[0]
+        marker = '"data": '
+        payload_bytes = line[line.index(marker) + len(marker) : -1]
+        self.assertEqual(payload_bytes, run_single.stdout.rstrip("\n"))
 
     def test_the_stream_payload_equals_the_single_value_form(self) -> None:
         # Section 5.3: ``data`` is byte-identical to what ``--format json``

@@ -22,6 +22,12 @@ rate depends on the generator and is not a property of the code; the zero is.
 Using a compensated form here would turn the parity test into an approximate
 one and lose the only check that the two paths compute the same thing.
 
+One fact about that test, learned the hard way on 2026-09-29: it needs a
+fixture with at least THREE fills. At two addends a naive left fold and a
+compensated sum return the same bits, because Neumaier's residual rounds back
+into the total, so a suite whose deepest ladder fills twice agrees with
+``sum()`` and pins nothing at all. The fixture set says so where it is defined.
+
 Three asymmetries in the trace that the arithmetic has to respect, each stated
 in section 4.6 rather than inferred from field values:
 

@@ -192,6 +192,36 @@ class SummaryTest(unittest.TestCase):
         self.assertIsInstance(self.summary["snu_bars"], int)
         self.assertNotIsInstance(self.summary["snu_bars"], bool)
 
+    def test_the_two_counters_carry_the_walks_own_values(self) -> None:
+        # A type check alone cannot refute a hardcoded constant: both of these
+        # survived being pinned to 0 with the whole suite green. The template
+        # fills only its 68.00 rung out of a 1500 budget, so 900/1500 = 0.6.
+        self.assertEqual(self.summary["filled_fraction"], 0.6)
+        self.assertEqual(self.summary["snu_bars"], 0)
+
+    def test_a_counted_bar_reaches_the_summary_as_a_non_zero_count(self) -> None:
+        # Every other envelope test runs a document whose count is 0, so a
+        # hardcoded zero would satisfy all of them. This one makes the bar
+        # reach both a rung and an affordable tranche: the walk takes the stop,
+        # counts the bar, and the count has to arrive in the summary.
+        document = _document("pullback-trailing-stop")
+        document["spec"]["tp_tranches"] = [{"price": 68.50, "tranche_pct": 100.0}]
+        admitted = admit(document)
+        plan = interpret(admitted.intent, admitted.document)
+        config = _config()
+        bars = (_bar(WALK_START, 67.00, 68.60, 66.40),)
+        result = walk(plan, config, bars)
+        built = envelope.build(
+            intent=admitted.intent,
+            plan=plan,
+            config=config,
+            result=result,
+            measures=summarise(result, declared_floor=plan.declared_floor),
+            bars=bars,
+        )
+        self.assertEqual(result.snu_bars, 1)
+        self.assertEqual(built["summary"]["snu_bars"], 1)
+
     def test_the_cash_fields_carry_the_documents_own_currency(self) -> None:
         # ``spec.size.currency`` IS stated, so these carry a real code.
         self.assertEqual(self.summary["notional_spent"]["unit"], "EUR")
