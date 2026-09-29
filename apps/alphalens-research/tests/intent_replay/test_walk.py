@@ -164,6 +164,81 @@ class EntriesFillTest(unittest.TestCase):
         self.assertEqual(result.events[-1].price, 68.4)
 
 
+class EntryTrailTest(unittest.TestCase):
+    """The native entry trail (spec sections 3.3, 4.4 row 3 and 8).
+
+    With a stated distance a rung no longer rests as a limit. The first bar to
+    touch it ARMS a trailing trigger that ratchets down with the running low
+    and fires on a rebound of that distance. What is modelled is the BROKER's
+    order type: the server owns the ratchet and the fire, so there is no local
+    implementation to compare against and the run says so through the
+    ``native_entry_trail_is_a_broker_model`` divergence.
+
+    ``d`` is 50 bps throughout, so a limit of 68.00 arms at a reference of
+    68.00 and fires at 68.34.
+    """
+
+    LIMIT = RUNGS[0].limit_price
+    BUDGET = RUNGS[0].notional
+
+    def _walk(self, *bars: Bar, bps: int = 50) -> Any:
+        plan = _plan(entries=RUNGS[:1], notional=self.BUDGET)
+        return walk(plan, _config(entry_trail_bps=bps), bars)
+
+    def test_a_touched_rung_no_longer_fills_at_its_limit(self) -> None:
+        # The bar reaches 68.00 and rebounds to 68.20, which is short of the
+        # 68.34 trigger. As a resting limit this rung fills at 68.00; as a
+        # trail it arms and waits.
+        result = self._walk(_bar(WALK_START, 68.05, 68.2, 67.9))
+        self.assertEqual(_kinds(result), [])
+        self.assertEqual(result.outcome, "no_fill")
+
+    def test_the_arming_bar_fires_when_the_rebound_reaches_the_trigger(self) -> None:
+        # Section 4.4 keeps the worse resolution where one is well defined, and
+        # on the arming bar it is: the trigger computed from the touch
+        # reference, before the bar's own low could ratchet it down. Live the
+        # geometry is computed AT the touch and the order rests from that
+        # instant, so the same bar can fire it - every recorded live fire
+        # happened in the session of its touch.
+        result = self._walk(_bar(WALK_START, 68.05, 68.4, 67.9))
+        self.assertEqual(_kinds(result), ["entry_filled", "stop_placed", "horizon_open"])
+        filled = result.events[0]
+        self.assertEqual(filled.price, 68.34)
+        self.assertEqual(filled.units, self.BUDGET / self.LIMIT)
+        self.assertEqual(filled.cash, self.BUDGET / self.LIMIT * 68.34)
+        self.assertEqual(result.events[1].level, FLOOR)
+
+    def test_a_bar_that_gaps_below_the_rung_arms_on_its_OPEN(self) -> None:
+        # The touch happens at the first print, so the reference is the open and
+        # not the level. Measured on 20 sessions of real daily bars: at a 1-2%
+        # pullback 23-33% of arming bars open below their rung, with a median
+        # gap of 86-131 bps - and the arming-bar trigger moves by the whole gap.
+        # Referenced on the LIMIT this bar would fire at 68.34, which its high
+        # never reaches, so the two readings differ by a fill.
+        result = self._walk(_bar(WALK_START, 67.0, 67.5, 66.9))
+        self.assertEqual(result.events[0].price, 67.0 * 1.005)
+        self.assertEqual(result.events[0].units, self.BUDGET / self.LIMIT)
+
+    def test_the_distance_is_frozen_and_ABSOLUTE_not_a_fraction_of_the_trough(self) -> None:
+        # The wire field is a price distance to the market, computed once from
+        # the arming reference, so the server's trigger is `trough + distance`.
+        # The two forms coincide at the touch and separate as the trough falls:
+        # at a trough of 60.00 the additive trigger is 60.34 and the
+        # proportional one 60.30, so bar 3 fires under one reading and not the
+        # other. Its high sits between them on purpose.
+        bars = (
+            _bar(WALK_START, 68.05, 68.2, 67.9),
+            _bar(WALK_START + MINUTE, 67.0, 67.5, 60.0),
+            _bar(WALK_START + 2 * MINUTE, 60.1, 60.32, 60.0),
+            _bar(WALK_START + 3 * MINUTE, 60.1, 60.4, 60.0),
+        )
+        result = self._walk(*bars)
+        filled = [event for event in result.events if event.kind == "entry_filled"]
+        self.assertEqual(len(filled), 1)
+        self.assertEqual(filled[0].t, WALK_START + 3 * MINUTE)
+        self.assertAlmostEqual(filled[0].price, 60.34, places=10)
+
+
 class RestingStopTest(unittest.TestCase):
     def test_the_resting_stop_closes_the_position_at_its_level(self) -> None:
         bars = (_bar(WALK_START, 68.0, 68.6, 67.9), _bar(WALK_START + MINUTE, 67.0, 67.2, 62.0))

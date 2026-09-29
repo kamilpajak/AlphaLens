@@ -54,6 +54,26 @@ _OUTCOME_OF_CLOSE = {
 # magnitude away, so nothing is closed by accident.
 _DUST_REL_TOL = 1e-9
 
+# The stated entry-trail distance is in basis points of the arming reference.
+_BPS_PER_UNIT = 10_000
+
+
+@dataclass(slots=True)
+class _ArmedTrail:
+    """One rung's native trailing order, as the BROKER holds it.
+
+    ``distance`` is ABSOLUTE and frozen when the order is placed: the wire
+    field is a price distance to the market, computed once from the arming
+    reference, so the trigger the server ratchets is ``trough + distance`` and
+    not ``trough x (1 + d)``. The two coincide at the touch and separate as the
+    trough falls - by 21 bps at a 30% drawdown on a 50 bps distance.
+
+    ``trough`` is the running low the trigger follows, and it only ever falls.
+    """
+
+    distance: float
+    trough: float
+
 
 @dataclass(frozen=True, slots=True)
 class WalkResult:
@@ -88,6 +108,10 @@ def _outcome(state: _WalkState, *, filled_any: bool) -> str:
 @dataclass(slots=True)
 class _WalkState:
     pending: dict[int, PendingEntry]
+    # Rungs whose trailing order rests at the broker, by tier. A rung stays in
+    # ``pending`` as well: it is still unfilled, so the deadline must expire it
+    # with the others (section 4.6 publishes one cause, and this is it).
+    armed: dict[int, _ArmedTrail] = field(default_factory=dict)
     units: float = 0.0
     units_sold: float = 0.0
     fired: set[int] = field(default_factory=set)
@@ -149,29 +173,76 @@ def _reachable(state: _WalkState, bar: Bar, rung: PendingEntry) -> bool:
     return bar.low <= rung.limit_price
 
 
-def _fill_entries(state: _WalkState, bar: Bar, plan: Plan) -> None:
+def _book_entry(
+    state: _WalkState, bar: Bar, plan: Plan, index: int, rung: PendingEntry, *, price: float
+) -> None:
+    """Book one rung's purchase and place the stop if this is the first fill.
+
+    The quantity comes from the rung's LIMIT, never from the price paid: the
+    order is composed once, as in the drain, and a trailing fire changes when
+    and at what price it executes, not how much it buys.
+    """
+    units = rung.notional / rung.limit_price
+    del state.pending[index]
+    state.armed.pop(index, None)
+    state.units += units
+    state.cash += units * price
+    state.committed += rung.notional
+    state.events.append(
+        EntryFilled(t=bar.t, tier_index=index, price=price, units=units, cash=units * price)
+    )
+    if state.stop is None:
+        state.stop = plan.declared_floor
+        state.events.append(StopPlaced(t=bar.t, level=plan.declared_floor))
+
+
+def _advance_trails(state: _WalkState, bar: Bar, plan: Plan, *, bps: int) -> None:
+    """Arm, fire and ratchet the native entry trails, shallowest rung first.
+
+    One order of operations, and section 4.4 row 3 fixes it: the trigger is
+    tested against the trough as it stood BEFORE this bar, and only then does
+    the bar's own low ratchet it down. The arming bar needs no special case -
+    seeding the trough at the touch reference makes its trigger
+    ``reference + distance``, which is the level the live geometry computes at
+    the touch instant.
+
+    That resolution is the worse one where a worse one is well defined: had the
+    low come first, the trough would already have fallen and the buy would pay
+    less.
+    """
+    for index in sorted(state.pending):
+        rung = state.pending[index]
+        trail = state.armed.get(index)
+        if trail is None:
+            if not _reachable(state, bar, rung):
+                continue
+            reference = min(bar.open, rung.limit_price)
+            trail = _ArmedTrail(distance=reference * bps / _BPS_PER_UNIT, trough=reference)
+            state.armed[index] = trail
+        level = trail.trough + trail.distance
+        if bar.high >= level:
+            _book_entry(state, bar, plan, index, rung, price=level)
+            continue
+        trail.trough = min(trail.trough, bar.low)
+
+
+def _fill_entries(state: _WalkState, bar: Bar, plan: Plan, config: RunConfig) -> None:
     """Every rung the bar reached, shallowest first.
 
-    The fill price is ``min(open, limit)``: a bar that opens already through a
-    resting limit order fills at the open, because the open is the first trade
-    and nothing about that is in question.
+    Without a stated trail distance the fill price is ``min(open, limit)``: a
+    bar that opens already through a resting limit order fills at the open,
+    because the open is the first trade and nothing about that is in question.
+
+    With one, nothing rests at the rung and :func:`_advance_trails` decides.
     """
+    if config.entry_trail_bps is not None:
+        _advance_trails(state, bar, plan, bps=config.entry_trail_bps)
+        return
     for index in sorted(state.pending):
         rung = state.pending[index]
         if not _reachable(state, bar, rung):
             continue
-        price = min(bar.open, rung.limit_price)
-        units = rung.notional / rung.limit_price
-        del state.pending[index]
-        state.units += units
-        state.cash += units * price
-        state.committed += rung.notional
-        state.events.append(
-            EntryFilled(t=bar.t, tier_index=index, price=price, units=units, cash=units * price)
-        )
-        if state.stop is None:
-            state.stop = plan.declared_floor
-            state.events.append(StopPlaced(t=bar.t, level=plan.declared_floor))
+        _book_entry(state, bar, plan, index, rung, price=min(bar.open, rung.limit_price))
 
 
 def _track_extremes(state: _WalkState, bar: Bar) -> None:
@@ -496,7 +567,7 @@ def _match_orders(
     # Asked BEFORE the fills, while the deep rung is still pending and the
     # question is still answerable.
     deep_snu = _deep_rung_snu(state, bar, ladder=ladder, intended=intended, costs=config.costs)
-    _fill_entries(state, bar, plan)
+    _fill_entries(state, bar, plan, config)
     _track_extremes(state, bar)
     _exit_on_stop(state, bar, ladder=ladder, intended=intended, costs=config.costs)
     return deep_snu
