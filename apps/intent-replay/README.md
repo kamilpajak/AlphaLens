@@ -85,12 +85,11 @@ that rests at the broker in both deployments, and carries
 
 Then the configuration block is parsed, and the bars last: each bar's shape, the
 ordering of the sequence, and whether the window covers the stated `walk_start`.
-Then the walk runs. **In this version an accepted document still has nothing to
-print:** the command exits 0 with empty stdout and empty stderr. The walk's
-trace, its `snu_bars` counter and its fill figures are computed and the
-envelope that renders them arrives in the next change. A refusal is exactly one
-JSON object on stderr, the last line, with stdout empty; exit status `0`
-accepted, `2` usage, `130` interrupted with nothing written, `1` everything
+Then the walk runs and the result is printed. `--format json` writes exactly one
+JSON value on stdout; `--format ndjson` writes two transport lines. Both leave
+stderr empty. The next section describes what is in the result. A refusal is
+exactly one JSON object on stderr, the last line, with stdout empty; exit status
+`0` accepted, `2` usage, `130` interrupted with nothing written, `1` everything
 else.
 
 Two choices inside the walk are worth stating here, because both are models and
@@ -171,6 +170,152 @@ schema is classified, the one path that is not
 key an author adds is refused by the fixed point. It is a tripwire for the day
 the contract grows a field — which is exactly what it is for.
 
+## Result
+
+An accepted document prints the result envelope. With `--format json` that is
+exactly one JSON value; with `--format ndjson` it is one `result` line and one
+`summary` line, each carrying `"schema": "intent_replay.stream/v1"`. The
+`result` line's `data` is byte-identical to what `--format json` prints, so a
+caller can move between the two without a second parser.
+
+The envelope has ten keys, in this order:
+
+| key | what it holds |
+|---|---|
+| `schema` | `intent_replay.result/v1` |
+| `intent_id` | the sentinel `REPLAY`; a replayed document has no arming identity |
+| `instrument` | the document's own `ticker` and `mic` |
+| `window` | the bar series that was handed in: `from_t`, `to_t`, `bars` |
+| `config` | the configuration block, echoed key for key |
+| `divergences` | the places this run is known to differ from the daemon |
+| `intrabar_rule` | the name of the order the walk resolves a bar in |
+| `outcome` | `closed_stop`, `closed_tp`, `closed_time_stop`, `no_fill` or an open position |
+| `summary` | the nine measures below |
+| `trace` | every event the walk emitted, in order |
+
+**`intrabar_rule` names the rule; it does not bound the cash.** The value is the
+constant `entries_then_stop_then_ladder`. On some bars the tape does not say
+which of two things happened first, and the walk has to decide. `intrabar_rule`
+says how it decided, and `snu_bars` says how often it had to. `pnl_cash` is one
+outcome under one stated rule. It is not a conservative number, not a lower
+bound, and not a worst case. Whether a best/worst envelope is even well defined
+for a laddered document is an open question (issue #1616); this version promises
+nothing about it.
+
+**`snu_bars` counts bars, and the count only goes one way.** A positive count
+means at least one bar's ordering changed the money. A count of zero means no
+such bar was DETECTED, which is weaker than none having occurred, so it is not a
+certificate. One shape is known to go uncounted and is measured: a bar on which
+the position OPENS through a rung below the open, where nothing is held yet, so
+the cost gate has no entry price to measure a tranche against. On the published
+template that bar is worth 18.045113. The honest use of the count is deciding
+whether to trust the result at all, never adjusting it.
+
+The count is a frequency, never a size: two runs can both report 1 while the bar
+decided 18.05 in one and 30.92 in the other. It also has no upper limit. A
+tranche that sells only PART of the position leaves the run alive, so a later
+bar can raise the count again.
+
+**`pnl_cash` is gross.** The `costs` block decides which take-profit tranches
+fire. It never reduces the cash.
+
+**`notional_spent` is the budget the document declared, not what an order would
+spend.** The live drain buys whole shares; the replay works in fractional units.
+That is a deliberate scope cut rather than a fact the replay lacks, so it is not
+a `divergences` entry. It is not small either. Section 5 of the design document
+measures the gap at 17.50 on a 1500 budget, 130.00 on 8000 with rungs 120.00 and
+115.00, and 60.81 on 1000 with rungs 196.13 and 175.40 — where the entry anchor
+also moves by 0.56 in price, about 30 basis points, and the R denominator moves
+with it.
+
+**`window` describes the series you handed in, not the part the walk read.** It
+can be wider on both sides. Bars before `walk_start` are skipped, and the walk
+stops as soon as the position closes, so later bars are never looked at. Both
+still count in `window`.
+
+**`filled_fraction` can be slightly above 1.0, and one reason is not rounding.**
+`validate_intent` accepts an entry ladder whose allocations sum to within 1e-6
+of 100, so a document stating 50.0 and 50.000001 is a valid document and its run
+reports `1.00000001`. Measured 2026-09-29. The replay does not clamp the value,
+because clamping would hide that case; `/edge` clamps to `[0, 1]`, this does
+not. Floating-point noise can also push it above 1.0, but only in the last few
+digits, which is seven orders of magnitude smaller and is not the reason for the
+decision.
+
+### The summary
+
+Nine keys. `filled_fraction` and `snu_bars` are bare numbers. Every other
+measure carries its unit.
+
+`notional_spent` and `pnl_cash` carry the document's own `spec.size.currency`.
+`avg_entry_price` and the R denominator carry the symbolic unit
+`instrument_currency`: they are prices in the INSTRUMENT's currency, which no
+document path states, so the tool must not guess it. `pnl_pct_of_spent` carries
+`percent`, so 4.58 means 4.58%. `r_multiple`, `mfe` and `mae` carry `R`.
+
+`r_multiple` always carries its denominator as an object with five fields:
+`kind` (`placed_stop`), `value`, `unit`, `source` (`spec.disaster_stop`) and
+`formula` (`avg_entry_price - placed_stop`). The level that rests at the broker
+is `spec.disaster_stop` on both deployments, in every document, including one
+that supplies its own `exit.initial_levels`.
+
+**When the denominator is not positive, three measures are null.** Not
+"negative": exactly 0.0 is reachable, by a bar that opens at the disaster stop
+and therefore fills there. `r_multiple.value`, `mfe` and `mae` all become null,
+and the `denominator` object is still carried, so a reader sees why. This is not
+a paper case — without the rule, a run that lost 109.375 reports +1.16 R.
+
+Two null shapes, because the design document prints two. `r_multiple` keeps its
+object, because the denominator inside it is the answer to "why is this null".
+Every other measure — `mfe`, `mae`, `avg_entry_price`, `pnl_pct_of_spent` —
+becomes a bare `null`, because a wrapper holding nothing but a unit answers
+nothing.
+
+**`mfe` is never negative and `mae` never positive, but only to within one unit
+in the last place.** The structural argument is about fill prices: every fill
+sits inside its own bar and the extremes are tracked from the first fill onward.
+But `avg_entry_price` is `cash / units`, and that division can land one ulp below
+a fill price the trough then equals. Measured 2026-09-29: one run in 200 000
+produced `mae` at `+6.447756222868429e-16`. A check written as `mae <= 0` would
+go red at that rate.
+
+**The denominator is not held away from zero, and that is the document's
+geometry rather than a defect.** A denominator of 1e-10 produces an R on the
+order of 1e10. It cannot reach infinity: the denominator is a difference of two
+prices of the same size, so its smallest non-zero value is one unit in the last
+place, which is 7.105427357601002e-15 at a price near 63 (measured
+2026-09-29). Section 5 of the design document works the resulting cap out.
+`allow_nan=False` on the writer means an infinity or a NaN cannot reach stdout:
+the writer REFUSES to emit it and raises instead. That is a statement about the
+writer, not a proof that every number is finite.
+
+### divergences
+
+Each entry names a place where the replay is known to differ from the live
+daemon for a reason no configuration value can close, because the replay lacks a
+FACT rather than a setting. Five entries exist, and each is printed only on the
+runs it applies to:
+
+| entry | printed when |
+|---|---|
+| `daemon_trail_guards` | the declared policy moves the stop at all; it covers both stop arms |
+| `daemon_reanchor_latch_is_journal_lifetime` | the reaction is `reanchor_on_fill` |
+| `native_entry_trail_is_a_broker_model` | the run states an entry-trail distance |
+| `take_profit_observation_time` | the resolved take-profit ladder is not empty |
+| `cost_gate_prices_the_account_currency` | the ladder is not empty and `min_commission_applies` is true |
+
+In THIS version `native_entry_trail_is_a_broker_model` cannot appear. The code
+emits it, but a stated entry-trail distance is refused before the walk starts
+(see `entry_trail_not_modelled` in the refusal table). The next change models
+entry trailing, removes the refusal, and makes the entry reachable.
+
+`cost_gate_prices_the_account_currency` is an admission the tool publishes about
+itself: it prices the stated budget in the ACCOUNT currency while the daemon
+prices the whole-share notional in the INSTRUMENT's. Above the fee card's knee
+the two agree; below it the replay's threshold is too low, so it fires tranches
+the daemon would decline.
+
+
 ## Refusal codes
 
 One code per failure mode, with a closed `details.reason` vocabulary where a
@@ -216,6 +361,24 @@ read (section 4.3.1).
 | | `duplicate_key` | an object in the configuration file repeats a key; `details.keys` lists them |
 | `bars_malformed` | `not_json` | the bar file is not a UTF-8 JSON document |
 | | `duplicate_key` | an object in the bar file repeats a key; `details.keys` lists them |
+
+`config_invalid` has its own vocabulary. It answers a value the caller DID
+state, so the key is present and nothing can use it. A key the caller did not
+state is `config_incomplete` instead, and missing keys win: when keys are both
+missing and unusable, only the missing ones are reported.
+
+| code | `details.reason` | what the caller stated |
+|---|---|---|
+| `config_invalid` | `unknown_key` | a key this block does not model. The contract's decoder DROPS such a key with only a warning, so a misspelt `entry_trail_bp` would otherwise switch entry trailing off in a run whose author believes the distance was stated |
+| | `wrong_type` | the value is not of the key's type; a stated `null` where none is allowed is included |
+| | `numeric_not_finite` | a price or cost is NaN or infinite, so every comparison on it would silently pass |
+| | `not_positive` | a distance or a price that must be above zero is not |
+| | `negative` | a cost below zero |
+| | `unit_mismatch` | the unit is not the one the walk compares against |
+| | `empty_string` | a provenance field or a currency code with no text |
+| | `oco_unsupported` | `oco` is stated `true`; v1 models no OCO pair, and the block travels in the result, so accepting it would describe a policy the run did not apply |
+| | `fx_cost_not_stated` | `fx_applies` is `true` and no key states the rate. The omitted term is 50 basis points of the notional, so accepting it would price every round trip too cheap |
+| | `entry_trail_not_modelled` | a well-formed entry-trail distance. TEMPORARY: this version parses the distance and does not apply it, so carrying it into the result would claim a policy the run never ran. State `null` until the next change models entry trailing. The type and range checks run first, so `true` is still `wrong_type` and `0` is still `not_positive`. One published consequence: the design document's own section 5.2 block states `entry_trail_bps: 50`, so this version refuses the very block it prints as canonical |
 
 Design: `docs/superpowers/specs/2026-09-23-intent-replay-design.md`.
 Implementation plan: `docs/superpowers/plans/2026-09-25-intent-replay-step1.md`.

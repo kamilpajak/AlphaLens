@@ -1,5 +1,5 @@
 """Every code `intent-replay` can answer with is in the package README, owned
-correctly, and every reason of the two CLI-owned codes has a row.
+correctly, and every reason of every code that HAS a reason vocabulary has a row.
 
 The precedent is `tests/brokers/test_broker_failure_codes_published.py`: a
 registered code missing from the table is unpublished, a row naming no
@@ -14,11 +14,13 @@ import unittest
 from pathlib import Path
 
 from intent_replay.cli import (
+    BARS_MALFORMED_REASONS,
     CONFIG_MALFORMED_REASONS,
     FAILURE_CODES,
     INTENT_MALFORMED_REASONS,
     OWNERS,
 )
+from intent_replay.config import CONFIG_INVALID_REASONS
 
 README = Path(__file__).resolve().parents[4] / "apps" / "intent-replay" / "README.md"
 # Both tables live under this heading, and only rows under it are published
@@ -91,6 +93,17 @@ class TheReasonTablesAndTheVocabulariesAgree(unittest.TestCase):
 
     def test_config_malformed_reasons(self) -> None:
         self.assertEqual(published_reasons()["config_malformed"], set(CONFIG_MALFORMED_REASONS))
+
+    def test_bars_malformed_reasons(self) -> None:
+        # The table has been published since PR 6 and was never checked against
+        # the vocabulary, so a reason added there would have gone unpublished
+        # silently. Added with the config_invalid table rather than filed.
+        self.assertEqual(published_reasons()["bars_malformed"], set(BARS_MALFORMED_REASONS))
+
+    def test_config_invalid_reasons(self) -> None:
+        # The only reason table whose vocabulary lives in the ENGINE rather
+        # than the CLI: config_invalid is raised by config.py.
+        self.assertEqual(published_reasons()["config_invalid"], set(CONFIG_INVALID_REASONS))
 
 
 if __name__ == "__main__":
