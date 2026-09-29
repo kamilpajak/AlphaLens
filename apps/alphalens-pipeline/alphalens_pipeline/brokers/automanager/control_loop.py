@@ -55,6 +55,7 @@ from alphalens_pipeline.brokers.automanager import (
     entry_trails,
     picks,
     state_paths,
+    trade_alerts,
 )
 from alphalens_pipeline.brokers.automanager.costs import (
     COMMISSION_RATE,
@@ -1601,11 +1602,19 @@ def _announce_fired_tranches(
     window dedup while a distinct tranche still notifies."""
     for tranche in fired:
         ticker = uic_to_instrument.get(tranche.uic, (f"uic {tranche.uic}", None))[0]
-        order_text = f" (order {tranche.sell_order_id})" if tranche.sell_order_id else ""
+        # SUBMITTED, not filled: the engine sends a market SELL and reads no fill
+        # back, so the alert carries no price and never says "sold" (#1621).
+        event = trade_alerts.TradeEvent(
+            kind=trade_alerts.EventKind.EXIT_SUBMITTED,
+            ticker=ticker,
+            label=tp_label_from_tag(tranche.tag),
+            qty=tranche.qty,
+            reason=trade_alerts.ExitReason.TAKE_PROFIT,
+            order_id=tranche.sell_order_id or None,
+            position_closed=tranche.position_closed,
+        )
         if deps.alert_throttled(
-            f"exit: {ticker} tranche {tp_label_from_tag(tranche.tag)} sold "
-            f"{tranche.qty:g} shares{order_text}",
-            f"tranche-fired:{tranche.uic}:{tranche.tag}",
+            trade_alerts.render(event), f"tranche-fired:{tranche.uic}:{tranche.tag}"
         ):
             report.alerts += 1
         if tranche.position_closed:
@@ -3773,6 +3782,11 @@ class _StandingStop:
 
     order_id: str
     ref: str | None
+    # When the stop was placed, and at what level when the record says so
+    # (#1621). A stop-move marker older than ``placed_ts`` moved an EARLIER
+    # stop on the same uic: every new stop is placed at the plan level.
+    placed_ts: float
+    placed_level: float | None
 
 
 def _fold_standing_stop_ids(lines: Iterable[Mapping[str, Any]]) -> dict[int, _StandingStop]:
@@ -3829,7 +3843,10 @@ def _elect_stop_placed(
     if isinstance(order_id, str) and order_id:
         ref = line.get("ref")
         latest[uic] = _StandingStop(
-            order_id=order_id, ref=ref if isinstance(ref, str) and ref else None
+            order_id=order_id,
+            ref=ref if isinstance(ref, str) and ref else None,
+            placed_ts=ts,
+            placed_level=_positive_float_or_none(line.get("stop_price")),
         )
     else:
         latest[uic] = None
@@ -3867,7 +3884,9 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
         return
     plan_pick_keys = _fold_governing_plan_pick_keys(lines)
     for uic in sorted(standing):
-        _reconcile_one_standing_stop(deps, broker, uic, standing[uic], plan_pick_keys, report)
+        _reconcile_one_standing_stop(
+            deps, broker, uic, standing[uic], plan_pick_keys, report, journal_lines=lines
+        )
 
 
 def _reconcile_one_standing_stop(
@@ -3877,6 +3896,8 @@ def _reconcile_one_standing_stop(
     stop: _StandingStop,
     plan_pick_keys: Mapping[int, str | None],
     report: TickReport,
+    *,
+    journal_lines: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     """Reconcile ONE journaled standing stop: gone-from-book -> budgeted
     resolution -> on FILLED, the terminal ``stop_filled`` line first, then one
@@ -3907,15 +3928,19 @@ def _reconcile_one_standing_stop(
         ref=stop.ref,
         partial=partial,
     )
-    # The stop ref is `<entry_crid>-stop-<gen>` (position_manager._exit_stop_ref)
-    # — no E{n}/TP{n} shape to render, so the operator label is the ticker
-    # prefix (labels doctrine: never a raw machine ref in message text).
-    label = stop.ref.split("-", 1)[0] if stop.ref else f"uic {uic}"
-    price_text = f" @ {avg_price:g}" if avg_price is not None else ""
-    if deps.alert_throttled(
-        f"exit: {label} stop {stop.order_id} filled {filled_qty:g} shares{price_text}",
-        f"stop-fill:{stop.order_id}",
-    ):
+    marker = _latest_stop_move(journal_lines, uic, since_ts=stop.placed_ts)
+    event = trade_alerts.TradeEvent(
+        kind=trade_alerts.EventKind.EXIT_FILLED,
+        ticker=_ticker_from_ref(stop.ref) or f"uic {uic}",
+        label=None,
+        qty=filled_qty,
+        price=avg_price,
+        reason=trade_alerts.stop_reason(marker.kind if marker else None),
+        level=marker.level if marker else stop.placed_level,
+        order_id=stop.order_id,
+        position_closed=not partial,
+    )
+    if deps.alert_throttled(trade_alerts.render(event), f"stop-fill:{stop.order_id}"):
         report.alerts += 1
     if partial:
         return
@@ -3993,6 +4018,63 @@ def _derive_owed_sibling_retires(lines: list[Mapping[str, Any]]) -> dict[str, st
 _GENERATION_TAIL_RE = re.compile(r"-g[1-9]\d*$")
 """The ``-g<N>`` generation tail of a same-day re-arm's crid prefix (#1371);
 ``-g0`` / ``-gx`` are not generations and fall through to the date parse."""
+
+
+# The journal field that carries the stop LEVEL on each stop-move marker kind
+# (#1621). The kinds are the ones the amend-success branch of the protection
+# executor writes; a test drives that branch and checks each written kind is
+# here and has an alert reason in ``trade_alerts``.
+_STOP_MOVE_LEVEL_KEY: Mapping[str, str] = {"trailed": "level", "reanchored": "stop_price"}
+
+
+class _StopMove(NamedTuple):
+    """The newest stop-move marker for one standing stop."""
+
+    kind: str
+    level: float | None
+
+
+def _latest_stop_move(
+    lines: Iterable[Mapping[str, Any]], uic: int, *, since_ts: float
+) -> _StopMove | None:
+    """The newest ``trailed`` / ``reanchored`` marker for ``uic`` written AT OR
+    AFTER ``since_ts`` (the standing stop's placement), or ``None`` when nothing
+    moved that stop — then it rests at the plan level it was placed at.
+
+    Scoped by the stop's own placement time, not by the plan generation the
+    protection folds use: the question is "what moved THIS order", and a marker
+    from an earlier position on a reused uic predates this order's placement.
+    A later line breaks a timestamp tie. Unparseable lines are skipped."""
+    newest: _StopMove | None = None
+    newest_ts = since_ts
+    for line in lines:
+        kind = line.get("kind")
+        level_key = _STOP_MOVE_LEVEL_KEY.get(str(kind))
+        if level_key is None or _coerce(line, "uic", int) != uic:
+            continue
+        ts = _coerce(line, "ts", float)
+        if ts is None or ts < newest_ts:
+            continue
+        newest_ts = ts
+        newest = _StopMove(str(kind), _positive_float_or_none(line.get(level_key)))
+    return newest
+
+
+def _positive_float_or_none(value: Any) -> float | None:
+    """``value`` as a finite positive float, else ``None`` (a level for display)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _ticker_from_ref(ref: str | None) -> str | None:
+    """The ticker a crid or stop ref was built for, via the same parser that
+    recovers its pick key (dashed tickers and ``-g<N>`` generations included);
+    ``None`` for a ref of another shape."""
+    pick_key = _pick_key_from_stop_ref(ref)
+    return pick_key.split(":", 1)[0] if pick_key else None
 
 
 def _pick_key_from_stop_ref(ref: str | None) -> str | None:
@@ -4143,11 +4225,15 @@ def _reconcile_one_armed_tier(
         avg_price=avg_price,
         observation=observation,
     )
-    if deps.alert_throttled(
-        f"entry-trail {entry_label_from_crid(crid)}: native trail {order_id} "
-        f"filled {filled_qty:g} shares -> fired",
-        f"entry-trail:fired:{crid}",
-    ):
+    event = trade_alerts.TradeEvent(
+        kind=trade_alerts.EventKind.ENTRY_FILLED,
+        ticker=_ticker_from_ref(crid) or crid,
+        label=entry_label_from_crid(crid),
+        qty=filled_qty,
+        price=avg_price,
+        order_id=order_id,
+    )
+    if deps.alert_throttled(trade_alerts.render(event), f"entry-trail:fired:{crid}"):
         report.alerts += 1
     _announce_ceiling_breach(deps, crid, observation, report)
 
@@ -4170,7 +4256,8 @@ def _announce_ceiling_breach(
     if observation is None or not observation.breached:
         return
     if deps.alert_throttled(
-        f"entry-trail {entry_label_from_crid(crid)}: filled {observation.fill:g} ABOVE its "
+        f"entry-trail {human_label_from_external_reference(crid)}: filled "
+        f"{observation.fill:g} ABOVE its "
         f"{observation.ceiling:g} ceiling (+{observation.breach_bps:.1f} bps) — "
         "the G1 clamp is not enforced on this order type (#1317)",
         f"entry-trail:ceiling-breach:{crid}",
@@ -6234,6 +6321,7 @@ def _journal_stop_placed(
     *,
     order_id: str,
     ref: str,
+    stop_price: float | None = None,
     clock: Callable[[], float] = time.time,
 ) -> None:
     """Persist a timestamped ``stop_placed`` outcome record.
@@ -6245,18 +6333,22 @@ def _journal_stop_placed(
     journal line retains it) and the deterministic ``ref``
     (``PlaceStop.request_id``) that renders the operator label on the fill alert.
     ``_fold_standing_stop_ids`` consumes both; fill-to-protection latency stays
-    measurable as before (``oco_placed`` covers the OCO path). The ``clock`` seam
-    keeps the record's ``ts`` testable (default wall clock)."""
-    _append_standalone_stop_journal(
-        {
-            "kind": "stop_placed",
-            "uic": int(uic),
-            "qty": float(qty),
-            "order_id": str(order_id),
-            "ref": str(ref),
-            "ts": float(clock()),
-        }
-    )
+    measurable as before (``oco_placed`` covers the OCO path). ``stop_price`` is
+    the level the stop was placed at, so the fill alert names it as a fact
+    (#1621); omitted when absent, and a record written before it reads as "level
+    unknown". The ``clock`` seam keeps the record's ``ts`` testable (default wall
+    clock)."""
+    record: dict[str, Any] = {
+        "kind": "stop_placed",
+        "uic": int(uic),
+        "qty": float(qty),
+        "order_id": str(order_id),
+        "ref": str(ref),
+    }
+    if stop_price is not None:
+        record["stop_price"] = float(stop_price)
+    record["ts"] = float(clock())
+    _append_standalone_stop_journal(record)
 
 
 def _journal_stop_filled(
@@ -10630,7 +10722,11 @@ def _execute_place_stop(
     # never implies a naked position — the place above already succeeded.
     _journal_outcome_best_effort(
         lambda: _journal_stop_placed(
-            action.uic, qty, order_id=placed_stop.entry_order_id, ref=action.request_id
+            action.uic,
+            qty,
+            order_id=placed_stop.entry_order_id,
+            ref=action.request_id,
+            stop_price=action.stop_price,
         ),
         throttle,
         report,

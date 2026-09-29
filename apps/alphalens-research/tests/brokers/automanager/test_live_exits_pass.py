@@ -669,9 +669,13 @@ class TestLiveExitsFlagOnFires(_JournalCase):
             cl._run_live_exits_pass(deps, report)
         self.assertEqual(len(seen), 1)
         msg, reason = seen[0]
-        self.assertIn("KO", msg)
-        self.assertIn("TP1", msg)
-        self.assertIn("50", msg)
+        # #1621: the SELL was SENT; no fill was read back, so no price and no
+        # "sold". Half of the position remains.
+        self.assertRegex(
+            msg,
+            r"^SELL KO TP1 50 - take-profit, market sell sent - position still open "
+            r"\(order \S+\)$",
+        )
         self.assertEqual(reason, f"tranche-fired:{uic}:tp1")
         self.assertEqual(report.alerts, 1)
 
