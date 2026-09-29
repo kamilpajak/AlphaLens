@@ -149,6 +149,47 @@ retire with an *inconclusive* label. That asymmetry is the accepted price of
 "retire if null" at the look cap, chosen over the alternative (optional
 stopping / monthly peeking), which manufactures false discoveries.
 
+## 5b. Pre-hoc amendments recorded on 2026-09-29, before the run
+
+Two facts appeared after the 2026-09-01 freeze. Both were found by the
+outcome-blind preflight on the run date, both are recorded here and on #541
+before any feature-vs-outcome statistic was computed, and neither costs a
+charge (the abort clause covers join integrity and population composition).
+
+**A. The join tripwire was widened by three names.** `population_ladders` and
+`thematic_briefs` both gained `source` and `event_overlap` (#1307 / #1340,
+2026-09-06) and `brief_published_at` (#1482, 2026-09-16). The tripwire asserts
+that the two stores share only the join keys, because a new shared non-key
+column would be silently suffixed by a `pandas.merge`. This script performs no
+merge — it reads the brief side through `bix.loc[(brief_date, ticker)]` on an
+explicitly selected `BRIEF_COLS` list, and none of the three names is in that
+list — so the hazard cannot reach the panel. The allowlist now names the three
+columns, and a positive control keeps it from rotting into "admit anything".
+
+**B. The insider-cluster event lane is excluded.** The lane (#1307, #1340) went
+live on 2026-09-06, five days after the freeze, and lands on the same
+`(brief_date, ticker)` key as the thematic lane. The frozen PANEL text carried
+no source filter only because a single lane existed on 2026-09-01. Counted
+outcome-blind on the run-date store:
+
+| lane | matured rows joining a brief |
+|---|---|
+| thematic | 548 |
+| insider_cluster | 6 |
+
+Six rows, six distinct tickers, four brief dates (2026-09-05, 09-09, 09-10,
+09-11) — at most 6 of 266 episodes and 4 of 47 clusters. The owner chose to
+**restrict the panel to `source == "thematic"`**, keeping the estimand the one
+that was designed and reviewed (the thematic screened candidate population)
+rather than silently widening it to two screeners for a 1% row gain. A row
+carrying no lane stamp is dropped too and counted, because a missing stamp
+cannot be assumed thematic.
+
+The registered script was NOT edited to obtain any number in §5 — those came
+from a scratch copy with the tripwire alone widened. The amendments above
+landed as their own commit before the run, which is why §6 can still be filled
+by a results commit that touches no executable code.
+
 ## 6. Results (placeholder — filled by the results commit, which must not touch executable code)
 
 - Part A per-member table: PENDING

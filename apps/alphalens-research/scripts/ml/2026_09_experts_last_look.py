@@ -22,13 +22,27 @@ PANEL (frozen)
 - Episodes: `population_ladders` plannable rows joined to `thematic_briefs`
   on (brief_date, ticker), brief_date >= 2026-07-06 (held-out; the discovery
   freeze is 2026-07-05), `panel_config_version == "panel-v1r-absdiff-2x"`
-  only (ADR 0013 R3 — no pooling across config versions).
+  only (ADR 0013 R3 — no pooling across config versions), and `source ==
+  "thematic"` only (PRE-HOC DEVIATION — see LANE DEVIATION below).
 - Outcome: continuous car_10 (stock BHAR − SPY BHAR, beta=1), anchor
   previous_trading_day(arrival), horizon arrival+9 sessions; episodes whose
   horizon has not closed by the run date are excluded (calendar maturity).
 - Split guard [0.55, 1.8] on day-over-day closes in the window (drop + count).
 - Unit: `ticker_episode_dedup` (chained 5-session collapse). Clusters =
   ARRIVAL SESSIONS everywhere (OLS CR2, WCB, bootstrap, CV blocks).
+LANE DEVIATION (pre-hoc, recorded 2026-09-29 BEFORE any `--run`)
+The insider-cluster event lane (#1307, #1340) went live on 2026-09-06, five
+days AFTER this registration froze, and lands on the same (brief_date, ticker)
+key as the thematic lane. The frozen PANEL text carried no source filter only
+because on 2026-09-01 a single lane existed. The registered estimand is the
+thematic screened candidate population, and the insider-cluster lane is a
+different screener, so it is EXCLUDED rather than silently widening the
+estimand to two screeners. Measured outcome-blind on the run-date store before
+the decision: 6 of 554 matured rows, 6 distinct tickers, 4 arrival sessions.
+Owner decision recorded on #541 before the run. A row carrying no lane stamp
+cannot be assumed thematic, so it is dropped too; every drop is counted and
+printed by the diagnostics.
+
 - PIT guard: the qual enrich runs by convention the NEXT morning
   (`experts enrich <yesterday>`, 00:30-08:30 UTC — before the D+1 session
   opens; measured at registration: computed_at - brief_date == +1 day on
@@ -254,9 +268,49 @@ BRIEF_COLS = [
     "technical_atr_pct",
 ]
 _CANDOR_ORD = {"promotional": 0.0, "mixed": 1.0, "candid": 2.0}  # "unclear" -> NaN
+SOURCE_LANE = "thematic"  # the registered estimand's screener (see LANE DEVIATION)
+_MISSING_LANE = "<missing>"  # a row with no lane stamp — dropped, never assumed
+# Columns the (brief_date, ticker) join expects both stores to carry. `source`
+# and `event_overlap` were added to BOTH stores by #1307/#1340 (2026-09-06) and
+# `brief_published_at` by #1482 (2026-09-16), all after this registration froze;
+# none of the three is in BRIEF_COLS, so none reaches the panel.
+SHARED_KEY_COLUMNS = frozenset(
+    {
+        "brief_date",
+        "ticker",
+        "theme",
+        "scorer_config_version",
+        "brief_published_at",
+        "event_overlap",
+        "source",
+    }
+)
 
 
 # ---------------------------------------------------------------- panel build
+def unexpected_shared_columns(outcomes_columns, briefs_columns):
+    """Shared columns the join does not expect, sorted (empty == healthy).
+
+    A new shared non-key column would be silently suffixed by a merge. This
+    script reads the brief side through ``bix.loc`` on an explicitly selected
+    column list rather than merging, so the tripwire guards the STORES' shape,
+    not this one join — which is why widening it needs a positive control.
+    """
+    return sorted((set(outcomes_columns) & set(briefs_columns)) - SHARED_KEY_COLUMNS)
+
+
+def thematic_lane_only(population):
+    """Restrict a ladder population to the registered screener lane.
+
+    See LANE DEVIATION in the module docstring for why this exists and when it
+    was decided. Returns ``(kept_frame, {lane: dropped_row_count})``.
+    """
+    lane = population["source"].where(population["source"].notna(), _MISSING_LANE).astype(str)
+    keep = lane == SOURCE_LANE
+    dropped = {str(k): int(v) for k, v in lane[~keep].value_counts().items()}
+    return population[keep], dropped
+
+
 def load_grouped():
     grouped = edge_stores.GroupedDailyCache(rs_history.DEFAULT_RS_HISTORY_ROOT)
     newest = edge_stores.newest_session(rs_history.DEFAULT_RS_HISTORY_ROOT)
@@ -301,18 +355,22 @@ def build_panel():
     briefs = edge_stores.load_store(edge_stores.HOME / "thematic_briefs")
     outcomes["ticker"] = outcomes["ticker"].astype(str).str.upper()
     briefs["ticker"] = briefs["ticker"].astype(str).str.upper()
-    shared = set(outcomes.columns) & set(briefs.columns)
-    # Join-integrity tripwire (pattern of 2026_07_tail_filter_features_gkfold):
-    # a NEW shared non-key column would be silently suffixed by the merge.
-    assert shared <= {"brief_date", "ticker", "theme", "scorer_config_version"}, (
-        f"unexpected shared columns across stores: {sorted(shared)}"
-    )
+    # Join-integrity tripwire (pattern of 2026_07_tail_filter_features_gkfold).
+    unexpected = unexpected_shared_columns(outcomes.columns, briefs.columns)
+    assert not unexpected, f"unexpected shared columns across stores: {unexpected}"
     bix = briefs.set_index(["brief_date", "ticker"])[[c for c in BRIEF_COLS if c in briefs.columns]]
 
     plannable = outcomes[outcomes["plannable"] == True]  # noqa: E712
     plannable = plannable[plannable["brief_date"].astype(str) >= HELDOUT_START]
+    plannable, lane_dropped = thematic_lane_only(plannable)
     rows = []
-    diag = {"split_dropped": 0, "car_missing": 0, "immature": 0, "pit_nulled": 0}
+    diag = {
+        "split_dropped": 0,
+        "car_missing": 0,
+        "immature": 0,
+        "pit_nulled": 0,
+        "lane_dropped": lane_dropped,
+    }
     for _, r in plannable.drop_duplicates(subset=["brief_date", "ticker"]).iterrows():
         # brief_date stays the NATIVE datetime.date — both stores stamp dates,
         # and a str key here silently empties the bix join (KeyError -> None).
@@ -417,6 +475,11 @@ def print_sample_diagnostics(dd, diag):
         f"guards: split-dropped {diag['split_dropped']} | car_10-missing {diag['car_missing']} | "
         f"immature {diag['immature']} | qual PIT-nulled rows {diag['pit_nulled']}"
     )
+    lane_dropped = diag["lane_dropped"]
+    print(
+        f"lane filter: kept source == {SOURCE_LANE!r} | "
+        f"dropped {sum(lane_dropped.values())} rows {lane_dropped or '{}'}"
+    )
     print(
         f"cluster sizes: mean {sizes.mean():.1f} | max {sizes.max()} "
         f"({sizes.max() / len(dd):.0%} of episodes) | cv {sizes.std(ddof=0) / sizes.mean():.2f}"
@@ -465,6 +528,10 @@ def preflight_power_sim(dd, n_sims=300, wcb_boot=499):
         & (outcomes["brief_date"].astype(str) <= "2026-07-05")
         & outcomes["market_excess_return"].notna()
     ]
+    # A no-op on this window (the lane went live 2026-09-06, two months after
+    # the 2026-07-05 discovery freeze), applied so the scale that calibrates
+    # the power sim comes from the same population as the panel it sizes.
+    disc, _ = thematic_lane_only(disc)
     y_d = disc["market_excess_return"].astype(float).to_numpy()
     cl_d = disc["brief_date"].astype(str).to_numpy()
     sd_y = float(np.std(y_d))
