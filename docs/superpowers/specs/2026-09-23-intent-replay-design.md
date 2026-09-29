@@ -19,7 +19,15 @@ FOURTH tie row, which fixed the rung/take-profit order as "the take-profit first
 either direction, and the literature this section was re-deriving says why: for a document
 with more than one entry or exit a unique worst case need not exist at all. The row's
 DETECTION survives, the section stops claiming pessimism it cannot deliver, and the
-vocabulary becomes the published one — see the revision note in 4.4)
+vocabulary becomes the published one — see the revision note in 4.4.
+2026-09-29, a second correction, this time of this document against the code that shipped the
+same day: §6.3 stated two properties the engine does not have. Its `snu_bars` bullet named TWO
+uncounted shapes where the detector leaves ONE uncounted — the cost-gate verdict flip is
+counted, and a test pins it — and its `mfe`/`mae` bullet claimed a strict sign that
+`avg = cash / units` breaks by one ulp. Both were found by running the tests and the walk while
+planning PR 7. The lesson is in the shape of the mistake: #1614 revised this section and #1613
+repaired the code it describes, on the same day, in that order, and neither step re-read the
+other)
 **Baseline:** `origin/main` `a444f6b2`
 **Related:** epic #1526 (express every `/edge` what-if lens as a TradeIntent document),
 `docs/research/bracket_keeper_repo_split_stage1_design_2026_08_02.md` (PARKED blueprint),
@@ -1457,27 +1465,45 @@ Computed with the real functions during design, 2026-09-23:
   definition of R and needs no knowledge of how the summary computed it. Added
   2026-09-28, after this document's own §5 example printed an R that the identity
   refutes;
-- `mfe` is never negative and `mae` never positive, whenever the denominator is
-  positive. The walk books every fill at `min(bar.open, limit)`, which lies
-  inside its own bar, and the extremes are tracked from the first fill onward, so
-  the trough never exceeds the average entry and the peak never falls below it.
-  `/edge` can produce the opposite signs because it books a fill AT the limit
-  even on a bar that traded entirely below it; this engine cannot, and a test
-  asserting it could would assert nothing;
+- `mfe` is never negative and `mae` never positive BEYOND ONE ULP of the average
+  entry, whenever the denominator is positive. The walk books every fill at
+  `min(bar.open, limit)`, which lies inside its own bar, and the extremes are
+  tracked from the first fill onward, so the trough never exceeds the average
+  entry and the peak never falls below it. That argument is about the FILL
+  PRICES. The average is `cash / units`, and the division can land one ulp below
+  a fill price the trough then equals, which is why the bound is structural and
+  not strict. This bullet claimed the strict form until 2026-09-29. Measured that
+  day: one run in 200 000 produced `mae` at `+6.447756222868429e-16`, and it
+  reproduces from a single rung at `limit_price` 52.37 for a `notional` of
+  2587.43, a floor of 41.35, and one bar 52.60/52.63/52.37/52.49. A strict
+  `mae <= 0` would go red at that rate, so the property carries a tolerance of one
+  ulp of `avg_entry_price`. Rounding the notional to 1270.85 makes the effect
+  vanish, so an implementation quoting a shortened figure would look refuted.
+  `/edge` can produce the opposite signs by a mechanism this engine does not have
+  — it books a fill AT the limit even on a bar that traded entirely below it — so
+  a test asserting THAT would still assert nothing;
 - a document with `exit: null` produces zero `stop_moved` events;
 - bars that touch no entry produce `outcome: "no_fill"` and zero cash;
 - `snu_bars` is positive ONLY when at least one bar's ordering the tape cannot
   settle changed the money. The converse does NOT hold, and this bullet claimed
   it until 2026-09-29: a biconditional cannot be implemented by the single pass
   that also produces the cash, because detecting every SNU means evaluating the
-  readings it did not take. Two shapes are known to go uncounted, both measured:
-  a bar on which the position OPENS through a rung below the open, where nothing
-  is held so the cost gate has no entry price to measure a tranche against
-  (worth 18.045113 on the published template); and a bar where the gate's own
-  verdict flips with the order, because a deep fill lowers the average entry and
-  the threshold with it. A same-bar entry fill and stop-out is not an SNU at all:
-  the rung sits above the stop the document declared, so the order is forced
-  rather than assumed (§4.4);
+  readings it did not take. ONE shape is known to go uncounted, and it is
+  measured: a bar on which the position OPENS through a rung below the open,
+  where nothing is held so the cost gate has no entry price to measure a tranche
+  against (worth 18.045113 on the published template). It is pinned by
+  `test_a_bar_that_opens_the_position_is_a_known_blind_spot`.
+  Until 2026-09-29 this bullet named a SECOND uncounted shape: a bar where the
+  cost gate's own verdict flips with the order, because a deep fill lowers the
+  average entry and the threshold with it. That shape is COUNTED. The detector
+  asks the gate on both sides of the deep fill and reports the bar when the two
+  verdicts differ, which `test_the_bar_counts_when_the_cost_gate_verdict_turns_on_the_order`
+  pins at `snu_bars == 1`. The bullet described the detector as it stood before
+  #1613 repaired it: #1614 wrote this section earlier the same day, #1613 changed
+  the code and not the document, and nothing brought the two back together.
+  A same-bar entry fill and stop-out is not an SNU at all: the rung sits above
+  the stop the document declared, so the order is forced rather than assumed
+  (§4.4);
 - a document carrying a path §4.3.1 classifies in none of its three classes is
   REFUSED, and the refusal names that path — with a positive control, a document
   whose every path IS classified, so the gate cannot rot to "accepts
