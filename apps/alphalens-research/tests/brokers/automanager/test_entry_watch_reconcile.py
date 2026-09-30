@@ -95,13 +95,25 @@ def _seed_armed(
     order_id: str,
     limit: float = 10.0,
     ceiling: float | None = 10.07,
+    troughs: tuple[float, ...] = (),
+    distance: float | None = None,
 ) -> None:
     """A watch_open + a REAL-id ``trail_armed`` line — a resting native order the
     broker owns (excluded from the watch pass, owned by the reconcile pass).
 
     ``ceiling=None`` reproduces a tier armed before #1317 shipped: the line
-    carries no ceiling, so the fill has nothing to be measured against."""
+    carries no ceiling, so the fill has nothing to be measured against.
+    ``distance=None`` does the same for #1635.
+
+    ``troughs`` are journaled BETWEEN the watch_open and the trail_armed line, so
+    the fold's ``latest_kind`` stays ``trail_armed``. Seeded after it they would
+    make it ``trough`` instead, ``_resting_armed_tiers`` would not see the tier at
+    all, and the pass would silently do nothing."""
     _seed_watch(path, crid=crid, limit=limit, next_tier_limit=None)
+    for trough in troughs:
+        entry_trails.append_entry_trail_line(
+            {"kind": entry_trails.KIND_TROUGH, "crid": crid, "trough": trough}
+        )
     record: dict[str, Any] = {
         "kind": entry_trails.KIND_TRAIL_ARMED,
         "crid": crid,
@@ -110,6 +122,8 @@ def _seed_armed(
     }
     if ceiling is not None:
         record[entry_trails.KEY_CEILING] = ceiling
+    if distance is not None:
+        record[entry_trails.KEY_DISTANCE] = distance
     entry_trails.append_entry_trail_line(record)
 
 
@@ -141,6 +155,87 @@ class TestFilledArmedTierWritesFired(unittest.TestCase):
         self.assertEqual(fired[0]["measurement"]["order_id"], "TR-1")
         self.assertEqual(fired[0]["measurement"]["avg_price"], 10.05)
         self.assertEqual(fired[0]["measurement"]["tier_limit"], 10.0)
+
+    def test_the_fired_stamp_prices_the_trigger_the_way_the_broker_does(self) -> None:
+        # #1635: the resting order ratcheted its trigger down to
+        # ``trough + distance`` = 9.80 + 0.05. The form this replaces multiplied
+        # the trough (9.80 * 1.005 = 9.849), which prices an order that would
+        # have been re-armed at the trough rather than the one that was resting.
+        path = _journal(self)
+        _seed_armed(path, order_id="TR-1", limit=10.0, troughs=(9.80,), distance=0.05)
+        broker = _ResolvingBroker()
+        broker.resolutions["TR-1"] = _os(
+            "TR-1", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=9.85
+        )
+        deps = _watch_deps(None, [], broker=broker)
+
+        _run(deps)
+
+        fired = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED]
+        self.assertEqual(len(fired), 1)
+        self.assertEqual(fired[0]["measurement"]["final_trough"], 9.80)
+        self.assertAlmostEqual(fired[0]["measurement"]["trigger_at_final_trough"], 9.85, places=10)
+        self.assertNotIn("would_be_trigger", fired[0]["measurement"])
+
+    def test_the_fired_stamp_uses_the_arms_distance_not_any_current_d(self) -> None:
+        # The state the operator creates by widening
+        # ALPHALENS_BROKER_ENTRY_TRAIL_BPS while a watch is open: the order was
+        # armed at 150 bps off a 10.00 reference, so its frozen distance is 0.15,
+        # while BOTH available d values say 50 bps (the ambient flag this pass
+        # reads, and the ``watch_open`` record frozen at drain time). A stamp
+        # derived from either reads 9.849 or 9.85; the order fires at 9.95.
+        path = _journal(self)
+        _seed_armed(path, order_id="TR-1", limit=10.0, troughs=(9.80,), distance=0.15)
+        broker = _ResolvingBroker()
+        broker.resolutions["TR-1"] = _os(
+            "TR-1", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=9.96
+        )
+        deps = _watch_deps(None, [], broker=broker)
+
+        _run(deps)  # _run patches the ambient flag to "50"
+
+        fired = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED]
+        self.assertAlmostEqual(fired[0]["measurement"]["trigger_at_final_trough"], 9.95, places=10)
+
+    def test_a_tier_armed_before_the_distance_was_journaled_stamps_no_trigger(self) -> None:
+        # Every fire before this change is in this state: the ``trail_armed``
+        # line carries no distance, so the level the order actually ratcheted to
+        # is not recoverable from any line. No verdict beats a re-derived number
+        # — the same rule the ceiling follows (#1317).
+        path = _journal(self)
+        _seed_armed(path, order_id="TR-1", limit=10.0, troughs=(9.80,), distance=None)
+        broker = _ResolvingBroker()
+        broker.resolutions["TR-1"] = _os(
+            "TR-1", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=9.85
+        )
+        deps = _watch_deps(None, [], broker=broker)
+
+        _run(deps)
+
+        fired = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED]
+        self.assertEqual(fired[0]["measurement"]["final_trough"], 9.80)
+        self.assertIsNone(fired[0]["measurement"]["trigger_at_final_trough"])
+
+    def test_an_armed_tier_with_no_journaled_trough_stamps_no_trigger(self) -> None:
+        # ``min_trough`` folds to None when no ``trough`` line was ever written,
+        # which the fold admits for a resting armed tier. The stamp answers None
+        # through ``trigger_at_trough``'s own contract rather than an extra guard
+        # at this call site: a second place to express the same rule is a second
+        # place for it to drift.
+        path = _journal(self)
+        _seed_armed(path, order_id="TR-1", limit=10.0, troughs=(), distance=0.05)
+        broker = _ResolvingBroker()
+        broker.resolutions["TR-1"] = _os(
+            "TR-1", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=10.05
+        )
+        deps = _watch_deps(None, [], broker=broker)
+
+        _run(deps)
+
+        fired = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED]
+        self.assertEqual(len(fired), 1, "the fill is still recorded")
+        self.assertIsNone(fired[0]["measurement"]["final_trough"])
+        self.assertIsNone(fired[0]["measurement"]["trigger_at_final_trough"])
 
     def test_fired_line_makes_the_fold_terminal_and_releases_the_reservation(self) -> None:
         path = _journal(self)

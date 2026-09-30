@@ -139,8 +139,8 @@ class TestCeilingMustBeJournaledNotDerived(unittest.TestCase):
     """Why the ceiling is stored rather than recomputed at read time."""
 
     def test_the_obvious_reconstruction_is_wrong_on_a_real_row(self) -> None:
-        # would_be_trigger * (1 + eps) matches the arm line on 22 of 23 rows and
-        # misses BAH, because the fired blob's would_be_trigger comes from the
+        # The superseded would_be_trigger * (1 + eps) matches the arm line on 22
+        # of 23 rows and misses BAH, because that field came from the
         # MINIMUM trough ever journaled, not the trough at arm time.
         self.assertAlmostEqual(BAH_DERIVED_CEILING, 73.80 * 1.005 * (1.0 + CEILING_EPS_FRAC))
         self.assertLess(BAH_DERIVED_CEILING, BAH.ceiling)

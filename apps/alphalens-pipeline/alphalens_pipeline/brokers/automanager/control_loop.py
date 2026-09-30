@@ -1874,11 +1874,6 @@ def _entry_watch_max_picks() -> int:
     return _ENTRY_WATCH_MAX_PICKS_DEFAULT
 
 
-_ENTRY_BPS_DENOMINATOR = 10_000
-"""``d = d_bps / 10_000`` — the would-be-trigger basis-point divisor for the
-measurement stamp (mirrors ``entry_trail_watcher._BPS_DENOMINATOR``; a local
-copy keeps this module from importing a private engine constant)."""
-
 _ENTRY_REARM_MARKER = "awaiting_fresh_low"
 """The truthy flag the reconcile pass stamps on a RE-ARM ``watch_open`` line
 (memo §5 CRITICAL-2): the reconstructed watcher seeds ``awaiting_fresh_low`` from
@@ -2585,6 +2580,7 @@ def _advance_one_entry_watch(
         price,
         d_bps,
         armed_ceiling=None if tier_state is None else tier_state.armed_ceiling,
+        armed_distance=None if tier_state is None else tier_state.armed_distance,
     )
     # PR-T2b native arm: once TOUCHED (with a trustworthy price) PLACE the resting
     # Saxo trailing-LIMIT order out-of-band — the server ratchets + fires from
@@ -2601,6 +2597,7 @@ def _advance_one_entry_watch(
             report,
             journaled_ceiling=None if tier_state is None else tier_state.armed_ceiling,
             journaled_trigger=None if tier_state is None else tier_state.armed_trigger,
+            journaled_distance=None if tier_state is None else tier_state.armed_distance,
         )
     for alert in result.alerts:
         if deps.alert_throttled(alert.message, alert.throttle_key):
@@ -2768,6 +2765,7 @@ def _persist_entry_watch_result(
     price: float | None,
     d_bps: int,
     armed_ceiling: float | None = None,
+    armed_distance: float | None = None,
 ) -> None:
     """Persist one tick's journal intents (memo §5 journals) plus, at a terminal,
     the measurement blob (memo §5 Measurement / T1d). The running trough + touch
@@ -2802,6 +2800,7 @@ def _persist_entry_watch_result(
                 d_bps,
                 order_id=payload.get("order_id"),
                 armed_ceiling=armed_ceiling,
+                armed_distance=armed_distance,
             )
         entry_trails.append_entry_trail_line(line)
 
@@ -2836,24 +2835,28 @@ def _entry_measurement_blob(
     *,
     order_id: str | None = None,
     armed_ceiling: float | None = None,
+    armed_distance: float | None = None,
 ) -> dict[str, Any]:
     """The per-tier terminal measurement stamp (memo §5 / T1d): the variant-A
-    entry (``tier_limit``), the touch price/ts, the final trough, the would-be
-    trigger ``trough*(1+d)``, the order id (the REAL id on a ``fired`` line the
+    entry (``tier_limit``), the touch price/ts, the final trough, the trigger the
+    resting order had ratcheted to at that trough
+    (``trigger_at_final_trough`` — #1635: the JOURNALED arm distance added to the
+    trough, ``None`` for a tier that never armed), the order id (the REAL id on a ``fired`` line the
     G6 cancel-then-verify wrote; NULL on the other terminals — the offline
     reconcile join fills those by order id), and the ``entry_mode`` cohort tag
     (T8 poolability). Follows the ``tranche_fired`` telemetry-blob shape so the
     offline exec_quality join can compute concession / implied ΔR / fill-rate
     loss later."""
     trough = runtime.trough
-    trigger = None if trough is None else trough * (1.0 + d_bps / _ENTRY_BPS_DENOMINATOR)
     limit = record.get("limit")
     return {
         "tier_limit": None if limit is None else float(limit),
         "touch_price": runtime.touch_price,
         "touch_ts": runtime.touch_ts,
         "final_trough": trough,
-        "would_be_trigger": trigger,
+        "trigger_at_final_trough": entry_trail_geometry.trigger_at_trough(
+            trough=trough, distance=armed_distance
+        ),
         "order_id": order_id,
         "entry_mode": record.get("entry_mode") or _entry_trail_mode_tag(d_bps),
         # #1317 — the SAME two keys the reconcile measurement carries, so both
@@ -2986,7 +2989,12 @@ def _cancel_working_entry_orders(deps: LoopDeps, report: TickReport) -> None:
 
 
 def _journal_trail_armed(
-    crid: str, *, order_id: str | None, trigger: float | None, ceiling: float | None
+    crid: str,
+    *,
+    order_id: str | None,
+    trigger: float | None,
+    ceiling: float | None,
+    distance: float | None,
 ) -> None:
     """Append one ``trail_armed`` line (the G3 write-ahead uses ``order_id=None``
     before the POST; the post-POST line fills the real id in — the fold's
@@ -2996,7 +3004,20 @@ def _journal_trail_armed(
     the GEOMETRY value (all that is known before the POST) and the post-POST line
     the TICK-QUANTIZED value the adapter put on the wire. Journaled rather than
     left to be recomputed later, because the obvious later reconstruction is
-    wrong whenever the trough moved between the arm and the terminal."""
+    wrong whenever the trough moved between the arm and the terminal.
+
+    ``distance`` rides for the same reason and is the one arm-time number that no
+    later read can recover (#1635): the server ratchets the trigger down as
+    ``trough + distance`` holding it fixed, while the arm priced it off the
+    AMBIENT ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` — which the operator can widen
+    while this watch is open — and the ``watch_open`` record's ``d_bps`` is frozen
+    at drain time and rides a re-arm for days.
+
+    Unlike the ceiling, this is the REQUESTED distance, not a wire value:
+    ``PlacedOrder`` reports ``stop_limit_price`` and no distance, and the broker
+    tick-aligns the distance at placement. So a terminal stamp built from it is
+    off by at most the alignment, which is smaller than the arithmetic it
+    replaces but is NOT zero."""
     entry_trails.append_entry_trail_line(
         {
             "kind": entry_trails.KIND_TRAIL_ARMED,
@@ -3004,6 +3025,7 @@ def _journal_trail_armed(
             "order_id": order_id,
             entry_trails.KEY_TRIGGER: None if trigger is None else float(trigger),
             entry_trails.KEY_CEILING: None if ceiling is None else float(ceiling),
+            entry_trails.KEY_DISTANCE: None if distance is None else float(distance),
         }
     )
 
@@ -3390,6 +3412,8 @@ def _terminal_refuse_arm(
             "kind": entry_trails.KIND_CANCELLED,
             "crid": crid,
             "note": note,
+            # #1635: no ``armed_distance``. This refusal is decided BEFORE the
+            # G3 write-ahead, so no distance was ever journaled for the tier.
             "measurement": _entry_measurement_blob(record, runtime, d_bps),
         }
     )
@@ -3412,14 +3436,15 @@ def _arm_native_trail(
     *,
     journaled_ceiling: float | None,
     journaled_trigger: float | None,
+    journaled_distance: float | None,
 ) -> None:
     """Place ONE native Saxo trailing-LIMIT order at the TOUCH (memo §2 V1, §5).
 
-    ``journaled_ceiling`` / ``journaled_trigger`` are what a PREVIOUS tick
-    journaled for this tier, used only by the crash-window ADOPT branch. Both are
-    REQUIRED (no default): the caller has to state whether they are known, since
-    the journal is append-only and latest-wins, so re-journaling ``None`` over a
-    known value silently erases it.
+    ``journaled_ceiling`` / ``journaled_trigger`` / ``journaled_distance`` are
+    what a PREVIOUS tick journaled for this tier, used only by the crash-window
+    ADOPT branch. All are REQUIRED (no default): the caller has to state whether
+    they are known, since the journal is append-only and latest-wins, so
+    re-journaling ``None`` over a known value silently erases it.
 
     Sequence (money-critical ORDER):
       1. capability + ALLOW_ORDERS gates -> place nothing when disabled;
@@ -3470,6 +3495,7 @@ def _arm_native_trail(
             order_id=lookup.order_id,
             trigger=journaled_trigger,
             ceiling=journaled_ceiling,
+            distance=journaled_distance,
         )
         runtime.watcher.mark_armed()
         return
@@ -3507,7 +3533,13 @@ def _arm_native_trail(
         return
     # G3 write-ahead, pre-POST: the ceiling is the geometry value here — the
     # wire value does not exist until the adapter has quantized it.
-    _journal_trail_armed(crid, order_id=None, trigger=geo.order_price, ceiling=geo.ceiling_price)
+    _journal_trail_armed(
+        crid,
+        order_id=None,
+        trigger=geo.order_price,
+        ceiling=geo.ceiling_price,
+        distance=geo.trailing_distance,
+    )
     try:
         placed = broker.place_trailing_stop(
             uic,
@@ -3531,6 +3563,9 @@ def _arm_native_trail(
         # value would record a ceiling nobody confirmed sending, which is the
         # move #1317 exists to stop.
         ceiling=placed.stop_limit_price,
+        # The REQUESTED distance: the contract reports no wire distance, so there
+        # is no adapter-confirmed value to prefer here (see _journal_trail_armed).
+        distance=geo.trailing_distance,
     )
     runtime.watcher.mark_armed()
     logger.info(
@@ -3582,6 +3617,10 @@ def _handle_arm_failure(
                 "kind": entry_trails.KIND_CANCELLED,
                 "crid": crid,
                 "note": f"insufficient funds at fire-arm: {exc}",
+                # #1635: no ``armed_distance``. The G3 write-ahead journaled one
+                # before the POST, but the POST was REJECTED, so no order rests
+                # and no trigger ever ratcheted. Stamping the write-ahead's value
+                # would describe an order that does not exist.
                 "measurement": _entry_measurement_blob(record, runtime, d_bps),
             }
         )
@@ -4377,21 +4416,25 @@ def _entry_reconcile_measurement(
     """The terminal measurement stamp for a RECONCILED fill (memo §5 / T1d),
     mirroring :func:`_entry_measurement_blob` but sourced from the FOLD (the
     watcher runtime is gone once a tier is resting) + the resolved fill: the
-    variant-A entry ``tier_limit``, the final trough + its ``would_be_trigger``,
+    variant-A entry ``tier_limit``, the final trough + the trigger the resting
+    order had ratcheted to at it (``trigger_at_final_trough`` — #1635: the
+    JOURNALED arm distance added to the trough, ``None`` for a tier armed before
+    that distance was journaled),
     the join ``order_id``, the realized ``avg_price``/``realized_qty`` (the
     entry-side concession the offline join computes vs the limit), and the
     ``entry_mode`` cohort tag (T8). Touch marks are the ``touched`` line's job (the
     offline join reads them there), so they are ``None`` here."""
     record = tier_state.watch_open or {}
     trough = tier_state.min_trough
-    trigger = None if trough is None else trough * (1.0 + d_bps / _ENTRY_BPS_DENOMINATOR)
     limit = record.get("limit")
     return {
         "tier_limit": None if limit is None else float(limit),
         "touch_price": None,
         "touch_ts": None,
         "final_trough": trough,
-        "would_be_trigger": trigger,
+        "trigger_at_final_trough": entry_trail_geometry.trigger_at_trough(
+            trough=trough, distance=tier_state.armed_distance
+        ),
         "order_id": order_id,
         "avg_price": avg_price,
         "realized_qty": realized_qty,

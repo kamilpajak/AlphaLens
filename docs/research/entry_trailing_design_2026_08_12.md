@@ -147,8 +147,10 @@ first look at fires says the opposite.
   ceiling is now journaled on the `trail_armed` line — the wire value the
   adapter reports via `PlacedOrder.stop_limit_price`, not a value re-derived at
   read time (the obvious reconstruction, `would_be_trigger x (1+eps)`, is wrong
-  on BAH by 0.33 because `would_be_trigger` uses the minimum trough ever seen,
-  not the trough at arm). Each `fired` line carries `ceiling` plus a
+  on BAH by 0.33 because `would_be_trigger` used the minimum trough ever seen,
+  not the trough at arm). That field was renamed `trigger_at_final_trough` and
+  its arithmetic corrected on 2026-09-30 (#1635); the sentence describes the
+  rows written before then, and its conclusion is unchanged. Each `fired` line carries `ceiling` plus a
   `ceiling_breach` block, and a breach raises its own throttled alert. Placement
   is UNCHANGED: the field is still sent, because it costs nothing and records
   the intent, and picking the remedy is a separate decision.
