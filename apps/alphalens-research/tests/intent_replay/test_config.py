@@ -36,9 +36,12 @@ from intent_replay.units import BPS, EPOCH_MS_UTC, FRACTION, Quantity, Translate
 #
 # It departs from the printed block in EXACTLY ONE key, and section 5.4 asks
 # for that to be said rather than for the fixture to keep calling itself
-# verbatim: the block states ``entry_trail_bps: 50``, and this version refuses
-# a stated distance (``entry_trail_not_modelled``), so the fixture states null.
-# PR 8 models entry trailing and makes the printed block runnable again.
+# verbatim: the block states ``entry_trail_bps: 50`` and the fixture states
+# null. The refusal that forced the departure is gone and the walk models the
+# trail, so the reason has CHANGED rather than expired: this block is the
+# baseline of the limit-ladder tests, and there are dozens of them. A trailing
+# test states the distance itself, which also keeps the two entry policies
+# visibly apart in every test that exercises one.
 CANONICAL: Mapping[str, Any] = {
     "entry_deadline": {
         "kind": "order_ttl_sessions",
@@ -86,9 +89,13 @@ def _canonical() -> dict[str, Any]:
 
 
 def _all_stated() -> dict[str, Any]:
-    """The variant with every optional scalar stated. The trail stays OFF: a
-    stated distance is refused in this version (section 5.4)."""
+    """The variant with every optional scalar stated — the trail included.
+
+    It was misnamed while a stated distance was refused: it left the trail null
+    and still called itself all-stated, so the one optional scalar with a
+    refusal of its own was the one it never exercised."""
     data = _canonical()
+    data["entry_trail_bps"] = 50
     data["ceiling_price"] = 120.5
     data["time_stop_t"] = 1790900000000
     return data
@@ -179,7 +186,7 @@ class CanonicalExampleTest(unittest.TestCase):
 
     def test_the_all_stated_variant_parses(self) -> None:
         config = RunConfig.from_jsonable(_all_stated())
-        self.assertIsNone(config.entry_trail_bps)
+        self.assertEqual(config.entry_trail_bps, 50)
         self.assertEqual(config.ceiling_price, 120.5)
         self.assertEqual(config.time_stop_t, 1790900000000)
 
@@ -513,29 +520,51 @@ class AggregationTest(unittest.TestCase):
         )
 
 
-class EntryTrailNotModelledTest(unittest.TestCase):
-    """Spec section 5.4: until PR 8 the walk parses the distance and ignores
-    it, so echoing a stated value into the result would claim a policy the run
-    did not apply. The refusal is TEMPORARY and the reason says so."""
+class EntryTrailDistanceTest(unittest.TestCase):
+    """A stated distance is a POLICY the walk applies, so the block carries it
+    through. The temporary refusal that stood here answered a well-formed
+    distance with ``entry_trail_not_modelled``; the walk now models the trail,
+    so refusing would describe an entry ladder the run did not replay.
 
-    def test_a_well_formed_distance_is_refused_as_not_modelled(self) -> None:
+    The type and range checks are unchanged and still run first, which is what
+    keeps ``true`` a ``wrong_type`` and ``0`` a ``not_positive`` rather than
+    letting either reach the walk as a distance."""
+
+    def test_a_well_formed_distance_is_carried_through(self) -> None:
         for value in (1, 50, 10_000):
             with self.subTest(value):
-                with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", value))
-                self.assertEqual(
-                    _refusal(ctx.exception),
-                    (CONFIG_INVALID_CODE, "entry_trail_not_modelled"),
-                )
-                self.assertEqual(ctx.exception.failure.details["keys"], ["entry_trail_bps"])
+                config = RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", value))
+                self.assertEqual(config.entry_trail_bps, value)
+
+    def test_the_distance_survives_the_round_trip_the_envelope_echoes(self) -> None:
+        # The block travels in the result (section 5.2), so a value the parser
+        # accepts and the echo drops would publish a run nobody can reproduce.
+        config = RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", 50))
+        self.assertEqual(config.to_jsonable()["entry_trail_bps"], 50)
 
     def test_the_trail_stated_off_is_still_accepted(self) -> None:
         config = RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", None))
         self.assertIsNone(config.entry_trail_bps)
 
+    def test_a_distance_too_wide_for_the_arithmetic_is_refused_not_a_traceback(self) -> None:
+        # There is deliberately no UPPER bound, but "any integer" is only
+        # publishable if the walk can carry every integer, and it cannot: the
+        # distance is multiplied by a price, and an int wider than a float
+        # raises OverflowError on the conversion. Before this the refusal was
+        # unreachable because every stated distance was refused, so the value
+        # never reached the arithmetic.
+        for value in (10**400, 2**2000):
+            with self.subTest(len(str(value))):
+                with self.assertRaises(ConfigError) as ctx:
+                    RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", value))
+                self.assertEqual(
+                    _refusal(ctx.exception), (CONFIG_INVALID_CODE, "numeric_not_finite")
+                )
+
     def test_the_type_and_range_checks_still_run_first(self) -> None:
-        # Section 5.4: ``true`` stays wrong_type and ``0`` stays not_positive;
-        # this reason only answers a WELL-FORMED distance.
+        # Section 5.4: ``true`` stays wrong_type and ``0`` stays not_positive.
+        # The live flag reads 0 as OFF, so a 0 here is ambiguous and says which
+        # form to use instead; that message outlives the removed refusal.
         for value, reason in ((True, "wrong_type"), (0, "not_positive"), (-1, "not_positive")):
             with self.subTest(repr(value)):
                 with self.assertRaises(ConfigError) as ctx:
@@ -558,7 +587,6 @@ class ReasonVocabularyTest(unittest.TestCase):
                 "empty_string",
                 "oco_unsupported",
                 "fx_cost_not_stated",
-                "entry_trail_not_modelled",
             },
         )
 

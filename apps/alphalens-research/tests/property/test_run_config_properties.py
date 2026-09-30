@@ -41,10 +41,10 @@ _BLOCK = st.fixed_dictionaries(
     {
         "entry_deadline": _translated(EPOCH_MS_UTC),
         "walk_start": _translated(EPOCH_MS_UTC),
-        # A stated distance is refused in this version (section 5.4,
-        # ``entry_trail_not_modelled``), so the only value that round-trips
-        # is null. PR 8 widens this back to a distance.
-        "entry_trail_bps": st.none(),
+        # A distance is a POLICY the walk applies; null is OFF. No upper
+        # bound: section 5.2 publishes the key as an integer >= 1, and the
+        # deployment rail that caps the flag at 150 is not a document fact.
+        "entry_trail_bps": st.one_of(st.none(), st.integers(min_value=1, max_value=10_000)),
         "ceiling_price": st.one_of(
             st.none(),
             st.integers(min_value=1, max_value=100_000),

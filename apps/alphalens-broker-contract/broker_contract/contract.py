@@ -607,8 +607,8 @@ class SupportsTrailingStop(Protocol):
     like :class:`SupportsStandaloneStop` / :class:`SupportsMarketOrders`): a
     caller ``isinstance``-narrows a ``Broker`` to this Protocol; a broker
     without it (or with the entry-trail env flag off) runs the resting-limit
-    entry path unchanged. NOTHING calls these methods yet — the executor wiring
-    is a later increment (PR-T2b), so this capability is inert on its own.
+    entry path unchanged. The executor calls this on both deployments: the entry
+    watch places one native trailing order per tier when its rung is touched.
 
     ``request_id`` is the POST x-request-id (Saxo 15 s dedup) and the
     ``ExternalReference`` — pass a DETERMINISTIC value (the ``-entry-`` request-id

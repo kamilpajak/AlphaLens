@@ -176,6 +176,34 @@ class AcceptedDocumentTest(_Files):
         self.assertEqual(summary["notional_spent"], {"value": 900.0, "unit": "EUR"})
         self.assertEqual(value["outcome"], "open")
 
+    def test_a_stated_trail_distance_reaches_the_published_command(self) -> None:
+        """The trailing model is the one both deployments run, and no case here
+        reached it: every CLI test uses the canonical block, which states null.
+
+        The rung is 68.00 and the distance 50 bps. Bar 1 touches it and arms a
+        trigger of 68.34, which that bar's high of 68.20 does not reach, and its
+        low of 67.90 ratchets the trough. Bar 2 therefore tests 68.24, its high
+        of 68.30 reaches it, and the fill is 68.24 instead of the rung - which
+        is where every number below comes from, including the R denominator the
+        document's 63.00 stop is measured against.
+
+        Compared with a tolerance, not for equality: the trigger is a float SUM
+        of the trough and the distance, and 67.90 + 0.34 is 68.24000000000001.
+        The published number carries that representation, so an exact-equality
+        assertion here would be asserting the arithmetic and not the model.
+        """
+        config = self.write("trail.json", {**CANONICAL, "entry_trail_bps": 50})
+        run = self.run_cli("run", self.document, "--config", config, "--bars", self.bars)
+        self.assertEqual((run.code, run.stderr), (EXIT_OK, ""))
+        value = json.loads(run.stdout)
+        summary = value["summary"]
+        self.assertAlmostEqual(summary["avg_entry_price"]["value"], 68.24, places=9)
+        self.assertAlmostEqual(summary["r_multiple"]["denominator"]["value"], 5.24, places=9)
+        self.assertAlmostEqual(summary["notional_spent"]["value"], 903.176471, places=6)
+        self.assertEqual(summary["snu_bars"], 1)
+        self.assertEqual(value["outcome"], "open")
+        self.assertIn("native_entry_trail_is_a_broker_model", value["divergences"])
+
     def test_the_command_hands_the_envelope_the_series_it_read(self) -> None:
         _, value = self._json()
         self.assertEqual(

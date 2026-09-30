@@ -19,7 +19,11 @@ dependencies = [
     "uvicorn[standard]>=0.49.0",
     "pyarrow>=24.0",
     "pandas>=2.3",
-    "pyjwt[crypto]>=2.13.0",
+    # Floor is the first release without the advisory set published against
+    # 2.13.0 (ten of them). Keep it above that range rather than relying on the
+    # lock alone: auth_cf/jwt_verifier.py calls jwt.decode() on every API
+    # request, so this library sits on the hottest path the service has.
+    "pyjwt[crypto]>=2.14.0",
     "httpx>=0.28",
     # XNYS trading calendar — backs the /v1/market/status endpoint that
     # the SPA polls to render its closed-market banner. Same library the
