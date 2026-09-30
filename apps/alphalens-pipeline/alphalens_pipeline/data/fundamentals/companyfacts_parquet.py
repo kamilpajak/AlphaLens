@@ -198,6 +198,16 @@ class CompanyfactsParquetReader:
         _evict_to_capacity(self._cache, self._cache_capacity)
         return table
 
+    def invalidate(self, cik: str) -> None:
+        """Drop ``cik`` from the in-process memo so the next read hits disk.
+
+        Needed since #1335 gave the companyfacts cache a lifetime: a file this
+        reader has already served can now be REPLACED underneath it during the
+        same run. Without this the run keeps serving the table it just refreshed
+        away, and the refresh buys nothing until the next process starts.
+        """
+        self._cache.pop(cik, None)
+
     def _read_table_from_disk(self, cik: str) -> pa.Table | None:
         path = self._dir / f"{cik}.parquet"
         if not path.exists():

@@ -39,7 +39,8 @@ from __future__ import annotations
 import logging
 import math
 import os
-from datetime import date
+import tempfile
+from datetime import date, timedelta
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -125,6 +126,50 @@ def _is_tax_heavy(ticker: str) -> bool:
     if sic is None:
         return False
     return any(lo <= sic <= hi for lo, hi, _label in _TAX_HEAVY_SIC_RANGES)
+
+
+#: A cached companyfacts table whose newest reported period ends more than this
+#: many days before today is REFETCHED by :meth:`EdgarFundamentalsStore.preload`.
+#:
+#: 150, derived from the two facts that bracket it (#1335).
+#:
+#: The ceiling is ``ttm_aggregator.DEFAULT_TTM_MAX_STALENESS_DAYS`` (270): past
+#: that, ``compute_ttm`` refuses the result and every EDGAR-derived column for
+#: that ticker goes blank. Refreshing must happen well before it, not at it.
+#:
+#: The floor is what a HEALTHY quarterly filer looks like. Its newest period end
+#: is legitimately old between filings: a quarter ending 2026-03-31 stays the
+#: newest one until the following 10-Q lands around 2026-08-09, which is 131
+#: days. A threshold under ~135 would refetch every healthy ticker on every run.
+#:
+#: Why this exists: before #1335 ``preload`` fetched a CIK only when its file was
+#: absent and never again. Measured on the production store 2026-09-30, 4784 of
+#: 5992 files were written in 2026-05 and never touched; 2612 of them stop at the
+#: quarter ending 2025-12-31, so on 2026-09-28 they all crossed the 270-day gate
+#: at once. 1843 more stop at 2026-03-31 and cross it on 2026-12-27.
+REFETCH_DATA_AGE_DAYS = 150
+
+#: A ticker is not refetched more often than this, however stale its data looks.
+#: A delinquent or de-registered filer never gets fresher, so without a floor it
+#: would cost one SEC request per run forever — three runs a day, for as long as
+#: it stays in any candidate's peer cohort. Does NOT apply to a missing or
+#: unreadable file: that one is refetched on sight, because there is no usable
+#: answer to protect.
+REFETCH_MIN_INTERVAL_DAYS = 7
+
+#: Stale tickers refreshed per :meth:`EdgarFundamentalsStore.preload` call.
+#:
+#: Measured 2026-09-30: one companyfacts refetch costs 0.36 s and 4.3 MB (mean
+#: over TDOC / ZION / BAH / AAPL), and one thematic run's preload universe held
+#: 1630 tickers whose data was already past the age above. Unbounded, the first
+#: run after this change would pay about 10 minutes and 7 GB inside a build that
+#: had been killed by its own start timeout eight days earlier (#1628).
+#:
+#: 200 is about 72 s and 0.9 GB, under 1% of the build's 210-minute budget. The
+#: store converges over several runs instead of stalling one, and the arithmetic
+#: is comfortable: 3059 stale tickers at 200 per call, three calls a day, is
+#: about five days — against a 2026-12-27 deadline.
+REFETCH_BUDGET_PER_CALL = 200
 
 
 class EdgarFundamentalsStore:
@@ -220,37 +265,128 @@ class EdgarFundamentalsStore:
                 available.append(ticker)
         return sorted(set(available))
 
-    def preload(self, tickers: list[str]) -> None:
-        """Fetch + cache companyfacts parquets for any ticker missing locally.
+    def preload(
+        self,
+        tickers: list[str],
+        *,
+        refresh_stale: bool = True,
+        refresh_budget: int | None = None,
+        today: date | None = None,
+    ) -> None:
+        """Fetch companyfacts parquets that are missing, and refresh ones gone stale.
 
-        Idempotent — skips tickers whose parquet already exists. First call
-        with a cold cache pays ~12s per 100 missing tickers (SEC throttle
-        10 req/s); subsequent calls are free.
+        Two separate jobs, with different rules, because they carry different
+        costs if skipped:
+
+        * **Missing** — no file at all means no data for that ticker. Always
+          fetched, never budgeted.
+        * **Stale** — a file whose newest reported period is more than
+          :data:`REFETCH_DATA_AGE_DAYS` old. Refetched at most
+          ``refresh_budget`` per call (default :data:`REFETCH_BUDGET_PER_CALL`)
+          and at most once per :data:`REFETCH_MIN_INTERVAL_DAYS` per ticker, so
+          a large backlog converges over several runs instead of stalling one.
+
+        Refreshing is PIT-safe. SEC serves only the current vintage, but the
+        readers filter on ``filed_date <= asof``
+        (``ttm_aggregator._pit_filter``), so a newer filing is simply invisible
+        to an older ``asof`` — a refetch cannot introduce lookahead into a
+        historical replay.
+
+        ``refresh_stale=False`` is for the internal single-ticker calls that
+        only want the missing-file fetch; without it every per-ticker lookup
+        could trigger a refresh check of its own.
+
+        Before #1335 this method skipped any ticker whose file existed, for as
+        long as the file existed. See :data:`REFETCH_DATA_AGE_DAYS` for what
+        that cost.
         """
         self._load_ticker_map()
-        missing_ciks: list[tuple[str, str]] = []
+        ref = today or date.today()
+        budget = REFETCH_BUDGET_PER_CALL if refresh_budget is None else refresh_budget
+
+        missing: list[tuple[str, str]] = []
+        stale: list[tuple[str, str]] = []
         for ticker in tickers:
             cik = self._cik_for(ticker)
             if cik is None:
                 logger.warning("ticker %s unresolved (no CIK from SEC), skipping", ticker)
                 continue
             if not (self._dir / f"{cik}.parquet").exists():
-                missing_ciks.append((ticker, cik))
-        if missing_ciks:
-            logger.info("preload: fetching %d missing companyfacts from SEC", len(missing_ciks))
-            for ticker, cik in missing_ciks:
-                try:
-                    facts = self._sec_client.fetch_company_facts(cik)
-                except Exception as exc:
-                    logger.warning("companyfacts fetch failed for %s/%s: %s", ticker, cik, exc)
-                    continue
-                table = companyfacts_json_to_parquet_table(facts)
-                pq.write_table(table, self._dir / f"{cik}.parquet")
+                missing.append((ticker, cik))
+            elif refresh_stale and self._is_stale(cik, ref):
+                stale.append((ticker, cik))
+
+        if missing:
+            logger.info("preload: fetching %d missing companyfacts from SEC", len(missing))
+        if stale:
+            logger.info(
+                "preload: %d cached companyfacts older than %d days; refreshing %d this call",
+                len(stale),
+                REFETCH_DATA_AGE_DAYS,
+                min(len(stale), max(budget, 0)),
+            )
+        for ticker, cik in missing + stale[: max(budget, 0)]:
+            self._fetch_and_write(ticker, cik)
+
         # Batch-fetch prices for all tickers in one yfinance round-trip even
         # when no companyfacts are missing — otherwise warm-cache runs would
         # never populate prices and fall through to per-ticker fast_info.
         if self._with_prices and tickers:
             self._batch_fetch_prices(tickers)
+
+    def _is_stale(self, cik: str, today: date) -> bool:
+        """Should ``cik``'s cached table be refetched?
+
+        Unreadable or empty beats every other consideration: there is no usable
+        answer to protect, so it is refetched on sight. Otherwise the per-ticker
+        interval floor applies first (cheap, no parquet read), then the age of
+        the newest reported period.
+        """
+        table = self._reader.get_cik_table(cik)
+        if table is None:
+            return True
+        path = self._dir / f"{cik}.parquet"
+        try:
+            last_try = date.fromtimestamp(path.stat().st_mtime)
+        except OSError:
+            return True
+        if today - last_try < timedelta(days=REFETCH_MIN_INTERVAL_DAYS):
+            return False
+        if table.num_rows == 0:
+            return True
+        newest = max(table.column("period_end").to_pylist())
+        return newest < today - timedelta(days=REFETCH_DATA_AGE_DAYS)
+
+    def _fetch_and_write(self, ticker: str, cik: str) -> None:
+        """Fetch one CIK's companyfacts and replace its parquet, best-effort.
+
+        A failure leaves whatever was already on disk. Turning a stale answer
+        into no answer would be strictly worse than the state this method
+        exists to improve.
+        """
+        try:
+            facts = self._sec_client.fetch_company_facts(cik)
+        except Exception as exc:
+            logger.warning("companyfacts fetch failed for %s/%s: %s", ticker, cik, exc)
+            return
+        table = companyfacts_json_to_parquet_table(facts)
+        target = self._dir / f"{cik}.parquet"
+        # Write a sibling temp file and rename over the target. This method now
+        # REPLACES files that other processes (and this one) read, and Parquet
+        # keeps its metadata at the END, so a torn in-place write leaves a file
+        # that is unreadable rather than merely short. Same reasoning as
+        # ``macro/fred_client.py::_write_cache``.
+        fd, tmp_name = tempfile.mkstemp(dir=self._dir, suffix=".parquet.tmp")
+        os.close(fd)
+        tmp = Path(tmp_name)
+        try:
+            pq.write_table(table, tmp)
+            os.replace(tmp, target)
+        except Exception as exc:
+            logger.warning("companyfacts write failed for %s/%s: %s", ticker, cik, exc)
+            tmp.unlink(missing_ok=True)
+            return
+        self._reader.invalidate(cik)
 
     # --- the parity contract: 16-field features dict ---------------------
 
@@ -266,7 +402,7 @@ class EdgarFundamentalsStore:
             return None
         # Trigger on-demand fetch if the parquet is missing.
         if not (self._dir / f"{cik}.parquet").exists():
-            self.preload([ticker])
+            self.preload([ticker], refresh_stale=False)
         # Re-check; if still missing the fetch failed.
         if self._reader.get_cik_table(cik) is None:
             return None
@@ -405,7 +541,7 @@ class EdgarFundamentalsStore:
         if cik is None:
             return []
         if not (self._dir / f"{cik}.parquet").exists():
-            self.preload([ticker])
+            self.preload([ticker], refresh_stale=False)
         return annual_statements(self._reader, cik, asof, max_years=max_years)
 
     def owner_earnings_as_of(
