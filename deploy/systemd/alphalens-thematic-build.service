@@ -240,19 +240,38 @@ TasksMax=512
 #
 # Measured stages of that run: ingest 9.6, extract 43.9, map-themes 29.7,
 # score 43.3, brief 17.3 — 144 min to the end of `brief`, against a ~76 min
-# mean over the 22 post-#1330 runs of the old 00:30 slot. The cause is the
-# corpus the deciding run can now see: ~97 EX-99.1 filings it used to get zero
-# of. news_ingest.DEFAULT_MAX_ITEMS caps the item COUNT at 200, not the token
-# volume — an issuer press release is a long narrative where a GDELT row is a
-# headline — and the richer extraction feeds more candidates into `score` and
-# `brief` downstream. End to end the run needed about 153 min.
+# mean over the 22 post-#1330 runs of the old 00:30 slot.
 #
-# 210 is 1.37x that and still leaves 30 min of the 4h slot spacing, so a wedged
-# run is killed before the next fire. It is NOT headroom to grow into: a run
-# that genuinely needs 210 min finishes at 08:00 UTC, at the far edge of the
-# 07:00-08:00 UTC window in which the owner reads the brief. If the product
-# stages keep growing, the answer is to make them cheaper or to move work out
-# of this unit, not to raise this number again.
+# Be precise about what is MEASURED here. 144 min to the end of `brief` is a
+# measurement. The end-to-end figure is not: the unit was killed at 150 min with
+# `experts enrich` still running, so nobody observed it finish. Adding the
+# enrich tail's own historical cost gives an ESTIMATE of about 153 min, and that
+# estimate is what 210 is sized against.
+#
+# The attributed cause is also one day's evidence, not a controlled comparison:
+# the deciding run can now see ~97 EX-99.1 filings it used to get zero of, and
+# news_ingest.DEFAULT_MAX_ITEMS caps the item COUNT at 200, not the token volume
+# — an issuer press release is a long narrative where a GDELT row is a headline.
+# That explains `extract`, `map-themes` and `brief` plausibly. It does NOT
+# explain `score` tripling from 15.6 to 43.3 min, which is a quant stage;
+# that number is unexplained and worth its own look before 153 min is treated as
+# the new normal.
+#
+# WHY 210 AND NOT MORE. The timer's slots are 4h apart, RandomizedDelaySec=5min
+# can eat 5 of that, and after the SIGTERM systemd still needs TimeoutStopSec
+# plus both ExecStopPost commands before the unit is inactive. Budgeting 10 min
+# for that stop path leaves 225 min usable, so 210 is the estimate plus 37 min
+# with 15 min still in hand. `test_the_repair_slots_are_spaced_far_enough_apart_to_not_queue`
+# derives all of this from these two files and refuses anything from 225 up.
+#
+# It is NOT headroom to grow into: a run that genuinely needs 210 min finishes
+# at 08:00 UTC, at the far edge of the 07:00-08:00 UTC window in which the owner
+# reads the brief. And it does not fix the coupling that caused the incident —
+# the two publish steps are ExecStartPost, so they still only run when ExecStart
+# succeeded, and a timeout still skips a brief that was already written. Making
+# the brief the success boundary is the real fix and is filed separately. If the
+# product stages keep growing, the answer is to make them cheaper or to move
+# work out of this unit, not to raise this number again.
 TimeoutStartSec=210min
 
 # Oneshot doesn't auto-restart on success. On real failures (Polygon 5xx,

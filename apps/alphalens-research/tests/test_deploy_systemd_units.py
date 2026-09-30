@@ -441,6 +441,18 @@ def _service_start_timeout(service_text: str) -> dt.timedelta:
     return dt.timedelta(minutes=int(match.group(1)))
 
 
+# Budget between the SIGTERM and the unit going inactive. TimeoutStartSec bounds
+# ExecStart PLUS the ExecStartPost chain; after it fires, systemd still waits
+# TimeoutStopSec (unset here, so the 90s default) for the process to die and then
+# runs both ExecStopPost commands. The unit is not INACTIVE until all of that is
+# done, and a timer fire landing before then is queued rather than run. The
+# spacing assertion therefore needs strict `>` plus this margin: at exact equality
+# the run is killed at the very instant the next slot can fire, which is the
+# collision the assertion exists to forbid. 10 min is generous against a 90s
+# default plus two docker commands, and it is the cheap direction to be wrong in.
+STOP_MARGIN = dt.timedelta(minutes=10)
+
+
 def _timer_randomized_delay(timer_text: str) -> dt.timedelta:
     """``RandomizedDelaySec=`` from a timer unit, as a timedelta; zero when absent.
 
@@ -580,13 +592,15 @@ class TestThematicBuildSlotsClearTheSecDailyIndex(unittest.TestCase):
             )
             # The earlier fire can be jittered late by the whole delay while the later
             # one is not jittered at all, so the WORST-CASE gap is `gap - jitter`.
-            self.assertGreaterEqual(
-                gap - jitter,
+            usable = gap - jitter - STOP_MARGIN
+            self.assertGreater(
+                usable,
                 timeout,
-                f"{earlier:%H:%M} -> {later:%H:%M} UTC is {gap} apart and "
-                f"RandomizedDelaySec can eat {jitter} of it, leaving {gap - jitter} "
-                f"against TimeoutStartSec={timeout}. A wedged run would swallow the "
-                "next slot instead of being repaired by it.",
+                f"{earlier:%H:%M} -> {later:%H:%M} UTC is {gap} apart; "
+                f"RandomizedDelaySec can eat {jitter} and the stop path needs "
+                f"{STOP_MARGIN}, leaving {usable} against TimeoutStartSec={timeout}. "
+                "A wedged run would swallow the next slot instead of being repaired "
+                "by it.",
             )
 
 

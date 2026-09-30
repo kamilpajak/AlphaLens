@@ -70,10 +70,18 @@
 # over the old 25.5. That puts the brief at roughly 05:49 UTC median and
 # 06:24 at the observed worst.
 #
-# The owner reads the brief around 07:00-08:00 UTC, so it is there — but the
-# margin is about 35 min at the worst observed run, where it used to be over
-# five hours. A run that went to the full TimeoutStartSec=150min would
-# finish at 07:00 UTC, inside the reading window; no run has since #1330.
+# WHAT ACTUALLY HAPPENED, recorded here because the projection above was wrong.
+# The first scheduled deciding run on this schedule, 2026-09-30, reached the
+# brief stage at 06:37 UTC and wrote the parquet at 06:54 — later than the 06:24
+# worst case projected above. It then hit TimeoutStartSec and was killed at
+# 07:00 UTC during `experts enrich`, which skipped both ExecStartPost publish
+# steps, so the brief never reached Postgres until an operator republished it by
+# hand. The estimate above under-counted because the 200-item corpus cap bounds
+# the item COUNT, not the token volume: EX-99.1 filings are long narratives.
+# Measured stages: ingest 9.6, extract 43.9, map-themes 29.7, score 43.3,
+# brief 17.3 — 144 min to the end of brief. TimeoutStartSec moved 150 -> 210min
+# in response; a run that uses all of it now finishes at 08:00 UTC, at the far
+# edge of the reading window rather than inside it.
 #
 # Polygon contention does not change. `thematic ingest --force` already runs
 # at 04:30 every day, inside the bracket-cost replay's 03:30-05:50 UTC
