@@ -18,7 +18,14 @@ from intent_replay.bars import Bar
 from intent_replay.config import RunConfig
 from intent_replay.interpreter import DeclaredTranche, PendingEntry, Plan
 from intent_replay.trace import KINDS
-from intent_replay.walk import _WalkState, _would_fill, walk
+from intent_replay.walk import (
+    _a_tranche_would_have_fired,
+    _fire_tranches,
+    _held,
+    _WalkState,
+    _would_fill,
+    walk,
+)
 
 from tests.intent_replay.test_config import CANONICAL
 
@@ -930,16 +937,42 @@ class AmbiguousBarsTest(unittest.TestCase):
         self.assertLess(REFUSED_LEVEL, THRESHOLDS[1.0])
         self.assertEqual(result.snu_bars, 0)
 
-    def test_any_unfired_tranche_makes_the_bar_ambiguous_not_only_the_leading_one(self) -> None:
-        # The ladder need not rise, so "the leading tranche" is not a thing to
-        # test. `/edge` asks the same question of ANY unhit tranche
-        # (`ladder_replay.py:957-959`).
+    def test_an_untouched_shallower_tranche_does_not_block_a_reached_deeper_one(self) -> None:
+        # What this pins is SKIP-untouched, not break-on-first: tranche 0 sits at
+        # 80.00, which the bar never reaches, so the review continues to tranche
+        # 1 exactly as `_fire_tranches` does. The ladder need not rise, so the
+        # walk reads it as GIVEN rather than by price. Renamed 2026-09-30: the
+        # old name claimed ANY unfired tranche counts, which is the reading
+        # `_fire_tranches` has never had -- a REACHED tranche the gate refuses
+        # blocks the ones behind it
+        # (`test_a_refused_tranche_blocks_the_reached_ones_behind_it_and_nothing_fires`).
         tranches = (
             DeclaredTranche(tranche_index=0, price=80.0, fraction=0.5),
             DeclaredTranche(tranche_index=1, price=74.0, fraction=0.5),
         )
         result = self._walk(tranches, _bar(WALK_START + MINUTE, 72.0, 74.5, 62.0))
         self.assertEqual(result.snu_bars, 1)
+
+    def test_a_refused_tranche_blocks_the_reached_ones_behind_it_and_nothing_fires(self) -> None:
+        # `_fire_tranches` walks the ladder in ITS order and RETURNS on the first
+        # cost-gate refusal, so a level behind one the gate declines cannot fire
+        # in either reading. Both tranches share the 0.5 threshold, so the bar
+        # reaching both fires NOTHING under the take-profit-first order, and a
+        # bar where no order moved money is not an SNU. Spec section 4.4,
+        # decided 2026-09-26: counting it would put bars where the rule changed
+        # nothing into a number whose published meaning is the opposite.
+        tranches = (
+            DeclaredTranche(tranche_index=0, price=REFUSED_LEVEL, fraction=0.5),
+            DeclaredTranche(tranche_index=1, price=74.0, fraction=0.5),
+        )
+        result = self._walk(tranches, _bar(WALK_START + MINUTE, 72.0, 74.5, 62.0))
+        self.assertLess(REFUSED_LEVEL, THRESHOLDS[0.5])
+        self.assertGreater(74.0, THRESHOLDS[0.5])
+        # Not vacuous: row 1 was REACHED. Without these two the test would pass
+        # on a walk that never asked the question at all.
+        self.assertEqual(result.events[-1].reason, "stop")
+        self.assertEqual([e for e in result.events if e.kind == "tp_fired"], [])
+        self.assertEqual(result.snu_bars, 0)
 
     def test_a_tranche_that_already_fired_leaves_a_later_stop_bar_unambiguous(self) -> None:
         result = self._walk(
@@ -950,6 +983,141 @@ class AmbiguousBarsTest(unittest.TestCase):
         self.assertEqual(len([e for e in result.events if e.kind == "tp_fired"]), 1)
         self.assertEqual(result.events[-1].reason, "stop")
         self.assertEqual(result.snu_bars, 0)
+
+
+class RowOneAgreesWithTheLadderPassTest(unittest.TestCase):
+    """`_a_tranche_would_have_fired` answers True exactly when `_fire_tranches`
+    would sell something from the same state.
+
+    Row 1 is a COUNTERFACTUAL: on a stop bar `_walk_one_bar` returns before
+    `_advance_state`, so the ladder pass never runs and nothing checks that the
+    two agree. #1629 is exactly that drift -- the helper asked `any(reached and
+    affordable)` while the pass stops at the first refusal -- and it survived
+    because no behavioural test put a REFUSED tranche in front of a clearing
+    one. A bar shape cannot pin this; only asking both functions can.
+
+    The domain is `_held(state) > 0`. `_fire_tranches` carries a `_held <= 0`
+    guard the helper does not, and the helper's docstring argues it is never
+    asked with nothing held (a stop RESTS only after a fill). A twin guard on
+    the helper would be unreachable code, so the carve-out lives here instead.
+    """
+
+    INTENDED = 900.0 / 68.0
+
+    def _state(self, *, fired: frozenset[int] = frozenset(), sold: float = 0.0) -> _WalkState:
+        state = _WalkState(pending={})
+        state.units = self.INTENDED
+        state.cash = 900.0
+        state.units_sold = sold
+        state.fired = set(fired)
+        state.stop = FLOOR
+        return state
+
+    # Each case is (name, ladder, bar, already-fired, units already sold). The
+    # boundary case is not optional: a mutant reading `bar.high <= price`
+    # survives the whole suite and is caught ONLY by a tranche priced exactly at
+    # a bar's high.
+    CASES = (
+        (
+            "rising, first reached is refused, deeper one clears",
+            ((0, REFUSED_LEVEL, 0.5), (1, 74.0, 0.5)),
+            (72.0, 74.5, 62.0),
+            frozenset(),
+            0.0,
+        ),
+        (
+            "rising, first reached clears",
+            ((0, 70.0, 0.5), (1, 74.0, 0.5)),
+            (72.0, 74.5, 62.0),
+            frozenset(),
+            0.0,
+        ),
+        (
+            "ladder given in DESCENDING order",
+            ((0, 74.0, 0.5), (1, REFUSED_LEVEL, 0.5)),
+            (72.0, 74.5, 62.0),
+            frozenset(),
+            0.0,
+        ),
+        (
+            "first tranche is never reached, second clears",
+            ((0, 80.0, 0.5), (1, 74.0, 0.5)),
+            (72.0, 74.5, 62.0),
+            frozenset(),
+            0.0,
+        ),
+        (
+            "the only reached tranche already fired",
+            ((0, 70.0, 0.4),),
+            (68.0, 70.5, 62.0),
+            frozenset({0}),
+            0.4 * INTENDED,
+        ),
+        (
+            "tranche priced EXACTLY at the bar high",
+            ((0, 70.0, 1.0),),
+            (67.0, 70.0, 62.0),
+            frozenset(),
+            0.0,
+        ),
+        (
+            "refused tranche priced exactly at the bar high",
+            ((0, REFUSED_LEVEL, 1.0),),
+            (67.0, REFUSED_LEVEL, 62.0),
+            frozenset(),
+            0.0,
+        ),
+        (
+            "no tranche reached at all",
+            ((0, 90.0, 0.5), (1, 95.0, 0.5)),
+            (72.0, 74.5, 62.0),
+            frozenset(),
+            0.0,
+        ),
+        (
+            "empty ladder",
+            (),
+            (72.0, 74.5, 62.0),
+            frozenset(),
+            0.0,
+        ),
+        (
+            "part of the position already sold, so held < units",
+            ((0, 70.0, 0.4), (1, 74.0, 0.6)),
+            (72.0, 74.5, 62.0),
+            frozenset({0}),
+            0.4 * INTENDED,
+        ),
+    )
+
+    def test_the_helper_and_the_ladder_pass_agree_on_every_shape(self) -> None:
+        for name, rungs, (open_, high, low), fired, sold in self.CASES:
+            with self.subTest(case=name):
+                ladder = tuple(
+                    DeclaredTranche(tranche_index=i, price=price, fraction=frac)
+                    for i, price, frac in rungs
+                )
+                bar = _bar(WALK_START + MINUTE, open_, high, low)
+                asked = self._state(fired=fired, sold=sold)
+                self.assertGreater(_held(asked), 0.0, "case is outside the stated domain")
+                answer = _a_tranche_would_have_fired(
+                    asked,
+                    bar,
+                    ladder=ladder,
+                    intended=self.INTENDED,
+                    costs=_config().costs,
+                )
+                acted = copy.deepcopy(self._state(fired=fired, sold=sold))
+                _fire_tranches(
+                    acted,
+                    bar,
+                    ladder=ladder,
+                    ladder_name="tp_tranches",
+                    intended=self.INTENDED,
+                    costs=_config().costs,
+                )
+                sold_something = any(e.kind == "tp_fired" for e in acted.events)
+                self.assertEqual(answer, sold_something)
 
 
 class RungAndTakeProfitSnuTest(unittest.TestCase):

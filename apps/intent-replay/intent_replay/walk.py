@@ -509,14 +509,30 @@ def _a_tranche_would_have_fired(
     intended: float,
     costs: Costs,
 ) -> bool:
-    """Whether ANY tranche still unfired was both reached and affordable.
+    """Whether the take-profit-first reading would have sold anything.
 
-    ANY, not the shallowest: the schema does not order the ladder
-    (``_tp_violations`` checks positive percentages, the one-sided sum,
-    duplicate prices and above-blend, and no ordering), and ``/edge`` asks the
-    same question of any unhit tranche. A tranche the cost gate would decline
-    could not have fired first either way, so a bar carrying only those decided
-    nothing and is not counted.
+    The FIRST tranche this bar reached that has not fired, in LADDER order, and
+    the cost gate's verdict on that one alone. Not ``any``: ``_fire_tranches``
+    RETURNS on the first refusal, so a level behind one the gate declines
+    cannot fire in either reading, and a bar carrying only those decided
+    nothing. ``_deep_rung_snu`` already reads the ladder this way, and the
+    reason is the daemon's: ``plan_tranche_exits`` stops the batch so the
+    stop-shrink accounting cannot advance past an unfired shallower tranche.
+
+    Two arguments this docstring used to give for ``any`` are wrong, and both
+    are recorded because each looks sound. That the schema does not order the
+    ladder is TRUE (``_tp_violations`` checks positive percentages, the
+    one-sided sum, duplicate prices and above-blend, never ordering) and
+    IRRELEVANT: ordering is not what makes the live path stop, which is why
+    this walks the ladder as GIVEN rather than by price. And ``/edge`` does not
+    ask the same question: ``ladder_replay._resolve_stop`` asks
+    ``any(unhit and high >= price)`` with NO cost gate at all, so it asks about
+    reachability and never about affordability, and has nothing to be
+    inconsistent with.
+
+    On a rising ladder the divergence is the COMMON case, not a corner: with
+    equal fractions every tranche shares one threshold, so a first tranche too
+    close to the entry is refused while a deeper, higher one clears.
 
     Only ``_exit_on_stop`` asks, and only once a stop RESTS, which happens on
     the first fill. So something is always held here: ``units`` never shrinks,
@@ -524,11 +540,11 @@ def _a_tranche_would_have_fired(
     meet ends the walk with ``tp_complete``. ``_clears`` may therefore divide
     by ``state.units`` without a guard of its own.
     """
-    return any(
-        bar.high >= tranche.price and _clears(state, tranche, intended=intended, costs=costs)
-        for tranche in ladder
-        if tranche.tranche_index not in state.fired
-    )
+    for tranche in ladder:
+        if tranche.tranche_index in state.fired or bar.high < tranche.price:
+            continue
+        return _clears(state, tranche, intended=intended, costs=costs)
+    return False
 
 
 def _staged(
@@ -662,8 +678,13 @@ def _fire_tranches(
 
     An untouched tranche is SKIPPED and the review continues, exactly as the
     daemon's ``plan_tranche_exits`` does; the only early exit is a cost-gate
-    refusal, because every tranche behind a level too cheap to sell at is
-    cheaper still. Nothing here assumes the ladder rises.
+    refusal, and the reason is the daemon's own: firing past an unfired
+    shallower tranche would advance ``already_fired`` and the stop-shrink
+    accounting out of ladder order. It is NOT that a level behind a refused one
+    is cheaper still -- that is false for a rising ladder, which is the normal
+    shape. The threshold RISES as the tranche shrinks, so with equal fractions
+    all tranches share one threshold and the deeper, HIGHER level clears where
+    the shallower was refused. Nothing here assumes the ladder rises.
 
     The quantity is a fraction of the INTENDED ladder, as in the daemon, and the
     clamp to what is actually held runs CUMULATIVELY down the tranches, so a
