@@ -216,6 +216,27 @@ class TestFilledArmedTierWritesFired(unittest.TestCase):
         self.assertEqual(fired[0]["measurement"]["final_trough"], 9.80)
         self.assertIsNone(fired[0]["measurement"]["trigger_at_final_trough"])
 
+    def test_an_armed_tier_with_no_journaled_trough_stamps_no_trigger(self) -> None:
+        # ``min_trough`` folds to None when no ``trough`` line was ever written,
+        # which the fold admits for a resting armed tier. The stamp answers None
+        # through ``trigger_at_trough``'s own contract rather than an extra guard
+        # at this call site: a second place to express the same rule is a second
+        # place for it to drift.
+        path = _journal(self)
+        _seed_armed(path, order_id="TR-1", limit=10.0, troughs=(), distance=0.05)
+        broker = _ResolvingBroker()
+        broker.resolutions["TR-1"] = _os(
+            "TR-1", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=10.05
+        )
+        deps = _watch_deps(None, [], broker=broker)
+
+        _run(deps)
+
+        fired = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED]
+        self.assertEqual(len(fired), 1, "the fill is still recorded")
+        self.assertIsNone(fired[0]["measurement"]["final_trough"])
+        self.assertIsNone(fired[0]["measurement"]["trigger_at_final_trough"])
+
     def test_fired_line_makes_the_fold_terminal_and_releases_the_reservation(self) -> None:
         path = _journal(self)
         _seed_armed(path, order_id="TR-1", limit=10.0)

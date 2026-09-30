@@ -115,7 +115,13 @@ def trigger_at_trough(*, trough: float | None, distance: float | None) -> float 
     ``None`` when either input is missing or not a usable price — a tier that
     never armed has no frozen distance, and there is no honest answer for it.
     NOT clamped to the tier limit or to the arm price: the trough may fall below
-    both and the trigger follows it down, which is a better entry."""
+    both and the trigger follows it down, which is a better entry.
+
+    APPROXIMATE, and the caller should say so when publishing the number: the
+    journaled distance is the one the arm REQUESTED, because ``PlacedOrder``
+    reports no wire distance and the broker tick-aligns it at placement. So the
+    result carries that alignment residual (see
+    ``control_loop._journal_trail_armed``)."""
     if trough is None or distance is None:
         return None
     for value in (trough, distance):
