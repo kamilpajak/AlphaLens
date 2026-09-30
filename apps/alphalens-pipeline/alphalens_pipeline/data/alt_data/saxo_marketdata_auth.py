@@ -324,13 +324,29 @@ class LiveTokenProvider:
         return _load_store(self._cfg.store_path)
 
     def access_token(self) -> str:
+        return self.access_token_with_expiry(min_remaining_s=_REFRESH_MARGIN_S)[0]
+
+    def access_token_with_expiry(self, *, min_remaining_s: float) -> tuple[str, dt.datetime]:
+        """The stored access token and its recorded expiry, refreshed first when
+        fewer than ``min_remaining_s`` seconds remain.
+
+        The price reader (#1644) needs a caller-chosen margin: its WebSocket
+        stays authorized only as long as the token it last sent, and the
+        20-minute refresh timer rotates the store exactly when the previous
+        token expires, so waiting for the default margin would leave the reader
+        re-authorizing in the token's last two minutes. Same lock and same
+        refresh path as :meth:`access_token`, which keeps its default margin."""
         with _exclusive_lock(self._cfg.store_path):
             state = self._load()
             expires_at = dt.datetime.fromisoformat(state["expires_at"])
             remaining = (expires_at - dt.datetime.now(dt.UTC)).total_seconds()
-            if remaining > _REFRESH_MARGIN_S:
-                return state["access_token"]
-            return refresh(self._cfg, refresh_token=state["refresh_token"])["access_token"]
+            if remaining > min_remaining_s:
+                return state["access_token"], expires_at
+            refresh(self._cfg, refresh_token=state["refresh_token"])
+            # `refresh` persisted the rotated pair; read it back so the expiry
+            # returned is the one on disk, computed by the same `save_bundle`.
+            state = self._load()
+            return state["access_token"], dt.datetime.fromisoformat(state["expires_at"])
 
     def force_refresh(self) -> str:
         with _exclusive_lock(self._cfg.store_path):

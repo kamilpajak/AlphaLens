@@ -1327,10 +1327,14 @@ def _px_frame(message_id: int, uic: int = 5) -> bytes:
 
 class _StaticTokenProvider:
     """Token provider for connection scenarios — ``_run_one_connection`` reads
-    ``access_token()`` when building the WS auth header."""
+    the token (with its expiry) when building the WS auth header. The expiry is
+    a day away, so the in-place re-authorize (#1644) never triggers here."""
 
     def access_token(self) -> str:
         return "tok"
+
+    def access_token_with_expiry(self, *, min_remaining_s: float) -> tuple[str, dt.datetime]:
+        return "tok", dt.datetime.now(dt.UTC) + dt.timedelta(days=1)
 
 
 class _SupervisedHarness:
@@ -1338,7 +1342,14 @@ class _SupervisedHarness:
     instant fake ``async_sleep`` that can stop the loop after N idle sleeps,
     and a recorded ``ws_connect``."""
 
-    def __init__(self, stream_kwargs=None, conns=None, stop_after_sleeps=None, client=None):
+    def __init__(
+        self,
+        stream_kwargs=None,
+        conns=None,
+        stop_after_sleeps=None,
+        client=None,
+        token_provider=None,
+    ):
         self.client = client if client is not None else _SubTrackingClient()
         self.ws_calls: list[str] = []
         self.sleeps: list[float] = []
@@ -1358,7 +1369,7 @@ class _SupervisedHarness:
 
         self.stream = SaxoPriceStream(
             self.client,
-            _StaticTokenProvider(),
+            token_provider if token_provider is not None else _StaticTokenProvider(),
             ws_connect=ws_connect,
             async_sleep=async_sleep,
             **(stream_kwargs or {}),
@@ -2158,6 +2169,209 @@ class TestStreamIsReceiving(unittest.TestCase):
         _, stream = self._stream()
         stream._apply_create_snapshot({"Snapshot": {"Data": [_row(Uic=5)]}})
         self.assertTrue(stream.is_receiving())
+
+
+# --- #1644: re-authorize the open connection before its token expires -------
+
+
+_TOKEN_LIFE_S = 1200.0
+
+
+class _ExpiringTokenProvider:
+    """Stand-in for ``LiveTokenProvider``: one stored token with a recorded
+    expiry on the test's clock. Asked for a token with fewer than
+    ``min_remaining_s`` left, it "refreshes" to the next name with a fresh
+    20-minute life, like the real provider under its store lock."""
+
+    def __init__(self, clock: _SteppingClock) -> None:
+        self._clock = clock
+        self._seq = 0
+        self.token = "t0"
+        self.expires_at = clock() + dt.timedelta(seconds=_TOKEN_LIFE_S)
+        self.margins: list[float] = []
+        self.raise_next: Exception | None = None
+
+    def access_token_with_expiry(self, *, min_remaining_s: float) -> tuple[str, dt.datetime]:
+        self.margins.append(min_remaining_s)
+        if self.raise_next is not None:
+            exc, self.raise_next = self.raise_next, None
+            raise exc
+        if (self.expires_at - self._clock()).total_seconds() <= min_remaining_s:
+            self._seq += 1
+            self.token = f"t{self._seq}"
+            self.expires_at = self._clock() + dt.timedelta(seconds=_TOKEN_LIFE_S)
+        return self.token, self.expires_at
+
+
+class _AuthorizingClient(_SubTrackingClient):
+    """``_SubTrackingClient`` that also records ``authorize_stream`` calls and
+    answers with scripted statuses (202 once the script runs out)."""
+
+    def __init__(self, statuses: list[int] | None = None) -> None:
+        super().__init__()
+        self.authorizations: list[tuple[str, str]] = []
+        self._statuses = list(statuses or [])
+
+    def authorize_stream(self, context_id: str, *, access_token: str) -> int:
+        self.authorizations.append((context_id, access_token))
+        return self._statuses.pop(0) if self._statuses else 202
+
+
+class TestReauthorizeInPlace(unittest.TestCase):
+    """Saxo disconnects a WebSocket when the token it was opened with expires,
+    unless the client PUTs a newer one for the same context first
+    (developer.saxo/openapi/learn/streaming). The reader used to authorize only
+    at connect, so on 30.09 it dropped 14 times in one US session, each drop
+    about 20 minutes after the previous reconnect. It now re-authorizes the
+    OPEN connection once its token has fewer than 5 minutes left."""
+
+    def _harness(self, script_builder, *, statuses=None, stop_after_sleeps=None):
+        clock = _SteppingClock(_T0)
+        provider = _ExpiringTokenProvider(clock)
+        client = _AuthorizingClient(statuses)
+        h = _SupervisedHarness(
+            client=client,
+            token_provider=provider,
+            stream_kwargs={"clock": clock},
+            stop_after_sleeps=stop_after_sleeps,
+        )
+        h._conns.append(_ScriptedConn(script_builder(h.stream, clock, provider)))
+        h.stream.ensure_subscribed({5})
+        return h, clock, provider, client
+
+    @staticmethod
+    def _stop_with_frame(stream, message_id):
+        return lambda: (setattr(stream, "_stop", True), _px_frame(message_id))[1]
+
+    @staticmethod
+    def _after(clock, seconds, frame):
+        return lambda: (clock.advance(seconds), frame)[1]
+
+    def test_a_token_entering_its_last_five_minutes_is_re_authorized_in_place(self):
+        h, _clock, _provider, client = self._harness(
+            lambda st, clock, p: [
+                _px_frame(1),
+                self._after(clock, 950, _px_frame(2)),  # 250 s left
+                self._stop_with_frame(st, 3),
+            ]
+        )
+        h.run()
+        self.assertEqual(client.authorizations, [(h.stream._context_id, "t1")])
+        self.assertEqual(len(h.ws_calls), 1, "no reconnect: the same socket carries the new token")
+        self.assertEqual(h.stream._authorized_token, "t1")
+
+    def test_plenty_of_life_left_means_no_provider_call_and_no_put(self):
+        h, _clock, provider, client = self._harness(
+            lambda st, clock, p: [
+                _px_frame(1),
+                self._after(clock, 600, _px_frame(2)),  # 600 s left
+                self._stop_with_frame(st, 3),
+            ]
+        )
+        h.run()
+        self.assertEqual(client.authorizations, [])
+        self.assertEqual(provider.margins, [sps._REAUTH_MIN_REMAINING_S], "only the connect read")
+
+    def test_frames_inside_the_check_window_do_not_call_the_provider_again(self):
+        h, _clock, provider, client = self._harness(
+            lambda st, clock, p: [
+                self._after(clock, 950, _px_frame(1)),  # check: re-authorize to t1
+                self._after(clock, 10, _px_frame(2)),
+                self._after(clock, 10, _px_frame(3)),
+                self._stop_with_frame(st, 4),
+            ]
+        )
+        h.run()
+        self.assertEqual(len(client.authorizations), 1)
+        self.assertEqual(len(provider.margins), 2, "connect + one check, none inside the window")
+
+    def test_a_refused_put_keeps_the_connection_and_retries_next_check(self):
+        with self.assertLogs(sps.logger, level="WARNING") as logs:
+            h, _clock, _provider, client = self._harness(
+                lambda st, clock, p: [
+                    self._after(clock, 950, _px_frame(1)),  # 401
+                    self._after(clock, 31, _px_frame(2)),  # retry: 202
+                    self._stop_with_frame(st, 3),
+                ],
+                statuses=[401],
+            )
+            h.run()
+        self.assertEqual([tok for _ctx, tok in client.authorizations], ["t1", "t1"])
+        self.assertEqual(h.stream._authorized_token, "t1")
+        self.assertEqual(len(h.ws_calls), 1)
+        self.assertTrue(any("HTTP 401" in line for line in logs.output), logs.output)
+        self.assertFalse(any("session failed" in line for line in logs.output))
+
+    def test_a_missing_endpoint_is_an_error_logged_once(self):
+        with self.assertLogs(sps.logger, level="WARNING") as logs:
+            h, _clock, _provider, _client = self._harness(
+                lambda st, clock, p: [
+                    self._after(clock, 950, _px_frame(1)),
+                    self._after(clock, 31, _px_frame(2)),
+                    self._stop_with_frame(st, 3),
+                ],
+                statuses=[404, 404],
+            )
+            h.run()
+        errors = [r for r in logs.records if r.levelname == "ERROR"]
+        self.assertEqual(len(errors), 1, [r.getMessage() for r in errors])
+        self.assertIn("streaming/ws/authorize", errors[0].getMessage())
+
+    def test_a_provider_failure_never_becomes_a_session_failure(self):
+        def script(st, clock, provider):
+            def fail_then_frame():
+                clock.advance(950)
+                provider.raise_next = RuntimeError("could not acquire the token-store lock")
+                return _px_frame(1)
+
+            return [fail_then_frame, self._stop_with_frame(st, 2)]
+
+        with self.assertLogs(sps.logger, level="WARNING") as logs:
+            h, _clock, _provider, client = self._harness(script)
+            h.run()
+        self.assertEqual(client.authorizations, [])
+        self.assertEqual(len(h.ws_calls), 1)
+        self.assertEqual(h.stream._consecutive_failures, 0)
+        self.assertFalse(any("session failed" in line for line in logs.output), logs.output)
+        self.assertTrue(any("re-authorize" in line for line in logs.output), logs.output)
+
+    def test_a_connection_opens_with_a_token_that_has_five_minutes_left(self):
+        h, _clock, provider, _client = self._harness(
+            lambda st, clock, p: [self._stop_with_frame(st, 1)]
+        )
+        h.run()
+        self.assertEqual(provider.margins, [sps._REAUTH_MIN_REMAINING_S])
+
+    def test_a_drop_soon_after_a_successful_re_authorization_is_reported(self):
+        # Saxo answers 202 even for a context id it does not know, so a drop
+        # right after a "successful" PUT is the only sign the 202 did not bind.
+        with self.assertLogs(sps.logger, level="WARNING") as logs:
+            h, _clock, _provider, _client = self._harness(
+                lambda st, clock, p: [
+                    self._after(clock, 950, _px_frame(1)),  # 202
+                    self._after(clock, 60, ConnectionError("no close frame received or sent")),
+                ],
+                stop_after_sleeps=1,
+            )
+            h.run()
+        self.assertTrue(
+            any("after a successful re-authorization" in line for line in logs.output),
+            logs.output,
+        )
+
+    def test_the_worst_case_delay_fits_inside_the_margin(self):
+        # From "the token enters its last 5 minutes" to "the new token is
+        # accepted": one check interval, the longest frame gap a live socket
+        # survives, the token-store lock wait, the refresh POST and the PUT.
+        from alphalens_pipeline.data.alt_data import saxo_marketdata_auth, saxo_marketdata_client
+
+        worst = (
+            sps._REAUTH_CHECK_S
+            + sps._RECV_TIMEOUT_S
+            + saxo_marketdata_auth._LOCK_TIMEOUT_S
+            + 2 * saxo_marketdata_client._TIMEOUT_S
+        )
+        self.assertLess(worst, sps._REAUTH_MIN_REMAINING_S)
 
 
 if __name__ == "__main__":

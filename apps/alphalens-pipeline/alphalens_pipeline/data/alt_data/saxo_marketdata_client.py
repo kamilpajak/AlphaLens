@@ -24,6 +24,11 @@ from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveTokenProvi
 logger = logging.getLogger(__name__)
 
 LIVE_API_BASE_URL = "https://gateway.saxobank.com/openapi"
+# The https sibling of the price reader's WebSocket connect URL
+# (developer.saxo/openapi/learn/environments: live streaming base
+# https://live-streaming.saxobank.com/oapi/streaming/ws). Lowercase
+# ``contextid`` on this endpoint, as documented and as the SIM stream uses.
+LIVE_STREAMING_AUTHORIZE_URL = "https://live-streaming.saxobank.com/oapi/streaming/ws/authorize"
 
 _TIMEOUT_S = 30.0
 _APPLICATION_JSON = "application/json"
@@ -229,6 +234,24 @@ class SaxoMarketDataClient:
         if not (200 <= resp.status_code < 300):
             raise RuntimeError(f"price subscription failed: HTTP {resp.status_code}")
         return resp.json()
+
+    def authorize_stream(self, context_id: str, *, access_token: str) -> int:
+        """PUT ``access_token`` onto the OPEN streaming connection ``context_id``
+        and return the HTTP status (202 = accepted) (#1644).
+
+        Saxo disconnects a WebSocket when the token it was opened with expires,
+        unless the client re-authorizes it first. The token is passed in rather
+        than read from the provider so the caller knows exactly which token the
+        connection now carries. Saxo also answers 202 for a context id it does
+        not know, so a 202 is necessary, not sufficient. Network errors
+        propagate to the caller."""
+        resp = self._session.put(
+            LIVE_STREAMING_AUTHORIZE_URL,
+            params={"contextid": context_id},
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=_TIMEOUT_S,
+        )
+        return int(resp.status_code)
 
     def delete_price_subscription(self, context_id: str, reference_id: str) -> None:
         """Idempotent teardown: an already-gone subscription is not an error."""

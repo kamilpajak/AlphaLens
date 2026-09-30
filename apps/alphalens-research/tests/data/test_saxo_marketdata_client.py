@@ -4,6 +4,7 @@ import unittest
 
 from alphalens_pipeline.data.alt_data.saxo_marketdata_client import (
     LIVE_API_BASE_URL,
+    LIVE_STREAMING_AUTHORIZE_URL,
     SaxoMarketDataClient,
 )
 
@@ -40,6 +41,9 @@ class _Session:
 
     def delete(self, url, **kw):
         return self._next("DELETE", url, **kw)
+
+    def put(self, url, **kw):
+        return self._next("PUT", url, **kw)
 
 
 class _Tokens:
@@ -282,6 +286,39 @@ class TestPriceSubscription(unittest.TestCase):
     def test_delete_is_quiet_on_404(self):
         """Deleting an already-gone subscription is not an error."""
         _client(_Session(_Resp(404))).delete_price_subscription("ctx", "px")
+
+
+class TestAuthorizeStream(unittest.TestCase):
+    """#1644: re-authorize an OPEN streaming connection with a newer token.
+    Saxo drops the WebSocket when the token it was opened with expires unless
+    the client PUTs a new one for the same context id first."""
+
+    def test_puts_the_given_token_for_the_context(self):
+        s = _Session(_Resp(202))
+        status = _client(s).authorize_stream("almgr-px-1-2-3", access_token="new-tok")
+        self.assertEqual(status, 202)
+        method, url, kw = s.calls[0]
+        self.assertEqual(method, "PUT")
+        self.assertEqual(url, LIVE_STREAMING_AUTHORIZE_URL)
+        self.assertEqual(kw["params"], {"contextid": "almgr-px-1-2-3"})
+        # The token passed in, not the provider's: the caller must know
+        # exactly which token the connection is now authorized with.
+        self.assertEqual(kw["headers"]["Authorization"], "Bearer new-tok")
+        self.assertIn("timeout", kw)
+
+    def test_the_url_is_the_live_streaming_host(self):
+        self.assertEqual(
+            LIVE_STREAMING_AUTHORIZE_URL,
+            "https://live-streaming.saxobank.com/oapi/streaming/ws/authorize",
+        )
+
+    def test_returns_the_status_it_got(self):
+        for code in (401, 404):
+            with self.subTest(code=code):
+                self.assertEqual(
+                    _client(_Session(_Resp(code))).authorize_stream("ctx", access_token="t"),
+                    code,
+                )
 
 
 if __name__ == "__main__":

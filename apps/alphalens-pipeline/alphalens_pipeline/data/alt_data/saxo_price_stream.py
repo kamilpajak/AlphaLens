@@ -69,7 +69,10 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveAuthConfig, LiveTokenProvider
-from alphalens_pipeline.data.alt_data.saxo_marketdata_client import SaxoMarketDataClient
+from alphalens_pipeline.data.alt_data.saxo_marketdata_client import (
+    LIVE_STREAMING_AUTHORIZE_URL,
+    SaxoMarketDataClient,
+)
 from alphalens_pipeline.data.alt_data.saxo_stream_envelope import (
     StreamMessage,
     parse_stream_frames,
@@ -107,6 +110,27 @@ _CONTROL_LOG_INTERVAL_S = 300.0
 _CONTROL_LOG_PAYLOAD_CHARS = 300
 
 _MAX_FRAME_SILENCE_S = 40.0
+
+# In-place re-authorization (#1644). Saxo disconnects a WebSocket when the token
+# it was OPENED with expires, unless the client first PUTs a newer token for the
+# same context (developer.saxo/openapi/learn/streaming). The LIVE market-data
+# token lives 20 minutes and the refresh timer rotates the store exactly when
+# the previous token expires, so the reader asks for a token with a margin of
+# its own. Saxo also drops a little before the expiry we record (4-15 s
+# typically, once about 2 minutes on 30.09), so the margin is minutes, not the
+# provider's default 120 s. Worst case from "the token enters its last
+# _REAUTH_MIN_REMAINING_S" to "the new token is accepted": one check interval
+# (the check runs after a frame) + the longest frame gap a live socket survives
+# (_RECV_TIMEOUT_S) + the token-store lock wait + the refresh POST + the PUT.
+# A test pins that sum below the margin.
+_REAUTH_CHECK_S = 30.0
+_REAUTH_MIN_REMAINING_S = 300.0
+# A drop this soon after a 202 means the PUT did not bind to our connection:
+# Saxo documents 202 even for a context id it does not know.
+_DROP_AFTER_REAUTH_WINDOW_S = 300.0
+_HTTP_ACCEPTED = 202
+_HTTP_NOT_FOUND = 404
+_HTTP_METHOD_NOT_ALLOWED = 405
 
 # With zero desired uics the reader holds no WebSocket (idle connections get
 # killed by the venue and turn into failure storms); poll the desired set at
@@ -652,6 +676,13 @@ class SaxoPriceStream:
         # gate must never be able to silence the stream during trading hours.
         self._session_window = session_window
         self._session_window_warned = False
+        # In-place re-authorization state (#1644), on self._clock. Per
+        # connection: reset by _run_one_connection; None = nothing to check.
+        self._authorized_token: str | None = None
+        self._authorized_expires_at: dt.datetime | None = None
+        self._next_reauth_check: dt.datetime | None = None
+        self._last_reauth_ok_at: dt.datetime | None = None
+        self._authorize_endpoint_error_logged = False
         self._session_asleep = False
         self._was_delayed = False
         # Last reclaim attempt (transition or retry), on self._clock so a unit
@@ -944,6 +975,7 @@ class SaxoPriceStream:
                     await self._run_one_connection()
                 except Exception:
                     logger.warning("saxo price stream session failed", exc_info=True)
+                    self._note_drop_after_reauth()
                 if self._stop:
                     return
                 self._consecutive_failures += 1
@@ -1010,10 +1042,20 @@ class SaxoPriceStream:
     async def _run_one_connection(self) -> None:
         import asyncio
 
-        token = self._token_provider.access_token()
+        # Open with a token that has minutes left, never one about to die: a
+        # reconnect on 30.09 took a token with ~2.5 min left and lasted exactly
+        # that long (#1644).
+        token, expires_at = self._token_provider.access_token_with_expiry(
+            min_remaining_s=_REAUTH_MIN_REMAINING_S
+        )
         self._rotate_context()
         url = f"{LIVE_STREAM_URL}?contextId={self._context_id}"
         conn = await self._ws_connect(url, {"Authorization": f"Bearer {token}"})
+        self._authorized_token = token
+        self._authorized_expires_at = expires_at
+        self._last_reauth_ok_at = None
+        self._authorize_endpoint_error_logged = False
+        self._next_reauth_check = self._clock() + dt.timedelta(seconds=_REAUTH_CHECK_S)
         try:
             # Fresh context -> the subscription MUST be (re)created before any
             # delta can flow. Runs on the reader thread by design (single
@@ -1028,9 +1070,92 @@ class SaxoPriceStream:
                     # ensure_subscribed changed the desired set, or the server
                     # sent _resetsubscriptions — recreate on THIS connection.
                     self._recreate_subscription()
+                self._maybe_reauthorize()
         finally:
             with contextlib.suppress(Exception):
                 await conn.close()
+
+    def _maybe_reauthorize(self) -> None:
+        """(Reader thread) Put a fresher token on the OPEN connection once the
+        one it carries has fewer than ``_REAUTH_MIN_REMAINING_S`` left (#1644).
+
+        Gated to one check per ``_REAUTH_CHECK_S`` on ``self._clock``, and a
+        no-op before the first connect. Nothing here may raise into
+        ``_supervise``: a failure there counts as a session failure and forces
+        the reconnect this exists to avoid. A refused PUT keeps the connection,
+        unlike the SIM order stream: the token it carries stays valid until it
+        expires, and if it does, Saxo closes the socket and the ordinary
+        reconnect path runs."""
+        now = self._clock()
+        if self._next_reauth_check is None or now < self._next_reauth_check:
+            return
+        self._next_reauth_check = now + dt.timedelta(seconds=_REAUTH_CHECK_S)
+        expires_at = self._authorized_expires_at
+        if expires_at is not None and (expires_at - now).total_seconds() > _REAUTH_MIN_REMAINING_S:
+            return
+        try:
+            self._reauthorize(now)
+        except Exception:
+            logger.warning(
+                "saxo price stream: re-authorize failed - keeping the connection, "
+                "retrying in %.0fs",
+                _REAUTH_CHECK_S,
+                exc_info=True,
+            )
+
+    def _reauthorize(self, now: dt.datetime) -> None:
+        token, expires_at = self._token_provider.access_token_with_expiry(
+            min_remaining_s=_REAUTH_MIN_REMAINING_S
+        )
+        if token == self._authorized_token:
+            logger.warning(
+                "saxo price stream: the token provider returned the token already on "
+                "the connection - retrying in %.0fs",
+                _REAUTH_CHECK_S,
+            )
+            return
+        status = self._client.authorize_stream(self._context_id, access_token=token)
+        if status == _HTTP_ACCEPTED:
+            self._authorized_token = token
+            self._authorized_expires_at = expires_at
+            self._last_reauth_ok_at = now
+            logger.info(
+                "saxo price stream: re-authorized the connection in place (token valid until %s)",
+                expires_at.isoformat(),
+            )
+            return
+        if status in (_HTTP_NOT_FOUND, _HTTP_METHOD_NOT_ALLOWED):
+            # A wrong endpoint is permanent: say so once, loudly, instead of a
+            # WARNING every check. The connection drops when its token expires.
+            if not self._authorize_endpoint_error_logged:
+                self._authorize_endpoint_error_logged = True
+                logger.error(
+                    "saxo price stream: re-authorize endpoint %s answered HTTP %d - the "
+                    "connection will drop when its token expires",
+                    LIVE_STREAMING_AUTHORIZE_URL,
+                    status,
+                )
+            return
+        logger.warning(
+            "saxo price stream: re-authorize refused (HTTP %d) - keeping the "
+            "connection, retrying in %.0fs",
+            status,
+            _REAUTH_CHECK_S,
+        )
+
+    def _note_drop_after_reauth(self) -> None:
+        """One WARNING when a connection drops soon after a 202 (#1644): the
+        only visible sign that the PUT did not bind to our connection."""
+        ok_at = self._last_reauth_ok_at
+        if ok_at is None:
+            return
+        elapsed = (self._clock() - ok_at).total_seconds()
+        if elapsed <= _DROP_AFTER_REAUTH_WINDOW_S:
+            logger.warning(
+                "saxo price stream: connection dropped %.0fs after a successful "
+                "re-authorization - the 202 may not have applied to this connection",
+                elapsed,
+            )
 
     def _emit_stream_gauge(self, *, reader_up: bool, force: bool = False) -> None:
         """Best-effort Prometheus textfile emit — a textfile-dir hiccup must
