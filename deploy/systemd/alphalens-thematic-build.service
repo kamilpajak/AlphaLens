@@ -252,10 +252,24 @@ TasksMax=512
 # the deciding run can now see ~97 EX-99.1 filings it used to get zero of, and
 # news_ingest.DEFAULT_MAX_ITEMS caps the item COUNT at 200, not the token volume
 # — an issuer press release is a long narrative where a GDELT row is a headline.
-# That explains `extract`, `map-themes` and `brief` plausibly. It does NOT
-# explain `score` tripling from 15.6 to 43.3 min, which is a quant stage;
-# that number is unexplained and worth its own look before 153 min is treated as
-# the new normal.
+#
+# CORRECTION, measured 2026-09-30. This block first said `score` had "tripled
+# from 15.6 to 43.3 min" and called that unexplained. It had not. 15.6 was a
+# MEAN over a series that swings from 2.8 to 50.5 min per run; the 04:30 slot of
+# 2026-09-25 took 50.5, MORE than the run this bump responds to. Comparing one
+# observation against a mean of a long-tailed series manufactured an anomaly
+# that is not there, and no stage needs its own investigation.
+#
+# What IS true, over the 33 deciding runs since 2026-08-20, measured start to
+# the end of `brief`: median 68.5 min, p90 112.5, previous max 118.2 on
+# 2026-09-26. The 144 min run is the new max, 22% above the previous one, and it
+# continues an upward drift already visible before the schedule moved (104 on
+# 08-21, 110 on 09-07, 112 on 09-23, 118 on 09-26, 117 on 09-29). So 150min had
+# only 32 min of headroom over the observed max BEFORE #1606 and was going to be
+# hit regardless; the schedule change brought the collision forward rather than
+# creating it. How much of the 26 min above the previous max is the EDGAR corpus
+# is not separable from one day: the consecutive 09-29 (no EDGAR, 116.8) and
+# 09-30 (EDGAR, 144.0) differ by less than this series' own day-to-day swing.
 #
 # WHY 210 AND NOT MORE. The timer's slots are 4h apart, RandomizedDelaySec=5min
 # can eat 5 of that, and after the SIGTERM systemd still needs TimeoutStopSec
