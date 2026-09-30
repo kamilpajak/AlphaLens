@@ -28,10 +28,9 @@ not in the feature that shipped.
 
 ### What this does NOT say
 
-- **No number here is withdrawn.** The size of the difference has not been measured with the shipped
-  code, and a difference that is a product of two small factors need not move anything. Quoting a
-  magnitude before it is measured would be the same class of error as this one. #1630 measures it by
-  running the corrected script and publishes the result as a dated addendum.
+- **No number here is withdrawn.** The size of the difference is a product of two small factors and
+  need not move anything. **It has now been measured — see the addendum below, and read that before
+  quoting any figure from the grid.**
 - **The reproduction claim in the Method line is intact and the arithmetic claim is not, and the line
   does not distinguish them.** The independent verifier re-derived four cases by hand and matched the
   recorded parquet to `r = 1.0000`. It reproduced the study faithfully, including this trigger. A
@@ -56,6 +55,94 @@ Named here so a later reader does not discover them as new:
 too, and that field feeds the offline join this memo's evidence line asks for
 ("live rollout must MEASURE realized-vs-replay before widening"). Tracked in #1635. It is a separate
 problem from this one and is not fixed by correcting the study.
+
+## Addendum 2026-09-30 — what the trigger correction is worth, measured
+
+Read 2026-09-30 14:05 UTC, by running the corrected script (`cc512e34`) over the local
+population-ladder store. Both trigger forms ran in ONE pass over the SAME touches and bars, paired on
+`(date, ticker, tier, slip, d)` — a key verified unique, so the join is one-to-one and no figure is
+inflated by fan-out.
+
+`fill bps` is `(additive fill - proportional fill) / proportional fill`, across all cohorts. Positive
+means the superseded form filled CHEAPER and so flattered variant B. `dR` is in the fixed
+denominator, per paired fill.
+
+| `d` | paired | fill bps med | fill bps mean | dR mean | dR mean ex-worst | fills add / prop | additive cheaper |
+|---|---|---|---|---|---|---|---|
+| **0.5%** | 574 | **+0.024** | +0.060 | **-0.0000** | -0.0001 | 574 / 574 | 3 |
+| 1.0% | 569 | +0.393 | +0.469 | -0.0003 | -0.0004 | 569 / 569 | 3 |
+| 1.5% | 557 | +0.831 | +1.197 | -0.0002 | -0.0006 | 557 / 557 | 9 |
+| 2.0% | 552 | +1.642 | +2.871 | -0.0015 | -0.0017 | 552 / 552 | 4 |
+| 3.0% | 519 | +3.328 | +3.931 | -0.0021 | -0.0024 | 519 / 522 | 6 |
+
+(The slippage-adverse view differs in the fourth decimal and is omitted; it is in the script's own
+output.)
+
+**The correction is immaterial at the setting production runs.** At `d` = 0.5%, the live flag value,
+it is worth four hundred-thousandths of an R against a grid whose spread is two orders larger, and
+the fill counts are IDENTICAL. Fill counts stay identical through `d` = 2.0%; only at 3.0% does the
+additive form miss three fills the proportional one caught. So this defect moves no sign, no ranking
+and no boundary, and in particular the `ENTRY_TRAIL_BPS_MAX = 150` argument in
+`entry_trailing_design_2026_08_12.md` §6 does not rest on it.
+
+`dR mean ex-worst` drops the single largest-magnitude row and agrees in SIGN with `dR mean` in every
+row, so no figure here is one row's opinion. The difference is nonetheless TWO-SIDED: three to nine
+rows per configuration fill cheaper under the additive form, because a higher trigger can fail to
+fire on a bar the lower one fired on, the trough keeps falling, and the eventual fill lands far lower
+many bars later. A one-way statement of the direction would be wrong.
+
+### The construction, because the number is a function of it
+
+| | 2026-08-12 run | this run |
+|---|---|---|
+| store dates iterated | 85 | 111 |
+| plannable candidates | 769 | 936 |
+| candidates with a cached bar path | — | 493 |
+| **tier touches** | **946** | **576** |
+| bar-cache span | — | 2026-05-27 to 2026-08-31 |
+| trigger | proportional | additive, with a proportional control |
+
+The two populations OVERLAP but neither contains the other: this store spans 2026-04-14 to
+2026-09-04 while its bar cache starts on 2026-05-27, so this run misses the original's early dates
+and adds three weeks the original never saw.
+
+Also carried, because it bounds how much the comparison can show: **164 of the 493 paths with bars
+end before the entry window closes.** That truncation removes later bars, which is exactly where the
+two forms diverge, and it removes variant B fills more readily than variant A ones. So the measured
+delta is compressed toward zero rather than inflated by this.
+
+### The per-arm drop breakdown this memo deferred
+
+Item 3 of the open list asked for "the per-variant implausible-drop breakdown ... one-line script
+change if the study is ever re-run". Splitting the arms supplied it:
+
+| arm | implausible drops |
+|---|---|
+| B / additive (published) | 2 |
+| B / proportional (control) | 10 |
+
+The control arm drops five times as many rows. That is itself a small sign that the superseded
+trigger produces more implausible fills, and it is one more reason the control is not a policy.
+
+### What this addendum does NOT settle
+
+**The absolute grid from this run differs from the grid above, and the trigger does not explain it.**
+On this panel the ALL-cohort policy view reads A 0.171 against B 0.177 at `d` = 0.5% and 0.169 at
+`d` = 1.0% — so `d` = 1.0% does not beat A here, and the crossing to negative sits well below the
+`d` ≈ 2% this memo published. The delta table accounts for at most 0.0003 R of that. The rest is the
+population difference described above.
+
+Whether the 2026-08-12 grid still holds is therefore OPEN, and settling it needs a run on the
+original store, which lives on the VPS. That is a different question from the one this addendum
+answers, and the two must not be conflated: this addendum says the trigger correction changes
+nothing, not that the study's conclusions are confirmed.
+
+Three divergences from the live order remain unmodelled and are named in
+`alphalens_research/diagnostics/trailing_entry_trigger.py`: the server's coarse ratchet of a tenth of
+the distance, the bid-versus-trade-price reference, and the day-1 gap gate production applies and this
+study does not. The trough also still seeds from the touch bar's low where the daily-bar replay seeds
+from the reference — a median 13.2 bps apart on these touches, which is larger than the term this
+addendum measures.
 
 ## Verdict
 
