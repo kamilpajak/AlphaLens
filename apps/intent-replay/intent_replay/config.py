@@ -122,7 +122,10 @@ CONFIG_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
             "would inherit nothing where the caller believed something was stated."
         ),
         "wrong_type": "The value is not of the stated key's type (a null where none is allowed included).",
-        "numeric_not_finite": "A price or cost is NaN or infinite; every comparison on it would silently pass.",
+        "numeric_not_finite": (
+            "A stated number the walk's arithmetic cannot carry: NaN or infinite, where every "
+            "comparison on it would silently pass, or an integer too wide to convert to a float."
+        ),
         "not_positive": "A distance or a price that must be above zero is not.",
         "negative": "A cost below zero.",
         "unit_mismatch": "The unit is not the one the walk compares against.",
@@ -474,6 +477,12 @@ def _trail_distance(reader: _Reader, node: Any) -> int | None:
     0 - the three-limit ladder, which is the OPPOSITE policy - but that is a
     deployment rail, not a property of the document, and section 5.2 publishes
     the key as an integer >= 1. The README says what no deployment will run.
+
+    "No upper bound" is a claim about the POLICY, not about arithmetic. The walk
+    multiplies the distance by a price, and an integer wider than a float raises
+    on that conversion, so a value the schema permits would leave a traceback
+    where the tool owes a refusal. That one is refused here instead, as a number
+    nothing can use - the same mode as NaN, not a new rule.
     """
     if node is None:
         return None
@@ -483,6 +492,15 @@ def _trail_distance(reader: _Reader, node: Any) -> int | None:
     if distance < 1:
         reader.reject(
             "entry_trail_bps", "not_positive", "must be >= 1; entry trailing OFF is stated as null"
+        )
+        return None
+    try:
+        float(distance)
+    except OverflowError:
+        reader.reject(
+            "entry_trail_bps",
+            "numeric_not_finite",
+            "too wide to convert to a float; the walk multiplies it by a price",
         )
         return None
     return distance

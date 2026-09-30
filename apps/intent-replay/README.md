@@ -419,7 +419,9 @@ A stated distance has no upper bound here, because section 5.2 publishes the key
 as an integer `>= 1` and a deployment rail is not a document fact. But the live
 reader caps the flag at 150 and treats anything outside `[0, 150]` as 0 — the
 three-limit ladder, the opposite policy — so a larger value describes a run no
-deployment will make.
+deployment will make. The absent bound is about the POLICY: a value so wide it
+cannot become a float is refused all the same, because the walk multiplies the
+distance by a price and that conversion would raise.
 
 ## Refusal codes
 
@@ -476,7 +478,7 @@ missing and unusable, only the missing ones are reported.
 |---|---|---|
 | `config_invalid` | `unknown_key` | a key this block does not model. The contract's decoder DROPS such a key with only a warning, so a misspelt `entry_trail_bp` would otherwise switch entry trailing off in a run whose author believes the distance was stated |
 | | `wrong_type` | the value is not of the key's type; a stated `null` where none is allowed is included |
-| | `numeric_not_finite` | a price or cost is NaN or infinite, so every comparison on it would silently pass |
+| | `numeric_not_finite` | a stated number the walk's arithmetic cannot carry: NaN or infinite, where every comparison on it would silently pass, or an integer too wide to convert to a float. `entry_trail_bps` has no upper BOUND, but the walk multiplies it by a price, so a value that cannot become a float is refused here rather than raising |
 | | `not_positive` | a distance or a price that must be above zero is not |
 | | `negative` | a cost below zero |
 | | `unit_mismatch` | the unit is not the one the walk compares against |

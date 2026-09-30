@@ -545,6 +545,21 @@ class EntryTrailDistanceTest(unittest.TestCase):
         config = RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", None))
         self.assertIsNone(config.entry_trail_bps)
 
+    def test_a_distance_too_wide_for_the_arithmetic_is_refused_not_a_traceback(self) -> None:
+        # There is deliberately no UPPER bound, but "any integer" is only
+        # publishable if the walk can carry every integer, and it cannot: the
+        # distance is multiplied by a price, and an int wider than a float
+        # raises OverflowError on the conversion. Before this the refusal was
+        # unreachable because every stated distance was refused, so the value
+        # never reached the arithmetic.
+        for value in (10**400, 2**2000):
+            with self.subTest(len(str(value))):
+                with self.assertRaises(ConfigError) as ctx:
+                    RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", value))
+                self.assertEqual(
+                    _refusal(ctx.exception), (CONFIG_INVALID_CODE, "numeric_not_finite")
+                )
+
     def test_the_type_and_range_checks_still_run_first(self) -> None:
         # Section 5.4: ``true`` stays wrong_type and ``0`` stays not_positive.
         # The live flag reads 0 as OFF, so a 0 here is ambiguous and says which
