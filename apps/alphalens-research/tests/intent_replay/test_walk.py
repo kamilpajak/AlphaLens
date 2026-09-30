@@ -930,16 +930,42 @@ class AmbiguousBarsTest(unittest.TestCase):
         self.assertLess(REFUSED_LEVEL, THRESHOLDS[1.0])
         self.assertEqual(result.snu_bars, 0)
 
-    def test_any_unfired_tranche_makes_the_bar_ambiguous_not_only_the_leading_one(self) -> None:
-        # The ladder need not rise, so "the leading tranche" is not a thing to
-        # test. `/edge` asks the same question of ANY unhit tranche
-        # (`ladder_replay.py:957-959`).
+    def test_an_untouched_shallower_tranche_does_not_block_a_reached_deeper_one(self) -> None:
+        # What this pins is SKIP-untouched, not break-on-first: tranche 0 sits at
+        # 80.00, which the bar never reaches, so the review continues to tranche
+        # 1 exactly as `_fire_tranches` does. The ladder need not rise, so the
+        # walk reads it as GIVEN rather than by price. Renamed 2026-09-30: the
+        # old name claimed ANY unfired tranche counts, which is the reading
+        # `_fire_tranches` has never had -- a REACHED tranche the gate refuses
+        # blocks the ones behind it
+        # (`test_a_refused_tranche_blocks_the_reached_ones_behind_it_and_nothing_fires`).
         tranches = (
             DeclaredTranche(tranche_index=0, price=80.0, fraction=0.5),
             DeclaredTranche(tranche_index=1, price=74.0, fraction=0.5),
         )
         result = self._walk(tranches, _bar(WALK_START + MINUTE, 72.0, 74.5, 62.0))
         self.assertEqual(result.snu_bars, 1)
+
+    def test_a_refused_tranche_blocks_the_reached_ones_behind_it_and_nothing_fires(self) -> None:
+        # `_fire_tranches` walks the ladder in ITS order and RETURNS on the first
+        # cost-gate refusal, so a level behind one the gate declines cannot fire
+        # in either reading. Both tranches share the 0.5 threshold, so the bar
+        # reaching both fires NOTHING under the take-profit-first order, and a
+        # bar where no order moved money is not an SNU. Spec section 4.4,
+        # decided 2026-09-26: counting it would put bars where the rule changed
+        # nothing into a number whose published meaning is the opposite.
+        tranches = (
+            DeclaredTranche(tranche_index=0, price=REFUSED_LEVEL, fraction=0.5),
+            DeclaredTranche(tranche_index=1, price=74.0, fraction=0.5),
+        )
+        result = self._walk(tranches, _bar(WALK_START + MINUTE, 72.0, 74.5, 62.0))
+        self.assertLess(REFUSED_LEVEL, THRESHOLDS[0.5])
+        self.assertGreater(74.0, THRESHOLDS[0.5])
+        # Not vacuous: row 1 was REACHED. Without these two the test would pass
+        # on a walk that never asked the question at all.
+        self.assertEqual(result.events[-1].reason, "stop")
+        self.assertEqual([e for e in result.events if e.kind == "tp_fired"], [])
+        self.assertEqual(result.snu_bars, 0)
 
     def test_a_tranche_that_already_fired_leaves_a_later_stop_bar_unambiguous(self) -> None:
         result = self._walk(
