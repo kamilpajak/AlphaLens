@@ -37,10 +37,11 @@ from intent_replay.units import BPS, EPOCH_MS_UTC, FRACTION, Quantity, Translate
 # It departs from the printed block in EXACTLY ONE key, and section 5.4 asks
 # for that to be said rather than for the fixture to keep calling itself
 # verbatim: the block states ``entry_trail_bps: 50`` and the fixture states
-# null. The refusal that forced the departure is gone; what keeps it for now is
-# that the walk does not read the distance yet, so every test built on this
-# block would change meaning before the model exists to give it one. The last
-# step of this change flips the key and the departure note goes with it.
+# null. The refusal that forced the departure is gone and the walk models the
+# trail, so the reason has CHANGED rather than expired: this block is the
+# baseline of the limit-ladder tests, and there are dozens of them. A trailing
+# test states the distance itself, which also keeps the two entry policies
+# visibly apart in every test that exercises one.
 CANONICAL: Mapping[str, Any] = {
     "entry_deadline": {
         "kind": "order_ttl_sessions",
