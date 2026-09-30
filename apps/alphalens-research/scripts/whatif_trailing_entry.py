@@ -13,12 +13,21 @@ Design (binding, operator-approved 2026-08-12):
   Slippage-adverse A: fill requires trading THROUGH the limit (low <= L - tick);
   fill time = first through-bar; price still L.
 * Variant B(d): after the touch, trail the running LOW; enter at the first bar
-  whose high reaches run_low*(1+d) (stop-buy). Trigger level uses lows up to the
+  whose high reaches the trigger (stop-buy). Trigger level uses lows up to the
   PREVIOUS bar (conservative: the stop rests at the level derived from
   already-seen lows). Gap-open above the level fills at the open. Same-bar
   bounce inside the touch bar is NOT triggered (minute-bar intra-bar order
   unknown; conservative against B's fill rate). No trigger inside the entry
   window => tier MISSED. Slippage-adverse B: +1 tick on the fill price.
+* Trigger FORM (corrected 2026-09-30, #1630): the shipped answer is ADDITIVE,
+  `trough + reference*d`, with the distance frozen at the touch from
+  `min(touch open, limit)` — the form the broker's own
+  `entry_trail_geometry.compute_trailing_order_geometry` computes and the adapter
+  sends. The 2026-08-12 run used PROPORTIONAL `run_low*(1+d)`, an order type no
+  venue we use offers. Both forms run in ONE pass over the SAME touches and bars,
+  because the proportional arm is a within-run CONTROL: it keeps the arithmetic
+  difference from being confounded with a change of population. Only the additive
+  arm is a published number; the control appears in the delta section alone.
 * Exits: ONE shared implementation for both variants —
   alphalens_pipeline.feedback.ladder_replay._replay_synthetic_fill (the repo's
   synthetic-fill exit walk: TP tranches / disaster stop / TIME_STOP at
@@ -44,6 +53,7 @@ import datetime as dt
 import math
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -59,6 +69,12 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
 )
 from alphalens_pipeline.paper.brief_loader import load_brief
 from alphalens_pipeline.paper.calendar import trading_days_elapsed
+from alphalens_research.diagnostics.trailing_entry_trigger import (
+    ADDITIVE,
+    FORMS,
+    PROPORTIONAL,
+    trail_trigger,
+)
 
 TICK = 0.01
 D_GRID = (0.005, 0.01, 0.015, 0.02, 0.03)
@@ -108,30 +124,6 @@ def first_touch(bars: list[dict], limit: float, entry_expiry_ms: int) -> int | N
     return None
 
 
-def trail_trigger(
-    bars: list[dict], touch_idx: int, d: float, entry_expiry_ms: int
-) -> tuple[int, float] | None:
-    """(bar_idx, fill_price) of the trailed buy-stop, or None (MISSED).
-
-    Arms at the touch bar; run_low seeds from the touch bar's low. From the next
-    bar onward: check trigger vs the level from PREVIOUS bars' lows first, then
-    update run_low. Gap-open above the level fills at the open.
-    """
-    run_low = float(bars[touch_idx]["l"])
-    for i in range(touch_idx + 1, len(bars)):
-        b = bars[i]
-        if int(b["t"]) >= entry_expiry_ms:
-            return None
-        level = run_low * (1.0 + d)
-        o, h, lo = float(b["o"]), float(b["h"]), float(b["l"])
-        if o >= level:
-            return i, o
-        if h >= level:
-            return i, level
-        run_low = min(run_low, lo)
-    return None
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", default=str(Path.home() / ".alphalens" / "population_ladders"))
@@ -155,6 +147,12 @@ def main() -> int:
         "tier_touches": 0,
         "implausible_dropped": 0,
     }
+    # Per-arm drop breakdown. The memo's deferred item 3 asked for exactly this
+    # ("the per-variant implausible-drop breakdown ... if the study is ever
+    # re-run"), and splitting the arms for the trigger comparison supplies it.
+    # `cov["implausible_dropped"]` keeps counting only the arms the study
+    # PUBLISHES, so it stays comparable with the 2026-08-12 figure.
+    drops: dict[str, int] = {}
     records: list[dict] = []
     recon: list[dict] = []
 
@@ -246,6 +244,7 @@ def main() -> int:
                     entry: float | None,
                     fill_idx: int | None,
                     *,
+                    form: str | None = None,
                     # Early-bind the per-tier loop state (ruff B023): emit is
                     # only ever called within the same iteration, so late
                     # binding was harmless — but explicit binding proves it.
@@ -257,9 +256,13 @@ def main() -> int:
                     risk_a=risk_a,
                     position_expiry_ms=position_expiry_ms,
                 ) -> None:
+                    published = form in (None, ADDITIVE)
                     rec = {
                         **base,
                         "variant": variant,
+                        # None for variant A, which has no trail. The published
+                        # arms are A and B/additive; B/proportional is a control.
+                        "form": form,
                         "d": d,
                         "slip": slip,
                         "filled": filled,
@@ -276,11 +279,19 @@ def main() -> int:
                         m, cls, hopen = exit_mark_for_fill(
                             setup, bars, entry, int(bars[fill_idx]["t"]), stop, position_expiry_ms
                         )
+                        arm = f"{variant}{'' if form is None else '/' + form}"
                         if m is None or abs(m / entry - 1.0) > IMPLAUSIBLE:
-                            cov["implausible_dropped"] += 1
+                            drops[f"implausible/{arm}"] = drops.get(f"implausible/{arm}", 0) + 1
+                            if published:
+                                cov["implausible_dropped"] += 1
                             return
                         if entry - stop <= 0:
-                            cov["tier_bad_geometry"] += 1
+                            # DISTINCT from the pre-touch `tier_bad_geometry`,
+                            # which rejects a LIMIT at or below the stop. This one
+                            # rejects a FILL at or below it, reachable only for B,
+                            # whose trigger can sit under the limit. The two shared
+                            # one counter until 2026-09-30 and meant two things.
+                            drops[f"fill_le_stop/{arm}"] = drops.get(f"fill_le_stop/{arm}", 0) + 1
                             return
                         rec.update(
                             {
@@ -302,16 +313,19 @@ def main() -> int:
                     emit("A", None, "adverse", True, limit, thr_idx)
                 else:
                     emit("A", None, "adverse", False, None, None)
-                # Variant B(d) x slippage
+                # Variant B(d) x slippage x trigger FORM. Same touch, same bars,
+                # same d for both forms, so the difference between them is the
+                # arithmetic and nothing else.
                 for d in D_GRID:
-                    trg = trail_trigger(bars, t_idx, d, entry_expiry_ms)
-                    if trg is None:
-                        emit("B", d, "none", False, None, None)
-                        emit("B", d, "adverse", False, None, None)
-                    else:
-                        fi, fp = trg
-                        emit("B", d, "none", True, fp, fi)
-                        emit("B", d, "adverse", True, fp + TICK, fi)
+                    for form in FORMS:
+                        trg = trail_trigger(bars, t_idx, d, entry_expiry_ms, limit=limit, form=form)
+                        if trg is None:
+                            emit("B", d, "none", False, None, None, form=form)
+                            emit("B", d, "adverse", False, None, None, form=form)
+                        else:
+                            fi, fp = trg
+                            emit("B", d, "none", True, fp, fi, form=form)
+                            emit("B", d, "adverse", True, fp + TICK, fi, form=form)
 
     if cov["tier_touches"] < MIN_TOUCHES:
         print("## COVERAGE PROBLEM — study aborted")
@@ -333,7 +347,12 @@ def main() -> int:
     print("## Data coverage")
     for k, v in cov.items():
         print(f"- {k}: {v}")
-    n_open = int(rf.loc[rf["filled"] == True, "open"].sum())  # noqa: E712
+    if drops:
+        print("- per-arm drops (`reason/arm: n`; arms with `/proportional` are the control):")
+        for k in sorted(drops):
+            print(f"    - {k}: {drops[k]}")
+    published_rows = rf[rf["form"].isna() | (rf["form"] == ADDITIVE)]
+    n_open = int(published_rows.loc[published_rows["filled"] == True, "open"].sum())  # noqa: E712
     print(f"- tier-entries still horizon-open at path end (marked at last close): {n_open}")
     print()
 
@@ -410,7 +429,12 @@ def main() -> int:
             rows.append({"config": f"A slip={slip}", **agg(a, uni)})
         for d in D_GRID:
             for slip in ("none", "adverse"):
-                b = sub[(sub["variant"] == "B") & (sub["d"] == d) & (sub["slip"] == slip)]
+                b = sub[
+                    (sub["variant"] == "B")
+                    & (sub["d"] == d)
+                    & (sub["slip"] == slip)
+                    & (sub["form"] == ADDITIVE)
+                ]
                 rows.append({"config": f"B d={d:.1%} slip={slip}", **agg(b, uni)})
         tbl = pd.DataFrame(rows)[cols]
         for c in tbl.columns[1:]:
@@ -423,6 +447,85 @@ def main() -> int:
             )
         print(tbl.to_markdown(index=False))
         print()
+
+    # ---------------------------------------------- trigger-form delta (#1630)
+    print("## Trigger form: shipped ADDITIVE vs the 2026-08-12 PROPORTIONAL control")
+    print()
+    print(
+        "The control arm is the trigger the 2026-08-12 run used, `run_low*(1+d)`, which no "
+        "venue we use offers. Both arms ran over the SAME touches and bars in this one pass, "
+        "so a difference here is the arithmetic and not a change of population. `fill bps` is "
+        "`(additive fill - proportional fill)/proportional fill`, positive when the old form "
+        "filled CHEAPER and therefore flattered variant B."
+    )
+    print()
+    print(
+        "Read the median with the mean and the `worst dR` column together: the difference is "
+        "NOT one-sided, because a higher trigger can miss a bounce and buy far lower many bars "
+        "later, so a single row can move a cohort mean."
+    )
+    print()
+    key = ["date", "ticker", "tier", "slip", "d"]
+    filled_b = rf[(rf["variant"] == "B") & (rf["filled"] == True)]  # noqa: E712
+    add = filled_b[filled_b["form"] == ADDITIVE].set_index(key)
+    prop = filled_b[filled_b["form"] == PROPORTIONAL].set_index(key)
+    paired = add.join(prop, how="inner", lsuffix="_add", rsuffix="_prop")
+    rows = []
+    for d in D_GRID:
+        for slip in ("none", "adverse"):
+            pr = paired.xs((slip, d), level=("slip", "d"), drop_level=False)
+            b_add = rf[
+                (rf["variant"] == "B")
+                & (rf["d"] == d)
+                & (rf["slip"] == slip)
+                & (rf["form"] == ADDITIVE)
+            ]
+            b_prop = rf[
+                (rf["variant"] == "B")
+                & (rf["d"] == d)
+                & (rf["slip"] == slip)
+                & (rf["form"] == PROPORTIONAL)
+            ]
+            row: dict[str, Any] = {
+                "config": f"d={d:.1%} slip={slip}",
+                "N_paired": len(pr),
+                "fills_add": int(b_add["filled"].sum()),
+                "fills_prop": int(b_prop["filled"].sum()),
+            }
+            if len(pr):
+                bps = (pr["entry_add"] / pr["entry_prop"] - 1.0) * 1e4
+                dr = pr["r_fixed_add"] - pr["r_fixed_prop"]
+                worst = dr.loc[dr.abs().idxmax()]
+                row.update(
+                    {
+                        "fill bps med": bps.median(),
+                        "fill bps mean": bps.mean(),
+                        "dR mean": dr.mean(),
+                        "dR med": dr.median(),
+                        "dR mean ex-worst": (dr.sum() - worst) / (len(dr) - 1)
+                        if len(dr) > 1
+                        else np.nan,
+                        "worst dR": worst,
+                        "cheaper additive": int((bps < 0).sum()),
+                    }
+                )
+            rows.append(row)
+    delta_tbl = pd.DataFrame(rows)
+    for c in delta_tbl.columns[1:]:
+        delta_tbl[c] = delta_tbl[c].map(
+            lambda x: (
+                f"{x:+.4f}"
+                if isinstance(x, float) and not math.isnan(x)
+                else ("" if isinstance(x, float) else x)
+            )
+        )
+    print(delta_tbl.to_markdown(index=False))
+    print()
+    print(
+        "`dR mean ex-worst` drops the single largest-magnitude row. Where it disagrees in SIGN "
+        "with `dR mean`, that cohort's mean is one row's opinion and must not be quoted alone."
+    )
+    print()
 
     print("## Reconciliation vs RECORDED parquet outcomes (terminal rows)")
     if len(rc):
