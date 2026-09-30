@@ -40,7 +40,7 @@ import logging
 import math
 import os
 import tempfile
-from datetime import date, timedelta
+from datetime import date
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -149,13 +149,36 @@ def _is_tax_heavy(ticker: str) -> bool:
 #: at once. 1843 more stop at 2026-03-31 and cross it on 2026-12-27.
 REFETCH_DATA_AGE_DAYS = 150
 
-#: A ticker is not refetched more often than this, however stale its data looks.
-#: A delinquent or de-registered filer never gets fresher, so without a floor it
-#: would cost one SEC request per run forever — three runs a day, for as long as
-#: it stays in any candidate's peer cohort. Does NOT apply to a missing or
-#: unreadable file: that one is refetched on sight, because there is no usable
-#: answer to protect.
+#: Floor on how often one ticker is re-asked, whatever its data age. Does NOT
+#: apply to a missing or unreadable file: that one is refetched on sight,
+#: because there is no usable answer to protect.
 REFETCH_MIN_INTERVAL_DAYS = 7
+
+#: The retry interval scales with the age of the data: a ticker whose newest
+#: period is ``A`` days old is re-asked every ``A / REFETCH_BACKOFF_DIVISOR``
+#: days, floored at :data:`REFETCH_MIN_INTERVAL_DAYS`.
+#:
+#: A flat interval does not work, and the reason is measured rather than
+#: supposed. Over the 1198 tables fetched on or after 2026-06-01, the age of the
+#: newest reported period ON THE DAY OF THE FETCH was: median 66 days, p75 164,
+#: p90 336, p99 1284. **35.3% were already past the 150-day threshold the moment
+#: they arrived.** Those CIKs do not file quarterly — royalty trusts, closed-end
+#: funds, foreign private issuers, dormant shells that entered the universe as
+#: SIC peers. A flat 7-day retry would re-ask roughly 2100 of them every week,
+#: which is more than the whole per-call budget, so the tickers a refetch would
+#: actually help would never be reached.
+#:
+#: 10, so a ticker is re-asked about ten times over the life of its staleness. At
+#: the 150-day threshold that is a 15-day interval, which spends an eighth of the
+#: 120-day margin before the TTM gate — fast enough to catch a new filing well
+#: before the ticker goes dark, slow enough that a dormant CIK costs little.
+REFETCH_BACKOFF_DIVISOR = 10
+
+#: Interval for a table that is READABLE but EMPTY. That is a valid SEC answer
+#: ("no XBRL facts for this CIK"), not a broken file, so it must not be retried
+#: like one — and it has no reported period, so the scaled rule above has nothing
+#: to scale. 18 of the 5992 cached tables were empty on 2026-09-30.
+REFETCH_EMPTY_INTERVAL_DAYS = 90
 
 #: Stale tickers refreshed per :meth:`EdgarFundamentalsStore.preload` call.
 #:
@@ -166,9 +189,16 @@ REFETCH_MIN_INTERVAL_DAYS = 7
 #: had been killed by its own start timeout eight days earlier (#1628).
 #:
 #: 200 is about 72 s and 0.9 GB, under 1% of the build's 210-minute budget. The
-#: store converges over several runs instead of stalling one, and the arithmetic
-#: is comfortable: 3059 stale tickers at 200 per call, three calls a day, is
-#: about five days — against a 2026-12-27 deadline.
+#: store converges over several runs instead of stalling one: 4288 cached CIKs
+#: are stale and plausibly refreshable (newest period 150-450 days old), and
+#: since those sort FIRST, 200 per call across three runs a day works through
+#: them in about 7 days — against a 2026-12-27 deadline.
+#:
+#: Simulated against the real store 2026-09-30, steady-state refetches per day:
+#: a flat 7-day retry needs 661, which is MORE than the 600/day this budget
+#: allows, so it would never converge; the scaled retry needs 210. Over one
+#: run's actual preload universe (2041 tickers, the largest of the last three)
+#: it is 199/day flat against 63/day scaled.
 REFETCH_BUDGET_PER_CALL = 200
 
 
@@ -325,6 +355,11 @@ class EdgarFundamentalsStore:
                 REFETCH_DATA_AGE_DAYS,
                 min(len(stale), max(budget, 0)),
             )
+        # Freshest-stale first. With more stale tickers than budget, spending it
+        # in ticker order would hand it to whoever sorts first, including CIKs
+        # whose newest filing is from 2014 and will never advance. A ticker that
+        # has only just crossed the threshold is the one a refetch helps.
+        stale.sort(key=lambda pair: self._data_age_days(pair[1], ref) or 10**6)
         for ticker, cik in missing + stale[: max(budget, 0)]:
             self._fetch_and_write(ticker, cik)
 
@@ -334,28 +369,47 @@ class EdgarFundamentalsStore:
         if self._with_prices and tickers:
             self._batch_fetch_prices(tickers)
 
+    def _data_age_days(self, cik: str, today: date) -> int | None:
+        """Age of ``cik``'s newest reported period, or ``None`` when unusable.
+
+        ``None`` means missing, unreadable or empty — the caller decides what
+        each of those deserves; this method only reports what is on disk.
+        """
+        table = self._reader.get_cik_table(cik)
+        if table is None or table.num_rows == 0:
+            return None
+        return (today - max(table.column("period_end").to_pylist())).days
+
     def _is_stale(self, cik: str, today: date) -> bool:
         """Should ``cik``'s cached table be refetched?
 
-        Unreadable or empty beats every other consideration: there is no usable
-        answer to protect, so it is refetched on sight. Otherwise the per-ticker
-        interval floor applies first (cheap, no parquet read), then the age of
-        the newest reported period.
+        Three cases, in order:
+
+        1. **Missing or unreadable** — refetched on sight, ignoring every
+           interval. There is no usable answer to protect.
+        2. **Readable but empty** — a valid SEC answer, re-asked on the long
+           :data:`REFETCH_EMPTY_INTERVAL_DAYS` interval.
+        3. **Readable with data** — stale once the newest period passes
+           :data:`REFETCH_DATA_AGE_DAYS`, and then re-asked on an interval that
+           GROWS with that age (see :data:`REFETCH_BACKOFF_DIVISOR`).
         """
+        path = self._dir / f"{cik}.parquet"
         table = self._reader.get_cik_table(cik)
         if table is None:
             return True
-        path = self._dir / f"{cik}.parquet"
         try:
             last_try = date.fromtimestamp(path.stat().st_mtime)
         except OSError:
             return True
-        if today - last_try < timedelta(days=REFETCH_MIN_INTERVAL_DAYS):
+        waited = (today - last_try).days
+
+        age = self._data_age_days(cik, today)
+        if age is None:  # readable but empty
+            return waited >= REFETCH_EMPTY_INTERVAL_DAYS
+        if age <= REFETCH_DATA_AGE_DAYS:
             return False
-        if table.num_rows == 0:
-            return True
-        newest = max(table.column("period_end").to_pylist())
-        return newest < today - timedelta(days=REFETCH_DATA_AGE_DAYS)
+        interval = max(REFETCH_MIN_INTERVAL_DAYS, age // REFETCH_BACKOFF_DIVISOR)
+        return waited >= interval
 
     def _fetch_and_write(self, ticker: str, cik: str) -> None:
         """Fetch one CIK's companyfacts and replace its parquet, best-effort.

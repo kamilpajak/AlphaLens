@@ -16,6 +16,7 @@ relationship between the refresh age and the TTM gate it exists to stay ahead of
 from __future__ import annotations
 
 import datetime as dt
+import os
 import tempfile
 import unittest
 import unittest.mock
@@ -103,7 +104,7 @@ class CompanyfactsCacheLifetimeTest(unittest.TestCase):
         cik: str,
         newest: dt.date,
         *,
-        written: dt.date = TODAY - dt.timedelta(days=30),
+        written: dt.date = TODAY - dt.timedelta(days=120),
     ) -> Path:
         """Seed a cached table. ``written`` is the file mtime — when we last TRIED,
         which is a different question from how old the DATA is, and the interval
@@ -112,8 +113,6 @@ class CompanyfactsCacheLifetimeTest(unittest.TestCase):
         path = self.dir / f"{cik}.parquet"
         pq.write_table(_table(newest), path)
         stamp = dt.datetime.combine(written, dt.time(12, 0)).timestamp()
-        import os
-
         os.utime(path, (stamp, stamp))
         return path
 
@@ -150,22 +149,83 @@ class CompanyfactsCacheLifetimeTest(unittest.TestCase):
     # --- the floors that bound the cost -----------------------------------
 
     def test_a_ticker_refetched_recently_is_not_refetched_again(self) -> None:
-        """A delinquent filer never gets fresher. Without this floor it costs one
-        SEC request per run forever, three runs a day, for as long as it is listed."""
+        """A delinquent filer never gets fresher. Without a floor it costs one SEC
+        request per run forever, three runs a day, for as long as it is listed."""
         self._write(
             CIK_A,
-            TODAY - dt.timedelta(days=400),
-            written=TODAY - dt.timedelta(days=ef.REFETCH_MIN_INTERVAL_DAYS - 1),
+            TODAY - dt.timedelta(days=160),
+            written=TODAY - dt.timedelta(days=1),
         )
         self._store().preload(["AAA"], today=TODAY)
         self.client.fetch_company_facts.assert_not_called()
+
+    def test_the_retry_interval_grows_with_the_age_of_the_data(self) -> None:
+        """Measured 2026-09-30 over the 1198 tables fetched since 2026-06-01: 35.3%
+        were ALREADY past the 150-day age on the day they were fetched (median 66,
+        p90 336, p99 1284). Those tickers do not file quarterly — trusts, funds,
+        foreign issuers, dormant shells — so a flat 7-day retry would re-ask about
+        2100 hopeless CIKs every week, consume the whole budget in steady state and
+        starve the tickers a refetch would actually help.
+
+        The interval therefore scales with how old the data is: re-ask roughly ten
+        times over the life of the staleness. At the 150-day threshold that is 15
+        days, which uses an eighth of the 120-day margin before the TTM gate."""
+        old = TODAY - dt.timedelta(days=400)  # scaled interval = 40 days
+        self._write(CIK_A, old, written=TODAY - dt.timedelta(days=39))
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_not_called()
+
+        self.client.reset_mock()
+        self._write(CIK_A, old, written=TODAY - dt.timedelta(days=41))
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_called_once_with(CIK_A)
+
+    def test_an_empty_table_backs_off_instead_of_being_re_asked_every_week(self) -> None:
+        """An empty table is a valid SEC answer ("no XBRL facts for this CIK"), not a
+        broken file, so it must not be retried like one. 18 of the 5992 cached tables
+        are empty (measured 2026-09-30). It has no period to age, so the scaled rule
+        has nothing to scale and it gets its own long interval."""
+        path = self.dir / f"{CIK_A}.parquet"
+
+        def seed(waited_days: int) -> None:
+            pq.write_table(_table(TODAY).slice(0, 0), path)
+            stamp = dt.datetime.combine(
+                TODAY - dt.timedelta(days=waited_days), dt.time(12)
+            ).timestamp()
+            os.utime(path, (stamp, stamp))
+
+        # Literal days, NOT the constant: a test that derives its own fixture from
+        # the constant it pins moves with it, and cannot fail when it changes. That
+        # is how a mutation setting this interval to 0 first survived.
+        seed(89)
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_not_called()
+
+        self.client.reset_mock()
+        seed(91)
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_called_once_with(CIK_A)
+        self.assertEqual(
+            ef.REFETCH_EMPTY_INTERVAL_DAYS,
+            90,
+            "the two literals above bracket this value; move them together",
+        )
+
+    def test_the_budget_goes_to_the_tickers_most_likely_to_have_a_new_filing(self) -> None:
+        """With more stale tickers than budget, spending it in ticker order would hand
+        it to whoever sorts first — including CIKs whose newest filing is from 2014 and
+        will never advance. Freshest-stale first: those are the ones a refetch helps."""
+        self._write(CIK_A, TODAY - dt.timedelta(days=4000), written=TODAY - dt.timedelta(days=900))
+        self._write(CIK_B, TODAY - dt.timedelta(days=160), written=TODAY - dt.timedelta(days=90))
+        self._store().preload(["AAA", "BBB"], today=TODAY, refresh_budget=1)
+        self.client.fetch_company_facts.assert_called_once_with(CIK_B)
 
     def test_the_budget_bounds_how_many_stale_tickers_one_call_refreshes(self) -> None:
         """Measured 2026-09-30: a refetch costs 0.36s and 4.3 MB, and a single run's
         universe held 1630 stale tickers. Unbounded, the first run pays ~10 min and
         ~7 GB inside a build that was killed by its own timeout eight days earlier."""
-        self._write(CIK_A, TODAY - dt.timedelta(days=400))
-        self._write(CIK_B, TODAY - dt.timedelta(days=400))
+        self._write(CIK_A, TODAY - dt.timedelta(days=400), written=TODAY - dt.timedelta(days=90))
+        self._write(CIK_B, TODAY - dt.timedelta(days=400), written=TODAY - dt.timedelta(days=90))
         store = self._store()
         store.preload(["AAA", "BBB"], today=TODAY, refresh_budget=1)
         self.assertEqual(self.client.fetch_company_facts.call_count, 1)
