@@ -269,6 +269,16 @@ class CompanyfactsCacheLifetimeTest(unittest.TestCase):
         newest = max(pq.read_table(path).column("period_end").to_pylist())
         self.assertEqual(newest, dt.date(2025, 3, 31))
 
+    def test_an_unreadable_cached_table_is_fetched_even_when_the_budget_is_zero(self) -> None:
+        """An unreadable file is not a stale answer, it is NO answer — the same
+        position as a missing file, which is never budgeted. Routing it through the
+        stale path made it compete for the budget AND sort last (its data age is
+        unknown), so on a large universe it could wait indefinitely while the store
+        held a file nothing can read. Found by review, confirmed by running it."""
+        (self.dir / f"{CIK_A}.parquet").write_bytes(b"not a parquet")
+        self._store().preload(["AAA"], today=TODAY, refresh_budget=0)
+        self.client.fetch_company_facts.assert_called_once_with(CIK_A)
+
     def test_an_unreadable_cached_table_is_refetched(self) -> None:
         """A torn file is a state this store can now reach, because preload has
         started rewriting files other readers hold open."""

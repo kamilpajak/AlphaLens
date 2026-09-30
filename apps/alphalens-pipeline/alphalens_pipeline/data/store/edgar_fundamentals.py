@@ -341,7 +341,14 @@ class EdgarFundamentalsStore:
             if cik is None:
                 logger.warning("ticker %s unresolved (no CIK from SEC), skipping", ticker)
                 continue
-            if not (self._dir / f"{cik}.parquet").exists():
+            # An unreadable file belongs with the missing ones, not the stale ones.
+            # It is not an out-of-date answer, it is no answer, and the stale path
+            # both budgets it and sorts it last (its data age is unknown), so on a
+            # large universe it could wait indefinitely.
+            if (
+                not (self._dir / f"{cik}.parquet").exists()
+                or self._reader.get_cik_table(cik) is None
+            ):
                 missing.append((ticker, cik))
             elif refresh_stale and self._is_stale(cik, ref):
                 stale.append((ticker, cik))
@@ -386,7 +393,10 @@ class EdgarFundamentalsStore:
         Three cases, in order:
 
         1. **Missing or unreadable** — refetched on sight, ignoring every
-           interval. There is no usable answer to protect.
+           interval. There is no usable answer to protect. :meth:`preload`
+           routes these to its unbudgeted path before asking, so in practice
+           this branch only fires when the predicate is called directly; it
+           stays here so the predicate is total.
         2. **Readable but empty** — a valid SEC answer, re-asked on the long
            :data:`REFETCH_EMPTY_INTERVAL_DAYS` interval.
         3. **Readable with data** — stale once the newest period passes
