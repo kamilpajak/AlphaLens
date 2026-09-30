@@ -1,9 +1,61 @@
 # Trailing (bounce-confirmed) entries vs hardcoded limit entries — what-if replay
 
 **Date:** 2026-08-12
-**Status:** COMPLETE — direction-level diagnostic (a re-cut of already-used data, NOT a pre-registered strategy test; no Bonferroni claim is made)
+**Status:** COMPLETE — direction-level diagnostic (a re-cut of already-used data, NOT a pre-registered strategy test; no Bonferroni claim is made). **Read the 2026-09-30 correction below before quoting any number: the trigger this study used is not the one the broker runs.**
 **Question (operator):** on our historical data, would trailing entries (enter only after price bounces d% off its running low) beat the current limit-at-touch entries?
 **Method:** what-if replay over the population-ladder parquets (85 days, 769 plannable candidates) on cached Polygon minute bars; both variants share ONE exit function (the repo `ladder_replay` engine); slippage stressed both ways; independent verifier re-derived 4 cases by hand (6-decimal match, cases picked by deterministic rule, never by outcome) and reproduced the recorded parquet outcomes with Pearson r = 1.0000. Script: `apps/alphalens-research/scripts` authoring copy of `whatif_trailing_entry.py` (run from `/tmp` on the VPS); records parquet `/tmp/whatif_trailing_entry_records.parquet` (11,292 rows).
+
+## Correction 2026-09-30 — the trigger form, and what it does and does not touch
+
+**The study priced the trailing trigger as `run_low * (1 + d)`. The broker prices it as
+`trough + distance`, where `distance = reference * d` is an absolute price frozen once at the touch.**
+
+The distance is a price distance to the market, not a fraction of the running low, so it does not
+shrink as the low falls. The authority is our own code, not vendor prose:
+`alphalens_pipeline/brokers/automanager/entry_trail_geometry.py` computes `distance = reference *
+d_frac` once and `order_price = reference + distance`, and that function builds the order that is
+actually sent. A second, independent sign: the broker rejects a distance that is not a multiple of
+the instrument tick (`PriceNotInTickSizeIncrements`), and a quantity rounded to a tick is a price
+rather than a percentage.
+
+The two forms agree at the touch, where the trough IS the reference, and separate as the trough
+falls. Because `trough <= reference`, the study's level is the LOWER of the two, so its variant B
+fires earlier and at a better price than the order would. The difference is `(reference - trough) *
+d`.
+
+**So the grid below describes an order type no venue we use offers.** That is a fault in the study,
+not in the feature that shipped.
+
+### What this does NOT say
+
+- **No number here is withdrawn.** The size of the difference has not been measured with the shipped
+  code, and a difference that is a product of two small factors need not move anything. Quoting a
+  magnitude before it is measured would be the same class of error as this one. #1630 measures it by
+  running the corrected script and publishes the result as a dated addendum.
+- **The reproduction claim in the Method line is intact and the arithmetic claim is not, and the line
+  does not distinguish them.** The independent verifier re-derived four cases by hand and matched the
+  recorded parquet to `r = 1.0000`. It reproduced the study faithfully, including this trigger. A
+  verifier that agrees with the code cannot catch a premise the code and the verifier share.
+- **The fill-rate and concession claims are not automatically affected either**, because they depend
+  on whether a trigger is reached at all rather than on where it sits, and that is a separate
+  measurement.
+
+### Two further divergences from the live order, neither of them this one
+
+Named here so a later reader does not discover them as new:
+
+- The server ratchets the trigger in COARSE steps of `distance * 0.10`
+  (`entry_trail_geometry.TRAILING_STEP_FRACTION`, floored to whole ticks at placement), so the live
+  trigger lags the falling low. This study models a continuous trail. Whether that helps or hurts
+  variant B is not obvious and is not asserted here.
+- The live reference is a BID and this study's bars are trade prices, so a spread sits between them.
+
+### One place the same arithmetic reaches production
+
+`would_be_trigger`, the terminal measurement stamp in `control_loop`, carries the proportional form
+too, and that field feeds the offline join this memo's evidence line asks for
+("live rollout must MEASURE realized-vs-replay before widening"). Tracked in #1635. It is a separate
+problem from this one and is not fixed by correcting the study.
 
 ## Verdict
 
