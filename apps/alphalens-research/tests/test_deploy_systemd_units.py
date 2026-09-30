@@ -441,6 +441,26 @@ def _service_start_timeout(service_text: str) -> dt.timedelta:
     return dt.timedelta(minutes=int(match.group(1)))
 
 
+def _timer_randomized_delay(timer_text: str) -> dt.timedelta:
+    """``RandomizedDelaySec=`` from a timer unit, as a timedelta; zero when absent.
+
+    systemd delays EACH fire by an independent random amount in ``[0, delay]``, so two
+    consecutive slots can land as little as ``gap - delay`` apart: the earlier one late
+    by the full delay, the later one not at all. The slot-spacing assertion has to budget
+    for that, or it blesses a timeout that a jittered pair of fires can still overrun.
+    """
+    match = re.search(r"^RandomizedDelaySec=(\d+)min\s*$", timer_text, re.MULTILINE)
+    if match is None:
+        if re.search(r"^RandomizedDelaySec=", timer_text, re.MULTILINE):
+            raise AssertionError(
+                "RandomizedDelaySec is set in a form this helper does not model. "
+                "Teach it the new form — treating it as zero would overstate the "
+                "usable gap between slots."
+            )
+        return dt.timedelta(0)
+    return dt.timedelta(minutes=int(match.group(1)))
+
+
 class TestSlotTimeParser(unittest.TestCase):
     """Positive control for :func:`_slot_times` (it guards every test below)."""
 
@@ -483,6 +503,20 @@ class TestSlotTimeParser(unittest.TestCase):
     def test_the_timeout_reader_refuses_a_form_it_does_not_model(self) -> None:
         with self.assertRaises(AssertionError):
             _service_start_timeout("TimeoutStartSec=9000\n")
+
+    def test_the_jitter_reader_reads_minutes(self) -> None:
+        self.assertEqual(
+            _timer_randomized_delay("[Timer]\nRandomizedDelaySec=5min\n"),
+            dt.timedelta(minutes=5),
+        )
+
+    def test_the_jitter_reader_returns_zero_when_the_directive_is_absent(self) -> None:
+        self.assertEqual(_timer_randomized_delay("[Timer]\nPersistent=true\n"), dt.timedelta(0))
+
+    def test_the_jitter_reader_refuses_a_form_it_does_not_model(self) -> None:
+        # Silently reading 30s as zero would overstate the usable slot gap.
+        with self.assertRaises(AssertionError):
+            _timer_randomized_delay("RandomizedDelaySec=30s\n")
 
 
 class TestThematicBuildSlotsClearTheSecDailyIndex(unittest.TestCase):
@@ -537,16 +571,21 @@ class TestThematicBuildSlotsClearTheSecDailyIndex(unittest.TestCase):
         # rather than restating it: it has already been raised three times
         # (45 -> 75 -> 110 -> 150 min), and a fourth raise past the slot gap is
         # exactly the change this test exists to catch.
+        timer_text = TIMER_PATH.read_text()
         timeout = _service_start_timeout(SERVICE_PATH.read_text())
+        jitter = _timer_randomized_delay(timer_text)
         for earlier, later in zip(self.slots, self.slots[1:], strict=False):
             gap = dt.datetime.combine(dt.date(2026, 1, 1), later) - dt.datetime.combine(
                 dt.date(2026, 1, 1), earlier
             )
+            # The earlier fire can be jittered late by the whole delay while the later
+            # one is not jittered at all, so the WORST-CASE gap is `gap - jitter`.
             self.assertGreaterEqual(
-                gap,
+                gap - jitter,
                 timeout,
-                f"{earlier:%H:%M} -> {later:%H:%M} UTC is {gap} apart, inside the "
-                "service's TimeoutStartSec=150min. A wedged run would swallow the "
+                f"{earlier:%H:%M} -> {later:%H:%M} UTC is {gap} apart and "
+                f"RandomizedDelaySec can eat {jitter} of it, leaving {gap - jitter} "
+                f"against TimeoutStartSec={timeout}. A wedged run would swallow the "
                 "next slot instead of being repaired by it.",
             )
 
