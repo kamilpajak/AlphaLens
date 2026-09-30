@@ -128,6 +128,62 @@ class TestLiveTokenProvider(unittest.TestCase):
             on_disk = json.loads(cfg.store_path.read_text())
             self.assertEqual(on_disk["refresh_token"], "rt-new")
 
+    def _write_store(self, cfg: LiveAuthConfig, *, remaining_s: float) -> dt.datetime:
+        expiry = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=remaining_s)
+        cfg.store_path.write_text(
+            json.dumps(
+                {"access_token": "old", "refresh_token": "rt-old", "expires_at": expiry.isoformat()}
+            )
+        )
+        return expiry
+
+    def test_token_with_expiry_keeps_a_token_above_the_callers_margin(self):
+        # #1644: the price reader asks for a token with 5 minutes left. A stored
+        # token with 10 minutes left is returned as is, with its recorded expiry.
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(Path(d))
+            expiry = self._write_store(cfg, remaining_s=600)
+            with mock.patch(
+                "alphalens_pipeline.data.alt_data.saxo_marketdata_auth.requests.post"
+            ) as mock_post:
+                token, expires_at = LiveTokenProvider(cfg).access_token_with_expiry(
+                    min_remaining_s=300
+                )
+            mock_post.assert_not_called()
+            self.assertEqual(token, "old")
+            self.assertEqual(expires_at, expiry)
+
+    def test_token_with_expiry_refreshes_under_the_callers_margin(self):
+        # 4 minutes left is above the default 120 s margin but under the
+        # caller's 5 minutes, so it refreshes and returns the new expiry.
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(Path(d))
+            self._write_store(cfg, remaining_s=240)
+            payload = {"access_token": "new", "refresh_token": "rt-new", "expires_in": 1200}
+            before = dt.datetime.now(dt.UTC)
+            with mock.patch(
+                "alphalens_pipeline.data.alt_data.saxo_marketdata_auth.requests.post",
+                return_value=_Resp(201, payload),
+            ):
+                token, expires_at = LiveTokenProvider(cfg).access_token_with_expiry(
+                    min_remaining_s=300
+                )
+            self.assertEqual(token, "new")
+            self.assertGreaterEqual(expires_at, before + dt.timedelta(seconds=1200))
+            self.assertEqual(json.loads(cfg.store_path.read_text())["refresh_token"], "rt-new")
+
+    def test_plain_access_token_keeps_the_default_margin(self):
+        # The other users of the store (LIVE order client, day-1 gap probe)
+        # must not start refreshing earlier: 4 minutes left is still valid.
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(Path(d))
+            self._write_store(cfg, remaining_s=240)
+            with mock.patch(
+                "alphalens_pipeline.data.alt_data.saxo_marketdata_auth.requests.post"
+            ) as mock_post:
+                self.assertEqual(LiveTokenProvider(cfg).access_token(), "old")
+            mock_post.assert_not_called()
+
     def test_store_is_written_0600(self):
         with tempfile.TemporaryDirectory() as d:
             cfg = _cfg(Path(d))

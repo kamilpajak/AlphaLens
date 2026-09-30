@@ -56,6 +56,9 @@ SAXO_URL_FRAGMENTS = (
     "gateway.saxobank.com",
     "logonvalidation.net",
     "saxobank.com/sim/openapi",
+    # LIVE streaming host: the price reader's WebSocket and its re-authorize
+    # PUT (#1644). The PUT lives in the canonical market-data client.
+    "live-streaming.saxobank.com",
 )
 
 # Module-level patterns that constitute a raw HTTP call. Word-boundary +
@@ -107,6 +110,7 @@ class TestNoRawSaxoHttp(unittest.TestCase):
             'urllib.request.urlopen("https://gateway.saxobank.com/sim/openapi/port/v1/users/me")',
             'resp = requests.get("https://gateway.saxobank.com/sim/openapi/port/v1/users/me")',
             'await httpx.post("https://sim.logonvalidation.net/token")',
+            'requests.put("https://live-streaming.saxobank.com/oapi/streaming/ws/authorize")',
             "aiohttp.ClientSession()  # https://gateway.saxobank.com/sim/openapi",
         ]
         for sample in shadow_samples:
@@ -132,6 +136,12 @@ class TestNoRawSaxoHttp(unittest.TestCase):
 
         self.assertTrue(_file_uses_saxo_url(SIM_BASE_URL))
         self.assertTrue(_file_uses_saxo_url(SIM_AUTH_BASE_URL))
+        # #1644: the LIVE streaming host (the price reader's re-authorize PUT).
+        from alphalens_pipeline.data.alt_data.saxo_marketdata_client import (
+            LIVE_STREAMING_AUTHORIZE_URL,
+        )
+
+        self.assertTrue(_file_uses_saxo_url(LIVE_STREAMING_AUTHORIZE_URL))
 
     def test_canonical_clients_exist(self):
         """Every exemption must point at a real file — otherwise the scan below
