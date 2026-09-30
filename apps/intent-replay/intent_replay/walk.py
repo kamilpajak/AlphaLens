@@ -54,6 +54,41 @@ _OUTCOME_OF_CLOSE = {
 # magnitude away, so nothing is closed by accident.
 _DUST_REL_TOL = 1e-9
 
+# The stated entry-trail distance is in basis points of the arming reference.
+_BPS_PER_UNIT = 10_000
+
+
+def _trigger(trough: float, distance: float) -> float:
+    """The level a trailing buy fires at: ADDITIVE, because the wire field is a
+    price distance computed once and not a fraction of the running low.
+
+    Named, so the quantity has one expression. The classification path and the
+    fill path each derived it separately, and two expressions for one number is
+    the defect this module has already paid for once.
+    """
+    return trough + distance
+
+
+@dataclass(slots=True)
+class _ArmedTrail:
+    """One rung's native trailing order, as the BROKER holds it.
+
+    ``distance`` is ABSOLUTE and frozen when the order is placed: the wire
+    field is a price distance to the market, computed once from the arming
+    reference, so the trigger the server ratchets is ``trough + distance`` and
+    not ``trough x (1 + d)``. The two coincide at the touch and separate as the
+    trough falls - by 21 bps at a 30% drawdown on a 50 bps distance.
+
+    ``trough`` is the running low the trigger follows, and it only ever falls.
+    """
+
+    distance: float
+    trough: float
+
+    @property
+    def level(self) -> float:
+        return _trigger(self.trough, self.distance)
+
 
 @dataclass(frozen=True, slots=True)
 class WalkResult:
@@ -88,6 +123,13 @@ def _outcome(state: _WalkState, *, filled_any: bool) -> str:
 @dataclass(slots=True)
 class _WalkState:
     pending: dict[int, PendingEntry]
+    # Rungs whose trailing order rests at the broker, by tier. A rung stays in
+    # ``pending`` as well: it is still unfilled, so the deadline must expire it
+    # with the others (section 4.6 publishes one cause, and this is it).
+    armed: dict[int, _ArmedTrail] = field(default_factory=dict)
+    # Rungs the depth rule retired before they could arm. They stay in
+    # ``pending`` so the deadline still accounts for them.
+    barred: set[int] = field(default_factory=set)
     units: float = 0.0
     units_sold: float = 0.0
     fired: set[int] = field(default_factory=set)
@@ -149,29 +191,275 @@ def _reachable(state: _WalkState, bar: Bar, rung: PendingEntry) -> bool:
     return bar.low <= rung.limit_price
 
 
-def _fill_entries(state: _WalkState, bar: Bar, plan: Plan) -> None:
+def _book_entry(
+    state: _WalkState, bar: Bar, plan: Plan, index: int, rung: PendingEntry, *, price: float
+) -> None:
+    """Book one rung's purchase and place the stop if this is the first fill.
+
+    The quantity comes from the rung's LIMIT, never from the price paid: the
+    order is composed once, as in the drain, and a trailing fire changes when
+    and at what price it executes, not how much it buys.
+    """
+    units = rung.notional / rung.limit_price
+    del state.pending[index]
+    state.armed.pop(index, None)
+    state.units += units
+    state.cash += units * price
+    state.committed += rung.notional
+    state.events.append(
+        EntryFilled(t=bar.t, tier_index=index, price=price, units=units, cash=units * price)
+    )
+    if state.stop is None:
+        state.stop = plan.declared_floor
+        state.events.append(StopPlaced(t=bar.t, level=plan.declared_floor))
+
+
+@dataclass(frozen=True, slots=True)
+class _Prospect:
+    """What a rung's trailing order would do on one bar, computed WITHOUT doing
+    it, so the classification in :func:`_staged` and the fill in
+    :func:`_advance_trails` answer with one function. Deriving the level twice
+    is the defect this repo has already paid for once."""
+
+    trough: float
+    distance: float
+    arming: bool
+
+    @property
+    def level(self) -> float:
+        return _trigger(self.trough, self.distance)
+
+
+def _next_listed_limits(plan: Plan) -> dict[int, float]:
+    """Each rung's NEXT-LISTED sibling limit, by tier index.
+
+    LISTED, not cheapest: ``validate_intent`` does not require the entry ladder
+    to descend, and the live loop reads ``tiers[index + 1]``, so the rung with
+    nowhere to hand a deeper move is the one listed last rather than the one
+    priced lowest.
+    """
+    entries = plan.entries
+    return {
+        rung.tier_index: entries[position + 1].limit_price
+        for position, rung in enumerate(entries[:-1])
+    }
+
+
+def _trail_snu(bar: Bar, trail: _ArmedTrail, *, level: float, arming: bool) -> bool:
+    """Does this bar's high/low ORDER change the money for an armed rung?
+
+    Section 4.4's criterion, applied to row 3: both readings must be consistent
+    with the bar and lead to different money.
+
+    * A bar that opens through the trigger of an order ALREADY RESTING is
+      forced - the open is the first print and both readings fill there, so
+      nothing is assumed. The same open settles nothing on the ARMING bar,
+      because the order is not there yet: it is placed when the price reaches
+      the rung, which an open above the trigger has not done. That case is
+      reachable whenever the open is more than one distance above the rung.
+    * A bar whose low cannot fall below the trough it already carries leaves the
+      trigger where it is, so both readings test the same level.
+    * Otherwise the declared reading tests ``level`` and "the low came first"
+      tests ``low + distance``, which is lower. Either they fire at two prices
+      or only the second fires, and both are different money.
+    """
+    if not arming and bar.open >= level:
+        return False
+    if bar.low >= trail.trough:
+        return False
+    return bar.high >= bar.low + trail.distance
+
+
+def _hands_on_to_the_next_rung(bar: Bar, rung: PendingEntry, next_limits: dict[int, float]) -> bool:
+    """The live depth rule: the bar's FIRST price is already below the rung
+    listed after this one, so the move is that rung's job."""
+    next_limit = next_limits.get(rung.tier_index)
+    return next_limit is not None and bar.open < next_limit
+
+
+def _closed_at_the_first_print(state: _WalkState, bar: Bar) -> bool:
+    """The open is the first print. If it is already through the resting stop the
+    position closed there, and a purchase after that is a RE-ENTRY - a second
+    position this tool does not model (section 4.4).
+
+    Continuity settles it rather than a convention, and it is why the test is the
+    bar's OPEN and not its low: a bar that opens ABOVE the stop reached the
+    trigger first, so the fill stands and the stop takes it out afterwards, which
+    is the worse resolution and the one section 4.4 keeps.
+    """
+    return state.stop is not None and bar.open <= state.stop
+
+
+def _prospect(
+    state: _WalkState,
+    bar: Bar,
+    rung: PendingEntry,
+    index: int,
+    *,
+    bps: int,
+    next_limits: dict[int, float],
+) -> _Prospect | None:
+    """This rung's trailing order on this bar, or ``None`` if it has none."""
+    if index in state.barred or _closed_at_the_first_print(state, bar):
+        return None
+    trail = state.armed.get(index)
+    if trail is not None:
+        return _Prospect(trough=trail.trough, distance=trail.distance, arming=False)
+    if not _reachable(state, bar, rung) or _hands_on_to_the_next_rung(bar, rung, next_limits):
+        return None
+    reference = min(bar.open, rung.limit_price)
+    return _Prospect(trough=reference, distance=reference * bps / _BPS_PER_UNIT, arming=True)
+
+
+def _trail_fill_price(bar: Bar, level: float, *, arming: bool) -> float:
+    """What a fired trailing buy pays on this bar.
+
+    The gap rule reaches the legs that REST at the broker, and on the arming bar
+    this one does not: the order is placed at the touch, which cannot precede
+    the open. So an arming bar takes the trigger however high it opened, and a
+    later bar that opens through the trigger takes its open, the first print.
+    """
+    return level if arming else max(bar.open, level)
+
+
+def _would_fill(
+    state: _WalkState,
+    bar: Bar,
+    rung: PendingEntry,
+    index: int,
+    *,
+    config: RunConfig,
+    next_limits: dict[int, float],
+) -> tuple[float, bool] | None:
+    """``(price, in_question)`` if this bar fills the rung, else ``None``.
+
+    ``in_question`` is section 4.4's fourth-situation test: does the fill land
+    somewhere INSIDE the bar rather than at its first print. For a resting
+    limit that is ``limit < open``; for a buy STOP the sign inverts, because a
+    trigger at or below the open is the one already through at the first print.
+    An arming bar is always in question - its order is placed at the touch,
+    which cannot be the open.
+    """
+    if config.entry_trail_bps is None:
+        if not _reachable(state, bar, rung):
+            return None
+        return min(bar.open, rung.limit_price), rung.limit_price < bar.open
+    found = _prospect(state, bar, rung, index, bps=config.entry_trail_bps, next_limits=next_limits)
+    if found is None or bar.high < found.level:
+        return None
+    price = _trail_fill_price(bar, found.level, arming=found.arming)
+    return price, found.arming or found.level > bar.open
+
+
+def _arm(
+    state: _WalkState,
+    bar: Bar,
+    rung: PendingEntry,
+    index: int,
+    *,
+    bps: int,
+    next_limits: dict[int, float],
+) -> _ArmedTrail | None:
+    """Place this rung's trailing order, or decline and say nothing.
+
+    The reference is ``min(open, limit)``: the touch happens at the first print
+    when the bar gapped through the level, and at the level otherwise. The
+    distance is frozen here, once, because the wire field is an absolute price
+    distance and the server ratchets from it.
+
+    Two ways to decline. A rung the resting stop puts out of reach is skipped
+    and stays pending, exactly as a limit rung is. And a bar whose FIRST price
+    is already below the next-listed rung hands the move to that rung: the live
+    depth rule, which lives on this bar alone because the wire arms on the touch
+    tick and an armed tier is terminal for the watcher.
+    """
+    found = _prospect(state, bar, rung, index, bps=bps, next_limits=next_limits)
+    if found is None:
+        if _reachable(state, bar, rung) and _hands_on_to_the_next_rung(bar, rung, next_limits):
+            state.barred.add(index)
+        return None
+    trail = _ArmedTrail(distance=found.distance, trough=found.trough)
+    state.armed[index] = trail
+    return trail
+
+
+def _advance_trails(
+    state: _WalkState, bar: Bar, plan: Plan, *, bps: int, next_limits: dict[int, float]
+) -> bool:
+    """Arm, fire and ratchet the native entry trails, shallowest rung first.
+
+    One order of operations, and section 4.4 row 3 fixes it: the trigger is
+    tested against the trough as it stood BEFORE this bar, and only then does
+    the bar's own low ratchet it down. The arming bar needs no special case -
+    seeding the trough at the touch reference makes its trigger
+    ``reference + distance``, which is the level the live geometry computes at
+    the touch instant.
+
+    That resolution is the worse one where a worse one is well defined: had the
+    low come first, the trough would already have fallen and the buy would pay
+    less.
+
+    Returns whether any rung's high/low order changed the money on this bar.
+    """
+    # Asked for the whole bar, because the loop reads ``state.armed`` directly
+    # for a rung already armed and never consults ``_prospect`` on that path.
+    if _closed_at_the_first_print(state, bar):
+        return False
+    decided = False
+    # A barred rung stays in ``pending`` so the deadline can account for it, and
+    # it is ``_prospect`` that refuses it - the one function answering whether a
+    # rung has an order on this bar. A second copy of that test here enforces
+    # nothing the first does not, and hides which one is load-bearing.
+    for index in sorted(state.pending):
+        rung = state.pending[index]
+        trail = state.armed.get(index)
+        arming = trail is None
+        if trail is None:
+            trail = _arm(state, bar, rung, index, bps=bps, next_limits=next_limits)
+            if trail is None:
+                continue
+        level = trail.level
+        # Asked BEFORE the ratchet, because it is about the trough this bar
+        # INHERITED - on the arming bar, the touch reference itself.
+        decided = _trail_snu(bar, trail, level=level, arming=arming) or decided
+        if bar.high >= level:
+            price = _trail_fill_price(bar, level, arming=arming)
+            _book_entry(state, bar, plan, index, rung, price=price)
+            continue
+        trail.trough = min(trail.trough, bar.low)
+    return decided
+
+
+def _fill_entries(
+    state: _WalkState,
+    bar: Bar,
+    plan: Plan,
+    config: RunConfig,
+    *,
+    next_limits: dict[int, float],
+) -> bool:
     """Every rung the bar reached, shallowest first.
 
-    The fill price is ``min(open, limit)``: a bar that opens already through a
-    resting limit order fills at the open, because the open is the first trade
-    and nothing about that is in question.
+    Without a stated trail distance the fill price is ``min(open, limit)``: a
+    bar that opens already through a resting limit order fills at the open,
+    because the open is the first trade and nothing about that is in question.
+
+    With one, nothing rests at the rung and :func:`_advance_trails` decides.
+
+    Returns whether a trailing rung's high/low order changed the money, for the
+    same reason the fourth situation's flag is returned rather than applied:
+    the resting stop runs after the fills and one bar is counted once.
     """
+    if config.entry_trail_bps is not None:
+        return _advance_trails(
+            state, bar, plan, bps=config.entry_trail_bps, next_limits=next_limits
+        )
     for index in sorted(state.pending):
         rung = state.pending[index]
         if not _reachable(state, bar, rung):
             continue
-        price = min(bar.open, rung.limit_price)
-        units = rung.notional / rung.limit_price
-        del state.pending[index]
-        state.units += units
-        state.cash += units * price
-        state.committed += rung.notional
-        state.events.append(
-            EntryFilled(t=bar.t, tier_index=index, price=price, units=units, cash=units * price)
-        )
-        if state.stop is None:
-            state.stop = plan.declared_floor
-            state.events.append(StopPlaced(t=bar.t, level=plan.declared_floor))
+        _book_entry(state, bar, plan, index, rung, price=min(bar.open, rung.limit_price))
+    return False
 
 
 def _track_extremes(state: _WalkState, bar: Bar) -> None:
@@ -191,22 +479,26 @@ def _exit_on_stop(
     ladder: tuple[DeclaredTranche, ...],
     intended: float,
     costs: Costs,
-) -> None:
+) -> bool:
     """The resting stop, if the bar reached it. The stop RESTS at the broker, so
     a bar that opens already through it executes at the open.
 
     Row 1 of the section 4.4 table: a bar that reached both the stop and a
     take-profit does not say which came first. The walk takes the stop - the
-    conservative reading - and counts the bar, so a reader of the summary knows
-    the run answered a question the tape could not.
+    conservative reading - and the bar is counted, so a reader of the summary
+    knows the run answered a question the tape could not.
+
+    Returns whether row 1 applies. It is REPORTED rather than counted here,
+    because a bar can carry another of the three sources as well and a bar is
+    counted once however many questions it raised.
     """
     if state.stop is None or bar.low > state.stop:
-        return
-    if _a_tranche_would_have_fired(state, bar, ladder=ladder, intended=intended, costs=costs):
-        state.snu += 1
+        return False
+    row_one = _a_tranche_would_have_fired(state, bar, ladder=ladder, intended=intended, costs=costs)
     price = min(bar.open, state.stop)
     state.events.append(PositionClosed(t=bar.t, reason="stop", price=price, units=_held(state)))
     state.closed = "stop"
+    return row_one
 
 
 def _a_tranche_would_have_fired(
@@ -239,24 +531,36 @@ def _a_tranche_would_have_fired(
     )
 
 
-def _staged(state: _WalkState, bar: Bar) -> tuple[tuple[float, float], tuple[float, float]]:
+def _staged(
+    state: _WalkState,
+    bar: Bar,
+    *,
+    config: RunConfig,
+    next_limits: dict[int, float],
+) -> tuple[tuple[float, float], tuple[float, float]]:
     """The position this bar produces, in the two stages the SNU is about.
 
-    A rung at or above the open is through at the FIRST print, so it belongs to
-    both readings and is not in question. The pair returned is therefore
-    ``(cash, units)`` after those rungs only, and then after the DEEP ones as
-    well. The difference between the two is the whole subject of section 4.4's
-    fourth situation: it moves the held quantity, and it moves the average entry
-    that every cost threshold is computed from.
+    A rung through at the FIRST print belongs to both readings and is not in
+    question. The pair returned is therefore ``(cash, units)`` after those only,
+    and then after the ones that fill somewhere INSIDE the bar as well. The
+    difference between the two is the whole subject of section 4.4's fourth
+    situation: it moves the held quantity, and it moves the average entry that
+    every cost threshold is computed from.
+
+    Which rungs are which is :func:`_would_fill`'s answer, not a second reading
+    of the levels - under a trail the test inverts, because a buy STOP at or
+    below the open is the one already through.
     """
     cash, units = state.cash, state.units
+    shallow = (cash, units)
     for deep in (False, True):
         for index in sorted(state.pending):
             rung = state.pending[index]
-            if (rung.limit_price < bar.open) is not deep or not _reachable(state, bar, rung):
+            found = _would_fill(state, bar, rung, index, config=config, next_limits=next_limits)
+            if found is None or found[1] is not deep:
                 continue
             filled = rung.notional / rung.limit_price
-            cash += filled * min(bar.open, rung.limit_price)
+            cash += filled * found[0]
             units += filled
         if not deep:
             shallow = (cash, units)
@@ -270,6 +574,8 @@ def _deep_rung_snu(
     ladder: tuple[DeclaredTranche, ...],
     intended: float,
     costs: Costs,
+    config: RunConfig,
+    next_limits: dict[int, float],
 ) -> bool:
     """Does this bar's rung-against-take-profit order change the MONEY?
 
@@ -293,11 +599,15 @@ def _deep_rung_snu(
     so the replay cannot say whether the tranche would have fired at all.
     """
     if not any(
-        rung.limit_price < bar.open and _reachable(state, bar, rung)
-        for rung in state.pending.values()
+        (found := _would_fill(state, bar, rung, index, config=config, next_limits=next_limits))
+        is not None
+        and found[1]
+        for index, rung in state.pending.items()
     ):
         return False
-    (cash_before, units_before), (cash_after, units_after) = _staged(state, bar)
+    (cash_before, units_before), (cash_after, units_after) = _staged(
+        state, bar, config=config, next_limits=next_limits
+    )
     if units_before <= 0.0:
         return False
     held, held_after = units_before - state.units_sold, units_after - state.units_sold
@@ -475,7 +785,48 @@ def resolve_ladder(plan: Plan) -> tuple[str, tuple[DeclaredTranche, ...]]:
     return "tp_tranches", plan.declared_tranches
 
 
-def _walk_one_bar(
+def _match_orders(
+    state: _WalkState,
+    bar: Bar,
+    plan: Plan,
+    config: RunConfig,
+    *,
+    ladder: tuple[DeclaredTranche, ...],
+    intended: float,
+) -> bool:
+    """What the bar's own levels decide: the deadline, the entry fills, the
+    excursion marks and the resting stop.
+
+    Returns whether this bar is an SNU bar, from ANY of the three sources
+    section 4.4 names: row 1 (the stop and a take-profit in one bar), the
+    fourth situation (a rung filling inside the bar against a take-profit), and
+    the trailing entry's own high/low order. One answer, because ``snu_bars``
+    counts BARS and not questions.
+
+    The count is applied by the caller, once, and BEFORE it asks whether the
+    position closed - a bar the stop closed can still have been decided by one
+    of the other two.
+    """
+    _expire(state, bar, deadline=config.entry_deadline.value)
+    next_limits = _next_listed_limits(plan)
+    # Asked BEFORE the fills, while the rung is still pending and the question
+    # is still answerable.
+    deep_snu = _deep_rung_snu(
+        state,
+        bar,
+        ladder=ladder,
+        intended=intended,
+        costs=config.costs,
+        config=config,
+        next_limits=next_limits,
+    )
+    trail_snu = _fill_entries(state, bar, plan, config, next_limits=next_limits)
+    _track_extremes(state, bar)
+    row_one = _exit_on_stop(state, bar, ladder=ladder, intended=intended, costs=config.costs)
+    return deep_snu or trail_snu or row_one
+
+
+def _advance_state(
     state: _WalkState,
     bar: Bar,
     plan: Plan,
@@ -486,21 +837,12 @@ def _walk_one_bar(
     intended: float,
     trails: bool,
 ) -> None:
-    """One bar, in the order section 4.4 fixes. Returns as soon as the position
-    closes, so the caller only has to ask whether it did."""
-    _expire(state, bar, deadline=config.entry_deadline.value)
-    # Asked BEFORE the fills, while the deep rung is still pending and the
-    # question is still answerable.
-    deep_snu = _deep_rung_snu(state, bar, ladder=ladder, intended=intended, costs=config.costs)
-    _fill_entries(state, bar, plan)
-    _track_extremes(state, bar)
-    _exit_on_stop(state, bar, ladder=ladder, intended=intended, costs=config.costs)
-    if state.closed is not None:
-        # A bar the stop closed has already been asked its question, by row 1.
-        # Counting the fourth situation too would count one bar twice.
-        return
-    if deep_snu:
-        state.snu += 1
+    """What the position does once the bar's orders have been matched: the
+    take-profit review, the replay's own horizon, and the protection pass.
+
+    Each step can close the position, and every later step is skipped when one
+    does - the walk models one position, not a re-entry.
+    """
     _fire_tranches(
         state,
         bar,
@@ -515,6 +857,44 @@ def _walk_one_bar(
     if state.closed is not None:
         return
     _decide_stop(state, bar, plan, trails=trails)
+
+
+def _walk_one_bar(
+    state: _WalkState,
+    bar: Bar,
+    plan: Plan,
+    config: RunConfig,
+    *,
+    ladder: tuple[DeclaredTranche, ...],
+    ladder_name: str,
+    intended: float,
+    trails: bool,
+) -> None:
+    """One bar, in the order section 4.4 fixes: match this bar's orders, then
+    advance the position. Returns as soon as the position closes, so the caller
+    only has to ask whether it did.
+
+    The two halves are separate functions because section 6.5 says so: the bar
+    loop is the natural candidate to exceed the cognitive-complexity gate, and
+    splitting it is a design decision rather than a rescue after a red run.
+    """
+    if _match_orders(state, bar, plan, config, ladder=ladder, intended=intended):
+        # Once per BAR, and before the closed check: a bar the stop closed may
+        # still have been decided by the fourth situation or by a trailing
+        # entry, and neither of those needs a take-profit to exist.
+        state.snu += 1
+    if state.closed is not None:
+        return
+    _advance_state(
+        state,
+        bar,
+        plan,
+        config,
+        ladder=ladder,
+        ladder_name=ladder_name,
+        intended=intended,
+        trails=trails,
+    )
 
 
 def walk(plan: Plan, config: RunConfig, bars: tuple[Bar, ...]) -> WalkResult:

@@ -18,7 +18,7 @@ from intent_replay.bars import Bar
 from intent_replay.config import RunConfig
 from intent_replay.interpreter import DeclaredTranche, PendingEntry, Plan
 from intent_replay.trace import KINDS
-from intent_replay.walk import walk
+from intent_replay.walk import _WalkState, _would_fill, walk
 
 from tests.intent_replay.test_config import CANONICAL
 
@@ -162,6 +162,349 @@ class EntriesFillTest(unittest.TestCase):
         )
         result = walk(_plan(entries=RUNGS[:1]), _config(), bars)
         self.assertEqual(result.events[-1].price, 68.4)
+
+
+class EntryTrailTest(unittest.TestCase):
+    """The native entry trail (spec sections 3.3, 4.4 row 3 and 8).
+
+    With a stated distance a rung no longer rests as a limit. The first bar to
+    touch it ARMS a trailing trigger that ratchets down with the running low
+    and fires on a rebound of that distance. What is modelled is the BROKER's
+    order type: the server owns the ratchet and the fire, so there is no local
+    implementation to compare against and the run says so through the
+    ``native_entry_trail_is_a_broker_model`` divergence.
+
+    ``d`` is 50 bps throughout, so a limit of 68.00 arms at a reference of
+    68.00 and fires at 68.34.
+    """
+
+    LIMIT = RUNGS[0].limit_price
+    BUDGET = RUNGS[0].notional
+
+    def _walk(self, *bars: Bar, bps: int = 50) -> Any:
+        plan = _plan(entries=RUNGS[:1], notional=self.BUDGET)
+        return walk(plan, _config(entry_trail_bps=bps), bars)
+
+    def test_a_touched_rung_no_longer_fills_at_its_limit(self) -> None:
+        # The bar reaches 68.00 and rebounds to 68.20, which is short of the
+        # 68.34 trigger. As a resting limit this rung fills at 68.00; as a
+        # trail it arms and waits.
+        result = self._walk(_bar(WALK_START, 68.05, 68.2, 67.9))
+        self.assertEqual(_kinds(result), [])
+        self.assertEqual(result.outcome, "no_fill")
+
+    def test_the_arming_bar_fires_when_the_rebound_reaches_the_trigger(self) -> None:
+        # Section 4.4 keeps the worse resolution where one is well defined, and
+        # on the arming bar it is: the trigger computed from the touch
+        # reference, before the bar's own low could ratchet it down. Live the
+        # geometry is computed AT the touch and the order rests from that
+        # instant, so the same bar can fire it - every recorded live fire
+        # happened in the session of its touch.
+        result = self._walk(_bar(WALK_START, 68.05, 68.4, 67.9))
+        self.assertEqual(_kinds(result), ["entry_filled", "stop_placed", "horizon_open"])
+        filled = result.events[0]
+        self.assertEqual(filled.price, 68.34)
+        self.assertEqual(filled.units, self.BUDGET / self.LIMIT)
+        self.assertEqual(filled.cash, self.BUDGET / self.LIMIT * 68.34)
+        self.assertEqual(result.events[1].level, FLOOR)
+
+    def test_a_bar_that_gaps_below_the_rung_arms_on_its_OPEN(self) -> None:
+        # The touch happens at the first print, so the reference is the open and
+        # not the level. Measured on 20 sessions of real daily bars: at a 1-2%
+        # pullback 23-33% of arming bars open below their rung, with a median
+        # gap of 86-131 bps - and the arming-bar trigger moves by the whole gap.
+        # Referenced on the LIMIT this bar would fire at 68.34, which its high
+        # never reaches, so the two readings differ by a fill.
+        result = self._walk(_bar(WALK_START, 67.0, 67.5, 66.9))
+        self.assertEqual(result.events[0].price, 67.0 * 1.005)
+        self.assertEqual(result.events[0].units, self.BUDGET / self.LIMIT)
+
+    def test_the_distance_is_frozen_and_ABSOLUTE_not_a_fraction_of_the_trough(self) -> None:
+        # The wire field is a price distance to the market, computed once from
+        # the arming reference, so the server's trigger is `trough + distance`.
+        # The two forms coincide at the touch and separate as the trough falls:
+        # at a trough of 60.00 the additive trigger is 60.34 and the
+        # proportional one 60.30, so bar 3 fires under one reading and not the
+        # other. Its high sits between them on purpose.
+        bars = (
+            _bar(WALK_START, 68.05, 68.2, 67.9),
+            _bar(WALK_START + MINUTE, 67.0, 67.5, 60.0),
+            _bar(WALK_START + 2 * MINUTE, 60.1, 60.32, 60.0),
+            _bar(WALK_START + 3 * MINUTE, 60.1, 60.4, 60.0),
+        )
+        result = self._walk(*bars)
+        filled = [event for event in result.events if event.kind == "entry_filled"]
+        self.assertEqual(len(filled), 1)
+        self.assertEqual(filled[0].t, WALK_START + 3 * MINUTE)
+        self.assertAlmostEqual(filled[0].price, 60.34, places=10)
+
+    def test_a_LATER_bar_that_opens_above_the_trigger_fills_at_the_open(self) -> None:
+        # By then the order RESTS at the broker, so the gap rule of section 4.4
+        # reaches it: the open is the first print and nothing about that is in
+        # question. Bar 1 arms and ratchets the trough to 67.90, leaving a
+        # 68.24 trigger; bar 2 opens above it.
+        bars = (
+            _bar(WALK_START, 68.05, 68.2, 67.9),
+            _bar(WALK_START + MINUTE, 68.5, 68.6, 68.3),
+        )
+        result = self._walk(*bars)
+        filled = [event for event in result.events if event.kind == "entry_filled"]
+        self.assertEqual(len(filled), 1)
+        self.assertEqual(filled[0].price, 68.5)
+
+    def test_the_ARMING_bar_never_fills_at_its_open_however_high_that_is(self) -> None:
+        # The gap rule reaches the legs that REST there, and on the arming bar
+        # this one did not: it is placed at the touch, which cannot precede the
+        # open. So a bar opening at 68.40, dipping to the 68.00 rung and
+        # reaching 68.50 fires at the 68.34 trigger, not at 68.40 - the open is
+        # a price the order was not yet there to take.
+        result = self._walk(_bar(WALK_START, 68.4, 68.5, 67.9))
+        self.assertEqual(result.events[0].price, 68.34)
+
+    def test_a_bar_whose_low_could_have_fired_it_cheaper_is_counted(self) -> None:
+        # Row 3 of section 4.4, and the criterion at :831 is that both orderings
+        # are consistent with the bar and lead to different money. Here they do:
+        # the declared reading tests the 68.34 trigger and does not fire, while
+        # "the low came first" tests 67.50 + 0.34 = 67.84 and does. One fill
+        # against none is the largest difference the rule can make.
+        result = self._walk(_bar(WALK_START, 68.05, 68.1, 67.5))
+        self.assertEqual(_kinds(result), [])
+        self.assertEqual(result.snu_bars, 1)
+
+    def test_a_bar_whose_low_IS_the_touch_decides_nothing(self) -> None:
+        # With the low at the reference the trough cannot move inside the bar,
+        # so the trigger is the same under either ordering - forced by the
+        # levels, exactly the ground on which section 4.4 excludes row 2.
+        result = self._walk(_bar(WALK_START, 68.0, 68.4, 68.0))
+        self.assertEqual(result.events[0].price, 68.34)
+        self.assertEqual(result.snu_bars, 0)
+
+    def test_an_armed_bar_that_makes_a_new_low_and_retraces_is_counted(self) -> None:
+        bars = (
+            _bar(WALK_START, 68.05, 68.1, 67.9),
+            _bar(WALK_START + MINUTE, 67.4, 67.5, 67.0),
+        )
+        result = self._walk(*bars)
+        self.assertEqual(_kinds(result), [])
+        self.assertEqual(result.snu_bars, 1)
+
+    def test_a_gap_through_the_trigger_decides_nothing_even_on_a_new_low(self) -> None:
+        # The gap row wins over the new-low row: the open is the first print, so
+        # the fill is at the open under either ordering and the money is the
+        # same. Counting it would put a bar where the rule changed nothing into
+        # a number whose published meaning is how much came from the rule.
+        bars = (
+            _bar(WALK_START, 68.05, 68.1, 67.9),
+            _bar(WALK_START + MINUTE, 68.3, 68.4, 67.0),
+        )
+        result = self._walk(*bars)
+        self.assertEqual(result.events[0].price, 68.3)
+        self.assertEqual(result.snu_bars, 0)
+
+    def _laddered(self, *bars: Bar) -> Any:
+        """Both published rungs, so a later one can arm while a stop rests."""
+        return walk(_plan(), _config(entry_trail_bps=50), bars)
+
+    def test_a_bar_that_opens_ABOVE_the_stop_fires_and_then_stops_out(self) -> None:
+        # Section 4.4 keeps the worse resolution where one is well defined, and
+        # a fill followed by a stop-out IS the worse one: without it there is no
+        # loss. The open is 66.00, above the 63.00 stop, so the price reached the
+        # 66.33 trigger before it reached the stop and both legs executed.
+        bars = (
+            _bar(WALK_START, 68.05, 68.4, 67.9),
+            _bar(WALK_START + MINUTE, 66.0, 66.4, 62.0),
+        )
+        result = self._laddered(*bars)
+        self.assertEqual(
+            _kinds(result), ["entry_filled", "stop_placed", "entry_filled", "position_closed"]
+        )
+        self.assertEqual(result.events[0].price, 68.34)
+        self.assertEqual(result.events[2].price, 66.0 * 1.005)
+        self.assertEqual(result.events[3].price, FLOOR)
+
+    def test_a_bar_that_opens_BELOW_the_stop_does_not_fire_the_trail(self) -> None:
+        # Continuity settles this one rather than a convention: the open is
+        # already through the stop, so the position closed at the first print and
+        # a purchase after it is a RE-ENTRY - a second position this tool does
+        # not model (section 4.4). The trigger being above the stop does not
+        # help; nothing was there to buy for.
+        bars = (
+            _bar(WALK_START, 68.05, 68.4, 67.9),
+            _bar(WALK_START + MINUTE, 62.5, 66.4, 62.0),
+        )
+        result = self._laddered(*bars)
+        self.assertEqual(_kinds(result), ["entry_filled", "stop_placed", "position_closed"])
+        self.assertEqual(result.events[2].price, 62.5)
+
+    def test_a_bar_that_gaps_past_the_NEXT_rung_bars_the_shallower_one(self) -> None:
+        # The live depth suspend, measured against the engine on 2026-09-29: it
+        # fires only when the FIRST price at or below a rung is already below the
+        # next one, because the wire arms on the touch tick and an armed tier is
+        # terminal for the watcher. In bar terms that first price is the open.
+        # A deeper move is the next rung's job; the shallower one never arms.
+        result = self._laddered(_bar(WALK_START, 66.0, 68.0, 65.0))
+        filled = [event for event in result.events if event.kind == "entry_filled"]
+        self.assertEqual([event.tier_index for event in filled], [1])
+        self.assertEqual(filled[0].price, 66.0 * 1.005)
+
+    def test_the_same_depth_on_a_LATER_bar_does_not_bar_an_armed_rung(self) -> None:
+        # Measured on the live engine: a price walking DOWN through the rung arms
+        # on the touch and a later depth never suspends it, because the watcher
+        # is already terminal. Barring it here would starve fills the deployed
+        # path makes.
+        bars = (
+            _bar(WALK_START, 68.05, 68.1, 67.9),
+            _bar(WALK_START + MINUTE, 67.0, 68.5, 65.0),
+        )
+        result = self._laddered(*bars)
+        filled = [event for event in result.events if event.kind == "entry_filled"]
+        self.assertIn(0, [event.tier_index for event in filled])
+
+    def test_the_last_listed_rung_never_bars_itself(self) -> None:
+        # There is no next rung to hand the move to. `validate_intent` does not
+        # require the ladder to descend, so the rule is about the rung LISTED
+        # last, not the cheapest one.
+        result = self._walk(_bar(WALK_START, 60.0, 68.5, 59.0))
+        self.assertEqual(result.events[0].price, 60.0 * 1.005)
+
+    def test_an_arming_bar_whose_OPEN_is_above_the_trigger_still_counts(self) -> None:
+        # The "opened through the trigger" guard belongs to a RESTING order: for
+        # one, both readings fill at the open and nothing is assumed. On the
+        # ARMING bar the order does not exist at the open - it is placed when the
+        # price falls to the rung - so an open above the trigger settles nothing.
+        # Here the reference is 68.00 and the trigger 68.34, the open is 68.40,
+        # and the low-first reading would fill at 67.90 + 0.34 = 68.24 instead.
+        result = self._walk(_bar(WALK_START, 68.4, 68.5, 67.9))
+        self.assertEqual(result.events[0].price, 68.34)
+        self.assertEqual(result.snu_bars, 1)
+
+    def test_a_barred_rung_stays_barred_on_a_LATER_bar_that_would_arm_it(self) -> None:
+        # "Never arms" is the whole content of the depth rule, and it is a claim
+        # about every LATER bar, not about the bar that barred the rung. Without
+        # this the rule was only tested on the bar it fired on, and the second
+        # bar here is one that would otherwise arm at 68.00 and fire at 68.34.
+        bars = (
+            _bar(WALK_START, 66.0, 68.0, 65.0),
+            _bar(WALK_START + MINUTE, 68.05, 68.5, 67.9),
+        )
+        result = self._laddered(*bars)
+        filled = [event for event in result.events if event.kind == "entry_filled"]
+        self.assertEqual([event.tier_index for event in filled], [1])
+
+    def test_the_classifier_reports_no_fill_once_the_open_is_through_the_stop(self) -> None:
+        """``_would_fill`` answers "does this bar fill the rung", and on a bar
+        whose OPEN is already through the resting stop the answer is no: the
+        position closed at the first print and buying after it is a re-entry.
+
+        Asserted on the function rather than through a walk on purpose. Measured
+        over 8000 random ladders, 2239 of them ending on the stop, teaching the
+        classifier this changes neither ``snu_bars`` nor the cash - so no walk
+        can carry the assertion, and without one the function would go on
+        promising a fill that ``_advance_trails`` refuses to book.
+        """
+        state = _WalkState(pending={1: RUNGS[1]})
+        state.stop = FLOOR
+        state.units, state.cash = 13.17, 900.0
+        bar = _bar(WALK_START, FLOOR - 0.5, 69.5, FLOOR - 1.0)
+        answer = _would_fill(
+            state, bar, RUNGS[1], 1, config=_config(entry_trail_bps=50), next_limits={}
+        )
+        self.assertIsNone(answer)
+
+    def test_a_trail_SNU_survives_the_stop_closing_the_same_bar(self) -> None:
+        """A bar can carry a trailing-entry SNU and then be closed by the stop.
+
+        The count used to be dropped there, on the ground that row 1 had already
+        asked the bar its question - but row 1 only counts a bar that also
+        reached an affordable take-profit, and this document declares no ladder
+        at all. Before the trail there was no SNU source without a tranche, so
+        the premise held; the trail is the first one.
+
+        The first bar arms rung 0 with its low AT the reference, so its trigger
+        cannot move and it contributes nothing of its own. On the second bar
+        rung 1 arms at 66.50 and fires at 66.8325, and the low then reaches the
+        stop. Read low-first, the price passes the stop at 63.00 before the
+        trigger, so that rung is never bought at all - the two readings differ
+        over whether a tranche was purchased, which is as different as money
+        gets.
+        """
+        bars = (
+            _bar(WALK_START, 68.05, 68.4, 68.0),
+            _bar(WALK_START + MINUTE, 66.6, 67.2, 62.9),
+        )
+        result = self._laddered(*bars)
+        self.assertEqual(
+            _kinds(result), ["entry_filled", "stop_placed", "entry_filled", "position_closed"]
+        )
+        self.assertEqual(result.events[2].price, 66.8325)
+        self.assertEqual(result.events[3].price, FLOOR)
+        self.assertEqual(result.snu_bars, 1)
+
+    def test_the_fourth_situation_is_classified_by_the_TRAIL_not_by_the_limit(self) -> None:
+        """Section 4.4's fourth situation asks whether a rung filled INSIDE the
+        bar while a take-profit was also reached. For a resting limit the test is
+        ``limit < open``; for a buy STOP the sign inverts, because a trigger at or
+        below the open is the one already through at the first print.
+
+        Reading it off the LIMIT under a trail counts the wrong bars. This ladder
+        is one of three in six thousand random trailing runs where the two
+        readings reach a different ``snu_bars``, found by search rather than by
+        guessing a shape: the limit reading reports two bars and the trail
+        reading one. The cash is asserted beside it because it must NOT move -
+        the detector feeds ``snu_bars`` alone and can never change what was
+        bought, which is why the count is the only thing that can catch it.
+
+        The ladder was re-drawn on 2026-09-30: teaching ``_trail_snu`` about
+        arming bars made the previous one report two bars under BOTH readings,
+        so it no longer discriminated. A golden case that stops discriminating
+        is worse than none, because it still passes.
+        """
+        rungs = (
+            PendingEntry(tier_index=0, limit_price=45.8149, notional=1050.0),
+            PendingEntry(tier_index=1, limit_price=44.8421, notional=450.0),
+        )
+        tranches = (
+            DeclaredTranche(tranche_index=0, price=46.1709, fraction=0.333333),
+            DeclaredTranche(tranche_index=1, price=46.045, fraction=0.333333),
+            DeclaredTranche(tranche_index=2, price=47.2309, fraction=0.333333),
+        )
+        bars = (
+            _bar(WALK_START, 45.9079, 45.9934, 44.8313, close=45.9542),
+            _bar(WALK_START + MINUTE, 45.9542, 48.073, 44.3412, close=45.372),
+            _bar(WALK_START + 2 * MINUTE, 45.372, 47.0921, 43.4173, close=45.0753),
+            _bar(WALK_START + 3 * MINUTE, 45.0753, 47.1778, 43.8848, close=44.4752),
+        )
+        plan = _plan(entries=rungs, notional=1500.0, floor=42.5307, tranches=tranches)
+        result = walk(plan, _config(entry_trail_bps=50), bars)
+        self.assertEqual(result.snu_bars, 1)
+        self.assertAlmostEqual(result.notional_spent, 1505.4425, places=4)
+
+    def _to_deadline(self, *bars: Bar) -> Any:
+        config = _config(entry_trail_bps=50, entry_deadline=_deadline(WALK_START + MINUTE))
+        return walk(_plan(), config, bars)
+
+    def test_an_armed_rung_expires_at_the_deadline_like_any_other(self) -> None:
+        # A resting trailing order dies with the ladder's window. It is still an
+        # unfilled rung, so it leaves through the one published cause rather
+        # than through a second kind of event.
+        result = self._to_deadline(
+            _bar(WALK_START, 68.05, 68.1, 67.9),
+            _bar(WALK_START + MINUTE, 68.0, 68.1, 67.95),
+        )
+        self.assertEqual(_kinds(result), ["entry_expired"])
+        self.assertEqual(result.events[0].tiers, (0, 1))
+        self.assertEqual(result.events[0].reason, "deadline")
+
+    def test_a_barred_rung_expires_too_rather_than_vanishing(self) -> None:
+        # The depth rule retires a rung without an event of its own, so the
+        # deadline is where the trace accounts for it. Dropping it from
+        # ``pending`` instead would leave a rung the trace never mentions.
+        result = self._to_deadline(
+            _bar(WALK_START, 66.0, 68.0, 65.0),
+            _bar(WALK_START + MINUTE, 66.5, 66.6, 66.4),
+        )
+        expired = [event for event in result.events if event.kind == "entry_expired"]
+        self.assertEqual([event.tiers for event in expired], [(0,)])
 
 
 class RestingStopTest(unittest.TestCase):

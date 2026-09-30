@@ -18,6 +18,7 @@ from typing import Any
 
 from intent_replay import envelope
 from intent_replay.bars import Bar
+from intent_replay.config import RunConfig
 from intent_replay.door import admit
 from intent_replay.interpreter import PendingEntry, interpret
 from intent_replay.measures import summarise
@@ -41,11 +42,16 @@ def _document(name: str, **patch: Any) -> dict[str, Any]:
     return data
 
 
-def _built(name: str, bars: tuple[Bar, ...], **patch: Any) -> dict[str, Any]:
-    """The whole pipeline: door, interpreter, walk, measures, envelope."""
+def _built(
+    name: str, bars: tuple[Bar, ...], *, run_config: RunConfig | None = None, **patch: Any
+) -> dict[str, Any]:
+    """The whole pipeline: door, interpreter, walk, measures, envelope.
+
+    ``run_config`` is separate from ``patch``: the latter edits the DOCUMENT,
+    and a divergence predicate can read either side."""
     admitted = admit(_document(name, **patch))
     plan = interpret(admitted.intent, admitted.document)
-    config = _config()
+    config = _config() if run_config is None else run_config
     result = walk(plan, config, bars)
     measures = summarise(result, declared_floor=plan.declared_floor)
     return envelope.build(
@@ -147,9 +153,11 @@ class ConfigEchoTest(unittest.TestCase):
         self.assertEqual(list(built["config"]), list(CANONICAL))
 
     def test_the_echo_departs_from_the_printed_block_in_exactly_one_key(self) -> None:
-        # Section 5.4: the printed block states ``entry_trail_bps: 50`` and this
-        # version refuses a stated distance, so the fixture -- and therefore the
-        # echo -- states null. Asserted so the departure cannot grow silently.
+        # Section 5.4: the printed block states ``entry_trail_bps: 50`` and the
+        # fixture -- and therefore the echo -- states null, because the fixture
+        # is the baseline of the limit-ladder tests and a trailing test states
+        # the distance itself. Asserted so the departure cannot GROW silently,
+        # whatever its reason happens to be.
         printed = _spec_config_block()
         echoed = _built("pullback-trailing-stop", TWO_BARS)["config"]
         differing = [key for key in printed if printed[key] != echoed[key]]
@@ -335,8 +343,8 @@ class DivergencePredicateTest(unittest.TestCase):
     are transcribed from the section 5.2 table, so a wrong one is a report that
     does not describe the run."""
 
-    def _names(self, name: str, **patch: Any) -> list[str]:
-        return _built(name, TWO_BARS, **patch)["divergences"]
+    def _names(self, name: str, *, run_config: RunConfig | None = None, **patch: Any) -> list[str]:
+        return _built(name, TWO_BARS, run_config=run_config, **patch)["divergences"]
 
     def test_a_trailing_document_reports_the_order_state_guards(self) -> None:
         self.assertIn("daemon_trail_guards", self._names("pullback-trailing-stop"))
@@ -385,19 +393,25 @@ class DivergencePredicateTest(unittest.TestCase):
         plan = interpret(admitted.intent, admitted.document)
         block = copy.deepcopy(dict(CANONICAL))
         block["costs"] = {**block["costs"], "min_commission_applies": False}
-        from intent_replay.config import RunConfig
-
         names = envelope.divergences(plan, RunConfig.from_jsonable(block))
         self.assertIn("take_profit_observation_time", names)
         self.assertNotIn("cost_gate_prices_the_account_currency", names)
 
-    def test_the_entry_trail_entry_cannot_be_reached_in_this_version(self) -> None:
-        # The predicate is "the run STATES an entry-trail distance", and this
-        # version refuses every stated distance (section 5.4,
-        # ``entry_trail_not_modelled``). So the code emits the name and no
-        # ACCEPTED configuration reaches it. Asserted as the gap it is, rather
-        # than dressed up with a document that could not be run.
+    def test_a_stated_distance_reports_the_trail_as_the_BROKERS_model(self) -> None:
+        # The predicate is "the run STATES an entry-trail distance". Until the
+        # walk modelled the trail, every stated distance was refused, so the
+        # name was registered and NO accepted configuration could reach it; the
+        # test that stood here asserted exactly that gap. The gap is closed, so
+        # the assertion inverts: a run that states a distance reports the name.
         self.assertIn("native_entry_trail_is_a_broker_model", envelope.DIVERGENCES)
+        self.assertIn(
+            "native_entry_trail_is_a_broker_model",
+            self._names("pullback-trailing-stop", run_config=_config(entry_trail_bps=50)),
+        )
+
+    def test_a_run_that_states_no_distance_does_not_report_it(self) -> None:
+        # The other half of this class's pattern: one document that fires the
+        # name and one that does not. The canonical block states null.
         self.assertNotIn(
             "native_entry_trail_is_a_broker_model", self._names("pullback-trailing-stop")
         )
