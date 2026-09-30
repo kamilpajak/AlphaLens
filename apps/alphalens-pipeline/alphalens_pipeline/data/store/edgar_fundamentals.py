@@ -449,6 +449,14 @@ class EdgarFundamentalsStore:
         The ``dei`` cover page stays out of the fallback too — it is the tag that
         caused the original defect.
 
+        KNOWN GAP (#1642): ``compute_ttm`` also filters ``unit == "USD"`` and a
+        form whitelist, and this measure filters neither, so it counts chain rows
+        the consumer will never read. Measured over the same 600 CIKs, 5 disagree
+        — two reporting in CNY, one in CAD, two filing form 10-KT. None is masked
+        today only because all five are already past the threshold. Closing it
+        needs its own measurement, because a non-USD reporter would end up with
+        no age at all and that may be worse than the gap.
+
         ``None`` means "no answer to age": missing, unreadable, empty, or holding
         no ``us-gaap`` row with a past period at all. All of them route to the long
         :data:`REFETCH_EMPTY_INTERVAL_DAYS` branch in :meth:`_is_stale`.
