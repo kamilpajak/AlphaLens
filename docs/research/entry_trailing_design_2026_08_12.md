@@ -3,7 +3,7 @@
 **Date:** 2026-08-12
 **Status:** LOCKED 2026-08-12 — operator approved §8 per recommendation; probe battery §4 pending (SIM battery launched same evening; LIVE battery deferred per §4a while LAC rests)
 **Method:** 3-lens workflow (reuse-inventory/code-fit, execution-mechanics, risk/state) + 2 code-verifying critics (facts; adversarial "what breaks money" — 10 findings, 4 CRITICAL); every claim carries a `file:line` anchor or is marked probe-pending. Zen adversarial pass recorded in §10.
-**Evidence base:** `trailing_entry_whatif_2026_08_12.md` (#1037) — bounce-confirmed entries at d=0.5-1% beat limit-at-touch in every cohort under both slippage assumptions (+0.018R ALL, +0.025R day-1; negative average concession; ≤1.5% fill-rate cost; edge dead by d≈2-3%). Direction-level; live rollout must MEASURE realized-vs-replay before widening.
+**Evidence base:** `trailing_entry_whatif_2026_08_12.md` (#1037) — bounce-confirmed entries at d=0.5-1% beat limit-at-touch in every cohort under both slippage assumptions (+0.018R ALL, +0.025R day-1; negative average concession; ≤1.5% fill-rate cost; edge dead by d≈2-3%). Direction-level; live rollout must MEASURE realized-vs-replay before widening. **Note 2026-09-30:** that replay priced the trigger as a fraction of the running low, while the order this memo specifies keeps an ABSOLUTE distance frozen at the touch — see the correction at the top of the study. No figure quoted here is withdrawn; the size of the difference is measured in #1630. The stamp the sentence above depends on carries the same wrong form, tracked in #1635.
 
 ## 1. What changes and what deliberately does not
 
