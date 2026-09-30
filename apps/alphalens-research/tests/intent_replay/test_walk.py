@@ -367,6 +367,19 @@ class EntryTrailTest(unittest.TestCase):
         result = self._walk(_bar(WALK_START, 60.0, 68.5, 59.0))
         self.assertEqual(result.events[0].price, 60.0 * 1.005)
 
+    def test_a_barred_rung_stays_barred_on_a_LATER_bar_that_would_arm_it(self) -> None:
+        # "Never arms" is the whole content of the depth rule, and it is a claim
+        # about every LATER bar, not about the bar that barred the rung. Without
+        # this the rule was only tested on the bar it fired on, and the second
+        # bar here is one that would otherwise arm at 68.00 and fire at 68.34.
+        bars = (
+            _bar(WALK_START, 66.0, 68.0, 65.0),
+            _bar(WALK_START + MINUTE, 68.05, 68.5, 67.9),
+        )
+        result = self._laddered(*bars)
+        filled = [event for event in result.events if event.kind == "entry_filled"]
+        self.assertEqual([event.tier_index for event in filled], [1])
+
     def test_the_fourth_situation_is_classified_by_the_TRAIL_not_by_the_limit(self) -> None:
         """Section 4.4's fourth situation asks whether a rung filled INSIDE the
         bar while a take-profit was also reached. For a resting limit the test is

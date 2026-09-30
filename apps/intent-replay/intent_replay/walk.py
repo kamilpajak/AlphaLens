@@ -277,6 +277,17 @@ def _prospect(
     return _Prospect(trough=reference, distance=reference * bps / _BPS_PER_UNIT, arming=True)
 
 
+def _trail_fill_price(bar: Bar, level: float, *, arming: bool) -> float:
+    """What a fired trailing buy pays on this bar.
+
+    The gap rule reaches the legs that REST at the broker, and on the arming bar
+    this one does not: the order is placed at the touch, which cannot precede
+    the open. So an arming bar takes the trigger however high it opened, and a
+    later bar that opens through the trigger takes its open, the first print.
+    """
+    return level if arming else max(bar.open, level)
+
+
 def _would_fill(
     state: _WalkState,
     bar: Bar,
@@ -302,7 +313,7 @@ def _would_fill(
     found = _prospect(state, bar, rung, index, bps=config.entry_trail_bps, next_limits=next_limits)
     if found is None or bar.high < found.level:
         return None
-    price = found.level if found.arming else max(bar.open, found.level)
+    price = _trail_fill_price(bar, found.level, arming=found.arming)
     return price, found.arming or found.level > bar.open
 
 
@@ -366,9 +377,11 @@ def _advance_trails(
     if state.stop is not None and bar.open <= state.stop:
         return False
     decided = False
+    # A barred rung stays in ``pending`` so the deadline can account for it, and
+    # it is ``_prospect`` that refuses it - the one function answering whether a
+    # rung has an order on this bar. A second copy of that test here enforces
+    # nothing the first does not, and hides which one is load-bearing.
     for index in sorted(state.pending):
-        if index in state.barred:
-            continue
         rung = state.pending[index]
         trail = state.armed.get(index)
         arming = trail is None
@@ -381,14 +394,8 @@ def _advance_trails(
         # INHERITED - on the arming bar, the touch reference itself.
         decided = _trail_snu(bar, trail, level=level) or decided
         if bar.high >= level:
-            # The gap rule reaches the legs that REST at the broker, and on the
-            # arming bar this one does not: it is placed at the touch, which
-            # cannot precede the open. So an arming bar takes the trigger
-            # however high it opened, and a later bar that opens through the
-            # trigger takes its open, the first print.
-            _book_entry(
-                state, bar, plan, index, rung, price=level if arming else max(bar.open, level)
-            )
+            price = _trail_fill_price(bar, level, arming=arming)
+            _book_entry(state, bar, plan, index, rung, price=price)
             continue
         trail.trough = min(trail.trough, bar.low)
     return decided
