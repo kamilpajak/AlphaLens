@@ -115,7 +115,18 @@ def exit_mark_for_fill(
 
 
 def first_touch(bars: list[dict], limit: float, entry_expiry_ms: int) -> int | None:
-    """Index of the first bar (ts < expiry) with low <= limit; None if never."""
+    """Index of the first bar (ts < expiry) with low <= limit; None if never.
+
+    NOT the production arming condition. The live watcher also applies the G9
+    depth suspend (`entry_trail_watcher._trough_below_next_tier`: a running low
+    below the NEXT tier's limit hands the move to that tier) and refuses to open
+    a watch at all on a day-1 gap through the open. Neither is applied here, so a
+    rung production would bar can appear as a touch.
+
+    That keeps the PER-ARM comparison valid, because both arms see the same
+    touches. It means the absolute fill rates are NOT comparable with production
+    counters, and they are wider than the live path would produce.
+    """
     for i, b in enumerate(bars):
         if int(b["t"]) >= entry_expiry_ms:
             return None

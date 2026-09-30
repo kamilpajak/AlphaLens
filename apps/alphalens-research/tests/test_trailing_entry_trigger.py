@@ -91,6 +91,25 @@ class TheTwoFormsTest(unittest.TestCase):
         self.assertAlmostEqual(prop[1], 66.33, places=4)
         self.assertIsNone(add)
 
+    def test_a_GAPPED_touch_bar_freezes_on_the_open_and_seeds_on_the_low(self) -> None:
+        # The one bar where the reference and the trough seed are different
+        # numbers, so it pins both at once. Limit 68.00, touch bar opening at
+        # 67.50 and printing a low of 67.00:
+        #   reference = min(67.50, 68.00) = 67.50  ->  distance = 0.3375
+        #   trough seeds from the bar's LOW, 67.00, not from the reference
+        #   first post-touch level = 67.00 + 0.3375 = 67.3375
+        # Two mutations this kills: taking the limit as the reference (level
+        # 67.34) and seeding the trough from the reference (level 67.8375, which
+        # the next bar never reaches). The seed is deliberately the low -- the
+        # daily-bar replay seeds both from the reference, and that divergence is
+        # stated in the module docstring rather than silently fixed here.
+        bars = [_bar(0, 67.5, 68.2, 67.0), _bar(1, 67.2, 67.5, 67.1)]
+        got = trail_trigger(bars, 0, 0.005, FAR_FUTURE, limit=68.0, form=ADDITIVE)
+        self.assertIsNotNone(got)
+        assert got is not None
+        self.assertEqual(got[0], 1)
+        self.assertAlmostEqual(got[1], 67.3375, places=10)
+
     def test_a_gap_open_above_the_level_fills_at_the_open(self) -> None:
         bars = [_bar(0, 68.0, 68.0, 68.0), _bar(1, 67.0, 67.0, 66.0), _bar(2, 67.5, 67.6, 67.4)]
         got = trail_trigger(bars, 0, 0.005, FAR_FUTURE, limit=68.0, form=ADDITIVE)
