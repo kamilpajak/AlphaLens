@@ -168,6 +168,14 @@ KEY_CEILING = "ceiling"
 the order was armed with (#1317). Named here rather than spelled at the two
 write sites and the fold, so the journal key cannot drift."""
 
+KEY_DISTANCE = "distance"
+"""Field name on a ``trail_armed`` line: the ABSOLUTE trailing distance
+(``TrailingStopDistanceToMarket``) the order was armed with (#1635). Journaled
+rather than recomputed at read time because it is frozen at the arm off the
+ARMING reference, while the ambient ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` the arm
+read can move before the terminal is written and the ``watch_open`` record's
+``d_bps`` is frozen at drain time — so neither d reproduces it afterwards."""
+
 ENTRY_TRAIL_TERMINAL_KINDS = frozenset({KIND_FIRED, KIND_EXPIRED, KIND_SUSPENDED, KIND_CANCELLED})
 ENTRY_TRAIL_KINDS = (
     frozenset({KIND_WATCH_OPEN, KIND_TOUCHED, KIND_TROUGH, KIND_TRAIL_ARMED})
@@ -221,6 +229,13 @@ class EntryTrailTierState:
     # come from that tick. A record pairing an old ceiling with a freshly
     # computed trigger describes no order that ever existed.
     armed_trigger: float | None = None
+    # #1635: the ABSOLUTE trailing distance the SAME ``trail_armed`` line
+    # journaled. This is the number the terminal measurement stamp needs: the
+    # server ratchets the trigger down as ``trough + distance`` with the distance
+    # held fixed, so a would-be trigger recomputed from any ``d`` is wrong
+    # whenever the flag moved between the arm and the terminal. ``None`` when the
+    # tier is not armed or the line predates this field.
+    armed_distance: float | None = None
     # #1376: the LATEST terminal record verbatim (mirror of ``watch_open``).
     # ``terminal_kind`` alone reduced a ``fired`` line to its marker while the
     # journal carries the fill (``avg_price`` / ``realized_qty``) and a
@@ -298,6 +313,7 @@ def _fold_record_into_state(state: dict[str, Any], kind: str, record: Mapping[st
         state["armed_order_id"] = None
         state["armed_ceiling"] = None
         state["armed_trigger"] = None
+        state["armed_distance"] = None
     elif kind == KIND_TRAIL_ARMED:
         # The LATEST trail_armed wins (a real-id line overrides the earlier
         # null-id write-ahead); a missing/blank order id folds back to None.
@@ -305,6 +321,7 @@ def _fold_record_into_state(state: dict[str, Any], kind: str, record: Mapping[st
         state["armed_order_id"] = str(order_id) if order_id else None
         state["armed_ceiling"] = _finite_positive_float(record.get(KEY_CEILING))
         state["armed_trigger"] = _finite_positive_float(record.get(KEY_TRIGGER))
+        state["armed_distance"] = _finite_positive_float(record.get(KEY_DISTANCE))
     elif kind == KIND_TROUGH:
         trough = _finite_positive_float(record.get(KIND_TROUGH))
         if trough is not None and (state["min_trough"] is None or trough < state["min_trough"]):
@@ -343,6 +360,7 @@ def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
                 "armed_order_id": None,
                 "armed_ceiling": None,
                 "armed_trigger": None,
+                "armed_distance": None,
                 "terminal_record": None,
             },
         )
@@ -700,7 +718,8 @@ def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
     Kept per crid: the latest ``watch_open``, the record achieving the MIN
     trough (equals the latest under the ratchet invariant, but min is the
     fold-equivalent choice), the latest ``trail_armed`` (it carries the resting
-    order id + its ceiling, which ``latest_state`` alone does not preserve), the
+    order id, its ceiling and its trailing distance, which ``latest_state`` alone
+    does not preserve), the
     latest non-terminal state record, and the latest terminal record — :data:`COMPACTED_LINES_PER_CRID_BOUND` lines at
     most, however long the input. UNKNOWN kinds and malformed/missing-crid
     lines are PRESERVED VERBATIM (memo G4 — dropping a malformed line would

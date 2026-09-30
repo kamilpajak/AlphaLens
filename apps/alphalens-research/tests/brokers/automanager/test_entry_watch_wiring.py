@@ -811,6 +811,11 @@ class TestEntryWatchPassNativeArm(unittest.TestCase):
         self._run(deps, 10.0, prices)
         cancelled = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_CANCELLED]
         self.assertEqual(len(cancelled), 1, "insufficient funds terminal-refuses the tier (G7)")
+        # #1635: the write-ahead already journaled a distance before the POST was
+        # rejected, but the POST FAILED, so no order rests and no trigger ever
+        # ratcheted. The stamp says unknown rather than publishing the level an
+        # order that does not exist would have had.
+        self.assertIsNone(cancelled[0]["measurement"]["trigger_at_final_trough"])
 
     def test_deep_decline_suspends_on_a_single_gap_down_tick_no_order(self) -> None:
         # A gap-down tick that touches AND is already below the next tier suspends
@@ -2144,6 +2149,23 @@ class TestArmJournalsOnlyArmTimeFacts(unittest.TestCase):
             lines[0][entry_trails.KEY_CEILING], broker.trailing_orders[0]["ceiling_price"]
         )
         self.assertEqual(lines[0][entry_trails.KEY_TRIGGER], lines[-1][entry_trails.KEY_TRIGGER])
+
+    def test_both_arm_lines_journal_the_distance_that_went_on_the_wire(self) -> None:
+        # #1635: the ABSOLUTE trailing distance is the arm-time fact the terminal
+        # measurement stamp needs, and it is the one number no later read can
+        # recompute. The arm prices it off the AMBIENT
+        # ALPHALENS_BROKER_ENTRY_TRAIL_BPS, which the operator can widen while
+        # this watch is still open, and the ``watch_open`` record's ``d_bps`` was
+        # frozen at drain time. So it is journaled, and it is asserted against
+        # what the adapter was ASKED to send rather than against a formula, for
+        # the same reason the ceiling is (#1317).
+        broker = _RecordingBroker()
+        broker.wire_ceiling = 58.95
+        lines = self._arm(broker)
+        sent = broker.trailing_orders[0]["trailing_distance"]
+        self.assertAlmostEqual(sent, 0.05, places=10)  # reference 10.00 at 50 bps
+        self.assertEqual(lines[0][entry_trails.KEY_DISTANCE], sent, "the write-ahead")
+        self.assertEqual(lines[-1][entry_trails.KEY_DISTANCE], sent, "the post-POST line")
 
 
 class TestWatchGeometryStampThroughToPlannedLine(unittest.TestCase):

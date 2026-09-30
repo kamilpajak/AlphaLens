@@ -38,9 +38,16 @@ rotates: without the snapshot the measurement cannot be repeated.
 **A ceiling must not be reconstructed.** The obvious shortcut —
 `would_be_trigger x (1 + CEILING_EPS_FRAC)` off the `fired` blob — reproduces
 the arm line exactly on 22 of the 23 rows and is wrong by 0.3324 on BAH, because
-`would_be_trigger` is derived from the MINIMUM trough ever journaled while the
+`would_be_trigger` was derived from the MINIMUM trough ever journaled while the
 arm used the trough as it stood at arm time. Taking the shortcut would have
 reported BAH's overshoot as 92 bps instead of 47.
+
+`would_be_trigger` no longer exists: on 2026-09-30 it was renamed
+`trigger_at_final_trough` and its arithmetic corrected from `trough x (1+d)` to
+the trough plus the journaled arm distance (#1635). The 23 rows above were
+written with the old field, so the measurement stands as taken. The shortcut is
+no more usable against the new field than against the old one — it still reads a
+trough from after the arm.
 
 ## The 23 fires
 

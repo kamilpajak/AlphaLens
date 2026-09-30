@@ -272,6 +272,56 @@ class TestFoldEntryTrailLines(unittest.TestCase):
         )
         self.assertIsNone(legacy.tiers[_CRID].armed_trigger)
 
+    def test_latest_trail_armed_distance_wins_and_a_legacy_line_folds_to_none(self) -> None:
+        # #1635: the trailing DISTANCE is the only arm-time number that survives
+        # a flag change. The arm prices the order with the AMBIENT
+        # ALPHALENS_BROKER_ENTRY_TRAIL_BPS, while the watch_open record carries
+        # the value frozen at drain time, so a distance recomputed later from
+        # either d is wrong whenever the operator moved the flag while the watch
+        # was open. Journaled, it cannot drift.
+        armed = et.fold_entry_trail_lines(
+            [
+                _watch_open(),
+                _line(
+                    et.KIND_TRAIL_ARMED,
+                    order_id="O-9",
+                    trigger=58.8327,
+                    ceiling=58.95,
+                    distance=0.2927,
+                ),
+            ]
+        )
+        self.assertEqual(armed.tiers[_CRID].armed_distance, 0.2927)
+        legacy = et.fold_entry_trail_lines(
+            [_watch_open(), _line(et.KIND_TRAIL_ARMED, order_id="O-9", trigger=58.8327)]
+        )
+        self.assertIsNone(legacy.tiers[_CRID].armed_distance)
+
+    def test_a_corrupt_distance_folds_to_none_rather_than_a_bad_number(self) -> None:
+        # Same SEMANTIC gate as the ceiling and the trigger: a zero or negative
+        # distance would place the would-be trigger AT or BELOW the trough, which
+        # no trailing order can do.
+        for bad in (0, -1.5, float("nan"), float("inf"), True, None):
+            with self.subTest(distance=bad):
+                fold = et.fold_entry_trail_lines(
+                    [_watch_open(), _line(et.KIND_TRAIL_ARMED, order_id="O-9", distance=bad)]
+                )
+                self.assertIsNone(fold.tiers[_CRID].armed_distance)
+
+    def test_re_opening_a_watch_clears_the_armed_distance(self) -> None:
+        # The re-arm reprices the order against a fresh reference, so the
+        # previous session's frozen distance must not survive into the next one.
+        fold = et.fold_entry_trail_lines(
+            [
+                _watch_open(),
+                _line(
+                    et.KIND_TRAIL_ARMED, order_id="O-1", trigger=10.05, ceiling=10.07, distance=0.05
+                ),
+                _watch_open(awaiting_fresh_low=True),
+            ]
+        )
+        self.assertIsNone(fold.tiers[_CRID].armed_distance)
+
     def test_re_opening_a_watch_clears_the_armed_ceiling(self) -> None:
         # The re-arm resets the arm state; a stale ceiling from the previous
         # session's order must not be compared against the next fill.
@@ -437,6 +487,8 @@ def _fold_data(fold: et.EntryTrailFold) -> tuple[Any, int]:
                 # armed ceiling fails here instead of going quiet.
                 s.armed_ceiling,
                 s.armed_trigger,
+                # #1635: likewise for the frozen trailing distance.
+                s.armed_distance,
                 # #1376: the latest terminal record rides the fold (fired avg
                 # price / realized qty, cancel note) — a compactor that kept
                 # the marker but lost the record must fail here.

@@ -113,6 +113,82 @@ class TestSuspendedMeasurementBlob(unittest.TestCase):
         self.assertEqual(blob["final_trough"], 9.40)
         self.assertIsNone(blob["order_id"])
 
+    def test_an_armed_tier_stamps_the_trough_plus_the_frozen_distance(self) -> None:
+        # #1635: the resting order's trigger ratchets down as
+        # ``trough + distance`` with the distance held fixed at the arm, so the
+        # stamp must read the JOURNALED distance. The form this replaces
+        # multiplied the trough (9.40 * 1.005 = 9.447), which is the trigger of
+        # an order that would have been re-armed at the trough — not the one
+        # resting at the broker.
+        #
+        # ``order_id=None`` is the G3 write-ahead shape and is load-bearing here:
+        # ``_active_entry_watches`` drops a tier whose ``armed_order_id`` is set,
+        # so a real id would take the tier out of the watch pass and no terminal
+        # stamp would be written at all.
+        path = _journal(self)
+        _seed_watch(path, next_tier_limit=9.5)
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_TRAIL_ARMED,
+                "crid": "KO-2026-07-20-entry-t0",
+                "order_id": None,
+                entry_trails.KEY_TRIGGER: 10.05,
+                entry_trails.KEY_DISTANCE: 0.05,
+            }
+        )
+        prices: dict[int, float | None] = {}
+        deps = _watch_deps(_FakeFeed(prices), [])
+        _run(deps, 10.0, prices)  # touched, trough=10.0
+        _run(deps, 9.40, prices)  # below next tier 9.5 -> suspended
+
+        blob = _terminal(path, entry_trails.KIND_SUSPENDED)["measurement"]
+        self.assertEqual(blob["final_trough"], 9.40)
+        self.assertAlmostEqual(blob["trigger_at_final_trough"], 9.45, places=10)
+        self.assertNotIn("would_be_trigger", blob)
+
+    def test_a_tier_that_never_armed_has_no_trigger(self) -> None:
+        # No ``trail_armed`` line, so no order rests and no distance is frozen.
+        # The stamp says so rather than publishing a what-if: the field feeds the
+        # offline join that is meant to compare the realized fill against the
+        # level the BROKER used, and a tier with no order has no such level.
+        path = _journal(self)
+        _seed_watch(path, next_tier_limit=9.5)
+        prices: dict[int, float | None] = {}
+        deps = _watch_deps(_FakeFeed(prices), [])
+        _run(deps, 10.0, prices)
+        _run(deps, 9.40, prices)
+
+        blob = _terminal(path, entry_trails.KIND_SUSPENDED)["measurement"]
+        self.assertEqual(blob["final_trough"], 9.40)
+        self.assertIsNone(blob["trigger_at_final_trough"])
+
+    def test_the_stamp_reads_the_journaled_distance_not_the_ambient_flag(self) -> None:
+        # The decisive property. The arm prices the order with the AMBIENT
+        # ALPHALENS_BROKER_ENTRY_TRAIL_BPS (control_loop reads it fresh every
+        # pass), while the ``watch_open`` record's ``d_bps`` is frozen at drain
+        # time and rides a re-arm for days. Here both d values say 50 bps and the
+        # journaled distance says 150 bps, which is the state the operator
+        # creates by widening the flag while a watch is open. Any stamp derived
+        # from either d reads 9.447 or 9.45; the order really fires at 9.55.
+        path = _journal(self)
+        _seed_watch(path, next_tier_limit=9.5)
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_TRAIL_ARMED,
+                "crid": "KO-2026-07-20-entry-t0",
+                "order_id": None,
+                entry_trails.KEY_TRIGGER: 10.15,
+                entry_trails.KEY_DISTANCE: 0.15,
+            }
+        )
+        prices: dict[int, float | None] = {}
+        deps = _watch_deps(_FakeFeed(prices), [])
+        _run(deps, 10.0, prices)
+        _run(deps, 9.40, prices)  # _run patches the flag to "50"
+
+        blob = _terminal(path, entry_trails.KIND_SUSPENDED)["measurement"]
+        self.assertAlmostEqual(blob["trigger_at_final_trough"], 9.55, places=10)
+
 
 class TestExpiredMeasurementBlob(unittest.TestCase):
     def test_expiry_terminal_carries_measurement(self) -> None:

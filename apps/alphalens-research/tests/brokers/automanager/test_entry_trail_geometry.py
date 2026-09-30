@@ -22,6 +22,7 @@ from alphalens_pipeline.brokers.automanager.entry_trail_geometry import (
     arms_inside_exit_region,
     compute_trailing_order_geometry,
     entry_fill_estimate,
+    trigger_at_trough,
 )
 from alphalens_pipeline.paper.sizing import planned_blended_entry
 from alphalens_research.diagnostics.exit_policy_replay import arm_b_initial_levels
@@ -330,6 +331,52 @@ class TestValidityAcrossEveryPartialFillSubset(unittest.TestCase):
             ):
                 invalid.append(indices)
         self.assertEqual(invalid, [(0, 1), (0, 2), (1, 2), (0, 1, 2)])
+
+
+class TestTriggerAtTrough(unittest.TestCase):
+    """#1635: the level a resting native trailing order fires at, once the
+    server has ratcheted it down to ``trough``."""
+
+    def test_the_trigger_is_the_trough_plus_the_frozen_distance(self) -> None:
+        # The distance is ABSOLUTE and frozen at the arm, so the trigger falls
+        # one-for-one with the trough. The form this replaces multiplied the
+        # trough instead, which shrinks the distance as the trough falls: at a
+        # 6% drawdown on a 50 bps distance that is 0.003 of price, and the two
+        # forms only agree while the trough still equals the arming reference.
+        geo = compute_trailing_order_geometry(reference=10.0, trough=10.0, d_bps=50)
+        assert geo is not None
+        self.assertEqual(geo.trailing_distance, 0.05)
+        trigger = trigger_at_trough(trough=9.40, distance=geo.trailing_distance)
+        assert trigger is not None
+        self.assertAlmostEqual(trigger, 9.45, places=10)
+        self.assertNotAlmostEqual(trigger, 9.40 * 1.005, places=6)
+
+    def test_the_trigger_follows_the_trough_below_the_arming_reference(self) -> None:
+        # Not clamped to the arm price: the trough may fall a long way and the
+        # trigger follows it DOWN, which is a better entry, not a worse one
+        # (memo §2 evidence, and the same property the dry-run engine documents).
+        geo = compute_trailing_order_geometry(reference=100.0, trough=100.0, d_bps=150)
+        assert geo is not None
+        self.assertAlmostEqual(trigger_at_trough(trough=90.0, distance=geo.trailing_distance), 91.5)
+
+    def test_an_unarmed_or_degenerate_input_has_no_trigger(self) -> None:
+        # A tier that never armed has no frozen distance, so there is no honest
+        # answer — and the one tempting substitute, a distance recomputed from
+        # ``d``, is exactly the defect #1635 is about. ``None`` stays ``None``:
+        # unknown, not guessed.
+        for trough, distance in (
+            (9.40, None),
+            (None, 0.05),
+            (None, None),
+            (9.40, 0.0),
+            (9.40, -0.05),
+            (9.40, float("nan")),
+            (9.40, float("inf")),
+            (float("nan"), 0.05),
+            (0.0, 0.05),
+        ):
+            with self.subTest(trough=trough, distance=distance):
+                self.assertIsNone(trigger_at_trough(trough=trough, distance=distance))
 
 
 if __name__ == "__main__":

@@ -49,12 +49,20 @@ Named here so a later reader does not discover them as new:
   variant B is not obvious and is not asserted here.
 - The live reference is a BID and this study's bars are trade prices, so a spread sits between them.
 
-### One place the same arithmetic reaches production
+### The same arithmetic also reached production, and was fixed there
 
-`would_be_trigger`, the terminal measurement stamp in `control_loop`, carries the proportional form
-too, and that field feeds the offline join this memo's evidence line asks for
-("live rollout must MEASURE realized-vs-replay before widening"). Tracked in #1635. It is a separate
-problem from this one and is not fixed by correcting the study.
+The terminal measurement stamp in `control_loop` carried the proportional form too, in the field
+that feeds the offline join this memo's evidence line asks for ("live rollout must MEASURE
+realized-vs-replay before widening"). Fixed on 2026-09-30 under #1635, by a different route than the
+study's: the arm now journals the ABSOLUTE `distance` it sent on the `trail_armed` line, and the
+stamp adds it to the trough. Inverting the recorded trigger would not have worked, because the arm
+prices the order with the AMBIENT `ALPHALENS_BROKER_ENTRY_TRAIL_BPS` while the `watch_open` record's
+`d_bps` is frozen at drain time, so neither `d` reproduces the distance once the flag moves.
+
+Two consequences for anyone joining on that field. The key is now `trigger_at_final_trough`; rows
+written before 2026-09-30 carry `would_be_trigger` and the proportional arithmetic. And the new
+field is `null` for a tier armed before the distance was journaled, and for one that never armed at
+all — no verdict, rather than a re-derived number.
 
 ## Addendum 2026-09-30 — what the trigger correction is worth, measured
 

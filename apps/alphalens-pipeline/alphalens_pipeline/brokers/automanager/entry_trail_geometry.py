@@ -101,6 +101,29 @@ def compute_trailing_order_geometry(
     )
 
 
+def trigger_at_trough(*, trough: float | None, distance: float | None) -> float | None:
+    """The level the resting native trailing order fires at once the server has
+    ratcheted it down to ``trough`` (#1635).
+
+    ``distance`` is the ABSOLUTE ``trailing_distance`` the arm put on the wire,
+    frozen there off the ARMING reference. So the trigger falls one-for-one with
+    the trough, and this needs the JOURNALED distance rather than any ``d``: the
+    arm reads the ambient ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS``, which can move
+    before the terminal is written, and the ``watch_open`` record's ``d_bps`` is
+    frozen at drain time, so neither reproduces the distance afterwards.
+
+    ``None`` when either input is missing or not a usable price — a tier that
+    never armed has no frozen distance, and there is no honest answer for it.
+    NOT clamped to the tier limit or to the arm price: the trough may fall below
+    both and the trigger follows it down, which is a better entry."""
+    if trough is None or distance is None:
+        return None
+    for value in (trough, distance):
+        if not math.isfinite(value) or value <= 0.0:
+            return None
+    return trough + distance
+
+
 @dataclass(frozen=True)
 class CeilingObservation:
     """What one entry-trail fire did relative to the ceiling it was armed with."""

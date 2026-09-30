@@ -25,9 +25,15 @@ without this snapshot the whole measurement becomes unrepeatable.
 **Do NOT reconstruct the ceiling from the ``fired`` measurement.** The obvious
 shortcut, ``would_be_trigger * (1 + CEILING_EPS_FRAC)``, reproduces the arm line
 exactly on 22 of these 23 rows and is wrong by −0.3324 on BAH: the ``fired``
-blob's ``would_be_trigger`` is derived from the MINIMUM trough ever journaled,
+blob's ``would_be_trigger`` was derived from the MINIMUM trough ever journaled,
 while the arm used the trough as it stood at arm time. :data:`BAH_DERIVED_CEILING`
 pins that gap so nobody reintroduces the shortcut.
+
+``would_be_trigger`` was renamed ``trigger_at_final_trough`` on 2026-09-30 and
+its arithmetic corrected to the trough plus the JOURNALED arm distance (#1635).
+These 23 rows were written with the old field and the old arithmetic, so the
+numbers here stand as measured; the shortcut is no more usable against the new
+field, which still reads a trough from after the arm.
 
 **Reading rule for the SIM rows.** SIM fills are synthetic (see the 2026-08-07
 probe: SIM filled a deep-through limit and a near-touch limit at the SAME
@@ -108,7 +114,8 @@ BAH_BREACH_ABS = 0.3503000000000043
 BAH_BREACH_BPS = 46.925841630978326
 
 BAH_DERIVED_CEILING = 74.31733799999998
-"""What ``would_be_trigger (73.80 * 1.005) * (1 + CEILING_EPS_FRAC)`` gives for
+"""What the superseded ``would_be_trigger (73.80 * 1.005) * (1 + CEILING_EPS_FRAC)``
+gives for
 BAH — 0.3324 BELOW the ceiling the order was actually armed with. The shortcut
 matches on the other 22 rows and is wrong here, which is why the ceiling is
 journaled rather than derived."""
