@@ -441,6 +441,38 @@ def _service_start_timeout(service_text: str) -> dt.timedelta:
     return dt.timedelta(minutes=int(match.group(1)))
 
 
+# Budget between the SIGTERM and the unit going inactive. TimeoutStartSec bounds
+# ExecStart PLUS the ExecStartPost chain; after it fires, systemd still waits
+# TimeoutStopSec (unset here, so the 90s default) for the process to die and then
+# runs both ExecStopPost commands. The unit is not INACTIVE until all of that is
+# done, and a timer fire landing before then is queued rather than run. The
+# spacing assertion therefore needs strict `>` plus this margin: at exact equality
+# the run is killed at the very instant the next slot can fire, which is the
+# collision the assertion exists to forbid. 10 min is generous against a 90s
+# default plus two docker commands, and it is the cheap direction to be wrong in.
+STOP_MARGIN = dt.timedelta(minutes=10)
+
+
+def _timer_randomized_delay(timer_text: str) -> dt.timedelta:
+    """``RandomizedDelaySec=`` from a timer unit, as a timedelta; zero when absent.
+
+    systemd delays EACH fire by an independent random amount in ``[0, delay]``, so two
+    consecutive slots can land as little as ``gap - delay`` apart: the earlier one late
+    by the full delay, the later one not at all. The slot-spacing assertion has to budget
+    for that, or it blesses a timeout that a jittered pair of fires can still overrun.
+    """
+    match = re.search(r"^RandomizedDelaySec=(\d+)min\s*$", timer_text, re.MULTILINE)
+    if match is None:
+        if re.search(r"^RandomizedDelaySec=", timer_text, re.MULTILINE):
+            raise AssertionError(
+                "RandomizedDelaySec is set in a form this helper does not model. "
+                "Teach it the new form — treating it as zero would overstate the "
+                "usable gap between slots."
+            )
+        return dt.timedelta(0)
+    return dt.timedelta(minutes=int(match.group(1)))
+
+
 class TestSlotTimeParser(unittest.TestCase):
     """Positive control for :func:`_slot_times` (it guards every test below)."""
 
@@ -483,6 +515,20 @@ class TestSlotTimeParser(unittest.TestCase):
     def test_the_timeout_reader_refuses_a_form_it_does_not_model(self) -> None:
         with self.assertRaises(AssertionError):
             _service_start_timeout("TimeoutStartSec=9000\n")
+
+    def test_the_jitter_reader_reads_minutes(self) -> None:
+        self.assertEqual(
+            _timer_randomized_delay("[Timer]\nRandomizedDelaySec=5min\n"),
+            dt.timedelta(minutes=5),
+        )
+
+    def test_the_jitter_reader_returns_zero_when_the_directive_is_absent(self) -> None:
+        self.assertEqual(_timer_randomized_delay("[Timer]\nPersistent=true\n"), dt.timedelta(0))
+
+    def test_the_jitter_reader_refuses_a_form_it_does_not_model(self) -> None:
+        # Silently reading 30s as zero would overstate the usable slot gap.
+        with self.assertRaises(AssertionError):
+            _timer_randomized_delay("RandomizedDelaySec=30s\n")
 
 
 class TestThematicBuildSlotsClearTheSecDailyIndex(unittest.TestCase):
@@ -537,17 +583,24 @@ class TestThematicBuildSlotsClearTheSecDailyIndex(unittest.TestCase):
         # rather than restating it: it has already been raised three times
         # (45 -> 75 -> 110 -> 150 min), and a fourth raise past the slot gap is
         # exactly the change this test exists to catch.
+        timer_text = TIMER_PATH.read_text()
         timeout = _service_start_timeout(SERVICE_PATH.read_text())
+        jitter = _timer_randomized_delay(timer_text)
         for earlier, later in zip(self.slots, self.slots[1:], strict=False):
             gap = dt.datetime.combine(dt.date(2026, 1, 1), later) - dt.datetime.combine(
                 dt.date(2026, 1, 1), earlier
             )
-            self.assertGreaterEqual(
-                gap,
+            # The earlier fire can be jittered late by the whole delay while the later
+            # one is not jittered at all, so the WORST-CASE gap is `gap - jitter`.
+            usable = gap - jitter - STOP_MARGIN
+            self.assertGreater(
+                usable,
                 timeout,
-                f"{earlier:%H:%M} -> {later:%H:%M} UTC is {gap} apart, inside the "
-                "service's TimeoutStartSec=150min. A wedged run would swallow the "
-                "next slot instead of being repaired by it.",
+                f"{earlier:%H:%M} -> {later:%H:%M} UTC is {gap} apart; "
+                f"RandomizedDelaySec can eat {jitter} and the stop path needs "
+                f"{STOP_MARGIN}, leaving {usable} against TimeoutStartSec={timeout}. "
+                "A wedged run would swallow the next slot instead of being repaired "
+                "by it.",
             )
 
 
@@ -1157,12 +1210,27 @@ class TestThematicBuildCadence(unittest.TestCase):
         # ExecStartPost steps count toward TimeoutStartSec on a oneshot. 110
         # would have left such a day on the edge; 150 is 1.4× the observed
         # max and still leaves 90 min of the 4h slot spacing.
+        #
+        # Bumped 150→210min on 2026-09-30, after the FIRST scheduled deciding
+        # run on the #1606 schedule hit the cap and was SIGTERMed (exit 143,
+        # Result=timeout) while the two ExecStartPost publish steps still had
+        # to run. The brief parquet was already written; it never reached
+        # Postgres, and the dashboard showed nothing for the date until an
+        # operator ran rebuild-cache by hand. Measured stages that run:
+        # ingest 9.6, extract 43.9, map-themes 29.7, score 43.3, brief 17.3 —
+        # 144 min to the end of brief against a ~76 min mean before the
+        # deciding slot moved to 04:30 UTC. The corpus now carries ~97 EX-99.1
+        # narratives the 00:30 slot never saw, and those are long documents,
+        # not headlines: the 200-item cap bounds the COUNT, not the token
+        # volume, nor the candidate count the later stages inherit.
+        # With migrate-qual-cache and enrich the run needed about 153 min.
+        # 210 is 1.37× that and still leaves 30 min of the 4h slot spacing.
         self.assertRegex(
             SERVICE_PATH.read_text(),
-            re.compile(r"^TimeoutStartSec=150min\s*$", re.MULTILINE),
-            "Service must carry TimeoutStartSec=150min: a wedged run blocks "
-            "every subsequent timer fire, and a heavy map-themes day needs "
-            "more than 110min for the product stages alone (#1330).",
+            re.compile(r"^TimeoutStartSec=210min\s*$", re.MULTILINE),
+            "Service must carry TimeoutStartSec=210min: a wedged run blocks "
+            "every subsequent timer fire, and the deciding run on the #1606 "
+            "schedule needed about 153 min end to end (#1606 follow-up).",
         )
 
     def test_run_thematic_day_passes_force_to_ingest(self) -> None:
