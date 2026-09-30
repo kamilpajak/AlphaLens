@@ -119,9 +119,11 @@ def trigger_at_trough(*, trough: float | None, distance: float | None) -> float 
 
     APPROXIMATE, and the caller should say so when publishing the number: the
     journaled distance is the one the arm REQUESTED, because ``PlacedOrder``
-    reports no wire distance and the broker tick-aligns it at placement. So the
-    result carries that alignment residual (see
-    ``control_loop._journal_trail_armed``)."""
+    reports no wire distance and the adapter rounds it to whole ticks at
+    placement. The residual is median 0.51 bps and at most 4.33 bps on the
+    recorded arms, i.e. LARGER than the arithmetic error this replaces — so this
+    number is the resting order's trigger only to about one tick. Measurement and
+    provenance in ``control_loop._journal_trail_armed``."""
     if trough is None or distance is None:
         return None
     for value in (trough, distance):
