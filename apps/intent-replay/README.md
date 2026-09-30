@@ -381,15 +381,30 @@ The rules, each stated so a reader can check it against a bar:
 | the deadline | an armed or barred rung expires with the others, through the one published cause |
 | quantity | from the rung's LIMIT, as in the drain. A trailing fire changes when and at what price a rung executes, not how much it buys |
 
-**How often the convention decides, measured.** Over 20 sessions of real daily
-bars, 11 654 names with a complete history, one 8-bar watch each and a 50 bps
-distance: the mean number of bars meeting the trail's own SNU predicate is
-**0.23**, and **79.7%** of watches meet it on no bar at all. 94.7% of watches
-fire, most of them immediately, because a 50 bps rebound is small against a
-median daily range of 1.53%. So on daily bars a trailing run usually reports
-`snu_bars: 0` from this source. The frequency is a function of the bar's
-granularity against the distance, not a property of the model; on minute bars,
-whose range is two orders smaller, it is smaller again.
+**How often the convention decides, measured by running it.** The construction
+is stated because the number is a function of it: the last 20 sessions of the
+split-adjusted daily store, every one of the 11 654 tickers with a complete
+history, an eight-bar watch, ONE rung placed as a pullback trap at the first
+bar's open less `p`, a 50 bps distance, and no take-profit ladder so `snu_bars`
+carries this source alone.
+
+| trap `p` | mean `snu_bars` | watches reporting 0 | watches that fired |
+|---|---|---|---|
+| 0.5% | 0.67 | 34.2% | 69.8% |
+| 1.0% | 0.57 | 44.1% | 57.0% |
+| 2.0% | 0.44 | 57.1% | 43.8% |
+
+The trap depth belongs in that table for a reason worth stating on its own,
+because it makes the arming bar the COMMON case and not an edge one. A rung at
+`open × (1 − p)` carries a trigger at `rung × (1 + d)`, and the bar's own open
+lies ABOVE that trigger exactly when `p > d / (1 + d)` — 0.4975% at 50 basis
+points. So every trap deeper than half a percent arms on a bar whose open has
+already passed the trigger, and such a bar IS counted: the order was not resting
+at the open, so an open above the trigger settles nothing.
+
+Zero from this source is common without being the rule, and the frequency is a
+function of the bar's granularity and of the trap depth rather than a property of
+the model; on minute bars, whose range is two orders smaller, it falls again.
 
 **Where the fill price stands against the record.** The convention fills at the
 trigger. Of the fires frozen in `tests/incident_1317_fixture.py`, **one of the

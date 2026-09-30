@@ -769,11 +769,19 @@ the convention on any bar that makes a new low and retraces.
 section, not "makes a new low and retraces".** That phrase is looser than the
 criterion and an earlier revision left it standing alone. A bar counts when both
 readings are consistent with it AND lead to different money, which for a trail
-means all three of: the open did not gap through the inherited trigger (a gap is
-the first print and forced), the low could have fallen below the trough the bar
-inherited, and the retrace reached `low + distance` so that the low-first reading
-would have fired. A bar making a new low and retracing five basis points at a
-fifty-basis-point distance satisfies the phrase and changes nothing.
+means all three of: the open did not gap through the trigger of an order ALREADY
+RESTING (that gap is the first print and forced, and both readings fill there),
+the low could have fallen below the trough the bar inherited, and the retrace
+reached `low + distance` so that the low-first reading would have fired. A bar
+making a new low and retracing five basis points at a fifty-basis-point distance
+satisfies the phrase and changes nothing.
+
+The first of those three says RESTING for a reason that is not a detail. On the
+ARMING bar no order exists at the open — it is placed when the price reaches the
+rung — so an open above the trigger has settled nothing and the bar is counted.
+That is the common case rather than an edge one: for a rung placed as a pullback
+trap of depth `p`, the open lies above the trigger whenever `p > d / (1 + d)`,
+which is under half a percent at 50 basis points.
 
 **And the model, published here because §4.4 is where a reader checks a bar
 against it.** With `entry_trail_bps` stated, nothing rests at a rung:
@@ -789,15 +797,30 @@ against it.** With `entry_trail_bps` stated, nothing rests at a rung:
 | the deadline | an armed or a handed-on rung expires with the others, under the one cause §4.6 publishes |
 | quantity | from the rung's LIMIT, as in the drain. A trailing fire changes when and at what price a rung executes, never how much it buys |
 
-**How often the convention decides, for a trail, measured.** Over 20 sessions of
-real daily bars, 11 654 names with a complete history and one eight-bar watch
-each at 50 bps: the mean number of bars meeting the predicate is **0.23**, and
-**79.7%** of watches meet it on no bar at all — 94.7% of watches fire, most
-immediately, because a 50 bps rebound is small against a 1.53% median daily
-range. So `snu_bars` is usually 0 from this source on daily bars, and the
-frequency is a function of the bar's granularity against the distance rather than
-a property of the model. An earlier revision of this paragraph said the row
-"fires most often"; that was the frequency of one CONJUNCT, not of the rule.
+**How often the convention decides, for a trail, measured by RUNNING it.** The
+construction decides the number, so it is published with it: the last 20 sessions
+of the split-adjusted daily store, every one of the 11 654 tickers with a
+complete history, an eight-bar watch, one rung as a pullback trap at the first
+bar's open less `p`, 50 bps, and no take-profit ladder so the count carries this
+source alone.
+
+| trap `p` | mean `snu_bars` | watches reporting 0 | watches that fired |
+|---|---|---|---|
+| 0.5% | 0.67 | 34.2% | 69.8% |
+| 1.0% | 0.57 | 44.1% | 57.0% |
+| 2.0% | 0.44 | 57.1% | 43.8% |
+
+The trap depth is in that table because it decides whether the ARMING bar can be
+counted, and for realistic depths it always can: a rung at `open × (1 − p)` has
+its trigger at `rung × (1 + d)`, and the open lies above that trigger exactly
+when `p > d / (1 + d)`, which is 0.4975% at 50 bps. The arming bar is therefore
+the common case rather than an edge one, and it is counted because the order is
+not resting at the open. Zero from this source is common without being the rule,
+and the frequency follows the bar's granularity and the trap depth rather than
+any property of the model. Two earlier figures do not survive: a claim that the
+row "fires most often" was the frequency of one CONJUNCT, and a mean of 0.23 came
+from a construction that was never published with it and cannot be reproduced
+from the text.
 
 **A FOURTH situation is an SNU that this section does NOT resolve, and says so.**
 A rung whose limit is at or above the bar's open is through at the first print,
