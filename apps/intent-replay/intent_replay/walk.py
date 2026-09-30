@@ -58,6 +58,17 @@ _DUST_REL_TOL = 1e-9
 _BPS_PER_UNIT = 10_000
 
 
+def _trigger(trough: float, distance: float) -> float:
+    """The level a trailing buy fires at: ADDITIVE, because the wire field is a
+    price distance computed once and not a fraction of the running low.
+
+    Named, so the quantity has one expression. The classification path and the
+    fill path each derived it separately, and two expressions for one number is
+    the defect this module has already paid for once.
+    """
+    return trough + distance
+
+
 @dataclass(slots=True)
 class _ArmedTrail:
     """One rung's native trailing order, as the BROKER holds it.
@@ -73,6 +84,10 @@ class _ArmedTrail:
 
     distance: float
     trough: float
+
+    @property
+    def level(self) -> float:
+        return _trigger(self.trough, self.distance)
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,7 +227,7 @@ class _Prospect:
 
     @property
     def level(self) -> float:
-        return self.trough + self.distance
+        return _trigger(self.trough, self.distance)
 
 
 def _next_listed_limits(plan: Plan) -> dict[int, float]:
@@ -230,21 +245,27 @@ def _next_listed_limits(plan: Plan) -> dict[int, float]:
     }
 
 
-def _trail_snu(bar: Bar, trail: _ArmedTrail, *, level: float) -> bool:
+def _trail_snu(bar: Bar, trail: _ArmedTrail, *, level: float, arming: bool) -> bool:
     """Does this bar's high/low ORDER change the money for an armed rung?
 
     Section 4.4's criterion, applied to row 3: both readings must be consistent
     with the bar and lead to different money.
 
-    * A bar that opens through the trigger is forced - the open is the first
-      print and both readings fill there, so nothing is assumed.
+    * A bar that opens through the trigger of an order ALREADY RESTING is
+      forced - the open is the first print and both readings fill there, so
+      nothing is assumed. The same open settles nothing on the ARMING bar,
+      because the order is not there yet: it is placed when the price reaches
+      the rung, which an open above the trigger has not done. That case is
+      reachable whenever the open is more than one distance above the rung.
     * A bar whose low cannot fall below the trough it already carries leaves the
       trigger where it is, so both readings test the same level.
     * Otherwise the declared reading tests ``level`` and "the low came first"
       tests ``low + distance``, which is lower. Either they fire at two prices
       or only the second fires, and both are different money.
     """
-    if bar.open >= level or bar.low >= trail.trough:
+    if not arming and bar.open >= level:
+        return False
+    if bar.low >= trail.trough:
         return False
     return bar.high >= bar.low + trail.distance
 
@@ -254,6 +275,19 @@ def _hands_on_to_the_next_rung(bar: Bar, rung: PendingEntry, next_limits: dict[i
     listed after this one, so the move is that rung's job."""
     next_limit = next_limits.get(rung.tier_index)
     return next_limit is not None and bar.open < next_limit
+
+
+def _closed_at_the_first_print(state: _WalkState, bar: Bar) -> bool:
+    """The open is the first print. If it is already through the resting stop the
+    position closed there, and a purchase after that is a RE-ENTRY - a second
+    position this tool does not model (section 4.4).
+
+    Continuity settles it rather than a convention, and it is why the test is the
+    bar's OPEN and not its low: a bar that opens ABOVE the stop reached the
+    trigger first, so the fill stands and the stop takes it out afterwards, which
+    is the worse resolution and the one section 4.4 keeps.
+    """
+    return state.stop is not None and bar.open <= state.stop
 
 
 def _prospect(
@@ -266,7 +300,7 @@ def _prospect(
     next_limits: dict[int, float],
 ) -> _Prospect | None:
     """This rung's trailing order on this bar, or ``None`` if it has none."""
-    if index in state.barred:
+    if index in state.barred or _closed_at_the_first_print(state, bar):
         return None
     trail = state.armed.get(index)
     if trail is not None:
@@ -367,14 +401,9 @@ def _advance_trails(
 
     Returns whether any rung's high/low order changed the money on this bar.
     """
-    # The open is the first print. If it is already through the resting stop the
-    # position closed there, and a purchase after that is a RE-ENTRY - a second
-    # position this tool does not model (section 4.4). Continuity settles it
-    # rather than a convention, and it is why the test is the bar's OPEN and not
-    # its low: a bar that opens ABOVE the stop reached the trigger first, so the
-    # fill stands and the stop takes it out afterwards, which is the worse
-    # resolution and the one section 4.4 keeps.
-    if state.stop is not None and bar.open <= state.stop:
+    # Asked for the whole bar, because the loop reads ``state.armed`` directly
+    # for a rung already armed and never consults ``_prospect`` on that path.
+    if _closed_at_the_first_print(state, bar):
         return False
     decided = False
     # A barred rung stays in ``pending`` so the deadline can account for it, and
@@ -389,10 +418,10 @@ def _advance_trails(
             trail = _arm(state, bar, rung, index, bps=bps, next_limits=next_limits)
             if trail is None:
                 continue
-        level = trail.trough + trail.distance
+        level = trail.level
         # Asked BEFORE the ratchet, because it is about the trough this bar
         # INHERITED - on the arming bar, the touch reference itself.
-        decided = _trail_snu(bar, trail, level=level) or decided
+        decided = _trail_snu(bar, trail, level=level, arming=arming) or decided
         if bar.high >= level:
             price = _trail_fill_price(bar, level, arming=arming)
             _book_entry(state, bar, plan, index, rung, price=price)
@@ -450,22 +479,26 @@ def _exit_on_stop(
     ladder: tuple[DeclaredTranche, ...],
     intended: float,
     costs: Costs,
-) -> None:
+) -> bool:
     """The resting stop, if the bar reached it. The stop RESTS at the broker, so
     a bar that opens already through it executes at the open.
 
     Row 1 of the section 4.4 table: a bar that reached both the stop and a
     take-profit does not say which came first. The walk takes the stop - the
-    conservative reading - and counts the bar, so a reader of the summary knows
-    the run answered a question the tape could not.
+    conservative reading - and the bar is counted, so a reader of the summary
+    knows the run answered a question the tape could not.
+
+    Returns whether row 1 applies. It is REPORTED rather than counted here,
+    because a bar can carry another of the three sources as well and a bar is
+    counted once however many questions it raised.
     """
     if state.stop is None or bar.low > state.stop:
-        return
-    if _a_tranche_would_have_fired(state, bar, ladder=ladder, intended=intended, costs=costs):
-        state.snu += 1
+        return False
+    row_one = _a_tranche_would_have_fired(state, bar, ladder=ladder, intended=intended, costs=costs)
     price = min(bar.open, state.stop)
     state.events.append(PositionClosed(t=bar.t, reason="stop", price=price, units=_held(state)))
     state.closed = "stop"
+    return row_one
 
 
 def _a_tranche_would_have_fired(
@@ -764,10 +797,15 @@ def _match_orders(
     """What the bar's own levels decide: the deadline, the entry fills, the
     excursion marks and the resting stop.
 
-    Returns whether section 4.4's fourth situation changed the money on this
-    bar. The COUNT is not applied here: the resting stop runs after the fills
-    and ends the walk on its own bar, and row 1 has already counted such a bar,
-    so the caller applies the flag only if the position is still open.
+    Returns whether this bar is an SNU bar, from ANY of the three sources
+    section 4.4 names: row 1 (the stop and a take-profit in one bar), the
+    fourth situation (a rung filling inside the bar against a take-profit), and
+    the trailing entry's own high/low order. One answer, because ``snu_bars``
+    counts BARS and not questions.
+
+    The count is applied by the caller, once, and BEFORE it asks whether the
+    position closed - a bar the stop closed can still have been decided by one
+    of the other two.
     """
     _expire(state, bar, deadline=config.entry_deadline.value)
     next_limits = _next_listed_limits(plan)
@@ -784,8 +822,8 @@ def _match_orders(
     )
     trail_snu = _fill_entries(state, bar, plan, config, next_limits=next_limits)
     _track_extremes(state, bar)
-    _exit_on_stop(state, bar, ladder=ladder, intended=intended, costs=config.costs)
-    return deep_snu or trail_snu
+    row_one = _exit_on_stop(state, bar, ladder=ladder, intended=intended, costs=config.costs)
+    return deep_snu or trail_snu or row_one
 
 
 def _advance_state(
@@ -798,7 +836,6 @@ def _advance_state(
     ladder_name: str,
     intended: float,
     trails: bool,
-    deep_snu: bool,
 ) -> None:
     """What the position does once the bar's orders have been matched: the
     take-profit review, the replay's own horizon, and the protection pass.
@@ -806,8 +843,6 @@ def _advance_state(
     Each step can close the position, and every later step is skipped when one
     does - the walk models one position, not a re-entry.
     """
-    if deep_snu:
-        state.snu += 1
     _fire_tranches(
         state,
         bar,
@@ -843,10 +878,12 @@ def _walk_one_bar(
     loop is the natural candidate to exceed the cognitive-complexity gate, and
     splitting it is a design decision rather than a rescue after a red run.
     """
-    deep_snu = _match_orders(state, bar, plan, config, ladder=ladder, intended=intended)
+    if _match_orders(state, bar, plan, config, ladder=ladder, intended=intended):
+        # Once per BAR, and before the closed check: a bar the stop closed may
+        # still have been decided by the fourth situation or by a trailing
+        # entry, and neither of those needs a take-profit to exist.
+        state.snu += 1
     if state.closed is not None:
-        # A bar the stop closed has already been asked its question, by row 1.
-        # Counting the fourth situation too would count one bar twice.
         return
     _advance_state(
         state,
@@ -857,7 +894,6 @@ def _walk_one_bar(
         ladder_name=ladder_name,
         intended=intended,
         trails=trails,
-        deep_snu=deep_snu,
     )
 
 

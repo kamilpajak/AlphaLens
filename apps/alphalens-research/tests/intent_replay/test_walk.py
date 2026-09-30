@@ -18,7 +18,7 @@ from intent_replay.bars import Bar
 from intent_replay.config import RunConfig
 from intent_replay.interpreter import DeclaredTranche, PendingEntry, Plan
 from intent_replay.trace import KINDS
-from intent_replay.walk import walk
+from intent_replay.walk import _WalkState, _would_fill, walk
 
 from tests.intent_replay.test_config import CANONICAL
 
@@ -367,6 +367,17 @@ class EntryTrailTest(unittest.TestCase):
         result = self._walk(_bar(WALK_START, 60.0, 68.5, 59.0))
         self.assertEqual(result.events[0].price, 60.0 * 1.005)
 
+    def test_an_arming_bar_whose_OPEN_is_above_the_trigger_still_counts(self) -> None:
+        # The "opened through the trigger" guard belongs to a RESTING order: for
+        # one, both readings fill at the open and nothing is assumed. On the
+        # ARMING bar the order does not exist at the open - it is placed when the
+        # price falls to the rung - so an open above the trigger settles nothing.
+        # Here the reference is 68.00 and the trigger 68.34, the open is 68.40,
+        # and the low-first reading would fill at 67.90 + 0.34 = 68.24 instead.
+        result = self._walk(_bar(WALK_START, 68.4, 68.5, 67.9))
+        self.assertEqual(result.events[0].price, 68.34)
+        self.assertEqual(result.snu_bars, 1)
+
     def test_a_barred_rung_stays_barred_on_a_LATER_bar_that_would_arm_it(self) -> None:
         # "Never arms" is the whole content of the depth rule, and it is a claim
         # about every LATER bar, not about the bar that barred the rung. Without
@@ -380,6 +391,55 @@ class EntryTrailTest(unittest.TestCase):
         filled = [event for event in result.events if event.kind == "entry_filled"]
         self.assertEqual([event.tier_index for event in filled], [1])
 
+    def test_the_classifier_reports_no_fill_once_the_open_is_through_the_stop(self) -> None:
+        """``_would_fill`` answers "does this bar fill the rung", and on a bar
+        whose OPEN is already through the resting stop the answer is no: the
+        position closed at the first print and buying after it is a re-entry.
+
+        Asserted on the function rather than through a walk on purpose. Measured
+        over 8000 random ladders, 2239 of them ending on the stop, teaching the
+        classifier this changes neither ``snu_bars`` nor the cash - so no walk
+        can carry the assertion, and without one the function would go on
+        promising a fill that ``_advance_trails`` refuses to book.
+        """
+        state = _WalkState(pending={1: RUNGS[1]})
+        state.stop = FLOOR
+        state.units, state.cash = 13.17, 900.0
+        bar = _bar(WALK_START, FLOOR - 0.5, 69.5, FLOOR - 1.0)
+        answer = _would_fill(
+            state, bar, RUNGS[1], 1, config=_config(entry_trail_bps=50), next_limits={}
+        )
+        self.assertIsNone(answer)
+
+    def test_a_trail_SNU_survives_the_stop_closing_the_same_bar(self) -> None:
+        """A bar can carry a trailing-entry SNU and then be closed by the stop.
+
+        The count used to be dropped there, on the ground that row 1 had already
+        asked the bar its question - but row 1 only counts a bar that also
+        reached an affordable take-profit, and this document declares no ladder
+        at all. Before the trail there was no SNU source without a tranche, so
+        the premise held; the trail is the first one.
+
+        The first bar arms rung 0 with its low AT the reference, so its trigger
+        cannot move and it contributes nothing of its own. On the second bar
+        rung 1 arms at 66.50 and fires at 66.8325, and the low then reaches the
+        stop. Read low-first, the price passes the stop at 63.00 before the
+        trigger, so that rung is never bought at all - the two readings differ
+        over whether a tranche was purchased, which is as different as money
+        gets.
+        """
+        bars = (
+            _bar(WALK_START, 68.05, 68.4, 68.0),
+            _bar(WALK_START + MINUTE, 66.6, 67.2, 62.9),
+        )
+        result = self._laddered(*bars)
+        self.assertEqual(
+            _kinds(result), ["entry_filled", "stop_placed", "entry_filled", "position_closed"]
+        )
+        self.assertEqual(result.events[2].price, 66.8325)
+        self.assertEqual(result.events[3].price, FLOOR)
+        self.assertEqual(result.snu_bars, 1)
+
     def test_the_fourth_situation_is_classified_by_the_TRAIL_not_by_the_limit(self) -> None:
         """Section 4.4's fourth situation asks whether a rung filled INSIDE the
         bar while a take-profit was also reached. For a resting limit the test is
@@ -387,31 +447,37 @@ class EntryTrailTest(unittest.TestCase):
         below the open is the one already through at the first print.
 
         Reading it off the LIMIT under a trail counts the wrong bars. This ladder
-        is one of five in three thousand random trailing runs where the two
-        readings disagree, found by search on 2026-09-30 rather than by guessing
-        a shape; the limit reading reports one such bar and the trail reading
-        none. The cash is asserted beside it because it must NOT move: the
-        detector feeds ``snu_bars`` alone and can never change what was bought.
+        is one of three in six thousand random trailing runs where the two
+        readings reach a different ``snu_bars``, found by search rather than by
+        guessing a shape: the limit reading reports two bars and the trail
+        reading one. The cash is asserted beside it because it must NOT move -
+        the detector feeds ``snu_bars`` alone and can never change what was
+        bought, which is why the count is the only thing that can catch it.
+
+        The ladder was re-drawn on 2026-09-30: teaching ``_trail_snu`` about
+        arming bars made the previous one report two bars under BOTH readings,
+        so it no longer discriminated. A golden case that stops discriminating
+        is worse than none, because it still passes.
         """
         rungs = (
-            PendingEntry(tier_index=0, limit_price=33.0191, notional=1184.638231),
-            PendingEntry(tier_index=1, limit_price=32.2963, notional=315.361769),
+            PendingEntry(tier_index=0, limit_price=45.8149, notional=1050.0),
+            PendingEntry(tier_index=1, limit_price=44.8421, notional=450.0),
         )
         tranches = (
-            DeclaredTranche(tranche_index=0, price=33.1557, fraction=0.333333),
-            DeclaredTranche(tranche_index=1, price=34.3689, fraction=0.333333),
-            DeclaredTranche(tranche_index=2, price=35.9811, fraction=0.333333),
+            DeclaredTranche(tranche_index=0, price=46.1709, fraction=0.333333),
+            DeclaredTranche(tranche_index=1, price=46.045, fraction=0.333333),
+            DeclaredTranche(tranche_index=2, price=47.2309, fraction=0.333333),
         )
         bars = (
-            _bar(WALK_START, 34.0063, 34.4642, 32.9773, close=33.0864),
-            _bar(WALK_START + MINUTE, 33.0864, 34.6038, 32.2753, close=33.2156),
-            _bar(WALK_START + 2 * MINUTE, 33.2156, 33.4895, 32.8876, close=33.3813),
-            _bar(WALK_START + 3 * MINUTE, 33.3813, 34.4894, 31.9653, close=33.6468),
+            _bar(WALK_START, 45.9079, 45.9934, 44.8313, close=45.9542),
+            _bar(WALK_START + MINUTE, 45.9542, 48.073, 44.3412, close=45.372),
+            _bar(WALK_START + 2 * MINUTE, 45.372, 47.0921, 43.4173, close=45.0753),
+            _bar(WALK_START + 3 * MINUTE, 45.0753, 47.1778, 43.8848, close=44.4752),
         )
-        plan = _plan(entries=rungs, notional=1500.0, floor=29.0041, tranches=tranches)
+        plan = _plan(entries=rungs, notional=1500.0, floor=42.5307, tranches=tranches)
         result = walk(plan, _config(entry_trail_bps=50), bars)
-        self.assertEqual(result.snu_bars, 0)
-        self.assertAlmostEqual(result.notional_spent, 1507.5, places=4)
+        self.assertEqual(result.snu_bars, 1)
+        self.assertAlmostEqual(result.notional_spent, 1505.4425, places=4)
 
     def _to_deadline(self, *bars: Bar) -> Any:
         config = _config(entry_trail_bps=50, entry_deadline=_deadline(WALK_START + MINUTE))
