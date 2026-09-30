@@ -3014,10 +3014,21 @@ def _journal_trail_armed(
     at drain time and rides a re-arm for days.
 
     Unlike the ceiling, this is the REQUESTED distance, not a wire value:
-    ``PlacedOrder`` reports ``stop_limit_price`` and no distance, and the broker
-    tick-aligns the distance at placement. So a terminal stamp built from it is
-    off by at most the alignment, which is smaller than the arithmetic it
-    replaces but is NOT zero."""
+    ``PlacedOrder`` reports ``stop_limit_price`` and no distance, and the adapter
+    rounds the distance to whole ticks before the POST (``_floor_to_whole_ticks``
+    in the Saxo broker — NEAREST tick with a one-tick floor, despite the name).
+
+    That alignment residual is LARGER than the arithmetic this replaces, which is
+    the opposite of what an earlier version of this docstring claimed. Measured
+    2026-09-30 on the 37 recorded terminals that carry the stamp (#1635 comment):
+    the alignment is median 0.51 bps and at most 4.33 bps, against a corrected
+    arithmetic term of median 0.00 bps and at most 1.58 bps, and it exceeds the
+    correction in 35 of the 37 rows. Cheap names are worst, because at 50 bps the
+    distance is a few cents and a penny tick is a large share of it: an $11 name
+    asked for 0.0552 and sent 0.06.
+
+    So journaling the distance removes a term no later read can reconstruct; it
+    does NOT make the stamp accurate against the order that actually rested."""
     entry_trails.append_entry_trail_line(
         {
             "kind": entry_trails.KIND_TRAIL_ARMED,
