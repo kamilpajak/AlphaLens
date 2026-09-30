@@ -550,6 +550,24 @@ class CompanyfactsCacheLifetimeTest(unittest.TestCase):
         )
         self.assertIsNone(self._store()._data_age_days(CIK_A, TODAY))
 
+    def test_a_chain_that_exists_but_cannot_be_dated_does_not_fall_back(self) -> None:
+        """The fallback tier must fire only when the issuer files NO chain row at
+        all. The chain tier can also come back empty because every chain row it
+        found was future-dated — and then the chain DOES exist, so answering with
+        a younger non-chain row is the masking bug again, one level down.
+
+        Found by review. Demonstrated before the fix: a future-dated cash-flow row
+        beside a 5-day-old `Revenues` row read age 5 while `compute_ttm` returned
+        None."""
+        self._write_rows(
+            CIK_A,
+            [
+                _row(chains.OPERATING_CASH_FLOW[0], TODAY + dt.timedelta(days=90)),
+                _row("Revenues", TODAY - dt.timedelta(days=5)),
+            ],
+        )
+        self.assertIsNone(self._store()._data_age_days(CIK_A, TODAY))
+
     def test_the_retry_interval_has_a_ceiling_as_well_as_a_floor(self) -> None:
         """Scoping the age to the FCFF chains made ages larger and therefore
         intervals longer — correctly, because the old measure was reading a fresh

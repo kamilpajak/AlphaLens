@@ -232,6 +232,19 @@ _AGE_CONCEPTS: Final[frozenset[str]] = frozenset(chains.OPERATING_CASH_FLOW) | f
 _AGE_CONCEPT_SET = pa.array(sorted(_AGE_CONCEPTS))
 
 
+def _newest_age(ends: Any, today: date) -> int | None:
+    """Days since the newest period in ``ends`` that has actually ENDED.
+
+    Future-dated rows are DROPPED rather than clamped to 0: an age of 0 still
+    reads as maximally fresh, which is the thing being fixed. ``None`` when
+    nothing is left, so the caller cannot mistake "cannot be dated" for "fresh".
+    """
+    past = pc.filter(ends, pc.less_equal(ends, pa.scalar(today, type=pa.date32())))
+    if len(past) == 0:
+        return None
+    return (today - pc.max(past).as_py()).days
+
+
 class EdgarFundamentalsStore:
     """PIT fundamentals store backed by SEC XBRL companyfacts.
 
@@ -453,12 +466,15 @@ class EdgarFundamentalsStore:
             is_us_gaap,
             pc.is_in(table.column("concept"), value_set=_AGE_CONCEPT_SET),
         )
-        for mask in (in_chain, is_us_gaap):
-            ends = pc.filter(table.column("period_end"), mask)
-            ends = pc.filter(ends, pc.less_equal(ends, pa.scalar(today, type=pa.date32())))
-            if len(ends) > 0:
-                return (today - pc.max(ends).as_py()).days
-        return None
+        chain_ends = pc.filter(table.column("period_end"), in_chain)
+        if len(chain_ends) > 0:
+            # The issuer files a chain, so only the chain may answer. Coming back
+            # empty here means every chain row is future-dated, which is not a
+            # licence to answer with something else: falling through would let a
+            # younger non-chain row speak for a chain that exists, which is the
+            # masking bug one level down.
+            return _newest_age(chain_ends, today)
+        return _newest_age(pc.filter(table.column("period_end"), is_us_gaap), today)
 
     def _is_stale(self, cik: str, today: date) -> bool:
         """Should ``cik``'s cached table be refetched?
