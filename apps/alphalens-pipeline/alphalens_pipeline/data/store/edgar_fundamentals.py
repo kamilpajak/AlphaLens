@@ -45,8 +45,6 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Final
 
-import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
@@ -63,6 +61,8 @@ from alphalens_pipeline.data.fundamentals.capital_allocation import (
 from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     CompanyfactsParquetReader,
     companyfacts_json_to_parquet_table,
+    has_concept_rows,
+    newest_period_end,
 )
 from alphalens_pipeline.data.fundamentals.edgar_companyfacts import _pit_filter
 from alphalens_pipeline.data.fundamentals.owner_earnings import (
@@ -229,20 +229,6 @@ _AGE_TAXONOMY: Final[str] = "us-gaap"
 _AGE_CONCEPTS: Final[frozenset[str]] = frozenset(chains.OPERATING_CASH_FLOW) | frozenset(
     chains.CAPEX
 )
-_AGE_CONCEPT_SET = pa.array(sorted(_AGE_CONCEPTS))
-
-
-def _newest_age(ends: Any, today: date) -> int | None:
-    """Days since the newest period in ``ends`` that has actually ENDED.
-
-    Future-dated rows are DROPPED rather than clamped to 0: an age of 0 still
-    reads as maximally fresh, which is the thing being fixed. ``None`` when
-    nothing is left, so the caller cannot mistake "cannot be dated" for "fresh".
-    """
-    past = pc.filter(ends, pc.less_equal(ends, pa.scalar(today, type=pa.date32())))
-    if len(past) == 0:
-        return None
-    return (today - pc.max(past).as_py()).days
 
 
 class EdgarFundamentalsStore:
@@ -469,20 +455,15 @@ class EdgarFundamentalsStore:
         table = self._reader.get_cik_table(cik)
         if table is None or table.num_rows == 0:
             return None
-        is_us_gaap = pc.equal(table.column("taxonomy"), _AGE_TAXONOMY)
-        in_chain = pc.and_(
-            is_us_gaap,
-            pc.is_in(table.column("concept"), value_set=_AGE_CONCEPT_SET),
+        # When the issuer files a chain at all, ONLY the chain may answer, even if
+        # every one of its rows turns out to be future-dated. Falling through then
+        # would let a younger non-chain row speak for a chain that exists, which is
+        # the masking bug one level down.
+        concepts = _AGE_CONCEPTS if has_concept_rows(table, _AGE_CONCEPTS, _AGE_TAXONOMY) else None
+        newest = newest_period_end(
+            table, taxonomy=_AGE_TAXONOMY, on_or_before=today, concepts=concepts
         )
-        chain_ends = pc.filter(table.column("period_end"), in_chain)
-        if len(chain_ends) > 0:
-            # The issuer files a chain, so only the chain may answer. Coming back
-            # empty here means every chain row is future-dated, which is not a
-            # licence to answer with something else: falling through would let a
-            # younger non-chain row speak for a chain that exists, which is the
-            # masking bug one level down.
-            return _newest_age(chain_ends, today)
-        return _newest_age(pc.filter(table.column("period_end"), is_us_gaap), today)
+        return None if newest is None else (today - newest).days
 
     def _is_stale(self, cik: str, today: date) -> bool:
         """Should ``cik``'s cached table be refetched?

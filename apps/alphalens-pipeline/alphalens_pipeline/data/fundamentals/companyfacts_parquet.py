@@ -219,6 +219,51 @@ class CompanyfactsParquetReader:
             return None
 
 
+def has_concept_rows(table: pa.Table, concepts: frozenset[str], taxonomy: str) -> bool:
+    """Does ``table`` hold any row in ``taxonomy`` whose concept is in ``concepts``?
+
+    Distinct from asking for its newest period: a caller needs to tell "this issuer
+    does not file these concepts" from "it files them and none has ended yet", and
+    those two deserve different answers.
+    """
+    mask = pc.and_(
+        pc.equal(table.column("taxonomy"), taxonomy),
+        pc.is_in(table.column("concept"), value_set=pa.array(sorted(concepts))),
+    )
+    return pc.any(mask).as_py() is True
+
+
+def newest_period_end(
+    table: pa.Table,
+    *,
+    taxonomy: str,
+    on_or_before: date,
+    concepts: frozenset[str] | None = None,
+) -> date | None:
+    """Newest ``period_end`` in ``taxonomy`` that has ENDED by ``on_or_before``.
+
+    ``concepts`` narrows to a concept family; omit it for the whole taxonomy.
+
+    Rows dated AFTER ``on_or_before`` are dropped rather than clamped. A
+    companyfacts table carries instants dated in the future — debt maturities,
+    lease terms — and treating one as age zero reports "maximally fresh" for a
+    fact about the future, which is how a freshness measure goes wrong quietly.
+    ``None`` when nothing is left, so a caller cannot mistake "cannot be dated"
+    for "fresh".
+    """
+    mask = pc.equal(table.column("taxonomy"), taxonomy)
+    if concepts is not None:
+        mask = pc.and_(
+            mask,
+            pc.is_in(table.column("concept"), value_set=pa.array(sorted(concepts))),
+        )
+    ends = pc.filter(table.column("period_end"), mask)
+    ended = pc.filter(ends, pc.less_equal(ends, pa.scalar(on_or_before, type=pa.date32())))
+    if len(ended) == 0:
+        return None
+    return pc.max(ended).as_py()
+
+
 def filter_concept(
     table: pa.Table,
     taxonomy: str,
