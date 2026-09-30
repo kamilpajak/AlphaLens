@@ -1090,10 +1090,16 @@ class SaxoPriceStream:
         if self._next_reauth_check is None or now < self._next_reauth_check:
             return
         self._next_reauth_check = now + dt.timedelta(seconds=_REAUTH_CHECK_S)
-        expires_at = self._authorized_expires_at
-        if expires_at is not None and (expires_at - now).total_seconds() > _REAUTH_MIN_REMAINING_S:
-            return
+        # The expiry comparison sits inside the try as well: an unusable expiry
+        # (for example one without a timezone) must degrade to a WARNING, not
+        # become a session failure on every connection.
         try:
+            expires_at = self._authorized_expires_at
+            if (
+                expires_at is not None
+                and (expires_at - now).total_seconds() > _REAUTH_MIN_REMAINING_S
+            ):
+                return
             self._reauthorize(now)
         except Exception:
             logger.warning(

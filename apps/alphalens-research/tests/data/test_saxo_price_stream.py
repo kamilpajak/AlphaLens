@@ -2335,6 +2335,26 @@ class TestReauthorizeInPlace(unittest.TestCase):
         self.assertFalse(any("session failed" in line for line in logs.output), logs.output)
         self.assertTrue(any("re-authorize" in line for line in logs.output), logs.output)
 
+    def test_an_unusable_expiry_never_becomes_a_session_failure(self):
+        # Review of #1647: the expiry comparison is part of the check too. A
+        # store whose expiry carries no timezone must degrade to a WARNING,
+        # not raise into _supervise on every connection.
+        def script(st, clock, provider):
+            def corrupt_then_frame():
+                # After connect: the expiry the connection carries is unusable.
+                st._authorized_expires_at = st._authorized_expires_at.replace(tzinfo=None)
+                clock.advance(31)
+                return _px_frame(1)
+
+            return [corrupt_then_frame, self._stop_with_frame(st, 2)]
+
+        with self.assertLogs(sps.logger, level="WARNING") as logs:
+            h, _clock, _provider, _client = self._harness(script)
+            h.run()
+        self.assertEqual(h.stream._consecutive_failures, 0)
+        self.assertEqual(len(h.ws_calls), 1)
+        self.assertFalse(any("session failed" in line for line in logs.output), logs.output)
+
     def test_a_connection_opens_with_a_token_that_has_five_minutes_left(self):
         h, _clock, provider, _client = self._harness(
             lambda st, clock, p: [self._stop_with_frame(st, 1)]
