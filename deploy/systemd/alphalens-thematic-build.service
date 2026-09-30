@@ -228,7 +228,32 @@ TasksMax=512
 # such a day on the edge; 150 is 1.4× the observed max and still leaves 90
 # min of the 4h slot spacing. With --init above, a timeout now actually
 # stops the container, so a wedged run no longer survives its own verdict.
-TimeoutStartSec=150min
+#
+# Bumped 150->210min on 2026-09-30, after the FIRST scheduled deciding run on
+# the #1606 schedule hit the cap. It started 04:30:21 UTC, wrote the brief
+# parquet at 06:54:19, and was SIGTERMed at 07:00:21 (exit 143, Result=timeout)
+# during `experts enrich`. Because the kill landed inside ExecStart, BOTH
+# ExecStartPost steps were skipped: the brief existed on disk and never reached
+# Postgres, so the dashboard showed nothing for the date until an operator ran
+# rebuild-cache by hand. This is the same shape as the 2026-06-15 bump, one
+# stage later.
+#
+# Measured stages of that run: ingest 9.6, extract 43.9, map-themes 29.7,
+# score 43.3, brief 17.3 — 144 min to the end of `brief`, against a ~76 min
+# mean over the 22 post-#1330 runs of the old 00:30 slot. The cause is the
+# corpus the deciding run can now see: ~97 EX-99.1 filings it used to get zero
+# of. news_ingest.DEFAULT_MAX_ITEMS caps the item COUNT at 200, not the token
+# volume — an issuer press release is a long narrative where a GDELT row is a
+# headline — and the richer extraction feeds more candidates into `score` and
+# `brief` downstream. End to end the run needed about 153 min.
+#
+# 210 is 1.37x that and still leaves 30 min of the 4h slot spacing, so a wedged
+# run is killed before the next fire. It is NOT headroom to grow into: a run
+# that genuinely needs 210 min finishes at 08:00 UTC, at the far edge of the
+# 07:00-08:00 UTC window in which the owner reads the brief. If the product
+# stages keep growing, the answer is to make them cheaper or to move work out
+# of this unit, not to raise this number again.
+TimeoutStartSec=210min
 
 # Oneshot doesn't auto-restart on success. On real failures (Polygon 5xx,
 # OpenRouter quota, OOM) systemd surfaces non-zero exit in journalctl + status.

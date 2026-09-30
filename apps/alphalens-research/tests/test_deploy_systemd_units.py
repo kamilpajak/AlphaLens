@@ -1157,12 +1157,27 @@ class TestThematicBuildCadence(unittest.TestCase):
         # ExecStartPost steps count toward TimeoutStartSec on a oneshot. 110
         # would have left such a day on the edge; 150 is 1.4× the observed
         # max and still leaves 90 min of the 4h slot spacing.
+        #
+        # Bumped 150→210min on 2026-09-30, after the FIRST scheduled deciding
+        # run on the #1606 schedule hit the cap and was SIGTERMed (exit 143,
+        # Result=timeout) while the two ExecStartPost publish steps still had
+        # to run. The brief parquet was already written; it never reached
+        # Postgres, and the dashboard showed nothing for the date until an
+        # operator ran rebuild-cache by hand. Measured stages that run:
+        # ingest 9.6, extract 43.9, map-themes 29.7, score 43.3, brief 17.3 —
+        # 144 min to the end of brief against a ~76 min mean before the
+        # deciding slot moved to 04:30 UTC. The corpus now carries ~97 EX-99.1
+        # narratives the 00:30 slot never saw, and those are long documents,
+        # not headlines: the 200-item cap bounds the COUNT, not the token
+        # volume, nor the candidate count the later stages inherit.
+        # With migrate-qual-cache and enrich the run needed about 153 min.
+        # 210 is 1.37× that and still leaves 30 min of the 4h slot spacing.
         self.assertRegex(
             SERVICE_PATH.read_text(),
-            re.compile(r"^TimeoutStartSec=150min\s*$", re.MULTILINE),
-            "Service must carry TimeoutStartSec=150min: a wedged run blocks "
-            "every subsequent timer fire, and a heavy map-themes day needs "
-            "more than 110min for the product stages alone (#1330).",
+            re.compile(r"^TimeoutStartSec=210min\s*$", re.MULTILINE),
+            "Service must carry TimeoutStartSec=210min: a wedged run blocks "
+            "every subsequent timer fire, and the deciding run on the #1606 "
+            "schedule needed about 153 min end to end (#1606 follow-up).",
         )
 
     def test_run_thematic_day_passes_force_to_ingest(self) -> None:
