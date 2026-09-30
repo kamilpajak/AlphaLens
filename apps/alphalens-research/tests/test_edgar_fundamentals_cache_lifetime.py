@@ -9,8 +9,23 @@ all 2612 stopped producing a TTM at once and every EDGAR-derived column went
 blank for them. A further 1843 files hold a newest quarter ending 2026-03-31
 and cross the same gate on 2026-12-27.
 
-These tests pin the refresh rule, the two floors that bound its cost, and the
-relationship between the refresh age and the TTM gate it exists to stay ahead of.
+The first cut of that rule measured the age over EVERY row in the parquet, which
+is a different quantity from the one the consumer reads. A companyfacts table
+holds every XBRL concept the issuer ever filed, in two taxonomies: ``us-gaap``
+(the statements) and ``dei`` (the cover page, which advances on ANY filing at
+all), plus instants dated in the FUTURE (debt maturities, lease terms). So a
+ticker whose cover page moved while its cash-flow chain stood still read as
+fresh and was never refreshed, with every EDGAR-derived column for it blank,
+and a future-dated instant produced a NEGATIVE age, which reads as maximally
+fresh forever. Measured over 600 random cached CIKs on 2026-09-30: 3 were
+permanently masked that way (0001816815 at age 0 with its newest cash-flow
+period 365 days old; 0000788965 at 92 against 273; 0001140859 at -31 against
+273), and 3 more were saved only by sitting within 30 days of crossing 150
+anyway.
+
+These tests pin the refresh rule, WHICH ROWS its age measure reads, the two
+floors that bound its cost, and the relationship between the refresh age and
+the TTM gate it exists to stay ahead of.
 """
 
 from __future__ import annotations
@@ -25,6 +40,8 @@ from unittest.mock import MagicMock
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from alphalens_pipeline.data.fundamentals import concept_chains as chains
+from alphalens_pipeline.data.fundamentals.companyfacts_parquet import SCHEMA
 from alphalens_pipeline.data.fundamentals.ttm_aggregator import DEFAULT_TTM_MAX_STALENESS_DAYS
 from alphalens_pipeline.data.store import edgar_fundamentals as ef
 from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
@@ -33,28 +50,51 @@ TODAY = dt.date(2026, 9, 30)
 CIK_A = "0000000001"
 CIK_B = "0000000002"
 
+#: The cover-page tag that advances on any filing at all, including one that
+#: carries no statements. It is the tag the masked CIKs above moved on.
+COVER_PAGE = "EntityCommonStockSharesOutstanding"
+#: A real future-dated us-gaap instant: an issuer states in 2026 what it owes
+#: after 2031. 0001140859 carried one and read as age -31 under the old rule.
+FUTURE_DATED = "LongTermDebtMaturitiesRepaymentsOfPrincipalAfterYearFive"
+
+
+def _row(
+    concept: str,
+    period_end: dt.date,
+    *,
+    taxonomy: str = "us-gaap",
+    unit: str = "USD",
+    instant: bool = False,
+) -> dict:
+    """One companyfacts row. ``instant`` drops ``period_start`` (balance-sheet
+    shape), which is how the future-dated rows in the real store look."""
+    return {
+        "taxonomy": taxonomy,
+        "concept": concept,
+        "unit": unit,
+        "period_start": None if instant else period_end - dt.timedelta(days=90),
+        "period_end": period_end,
+        "val": 100.0,
+        "accn": "x",
+        "fy": 2026,
+        "fp": "Q1",
+        "form": "10-Q",
+        "filed_date": min(period_end + dt.timedelta(days=40), TODAY),
+        "frame": None,
+    }
+
 
 def _table(newest_period: dt.date, *, val: float = 100.0) -> pa.Table:
     """One-row companyfacts table whose newest reported period is ``newest_period``."""
-    return pa.Table.from_pylist(
-        [
-            {
-                "taxonomy": "us-gaap",
-                "concept": "NetCashProvidedByUsedInOperatingActivities",
-                "unit": "USD",
-                "period_start": newest_period - dt.timedelta(days=90),
-                "period_end": newest_period,
-                "val": val,
-                "accn": "x",
-                "fy": 2026,
-                "fp": "Q1",
-                "form": "10-Q",
-                "filed_date": newest_period + dt.timedelta(days=40),
-                "frame": None,
-            }
-        ],
-        schema=ef.SCHEMA if hasattr(ef, "SCHEMA") else None,
-    )
+    row = _row(chains.OPERATING_CASH_FLOW[0], newest_period)
+    row["val"] = val
+    return _rows_table([row])
+
+
+def _rows_table(rows: list[dict]) -> pa.Table:
+    """Table on the REAL companyfacts schema, so ``period_start`` stays nullable
+    and every column keeps the type the production reader expects."""
+    return pa.Table.from_pylist(rows, schema=SCHEMA)
 
 
 def _facts(newest_period: dt.date) -> dict:
@@ -110,8 +150,22 @@ class CompanyfactsCacheLifetimeTest(unittest.TestCase):
         which is a different question from how old the DATA is, and the interval
         floor reads it. Defaults to a month ago: the shape of the #1335 store,
         where 4784 files were written in 2026-05 and never touched again."""
+        return self._write_table(cik, _table(newest), written=written)
+
+    def _write_rows(
+        self,
+        cik: str,
+        rows: list[dict],
+        *,
+        written: dt.date = TODAY - dt.timedelta(days=120),
+    ) -> Path:
+        """Seed a cached table from explicit rows, for the cases where WHICH rows
+        the table holds is the point."""
+        return self._write_table(cik, _rows_table(rows), written=written)
+
+    def _write_table(self, cik: str, table: pa.Table, *, written: dt.date) -> Path:
         path = self.dir / f"{cik}.parquet"
-        pq.write_table(_table(newest), path)
+        pq.write_table(table, path)
         stamp = dt.datetime.combine(written, dt.time(12, 0)).timestamp()
         os.utime(path, (stamp, stamp))
         return path
@@ -145,6 +199,137 @@ class CompanyfactsCacheLifetimeTest(unittest.TestCase):
         store.preload(["AAA"], today=TODAY)
         newest = max(store._reader.get_cik_table(CIK_A).column("period_end").to_pylist())
         self.assertEqual(newest, dt.date(2026, 6, 30))
+
+    # --- the age measures the rows the CONSUMER reads ---------------------
+
+    def test_a_fresh_cover_page_does_not_hide_a_cash_flow_chain_that_stood_still(self) -> None:
+        """The masking defect. A ``dei`` cover-page row advances on ANY filing at
+        all — an 8-K, a prospectus, a shell's annual cover page — while the
+        cash-flow chain ``compute_ttm`` reads stands still. Measured over 600
+        random cached CIKs on 2026-09-30, three were permanently masked this way
+        (0001816815 read age 0 with its newest cash-flow period 365 days old) and
+        three more were saved only by being within 30 days of crossing 150 anyway.
+        Every EDGAR-derived column for a masked ticker is blank, forever."""
+        self._write_rows(
+            CIK_A,
+            [
+                _row(COVER_PAGE, TODAY - dt.timedelta(days=5), taxonomy="dei", unit="shares"),
+                _row(chains.OPERATING_CASH_FLOW[0], TODAY - dt.timedelta(days=365)),
+            ],
+        )
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_called_once_with(CIK_A)
+
+    def test_the_second_tag_in_the_cash_flow_chain_counts_too(self) -> None:
+        """``compute_ttm`` walks the whole chain and takes the first tag that hits, so
+        an issuer reporting only the continuing-operations variant is served
+        normally. Measuring only the chain's first tag would call it chain-less.
+
+        Same fixture shape as the CapEx test above, and for the same reason: the
+        newer non-chain row is what makes narrowing the set observable."""
+        self._write_rows(
+            CIK_A,
+            [
+                _row("Revenues", TODAY - dt.timedelta(days=5)),
+                _row(chains.OPERATING_CASH_FLOW[1], TODAY - dt.timedelta(days=200)),
+            ],
+        )
+        self.assertEqual(self._store()._data_age_days(CIK_A, TODAY), 200)
+
+    def test_a_capex_row_counts_as_well_as_a_cash_flow_row(self) -> None:
+        """The FCFF path reads OCF and CapEx, so a CapEx period is a real answer to
+        "how old is the data this store can serve".
+
+        The fixture needs a NEWER non-chain us-gaap row beside it, or the test
+        cannot see the difference: drop CapEx from the chain set and the us-gaap
+        fallback tier finds the very same row and returns the very same age. That
+        is what made an earlier version of this test pass with CapEx deleted."""
+        self._write_rows(
+            CIK_A,
+            [
+                _row("Revenues", TODAY - dt.timedelta(days=5)),
+                _row(chains.CAPEX[0], TODAY - dt.timedelta(days=200)),
+            ],
+        )
+        self.assertEqual(self._store()._data_age_days(CIK_A, TODAY), 200)
+
+    def test_a_future_dated_period_end_does_not_make_a_ticker_look_fresh(self) -> None:
+        """An issuer states in 2026 what it owes after 2031, and that instant's
+        period ends in the FUTURE. Taking the max over every row then gives a
+        NEGATIVE age, which reads as maximally fresh forever: 0001140859 measured
+        -31 days while its newest cash-flow period was 273 days old, past the
+        270-day gate at which ``compute_ttm`` refuses to answer."""
+        self._write_rows(
+            CIK_A,
+            [
+                _row(FUTURE_DATED, TODAY + dt.timedelta(days=1800), instant=True),
+                _row(chains.OPERATING_CASH_FLOW[0], TODAY - dt.timedelta(days=273)),
+            ],
+        )
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_called_once_with(CIK_A)
+
+    def test_a_future_dated_chain_row_is_dropped_rather_than_read_as_age_zero(self) -> None:
+        """A future period inside the chain itself is no evidence about freshness
+        either, so it is dropped and the newest period that has actually ENDED is
+        what the age reports. Clamping the negative age to 0 instead would answer
+        "maximally fresh" — the same wrong answer, only harder to spot in a log."""
+        store = self._store()
+        self._write_rows(
+            CIK_A,
+            [
+                _row(chains.OPERATING_CASH_FLOW[0], TODAY + dt.timedelta(days=92)),
+                _row(chains.OPERATING_CASH_FLOW[0], TODAY - dt.timedelta(days=92)),
+            ],
+        )
+        self.assertEqual(store._data_age_days(CIK_A, TODAY), 92)
+
+    def test_a_table_whose_only_chain_row_is_future_dated_backs_off(self) -> None:
+        """Dropping every chain row leaves no age to report, which is the same
+        position as a table holding no chain at all: the long interval, NOT the
+        age-0 "maximally fresh" that a clamp would produce and that would suppress
+        the refetch entirely."""
+        self._write_rows(
+            CIK_A,
+            [_row(chains.OPERATING_CASH_FLOW[0], TODAY + dt.timedelta(days=92))],
+            written=TODAY - dt.timedelta(days=120),
+        )
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_called_once_with(CIK_A)
+
+    def test_a_table_holding_no_chain_row_at_all_backs_off_like_an_empty_one(self) -> None:
+        """Rows but no OCF and no CapEx anywhere: there is no age to report and
+        nothing to scale a back-off by, so it joins the empty-table branch. 65 of
+        the 600 sampled CIKs are in this state — IFRS-only foreign filers and
+        fee-filing-only CIKs. Measured 2026-09-30, the store serves them nothing
+        today: 0 have a us-gaap revenue row, ``compute_ttm`` answers for 0 of them
+        on revenue and 0 on net income, and 0 are live on any other column. Asking
+        them six times less often therefore costs nothing today."""
+        rows = [_row(COVER_PAGE, TODAY - dt.timedelta(days=5), taxonomy="dei", unit="shares")]
+
+        # Literal days, NOT the constant — see the empty-table test below for why.
+        self._write_rows(CIK_A, rows, written=TODAY - dt.timedelta(days=89))
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_not_called()
+
+        self.client.reset_mock()
+        self._write_rows(CIK_A, rows, written=TODAY - dt.timedelta(days=91))
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_called_once_with(CIK_A)
+
+    def test_a_fresh_chain_row_is_not_refetched_beside_an_ancient_cover_page(self) -> None:
+        """Control, the other way round. Narrowing the measure must not turn into
+        "refetch everything": a ticker whose cash-flow chain is current is left
+        alone however old the rest of its table is."""
+        self._write_rows(
+            CIK_A,
+            [
+                _row(COVER_PAGE, dt.date(2014, 3, 31), taxonomy="dei", unit="shares"),
+                _row(chains.OPERATING_CASH_FLOW[0], TODAY - dt.timedelta(days=30)),
+            ],
+        )
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_not_called()
 
     # --- the floors that bound the cost -----------------------------------
 
@@ -286,6 +471,119 @@ class CompanyfactsCacheLifetimeTest(unittest.TestCase):
         path.write_bytes(b"not a parquet")
         self._store().preload(["AAA"], today=TODAY)
         self.client.fetch_company_facts.assert_called_once_with(CIK_A)
+
+    def test_a_fresh_non_chain_usgaap_row_does_not_count(self) -> None:
+        """The mask is an AND over taxonomy and concept. Loosen it to an OR and
+        every us-gaap row counts again, which is candidate B's measured defect:
+        6 of 534 sampled CIKs have a cash-flow chain older than their newest
+        us-gaap duration row, the worst by 549 days."""
+        self._write_rows(
+            CIK_A,
+            [
+                _row("Revenues", TODAY - dt.timedelta(days=5)),
+                _row(chains.OPERATING_CASH_FLOW[0], TODAY - dt.timedelta(days=365)),
+            ],
+        )
+        self.assertEqual(self._store()._data_age_days(CIK_A, TODAY), 365)
+
+    def test_only_the_usgaap_taxonomy_counts(self) -> None:
+        """The taxonomy half of the mask is what keeps the dei cover page out, and
+        the cover page is what caused this defect. Nothing else pins it."""
+        self._write_rows(
+            CIK_A,
+            [
+                _row(
+                    chains.OPERATING_CASH_FLOW[0],
+                    TODAY - dt.timedelta(days=5),
+                    taxonomy="dei",
+                    unit="shares",
+                ),
+                _row(chains.OPERATING_CASH_FLOW[0], TODAY - dt.timedelta(days=400)),
+            ],
+        )
+        self.assertEqual(self._store()._data_age_days(CIK_A, TODAY), 400)
+
+    def test_the_age_reads_the_newest_chain_period_not_the_oldest(self) -> None:
+        """Swapping max for min reads the OLDEST period. Every fixture with a single
+        past-dated chain row agrees with both, so only two of them can tell."""
+        self._write_rows(
+            CIK_A,
+            [
+                _row(chains.OPERATING_CASH_FLOW[0], TODAY - dt.timedelta(days=30)),
+                _row(chains.OPERATING_CASH_FLOW[0], TODAY - dt.timedelta(days=800)),
+            ],
+        )
+        self.assertEqual(self._store()._data_age_days(CIK_A, TODAY), 30)
+
+    def test_a_chain_period_ending_today_is_age_zero_not_no_answer(self) -> None:
+        """The future filter is `<=`, not `<`. Tightened to `<`, an issuer that filed
+        a period ending today drops onto the 90-day no-answer branch instead of
+        reading as the freshest thing in the store."""
+        self._write_rows(CIK_A, [_row(chains.OPERATING_CASH_FLOW[0], TODAY)])
+        self.assertEqual(self._store()._data_age_days(CIK_A, TODAY), 0)
+
+    def test_a_table_with_no_chain_row_falls_back_to_its_newest_usgaap_period(self) -> None:
+        """Measured 2026-09-30: 5 of the 65 sampled CIKs that hold no cash-flow or
+        capex row at all still serve a column today (cash, short-term debt, equity,
+        shares outstanding). Dropping them straight onto the 90-day branch slowed
+        those from a 15-54 day cadence, which is a regression this change introduced
+        and this tier removes. The dei cover page stays excluded."""
+        self._write_rows(
+            CIK_A,
+            [
+                _row(COVER_PAGE, TODAY - dt.timedelta(days=2), taxonomy="dei", unit="shares"),
+                _row(
+                    "CashAndCashEquivalentsAtCarryingValue",
+                    TODAY - dt.timedelta(days=200),
+                    instant=True,
+                ),
+            ],
+        )
+        self.assertEqual(self._store()._data_age_days(CIK_A, TODAY), 200)
+
+    def test_a_table_with_neither_a_chain_row_nor_a_usgaap_row_has_no_age(self) -> None:
+        """The fallback is us-gaap only. A file holding nothing but a cover page has
+        no age at all and belongs on the long branch."""
+        self._write_rows(
+            CIK_A,
+            [_row(COVER_PAGE, TODAY - dt.timedelta(days=2), taxonomy="dei", unit="shares")],
+        )
+        self.assertIsNone(self._store()._data_age_days(CIK_A, TODAY))
+
+    def test_the_retry_interval_has_a_ceiling_as_well_as_a_floor(self) -> None:
+        """Scoping the age to the FCFF chains made ages larger and therefore
+        intervals longer — correctly, because the old measure was reading a fresh
+        cover page. But `age // 10` on a 5470-day-old table is a 547-day wait, and
+        a dormant issuer that resumes filing would go unnoticed for that long.
+
+        Measured 2026-09-30 over the store: a 90-day ceiling costs 2 extra
+        refetches a day out of a 600/day budget (233 -> 235) and cuts the worst
+        wait from 547 days to 90."""
+        self._write_rows(
+            CIK_A,
+            [_row(chains.OPERATING_CASH_FLOW[0], TODAY - dt.timedelta(days=5470))],
+            written=TODAY - dt.timedelta(days=91),
+        )
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_called_once_with(CIK_A)
+
+    def test_below_the_ceiling_the_interval_still_scales(self) -> None:
+        """A control for the test above. Without it, a ceiling of 7 would pass:
+        everything would refetch and the scaling would be gone."""
+        self._write_rows(
+            CIK_A,
+            [_row(chains.OPERATING_CASH_FLOW[0], TODAY - dt.timedelta(days=5470))],
+            written=TODAY - dt.timedelta(days=89),
+        )
+        self._store().preload(["AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_not_called()
+
+    def test_the_ceiling_and_the_no_answer_interval_agree(self) -> None:
+        """They answer the same operational question — we hold nothing useful for
+        this ticker and asking more often does not change that — so they are the
+        same number on purpose rather than by accident. If you mean them to differ,
+        change this assertion and write down why."""
+        self.assertEqual(ef.REFETCH_MAX_INTERVAL_DAYS, ef.REFETCH_EMPTY_INTERVAL_DAYS)
 
     # --- the two constants must not drift apart ---------------------------
 

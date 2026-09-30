@@ -43,8 +43,10 @@ import tempfile
 from datetime import date
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
@@ -128,8 +130,10 @@ def _is_tax_heavy(ticker: str) -> bool:
     return any(lo <= sic <= hi for lo, hi, _label in _TAX_HEAVY_SIC_RANGES)
 
 
-#: A cached companyfacts table whose newest reported period ends more than this
-#: many days before today is REFETCHED by :meth:`EdgarFundamentalsStore.preload`.
+#: A cached companyfacts table whose newest period ON THE FCFF PATH ends more
+#: than this many days before today is REFETCHED by
+#: :meth:`EdgarFundamentalsStore.preload`. Which rows count is
+#: :meth:`EdgarFundamentalsStore._data_age_days`.
 #:
 #: 150, derived from the two facts that bracket it (#1335).
 #:
@@ -174,10 +178,27 @@ REFETCH_MIN_INTERVAL_DAYS = 7
 #: before the ticker goes dark, slow enough that a dormant CIK costs little.
 REFETCH_BACKOFF_DIVISOR = 10
 
-#: Interval for a table that is READABLE but EMPTY. That is a valid SEC answer
-#: ("no XBRL facts for this CIK"), not a broken file, so it must not be retried
-#: like one — and it has no reported period, so the scaled rule above has nothing
-#: to scale. 18 of the 5992 cached tables were empty on 2026-09-30.
+#: Ceiling on the scaled retry interval. Scoping the age to the FCFF chains made
+#: ages larger and therefore intervals longer, which is correct — the measure it
+#: replaced was reading a fresh ``dei`` cover page — but ``age // 10`` on a
+#: 5470-day-old table is a 547-day wait, and a dormant issuer that resumed filing
+#: would go unnoticed for that long.
+#:
+#: 90, measured 2026-09-30 across the whole store: the ceiling costs 2 extra
+#: refetches a day out of the 600/day the budget allows (233 -> 235) and cuts the
+#: worst wait from 547 days to 90. It binds on 249 CIKs.
+#:
+#: Equal to :data:`REFETCH_EMPTY_INTERVAL_DAYS` on purpose rather than by
+#: coincidence: a table with no answer and a table whose answer is five years old
+#: pose the same operational question. Pinned by
+#: ``test_the_ceiling_and_the_no_answer_interval_agree``.
+REFETCH_MAX_INTERVAL_DAYS = 90
+
+#: Interval for a table that is READABLE but has no age to report at all: empty,
+#: or holding no ``us-gaap`` row with a past period. Both are valid SEC answers,
+#: not broken files, so they must not be retried like one — and neither has a
+#: period the scaled rule above could scale. 18 of the 5992 cached tables were
+#: empty on 2026-09-30.
 REFETCH_EMPTY_INTERVAL_DAYS = 90
 
 #: Stale tickers refreshed per :meth:`EdgarFundamentalsStore.preload` call.
@@ -200,6 +221,15 @@ REFETCH_EMPTY_INTERVAL_DAYS = 90
 #: run's actual preload universe (2041 tickers, the largest of the last three)
 #: it is 199/day flat against 63/day scaled.
 REFETCH_BUDGET_PER_CALL = 200
+
+#: The age measure is scoped to the two chains ``compute_ttm`` reads on the FCFF
+#: path. Built once at import: rebuilding the value set on every call costs more
+#: than the scan it feeds.
+_AGE_TAXONOMY: Final[str] = "us-gaap"
+_AGE_CONCEPTS: Final[frozenset[str]] = frozenset(chains.OPERATING_CASH_FLOW) | frozenset(
+    chains.CAPEX
+)
+_AGE_CONCEPT_SET = pa.array(sorted(_AGE_CONCEPTS))
 
 
 class EdgarFundamentalsStore:
@@ -310,7 +340,7 @@ class EdgarFundamentalsStore:
 
         * **Missing** — no file at all means no data for that ticker. Always
           fetched, never budgeted.
-        * **Stale** — a file whose newest reported period is more than
+        * **Stale** — a file whose newest period on the FCFF path is more than
           :data:`REFETCH_DATA_AGE_DAYS` old. Refetched at most
           ``refresh_budget`` per call (default :data:`REFETCH_BUDGET_PER_CALL`)
           and at most once per :data:`REFETCH_MIN_INTERVAL_DAYS` per ticker, so
@@ -377,15 +407,58 @@ class EdgarFundamentalsStore:
             self._batch_fetch_prices(tickers)
 
     def _data_age_days(self, cik: str, today: date) -> int | None:
-        """Age of ``cik``'s newest reported period, or ``None`` when unusable.
+        """Age of the newest period the FCFF path can consume, or ``None``.
 
-        ``None`` means missing, unreadable or empty — the caller decides what
-        each of those deserves; this method only reports what is on disk.
+        Scoped to :data:`_AGE_CONCEPTS`, the two chains ``compute_ttm`` reads on
+        that path. Rows outside them move for reasons that say nothing about
+        whether an EDGAR column can be produced: the ``dei`` cover page advances
+        on any filing at all, and debt-maturity and lease instants are dated in
+        the FUTURE. Taking the max over EVERY row let a ticker whose cover page
+        advanced while its cash-flow chain stood still read as fresh forever,
+        with every EDGAR-derived column for it blank, and let a future-dated
+        instant read as a NEGATIVE age. Measured over 600 random cached CIKs on
+        2026-09-30, three were masked that way for good (0001816815 read age 0
+        against a 365-day-old cash-flow period; 0001140859 read -31 against 273)
+        and three more were saved only by being close to the threshold anyway.
+
+        Future-dated rows are DROPPED rather than clamped to 0, because an age of
+        0 still reads as maximally fresh. Over the same 600 CIKs no chain row is
+        future-dated, so this filter changes nothing today; it exists so that one
+        cannot silence the measure if it appears.
+
+        A table holding NO chain row at all falls back to its newest ``us-gaap``
+        period. The FCFF path is structurally dead for such an issuer, so there is
+        no chain left to mask, but the balance-sheet instants can still serve
+        columns: measured 2026-09-30, 5 of the 65 sampled CIKs in that state serve
+        at least one of cash, short-term debt, total equity or shares outstanding
+        today. Without this tier they dropped from a 15-54 day cadence onto the
+        90-day branch, a regression this scoping would otherwise have introduced.
+        The ``dei`` cover page stays out of the fallback too — it is the tag that
+        caused the original defect.
+
+        ``None`` means "no answer to age": missing, unreadable, empty, or holding
+        no ``us-gaap`` row with a past period at all. All of them route to the long
+        :data:`REFETCH_EMPTY_INTERVAL_DAYS` branch in :meth:`_is_stale`.
+
+        Kept in Arrow on purpose. The old line materialised the whole
+        ``period_end`` column through ``.to_pylist()``, about 12 000 Python date
+        objects per issuer, and ``preload`` evaluates the measure twice per stale
+        ticker. Over the same 600 tables that was 6.477 s against 0.320 s here.
         """
         table = self._reader.get_cik_table(cik)
         if table is None or table.num_rows == 0:
             return None
-        return (today - max(table.column("period_end").to_pylist())).days
+        is_us_gaap = pc.equal(table.column("taxonomy"), _AGE_TAXONOMY)
+        in_chain = pc.and_(
+            is_us_gaap,
+            pc.is_in(table.column("concept"), value_set=_AGE_CONCEPT_SET),
+        )
+        for mask in (in_chain, is_us_gaap):
+            ends = pc.filter(table.column("period_end"), mask)
+            ends = pc.filter(ends, pc.less_equal(ends, pa.scalar(today, type=pa.date32())))
+            if len(ends) > 0:
+                return (today - pc.max(ends).as_py()).days
+        return None
 
     def _is_stale(self, cik: str, today: date) -> bool:
         """Should ``cik``'s cached table be refetched?
@@ -397,9 +470,10 @@ class EdgarFundamentalsStore:
            routes these to its unbudgeted path before asking, so in practice
            this branch only fires when the predicate is called directly; it
            stays here so the predicate is total.
-        2. **Readable but empty** — a valid SEC answer, re-asked on the long
+        2. **Readable, but no age to report** — empty, or holding no row of
+           either FCFF chain. Both are valid SEC answers, re-asked on the long
            :data:`REFETCH_EMPTY_INTERVAL_DAYS` interval.
-        3. **Readable with data** — stale once the newest period passes
+        3. **Readable with data** — stale once the newest chain period passes
            :data:`REFETCH_DATA_AGE_DAYS`, and then re-asked on an interval that
            GROWS with that age (see :data:`REFETCH_BACKOFF_DIVISOR`).
         """
@@ -414,11 +488,14 @@ class EdgarFundamentalsStore:
         waited = (today - last_try).days
 
         age = self._data_age_days(cik, today)
-        if age is None:  # readable but empty
+        if age is None:  # readable, but no FCFF-path period to age
             return waited >= REFETCH_EMPTY_INTERVAL_DAYS
         if age <= REFETCH_DATA_AGE_DAYS:
             return False
-        interval = max(REFETCH_MIN_INTERVAL_DAYS, age // REFETCH_BACKOFF_DIVISOR)
+        interval = min(
+            REFETCH_MAX_INTERVAL_DAYS,
+            max(REFETCH_MIN_INTERVAL_DAYS, age // REFETCH_BACKOFF_DIVISOR),
+        )
         return waited >= interval
 
     def _fetch_and_write(self, ticker: str, cik: str) -> None:
