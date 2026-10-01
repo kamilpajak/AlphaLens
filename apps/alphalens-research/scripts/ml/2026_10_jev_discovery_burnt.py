@@ -129,6 +129,18 @@ _BRIEF_COLS = [
 ]
 
 
+def iso_date(value) -> str:
+    """One text form for a date that arrives as a `date`, a Timestamp or a string.
+
+    Join keys that look identical when printed and differ by type are the quiet kind
+    of bug: nothing raises, the join simply matches nothing.
+    """
+    if value is None:
+        return ""
+    text = str(value)
+    return text[:10] if len(text) >= 10 else text
+
+
 def catalyst_mass(probs_json) -> float | None:
     """`1 - P(the event type is one of ours marked non-market-moving)`.
 
@@ -180,6 +192,12 @@ def load_jev_candidate() -> pd.DataFrame:
     d = pd.concat([pd.read_parquet(p) for p in files], ignore_index=True)
     d = d[d["jev_feature_version"].astype(str) == FEATURE_VERSION].copy()
     d["ticker"] = d["ticker"].astype(str).str.upper()
+    # The builder writes `brief_date` as the parquet filename stem, so a STRING, while
+    # the label store carries `datetime.date`. The two never compare equal, so a tuple
+    # key from one side silently misses every row of the other. Measured on the first
+    # run of this script: 391 of 391 candidate joins missed and two of the six
+    # candidates arrived all-null, which would have read as "they carry nothing".
+    d["brief_date"] = d["brief_date"].map(iso_date)
     keep = ["brief_date", "ticker", "jev_touches_industry", "jev_company_gain"]
     return (
         d[keep]
@@ -238,14 +256,28 @@ def build_panel() -> tuple[pd.DataFrame, dict]:
             row.update(art.loc[url].to_dict())
         else:
             diag["no_article_feature"] += 1
-        if key in cand.index:
-            row.update(cand.loc[key].to_dict())
+        cand_key = (iso_date(r["brief_date"]), key[1])
+        if cand_key in cand.index:
+            row.update(cand.loc[cand_key].to_dict())
         else:
             diag["no_candidate_feature"] += 1
         rows.append(row)
 
     panel = pd.DataFrame(rows)
     diag["joined"] = len(panel)
+    # A join that misses every single row is a key bug, never a property of the data.
+    # Reporting it as coverage would let the pass print "carries nothing" about columns
+    # it never read.
+    for what, missed in (
+        ("article", diag["no_article_feature"]),
+        ("candidate", diag["no_candidate_feature"]),
+    ):
+        if rows and missed == len(rows):
+            raise RuntimeError(
+                f"the {what} feature join matched 0 of {len(rows)} rows. That is a "
+                "join-key bug, not an absence of features; check the key types on both "
+                "sides before reading anything into a coefficient."
+            )
     panel = ticker_episode_dedup(panel).reset_index(drop=True)
     diag["episodes"] = len(panel)
     diag["clusters"] = panel["arrival"].astype(str).nunique()

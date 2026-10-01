@@ -194,3 +194,54 @@ class TestTheMinimumDetectableEffect(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheJoinKeyIsNormalised(unittest.TestCase):
+    """The quiet bug class: keys that print identically and differ by type.
+
+    Measured on the first run of this script: the builder writes `brief_date` as the
+    parquet filename stem, a STRING, while the label store carries `datetime.date`.
+    The tuple key missed 391 of 391 rows, two of the six candidates arrived all-null,
+    and a pass that printed only coefficients would have read that as "they carry
+    nothing".
+    """
+
+    def test_every_form_a_date_arrives_in_normalises_to_one_string(self):
+        import datetime as dt
+
+        forms = [
+            dt.date(2026, 5, 19),
+            "2026-05-19",
+            pd.Timestamp("2026-05-19"),
+            pd.Timestamp("2026-05-19 13:30:00"),
+            dt.datetime(2026, 5, 19, 13, 30),
+        ]
+        self.assertEqual({disc.iso_date(f) for f in forms}, {"2026-05-19"})
+
+    def test_a_missing_date_is_empty_rather_than_the_text_none(self):
+        self.assertEqual(disc.iso_date(None), "")
+
+    def test_two_keys_that_differ_only_by_type_now_match(self):
+        import datetime as dt
+
+        self.assertEqual(disc.iso_date(dt.date(2026, 5, 19)), disc.iso_date("2026-05-19"))
+
+
+class TestATotalJoinMissIsRefused(unittest.TestCase):
+    """A join that matches NOTHING is a key bug, never a property of the data.
+
+    Without this the pass reports full coverage of the controls, zero coverage of two
+    candidates, and a reader who skips the coverage block concludes the features are
+    worthless. The first run of this script produced exactly that shape.
+    """
+
+    def test_the_message_says_it_is_a_key_bug_and_names_the_side(self):
+        source = _SCRIPT.read_text()
+        self.assertIn("join-key bug", source)
+        self.assertIn("no_candidate_feature", source)
+        self.assertIn("no_article_feature", source)
+
+    def test_the_guard_compares_the_miss_count_against_the_row_count(self):
+        # A guard that fired on "some misses" would refuse a legitimately sparse
+        # join; it must fire only when EVERY row missed.
+        self.assertIn("missed == len(rows)", _SCRIPT.read_text())
