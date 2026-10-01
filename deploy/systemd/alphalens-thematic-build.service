@@ -180,6 +180,16 @@ ExecStartPost=/usr/bin/docker compose \
 # Both steps are `-`-prefixed. A DeepSeek or Perplexity hiccup must not mark
 # the run failed, page the operator, or skip the rebuild below it.
 #
+# WHAT THE `-` DOES NOT COVER, so the operator is not surprised: it makes a
+# non-zero EXIT non-fatal. A TimeoutStartSec kill is not an exit — it still
+# marks the unit failed, still reaches the metrics hook below, and still pages,
+# and it skips whatever ExecStartPost had not run yet, including the second
+# rebuild-cache. So a timeout landing here costs the Buffett drawer AND an
+# alert; what it no longer costs is the brief. Removing the alert too would
+# mean a separate unit with its own timeout (an `OnSuccess=` sibling, the shape
+# alphalens-thematic-shadow-map already uses) — more moving parts than the
+# ordering fix, and worth revisiting only if these timeouts become routine.
+#
 # Supervised like the build container (#1330): `--init` so the first SIGTERM
 # ends the run rather than only the docker client, a `--name` to address it by,
 # and a `docker rm -f` on both ends.
