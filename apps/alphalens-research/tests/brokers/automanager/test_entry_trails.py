@@ -681,6 +681,85 @@ class TestCompactEntryTrailJournalFile(unittest.TestCase):
         self.assertEqual(fold.malformed, 1)
 
 
+class TestEntryTrailCompactionSnapshots(unittest.TestCase):
+    """#1648: the entry-trails compactor keeps one trough/state line per tier
+    and drops the rest; those dropped lines are the observation history a
+    comparison with a backtest needs. They now survive in a snapshot of the
+    exact bytes compacted from."""
+
+    def _compact(self, journal: Path) -> Any:
+        with mock.patch.object(et, "_entry_trail_journal_path", lambda: journal):
+            return et.compact_entry_trail_journal()
+
+    def test_the_rewrite_leaves_a_snapshot_of_the_original_bytes(self) -> None:
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "entry_trails.jsonl"
+            original = "".join(line + "\n" for line in _rich_entry_trail_journal()).encode()
+            journal.write_bytes(original)
+            outcome = self._compact(journal)
+            snapshots = [p.read_bytes() for p in (Path(d) / js.SNAPSHOT_DIRNAME).iterdir()]
+            shrunk = journal.stat().st_size < len(original)
+        self.assertEqual(outcome.status, "compacted")
+        self.assertTrue(shrunk)
+        self.assertEqual(snapshots, [original])
+
+    def test_an_already_compact_journal_is_left_alone(self) -> None:
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "entry_trails.jsonl"
+            journal.write_text(
+                "".join(line + "\n" for line in _rich_entry_trail_journal()), encoding="utf-8"
+            )
+            self._compact(journal)
+            compacted = journal.read_bytes()
+            outcome = self._compact(journal)
+            self.assertEqual(outcome.status, "unchanged")
+            self.assertEqual(journal.read_bytes(), compacted)
+            self.assertEqual(len(list((Path(d) / js.SNAPSHOT_DIRNAME).iterdir())), 1)
+
+    def test_a_failed_snapshot_leaves_the_journal_untouched(self) -> None:
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "entry_trails.jsonl"
+            original = "".join(line + "\n" for line in _rich_entry_trail_journal()).encode()
+            journal.write_bytes(original)
+            with mock.patch.object(js, "snapshot_bytes", side_effect=OSError("read-only")):
+                outcome = self._compact(journal)
+            self.assertEqual(outcome.status, "skipped")
+            self.assertEqual(journal.read_bytes(), original)
+
+    def test_a_line_appended_during_compaction_is_never_lost(self) -> None:
+        # The CLI's `broker disarm` appends `cancelled` lines to this journal
+        # from another process; one landing mid-compaction must survive.
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        real_snapshot = js.snapshot_bytes
+        late = (_line(et.KIND_CANCELLED) + "\n").encode()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "entry_trails.jsonl"
+            journal.write_text(
+                "".join(line + "\n" for line in _rich_entry_trail_journal()), encoding="utf-8"
+            )
+
+            def snapshot_then_append(path, data, **kw):
+                written = real_snapshot(path, data, **kw)
+                with journal.open("ab") as fh:  # the concurrent writer
+                    fh.write(late)
+                return written
+
+            with mock.patch.object(js, "snapshot_bytes", side_effect=snapshot_then_append):
+                outcome = self._compact(journal)
+            after = journal.read_bytes()
+            leftovers = [p.name for p in Path(d).rglob("*.tmp")]
+        self.assertEqual(outcome.status, "skipped")
+        self.assertTrue(after.endswith(late))
+        self.assertEqual(leftovers, [])
+
+
 class TestAppendEntryTrailLine(unittest.TestCase):
     """The PR-T1 writer: append-only, round-trips through the fold, and shares
     the ONE journal-path seam the read/fold/compaction primitives use."""

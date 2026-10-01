@@ -189,6 +189,28 @@ class TestReconcileFillsCommand(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertFalse(out.exists(), "no parquet written when the capability is absent")
 
+    def test_a_fire_kept_only_in_a_compaction_snapshot_still_reaches_the_parquet(self):
+        # #1648: boot compaction removed a closed position's tranche_fired from
+        # the journal (SMMT, 29.09). The parquet is rebuilt on every run, so a
+        # run reading only the journal would drop that fire for good.
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        filled = _fired_line(11, "tp0", sell_order_id="S-FILL", decision_bid=_DECISION_BID)
+        others = [line for line in _JOURNAL_LINES if line is not _JOURNAL_LINES[1]]
+        harness = _Harness(self, lines=others)
+        js.snapshot_bytes(
+            harness.journal_path,
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in [*others, filled]).encode(),
+        )
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["reconcile-fills", "--out", str(harness.out_path)])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        frame = pd.read_parquet(harness.out_path)
+        self.assertEqual(set(frame["sell_order_id"]), {"S-FILL", "S-PEND", "S-UNK"})
+        self.assertEqual(len(frame), 3, "the fires in both the snapshot and the journal count once")
+
     def test_writes_parquet_and_prints_counts(self):
         harness = _Harness(self)
         from alphalens_cli.commands.broker import broker_app
