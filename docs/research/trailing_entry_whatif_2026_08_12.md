@@ -1,7 +1,7 @@
 # Trailing (bounce-confirmed) entries vs hardcoded limit entries — what-if replay
 
 **Date:** 2026-08-12
-**Status:** COMPLETE — direction-level diagnostic (a re-cut of already-used data, NOT a pre-registered strategy test; no Bonferroni claim is made). **Read the 2026-09-30 correction below before quoting any number: the trigger this study used is not the one the broker runs.**
+**Status:** COMPLETE — direction-level diagnostic (a re-cut of already-used data, NOT a pre-registered strategy test; no Bonferroni claim is made). **Read the 2026-09-30 AND 2026-10-01 corrections below before quoting any number: the trigger this study used is not the one the broker runs, and the published day-1 magnitude does not reproduce.**
 **Question (operator):** on our historical data, would trailing entries (enter only after price bounces d% off its running low) beat the current limit-at-touch entries?
 **Method:** what-if replay over the population-ladder parquets (85 days, 769 plannable candidates) on cached Polygon minute bars; both variants share ONE exit function (the repo `ladder_replay` engine); slippage stressed both ways; independent verifier re-derived 4 cases by hand (6-decimal match, cases picked by deterministic rule, never by outcome) and reproduced the recorded parquet outcomes with Pearson r = 1.0000. Script: `apps/alphalens-research/scripts` authoring copy of `whatif_trailing_entry.py` (run from `/tmp` on the VPS); records parquet `/tmp/whatif_trailing_entry_records.parquet` (11,292 rows).
 
@@ -114,6 +114,10 @@ The two populations OVERLAP but neither contains the other: this store spans 202
 2026-09-04 while its bar cache starts on 2026-05-27, so this run misses the original's early dates
 and adds three weeks the original never saw.
 
+**Superseded 2026-10-01:** this paragraph explains 576 against 946 as a different WINDOW. That is not
+the explanation. The copy was an incomplete mirror of the same store, which yields 1334 touches — see
+the Correction below. The window difference is real and is not what produced the gap.
+
 Also carried, because it bounds how much the comparison can show: **164 of the 493 paths with bars
 end before the entry window closes.** That truncation removes later bars, which is exactly where the
 two forms diverge, and it removes variant B fills more readily than variant A ones. So the measured
@@ -132,131 +136,181 @@ change if the study is ever re-run". Splitting the arms supplied it:
 The control arm drops five times as many rows. That is itself a small sign that the superseded
 trigger produces more implausible fills, and it is one more reason the control is not a policy.
 
-### Correction 2026-10-01 — the open question this addendum raised does not exist
+## Correction 2026-10-01 — the open question was my artifact; the day-1 magnitude does not reproduce
 
 **It was my error.** The 2026-09-30 run was made against a local copy of the population-ladder store,
-not against the store. That copy holds 576 of the 1334 tier touches the same script finds in the real
+not against the store. That copy yields 576 tier touches where the same script finds 1334 in the
 store. From that fragment I published two statements — that `d` = 1.0% does not beat variant A, and
 that the edge crosses zero well below the `d` approximately 2% this study published — and opened
-#1652 to settle them. Both were artifacts of the missing data. The store was reachable the whole
-time and the run takes minutes.
+#1652 to settle them. Both were artifacts of the missing data.
 
-**What was run.** `whatif_trailing_entry.py` with the corrected trigger, on the VPS against
-`~/.alphalens/population_ladders`, twice:
+**The failure mode was already written down.** A 2026-09-24 note records that a local `~/.alphalens`
+mirror is a DIFFERENT store after a rebuild and that a fresh mtime does not say otherwise. #1652's own
+body cites that note while recommending the VPS run. So this was not a missing fact; it was publishing
+before taking the step the note names.
 
-- **run 1, the full store**: 134 dates, 1138 plannable candidates, 1334 tier touches (ALL-cohort
-  universe 1331).
-- **run 2, the published date set**: the same store restricted to the 85 ladder dates before
-  2026-08-12, through a directory view that links `bars/` and `grouped/` so forward bars are
-  complete. It iterates 85 dates and 769 plannable candidates, the same counts as the Method line at
-  the top of this study, and finds 932 tier touches against the published 946.
+**What was run.** Read 2026-10-01, 09:50-11:20 UTC, from the VPS checkout of `main` at `04877f02`:
 
-#### ALL cohort: direction and magnitude both reproduce
+- **run 1, the full store**: `./.venv/bin/python apps/alphalens-research/scripts/whatif_trailing_entry.py
+  --out /tmp/whatif_full.parquet`, log `/tmp/whatif_full.log`. 134 dates, 1138 candidates
+  (`not_plannable: 4`), 1334 tier touches, ALL-cohort universe 1331.
+- **run 2, the published DATES but NOT the published data conditions**: the same command with
+  `--store /tmp/ladders_pre_20260812`, log `/tmp/whatif_cut.log`. That view is the same store seen
+  through symlinks — every `<date>.parquet` with `date < 2026-08-12`, plus `bars/`, `grouped/` and
+  `corporate_actions_cache.json` linked whole, so forward bars are COMPLETE. It iterates 85 dates and
+  769 candidates, the Method line's own counts, and finds 932 tier touches against the published 946.
+  The original run had 197 entry windows cut short by its data horizon; run 2 reports
+  `entry_window_truncated: 0`. That difference is candidate number one for the day-1 shortfall below,
+  so run 2 is not an apples-to-apples panel.
 
-Policy view (`meanR_policy_fix`), slippage `none`:
+Both logs are on the VPS and are the only place these figures can be re-read. **Every delta below is
+the difference of the three-decimal levels printed in these tables**, so it reproduces from the table
+and can differ from the unrounded delta by 0.001.
 
-| panel | dates | ALL N | A | d=0.5% | d=1.0% | d=1.5% | d=2.0% | d=3.0% |
+### The cohorts, measured not derived
+
+Policy view (`meanR_policy_fix`), slippage `none`. The adverse-slippage arm was NOT restated.
+
+| panel | cohort | N | A | d=0.5% | d=1.0% | d=1.5% | d=2.0% | d=3.0% |
 |---|---|---|---|---|---|---|---|---|
-| published 2026-08-12 | 85 | 946 | 0.215 | **0.233** | 0.225 | (in log) | (in log) | 0.198 |
-| run 2 (the published 85 dates) | 85 | 932 | 0.192 | **0.206** | 0.200 | 0.201 | 0.193 | 0.186 |
-| run 1 (full store) | 134 | 1331 | 0.117 | **0.128** | 0.122 | 0.126 | 0.118 | 0.117 |
-| the 2026-09-30 local copy | 111 | 576 | 0.171 | 0.177 | 0.169 | 0.171 | 0.161 | 0.156 |
+| published | ALL | 946 | 0.215 | **0.233** | 0.225 | (in log) | (in log) | 0.198 |
+| run 2 | ALL | 932 | 0.192 | **0.206** | 0.200 | 0.201 | 0.193 | 0.186 |
+| run 1 | ALL | 1331 | 0.117 | **0.128** | 0.122 | 0.126 | 0.118 | 0.117 |
+| the 2026-09-30 fragment | ALL | 576 | 0.171 | 0.177 | 0.169 | 0.171 | 0.161 | 0.156 |
+| published | day-1 | 357 | 0.177 | **0.202** | 0.194 | (in log) | (in log) | 0.140 |
+| run 2 | day-1 | 356 | 0.156 | **0.163** | 0.162 | 0.160 | 0.151 | 0.137 |
+| run 1 | day-1 | 537 | 0.085 | **0.097** | 0.093 | 0.095 | 0.085 | 0.078 |
+| published | day-2+ | 589 | 0.238 | **0.251** | 0.244 | (in log) | (in log) | 0.233 |
+| run 2 | day-2+ | 576 | 0.214 | **0.232** | 0.224 | 0.227 | 0.219 | 0.215 |
+| run 1 | day-2+ | 794 | 0.139 | **0.149** | 0.141 | 0.146 | 0.140 | 0.143 |
 
-Against each panel's own A: published +0.018 at `d` = 0.5% and +0.010 at `d` = 1%; run 2 gives
-+0.014 and +0.008; run 1 gives +0.011 and +0.005. The local copy gives +0.006 and **-0.002**, and
-that last figure is the artifact the correction above is about.
+As deltas at `d` = 0.5%: ALL published +0.018, run 2 +0.014, run 1 +0.011. day-1 published +0.025,
+run 2 **+0.007**, run 1 +0.012. day-2+ published +0.013, run 2 **+0.018**, run 1 +0.010.
 
-`d` = 0.5% is the maximum of the grid on both real panels, and the ALL-cohort magnitude reproduces at
-both settings this study published.
+### What reproduces
 
-#### day-1 cohort: the direction reproduces, the magnitude does not
+- **The sign, the ordering and the grid maximum.** `d` = 0.5% is the maximum of the grid on the ALL,
+  day-1, day-2+, E1 and E2 cohorts of both panels. It is NOT the maximum on E3, where `d` = 1.5% wins
+  on both.
+- **The ALL-cohort gain, in sign and ordering, at 78% (run 2) and 61% (run 1) of the published
+  magnitude.** That is a 20-40% shortfall, not an exact reproduction.
+- **"day-1 cohort flips hardest"**, the parenthetical in the Verdict, which is about `d` = 3%. day-1
+  sits below its own A by -0.019 (run 2) and -0.007 (run 1), against ALL's -0.006 and 0.000 and
+  day-2+'s +0.001 and +0.004. day-1 is the only cohort that goes clearly negative. Only the published
+  magnitude (-0.037) is larger than either re-run finds.
 
-| panel | day-1 N | A | d=0.5% | d=1.0% | d=1.5% | d=3.0% |
-|---|---|---|---|---|---|---|
-| published 2026-08-12 | 357 | 0.177 | **0.202** | 0.194 | (in log) | 0.140 |
-| run 2 (the published 85 dates) | 356 | 0.156 | **0.163** | 0.162 | 0.160 | 0.137 |
-| run 1 (full store) | 537 | 0.085 | **0.097** | 0.093 | 0.095 | 0.078 |
+### What does not reproduce: the day-1 MAGNITUDE
 
-At `d` = 0.5%: published +0.025, run 2 **+0.007**, run 1 +0.012. At `d` = 1%: published +0.017,
-run 2 +0.006, run 1 +0.008. The published day-1 gain is between two and four times what either
-re-run finds.
+At `d` = 0.5% the published day-1 gain is +0.025 against +0.007 (run 2) and +0.012 (run 1), so between
+two and four times smaller. At `d` = 1% it is +0.017 against +0.006 and +0.008.
 
-**The cohort did not change size.** Run 2 finds 356 day-1 touches against the published 357 on the
-same 85 dates. So this is not dilution by newly reachable touches — it is nearly the same rows with a
-different mean.
+**The cohort is the same SIZE.** Run 2 finds 356 day-1 touches against the published 357 on the same
+85 dates, so the shrinkage is not dilution by a larger cohort. **Whether it is the same ROWS was not
+checked.** The store has been rebuilt three times since, which can replace members one for one; a join
+on `(date, ticker, tier)` against the published records parquet would settle it and was not run.
 
-#### Why the day-1 gain shrank is UNRESOLVED
+#### Why it shrank is UNRESOLVED
 
-Ruled out by measurement:
+Ruled out by inspection, which is weaker than measurement:
 
-- **the trigger correction this addendum measures.** On run 2's panel its within-run control reads
-  `dR` mean -0.0000 and `dR` median -0.0000 at `d` = 0.5%, the same answer the local copy gave.
-- **a changed cohort definition.** `git log` shows two commits on the script since 2026-08-01,
-  `7727dee1` (#1037, the original study) and `cc512e34` (the trigger fix); the `day1` predicate is
-  untouched, and the cohort size is 356 against 357.
+- **a changed cohort PREDICATE.** `git log` shows two commits on the script since 2026-08-01,
+  `7727dee1` (#1037) and `cc512e34` (the trigger fix), and the `day1` predicate is untouched. This
+  says nothing about whether the rows the predicate selects changed.
 
 Not ruled out, not measured, and not to be quoted as the explanation:
 
-- **forward bars are now complete.** Run 2 reports `entry_window_truncated: 0`. The original run had
-  a data horizon one day past its newest ladder date, and the Caveats below record 197 candidates
-  whose entry windows that horizon cut short. A truncated window removes later bars, and a day-1
-  touch has far less room inside the horizon than a day-2+ touch, so truncation and the day-1 cohort
-  can interact. Nobody has checked whether they do.
-- **the ladder store has been rebuilt.** Three archived directories sit beside it on the VPS
-  (`population_ladders.pre1416`, `.pre1442-20260913`, `.pre1444-20260914`). That is consistent with
-  932 ALL touches against 946, and says nothing about which rows moved.
+- **the trigger correction this addendum measures, POOLED.** Its within-run control reads `dR` mean
+  and median of -0.0000 at `d` = 0.5% on run 2's panel. But that control is computed ACROSS ALL
+  COHORTS, as the table's own note above says, and it was not cut to day-1. The error term is
+  `(reference - trough) x d`, so it is largest where post-touch drawdowns are deepest, and bullet 3
+  below says that is the day-1 cohort. A pooled mean over 932 touches cannot bound a subgroup effect
+  in 356 of them.
+- **forward bars are now complete.** Run 2 reports `entry_window_truncated: 0`; the original run's
+  horizon cut 197 entry windows short. A truncated window removes later bars, and a day-1 touch has
+  far less room inside the horizon than a day-2+ touch, so truncation and the day-1 cohort can
+  interact. Capping run 2's forward bars at the original horizon would test this with the same tooling
+  and needs no store snapshot. It was not run.
+- **the ladder store has been rebuilt.** Three archived directories sit beside it on the VPS:
+  `population_ladders.pre1416`, `population_ladders.pre1442-20260913-164940` and
+  `population_ladders.pre1444-20260914-115836`.
 
-#### A faithful reproduction is impossible
+#### What else in this addendum was measured on the fragment
+
+Every row of the delta table above, its paired counts, its fill counts, its `ex-worst` column, the
+"fill counts are IDENTICAL" conclusion and the 2-against-10 implausible-drop split all come from the
+same incomplete copy (576 of 1334 touches). Exactly ONE cell was re-measured on run 2: `dR` at
+`d` = 0.5%. The rest is neither withdrawn nor re-measured — including the "leaves the fill counts
+identical" claim that the design memo's §6 note leans on.
+
+#### A faithful reproduction of the STORE is impossible
 
 All three archived snapshots begin 2026-05-19 and run into September. No snapshot of the store as it
 stood on 2026-08-12 exists, so the published absolute levels cannot be re-derived from the store by
-anyone. The Verdict table records one run. What a later run can check is the deltas, and only the
-ALL-cohort delta checks out well.
+anyone. This bounds what the STORE can give back. It does not bound the truncation question above,
+which is a flag on the same run.
 
-#### Three further claims this reproduction contradicts
+### Three further published claims this reproduction contradicts
 
-- **"The edge decays monotonically with `d`"** (Verdict). It does not, on either real panel: run 2
-  reads 0.206, 0.200, 0.201, 0.193, 0.186 and run 1 reads 0.128, 0.122, 0.126, 0.118, 0.117, so
-  `d` = 1.5% sits above `d` = 1.0% in both.
-- **"grid support is {50,100} with 150 marginal"**
-  (`entry_trailing_design_2026_08_12.md` §6). Both panels rank 150 bps ABOVE 100 bps. Nothing in
-  production moves, because 50 is still the maximum, but 150 is not the marginal member of that set.
-- **"<=1.5% fill-rate cost"** (same memo, Evidence base). It holds on the published 85 dates and not
-  on the full store. Fill rates, with A at 1.000 on every panel:
+- **"The edge decays monotonically with `d`"** (Verdict). It does not: `d` = 1.5% sits above
+  `d` = 1.0% on the ALL cohort of both panels, by +0.001 (run 2) and +0.004 (run 1), and on day-2+
+  as well (0.227 against 0.224, and 0.146 against 0.141). Caveat 4 below
+  already says the optimum inside the grid is not resolvable at this N, so read this as "the grid is
+  FLAT between 1% and 1.5%" rather than as a measured reversal.
+- **"grid support is {50,100} with 150 marginal"** (`entry_trailing_design_2026_08_12.md` §6 and the
+  comment on `ENTRY_TRAIL_BPS_MAX`). On the ALL cohort of both panels 150 bps ranks ABOVE 100 bps,
+  which argues for INCLUDING 150 rather than against the bound. It does not hold on run 2's day-1
+  cohort, where 1.5% (+0.004) is below 1.0% (+0.006).
+- **"the replay's edge is negative by d≈2%"** (same two places). On the ALL cohort `d` = 2.0% is
+  +0.001 on BOTH panels — flat, not negative — and only `d` = 3% reaches zero or below. The claim
+  holds for day-1 (run 2 -0.005 at 2%) and for E2, not for the grid.
 
-| panel | d=0.5% | d=1.0% | d=1.5% | d=2.0% | d=3.0% |
-|---|---|---|---|---|---|
-| run 2 (the published 85 dates) | 0.994 | 0.986 | 0.982 | 0.976 | 0.943 |
-| run 1 (full store) | 0.992 | 0.971 | 0.953 | 0.944 | 0.891 |
+### The region beyond the bound is MIXED, not uniformly bad
 
-At `d` = 1% the cost is 1.4% on the published dates and 2.9% on the full store.
+This is the sentence an earlier draft of this correction got wrong in my own favour. Deltas against
+each cohort's own A, at the two settings the bound of 150 excludes:
 
-#### Two claims that stay UNRESOLVED rather than settled
+| cohort | run 2: d=2% / 3% | run 1: d=2% / 3% |
+|---|---|---|
+| ALL | +0.001 / -0.006 | +0.001 / 0.000 |
+| day-1 | **-0.005 / -0.019** | 0.000 / **-0.007** |
+| day-2+ | +0.005 / +0.001 | +0.001 / +0.004 |
+| E1 | -0.002 / -0.003 | 0.000 / +0.002 |
+| E2 | -0.004 / **-0.018** | -0.006 / -0.008 |
+| E3 | **+0.035** / +0.005 | **+0.032** / +0.009 |
 
-- **"day-1 cohort flips hardest" / day-1 benefits most.** Run 2 contradicts it: day-1 gains +0.007
-  against the ALL cohort's +0.014. Run 1 supports it by a hair: +0.012 against +0.011. One panel each
-  way, so unresolved.
-- **"beats limit-at-touch in EVERY cohort".** Only ALL and day-1 are restated here. The day-2+, E1,
-  E2 and E3 rows are not, so read the breadth as unverified rather than reconfirmed.
+So §6's "a bound must exclude the measured-bad region" describes a property of day-1 and E2, not of
+the grid: ALL is flat there, E1 is flat, day-2+ is positive, and **E3 — the deepest tier — prefers a
+WIDE trail on both panels** (+0.035 and +0.032 at `d` = 2%). The bound still points the right way,
+because 50 bps is the maximum on ALL, day-1 and day-2+ and nothing beyond 150 improves them. Its
+published justification is cohort-specific and should be read that way.
 
-#### What does not change
+### Claims left UNRESOLVED rather than settled
 
-`ENTRY_TRAIL_BPS_MAX = 150` and the first LIVE value of 50 both stand. `d` = 0.5% is the maximum of
-the grid on both real panels, and the region the bound excludes is never better than baseline on
-either. The margin behind the bound is thinner than published, and that is worth stating in numbers
-rather than in the word "clearly": day-1 at `d` = 3% sits below A by -0.019 on run 2 and -0.007 on
-run 1, against the published -0.037.
+- **"day-1 touches benefit MOST"** at `d` = 0.5%, read against day-2+ rather than against ALL, which
+  contains day-1. Run 2 contradicts it: +0.007 against day-2+'s +0.018. Run 1 supports it by a hair:
+  +0.012 against +0.010. One panel each way. The real shape of the change is a reallocation between
+  the two day cohorts, which neither panel settles.
+- **"beats limit-at-touch in EVERY cohort"**. ALL, day-1 and day-2+ are restated here; E1, E2 and E3
+  are not. Read the breadth as unverified rather than reconfirmed.
+- **"under BOTH slippage assumptions"**. Both re-runs report the slippage-`none` view only.
+- **"it enters CHEAPER, not dearer"** — the negative-concession finding. Neither run restated it.
 
-The payoff estimate in the Caveats below reads about +0.02R per entry. On these re-runs it is
-+0.014R on the published dates and +0.011R on the full store, so the tick slack that estimate buys is
-about a quarter smaller and the stop-buy slippage caveat gets stronger, not weaker.
+### What does not change
+
+`ENTRY_TRAIL_BPS_MAX = 150` and the first LIVE value of 50 both stand. The margin behind the bound is
+thinner than published and that is worth stating in numbers rather than in the word "clearly": day-1
+at `d` = 3% sits below A by -0.019 on run 2 and -0.007 on run 1, against the published -0.037.
+
+The payoff estimate in Caveat 4 below reads about +0.02R per entry. On these re-runs it is +0.014R on
+the published dates and +0.011R on the full store — about 30% smaller and about 45% smaller
+respectively, not "about a quarter". The tick slack it buys shrinks with it.
 
 Three divergences from the live order remain unmodelled and are named in
 `alphalens_research/diagnostics/trailing_entry_trigger.py`: the server's coarse ratchet of a tenth of
 the distance, the bid-versus-trade-price reference, and the day-1 gap gate production applies and this
 study does not. The trough also still seeds from the touch bar's low where the daily-bar replay seeds
-from the reference — a median 13.2 bps apart on these touches, which is larger than the term this
-addendum measures.
+from the reference — a median 13.2 bps apart on these touches, which is larger than the term the
+trigger correction above measures.
 
 ## Verdict
 
@@ -264,9 +318,10 @@ addendum measures.
 
 > **Reproduction 2026-10-01 — read this line with the Correction above.** On both re-runs the ALL-cohort
 > gain reproduces and `d` = 0.5% is still the grid maximum. Three parts of this sentence do not hold:
-> the decay is NOT monotone (`d` = 1.5% sits above `d` = 1.0% on both panels), the day-1 MAGNITUDE is
-> two to four times smaller, and "flips hardest" is contradicted on one panel and supported on the
-> other. The word EVERY still rests on this run alone — only ALL and day-1 were restated.
+> the decay is NOT monotone (`d` = 1.5% sits above `d` = 1.0% on both panels), the day-1 MAGNITUDE at
+> `d` = 0.5% is two to four times smaller, and "under BOTH slippage assumptions" plus "enters CHEAPER"
+> were not restated at all. **"flips hardest" REPRODUCES** on both panels. The word EVERY now rests on
+> ALL, day-1 and day-2+; E1, E2 and E3 still rest on this run alone.
 
 Policy view (missed tier = 0R, fixed risk denominator = A's risk unit — the view that cannot flatter B by re-denominating):
 
@@ -274,28 +329,32 @@ Policy view (missed tier = 0R, fixed risk denominator = A's risk unit — the vi
 |---|---|---|---|---|---|
 | ALL | 946 | 0.215 / 0.209 | **0.233 / 0.230** | 0.225 / 0.223 | 0.198 / 0.196 |
 | day-1 touch | 357 | 0.177 / 0.175 | **0.202 / 0.200** | 0.194 / 0.192 | 0.140 / 0.139 |
-| day-2+ touch | 589 | 0.238 / 0.229 | **0.251 / 0.249** | 0.244 / 0.241 | 0.233 / 0.230 |
-| E1 | 628 | 0.211 / 0.209 | **0.223 / 0.221** | 0.218 / 0.215 | 0.183 / 0.181 |
-| E2 | 243 | 0.153 / 0.135 | **0.174 / 0.172** | — | — |
-| E3 | 75 | (in log) | (in log) | — | — |
+| day-2+ touch | 589 | 0.238 / 0.229 | **0.251 / 0.249** | 0.244 / 0.241 | 0.233 / 0.230 | *restated 2026-10-01* |
+| E1 | 628 | 0.211 / 0.209 | **0.223 / 0.221** | 0.218 / 0.215 | 0.183 / 0.181 | *not restated 2026-10-01* |
+| E2 | 243 | 0.153 / 0.135 | **0.174 / 0.172** | — | — | *not restated 2026-10-01* |
+| E3 | 75 | (in log) | (in log) | — | — | *not restated; `d` = 1.5% is the grid max here* |
 
 Full grids incl. d = 1.5/2%, medians, win rates, own-denominator view: rerun log `/tmp/whatif_rerun.log` on the VPS (regenerate any time from the records parquet).
 
 ## Why the trail wins (mechanics, from the data)
 
 1. **The concession is NEGATIVE at small d** (ALL cohort: −0.3% average entry price vs the limit). After price touches the limit it usually keeps sliding; the trail follows the falling price down and triggers off a LOWER low — so "waiting for confirmation" gets paid instead of paying. The intuition "trailing always buys dearer" is wrong at small d on our paths.
-2. **Fill-rate cost is negligible at small d**: 99.5% at 0.5%, 98.5% at 1% (vs 100% for A). By d = 3% it drops to 93.8% and the missed winners eat the edge.
-3. **Day-1 touches benefit MOST** (+0.025R at d = 0.5%, win rate 68.1% → 70.0%) — **UNRESOLVED as of 2026-10-01:** the re-run on the same 85 dates puts day-1 at +0.007R against the ALL cohort's +0.014R, which contradicts this bullet, while the full store puts it at +0.012R against +0.011R, which supports it by a hair. One panel each way. The mechanism below was not measured by either run — consistent with the day-1 adverse-selection finding (`reference_day1_gap_gate_and_adverse_selection_2026_08_11`): day-1 dips are the most likely to be falling knives, so bounce confirmation filters exactly where filtering pays. Note the day-1 gap GATE only covers the open-below-E1 subclass; the trail helps the remaining day-1 touches too.
+2. **Fill-rate cost is negligible at small d**: 99.5% at 0.5%, 98.5% at 1% (vs 100% for A). By d = 3% it drops to 93.8% and the missed winners eat the edge. **Revised 2026-10-01:** on the re-runs the fill rate is 99.4% / 98.6% at d = 0.5% / 1% on the published 85 dates and 99.2% / 97.1% on the full store; at d = 3% it is 94.3% and **89.1%** against the published 93.8%, so the full-store cost at 3% is nearly double.
+3. **Day-1 touches benefit MOST** (+0.025R at d = 0.5%, win rate 68.1% → 70.0%) — **the win-rate half REVERSES on both re-runs** (day-1 at d = 0.5% goes 0.646 → 0.635 on run 2 and 0.575 → 0.564 on run 1; the ALL cohort falls too), and the R half is **UNRESOLVED as of 2026-10-01:** the re-run on the same 85 dates puts day-1 at +0.007R against the ALL cohort's +0.014R, which contradicts this bullet, while the full store puts it at +0.012R against +0.011R, which supports it by a hair. One panel each way. The mechanism below was not measured by either run — consistent with the day-1 adverse-selection finding (`reference_day1_gap_gate_and_adverse_selection_2026_08_11`): day-1 dips are the most likely to be falling knives, so bounce confirmation filters exactly where filtering pays. Note the day-1 gap GATE only covers the open-below-E1 subclass; the trail helps the remaining day-1 touches too.
 4. Effect size honesty: +0.018R mean on ALL is ~8% relative — real but modest; N = 946 tier-touches from 85 days, third-order cut of the same data. Direction, not calibration: {0.5%, 1%} beat A robustly, the exact optimum inside that range is not resolvable at this N.
 
 ## Caveats
 
 - **Execution realism**: variant A assumed touch-fill (adverse variant demands trade-through — changed almost nothing: 938/946 touches traded through on the same bar); variant B assumed stop-buy at trigger +1 tick adverse. Real stop-buy slippage on thin small-caps can exceed 1 tick; the ~+0.02R edge could absorb ~2-3 extra ticks on a $3 stock before flipping, less on dearer names. **Revised 2026-10-01:** on the re-runs the edge is +0.014R / +0.011R, so the slack is nearer 1-2 ticks on that $3 stock.
 - **60 "implausible" B rows dropped** (0.6%, mirror of the monitor's split guard) without a per-variant bias quantification — flagged by the verifier, direction unknown, small.
-- 197 candidates had entry windows truncated by the data horizon; 4,937 tier-entries were still horizon-open and marked at last close — identical treatment for A and B, so comparisons stand, but absolute R levels are conservative.
+- 197 candidates had entry windows truncated by the data horizon; 4,937 tier-entries were still horizon-open and marked at last close — identical treatment for A and B, so comparisons stand, but absolute R levels are conservative. **2026-10-01:** "comparisons stand" is in doubt BETWEEN panels, not within this one — run 2 reports `entry_window_truncated: 0`, and the Correction above names a truncation-by-day-1 interaction as the leading unmeasured candidate for the day-1 shortfall.
 - Implementing trailing ENTRIES live was previously REJECTED (INC-4) on execution-complexity grounds (bot-managed stop-buys trailed per tick, restart-safety, off-tick amend limits — see `trailing_execution_design_2026_08_07.md`). This result is evidence to REOPEN that decision with a concrete payoff estimate (~+0.02R/entry), not a green light to build. **Revised 2026-10-01:** the re-runs put that estimate at +0.014R per entry on the published dates and +0.011R on the full store, so the slack it buys against stop-buy slippage is about a quarter smaller.
 
 ## Addendum (same day): ATR-normalized trail distance + volatility-heterogeneity diagnostic
+
+**2026-10-01:** the absolute levels quoted below are the 2026-08-12 run's and do not reproduce (see the
+Correction above). The +0.002R comparison is unaffected in SIGN, but it is now about a sixth of the
+grid's measured spread rather than a hundredth of the level.
 
 Operator follow-up question: should d be volatility-normalized (d_i = k × ATR/price), and is there per-condition structure an ML model could learn? Extended replay (`/tmp/whatif_trailing_entry_atr.py` on the VPS; fixed-d rows reproduced digit-for-digit vs the base run, 11,292 records aligned; 0 touches excluded for bad ATR, 1 capped case at the 5% guard):
 
