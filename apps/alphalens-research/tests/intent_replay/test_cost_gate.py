@@ -131,18 +131,21 @@ if __name__ == "__main__":
 
 
 class TheThresholdAboveTheKneeDoesNotSeeTheNotionalTest(unittest.TestCase):
-    """What a stated FX rate can and cannot change, measured (#1592).
+    """Why a stated FX rate will be almost unobservable here (#1592).
 
-    The decision of #1592 states a mid rate so the per-fill minimum and the
-    budget are commensurable. These rows record what the rate's MAGNITUDE buys:
-    above the knee, nothing the gate compares. They exist because the design
-    pays for provenance on a value whose only observable effect is here, and a
-    reader of section 8.1 needs the bound rather than the adjective.
+    No FX term exists yet: ``fx_applies`` is refused in ``config``, so these
+    rows pin the MECHANISM the decision rests on rather than the decision. The
+    mechanism is that a rate reaches this module only by scaling the notional,
+    and above the knee the notional cancels. Section 8.1 publishes the
+    consequence, so these rows keep its numbers honest; the FX-aware rows arrive
+    with the keys.
     """
 
     KNEE = MIN_COMMISSION / RATE
     ENTRY = 66.50
     BUDGET = 8000.0  # the standard manual-pick position, in the account currency
+    # The two candidate rates of section 8.1. The TEST applies them to the
+    # budget, because the gate takes a notional and has no FX input yet.
     USD_PER_PLN, PLN_PER_USD = 1.0 / 3.7, 3.7
 
     def _threshold(self, notional: float) -> float | None:
@@ -157,10 +160,15 @@ class TheThresholdAboveTheKneeDoesNotSeeTheNotionalTest(unittest.TestCase):
         self.assertEqual(len({self._threshold(notional) for notional in above}), 1)
         self.assertEqual(self._threshold(8000.0), 66.93889999999999)
 
-    def test_a_rate_and_its_inverse_price_the_same_threshold(self) -> None:
-        # A rate stated upside down is 13.7x wrong on this account and leaves
-        # the gate's verdict bit-identical, which is why section 5.2.1 requires
-        # the DERIVED notional in the result instead of trusting the rate.
+    def test_a_rate_and_its_inverse_give_notionals_the_gate_cannot_tell_apart(
+        self,
+    ) -> None:
+        # The named witness for section 8.1's published pair, subsumed by the
+        # row above and kept because a published number needs one. A rate stated
+        # upside down is 13.7x wrong on this account and still leaves the
+        # verdict bit-identical, which is why section 5.2.1 puts the direction
+        # in the unit and prints the derived notional rather than trusting the
+        # rate.
         self.assertEqual(
             self._threshold(self.BUDGET * self.USD_PER_PLN),
             self._threshold(self.BUDGET * self.PLN_PER_USD),

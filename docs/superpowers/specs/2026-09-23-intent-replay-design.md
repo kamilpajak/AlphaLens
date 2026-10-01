@@ -1249,8 +1249,17 @@ default to none. `entry_deadline` and `walk_start` are the TRANSLATED paths of
 §4.3.1, and they follow a rule the rest of the block does not need:
 
 > A config value that TRANSLATES a document path carries the
-> `kind`/`value`/`unit`/`source`/`formula` object of §5.1. A config value that is
-> a plain run switch stays a bare scalar.
+> `kind`/`value`/`unit`/`source`/`formula` object of §5.1. A config value that
+> carries a MAGNITUDE carries the `value`/`unit` pair. A config value that is a
+> plain run switch stays a bare scalar.
+
+The middle shape was missing from this rule until 2026-10-01, although the
+`costs` block has used it since PR 3: `commission_rate`, `min_commission` and
+`exit_edge_min_bps` are each a `value`/`unit` pair, so a rule admitting only the
+other two shapes described none of them. The omission only started to matter
+with #1592, whose new keys are magnitudes where the unit IS the question — a
+round-trip cost given as `0.005` and as `0.5` differ by a hundredfold and both
+read as plausible.
 
 The anchor and the boundary rule live inside `formula` as resolved values rather
 than as free-text sibling keys, because a reader can check a formula against the
@@ -1326,9 +1335,21 @@ key set.
 | key | shape | unit | why it cannot be omitted | required |
 |---|---|---|---|---|
 | `fx.instrument_currency` | §5.1 translated value | ISO 4217 code | it is the settlement currency of `instrument.mic`, which no document path states (§4.3.1) and which no table in this repo maps from a MIC. The gate compares `min_commission` against a notional, and the two are in different currencies until this is stated | always |
-| `fx.mid_rate` | §5.1 translated value, stating BOTH codes in the direction given | instrument currency per unit of account currency | it makes `max(min_commission, commission_rate x notional)` commensurable, and the walk sizes with it | when the two currencies differ |
-| `fx.round_trip_cost_rate` | bare scalar | fraction of notional | the daemon reads `FX_ROUND_TRIP_RATE` and §2.1 forbids inheriting it. In bps the term IS the rate, flat at every notional, so one stated fraction prices the leg | when the two currencies differ |
-| `fx.sizing_buffer_pct` | bare scalar | per cent | the drain shrinks the budget by it before dividing, and the walk now applies it too (§8.1) | when the two currencies differ |
+| `fx.mid_rate` | §5.1 translated value, whose `unit` is the ordered pair `<instrument>/<account>` — for a PLN budget on a USD instrument, `USD/PLN`, read as "USD per PLN" | that pair, so the direction is part of the value | it makes `max(min_commission, commission_rate x notional)` commensurable, and the walk sizes with it | when the two currencies differ |
+| `fx.round_trip_cost_rate` | `value`/`unit` pair, as `commission_rate` is | `fraction` | the daemon reads `FX_ROUND_TRIP_RATE` and §2.1 forbids inheriting it. In bps the term IS the rate, flat at every notional, so one stated fraction prices the leg | when the two currencies differ |
+| `fx.sizing_buffer_pct` | `value`/`unit` pair | `percent` | the drain shrinks the budget by it before dividing, and the walk now applies it too (§8.1) | when the two currencies differ |
+
+**Why the rate carries provenance when it translates no document path.** The
+§5.1 shape is tied to translation, and a mid rate is not a document path
+resolved — it is a market fact the caller supplies. It gets the shape anyway, for
+a different reason, stated here so the rule is not quietly stretched: it is the
+one value in the block that NOTHING in the run can check, so its `source` and
+the as-of time inside `formula` are the only audit a later reader has. The
+direction, by contrast, IS checkable, which is why it lives in the unit rather
+than in prose: the numerator must equal `fx.instrument_currency` and the
+denominator must equal `spec.size.currency`, and a pair naming anything else is
+refused. That check is what makes an inverted rate a refusal instead of a
+silently flattering run (§8.1).
 
 Four consequences, each one something the old block could get wrong in silence:
 
@@ -1339,6 +1360,9 @@ Four consequences, each one something the old block could get wrong in silence:
 - **`min_commission.unit` is CHECKED against `fx.instrument_currency`** instead
   of being a label nothing compares.
 - **The gate's notional is the tranche's**, not the entry budget's (§8.1).
+- **The symbolic unit `instrument_currency` is retired.** §5 gives it to
+  `avg_entry_price` and the R denominator precisely because no path states the
+  currency; once `fx.instrument_currency` does, those fields carry a real code.
 - **The result publishes the derived instrument-currency notional** beside the
   stated rate. The rate's magnitude is otherwise almost unobservable, and a tool
   that pays for provenance on a value it cannot check should at least print what
