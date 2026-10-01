@@ -53,6 +53,7 @@ from alphalens_pipeline.brokers.automanager import (
     entry_trail_geometry,
     entry_trail_watcher,
     entry_trails,
+    journal_snapshots,
     picks,
     state_paths,
     trade_alerts,
@@ -5095,11 +5096,15 @@ def build_default_deps(
     # One-shot bounded-growth maintenance: fold the append-only standalone-stop
     # journal down to its minimal fold-equivalent set (issue #895). Runs here —
     # at startup, before the tick loop — so no concurrent tick races the rewrite.
-    _compact_standalone_stop_journal()
+    compaction_outcomes = [_compact_standalone_stop_journal()]
     # Same maintenance for the entry-trails journal (entry-trailing PR-T0):
     # startup, before the tick loop, no concurrent tick — a missing/empty
     # journal is a no-op, so this is inert until a watcher writes records.
-    entry_trails.compact_entry_trail_journal()
+    compaction_outcomes.append(entry_trails.compact_entry_trail_journal())
+    # #1648: a compaction that could not snapshot (or saw the journal change)
+    # keeps the journal whole. Say so on the alert sink, not only in journald,
+    # so a skip that repeats at every boot is seen before the journal grows.
+    _alert_skipped_compactions(compaction_outcomes, _journaled_alert(notify))
 
     # ADR 0017 composition root: env == live routes into the LIVE factory (which
     # itself refuses to construct anything until assert_live_rails + the §1
@@ -5522,22 +5527,29 @@ def _build_planned_line(
 
 def _iter_standalone_stop_journal() -> Iterator[dict[str, Any]]:
     """Yield parsed lines from the standalone-stop journal; malformed lines skipped."""
-    import json
-
     path = _standalone_stop_journal_path()
     if not path.exists():
         return
     with path.open("r", encoding="utf-8") as fh:
-        for raw_line in fh:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(record, dict):
-                yield record
+        yield from _parse_standalone_stop_lines(fh)
+
+
+def _parse_standalone_stop_lines(raw_lines: Iterable[str]) -> Iterator[dict[str, Any]]:
+    """The parsing rules of :func:`_iter_standalone_stop_journal`, over lines
+    already read, so the boot compactor parses exactly the bytes it snapshots
+    (#1648) instead of reading the file a second time."""
+    import json
+
+    for raw_line in raw_lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            yield record
 
 
 def _read_persisted_gen(uic: int) -> tuple[int, float | None]:
@@ -7151,44 +7163,65 @@ def _track_stop_filled_by_id(
             stop_filled_by_id[order_id] = (ts, dict(line))
 
 
-def _compact_standalone_stop_journal() -> None:
+def _compact_standalone_stop_journal() -> journal_snapshots.CompactionOutcome:
     """Atomically rewrite the standalone-stop journal with its compacted form.
 
-    Read the current file, compute the minimal fold-equivalent line set, and
-    replace the file in place (temp file in the SAME dir + ``os.replace`` — an
-    atomic rename on POSIX, so a crash mid-rewrite leaves the old journal intact).
-    A NO-OP when the journal is absent or holds no parseable records — never
-    creates or truncates a file that has nothing to compact.
+    Read the file ONCE, compute the minimal fold-equivalent line set from those
+    bytes, and hand both to :func:`journal_snapshots.replace_compacted`, which
+    snapshots the original bytes before replacing the file (#1648: the lines a
+    compaction drops, such as a closed position's ``tranche_fired`` telemetry,
+    exist nowhere else) and leaves the journal alone when it cannot snapshot it or
+    when the file changed meanwhile. The replace is a temp file in the SAME dir +
+    ``os.replace`` (atomic on POSIX). A NO-OP when the journal is absent or holds
+    no parseable records — never creates or truncates a file that has nothing to
+    compact.
 
     Call ONCE at daemon startup (``build_default_deps``), BEFORE the tick loop, so
     no concurrent tick can race the rewrite against an append."""
-    import contextlib
+    import io
     import json
-    import os
-    import tempfile
 
     path = _standalone_stop_journal_path()
+    unchanged = journal_snapshots.CompactionOutcome(path.name, journal_snapshots.STATUS_UNCHANGED)
     if not path.exists():
-        return
-    lines = list(_iter_standalone_stop_journal())
+        return unchanged
+    before = path.stat()
+    original = path.read_bytes()
+    # newline=None: the same universal-newline splitting a text-mode file read
+    # gives _iter_standalone_stop_journal.
+    lines = list(_parse_standalone_stop_lines(io.StringIO(original.decode("utf-8"), newline=None)))
     if not lines:
-        return
+        return unchanged
     compacted = _compact_standalone_stop_journal_lines(lines)
-
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=".standalone_stops.compact-", suffix=".tmp"
+    compacted_bytes = "".join(
+        json.dumps(record, sort_keys=True, default=str) + "\n" for record in compacted
+    ).encode("utf-8")
+    return journal_snapshots.replace_compacted(
+        path,
+        original,
+        compacted_bytes,
+        before=before,
+        tmp_prefix=".standalone_stops.compact-",
     )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            for record in compacted:
-                fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp_name, str(path))
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_name)
-        raise
+
+
+def _alert_skipped_compactions(
+    outcomes: Iterable[journal_snapshots.CompactionOutcome], alert: Callable[[str], None]
+) -> None:
+    """One message per journal whose boot compaction was skipped (#1648).
+
+    Never raises: a failed delivery must not stop the daemon from starting
+    (the journal is intact either way)."""
+    for outcome in outcomes:
+        if outcome.status != journal_snapshots.STATUS_SKIPPED:
+            continue
+        try:
+            alert(
+                f"journal compaction skipped for {outcome.journal}: {outcome.reason} - "
+                "nothing was removed"
+            )
+        except Exception:
+            logger.warning("compaction-skipped alert failed to send", exc_info=True)
 
 
 def _default_oauth_provider(*, alert: NotificationPort | None = None) -> Any:

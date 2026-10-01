@@ -38,18 +38,16 @@ design — a watch that cannot be funded at its limits must not open.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import math
 import os
-import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from alphalens_pipeline.brokers.automanager import state_paths
+from alphalens_pipeline.brokers.automanager import journal_snapshots, state_paths
 from alphalens_pipeline.brokers.automanager.labels import entry_label_from_crid
 from alphalens_pipeline.brokers.journal import append_json_line
 
@@ -749,35 +747,34 @@ def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
     return [materialized[index] for index in sorted(keep)]
 
 
-def compact_entry_trail_journal() -> None:
+def compact_entry_trail_journal() -> journal_snapshots.CompactionOutcome:
     """Atomically rewrite the entry-trails journal with its compacted form.
 
-    Mirrors ``control_loop._compact_standalone_stop_journal``: a NO-OP when
-    the journal is absent or holds no non-blank lines (never creates or
-    truncates a file with nothing to compact); otherwise temp file in the
-    SAME dir + ``os.replace`` (atomic rename on POSIX — a crash mid-rewrite
-    leaves the old journal intact). Call ONCE at daemon startup
-    (``build_default_deps``), BEFORE the tick loop, so no concurrent tick can
-    race the rewrite against an append."""
+    Mirrors ``control_loop._compact_standalone_stop_journal``: read the file ONCE,
+    compact from those bytes, and let :func:`journal_snapshots.replace_compacted`
+    snapshot the original bytes before replacing it (#1648: the trough and state
+    lines a compaction drops are history that exists nowhere else), leaving the
+    journal alone when it cannot snapshot it or when it changed meanwhile (the
+    CLI's ``broker disarm`` appends here from another process). A NO-OP when the
+    journal is absent or holds no non-blank lines (never creates or truncates a
+    file with nothing to compact). Call ONCE at daemon startup
+    (``build_default_deps``), BEFORE the tick loop, so no concurrent tick can race
+    the rewrite against an append."""
     path = _entry_trail_journal_path()
+    unchanged = journal_snapshots.CompactionOutcome(path.name, journal_snapshots.STATUS_UNCHANGED)
     if not path.exists():
-        return
-    raw_lines = path.read_text(encoding="utf-8").splitlines()
+        return unchanged
+    before = path.stat()
+    original = path.read_bytes()
+    raw_lines = original.decode("utf-8").splitlines()
     if not any(line.strip() for line in raw_lines):
-        return
+        return unchanged
     compacted = compact_entry_trail_lines(raw_lines)
-
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=".entry_trails.compact-", suffix=".tmp"
+    compacted_bytes = "".join(line + "\n" for line in compacted).encode("utf-8")
+    return journal_snapshots.replace_compacted(
+        path,
+        original,
+        compacted_bytes,
+        before=before,
+        tmp_prefix=".entry_trails.compact-",
     )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            for line in compacted:
-                fh.write(line + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp_name, str(path))
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_name)
-        raise

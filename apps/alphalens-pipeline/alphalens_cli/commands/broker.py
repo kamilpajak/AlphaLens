@@ -2850,7 +2850,11 @@ def reconcile_fills_command(
 
     resolved_format = _resolve_format(output_format, json_alias=as_json)
 
-    from alphalens_pipeline.brokers.automanager import control_loop, state_paths
+    from alphalens_pipeline.brokers.automanager import (
+        control_loop,
+        journal_snapshots,
+        state_paths,
+    )
     from alphalens_pipeline.brokers.automanager.exec_quality import (
         FILL_STATUS_FILLED,
         FILL_STATUS_PENDING,
@@ -2864,7 +2868,12 @@ def reconcile_fills_command(
     _guard_state_layout()
 
     out_path = out or state_paths.exec_quality_parquet()
-    lines = list(control_loop._iter_standalone_stop_journal())
+    # #1648: boot compaction removes a closed position's tranche_fired from the
+    # journal, and the parquet below is rebuilt from scratch, so read the
+    # compaction snapshots too or a rebuild drops every fire compacted away.
+    lines = list(
+        journal_snapshots.iter_journal_history(control_loop._standalone_stop_journal_path())
+    )
 
     broker = _cli_broker()
     if not isinstance(broker, SupportsOrderResolution):

@@ -2614,6 +2614,88 @@ class TestBuildDefaultDepsBootCompactsJournals(unittest.TestCase):
         trails.assert_called_once_with()
 
 
+class TestBuildDefaultDepsKeepsWhatCompactionRemoves(unittest.TestCase):
+    """#1648 through the real boot path, compactors NOT mocked: a boot that
+    compacts leaves a snapshot of each journal it rewrote, and a boot that
+    cannot snapshot leaves the journals alone and says so on the alert sink."""
+
+    def _seed(self, home: Path) -> tuple[Path, Path]:
+        import json
+
+        root = home / ".alphalens" / "broker_orders" / "sim"
+        root.mkdir(parents=True)
+        stops = root / "standalone_stops.jsonl"
+        stops.write_bytes(
+            _journal_bytes(
+                [
+                    _tranche_plan_line(1640268, pick_key="SMMT:2026-09-23"),
+                    {"kind": "tranche_fired", "uic": 1640268, "tag": "tp1", "position_closed": True},
+                    {"kind": "tranche_plan_retracted", "uic": 1640268, "pick_key": "SMMT:2026-09-23"},
+                ]
+            )
+        )  # fmt: skip
+        trails = root / "entry_trails.jsonl"
+        crid = "SMMT-2026-09-23-entry-t0"
+        trails.write_text(
+            "".join(
+                json.dumps({"kind": kind, "crid": crid, **extra}, sort_keys=True) + "\n"
+                for kind, extra in [
+                    ("trough", {"trough": 16.40}),
+                    ("trough", {"trough": 16.25}),
+                    ("trough", {"trough": 16.11}),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return stops, trails
+
+    def _boot(self, alerts: list[str]) -> None:
+        with (
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_AmendCapableBroker(),
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+        ):
+            cl.build_default_deps(notify=alerts.append, chain_loss_notify=lambda _msg: None)
+
+    def test_a_boot_snapshots_each_journal_it_compacts(self) -> None:
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        alerts: list[str] = []
+        with _isolated_home() as home:
+            stops, trails = self._seed(home)
+            stops_before, trails_before = stops.read_bytes(), trails.read_bytes()
+            self._boot(alerts)
+            snapshots = {
+                p.name.split(".", 1)[0]: p.read_bytes()
+                for p in (stops.parent / js.SNAPSHOT_DIRNAME).iterdir()
+            }
+            stops_after = stops.read_bytes()
+        self.assertEqual(
+            snapshots, {"standalone_stops": stops_before, "entry_trails": trails_before}
+        )
+        self.assertNotIn(b"tranche_fired", stops_after)
+        self.assertFalse([a for a in alerts if "compaction skipped" in a], alerts)
+
+    def test_a_boot_that_cannot_snapshot_alerts_once_per_journal(self) -> None:
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        alerts: list[str] = []
+        with _isolated_home() as home:
+            stops, trails = self._seed(home)
+            stops_before, trails_before = stops.read_bytes(), trails.read_bytes()
+            with mock.patch.object(js, "snapshot_bytes", side_effect=OSError("No space left")):
+                self._boot(alerts)
+            self.assertEqual(stops.read_bytes(), stops_before)
+            self.assertEqual(trails.read_bytes(), trails_before)
+        skipped = [a for a in alerts if "compaction skipped" in a]
+        self.assertEqual(len(skipped), 2, alerts)
+        self.assertTrue(any("standalone_stops.jsonl" in a for a in skipped))
+        self.assertTrue(any("entry_trails.jsonl" in a for a in skipped))
+        self.assertTrue(all("No space left" in a for a in skipped))
+
+
 class TestBuildDefaultDepsThreadsAuditBudgetIntoPlacement(unittest.TestCase):
     """#1094: ONE per-tick audit budget covers ALL three consumers — the
     verdict pass, the entry-trail pass AND the placement path's own
@@ -7430,9 +7512,11 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
                         cl._fold_ttl_markers(before_lines, kind, 300.0, 120.0),
                         cl._fold_ttl_markers(after_lines, kind, 300.0, 120.0),
                     )
-            # No temp artifacts left behind in the journal dir.
+            # No temp artifacts left behind; the only new entry is the
+            # snapshot directory (#1648).
             leftovers = [p.name for p in Path(d).iterdir() if p.name != journal.name]
-            self.assertEqual(leftovers, [])
+            self.assertEqual(leftovers, ["compaction_snapshots"])
+            self.assertEqual([p.name for p in Path(d).rglob("*.tmp")], [])
 
     def test_rewrite_preserves_the_trailed_ratchet_floor(self) -> None:
         # #1324 through the REAL boot path: the JSON round-trip plus the file
@@ -7464,6 +7548,145 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
         self.assertEqual(reanchored_before, {333: 95.0})
         self.assertEqual(cl._fold_trailed_since_latest_plan(after), trailed_before)
         self.assertEqual(cl._fold_reanchored_markers(after), reanchored_before)
+
+
+def _journal_bytes(lines: list[dict[str, Any]]) -> bytes:
+    import json
+
+    return "".join(json.dumps(line, sort_keys=True) + "\n" for line in lines).encode("utf-8")
+
+
+class TestCompactionSnapshotsTheJournal(unittest.TestCase):
+    """#1648: boot compaction removed SMMT's ``tranche_fired`` (the decision-side
+    bid/ask/spread of its 29.09 take-profit) and four other lines, and nothing
+    kept them. The compactor now snapshots the exact bytes it compacted from
+    before it replaces the journal, and leaves the journal alone when it cannot."""
+
+    # The SMMT shape: a closed, retracted position whose tranche lines the
+    # compactor drops entirely ("a fully retracted uic keeps NOTHING").
+    _SMMT = 1640268
+
+    def _smmt_journal(self) -> list[dict[str, Any]]:
+        return [
+            {"kind": "stop_placed", "uic": self._SMMT, "qty": 34.0, "order_id": "5446505166",
+             "ref": "SMMT-2026-09-23-entry-t0-fire-stop-0", "ts": 1790264498.64},
+            _tranche_plan_line(self._SMMT, pick_key="SMMT:2026-09-23"),
+            {"kind": "tranche_fired", "uic": self._SMMT, "tag": "tp1", "position_closed": True,
+             "telemetry": {"decision_bid": 18.05, "decision_ask": 18.18, "qty": 34.0,
+                           "sell_order_id": "5447570154"}},
+            {"kind": "tranche_plan_retracted", "uic": self._SMMT, "pick_key": "SMMT:2026-09-23"},
+        ]  # fmt: skip
+
+    def _compact(self, journal: Path) -> Any:
+        with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            return cl._compact_standalone_stop_journal()
+
+    def test_a_dropped_tranche_fired_survives_in_the_snapshot(self) -> None:
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            original = _journal_bytes(self._smmt_journal())
+            journal.write_bytes(original)
+            outcome = self._compact(journal)
+            snapshot_bytes = [p.read_bytes() for p in (Path(d) / js.SNAPSHOT_DIRNAME).iterdir()]
+            after = journal.read_bytes()
+            history = list(js.iter_journal_history(journal))
+        self.assertEqual(outcome.status, "compacted")
+        self.assertNotIn(b"tranche_fired", after, "the compactor still drops it from the journal")
+        self.assertEqual(snapshot_bytes, [original])
+        self.assertTrue(
+            any(r.get("kind") == "tranche_fired" and r.get("uic") == self._SMMT for r in history),
+            "the history still has SMMT's take-profit telemetry",
+        )
+
+    def test_the_snapshot_is_the_original_bytes(self) -> None:
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            original = _journal_bytes(self._smmt_journal()) + b"not json\n"
+            journal.write_bytes(original)
+            self._compact(journal)
+            (snapshot,) = (Path(d) / js.SNAPSHOT_DIRNAME).iterdir()
+            self.assertEqual(snapshot.read_bytes(), original, "malformed lines included")
+
+    def test_a_reorder_only_rewrite_still_rewrites_and_snapshots(self) -> None:
+        # The #1324 fixture keeps all three lines but reorders them. Comparing
+        # line counts would skip this rewrite; the comparison is on bytes.
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            original = _journal_bytes(
+                [
+                    _tranche_plan_line(333, pick_key="OLN:2026-08-14"),
+                    {"kind": "trailed", "uic": 333, "level": 97.0, "ts": 30.0},
+                    {"kind": "reanchored", "uic": 333, "avg_price": 95.0, "ts": 20.0},
+                ]
+            )
+            journal.write_bytes(original)
+            outcome = self._compact(journal)
+            self.assertEqual(outcome.status, "compacted")
+            self.assertNotEqual(journal.read_bytes(), original)
+            self.assertEqual(len(list((Path(d) / js.SNAPSHOT_DIRNAME).iterdir())), 1)
+
+    def test_an_already_compact_journal_is_neither_snapshotted_nor_rewritten(self) -> None:
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            journal.write_bytes(_journal_bytes(self._smmt_journal()))
+            self._compact(journal)  # first boot compacts and snapshots
+            compacted = journal.read_bytes()
+            mtime = journal.stat().st_mtime_ns
+            outcome = self._compact(journal)  # second boot: nothing to drop
+            self.assertEqual(outcome.status, "unchanged")
+            self.assertEqual(journal.read_bytes(), compacted)
+            self.assertEqual(journal.stat().st_mtime_ns, mtime, "not rewritten")
+            self.assertEqual(len(list((Path(d) / js.SNAPSHOT_DIRNAME).iterdir())), 1)
+
+    def test_a_failed_snapshot_leaves_the_journal_untouched(self) -> None:
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            original = _journal_bytes(self._smmt_journal())
+            journal.write_bytes(original)
+            with mock.patch.object(js, "snapshot_bytes", side_effect=OSError("No space left")):
+                outcome = self._compact(journal)
+            self.assertEqual(outcome.status, "skipped")
+            self.assertIn("No space left", outcome.reason)
+            self.assertEqual(journal.read_bytes(), original)
+            self.assertEqual(sorted(p.name for p in Path(d).iterdir()), ["standalone_stops.jsonl"])
+
+    def test_a_line_appended_during_compaction_is_never_lost(self) -> None:
+        # Another process (for example the CLI) appends between the read and the
+        # replace. Replacing would erase that line from the journal and it is in
+        # no snapshot, so the compactor must give up instead.
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        real_snapshot = js.snapshot_bytes
+        late = b'{"kind": "amend_ok", "qty": 1.0, "ts": 99.0, "uic": 7}\n'
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            journal.write_bytes(_journal_bytes(self._smmt_journal()))
+
+            def snapshot_then_append(path, data, **kw):
+                written = real_snapshot(path, data, **kw)
+                with journal.open("ab") as fh:  # the concurrent writer
+                    fh.write(late)
+                return written
+
+            with mock.patch.object(js, "snapshot_bytes", side_effect=snapshot_then_append):
+                outcome = self._compact(journal)
+            after = journal.read_bytes()
+            leftovers = [p.name for p in Path(d).rglob("*.tmp")]
+        self.assertEqual(outcome.status, "skipped")
+        self.assertTrue(after.endswith(late), "the appended line is still in the journal")
+        self.assertIn(b"tranche_fired", after, "nothing was compacted away")
+        self.assertEqual(leftovers, [])
 
 
 _AMEND_ON = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
