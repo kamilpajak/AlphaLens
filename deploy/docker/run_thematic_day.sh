@@ -94,49 +94,10 @@ alphalens thematic score
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic brief"
 alphalens thematic brief
 
-# Eager expert-panel qualitative layer (card epic #500 / surfacing PRs #530-#535;
-# generalized to the experts registry in PR-2). `--all` runs every registered
-# QUAL-capable expert: today that is Buffett (value/quality) — it classifies moat /
-# trend / candor / understandability + a rationale per brief survivor from its 10-K
-# and stamps the qual columns INTO the brief parquet the brief stage just wrote, so
-# the rebuild-cache ExecStartPost below carries them into Postgres and the card's
-# `expert.panel` deep-read drawer lights up. O'Neil (momentum, PR-7) is numeric-only
-# (NOT a QualEnrichExpert) — it is skipped here at $0 because its numerics + the
-# panel disagreement scalar are stamped earlier, at the `score` stage, not here.
-#
-# All five thematic stages above default to yesterday-UTC; `experts enrich` takes
-# the date as a positional arg, so pass the same day explicitly. Results are cached
-# immutably per (date, ticker, scuttlebutt) under ~/.alphalens/buffett_qual/, so
-# the repair-slot reruns re-pay the LLM only for names not yet classified for the day
-# (~$3-4/day steady-state with scuttlebutt on; a no-10-K name costs nothing).
-#
-# `--scuttlebutt` is ON: it adds a web-grounded Perplexity context block
-# (competitive position, customer/supplier concentration, management reputation)
-# to the classifier as UNVERIFIED narrative, and surfaces the "scuttlebutt:
-# web-grounded, unverified" footnote in the drawer. Needs PERPLEXITY_API_KEY
-# (already passed into the container); if it is missing the scuttlebutt fetch
-# degrades to "no context" rather than failing — the qual layer still runs.
-# Cache is keyed by the flag, so the scuttlebutt and plain runs never collide.
-#
-# Best-effort under `set -e` (same posture as the VIX refresh below): the brief is
-# already written, so a DeepSeek / Perplexity / SEC hiccup must NOT fail the build
-# — the drawer simply stays absent for that name until the next run re-tries.
-#
-# MANDATORY ORDERING: migrate the qual cache into version tiers BEFORE enrich.
-# This deploy widened the cache key with a `config_version` tier so a future rubric
-# bump can never overwrite the corpus. The one-shot move relocates the existing
-# pre-registry corpus into the v0 tier so enrich SHORT-CIRCUITS on a load-hit there,
-# instead of recomputing every cached name into v0 with a possibly-different
-# (LLM-nondeterministic) verdict. Idempotent — re-runs migrate nothing. Best-effort
-# under `set -e`: a migrate hiccup must not fail the build (it costs at most one run
-# of recompute-waste), so warn to stderr and continue.
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] experts migrate-qual-cache"
-alphalens experts migrate-qual-cache \
-    || echo "WARN: experts migrate-qual-cache failed; legacy names may recompute into v0 tier" >&2
-
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] experts enrich"
-QUAL_DATE="$(date -u -d 'yesterday' +%Y-%m-%d)"
-alphalens experts enrich "$QUAL_DATE" --all --scuttlebutt \
-    || echo "WARN: experts enrich failed for $QUAL_DATE; deep-read drawer absent until next run" >&2
+# The expert-panel qualitative layer used to run here, after `brief`. It moved
+# to deploy/docker/run_experts_enrich.sh, which the systemd unit invokes as an
+# ExecStartPost AFTER the publish chain — see that script's header for why. The
+# short version: it is optional work, and while it lived inside this script a
+# timeout in it skipped the publish steps and lost an already-written brief.
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] DONE"

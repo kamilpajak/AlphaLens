@@ -97,6 +97,7 @@ EnvironmentFile=/etc/alphalens/env
 #                     path; runs on every stop including timeout, BEFORE
 #                     the metrics hook.
 ExecStartPre=-/usr/bin/docker rm -f alphalens-thematic-build
+ExecStartPre=-/usr/bin/docker rm -f alphalens-thematic-experts-enrich
 ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     --init --name alphalens-thematic-build \
     --user %U:%G \
@@ -163,6 +164,53 @@ ExecStartPost=/usr/bin/docker compose \
     -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
     --profile maintenance run --rm rebuild-cache
 
+# ---- everything below here is OPTIONAL, and that is the whole point --------
+#
+# The expert-panel qualitative layer used to live at the END of the ExecStart
+# script. TimeoutStartSec covers the whole of ExecStart, so a timeout in this
+# optional work killed the unit, systemd skipped EVERY ExecStartPost, and a
+# brief already written to disk never reached Postgres. That happened on
+# 2026-09-30 and was repaired by hand.
+#
+# Moving it here buys NO TIME. ExecStart and every ExecStartPost share one
+# TimeoutStartSec, so the budget is exactly what it was. It buys ORDERING: the
+# brief is in the database by the time this starts, so the same timeout now
+# costs the Buffett drawer instead of the day's product.
+#
+# Both steps are `-`-prefixed. A DeepSeek or Perplexity hiccup must not mark
+# the run failed, page the operator, or skip the rebuild below it.
+#
+# Supervised like the build container (#1330): `--init` so the first SIGTERM
+# ends the run rather than only the docker client, a `--name` to address it by,
+# and a `docker rm -f` on both ends. The env set is the subset these two stages
+# read — OpenRouter for the classifier, Perplexity for the scuttlebutt context,
+# SEC for the 10-K fetch — plus the OpenRouter provider pins.
+ExecStartPost=-/usr/bin/docker run --rm \
+    --init --name alphalens-thematic-experts-enrich \
+    --user %U:%G \
+    -e HOME=/app/home \
+    -e OPENROUTER_API_KEY \
+    -e PERPLEXITY_API_KEY \
+    -e SEC_EDGAR_USER_AGENT \
+    -e ALPHALENS_OPENROUTER_PROVIDER_ORDER \
+    -e ALPHALENS_OPENROUTER_ALLOW_FALLBACKS \
+    -e ALPHALENS_OPENROUTER_QUANTIZATIONS \
+    -e ALPHALENS_OPENROUTER_REQUIRE_PARAMETERS \
+    -e ALPHALENS_PERPLEXITY_SOURCE=1 \
+    -v %h/.alphalens:/app/home/.alphalens \
+    --entrypoint /bin/bash \
+    alphalens-pipeline:latest \
+    /app/deploy/docker/run_experts_enrich.sh
+
+# `experts enrich` stamps its columns INTO the brief parquet the brief stage
+# wrote, so without a second pass they stay on disk until the next slot.
+# rebuild-cache is mtime-gated per date and idempotent, so this re-publishes
+# only the date that just changed. Best-effort: the brief itself is already
+# published, and failing here must not undo that.
+ExecStartPost=-/usr/bin/docker compose \
+    -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
+    --profile maintenance run --rm rebuild-cache
+
 # NOTE: the population-ladder edge mirror (``rebuild-ladder-outcomes``) used to
 # live here too, but it was MOVED to alphalens-feedback-shadow-returns.service
 # (ExecStartPost). That nightly job is the SOLE writer of the population-ladder
@@ -177,6 +225,7 @@ ExecStartPost=/usr/bin/docker compose \
 # verify-cache halt also updates the exit code gauge — Alertmanager
 # (PR-3) then fires on the non-zero exit.
 ExecStopPost=-/usr/bin/docker rm -f alphalens-thematic-build
+ExecStopPost=-/usr/bin/docker rm -f alphalens-thematic-experts-enrich
 ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics thematic-build
 
 # Keep stdout/stderr in journald.
@@ -280,12 +329,21 @@ TasksMax=512
 #
 # It is NOT headroom to grow into: a run that genuinely needs 210 min finishes
 # at 08:00 UTC, at the far edge of the 07:00-08:00 UTC window in which the owner
-# reads the brief. And it does not fix the coupling that caused the incident —
-# the two publish steps are ExecStartPost, so they still only run when ExecStart
-# succeeded, and a timeout still skips a brief that was already written. Making
-# the brief the success boundary is the real fix and is filed separately. If the
-# product stages keep growing, the answer is to make them cheaper or to move
-# work out of this unit, not to raise this number again.
+# reads the brief. If the product stages keep growing, the answer is to make them
+# cheaper or to move work out of this unit, not to raise this number again.
+#
+# UPDATE (#1650). The coupling this comment used to call unfixed is fixed: the
+# expert enrichment left the ExecStart shell and now runs after both publish
+# steps, `-`-prefixed. Every ExecStartPost still counts toward this timeout, so
+# the budget is unchanged and a long run can still be killed — but what it costs
+# changed. Before, a timeout anywhere skipped the publish chain and lost a brief
+# that was already on disk. Now the brief is in Postgres before the optional work
+# starts, and the same timeout costs the Buffett qualitative drawer.
+#
+# What remains: a run slow enough to be killed DURING verify-cache or the first
+# rebuild-cache still loses the publish. Measured over the three deciding runs
+# since the 04:30 move, those two steps take 1-2 min against a 210 min budget,
+# against 6-30 min for the enrichment they now sit in front of.
 TimeoutStartSec=210min
 
 # Oneshot doesn't auto-restart on success. On real failures (Polygon 5xx,
