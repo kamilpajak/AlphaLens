@@ -10,6 +10,7 @@ block `test_config.CANONICAL`, so no value here is invented.
 from __future__ import annotations
 
 import copy
+import math
 import unittest
 from typing import Any
 
@@ -1478,6 +1479,115 @@ class WholeWalkInvariantsTest(unittest.TestCase):
         closed = result.events[-1]
         self.assertEqual(closed.reason, "stop")
         self.assertEqual(closed.units, result.units_filled - sold)
+
+
+class TheGoldenCasesAtWalkLevelTest(unittest.TestCase):
+    """Spec section 6.2 rows 1 and 2, asserted as the EVENTS the column names.
+
+    The four golden cases already exist in
+    `tests/brokers/test_stop_decision.py::GoldenCasesTest`, where they assert
+    the level `decide_stop` RETURNS. Section 6.2's expectation column is written
+    in `stop_moved` events, which is a walk-level fact: a leaf returning the
+    right level and a walk that drops the event are the same green there.
+
+    Only two of the four rows are new here. Rows 3 and 4 (the trail at its
+    trigger and a tenth below it) are already asserted at this level by
+    `StopDecisionTest.test_the_decision_reads_the_bar_high_and_not_its_close`
+    and `test_the_trail_stays_dark_below_its_trigger`; restating them with
+    section 6.2's own numbers beside the template's would buy nothing.
+
+    Section 6.1 is why these matter more than their size suggests: the parity
+    test holding the leaf against the daemon "must be retired in step 2", and
+    the PR that retires it "puts behaviour-pinning golden cases in its place".
+
+    The section's "anchor 68.00" is NOT a rung. It is the value the floor is
+    derived from -- 68.00 - 1.5 x 1.20 = 66.20, which is exactly the
+    `plan_stop` of `_reanchor_view()` in the leaf's own fixture. So the rung
+    goes at the average fill the row names, and no entry trail is needed.
+    """
+
+    FLOOR = 66.20
+
+    def test_an_average_fill_of_68_50_reanchors_the_stop_to_66_70(self) -> None:
+        result = walk(
+            _plan(
+                entries=(PendingEntry(tier_index=0, limit_price=68.50, notional=1500.0),),
+                floor=self.FLOOR,
+                reaction=REANCHOR,
+            ),
+            _config(),
+            (_bar(WALK_START, 68.50, 68.60, 68.40),),
+        )
+        self.assertEqual(result.avg_entry_price, 68.50)
+        self.assertEqual([e.after for e in result.events if e.kind == "stop_moved"], [66.70])
+
+    def test_a_fill_better_than_the_anchor_moves_no_stop(self) -> None:
+        # 67.50 - 1.5 x 1.20 = 65.70, under the 66.20 floor, so the clamp
+        # refuses and the walk emits nothing rather than lowering the stop.
+        result = walk(
+            _plan(
+                entries=(PendingEntry(tier_index=0, limit_price=67.50, notional=1500.0),),
+                floor=self.FLOOR,
+                reaction=REANCHOR,
+            ),
+            _config(),
+            (_bar(WALK_START, 67.50, 67.60, 67.40),),
+        )
+        self.assertEqual(result.avg_entry_price, 67.50)
+        self.assertEqual([e.kind for e in result.events if e.kind == "stop_moved"], [])
+
+
+class TheFloorDecidesHowManyReanchorsFireTest(unittest.TestCase):
+    """Spec section 6.3: the floor is part of the re-anchor measurement.
+
+    The section says a floor in `(65.70, 66.20]` fires only the FIRST
+    re-anchor. Measured on the section's own PR-6 fixture, BOTH endpoints are
+    wrong:
+
+        floor 63.0                 -> 2 moves  [66.2, 65.79643916913948]
+        floor 65.79643916913948    -> 2 moves  (the section says 1)
+        floor 65.7964391691395     -> 1 move
+        floor 66.1999              -> 1 move
+        floor 66.20                -> 0 moves  (the section says 1)
+
+    So the interval is `(65.79643916913948, 66.20)`, open at both ends. The left
+    number is the one `test_a_later_rung_fill_reanchors_LOWER` already records
+    as the budget-weighted level the walk produces, against the section's
+    equal-units 65.70. The right end closes because `_decide_stop` returns early
+    when the target equals the stop standing, and at that floor it does.
+    """
+
+    RUNGS = (
+        PendingEntry(tier_index=0, limit_price=68.0, notional=900.0),
+        PendingEntry(tier_index=1, limit_price=67.0, notional=600.0),
+    )
+    SECOND_LEVEL = 65.79643916913948
+
+    def _moves(self, floor: float) -> list[float]:
+        result = walk(
+            _plan(entries=self.RUNGS, floor=floor, reaction=REANCHOR),
+            _config(),
+            (_bar(WALK_START, 68.0, 68.2, 67.5), _bar(WALK_START + MINUTE, 67.5, 67.6, 66.9)),
+        )
+        return [event.after for event in result.events if event.kind == "stop_moved"]
+
+    def test_a_floor_below_the_second_level_fires_both(self) -> None:
+        self.assertEqual(self._moves(63.0), [66.2, self.SECOND_LEVEL])
+
+    def test_a_floor_exactly_at_the_second_level_still_fires_both(self) -> None:
+        # The left end is OPEN: equality does not refuse.
+        self.assertEqual(self._moves(self.SECOND_LEVEL), [66.2, self.SECOND_LEVEL])
+
+    def test_one_ulp_above_the_second_level_fires_only_the_first(self) -> None:
+        self.assertEqual(self._moves(math.nextafter(self.SECOND_LEVEL, 1e9)), [66.2])
+
+    def test_a_floor_just_under_the_first_level_fires_only_the_first(self) -> None:
+        self.assertEqual(self._moves(66.1999), [66.2])
+
+    def test_a_floor_exactly_at_the_first_level_fires_neither(self) -> None:
+        # The right end is OPEN too: the target equals the stop standing, and
+        # the decision returns early rather than re-emitting it.
+        self.assertEqual(self._moves(66.20), [])
 
 
 if __name__ == "__main__":
