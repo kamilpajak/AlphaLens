@@ -404,11 +404,27 @@ def _ask(
             logger.warning("gave up after %d attempt(s): HTTP %s", attempt, status)
             return None
         except httpx.TransportError as exc:
-            # The connection never delivered a response, so nothing was answered and
-            # re-sending is safe. Measured on the first whole-history run: 11 of 12
-            # give-ups were `ReadError: Connection reset by peer`, which is a
-            # TransportError and not an HTTPStatusError, so it reached the generic
-            # branch below and gave up on the first attempt.
+            # Measured on the first whole-history run: 11 of 12 give-ups were
+            # `ReadError: Connection reset by peer`, which is a TransportError and
+            # not an HTTPStatusError, so it reached the generic branch below and
+            # gave up on the first attempt.
+            #
+            # Why re-sending is safe, stated precisely rather than loosely: it is
+            # NOT that nothing reached the vendor. A `ReadError` or `ReadTimeout`
+            # happens after the request was fully sent, so the vendor may well have
+            # processed it and we simply never saw the answer — the same distinction
+            # `broker_contract`'s `write_outcome_unknown` draws, where retryable
+            # means "safe to re-run WITHOUT reconciling first" and not "the cause was
+            # transient". Re-sending is safe here because this call has no side
+            # effect to reconcile: it only reads, the store row is keyed so a repeat
+            # overwrites rather than duplicates, and the only cost of a duplicate is
+            # a second charge of about $0.00012. On a call that WROTE anything this
+            # branch would be wrong.
+            #
+            # No jitter: six workers back off on the same 2s / 4s / 6s schedule and
+            # would re-collide under a real throttle. Left as is because the measured
+            # run drew zero 429s, so adding jitter would be tuning against a failure
+            # this code has not yet seen.
             if attempt < _MAX_ATTEMPTS:
                 time.sleep(_RETRY_SLEEP_SECONDS * attempt)
                 continue
@@ -627,7 +643,10 @@ def run_article_pass(
         news = pd.read_parquet(NEWS_DIR / f"{date}.parquet")
         out_path = out_dir / f"{date}.parquet"
         done = _already_done(out_path, ["news_id"], version)
-        todo = [r for _, r in news.iterrows() if str(r["id"]) not in {k[0] for k in done}]
+        # Hoisted: a set comprehension in the condition is re-evaluated per row, which
+        # measurement confirmed is O(rows x done).
+        done_ids = {key[0] for key in done}
+        todo = [r for _, r in news.iterrows() if str(r["id"]) not in done_ids]
         if limit is not None:
             todo = todo[:limit]
         if not todo:
