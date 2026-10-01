@@ -73,7 +73,18 @@ WHAT IS REPORTED, AND WHY THE LAST ONE IS THE POINT
    coefficient without it cannot say whether a null means "no effect" or "no power",
    and on 2026-10-01 I reported a null that was the latter.
 
-Last run: NOT YET RUN.
+Last run: 2026-10-01. 198 episodes / 26 arrival clusters, 195 complete cases.
+No candidate carries a coefficient and NOT ONE IS POWERED: standardised betas run
+-0.026 to +0.040 per candidate with p from 0.49 to 0.84, against minimum detectable
+effects of 0.123 to 0.251 and an actionable floor of 0.10. Controls reproduce the
+published burnt table (ATR -0.347 vs -0.378, MA50 -0.327 vs -0.303), so the
+instrument works. Episodes needed, from the best MDE: ~295 for a true 0.10, ~1180 for
+0.05, ~3278 for the observed ~0.03.
+
+A first run was DISCARDED: the candidate join matched 0 of 391 rows because the
+builder writes `brief_date` as a string and the label store carries `datetime.date`.
+Nothing was reported from it, because coverage prints before any coefficient and the
+joint fit refuses an all-null column. Both are why a silent false null did not ship.
 """
 
 from __future__ import annotations
