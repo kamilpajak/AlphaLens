@@ -198,7 +198,9 @@ def clamp_reanchor_target(
     disaster floor). Returns ``None`` = "do NOT reanchor — leave the resting stop
     where it is" on any degenerate input or when the target would drop below
     ``prior_stop``. NOTE: this enforces NEVER-BELOW-BRIEF-FLOOR, not
-    never-loosen-vs-the-current-live-stop (``OrderState`` carries no stop price).
+    never-loosen-vs-the-current-live-stop. The live stop's level
+    (``OrderState.resting_price``) is the caller's to compare against
+    (``position_manager._maybe_trail``'s ratchet, #1514).
     The min-distance floor caps how close the stop may sit to ``anchor_price``
     (a too-close proposal is pushed FARTHER from price); it is chosen so it never
     binds the 1.5x-ATR policy and exists mainly for a future stochastic policy.

@@ -37,7 +37,10 @@ from alphalens_pipeline.brokers.automanager.costs import (
     round_trip_fee_bps,
 )
 from alphalens_pipeline.brokers.automanager.labels import tp_label_from_tag
-from alphalens_pipeline.brokers.automanager.position_manager import _sole_standalone_stop
+from alphalens_pipeline.brokers.automanager.position_manager import (
+    _amend_stop_price,
+    _sole_standalone_stop,
+)
 from alphalens_pipeline.brokers.execution import assert_rail_lattice
 
 logger = logging.getLogger(__name__)
@@ -419,7 +422,10 @@ def execute_tranche_exit(
             side=sl_leg.side or "SELL",
             order_type=sl_leg.order_type or "StopIfTraded",
             new_qty=new_sl_qty,
-            stop_price=stop_price,
+            # #1514: never below where the stop rests. ``stop_price`` is the
+            # journaled level, which can lag the order (a lost marker, an
+            # owner-raised stop).
+            stop_price=_amend_stop_price(stop_price, sl_leg),
             request_id=f"{request_ref}-{exit.tag}-amend",
         )
     # 2) market-sell the freed tranche.

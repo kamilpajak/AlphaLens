@@ -281,8 +281,12 @@ class FakeBroker:
             raise OrderRejectedError(
                 f"fake OCO reject for uic {uic}", error_code=self.oco_reject_code
             )
-        stop_id = self._new_sell_leg(uic, side, qty, "StopIfTraded", f"{request_id}-stop", "Oco")
-        tp_id = self._new_sell_leg(uic, side, qty, "Limit", f"{request_id}-tp", "Oco")
+        stop_id = self._new_sell_leg(
+            uic, side, qty, "StopIfTraded", f"{request_id}-stop", "Oco", resting_price=stop_price
+        )
+        tp_id = self._new_sell_leg(
+            uic, side, qty, "Limit", f"{request_id}-tp", "Oco", resting_price=take_profit
+        )
         self._oco_sibling[stop_id] = tp_id
         self._oco_sibling[tp_id] = stop_id
         return PlacedOrder(entry_order_id="", exit_order_ids=(stop_id, tp_id))
