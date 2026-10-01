@@ -479,6 +479,63 @@ def candidate_state(row, article) -> dict[str, str]:
     }
 
 
+def article_row(row, out: SystemOneResponse, *, date: str, version: str, body_chars: int) -> dict:
+    """One article's store row.
+
+    Its keys must match `_ARTICLE_SCHEMA` EXACTLY. `pa.Table.from_pandas` raises
+    on a key the schema declares and the dict omits, but it silently DROPS a key
+    the dict has and the schema does not — so a new field added here without a
+    schema entry would be discarded with no error at all. A test pins the parity
+    in both directions.
+    """
+    etype = out.answers.get("event_type")
+    mat = out.answers.get("materiality")
+    fact = out.answers.get("concrete_fact")
+    return {
+        "date": date,
+        "news_id": _text(row["id"]),
+        "url": _text(row.get("url")),
+        "source": _text(row.get("source")),
+        "jev_model": out.model,
+        "jev_event_type": None if etype is None else etype.choice,
+        "jev_event_type_confidence": None if etype is None else etype.confidence,
+        "jev_event_type_probs_json": None if etype is None else _probs_json(etype),
+        "jev_materiality": None if mat is None else mat.score,
+        "jev_materiality_confidence": None if mat is None else mat.confidence,
+        "jev_materiality_probs_json": None if mat is None else _probs_json(mat),
+        "jev_concrete_fact": None if fact is None else fact.noul,
+        "jev_body_chars_sent": body_chars,
+        "jev_cost_usd": out.cost_usd,
+        "jev_feature_version": version,
+        "jev_computed_at": _now_iso(),
+    }
+
+
+def candidate_row(
+    row, article, out: SystemOneResponse, *, date: str, version: str, body_chars: int
+) -> dict:
+    """One candidate's store row. Keys must match `_CANDIDATE_SCHEMA` exactly."""
+    touches = out.answers.get("touches_industry")
+    gain = out.answers.get("company_gain")
+    return {
+        "brief_date": date,
+        "ticker": _text(row["ticker"]).upper(),
+        "news_id": _text(article.get("id")),
+        "url": _text(article.name),
+        "jev_model": out.model,
+        "jev_touches_industry": None if touches is None else touches.noul,
+        "jev_company_gain": None if gain is None else gain.noul,
+        "jev_body_chars_sent": body_chars,
+        "jev_cost_usd": out.cost_usd,
+        "jev_feature_version": version,
+        "jev_computed_at": _now_iso(),
+    }
+
+
+def _now_iso() -> str:
+    return dt.datetime.now(dt.UTC).isoformat()
+
+
 def run_article_pass(
     client: OpenRouterClient,
     dates: list[str],
@@ -503,31 +560,12 @@ def run_article_pass(
 
         def one(row, *, date: str = date, version: str = version) -> dict | None:
             state = article_state(row)
-            body = state["article_body"]
             out = _ask(client, state, ARTICLE_QUESTIONS, spend)
             if out is None:
                 return None
-            etype = out.answers.get("event_type")
-            mat = out.answers.get("materiality")
-            fact = out.answers.get("concrete_fact")
-            return {
-                "date": date,
-                "news_id": str(row["id"]),
-                "url": str(row.get("url") or ""),
-                "source": str(row.get("source") or ""),
-                "jev_model": out.model,
-                "jev_event_type": None if etype is None else etype.choice,
-                "jev_event_type_confidence": None if etype is None else etype.confidence,
-                "jev_event_type_probs_json": None if etype is None else _probs_json(etype),
-                "jev_materiality": None if mat is None else mat.score,
-                "jev_materiality_confidence": None if mat is None else mat.confidence,
-                "jev_materiality_probs_json": None if mat is None else _probs_json(mat),
-                "jev_concrete_fact": None if fact is None else fact.noul,
-                "jev_body_chars_sent": len(body),
-                "jev_cost_usd": out.cost_usd,
-                "jev_feature_version": version,
-                "jev_computed_at": dt.datetime.now(dt.UTC).isoformat(),
-            }
+            return article_row(
+                row, out, date=date, version=version, body_chars=len(state["article_body"])
+            )
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
             rows = [r for r in pool.map(one, todo) if r is not None]
@@ -607,25 +645,17 @@ def run_candidate_pass(
         def one(pair, *, date: str = date, version: str = version) -> dict | None:
             row, article = pair
             state = candidate_state(row, article)
-            body = state["article_body"]
             out = _ask(client, state, CANDIDATE_QUESTIONS, spend)
             if out is None:
                 return None
-            touches = out.answers.get("touches_industry")
-            gain = out.answers.get("company_gain")
-            return {
-                "brief_date": date,
-                "ticker": str(row["ticker"]).upper(),
-                "news_id": str(article.get("id") or ""),
-                "url": str(article.name if article.name is not None else ""),
-                "jev_model": out.model,
-                "jev_touches_industry": None if touches is None else touches.noul,
-                "jev_company_gain": None if gain is None else gain.noul,
-                "jev_body_chars_sent": len(body),
-                "jev_cost_usd": out.cost_usd,
-                "jev_feature_version": version,
-                "jev_computed_at": dt.datetime.now(dt.UTC).isoformat(),
-            }
+            return candidate_row(
+                row,
+                article,
+                out,
+                date=date,
+                version=version,
+                body_chars=len(state["article_body"]),
+            )
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
             rows = [r for r in pool.map(one, todo) if r is not None]

@@ -330,5 +330,91 @@ class TestSpendAccounting(unittest.TestCase):
         self.assertAlmostEqual(spend.usd, 0.0)
 
 
+class TestTheRowKeysMatchTheDeclaredSchema(unittest.TestCase):
+    """A key in the row dict that the schema does not declare is SILENTLY DROPPED.
+
+    Measured with pyarrow: a key the schema declares and the dict omits raises
+    `KeyError`, and a wrong dtype raises `ArrowInvalid` — both fail loudly. But an
+    EXTRA key just vanishes, so adding a feature here and forgetting the schema
+    would discard it with no error anywhere. These tests pin the parity in both
+    directions, which is the only direction that cannot fail on its own.
+    """
+
+    class _Answer:
+        def __init__(self, **kw):
+            self.type = kw.get("type", "noul")
+            self.noul = kw.get("noul")
+            self.choice = kw.get("choice")
+            self.score = kw.get("score")
+            self.probabilities = kw.get("probabilities")
+            self.confidence = kw.get("confidence")
+
+    class _Out:
+        def __init__(self, answers):
+            self.model = "typesafe/jev-1.13-20260917"
+            self.answers = answers
+            self.cost_usd = 1e-05
+
+    def test_an_article_row_has_exactly_the_declared_fields(self):
+        out = self._Out(
+            {
+                "event_type": self._Answer(
+                    type="choice",
+                    choice="earnings",
+                    confidence=0.7,
+                    probabilities={"earnings": 0.7},
+                ),
+                "materiality": self._Answer(
+                    type="score", score=1.5, confidence=0.6, probabilities={"1": 0.5}
+                ),
+                "concrete_fact": self._Answer(noul=0.8),
+            }
+        )
+        row = layer.article_row(
+            pd.Series({"id": "n1", "url": "u", "source": "rss"}),
+            out,
+            date="2026-08-19",
+            version="v",
+            body_chars=10,
+        )
+        self.assertEqual(set(row), set(layer._ARTICLE_SCHEMA.names))
+
+    def test_a_candidate_row_has_exactly_the_declared_fields(self):
+        out = self._Out(
+            {"touches_industry": self._Answer(noul=0.8), "company_gain": self._Answer(noul=0.3)}
+        )
+        article = pd.Series({"id": "n1", "title": "t", "body": "b"}, name="https://example.test/a")
+        row = layer.candidate_row(
+            pd.Series({"ticker": "acme"}),
+            article,
+            out,
+            date="2026-08-19",
+            version="v",
+            body_chars=10,
+        )
+        self.assertEqual(set(row), set(layer._CANDIDATE_SCHEMA.names))
+
+    def test_a_row_whose_every_answer_is_absent_still_writes_under_the_schema(self):
+        # A refusal is skipped entirely, but a 200 that answered only some of the
+        # questions must still produce a well-typed row rather than a crash.
+        row = layer.article_row(
+            pd.Series({"id": "n1", "url": "u", "source": "rss"}),
+            self._Out({}),
+            date="2026-08-19",
+            version="v",
+            body_chars=0,
+        )
+        self.assertEqual(set(row), set(layer._ARTICLE_SCHEMA.names))
+        layer._write(self.path, [row], layer._ARTICLE_SCHEMA, ["news_id"])
+        self.assertEqual(len(pd.read_parquet(self.path)), 1)
+
+    def setUp(self):
+        import tempfile
+
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.path = Path(self._dir.name) / "d.parquet"
+
+
 if __name__ == "__main__":
     unittest.main()
