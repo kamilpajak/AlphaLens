@@ -182,9 +182,18 @@ ExecStartPost=/usr/bin/docker compose \
 #
 # Supervised like the build container (#1330): `--init` so the first SIGTERM
 # ends the run rather than only the docker client, a `--name` to address it by,
-# and a `docker rm -f` on both ends. The env set is the subset these two stages
-# read — OpenRouter for the classifier, Perplexity for the scuttlebutt context,
-# SEC for the 10-K fetch — plus the OpenRouter provider pins.
+# and a `docker rm -f` on both ends.
+#
+# The env set is the MEASURED closure of what these two stages read, not a copy
+# of ExecStart's: OpenRouter for the classifier, Perplexity for the scuttlebutt
+# context, SEC for the 10-K fetch, and the four OpenRouter provider pins.
+# Deliberately absent and checked rather than assumed: TELEGRAM_*, POLYGON,
+# FRED and ALPHA_VANTAGE are unreachable from here; ALPHALENS_PERPLEXITY_SOURCE
+# is read only by `news_ingest`, i.e. the `ingest` stage; and nothing on this
+# path writes a Prometheus textfile metric, which is why the node_exporter mount
+# and ALPHALENS_TEXTFILE_DIR are not here either. SEC_RATE_COORD_PATH needs no
+# passing: it defaults inside ~/.alphalens, so this container shares the same
+# inode as the build one and the 10 req/s reservation still coordinates.
 ExecStartPost=-/usr/bin/docker run --rm \
     --init --name alphalens-thematic-experts-enrich \
     --user %U:%G \
@@ -196,7 +205,6 @@ ExecStartPost=-/usr/bin/docker run --rm \
     -e ALPHALENS_OPENROUTER_ALLOW_FALLBACKS \
     -e ALPHALENS_OPENROUTER_QUANTIZATIONS \
     -e ALPHALENS_OPENROUTER_REQUIRE_PARAMETERS \
-    -e ALPHALENS_PERPLEXITY_SOURCE=1 \
     -v %h/.alphalens:/app/home/.alphalens \
     --entrypoint /bin/bash \
     alphalens-pipeline:latest \

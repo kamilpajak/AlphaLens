@@ -3134,6 +3134,28 @@ class TestPublicationRunsBeforeTheOptionalEnrichment(unittest.TestCase):
             "both stages must warn and continue rather than abort",
         )
 
+    def test_no_slot_plus_its_timeout_can_cross_utc_midnight(self) -> None:
+        """`run_experts_enrich.sh` recomputes `date -u -d yesterday` in its own
+        container, minutes to hours after the thematic stages defaulted to the same
+        expression. They agree only while the whole run stays inside one UTC day.
+
+        Today the latest slot is 12:30 UTC and the budget 210 min, so the last
+        possible finish is 16:05 UTC including jitter. This test is here so that
+        moving a slot late, or raising the timeout far, fails loudly instead of
+        quietly enriching the wrong date once per run."""
+        timer = TIMER_PATH.read_text()
+        timeout = _service_start_timeout(SERVICE_PATH.read_text())
+        jitter = _timer_randomized_delay(timer)
+        for slot in _slot_times(timer):
+            finish = dt.datetime.combine(dt.date(2026, 1, 1), slot) + jitter + timeout
+            self.assertEqual(
+                finish.date(),
+                dt.date(2026, 1, 1),
+                f"a run starting at {slot} could finish on the next UTC day, so the "
+                "enrichment container would compute a different `yesterday` than the "
+                "thematic stages did",
+            )
+
     def test_the_enrichment_script_is_executable(self) -> None:
         self.assertTrue(
             RUN_ENRICH_SCRIPT.stat().st_mode & stat.S_IXUSR,
