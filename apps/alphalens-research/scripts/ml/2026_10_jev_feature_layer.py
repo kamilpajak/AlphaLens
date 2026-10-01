@@ -106,8 +106,10 @@ import logging
 import pathlib
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
+import httpx
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -132,6 +134,15 @@ OUT_ROOT = HOME / "jev_features"
 BODY_CHAR_CAP = 32_000
 MODEL = DEFAULT_SYSTEM_ONE_MODEL
 DEFAULT_WORKERS = 8
+
+# Retry policy. The canonical client deliberately has none: it states that retry and
+# throttle are caller concerns, and this builder is the caller. A whole-history run is
+# about 24000 calls against a vendor that documents rate limits changing without
+# notice, so without a retry a 429 burst leaves holes in the store, and without the
+# non-zero exit below the run that produced them still reports success.
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+_MAX_ATTEMPTS = 4
+_RETRY_SLEEP_SECONDS = 2.0
 
 # One short clause per option. The vocabulary itself comes from the live
 # taxonomy below, so a type added to EVENT_TYPE_TIER without a description here
@@ -340,12 +351,21 @@ class _Spend:
     def __init__(self) -> None:
         self.usd = 0.0
         self.calls = 0
+        self.costed = 0
         self.refused = 0
 
     def add(self, usd: float | None) -> None:
+        """Count the call; add the cost only when one was actually reported.
+
+        `costed` is tracked apart from `calls` so a vendor that stopped returning
+        `usage` reads as "N calls, 0 of them costed" rather than as a free run.
+        `is not None` rather than a truth test, so a genuine 0.0 is a reported cost
+        and not a missing one.
+        """
         with _cost_lock:
             self.calls += 1
-            if usd:
+            if usd is not None:
+                self.costed += 1
                 self.usd += usd
 
     def refuse(self) -> None:
@@ -362,20 +382,40 @@ def _probs_json(answer) -> str | None:
 def _ask(
     client: OpenRouterClient, state: dict, questions: dict, spend: _Spend
 ) -> SystemOneResponse | None:
-    """One call. Returns None on any failure, having counted it.
+    """One call, retried on a transient status. Returns None once it gives up.
 
-    Fail-soft per row, loud in the counters: a batch over tens of thousands of
-    articles must not abort because one of them was refused, and a run that
-    refused many must not look like a run that succeeded.
+    Retries only `_RETRYABLE_STATUS`: a 400 means the request itself is wrong, so
+    re-sending it spends money to get the same answer back. Fail-soft per row and
+    loud in the counters: a batch over tens of thousands of articles must not abort
+    because of one of them, and a run that gave up on many must not look clean.
     """
-    try:
-        out = client.system_one(state=state, questions=questions, model=MODEL)
-    except Exception as exc:  # every failure is ONE skipped row, never an aborted batch
-        spend.refuse()
-        logger.warning("refused: %s: %s", type(exc).__name__, exc)
-        return None
-    spend.add(out.cost_usd)
-    return out
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            out = client.system_one(state=state, questions=questions, model=MODEL)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in _RETRYABLE_STATUS and attempt < _MAX_ATTEMPTS:
+                time.sleep(_RETRY_SLEEP_SECONDS * attempt)
+                continue
+            spend.refuse()
+            logger.warning("gave up after %d attempt(s): HTTP %s", attempt, status)
+            return None
+        except Exception as exc:  # every failure is ONE skipped row, never an aborted batch
+            spend.refuse()
+            logger.warning("refused: %s: %s", type(exc).__name__, exc)
+            return None
+        spend.add(out.cost_usd)
+        return out
+    return None
+
+
+def _exit_code(spend: _Spend) -> int:
+    """Non-zero when any row was given up on.
+
+    A sparse store that reports success is worse than a failed run: the holes are
+    invisible to whatever reads the store next.
+    """
+    return 0 if spend.refused == 0 else 1
 
 
 def _dates_in(directory: pathlib.Path) -> list[str]:
@@ -391,6 +431,23 @@ def _select_dates(available: list[str], span: str | None) -> list[str]:
     return [d for d in available if lo <= d <= hi]
 
 
+def _read_existing(path: pathlib.Path) -> pd.DataFrame:
+    """Read a store file, refusing loudly when it cannot be read.
+
+    Treating a corrupt file as absent would re-send every row for that date to the
+    vendor and still report success. A file of ours going unreadable is not a normal
+    event, so the operator is told what to do instead of being billed for it.
+    """
+    try:
+        return pd.read_parquet(path)
+    except Exception as exc:
+        raise RuntimeError(
+            f"cannot read {path}: {type(exc).__name__}: {exc}. Treating it as absent would "
+            "re-send every row for this date to the vendor. Delete or restore the file, then "
+            "re-run."
+        ) from exc
+
+
 def _already_done(out_path: pathlib.Path, key_cols: list[str], version: str) -> set[tuple]:
     """Keys already written for this date UNDER THE CURRENT VERSION.
 
@@ -399,31 +456,35 @@ def _already_done(out_path: pathlib.Path, key_cols: list[str], version: str) -> 
     """
     if not out_path.exists():
         return set()
-    try:
-        done = pd.read_parquet(out_path)
-    except Exception:
-        logger.warning("unreadable, will be rewritten: %s", out_path)
-        return set()
+    done = _read_existing(out_path)
     if "jev_feature_version" not in done.columns:
         return set()
     done = done[done["jev_feature_version"] == version]
-    return {tuple(str(r[c]) for c in key_cols) for _, r in done.iterrows()}
+    if done.empty:
+        return set()
+    # Column-wise, not `iterrows`. The review's suggested `itertuples` form was run
+    # and raises: a namedtuple cannot be indexed by column name.
+    return set(zip(*[done[col].astype(str) for col in key_cols], strict=True))
 
 
 def _write(out_path: pathlib.Path, rows: list[dict], schema: pa.Schema, key_cols: list[str]) -> int:
     """Append rows to the date's parquet, last write wins per key.
 
-    Written through a temp file and `os.replace` so an interrupted run leaves
-    the previous parquet intact rather than a half-written one.
+    Written through a temp file and `os.replace` so an interrupted run leaves the
+    previous parquet intact rather than a half-written one.
+
+    SINGLE WRITER PER DATE, assumed and not enforced. This is read-modify-write with
+    no coordination, so two concurrent invocations covering the same date would each
+    read before the other wrote and the loser's rows would vanish. The consequence is
+    bounded: lost rows are simply absent from the done-set next time, so the next run
+    recomputes them, a respend rather than a permanent loss. The script is invoked by
+    hand; if it ever runs from a timer this needs a lock.
     """
     if not rows:
         return 0
     frame = pd.DataFrame(rows)
     if out_path.exists():
-        try:
-            frame = pd.concat([pd.read_parquet(out_path), frame], ignore_index=True)
-        except Exception:
-            logger.warning("previous parquet unreadable, replacing: %s", out_path)
+        frame = pd.concat([_read_existing(out_path), frame], ignore_index=True)
     frame = frame.drop_duplicates(subset=[*key_cols, "jev_feature_version"], keep="last")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_suffix(".parquet.tmp")
@@ -521,7 +582,7 @@ def candidate_row(
         "brief_date": date,
         "ticker": _text(row["ticker"]).upper(),
         "news_id": _text(article.get("id")),
-        "url": _text(article.name),
+        "url": _text(article.get("url")),
         "jev_model": out.model,
         "jev_touches_industry": None if touches is None else touches.noul,
         "jev_company_gain": None if gain is None else gain.noul,
@@ -580,6 +641,25 @@ def run_article_pass(
         )
 
 
+def build_url_index(news: pd.DataFrame) -> dict[str, dict]:
+    """url -> one article record, as a PLAIN DICT.
+
+    Worker threads read this concurrently. A pandas index builds its hash engine
+    lazily on the first lookup, which mutates index internals, so a shared DataFrame
+    index raises a question a dict does not. Copying the returned Series, as the
+    review suggested, would not have addressed that.
+
+    A duplicated url keeps the LAST record, matching the convention elsewhere in
+    these stores that a later write supersedes an earlier one.
+    """
+    index: dict[str, dict] = {}
+    for record in news.to_dict("records"):
+        url = record.get("url")
+        if isinstance(url, str) and url:
+            index[url] = record
+    return index
+
+
 def run_candidate_pass(
     client: OpenRouterClient,
     dates: list[str],
@@ -596,14 +676,15 @@ def run_candidate_pass(
     """
     version = jev_feature_version()
     out_dir = OUT_ROOT / "candidate"
-    news = pd.concat(
-        [
-            pd.read_parquet(p, columns=["id", "url", "title", "body"])
-            for p in sorted(glob.glob(str(NEWS_DIR / "*.parquet")))
-        ],
-        ignore_index=True,
-    ).drop_duplicates("url", keep="last")
-    by_url = news.set_index("url")
+    by_url = build_url_index(
+        pd.concat(
+            [
+                pd.read_parquet(p, columns=["id", "url", "title", "body"])
+                for p in sorted(glob.glob(str(NEWS_DIR / "*.parquet")))
+            ],
+            ignore_index=True,
+        )
+    )
 
     for date in dates:
         brief_path = BRIEFS_DIR / f"{date}.parquet"
@@ -623,13 +704,10 @@ def run_candidate_pass(
             if (date, str(r["ticker"]).upper()) in done:
                 continue
             url = r.get("source_event_url")
-            if not isinstance(url, str) or url not in by_url.index:
+            if not isinstance(url, str) or url not in by_url:
                 unresolved += 1
                 continue
-            article = by_url.loc[url]
-            if isinstance(article, pd.DataFrame):
-                article = article.iloc[-1]
-            todo.append((r, article))
+            todo.append((r, by_url[url]))
         if limit is not None:
             todo = todo[:limit]
         if not todo:
@@ -704,13 +782,14 @@ def main(argv: list[str] | None = None) -> int:
         run_candidate_pass(client, dates, workers=args.workers, limit=args.limit, spend=spend)
 
     logger.info(
-        "done: %d calls, %d refused, $%.4f spent, version %s",
+        "done: %d calls (%d reported a cost), %d given up on, $%.4f spent, version %s",
         spend.calls,
+        spend.costed,
         spend.refused,
         spend.usd,
         version,
     )
-    return 0
+    return _exit_code(spend)
 
 
 if __name__ == "__main__":

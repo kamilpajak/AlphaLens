@@ -223,11 +223,16 @@ class TestWhatCountsAsAlreadyDone(unittest.TestCase):
             layer._already_done(self.path, ["news_id"], layer.jev_feature_version()), set()
         )
 
-    def test_an_unreadable_file_means_nothing_is_done_rather_than_crashing(self):
+    def test_an_unreadable_file_stops_the_run_instead_of_respending(self):
+        # Treating a corrupt file as "nothing done" re-sends every row for that
+        # date to the vendor and reports success. A store file of ours going
+        # unreadable is not a normal event, so the right direction is to stop with
+        # an actionable message and let the operator delete or restore it.
         self.path.write_bytes(b"not a parquet")
-        self.assertEqual(
-            layer._already_done(self.path, ["news_id"], layer.jev_feature_version()), set()
-        )
+        with self.assertRaises(RuntimeError) as caught:
+            layer._already_done(self.path, ["news_id"], layer.jev_feature_version())
+        self.assertIn(str(self.path), str(caught.exception))
+        self.assertIn("delete", str(caught.exception).lower())
 
     def test_a_file_written_before_the_version_column_existed_means_nothing_is_done(self):
         self._write([{"news_id": "a"}])
@@ -414,6 +419,101 @@ class TestTheRowKeysMatchTheDeclaredSchema(unittest.TestCase):
         self._dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._dir.cleanup)
         self.path = Path(self._dir.name) / "d.parquet"
+
+
+class TestRetryAndFailureAccounting(unittest.TestCase):
+    """A sparse store must never report success.
+
+    The vendor documents that rate limits change without notice, and a whole-history
+    run is about 24000 calls. Without a retry a 429 burst produces a store with
+    holes; without a non-zero exit the run that produced it still looks fine.
+    """
+
+    class _Resp:
+        def __init__(self, code):
+            self.status_code = code
+            self.headers = {}
+
+    def _http_error(self, code):
+        import httpx
+
+        return httpx.HTTPStatusError("boom", request=mock.Mock(), response=self._Resp(code))
+
+    def test_a_rate_limit_is_retried_and_then_succeeds(self):
+        calls = []
+
+        def flaky(*, state, questions, model):
+            calls.append(1)
+            if len(calls) < 3:
+                raise self._http_error(429)
+            return mock.Mock(cost_usd=1e-05)
+
+        client = mock.Mock()
+        client.system_one = flaky
+        spend = layer._Spend()
+        with mock.patch.object(layer, "_RETRY_SLEEP_SECONDS", 0.0):
+            out = layer._ask(client, {"a": "b"}, {"q": {}}, spend)
+        self.assertIsNotNone(out)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(spend.refused, 0)
+
+    def test_retries_are_bounded_and_the_row_is_then_counted_as_refused(self):
+        client = mock.Mock()
+        client.system_one = mock.Mock(side_effect=self._http_error(503))
+        spend = layer._Spend()
+        with mock.patch.object(layer, "_RETRY_SLEEP_SECONDS", 0.0):
+            self.assertIsNone(layer._ask(client, {"a": "b"}, {"q": {}}, spend))
+        self.assertEqual(client.system_one.call_count, layer._MAX_ATTEMPTS)
+        self.assertEqual(spend.refused, 1)
+
+    def test_a_non_retryable_status_is_not_retried(self):
+        # A 400 means the request is wrong. Re-sending it spends money to get the
+        # same answer.
+        client = mock.Mock()
+        client.system_one = mock.Mock(side_effect=self._http_error(400))
+        spend = layer._Spend()
+        with mock.patch.object(layer, "_RETRY_SLEEP_SECONDS", 0.0):
+            self.assertIsNone(layer._ask(client, {"a": "b"}, {"q": {}}, spend))
+        self.assertEqual(client.system_one.call_count, 1)
+        self.assertEqual(spend.refused, 1)
+
+    def test_a_run_with_any_refusal_exits_non_zero(self):
+        spend = layer._Spend()
+        spend.refuse()
+        self.assertNotEqual(layer._exit_code(spend), 0)
+
+    def test_a_clean_run_exits_zero(self):
+        spend = layer._Spend()
+        spend.add(1e-05)
+        self.assertEqual(layer._exit_code(spend), 0)
+
+    def test_a_reported_cost_of_exactly_zero_is_distinguished_from_none(self):
+        spend = layer._Spend()
+        spend.add(0.0)
+        spend.add(None)
+        self.assertEqual(spend.calls, 2)
+        self.assertEqual(spend.costed, 1)
+
+
+class TestTheCandidateLookupIsAPlainMapping(unittest.TestCase):
+    def test_the_url_index_is_a_dict_not_a_pandas_index(self):
+        # Several worker threads read it. A pandas index builds its hash engine
+        # lazily on first lookup, which mutates internals; a dict does not, so the
+        # question does not arise. The reviewer's suggested `.copy()` of the result
+        # would not have addressed that.
+        news = pd.DataFrame(
+            {"url": ["u1", "u2"], "id": ["a", "b"], "title": ["t", "t"], "body": ["x", "y"]}
+        )
+        index = layer.build_url_index(news)
+        self.assertIsInstance(index, dict)
+        self.assertEqual(set(index), {"u1", "u2"})
+        self.assertEqual(index["u2"]["body"], "y")
+
+    def test_a_duplicate_url_keeps_the_last_record(self):
+        news = pd.DataFrame(
+            {"url": ["u1", "u1"], "id": ["a", "b"], "title": ["t", "t"], "body": ["old", "new"]}
+        )
+        self.assertEqual(layer.build_url_index(news)["u1"]["body"], "new")
 
 
 if __name__ == "__main__":
