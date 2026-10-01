@@ -641,9 +641,10 @@ def _new_stop_price(
 
 
 def _unrestored_trail_alert(uic: int, plan: PlannedExit, view: ProtectionView) -> list[Action]:
-    """One alert when a fully naked uic is re-stopped below its trailed level.
+    """One alert when a fully naked uic gets a stop below its trailed level (a stop
+    cancelled at the broker, or a refill of the same pick after a stop-out).
 
-    The re-place stays at the plan stop on purpose: the trailed fold is not reset
+    The new stop stays at the plan stop on purpose: the trailed fold is not reset
     when a later tier of the SAME pick refills after a trailed stop-out, so the
     level could belong to an earlier fill and sit next to the market. Saying so
     makes the lost level visible instead of silent. The message carries only
@@ -653,7 +654,7 @@ def _unrestored_trail_alert(uic: int, plan: PlannedExit, view: ProtectionView) -
         return []
     return [
         AlertOnly(
-            f"uic {uic}: stop re-placed at the plan level {plan.stop_price:.2f}; "
+            f"uic {uic}: naked stop placed at the plan level {plan.stop_price:.2f}; "
             f"trailed level {trailed:.2f} not restored"
         )
     ]
