@@ -132,6 +132,14 @@ OUT_ROOT = HOME / "jev_features"
 
 # Measured, see the module docstring. Not a cost decision.
 BODY_CHAR_CAP = 32_000
+
+# The title needs a cap too, which the first whole-history run proved the hard way:
+# one `edgar_press_release` carried a TITLE of 180725 characters, about 45000 tokens,
+# which alone exceeds the vendor's 32000-token limit, and the call came back HTTP 400.
+# It was the only non-transport give-up of 23823. A real title in this store has a
+# median of 67 characters and a measured maximum of 202, so 2000 cannot truncate one
+# and only ever trims a field the ingest filled with something that is not a title.
+TITLE_CHAR_CAP = 2_000
 MODEL = DEFAULT_SYSTEM_ONE_MODEL
 DEFAULT_WORKERS = 8
 
@@ -296,6 +304,7 @@ def jev_feature_version() -> str:
         "schema": _VERSION_SCHEMA,
         "model": MODEL,
         "body_char_cap": BODY_CHAR_CAP,
+        "title_char_cap": TITLE_CHAR_CAP,
         "article_questions": ARTICLE_QUESTIONS,
         "candidate_questions": CANDIDATE_QUESTIONS,
     }
@@ -545,7 +554,7 @@ def _text(value) -> str:
 def article_state(row) -> dict[str, str]:
     """The state for one article. Title plus body, body capped."""
     return {
-        "article_title": _text(row.get("title")),
+        "article_title": _text(row.get("title"))[:TITLE_CHAR_CAP],
         "article_body": _text(row.get("body"))[:BODY_CHAR_CAP],
     }
 
@@ -562,7 +571,7 @@ def candidate_state(row, article) -> dict[str, str]:
     and inflate the very discrimination this layer measures.
     """
     return {
-        "article_title": _text(article.get("title")),
+        "article_title": _text(article.get("title"))[:TITLE_CHAR_CAP],
         "article_body": _text(article.get("body"))[:BODY_CHAR_CAP],
         "ticker": _text(row["ticker"]).upper(),
         "company_name": _text(row.get("company_name")),
