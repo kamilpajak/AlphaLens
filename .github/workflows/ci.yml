@@ -354,18 +354,31 @@ jobs:
         working-directory: apps/web
         run: pnpm run build
 
+      - name: Install Playwright OS dependencies
+        working-directory: apps/web
+        # The apt half of what used to be `--with-deps`, on its own and
+        # deliberately UNBOUNDED. It must not sit inside the kill-and-retry
+        # wrapper below: `timeout` kills apt-get without releasing
+        # /var/lib/dpkg/lock-frontend, so every retry then dies in about a
+        # second on "Could not get lock ... held by process N". Measured on run
+        # 36889101798 (2026-10-01, twice in a row): attempt 1 killed at exactly
+        # 240s mid-apt, attempts 2-4 failing one second apart. A slow mirror is
+        # not a stall, and the job timeout is the backstop for a stuck apt.
+        run: pnpm exec playwright install-deps chromium
+
       - name: Install Playwright browser (chromium)
         working-directory: apps/web
-        # playwright.config.ts targets a single chromium project. --with-deps
-        # pulls the OS libraries the headless browser needs on ubuntu-latest.
-        # Only chromium is installed (not webkit/firefox) to keep the step fast.
+        # playwright.config.ts targets a single chromium project, and only
+        # chromium is installed (not webkit/firefox) to keep the step fast.
         # kill-and-retry wrapper (2026-08-19): the CDN download sometimes STALLS
         # (dead TCP, no progress, no error) — a stalled attempt never triggers
         # playwright's own mirror fallback, so bound each attempt to 4min and
-        # retry; a fresh connection usually lands on a healthy CDN edge.
+        # retry; a fresh connection usually lands on a healthy CDN edge. The OS
+        # libraries come from the step above, so a killed attempt here leaves no
+        # lock behind and each retry is genuinely independent.
         run: |
           for attempt in 1 2 3 4; do
-            timeout 240 pnpm exec playwright install --with-deps chromium && exit 0
+            timeout 240 pnpm exec playwright install chromium && exit 0
             echo "playwright install attempt ${attempt} failed/stalled — retrying"
           done
           exit 1
