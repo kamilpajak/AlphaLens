@@ -147,11 +147,23 @@ _APP_TITLE = "AlphaLens"
 # frozen cohort — unlike the per-call output caps.
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
 
+# Default System One model (see ``OpenRouterClient.system_one``). Pinned to a
+# VERSIONED id, not the ``jev-latest`` alias: the alias moves when the vendor
+# ships a new build, so answers would change with no change on our side. A
+# feature store whose values silently come from two models cannot be pooled,
+# which is the same hazard ``catalyst_config_version`` exists to prevent on the
+# scoring side. The answering build is reported back in
+# ``SystemOneResponse.model`` so a batch can record it per row.
+DEFAULT_SYSTEM_ONE_MODEL = "typesafe/jev-1.13"
+
 __all__ = [
     "API_KEY_ENV",
+    "DEFAULT_SYSTEM_ONE_MODEL",
     "OPENROUTER_BASE_URL",
     "OpenRouterClient",
     "OpenRouterConfig",
+    "SystemOneAnswer",
+    "SystemOneResponse",
     "get_default_openrouter_client",
 ]
 
@@ -328,6 +340,52 @@ def _wrap_response(payload: dict[str, Any]) -> SimpleNamespace:
     )
 
 
+@dataclass(frozen=True)
+class SystemOneAnswer:
+    """One typed answer from a System One model.
+
+    The vendor returns a different field per primitive — ``noul`` for a
+    probability, ``choice`` + ``probabilities`` + ``confidence`` for a pick,
+    ``score`` + ``probabilities`` + ``confidence`` for a rubric position. They
+    are modelled as one frozen record with optional fields rather than three
+    classes, because a caller asking several questions in one request reads
+    them out of one mapping and would otherwise have to branch on the type
+    before it can even look at the answer.
+
+    ``type`` is always the string the vendor sent, including a primitive this
+    class does not model. A new primitive then leaves every modelled field
+    ``None`` and the caller can skip it, instead of a batch dying on a
+    ``KeyError`` partway through a store.
+
+    ``confidence`` stays ``None`` for a Noul. The vendor does not return one,
+    and defaulting it would let a caller threshold on a number we invented.
+    """
+
+    type: str
+    noul: float | None = None
+    choice: str | None = None
+    score: float | None = None
+    probabilities: dict[str, float] | None = None
+    confidence: float | None = None
+
+
+@dataclass(frozen=True)
+class SystemOneResponse:
+    """The result of one ``/systemone`` call.
+
+    ``model`` is the id that ANSWERED, which can differ from the one sent when
+    an alias was used. ``cost_usd`` is the vendor's own figure for this call —
+    surfaced rather than recomputed, so a batch reporting what it spent cannot
+    drift from the published price.
+    """
+
+    model: str
+    answers: dict[str, SystemOneAnswer]
+    cost_usd: float | None = None
+    input_tokens: int | None = None
+    provider: str | None = None
+
+
 @dataclass
 class OpenRouterConfig:
     """Translated config — Gemini-style kwargs in, OpenAI-style fields out.
@@ -365,6 +423,54 @@ def _build_system_message_for_json_schema(schema: dict[str, Any]) -> str:
         "that conforms exactly to this schema. Do NOT include any prose, "
         "markdown fences, or extra fields. Output only the JSON object.\n\n"
         f"Schema:\n{schema_json}"
+    )
+
+
+def _float_or_none(value: Any) -> float | None:
+    """Coerce a vendor number, tolerating a missing field or an odd type."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _wrap_system_one_answer(answer: dict[str, Any]) -> SystemOneAnswer:
+    """Translate one raw answer document into :class:`SystemOneAnswer`.
+
+    Reads only the fields it models and ignores the rest, so a vendor addition
+    is inert here rather than an error. ``probabilities`` is rebuilt as a plain
+    ``dict[str, float]`` because the vendor keys a Score distribution by level
+    NUMBER, which arrives as an int in JSON and as a string elsewhere; one key
+    type at the boundary keeps every call site from having to guess.
+    """
+    probabilities = answer.get("probabilities")
+    if isinstance(probabilities, dict):
+        coerced: dict[str, float] = {}
+        for key, value in probabilities.items():
+            as_float = _float_or_none(value)
+            if as_float is not None:
+                coerced[str(key)] = as_float
+        probabilities = coerced
+    else:
+        probabilities = None
+    return SystemOneAnswer(
+        type=str(answer.get("type") or "unknown"),
+        noul=_float_or_none(answer.get("noul")),
+        choice=(str(answer["choice"]) if answer.get("choice") is not None else None),
+        score=_float_or_none(answer.get("score")),
+        probabilities=probabilities,
+        confidence=_float_or_none(answer.get("confidence")),
     )
 
 
@@ -526,6 +632,67 @@ class OpenRouterClient:
         wrapped = _wrap_response(payload)
         self._log_serving_provider(model, wrapped.provider)
         return wrapped
+
+    def system_one(
+        self,
+        *,
+        state: Any,
+        questions: dict[str, Any],
+        model: str = DEFAULT_SYSTEM_ONE_MODEL,
+    ) -> SystemOneResponse:
+        """Ask a System One model typed questions about ``state``.
+
+        A System One model returns probabilities over answer spaces the caller
+        defines, not text, so this is a different endpoint and a different body
+        from :meth:`generate_content` — there are no ``messages`` and there is
+        no completion to read. ``state`` may be a string, a mapping or a list
+        of strings; ``questions`` maps an id the caller chooses to a question
+        document (``{"type": "noul" | "choice" | "score", "instructions": ...,
+        "criteria": ...}``).
+
+        Every question in one request is evaluated against the same state and
+        independently, so asking a question the caller may not need costs only
+        that question's tokens. Batching is therefore the normal shape here,
+        not an optimisation.
+
+        Two deliberate differences from :meth:`generate_content`:
+
+        * **No provider block.** ``provider_routing_from_env()`` pins which
+          backend serves DeepSeek. A System One model is served by its own
+          provider, so a pin read from the environment would at best be inert
+          and at worst refuse the call — and it would make a script's routing
+          depend on the operator's shell.
+        * **No ``config``.** There is no temperature, no output cap and no
+          response format to set: the answer space IS the schema.
+
+        Raises ``ValueError`` when ``questions`` is empty (such a call spends
+        input tokens and answers nothing) and
+        ``httpx.HTTPStatusError`` on a non-2xx, so a caller cannot mistake a
+        rate-limited call for a run that legitimately produced no answers.
+        Retry and throttle stay caller concerns, as they are for
+        :meth:`generate_content`.
+        """
+        if not questions:
+            raise ValueError("system_one requires at least one question")
+        response = self._http.post(
+            "/systemone", json={"model": model, "state": state, "questions": questions}
+        )
+        response.raise_for_status()
+        payload = response.json()
+        usage = payload.get("usage") or {}
+        answered_by = str(payload.get("model") or model)
+        provider = payload.get("provider")
+        self._log_serving_provider(answered_by, provider)
+        return SystemOneResponse(
+            model=answered_by,
+            answers={
+                qid: _wrap_system_one_answer(answer)
+                for qid, answer in (payload.get("answers") or {}).items()
+            },
+            cost_usd=_float_or_none(usage.get("cost")),
+            input_tokens=_int_or_none(usage.get("input_tokens")),
+            provider=str(provider) if provider is not None else None,
+        )
 
     def _log_serving_provider(self, model: str, provider: str | None) -> None:
         """Log the first sighting of a serving provider, and every change.
