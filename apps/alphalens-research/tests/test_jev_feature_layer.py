@@ -100,6 +100,13 @@ class TestTheVersionTokenMovesWithTheInstrument(unittest.TestCase):
         with mock.patch.object(layer, "BODY_CHAR_CAP", layer.BODY_CHAR_CAP + 1):
             self.assertNotEqual(layer.jev_feature_version(), before)
 
+    def test_changing_the_title_cap_moves_the_token(self):
+        # Caught by mutation: removing `title_char_cap` from the fingerprint failed
+        # nothing, so the token could have stopped tracking one of its two caps.
+        before = layer.jev_feature_version()
+        with mock.patch.object(layer, "TITLE_CHAR_CAP", layer.TITLE_CHAR_CAP + 1):
+            self.assertNotEqual(layer.jev_feature_version(), before)
+
     def test_changing_the_model_moves_the_token(self):
         before = layer.jev_feature_version()
         with mock.patch.object(layer, "MODEL", "typesafe/jev-9.99"):
@@ -167,6 +174,34 @@ class TestTheCandidateStateDoesNotLeakTheMappersConclusion(unittest.TestCase):
         state = layer.article_state(row)
         self.assertEqual(set(state), {"article_title", "article_body"})
         self.assertEqual(len(state["article_body"]), layer.BODY_CHAR_CAP)
+
+    def test_a_runaway_title_is_capped(self):
+        # Measured on the first whole-history run: one `edgar_press_release` carried a
+        # TITLE of 180725 characters (about 45000 tokens), which alone exceeds the
+        # 32000-token context limit, and the vendor answered HTTP 400. It was the only
+        # non-transport give-up of 23823 calls. A real title here has a median of 67
+        # characters and a measured maximum of 202, so the cap cannot truncate one.
+        state = layer.article_state(pd.Series({"title": "t" * 200_000, "body": "b"}))
+        self.assertEqual(len(state["article_title"]), layer.TITLE_CHAR_CAP)
+
+    def test_a_normal_title_is_untouched_by_the_cap(self):
+        title = "Abbott vs. Intuitive Surgical: Is Consistent Growth Better Than Premium?"
+        self.assertEqual(
+            layer.article_state(pd.Series({"title": title, "body": ""}))["article_title"], title
+        )
+
+    def test_the_candidate_state_caps_the_title_too(self):
+        row = pd.Series(
+            {"ticker": "A", "company_name": "N", "industry_name": "I", "sector_name": "S"}
+        )
+        state = layer.candidate_state(row, pd.Series({"title": "t" * 200_000, "body": "b"}))
+        self.assertEqual(len(state["article_title"]), layer.TITLE_CHAR_CAP)
+
+    def test_the_title_cap_leaves_room_for_a_full_body_and_the_questions(self):
+        # The two caps plus the question block must stay inside the 32000-token limit
+        # the vendor enforces, with room to spare for the JSON envelope.
+        approx_tokens = (layer.TITLE_CHAR_CAP + layer.BODY_CHAR_CAP) / 4 + 1000
+        self.assertLess(approx_tokens, 32_000)
 
     def test_a_missing_body_sends_an_empty_string_not_the_word_nan(self):
         # A pandas missing value is NaN, and NaN is TRUTHY, so `str(v or "")`
@@ -464,6 +499,51 @@ class TestRetryAndFailureAccounting(unittest.TestCase):
         with mock.patch.object(layer, "_RETRY_SLEEP_SECONDS", 0.0):
             self.assertIsNone(layer._ask(client, {"a": "b"}, {"q": {}}, spend))
         self.assertEqual(client.system_one.call_count, layer._MAX_ATTEMPTS)
+        self.assertEqual(spend.refused, 1)
+
+    def test_a_dropped_connection_is_retried(self):
+        # Measured on the first whole-history run: 11 of 12 give-ups were
+        # `ReadError: Connection reset by peer`. A ReadError is a TransportError, not
+        # an HTTPStatusError, so it fell into the generic branch and gave up on the
+        # first attempt — the most obviously retryable failure there is.
+        import httpx
+
+        calls = []
+
+        def flaky(*, state, questions, model):
+            calls.append(1)
+            if len(calls) < 3:
+                raise httpx.ReadError("Connection reset by peer")
+            return mock.Mock(cost_usd=1e-05)
+
+        client = mock.Mock()
+        client.system_one = flaky
+        spend = layer._Spend()
+        with mock.patch.object(layer, "_RETRY_SLEEP_SECONDS", 0.0):
+            self.assertIsNotNone(layer._ask(client, {"a": "b"}, {"q": {}}, spend))
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(spend.refused, 0)
+
+    def test_a_transport_error_that_never_clears_is_bounded_then_counted(self):
+        import httpx
+
+        client = mock.Mock()
+        client.system_one = mock.Mock(side_effect=httpx.ConnectTimeout("timed out"))
+        spend = layer._Spend()
+        with mock.patch.object(layer, "_RETRY_SLEEP_SECONDS", 0.0):
+            self.assertIsNone(layer._ask(client, {"a": "b"}, {"q": {}}, spend))
+        self.assertEqual(client.system_one.call_count, layer._MAX_ATTEMPTS)
+        self.assertEqual(spend.refused, 1)
+
+    def test_a_programming_error_is_not_retried(self):
+        # Only transport and transient-status failures are worth re-sending. A bug
+        # in our own row handling would otherwise be retried four times per row.
+        client = mock.Mock()
+        client.system_one = mock.Mock(side_effect=KeyError("ticker"))
+        spend = layer._Spend()
+        with mock.patch.object(layer, "_RETRY_SLEEP_SECONDS", 0.0):
+            self.assertIsNone(layer._ask(client, {"a": "b"}, {"q": {}}, spend))
+        self.assertEqual(client.system_one.call_count, 1)
         self.assertEqual(spend.refused, 1)
 
     def test_a_non_retryable_status_is_not_retried(self):

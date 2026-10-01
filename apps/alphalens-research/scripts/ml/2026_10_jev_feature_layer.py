@@ -132,6 +132,14 @@ OUT_ROOT = HOME / "jev_features"
 
 # Measured, see the module docstring. Not a cost decision.
 BODY_CHAR_CAP = 32_000
+
+# The title needs a cap too, which the first whole-history run proved the hard way:
+# one `edgar_press_release` carried a TITLE of 180725 characters, about 45000 tokens,
+# which alone exceeds the vendor's 32000-token limit, and the call came back HTTP 400.
+# It was the only non-transport give-up of 23823. A real title in this store has a
+# median of 67 characters and a measured maximum of 202, so 2000 cannot truncate one
+# and only ever trims a field the ingest filled with something that is not a title.
+TITLE_CHAR_CAP = 2_000
 MODEL = DEFAULT_SYSTEM_ONE_MODEL
 DEFAULT_WORKERS = 8
 
@@ -296,6 +304,7 @@ def jev_feature_version() -> str:
         "schema": _VERSION_SCHEMA,
         "model": MODEL,
         "body_char_cap": BODY_CHAR_CAP,
+        "title_char_cap": TITLE_CHAR_CAP,
         "article_questions": ARTICLE_QUESTIONS,
         "candidate_questions": CANDIDATE_QUESTIONS,
     }
@@ -384,8 +393,11 @@ def _ask(
 ) -> SystemOneResponse | None:
     """One call, retried on a transient status. Returns None once it gives up.
 
-    Retries only `_RETRYABLE_STATUS`: a 400 means the request itself is wrong, so
-    re-sending it spends money to get the same answer back. Fail-soft per row and
+    Two failure classes are retried, and for the same reason — nothing was answered,
+    so re-sending cannot double anything: a status in `_RETRYABLE_STATUS`, and any
+    `httpx.TransportError` (connection reset, timeout, DNS). A 4xx is NOT retried:
+    the request itself is wrong, so re-sending buys the same answer for money. Nor is
+    anything else, so a bug in our own row handling fails once instead of four times. Fail-soft per row and
     loud in the counters: a batch over tens of thousands of articles must not abort
     because of one of them, and a run that gave up on many must not look clean.
     """
@@ -399,6 +411,34 @@ def _ask(
                 continue
             spend.refuse()
             logger.warning("gave up after %d attempt(s): HTTP %s", attempt, status)
+            return None
+        except httpx.TransportError as exc:
+            # Measured on the first whole-history run: 11 of 12 give-ups were
+            # `ReadError: Connection reset by peer`, which is a TransportError and
+            # not an HTTPStatusError, so it reached the generic branch below and
+            # gave up on the first attempt.
+            #
+            # Why re-sending is safe, stated precisely rather than loosely: it is
+            # NOT that nothing reached the vendor. A `ReadError` or `ReadTimeout`
+            # happens after the request was fully sent, so the vendor may well have
+            # processed it and we simply never saw the answer — the same distinction
+            # `broker_contract`'s `write_outcome_unknown` draws, where retryable
+            # means "safe to re-run WITHOUT reconciling first" and not "the cause was
+            # transient". Re-sending is safe here because this call has no side
+            # effect to reconcile: it only reads, the store row is keyed so a repeat
+            # overwrites rather than duplicates, and the only cost of a duplicate is
+            # a second charge of about $0.00012. On a call that WROTE anything this
+            # branch would be wrong.
+            #
+            # No jitter: six workers back off on the same 2s / 4s / 6s schedule and
+            # would re-collide under a real throttle. Left as is because the measured
+            # run drew zero 429s, so adding jitter would be tuning against a failure
+            # this code has not yet seen.
+            if attempt < _MAX_ATTEMPTS:
+                time.sleep(_RETRY_SLEEP_SECONDS * attempt)
+                continue
+            spend.refuse()
+            logger.warning("gave up after %d attempt(s): %s: %s", attempt, type(exc).__name__, exc)
             return None
         except Exception as exc:  # every failure is ONE skipped row, never an aborted batch
             spend.refuse()
@@ -514,7 +554,7 @@ def _text(value) -> str:
 def article_state(row) -> dict[str, str]:
     """The state for one article. Title plus body, body capped."""
     return {
-        "article_title": _text(row.get("title")),
+        "article_title": _text(row.get("title"))[:TITLE_CHAR_CAP],
         "article_body": _text(row.get("body"))[:BODY_CHAR_CAP],
     }
 
@@ -531,7 +571,7 @@ def candidate_state(row, article) -> dict[str, str]:
     and inflate the very discrimination this layer measures.
     """
     return {
-        "article_title": _text(article.get("title")),
+        "article_title": _text(article.get("title"))[:TITLE_CHAR_CAP],
         "article_body": _text(article.get("body"))[:BODY_CHAR_CAP],
         "ticker": _text(row["ticker"]).upper(),
         "company_name": _text(row.get("company_name")),
@@ -612,7 +652,10 @@ def run_article_pass(
         news = pd.read_parquet(NEWS_DIR / f"{date}.parquet")
         out_path = out_dir / f"{date}.parquet"
         done = _already_done(out_path, ["news_id"], version)
-        todo = [r for _, r in news.iterrows() if str(r["id"]) not in {k[0] for k in done}]
+        # Hoisted: a set comprehension in the condition is re-evaluated per row, which
+        # measurement confirmed is O(rows x done).
+        done_ids = {key[0] for key in done}
+        todo = [r for _, r in news.iterrows() if str(r["id"]) not in done_ids]
         if limit is not None:
             todo = todo[:limit]
         if not todo:
