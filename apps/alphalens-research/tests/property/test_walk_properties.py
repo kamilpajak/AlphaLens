@@ -222,13 +222,22 @@ class TheGeneratorReachesTheLadderTest(PropertyTestCase):
     `strategies.py` measured for the pipeline's own generator -- both halves are
     drawn from one price band, so an independent draw already overlaps often.
 
-    The floors below are well under the measured shares, so ordinary
-    Hypothesis variation cannot trip them; a floor that was tripped would mean
-    the generator stopped reaching the ladder and every property above it had
-    gone quietly vacuous.
+    The floors are chosen by arithmetic rather than by feel, because a floor set
+    by feel is either a flake or a blind spot. At the `ci` profile's 300
+    examples the binomial spread of the fill share is 0.0139 and of the
+    take-profit share 0.0260, so:
+
+        fill        floor 0.85 sits 6.3 spreads under the measured 0.938
+        take-profit floor 0.15 sits 5.1 spreads under the measured 0.284
+
+    Both are far enough out that ordinary variation cannot trip them, and close
+    enough that a generator which stopped reaching the ladder would be caught
+    rather than quietly making every property above it vacuous. A take-profit
+    floor of 0.20 would sit only 3.2 spreads out, which over many CI runs is a
+    flake someone reruns rather than a finding.
     """
 
-    MIN_FILLED_SHARE = 0.80
+    MIN_FILLED_SHARE = 0.85
     MIN_TAKE_PROFIT_SHARE = 0.15
 
     _SEEN: dict[str, int] = {}
