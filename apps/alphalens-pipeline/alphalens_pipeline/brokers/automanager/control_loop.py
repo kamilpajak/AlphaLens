@@ -316,6 +316,10 @@ class LoopDeps:
     # pages once via the shared throttle. Frozen forbids REBINDING the field, not
     # mutating the dict it points at.
     oco_lag_counts: dict[int, int] = field(default_factory=dict)
+    # uic -> the raised managed-exit stop last announced in the log. Carried
+    # across ticks so ``_build_managed_exits`` says a raise once per level, not
+    # once a minute while it holds. Mutable dict on the frozen deps, as above.
+    stop_raises_announced: dict[int, float] = field(default_factory=dict)
     # Daemon-lifetime single-slot holder of the PREVIOUS tick's KILL state, so the
     # edge-triggered KILL alert (run_once) fires ONCE per False->True / True->False
     # transition instead of every tick while KILL is held. Edges are rare and each
@@ -966,8 +970,15 @@ def _build_managed_exits(
     trailed: Mapping[int, float],
     plan_currencies: Mapping[int, tuple[str | None, str | None, str | None]] | None = None,
     reanchored: Mapping[int, float] | None = None,
+    announced: dict[int, float] | None = None,
 ) -> list[ManagedExit]:
     """Build this tick's managed-position list. Pure — no broker/journal I/O.
+
+    ``announced`` is the daemon's uic -> last announced raised stop
+    (``LoopDeps.stop_raises_announced``). With it, a raise is logged once per
+    uic and level instead of on every tick while it holds; without it (direct
+    callers, tests) every raise is logged. Entries for uics that are no longer
+    managed are dropped, so a later position on the uic is announced afresh.
 
     A live long position whose uic has a folded ``tranche_plan`` (Task 1)
     becomes ONE ``ManagedExit``; a live long with NO ``tranche_plan`` on record
@@ -1004,6 +1015,7 @@ def _build_managed_exits(
             skipped += 1
             continue
         trailed_level = trailed.get(uic)
+        raises: list[tuple[str, tuple[object, ...]]] = []
         if trailed_level is not None and trailed_level > stop_price:
             # The journaled ratchet floor outranks the plan's disaster stop, so
             # THIS is the level that gets placed. Announced because #1324 made
@@ -1013,12 +1025,12 @@ def _build_managed_exits(
             # writes a log line — which is why nobody could tell whether
             # trailing had ever fired. Logged only when it actually raises, so
             # a steady state stays quiet.
-            logger.info(
-                "uic %s: managed-exit stop raised by the journaled trailed level "
-                "%.4f (plan stop %.4f)",
-                uic,
-                trailed_level,
-                stop_price,
+            raises.append(
+                (
+                    "uic %s: managed-exit stop raised by the journaled trailed level "
+                    "%.4f (plan stop %.4f)",
+                    (uic, trailed_level, stop_price),
+                )
             )
             stop_price = trailed_level
         # #1518: the re-anchor's own floor. Same job as the trailed level, from
@@ -1030,15 +1042,27 @@ def _build_managed_exits(
         # that can fall is not a floor.
         reanchored_level = (reanchored or {}).get(uic)
         if reanchored_level is not None and reanchored_level > stop_price:
-            logger.info(
-                "uic %s: managed-exit stop raised by the journaled reanchored level "
-                "%.4f (previous %.4f, from the %s)",
-                uic,
-                reanchored_level,
-                stop_price,
-                "trailed level" if trailed_level is not None else "plan stop",
+            raises.append(
+                (
+                    "uic %s: managed-exit stop raised by the journaled reanchored level "
+                    "%.4f (previous %.4f, from the %s)",
+                    (
+                        uic,
+                        reanchored_level,
+                        stop_price,
+                        "trailed level" if trailed_level is not None else "plan stop",
+                    ),
+                )
             )
             stop_price = reanchored_level
+        if raises and (announced is None or announced.get(uic) != stop_price):
+            for message, args in raises:
+                logger.info(message, *args)
+        if announced is not None:
+            if raises:
+                announced[uic] = stop_price
+            else:
+                announced.pop(uic, None)
         instrument_ccy, sizing_ccy, exchange_mic = (plan_currencies or {}).get(
             uic, (None, None, None)
         )
@@ -1056,6 +1080,9 @@ def _build_managed_exits(
                 ),
             )
         )
+    if announced is not None:
+        for gone in set(announced) - {m.uic for m in managed}:
+            del announced[gone]
     logger.info(
         "live-exits: %d position(s) managed, %d skipped (no take-profit ladder on record)",
         len(managed),
@@ -1481,6 +1508,7 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         trailed=_fold_trailed_since_latest_plan(journal_lines),
         plan_currencies=fold_tranche_plan_currencies(journal_lines),
         reanchored=_fold_reanchored_stop_levels(journal_lines),
+        announced=deps.stop_raises_announced,
     )
     # uic -> (ticker, venue) off the live positions just read. The venue must
     # survive: resolving a LIVE instrument by bare ticker is ambiguous for
