@@ -39,6 +39,8 @@ SYSTEMD_DIR = REPO_ROOT / "deploy" / "systemd"
 SERVICE_PATH = SYSTEMD_DIR / "alphalens-thematic-build.service"
 TIMER_PATH = SYSTEMD_DIR / "alphalens-thematic-build.timer"
 RUN_THEMATIC_SCRIPT = REPO_ROOT / "deploy" / "docker" / "run_thematic_day.sh"
+RUN_ENRICH_SCRIPT = REPO_ROOT / "deploy" / "docker" / "run_experts_enrich.sh"
+PIPELINE_DOCKERFILE = REPO_ROOT / "deploy" / "docker" / "Dockerfile.pipeline"
 
 # Units migrated from macOS launchd in PR-1 of the observability epic.
 EDGAR_SERVICE = SYSTEMD_DIR / "alphalens-edgar-detect.service"
@@ -848,11 +850,12 @@ class TestRunThematicDayChainContract(unittest.TestCase):
     """
 
     CORE_STAGES = ("ingest --force", "extract", "map-themes", "score", "brief")
-    BEST_EFFORT = (
-        "experts migrate-qual-cache",
-        "experts enrich",
-        "cache refresh-vix",
-    )
+    # The two `experts` stages left this script in #1650 — they are optional
+    # work and, while they lived inside the ExecStart shell, a timeout in them
+    # skipped the publish chain and lost an already-written brief. They now run
+    # as an ExecStartPost AFTER publication and are pinned by
+    # TestPublicationRunsBeforeTheOptionalEnrichment.
+    BEST_EFFORT = ("cache refresh-vix",)
 
     def setUp(self):
         self.text = RUN_THEMATIC_SCRIPT.read_text()
@@ -1251,7 +1254,7 @@ class TestThematicBuildCadence(unittest.TestCase):
         # PR-2 renamed `buffett qual-enrich` / `buffett migrate-qual-cache` to the
         # registry-driven `experts` surface; the deploy script must invoke the new
         # commands (migrate strictly before enrich) and carry NO stale old command.
-        script_text = RUN_THEMATIC_SCRIPT.read_text()
+        script_text = RUN_ENRICH_SCRIPT.read_text()
         self.assertIn("alphalens experts migrate-qual-cache", script_text)
         self.assertRegex(
             script_text,
@@ -2990,3 +2993,171 @@ class TestThematicShadowMapUnit(unittest.TestCase):
                 self.assertIsNotNone(hook_match)
                 assert post_match is not None and hook_match is not None
                 self.assertLess(post_match.start(), hook_match.start())
+
+
+class TestPublicationRunsBeforeTheOptionalEnrichment(unittest.TestCase):
+    """The brief must reach Postgres before anything optional runs.
+
+    Until #1650 the two ``experts`` stages sat at the END of the ExecStart
+    script, so they were inside the shell whose success gates both publish
+    steps. A timeout there — and `TimeoutStartSec` covers the whole of
+    ExecStart — killed the unit, systemd skipped every ExecStartPost, and a
+    brief already written to disk never reached the database. That happened on
+    2026-09-30 and was repaired by hand.
+
+    Moving them AFTER the publish chain does not buy a single minute: ExecStart
+    and every ExecStartPost share one `TimeoutStartSec`. It buys ORDERING. The
+    same timeout now costs the Buffett qualitative drawer instead of the brief.
+
+    Why ordering is worth it: over the three deciding runs since the 04:30 move
+    the total was 86, 150 (killed at the limit) and 177 min against a 210 min
+    budget, and `extract` alone moved from 44 to 110 min between two
+    consecutive days. The margin is real but thin, and the variance is large.
+    """
+
+    def setUp(self) -> None:
+        self.service = SERVICE_PATH.read_text()
+        self.lines = self.service.splitlines()
+
+    def _directives(self) -> list[tuple[int, str]]:
+        """(line index of the directive's first line, its full joined text).
+
+        Continuations are joined so a multi-line `docker run` reads as one
+        statement, and comment lines are dropped so prose naming a command is
+        never mistaken for an invocation of it.
+        """
+        out: list[tuple[int, str]] = []
+        start, buf = None, ""
+        for i, raw in enumerate(self.lines):
+            if raw.lstrip().startswith("#"):
+                continue
+            if start is None:
+                if not raw.strip():
+                    continue
+                start = i
+            buf += raw.rstrip()[:-1] + " " if raw.rstrip().endswith("\\") else raw
+            if not raw.rstrip().endswith("\\"):
+                out.append((start, buf))
+                start, buf = None, ""
+        return out
+
+    def _only(self, needle: str) -> int:
+        hits = [i for i, text in self._directives() if needle in text]
+        self.assertEqual(
+            len(hits), 1, f"expected exactly one directive containing {needle!r}, got {len(hits)}"
+        )
+        return hits[0]
+
+    def _all(self, needle: str) -> list[int]:
+        return [i for i, text in self._directives() if needle in text]
+
+    def test_the_runner_no_longer_runs_the_expert_enrichment(self) -> None:
+        """The anti-regression half. Adding the stages back to the runner would
+        silently restore the coupling while every other test here still passed."""
+        text = RUN_THEMATIC_SCRIPT.read_text()
+        for stage in ("experts migrate-qual-cache", "experts enrich"):
+            self.assertNotIn(
+                f"alphalens {stage}",
+                text,
+                f"{stage} belongs in run_experts_enrich.sh, after the publish chain. "
+                "Inside the ExecStart script it can swallow a written brief again.",
+            )
+
+    def test_the_enrichment_runs_after_the_brief_reaches_postgres(self) -> None:
+        rebuilds = self._all("--profile maintenance run --rm rebuild-cache")
+        enrich = self._only("run_experts_enrich.sh")
+        self.assertLess(
+            rebuilds[0],
+            enrich,
+            "rebuild-cache is what puts the brief in Postgres; it must come first, "
+            "or a timeout in the optional work still costs the brief",
+        )
+
+    def test_a_failure_in_the_enrichment_cannot_fail_the_unit(self) -> None:
+        """Without the `-` prefix a DeepSeek or Perplexity hiccup marks the whole
+        run failed, pages the operator, and skips the second rebuild-cache."""
+        line = self.lines[self._only("run_experts_enrich.sh")]
+        self.assertTrue(
+            line.startswith("ExecStartPost=-"),
+            f"the enrichment step must be `-`-prefixed, got {line!r}",
+        )
+
+    def test_the_qualitative_columns_reach_postgres_too(self) -> None:
+        """`experts enrich` stamps its columns INTO the brief parquet, so without a
+        second rebuild-cache they sit on disk until the next day's slot."""
+        rebuilds = self._all("--profile maintenance run --rm rebuild-cache")
+        self.assertEqual(
+            len(rebuilds), 2, f"expected two rebuild-cache steps, found {len(rebuilds)}"
+        )
+        self.assertLess(self._only("run_experts_enrich.sh"), rebuilds[1])
+        self.assertTrue(
+            self.lines[rebuilds[1]].startswith("ExecStartPost=-"),
+            "the second rebuild-cache is best-effort: the brief is already published",
+        )
+
+    def test_the_enrichment_container_is_supervised_like_the_build(self) -> None:
+        """Same three pieces as the build container (#1330): `--init` so the first
+        SIGTERM ends the run, a `--name` to address it by, and a `docker rm -f` on
+        both ends. Without them a timeout kills only the docker client and the
+        container keeps writing."""
+        idx = self._only("run_experts_enrich.sh")
+        enrich = self.lines[idx]
+        directive = next(text for i, text in self._directives() if i == idx)
+        self.assertIn("--init", directive)
+        self.assertIn("--name alphalens-thematic-experts-enrich", directive)
+        self.assertIn(
+            "ExecStartPre=-/usr/bin/docker rm -f alphalens-thematic-experts-enrich", self.service
+        )
+        self.assertIn(
+            "ExecStopPost=-/usr/bin/docker rm -f alphalens-thematic-experts-enrich", self.service
+        )
+        self.assertTrue(enrich.startswith("ExecStartPost=-"))
+
+    def test_the_enrichment_script_is_baked_into_the_image(self) -> None:
+        """The unit mounts ~/.alphalens, not the repo, so the script has to be in
+        the image. Forgetting the COPY makes every run log `No such file`."""
+        dockerfile = PIPELINE_DOCKERFILE.read_text()
+        self.assertIn("COPY deploy/docker/run_experts_enrich.sh", dockerfile)
+        self.assertIn("chmod +x /app/deploy/docker/run_experts_enrich.sh", dockerfile)
+
+    def test_the_enrichment_script_is_best_effort_throughout(self) -> None:
+        """`set -e` here would make the first failing stage skip the second, which
+        is the opposite of what a best-effort tail is for."""
+        text = RUN_ENRICH_SCRIPT.read_text()
+        self.assertNotRegex(text, r"(?m)^set -e")
+        self.assertRegex(text, r"(?m)^set -uo pipefail\b")
+        for stage in ("experts migrate-qual-cache", "experts enrich"):
+            self.assertIn(f"alphalens {stage}", text)
+        self.assertEqual(
+            text.count("|| echo"),
+            2,
+            "both stages must warn and continue rather than abort",
+        )
+
+    def test_no_slot_plus_its_timeout_can_cross_utc_midnight(self) -> None:
+        """`run_experts_enrich.sh` recomputes `date -u -d yesterday` in its own
+        container, minutes to hours after the thematic stages defaulted to the same
+        expression. They agree only while the whole run stays inside one UTC day.
+
+        Today the latest slot is 12:30 UTC and the budget 210 min, so the last
+        possible finish is 16:05 UTC including jitter. This test is here so that
+        moving a slot late, or raising the timeout far, fails loudly instead of
+        quietly enriching the wrong date once per run."""
+        timer = TIMER_PATH.read_text()
+        timeout = _service_start_timeout(SERVICE_PATH.read_text())
+        jitter = _timer_randomized_delay(timer)
+        for slot in _slot_times(timer):
+            finish = dt.datetime.combine(dt.date(2026, 1, 1), slot) + jitter + timeout
+            self.assertEqual(
+                finish.date(),
+                dt.date(2026, 1, 1),
+                f"a run starting at {slot} could finish on the next UTC day, so the "
+                "enrichment container would compute a different `yesterday` than the "
+                "thematic stages did",
+            )
+
+    def test_the_enrichment_script_is_executable(self) -> None:
+        self.assertTrue(
+            RUN_ENRICH_SCRIPT.stat().st_mode & stat.S_IXUSR,
+            "the unit invokes it through bash, but keep the bit set like its sibling",
+        )
