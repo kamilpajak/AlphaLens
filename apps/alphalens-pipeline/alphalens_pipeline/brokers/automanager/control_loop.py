@@ -1632,8 +1632,16 @@ def _announce_fired_tranches(
             )
 
 
-def _uics_declaring_a_trail(journal_lines: Iterable[Mapping[str, Any]]) -> frozenset[int]:
-    """The uics whose governing plan DECLARES a trailing stop (#1236).
+def _uics_moving_their_stop(journal_lines: Iterable[Mapping[str, Any]]) -> frozenset[int]:
+    """The uics whose governing plan DECLARES a stop move: a trail or a re-anchor.
+
+    Trails need the peak. Both need the live price since #1514: a NEW stop placed
+    beside a resting one keeps that stop's raised level only when a live price
+    shows it clear of the market (``position_manager._new_stop_price``), and a
+    re-anchored stop is raised exactly like a trailed one. Fetching for trails
+    alone left a re-anchor pick's raised stop to be superseded at the plan stop.
+    A pick that declares no move (``exit: null``) is not fetched: its stop sits
+    where the owner put it.
 
     The peak fetch used to be gated on the daemon-wide policy: one env var said
     "this deployment trails", and peaks were fetched for every long. Trailing is
@@ -1650,7 +1658,7 @@ def _uics_declaring_a_trail(journal_lines: Iterable[Mapping[str, Any]]) -> froze
     return frozenset(
         uic
         for uic, plan in _fold_planned_exits(journal_lines).items()
-        if resolve_declared_policy(plan.reaction).trails
+        if (policy := resolve_declared_policy(plan.reaction)).trails or policy.requires_amend_stop
     )
 
 
@@ -1740,7 +1748,7 @@ def _run_protection_pass(
     declaring a trail the pass takes the exact 2-arg build call and fetches
     nothing."""
     try:
-        trailing_uics = _uics_declaring_a_trail(_iter_standalone_stop_journal())
+        trailing_uics = _uics_moving_their_stop(_iter_standalone_stop_journal())
         if trailing_uics:
             peak_by_uic, last_price_by_uic = _fetch_protection_peaks(
                 deps, report, uics=trailing_uics

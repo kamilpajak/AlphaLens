@@ -477,10 +477,11 @@ class ProtectionView:
     # Like ``reanchored_by_uic`` above, the fold is JOURNAL-lifetime, not
     # position-lifetime. It is NOT unbounded, though:
     # ``_fold_trailed_since_latest_plan`` resets on every new-generation
-    # ``tranche_plan``, so an ordinary re-pick of the same uic (a new pick_key)
-    # clears the stale level. What survives the reset is a refill inside the
-    # SAME generation, and a uic whose journal carries no ``tranche_plan`` at
-    # all — those inherit the prior fill's floor.
+    # ``tranche_plan`` or ``planned`` line (#1236), so an ordinary re-pick of the
+    # same uic (a new pick_key) clears the stale level. What survives the reset
+    # is a refill inside the SAME pick — a later tier filling after a trailed
+    # stop-out — which inherits the prior fill's floor. That is why a fully
+    # naked re-place does not restore this level (#1514).
     # NOT purely benign, and #1324 made the lifetime real by keeping the marker
     # across boots (before that, boot compaction cleared it daily). There are
     # TWO consumers, and they differ: ``_maybe_trail`` only GATES a new proposal
@@ -571,6 +572,91 @@ def _finite_positive(value: float | None) -> TypeIs[float]:
     ``if not _finite_positive(x): return None`` and then uses ``x`` as a real
     price, which only reads as correct once this narrows."""
     return value is not None and math.isfinite(value) and value > 0
+
+
+# #1514: the level a resize or a re-place must KEEP is where the stop rests at the
+# broker now, not the placement-time plan stop. Every protection branch used to
+# price its action at ``plan.stop_price``; an amend sends that as the order price,
+# so a resize meant only to change the quantity also moved a trailed (or
+# re-anchored, or hand-raised) stop back down to the disaster level, and
+# ``_maybe_trail``'s ratchet then refused to raise it until price made a new high.
+# ``resting_price`` reflects every move made to the order, so no journal fold has
+# to say which fill earned the level.
+
+
+def _resting_stop_price(leg: OrderState) -> float | None:
+    """Where ``leg`` rests, or ``None`` when the broker did not report a usable price."""
+    price = leg.resting_price
+    return price if _finite_positive(price) else None
+
+
+def _amend_stop_price(floor: float, leg: OrderState) -> float:
+    """The price an in-place resize of ``leg`` sends: ``floor`` (the plan stop, or
+    the take-profit's journaled level), never below where the leg rests.
+
+    Unconditional, unlike ``_new_stop_price``: the leg already rests at that
+    price, and a refused amend leaves it resting, so nothing can go naked. Shared
+    by the protection pass and ``live_exit_engine.execute_tranche_exit`` so the
+    two cannot disagree about where a resized stop goes."""
+    resting = _resting_stop_price(leg)
+    return floor if resting is None else max(floor, resting)
+
+
+def _new_stop_price(
+    uic: int, plan: PlannedExit, legs: tuple[OrderState, ...], view: ProtectionView
+) -> float:
+    """The price of a NEW stop placed beside the stops already resting on ``uic``.
+
+    The highest unfilled resting stop level, but only when a live price shows it
+    clear of the market by the declared policy's min distance; otherwise the plan
+    stop. A refused place leaves the new shares NAKED (``_execute_place_stop``
+    records the failure and returns), which is worse than a low stop, so a level
+    the market may already have reached is never sent. A leg that has partially
+    triggered is excluded: the market traded through its price."""
+    levels = [
+        price
+        for leg in legs
+        if leg.order_type in STOP_TYPES
+        and (leg.filled_quantity or 0.0) <= _QTY_EPS
+        and (price := _resting_stop_price(leg)) is not None
+    ]
+    if not levels or max(levels) <= plan.stop_price:
+        return plan.stop_price
+    level = max(levels)
+    last_price = view.last_price_by_uic.get(uic)
+    if not _finite_positive(last_price):
+        return plan.stop_price
+    band = last_price * (1.0 - resolve_declared_policy(plan.reaction).min_stop_distance_frac)
+    if level > band:
+        logger.info(
+            "uic %s: new stop at the plan level %.4f, resting level %.4f is inside "
+            "the market band (last %.4f)",
+            uic,
+            plan.stop_price,
+            level,
+            last_price,
+        )
+        return plan.stop_price
+    return level
+
+
+def _unrestored_trail_alert(uic: int, plan: PlannedExit, view: ProtectionView) -> list[Action]:
+    """One alert when a fully naked uic is re-stopped below its trailed level.
+
+    The re-place stays at the plan stop on purpose: the trailed fold is not reset
+    when a later tier of the SAME pick refills after a trailed stop-out, so the
+    level could belong to an earlier fill and sit next to the market. Saying so
+    makes the lost level visible instead of silent. The message carries only
+    stable values, so the protection throttle sends it once per interval."""
+    trailed = view.trailed_stop_by_uic.get(uic)
+    if trailed is None or trailed <= plan.stop_price:
+        return []
+    return [
+        AlertOnly(
+            f"uic {uic}: stop re-placed at the plan level {plan.stop_price:.2f}; "
+            f"trailed level {trailed:.2f} not restored"
+        )
+    ]
 
 
 def _oco_stop_leg(legs: tuple[OrderState, ...]) -> OrderState | None:
@@ -892,8 +978,15 @@ def _maybe_trail(
     # clear a coarse _TRAIL_STEP_EPS step above the last CONFIRMED trailed level,
     # else the resting stop stays put (also bounds re-PATCH chatter on a sub-step
     # peak wiggle).
-    floor = view.trailed_stop_by_uic.get(uic)
-    if floor is not None and clamped <= floor + _TRAIL_STEP_EPS:
+    # #1514: the stop that RESTS is a floor too. The journaled level can lag it
+    # (a lost marker, an owner-raised stop), and a proposal between the two would
+    # otherwise PATCH the resting stop down.
+    floors = [
+        level
+        for level in (view.trailed_stop_by_uic.get(uic), _resting_stop_price(sole))
+        if level is not None
+    ]
+    if floors and clamped <= max(floors) + _TRAIL_STEP_EPS:
         return None
     target = clamped
     owned = pos.quantity
@@ -1021,7 +1114,7 @@ def _reconcile_over_hedge(
                 sole.order_id,
                 sole.order_type or "",
                 owned,
-                plan.stop_price,
+                _amend_stop_price(plan.stop_price, sole),
                 _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
                 reason="over-hedge downsize — PATCH amend in place",
             )
@@ -1049,7 +1142,7 @@ def _reconcile_over_hedge(
                 oco_stop.order_id,
                 oco_stop.order_type or "StopIfTraded",
                 owned,
-                plan.stop_price,
+                _amend_stop_price(plan.stop_price, oco_stop),
                 _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
                 reason="OCO downsize — PATCH OCO stop leg down in place",
             )
@@ -1092,7 +1185,7 @@ def _reconcile_over_hedge(
             uic,
             _SIDE,
             owned,
-            plan.stop_price,
+            _new_stop_price(uic, plan, legs, view),
             _exit_stop_ref(plan.entry_crid, gen),
             supersede_ids=bad.stop_leg_ids,  # keep old stop until the residual is confirmed
         )
@@ -1160,7 +1253,8 @@ def _reconcile_deficit(
                 plan.entry_crid,
                 plan.next_gen(owned),
                 supersede_ids=(),
-            )
+            ),
+            *_unrestored_trail_alert(uic, plan, view),
         ]
     # (GROW amend, Stage 3): a SINGLE clean standalone stop under-covers (owned
     #      grew) -> PATCH amend it UP to live owned in place (absolute-target,
@@ -1185,7 +1279,7 @@ def _reconcile_deficit(
                 sole.order_id,
                 sole.order_type or "",
                 owned,
-                plan.stop_price,
+                _amend_stop_price(plan.stop_price, sole),
                 _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
                 reason="grow — PATCH amend stop up in place",
             )
@@ -1215,7 +1309,7 @@ def _reconcile_deficit(
                 oco_stop.order_id,
                 oco_stop.order_type or "StopIfTraded",
                 owned,
-                plan.stop_price,
+                _amend_stop_price(plan.stop_price, oco_stop),
                 _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
                 reason="grow-after-OCO — PATCH OCO stop leg up in place",
             )
@@ -1245,7 +1339,7 @@ def _reconcile_deficit(
                 uic,
                 _SIDE,
                 deficit,
-                plan.stop_price,
+                plan.stop_price if conservative else _new_stop_price(uic, plan, legs, view),
                 _exit_stop_ref(plan.entry_crid, plan.next_gen(deficit)),
                 cancel_conflicting=_tp_only_leg_ids(legs),  # lone TP -> cancel BEFORE (Bug B)
             )
@@ -1262,7 +1356,10 @@ def _reconcile_deficit(
             _exit_stop_ref(plan.entry_crid, plan.next_gen(owned)),
             supersede_ids=_stop_leg_ids(legs),  # stale stop -> cancel AFTER
             cancel_conflicting=_tp_only_leg_ids(legs),  # lone TP -> cancel BEFORE (Bug B)
-        )
+        ),
+        # B2 runs only with no covering stop left (B1 takes every case with one),
+        # so this is the fully naked re-place: the plan stop, said out loud.
+        *_unrestored_trail_alert(uic, plan, view),
     ]
 
 
