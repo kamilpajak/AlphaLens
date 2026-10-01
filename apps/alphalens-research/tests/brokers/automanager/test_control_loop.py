@@ -6491,6 +6491,46 @@ class TestManagedExitAnnouncesInheritedTrailedLevel(unittest.TestCase):
         self.assertEqual(logs, [])
 
 
+class TestManagedExitAnnouncesARaiseOncePerLevel(unittest.TestCase):
+    """The announcement above used to repeat on EVERY tick while the raise held
+    (LIVE VST 2026-10-01: the same line once a minute for the whole session).
+    With the daemon's ``announced`` map it is said once per uic and level, and
+    again only when the level moves."""
+
+    def _tick(self, announced: dict[int, float], trailed_level: float) -> list[str]:
+        lines = [_tranche_plan_line(333, pick_key="OLN:2026-08-14")]
+        with self.assertLogs(cl.logger, level="INFO") as captured:
+            cl.logger.info("probe")  # floor so assertLogs never raises on silence
+            cl._build_managed_exits(
+                long_positions=[_pos(10.0, 333)],
+                tranche_plans=cl.fold_tranche_plans(lines),
+                fired=cl._fold_fired_since_latest_plan(lines),
+                trailed={333: trailed_level},
+                announced=announced,
+            )
+        return [line for line in captured.output if _INHERITED_TRAIL_MARKER in line]
+
+    def test_an_unchanged_raise_is_announced_once(self) -> None:
+        announced: dict[int, float] = {}
+        self.assertEqual(len(self._tick(announced, 97.0)), 1)
+        self.assertEqual(self._tick(announced, 97.0), [])
+
+    def test_a_new_level_is_announced_again(self) -> None:
+        announced: dict[int, float] = {}
+        self._tick(announced, 97.0)
+        again = self._tick(announced, 98.0)
+        self.assertEqual(len(again), 1)
+        self.assertIn("98", again[0])
+
+    def test_a_closed_position_is_forgotten(self) -> None:
+        announced: dict[int, float] = {}
+        self._tick(announced, 97.0)
+        cl._build_managed_exits(
+            long_positions=[], tranche_plans={}, fired={}, trailed={}, announced=announced
+        )
+        self.assertEqual(announced, {})
+
+
 class TestCompactorKeepsReanchoredLatch(unittest.TestCase):
     """#1324 sibling: the boot compactor used to drop the ``reanchored`` markers
     too, so every restart lost ``ProtectionView.reanchored_by_uic`` — the
