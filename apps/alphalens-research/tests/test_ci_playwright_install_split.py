@@ -43,7 +43,18 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 # wherever an attempt is killable.
 WITH_DEPS = "--with-deps"
 INSTALL_DEPS = "playwright install-deps"
-TIMEOUT_CALL = re.compile(r"\btimeout\s+\d+\b")
+
+# Two patterns, because the two assertions below want opposite things.
+#
+# ANY_TIMEOUT forbids apt under every spelling of a killable command. A pattern
+# that demanded the duration next (`timeout\s+\d+`) would miss
+# `timeout --signal=KILL 240 ...` and `timeout -k 5 240 ...`, both of which kill
+# apt exactly as the plain form does. Being broad is right here: it over-matches
+# `timeout-minutes:`, which can never carry `--with-deps`.
+#
+# BOUNDED_CALL has to recognise a real invocation, so it keeps the duration.
+ANY_TIMEOUT = re.compile(r"\btimeout\b")
+BOUNDED_CALL = re.compile(r"\btimeout\s+(?:-\S+\s+)*\d+\b")
 
 
 class ThePlaywrightInstallIsSplitTest(unittest.TestCase):
@@ -61,7 +72,7 @@ class ThePlaywrightInstallIsSplitTest(unittest.TestCase):
         offenders = [
             f"{number}: {line.strip()}"
             for number, line in enumerate(self.lines, start=1)
-            if WITH_DEPS in line and TIMEOUT_CALL.search(line)
+            if WITH_DEPS in line and ANY_TIMEOUT.search(line)
         ]
         self.assertEqual(
             offenders,
@@ -84,7 +95,15 @@ class ThePlaywrightInstallIsSplitTest(unittest.TestCase):
         # The positive control. Splitting the step must not throw away the
         # stall protection the wrapper exists for; a file that only forbade
         # --with-deps would be green on a workflow that simply dropped it.
-        download = [line for line in self.lines if TIMEOUT_CALL.search(line)]
+        # Comments are excluded, or the control is foolable: a workflow that
+        # dropped the wrapper but left `# timeout 240 ... playwright install`
+        # behind would keep this green, which is the one thing a positive
+        # control must not do.
+        download = [
+            line
+            for line in self.lines
+            if BOUNDED_CALL.search(line) and not line.strip().startswith("#")
+        ]
         self.assertTrue(
             any("playwright install" in line for line in download),
             "no timeout-bounded `playwright install` left: the CDN stall "
