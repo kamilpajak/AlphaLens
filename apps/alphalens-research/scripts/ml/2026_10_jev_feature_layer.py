@@ -384,8 +384,11 @@ def _ask(
 ) -> SystemOneResponse | None:
     """One call, retried on a transient status. Returns None once it gives up.
 
-    Retries only `_RETRYABLE_STATUS`: a 400 means the request itself is wrong, so
-    re-sending it spends money to get the same answer back. Fail-soft per row and
+    Two failure classes are retried, and for the same reason — nothing was answered,
+    so re-sending cannot double anything: a status in `_RETRYABLE_STATUS`, and any
+    `httpx.TransportError` (connection reset, timeout, DNS). A 4xx is NOT retried:
+    the request itself is wrong, so re-sending buys the same answer for money. Nor is
+    anything else, so a bug in our own row handling fails once instead of four times. Fail-soft per row and
     loud in the counters: a batch over tens of thousands of articles must not abort
     because of one of them, and a run that gave up on many must not look clean.
     """
@@ -399,6 +402,18 @@ def _ask(
                 continue
             spend.refuse()
             logger.warning("gave up after %d attempt(s): HTTP %s", attempt, status)
+            return None
+        except httpx.TransportError as exc:
+            # The connection never delivered a response, so nothing was answered and
+            # re-sending is safe. Measured on the first whole-history run: 11 of 12
+            # give-ups were `ReadError: Connection reset by peer`, which is a
+            # TransportError and not an HTTPStatusError, so it reached the generic
+            # branch below and gave up on the first attempt.
+            if attempt < _MAX_ATTEMPTS:
+                time.sleep(_RETRY_SLEEP_SECONDS * attempt)
+                continue
+            spend.refuse()
+            logger.warning("gave up after %d attempt(s): %s: %s", attempt, type(exc).__name__, exc)
             return None
         except Exception as exc:  # every failure is ONE skipped row, never an aborted batch
             spend.refuse()

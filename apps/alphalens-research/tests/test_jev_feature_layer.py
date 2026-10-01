@@ -466,6 +466,51 @@ class TestRetryAndFailureAccounting(unittest.TestCase):
         self.assertEqual(client.system_one.call_count, layer._MAX_ATTEMPTS)
         self.assertEqual(spend.refused, 1)
 
+    def test_a_dropped_connection_is_retried(self):
+        # Measured on the first whole-history run: 11 of 12 give-ups were
+        # `ReadError: Connection reset by peer`. A ReadError is a TransportError, not
+        # an HTTPStatusError, so it fell into the generic branch and gave up on the
+        # first attempt — the most obviously retryable failure there is.
+        import httpx
+
+        calls = []
+
+        def flaky(*, state, questions, model):
+            calls.append(1)
+            if len(calls) < 3:
+                raise httpx.ReadError("Connection reset by peer")
+            return mock.Mock(cost_usd=1e-05)
+
+        client = mock.Mock()
+        client.system_one = flaky
+        spend = layer._Spend()
+        with mock.patch.object(layer, "_RETRY_SLEEP_SECONDS", 0.0):
+            self.assertIsNotNone(layer._ask(client, {"a": "b"}, {"q": {}}, spend))
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(spend.refused, 0)
+
+    def test_a_transport_error_that_never_clears_is_bounded_then_counted(self):
+        import httpx
+
+        client = mock.Mock()
+        client.system_one = mock.Mock(side_effect=httpx.ConnectTimeout("timed out"))
+        spend = layer._Spend()
+        with mock.patch.object(layer, "_RETRY_SLEEP_SECONDS", 0.0):
+            self.assertIsNone(layer._ask(client, {"a": "b"}, {"q": {}}, spend))
+        self.assertEqual(client.system_one.call_count, layer._MAX_ATTEMPTS)
+        self.assertEqual(spend.refused, 1)
+
+    def test_a_programming_error_is_not_retried(self):
+        # Only transport and transient-status failures are worth re-sending. A bug
+        # in our own row handling would otherwise be retried four times per row.
+        client = mock.Mock()
+        client.system_one = mock.Mock(side_effect=KeyError("ticker"))
+        spend = layer._Spend()
+        with mock.patch.object(layer, "_RETRY_SLEEP_SECONDS", 0.0):
+            self.assertIsNone(layer._ask(client, {"a": "b"}, {"q": {}}, spend))
+        self.assertEqual(client.system_one.call_count, 1)
+        self.assertEqual(spend.refused, 1)
+
     def test_a_non_retryable_status_is_not_retried(self):
         # A 400 means the request is wrong. Re-sending it spends money to get the
         # same answer.
