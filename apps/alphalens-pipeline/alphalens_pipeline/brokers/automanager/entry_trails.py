@@ -57,9 +57,13 @@ logger = logging.getLogger(__name__)
 
 ENTRY_TRAIL_BPS_ENV = "ALPHALENS_BROKER_ENTRY_TRAIL_BPS"
 
-# Bound = 150, NOT 300: the replay's edge is negative by d≈2% and clearly
-# worse at 3% — the bound must exclude the measured-bad region (memo §6; grid
-# support is {50, 100} with 150 marginal).
+# Bound = 150, NOT 300: the bound must exclude the region the grid does not
+# support (memo §6). Reproduced 2026-10-01 on the original store: 50 bps is the
+# grid maximum on the ALL, day-1 and day-2+ cohorts of both panels and the bound
+# STANDS — but two parts of the original rationale do not. The edge is not
+# NEGATIVE by d=2% (on ALL it is +0.001R, i.e. flat, reaching zero or below only
+# by d=3%), and 150 bps ranks ABOVE 100 bps on both panels, so 150 is not the
+# marginal member. See the study's Correction 2026-10-01.
 ENTRY_TRAIL_BPS_MAX = 150
 
 _FEATURE_OFF_BPS = 0  # trailing disabled — today's limit-at-touch behavior

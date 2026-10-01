@@ -5,7 +5,7 @@
 **Type:** engineering decision support — a re-cut of already-used data, NOT a pre-registered strategy test. Direction-level per cohort.
 **Script:** `apps/alphalens-research/scripts/whatif_trailing_tp.py` (run on the VPS against the population-ladder store + the monitor's cached minute bars; no refetch).
 **Artifacts:** VPS `~/whatif_studies/trailing_tp_2026_08_18/` (full stdout, TSV aggregate, 11,496-row per-record parquet, run copy of the script).
-**Twin study:** `trailing_entry_whatif_2026_08_12.md` (#1037) — the entry-side counterpart whose +0.018R verdict shipped as the native trailing entry (first live fill 2026-08-18). **Note 2026-09-30:** that study priced its trigger as a fraction of the running low rather than as the absolute distance the broker keeps; see the correction at the top of it. This study's own trigger has the same shape, in the opposite direction.
+**Twin study:** `trailing_entry_whatif_2026_08_12.md` (#1037) — the entry-side counterpart whose +0.018R verdict shipped as the native trailing entry (**2026-10-01:** re-run on the original store that +0.018R is +0.014R on the same dates and +0.011R on the full store, and the twin's day-1 figure does not reproduce at all) (first live fill 2026-08-18). **Note 2026-09-30:** that study priced its trigger as a fraction of the running low rather than as the absolute distance the broker keeps; see the correction at the top of it. This study's own trigger has the same shape, in the opposite direction.
 
 ## 1. Question
 
