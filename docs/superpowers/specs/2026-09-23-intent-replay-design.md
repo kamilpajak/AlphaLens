@@ -11,8 +11,11 @@ unimplementable under the old per-package dependency rule; §5.1 corrected
 stop rests, #1597; implementation under way, epic #1571, PR 1-5 merged;
 sections 4.4, 5.4, 6.3 and 8.1 revised 2026-09-26 before PR 6, after running the stop arms and the
 cost gate: the re-anchor arm can LOWER the resting stop, a rung below a stop
-that has moved is unreachable, and the cost gate's FX leg has no stated rate)
-**Date:** 2026-09-23, last revised 2026-09-29
+that has moved is unreachable, and the cost gate's FX leg has no stated rate;
+sections 4.3.1, 5, 5.2 and 8.1 revised 2026-10-01 by deciding #1592 under its
+option 1 — the FX leg and the per-fill minimum are priced from STATED facts, and
+§5.2.1 is the key set, which lands with the implementation rather than here)
+**Date:** 2026-09-23, last revised 2026-10-01
 (2026-09-28, PR 7's plan: sections 4.4, 4.6, 5, 5.1, 5.2, 5.3 and 5.4 revised — among them a
 FOURTH tie row, which fixed the rung/take-profit order as "the take-profit first".
 2026-09-29: that row's RESOLUTION is WITHDRAWN. Running it showed it is not a bound in
@@ -61,7 +64,7 @@ multiplicity budget, and carries no accrued history.
 | a rung below a stop that has MOVED | skipped on every bar the stop sits above it, never cancelled. Filling it books a purchase at a price the same bar had already sold at, and a fill after the position closes is a re-entry this tool does not model. Under a trail the level tested is the TRIGGER and the boundary is the bar's OPEN, not its low: a bar opening above the stop reached the trigger first, so the fill stands and the stop takes it out after (§4.4) |
 | which bars count as SNUs | only the bars whose ordering the tape cannot settle AND where it changes the money. A same-bar LIMIT-rung fill and stop-out is forced by the levels and is NOT counted, against the existing `/edge` replay; under a trail that argument does not carry, and §4.4 says what replaces it. The count detects; it does not certify, and it is a frequency rather than a magnitude (§4.4, §6.3) |
 | the gap-open fill price | it follows the tape wherever the order RESTS at the broker — a rung, the disaster stop, and a trailing entry order once placed, all fill at the bar's open when the open is already through them. The bar that ARMS a trail is the exception: its order is placed at the touch, which cannot precede the open, so it takes its trigger however high the bar opened. A take-profit rests nowhere in v1, so it fills at its level (§4.4) |
-| the cost gate's FX leg | its rate is not stated, so `fx_applies: true` is refused in v1. The omitted term is 50 bps on every tranche; pricing it is #1592 (§5.4, §8.1) |
+| the cost gate's FX leg | priced from stated facts, decided 2026-10-01 under #1592: the configuration states the instrument's currency, a mid rate, the round-trip FX cost rate and the sizing buffer, and `fx_applies` becomes DERIVED rather than declared (§5.2.1, §8.1). The v1 refusal stands until those keys exist |
 | every input path | classified here as interpreted, translated or out of scope; an unclassified path is refused, never approximated (§4.3.1) |
 | where a run value comes from | the document, or STATED in the run configuration — never inherited from a deployment, an environment variable or a production constant (§2.1) |
 | day-1 anchor | translated: the client resolves the first session and states it as `walk_start`; `meta.source` is not read here (§4.1, §4.3.1) |
@@ -536,8 +539,8 @@ here, and this table is the whole of them:
 | path | class | why |
 |---|---|---|
 | `instrument.ticker` | out of scope | identity. The walk is over the bars it is handed; nothing resolves a symbol |
-| `instrument.mic` | translated (calendar) + out of scope (fee card, settlement currency) | the calendar reaches the replay through `entry_deadline` (§4.1); costs are a non-goal per §2 and `spec.size` is already in the account currency |
-| `spec.size.currency` | out of scope | it labels the unit of the cash answer; it changes nothing the replay does, and §4.3.1 does not count a label as interpretation |
+| `instrument.mic` | translated (calendar) + out of scope (fee card, settlement currency) | the calendar reaches the replay through `entry_deadline` (§4.1). The settlement currency stays out of scope only until #1592's keys exist: the second reason first given here — that `spec.size` is already in the account currency — is why a conversion is NEEDED, not why it can be ignored, and §5.2 has carried the resulting divergence since 2026-09-28. §5.2.1 moves this half to *translated* with the implementation. The fee card is out of scope for the §2 reason alone: the threshold arrives stated |
+| `spec.size.currency` | out of scope | it labels the unit of the cash answer, and a label is not interpretation. #1592 ends that being the whole story: compared against `fx.instrument_currency` it DERIVES whether a conversion applies, which is a refusal this path can raise, so §5.2.1 makes it *interpreted*. The class cannot move before the read exists — patching this column alone makes the gate refuse the document it describes (`path_unclassified`, measured 2026-10-01) |
 | `spec.order_ttl_days` | translated | sessions the leaf cannot count (§4.1) |
 | `meta.generation`, `meta.armed_ts`, `intent_id` | out of scope | queue and identity concerns, the same ones §4.3 already declines |
 | `meta.schema_version`, `spec.schema_version` | out of scope | the door is the only gate that reads a version; the codec and `validate_intent` stay version-blind on purpose, and so does this |
@@ -634,8 +637,10 @@ the walk begins. Under the read question both are unread, so the gate refuses
 every document that can exist, and §6.3's positive control — a document whose
 every path is read — cannot be constructed at all. Under the classify question
 `instrument.mic` is *translated* for its calendar, through the deadline of §4.1,
-and its fee card and settlement currency are *out of scope* because §2 makes
-cost a non-goal and `spec.size` is already in the account currency. Both halves
+and its fee card and settlement currency are *out of scope* — the fee card
+because §2 makes cost a non-goal, the settlement currency only until #1592's
+keys exist (§5.2.1), since the reason first given here, that `spec.size` is
+already in the account currency, is why a conversion is NEEDED. Both halves
 had to be written down to get there, which is exactly the work the gate exists
 to force.
 
@@ -1113,9 +1118,12 @@ the replay must not resolve it; both carry the symbolic unit
 `instrument_currency`. The cash fields are different: `spec.size.currency` IS
 stated, so `notional_spent` and `pnl_cash` carry a real code. This block is
 still the cross-currency document §8.1 describes — a 1500 EUR budget on a
-KO/XNYS instrument declaring `fx_applies: false` — and #1592 owns that; changing
-a unit the tool cannot know is a different edit from changing the currency pair
-it was handed.
+KO/XNYS instrument declaring `fx_applies: false`. #1592 decided that on
+2026-10-01 (§5.2.1): the instrument's currency becomes a stated fact, so these
+two fields gain a real code and the document stops declaring its own conversion.
+The block is NOT edited here. `test_envelope` reads this example's `config` key
+by key and compares it against the built envelope, so the example and the keys
+move together, in the commit that adds them.
 
 **`pnl_cash` is GROSS.** The `costs` block decides WHICH take-profit tranches
 fire and never reduces the cash. §2 makes cost a non-goal and §8.1 says the
@@ -1137,7 +1145,11 @@ the replay lacks, so it is not a `divergences` entry. It is not small. Measured
 replay's 1500.00, a gap of 17.50; at 8000 on rungs 120.00 and 115.00 the gap is
 130.00; at 1000 on rungs 196.13 and 175.40 it is 60.81, and there the entry anchor
 moves too — 187.83800 against 187.27654, which is 0.56 in price or about 30 bps,
-and the denominator moves with it.
+and the denominator moves with it. Those figures are the PRE-buffer gap. Under
+#1592 the walk also applies the stated sizing buffer, so the residual then has
+two named components — the buffer the drain withholds and the whole-share
+lattice — and this paragraph is re-measured by the implementation rather than
+restated from here.
 
 **The denominator is not held away from zero.** On this block's own cash a
 denominator of 1e-10 publishes an R near 2.9e10, and that is the document's
@@ -1288,6 +1300,11 @@ notional in the INSTRUMENT's. Above the fee card's knee the fee is pure ad
 valorem and the two thresholds agree to full precision; below it the per-fill
 minimum binds unequally, and the replay's threshold is too LOW by 1.05, 15.24 and
 38.10 bps at the points §8.1 measures, so it fires tranches the daemon declines.
+#1592 RETIRES this entry rather than extending it: once the instrument's
+currency and a mid rate are stated, the gate prices that currency and the replay
+no longer LACKS the fact, which is what an entry here has to assert. The row
+cannot go yet — `test_envelope` pins this table at five entries against
+`envelope.DIVERGENCES` — so it goes with the code.
 
 Three of the five flatter the result, which is why they are printed rather than
 footnoted; `take_profit_observation_time` can run either way and the re-anchor
@@ -1296,6 +1313,48 @@ reasoning as §4.3.1: a divergence that can appear without anyone writing it dow
 is a divergence nobody will find. The per-run column is part of that: an entry
 printed on every run regardless of the document would carry no information, and
 one printed on no run would be a promise rather than a report.
+
+### 5.2.1 The FX facts the gate needs, and the one it cannot check
+
+Decided 2026-10-01 under #1592, which listed two options: this block gains
+stated FX facts rather than v1 being restricted to same-currency documents. The
+other option would have refused every pick this account actually holds, since
+the budget is in PLN and the instruments settle in USD — it removes the tool's
+purpose rather than its gap. §8.1 carries the measurements; this section is the
+key set.
+
+| key | shape | unit | why it cannot be omitted | required |
+|---|---|---|---|---|
+| `fx.instrument_currency` | §5.1 translated value | ISO 4217 code | it is the settlement currency of `instrument.mic`, which no document path states (§4.3.1) and which no table in this repo maps from a MIC. The gate compares `min_commission` against a notional, and the two are in different currencies until this is stated | always |
+| `fx.mid_rate` | §5.1 translated value, stating BOTH codes in the direction given | instrument currency per unit of account currency | it makes `max(min_commission, commission_rate x notional)` commensurable, and the walk sizes with it | when the two currencies differ |
+| `fx.round_trip_cost_rate` | bare scalar | fraction of notional | the daemon reads `FX_ROUND_TRIP_RATE` and §2.1 forbids inheriting it. In bps the term IS the rate, flat at every notional, so one stated fraction prices the leg | when the two currencies differ |
+| `fx.sizing_buffer_pct` | bare scalar | per cent | the drain shrinks the budget by it before dividing, and the walk now applies it too (§8.1) | when the two currencies differ |
+
+Four consequences, each one something the old block could get wrong in silence:
+
+- **`fx_applies` stops being stated and becomes DERIVED** from
+  `spec.size.currency` against `fx.instrument_currency`. A caller could
+  previously declare `false` on a cross-currency document; §8.1 measures what
+  that costs. A derived value cannot contradict the two codes it comes from.
+- **`min_commission.unit` is CHECKED against `fx.instrument_currency`** instead
+  of being a label nothing compares.
+- **The gate's notional is the tranche's**, not the entry budget's (§8.1).
+- **The result publishes the derived instrument-currency notional** beside the
+  stated rate. The rate's magnitude is otherwise almost unobservable, and a tool
+  that pays for provenance on a value it cannot check should at least print what
+  the value produced.
+
+**Three surfaces move with the implementation rather than here, and in each case
+the reason is a test.** The §5 example's `config` block is read key by key by
+`test_envelope` and compared against the built envelope, so a key written here
+ahead of the code turns it red. The `divergences` table is pinned at five
+entries, and `cost_gate_prices_the_account_currency` is retired by this decision
+rather than added to. And `spec.size.currency` becomes *interpreted*, because
+deriving the conversion is a read whose value can raise a refusal — but the class
+cannot move before the read exists: patching the §4.3.1 column alone makes the
+gate refuse the very document it describes. The classification gate also runs
+inside the interpreter, which today receives no configuration at all, so the
+implementation settles where the comparison lives before that row can change.
 
 ### 5.3 Formats
 
@@ -1891,6 +1950,46 @@ reader needs and a rewritten bullet loses it.
   conversion leg alone would satisfy the arithmetic and keep the forbidden rate.
   That is a third option #1592 does not list, and it belongs on that issue
   rather than in an implementation PR.
+
+  **Decided 2026-10-01: option 1, with three measurements that shaped it
+  (#1592).** The configuration states the instrument's currency, a mid rate, the
+  round-trip FX cost rate and the sizing buffer (§5.2.1). `fx_applies` stops
+  being declared and is DERIVED from the two currency codes, which removes the
+  one thing the block could previously get wrong in silence — a caller stating
+  `false` on a cross-currency document. `min_commission_applies` keeps its
+  stated form for the reason given above: it gates a magnitude the block
+  carries, and it is a fee-card fact rather than a currency fact.
+
+  **One: the gate prices a TRANCHE, not the entry budget.** The walk passes
+  `min(tranche.fraction * intended, held)`. On a 1020 position of 15 shares at
+  68.00, under the 8 bps card with a 1.00 per-fill minimum and a 50 bps edge: one
+  tranche prices 19.6078 bps on either reading — the only case where the two
+  agree, and the shape of the §5 example, which therefore cannot discriminate
+  them — while two tranches price 39.2157 against the budget reading's 19.6078,
+  and five price 98.0392 against that same 19.6078. The budget reading always
+  UNDER-prices, so it fires tranches the daemon declines.
+
+  **Two: the stated rate's magnitude is nearly unobservable, and an inversion
+  flatters this account.** Above the knee the fee is `2 x commission_rate` with
+  the notional cancelling, so a rate stated upside down — 3.70 where 0.27027 was
+  meant, a factor of 13.7 — leaves the threshold BIT-IDENTICAL at an 8000 budget:
+  66.93889999999999 both ways. One threshold covered 200 000 notionals spanning a
+  factor of 1000, with a range of exactly 0.0. The fee itself is pure ad valorem
+  only to within one ulp — 15.02 per cent of those notionals differ from
+  `2 x commission_rate`, by at most 1.0 ulp — which is why this claim is written
+  about the THRESHOLD, the quantity the gate compares, rather than about the fee.
+  Below the knee the rate does bite, and there an inversion restores the too-low
+  threshold this change exists to remove. So the result publishes the DERIVED
+  instrument-currency notional beside the stated rate: a reader who sees 29 600
+  against an 8000 budget catches the inversion by inspection, where 16.0 bps
+  cannot.
+
+  **Three: the buffer cannot be applied in one place only.** The drain shrinks
+  the budget before dividing. A buffer used by the gate and not by the walk would
+  leave one run holding two position sizes, which is a result claiming a policy
+  the run did not apply — the `oco` shape decided above. So the walk sizes on the
+  stated rate and buffer too. The whole-share lattice is NOT folded in: §5 calls
+  it a recorded scope cut and it stays one.
 
   **The gate is not exact even when the currencies match, and the boundary is
   the fee card's knee.** The replay prices the stated budget; the daemon prices

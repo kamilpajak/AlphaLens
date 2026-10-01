@@ -32,6 +32,7 @@ off" rows land on the SAME threshold.
 
 from __future__ import annotations
 
+import math
 import unittest
 
 from intent_replay import cost_gate
@@ -39,6 +40,7 @@ from intent_replay.config import Costs
 from intent_replay.units import BPS, FRACTION, Quantity
 
 RATE, MIN_COMMISSION, EDGE_BPS = 0.0008, 1.0, 50.0
+BPS_PER_UNIT = 1e4
 
 
 def _costs(*, min_commission_applies: bool = True, edge_bps: float = EDGE_BPS) -> Costs:
@@ -126,3 +128,63 @@ class ClearsCostTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheThresholdAboveTheKneeDoesNotSeeTheNotionalTest(unittest.TestCase):
+    """What a stated FX rate can and cannot change, measured (#1592).
+
+    The decision of #1592 states a mid rate so the per-fill minimum and the
+    budget are commensurable. These rows record what the rate's MAGNITUDE buys:
+    above the knee, nothing the gate compares. They exist because the design
+    pays for provenance on a value whose only observable effect is here, and a
+    reader of section 8.1 needs the bound rather than the adjective.
+    """
+
+    KNEE = MIN_COMMISSION / RATE
+    ENTRY = 66.50
+    BUDGET = 8000.0  # the standard manual-pick position, in the account currency
+    USD_PER_PLN, PLN_PER_USD = 1.0 / 3.7, 3.7
+
+    def _threshold(self, notional: float) -> float | None:
+        return cost_gate.min_profitable_exit_price(
+            entry_price=self.ENTRY, units=notional / self.ENTRY, costs=_costs()
+        )
+
+    def test_the_threshold_is_one_value_across_notionals_spanning_a_factor_of_a_thousand(
+        self,
+    ) -> None:
+        above = (self.KNEE, 2162.16, 8000.0, 29600.0, 987648.0, self.KNEE * 1000.0)
+        self.assertEqual(len({self._threshold(notional) for notional in above}), 1)
+        self.assertEqual(self._threshold(8000.0), 66.93889999999999)
+
+    def test_a_rate_and_its_inverse_price_the_same_threshold(self) -> None:
+        # A rate stated upside down is 13.7x wrong on this account and leaves
+        # the gate's verdict bit-identical, which is why section 5.2.1 requires
+        # the DERIVED notional in the result instead of trusting the rate.
+        self.assertEqual(
+            self._threshold(self.BUDGET * self.USD_PER_PLN),
+            self._threshold(self.BUDGET * self.PLN_PER_USD),
+        )
+
+    def test_below_the_knee_that_same_pair_prices_differently(self) -> None:
+        # The existence control: without it, a gate that ignored the notional
+        # everywhere would satisfy the two rows above.
+        small = 500.0
+        self.assertLess(small * self.USD_PER_PLN, self.KNEE)
+        self.assertNotEqual(
+            self._threshold(small * self.USD_PER_PLN),
+            self._threshold(small * self.PLN_PER_USD),
+        )
+
+    def test_the_fee_is_pure_ad_valorem_to_within_one_ulp_not_exactly(self) -> None:
+        # The invariance is EXACT at the threshold and only near-exact in the
+        # fee: 15.02 per cent of 200 000 notionals drawn above the knee differ
+        # from 2 x rate, by at most 1.0 ulp. Stating the claim about the fee
+        # would be stating it one step away from where it holds.
+        ad_valorem_bps = 2.0 * RATE * BPS_PER_UNIT
+        wobbling = 1250.0000001
+        self.assertNotEqual(cost_gate.round_trip_fee_bps(wobbling, costs=_costs()), ad_valorem_bps)
+        self.assertLessEqual(
+            abs(cost_gate.round_trip_fee_bps(wobbling, costs=_costs()) - ad_valorem_bps),
+            math.ulp(ad_valorem_bps),
+        )
