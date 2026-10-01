@@ -54,7 +54,7 @@ from intent_replay.cli import (
     manifest,
     render_help,
 )
-from intent_replay.door import DOOR_REASONS
+from intent_replay.door import DOOR_REASONS, admit
 
 from tests.intent_replay.test_config import CANONICAL
 
@@ -785,6 +785,97 @@ class EntryPointTest(unittest.TestCase):
         }
         self.assertEqual(calls, set())
         self.assertIsInstance(logging.getLogger("intent_replay.cli"), logging.Logger)
+
+
+class TheDoorAndTheReplayAgreeTest(_Files):
+    """Spec section 6.4: what the door accepts, the replay accepts.
+
+    Until now the three published templates reached the replay in three
+    different files and nothing asserted the AGREEMENT as a claim: the only
+    directory-wide loop lived in `test_door.py` and called `admit` alone, so a
+    file the door admitted and the replay then refused would have been caught by
+    nobody.
+
+    Two things the loop depends on, both stated rather than assumed:
+
+    * EVERY template is dated here. None of the three carries `meta.trade_date`
+      as published, so "the templates with a date" is not a filter selecting a
+      subset of them -- the replay refuses an undated one
+      (`trade_date_required`), which `test_door.py` pins separately.
+    * the configuration is load-bearing. Under `oco: true`, or a `time_stop_t`
+      the block cannot use, BOTH pullback templates refuse with
+      `config_invalid` -- a refusal of the run configuration, not of the
+      document. The claim survives that, but only against a stated block, so
+      this runs against `CANONICAL` and asserts the one field that would flip
+      the verdict.
+    """
+
+    # The single published exception, and section 8.1 is the decision it
+    # carries: the door ADMITS this file and the replay must refuse it. Whoever
+    # meets a red here should not drop the file or soften the code - either
+    # quietly undoes that decision.
+    REFUSED = {"immediate-plus-pullback": ("entry_mode_unsupported", [0])}
+
+    def test_every_published_template_the_door_admits_the_replay_runs(self) -> None:
+        self.assertIs(CANONICAL["oco"], False)
+        names = sorted(path.stem for path in EXAMPLES.glob("*.json"))
+        self.assertEqual(
+            names,
+            ["immediate-plus-pullback", "pullback-trailing-stop", "pullback-two-tiers"],
+            "a new template must be classified here, not silently skipped",
+        )
+        for name in names:
+            with self.subTest(template=name):
+                document = _document(name)
+                self.assertEqual(document["meta"]["trade_date"], "2026-09-23")
+                admit(document)  # the door's verdict: admitted, or this raises
+                path = self.write(f"{name}-dated.json", document)
+                run = self.run_cli("run", path, "--config", self.config, "--bars", self.bars)
+                if name in self.REFUSED:
+                    code, tiers = self.REFUSED[name]
+                    failure = run.failure(self)
+                    self.assertEqual(failure["code"], code)
+                    self.assertEqual(failure["details"]["tiers"], tiers)
+                else:
+                    self.assertEqual((run.code, run.stderr), (EXIT_OK, ""))
+
+
+class ARepeatedRunPrintsTheSameBytesTest(_Files):
+    """Spec section 6.3: two runs over the same input produce byte-identical output.
+
+    `test_walk.py::InvariantTest::test_two_walks_over_one_input_agree` compares
+    `WalkResult` OBJECTS, which says nothing about the bytes a consumer reads,
+    and the two byte-identity tests above compare different invocation SHAPES
+    rather than a repeat. The section's own reason for the property is that a
+    research tool returning a different number on a repeat invalidates every
+    conclusion drawn from it, and the number a reader gets is the serialised
+    one.
+
+    In-process rather than through `subprocess`: no CLI test in this package
+    shells out, and a subprocess would add a fresh `PYTHONHASHSEED` per run -
+    which happens not to bite only because `cli` sorts its sets before output.
+    """
+
+    def test_the_json_form_repeats_byte_for_byte(self) -> None:
+        first = self.run_cli("run", self.document, "--config", self.config, "--bars", self.bars)
+        second = self.run_cli("run", self.document, "--config", self.config, "--bars", self.bars)
+        self.assertEqual((first.code, first.stderr), (EXIT_OK, ""))
+        self.assertEqual(first.stdout, second.stdout)
+
+    def test_the_ndjson_form_repeats_byte_for_byte(self) -> None:
+        argv = (
+            "run",
+            self.document,
+            "--config",
+            self.config,
+            "--bars",
+            self.bars,
+            "--format",
+            "ndjson",
+        )
+        first, second = self.run_cli(*argv), self.run_cli(*argv)
+        self.assertEqual((first.code, first.stderr), (EXIT_OK, ""))
+        self.assertEqual(first.stdout, second.stdout)
 
 
 if __name__ == "__main__":

@@ -1530,10 +1530,26 @@ Computed with the real functions during design, 2026-09-23:
   fills it is not, and this section said otherwise until 2026-09-26: the
   re-anchor arm clamps against `plan_stop` rather than against the level
   standing, so a later and lower rung fill re-anchors LOWER — run during PR 6,
-  66.20 then 65.70 on rungs 68.00 and 67.00 with `k_atr` 1.5, `atr` 1.20 and
-  `spec.disaster_stop` 63.00. The floor is part of the measurement, because the
-  clamp refuses any target below it: with a floor in (65.70, 66.20] only the
-  FIRST re-anchor fires, and above 66.20 neither does.
+  66.20 then 65.79643916913948 on rungs 68.00 and 67.00 with `k_atr` 1.5,
+  `atr` 1.20 and `spec.disaster_stop` 63.00. This bullet said 65.70 until
+  2026-10-01; that is the EQUAL-UNITS level, and the walk weights the average by
+  budget over limit, which `test_a_later_rung_fill_reanchors_LOWER` has recorded
+  since PR 6. The floor is part of the measurement, because the clamp refuses
+  any target below it: with a floor in (65.79643916913948, 66.20) only the FIRST
+  re-anchor fires, and at or above 66.20 neither does. Both endpoints are OPEN
+  and this bullet had both wrong until 2026-10-01 — swept that day and pinned by
+  `TheFloorDecidesHowManyReanchorsFireTest`: a floor EQUAL to the second level
+  still fires both, and a floor equal to 66.20 fires neither, because
+  `_decide_stop` returns early when the target equals the stop standing.
+  The epoch-scoped form is not what the properties assert, and 2026-10-01 is
+  why. Scoping to an average fill is VACUOUS on the re-anchor arm — the latch
+  allows one move per average, so 0 of 14 913 generated runs ever put two in
+  one epoch and a one-element sequence is monotone by construction — and WEAKER
+  THAN TRUE on the trail arm, whose ratchet persists across fills. It would
+  also force a test to rebuild the epoch from `cash / units` plus the latch
+  predicate, which is the production arithmetic it is checking. So each arm
+  carries its own property: the trail is monotone across the whole trace, and
+  the re-anchor arm emits no more moves than there are fills.
   The trail arm IS monotone across the whole trace, because its ratchet
   compares the CLAMPED level against the last trailed one. The replay
   reproduces both arms rather than adding a never-down rule of its own, which
@@ -1560,9 +1576,24 @@ Computed with the real functions during design, 2026-09-23:
   day: one run in 200 000 produced `mae` at `+6.447756222868429e-16`, and it
   reproduces from a single rung at `limit_price` 52.37 for a `notional` of
   2587.43, a floor of 41.35, and one bar 52.60/52.63/52.37/52.49. A strict
-  `mae <= 0` would go red at that rate, so the property carries a tolerance of one
-  ulp of `avg_entry_price`. Rounding the notional to 1270.85 makes the effect
-  vanish, so an implementation quoting a shortened figure would look refuted.
+  `mae <= 0` would go red at that rate. Rounding the notional to 1270.85 makes
+  the effect vanish, so an implementation quoting a shortened figure would look
+  refuted.
+  A tolerance of "one ulp of `avg_entry_price`" is NOT the bound, and this
+  bullet said it was until 2026-10-01. It is wrong twice. The UNIT: `mfe` and
+  `mae` are `(extreme - average) / denominator`, so they are in R, while a ULP
+  of a price is in the instrument's currency — the R-space form is wrong by a
+  factor of the denominator, and two rungs on one bar 61.05/61.05/60.87/61.05
+  with a floor of 60.88 refute it directly (`mfe` at -4.179663151529959e-14,
+  5.9x one ULP of the average). The MAGNITUDE: one ULP is not a bound in price
+  space either, because the average sums cash and units over the fills, so the
+  rounding grows with their number — three rungs filling at one price put the
+  trough exactly TWO ULPs above the average. So the property is asserted on the
+  FILL PRICES, where the argument above already lives and no tolerance is
+  needed: the trough is at or below every fill price and the peak at or above
+  every one. Zero violations in 8798 filled runs, including the case that
+  refutes the average form. Pinned by
+  `ExcursionsNeverCrossTheFillPricesTest` and its three witnesses.
   `/edge` can produce the opposite signs by a mechanism this engine does not have
   — it books a fill AT the limit even on a bar that traded entirely below it — so
   a test asserting THAT would still assert nothing;
