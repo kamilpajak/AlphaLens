@@ -51,6 +51,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -80,6 +81,10 @@ logger = logging.getLogger(__name__)
 # Poolability key. Bump on ANY change to: the anchor rule, the horizons, the benchmark
 # ticker, BETA_WINDOW_SESSIONS, MIN_BETA_OBS, the split bounds, RESID_WINDOW_SESSIONS,
 # MIN_RESID_OBS, the population rule or the status codes and their order.
+#: A new POPULATION added through `PopulationSource` does NOT bump this, and the line
+#: above is about the population rule of an existing lane. The label formula is what the
+#: token fingerprints, every row already carries a `population` column, and bumping
+#: would invalidate the stored rows a REGISTERED PENDING test reads (#1227).
 SEL_LABEL_VERSION = "sel-label-v3"  # v3: the cross-sourced split guard (#1533)
 
 HORIZONS: tuple[int, ...] = (1, 3, 5, 10, 20, 40)
@@ -144,6 +149,11 @@ POPULATION_PRE_OPEN_RECOVERED = "pre_open_recovered"
 #: over the same dates, roughly nine times what the briefs keep.
 POPULATION_NEWS_FEED_TAGGED = "news_feed_tagged"
 LANE_THEMATIC = "thematic"
+#: A feed-tagged name is in neither the thematic funnel nor the event lane, and the
+#: `lane` column is already filtered on (`scripts/ml/2026_09_experts_last_look.py`
+#: does `keep = lane == SOURCE_LANE`). Labelling these rows "thematic" would hand that
+#: filter 10000 rows it was never meant to see.
+LANE_NEWS_FEED = "news_feed"
 SHADOW_SOURCE_LLM = "llm"
 
 # (open, close) per ticker for one session; ``None`` for the session = no file on disk.
@@ -542,7 +552,10 @@ class PopulationSource:
     #: would then be recomputed forever and never carry a label, while the job reported
     #: success. False here says the question does not apply.
     publication_gate: bool
-    #: Whether a shadow file existed for that date. Reported by the source rather than
+    #: Whether a shadow file existed for that date. For a population that has nothing
+    #: to do with thematic shadows this is False, which under a boolean schema is the
+    #: least wrong value available and means "not applicable" rather than "the file was
+    #: absent that day". Reported by the source rather than
     #: inferred from the population, because the two disagree on a date whose
     #: population is EMPTY while a shadow file exists: inferring it from the frame
     #: would then hand `apply_pre_open_population` False where the old code passed
@@ -596,7 +609,11 @@ def news_population_source(news_dir: Path = DEFAULT_NEWS_DIR) -> PopulationSourc
         frame = pd.read_parquet(path, columns=["tickers"])
         tickers: set[str] = set()
         for tags in frame["tickers"]:
-            if tags is None:
+            # An explicit type check, not a try/except. A NaN raises and a LIST is fine,
+            # but a bare string does NEITHER: iterating "AAPL" yields 'A','A','P','L',
+            # four junk tickers that would be stamped and stored. Catching TypeError
+            # would miss exactly that case.
+            if not isinstance(tags, (list, tuple, set, frozenset, np.ndarray, pd.Series)):
                 continue
             for tag in tags:
                 symbol = str(tag).strip().upper()
@@ -605,7 +622,7 @@ def news_population_source(news_dir: Path = DEFAULT_NEWS_DIR) -> PopulationSourc
         rows = [
             {
                 "ticker": ticker,
-                "lane": LANE_THEMATIC,
+                "lane": LANE_NEWS_FEED,
                 "population": POPULATION_NEWS_FEED_TAGGED,
                 "briefed_any_theme": False,
                 "themes_briefed": [],
@@ -879,7 +896,12 @@ def _read_existing_labels(out_path: Path) -> dict[str, dict[str, Any]]:
 
 
 def publication_verdict_for(
-    source: PopulationSource, brief_date: dt.date, *, population: pd.DataFrame | None
+    source: PopulationSource,
+    brief_date: dt.date,
+    *,
+    population: pd.DataFrame | None,
+    recovered: Sequence[str] | None = None,
+    exchange: str = DEFAULT_EXCHANGE,
 ) -> bool | None:
     """The publication verdict a source's rows should be judged against.
 
@@ -889,11 +911,9 @@ def publication_verdict_for(
     """
     if not source.publication_gate:
         return True
-    if population is None or not len(population):
+    if population is None:
         return None
-    return published_before_open(
-        brief_date, _first_present(population[BRIEF_PUBLISHED_AT]), DEFAULT_EXCHANGE
-    )
+    return _date_published_before_open(brief_date, population, recovered, exchange)
 
 
 def _date_published_before_open(
@@ -1077,10 +1097,8 @@ def _stamp_date(
     if population.empty and not existing:
         return False, 0
 
-    published = (
-        _date_published_before_open(brief_date, population, recovered, exchange)
-        if source.publication_gate
-        else True
+    published = publication_verdict_for(
+        source, brief_date, population=population, recovered=recovered, exchange=exchange
     )
     pop_records = {
         r["ticker"]: {k: _normalise(v) for k, v in r.items()} for r in population.to_dict("records")
@@ -1195,6 +1213,7 @@ def enrich_selection_labels(
 __all__ = [
     "DEFAULT_NEWS_LABELS_DIR",
     "HORIZONS",
+    "LANE_NEWS_FEED",
     "NON_TERMINAL_STATUSES",
     "POPULATION_NEWS_FEED_TAGGED",
     "SEL_LABEL_COLUMNS",

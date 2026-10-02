@@ -403,5 +403,116 @@ class TestTheGateFlagReachesTheWrittenRow(unittest.TestCase):
         self.assertEqual(rows[sl.status_key(20)].iloc[0], sl.STATUS_PUBLICATION_UNKNOWN)
 
 
+class TestTheReviewFindings(unittest.TestCase):
+    """Five findings from the zen pass, each adjudicated by running it."""
+
+    def test_a_feed_row_carries_its_own_lane_not_the_thematic_one(self):
+        # `2026_09_experts_last_look.py:313` already does `keep = lane == SOURCE_LANE`,
+        # so this is not a documentation nicety: a feed row labelled "thematic" would be
+        # picked up by a filter meant for the thematic funnel.
+        with TemporaryDirectory() as d:
+            news = Path(d)
+            pd.DataFrame([{"id": "a", "tickers": ["AAPL"], "source": "polygon"}]).to_parquet(
+                news / "2026-05-19.parquet", index=False
+            )
+            row = sl.news_population_source(news).build(dt.date(2026, 5, 19)).iloc[0]
+        self.assertEqual(row["lane"], sl.LANE_NEWS_FEED)
+        self.assertNotEqual(row["lane"], sl.LANE_THEMATIC)
+
+    def test_a_thematic_row_keeps_the_thematic_lane(self):
+        brief = pd.DataFrame([{"ticker": "AAPL", "theme": "ai", "source": "thematic"}])
+        self.assertEqual(sl.build_population(brief, None)["lane"].iloc[0], sl.LANE_THEMATIC)
+
+    def test_a_scalar_in_the_tickers_column_is_skipped_not_split_into_letters(self):
+        """Measured: iterating the string "AAPL" yields 'A','A','P','L' — four junk
+        tickers that would be stamped and stored. A try/except on TypeError, which the
+        review suggested, catches a NaN but NOT this, because it does not raise.
+
+        Adjudicated further: this shape cannot come out of a parquet file, whose column
+        is typed, and `to_parquet` refuses a mixed list/string column outright. So the
+        guard protects against an object-dtype frame reaching the builder some other
+        way, which is why the frame is injected rather than written to disk. The guard
+        is cheap and the alternative failure is silent.
+        """
+        from unittest import mock
+
+        frame = pd.DataFrame({"tickers": pd.Series(["AAPL", ["MSFT"]], dtype=object)})
+        with TemporaryDirectory() as d:
+            news = Path(d)
+            pd.DataFrame([{"id": "x", "tickers": ["ZZZZ"], "source": "polygon"}]).to_parquet(
+                news / "2026-05-19.parquet", index=False
+            )
+            with mock.patch.object(sl.pd, "read_parquet", return_value=frame):
+                pop = sl.news_population_source(news).build(dt.date(2026, 5, 19))
+        self.assertEqual(list(pop["ticker"]), ["MSFT"], "a bare string must contribute nothing")
+
+    def test_a_nan_in_the_tickers_column_does_not_abort_the_date(self):
+        with TemporaryDirectory() as d:
+            news = Path(d)
+            pd.DataFrame(
+                [
+                    {"id": "a", "tickers": None, "source": "rss"},
+                    {"id": "b", "tickers": ["MSFT"], "source": "polygon"},
+                ]
+            ).to_parquet(news / "2026-05-19.parquet", index=False)
+            pop = sl.news_population_source(news).build(dt.date(2026, 5, 19))
+        self.assertEqual(list(pop["ticker"]), ["MSFT"])
+
+    def test_stamp_date_reaches_the_gate_only_through_the_shared_helper(self):
+        """Two copies of the same decision, one tested and one inline, is how the defect
+        this PR fixed would come back. Asserted behaviourally rather than by grepping the
+        source: a source count caught the function DEFINITION as well as the call, which
+        is the third brittle text assertion of this change.
+        """
+        from collections import Counter
+        from unittest import mock
+
+        calls = []
+
+        def spy(source, brief_date, *, population, recovered=None, exchange="XNYS"):
+            calls.append(brief_date)
+            return True
+
+        with TemporaryDirectory() as d:
+            news = Path(d) / "news"
+            news.mkdir()
+            pd.DataFrame([{"id": "a", "tickers": ["AAPL"], "source": "polygon"}]).to_parquet(
+                news / "2026-05-19.parquet", index=False
+            )
+            with mock.patch.object(sl, "publication_verdict_for", spy):
+                sl._stamp_date(
+                    dt.date(2026, 5, 19),
+                    source=sl.news_population_source(news),
+                    labels_dir=Path(d) / "out",
+                    reader=sl._SessionReader(Path(d) / "no_prices"),
+                    now=dt.datetime(2027, 6, 1, tzinfo=dt.UTC),
+                    last_closed_session=dt.date(2027, 5, 28),
+                    newest_session=dt.date(2027, 5, 28),
+                    counts=Counter(),
+                    exchange="XNYS",
+                    references=sl._ReferenceCloses(lambda *a, **k: None),
+                )
+        self.assertEqual(
+            calls, [dt.date(2026, 5, 19)], "_stamp_date must not carry its own copy of the gate"
+        )
+
+    def test_the_version_constant_explains_why_a_new_population_does_not_bump_it(self):
+        # The constant's comment lists "the population rule" among the things that force
+        # a bump. A reader hitting that will read the omission as an oversight unless the
+        # reasoning sits next to it.
+        source = _SCRIPT_SOURCE()
+        head = source[: source.index("SEL_LABEL_VERSION") + 2000]
+        self.assertIn("PopulationSource", head)
+
+    def test_not_applicable_is_documented_where_shadow_available_is_declared(self):
+        self.assertIn("not applicable", _SCRIPT_SOURCE())
+
+
+def _SCRIPT_SOURCE() -> str:
+    import alphalens_pipeline.feedback.selection_label as mod
+
+    return Path(mod.__file__).read_text()
+
+
 if __name__ == "__main__":
     unittest.main()
