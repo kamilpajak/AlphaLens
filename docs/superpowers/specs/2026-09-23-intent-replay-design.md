@@ -1205,6 +1205,11 @@ differently on a smaller tier. So "the buffer makes the lattice worse" is false
 as a general claim, and the construction has to travel with the number —
 one rate and one buffer give one figure, not a direction.
 
+Every figure in this paragraph and in the example's summary above is recomputed
+by `apps/alphalens-research/scripts/record_intent_replay_fx_numbers.py`, which
+no test pins because it IS the pin: the figures are prose, and prose goes stale
+silently. Re-run it when a figure here moves.
+
 **The denominator is not held away from zero.** On this block's own cash a
 denominator of 1e-10 publishes an R near 2.9e10, and that is the document's
 geometry rather than a defect. It cannot reach infinity: the denominator is a
