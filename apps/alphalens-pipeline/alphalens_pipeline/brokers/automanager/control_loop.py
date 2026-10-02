@@ -4753,8 +4753,16 @@ class EntryFillProbe:
         self._failing = False
 
     def arm(self) -> bool:
-        """Read the armed ids for this wait (journal only). False = nothing to watch."""
-        self._armed = self._armed_order_ids()
+        """Read the armed ids for this wait (journal only). False = nothing to watch.
+
+        Runs on the daemon's main loop, so a failing read costs the probe (the
+        plain sleep for this wait), never the daemon."""
+        try:
+            self._armed = self._armed_order_ids()
+        except Exception:  # broad on purpose: see the docstring
+            logger.warning("entry fill probe: armed-order read failed — plain sleep", exc_info=True)
+            self._armed = frozenset()
+            return False
         for gone in set(self._seen) - self._armed:
             del self._seen[gone]
         return bool(self._armed)

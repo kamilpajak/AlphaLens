@@ -8196,6 +8196,19 @@ class TestRunDaemonWakesOnAnEntryFill(unittest.TestCase):
         warnings = [line for line in caught.output if "fill probe" in line]
         self.assertEqual(len(warnings), 1, caught.output)
 
+    def test_an_armed_reader_that_raises_falls_back_to_the_plain_sleep(self) -> None:
+        # The journal read runs on the daemon's main loop: a raise there must
+        # cost the probe, never the daemon.
+        def _broken() -> frozenset[str]:
+            raise OSError("journal unreadable")
+
+        book = _Book([[]])
+        with self.assertLogs(cl.logger, level="WARNING"):
+            run_at, slept = self._run(armed=_broken, book=book, ticks=2)
+        self.assertEqual(run_at, [1000.0, 1045.0])
+        self.assertEqual(slept, [45.0, 45.0])
+        self.assertEqual(book.reads, 0)
+
     def test_the_fast_protection_pass_does_not_count_toward_the_oco_lag_alert(self) -> None:
         book = _Book([[]])
         with mock.patch.object(cl, "_track_oco_lag") as track:
