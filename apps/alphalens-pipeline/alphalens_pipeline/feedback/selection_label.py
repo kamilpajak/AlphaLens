@@ -596,9 +596,22 @@ def news_population_source(news_dir: Path = DEFAULT_NEWS_DIR) -> PopulationSourc
     a theme, and writing a theme or True here would make it indistinguishable from one
     that was.
 
-    Unpriceable tags — preferred lines, warrants, units — are NOT filtered out. They
-    reach `no_open`, which is terminal, so they freeze once instead of churning, and
-    their count stays a visible measure of how much of the feed we cannot price.
+    Unpriceable tags — preferred lines, warrants, units — are NOT filtered out, so
+    their count stays a visible measure of how much of the feed we cannot price. Where
+    they land depends on which vendor carries them, and the two places behave
+    differently:
+
+    * a tag NO vendor prices reaches `no_open`, which is terminal, so it freezes once;
+    * a tag the open source prices while the split reference does not reaches
+      `split_unchecked`, which `_is_non_terminal` retries for
+      `SPLIT_UNCHECKED_RETRY_DAYS` before freezing as a disclosed unchecked row.
+
+    The second case is the common one for warrants, which is not what this docstring
+    said before: measured on the whole-history run, 40 of the 51 warrant and preferred
+    tickers stamped `split_unchecked` were present in a recent grouped session file, so
+    they had an open and churned rather than freezing. The two paths are pinned by
+    `test_an_unanswered_reference_makes_the_row_unchecked_not_ok` and the retry-window
+    tests in `test_selection_label.py`.
     """
     files = _dated_files(Path(news_dir))
 
@@ -616,7 +629,14 @@ def news_population_source(news_dir: Path = DEFAULT_NEWS_DIR) -> PopulationSourc
             if not isinstance(tags, (list, tuple, set, frozenset, np.ndarray, pd.Series)):
                 continue
             for tag in tags:
-                symbol = str(tag).strip().upper()
+                # Feeds emit a class share as `BRK.B`; SEC, our universe and the price
+                # vendors spell it `BRK-B`, and `catalyst_resolver._normalize_symbol`
+                # already folds the separator for the same reason. Without the fold the
+                # tag is stored under a spelling nothing else uses: measured on the
+                # whole-history run, 87 of 158 `split_unchecked` rows were `BRK.B`, and
+                # the retry window cannot resolve them because the cause is the
+                # spelling, not a late-arriving price.
+                symbol = str(tag).strip().upper().replace(".", "-")
                 if symbol:
                     tickers.add(symbol)
         rows = [

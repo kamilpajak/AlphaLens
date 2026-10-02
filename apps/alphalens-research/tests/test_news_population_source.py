@@ -100,6 +100,36 @@ class TestTheNewsPopulationSource(unittest.TestCase):
         pop = sl.news_population_source(self.news).build(dt.date(2026, 5, 19))
         self.assertEqual(sorted(pop["ticker"]), ["AAPL", "MSFT"])
 
+    def test_a_class_share_is_folded_to_the_house_spelling(self):
+        """Feeds emit ``BRK.B``; SEC, our universe and the price vendors use ``BRK-B``.
+
+        Measured on the whole-history news run: 87 of 158 ``split_unchecked`` rows were
+        one ticker, ``BRK.B``, and retrying them for 120 days cannot help because the
+        cause is the spelling. ``yfinance`` returns 0 closes for ``BRK.B`` and 20 for
+        ``BRK-B`` over the same month. `catalyst_resolver._normalize_symbol` already
+        folds the separator for exactly this reason.
+        """
+        _news(
+            self.news,
+            "2026-05-19",
+            [{"id": "a", "tickers": ["BRK.B", "brk.b", "AAPL"], "source": "polygon"}],
+        )
+        pop = sl.news_population_source(self.news).build(dt.date(2026, 5, 19))
+        self.assertEqual(sorted(pop["ticker"]), ["AAPL", "BRK-B"])
+
+    def test_the_folded_spellings_of_one_name_are_one_row_and_not_two(self):
+        """Two spellings of one name are one observation; the label is about the name."""
+        _news(
+            self.news,
+            "2026-05-19",
+            [
+                {"id": "a", "tickers": ["BRK.B"], "source": "polygon"},
+                {"id": "b", "tickers": ["BRK-B"], "source": "gdelt"},
+            ],
+        )
+        pop = sl.news_population_source(self.news).build(dt.date(2026, 5, 19))
+        self.assertEqual(list(pop["ticker"]), ["BRK-B"])
+
     def test_its_dates_are_the_news_files_on_disk(self):
         _news(self.news, "2026-05-19", [{"id": "a", "tickers": ["AAPL"], "source": "polygon"}])
         _news(self.news, "2026-05-20", [{"id": "b", "tickers": ["MSFT"], "source": "polygon"}])
