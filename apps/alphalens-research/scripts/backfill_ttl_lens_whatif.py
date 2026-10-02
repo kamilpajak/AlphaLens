@@ -42,9 +42,9 @@ from typing import Any
 import pandas as pd
 import pandas.testing as pdt
 from alphalens_pipeline.feedback.breakeven_lenses import BREAKEVEN_LENSES
-from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.feedback.ladder_replay import replay_ladder_breakeven
 from alphalens_pipeline.feedback.population_ladder_monitor import _bars_cache_path, _rth_window_utc
+from alphalens_pipeline.market.calendar import ladder_arrival_session
 from alphalens_research.diagnostics.breakeven_backfill import (
     UNRESOLVABLE,
     apply_lens_key_backfill,

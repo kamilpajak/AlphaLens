@@ -25,7 +25,6 @@ from pathlib import Path
 
 import pandas as pd
 from alphalens_pipeline.feedback.breakeven_lenses import BREAKEVEN_LENSES
-from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.feedback.ladder_replay import GRID_CONFIGS, replay_ladder
 from alphalens_pipeline.feedback.population_ladder_monitor import (
     _CHART_PAYLOAD_COLUMN,
@@ -47,6 +46,7 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
 )
 from alphalens_pipeline.market.calendar import (
     advance_trading_sessions,
+    ladder_arrival_session,
     previous_trading_day,
     session_open_utc,
 )
@@ -298,8 +298,6 @@ class TestIncompleteRunIsCountable(_MonitorTestBase):
     _SUNDAY_NOW = dt.datetime(2026, 9, 20, 21, 0, tzinfo=UTC)  # last closed = Fri 2026-09-18
 
     def test_a_date_whose_arrival_has_not_closed_reports_no_unpriced_rows(self):
-        from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
-
         # The premise, asserted rather than assumed: the arrival really is after
         # the last closed session, so no bar for it can exist.
         self.assertGreater(
@@ -326,7 +324,6 @@ class TestIncompleteRunIsCountable(_MonitorTestBase):
         # over in UTC (at Fri 23:00 UTC it still answers Thursday), which is what
         # gives bar publication its margin. So the equality case for a Thursday
         # brief — arrival Fri 2026-09-18 — falls on the Saturday.
-        from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
         from alphalens_pipeline.feedback.population_ladder_monitor import (
             _last_closed_session,
         )

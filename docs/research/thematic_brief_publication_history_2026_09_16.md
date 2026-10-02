@@ -147,7 +147,7 @@ Extraction command (read-only, on the VPS, from `~/AlphaLens` with the host venv
 ```python
 import datetime as dt, json, os
 import pandas as pd
-from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
+from alphalens_pipeline.market.calendar import ladder_arrival_session
 from alphalens_pipeline.thematic.publication import deadline_utc
 
 home = os.path.expanduser("~/.alphalens")
@@ -182,7 +182,7 @@ import re
 import sys
 from zoneinfo import ZoneInfo
 
-from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
+from alphalens_pipeline.market.calendar import ladder_arrival_session
 
 src, dst = sys.argv[1], sys.argv[2]
 line_re = re.compile(r"^(\S+) \S+ \S+\[(\d+)\]: (.*)$")

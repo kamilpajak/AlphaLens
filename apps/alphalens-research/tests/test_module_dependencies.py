@@ -186,6 +186,27 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # Selection never reads measurement (#1678). The thematic lane decides
+        # WHICH tickers appear in a brief; the feedback lane measures what
+        # happened to earlier ones. Two edges used to run the wrong way — the
+        # publication clock reached for `feedback.ladder_config.ladder_arrival_session`
+        # and the trade-setup geometry for the PRIVATE
+        # `feedback.bar_window._window_vwap` — which also closed a real cycle,
+        # `feedback.selection_label -> thematic.publication -> feedback.ladder_config`.
+        # Both now read the shared primitives from `alphalens_pipeline.market`.
+        #
+        # The REVERSE direction stays allowed and is live: measurement reads
+        # selection (`feedback.selection_label` imports `thematic.publication`),
+        # which is why this rule is one-way and there is no mirror of it.
+        #
+        # No `top_level_only`: a lazy import would re-create the same coupling,
+        # and the two edges this replaced were themselves top-level.
+        "name": "thematic must not import feedback (selection never reads measurement)",
+        "from_pkg": "alphalens_pipeline.thematic",
+        "forbidden_prefix": "alphalens_pipeline.feedback",
+        "exemptions": set(),
+    },
+    {
         # Broker-manager extraction, PR-4: execution never reads the replay
         # ledger. The feedback replay engines are a MEASUREMENT tier (ADR
         # 0012); brokers reaching into feedback would let live execution
@@ -922,6 +943,62 @@ class TestModuleDependencies(unittest.TestCase):
             any(m.startswith(cli_rules[0]["forbidden_prefix"]) for m in modules),
             "rule would not catch the synthetic violation",
         )
+
+    def test_thematic_must_not_import_feedback_positive_control(self):
+        """The selection -> measurement rule (#1678) cannot rot silently.
+
+        The synthetic violation uses the shape the real one had: a PRIVATE name
+        (`_window_vwap`) pulled across the boundary, hidden in a function body.
+        The rule carries no `top_level_only`, so a lazy import must be caught
+        too — the whole point is that the coupling cannot come back by any
+        route.
+        """
+        import tempfile
+
+        synthetic = (
+            "def sneaky():\n"
+            "    from alphalens_pipeline.feedback.bar_window import _window_vwap\n"
+            "    return _window_vwap\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_thematic_feedback_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+
+        self.assertIn("alphalens_pipeline.feedback.bar_window", modules)
+
+        rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "alphalens_pipeline.thematic"
+            and rule.get("forbidden_prefix") == "alphalens_pipeline.feedback"
+        ]
+        self.assertEqual(len(rules), 1, "the thematic -> feedback rule must exist exactly once")
+        self.assertNotIn(
+            "top_level_only",
+            rules[0],
+            "the thematic -> feedback rule must catch function-scope (lazy) imports too",
+        )
+        self.assertTrue(
+            any(m.startswith(rules[0]["forbidden_prefix"]) for m in modules),
+            "rule would not catch the synthetic violation",
+        )
+
+    def test_the_reverse_direction_is_still_allowed_and_live(self):
+        """Measurement reading selection is the INTENDED direction.
+
+        If this ever reads zero, either the coupling moved somewhere this gate
+        cannot see, or someone "fixed" a cycle by reversing it — which would
+        put the edge back the wrong way round.
+        """
+        feedback_dir = PACKAGE_DIRS["alphalens_pipeline"] / "feedback"
+        live = [
+            path.name
+            for path in sorted(feedback_dir.rglob("*.py"))
+            for mod in _iter_imports(path, include_function_scope=True)
+            if mod.startswith("alphalens_pipeline.thematic")
+        ]
+        self.assertTrue(live, "expected feedback to keep importing thematic; found none")
 
     def test_broker_contract_leaf_positive_control(self):
         """The broker_contract leaf rules cannot rot silently.

@@ -22,6 +22,12 @@ Two failure modes the helpers in this module exist to prevent:
   holidays. ``brokers.reconcile`` runs its expiry sweep on
   ``trading_days_elapsed`` so the verdict matches the memo.
 
+* **Anchoring a T-1 brief on a session that has already closed.** A
+  brief dated ``D`` is built after session ``D`` closes, so its reader
+  can first trade on the first session strictly after ``D``.
+  :func:`ladder_arrival_session` is that rule; the feedback replay, the
+  selection label and the thematic publication clock all anchor on it.
+
 ## Multi-exchange design
 
 All helpers accept an ``exchange`` parameter (ISO 10383 MIC) that
@@ -238,6 +244,29 @@ def session_on_or_after(
     cal = _calendar(exchange)
     session = ts if cal.is_session(ts) else cal.date_to_session(ts, direction="next")
     return session.date()
+
+
+# Id of the rule in :func:`ladder_arrival_session`, stamped into the
+# ladder-replay config token (``feedback.ladder_config``). Rows replayed under
+# the old ``session_on_or_after(brief_date)`` anchor (stamp schema 1) carry no
+# such key.
+ARRIVAL_RULE = "first_session_after_brief_date"
+
+
+def ladder_arrival_session(brief_date: dt.date, exchange: str = DEFAULT_EXCHANGE) -> dt.date:
+    """The first session a reader of the brief dated ``brief_date`` can trade.
+
+    Briefs are dated T-1: the brief for ``D`` is first built on calendar day
+    ``D+1`` (about 01:30 UTC) from session ``D``'s close. Session ``D`` itself has
+    closed by then, so the ladder window starts at the first session strictly
+    after ``D`` (#1416). Weekend and holiday briefs land on the same session as
+    ``session_on_or_after(brief_date)``; only a brief dated on a session moves.
+
+    This is a DATE rule: it holds while no brief for ``D`` exists before ``D+1``
+    00:00 UTC and the next session opens after the brief is built. The event
+    lane's CAR anchor is a different quantity and does NOT use this rule.
+    """
+    return session_on_or_after(brief_date + dt.timedelta(days=1), exchange)
 
 
 def advance_trading_sessions(

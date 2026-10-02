@@ -11,7 +11,7 @@ Provides two fill models that do NOT require a live broker order:
 ``vwap_arrival_fill``
     Fills at the volume-weighted average close price over the first
     ``ARRIVAL_VWAP_WINDOW_MIN`` minutes of the session, delegating to the
-    canonical :func:`alphalens_pipeline.feedback.bar_window._window_vwap`
+    canonical :func:`alphalens_pipeline.market.bars.window_vwap`
     primitive so the arithmetic stays in one place.
 
 Both return an :class:`ArmFill` frozen dataclass.  ``ArmSetup`` is defined
@@ -27,10 +27,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from alphalens_pipeline.feedback.bar_window import (
-    ARRIVAL_VWAP_WINDOW_MIN,
-    _window_vwap,
-)
+from alphalens_pipeline.market.bars import ARRIVAL_VWAP_WINDOW_MIN, window_vwap
 from alphalens_pipeline.thematic.trade_setup import builder, ladder
 
 # Re-export the canonical stop-ATR-buffer constant so callers do not need
@@ -144,11 +141,11 @@ def vwap_arrival_fill(
 ) -> ArmFill:
     """Fill at the VWAP of the first ``window_min`` minutes of the session.
 
-    Delegates to :func:`alphalens_pipeline.feedback.bar_window._window_vwap`
+    Delegates to :func:`alphalens_pipeline.market.bars.window_vwap`
     so the arithmetic (close-price weighted by volume, zero-volume fallback
     to unweighted mean of closes) stays in one canonical place.
 
-    Note: ``_window_vwap`` uses an exclusive window end ``[start, end)``, so
+    Note: ``window_vwap`` uses an exclusive window end ``[start, end)``, so
     bars at exactly ``arrival_open_ms + window_min * 60_000`` are excluded.
     This matches the existing population-monitor VWAP convention.
 
@@ -157,20 +154,20 @@ def vwap_arrival_fill(
             :func:`market_at_arrival_fill`).
         arrival_open_ms: Epoch ms of the session open (RTH start).
         window_min: Length of the VWAP window in minutes.  Defaults to
-            :data:`alphalens_pipeline.feedback.bar_window.ARRIVAL_VWAP_WINDOW_MIN`.
+            :data:`alphalens_pipeline.market.bars.ARRIVAL_VWAP_WINDOW_MIN`.
 
     Returns:
         :class:`ArmFill` with ``status="OK"`` and ``fill_price`` set to the
-        VWAP, or ``status="NO_FILL"`` when ``_window_vwap`` returns ``None``
+        VWAP, or ``status="NO_FILL"`` when ``window_vwap`` returns ``None``
         (no bars in the window).
     """
     window_end_ms = arrival_open_ms + window_min * 60_000
 
-    # _window_vwap expects datetime objects; convert from epoch ms.
+    # window_vwap expects datetime objects; convert from epoch ms.
     start_dt = dt.datetime.fromtimestamp(arrival_open_ms / 1000.0, tz=dt.UTC)
     end_dt = dt.datetime.fromtimestamp(window_end_ms / 1000.0, tz=dt.UTC)
 
-    vwap = _window_vwap(bars, start_dt, end_dt)
+    vwap = window_vwap(bars, start_dt, end_dt)
     if vwap is None or math.isnan(vwap):
         return ArmFill(fill_price=None, fill_ts_ms=None, status="NO_FILL")
 

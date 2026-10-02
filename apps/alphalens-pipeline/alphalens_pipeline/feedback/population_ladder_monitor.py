@@ -68,11 +68,7 @@ import pandas as pd
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.sizing import TradeSetupNotPlannableError
 
-from alphalens_pipeline.feedback.bar_window import (
-    ARRIVAL_VWAP_WINDOW_MIN,
-    IMPLAUSIBLE_RETURN_THRESHOLD,
-    _window_vwap,
-)
+from alphalens_pipeline.feedback.bar_window import IMPLAUSIBLE_RETURN_THRESHOLD
 from alphalens_pipeline.feedback.breakeven_lenses import breakeven_grid
 from alphalens_pipeline.feedback.corporate_actions import (
     DISPOSITION_EXTREME_VALIDATED,
@@ -85,11 +81,7 @@ from alphalens_pipeline.feedback.corporate_actions import (
     default_adjusted_closes_fetch,
     resolve_guard_disposition,
 )
-from alphalens_pipeline.feedback.ladder_config import (
-    ARRIVAL_RULE,
-    ladder_arrival_session,
-    ladder_config_version,
-)
+from alphalens_pipeline.feedback.ladder_config import ladder_config_version
 from alphalens_pipeline.feedback.ladder_replay import (
     LadderOutcome,
     LevelCrossing,
@@ -98,9 +90,12 @@ from alphalens_pipeline.feedback.ladder_replay import (
     replay_ladder_grid,
 )
 from alphalens_pipeline.feedback.pre_open_population import load_brief_for_population
+from alphalens_pipeline.market.bars import ARRIVAL_VWAP_WINDOW_MIN, window_vwap
 from alphalens_pipeline.market.calendar import (
+    ARRIVAL_RULE,
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
+    ladder_arrival_session,
     session_open_utc,
 )
 from alphalens_pipeline.paper.brief_loader import CandidateBrief
@@ -2759,7 +2754,7 @@ def _replay_candidate(
         reference_close = reference_close_override
     else:
         arrival_end = arrival_start + dt.timedelta(minutes=ARRIVAL_VWAP_WINDOW_MIN)
-        reference_close = _window_vwap(bars, arrival_start, arrival_end)
+        reference_close = window_vwap(bars, arrival_start, arrival_end)
     outcome = replay_ladder(
         setup,
         bars,

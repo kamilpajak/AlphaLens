@@ -77,12 +77,15 @@ from alphalens_pipeline.feedback.benchmark_excess import (
     row_is_quarantined,
     stored_pair_is_settled,
 )
-from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.feedback.population_ladder_monitor import (
     GroupedFetch,
     _default_grouped_fetch,
 )
-from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, previous_trading_day
+from alphalens_pipeline.market.calendar import (
+    DEFAULT_EXCHANGE,
+    ladder_arrival_session,
+    previous_trading_day,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -14,6 +14,9 @@ against future calendar revisions to far-out years:
     * 2026-05-25 — full holiday (Memorial Day, Monday).
     * 2026-05-29 — normal session (Friday).
     * 2026-06-05 / 2026-06-12 — two consecutive holiday-free Fridays.
+    * 2026-09-07 — Labor Day (full holiday, Monday); 2026-09-04 and
+      2026-09-08 are the sessions on either side of it.
+    * 2026-11-27 — half-day (Friday after Thanksgiving).
 
   XWAR (Warsaw — exercised so the multi-exchange API stays honest):
     * 2025-01-06 — Three Kings Day, Polish public holiday, GPW closed.
@@ -30,6 +33,7 @@ from alphalens_pipeline.market.calendar import (
     advance_trading_sessions,
     is_half_day,
     is_trading_day,
+    ladder_arrival_session,
     n_sessions_before,
     next_trading_open,
     previous_trading_day,
@@ -473,3 +477,53 @@ class TestSessionNotClosed(unittest.TestCase):
     def test_a_naive_moment_is_refused(self) -> None:
         with self.assertRaises(ValueError):
             session_not_closed(dt.datetime(2026, 9, 16, 15), "XNYS")
+
+
+class TestLadderArrivalSession(unittest.TestCase):
+    """A brief dated D is built after session D closes (T-1 dating), so the
+    ladder can first trade on the first session strictly after D (#1416)."""
+
+    def _assert_arrival(self, brief: str, expected: str, exchange: str = "XNYS") -> None:
+        got = ladder_arrival_session(dt.date.fromisoformat(brief), exchange)
+        self.assertEqual(got, dt.date.fromisoformat(expected))
+
+    def test_session_day_brief_arrives_next_session(self):
+        self._assert_arrival("2026-09-08", "2026-09-09")  # Tue -> Wed
+
+    def test_friday_brief_arrives_monday(self):
+        self._assert_arrival("2026-09-11", "2026-09-14")
+
+    def test_saturday_brief_arrives_monday(self):
+        self._assert_arrival("2026-09-12", "2026-09-14")
+
+    def test_sunday_brief_arrives_monday(self):
+        self._assert_arrival("2026-09-13", "2026-09-14")
+
+    def test_holiday_brief_arrives_next_session(self):
+        self._assert_arrival("2026-09-07", "2026-09-08")  # Labor Day Mon -> Tue
+
+    def test_brief_before_a_monday_holiday_skips_it(self):
+        self._assert_arrival("2026-09-04", "2026-09-08")  # Fri -> (Labor Day) -> Tue
+
+    def test_half_day_brief_arrives_next_session(self):
+        self._assert_arrival("2026-11-27", "2026-11-30")  # post-Thanksgiving half day
+
+    def test_non_default_exchange(self):
+        self._assert_arrival("2026-09-08", "2026-09-09", exchange="XWAR")
+
+    def test_arrival_opens_after_the_brief_can_exist(self):
+        # The brief for D is first generated on calendar day D+1, so the arrival
+        # session must open after D+1 00:00 UTC for every date.
+        day = dt.date(2026, 1, 1)
+        while day < dt.date(2027, 1, 1):
+            arrival = ladder_arrival_session(day)
+            earliest = dt.datetime.combine(day + dt.timedelta(days=1), dt.time(), tzinfo=dt.UTC)
+            self.assertGreater(session_open_utc(arrival, "XNYS"), earliest, day)
+            day += dt.timedelta(days=1)
+
+    def test_guard_refutes_the_old_rule(self):
+        # Positive control for the guard above: the old anchor opens BEFORE the
+        # brief exists on a session-day brief.
+        brief = dt.date(2026, 9, 8)
+        earliest = dt.datetime.combine(brief + dt.timedelta(days=1), dt.time(), tzinfo=dt.UTC)
+        self.assertLess(session_open_utc(session_on_or_after(brief, "XNYS"), "XNYS"), earliest)

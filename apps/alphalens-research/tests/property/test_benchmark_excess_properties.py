@@ -19,12 +19,12 @@ import datetime as dt
 import math
 from typing import Any
 
-from alphalens_pipeline.feedback.bar_window import ARRIVAL_VWAP_WINDOW_MIN
 from alphalens_pipeline.feedback.benchmark_excess import (
     _arrival_reference,
     _window_return,
     compute_market_excess_for_row,
 )
+from alphalens_pipeline.market.bars import ARRIVAL_VWAP_WINDOW_MIN
 from hypothesis import given
 from hypothesis import strategies as st
 

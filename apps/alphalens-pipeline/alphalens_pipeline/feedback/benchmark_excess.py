@@ -75,17 +75,17 @@ from typing import Any, TypeGuard
 
 import pandas as pd
 
-from alphalens_pipeline.feedback.bar_window import ARRIVAL_VWAP_WINDOW_MIN, _window_vwap
 from alphalens_pipeline.feedback.corporate_actions import SPLIT_INVALIDATED_CLASSIFICATION
-from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.feedback.population_ladder_monitor import (
     GroupedFetch,
     _default_grouped_fetch,
     _grouped_close,
     _prefetch_grouped_daily,
 )
+from alphalens_pipeline.market.bars import ARRIVAL_VWAP_WINDOW_MIN, window_vwap
 from alphalens_pipeline.market.calendar import (
     DEFAULT_EXCHANGE,
+    ladder_arrival_session,
     previous_trading_day,
     session_open_utc,
 )
@@ -183,7 +183,7 @@ def _arrival_reference(
     if not bars:
         return None
     arrival_window_end = arrival_open + dt.timedelta(minutes=ARRIVAL_VWAP_WINDOW_MIN)
-    reference = _window_vwap(bars, arrival_open, arrival_window_end)
+    reference = window_vwap(bars, arrival_open, arrival_window_end)
     if reference is None or reference <= 0:
         return None
     return reference

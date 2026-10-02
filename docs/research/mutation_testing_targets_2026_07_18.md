@@ -226,7 +226,7 @@ Not yet run. `crit·suit` descending; `pipe:` = `apps/alphalens-pipeline/alphale
 | 15 | `res:diagnostics/nofill.py` | NO_FILL root-cause classifier. |
 | 12 | `pipe:scorers/_common.py` | Shared `winsorize` + `rank_zscore` normalisation. |
 | 9 | `res:backtest/historical_validation.py` | DEPLOY/ITERATE/SKIP aggregate decision. |
-| 8 | `pipe:feedback/bar_window.py` | `_window_vwap` anchor — **needs a direct test file first** (suitability 2). |
+| 8 | `pipe:market/bars.py` | `window_vwap` anchor — **needs a direct test file first** (suitability 2). |
 
 ## Operator recipe
 

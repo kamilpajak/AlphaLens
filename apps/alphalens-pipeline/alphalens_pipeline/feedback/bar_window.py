@@ -1,27 +1,25 @@
-"""Shared broker-free VWAP-anchor / bar-fetch primitives.
+"""Shared broker-free bar-fetch primitive and replay guard constants.
 
 These are the price-path replay building blocks consumed by the surviving
 broker-free feedback engine — the population monitor
 (:mod:`alphalens_pipeline.feedback.population_ladder_monitor`). They were
 formerly housed in ``shadow_return.py`` (deleted with the broker chain); the
-arrival opening-window VWAP arithmetic, the implausible-move guard threshold,
-the holding-horizon constant and the canonical Polygon bar fetcher are all
-broker-agnostic, so they live here as the single anchor-arithmetic source.
+implausible-move guard threshold, the holding-horizon constant and the
+canonical Polygon bar fetcher are all broker-agnostic, so they live here.
+
+The arrival opening-window VWAP arithmetic moved to
+:mod:`alphalens_pipeline.market.bars` — it is shared with the selection tier,
+which must not import this measurement-tier package.
 
 None of these primitives reads any paper ledger / broker — they take a ticker
-and a UTC window and return Polygon minute aggregates (or a VWAP over them).
+and a UTC window and return Polygon minute aggregates.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
-
-# Opening window (minutes from the session open) over which the arrival /
-# horizon VWAP is taken. 30 min damps opening-auction noise vs the single open
-# print; cheap to retune (one constant).
-ARRIVAL_VWAP_WINDOW_MIN = 30
 
 # Holding horizon, in trading sessions, between the arrival anchor and the
 # exit anchor. A single global constant keeps the metric homogeneous across
@@ -46,34 +44,6 @@ DEFAULT_LOOKBACK_DAYS = 14
 BarFetch = Callable[[str, dt.datetime, dt.datetime], Sequence[dict[str, Any]]]
 
 
-def _window_vwap(
-    bars: Sequence[Mapping[str, Any]],
-    start: dt.datetime,
-    end: dt.datetime,
-) -> float | None:
-    """Volume-weighted close over bars whose start ``t`` is in ``[start, end)``.
-
-    Returns ``None`` when no bar falls in the window. Degrades to the simple
-    mean of closes when total volume is zero (an all-zero-volume thin-name
-    window) so a VWAP is still produced rather than a divide-by-zero.
-    """
-    start_ms = int(start.timestamp() * 1000)
-    end_ms = int(end.timestamp() * 1000)
-    pairs: list[tuple[float, float]] = []
-    for bar in bars:
-        t = bar.get("t")
-        close = bar.get("c")
-        if t is None or close is None or not (start_ms <= t < end_ms):
-            continue
-        pairs.append((float(close), float(bar.get("v") or 0.0)))
-    if not pairs:
-        return None
-    total_vol = sum(v for _, v in pairs)
-    if total_vol == 0:
-        return sum(c for c, _ in pairs) / len(pairs)
-    return sum(c * v for c, v in pairs) / total_vol
-
-
 def _default_bar_fetch(
     ticker: str, start: dt.datetime, end: dt.datetime
 ) -> Sequence[dict[str, Any]]:
@@ -84,11 +54,9 @@ def _default_bar_fetch(
 
 
 __all__ = [
-    "ARRIVAL_VWAP_WINDOW_MIN",
     "DEFAULT_LOOKBACK_DAYS",
     "HOLDING_HORIZON_TRADING_DAYS",
     "IMPLAUSIBLE_RETURN_THRESHOLD",
     "BarFetch",
     "_default_bar_fetch",
-    "_window_vwap",
 ]

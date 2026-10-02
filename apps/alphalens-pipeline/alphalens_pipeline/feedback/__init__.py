@@ -12,8 +12,11 @@ feedback analytics:
   time-stop) over the briefs. This is the SOLE feedback signal: it reads briefs
   + Polygon only and writes the ``~/.alphalens/population_ladders`` parquets,
   never a decision/click ledger.
-- ``bar_window`` — the shared VWAP-anchor / Polygon bar-fetch primitives the
-  replay engine consumes.
+- ``bar_window`` — the shared Polygon bar-fetch primitive plus the
+  holding-horizon and implausible-move guard constants the replay engine
+  consumes. The arrival VWAP anchor itself lives in
+  ``alphalens_pipeline.market.bars`` so the selection side can use it
+  without importing this measurement tier.
 
 The legacy paper-ledger-coupled metrics (``outcome_join``, ``shadow_return``,
 ``execution_modes``, ``execution_telemetry``) were removed with the broker chain

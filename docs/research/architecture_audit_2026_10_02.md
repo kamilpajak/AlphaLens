@@ -126,10 +126,14 @@ Two context boundaries are **not** where their directory names suggest:
   scripts, the lab and tests — never by anything the deployment runs (§6).
   ADR 0011 frames the pipeline app as live infrastructure; for `data/` that is
   only partly true.
-- **`alphalens_pipeline/paper/` is a decommissioned context holding the
-  repository's most-shared primitive.** ADR 0012 decommissioned paper trading,
-  yet `paper.calendar` has the highest static inbound reference count in the
-  repo (41). The name misleads and the package status contradicts its use.
+- **`alphalens_pipeline/paper/` is a misleading home for live primitives.**
+  `paper.calendar` has the highest static inbound reference count in the repo
+  (41), and the name says it belongs to a feature ADR 0012 decommissioned.
+  **Correction (2026-10-02):** this memo first called `paper/` "a decommissioned
+  context". That was imprecise — ADR 0012 decommissioned paper *trading*, the
+  Alpaca harness; the package survived as the home of helpers that outlived it
+  and `paper/__init__.py` declares `__status__ = "ACTIVE"` deliberately. The
+  problem is the NAME, not a dead package.
 
 ---
 
@@ -214,9 +218,9 @@ re-export hub, and an API is a contract rather than an edge count.
 | `alphalens_pipeline.data.factors` | 25 |
 | `alphalens_pipeline.data.alt_data.yfinance_cache` | 24 |
 
-The top entry is the finding: the repo's most-shared primitive lives in the
-package ADR 0012 decommissioned, and it is referenced nearly as often as the
-next three put together.
+The top entry is the finding: the repo's most-shared primitive lives under a
+name that says it belongs to a decommissioned feature, and it is referenced
+nearly as often as the next three put together.
 
 Two entries in this table are research-tier (`backtest.metrics`,
 `attribution.factor_analysis`) and rank high because the 133 research scripts
@@ -496,7 +500,7 @@ Cost of leaving it against cost of fixing it. Nothing here was changed.
 | 1 | 77 of 164 brief-store columns cross no schema gate; the gated boundary (pipeline → API) is not where most columns live | §5.1 | a renamed column breaks readers silently; this is the most likely source of a quiet production defect | a column-contract gate on the parquet writer, mirroring `test_schema_parity.py` |
 | 2 | `control_loop.py` is 11 130 lines with no internal boundary, on the live order path | §4.1 | every change needs the whole file in head; 130 commits in 6 months | split into modules behind the existing `LoopDeps` seam; its own arc, own review |
 | 3 | No gate in CI measures file or function size | §4.2 | the next 11 000-line file grows the same way | enable `PLR0915`/`PLR0912` with a baseline, or a file-length check |
-| 4 | `paper.calendar` has the repo's highest inbound count (41) while `paper/` is the package ADR 0012 decommissioned | §2.4 | misleads every reader; blocks the keeper split | DONE — moved to `alphalens_pipeline.market.calendar`; the module keeps its symbol names |
+| 4 | `paper.calendar` has the repo's highest inbound count (41) under a name that says it belongs to the feature ADR 0012 decommissioned (the package itself is `ACTIVE` — see §1.3 correction) | §2.4 | misleads every reader; blocks the keeper split | DONE — moved to `alphalens_pipeline.market.calendar`; the module keeps its symbol names |
 | 5 | `alphalens_pipeline/data/` is substantially research-tier (11 modules, 1 649 LOC referenced only by lab/scripts/tests) | §6.1 | ADR 0011's framing is wrong for `data/`, so new code lands on the wrong side | decide the boundary, then move or document |
 | 6 | 12 live-tier modules (1 676 LOC) are referenced only by tests | §6.2 | speculative generality indistinguishable from a kept seam | extend the `UNWIRED_ALLOWED` pattern: a reason per module, or remove |
 | 7 | `_reset_remote_quote_source_for_tests` is a test hook in production code on the money path | §4.1 | small, but it is a live file | fold into the injected deps |
