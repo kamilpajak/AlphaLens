@@ -51,6 +51,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -80,6 +81,10 @@ logger = logging.getLogger(__name__)
 # Poolability key. Bump on ANY change to: the anchor rule, the horizons, the benchmark
 # ticker, BETA_WINDOW_SESSIONS, MIN_BETA_OBS, the split bounds, RESID_WINDOW_SESSIONS,
 # MIN_RESID_OBS, the population rule or the status codes and their order.
+#: A new POPULATION added through `PopulationSource` does NOT bump this, and the line
+#: above is about the population rule of an existing lane. The label formula is what the
+#: token fingerprints, every row already carries a `population` column, and bumping
+#: would invalidate the stored rows a REGISTERED PENDING test reads (#1227).
 SEL_LABEL_VERSION = "sel-label-v3"  # v3: the cross-sourced split guard (#1533)
 
 HORIZONS: tuple[int, ...] = (1, 3, 5, 10, 20, 40)
@@ -98,6 +103,11 @@ MIN_RESID_OBS = 30  # fewer residuals -> no scaled label
 AUDIT_LEAD_SESSIONS = 20
 
 DEFAULT_LABELS_DIR = Path.home() / ".alphalens" / "selection_labels"
+DEFAULT_NEWS_DIR = Path.home() / ".alphalens" / "thematic_news"
+#: A SEPARATE directory on purpose. #1227 is registered and pending on a panel drawn
+#: from `selection_labels`; writing a nine-times-larger population into those files
+#: would change what that frozen panel contains.
+DEFAULT_NEWS_LABELS_DIR = Path.home() / ".alphalens" / "news_labels"
 DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
 
 STATUS_OK = "ok"
@@ -131,7 +141,19 @@ POPULATION_BRIEFED_OR_PROPOSED = "briefed_or_llm_proposed"
 # proposals of such a date are dropped with everything else not on the list: they were
 # written by the same runs, so their state at the open is unknown.
 POPULATION_PRE_OPEN_RECOVERED = "pre_open_recovered"
+#: Names a news feed tagged to an article on that date, whether or not anything
+#: downstream looked at them. The briefed panel is 423 episodes over 64 arrival
+#: sessions and a power simulation on the real structure put a 0.03 effect at 71%
+#: against an 80% bar, so it cannot resolve the effect its own point estimates
+#: suggest. The raw feeds already carry about 10200 priceable (date, ticker) pairs
+#: over the same dates, roughly nine times what the briefs keep.
+POPULATION_NEWS_FEED_TAGGED = "news_feed_tagged"
 LANE_THEMATIC = "thematic"
+#: A feed-tagged name is in neither the thematic funnel nor the event lane, and the
+#: `lane` column is already filtered on (`scripts/ml/2026_09_experts_last_look.py`
+#: does `keep = lane == SOURCE_LANE`). Labelling these rows "thematic" would hand that
+#: filter 10000 rows it was never meant to see.
+LANE_NEWS_FEED = "news_feed"
 SHADOW_SOURCE_LLM = "llm"
 
 # (open, close) per ticker for one session; ``None`` for the session = no file on disk.
@@ -507,6 +529,125 @@ def _collect_proposed(
             config[ticker] = rec.get("mapper_config_version")
 
 
+@dataclass(frozen=True)
+class PopulationSource:
+    """Where a date's population comes from, and which brief-only steps apply.
+
+    Injected rather than branched on a flag so the two populations cannot drift into
+    one function with growing `if` arms. `pre_open_recovery` is False for anything
+    that is not a thematic brief: the recovery step replaces a date's list with the
+    one its BRIEF held at the arrival open, so on a date the journal knows about it
+    would drop a feed population entirely.
+    """
+
+    name: str
+    dates: Callable[[], set[dt.date]]
+    build: Callable[[dt.date], pd.DataFrame]
+    pre_open_recovery: bool
+    #: Whether the publication gate applies. It asks whether the stored LIST existed
+    #: before the arrival open, which is a fact about a thematic brief being rewritten
+    #: after it (#1494). A news feed has no list and no stamp, so the gate answers from
+    #: the journal window and returns None outside it — and None means a uniform
+    #: `publication_unknown`, which is NON-TERMINAL. Every feed row after the window
+    #: would then be recomputed forever and never carry a label, while the job reported
+    #: success. False here says the question does not apply.
+    publication_gate: bool
+    #: Whether a shadow file existed for that date. For a population that has nothing
+    #: to do with thematic shadows this is False, which under a boolean schema is the
+    #: least wrong value available and means "not applicable" rather than "the file was
+    #: absent that day". Reported by the source rather than
+    #: inferred from the population, because the two disagree on a date whose
+    #: population is EMPTY while a shadow file exists: inferring it from the frame
+    #: would then hand `apply_pre_open_population` False where the old code passed
+    #: True, and the recovered rows would carry the wrong stage value.
+    shadow_available: Callable[[dt.date], bool]
+
+
+def _empty_population() -> pd.DataFrame:
+    return pd.DataFrame(columns=["ticker", *STAGE_COLUMNS])
+
+
+def thematic_population_source(briefs_dir: Path, shadow_dir: Path) -> PopulationSource:
+    """Today's population: thematic briefed names plus the LLM shadow proposals."""
+    briefs, shadows = _dated_files(Path(briefs_dir)), _dated_files(Path(shadow_dir))
+
+    def build(date: dt.date) -> pd.DataFrame:
+        bp, sp = briefs.get(date), shadows.get(date)
+        brief = pd.read_parquet(bp) if bp is not None else None
+        shadow = pd.read_parquet(sp) if sp is not None else None
+        return build_population(brief, shadow)
+
+    return PopulationSource(
+        name=POPULATION_BRIEFED_OR_PROPOSED,
+        dates=lambda: set(briefs) | set(shadows),
+        build=build,
+        pre_open_recovery=True,
+        publication_gate=True,
+        shadow_available=lambda date: date in shadows,
+    )
+
+
+def news_population_source(news_dir: Path = DEFAULT_NEWS_DIR) -> PopulationSource:
+    """One row per (date, ticker) the feeds tagged, however many articles tagged it.
+
+    The label is about the name's forward return, so a name mentioned by five articles
+    on one date is one observation and not five. The brief-only stage columns are left
+    empty rather than invented: a feed name was never briefed and never proposed under
+    a theme, and writing a theme or True here would make it indistinguishable from one
+    that was.
+
+    Unpriceable tags — preferred lines, warrants, units — are NOT filtered out. They
+    reach `no_open`, which is terminal, so they freeze once instead of churning, and
+    their count stays a visible measure of how much of the feed we cannot price.
+    """
+    files = _dated_files(Path(news_dir))
+
+    def build(date: dt.date) -> pd.DataFrame:
+        path = files.get(date)
+        if path is None:
+            return _empty_population()
+        frame = pd.read_parquet(path, columns=["tickers"])
+        tickers: set[str] = set()
+        for tags in frame["tickers"]:
+            # An explicit type check, not a try/except. A NaN raises and a LIST is fine,
+            # but a bare string does NEITHER: iterating "AAPL" yields 'A','A','P','L',
+            # four junk tickers that would be stamped and stored. Catching TypeError
+            # would miss exactly that case.
+            if not isinstance(tags, (list, tuple, set, frozenset, np.ndarray, pd.Series)):
+                continue
+            for tag in tags:
+                symbol = str(tag).strip().upper()
+                if symbol:
+                    tickers.add(symbol)
+        rows = [
+            {
+                "ticker": ticker,
+                "lane": LANE_NEWS_FEED,
+                "population": POPULATION_NEWS_FEED_TAGGED,
+                "briefed_any_theme": False,
+                "themes_briefed": [],
+                "themes_proposed": [],
+                "shadow_available": False,
+                "event_overlap": False,
+                "mapper_config_version": None,
+                BRIEF_PUBLISHED_AT: None,
+            }
+            for ticker in sorted(tickers)
+        ]
+        return (
+            pd.DataFrame(rows, columns=["ticker", *STAGE_COLUMNS]) if rows else _empty_population()
+        )
+
+    return PopulationSource(
+        name=POPULATION_NEWS_FEED_TAGGED,
+        dates=lambda: set(files),
+        build=build,
+        pre_open_recovery=False,
+        publication_gate=False,
+        shadow_available=lambda _date: False,
+    )
+
+
 def build_population(brief: pd.DataFrame | None, shadow: pd.DataFrame | None) -> pd.DataFrame:
     """One row per ticker: thematic briefed names and LLM proposals, with stage columns."""
     themes_briefed: dict[str, set[str]] = {}
@@ -754,6 +895,27 @@ def _read_existing_labels(out_path: Path) -> dict[str, dict[str, Any]]:
     return existing
 
 
+def publication_verdict_for(
+    source: PopulationSource,
+    brief_date: dt.date,
+    *,
+    population: pd.DataFrame | None,
+    recovered: Sequence[str] | None = None,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> bool | None:
+    """The publication verdict a source's rows should be judged against.
+
+    `True` when the gate does not apply, which is not a claim that something was
+    published: it is the only value that lets a row be labelled at all, and for a
+    population with no list there is nothing the gate could be protecting against.
+    """
+    if not source.publication_gate:
+        return True
+    if population is None:
+        return None
+    return _date_published_before_open(brief_date, population, recovered, exchange)
+
+
 def _date_published_before_open(
     brief_date: dt.date,
     population: pd.DataFrame,
@@ -911,8 +1073,7 @@ def _stamp_todo(
 def _stamp_date(
     brief_date: dt.date,
     *,
-    brief_path: Path | None,
-    shadow_path: Path | None,
+    source: PopulationSource,
     labels_dir: Path,
     reader: _SessionReader,
     now: dt.datetime,
@@ -922,20 +1083,23 @@ def _stamp_date(
     exchange: str,
     references: _ReferenceCloses,
 ) -> tuple[bool, int]:
-    brief = pd.read_parquet(brief_path) if brief_path is not None else None
-    shadow = pd.read_parquet(shadow_path) if shadow_path is not None else None
-    population = build_population(brief, shadow)
-    recovered = pre_open_names(brief_date)
+    population = source.build(brief_date)
+    # Pre-open recovery is a fact about a thematic BRIEF: it replaces the date's list
+    # with the one the brief held at the arrival open. A feed population has no brief,
+    # so on a date the journal knows about this step would drop all of it.
+    recovered = pre_open_names(brief_date) if source.pre_open_recovery else None
     if recovered is not None:
         population = apply_pre_open_population(
-            population, recovered, shadow_available=shadow is not None
+            population, recovered, shadow_available=source.shadow_available(brief_date)
         )
     out_path = labels_dir / f"{brief_date.isoformat()}.parquet"
     existing = _read_existing_labels(out_path)
     if population.empty and not existing:
         return False, 0
 
-    published = _date_published_before_open(brief_date, population, recovered, exchange)
+    published = publication_verdict_for(
+        source, brief_date, population=population, recovered=recovered, exchange=exchange
+    )
     pop_records = {
         r["ticker"]: {k: _normalise(v) for k, v in r.items()} for r in population.to_dict("records")
     }
@@ -999,6 +1163,7 @@ def enrich_selection_labels(
     briefs_dir: Path = DEFAULT_BRIEFS_DIR,
     shadow_dir: Path = DEFAULT_SHADOW_DIR,
     labels_dir: Path = DEFAULT_LABELS_DIR,
+    source: PopulationSource | None = None,
     grouped_root: Path = DEFAULT_RS_HISTORY_ROOT,
     now: dt.datetime | None = None,
     exchange: str = DEFAULT_EXCHANGE,
@@ -1012,21 +1177,20 @@ def enrich_selection_labels(
     """
     now = now or dt.datetime.now(dt.UTC)
     last_closed_session = previous_trading_day(now.date(), exchange)
-    briefs, shadows = _dated_files(Path(briefs_dir)), _dated_files(Path(shadow_dir))
+    source = source or thematic_population_source(Path(briefs_dir), Path(shadow_dir))
     grouped = _dated_files(Path(grouped_root))
     newest_session = max(grouped) if grouped else None
     reader = _SessionReader(Path(grouped_root))
     references = _ReferenceCloses(reference_closes)
     report = SelectionLabelReport()
     counts: Counter[str] = Counter()
-    for brief_date in sorted(set(briefs) | set(shadows), reverse=True):
+    for brief_date in sorted(source.dates(), reverse=True):
         if deadline is not None and deadline.should_stop():
             break
         try:
             written, n = _stamp_date(
                 brief_date,
-                brief_path=briefs.get(brief_date),
-                shadow_path=shadows.get(brief_date),
+                source=source,
                 labels_dir=Path(labels_dir),
                 reader=reader,
                 now=now,
@@ -1047,13 +1211,17 @@ def enrich_selection_labels(
 
 
 __all__ = [
+    "DEFAULT_NEWS_LABELS_DIR",
     "HORIZONS",
+    "LANE_NEWS_FEED",
     "NON_TERMINAL_STATUSES",
+    "POPULATION_NEWS_FEED_TAGGED",
     "SEL_LABEL_COLUMNS",
     "SEL_LABEL_VERSION",
     "SPLIT_UNCHECKED_RETRY_DAYS",
     "STATUS_SPLIT_GUARD",
     "STATUS_SPLIT_UNCHECKED",
+    "PopulationSource",
     "PreWindow",
     "ReferenceClosesFetch",
     "SelectionLabel",
@@ -1063,4 +1231,7 @@ __all__ = [
     "default_reference_closes",
     "enrich_selection_labels",
     "estimate_pre_window",
+    "news_population_source",
+    "publication_verdict_for",
+    "thematic_population_source",
 ]
