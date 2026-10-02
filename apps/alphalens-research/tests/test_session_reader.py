@@ -198,5 +198,64 @@ class TestTheDriverSuppliesTheUniverse(unittest.TestCase):
         self.assertEqual(seen["universe"], {"AAA", "BBB", sl.BENCHMARK_TICKER})
 
 
+class TestTheDriverPrimesTheReferenceSpan(unittest.TestCase):
+    """A span the driver does not pass leaves every later date refetching.
+
+    Measured over 10 dates against the real store: 836 fetches for 452 tickers without
+    it, 451 for 451 with it. At 1.46 s a fetch that is 95% of a stamped date's time, so
+    the whole point of the change lives in this one argument.
+    """
+
+    def test_enrich_passes_the_grouped_stores_first_and_last_session(self):
+        seen: dict = {}
+        real = sl._ReferenceCloses
+
+        def capture(fetch, span=None):
+            seen["span"] = span
+            return real(fetch, span=span)
+
+        with TemporaryDirectory() as d:
+            news, grouped = Path(d) / "news", Path(d) / "grouped"
+            news.mkdir()
+            pd.DataFrame([{"id": "a", "tickers": ["AAA"], "source": "polygon"}]).to_parquet(
+                news / "2026-05-19.parquet", index=False
+            )
+            _session_file(grouped, S1, [("AAA", 1.0, 2.0)])
+            _session_file(grouped, S2, [("AAA", 3.0, 4.0)])
+            with mock.patch.object(sl, "_ReferenceCloses", capture):
+                sl.enrich_selection_labels(
+                    source=sl.news_population_source(news),
+                    labels_dir=Path(d) / "out",
+                    grouped_root=grouped,
+                    now=dt.datetime(2027, 6, 1, tzinfo=dt.UTC),
+                    reference_closes=lambda *a, **k: None,
+                )
+        self.assertEqual(seen["span"], (S1, S2))
+
+    def test_an_empty_grouped_store_passes_no_span_rather_than_an_invalid_one(self):
+        seen: dict = {}
+        real = sl._ReferenceCloses
+
+        def capture(fetch, span=None):
+            seen["span"] = span
+            return real(fetch, span=span)
+
+        with TemporaryDirectory() as d:
+            news = Path(d) / "news"
+            news.mkdir()
+            pd.DataFrame([{"id": "a", "tickers": ["AAA"], "source": "polygon"}]).to_parquet(
+                news / "2026-05-19.parquet", index=False
+            )
+            with mock.patch.object(sl, "_ReferenceCloses", capture):
+                sl.enrich_selection_labels(
+                    source=sl.news_population_source(news),
+                    labels_dir=Path(d) / "out",
+                    grouped_root=Path(d) / "absent",
+                    now=dt.datetime(2027, 6, 1, tzinfo=dt.UTC),
+                    reference_closes=lambda *a, **k: None,
+                )
+        self.assertIsNone(seen["span"])
+
+
 if __name__ == "__main__":
     unittest.main()
