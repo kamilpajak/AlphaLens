@@ -29,7 +29,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from intent_replay.bars import Bar
 from intent_replay.interpreter import DeclaredTranche, PendingEntry, Plan
@@ -229,18 +229,40 @@ class TheGeneratorReachesTheLadderTest(PropertyTestCase):
     drawn from one price band, so an independent draw already overlaps often.
 
     The floors are chosen by arithmetic rather than by feel, because a floor set
-    by feel is either a flake or a blind spot. At the `ci` profile's 300
-    examples the binomial spread of the fill share is 0.0139 and of the
-    take-profit share 0.0260, so:
+    by feel is either a flake or a blind spot. This paragraph once derived them
+    from a BINOMIAL spread, and that was the wrong distribution: Hypothesis does
+    not sample independently, it biases toward boundary values, so the realised
+    share swings much wider than a binomial model allows. CI proved it on
+    2026-10-02 with a take-profit share of 0.1267 at 300 examples -- 5.1
+    "spreads" below the measured mean under the old model, which should have
+    been impossible, and was not.
 
-        fill        floor 0.85 sits 6.3 spreads under the measured 0.938
-        take-profit floor 0.15 sits 5.1 spreads under the measured 0.284
+    So the spread is MEASURED, not derived, by running the probe over ten seeds
+    at each size:
 
-    Both are far enough out that ordinary variation cannot trip them, and close
-    enough that a generator which stopped reaching the ladder would be caught
-    rather than quietly making every property above it vacuous. A take-profit
-    floor of 0.20 would sit only 3.2 spreads out, which over many CI runs is a
-    flake someone reruns rather than a finding.
+        max_examples   tp share: mean / sd / min      fill share: mean / sd
+        300            0.2873 / 0.0617 / 0.1700       --
+        2000           0.2849 / 0.0170 / 0.2490       0.9456 / 0.0105
+
+    The sd falls by 3.6x between the two while the square root of the sample
+    ratio is 2.58, which is one more sign that the binomial model did not
+    describe this sampler.
+
+    Hence this probe pins `max_examples=2000` rather than inheriting the `ci`
+    profile's 300. At that size:
+
+        fill        floor 0.85 sits 9.1 measured sd under the mean 0.9456
+        take-profit floor 0.15 sits 7.9 measured sd under the mean 0.2849
+
+    `derandomize` is deliberately left at the profile's False. The defect was
+    the variance model, not the randomness, and this suite's documented choice
+    is to explore and to weight the GENERATOR when a branch is rare
+    (`test_form4_pit_properties` states that reasoning) rather than to freeze
+    the seed. The cost of the larger sample is 1.6 s, measured.
+
+    Both floors stay far enough out that ordinary variation cannot trip them,
+    and close enough that a generator which stopped reaching the ladder would be
+    caught rather than quietly making every property above it vacuous.
     """
 
     MIN_FILLED_SHARE = 0.85
@@ -248,6 +270,11 @@ class TheGeneratorReachesTheLadderTest(PropertyTestCase):
 
     _SEEN: dict[str, int] = {}
 
+    # 2000, not the ci profile's 300: a probe that asserts a RATE needs a
+    # sample whose measured spread leaves the floors out of reach. See the
+    # class docstring for the numbers and for why the old binomial derivation
+    # was wrong.
+    @settings(max_examples=2000)
     @given(_ladder_and_spanning_path())
     def an_outcome_probe(self, case: _Case) -> None:
         """Deliberately NOT named ``test_*``: the test below drives it."""
