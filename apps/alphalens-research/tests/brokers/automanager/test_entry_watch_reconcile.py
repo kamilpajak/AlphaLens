@@ -19,6 +19,7 @@ is LEFT for the Rearm phase (Finding 2) — never terminated here.
 
 from __future__ import annotations
 
+import dataclasses
 import unittest
 from typing import Any
 from unittest import mock
@@ -155,6 +156,32 @@ class TestFilledArmedTierWritesFired(unittest.TestCase):
         self.assertEqual(fired[0]["measurement"]["order_id"], "TR-1")
         self.assertEqual(fired[0]["measurement"]["avg_price"], 10.05)
         self.assertEqual(fired[0]["measurement"]["tier_limit"], 10.0)
+
+    def test_the_fired_line_carries_the_venue_fill_time_from_the_audit_row(self) -> None:
+        # #1402: the gap from the venue fill to the stop was measurable only by
+        # a manual audit read. The resolved outcome already carries the audit
+        # row's ActivityTime, so the line records it at no extra request.
+        path = _journal(self)
+        _seed_armed(path, order_id="TR-1", limit=10.0)
+        broker = _ResolvingBroker()
+        outcome = _os("TR-1", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=10.05)
+        broker.resolutions["TR-1"] = dataclasses.replace(
+            outcome, raw_status="FinalFill/Confirmed ActivityTime=2026-10-01T15:13:02.243000Z"
+        )
+        _run(_watch_deps(None, [], broker=broker))
+        fired = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED]
+        self.assertEqual(fired[0]["venue_activity_time"], "2026-10-01T15:13:02.243000Z")
+
+    def test_no_audit_time_means_no_field_rather_than_a_guess(self) -> None:
+        path = _journal(self)
+        _seed_armed(path, order_id="TR-1", limit=10.0)
+        broker = _ResolvingBroker()
+        broker.resolutions["TR-1"] = _os(
+            "TR-1", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=10.05
+        )
+        _run(_watch_deps(None, [], broker=broker))
+        fired = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED]
+        self.assertNotIn("venue_activity_time", fired[0])
 
     def test_the_fired_stamp_prices_the_trigger_the_way_the_broker_does(self) -> None:
         # #1635: the resting order ratcheted its trigger down to
