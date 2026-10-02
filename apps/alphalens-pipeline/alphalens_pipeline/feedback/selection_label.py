@@ -596,9 +596,22 @@ def news_population_source(news_dir: Path = DEFAULT_NEWS_DIR) -> PopulationSourc
     a theme, and writing a theme or True here would make it indistinguishable from one
     that was.
 
-    Unpriceable tags — preferred lines, warrants, units — are NOT filtered out. They
-    reach `no_open`, which is terminal, so they freeze once instead of churning, and
-    their count stays a visible measure of how much of the feed we cannot price.
+    Unpriceable tags — preferred lines, warrants, units — are NOT filtered out, so
+    their count stays a visible measure of how much of the feed we cannot price. Where
+    they land depends on which vendor carries them, and the two places behave
+    differently:
+
+    * a tag NO vendor prices reaches `no_open`, which is terminal, so it freezes once;
+    * a tag the open source prices while the split reference does not reaches
+      `split_unchecked`, which `_is_non_terminal` retries for
+      `SPLIT_UNCHECKED_RETRY_DAYS` before freezing as a disclosed unchecked row.
+
+    The second case is the common one for warrants, which is not what this docstring
+    said before: measured on the whole-history run, 40 of the 51 warrant and preferred
+    tickers stamped `split_unchecked` were present in a recent grouped session file, so
+    they had an open and churned rather than freezing. The two paths are pinned by
+    `test_an_unanswered_reference_makes_the_row_unchecked_not_ok` and the retry-window
+    tests in `test_selection_label.py`.
     """
     files = _dated_files(Path(news_dir))
 
@@ -616,7 +629,14 @@ def news_population_source(news_dir: Path = DEFAULT_NEWS_DIR) -> PopulationSourc
             if not isinstance(tags, (list, tuple, set, frozenset, np.ndarray, pd.Series)):
                 continue
             for tag in tags:
-                symbol = str(tag).strip().upper()
+                # Feeds emit a class share as `BRK.B`; SEC, our universe and the price
+                # vendors spell it `BRK-B`, and `catalyst_resolver._normalize_symbol`
+                # already folds the separator for the same reason. Without the fold the
+                # tag is stored under a spelling nothing else uses: measured on the
+                # whole-history run, 87 of 158 `split_unchecked` rows were `BRK.B`, and
+                # the retry window cannot resolve them because the cause is the
+                # spelling, not a late-arriving price.
+                symbol = str(tag).strip().upper().replace(".", "-")
                 if symbol:
                     tickers.add(symbol)
         rows = [
@@ -726,12 +746,39 @@ class SelectionLabelReport:
 
 
 class _SessionReader:
-    """Reads only the tickers a pass needs from each session file, once per run."""
+    """Reads each session file ONCE, in full, keeping the tickers the run expects.
 
-    def __init__(self, root: Path):
+    Two measurements on a real session file of the grouped-daily store (11 467 rows, ONE
+    row group, 505 KB), on the VPS:
+
+    * a row filter for 80 tickers costs 18.4 ms; the whole file with no filter costs
+      6.9 ms. The filter is 2.7x SLOWER, because one row group gives the predicate
+      nothing to skip, so every row is read either way and the filter is extra work.
+    * keeping every ticker of a session costs 2.28 MB; keeping the 3 042 tickers of the
+      news run costs 0.51 MB. A 270-session window is the difference between about
+      600 MB and about 140 MB, which is why the universe is worth passing.
+
+    The cost that dominated, though, was the NUMBER of reads. The previous form asked for
+    exactly the tickers it still needed and memoised which ones it had fetched per
+    session, so a second stamped date with its own ticker set re-read the same file. Over
+    the 137-date news run that is about 37 000 reads and roughly 4.5 hours.
+
+    ``universe`` comes from ``_run_universe``, which walks every date the source offers,
+    so it is the whole run's ticker set and not one date's. It is a HINT and never a
+    contract: a ticker outside it is still answered, at
+    the cost of one more read of that file, because a universe computed slightly wrong
+    must not become a wrong label: a missing bar reads as `no_open`, which is terminal, so
+    the row would freeze carrying an answer the prices do not support. ``None`` means keep
+    every ticker, which is right for a small store and wrong for the nightly job.
+    """
+
+    def __init__(self, root: Path, universe: set[str] | None = None):
         self._root = root
         self._bars: dict[dt.date, dict[str, tuple[float | None, float | None]] | None] = {}
-        self._read: dict[dt.date, set[str]] = {}
+        #: Tickers whose bar for that session is SETTLED - present in the file or known
+        #: absent from it. Membership here is what makes a second ask free.
+        self._settled: dict[dt.date, set[str]] = {}
+        self._universe = {t.upper() for t in universe} if universe else None
 
     def book(
         self, sessions: Iterable[dt.date], tickers: set[str]
@@ -741,25 +788,35 @@ class _SessionReader:
     def _session(self, session: dt.date, tickers: set[str]) -> SessionBars | None:
         if session in self._bars and self._bars[session] is None:
             return None
-        missing = tickers - self._read.get(session, set())
+        missing = tickers - self._settled.get(session, set())
         if missing:
             path = self._root / f"{session.isoformat()}.parquet"
             if not path.exists():
                 self._bars[session] = None
                 return None
             try:
-                df = pd.read_parquet(
-                    path, columns=["T", "o", "c"], filters=[("T", "in", sorted(missing))]
-                )
+                # No `filters=`: see the class docstring. A whole-file read of a
+                # one-row-group file is 2.7x cheaper than the same read with a predicate.
+                df = pd.read_parquet(path, columns=["T", "o", "c"])
             except (OSError, ValueError) as exc:
                 logger.warning("selection-label: unreadable session file %s (%s)", path, exc)
                 self._bars[session] = None
                 return None
+            keep = None if self._universe is None else self._universe | missing
             bars = self._bars.setdefault(session, {})
             assert bars is not None
+            seen: set[str] = set()
             for t, o, c in zip(df["T"], df["o"], df["c"], strict=True):
-                bars[str(t).upper()] = (o, c)
-            self._read.setdefault(session, set()).update(missing)
+                symbol = str(t).upper()
+                seen.add(symbol)
+                if keep is None or symbol in keep:
+                    bars[symbol] = (o, c)
+            # A ticker is settled whether or not the file held it, so a name absent from
+            # the store is answered once rather than re-read on every date. With a
+            # universe that is the universe plus whatever else was asked for; with none,
+            # the file was read whole, so every ticker in it is settled.
+            self._settled.setdefault(session, set()).update(keep if keep is not None else seen)
+            self._settled[session].update(missing)
         return self._bars.get(session) or {}
 
 
@@ -970,22 +1027,59 @@ def default_reference_closes(ticker: str, start: dt.date, end: dt.date) -> pd.Se
 
 
 class _ReferenceCloses:
-    """One reference series per ticker per run, widened to cover every span asked of it.
+    """One reference series per ticker per run, over the whole span the run can ask for.
 
-    Brief dates are stamped newest-first and their spans overlap heavily, so a memo keyed
-    on ``(ticker, span)`` would miss on nearly every date. Holding one series per ticker
-    and refetching only when a request falls outside it turns roughly 1500 (date, ticker)
-    pairs into about one fetch per distinct ticker.
+    Dates are stamped newest-first and their spans overlap heavily, so a memo keyed on
+    ``(ticker, span)`` would miss on nearly every date. Holding one series per ticker and
+    refetching only when a request falls outside it was meant to turn roughly 1500
+    (date, ticker) pairs into about one fetch per distinct ticker. It did not: newest-
+    first means every LATER date asks for an EARLIER start, which is outside the held
+    span, so a frequently-tagged name is refetched on nearly every date it appears on.
+    Measured against the real store over 10 dates: 452 distinct tickers, 836 fetches,
+    1.85 each and 8 for names like AAPL. At 1.46 s a fetch that was 95% of a stamped
+    date's wall time, against 4% for reading the grouped store.
+
+    ``span`` closes that gap. It is a FLOOR on the first fetch for a ticker, not a
+    ceiling on what may be asked: the driver passes the grouped store's own first and
+    last session, which bounds every book by construction, so no later date can fall
+    outside and each ticker is fetched once. A request outside it still widens and
+    refetches as before, and ``None`` keeps the old behaviour for callers with no span.
+
+    Because priming widens the FIRST fetch, there is no held series to fall back on if
+    the vendor refuses it, so a refused wide fetch retries the span that was actually
+    asked for. Otherwise widening could lose an answer the narrow span would have given.
+
+    An EMPTY series is deliberately NOT treated as a refusal. Review raised the worry
+    that a wide range might come back empty where a narrow one would have data, which
+    would leave the fallback unfired. Measured against the vendor on 12 tickers whose
+    first session in the grouped store is 2026-04 or later - the recent-listing case the
+    worry is about - the wide and narrow ranges returned IDENTICAL lengths, 125 each for
+    the 10 that have data and 0 for the 2 warrants that have none. For a DELISTED name
+    the wide range covers more of its trading life, not less. Meanwhile an empty answer
+    cached as an answer is what the warrants need: about 51 tickers have no reference at
+    all, and retrying each of them a second time every run would cost about 75 s for a
+    case the measurement does not produce.
 
     A failed fetch is cached as ``None`` for the rest of the run: the rows become
     unchecked, which is non-terminal, so the next pass retries rather than this one
     hammering a vendor that just said no.
     """
 
-    def __init__(self, fetch: ReferenceClosesFetch) -> None:
+    def __init__(
+        self, fetch: ReferenceClosesFetch, span: tuple[dt.date, dt.date] | None = None
+    ) -> None:
         self._fetch = fetch
         self._span: dict[str, tuple[dt.date, dt.date]] = {}
         self._series: dict[str, pd.Series | None] = {}
+        self._run_span = span
+
+    def _try(self, ticker: str, lo: dt.date, hi: dt.date) -> pd.Series | None:
+        try:
+            # [start, end) fetch contract, so +1 day to include the last session itself.
+            return self._fetch(ticker, lo, hi + dt.timedelta(days=1))
+        except Exception as exc:  # a broken fetch is "could not check", never a crash
+            logger.warning("selection-label: reference closes failed for %s - %s", ticker, exc)
+            return None
 
     def closes(self, ticker: str, start: dt.date, end: dt.date) -> pd.Series | None:
         upper = ticker.upper()
@@ -994,12 +1088,12 @@ class _ReferenceCloses:
             return self._series[upper]
         lo = min(start, held[0]) if held else start
         hi = max(end, held[1]) if held else end
-        try:
-            # [start, end) fetch contract, so +1 day to include the last session itself.
-            series = self._fetch(upper, lo, hi + dt.timedelta(days=1))
-        except Exception as exc:  # a broken fetch is "could not check", never a crash
-            logger.warning("selection-label: reference closes failed for %s - %s", upper, exc)
-            series = None
+        if held is None and self._run_span is not None:
+            lo, hi = min(lo, self._run_span[0]), max(hi, self._run_span[1])
+        series = self._try(upper, lo, hi)
+        if series is None and held is None and (lo, hi) != (start, end):
+            lo, hi = start, end
+            series = self._try(upper, lo, hi)
         if series is None and held is not None and self._series[upper] is not None:
             # A refused WIDENING must not evict a series that already answers the narrower
             # span: that would demote rows this run had already checked. This one request
@@ -1158,6 +1252,27 @@ def _book_for(
     return reader.book(before + window_sessions(anchor, MAX_HORIZON, exchange), tickers)
 
 
+def _run_universe(source: PopulationSource) -> set[str]:
+    """Every ticker this run can ask a session file for, plus the benchmark.
+
+    Built by walking the populations once up front so each session file is read once
+    rather than once per stamped date. A date whose population cannot be built is skipped
+    rather than raising: the universe is a hint, the stamping loop reports the failure,
+    and a ticker the walk misses still gets answered by one extra read.
+    """
+    tickers = {BENCHMARK_TICKER}
+    for date in source.dates():
+        try:
+            population = source.build(date)
+        except Exception:
+            # The stamping loop below reports a bad date; here the universe is only a
+            # hint, so a date that cannot be built costs an extra read and nothing else.
+            continue
+        if len(population):
+            tickers.update(str(t).upper() for t in population["ticker"])
+    return tickers
+
+
 def enrich_selection_labels(
     *,
     briefs_dir: Path = DEFAULT_BRIEFS_DIR,
@@ -1180,8 +1295,10 @@ def enrich_selection_labels(
     source = source or thematic_population_source(Path(briefs_dir), Path(shadow_dir))
     grouped = _dated_files(Path(grouped_root))
     newest_session = max(grouped) if grouped else None
-    reader = _SessionReader(Path(grouped_root))
-    references = _ReferenceCloses(reference_closes)
+    reader = _SessionReader(Path(grouped_root), universe=_run_universe(source))
+    references = _ReferenceCloses(
+        reference_closes, span=(min(grouped), max(grouped)) if grouped else None
+    )
     report = SelectionLabelReport()
     counts: Counter[str] = Counter()
     for brief_date in sorted(source.dates(), reverse=True):
