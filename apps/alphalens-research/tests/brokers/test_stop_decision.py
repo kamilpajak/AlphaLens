@@ -25,7 +25,14 @@ import dataclasses
 import math
 import unittest
 
-from broker_contract.stop_decision import TRAIL_STEP_EPS, StopDecisionView, decide_stop
+from broker_contract.stop_decision import (
+    TRAIL_STEP_EPS,
+    StopDecision,
+    StopDecisionView,
+    decide_reanchor_detail,
+    decide_stop,
+    decide_trail_detail,
+)
 from broker_contract.trade_intent.schema import ModelPush, ReanchorOnFill, TrailingStop
 
 _TRAIL = TrailingStop(arm_trigger_r=0.5, trail_frac=0.6)
@@ -307,3 +314,142 @@ class ShapeTest(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class TheDetailReportsTheLevelsTheDecisionUsedTest(unittest.TestCase):
+    """#1581 step 2: the daemon needs more than the price it places.
+
+    Its re-anchor arm compares the CLAMPED level against the RAW PROPOSAL and,
+    when they differ, carries that divergence to the journal (#1015); both arms
+    log a refusal that prints the proposal. A float answer cannot supply any of
+    it, and recomputing the proposal beside the decision cannot say WHICH guard
+    refused: measured on the trail arm, 394 of 458 post-proposal ``None``
+    answers are RATCHET refusals rather than clamp refusals, so a
+    recompute-and-guess log line would be wrong 86 per cent of the time.
+
+    So the leaf reports its own two levels. ``decide_stop`` keeps its exact
+    signature, because a second program calls it and renders its answer into a
+    schema-versioned published result.
+    """
+
+    def test_a_moved_stop_reports_the_proposal_and_the_level_it_placed(self) -> None:
+        detail = decide_trail_detail(_trail_view())
+        self.assertIsInstance(detail, StopDecision)
+        self.assertEqual(detail.proposed, 103.0)
+        self.assertEqual(detail.clamped, 103.0)
+        self.assertEqual(detail.level, 103.0)
+
+    def test_an_envelope_that_MOVED_the_target_reports_both_levels(self) -> None:
+        """The #1015 case, and the only one where ``proposed`` and ``clamped``
+        both exist and disagree. The daemon's re-anchor arm compares them with
+        ``math.isclose`` and, when they differ, carries the divergence to the
+        append-only journal. Every other case here has them equal or has one of
+        them absent, so without this case a record that reported ``proposed``
+        as a copy of ``clamped`` would pass.
+
+        Built from the arithmetic: a tiny ATR distance puts the target at 68.488,
+        inside the policy's 0.002 min-distance envelope around the 68.50 average
+        fill, so the envelope pulls it to 68.363 without refusing it."""
+        detail = decide_reanchor_detail(
+            _reanchor_view(reaction=ReanchorOnFill(k_atr=0.01, atr=1.20))
+        )
+        self.assertEqual(detail.proposed, 68.488)
+        self.assertEqual(detail.clamped, 68.363)
+        self.assertEqual(detail.level, 68.363)
+        self.assertNotEqual(detail.proposed, detail.clamped)
+
+    def test_the_trail_envelope_also_moves_targets_without_refusing_them(self) -> None:
+        """The same divergence on the TRAIL arm, where nothing records it today.
+
+        A pullback puts the live-price anchor below the policy's target: peak
+        110.00 with a live price of 101.00 proposes 106.00 and the 0.002
+        min-distance envelope places 100.798 instead. The daemon stamps no
+        journal record here and logs nothing -- that asymmetry with the
+        re-anchor arm is #1674 -- so this field is the only thing that reports
+        it, and without this case a record copying ``clamped`` into
+        ``proposed`` passes on this arm."""
+        detail = decide_trail_detail(_trail_view(peak=110.0, last_price=101.0))
+        self.assertEqual(detail.proposed, 106.0)
+        self.assertEqual(detail.clamped, 100.798)
+        self.assertEqual(detail.level, 100.798)
+
+    def test_a_clamp_refusal_reports_a_proposal_and_no_clamped_level(self) -> None:
+        """The condition the daemon's refusal log fires on: a proposal exists
+        and the never-below-brief-floor envelope refused it."""
+        detail = decide_trail_detail(_trail_view(plan_stop=99.0, peak=110.0, last_price=96.0))
+        self.assertEqual(detail.proposed, 106.0)
+        self.assertIsNone(detail.clamped)
+        self.assertIsNone(detail.level)
+
+    def test_a_ratchet_refusal_reports_a_clamped_level_and_still_no_answer(self) -> None:
+        """The case that makes the refusal predicate EXACT, and the reason the
+        leaf reports two levels instead of one.
+
+        The ratchet is the LAST gate, after the clamp, and it refuses in
+        SILENCE -- the daemon logs nothing here. So a refusal is a clamp refusal
+        when ``clamped is None and proposed is not None``, and a ratchet refusal
+        when ``clamped`` survives and ``level`` does not. Collapse the two into
+        one field and the daemon cannot tell them apart."""
+        detail = decide_trail_detail(_trail_view(ratchet_floor=102.99))
+        self.assertEqual(detail.proposed, 103.0)
+        self.assertEqual(detail.clamped, 103.0)
+        self.assertIsNone(detail.level)
+
+    def test_a_policy_that_is_dark_reports_no_proposal_at_all(self) -> None:
+        """Before activation the policy returns no target, so there is nothing
+        to log and nothing to compare: ``proposed`` is absent, not refused."""
+        detail = decide_trail_detail(_trail_view(peak=100.1, last_price=100.1))
+        self.assertIsNone(detail.proposed)
+        self.assertIsNone(detail.clamped)
+        self.assertIsNone(detail.level)
+
+    def test_a_guard_veto_reports_nothing(self) -> None:
+        detail = decide_trail_detail(_trail_view(has_sole_standalone_stop=False))
+        self.assertEqual((detail.proposed, detail.clamped, detail.level), (None, None, None))
+
+    def test_the_reanchor_detail_never_runs_the_trail_logic(self) -> None:
+        """TWO detail functions, not one routed on ``policy.trails``.
+
+        ``breakeven_trail`` carries ``trails=True`` AND
+        ``requires_amend_stop=True``, so a trailing declaration passes the
+        re-anchor arm's own guard. A single routed entry point would then run
+        the TRAIL branch where the daemon runs the re-anchor branch, which
+        answers ``None`` because the policy refuses without a peak. That is a
+        behaviour change, and it is reachable: four test modules call the arms
+        directly rather than through the router."""
+        # The view must carry a peak and a live price, or this test is VACUOUS:
+        # without them the trail branch vetoes on the feed and answers None too,
+        # so a routed entry point would give the same answer and the mutation
+        # would survive. Measured -- it did, until this view grew a peak.
+        view = _reanchor_view(reaction=_TRAIL, peak=105.0, last_price=105.0)
+        self.assertIsNone(decide_reanchor_detail(view).level)
+        # ... while the trail branch on that SAME view answers 90.4. That gap is
+        # what a single function routed on ``policy.trails`` would place where
+        # the daemon's re-anchor arm places nothing.
+        self.assertEqual(decide_trail_detail(view).level, 90.4)
+
+    def test_the_trail_detail_never_runs_the_reanchor_logic(self) -> None:
+        """The dual of the test above, and the reason the trails guard lives
+        INSIDE the leaf's trail branch rather than only in ``decide_stop``'s
+        routing. ``decide_trail_detail`` is called by the daemon's
+        ``_maybe_trail``, which has that guard, and four test modules call that
+        arm directly with whatever declaration they like. A trail entry point
+        that trusted its caller to have routed would answer for a declaration
+        the arm refuses."""
+        self.assertIsNone(decide_trail_detail(_trail_view(reaction=_REANCHOR)).level)
+        # Positive control: the re-anchor branch on that same declaration answers.
+        self.assertIsNotNone(decide_reanchor_detail(_reanchor_view()).level)
+
+    def test_decide_stop_answers_exactly_the_detail_it_routes_to(self) -> None:
+        """The wrapper cannot drift from the two functions, because it IS them."""
+        for name, view, detail in (
+            ("trail", _trail_view(), decide_trail_detail(_trail_view())),
+            ("reanchor", _reanchor_view(), decide_reanchor_detail(_reanchor_view())),
+        ):
+            with self.subTest(arm=name):
+                self.assertEqual(decide_stop(view), detail.level)
+
+    def test_the_record_is_frozen(self) -> None:
+        detail = decide_trail_detail(_trail_view())
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            detail.level = 1.0  # type: ignore[misc]
