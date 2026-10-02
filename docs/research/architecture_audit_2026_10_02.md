@@ -6,6 +6,12 @@
 **Harness:** `apps/alphalens-research/scripts/arch/` (tests in `apps/alphalens-research/tests/arch/`)
 **Scope:** read-only diagnosis. No production code changed, nothing deleted.
 
+**Amended 2026-10-03:** the context map was confirmed with the owner. §1.3 and
+§3 are rewritten on the strength of that pass, which dissolved two of the nine
+candidates and reframed two more; §3.1 records the method and marks every claim
+as the owner's assertion or as a measurement. No other number in this memo
+changed.
+
 **Acted on since (2026-10-02):** finding #4 shipped —
 `alphalens_pipeline.paper.calendar` moved to
 `alphalens_pipeline.market.calendar`. Every count in this memo is the
@@ -104,36 +110,65 @@ shell wrapper, or as the pipeline container's entrypoint.
 
 ### 1.3 The contexts, named
 
-Nine contexts, each with one owner and one way in. This table is the answer to
+**Seven contexts, confirmed with the owner on 2026-10-03.** §3.1 records that
+pass, including the two candidates it dissolved. This table is the answer to
 "where am I?".
 
 | Context | Lives in | Entered by | Writes |
 |---|---|---|---|
 | **Execution** (bracket keeper) | `alphalens_pipeline/brokers/**`, `broker_contract`, `alphalens_cli/commands/broker.py` | `alphalens broker manage` / `arm` / `auth` / `price-reader` daemons + timers | `broker_orders/` journals |
-| **Thematic selection** | `thematic/**`, `experts/**`, `scorers/` | `alphalens thematic {ingest,extract,map-themes,score,brief}` in the daily container | `thematic_briefs/`, `thematic_news/`, `buffett_qual/` |
-| **Feedback / edge** | `feedback/**`, `alphalens-feedback`, Django `edge/` | `alphalens feedback backfill-shadow-returns`, hourly edge mirror | `population_ladders/`, Postgres `edge_ladderoutcome` |
+| **Thematic selection** | `thematic/**`, `experts/**`, `scorers/`, `feedback/**`, `alphalens-feedback`, Django `edge/` | `alphalens thematic {ingest,extract,map-themes,score,brief}` in the daily container; `alphalens feedback backfill-shadow-returns`; hourly edge mirror | `thematic_briefs/`, `thematic_news/`, `buffett_qual/`, `population_ladders/`, Postgres `edge_ladderoutcome` |
 | **Data acquisition + PIT store** | `data/**` | Form-4 and grouped-daily timers, plus lab callers | `form4_parquet/`, `grouped_daily_history/`, `companyfacts_parquet/` |
 | **EDGAR detection** | `edgar_detector/` | `alphalens edgar detect`, every 15 min | `edgar-detect/` |
 | **Literature scanning** | `literature_scanner/` | weekly + monthly timers via a shell wrapper | `docs/research/literature_review/` (commits to `main`) |
-| **Publication** | `alphalens-django/{briefs,market,config,auth_cf}`, `apps/web` | gunicorn behind the tunnel; Cloudflare Pages | Postgres `briefs`, `days_meta` |
 | **Research lab** | `alphalens_research/**` + `scripts/` | by hand, plus 8 systemd-run scripts | `audit/`, ad-hoc |
 | **Intent replay** | `apps/intent-replay` | by hand (`python -m intent_replay`) | nothing — it stamps no state |
 
-Two context boundaries are **not** where their directory names suggest:
+**Two things in this repo are not contexts**, though an earlier draft of this
+memo listed them as such:
 
-- **`alphalens_pipeline/data/` is substantially research-tier, not live
-  infrastructure.** 11 of its modules (1 649 LOC) are referenced only by
-  scripts, the lab and tests — never by anything the deployment runs (§6).
-  ADR 0011 frames the pipeline app as live infrastructure; for `data/` that is
-  only partly true.
-- **`alphalens_pipeline/paper/` is a misleading home for live primitives.**
-  `paper.calendar` has the highest static inbound reference count in the repo
-  (41), and the name says it belongs to a feature ADR 0012 decommissioned.
-  **Correction (2026-10-02):** this memo first called `paper/` "a decommissioned
-  context". That was imprecise — ADR 0012 decommissioned paper *trading*, the
-  Alpaca harness; the package survived as the home of helpers that outlived it
-  and `paper/__init__.py` declares `__status__ = "ACTIVE"` deliberately. The
-  problem is the NAME, not a dead package.
+- **Publication** (`alphalens-django/{briefs,market,config,auth_cf}`, `apps/web`)
+  is the **face** of thematic selection, not a model of its own. Measured: the
+  whole briefs app defines exactly one computed serializer field (`top_theme`,
+  which picks the first theme off a list) and the `Brief` model declares no
+  derived property at all. It publishes what the pipeline decided.
+- **Feedback / edge** is thematic selection's **measuring arm**. Its subject is
+  the candidate population — every candidate of every brief — and not the
+  trades the owner actually took. Owner statement, 2026-10-03: `/edge` answers
+  "does the pipeline select well?".
+
+**One context is missing from the repo.** The outcome of the owner's real
+trades lives nowhere in it; he reads it off the broker's own web interface. This
+is a gap, not a mis-drawn boundary, and it carries a vocabulary trap: the word
+"edge" on the dashboard means *the quality of the machine's selection*, never
+*how the owner's money is doing*. Status: undecided by the owner (#1689).
+
+**One entry point per context is a premise, not a proof.** Each context above
+has exactly one way in (§1.2), and that is useful evidence about the deployment.
+It is the weakest of the three signals for a *semantic* boundary: one process
+can host two models, and one model can have two interfaces. §3 reports the
+boundaries this evidence could not settle on its own.
+
+One boundary is still not where its directory name suggests:
+
+- **`alphalens_pipeline/data/` holds research-tier code that writes a
+  production store.** 11 of its modules (1 649 LOC) are imported only by
+  scripts, the lab and tests — never by anything the deployment runs (§6). It
+  does not follow that nothing live consumes their output. Owner statement,
+  2026-10-03: insider transactions feed the briefs. Verified: the nightly
+  writer `apps/alphalens-research/scripts/run_form4_daily_incremental.py`
+  imports `alphalens_pipeline.data.alt_data.form4_incremental`, while the live
+  reader `alphalens_pipeline/thematic/sources/form4_store.py` opens
+  `~/.alphalens/form4_parquet/` **by path and imports nothing from `data/`**.
+  Writer and reader share a hive-partitioned layout and a column set, with no
+  gate and no import edge. That is the whole content of #1679: the code may
+  move to the lab, the store contract may not move with it.
+
+The `paper.calendar` anomaly this memo reported at publication time is
+**resolved**: #1687 moved the calendar, session and bar primitives to
+`alphalens_pipeline/market/`, so the repo's most-shared primitive no longer
+lives in a package named after a decommissioned feature. §2.4's fan-in figure
+was measured before that move.
 
 ---
 
@@ -230,18 +265,20 @@ labelled a public-API ranking.
 
 ---
 
-## 3. Bounded contexts — the evidence, and what it cannot settle
+## 3. Bounded contexts — the evidence, and what the owner settled
 
 Three independent signals were measured. They agree more than they disagree,
-which is the useful result.
+which is the useful result. What they could not decide was decided in one pass
+with the owner on 2026-10-03, recorded in §3.1.
 
 **Import clustering** (§2) separates the contexts cleanly. **Runtime ownership**
-(§1.2) gives each context exactly one entry point, with the two exceptions
-named in §1.3.
+(§1.2) gives each context exactly one entry point — useful evidence about the
+deployment, and the weakest of the three for a semantic boundary (§1.3).
 
 **Co-change coupling** — how often two contexts appear in the same commit, as a
 share of the smaller one's commits, over 1 155 classified commits since
-2026-04-01:
+2026-04-01, measured against the nine-candidate labelling this memo started
+with:
 
 | Pair | Coupling |
 |---|---:|
@@ -254,27 +291,96 @@ share of the smaller one's commits, over 1 155 classified commits since
 Treat this as corroboration only, never as a boundary. A solo author bundles
 related work into one commit, and the measurement shows that artifact plainly:
 `docs` co-occurs with everything, because a design memo ships with the code it
-describes. The one pair worth looking at is publication ↔ feedback, which is
-the `/edge` dashboard: Django serializers and the feedback pipeline change
-together because they share a data contract (§5), not because they share code.
+describes.
 
-That `execution ↔ thematic` does not register is a real positive result: it
-independently confirms what the parked split blueprint claims, that the broker
-is already decoupled from selection.
+Both extremes of that table turned out to mean something, and neither meant
+what the number alone suggested:
 
-**What none of this can settle.** A bounded context is where the domain
-language changes, which is a judgement, not a graph property. The table in
-§1.3 is the audit's best reading of the evidence; it needs one pass with the
-owner to name each context in his own vocabulary and confirm the two
-boundaries that contradict their directory names. That pass is the remaining
-work on this question.
+- **publication ↔ feedback at 34.7% is one thing, not two coupled things.**
+  The owner pass dissolved both labels: feedback is thematic selection's
+  measuring arm, and publication is its face. A dashboard and the measurement
+  it displays are not two contexts with a suspiciously busy edge between them.
+- **execution ↔ thematic not registering at all is a satisfied design goal.**
+  Owner statement: the bracket keeper is deliberately client-agnostic, and the
+  brief and the WhatsApp group are two of its clients. The absence is the
+  property, not a gap.
+
+### 3.1 The owner pass, 2026-10-03
+
+A bounded context is where the domain language changes, which is a judgement
+and not a graph property. The pass put that judgement where it belongs.
+
+**Method.** The candidate table was NOT shown first. Presenting nine finished,
+named candidates anchors the only domain expert available and invites him to
+adjust the proposal rather than draw his own line. So the owner first narrated
+one concrete end-to-end case — a real trade, from where the idea came from to
+how he learned the outcome — and then one exception, with directory names,
+package names and this memo's context labels withheld. The candidate cards came
+second, as hypotheses to attack. Each claim below is marked **[owner]** for his
+assertion or **[measured]** for a check run against the code.
+
+**What the pass changed.** Four candidates were put under attack; three did not
+survive.
+
+| Candidate | Outcome |
+|---|---|
+| Feedback / edge as its own context | **Dissolved.** `/edge` answers "does the pipeline select well?" **[owner]**, and its subject is every candidate of every brief rather than the owner's own trades **[owner]**. Merged into thematic selection as its measuring arm. |
+| Publication as its own context | **Dissolved.** The briefs app defines one computed serializer field and no derived model property **[measured]**, so it publishes what the pipeline decided and owns no concept of its own. |
+| `data/` as research-tier | **Reframed, not dissolved.** Insider transactions feed the briefs **[owner]**; the acquisition code is imported only by scripts, the lab and tests while the live reader opens the store by path **[measured]**. Research-tier code, production store, no import edge between them. |
+| Execution as a stage after selection | **Reframed.** It is a client-agnostic service whose client is the moment a human decided to trade **[owner]**, not any upstream source. |
+
+**What the pass added that no measurement had.** Three things, each of which an
+import graph and a commit history are structurally unable to see:
+
+1. **A missing context.** The realized outcome of real trades lives nowhere in
+   the repo; the owner reads it off the broker **[owner]**. §1.3 and #1689.
+2. **A rail that belongs to the machine, not to the portfolio.** Arming was
+   once refused for want of queue slots, and the owner raised the limit thinking
+   "the machine is being over-cautious, I know how much of this I want"
+   **[owner]**. So the keeper does not own the rule "how many positions do I
+   hold at once" — that rule lives with the owner, outside the software.
+3. **A number whose author is unknown.** In the trade walked through, the owner
+   could not say whether the stop loss came from the group's message or was
+   chosen while the document was written **[owner]**, and the document records
+   no difference. #1690.
+
+**What the pass did not settle.** Whether the dashboard can show anything the
+pipeline does not compute was asked of the owner and should not have been — it
+is a fact about the code, and it was settled by measurement instead (one
+computed field, no derived properties). The realized-performance question
+(#1689) is genuinely open and is recorded as undecided rather than answered.
+
+### 3.2 Relationship map
+
+Seven names are an index. The map is the edges between them: who produces what,
+what fact crosses, who owns its shape, and what is assumed. Every edge below is
+out-of-band — a store, not a function call — which is why §2 cannot see any of
+them.
+
+| Edge | Fact that crosses | Shape owner | Gate | Open assumption |
+|---|---|---|---|---|
+| human decision → **execution** | a whole trade: levels, size, exits | `broker_contract` schema + the `arm` door | yes — schema, codec, fixed point, key rules | which numbers the author chose is not recorded (#1690) |
+| **data** → **thematic** (`form4_parquet/`) | insider transactions, hive-partitioned by `transaction_year` | nobody; the writer's layout is the contract | none | writer and reader agree on the column set by convention only |
+| **data** → **thematic** (`grouped_daily_history/`) | split-adjusted whole-market closes | the backfill script | none | must stay `adjusted=true`; the monitor's raw-close cache must not be merged into it |
+| **thematic** stages → each other, and → the lab (`thematic_briefs/`) | the brief: 164 columns | the writing stage | **none for 77 of 164 columns** (§5.1) | a renamed or dropped column breaks readers silently |
+| **thematic** → its own face (Postgres `briefs`, `days_meta`) | the published brief, 87 shared columns | Django model + OpenAPI schema | yes — `test_schema_parity.py`, `test_openapi_parity.py` | the gated boundary is not the one where the coupling lives |
+| **thematic** measuring arm → its face (`population_ladders/` → `edge_ladderoutcome`) | per-candidate ladder outcomes | the feedback writer | mtime-gated rebuild, no schema gate | `/edge` means selection quality, never the owner's P&L |
+| **execution** → *nothing* | realized outcome of a real trade | — | — | the edge does not exist; the owner reads the broker (#1689) |
+| all of the above → **market primitives** | what a trading session is | `alphalens_pipeline/market/` | the dependency gate forbids the reverse direction | a "generic" calendar must not quietly decide broker or eligibility policy |
+
+The last row is the one to watch. A shared primitive with the repo's highest
+inbound reference count is a generic capability only as long as it stays
+generic; the moment it decides something a context owns, every consumer
+inherits that decision through an API that looks neutral.
 
 **Parked split blueprint.** `docs/research/bracket_keeper_repo_split_stage1_design_2026_08_02.md`
 was written at `7d6783f9`, two months and several hundred commits ago. Its
-central claim still holds at `e49a5c1b`: the execution context's only residual
-upward edge of substance is `paper.calendar`, which §2.4 independently
-identifies as the repo's most-shared primitive. The blueprint's edge table
-should be re-verified line by line before it is executed, but it has not rotted.
+central claim still holds: the execution context's only residual upward edge of
+substance was the shared calendar, which #1687 has since moved into
+`alphalens_pipeline/market/`. The blueprint's edge table should be re-verified
+line by line before it is executed, but it has not rotted — and the owner pass
+independently confirmed its premise, that the keeper serves clients rather than
+sitting downstream of selection.
 
 ---
 
@@ -510,9 +616,11 @@ Cost of leaving it against cost of fixing it. Nothing here was changed.
 | 11 | Root `pyproject.toml` carries `per-file-ignores` for `apps/alphalens-pipeline/tests/*`, which does not exist | §9 | harmless, but it is a rule guarding nothing | doc/config PR |
 | 12 | `just lint` omits `alphalens-broker-contract` and `alphalens-feedback`, which CI does lint | §9 | local lint is greener than CI | one-line `justfile` fix |
 
-**Issues filed:** only where the owner must decide — findings 1, 2, 4, 5 and the
-§7 test-app question. The rest are rows here, deliberately: the board grew +38
-net in 8 weeks and the rule that followed was to fix rather than file.
+**Issues filed:** only where the owner must decide — findings 1, 2, 4, 5, the
+§7 test-app question, and the two decisions the owner pass turned up (#1689 the
+missing realized-outcome context, #1690 a pick that does not record which of
+its numbers the author chose). The rest are rows here, deliberately: the board
+grew +38 net in 8 weeks and the rule that followed was to fix rather than file.
 
 ---
 
@@ -540,6 +648,21 @@ modules are absent, and a control that an unrelated directory named `arch`
 elsewhere would still be measured. Every figure in this report is from after
 that fix.
 
+**A fifth correction, and the only one that is not arithmetic.** The owner pass
+(§3.1) overturned three of this memo's readings. None of them was a wrong
+number; each was a correct number read as something it did not say.
+
+| As published | What it actually is | Why no measurement could have caught it |
+|---|---|---|
+| "Nine contexts, each with one owner and one way in" | Seven. One entry point per context is evidence about the deployment, not about the domain language | A runtime boundary and a language boundary are different objects; the harness only sees the first |
+| The 34.7% publication ↔ feedback pair is "a three-layer data contract" between two contexts | One thing — selection's measuring arm and the face that displays it | Co-change cannot distinguish "two contexts that change together" from "one context split across two directories" |
+| "`alphalens_pipeline/data/` is substantially research-tier, not live infrastructure" | The acquisition code is research-tier; the store it writes is a production input to the briefs | The join between them is a filesystem path, so the import graph correctly reported no edge — and the absence of an edge was read as the absence of a consumer |
+
+The method is what produced these. The candidate table was deliberately held
+back until after the owner had narrated a real case in his own words; three of
+the four candidates then attacked did not survive. Had the table been shown
+first, the likely outcome was agreement with it.
+
 **The lesson worth keeping:** the two planning numbers that moved most were the
 two that pointed at a problem. "5 cycles" suggested a tangle; there is none at
 import time. "39 unreachable modules" suggested dead code; there is 83 lines of
@@ -563,5 +686,7 @@ the same failure this project recorded in the #1227 power-gate postmortem.
   avoiding Sonar's number rather than mixing them. Entering a context manager
   is not counted as a decision, matching standard implementations; the figures
   in §4.1 are identical either way (`control_loop.py` has 4 `with` items).
-- **The context map is unconfirmed.** §3 says what the evidence supports; the
-  owner naming each context is the step that completes it.
+- **The context map is now confirmed** (§3.1, 2026-10-03) — but one question
+  inside it is open rather than answered: whether the realized outcome of real
+  trades should live in this repo at all (#1689). The map records the gap and
+  not a plan.
