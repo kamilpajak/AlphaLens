@@ -286,7 +286,7 @@ by field:
 | `reaction` | primitive \| None | what the document declared |
 | `has_sole_standalone_stop` | bool | the PREDICATE's result, never the order legs |
 | `amend_in_backoff` | bool | same — a result, not the failure history |
-| `last_trailed_level` | float \| None | the ratchet floor |
+| `ratchet_floor` | float \| None | the level a new proposal must clear, COMPOSED by the caller as the higher of the last trailed level and the level the stop is resting at. Named `last_trailed_level` until 2026-10-02, when #1581 found the leaf ratcheting against one floor where the daemon ratchets against two (#1514): the journaled level can lag the resting one, and a proposal between them would patch the resting stop DOWN. Both inputs are the caller's own — a journal fold and an order leg's price — so the composition stays caller-side and nothing order-shaped crosses |
 | `already_reanchored` | bool | the re-anchor arm's idempotence latch, as the PREDICATE's result: a confirmed re-anchor already fired for this average fill (`reanchored_by_uic`, compared by the daemon with its own tolerance); a replay knows this from its own trace |
 
 Nothing here is broker-order-shaped: the three state questions cross as

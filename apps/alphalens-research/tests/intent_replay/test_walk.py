@@ -1674,5 +1674,62 @@ class TheFilledFractionIsAFractionOfWhatTheLadderSplitsTest(unittest.TestCase):
         self.assertEqual(result.filled_fraction, 0.0)
 
 
+class TheRatchetFloorIsTheHigherOfTheTwoFloorsTheWalkHoldsTest(unittest.TestCase):
+    """The walk holds TWO floors and hands the leaf one of them (#1581).
+
+    ``state.stop`` is the level resting at the broker and ``state.last_trailed_level``
+    is the level a trail last moved it to. The live daemon ratchets a proposal
+    against the HIGHER of those two (``position_manager.py:985-991``, citing
+    #1514: the journaled level can lag the resting one after a lost marker or an
+    owner-raised stop). The walk passed only the second, so before the first
+    trail move -- when the trailed level is still ``None`` and the resting stop is
+    the declared floor -- it had no floor at all.
+
+    The window is narrow and that is the clamp's doing, not luck: the clamp
+    already refuses anything below ``plan_stop``, which IS the resting stop at
+    that moment, so the gap is confined to the ``TRAIL_STEP_EPS`` band of 0.02
+    above the floor. Measured 2026-10-02 on the leaf: 15 of 200 000 draws, worst
+    distance 1.57e-02. Narrow is not zero, and the same composition is what makes
+    the daemon safe to rewire onto this leaf.
+
+    Both rows below are measured, and the second is the existence control: a
+    composition that vetoed every move would satisfy the first row alone.
+    """
+
+    # R = 63.08 - 63.00 = 0.08, so the trail arms at 63.08 + 0.5R = 63.1200 and
+    # the bar's 63.13 high reaches it. The level the leaf then proposes is
+    # 63.00374, which is 0.00374 above the floor -- inside the 0.02 band.
+    TIGHT_FLOOR, TIGHT_RUNG = 63.00, 63.08
+    TIGHT_BAR = _bar(WALK_START, 63.08, 63.13, 63.01, 63.10)
+    # R = 3.08, arming at 64.6200, and the proposal lands 4.832 above the floor.
+    WIDE_FLOOR, WIDE_RUNG = 60.00, 63.08
+    WIDE_BAR = _bar(WALK_START, 63.08, 66.00, 63.01, 65.00)
+
+    def _moves(self, floor: float, rung: float, bar: Bar) -> list[Any]:
+        plan = _plan(
+            entries=(PendingEntry(tier_index=0, limit_price=rung, notional=1000.0),),
+            notional=1000.0,
+            floor=floor,
+            reaction=TRAIL,
+        )
+        return [
+            event for event in walk(plan, _config(), (bar,)).events if event.kind == "stop_moved"
+        ]
+
+    def test_a_proposal_inside_the_band_above_the_resting_stop_is_vetoed(self) -> None:
+        # Without the composition the walk emits ``stop_moved 63.00 -> 63.00374``
+        # and the daemon, handed the same view with the stop resting at 63.00,
+        # answers None. The resting stop is a floor, so there is nothing to move.
+        self.assertEqual(self._moves(self.TIGHT_FLOOR, self.TIGHT_RUNG, self.TIGHT_BAR), [])
+
+    def test_a_proposal_clear_of_the_band_still_moves_the_stop(self) -> None:
+        # The existence control. Composing the floor must not turn the ratchet
+        # into a blanket refusal; a proposal 4.832 above the floor clears it.
+        moves = self._moves(self.WIDE_FLOOR, self.WIDE_RUNG, self.WIDE_BAR)
+        self.assertEqual(len(moves), 1)
+        self.assertEqual(moves[0].before, self.WIDE_FLOOR)
+        self.assertAlmostEqual(moves[0].after, 64.832, places=9)
+
+
 if __name__ == "__main__":
     unittest.main()

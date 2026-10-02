@@ -428,7 +428,7 @@ class TheTrailRatchetNeverLowersTheStopTest(PropertyTestCase):
 
     The section scopes monotonicity to "within one average fill". For the trail
     that is strictly WEAKER than the truth and does not need stating: the
-    ratchet compares the clamped level against `last_trailed_level`, which
+    ratchet compares the clamped level against `ratchet_floor`, which
     persists across fills, so the whole trace is monotone. Measured: zero
     decreases in 11 997 generated runs.
 

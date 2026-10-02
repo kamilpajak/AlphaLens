@@ -753,6 +753,35 @@ def _decide_stop(state: _WalkState, bar: Bar, plan: Plan, *, trails: bool) -> No
     if state.stop is None:
         return
     average = state.cash / state.units
+    # The ratchet floor is the HIGHER of the two floors the walk holds, which is
+    # what the daemon compares against (#1514, #1581). ``state.stop`` is the level
+    # resting at the broker and ``state.last_trailed_level`` is the level a trail
+    # last moved it to; before the first trail move the second is ``None`` while
+    # the first is the declared floor, so passing the second alone left the
+    # ratchet with no floor at all and let a proposal inside the
+    # ``TRAIL_STEP_EPS`` band above the resting stop through.
+    #
+    # Two details are load-bearing, both measured rather than reasoned:
+    #
+    # * the ARGUMENT ORDER is the daemon's, journaled before resting. ``max`` keeps
+    #   its first argument when the comparison is False, so ``max(nan, 56.0)`` is
+    #   ``nan`` and ``max(56.0, nan)`` is ``56.0``. The leaf compares its floor raw
+    #   and documents what a NaN floor does; reversing the order here would answer
+    #   a different question than the daemon answers.
+    # * the filter is ``is not None`` and never truthiness. A floor of exactly
+    #   ``0.0`` is a floor, and ``filter(None, ...)`` would drop it.
+    #
+    # The daemon reads its resting floor through ``_finite_positive``, so it
+    # treats zero, negatives and non-finite prices as absent, and this does not.
+    # That is not a gap here, and the reason is measured rather than argued:
+    # before the first trail move ``state.stop`` IS ``plan.declared_floor``, so a
+    # non-positive one makes ``plan_stop`` non-positive too and the leaf refuses
+    # on that alone -- checked at ``plan_stop`` 0.0, where the leaf answers None
+    # for a floor of 0.0 and for no floor alike. After the first move
+    # ``state.stop`` is a level the clamp produced, which is finite and positive.
+    # So the filtered and unfiltered forms cannot disagree on any input the walk
+    # can reach, and adding the guard would be dead code.
+    floors = [level for level in (state.last_trailed_level, state.stop) if level is not None]
     level = decide_stop(
         StopDecisionView(
             avg_price=average,
@@ -762,7 +791,7 @@ def _decide_stop(state: _WalkState, bar: Bar, plan: Plan, *, trails: bool) -> No
             reaction=plan.reaction,
             has_sole_standalone_stop=True,
             amend_in_backoff=False,
-            last_trailed_level=state.last_trailed_level,
+            ratchet_floor=max(floors) if floors else None,
             already_reanchored=state.latched_avg is not None and state.latched_avg == average,
         )
     )
