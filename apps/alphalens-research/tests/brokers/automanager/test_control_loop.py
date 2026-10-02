@@ -8057,6 +8057,235 @@ class TestRunDaemonNeverNaked(unittest.TestCase):
         self.assertEqual(len(run_at), 2)
 
 
+def _book_order(order_id: str, filled: float = 0.0) -> OrderState:
+    return OrderState(
+        order_id=order_id,
+        status=OrderStatus.PARTIALLY_FILLED if filled else OrderStatus.WORKING,
+        instrument=None,
+        filled_quantity=filled,
+        raw_status="Working",
+        side="BUY",
+        order_type="TrailingStopIfTraded",
+    )
+
+
+class _Book:
+    """A scripted order book: each probe pops the next listing (the last one
+    repeats), or raises when the step is an exception."""
+
+    def __init__(self, steps: list[Any]) -> None:
+        self._steps = list(steps)
+        self.reads = 0
+
+    def __call__(self) -> list[OrderState]:
+        self.reads += 1
+        step = self._steps.pop(0) if len(self._steps) > 1 else self._steps[0]
+        if isinstance(step, Exception):
+            raise step
+        return list(step)
+
+
+class TestRunDaemonWakesOnAnEntryFill(unittest.TestCase):
+    """#1402. On LIVE the poll-only wait was a fixed 45 s, so a native trailing
+    BUY that filled at the venue waited up to a whole ~58 s cycle for its stop
+    (measured 3.3-55.6 s, median 29 s over 15 entries). While such an order rests,
+    the wait now probes the book every 5 s and, on a new fill observation, runs a
+    protection pass at once and then the normal tick."""
+
+    _PROBE = 5.0
+
+    def _run(
+        self,
+        *,
+        armed: Callable[[], frozenset[str]],
+        book: _Book,
+        ticks: int,
+        seen: dict[str, Any] | None = None,
+    ) -> tuple[list[float], list[float]]:
+        clock = _Clock()
+        run_at: list[float] = []
+        deps = _daemon_deps(run_at, clock)
+        slept: list[float] = []
+
+        def _sleep(seconds: float) -> None:
+            slept.append(seconds)
+            clock.now += seconds
+
+        probe = cl.EntryFillProbe(
+            armed_order_ids=armed, list_open_orders=book, seen={} if seen is None else seen
+        )
+        cl.run_daemon(
+            deps,
+            once=False,
+            poll_seconds=45.0,
+            is_running=_stop_after(ticks),
+            heartbeat_fn=lambda _kill: None,
+            sleep_fn=_sleep,
+            wake_event=None,
+            monotonic=clock,
+            fill_probe=probe,
+        )
+        return run_at, slept
+
+    def test_nothing_armed_is_the_plain_sleep_with_no_clock_read(self) -> None:
+        clock = _Clock()
+        run_at: list[float] = []
+        deps = _daemon_deps(run_at, clock)
+        slept: list[float] = []
+        book = _Book([[]])
+
+        def _forbidden_monotonic() -> float:
+            raise AssertionError("monotonic must not be read when nothing is armed")
+
+        cl.run_daemon(
+            deps,
+            once=False,
+            poll_seconds=45.0,
+            is_running=_stop_after(2),
+            heartbeat_fn=lambda _kill: None,
+            sleep_fn=slept.append,
+            wake_event=None,
+            monotonic=_forbidden_monotonic,
+            fill_probe=cl.EntryFillProbe(armed_order_ids=frozenset, list_open_orders=book, seen={}),
+        )
+        self.assertEqual(slept, [45.0, 45.0])
+        self.assertEqual(book.reads, 0)
+
+    def test_a_resting_order_probes_every_five_seconds_and_keeps_the_cadence(self) -> None:
+        book = _Book([[_book_order("o1")]])
+        run_at, slept = self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=2)
+        self.assertEqual(run_at, [1000.0, 1045.0])
+        self.assertEqual(slept[:9], [self._PROBE] * 9)
+        # Two waits (run_daemon also waits after the last tick), 8 probes each:
+        # none once the deadline is reached.
+        self.assertEqual(book.reads, 16)
+
+    def test_an_order_that_leaves_the_book_wakes_protection_then_the_tick(self) -> None:
+        book = _Book([[_book_order("o1")], [_book_order("o1")], []])
+        run_at, _ = self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=2)
+        # Tick 1 at 1000; the order is gone at the third probe (1015): a fast
+        # protection pass, then the normal tick, both at 1015.
+        self.assertEqual(run_at, [1000.0, 1015.0, 1015.0])
+
+    def test_a_partial_fill_wakes_once_and_the_same_quantity_does_not_wake_again(self) -> None:
+        book = _Book([[_book_order("o1")], [_book_order("o1", filled=3.0)]])
+        run_at, _ = self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=3)
+        # Woken at 1010 by the growth to 3; the next wait sees 3 again every
+        # probe and runs the full 45 s.
+        self.assertEqual(run_at, [1000.0, 1010.0, 1010.0, 1055.0])
+
+    def test_a_gone_order_that_stays_armed_wakes_once_not_every_cycle(self) -> None:
+        # Audit REJECTED/UNKNOWN keeps the tier armed for good. Without the
+        # memo this would tick every ~5 s forever.
+        book = _Book([[]])
+        run_at, _ = self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=3)
+        self.assertEqual(run_at, [1000.0, 1005.0, 1005.0, 1050.0])
+
+    def test_the_memo_survives_across_waits_on_the_deps(self) -> None:
+        seen: dict[str, Any] = {}
+        book = _Book([[]])
+        self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=2, seen=seen)
+        run_at, _ = self._run(armed=lambda: frozenset({"o1"}), book=_Book([[]]), ticks=2, seen=seen)
+        self.assertEqual(run_at, [1000.0, 1045.0])  # already seen absent: no wake
+
+    def test_a_failing_probe_waits_the_full_poll_and_warns_once(self) -> None:
+        book = _Book([BrokerError("book read failed")])
+        with self.assertLogs(cl.logger, level="WARNING") as caught:
+            run_at, _ = self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=3)
+        self.assertEqual(run_at, [1000.0, 1045.0, 1090.0])
+        warnings = [line for line in caught.output if "fill probe" in line]
+        self.assertEqual(len(warnings), 1, caught.output)
+
+    def test_the_fast_protection_pass_does_not_count_toward_the_oco_lag_alert(self) -> None:
+        book = _Book([[]])
+        with mock.patch.object(cl, "_track_oco_lag") as track:
+            self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=2)
+        # Two run_once ticks track the lag; the fast pass between them does not.
+        self.assertEqual(track.call_count, 2)
+
+
+class _ResolvingBroker(_StubBroker):
+    """A stub that can classify a gone order and list the book."""
+
+    def resolve_order_outcome(self, order_id: str) -> OrderState:  # pragma: no cover - unused
+        raise AssertionError("not reached")
+
+    def get_open_position_references(self) -> list[str]:  # pragma: no cover - unused
+        return []
+
+    def get_closed_position_rows(self) -> list[dict[str, Any]]:  # pragma: no cover - unused
+        return []
+
+    def list_open_orders(self) -> list[OrderState]:
+        return [_book_order("o1")]
+
+
+class TestTheDaemonBuildsItsFillProbe(unittest.TestCase):
+    """The production probe watches exactly what the entry-trail reconcile owns:
+    resting armed tiers, under the reconcile's own two gates (the feature flag
+    and a broker that can classify a gone order)."""
+
+    def _deps(self, broker: Any) -> cl.LoopDeps:
+        with TemporaryDirectory() as d:
+            return _deps(broker, kill_file=Path(d) / "KILL", verdicts=[], place_calls=[], alerts=[])
+
+    def _armed(self, order_id: str | None) -> dict[str, Any]:
+        return {"crid-t0": mock.Mock(armed_order_id=order_id)}
+
+    def test_it_reports_the_armed_order_ids_when_trailing_is_on(self) -> None:
+        deps = self._deps(_ResolvingBroker())
+        with (
+            mock.patch.object(entry_trails, "entry_trail_bps", return_value=50),
+            mock.patch.object(entry_trails, "read_entry_trail_fold"),
+            mock.patch.object(cl, "_resting_armed_tiers", return_value=self._armed("o1")),
+        ):
+            probe = cl.build_entry_fill_probe(deps)
+            self.assertIsNotNone(probe)
+            assert probe is not None
+            self.assertTrue(probe.arm())
+
+    def test_nothing_is_armed_while_entry_trailing_is_off(self) -> None:
+        deps = self._deps(_ResolvingBroker())
+        with (
+            mock.patch.object(entry_trails, "entry_trail_bps", return_value=0),
+            mock.patch.object(cl, "_resting_armed_tiers", return_value=self._armed("o1")),
+        ):
+            probe = cl.build_entry_fill_probe(deps)
+            assert probe is not None
+            self.assertFalse(probe.arm())
+
+    def test_nothing_is_armed_when_the_broker_cannot_resolve_a_gone_order(self) -> None:
+        class _NoResolution(_StubBroker):
+            def list_open_orders(self) -> list[OrderState]:
+                return []
+
+        deps = self._deps(_NoResolution())
+        with (
+            mock.patch.object(entry_trails, "entry_trail_bps", return_value=50),
+            mock.patch.object(cl, "_resting_armed_tiers", return_value=self._armed("o1")),
+        ):
+            probe = cl.build_entry_fill_probe(deps)
+            assert probe is not None
+            self.assertFalse(probe.arm())
+
+    def test_a_broker_without_an_order_book_read_gets_no_probe(self) -> None:
+        deps = self._deps(object())
+        self.assertIsNone(cl.build_entry_fill_probe(deps))
+
+    def test_the_memo_lives_on_the_deps(self) -> None:
+        deps = self._deps(_ResolvingBroker())
+        with (
+            mock.patch.object(entry_trails, "entry_trail_bps", return_value=50),
+            mock.patch.object(entry_trails, "read_entry_trail_fold"),
+            mock.patch.object(cl, "_resting_armed_tiers", return_value=self._armed("o1")),
+        ):
+            probe = cl.build_entry_fill_probe(deps)
+            assert probe is not None
+            probe.arm()
+            probe.fill_seen()
+        self.assertEqual(deps.entry_fill_seen, {"o1": ("resting", 0.0)})
+
+
 class TestRunDaemonAbsoluteDeadline(unittest.TestCase):
     """Absolute-deadline scheduling: early wakes give EXTRA passes but never push
     the guaranteed backstop past the fixed wall-clock grid (adversary-2 fix)."""

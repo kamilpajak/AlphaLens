@@ -111,6 +111,7 @@ from alphalens_pipeline.brokers.reconcile import (
     OutcomeAuditBudget,
     SupportsOrderResolution,
     SupportsOutcomeCachePeek,
+    extract_activity_time,
 )
 from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 
@@ -316,6 +317,10 @@ class LoopDeps:
     # pages once via the shared throttle. Frozen forbids REBINDING the field, not
     # mutating the dict it points at.
     oco_lag_counts: dict[int, int] = field(default_factory=dict)
+    # #1402: order id -> the last fill observation the entry fill probe made
+    # (``EntryFillProbe``). Carried across waits so a tier whose order is gone
+    # but never resolves wakes the daemon once, not on every probe.
+    entry_fill_seen: dict[str, tuple[str, float]] = field(default_factory=dict)
     # uic -> the raised managed-exit stop last announced in the log. Carried
     # across ticks so ``_build_managed_exits`` says a raise once per level, not
     # once a minute while it holds. Mutable dict on the frozen deps, as above.
@@ -1790,7 +1795,12 @@ def _fetch_protection_peaks(
 
 
 def _run_protection_pass(
-    deps: LoopDeps, records: list[Mapping[str, Any]], kill: bool, report: TickReport
+    deps: LoopDeps,
+    records: list[Mapping[str, Any]],
+    kill: bool,
+    report: TickReport,
+    *,
+    track_oco_lag: bool = True,
 ) -> None:
     """Broker-state-truth protection pass (saxo-oco memo §6): ONE snapshot, then a
     pure desired-vs-actual diff over live positions + live SELL legs, each action
@@ -1842,7 +1852,8 @@ def _run_protection_pass(
         except BrokerError as exc:
             deps.alert(f"protection {type(action).__name__} failed (broker error) — skipped: {exc}")
             report.alerts += 1
-    _track_oco_lag(deps, actions, report)
+    if track_oco_lag:
+        _track_oco_lag(deps, actions, report)
 
 
 def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) -> None:
@@ -4345,6 +4356,9 @@ def _reconcile_one_armed_tier(
         realized_qty=filled_qty,
         avg_price=avg_price,
         observation=observation,
+        venue_activity_time=(
+            extract_activity_time(outcome.raw_status) if outcome is not None else None
+        ),
     )
     event = trade_alerts.TradeEvent(
         kind=trade_alerts.EventKind.ENTRY_FILLED,
@@ -4456,9 +4470,14 @@ def _journal_entry_fired(
     realized_qty: float,
     avg_price: float | None,
     observation: entry_trail_geometry.CeilingObservation | None,
+    venue_activity_time: str | None = None,
 ) -> None:
     """Append the terminal ``fired`` line for a reconciled fill (memo §5
     ``fired{realized_qty}`` + measurement).
+
+    ``venue_activity_time`` (#1402) is the audit row's ``ActivityTime`` — when the
+    venue filled, as opposed to ``ts``, when the daemon noticed. Omitted when the
+    outcome carried none, never invented.
 
     Top-level ``order_id`` + ``realized_qty`` release the virtual reservation (the
     fold's ``terminal_kind`` -> ``watching_virtual_gross_acct`` skips the tier) and
@@ -4466,24 +4485,25 @@ def _journal_entry_fired(
     + ``ts`` carry the realized entry-side fill the offline exec_quality join needs.
     Idempotent by construction: once written the tier is terminal in the fold, so
     the next reconcile pass excludes it (``_resting_armed_tiers``)."""
-    entry_trails.append_entry_trail_line(
-        {
-            "kind": entry_trails.KIND_FIRED,
-            "crid": crid,
-            "order_id": order_id,
-            "realized_qty": realized_qty,
-            "avg_price": avg_price,
-            "ts": now.isoformat(),
-            "measurement": _entry_reconcile_measurement(
-                tier_state,
-                d_bps,
-                order_id=order_id,
-                realized_qty=realized_qty,
-                avg_price=avg_price,
-                observation=observation,
-            ),
-        }
-    )
+    line: dict[str, Any] = {
+        "kind": entry_trails.KIND_FIRED,
+        "crid": crid,
+        "order_id": order_id,
+        "realized_qty": realized_qty,
+        "avg_price": avg_price,
+        "ts": now.isoformat(),
+        "measurement": _entry_reconcile_measurement(
+            tier_state,
+            d_bps,
+            order_id=order_id,
+            realized_qty=realized_qty,
+            avg_price=avg_price,
+            observation=observation,
+        ),
+    }
+    if venue_activity_time is not None:
+        line["venue_activity_time"] = venue_activity_time
+    entry_trails.append_entry_trail_line(line)
 
 
 def _entry_reconcile_measurement(
@@ -4700,6 +4720,137 @@ def _execute_action(
             report.cancels += 1
 
 
+# #1402: how often the poll-only wait looks at the order book while a native
+# trailing BUY rests. One GET per probe covers every armed order.
+_FILL_PROBE_S = 5.0
+
+
+class EntryFillProbe:
+    """Tells the poll-only wait when a resting native trailing BUY has filled (#1402).
+
+    On LIVE the wait between ticks was a fixed ``poll_seconds``, and the stop for
+    a venue fill waited for the next tick: measured 3.3-55.6 s (median 29 s)
+    over 15 entries. While an entry-trail order rests, the wait probes the book
+    and ends early so protection can place the stop.
+
+    It wakes on a NEW observation per order id, never on a state: an id that
+    just left the book, or whose filled quantity grew. A tier whose order is
+    gone but never resolves (audit REJECTED or UNKNOWN keeps it armed) would
+    otherwise wake every probe for good. ``seen`` carries those observations
+    across waits; the daemon keeps it on ``LoopDeps.entry_fill_seen``."""
+
+    def __init__(
+        self,
+        *,
+        armed_order_ids: Callable[[], frozenset[str]],
+        list_open_orders: Callable[[], list[OrderState]],
+        seen: dict[str, tuple[str, float]],
+    ) -> None:
+        self._armed_order_ids = armed_order_ids
+        self._list_open_orders = list_open_orders
+        self._seen = seen
+        self._armed: frozenset[str] = frozenset()
+        self._failing = False
+
+    def arm(self) -> bool:
+        """Read the armed ids for this wait (journal only). False = nothing to watch."""
+        self._armed = self._armed_order_ids()
+        for gone in set(self._seen) - self._armed:
+            del self._seen[gone]
+        return bool(self._armed)
+
+    def fill_seen(self) -> bool:
+        """One book read. True when any armed order shows something new."""
+        try:
+            book = {order.order_id: order for order in self._list_open_orders()}
+        except Exception as exc:  # broad on purpose: a probe can only end a wait early
+            if not self._failing:
+                logger.warning(
+                    "entry fill probe: order book read failed — waiting the full poll: %s", exc
+                )
+            self._failing = True
+            return False
+        self._failing = False
+        woke = False
+        for order_id in self._armed:
+            order = book.get(order_id)
+            observation = (
+                ("absent", 0.0)
+                if order is None
+                else ("resting", float(order.filled_quantity or 0.0))
+            )
+            previous = self._seen.get(order_id)
+            if observation == previous:
+                continue
+            self._seen[order_id] = observation
+            if observation[0] == "absent" or observation[1] > (previous or ("", 0.0))[1]:
+                woke = True
+        return woke
+
+
+def build_entry_fill_probe(deps: LoopDeps) -> EntryFillProbe | None:
+    """The production fill probe, or ``None`` for a broker with no order-book read.
+
+    It watches exactly what ``_run_entry_trail_reconcile_pass`` owns — resting
+    armed tiers — under that pass's own gates: entry trailing on, and a broker
+    that can classify a gone order. Outside them it reports nothing armed, so
+    the wait is the plain sleep."""
+    broker = deps.broker
+    list_open_orders = getattr(broker, "list_open_orders", None)
+    if list_open_orders is None:
+        return None
+
+    def _armed_order_ids() -> frozenset[str]:
+        if entry_trails.entry_trail_bps() <= 0 or not isinstance(broker, SupportsOrderResolution):
+            return frozenset()
+        tiers = _resting_armed_tiers(entry_trails.read_entry_trail_fold())
+        return frozenset(
+            state.armed_order_id for state in tiers.values() if state.armed_order_id is not None
+        )
+
+    return EntryFillProbe(
+        armed_order_ids=_armed_order_ids,
+        list_open_orders=list_open_orders,
+        seen=deps.entry_fill_seen,
+    )
+
+
+def _wait_for_entry_fill(
+    probe: EntryFillProbe,
+    *,
+    poll_seconds: float,
+    sleep_fn: Callable[[float], None],
+    monotonic: Callable[[], float],
+) -> bool:
+    """The poll-only wait with the #1402 fill probe. True when it ended early on
+    a fill. With nothing armed it is exactly ``sleep_fn(poll_seconds)``, with no
+    clock read, as before."""
+    if not probe.arm():
+        sleep_fn(poll_seconds)
+        return False
+    deadline = monotonic() + poll_seconds
+    while (remaining := deadline - monotonic()) > 0:
+        sleep_fn(min(_FILL_PROBE_S, remaining))
+        if monotonic() >= deadline:
+            return False
+        if probe.fill_seen():
+            return True
+    return False
+
+
+def _run_fill_wake_protection(deps: LoopDeps) -> None:
+    """The protection pass, run at once when the probe saw a fill, so the stop
+    does not wait for the rest of the next tick (#1402). It skips the OCO-lag
+    counter, which counts calls and would page twice as fast; the full tick that
+    follows runs the pass again with it."""
+    try:
+        _run_protection_pass(
+            deps, deps.read_records(), _kill_active(deps), TickReport(), track_oco_lag=False
+        )
+    except Exception:  # broad on purpose: the full tick right after is the backstop
+        logger.exception("entry fill probe: fast protection pass failed — the tick follows")
+
+
 def run_daemon(
     deps: LoopDeps,
     *,
@@ -4711,8 +4862,13 @@ def run_daemon(
     wake_event: threading.Event | None = None,
     on_tick: Callable[[], None] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    fill_probe: EntryFillProbe | None = None,
 ) -> None:
     """Drive run_once forever (orphan sweep on the FIRST tick only), or once.
+
+    ``fill_probe`` (#1402) applies to the poll-only path only: while a native
+    trailing BUY rests, the wait probes the order book and, on a fill, runs a
+    protection pass before the next tick. ``None`` keeps the plain sleep.
 
     ``wake_event`` toggles the streaming early-wake path (design memo
     saxo_streaming_design_2026_07_24.md). When ``None`` (streaming off / disabled
@@ -4771,7 +4927,12 @@ def run_daemon(
         if once:
             return
         if wake_event is None:
-            sleep_fn(poll_seconds)  # legacy/disabled path — byte-identical to today
+            if fill_probe is None:
+                sleep_fn(poll_seconds)  # legacy/disabled path — byte-identical to today
+            elif _wait_for_entry_fill(
+                fill_probe, poll_seconds=poll_seconds, sleep_fn=sleep_fn, monotonic=monotonic
+            ):
+                _run_fill_wake_protection(deps)
             continue
         if pass_end >= deadline:  # a TIMEOUT pass just ran -> schedule the next grid point
             deadline = pass_end + poll_seconds

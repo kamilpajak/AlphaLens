@@ -2983,7 +2983,11 @@ def manage_command(
     `touch ~/.alphalens/broker_orders/KILL` is the GLOBAL kill (every instance,
     ADR 0016 D3). Placement still needs ALPHALENS_BROKER_ALLOW_ORDERS=1 (enforced
     inside the broker)."""
-    from alphalens_pipeline.brokers.automanager.control_loop import build_default_deps, run_daemon
+    from alphalens_pipeline.brokers.automanager.control_loop import (
+        build_default_deps,
+        build_entry_fill_probe,
+        run_daemon,
+    )
     from broker_contract.contract import BrokerError
 
     try:
@@ -3001,6 +3005,9 @@ def manage_command(
                 poll_seconds=poll_seconds,
                 wake_event=deps.wake_event,
                 on_tick=deps.stream_tick,
+                # #1402: used only on the poll-only path (LIVE); the streaming
+                # path has its own early wake.
+                fill_probe=build_entry_fill_probe(deps),
             )
         finally:
             # Stop the streaming reader (DELETE subs + join the thread) so a --once

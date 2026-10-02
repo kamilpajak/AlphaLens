@@ -415,8 +415,11 @@ def _submission_date(record: Mapping[str, Any]) -> dt.date | None:
         return None
 
 
-def _extract_activity_time(raw_status: str) -> str | None:
-    """Display-only extraction of the ActivityTime diagnostics token."""
+def extract_activity_time(raw_status: str) -> str | None:
+    """The audit row's ``ActivityTime`` token, as Saxo wrote it, or ``None``.
+
+    Read for display here and journaled on an entry ``fired`` line (#1402), where
+    it is the venue fill time. Kept as the raw string: nothing parses it."""
     match = _ACTIVITY_TIME_RE.search(raw_status)
     return match.group(1) if match else None
 
@@ -689,7 +692,7 @@ def _reconcile_resolved(
 ) -> ReconcileVerdict:
     trade_date, ticker, qty, entry_order_id = brief
     details["raw_status"] = state.raw_status
-    activity_time = _extract_activity_time(state.raw_status)
+    activity_time = extract_activity_time(state.raw_status)
 
     if state.status is OrderStatus.FILLED:
         return _reconcile_filled(
