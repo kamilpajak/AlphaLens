@@ -10,7 +10,7 @@ Public surface:
 - :class:`alphalens_research.preaudit.profiles.SmokeProfile` — per-strategy
   declarative config (smoke window, args, data deps).
 - :class:`alphalens_research.preaudit.profiles.SMOKE_PROFILES` — registry keyed
-  by strategy name (must intersect :data:`alphalens_cli.commands.audit._SCRIPTS`).
+  by strategy name (must intersect :data:`alphalens_research.preaudit.strategies.AUDIT_SCRIPTS`).
 - :func:`alphalens_research.preaudit.coverage.check_all_deps` — validate data
   presence + coverage for a profile.
 - :func:`alphalens_research.preaudit.runner.run_smoke` — execute a tiny

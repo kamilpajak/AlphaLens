@@ -333,7 +333,7 @@ SMOKE_PROFILES: dict[str, SmokeProfile] = {
 }
 
 
-# Strategies in :data:`alphalens_cli.commands.audit._SCRIPTS` that
+# Strategies in :data:`alphalens_research.preaudit.strategies.AUDIT_SCRIPTS` that
 # DELIBERATELY do not require a SmokeProfile. Two reasons to allowlist:
 # (1) the strategy is RESEARCH_ONLY / archived and won't be re-audited
 # anytime soon, OR (2) its experiment script doesn't yet accept the

@@ -3,7 +3,7 @@
 Guards against three classes of regression:
 
 1. Ghost profile — a profile keyed by a strategy that no longer
-   exists in :data:`alphalens_cli.commands.audit._SCRIPTS`.
+   exists in :data:`alphalens_research.preaudit.strategies.AUDIT_SCRIPTS`.
 2. Profile drift — the locked smoke args (e.g. ``--skip-precheck``,
    ``--universe-size-cap``) silently removed.
 3. Hash-guard claim mismatch — a profile declares
@@ -16,7 +16,6 @@ from __future__ import annotations
 import unittest
 from datetime import date
 
-from alphalens_cli.commands.audit import _SCRIPTS
 from alphalens_research.preaudit.profiles import (
     INSIDER_PC_COMPOUND_PROFILE,
     PEAD_PSS_V2_PROFILE,
@@ -24,6 +23,7 @@ from alphalens_research.preaudit.profiles import (
     SMOKE_PROFILES,
     SmokeProfile,
 )
+from alphalens_research.preaudit.strategies import AUDIT_SCRIPTS
 
 
 class TestSmokeProfileRegistry(unittest.TestCase):
@@ -31,11 +31,11 @@ class TestSmokeProfileRegistry(unittest.TestCase):
         self.assertGreater(len(SMOKE_PROFILES), 0)
 
     def test_every_profile_key_resolves_in_audit_scripts(self):
-        unknown = sorted(set(SMOKE_PROFILES) - set(_SCRIPTS))
+        unknown = sorted(set(SMOKE_PROFILES) - set(AUDIT_SCRIPTS))
         self.assertEqual(
             unknown,
             [],
-            f"ghost profiles (not in audit._SCRIPTS): {unknown}",
+            f"ghost profiles (not in preaudit.strategies.AUDIT_SCRIPTS): {unknown}",
         )
 
     def test_profile_strategy_matches_dict_key(self):
@@ -48,16 +48,16 @@ class TestSmokeProfileRegistry(unittest.TestCase):
 
     def test_every_audit_script_has_profile_or_is_exempt(self):
         """Inverse drift guard (zen 2026-05-11): when a new strategy
-        lands in `audit._SCRIPTS`, this test fails until either a
+        lands in `preaudit.strategies.AUDIT_SCRIPTS`, this test fails until either a
         `SmokeProfile` is added OR the strategy is explicitly listed in
         `SMOKE_PROFILE_EXEMPT`. Forces the decision at PR review time,
         not at audit-launch time.
         """
-        unregistered = set(_SCRIPTS) - set(SMOKE_PROFILES) - SMOKE_PROFILE_EXEMPT
+        unregistered = set(AUDIT_SCRIPTS) - set(SMOKE_PROFILES) - SMOKE_PROFILE_EXEMPT
         self.assertEqual(
             unregistered,
             set(),
-            f"strategies in _SCRIPTS without a SmokeProfile and not in "
+            f"strategies in AUDIT_SCRIPTS without a SmokeProfile and not in "
             f"SMOKE_PROFILE_EXEMPT: {sorted(unregistered)}. "
             f"Add a SmokeProfile to SMOKE_PROFILES, or document the "
             f"exemption in SMOKE_PROFILE_EXEMPT in alphalens_research/preaudit/profiles.py.",
@@ -171,7 +171,7 @@ class TestHashGuardClaimsAreHonest(unittest.TestCase):
         for profile in SMOKE_PROFILES.values():
             if not profile.has_component_hash_guard:
                 continue
-            module_path = _SCRIPTS[profile.strategy]
+            module_path = AUDIT_SCRIPTS[profile.strategy]
             source = module_path.read_text(encoding="utf-8")
             self.assertIn(
                 "_verify_component_hashes",

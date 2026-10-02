@@ -19,14 +19,13 @@ import tempfile
 import time
 from pathlib import Path
 
-from alphalens_cli.commands.audit import _SCRIPTS
-
 from alphalens_research.preaudit.profiles import (
     SMOKE_PROFILES,
     SmokeProfile,
     SmokeResult,
     SmokeStatus,
 )
+from alphalens_research.preaudit.strategies import AUDIT_SCRIPTS
 
 # Smoke wall budget. cap=300 over 1 quarter typically runs in ~50-90s
 # on local SSD; allow ~7-10x headroom for cold parquet on MooseFS where
@@ -51,10 +50,10 @@ def run_smoke(
     Returns a :class:`SmokeResult`. The runner does NOT raise on
     subprocess failure — callers inspect ``result.status``.
     """
-    if strategy not in _SCRIPTS:
+    if strategy not in AUDIT_SCRIPTS:
         return SmokeResult(
             status=SmokeStatus.UNKNOWN_STRATEGY,
-            detail=(f"strategy {strategy!r} not in audit._SCRIPTS. Known: {sorted(_SCRIPTS)}"),
+            detail=(f"unknown strategy {strategy!r}; known strategies: {sorted(AUDIT_SCRIPTS)}"),
         )
 
     if profile is None:
@@ -70,7 +69,7 @@ def run_smoke(
             ),
         )
 
-    script_path = _SCRIPTS[strategy]
+    script_path = AUDIT_SCRIPTS[strategy]
     python = python_executable or sys.executable
     # `tempfile.mkstemp` creates a file with mode 0600 in the system temp
     # dir — secure-by-default and Python-idiomatic. Closing the fd

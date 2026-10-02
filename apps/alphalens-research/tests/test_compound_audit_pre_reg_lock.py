@@ -74,9 +74,9 @@ class TestEffectiveRebalanceStrideHardLock(unittest.TestCase):
         import subprocess
         import sys
 
-        from alphalens_cli.commands.audit import _SCRIPTS
+        from alphalens_research.preaudit.strategies import AUDIT_SCRIPTS
 
-        script = _SCRIPTS["insider_pc_compound"]
+        script = AUDIT_SCRIPTS["insider_pc_compound"]
         env = os.environ.copy()
         env["ALPHALENS_WORKERS"] = "1"
         if env_overrides:
