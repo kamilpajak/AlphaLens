@@ -7138,6 +7138,61 @@ def _rich_standalone_stop_journal() -> list[dict[str, Any]]:
         {"kind": "reanchored", "uic": uic_a, "avg_price": 13.5, "ts": 200.0},
         {"kind": "trailed", "uic": uic_b, "level": 30.0, "ts": 100.0},
         {"kind": "trailed", "uic": uic_b, "level": 31.0, "ts": 200.0},
+        # #1328: two plans at ONE tier on uic 333, written in reverse crid order so
+        # the compactor's crid sort reorders them; the fold must not care.
+        {
+            "kind": "planned",
+            "client_request_id": "crid-C1",
+            "uic": 333,
+            "side": "SELL",
+            "stop_price": 7.0,
+            "take_profit": 15.0,
+            "tier_index": 0,
+            "gen": 0,
+            "reaction": {"kind": "trailing_stop", "arm_trigger_r": 0.5, "trail_frac": 0.6},
+        },
+        {
+            "kind": "planned",
+            "client_request_id": "crid-C0",
+            "uic": 333,
+            "side": "SELL",
+            "stop_price": 6.0,
+            "take_profit": 14.0,
+            "tier_index": 0,
+            "gen": 0,
+        },
+        # #1327: stop_filled shapes. Two full entry-trail fills of one pick (the
+        # newer is kept so the owed retire survives), a partial one and a classic
+        # bracket ref (neither owes anything, both fold away).
+        {
+            "kind": "stop_filled",
+            "uic": 333,
+            "order_id": "fill-old",
+            "ts": 50.0,
+            "ref": "CCC-2026-09-04-entry-t0-stop-0",
+        },
+        {
+            "kind": "stop_filled",
+            "uic": 333,
+            "order_id": "fill-new",
+            "ts": 60.0,
+            "ref": "CCC-2026-09-04-entry-t1-stop-0",
+        },
+        {
+            "kind": "stop_filled",
+            "uic": 333,
+            "order_id": "fill-partial",
+            "ts": 70.0,
+            "ref": "DDD-2026-09-05-entry-t0-stop-0",
+            "partial": True,
+        },
+        {
+            "kind": "stop_filled",
+            "uic": 333,
+            "order_id": "fill-bracket",
+            "ts": 80.0,
+            "ref": "bracket-xyz-stop-0",
+        },
         # malformed — a planned line with no client_request_id; every fold skips it.
         {"kind": "planned", "uic": uic_a, "stop_price": 1.0},
     ]
@@ -7194,6 +7249,8 @@ def _planned_fold_data(
             planned.tp_price,
             planned.conflicting,
             planned.n_plans,
+            # #1328: the reaction decides whether the position trails at all.
+            repr(planned.reaction),
         )
         for uic, planned in fold.items()
     }
@@ -7307,14 +7364,34 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
             cl._fold_trailed_since_latest_plan(original),
             cl._fold_trailed_since_latest_plan(compacted),
         )
+        # #1327 / #1328: the readers the battery did not cover. Asserting them on
+        # this mixed journal is the point — an uncovered reader is how both stayed
+        # invisible.
+        self.assertEqual(
+            cl._derive_owed_sibling_retires(original),
+            cl._derive_owed_sibling_retires(compacted),
+        )
+        self.assertEqual(
+            cl._fold_round_trip_closures_since_latest_plan(original),
+            cl._fold_round_trip_closures_since_latest_plan(compacted),
+        )
+        self.assertEqual(
+            cl._fold_standing_stop_ids(original), cl._fold_standing_stop_ids(compacted)
+        )
+        self.assertEqual(
+            cl._uics_moving_their_stop(original), cl._uics_moving_their_stop(compacted)
+        )
 
     def test_compacted_set_is_minimal_one_line_per_key(self) -> None:
         compacted = cl._compact_standalone_stop_journal_lines(_rich_standalone_stop_journal())
         kinds = [line["kind"] for line in compacted]
-        # 3 planned (crid-A0 newest, crid-A1, crid-B0), 1 oco_unsupported,
-        # 1 oco_placed, 1 amend_failed, 1 oco_too_far, 2 amend_seq (one per uic),
-        # 1 reanchored + 1 trailed (newest per uic, #1324). No gen/malformed.
-        self.assertEqual(kinds.count("planned"), 3)
+        # 5 planned (crid-A0 newest, crid-A1, crid-B0, crid-C0, crid-C1), 1
+        # oco_unsupported, 1 oco_placed, 1 amend_failed, 1 oco_too_far, 2
+        # amend_seq (one per uic), 1 reanchored + 1 trailed (newest per uic,
+        # #1324), 1 stop_filled (the newer owed fill of CCC, #1327). No
+        # gen/malformed.
+        self.assertEqual(kinds.count("planned"), 5)
+        self.assertEqual(kinds.count("stop_filled"), 1)
         self.assertEqual(kinds.count("oco_unsupported"), 1)
         self.assertEqual(kinds.count("oco_placed"), 1)
         self.assertEqual(kinds.count("amend_failed"), 1)
@@ -7323,7 +7400,7 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
         self.assertEqual(kinds.count("reanchored"), 1)
         self.assertEqual(kinds.count("trailed"), 1)
         self.assertNotIn("gen", kinds)
-        self.assertEqual(len(compacted), 11)
+        self.assertEqual(len(compacted), 14)
 
     def test_newest_planned_per_crid_survives(self) -> None:
         compacted = cl._compact_standalone_stop_journal_lines(_rich_standalone_stop_journal())
