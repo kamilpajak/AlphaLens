@@ -763,7 +763,9 @@ class _SessionReader:
     session, so a second stamped date with its own ticker set re-read the same file. Over
     the 137-date news run that is about 37 000 reads and roughly 4.5 hours.
 
-    ``universe`` is a HINT and never a contract. A ticker outside it is still answered, at
+    ``universe`` comes from ``_run_universe``, which walks every date the source offers,
+    so it is the whole run's ticker set and not one date's. It is a HINT and never a
+    contract: a ticker outside it is still answered, at
     the cost of one more read of that file, because a universe computed slightly wrong
     must not become a wrong label: a missing bar reads as `no_open`, which is terminal, so
     the row would freeze carrying an answer the prices do not support. ``None`` means keep
@@ -1046,6 +1048,17 @@ class _ReferenceCloses:
     Because priming widens the FIRST fetch, there is no held series to fall back on if
     the vendor refuses it, so a refused wide fetch retries the span that was actually
     asked for. Otherwise widening could lose an answer the narrow span would have given.
+
+    An EMPTY series is deliberately NOT treated as a refusal. Review raised the worry
+    that a wide range might come back empty where a narrow one would have data, which
+    would leave the fallback unfired. Measured against the vendor on 12 tickers whose
+    first session in the grouped store is 2026-04 or later - the recent-listing case the
+    worry is about - the wide and narrow ranges returned IDENTICAL lengths, 125 each for
+    the 10 that have data and 0 for the 2 warrants that have none. For a DELISTED name
+    the wide range covers more of its trading life, not less. Meanwhile an empty answer
+    cached as an answer is what the warrants need: about 51 tickers have no reference at
+    all, and retrying each of them a second time every run would cost about 75 s for a
+    case the measurement does not produce.
 
     A failed fetch is cached as ``None`` for the rest of the run: the rows become
     unchecked, which is non-terminal, so the next pass retries rather than this one
