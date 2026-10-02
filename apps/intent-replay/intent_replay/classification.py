@@ -87,7 +87,10 @@ CONTAINERS: Final[frozenset[str]] = frozenset(
 # path -> the configuration key that carries its resolution.
 TRANSLATED: Final[Mapping[str, str]] = MappingProxyType(
     {
-        "instrument.mic": "walk_start, entry_deadline (the venue's calendar)",
+        "instrument.mic": (
+            "walk_start, entry_deadline (the venue's calendar); "
+            "fx.instrument_currency (its settlement currency)"
+        ),
         "spec.order_ttl_days": "entry_deadline",
         "meta.source": "walk_start",
         "meta.trade_date": "walk_start",
@@ -98,8 +101,7 @@ TRANSLATED: Final[Mapping[str, str]] = MappingProxyType(
 OUT_OF_SCOPE: Final[Mapping[str, str]] = MappingProxyType(
     {
         "instrument.ticker": "identity; the walk is over the bars it is handed",
-        "instrument.mic": "fee card and settlement currency; costs are a non-goal",
-        "spec.size.currency": "a label on the cash answer",
+        "instrument.mic": "the fee card; costs are a non-goal and the threshold arrives stated",
         "spec.schema_version": "the door is the only gate that reads a version",
         "meta.schema_version": "the door is the only gate that reads a version",
         "meta.generation": "a queue concern",

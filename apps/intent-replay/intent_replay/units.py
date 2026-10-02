@@ -14,11 +14,12 @@ Quantity``, because ``config`` imports it for its own fields and every
 module-level name is importable -- that is a property of the language, not a
 second published path, and nothing in this package uses it.
 
-``Translated`` is generic in its value type and both parameters are real: the
-config block translates an epoch to an ``int`` (what the walk compares against
-``Bar.t``), and the section 5.1 denominator translates a price difference to a
-``float``. Nothing at runtime enforces it — the parameter exists so a reader
-and a type checker see which of the two a given object is.
+``Translated`` is generic in its value type and all three parameters in use are
+real: the config block translates an epoch to an ``int`` (what the walk compares
+against ``Bar.t``) and a settlement currency to a ``str`` (section 5.2.1), and
+the section 5.1 denominator translates a price difference to a ``float``.
+Nothing at runtime enforces it — the parameter exists so a reader and a type
+checker see which of the three a given object is.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ __all__ = [
     "BPS",
     "EPOCH_MS_UTC",
     "FRACTION",
-    "INSTRUMENT_CURRENCY",
+    "ISO_4217",
     "PERCENT",
     "QUANTITY_KEYS",
     "R_UNIT",
@@ -47,11 +48,13 @@ BPS: Final = "bps"
 PERCENT: Final = "percent"
 R_UNIT: Final = "R"
 
-# SYMBOLIC, and deliberately not a currency code: ``avg_entry_price`` and the R
-# denominator are prices in the INSTRUMENT's currency, which no document path
-# states and which section 4.3.1 puts out of scope. The tool must not resolve
-# it, so it names the unit it cannot spell (section 5).
-INSTRUMENT_CURRENCY: Final = "instrument_currency"
+# The unit of a stated currency CODE, as opposed to the unit of an amount in
+# that currency (section 5.2.1). It replaces the symbolic ``instrument_currency``
+# token, which named a unit the tool could not spell: ``avg_entry_price`` and the
+# R denominator are prices in the INSTRUMENT's currency, and until #1592 no
+# stated fact gave that currency a name. ``fx.instrument_currency`` does, so
+# those fields carry a real code and the symbolic token is retired.
+ISO_4217: Final = "iso_4217"
 
 TRANSLATED_KEYS: Final = ("kind", "value", "unit", "source", "formula")
 QUANTITY_KEYS: Final = ("value", "unit")

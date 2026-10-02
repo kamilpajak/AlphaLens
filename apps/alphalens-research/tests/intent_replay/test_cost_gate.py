@@ -19,8 +19,10 @@ Two preconditions, both of which silently move the numbers if forgotten:
 * ``facts`` MUST be constructed. Called without it, the daemon falls back to
   ``CostGateFacts.legacy()``, whose ``fx_applies`` is true and adds exactly
   50 bps to the FEE — at an entry of 68.00 and 100 units that is a threshold of
-  68.7888 instead of 68.4488. The replay carries no FX term at all, because no
-  rate is stated and ``fx_applies: true`` is refused (spec section 8.1).
+  68.7888 instead of 68.4488. Those eight rows are a SAME-CURRENCY run, where
+  both arms of ``Fx`` return their argument and no FX term exists; #1592's own
+  rows state the cross-currency facts and reach the daemon's ``fx_applies``
+  numbers (``TheStatedFxLegTest``).
 * ``exit_edge_min_bps`` must be stated as 50.0 in these rows. The daemon reads
   its own module constant ``EXIT_EDGE_MIN_BPS = 50.0``; the replay reads the
   stated value, which the section 5 example states as 5.0.
@@ -32,24 +34,65 @@ off" rows land on the SAME threshold.
 
 from __future__ import annotations
 
+import dataclasses
 import math
+import random
 import unittest
 
+from alphalens_pipeline.brokers.automanager import costs as daemon_costs
 from intent_replay import cost_gate
 from intent_replay.config import Costs
+from intent_replay.fx import Fx
 from intent_replay.units import BPS, FRACTION, Quantity
 
 RATE, MIN_COMMISSION, EDGE_BPS = 0.0008, 1.0, 50.0
 BPS_PER_UNIT = 1e4
 
+# The daemon's own FX round-trip rate, STATED here rather than imported: the
+# replay reads it off the configuration (spec section 2.1), and these rows only
+# agree with the daemon's numbers because the caller stated the same value.
+FX_ROUND_TRIP = 0.005
+# USD per one EUR. Chosen so ``(100.0 / MID) * MID == 100.0`` and the same for
+# 15.0, which is what lets a golden row from the daemon be asserted with
+# equality rather than a tolerance: the replay is handed account-currency units
+# and multiplies by the rate to reach the share count the daemon was given.
+MID = 1.08
+# The card the golden rows were measured on. Imported for the PARITY rows only:
+# the daemon is an oracle at test time, which is this file's own practice and
+# not a production import -- the engine's allow-list still admits
+# ``broker_contract`` alone.
+CARD = daemon_costs.VenueFeeCard(
+    commission_rate=RATE, min_commission=MIN_COMMISSION, label="stated"
+)
 
-def _costs(*, min_commission_applies: bool = True, edge_bps: float = EDGE_BPS) -> Costs:
+SAME = Fx(
+    account_currency="EUR",
+    instrument_currency="EUR",
+    rate=None,
+    round_trip_cost_rate=None,
+    sizing_buffer_pct=None,
+)
+CROSS = Fx(
+    account_currency="EUR",
+    instrument_currency="USD",
+    rate=MID,
+    round_trip_cost_rate=FX_ROUND_TRIP,
+    sizing_buffer_pct=1.0,
+)
+
+
+def _costs(
+    *,
+    min_commission_applies: bool = True,
+    edge_bps: float = EDGE_BPS,
+    fx: Fx = SAME,
+) -> Costs:
     return Costs(
         commission_rate=Quantity(value=RATE, unit=FRACTION),
         min_commission=Quantity(value=MIN_COMMISSION, unit="USD"),
         min_commission_applies=min_commission_applies,
-        fx_applies=False,
         exit_edge_min_bps=Quantity(value=edge_bps, unit=BPS),
+        fx=fx,
     )
 
 
@@ -126,19 +169,16 @@ class ClearsCostTest(unittest.TestCase):
         self.assertEqual(cheap, 68.1428)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheThresholdAboveTheKneeDoesNotSeeTheNotionalTest(unittest.TestCase):
-    """Why a stated FX rate will be almost unobservable here (#1592).
+    """Why the stated FX rate is almost unobservable here (#1592).
 
-    No FX term exists yet: ``fx_applies`` is refused in ``config``, so these
-    rows pin the MECHANISM the decision rests on rather than the decision. The
-    mechanism is that a rate reaches this module only by scaling the notional,
-    and above the knee the notional cancels. Section 8.1 publishes the
-    consequence, so these rows keep its numbers honest; the FX-aware rows arrive
-    with the keys.
+    The rows pin the MECHANISM the decision rests on, and they state the
+    notional directly rather than through ``Fx``: a rate reaches this module
+    only by scaling the notional, so applying it in the test is applying it
+    where the module would. Above the knee the notional cancels, which is why
+    an inverted rate leaves the verdict bit-identical and why section 5.2.1 puts
+    the direction in the unit token rather than trusting the number. The rows
+    that go through the stated facts are ``TheStatedFxLegTest``'s.
     """
 
     KNEE = MIN_COMMISSION / RATE
@@ -196,3 +236,140 @@ class TheThresholdAboveTheKneeDoesNotSeeTheNotionalTest(unittest.TestCase):
             abs(cost_gate.round_trip_fee_bps(wobbling, costs=_costs()) - ad_valorem_bps),
             math.ulp(ad_valorem_bps),
         )
+
+
+class TheStatedFxLegTest(unittest.TestCase):
+    """The FX leg, priced from the STATED rate (#1592, spec section 5.2.1).
+
+    Two things change at once on a cross-currency run and the tests below keep
+    them apart. The gate prices the INSTRUMENT's currency, so the account-currency
+    units it is handed are multiplied by the rate; and the round trip pays the
+    stated conversion cost on top of commission. Each row names which.
+
+    Every threshold is a value the DAEMON returned, with
+    ``CostGateFacts(fx_applies=True, ...)`` and the same card, measured
+    2026-10-02. The share counts the daemon was given are 100 and 15; the replay
+    is handed those divided by the rate.
+    """
+
+    ENTRY = 68.0
+    DRAWS = 20_000
+    SEED = 20261002
+
+    def test_the_cross_currency_threshold_is_the_daemons_fx_aware_row(self) -> None:
+        # Above the knee: 1.08 x 100 x 68.00 = 7344 against a knee of 1250.
+        got = cost_gate.min_profitable_exit_price(
+            entry_price=self.ENTRY, units=100.0 / MID, costs=_costs(fx=CROSS)
+        )
+        self.assertEqual(got, 68.78880000000001)
+
+    def test_it_is_the_daemons_row_below_the_knee_too(self) -> None:
+        # 1.08 x 15 x 68.00 = 1101.6, under the knee, so the per-fill minimum
+        # binds as well -- which is the arm where the RATE is observable.
+        got = cost_gate.min_profitable_exit_price(
+            entry_price=self.ENTRY, units=15.0 / MID, costs=_costs(fx=CROSS)
+        )
+        self.assertEqual(got, 68.81333333333333)
+
+    def test_the_same_currency_row_beside_it_is_unmoved(self) -> None:
+        # The discriminator: the same two calls on a same-currency run answer
+        # exactly what they answered before this issue, so a leaking rate or a
+        # leaking cost rate goes red here.
+        for units, expected in ((100.0, 68.44879999999999), (15.0, 68.47333333333334)):
+            with self.subTest(units):
+                got = cost_gate.min_profitable_exit_price(
+                    entry_price=self.ENTRY, units=units, costs=_costs()
+                )
+                self.assertEqual(got, expected)
+
+    def test_the_fee_is_the_daemons_fee_bit_for_bit_in_both_arms(self) -> None:
+        # The grouping is why this is a parity test and not an identity. In bps
+        # the FX term alone is the stated rate exactly, at every notional,
+        # because the notional cancels -- but the daemon sums the two round
+        # trips and divides ONCE, so what a reader can subtract out of the
+        # published fee is not the term. ``tests/property/test_broker_costs_properties``
+        # records that for the daemon in its own docstring, as a claim it
+        # deliberately does not make, and this copy inherits it: measured here,
+        # the cross-minus-same difference departs from 50 bps on 43.3 per cent
+        # of 200 000 notionals drawn log-uniform over [1e-6, 1e9], and by
+        # 7.0e15 ulp at 1e-200, where two whole minimum commissions swamp the
+        # term entirely. So the claim this module can make is AGREEMENT with the
+        # daemon, and the grouping is copied to earn it: 0 of 200 000 draws
+        # differ in either arm.
+        rnd = random.Random(self.SEED)
+        for _ in range(self.DRAWS):
+            notional = math.exp(rnd.uniform(math.log(1e-6), math.log(1e9)))
+            with self.subTest(notional=notional):
+                self.assertEqual(
+                    cost_gate.round_trip_fee_bps(notional, costs=_costs(fx=CROSS)),
+                    daemon_costs.round_trip_fee_bps(notional, fx_applies=True, card=CARD),
+                )
+                self.assertEqual(
+                    cost_gate.round_trip_fee_bps(notional, costs=_costs()),
+                    daemon_costs.round_trip_fee_bps(notional, fx_applies=False, card=CARD),
+                )
+
+    def test_the_two_arms_never_coincide_so_that_parity_has_power(self) -> None:
+        # Without this the row above would pass on a module that ignored the
+        # stated facts and answered the same fee twice. Measured: on the same
+        # 200 000 draws the same-currency fee equals the daemon's FX-aware fee
+        # on none of them.
+        rnd = random.Random(self.SEED)
+        for _ in range(self.DRAWS):
+            notional = math.exp(rnd.uniform(math.log(1e-6), math.log(1e9)))
+            with self.subTest(notional=notional):
+                self.assertNotEqual(
+                    cost_gate.round_trip_fee_bps(notional, costs=_costs()),
+                    daemon_costs.round_trip_fee_bps(notional, fx_applies=True, card=CARD),
+                )
+
+    def test_a_non_positive_notional_pays_no_leg_either(self) -> None:
+        # The daemon's own arm returns a zero fee rather than dividing, and the
+        # FX term is inside that guard rather than beside it. The placement is
+        # load-bearing, not cosmetic: the term is a multiple of the notional, so
+        # the division CANCELS it, and a negative notional would come back as
+        # the whole stated leg. The counterfactual is asserted beside the
+        # behaviour, because "the guard is equivalent either way" is a reading
+        # that survives inspection and not measurement.
+        for notional in (0.0, -1.0, -5.0):
+            with self.subTest(notional):
+                self.assertEqual(
+                    cost_gate.round_trip_fee_bps(notional, costs=_costs(fx=CROSS)), 0.0
+                )
+        outside_the_guard = FX_ROUND_TRIP * -5.0 / -5.0 * BPS_PER_UNIT
+        self.assertEqual(outside_the_guard, FX_ROUND_TRIP * BPS_PER_UNIT)
+
+    def test_the_rate_alone_moves_the_verdict_where_the_minimum_binds(self) -> None:
+        # The CONVERSION on its own, with the cost rate switched off: the gate
+        # is handed one unit count and prices two different notionals, so a
+        # tranche that clears on the account-currency reading is refused on the
+        # instrument-currency one. This is the half the old divergence entry
+        # named, and it is now priced rather than reported.
+        rate_only = dataclasses.replace(CROSS, round_trip_cost_rate=0.0)
+        units = 15.0 / MID
+        account = cost_gate.min_profitable_exit_price(
+            entry_price=self.ENTRY, units=units, costs=_costs()
+        )
+        instrument = cost_gate.min_profitable_exit_price(
+            entry_price=self.ENTRY, units=units, costs=_costs(fx=rate_only)
+        )
+        self.assertIsNotNone(account)
+        self.assertIsNotNone(instrument)
+        self.assertLess(instrument, account)
+        # And the verdict, not only the number: a level between the two clears
+        # one reading and not the other.
+        between = (instrument + account) / 2.0
+        self.assertTrue(
+            cost_gate.clears_cost(
+                price=between, entry_price=self.ENTRY, units=units, costs=_costs(fx=rate_only)
+            )
+        )
+        self.assertFalse(
+            cost_gate.clears_cost(
+                price=between, entry_price=self.ENTRY, units=units, costs=_costs()
+            )
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

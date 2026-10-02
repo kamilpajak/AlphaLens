@@ -45,6 +45,10 @@ PACKAGE = "intent_replay"
 # Every import the covered modules are allowed to make. An addition is a
 # deliberate edit of this list, never an incidental one.
 ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
+    # The stated conversion of #1592. Pure stdlib by design: the direction
+    # convention it follows is the contract's, but citing a docstring is not
+    # importing a module.
+    "fx.py": frozenset({"__future__", "dataclasses"}),
     "config.py": frozenset(
         {
             "__future__",
@@ -54,6 +58,7 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "types",
             "typing",
             "broker_contract.failure",
+            "intent_replay.fx",
             "intent_replay.refusal",
             "intent_replay.units",
         }
@@ -112,6 +117,7 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "broker_contract.failure",
             "broker_contract.trade_intent.schema",
             "intent_replay.classification",
+            "intent_replay.fx",
             "intent_replay.refusal",
         }
     ),

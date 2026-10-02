@@ -164,9 +164,15 @@ def _plan_of(
     **overrides: Any,
 ) -> Plan:
     """A `Plan` carrying only what the generated document states."""
+    # ``notional`` is the stated budget and ``sizing_notional`` what the ladder
+    # splits; they coincide whenever no sizing buffer is stated, which is every
+    # generated document here (the conversion is same-currency, so both arms of
+    # ``Fx`` return their argument and no number moves).
     fields: dict[str, Any] = {
         "entries": entries,
         "notional": sum(entry.notional for entry in entries),
+        "sizing_notional": sum(entry.notional for entry in entries),
+        "account_currency": "EUR",
         "declared_floor": floor,
         "declared_stop": None,
         "declared_take_profit": None,

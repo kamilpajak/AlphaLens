@@ -34,7 +34,7 @@ from intent_replay.config import RunConfig
 from intent_replay.interpreter import Plan
 from intent_replay.measures import Measures
 from intent_replay.trace import to_jsonable
-from intent_replay.units import INSTRUMENT_CURRENCY, PERCENT, R_UNIT, Quantity, Translated
+from intent_replay.units import PERCENT, R_UNIT, Quantity, Translated
 from intent_replay.walk import WalkResult, resolve_ladder
 
 __all__ = [
@@ -60,9 +60,18 @@ _DENOMINATOR_KIND: Final = "placed_stop"
 _DENOMINATOR_SOURCE: Final = "spec.disaster_stop"
 _DENOMINATOR_FORMULA: Final = "avg_entry_price - placed_stop"
 
-# The five entries of the section 5.2 table, in its order. An addition is an
+# The four entries of the section 5.2 table, in its order. An addition is an
 # edit of that section first: a divergence that can appear without anyone
 # writing it down is a divergence nobody will find.
+#
+# ``cost_gate_prices_the_account_currency`` RETIRED on 2026-10-02 with #1592.
+# An entry here names a place the replay differs because it LACKS a FACT, and
+# the fact that row named -- the instrument's currency -- is now stated
+# (section 5.2.1). The whole-share gap that remains is a recorded scope cut
+# rather than a missing fact, which section 5 says in terms is not a
+# ``divergences`` entry, so the row retires instead of being renamed. The
+# 1.05 / 15.24 / 38.10 bps that section 5.2 attributed to it belong to that
+# lattice and survive unreported; the PR body says so.
 DIVERGENCES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "daemon_trail_guards": (
@@ -85,10 +94,6 @@ DIVERGENCES: Final[Mapping[str, str]] = MappingProxyType(
             "the poll time and the quote, so the moment a tranche is observed is not the "
             "moment the daemon would have observed it."
         ),
-        "cost_gate_prices_the_account_currency": (
-            "the instrument's currency, so the replay prices the stated budget in the ACCOUNT "
-            "currency while the daemon prices the whole-share notional in the instrument's."
-        ),
     }
 )
 
@@ -105,13 +110,11 @@ def divergences(plan: Plan, config: RunConfig) -> tuple[str, ...]:
     """
     policy = resolve_declared_policy(plan.reaction)
     _, ladder = resolve_ladder(plan)
-    laddered = bool(ladder)
     fires = {
         "daemon_trail_guards": policy.trails or policy.requires_amend_stop,
         "daemon_reanchor_latch_is_journal_lifetime": isinstance(plan.reaction, ReanchorOnFill),
         "native_entry_trail_is_a_broker_model": config.entry_trail_bps is not None,
-        "take_profit_observation_time": laddered,
-        "cost_gate_prices_the_account_currency": laddered and config.costs.min_commission_applies,
+        "take_profit_observation_time": bool(ladder),
     }
     return tuple(name for name in DIVERGENCES if fires[name])
 
@@ -132,13 +135,19 @@ def _window(bars: tuple[Bar, ...]) -> dict[str, Any]:
     return {"from_t": bars[0].t, "to_t": bars[-1].t, "bars": len(bars)}
 
 
-def _denominator(measures: Measures) -> dict[str, Any]:
+def _denominator(measures: Measures, *, instrument_currency: str) -> dict[str, Any]:
     """Carried even when there is no value to divide by, so a reader sees WHY
-    rather than a missing key (section 5.1)."""
+    rather than a missing key (section 5.1).
+
+    The unit is the STATED instrument currency. It was the symbolic token
+    ``instrument_currency`` until #1592, because no fact named the currency;
+    ``fx.instrument_currency`` names it, so the token retired rather than
+    standing for a code the run now has (section 5.2.1).
+    """
     return Translated(
         kind=_DENOMINATOR_KIND,
         value=measures.denominator,
-        unit=INSTRUMENT_CURRENCY,
+        unit=instrument_currency,
         source=_DENOMINATOR_SOURCE,
         formula=_DENOMINATOR_FORMULA,
     ).to_jsonable()
@@ -156,22 +165,58 @@ def _priced(value: float | None, unit: str) -> dict[str, Any] | None:
     return None if value is None else Quantity(value=value, unit=unit).to_jsonable()
 
 
-def _summary(*, measures: Measures, result: WalkResult, currency: str) -> dict[str, Any]:
-    """The nine keys of section 5, in the order it prints them."""
+def _summary(
+    *, measures: Measures, result: WalkResult, currency: str, instrument_currency: str
+) -> dict[str, Any]:
+    """The nine keys of section 5, in the order it prints them.
+
+    Two currencies, and which field carries which is the whole point of the
+    pair: the cash fields are the ACCOUNT's (``spec.size.currency``, the budget
+    the document states), and the two PRICE fields are the instrument's.
+    """
     return {
         "filled_fraction": result.filled_fraction,
         "snu_bars": result.snu_bars,
         "notional_spent": _priced(measures.notional_spent, currency),
-        "avg_entry_price": _priced(measures.avg_entry_price, INSTRUMENT_CURRENCY),
+        "avg_entry_price": _priced(measures.avg_entry_price, instrument_currency),
         "pnl_cash": _priced(measures.pnl_cash, currency),
         "pnl_pct_of_spent": _priced(measures.pnl_pct_of_spent, PERCENT),
         "r_multiple": {
             "value": measures.r_multiple,
             "unit": R_UNIT,
-            "denominator": _denominator(measures),
+            "denominator": _denominator(measures, instrument_currency=instrument_currency),
         },
         "mfe": _priced(measures.mfe, R_UNIT),
         "mae": _priced(measures.mae, R_UNIT),
+    }
+
+
+def _fx(config: RunConfig, measures: Measures) -> dict[str, Any]:
+    """What the stated conversion DID, which the echoed block cannot say.
+
+    Two derived facts, both named by section 5.2.1. ``applies`` is the flag a
+    caller used to state and could state wrongly; it is now the comparison of
+    two codes, so it cannot contradict them. ``notional_spent`` is the spend in
+    the INSTRUMENT's currency, printed because the rate's magnitude is otherwise
+    almost unobservable: an inverted rate stays positive, stays plausible, and
+    above the fee card's knee leaves the gate's verdict bit-identical
+    (section 8.1). A tool that pays for provenance on a value nothing can check
+    should at least print what the value produced.
+
+    They live here rather than inside the echoed ``config`` block because that
+    block has to round-trip through ``RunConfig.from_jsonable``, which refuses a
+    derived key on input exactly as the arming door does.
+
+    ``notional_spent`` is null on a same-currency run: the conversion is the
+    identity there, so the account figure beside it already IS the instrument
+    figure, and a copy would read as a second measurement.
+    """
+    fx = config.costs.fx
+    spent = measures.notional_spent
+    derived = None if not fx.applies or spent is None else fx.in_instrument_currency(spent)
+    return {
+        "applies": fx.applies,
+        "notional_spent": _priced(derived, config.fx.instrument_currency.value),
     }
 
 
@@ -203,10 +248,16 @@ def build(
         "instrument": {"ticker": intent.instrument.ticker, "mic": intent.instrument.mic},
         "window": _window(bars),
         "config": config.to_jsonable(),
+        "fx": _fx(config, measures),
         "divergences": list(divergences(plan, config)),
         "intrabar_rule": INTRABAR_RULE,
         "outcome": result.outcome,
-        "summary": _summary(measures=measures, result=result, currency=intent.spec.size.currency),
+        "summary": _summary(
+            measures=measures,
+            result=result,
+            currency=intent.spec.size.currency,
+            instrument_currency=config.fx.instrument_currency.value,
+        ),
         "trace": [to_jsonable(event) for event in result.events],
     }
 

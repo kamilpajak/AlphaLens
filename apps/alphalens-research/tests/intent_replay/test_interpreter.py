@@ -43,6 +43,7 @@ from broker_contract.trade_intent.schema import (
 from intent_replay import classification
 from intent_replay.classification import PATH_UNCLASSIFIED_CODE, PathUnclassifiedError
 from intent_replay.door import admit
+from intent_replay.fx import Fx
 from intent_replay.interpreter import (
     ENTRY_MODE_UNSUPPORTED_CODE,
     HONOURED_REACTION_KINDS,
@@ -68,6 +69,26 @@ IMMEDIATE = "immediate-plus-pullback"
 # The budget of every published template, and the ladder that spends it.
 TEMPLATE_NOTIONAL = 1500.0
 
+# The published templates state a EUR budget on a KO/XNYS instrument, so the
+# default here is the SAME-CURRENCY conversion -- both arms return their
+# argument, no float operation runs, and every number below predates #1592.
+SAME = Fx(
+    account_currency="EUR",
+    instrument_currency="EUR",
+    rate=None,
+    round_trip_cost_rate=None,
+    sizing_buffer_pct=None,
+)
+# The cross-currency facts of the section 5 example. One per cent of 1500 is
+# exact in binary, which is why the buffered figures below are literals.
+CROSS = Fx(
+    account_currency="EUR",
+    instrument_currency="USD",
+    rate=1.08,
+    round_trip_cost_rate=0.005,
+    sizing_buffer_pct=1.0,
+)
+
 TRAILING_REACTION = {"kind": "trailing_stop", "arm_trigger_r": 0.5, "trail_frac": 0.6}
 REANCHOR_REACTION = {"kind": "reanchor_on_fill", "k_atr": 1.5, "atr": 1.2}
 # A stop and a take-profit the document supplies ITSELF, beside the ladder it
@@ -81,7 +102,9 @@ _ENTRY_PATHS = frozenset(
         "spec.entry_tiers[].entry_mode",
     }
 )
-_SIZE_AND_FLOOR = frozenset({"spec.size.notional_acct", "spec.disaster_stop"})
+# ``spec.size.currency`` joined this set with #1592: the interpreter READS it,
+# which is what moved it out of section 4.3.1's out-of-scope list.
+_SIZE_AND_FLOOR = frozenset({"spec.size.notional_acct", "spec.size.currency", "spec.disaster_stop"})
 _LADDER_PATHS = frozenset({"spec.tp_tranches[].price", "spec.tp_tranches[].tranche_pct"})
 _LEVEL_PATHS = frozenset({"exit.initial_levels.stop", "exit.initial_levels.tp"})
 _TRAIL_PATHS = frozenset(
@@ -108,10 +131,10 @@ def _spec(document: Mapping[str, Any], **changes: Any) -> dict[str, Any]:
     return {**document["spec"], **changes}
 
 
-def _planned(document: Mapping[str, Any]) -> Plan:
+def _planned(document: Mapping[str, Any], *, fx: Fx = SAME) -> Plan:
     """The plan of a document that passes the door — the only path a caller has."""
     admitted = admit(document)
-    return interpret(admitted.intent, admitted.document)
+    return interpret(admitted.intent, admitted.document, fx=fx)
 
 
 def _refusal(exc: EntryModeUnsupportedError | PathUnclassifiedError) -> tuple[str, Any]:
@@ -149,7 +172,7 @@ class AcceptanceTest(unittest.TestCase):
     def test_the_trailing_template_carries_its_declared_primitive(self) -> None:
         document = _document(TRAILING)
         admitted = admit(document)
-        plan = interpret(admitted.intent, admitted.document)
+        plan = interpret(admitted.intent, admitted.document, fx=SAME)
         self.assertIsNotNone(admitted.intent.exit)
         assert admitted.intent.exit is not None
         self.assertIs(plan.reaction, admitted.intent.exit.reaction_plan[0])
@@ -206,7 +229,7 @@ class BudgetTest(unittest.TestCase):
         spec = dataclasses.replace(admitted.intent.spec, size=size)
         intent = dataclasses.replace(admitted.intent, spec=spec)
         with self.assertRaises(TypeError) as caught:
-            interpret(intent, admitted.document)
+            interpret(intent, admitted.document, fx=SAME)
         self.assertIn("spec.size.notional_acct", str(caught.exception))
 
     def test_a_rung_whose_share_buys_nothing_is_still_a_rung(self) -> None:
@@ -316,7 +339,7 @@ class ReactionTest(unittest.TestCase):
 
     def test_a_reanchor_primitive_passes_through_unchanged(self) -> None:
         admitted = admit(_document(exit={"reaction_plan": [dict(REANCHOR_REACTION)]}))
-        plan = interpret(admitted.intent, admitted.document)
+        plan = interpret(admitted.intent, admitted.document, fx=SAME)
         assert admitted.intent.exit is not None
         self.assertIs(plan.reaction, admitted.intent.exit.reaction_plan[0])
         self.assertIsInstance(plan.reaction, ReanchorOnFill)
@@ -331,7 +354,7 @@ class ReactionTest(unittest.TestCase):
         pushed = dataclasses.replace(admitted.intent.exit, reaction_plan=(ModelPush(),))
         intent = dataclasses.replace(admitted.intent, exit=pushed)
         with self.assertRaises(ValueError) as caught:
-            interpret(intent, admitted.document)
+            interpret(intent, admitted.document, fx=SAME)
         self.assertIn("model", str(caught.exception))
 
     def test_a_second_managing_primitive_is_a_programming_error(self) -> None:
@@ -351,7 +374,7 @@ class ReactionTest(unittest.TestCase):
         )
         intent = dataclasses.replace(admitted.intent, exit=both)
         with self.assertRaises(ValueError) as caught:
-            interpret(intent, admitted.document)
+            interpret(intent, admitted.document, fx=SAME)
         self.assertIn("one stop-management primitive", str(caught.exception))
 
     def test_the_honoured_kinds_are_the_contract_union_minus_the_reserved_tag(self) -> None:
@@ -450,9 +473,91 @@ class PurityTest(unittest.TestCase):
         admitted = admit(_document(TRAILING))
         document = copy.deepcopy(dict(admitted.document))
         intent = copy.deepcopy(admitted.intent)
-        interpret(admitted.intent, admitted.document)
+        interpret(admitted.intent, admitted.document, fx=SAME)
         self.assertEqual(admitted.document, document)
         self.assertEqual(admitted.intent, intent)
+
+
+class TheStatedConversionTest(unittest.TestCase):
+    """What the stated FX facts change here, and what they deliberately do not
+    (#1592, spec sections 5.2.1 and 8.1).
+
+    Two things, and only two. The SIZING BUFFER comes off the budget once, on
+    the total, before the ladder splits it -- which is where the drain applies
+    it (``broker_contract.sizing``) and therefore the only place that reproduces
+    the drain's own split. And ``spec.size.currency`` is READ, which is what
+    moves it out of section 4.3.1's out-of-scope list: its value decides the fx
+    key set the configuration was parsed against, so a run can be refused
+    because of it.
+
+    The RATE changes nothing here. Every sizing site divides a notional by a
+    price, and account currency per instrument price is a share count scaled by
+    the rate, so the rate cancels in every ratio the walk takes. Only the cost
+    gate needs it, because only the gate compares an instrument-currency
+    magnitude against a notional.
+    """
+
+    def test_the_buffer_comes_off_the_total_before_the_ladder_splits_it(self) -> None:
+        plan = _planned(_document(), fx=CROSS)
+        self.assertEqual(plan.sizing_notional, 1485.0)
+        self.assertEqual(
+            plan.entries,
+            (
+                PendingEntry(tier_index=0, limit_price=68.0, notional=891.0),
+                PendingEntry(tier_index=1, limit_price=66.5, notional=594.0),
+            ),
+        )
+
+    def test_the_stated_budget_is_still_the_stated_budget(self) -> None:
+        # ``notional`` is what the document SAYS and travels unchanged; the
+        # buffered figure is a second field. Section 2 forbids rescaling the
+        # size, and a single field would have made the two indistinguishable.
+        plan = _planned(_document(), fx=CROSS)
+        self.assertEqual(plan.notional, TEMPLATE_NOTIONAL)
+        self.assertNotEqual(plan.sizing_notional, plan.notional)
+
+    def test_a_same_currency_run_splits_the_budget_untouched(self) -> None:
+        # The preimage: no buffer applies, both arms return their argument, and
+        # the two rungs are the numbers every other test in this file asserts.
+        plan = _planned(_document())
+        self.assertEqual(plan.sizing_notional, TEMPLATE_NOTIONAL)
+        self.assertEqual(plan.entries[0].notional, 900.0)
+        self.assertEqual(plan.entries[1].notional, 600.0)
+
+    def test_a_zero_buffer_is_also_the_identity(self) -> None:
+        # Stated-and-zero is a policy (withhold nothing) and must not drift off
+        # the budget through a multiplication by one.
+        plan = _planned(_document(), fx=dataclasses.replace(CROSS, sizing_buffer_pct=0.0))
+        self.assertEqual(plan.sizing_notional, TEMPLATE_NOTIONAL)
+        self.assertEqual(plan.entries[0].notional, 900.0)
+
+    def test_the_rate_alone_moves_no_number_in_the_plan(self) -> None:
+        # The rate cancels in every ratio the walk takes; naming that here is
+        # what keeps the seam honest when a later reader asks why the walk
+        # never multiplies by it.
+        without = _planned(_document(), fx=dataclasses.replace(CROSS, rate=1.0))
+        with_rate = _planned(_document(), fx=dataclasses.replace(CROSS, rate=47.5))
+        self.assertEqual(without, with_rate)
+
+    def test_the_account_currency_is_read_off_the_document(self) -> None:
+        plan = _planned(_document(), fx=CROSS)
+        self.assertEqual(plan.account_currency, "EUR")
+        self.assertIn("spec.size.currency", plan.read)
+
+    def test_a_conversion_parsed_against_another_account_is_a_programming_error(self) -> None:
+        # The CLI derives both sides from one document, so this is unreachable
+        # there; ``interpret`` is public, and a configuration parsed against a
+        # different account currency chose a different fx key set. Loud rather
+        # than published, the rule ``refusal.py`` states for the package.
+        admitted = admit(_document())
+        with self.assertRaises(ValueError) as ctx:
+            interpret(
+                admitted.intent,
+                admitted.document,
+                fx=dataclasses.replace(CROSS, account_currency="PLN"),
+            )
+        self.assertIn("PLN", str(ctx.exception))
+        self.assertIn("EUR", str(ctx.exception))
 
 
 if __name__ == "__main__":

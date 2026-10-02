@@ -610,11 +610,20 @@ def _load_bars(source: str) -> Any:
 def _run(args: argparse.Namespace) -> int:
     """Document, then block, then bars — a caller fixes the primary input first.
 
-    The document is admitted and then INTERPRETED, which is where the fifth gate
-    of section 4.3.1 runs and where an unmodelled entry mode is refused. The
-    configuration comes next, and the price input last: its three checks are the
-    shape of each bar, the ordering of the sequence, and whether the window
-    covers the stated `walk_start`.
+    The document is admitted first, and the ADMITTED document is what the block
+    is parsed against: `spec.size.currency` is the account code that decides the
+    fx key set of section 5.2.1, so a document-blind parse could not say which
+    keys are required (#1592). The configuration comes next, then the
+    interpretation, which is where the fifth gate of section 4.3.1 runs and
+    where an unmodelled entry mode is refused — it needs the conversion, because
+    the sizing buffer comes off the budget before the entry ladder splits it.
+    The price input is last: its three checks are the shape of each bar, the
+    ordering of the sequence, and whether the window covers the stated
+    `walk_start`.
+
+    The config-before-interpret order is the only part of this that changed with
+    #1592, and it is safe because no test pinned the pair: the published order
+    a caller sees is still document, block, bars.
 
     Nothing is written before the last refusal can be raised: the envelope is
     built only after the walk has run, so a refusal can never follow a partial
@@ -625,8 +634,10 @@ def _run(args: argparse.Namespace) -> int:
         admitted = door.admit(document)
     except door.DoorRefusalError as exc:
         raise _intent_malformed(exc.reason, exc.message, **exc.details) from exc
-    plan = interpreter.interpret(admitted.intent, admitted.document)
-    run_config = RunConfig.from_jsonable(_load_config(args.config))
+    run_config = RunConfig.from_jsonable(
+        _load_config(args.config), account_currency=admitted.intent.spec.size.currency
+    )
+    plan = interpreter.interpret(admitted.intent, admitted.document, fx=run_config.costs.fx)
     series = bars.validate_sequence(bars.parse_bars(_load_bars(args.bars)))
     bars.check_window_covers(series, run_config.walk_start.value)
     result = walk.walk(plan, run_config, series)

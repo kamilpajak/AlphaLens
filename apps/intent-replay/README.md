@@ -24,17 +24,39 @@ and rendered back into the result by `to_jsonable`:
 | `ceiling_price` | number > 0, or `null` | the take-profit cap |
 | `time_stop_t` | epoch ms UTC, or `null` | the position time stop |
 | `oco` | `false` | v1 models no OCO pair; `true` is refused |
-| `costs` | five keys, see the spec | the threshold the take-profit cost gate compares against |
+| `fx` | one key, or four, see below | the currency the instrument settles in, and the conversion when it is not the account's |
+| `costs` | four keys, see the spec | the threshold the take-profit cost gate compares against |
 
-Inside `costs`, `fx_applies` must be `false`. A conversion costs 50 bps of the
-notional round trip and no key in this block states that rate, so a run that
-accepted `true` would price every take-profit tranche too cheap. Pricing it is
-issue #1592.
+`from_jsonable` takes the account currency as a required keyword — the
+document's own `spec.size.currency`, which the command reads off the admitted
+document. It is not a key of the block: a block able to state it would be able
+to disagree with the document it replays.
+
+**The `fx` key set is conditional, and the condition is a value inside it.**
+`fx.instrument_currency` is always required, as a `{kind, value, unit, source,
+formula}` object whose value is a three-letter ISO 4217 code and whose unit is
+`iso_4217`. When that code EQUALS the account currency, those are all the keys
+there are. When it differs, three more are required:
+
+| key | form | meaning |
+|---|---|---|
+| `fx.mid_rate` | `{kind, value, unit, source, formula}`, value > 0 | the mid rate, instrument currency per one unit of account currency. The unit SPELLS the direction — `USD_per_EUR` — and is checked by string equality against the two codes |
+| `fx.round_trip_cost_rate` | `{value, unit}`, unit `fraction` | the conversion cost of one round trip, which the cost gate adds. In basis points the term is the rate itself at every notional |
+| `fx.sizing_buffer_pct` | `{value, unit}`, unit `percent`, in `[0, 100)` | the settlement-drift haircut the live drain withholds before dividing the budget. The walk withholds it too |
+
+Stating one of those three when the codes AGREE is `unknown_key`; omitting one
+when they differ is `missing_key`. Either way it is refused, never accepted and
+left inert.
+
+There is no `fx_applies` key. Whether a conversion applies is DERIVED from the
+two codes, and the result publishes the derived flag in its own top-level `fx`
+block. A caller used to be able to state `false` on a cross-currency document
+and nothing compared the claim against anything.
 
 A missing key is `config_incomplete` (`details.keys` names every missing key).
 A stated value nothing can use — the wrong type, a non-finite number, a wrong
-unit, an unknown key, `oco: true`, or `costs.fx_applies: true` — is
-`config_invalid`.
+unit, an unknown key, `oco: true`, a currency that is not a three-letter
+uppercase code, or a sizing buffer at or above 100 — is `config_invalid`.
 The full reason table is with the refusal codes below. Nothing is defaulted.
 
 ## Command line
@@ -74,8 +96,9 @@ completed document.
 
 The document is then INTERPRETED, which is where the fifth gate runs. The
 interpreter reads the entry ladder into resting rungs (each with its share of
-`spec.size.notional_acct` in the account currency — no share quantity, because
-the FX rate and the venue's quantity lattice are not stated), the declared exit
+`spec.size.notional_acct` in the account currency, after the stated
+`fx.sizing_buffer_pct` comes off the total — no share quantity, because the
+venue's quantity lattice is not stated), the declared exit
 levels, the take-profit ladder and the declared reaction, and it records every
 path it read. `intent-replay` then refuses a path no class covers
 (`path_unclassified`) and an entry tier whose mode it does not model
@@ -261,7 +284,14 @@ is not small either. Section 5 of the design document
 measures the gap at 17.50 on a 1500 budget, 130.00 on 8000 with rungs 120.00 and
 115.00, and 60.81 on 1000 with rungs 196.13 and 175.40 — where the entry anchor
 also moves by 0.56 in price, about 30 basis points, and the R denominator moves
-with it.
+with it. Those figures are measured at a rate of 1.0 and no sizing buffer.
+
+The stated buffer is a SECOND component of the residual and is not a gap: the
+drain withholds it too. The two do not simply add, because the lattice bites on
+whatever budget is left. On the 1500 ladder above, at a rate of 1.0, adding a
+1 per cent buffer takes the lattice gap from 17.50 to 69.00; at a rate of 1.08
+it takes it from 69.50 DOWN to 53.30. So a buffer can make the lattice gap
+smaller, and any figure here has to travel with its rate and its buffer.
 
 **`window` describes the series you handed in, not the part the walk read.** It
 can be wider on both sides. Bars before `walk_start` are skipped, and the walk
@@ -283,9 +313,10 @@ Nine keys. `filled_fraction` and `snu_bars` are bare numbers. Every other
 measure carries its unit.
 
 `notional_spent` and `pnl_cash` carry the document's own `spec.size.currency`.
-`avg_entry_price` and the R denominator carry the symbolic unit
-`instrument_currency`: they are prices in the INSTRUMENT's currency, which no
-document path states, so the tool must not guess it. `pnl_pct_of_spent` carries
+`avg_entry_price` and the R denominator carry `fx.instrument_currency`: they are
+prices in the INSTRUMENT's currency, which the configuration states. They used
+to carry the symbolic token `instrument_currency`, because no fact named the
+currency; the token is retired. `pnl_pct_of_spent` carries
 `percent`, so 4.58 means 4.58%. `r_multiple`, `mfe` and `mae` carry `R`.
 
 `r_multiple` always carries its denominator as an object with five fields:
@@ -328,7 +359,7 @@ writer, not a proof that every number is finite.
 
 Each entry names a place where the replay is known to differ from the live
 daemon for a reason no configuration value can close, because the replay lacks a
-FACT rather than a setting. Five entries exist, and each is printed only on the
+FACT rather than a setting. Four entries exist, and each is printed only on the
 runs it applies to:
 
 | entry | printed when |
@@ -337,7 +368,6 @@ runs it applies to:
 | `daemon_reanchor_latch_is_journal_lifetime` | the reaction is `reanchor_on_fill` |
 | `native_entry_trail_is_a_broker_model` | the run states an entry-trail distance |
 | `take_profit_observation_time` | the resolved take-profit ladder is not empty |
-| `cost_gate_prices_the_account_currency` | the ladder is not empty and `min_commission_applies` is true |
 
 `native_entry_trail_is_a_broker_model` covers more than its name suggests, and
 the entry-trail section above has the list. The server owns the ratchet and the
@@ -346,11 +376,14 @@ watch that PLACES the order is ours, and the replay lacks the quotes, the sessio
 boundaries and the account state its gates read. Two of those omissions move the
 answer in the tool's favour.
 
-`cost_gate_prices_the_account_currency` is an admission the tool publishes about
-itself: it prices the stated budget in the ACCOUNT currency while the daemon
-prices the whole-share notional in the INSTRUMENT's. Above the fee card's knee
-the two agree; below it the replay's threshold is too low, so it fires tranches
-the daemon would decline.
+A fifth entry, `cost_gate_prices_the_account_currency`, was RETIRED when the FX
+keys landed. It named two differences under one name. The currency half is
+closed: the gate now prices the instrument's currency, from the stated rate. The
+whole-share half remains and is a scope cut rather than a missing fact, so it
+does not belong here — above the fee card's knee the two thresholds agree, and
+below it the replay's is too low by 1.05, 15.24 and 38.10 basis points at the
+points the design document measures, so it fires tranches the daemon would
+decline. Nothing in the result reports that any more.
 
 
 ### The native entry trail
@@ -499,7 +532,8 @@ missing and unusable, only the missing ones are reported.
 | | `unit_mismatch` | the unit is not the one the walk compares against |
 | | `empty_string` | a provenance field or a currency code with no text |
 | | `oco_unsupported` | `oco` is stated `true`; v1 models no OCO pair, and the block travels in the result, so accepting it would describe a policy the run did not apply |
-| | `fx_cost_not_stated` | `fx_applies` is `true` and no key states the rate. The omitted term is 50 basis points of the notional, so accepting it would price every round trip too cheap |
+| | `not_a_currency_code` | a stated currency is not a three-letter uppercase ISO 4217 code. The arming door holds the document's own code to that shape, and the two are compared |
+| | `buffer_out_of_range` | `fx.sizing_buffer_pct` is at or above 100. At 100 the budget is zero and the walk divides by it; above 100 the budget is negative and the run books a profit on a short the document never declared |
 
 Design: `docs/superpowers/specs/2026-09-23-intent-replay-design.md`.
 Implementation plan: `docs/superpowers/plans/2026-09-25-intent-replay-step1.md`.

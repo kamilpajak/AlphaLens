@@ -16,7 +16,7 @@ from intent_replay.units import (
     BPS,
     EPOCH_MS_UTC,
     FRACTION,
-    INSTRUMENT_CURRENCY,
+    ISO_4217,
     PERCENT,
     R_UNIT,
     Quantity,
@@ -29,9 +29,18 @@ class VocabularyTest(unittest.TestCase):
 
     def test_every_unit_string_is_the_published_one(self) -> None:
         self.assertEqual(
-            (EPOCH_MS_UTC, FRACTION, BPS, PERCENT, R_UNIT, INSTRUMENT_CURRENCY),
-            ("epoch_ms_utc", "fraction", "bps", "percent", "R", "instrument_currency"),
+            (EPOCH_MS_UTC, FRACTION, BPS, PERCENT, R_UNIT, ISO_4217),
+            ("epoch_ms_utc", "fraction", "bps", "percent", "R", "iso_4217"),
         )
+
+    def test_the_symbolic_instrument_currency_token_is_gone(self) -> None:
+        # Retired 2026-10-02 with #1592: it named a unit the tool could not
+        # spell, and ``fx.instrument_currency`` now spells it. A re-import
+        # would put a symbolic unit back on fields that carry a real code.
+        from intent_replay import units
+
+        self.assertFalse(hasattr(units, "INSTRUMENT_CURRENCY"))
+        self.assertNotIn("instrument_currency", units.__all__)
 
 
 class ShapeTest(unittest.TestCase):
@@ -79,24 +88,39 @@ class ShapeTest(unittest.TestCase):
 
 
 class GenericValueTest(unittest.TestCase):
-    """``Translated`` carries an epoch ``int`` in the config block and a price
-    ``float`` in the section 5.1 denominator, so its value type is a parameter.
+    """``Translated`` carries an epoch ``int`` in the config block, a currency
+    ``str`` in the fx block and a price ``float`` in the section 5.1
+    denominator, so its value type is a parameter and all three are in use.
     """
 
-    def test_the_class_is_subscriptable_in_both_parameters(self) -> None:
+    def test_the_class_is_subscriptable_in_every_parameter_in_use(self) -> None:
         self.assertIsNotNone(Translated[int])
         self.assertIsNotNone(Translated[float])
+        self.assertIsNotNone(Translated[str])
 
     def test_a_float_value_survives_rendering_unchanged(self) -> None:
         denominator = Translated(
             kind="placed_stop",
             value=1.63,
-            unit=INSTRUMENT_CURRENCY,
+            unit="USD",
             source="spec.disaster_stop",
             formula="avg_entry_price - placed_stop",
         )
         self.assertEqual(denominator.to_jsonable()["value"], 1.63)
         self.assertFalse(hasattr(denominator, "__dict__"))
+
+    def test_a_currency_code_survives_rendering_unchanged(self) -> None:
+        # The third parameter, added with the fx block of section 5.2.1: the
+        # value is a CODE and the unit names what kind of thing a code is.
+        settlement = Translated(
+            kind="venue_settlement_currency",
+            value="USD",
+            unit=ISO_4217,
+            source="instrument.mic",
+            formula="XNYS settles in USD",
+        )
+        self.assertEqual(settlement.to_jsonable()["value"], "USD")
+        self.assertEqual(settlement.to_jsonable()["unit"], "iso_4217")
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -29,6 +29,7 @@ from intent_replay.config import (
     Costs,
     RunConfig,
 )
+from intent_replay.fx import Fx
 from intent_replay.units import BPS, EPOCH_MS_UTC, FRACTION, Quantity, Translated
 
 # The config block of spec section 5.2, with the entry deadline as the
@@ -61,11 +62,28 @@ CANONICAL: Mapping[str, Any] = {
     "ceiling_price": None,
     "time_stop_t": None,
     "oco": False,
+    "fx": {
+        "instrument_currency": {
+            "kind": "venue_settlement_currency",
+            "value": "USD",
+            "unit": "iso_4217",
+            "source": "instrument.mic",
+            "formula": "XNYS settles in USD",
+        },
+        "mid_rate": {
+            "kind": "fx_mid",
+            "value": 1.08,
+            "unit": "USD_per_EUR",
+            "source": "ecb_reference_rate",
+            "formula": "ECB euro foreign exchange reference rate, 2026-09-23 14:15 UTC",
+        },
+        "round_trip_cost_rate": {"value": 0.005, "unit": "fraction"},
+        "sizing_buffer_pct": {"value": 1.0, "unit": "percent"},
+    },
     "costs": {
         "commission_rate": {"value": 0.0008, "unit": "fraction"},
         "min_commission": {"value": 1.0, "unit": "USD"},
         "min_commission_applies": True,
-        "fx_applies": False,
         "exit_edge_min_bps": {"value": 5.0, "unit": "bps"},
     },
 }
@@ -77,6 +95,7 @@ TOP_LEVEL_KEYS = (
     "ceiling_price",
     "time_stop_t",
     "oco",
+    "fx",
     "costs",
 )
 
@@ -130,6 +149,19 @@ def _with(data: dict[str, Any], path: str, value: Any) -> dict[str, Any]:
     return result
 
 
+# The published templates all state a EUR budget on a KO/XNYS instrument, so
+# the canonical block is the CROSS-currency case and the account code is EUR.
+# It is a required keyword of ``from_jsonable`` rather than a block key: it is
+# the document's ``spec.size.currency``, and a block able to state it would be
+# able to disagree with the document it replays.
+ACCOUNT_CURRENCY = "EUR"
+INSTRUMENT_CURRENCY = "USD"
+
+
+def _parse(data: Any, *, account_currency: str = ACCOUNT_CURRENCY) -> RunConfig:
+    return RunConfig.from_jsonable(data, account_currency=account_currency)
+
+
 def _refusal(exc: ConfigError) -> tuple[str, str | None]:
     failure = exc.failure
     assert failure.retryable is False, "a refused configuration is never retryable"
@@ -138,7 +170,7 @@ def _refusal(exc: ConfigError) -> tuple[str, str | None]:
 
 class CanonicalExampleTest(unittest.TestCase):
     def test_the_spec_example_parses_to_the_stated_values(self) -> None:
-        config = RunConfig.from_jsonable(CANONICAL)
+        config = _parse(CANONICAL)
         self.assertEqual(
             config.walk_start,
             Translated(
@@ -162,8 +194,14 @@ class CanonicalExampleTest(unittest.TestCase):
                 commission_rate=Quantity(0.0008, "fraction"),
                 min_commission=Quantity(1.0, "USD"),
                 min_commission_applies=True,
-                fx_applies=False,
                 exit_edge_min_bps=Quantity(5.0, "bps"),
+                fx=Fx(
+                    account_currency="EUR",
+                    instrument_currency="USD",
+                    rate=1.08,
+                    round_trip_cost_rate=0.005,
+                    sizing_buffer_pct=1.0,
+                ),
             ),
         )
 
@@ -175,7 +213,7 @@ class CanonicalExampleTest(unittest.TestCase):
         after 2026-09-24, which is 2026-10-05 (close 20:00 UTC)."""
         import datetime as dt
 
-        config = RunConfig.from_jsonable(_canonical())
+        config = _parse(_canonical())
         as_utc = lambda ms: dt.datetime.fromtimestamp(ms / 1000, dt.UTC)  # noqa: E731
         self.assertEqual(
             as_utc(config.walk_start.value), dt.datetime(2026, 9, 23, 13, 30, tzinfo=dt.UTC)
@@ -185,7 +223,7 @@ class CanonicalExampleTest(unittest.TestCase):
         )
 
     def test_the_all_stated_variant_parses(self) -> None:
-        config = RunConfig.from_jsonable(_all_stated())
+        config = _parse(_all_stated())
         self.assertEqual(config.entry_trail_bps, 50)
         self.assertEqual(config.ceiling_price, 120.5)
         self.assertEqual(config.time_stop_t, 1790900000000)
@@ -193,16 +231,19 @@ class CanonicalExampleTest(unittest.TestCase):
     def test_to_jsonable_is_the_spec_block(self) -> None:
         # Dict equality first, then the rendered text: dict equality treats
         # 1 == 1.0 and would not see an int rendered where a float was stated.
-        rendered = RunConfig.from_jsonable(CANONICAL).to_jsonable()
+        rendered = _parse(CANONICAL).to_jsonable()
         self.assertEqual(rendered, dict(CANONICAL))
         self.assertEqual(
             json.dumps(rendered, sort_keys=True, allow_nan=False),
             json.dumps(CANONICAL, sort_keys=True, allow_nan=False),
         )
 
-    def test_the_block_keys_are_the_seven_of_the_spec(self) -> None:
+    def test_the_block_keys_are_the_eight_of_the_spec(self) -> None:
+        # ``fx`` sits before ``costs``: it names the currency the minimum
+        # commission is quoted in, so the conversion is the frame the costs are
+        # read in rather than a cost of its own (section 5.2.1).
         self.assertEqual(CONFIG_KEYS, TOP_LEVEL_KEYS)
-        rendered = RunConfig.from_jsonable(CANONICAL).to_jsonable()
+        rendered = _parse(CANONICAL).to_jsonable()
         self.assertEqual(tuple(rendered), TOP_LEVEL_KEYS)
         self.assertEqual(
             tuple(rendered["costs"]),
@@ -210,7 +251,6 @@ class CanonicalExampleTest(unittest.TestCase):
                 "commission_rate",
                 "min_commission",
                 "min_commission_applies",
-                "fx_applies",
                 "exit_edge_min_bps",
             ),
         )
@@ -218,14 +258,14 @@ class CanonicalExampleTest(unittest.TestCase):
     def test_round_trip_is_the_identity(self) -> None:
         for label, data in {"canonical": _canonical(), "all stated": _all_stated()}.items():
             with self.subTest(label):
-                config = RunConfig.from_jsonable(data)
-                self.assertEqual(RunConfig.from_jsonable(config.to_jsonable()), config)
+                config = _parse(data)
+                self.assertEqual(_parse(config.to_jsonable()), config)
 
     def test_the_unit_constants_are_the_published_strings(self) -> None:
         self.assertEqual((EPOCH_MS_UTC, FRACTION, BPS), ("epoch_ms_utc", "fraction", "bps"))
 
     def test_the_config_is_frozen_and_slotted(self) -> None:
-        config = RunConfig.from_jsonable(CANONICAL)
+        config = _parse(CANONICAL)
         with self.assertRaises(dataclasses.FrozenInstanceError):
             config.oco = True  # type: ignore[misc]
         for instance in (config, config.costs, config.walk_start, config.costs.commission_rate):
@@ -241,22 +281,24 @@ class NoDefaultsTest(unittest.TestCase):
                     self.assertIs(field.default, dataclasses.MISSING)
                     self.assertIs(field.default_factory, dataclasses.MISSING)
 
-    def test_an_empty_config_names_all_seven_keys(self) -> None:
+    def test_an_empty_config_names_all_eight_keys(self) -> None:
         with self.assertRaises(ConfigError) as ctx:
-            RunConfig.from_jsonable({})
+            _parse({})
         self.assertEqual(_refusal(ctx.exception), (CONFIG_INCOMPLETE_CODE, "missing_key"))
         self.assertEqual(ctx.exception.failure.details["keys"], sorted(TOP_LEVEL_KEYS))
 
     def test_removing_any_key_names_exactly_that_key(self) -> None:
-        # Containers and leaves alike: 7 top-level, 5 + 5 provenance, 5 costs,
-        # 6 quantity leaves. A missing key is ONE fact, so exactly one
-        # violation; a value rule must not run on an absent key.
+        # Containers and leaves alike: 8 top-level, 5 + 5 for the two epoch
+        # provenance objects, 18 for the fx block (four keys, two of them
+        # provenance objects and two value/unit pairs) and 10 for costs. A
+        # missing key is ONE fact, so exactly one violation; a value rule must
+        # not run on an absent key.
         paths = list(_paths(CANONICAL))
-        self.assertEqual(len(paths), 28)
+        self.assertEqual(len(paths), 46)
         for path in paths:
             with self.subTest(path):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_without(_canonical(), path))
+                    _parse(_without(_canonical(), path))
                 self.assertEqual(_refusal(ctx.exception), (CONFIG_INCOMPLETE_CODE, "missing_key"))
                 details = ctx.exception.failure.details
                 self.assertEqual(details["keys"], [path])
@@ -266,7 +308,7 @@ class NoDefaultsTest(unittest.TestCase):
         # The caller completes the block first, then hears about values.
         data = _with(_without(_canonical(), "oco"), "ceiling_price", 0)
         with self.assertRaises(ConfigError) as ctx:
-            RunConfig.from_jsonable(data)
+            _parse(data)
         self.assertEqual(_refusal(ctx.exception), (CONFIG_INCOMPLETE_CODE, "missing_key"))
         self.assertEqual(ctx.exception.failure.details["keys"], ["oco"])
 
@@ -276,7 +318,7 @@ class NoDefaultsTest(unittest.TestCase):
         data = _without(_canonical(), "entry_trail_bps")
         data["entry_trail_bp"] = 50
         with self.assertRaises(ConfigError) as ctx:
-            RunConfig.from_jsonable(data)
+            _parse(data)
         self.assertEqual(_refusal(ctx.exception), (CONFIG_INCOMPLETE_CODE, "missing_key"))
         self.assertEqual(ctx.exception.failure.details["keys"], ["entry_trail_bps"])
 
@@ -292,11 +334,11 @@ class NullTest(unittest.TestCase):
             "oco",
             "walk_start.value",
             "costs.commission_rate.value",
-            "costs.fx_applies",
+            "fx.sizing_buffer_pct",
         ):
             with self.subTest(path):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_with(_canonical(), path, None))
+                    _parse(_with(_canonical(), path, None))
                 self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "wrong_type"))
                 self.assertEqual(ctx.exception.failure.details["keys"], [path])
 
@@ -305,13 +347,13 @@ class NullTest(unittest.TestCase):
         # ``spec.order_ttl_days``, which every decoded document carries, so a
         # null would translate a present path into nothing with no formula.
         with self.assertRaises(ConfigError) as ctx:
-            RunConfig.from_jsonable(_with(_canonical(), "entry_deadline", None))
+            _parse(_with(_canonical(), "entry_deadline", None))
         self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "wrong_type"))
 
     def test_the_three_optional_scalars_accept_null(self) -> None:
         for path in OPTIONAL_SCALARS:
             with self.subTest(path):
-                config = RunConfig.from_jsonable(_with(_all_stated(), path, None))
+                config = _parse(_with(_all_stated(), path, None))
                 self.assertIsNone(getattr(config, path))
 
 
@@ -327,7 +369,7 @@ class UnknownKeyTest(unittest.TestCase):
         ):
             with self.subTest(path):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_with(_canonical(), path, 1))
+                    _parse(_with(_canonical(), path, 1))
                 self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "unknown_key"))
                 self.assertEqual(ctx.exception.failure.details["keys"], [path])
 
@@ -340,7 +382,7 @@ class TypeTest(unittest.TestCase):
             "float for epoch ms": ("walk_start.value", 1.7585478e12),
             "float for time stop": ("time_stop_t", 1.0),
             "string for price": ("ceiling_price", "120"),
-            "string for bool": ("costs.fx_applies", "no"),
+            "string for bool": ("costs.min_commission_applies", "no"),
             "int for kind": ("walk_start.kind", 5),
             "bool for cost": ("costs.commission_rate.value", True),
             "list for costs": ("costs", []),
@@ -349,7 +391,7 @@ class TypeTest(unittest.TestCase):
         for label, (path, value) in cases.items():
             with self.subTest(label):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_with(_all_stated(), path, value))
+                    _parse(_with(_all_stated(), path, value))
                 self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "wrong_type"))
                 self.assertEqual(ctx.exception.failure.details["keys"], [path])
 
@@ -357,28 +399,28 @@ class TypeTest(unittest.TestCase):
         for value in ([], "config", None):
             with self.subTest(repr(value)):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(value)  # type: ignore[arg-type]
+                    _parse(value)  # type: ignore[arg-type]
                 self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "wrong_type"))
                 self.assertEqual(ctx.exception.failure.details["keys"], ["<root>"])
 
     def test_an_integer_price_is_accepted(self) -> None:
-        config = RunConfig.from_jsonable(_with(_all_stated(), "ceiling_price", 120))
+        config = _parse(_with(_all_stated(), "ceiling_price", 120))
         self.assertEqual(config.ceiling_price, 120)
 
     def test_a_huge_integer_epoch_is_accepted_without_a_traceback(self) -> None:
         # ``json.loads`` yields an int of any size; ``math.isfinite`` on one
         # wider than a float raises OverflowError, so ints must skip it.
         huge = 10**400
-        config = RunConfig.from_jsonable(_with(_canonical(), "walk_start.value", huge))
+        config = _parse(_with(_canonical(), "walk_start.value", huge))
         self.assertEqual(config.walk_start.value, huge)
-        self.assertEqual(RunConfig.from_jsonable(config.to_jsonable()), config)
+        self.assertEqual(_parse(config.to_jsonable()), config)
 
     def test_a_zero_epoch_is_accepted_as_stated(self) -> None:
         # The spec states no sign rule; a walk_start the bars do not cover is
         # refused downstream by window_too_short, not here.
         for path in EPOCH_PATHS:
             with self.subTest(path):
-                RunConfig.from_jsonable(_with(_all_stated(), path, 0))
+                _parse(_with(_all_stated(), path, 0))
 
 
 class NumericRulesTest(unittest.TestCase):
@@ -391,7 +433,7 @@ class NumericRulesTest(unittest.TestCase):
             for value in (math.nan, math.inf, -math.inf):
                 with self.subTest(f"{path}={value}"):
                     with self.assertRaises(ConfigError) as ctx:
-                        RunConfig.from_jsonable(_with(_all_stated(), path, value))
+                        _parse(_with(_all_stated(), path, value))
                     self.assertEqual(
                         _refusal(ctx.exception), (CONFIG_INVALID_CODE, "numeric_not_finite")
                     )
@@ -403,7 +445,7 @@ class NumericRulesTest(unittest.TestCase):
         for value in (0, -1):
             with self.subTest(value):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", value))
+                    _parse(_with(_canonical(), "entry_trail_bps", value))
                 self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "not_positive"))
                 self.assertIn("null", str(ctx.exception))
 
@@ -411,7 +453,7 @@ class NumericRulesTest(unittest.TestCase):
         for value in (0, -1.5):
             with self.subTest(value):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_with(_canonical(), "ceiling_price", value))
+                    _parse(_with(_canonical(), "ceiling_price", value))
                 self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "not_positive"))
 
     def test_a_negative_cost_is_refused_and_zero_is_not(self) -> None:
@@ -422,9 +464,9 @@ class NumericRulesTest(unittest.TestCase):
         ):
             with self.subTest(path):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_with(_canonical(), path, -0.1))
+                    _parse(_with(_canonical(), path, -0.1))
                 self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "negative"))
-                RunConfig.from_jsonable(_with(_canonical(), path, 0))
+                _parse(_with(_canonical(), path, 0))
 
     def test_a_unit_other_than_the_published_one_is_refused(self) -> None:
         cases = {
@@ -436,7 +478,7 @@ class NumericRulesTest(unittest.TestCase):
         for path, value in cases.items():
             with self.subTest(path):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_with(_canonical(), path, value))
+                    _parse(_with(_canonical(), path, value))
                 self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "unit_mismatch"))
                 self.assertEqual(ctx.exception.failure.details["keys"], [path])
 
@@ -449,15 +491,8 @@ class NumericRulesTest(unittest.TestCase):
         ):
             with self.subTest(path):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_with(_canonical(), path, ""))
+                    _parse(_with(_canonical(), path, ""))
                 self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "empty_string"))
-
-    def test_the_min_commission_unit_is_any_currency_code(self) -> None:
-        # The block does not see the document, so the code is not matched
-        # against anything here (see the module docstring for what it must
-        # match, and why that cannot be checked yet).
-        config = RunConfig.from_jsonable(_with(_canonical(), "costs.min_commission.unit", "PLN"))
-        self.assertEqual(config.costs.min_commission.unit, "PLN")
 
 
 class OcoTest(unittest.TestCase):
@@ -466,7 +501,7 @@ class OcoTest(unittest.TestCase):
         # block travels in the result, so an accepted true would describe a
         # policy the run did not apply.
         with self.assertRaises(ConfigError) as ctx:
-            RunConfig.from_jsonable(_with(_canonical(), "oco", True))
+            _parse(_with(_canonical(), "oco", True))
         self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "oco_unsupported"))
         self.assertEqual(
             ctx.exception.failure.details["violations"],
@@ -474,41 +509,12 @@ class OcoTest(unittest.TestCase):
         )
 
 
-class FxTest(unittest.TestCase):
-    def test_fx_applies_true_is_refused(self) -> None:
-        # The omitted term is a NUMBER: the daemon adds FX_ROUND_TRIP_RATE, which
-        # is exactly 50 bps of any notional, and no key in this block states it.
-        # Section 2.1 forbids inheriting a production constant, so a run that
-        # accepted true would price the round trip 50 bps too cheap and fire
-        # take-profit tranches the daemon declines. Pricing it is #1592.
-        with self.assertRaises(ConfigError) as ctx:
-            data = _canonical()
-            data["costs"]["fx_applies"] = True
-            RunConfig.from_jsonable(data)
-        self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "fx_cost_not_stated"))
-        self.assertEqual(
-            ctx.exception.failure.details["violations"],
-            [
-                {
-                    "key": "costs.fx_applies",
-                    "reason": "fx_cost_not_stated",
-                    "expected": False,
-                }
-            ],
-        )
-
-    def test_fx_applies_false_is_accepted(self) -> None:
-        data = _canonical()
-        data["costs"]["fx_applies"] = False
-        self.assertIs(RunConfig.from_jsonable(data).costs.fx_applies, False)
-
-
 class AggregationTest(unittest.TestCase):
     def test_every_invalid_value_is_reported_at_once(self) -> None:
         data = _with(_with(_canonical(), "oco", True), "ceiling_price", 0)
         data["costs"]["commission_rate"]["unit"] = "bps"
         with self.assertRaises(ConfigError) as ctx:
-            RunConfig.from_jsonable(data)
+            _parse(data)
         details = ctx.exception.failure.details
         self.assertEqual(details["keys"], ["ceiling_price", "costs.commission_rate.unit", "oco"])
         # ``reason`` is the FIRST violation in block order; the message names it.
@@ -533,17 +539,17 @@ class EntryTrailDistanceTest(unittest.TestCase):
     def test_a_well_formed_distance_is_carried_through(self) -> None:
         for value in (1, 50, 10_000):
             with self.subTest(value):
-                config = RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", value))
+                config = _parse(_with(_canonical(), "entry_trail_bps", value))
                 self.assertEqual(config.entry_trail_bps, value)
 
     def test_the_distance_survives_the_round_trip_the_envelope_echoes(self) -> None:
         # The block travels in the result (section 5.2), so a value the parser
         # accepts and the echo drops would publish a run nobody can reproduce.
-        config = RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", 50))
+        config = _parse(_with(_canonical(), "entry_trail_bps", 50))
         self.assertEqual(config.to_jsonable()["entry_trail_bps"], 50)
 
     def test_the_trail_stated_off_is_still_accepted(self) -> None:
-        config = RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", None))
+        config = _parse(_with(_canonical(), "entry_trail_bps", None))
         self.assertIsNone(config.entry_trail_bps)
 
     def test_a_distance_too_wide_for_the_arithmetic_is_refused_not_a_traceback(self) -> None:
@@ -556,7 +562,7 @@ class EntryTrailDistanceTest(unittest.TestCase):
         for value in (10**400, 2**2000):
             with self.subTest(len(str(value))):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", value))
+                    _parse(_with(_canonical(), "entry_trail_bps", value))
                 self.assertEqual(
                     _refusal(ctx.exception), (CONFIG_INVALID_CODE, "numeric_not_finite")
                 )
@@ -568,8 +574,237 @@ class EntryTrailDistanceTest(unittest.TestCase):
         for value, reason in ((True, "wrong_type"), (0, "not_positive"), (-1, "not_positive")):
             with self.subTest(repr(value)):
                 with self.assertRaises(ConfigError) as ctx:
-                    RunConfig.from_jsonable(_with(_canonical(), "entry_trail_bps", value))
+                    _parse(_with(_canonical(), "entry_trail_bps", value))
                 self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, reason))
+
+
+# --- #1592: the stated FX facts of section 5.2.1 -------------------------------
+
+# The cross-currency facts CANONICAL states: a EUR budget on a USD instrument,
+# which is the section 5 example's own document. ``mid_rate`` carries the
+# section 5.1 provenance shape because it is the one value in the block nothing
+# in the run can check, and its UNIT spells the direction, which IS checkable
+# (section 5.2.1).
+FX_CROSS: Mapping[str, Any] = CANONICAL["fx"]
+
+# The same-currency block: ONE key, and the other three are refused rather than
+# accepted and left inert.
+FX_SAME: Mapping[str, Any] = {
+    "instrument_currency": {
+        "kind": "venue_settlement_currency",
+        "value": "EUR",
+        "unit": "iso_4217",
+        "source": "instrument.mic",
+        "formula": "the venue settles in the account's own currency",
+    }
+}
+
+FX_CROSS_KEYS = (
+    "instrument_currency",
+    "mid_rate",
+    "round_trip_cost_rate",
+    "sizing_buffer_pct",
+)
+
+
+def _same_currency_block() -> dict[str, Any]:
+    data = copy.deepcopy(dict(CANONICAL))
+    data["fx"] = copy.deepcopy(dict(FX_SAME))
+    data["costs"]["min_commission"]["unit"] = ACCOUNT_CURRENCY
+    return data
+
+
+# The same-currency variant: the PREIMAGE every pre-#1592 number is from. Both
+# arms of ``Fx`` return their argument on this block, so no float operation
+# runs, and a run against it reproduces every number the tool published before
+# this issue -- exactly, not to within an ulp. ``test_walk`` is built on it for
+# that reason, and the cross-currency rows there state the facts themselves.
+SAME_CURRENCY: Mapping[str, Any] = _same_currency_block()
+
+
+def _cross() -> dict[str, Any]:
+    """The canonical block, which already states the cross-currency facts."""
+    return _canonical()
+
+
+def _same() -> dict[str, Any]:
+    return copy.deepcopy(dict(SAME_CURRENCY))
+
+
+class FxKeySetTest(unittest.TestCase):
+    """The conditional key set: one key when the codes agree, four when they differ."""
+
+    def test_the_cross_currency_block_parses_to_the_stated_facts(self) -> None:
+        config = _parse(_cross(), account_currency=ACCOUNT_CURRENCY)
+        self.assertEqual(config.fx.instrument_currency.value, "USD")
+        self.assertEqual(config.fx.mid_rate.value, 1.08)
+        self.assertEqual(config.fx.round_trip_cost_rate, Quantity(0.005, "fraction"))
+        self.assertEqual(config.fx.sizing_buffer_pct, Quantity(1.0, "percent"))
+
+    def test_applies_is_derived_and_never_stated(self) -> None:
+        cross = _parse(_cross(), account_currency=ACCOUNT_CURRENCY)
+        self.assertTrue(cross.costs.fx.applies)
+        same = _parse(_same(), account_currency=ACCOUNT_CURRENCY)
+        self.assertFalse(same.costs.fx.applies)
+
+    def test_a_magnitude_stated_on_a_same_currency_run_is_an_unknown_key(self) -> None:
+        for key in ("mid_rate", "round_trip_cost_rate", "sizing_buffer_pct"):
+            with self.subTest(key):
+                data = _same()
+                data["fx"][key] = copy.deepcopy(FX_CROSS[key])
+                with self.assertRaises(ConfigError) as ctx:
+                    RunConfig.from_jsonable(data, account_currency=ACCOUNT_CURRENCY)
+                self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "unknown_key"))
+                self.assertEqual(ctx.exception.failure.details["keys"], [f"fx.{key}"])
+
+    def test_a_magnitude_absent_on_a_cross_currency_run_is_a_missing_key(self) -> None:
+        for key in ("mid_rate", "round_trip_cost_rate", "sizing_buffer_pct"):
+            with self.subTest(key):
+                with self.assertRaises(ConfigError) as ctx:
+                    _parse(_without(_cross(), f"fx.{key}"), account_currency=ACCOUNT_CURRENCY)
+                self.assertEqual(_refusal(ctx.exception), (CONFIG_INCOMPLETE_CODE, "missing_key"))
+                self.assertEqual(ctx.exception.failure.details["keys"], [f"fx.{key}"])
+
+
+class FxDirectionTest(unittest.TestCase):
+    """The unit is the only real guard against an inverted rate (section 8.1)."""
+
+    def test_the_pair_unit_must_spell_instrument_per_account(self) -> None:
+        for unit in ("EUR_per_USD", "USD/EUR", "USD_per_PLN", "fraction"):
+            with self.subTest(unit):
+                with self.assertRaises(ConfigError) as ctx:
+                    _parse(
+                        _with(_cross(), "fx.mid_rate.unit", unit),
+                        account_currency=ACCOUNT_CURRENCY,
+                    )
+                self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "unit_mismatch"))
+                self.assertEqual(
+                    ctx.exception.failure.details["violations"][0]["expected"], "USD_per_EUR"
+                )
+
+    def test_a_non_positive_rate_is_refused(self) -> None:
+        for value in (0.0, -1.08):
+            with self.subTest(value):
+                with self.assertRaises(ConfigError) as ctx:
+                    _parse(
+                        _with(_cross(), "fx.mid_rate.value", value),
+                        account_currency=ACCOUNT_CURRENCY,
+                    )
+                self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "not_positive"))
+
+    def test_the_instrument_code_must_be_a_three_letter_uppercase_code(self) -> None:
+        # The door refuses a lower-case ``spec.size.currency``
+        # (``validate_intent``), so the two codes ``applies`` compares are only
+        # comparable if this side is held to the same shape.
+        for value in ("usd", "US", "USDD", "US1"):
+            with self.subTest(value):
+                with self.assertRaises(ConfigError) as ctx:
+                    _parse(
+                        _with(_cross(), "fx.instrument_currency.value", value),
+                        account_currency=ACCOUNT_CURRENCY,
+                    )
+                self.assertEqual(
+                    _refusal(ctx.exception), (CONFIG_INVALID_CODE, "not_a_currency_code")
+                )
+
+    def test_the_instrument_currency_unit_is_the_published_token(self) -> None:
+        with self.assertRaises(ConfigError) as ctx:
+            _parse(
+                _with(_cross(), "fx.instrument_currency.unit", "currency"),
+                account_currency=ACCOUNT_CURRENCY,
+            )
+        self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "unit_mismatch"))
+
+
+class FxBufferBoundTest(unittest.TestCase):
+    """``[0, 100)``, restated here because the contract has no such bound.
+
+    Measured on the published fixture: at 100 the budget is 0.0, the rung's
+    units are 0.0 and ``walk.py`` divides by them; at 150 the budget is -750.0
+    and the run reports a booked profit of +450.0 on a short the document never
+    declared, labelled ``no_fill``. Both are a traceback or a plausible lie
+    where the tool owes a refusal.
+    """
+
+    def test_the_open_upper_bound_is_refused(self) -> None:
+        for value in (100.0, 150.0, 1e9):
+            with self.subTest(value):
+                with self.assertRaises(ConfigError) as ctx:
+                    _parse(
+                        _with(_cross(), "fx.sizing_buffer_pct.value", value),
+                        account_currency=ACCOUNT_CURRENCY,
+                    )
+                self.assertEqual(
+                    _refusal(ctx.exception), (CONFIG_INVALID_CODE, "buffer_out_of_range")
+                )
+
+    def test_a_negative_buffer_is_refused_as_a_negative_cost(self) -> None:
+        with self.assertRaises(ConfigError) as ctx:
+            _parse(
+                _with(_cross(), "fx.sizing_buffer_pct.value", -1.0),
+                account_currency=ACCOUNT_CURRENCY,
+            )
+        self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "negative"))
+
+    def test_zero_is_a_stated_policy_and_is_accepted(self) -> None:
+        config = _parse(
+            _with(_cross(), "fx.sizing_buffer_pct.value", 0.0), account_currency=ACCOUNT_CURRENCY
+        )
+        self.assertEqual(config.costs.fx.sizing_notional(1500.0), 1500.0)
+
+
+class FxChecksTheMinimumCommissionCurrencyTest(unittest.TestCase):
+    """What the block could not check before #1592 and now can (section 5.2.1).
+
+    The gate compares ``min_commission`` against a notional, so a minimum
+    quoted in the ACCOUNT's currency on a cross-currency run prices the round
+    trip in two currencies at once.
+    """
+
+    def test_a_minimum_in_the_wrong_currency_is_refused(self) -> None:
+        with self.assertRaises(ConfigError) as ctx:
+            _parse(
+                _with(_cross(), "costs.min_commission.unit", "EUR"),
+                account_currency=ACCOUNT_CURRENCY,
+            )
+        self.assertEqual(_refusal(ctx.exception), (CONFIG_INVALID_CODE, "unit_mismatch"))
+        self.assertEqual(ctx.exception.failure.details["violations"][0]["expected"], "USD")
+
+    def test_the_instrument_currency_is_accepted(self) -> None:
+        config = _parse(_cross(), account_currency=ACCOUNT_CURRENCY)
+        self.assertEqual(config.costs.min_commission.unit, "USD")
+
+
+class FxEchoTest(unittest.TestCase):
+    def test_the_stated_block_round_trips_in_both_directions(self) -> None:
+        for label, data in {"cross": _cross(), "same": _same()}.items():
+            with self.subTest(label):
+                config = RunConfig.from_jsonable(data, account_currency=ACCOUNT_CURRENCY)
+                self.assertEqual(
+                    RunConfig.from_jsonable(
+                        config.to_jsonable(), account_currency=ACCOUNT_CURRENCY
+                    ),
+                    config,
+                )
+
+    def test_the_echo_renders_only_the_keys_the_caller_stated(self) -> None:
+        cross = _parse(_cross(), account_currency=ACCOUNT_CURRENCY).to_jsonable()
+        self.assertEqual(tuple(cross["fx"]), FX_CROSS_KEYS)
+        same = _parse(_same(), account_currency=ACCOUNT_CURRENCY).to_jsonable()
+        self.assertEqual(tuple(same["fx"]), ("instrument_currency",))
+
+    def test_the_echoed_provenance_and_the_engine_object_cannot_disagree(self) -> None:
+        # Two representations of one fact: the provenance travels in the result
+        # and the ``Fx`` does the arithmetic. Both are built once, from the same
+        # parsed values, which is what this asserts.
+        config = _parse(_cross(), account_currency=ACCOUNT_CURRENCY)
+        fx = config.costs.fx
+        self.assertEqual(fx.account_currency, ACCOUNT_CURRENCY)
+        self.assertEqual(fx.instrument_currency, config.fx.instrument_currency.value)
+        self.assertEqual(fx.rate, config.fx.mid_rate.value)
+        self.assertEqual(fx.round_trip_cost_rate, config.fx.round_trip_cost_rate.value)
+        self.assertEqual(fx.sizing_buffer_pct, config.fx.sizing_buffer_pct.value)
+        self.assertEqual(fx.pair_unit(), config.fx.mid_rate.unit)
 
 
 class ReasonVocabularyTest(unittest.TestCase):
@@ -586,7 +821,8 @@ class ReasonVocabularyTest(unittest.TestCase):
                 "unit_mismatch",
                 "empty_string",
                 "oco_unsupported",
-                "fx_cost_not_stated",
+                "not_a_currency_code",
+                "buffer_out_of_range",
             },
         )
 
