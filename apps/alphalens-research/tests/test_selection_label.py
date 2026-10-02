@@ -345,6 +345,56 @@ class TestTheReferenceCache(unittest.TestCase):
         self.assertIsNone(cache.closes("AAA", D(2026, 3, 5), D(2026, 3, 20)))
         self.assertEqual(len(self.calls), 1)
 
+    def test_with_a_run_span_a_ticker_is_fetched_once_however_the_dates_widen(self):
+        """The docstring promised one fetch per distinct ticker; it did not deliver one.
+
+        Dates are stamped newest-first, so every later date asks for an EARLIER start
+        and falls outside the held span. Measured against the real store over 10 dates:
+        452 distinct tickers and 836 fetches, 1.85 each, and 8 for a name that appears
+        on most dates. At 1.46 s a fetch that is 95% of a stamped date's wall time.
+
+        The run span is known before the loop starts - it is the grouped store's own
+        first and last session, which bounds every book - so the first fetch can cover
+        it and no later date can fall outside.
+        """
+        span = (D(2026, 1, 1), D(2026, 6, 30))
+        cache = sl._ReferenceCloses(self._fetch([self._series()]), span=span)
+        cache.closes("AAA", D(2026, 3, 1), D(2026, 3, 31))
+        cache.closes("AAA", D(2026, 2, 1), D(2026, 3, 10))
+        cache.closes("AAA", D(2026, 1, 15), D(2026, 6, 1))
+        self.assertEqual(len(self.calls), 1)
+        _, start, end = self.calls[0]
+        self.assertEqual(start, span[0])
+        self.assertGreater(end, span[1])
+
+    def test_a_request_outside_the_run_span_is_still_answered(self):
+        # The span is a floor on what to fetch, never a ceiling on what may be asked.
+        span = (D(2026, 3, 1), D(2026, 3, 31))
+        cache = sl._ReferenceCloses(self._fetch([self._series(), self._series()]), span=span)
+        cache.closes("AAA", D(2026, 3, 2), D(2026, 3, 20))
+        cache.closes("AAA", D(2025, 11, 1), D(2026, 3, 20))
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.calls[1][1], D(2025, 11, 1))
+
+    def test_a_refused_wide_fetch_falls_back_to_the_span_that_was_asked_for(self):
+        # Priming widens the FIRST fetch, so there is no held series to fall back on if
+        # the vendor refuses it. Without this the widening could lose an answer the
+        # narrow span would have given, which is the opposite of the point.
+        narrow = self._series()
+        cache = sl._ReferenceCloses(
+            self._fetch([None, narrow]), span=(D(2025, 1, 1), D(2026, 12, 31))
+        )
+        self.assertIs(cache.closes("AAA", D(2026, 3, 1), D(2026, 3, 31)), narrow)
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.calls[0][1], D(2025, 1, 1))
+        self.assertEqual(self.calls[1][1], D(2026, 3, 1))
+
+    def test_without_a_run_span_the_widening_behaviour_is_unchanged(self):
+        cache = sl._ReferenceCloses(self._fetch([self._series(), self._series()]))
+        cache.closes("AAA", D(2026, 3, 1), D(2026, 3, 31))
+        cache.closes("AAA", D(2026, 2, 1), D(2026, 3, 10))
+        self.assertEqual(len(self.calls), 2)
+
     def test_a_raising_fetch_is_reported_as_no_answer_not_a_crash(self):
         def boom(ticker, start, end):
             raise RuntimeError("vendor down")
