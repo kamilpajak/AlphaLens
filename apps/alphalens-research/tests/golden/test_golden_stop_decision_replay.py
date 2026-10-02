@@ -32,7 +32,14 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from tests.golden.stop_decision_cases import CASES, run_case, same_float, shape_violations
+from tests.golden.stop_decision_cases import (
+    CASES,
+    input_echo,
+    run_case,
+    same_float,
+    same_record,
+    shape_violations,
+)
 
 _GOLDEN = Path(__file__).resolve().parent / "fixtures" / "stop_decision" / "golden" / "corpus.json"
 _RECORDER = "scripts/record_golden_stop_decision.py"
@@ -78,6 +85,21 @@ class TheArmsStillAnswerWhatTheCorpusRecordedTest(unittest.TestCase):
         problems = shape_violations(self.recorded)
         self.assertEqual(problems, [], "\n  - ".join(["bucket shapes violated:", *problems]))
 
+    def test_the_recorded_inputs_still_match_the_table(self) -> None:
+        """The echo is not decoration. Comparing only the ANSWERS lets a case
+        whose inputs drift without moving its answer pass in silence, and the
+        recorded echo then describes inputs nobody drove. Demonstrated: moving
+        ``avg_price`` from 50.00 to 51.00 on a case that vetoes for a missing
+        peak left this suite green while the corpus still claimed 50.00 -- and
+        the echo is the first thing a reader of a failure reads."""
+        for case, row in zip(CASES, self.recorded, strict=True):
+            with self.subTest(case=case.name):
+                echo = input_echo(case)
+                self.assertTrue(
+                    same_record(row["input"], echo),
+                    f"{case.name}: recorded inputs {row['input']!r} are not the table's {echo!r}",
+                )
+
     def test_every_case_replays_bit_for_bit(self) -> None:
         for case, row in zip(CASES, self.recorded, strict=True):
             with self.subTest(case=case.name):
@@ -104,8 +126,10 @@ class TheArmsStillAnswerWhatTheCorpusRecordedTest(unittest.TestCase):
                     same_float(replayed["composed_ratchet_floor"], row["composed_ratchet_floor"]),
                     f"{case.name}: the composed ratchet floor changed",
                 )
-                self.assertEqual(
-                    replayed["logs"], row["logs"], f"{case.name}: the log lines changed"
+                self.assertTrue(
+                    same_record(replayed["logs"], row["logs"]),
+                    f"{case.name}: the log records changed: {replayed['logs']!r} "
+                    f"!= recorded {row['logs']!r}",
                 )
 
 

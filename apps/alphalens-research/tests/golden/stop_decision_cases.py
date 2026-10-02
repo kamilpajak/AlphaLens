@@ -197,7 +197,14 @@ class _Collect(logging.Handler):
     actions, so a refusal demoted from ``info`` to ``debug`` disappears from the
     operator's journal while every answer stays identical. A corpus that
     recorded the message alone did not see that mutation at all -- measured,
-    which is why the level is here."""
+    which is why the level is here.
+
+    Capturing at DEBUG rather than INFO is deliberate, and it has a cost worth
+    stating: a newly added ``logger.debug`` line in either arm turns the corpus
+    red although no deployment at INFO would print it. That is accepted, because
+    a new log line IS a change to the arm, and because capturing the demotion
+    gives the far better diagnostic -- the record says the level moved, instead
+    of saying a line vanished."""
 
     def __init__(self) -> None:
         super().__init__(level=logging.DEBUG)
@@ -227,14 +234,22 @@ def run_case(case: Case) -> dict[str, Any]:
         "arm": case.arm,
         "bucket": case.bucket,
         "why": case.why,
-        "input": _echo(case),
+        "input": input_echo(case),
         "composed_ratchet_floor": composed_ratchet_floor(case),
         "answer": None if action is None else _amend(action),
         "logs": handler.messages,
     }
 
 
-def _echo(case: Case) -> dict[str, Any]:
+def input_echo(case: Case) -> dict[str, Any]:
+    """The inputs as recorded. PUBLIC because the replay test compares the
+    recorded echo against the live table: without that comparison a case whose
+    inputs drift WITHOUT changing the answer passes silently and the recorded
+    echo becomes a lie. Demonstrated -- moving ``avg_price`` from 50.00 to 51.00
+    on a case that vetoes for a missing peak left the suite green while the
+    corpus still claimed 50.00, and the echo is what a reader of a future
+    failure reads first."""
+
     def absent(value: Any) -> Any:
         return None if value is _ABSENT else value
 
@@ -268,6 +283,25 @@ def _amend(action: Any) -> dict[str, Any]:
     """Every field of the AmendStop, by name off the dataclass, so a field added
     later lands in the record instead of being silently dropped."""
     return {f.name: getattr(action, f.name) for f in dataclasses.fields(action)}
+
+
+def same_record(left: Any, right: Any) -> bool:
+    """Structural equality that reaches every float leaf through ``same_float``.
+
+    Plain ``==`` fails in BOTH directions on these records. It calls two NaNs
+    different, so a dict carrying a NaN input compares unequal to itself -- the
+    first version of the input-echo assertion failed on exactly one case, the
+    NaN one, for that reason and no other. And it calls ``-0.0`` equal to
+    ``0.0``, so a sign flip hides. Recurse instead."""
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(
+            same_record(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(
+            same_record(a, b) for a, b in zip(left, right, strict=True)
+        )
+    return same_float(left, right)
 
 
 def same_float(left: Any, right: Any) -> bool:

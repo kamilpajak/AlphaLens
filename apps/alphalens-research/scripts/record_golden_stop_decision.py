@@ -44,6 +44,7 @@ table carries all three on purpose, so coercion would lose the cases.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from tests.golden.stop_decision_cases import BUCKETS, CASES, run_case, shape_violations
@@ -79,7 +80,13 @@ def main() -> None:
         )
 
     _GOLDEN.parent.mkdir(parents=True, exist_ok=True)
-    _GOLDEN.write_text(json.dumps(records, indent=2, sort_keys=True) + "\n")
+    # Write beside the target and rename, so a crash mid-write cannot leave a
+    # partial corpus that the existence guard above then refuses to replace.
+    # Same directory as the target so os.replace is an atomic rename on one
+    # filesystem (the convention scripts/sync_prometheus_rules.py follows).
+    staged = _GOLDEN.with_suffix(".json.partial")
+    staged.write_text(json.dumps(records, indent=2, sort_keys=True) + "\n")
+    os.replace(staged, _GOLDEN)
     placed = sum(1 for r in records if r["answer"] is not None)
     logged = sum(1 for r in records if r["logs"])
     print(
