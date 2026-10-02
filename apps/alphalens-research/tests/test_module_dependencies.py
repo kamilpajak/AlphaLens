@@ -186,6 +186,38 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # `market` is a platform leaf and must stay one (#1678). After the
+        # calendar, session and bar primitives moved in, it became the
+        # most-depended-on package in the repo (43 inbound). If it ever imports
+        # a CONSUMER tier, every one of those consumers inherits the dependency
+        # transitively — which is how a leaf stops being a leaf without anyone
+        # editing a consumer.
+        #
+        # Three deny rules rather than one `allowed_prefixes` rule on purpose:
+        # the allow-list kind always permits "the rule's own top-level package",
+        # which for `alphalens_pipeline.market` is `alphalens_pipeline` — so an
+        # allow-list here would permit every sibling and forbid nothing.
+        #
+        # `market.market_state` -> `data` is allowed and live: `data` is the
+        # other platform tier, not a consumer.
+        "name": "market must not import feedback (the platform leaf stays a leaf)",
+        "from_pkg": "alphalens_pipeline.market",
+        "forbidden_prefix": "alphalens_pipeline.feedback",
+        "exemptions": set(),
+    },
+    {
+        "name": "market must not import thematic (the platform leaf stays a leaf)",
+        "from_pkg": "alphalens_pipeline.market",
+        "forbidden_prefix": "alphalens_pipeline.thematic",
+        "exemptions": set(),
+    },
+    {
+        "name": "market must not import brokers (the platform leaf stays a leaf)",
+        "from_pkg": "alphalens_pipeline.market",
+        "forbidden_prefix": "alphalens_pipeline.brokers",
+        "exemptions": set(),
+    },
+    {
         # Selection never reads measurement (#1678). The thematic lane decides
         # WHICH tickers appear in a brief; the feedback lane measures what
         # happened to earlier ones. Two edges used to run the wrong way — the
@@ -943,6 +975,57 @@ class TestModuleDependencies(unittest.TestCase):
             any(m.startswith(cli_rules[0]["forbidden_prefix"]) for m in modules),
             "rule would not catch the synthetic violation",
         )
+
+    def test_market_leaf_rules_positive_control(self):
+        """The three `market` leaf rules cannot rot silently.
+
+        One control for the family, matching how the brokers rules are covered.
+        Feeds the walker a synthetic module that reaches up into all three
+        consumer tiers from inside a function body, and asserts each rule would
+        catch its own target.
+        """
+        import tempfile
+
+        synthetic = (
+            "def sneaky():\n"
+            "    from alphalens_pipeline.feedback.bar_window import window_vwap\n"
+            "    from alphalens_pipeline.thematic.publication import brief_open_utc\n"
+            "    from alphalens_pipeline.brokers.reconcile import sweep\n"
+            "    return window_vwap, brief_open_utc, sweep\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_market_leaf_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+
+        leaf_rules = [r for r in RULES if r["from_pkg"] == "alphalens_pipeline.market"]
+        self.assertEqual(len(leaf_rules), 3, "expected exactly three market leaf rules")
+        for rule in leaf_rules:
+            self.assertNotIn(
+                "top_level_only",
+                rule,
+                f"{rule['name']!r} must catch function-scope (lazy) imports too",
+            )
+            self.assertTrue(
+                any(m.startswith(rule["forbidden_prefix"]) for m in modules),
+                f"{rule['name']!r} would not catch the synthetic violation",
+            )
+
+    def test_market_may_still_import_data(self):
+        """`data` is the other platform tier, not a consumer.
+
+        `market.market_state` reads `data.rs_history` and `data.macro.fred_client`.
+        If this ever reads zero, a leaf rule was written too broadly and silently
+        cut a live edge rather than the three it was aimed at.
+        """
+        market_dir = PACKAGE_DIRS["alphalens_pipeline"] / "market"
+        live = [
+            mod
+            for path in sorted(market_dir.rglob("*.py"))
+            for mod in _iter_imports(path, include_function_scope=True)
+            if mod.startswith("alphalens_pipeline.data")
+        ]
+        self.assertTrue(live, "expected market to keep importing data; found none")
 
     def test_thematic_must_not_import_feedback_positive_control(self):
         """The selection -> measurement rule (#1678) cannot rot silently.
