@@ -83,7 +83,7 @@ def _bars_for(ticker: str, brief_date: str) -> list[dict]:
     import datetime as dt
 
     from alphalens_pipeline.feedback.population_ladder_monitor import _bars_cache_path
-    from alphalens_pipeline.paper.calendar import session_on_or_after
+    from alphalens_pipeline.market.calendar import session_on_or_after
 
     arrival = session_on_or_after(dt.date.fromisoformat(brief_date), "XNYS")
     candidate = _bars_cache_path(STORE_DIR, ticker, arrival)

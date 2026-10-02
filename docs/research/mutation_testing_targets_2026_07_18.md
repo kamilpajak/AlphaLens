@@ -219,14 +219,14 @@ Not yet run. `crit·suit` descending; `pipe:` = `apps/alphalens-pipeline/alphale
 | 20 | `res:diagnostics/slippage_regime.py` | Spread-stress re-evaluation of a pre-registered net-alpha. |
 | 20 | `res:overlays/vol_target.py` | The `.shift(1)` causality contract — a look-ahead here fakes alpha. |
 | 16 | `pipe:feedback/breakeven_lenses.py` | Kind-dispatch for the exit-stop what-if grid. |
-| 16 | `pipe:paper/calendar.py` | Session arithmetic behind TTL/time-stop sweeps + shadow-return anchors. |
+| 16 | `pipe:market/calendar.py` | Session arithmetic behind TTL/time-stop sweeps + shadow-return anchors. |
 | 16 | `pipe:thematic/extraction/themes.py` | `roll_up` novelty ratio + `flag_novel` threshold. |
 | 16 | `res:attribution/walk_forward.py` | C1–C5 gate → PASS/BORDERLINE/FAIL stability verdict. |
 | 15 | `pipe:feedback/execution_cost.py` | Per-arm execution-cost haircut. |
 | 15 | `res:diagnostics/nofill.py` | NO_FILL root-cause classifier. |
 | 12 | `pipe:scorers/_common.py` | Shared `winsorize` + `rank_zscore` normalisation. |
 | 9 | `res:backtest/historical_validation.py` | DEPLOY/ITERATE/SKIP aggregate decision. |
-| 8 | `pipe:feedback/bar_window.py` | `_window_vwap` anchor — **needs a direct test file first** (suitability 2). |
+| 8 | `pipe:market/bars.py` | `window_vwap` anchor — **needs a direct test file first** (suitability 2). |
 
 ## Operator recipe
 

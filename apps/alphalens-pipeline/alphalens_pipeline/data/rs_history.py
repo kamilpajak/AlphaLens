@@ -32,7 +32,7 @@ from typing import Any
 import pandas as pd
 
 from alphalens_pipeline.data.alt_data.polygon_client import _GROUPED_DAILY_FIELDS
-from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, n_sessions_before
+from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, n_sessions_before
 
 logger = logging.getLogger(__name__)
 

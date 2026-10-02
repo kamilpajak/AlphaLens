@@ -24,15 +24,14 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
-from alphalens_pipeline.feedback.bar_window import ARRIVAL_VWAP_WINDOW_MIN, _window_vwap
 from alphalens_pipeline.feedback.benchmark_excess import (
     BENCHMARK_COLUMNS,
     BENCHMARK_LEG_VERSION,
     compute_market_excess_for_row,
     enrich_store_with_benchmark_excess,
 )
-from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
-from alphalens_pipeline.paper.calendar import session_open_utc
+from alphalens_pipeline.market.bars import ARRIVAL_VWAP_WINDOW_MIN, window_vwap
+from alphalens_pipeline.market.calendar import ladder_arrival_session, session_open_utc
 
 UTC = dt.UTC
 
@@ -532,7 +531,7 @@ class TestBenchmarkAnchorInvariants(unittest.TestCase):
             {"t": self._ms(arrival_open + dt.timedelta(minutes=10)), "c": 745.0, "v": 1000},
             {"t": self._ms(arrival_open + dt.timedelta(minutes=45)), "c": 760.0, "v": 1000},
         ]
-        vwap = _window_vwap(bars, arrival_open, end)
+        vwap = window_vwap(bars, arrival_open, end)
         # Mean of the two in-window closes (747, 745); never pulled to 740 or 760.
         assert vwap is not None
         self.assertAlmostEqual(vwap, 746.0, places=6)
@@ -1628,7 +1627,7 @@ class TestOfficialCloseExitPrint(unittest.TestCase):
             self.assertAlmostEqual(float(df.loc["AA", "benchmark_window_return"]), 0.02, places=9)
 
     def test_ongoing_row_uses_the_last_closed_sessions_official_close(self) -> None:
-        from alphalens_pipeline.paper.calendar import previous_trading_day
+        from alphalens_pipeline.market.calendar import previous_trading_day
 
         last_closed = previous_trading_day(self._NOW.date())
         with tempfile.TemporaryDirectory() as tmp:

@@ -410,8 +410,7 @@ class TestSectorReuseFirst(unittest.TestCase):
             self.assertEqual(out.loc["AAPL", "sector_window_exit"], "2026-06-25")
 
     def test_event_lane_row_is_windowed_from_the_ladder_arrival(self):
-        from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
-        from alphalens_pipeline.paper.calendar import session_open_utc
+        from alphalens_pipeline.market.calendar import ladder_arrival_session, session_open_utc
 
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

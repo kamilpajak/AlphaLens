@@ -38,7 +38,7 @@ import math
 import numpy as np
 import pandas as pd
 from alphalens_pipeline.data import rs_history
-from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_on_or_after
+from alphalens_pipeline.market.calendar import advance_trading_sessions, session_on_or_after
 from alphalens_research.diagnostics import edge_stores
 from alphalens_research.diagnostics.nofill import TOUCH_EPS
 from alphalens_research.diagnostics.options_retro import ticker_episode_dedup

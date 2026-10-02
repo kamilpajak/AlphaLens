@@ -23,7 +23,7 @@ Verdict semantics per journal bracket:
 
 - entry id present in the open-orders view -> ``WORKING`` /
   ``PARTIALLY_FILLED``, annotated with a trading-day expiry sweep
-  (``paper.calendar.trading_days_elapsed`` on the venue calendar vs the
+  (``market.calendar.trading_days_elapsed`` on the venue calendar vs the
   bracket's ``ttl``) — an entry still working past its TTL should have
   expired and is a DIVERGENCE;
 - entry id absent -> ``resolve_order_outcome`` terminal classification;
@@ -55,7 +55,7 @@ from broker_contract.contract import (
     Position,
 )
 
-from alphalens_pipeline.paper.calendar import trading_days_elapsed
+from alphalens_pipeline.market.calendar import trading_days_elapsed
 
 logger = logging.getLogger(__name__)
 

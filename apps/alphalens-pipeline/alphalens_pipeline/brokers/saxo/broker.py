@@ -73,7 +73,7 @@ from alphalens_pipeline.data.alt_data.saxo_exchanges import (
     alias_expected_for,
 )
 from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveAuthConfig, LiveTokenProvider
-from alphalens_pipeline.paper.calendar import advance_trading_sessions
+from alphalens_pipeline.market.calendar import advance_trading_sessions
 
 logger = logging.getLogger(__name__)
 

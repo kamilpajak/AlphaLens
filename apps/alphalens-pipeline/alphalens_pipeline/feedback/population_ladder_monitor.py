@@ -68,11 +68,7 @@ import pandas as pd
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.sizing import TradeSetupNotPlannableError
 
-from alphalens_pipeline.feedback.bar_window import (
-    ARRIVAL_VWAP_WINDOW_MIN,
-    IMPLAUSIBLE_RETURN_THRESHOLD,
-    _window_vwap,
-)
+from alphalens_pipeline.feedback.bar_window import IMPLAUSIBLE_RETURN_THRESHOLD
 from alphalens_pipeline.feedback.breakeven_lenses import breakeven_grid
 from alphalens_pipeline.feedback.corporate_actions import (
     DISPOSITION_EXTREME_VALIDATED,
@@ -85,11 +81,7 @@ from alphalens_pipeline.feedback.corporate_actions import (
     default_adjusted_closes_fetch,
     resolve_guard_disposition,
 )
-from alphalens_pipeline.feedback.ladder_config import (
-    ARRIVAL_RULE,
-    ladder_arrival_session,
-    ladder_config_version,
-)
+from alphalens_pipeline.feedback.ladder_config import ladder_config_version
 from alphalens_pipeline.feedback.ladder_replay import (
     LadderOutcome,
     LevelCrossing,
@@ -98,12 +90,15 @@ from alphalens_pipeline.feedback.ladder_replay import (
     replay_ladder_grid,
 )
 from alphalens_pipeline.feedback.pre_open_population import load_brief_for_population
-from alphalens_pipeline.paper.brief_loader import CandidateBrief
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.bars import ARRIVAL_VWAP_WINDOW_MIN, window_vwap
+from alphalens_pipeline.market.calendar import (
+    ARRIVAL_RULE,
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
+    ladder_arrival_session,
     session_open_utc,
 )
+from alphalens_pipeline.paper.brief_loader import CandidateBrief
 from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
 from alphalens_pipeline.paper.sizing import validate_trade_setup
 from alphalens_pipeline.thematic.theme_text import slugify_theme
@@ -611,7 +606,7 @@ def _prefetch_grouped_daily(
     not cache, do not screen — carry / resolve), distinct from a complete cached
     session in which a ticker is simply absent.
     """
-    from alphalens_pipeline.paper.calendar import is_trading_day
+    from alphalens_pipeline.market.calendar import is_trading_day
 
     result: dict[dt.date, dict[str, dict[str, Any]] | None] = {}
     for session in sessions:
@@ -653,7 +648,7 @@ def _session_close_utc(session: dt.date, exchange: str) -> dt.datetime:
     early (e.g. 13:00 ET) close, not the nominal 16:00. Requires ``session`` to be
     an exact session.
     """
-    from alphalens_pipeline.paper.calendar import _calendar, _to_session_timestamp
+    from alphalens_pipeline.market.calendar import _calendar, _to_session_timestamp
 
     ts = _to_session_timestamp(session)
     cal = _calendar(exchange)
@@ -668,7 +663,7 @@ def _session_rth_span_min(session: dt.date, exchange: str) -> int:
     actual open→close span read off the calendar. Computed from the real
     open/close so the idiom transfers to any venue without a hard-coded table.
     """
-    from alphalens_pipeline.paper.calendar import is_half_day
+    from alphalens_pipeline.market.calendar import is_half_day
 
     if not is_half_day(session, exchange):
         return _RTH_FULL_SESSION_SPAN_MIN
@@ -716,7 +711,7 @@ def _filter_bars_to_rth(
     """
     if not bars:
         return bars
-    from alphalens_pipeline.paper.calendar import advance_trading_sessions, trading_days_elapsed
+    from alphalens_pipeline.market.calendar import advance_trading_sessions, trading_days_elapsed
 
     n_sessions = trading_days_elapsed(arrival_session, horizon_session, exchange)
     windows: list[tuple[int, int]] = []
@@ -1062,7 +1057,7 @@ def _holding_days(
     the read-side holding-period distribution excludes never-held rows rather
     than reporting a spurious full-hold span for them.
     """
-    from alphalens_pipeline.paper.calendar import trading_days_elapsed
+    from alphalens_pipeline.market.calendar import trading_days_elapsed
 
     entry_crossings = [c for c in outcome.sequence if c.level_id.startswith("E")]
     if not entry_crossings:
@@ -1501,7 +1496,7 @@ def _last_closed_session(now: dt.datetime, exchange: str) -> dt.date:
     strictly before its argument, so feeding today's date yields the last closed
     session whether or not today is itself a session.
     """
-    from alphalens_pipeline.paper.calendar import previous_trading_day
+    from alphalens_pipeline.market.calendar import previous_trading_day
 
     return previous_trading_day(now.date(), exchange)
 
@@ -1576,7 +1571,7 @@ def _grouped_pre_ex_close(
     closed (carry + lookup_failed) rather than guessing the materiality
     denominator.
     """
-    from alphalens_pipeline.paper.calendar import previous_trading_day
+    from alphalens_pipeline.market.calendar import previous_trading_day
 
     prev_session = previous_trading_day(ex_date, exchange)
     grouped = _read_grouped_cache(store_dir, prev_session)
@@ -1809,7 +1804,7 @@ def _candidate_new_sessions(
     split screen + prev_close fail-closed also need the session immediately BEFORE
     each new session, so it is included.
     """
-    from alphalens_pipeline.paper.calendar import previous_trading_day
+    from alphalens_pipeline.market.calendar import previous_trading_day
 
     plannable, _ = _is_plannable(c)
     if not plannable or c.trade_setup is None:
@@ -1843,7 +1838,7 @@ def _sessions_between(
     start: dt.date, end: dt.date, exchange: str, *, inclusive_start: bool
 ) -> list[dt.date]:
     """Exchange sessions in ``(start, end]`` (or ``[start, end]`` when inclusive_start)."""
-    from alphalens_pipeline.paper.calendar import advance_trading_sessions, trading_days_elapsed
+    from alphalens_pipeline.market.calendar import advance_trading_sessions, trading_days_elapsed
 
     if end < start:
         return []
@@ -1997,7 +1992,7 @@ def _screen_session(
     Fail-closed (``touched=True``) on a missing bar / missing-or-zero prev_close /
     split-class day, then the per-state level-touch screen, then position-expiry.
     """
-    from alphalens_pipeline.paper.calendar import previous_trading_day
+    from alphalens_pipeline.market.calendar import previous_trading_day
 
     grouped = grouped_by_session.get(session)
     # 4. missing-bar fail-closed: a NEW session absent from its complete map
@@ -2069,7 +2064,7 @@ def _screen_decision(
     defeated. ``last_priced_session`` stays the least-recently-priced fair-ordering
     key only.
     """
-    from alphalens_pipeline.paper.calendar import trading_days_elapsed
+    from alphalens_pipeline.market.calendar import trading_days_elapsed
 
     classification = _prior_classification(prior)
 
@@ -2288,7 +2283,7 @@ def _cheap_update_row(
     trend and permanently freeze the mark — the per-day screen is the sole, exact
     split gate.)
     """
-    from alphalens_pipeline.paper.calendar import trading_days_elapsed
+    from alphalens_pipeline.market.calendar import trading_days_elapsed
 
     latest_session = new_sessions[-1] if new_sessions else None
     c_star = None
@@ -2449,7 +2444,7 @@ def _carried_row(item: _ResolveItem) -> dict[str, Any]:
 
 def _deferred_age(item: _ResolveItem, last_closed_session: dt.date) -> int | None:
     """Sessions-behind age for a deferred TOUCH item (dead-man input), else None."""
-    from alphalens_pipeline.paper.calendar import trading_days_elapsed
+    from alphalens_pipeline.market.calendar import trading_days_elapsed
 
     if item.touched and item.last_priced_session is not None:
         return max(0, trading_days_elapsed(item.last_priced_session, last_closed_session))
@@ -2759,7 +2754,7 @@ def _replay_candidate(
         reference_close = reference_close_override
     else:
         arrival_end = arrival_start + dt.timedelta(minutes=ARRIVAL_VWAP_WINDOW_MIN)
-        reference_close = _window_vwap(bars, arrival_start, arrival_end)
+        reference_close = window_vwap(bars, arrival_start, arrival_end)
     outcome = replay_ladder(
         setup,
         bars,

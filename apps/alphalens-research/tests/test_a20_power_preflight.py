@@ -371,7 +371,7 @@ class TestTheGateDateArithmetic(unittest.TestCase):
         the first version of this test failed for that reason rather than for
         the behaviour it is about.
         """
-        from alphalens_pipeline.paper.calendar import advance_trading_sessions
+        from alphalens_pipeline.market.calendar import advance_trading_sessions
 
         return [advance_trading_sessions(start, i).isoformat() for i in range(n)]
 
@@ -577,14 +577,14 @@ class TestMeasuredAccrual(unittest.TestCase):
     """
 
     def test_one_cluster_per_session_reads_as_one(self):
-        from alphalens_pipeline.paper.calendar import advance_trading_sessions
+        from alphalens_pipeline.market.calendar import advance_trading_sessions
 
         start = dt.date(2026, 7, 6)
         anchors = {advance_trading_sessions(start, i).isoformat(): 3 for i in range(10)}
         self.assertAlmostEqual(pre.measured_accrual(anchors), 1.0, places=9)
 
     def test_every_other_session_reads_as_a_half(self):
-        from alphalens_pipeline.paper.calendar import advance_trading_sessions
+        from alphalens_pipeline.market.calendar import advance_trading_sessions
 
         start = dt.date(2026, 7, 6)
         anchors = {advance_trading_sessions(start, 2 * i).isoformat(): 1 for i in range(5)}
@@ -657,7 +657,7 @@ class TestIccEstimator(unittest.TestCase):
 
 
 def _sessions(n: int, start: dt.date = dt.date(2026, 6, 1)) -> list[dt.date]:
-    from alphalens_pipeline.paper.calendar import advance_trading_sessions
+    from alphalens_pipeline.market.calendar import advance_trading_sessions
 
     return [advance_trading_sessions(start, i) for i in range(n)]
 

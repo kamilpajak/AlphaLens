@@ -101,8 +101,8 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     _filter_bars_to_rth,
     _read_cached_bars,
 )
+from alphalens_pipeline.market.calendar import trading_days_elapsed
 from alphalens_pipeline.paper.brief_loader import load_brief
-from alphalens_pipeline.paper.calendar import trading_days_elapsed
 
 TICK = 0.01
 D_GRID = (0.005, 0.01, 0.015, 0.02, 0.03)

@@ -322,7 +322,7 @@ class SecEdgarClient:
 _DEFAULT_CLIENT: SecEdgarClient | None = None
 # Guards first-call construction so two threads racing the first call
 # don't each build a client (and a redundant SecRateCoordinator).
-# Double-checked locking (same idiom as ``paper.calendar._calendar``).
+# Double-checked locking (same idiom as ``market.calendar._calendar``).
 _DEFAULT_CLIENT_LOCK = threading.Lock()
 
 

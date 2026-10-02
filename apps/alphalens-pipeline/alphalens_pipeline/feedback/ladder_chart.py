@@ -56,7 +56,7 @@ from alphalens_pipeline.feedback.ladder_replay import (
     parse_ladder,
     replay_ladder,
 )
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
     previous_trading_day,
@@ -186,7 +186,7 @@ def _rth_window_ms(session: dt.date, exchange: str) -> tuple[int, int]:
     mis-reported close falls back to the full 390-minute session so a session is
     never silently dropped.
     """
-    from alphalens_pipeline.paper.calendar import _calendar, _to_session_timestamp, is_half_day
+    from alphalens_pipeline.market.calendar import _calendar, _to_session_timestamp, is_half_day
 
     open_utc = session_open_utc(session, exchange)
     open_ms = int(open_utc.timestamp() * 1000)

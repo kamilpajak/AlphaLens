@@ -75,7 +75,7 @@ def stamp_window_utc(asof: dt.date, exchange: str = "XNYS") -> tuple[dt.datetime
     the day's cleared OI, and at-close quotes — the only state valid to
     attribute to ``asof`` (spec §3.1).
     """
-    from alphalens_pipeline.paper.calendar import (
+    from alphalens_pipeline.market.calendar import (
         is_trading_day,
         next_trading_open,
         previous_trading_day,

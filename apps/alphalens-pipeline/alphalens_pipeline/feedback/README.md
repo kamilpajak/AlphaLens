@@ -77,7 +77,7 @@ and their fills appear as markers, but there is one "entry" line on screen.
 A brief dated `D` is built on calendar day `D+1` from session `D`'s close (the
 T-1 dating), so session `D` has closed before anyone can read it. The replay
 window therefore starts at **the first session strictly after `D`**:
-`ladder_config.ladder_arrival_session(D) = session_on_or_after(D + 1 day)`.
+`market.calendar.ladder_arrival_session(D) = session_on_or_after(D + 1 day)`.
 A Tuesday brief arrives on Wednesday, a Friday brief on Monday, and a weekend or
 holiday brief on the next session (the same session as before #1416). This
 arrival keys the bar cache (`bars/<TICKER>_<arrival>.parquet`), and it anchors

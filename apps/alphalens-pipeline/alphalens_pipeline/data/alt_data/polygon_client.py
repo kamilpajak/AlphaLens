@@ -530,7 +530,7 @@ class PolygonClient:
 _DEFAULT_CLIENT: PolygonClient | None = None
 # Guards first-call construction so two threads racing the first call
 # don't each build a client. Double-checked locking (same idiom as
-# ``paper.calendar._calendar``).
+# ``market.calendar._calendar``).
 _DEFAULT_CLIENT_LOCK = threading.Lock()
 
 

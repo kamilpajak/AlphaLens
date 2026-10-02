@@ -51,7 +51,7 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     _read_cached_bars,
     _rth_window_utc,
 )
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
     previous_trading_day,

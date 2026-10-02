@@ -5,7 +5,7 @@ The edgar-detect cron emits a gauge
 Prometheus rule can page when the watchlist has gone quiet for a full trading
 week. PromQL cannot consult a holiday calendar, so the calendar math lives here
 (Python, where ``exchange_calendars`` ships the session table via
-``alphalens_pipeline.paper.calendar``).
+``alphalens_pipeline.market.calendar``).
 
 Two halves:
 
@@ -15,9 +15,9 @@ Two halves:
   file (not ``seen_events.db`` / ``digest.db``, which carry purpose-specific
   schemas, nor user-owned ``portfolio.yaml``) keeps concerns separated.
 * the pure, exchange-aware gap computation built on
-  ``paper.calendar.is_trading_day`` so it is unit-testable in isolation.
+  ``market.calendar.is_trading_day`` so it is unit-testable in isolation.
 
-The ``alphalens_pipeline.edgar_detector -> alphalens_pipeline.paper.calendar``
+The ``alphalens_pipeline.edgar_detector -> alphalens_pipeline.market.calendar``
 import is intra-pipeline (pipeline -> pipeline), so it does not cross the
 workspace DAG boundary the dependency-direction guard enforces (that guard only
 forbids ``alphalens_pipeline.* -> alphalens_research.*`` at top level).
@@ -33,7 +33,7 @@ import tempfile
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, is_trading_day
+from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, is_trading_day
 
 logger = logging.getLogger(__name__)
 

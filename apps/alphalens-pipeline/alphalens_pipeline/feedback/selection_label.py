@@ -58,7 +58,6 @@ import pyarrow.parquet as pq
 
 from alphalens_pipeline.data.rs_history import DEFAULT_RS_HISTORY_ROOT
 from alphalens_pipeline.events.insider_cluster import SOURCE_INSIDER_CLUSTER
-from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.feedback.market_beta import BetaEstimate, estimate_beta
 from alphalens_pipeline.feedback.split_audit import (
     MIN_COMPARABLE_SESSIONS,
@@ -66,9 +65,10 @@ from alphalens_pipeline.feedback.split_audit import (
     SpanAudit,
     audit_span,
 )
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
+    ladder_arrival_session,
     n_sessions_before,
     previous_trading_day,
 )

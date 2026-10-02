@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
     session_on_or_after,

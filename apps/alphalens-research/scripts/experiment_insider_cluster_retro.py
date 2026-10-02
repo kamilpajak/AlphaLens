@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 from alphalens_pipeline.data.alt_data.sec_edgar_client import get_default_sec_client
 from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories
-from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_on_or_after
+from alphalens_pipeline.market.calendar import advance_trading_sessions, session_on_or_after
 from alphalens_pipeline.scorers.cohen_malloy_classifier import classify_from_transaction_dates
 from alphalens_research.diagnostics import insider_cluster_retro as icr
 from alphalens_research.diagnostics.options_retro import cluster_ols

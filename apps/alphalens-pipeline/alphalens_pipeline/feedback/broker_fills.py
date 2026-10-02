@@ -33,7 +33,7 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
-from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, session_on_or_after
+from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, session_on_or_after
 
 logger = logging.getLogger(__name__)
 

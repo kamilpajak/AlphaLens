@@ -30,7 +30,7 @@ from typing import NamedTuple
 import pandas as pd
 from alphalens_pipeline.data import rs_history
 from alphalens_pipeline.feedback import market_beta
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
     previous_trading_day,

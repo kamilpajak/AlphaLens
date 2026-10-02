@@ -35,11 +35,11 @@ from alphalens_pipeline.feedback.ladder_chart import (
     build_chart_payload,
     enrich_store_with_chart_payloads,
 )
-from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
 from alphalens_pipeline.feedback.ladder_replay import replay_ladder
 from alphalens_pipeline.feedback.population_ladder_monitor import _RunDeadline
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.calendar import (
     advance_trading_sessions,
+    ladder_arrival_session,
     previous_trading_day,
     session_open_utc,
 )

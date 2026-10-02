@@ -35,7 +35,7 @@ from broker_contract.trade_intent.schema import TradeIntent
 
 from alphalens_pipeline.brokers.automanager.picks import STATUS_ARMED, PickRecord
 from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
-from alphalens_pipeline.paper.calendar import session_not_closed
+from alphalens_pipeline.market.calendar import session_not_closed
 
 # LEGACY(source_brief) — see broker_contract.trade_intent.legacy
 _SOURCE_BRIEF = "brief"

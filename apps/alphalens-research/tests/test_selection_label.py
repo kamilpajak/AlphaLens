@@ -19,7 +19,7 @@ import pyarrow as pa
 from alphalens_pipeline.feedback import selection_label as sl
 from alphalens_pipeline.feedback.market_beta import BETA_ESTIMATED, BETA_FALLBACK_THIN
 from alphalens_pipeline.feedback.split_audit import UNANSWERED, SpanAudit
-from alphalens_pipeline.paper.calendar import advance_trading_sessions, n_sessions_before
+from alphalens_pipeline.market.calendar import advance_trading_sessions, n_sessions_before
 
 #: A second vendor that looked at the whole span and found nothing wrong. Passing this
 #: explicitly in every case is deliberate: the audit has no default, so a caller cannot

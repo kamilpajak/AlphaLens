@@ -3,7 +3,7 @@
 There are two independent thin wrappers over ``exchange_calendars`` for the SAME
 exchange semantics, on opposite sides of the workspace split:
 
-* ``alphalens_pipeline.paper.calendar`` — drives the LIVE broker-free feedback
+* ``alphalens_pipeline.market.calendar`` — drives the LIVE broker-free feedback
   replay (``population_ladder_monitor`` / ``benchmark_excess``): session windows,
   trading-day membership.
 * ``market.calendar`` (this Django app) — drives ``/v1/market/status`` (the SPA's
@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from alphalens_pipeline.paper import calendar as paper_cal
+from alphalens_pipeline.market import calendar as pipeline_cal
 
 from market import calendar as market_cal
 
@@ -48,9 +48,9 @@ def _all_days_2025() -> list[dt.date]:
 def test_is_trading_day_parity_full_year_xnys():
     """Every day in 2025: both wrappers agree on XNYS trading-day membership."""
     mismatches = [
-        (d, paper_cal.is_trading_day(d), market_cal.is_trading_day(d))
+        (d, pipeline_cal.is_trading_day(d), market_cal.is_trading_day(d))
         for d in _all_days_2025()
-        if paper_cal.is_trading_day(d) != market_cal.is_trading_day(d)
+        if pipeline_cal.is_trading_day(d) != market_cal.is_trading_day(d)
     ]
     assert not mismatches, f"is_trading_day drift between the two calendar wrappers: {mismatches}"
 
@@ -58,9 +58,9 @@ def test_is_trading_day_parity_full_year_xnys():
 def test_is_half_day_parity_full_year_xnys():
     """Every day in 2025: both wrappers agree on XNYS half-day (early close)."""
     mismatches = [
-        (d, paper_cal.is_half_day(d), market_cal.is_half_day(d))
+        (d, pipeline_cal.is_half_day(d), market_cal.is_half_day(d))
         for d in _all_days_2025()
-        if paper_cal.is_half_day(d) != market_cal.is_half_day(d)
+        if pipeline_cal.is_half_day(d) != market_cal.is_half_day(d)
     ]
     assert not mismatches, f"is_half_day drift between the two calendar wrappers: {mismatches}"
 
@@ -70,9 +70,9 @@ def test_parity_test_is_not_vacuous():
     AND at least one half-day — otherwise the parity assertions could pass by
     comparing two always-identical trivial answers."""
     days = _all_days_2025()
-    trading = [d for d in days if paper_cal.is_trading_day(d)]
-    non_trading = [d for d in days if not paper_cal.is_trading_day(d)]
-    half_days = [d for d in days if paper_cal.is_half_day(d)]
+    trading = [d for d in days if pipeline_cal.is_trading_day(d)]
+    non_trading = [d for d in days if not pipeline_cal.is_trading_day(d)]
+    half_days = [d for d in days if pipeline_cal.is_half_day(d)]
     assert 230 <= len(trading) <= 260, f"unexpected XNYS trading-day count: {len(trading)}"
     assert len(non_trading) > 100, "expected weekends + holidays as non-trading days"
     assert len(half_days) >= 2, f"expected >=2 XNYS half-days in 2025, got {len(half_days)}"
@@ -113,8 +113,8 @@ def test_next_open_parity_across_holiday_halfday_and_dst():
         dt.datetime(2025, 3, 7, 14, 30, tzinfo=dt.UTC),
     ]
     for instant in instants:
-        paper_open = paper_cal.next_trading_open(instant)
+        pipeline_open = pipeline_cal.next_trading_open(instant)
         market_open = market_cal.next_session_open_utc(instant)
-        assert paper_open == market_open, (
-            f"next-open drift for instant {instant}: pipeline={paper_open} django={market_open}"
+        assert pipeline_open == market_open, (
+            f"next-open drift for instant {instant}: pipeline={pipeline_open} django={market_open}"
         )

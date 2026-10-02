@@ -33,7 +33,7 @@ import datetime as dt
 import warnings
 
 import numpy as np
-from alphalens_pipeline.paper.calendar import session_on_or_after
+from alphalens_pipeline.market.calendar import session_on_or_after
 from alphalens_research.diagnostics import edge_stores
 from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
 from sklearn.ensemble import HistGradientBoostingClassifier

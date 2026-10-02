@@ -24,11 +24,10 @@ independent of per-row TTL can read the ``schema`` field or the dedicated
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 
-from alphalens_pipeline.feedback.bar_window import ARRIVAL_VWAP_WINDOW_MIN
-from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, session_on_or_after
+from alphalens_pipeline.market.bars import ARRIVAL_VWAP_WINDOW_MIN
+from alphalens_pipeline.market.calendar import ARRIVAL_RULE
 from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
 
 # Bumped ONLY when the SHAPE of the stamp changes (a key added / removed /
@@ -41,26 +40,6 @@ _STAMP_SCHEMA = 2
 # flips to tp-first), bump the id so old rows stay distinguishable from new ones.
 _RATCHET_RULE = "be_after_tp1_lock_after_tp2"  # break-even after TP1, lock after TP2
 _TIEBREAK_RULE = "sl_first"  # same-bar TP-vs-SL ambiguity resolves to the stop
-
-# Id of the rule in :func:`ladder_arrival_session`. Rows replayed under the old
-# ``session_on_or_after(brief_date)`` anchor (stamp schema 1) carry no such key.
-ARRIVAL_RULE = "first_session_after_brief_date"
-
-
-def ladder_arrival_session(brief_date: dt.date, exchange: str = DEFAULT_EXCHANGE) -> dt.date:
-    """The first session a reader of the brief dated ``brief_date`` can trade.
-
-    Briefs are dated T-1: the brief for ``D`` is first built on calendar day
-    ``D+1`` (about 01:30 UTC) from session ``D``'s close. Session ``D`` itself has
-    closed by then, so the ladder window starts at the first session strictly
-    after ``D`` (#1416). Weekend and holiday briefs land on the same session as
-    ``session_on_or_after(brief_date)``; only a brief dated on a session moves.
-
-    This is a DATE rule: it holds while no brief for ``D`` exists before ``D+1``
-    00:00 UTC and the next session opens after the brief is built. The event
-    lane's CAR anchor is a different quantity and does NOT use this rule.
-    """
-    return session_on_or_after(brief_date + dt.timedelta(days=1), exchange)
 
 
 def ladder_config_version(*, order_ttl_days: int) -> str:

@@ -40,7 +40,7 @@ def _classify(exc: Exception) -> Exception:
 class TestPolygonAggRangeLive(unittest.TestCase):
     def test_past_session_opening_window_has_minute_bars(self):
         from alphalens_pipeline.data.alt_data.polygon_client import get_default_polygon_client
-        from alphalens_pipeline.paper.calendar import previous_trading_day, session_open_utc
+        from alphalens_pipeline.market.calendar import previous_trading_day, session_open_utc
 
         def _probe() -> None:
             # Anchor to a session a few trading days back so it is unambiguously

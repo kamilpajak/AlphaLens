@@ -31,7 +31,7 @@ from pathlib import Path
 
 from alphalens_pipeline.data import rs_history
 from alphalens_pipeline.data.alt_data.polygon_client import PolygonAuthError
-from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, is_trading_day, n_sessions_before
+from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, is_trading_day, n_sessions_before
 
 logger = logging.getLogger("backfill_grouped_daily_history")
 

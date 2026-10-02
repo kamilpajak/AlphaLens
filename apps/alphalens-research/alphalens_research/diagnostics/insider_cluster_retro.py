@@ -40,7 +40,7 @@ from alphalens_pipeline.events.insider_cluster import (  # noqa: F401 — re-exp
     fetch_acceptance,
     qualifying_legs,
 )
-from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, advance_trading_sessions
+from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, advance_trading_sessions
 
 # Retrospective-only constants (matching + planning rule).
 MATCH_VARS = ("ret_20d", "ret_6m", "vol_20d", "log_dv_20d")

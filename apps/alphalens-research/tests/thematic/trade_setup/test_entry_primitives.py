@@ -1,6 +1,6 @@
 """Tests for entry_primitives: market_at_arrival_fill + vwap_arrival_fill.
 
-_window_vwap behavior (confirmed from bar_window.py source):
+window_vwap behavior (confirmed from market/bars.py source):
 - Uses close price ``c``, NOT typical price (h+l+c)/3.
 - Window is [start_ms, end_ms) — exclusive end.
 - Takes datetime objects, converts internally to epoch ms.
@@ -87,7 +87,7 @@ class TestMarketAtArrivalNaN(unittest.TestCase):
 class TestVwapArrival(unittest.TestCase):
     def test_volume_weighted_vwap(self):
         # Two 1-min bars in the 30-min window.
-        # _window_vwap uses close price (c), weighted by volume.
+        # window_vwap uses close price (c), weighted by volume.
         # Both bars have h=l=c=price so VWAP = (100*100 + 110*300) / 400 = 107.5
         bars = [
             _bar(_OPEN, 100.0, 100.0, 100.0, 100.0, v=100.0),
@@ -103,7 +103,7 @@ class TestVwapArrival(unittest.TestCase):
         self.assertEqual(f.status, "NO_FILL")
 
     def test_nan_close_price_returns_no_fill(self):
-        # _window_vwap: NaN close passes the `close is None` guard and propagates
+        # window_vwap: NaN close passes the `close is None` guard and propagates
         # through the weighted sum → vwap_arrival_fill must catch the NaN result.
         bars = [
             _bar(_OPEN, float("nan"), float("nan"), float("nan"), float("nan")),

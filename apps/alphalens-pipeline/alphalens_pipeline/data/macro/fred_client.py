@@ -77,7 +77,7 @@ def _reaches(series: pd.Series, through: dt.date, lag_sessions: int) -> bool:
     every long weekend. ``n_sessions_before`` rolls a non-session ``through`` back
     to the prior session first, which is what makes a Saturday ``asof`` behave.
     """
-    from alphalens_pipeline.paper.calendar import n_sessions_before
+    from alphalens_pipeline.market.calendar import n_sessions_before
 
     last = _last_observation(series)
     return last is not None and last >= n_sessions_before(through, lag_sessions)

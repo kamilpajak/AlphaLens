@@ -1152,7 +1152,7 @@ def _make_stream_session_window(
     stream's session gate.
 
     The window comes from the exchange-parametrized calendar helpers
-    (``paper.calendar`` on ``exchange_calendars`` — real holidays, early
+    (``market.calendar`` on ``exchange_calendars`` — real holidays, early
     closes, DST), NEVER hand-rolled hours: half-days resolve to the actual
     per-session close, a non-trading day is False all day.
 
@@ -1185,7 +1185,7 @@ def _make_stream_session_window(
     bounds_by_day: dict[dt.date, tuple[dt.datetime, dt.datetime] | None] = {}
 
     def _bounds(day: dt.date) -> tuple[dt.datetime, dt.datetime] | None:
-        from alphalens_pipeline.paper.calendar import (
+        from alphalens_pipeline.market.calendar import (
             is_trading_day,
             session_close_utc,
             session_open_utc,
@@ -2194,7 +2194,7 @@ def _open_entry_watches(
     ``planned`` writer can pass it through, and so the #1112 arm gates can read
     off a journal line which exit was actually placed. ``None`` omits the key
     entirely, keeping the line byte-identical to a pre-stamp watch_open."""
-    from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_close_utc
+    from alphalens_pipeline.market.calendar import advance_trading_sessions, session_close_utc
 
     trade_date = intent.meta.trade_date
     generation = _pick_generation(intent)
@@ -8930,7 +8930,7 @@ def _day1_gap_gate_session_info(
     (``_evaluate_day1_gap_gate``) so the two never disagree on what "day1"
     means."""
     try:
-        from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_open_utc
+        from alphalens_pipeline.market.calendar import advance_trading_sessions, session_open_utc
 
         step = 0 if day1_includes_trade_date else 1
         day1 = advance_trading_sessions(trade_date, step, exchange=exchange_mic)
