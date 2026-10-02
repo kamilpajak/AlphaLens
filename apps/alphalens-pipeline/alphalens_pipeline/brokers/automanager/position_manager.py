@@ -53,6 +53,7 @@ from broker_contract.exit_geometry import (
     clamp_reanchor_target,
 )
 from broker_contract.exit_geometry.registry import resolve_declared_policy
+from broker_contract.stop_decision import StopDecisionView, decide_reanchor_detail
 from broker_contract.trade_intent.schema import ReactionPrimitive, ReanchorOnFill
 
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
@@ -799,30 +800,47 @@ def _maybe_reanchor(
     the stop below the floor (a deep gap-down fill) the arm returns ``None`` and
     the resting stop stays put. Returns ``None`` (never a bad stop) whenever the
     policy or the envelope refuses (non-finite / ``<= 0`` / below-floor)."""
+    # #1581: the DECISION belongs to the contract now
+    # (``broker_contract.stop_decision``), which held a guard-for-guard copy of
+    # it. This arm no longer re-checks what the contract checks; it PROJECTS the
+    # position into the view and reports the answer. Two things stay here
+    # because this arm needs their values rather than their verdicts: the
+    # resolved policy, for ``policy.name`` in the log lines and the journal
+    # field, and the sole standalone stop, for the order id the amend addresses.
+    #
+    # Every other guard moved. Keeping a copy beside the contract's would have
+    # left the view's fields unpoliced: with an early return here, the view's
+    # ``already_reanchored`` was always False by the time the contract saw it,
+    # and hard-coding it to False killed none of 3495 tests. Measured. Now the
+    # field decides, and the corpus's two latch cases witness it.
     policy = resolve_declared_policy(plan.reaction)
-    if not policy.requires_amend_stop:
-        return None  # nothing declared -> the inert policy -> the stop never moves
     avg_price = pos.avg_price
-    if not _finite_positive(avg_price):
-        return None
-    atr = _declared_atr(plan.reaction)
     sole = _sole_standalone_stop(legs)
     if sole is None:
-        return None
-    if uic in view.amend_recently_failed:
-        return None
+        return None  # the amend needs an order id; nothing else here does
     latched = view.reanchored_by_uic.get(uic)
-    if latched is not None and abs(latched - avg_price) <= _REANCHOR_AVG_PRICE_EPS:
-        return None
-    proposed = policy.decide_reanchor(avg_price, atr)
+    decision = decide_reanchor_detail(
+        StopDecisionView(
+            avg_price=avg_price,
+            peak=None,  # this arm reads no high-water mark
+            last_price=None,  # nor a live price: it anchors on the realized fill
+            plan_stop=plan.stop_price,
+            reaction=plan.reaction,
+            has_sole_standalone_stop=sole is not None,
+            amend_in_backoff=uic in view.amend_recently_failed,
+            ratchet_floor=None,  # and it has no ratchet
+            # The 1e-6 band stays HERE: the view carries a bool, and a caller
+            # that passed exact equality instead would diverge on 29 060 of
+            # 300 000 generated (latched, avg_price) pairs.
+            already_reanchored=(
+                latched is not None and abs(latched - avg_price) <= _REANCHOR_AVG_PRICE_EPS
+            ),
+        )
+    )
+    proposed = decision.proposed
     if proposed is None:
         return None  # setup_static inert, or a degenerate the policy refuses
-    clamped = clamp_reanchor_target(
-        plan.stop_price,
-        proposed,
-        anchor_price=avg_price,
-        min_distance_frac=policy.min_stop_distance_frac,
-    )
+    clamped = decision.clamped
     if clamped is None:
         logger.info(
             "reanchor refused (below brief floor): policy=%s proposed=%.4f prior_stop=%.4f avg_price=%.4f",
