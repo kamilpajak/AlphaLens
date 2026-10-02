@@ -58,6 +58,7 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "types",
             "typing",
             "broker_contract.failure",
+            "intent_replay.fx",
             "intent_replay.refusal",
             "intent_replay.units",
         }
@@ -116,6 +117,7 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
             "broker_contract.failure",
             "broker_contract.trade_intent.schema",
             "intent_replay.classification",
+            "intent_replay.fx",
             "intent_replay.refusal",
         }
     ),

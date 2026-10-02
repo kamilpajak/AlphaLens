@@ -82,6 +82,9 @@ class TheSameCurrencyArmReturnsItsArgumentTest(unittest.TestCase):
     def test_to_shares_is_the_identity_even_with_a_rate_stated(self) -> None:
         self.assertEqual(_same(rate=3.7).to_shares(13.5), 13.5)
 
+    def test_an_account_amount_is_already_an_instrument_amount(self) -> None:
+        self.assertEqual(_same(rate=3.7).in_instrument_currency(1500.0), 1500.0)
+
 
 class TheCrossCurrencyArmTest(unittest.TestCase):
     def test_the_buffer_comes_off_the_total_before_anything_splits_it(self) -> None:
@@ -91,6 +94,22 @@ class TheCrossCurrencyArmTest(unittest.TestCase):
 
     def test_the_rate_turns_an_account_quantity_into_shares(self) -> None:
         self.assertEqual(_cross(rate=0.5).to_shares(20.0), 10.0)
+
+    def test_the_rate_also_prices_an_account_amount_in_the_instruments_currency(self) -> None:
+        # The same multiplication under a second name, because the two have
+        # different DIMENSIONS: one answers "how many shares", the other
+        # "how much money in the other currency". A call site that said
+        # ``to_shares`` for a cash figure would read as a share count.
+        self.assertEqual(_cross(rate=0.5).in_instrument_currency(900.0), 450.0)
+
+    def test_the_two_names_are_one_arithmetic(self) -> None:
+        # Stated rather than left to a reader: if these ever diverge, one of the
+        # two conversions has grown a rule the other lacks, and the result's
+        # derived notional would stop agreeing with the gate's.
+        fx = _cross(rate=1.08)
+        for value in (0.0, 1.0, 1500.0, 1e300, 5e-324):
+            with self.subTest(value):
+                self.assertEqual(fx.to_shares(value), fx.in_instrument_currency(value))
 
     def test_the_pair_unit_spells_the_direction_rather_than_implying_it(self) -> None:
         # `USD/PLN` reads as PLN per USD under market convention -- the inverse

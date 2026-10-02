@@ -173,7 +173,15 @@ class AcceptedDocumentTest(_Files):
         summary = value["summary"]
         self.assertEqual(summary["avg_entry_price"]["value"], 68.0)
         self.assertEqual(summary["r_multiple"]["denominator"]["value"], 5.0)
-        self.assertEqual(summary["notional_spent"], {"value": 900.0, "unit": "EUR"})
+        # 891.0 and not 900.0: the canonical block states a 1 per cent sizing
+        # buffer, so the ladder splits 1485.00 and this rung's 60 per cent is
+        # 891.00 (#1592). One per cent of 1500 is exact in binary, which is why
+        # this is an equality.
+        self.assertEqual(summary["notional_spent"], {"value": 891.0, "unit": "EUR"})
+        self.assertEqual(summary["avg_entry_price"]["unit"], "USD")
+        self.assertEqual(
+            value["fx"], {"applies": True, "notional_spent": {"value": 891.0 * 1.08, "unit": "USD"}}
+        )
         self.assertEqual(value["outcome"], "open")
 
     def test_a_stated_trail_distance_reaches_the_published_command(self) -> None:
@@ -191,6 +199,10 @@ class AcceptedDocumentTest(_Files):
         of the trough and the distance, and 67.90 + 0.34 is 68.24000000000001.
         The published number carries that representation, so an exact-equality
         assertion here would be asserting the arithmetic and not the model.
+
+        The spend is the rung's 891.00 of the buffered 1485.00 budget, bought
+        at 68.24 rather than at 68.00 — so 891.00 / 68.00 x 68.24000000000001.
+        It was 903.176471 before #1592, on the unbuffered 900.00.
         """
         config = self.write("trail.json", {**CANONICAL, "entry_trail_bps": 50})
         run = self.run_cli("run", self.document, "--config", config, "--bars", self.bars)
@@ -199,7 +211,7 @@ class AcceptedDocumentTest(_Files):
         summary = value["summary"]
         self.assertAlmostEqual(summary["avg_entry_price"]["value"], 68.24, places=9)
         self.assertAlmostEqual(summary["r_multiple"]["denominator"]["value"], 5.24, places=9)
-        self.assertAlmostEqual(summary["notional_spent"]["value"], 903.176471, places=6)
+        self.assertAlmostEqual(summary["notional_spent"]["value"], 894.144706, places=6)
         self.assertEqual(summary["snu_bars"], 1)
         self.assertEqual(value["outcome"], "open")
         self.assertIn("native_entry_trail_is_a_broker_model", value["divergences"])
@@ -443,12 +455,15 @@ class DocumentRefusalTest(_Files):
 
 
 class ConfigRefusalTest(_Files):
-    def test_an_empty_block_is_config_incomplete_naming_the_seven_keys(self) -> None:
+    def test_an_empty_block_is_config_incomplete_naming_the_eight_keys(self) -> None:
+        # Eight since #1592 added ``fx``. The count is asserted rather than the
+        # list because the list is ``test_config``'s subject; what this one
+        # shows is that the whole block reaches the caller through the command.
         path = self.write("empty.json", {})
         run = self.run_cli("run", self.document, "--config", path, "--bars", self.bars)
         failure = run.failure(self)
         self.assertEqual((run.code, failure["code"]), (EXIT_FAILED, "config_incomplete"))
-        self.assertEqual(len(failure["details"]["keys"]), 7)
+        self.assertEqual(len(failure["details"]["keys"]), 8)
 
     def test_an_unusable_value_is_config_invalid(self) -> None:
         config = copy.deepcopy(CANONICAL)

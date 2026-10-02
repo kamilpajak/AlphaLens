@@ -958,7 +958,12 @@ def walk(plan: Plan, config: RunConfig, bars: tuple[Bar, ...]) -> WalkResult:
         intended_units=intended,
         units_filled=state.units,
         notional_spent=state.cash,
-        filled_fraction=state.committed / plan.notional if plan.notional else 0.0,
+        # ``committed`` accumulates each rung's share of what the ladder
+        # SPLITS, so the denominator is that same quantity. Under a stated
+        # sizing buffer the two differ by exactly the buffer, and dividing by
+        # the stated budget instead publishes 0.594 for a ladder that is 60 per
+        # cent filled (#1592).
+        filled_fraction=(state.committed / plan.sizing_notional if plan.sizing_notional else 0.0),
         avg_entry_price=state.cash / state.units if filled_any else None,
         peak_price=state.peak,
         trough_price=state.trough,

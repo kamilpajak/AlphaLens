@@ -80,10 +80,29 @@ class Fx:
         return f"{self.instrument_currency}_per_{self.account_currency}"
 
     def to_shares(self, units: float) -> float:
-        """An account-currency quantity as a share count, for the cost gate."""
+        """An account-currency quantity as a share count, for the cost gate.
+
+        The walk's ``units`` are a rung's share of the budget divided by a
+        limit price -- account currency over an instrument-currency price,
+        which is a share count scaled by the rate.
+        """
+        return self._scaled(units)
+
+    def in_instrument_currency(self, amount: float) -> float:
+        """An ACCOUNT-currency amount in the instrument's currency.
+
+        The same multiplication as :meth:`to_shares` under a second name, and
+        the second name is the point: the two results have different
+        DIMENSIONS, and a call site that said ``to_shares`` for a cash figure
+        would read as a share count. One arithmetic, so the derived notional the
+        result publishes cannot disagree with the notional the gate priced.
+        """
+        return self._scaled(amount)
+
+    def _scaled(self, value: float) -> float:
         if not self.applies or self.rate is None:
-            return units
-        return units * self.rate
+            return value
+        return value * self.rate
 
     def sizing_notional(self, total: float) -> float:
         """The budget the entry ladder splits, after the settlement-drift

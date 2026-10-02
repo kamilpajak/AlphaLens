@@ -12,20 +12,26 @@ allow-list does not admit (spec section 3.1); and the fee card and
 a test pins on purpose. What keeps the copy honest is a golden table computed
 from the daemon's own function, in ``tests/intent_replay/test_cost_gate.py``.
 
-Two things this module deliberately does NOT carry:
+**The notional is the INSTRUMENT's currency, and #1592 is what made that
+possible.** The walk holds a tranche's size in the ACCOUNT currency, because a
+rung's share of the budget divided by a limit price is account currency per
+instrument price. ``Fx.to_shares`` turns that into a share count, and the
+product with the entry price is then the notional the fee card is written
+against -- which matters because ``min_commission`` is an instrument-currency
+magnitude, so comparing it against an account-currency notional priced two
+currencies at once. The conversion and the FX leg are both read off the stated
+facts (section 5.2.1); nothing here inherits a production constant.
 
-* **No FX term.** The daemon adds ``FX_ROUND_TRIP_RATE`` (0.0050, exactly
-  50 bps of any notional) when a conversion applies. No configuration key
-  states that rate and section 2.1 forbids inheriting a production constant, so
-  ``fx_applies: true`` is refused in ``config`` and never reaches this module.
-  Pricing it is #1592.
+What this module still does NOT carry:
+
 * **No whole-share lattice.** The daemon prices the WHOLE-SHARE notional; this
   prices the stated budget. Above the fee card's knee
   (``min_commission / commission_rate``) the fee is pure ad valorem and the two
   thresholds agree to full precision. Below it the per-fill minimum binds
   unequally and this threshold comes out too LOW, so the replay fires tranches
   the daemon declines: measured 1.05 bps at a budget of 1000 against 950 whole
-  shares' worth, 15.24 at 250 against 210, 38.10 at 100 against 84.
+  shares' worth, 15.24 at 250 against 210, 38.10 at 100 against 84. That gap has
+  no currency in it and survives this issue unchanged.
 
 The stance on unusable data is the daemon's and is the opposite of the stop
 decision's: ``clears_cost`` FAILS OPEN. Refusing an exit on a number nothing
@@ -46,11 +52,18 @@ _BPS_PER_UNIT: Final = 1e4
 
 
 def round_trip_fee_bps(notional: float, costs: Costs) -> float:
-    """Buy plus sell commission for ``notional``, in bps of that notional.
+    """Buy plus sell commission plus the FX leg for ``notional`` (the
+    INSTRUMENT's currency), in bps of that notional.
 
     A non-positive ``notional`` answers ``0.0`` rather than dividing — the
     daemon's own arm, and it is reachable here without a degenerate input: two
-    positive numbers can multiply to zero by underflow.
+    positive numbers can multiply to zero by underflow. The FX term sits INSIDE
+    that guard rather than beside it, as the daemon's does.
+
+    The grouping is the daemon's: the two round trips are summed and the sum is
+    divided once. In bps the FX term is the stated rate exactly, at every
+    notional, because the notional cancels — which is why one stated fraction
+    prices the leg (section 5.2.1).
     """
     if notional <= 0:
         return 0.0
@@ -58,12 +71,31 @@ def round_trip_fee_bps(notional: float, costs: Costs) -> float:
     per_fill = (
         max(costs.min_commission.value, ad_valorem) if costs.min_commission_applies else ad_valorem
     )
-    return 2.0 * per_fill / notional * _BPS_PER_UNIT
+    commission_round_trip = 2.0 * per_fill
+    fx_round_trip = _fx_round_trip(notional, costs)
+    return (commission_round_trip + fx_round_trip) / notional * _BPS_PER_UNIT
+
+
+def _fx_round_trip(notional: float, costs: Costs) -> float:
+    """The stated conversion cost of one round trip, or ``0.0``.
+
+    ``applies`` is derived from the two currency codes, so this arm cannot be
+    reached by a caller declaring a conversion the codes do not show
+    (section 5.2.1).
+    """
+    fx = costs.fx
+    if not fx.applies or fx.round_trip_cost_rate is None:
+        return 0.0
+    return fx.round_trip_cost_rate * notional
 
 
 def min_profitable_exit_price(*, entry_price: float, units: float, costs: Costs) -> float | None:
     """The lowest exit price that clears the round trip plus the STATED edge, or
     ``None`` when the answer is not representable.
+
+    ``units`` is the tranche's size in the ACCOUNT currency; the conversion to
+    shares happens here, once, so every caller states one unit and the module
+    docstring states which.
 
     ``None`` means UNREPRESENTABLE, never "no threshold": the result is guarded
     as well as the inputs, because the notional reaches a float extreme from
@@ -77,7 +109,7 @@ def min_profitable_exit_price(*, entry_price: float, units: float, costs: Costs)
     for value in (entry_price, units):
         if not math.isfinite(value) or value <= 0.0:
             return None
-    cost_bps = round_trip_fee_bps(units * entry_price, costs)
+    cost_bps = round_trip_fee_bps(costs.fx.to_shares(units) * entry_price, costs)
     threshold = entry_price * (1.0 + (cost_bps + costs.exit_edge_min_bps.value) / _BPS_PER_UNIT)
     if not math.isfinite(threshold):
         return None

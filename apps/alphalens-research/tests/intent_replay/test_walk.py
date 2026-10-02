@@ -28,7 +28,7 @@ from intent_replay.walk import (
     walk,
 )
 
-from tests.intent_replay.test_config import CANONICAL
+from tests.intent_replay.test_config import ACCOUNT_CURRENCY, CANONICAL, SAME_CURRENCY
 
 WALK_START = 1_790_170_200_000
 MINUTE = 60_000
@@ -52,23 +52,58 @@ TRAILED_LEVEL = 69.56
 
 
 def _config(**overrides: Any) -> RunConfig:
+    """The SAME-CURRENCY block (``test_config.SAME_CURRENCY``).
+
+    The walk's own arithmetic is currency-blind: it divides a notional by a
+    price and compares prices against prices. What a stated conversion changes
+    is the cost gate's notional and the budget the interpreter splits, and this
+    file builds its plans by hand rather than through the interpreter. So the
+    same-currency block is the honest default here -- every number below
+    predates #1592 and is unmoved by it, which is what makes a leaking rate or
+    a leaking buffer visible rather than absorbed. The rows that exercise the
+    conversion state it themselves (:func:`_cross_config`).
+    """
+    data = copy.deepcopy(dict(SAME_CURRENCY))
+    data.update(overrides)
+    return RunConfig.from_jsonable(data, account_currency=ACCOUNT_CURRENCY)
+
+
+def _cross_config(**overrides: Any) -> RunConfig:
+    """The CROSS-currency block of the section 5 example: a EUR budget on a USD
+    instrument, with the rate, the round-trip cost rate and the sizing buffer
+    the caller stated."""
     data = copy.deepcopy(dict(CANONICAL))
     data.update(overrides)
-    return RunConfig.from_jsonable(data)
+    return RunConfig.from_jsonable(data, account_currency=ACCOUNT_CURRENCY)
+
+
+# The same ladder under a 1 per cent sizing buffer: the figures the interpreter
+# produces from the published template once the conversion is stated. One per
+# cent of 1500 is exact in binary, so these are literals and not near-misses.
+BUFFERED_RUNGS = (
+    PendingEntry(tier_index=0, limit_price=68.0, notional=891.0),
+    PendingEntry(tier_index=1, limit_price=66.5, notional=594.0),
+)
+BUFFERED_TOTAL = 1485.0
 
 
 def _plan(
     *,
     entries: tuple[PendingEntry, ...] = RUNGS,
     notional: float = 1500.0,
+    sizing_notional: float | None = None,
     floor: float = FLOOR,
     take_profit: float | None = None,
     tranches: tuple[DeclaredTranche, ...] = (),
     reaction: Any = None,
 ) -> Plan:
+    """``sizing_notional`` defaults to ``notional`` — the same-currency case,
+    where no buffer applies and the ladder splits the stated budget."""
     return Plan(
         entries=entries,
         notional=notional,
+        sizing_notional=notional if sizing_notional is None else sizing_notional,
+        account_currency=ACCOUNT_CURRENCY,
         declared_floor=floor,
         declared_stop=None,
         declared_take_profit=take_profit,
@@ -1588,6 +1623,48 @@ class TheFloorDecidesHowManyReanchorsFireTest(unittest.TestCase):
         # The right end is OPEN too: the target equals the stop standing, and
         # the decision returns early rather than re-emitting it.
         self.assertEqual(self._moves(66.20), [])
+
+
+class TheFilledFractionIsAFractionOfWhatTheLadderSplitsTest(unittest.TestCase):
+    """The numerator and the denominator must be buffered together (#1592).
+
+    ``state.committed`` accumulates each rung's ``notional``, which is a share
+    of the BUFFERED budget once a conversion is stated. Dividing that by the
+    stated budget publishes 0.594 where the ladder is 60 per cent filled -- a
+    number that is wrong by exactly the buffer and reads as plausible. No test
+    could catch it before this issue, because the buffer was 0.0 on every
+    reachable path and the two readings agreed.
+    """
+
+    BAR = (_bar(WALK_START, 68.5, 68.6, 67.9),)
+
+    def test_a_buffered_ladder_reports_the_allocation_and_not_the_buffer(self) -> None:
+        # The 68.00 rung fills and the 66.50 one does not: 891 of 1485 is 0.6,
+        # and 891 of the stated 1500 would be 0.594.
+        result = walk(
+            _plan(entries=BUFFERED_RUNGS, sizing_notional=BUFFERED_TOTAL), _config(), self.BAR
+        )
+        self.assertEqual(result.notional_spent, 891.0)
+        self.assertEqual(result.filled_fraction, 0.6)
+
+    def test_the_unbuffered_denominator_is_the_number_this_rules_out(self) -> None:
+        # The existence control, stated as arithmetic rather than as a claim:
+        # the two readings really do differ on this fixture, so the row above
+        # has something to discriminate.
+        self.assertEqual(891.0 / 1500.0, 0.594)
+        self.assertNotEqual(891.0 / BUFFERED_TOTAL, 891.0 / 1500.0)
+
+    def test_a_same_currency_ladder_is_unmoved(self) -> None:
+        # The preimage: with no buffer the two readings agree, which is why
+        # every other fraction in this file is still 0.6 or 0.0.
+        result = walk(_plan(), _config(), self.BAR)
+        self.assertEqual(result.filled_fraction, 0.6)
+
+    def test_a_ladder_that_splits_nothing_divides_by_nothing(self) -> None:
+        # The guard is on the DENOMINATOR the walk divides by, so it has to be
+        # the buffered one there too.
+        result = walk(_plan(entries=(), notional=1500.0, sizing_notional=0.0), _config(), self.BAR)
+        self.assertEqual(result.filled_fraction, 0.0)
 
 
 if __name__ == "__main__":

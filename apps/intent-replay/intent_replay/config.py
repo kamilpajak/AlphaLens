@@ -16,7 +16,8 @@ Two codes, one failure mode each, both with a closed reason vocabulary:
 * ``config_invalid`` — a key the caller DID state, with a value nothing can
   use: the wrong type, a non-finite number, a non-positive distance or price, a
   negative cost, a unit other than the published one, an empty string, a key
-  this block does not model, or ``oco: true``. Its own code rather than a
+  this block does not model, a currency code that is not one, a sizing buffer
+  outside ``[0, 100)``, or ``oco: true``. Its own code rather than a
   reason under the first, on the same argument that gave ``bars_invalid`` its
   own code: a complete configuration can still carry a value nothing can use,
   and telling that caller "you did not state this" sends them to the wrong
@@ -49,11 +50,26 @@ Three decisions taken with the PR 3 plan on 2026-09-25, each pinned by a test:
   check runs on floats only — ``math.isfinite`` on an int wider than a float
   raises rather than answers.
 
-What this block cannot check, stated so it is not assumed: the currency
-``costs.min_commission.unit`` must match is the INSTRUMENT's, which no document
-path states; and a run whose instrument currency differs from
-``spec.size.currency`` needs an FX rate this block does not carry. Both are
-recorded on the epic and decided outside this module.
+Both things this block could not check before #1592 are now checked, and the
+key set that made them checkable is section 5.2.1's. ``fx.instrument_currency``
+states the settlement currency no document path carries, so
+``costs.min_commission.unit`` is compared against it instead of being a label
+nothing reads; and ``fx.mid_rate`` states the conversion, so a cross-currency
+run is PRICED rather than refused. Two consequences shape the reading pass:
+
+* **The fx key set is CONDITIONAL on a value inside it.** One key when the
+  stated instrument code equals ``account_currency``, four when they differ. So
+  a magnitude stated on a same-currency run is ``unknown_key`` and one absent
+  on a cross-currency run is ``missing_key`` — refused either way, never
+  accepted and left inert.
+* **``fx_applies`` is DERIVED and is no longer a key.** A caller could state
+  ``false`` on a cross-currency document, and section 8.1 measures what that
+  cost. A value derived from the two codes cannot contradict them.
+
+``account_currency`` is a REQUIRED keyword rather than a block key, because it
+is the document's (``spec.size.currency``) and not the caller's: the block
+cannot state it without being able to disagree with the document it replays.
+A required keyword cannot be forgotten at a call site; a free function can.
 
 ENGINE module: stdlib and ``broker_contract`` only.
 """
@@ -61,18 +77,21 @@ ENGINE module: stdlib and ``broker_contract`` only.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Final
 
 from broker_contract.failure import ContractError
 
+from intent_replay.fx import Fx
 from intent_replay.refusal import refuse
 from intent_replay.units import (
     BPS,
     EPOCH_MS_UTC,
     FRACTION,
+    ISO_4217,
+    PERCENT,
     QUANTITY_KEYS,
     TRANSLATED_KEYS,
     Quantity,
@@ -87,6 +106,7 @@ __all__ = [
     "CONFIG_KEYS",
     "ConfigError",
     "Costs",
+    "FxFacts",
     "RunConfig",
 ]
 
@@ -101,14 +121,24 @@ CONFIG_KEYS: Final = (
     "ceiling_price",
     "time_stop_t",
     "oco",
+    "fx",
     "costs",
 )
 _COSTS_KEYS: Final = (
     "commission_rate",
     "min_commission",
     "min_commission_applies",
-    "fx_applies",
     "exit_edge_min_bps",
+)
+
+# The conditional key set of section 5.2.1. ``instrument_currency`` is always
+# required; the three magnitudes are required exactly when the codes differ.
+_FX_SAME_KEYS: Final = ("instrument_currency",)
+_FX_CROSS_KEYS: Final = (
+    "instrument_currency",
+    "mid_rate",
+    "round_trip_cost_rate",
+    "sizing_buffer_pct",
 )
 
 CONFIG_INCOMPLETE_REASONS: Final[Mapping[str, str]] = MappingProxyType(
@@ -131,9 +161,14 @@ CONFIG_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         "unit_mismatch": "The unit is not the one the walk compares against.",
         "empty_string": "A provenance field or a currency code with no text.",
         "oco_unsupported": "v1 models no OCO pair; the key is stated false or the run is refused.",
-        "fx_cost_not_stated": (
-            "A conversion is stated to apply but no key states its rate. The omitted term is "
-            "50 bps of the notional, so accepting it would price every round trip too cheap."
+        "not_a_currency_code": (
+            "A stated currency is not a three-letter uppercase ISO 4217 code. The door holds "
+            "the document's own code to that shape, and the two are compared."
+        ),
+        "buffer_out_of_range": (
+            "A sizing buffer at or above 100 per cent. At 100 the budget is zero and the walk "
+            "divides by it; above 100 it is negative, and the run books a profit on a short "
+            "the document never declared."
         ),
     }
 )
@@ -144,28 +179,74 @@ class ConfigError(ContractError):
 
 
 @dataclass(frozen=True, slots=True)
+class FxFacts:
+    """The stated conversion of section 5.2.1, with the provenance it travels in.
+
+    This is the ECHO half: the four fields are what the caller wrote, and they
+    ride in the result so a reader can check the rate's as-of time against the
+    run. The ARITHMETIC half is :class:`~intent_replay.fx.Fx`, carried by
+    :class:`Costs`. Both are built once, from the same parsed values, in
+    :func:`_read_block` — so neither can drift from the other, and a test pins
+    every pair.
+
+    ``mid_rate`` carries the section 5.1 provenance shape although it translates
+    no document path. The reason is stated in section 5.2.1 rather than being a
+    quiet stretch of the rule: it is the one value in the block that NOTHING in
+    the run can check, so its ``source`` and the as-of time inside ``formula``
+    are the only audit a later reader has.
+    """
+
+    instrument_currency: Translated[str]
+    mid_rate: Translated[float] | None
+    round_trip_cost_rate: Quantity | None
+    sizing_buffer_pct: Quantity | None
+
+    def to_jsonable(self) -> dict[str, Any]:
+        """Only the keys the caller STATED, so the block round-trips.
+
+        The derived flag and the derived notional are published by the result
+        envelope and never here: a key this parser would refuse on input cannot
+        appear in an echo it has to be able to re-read.
+        """
+        block: dict[str, Any] = {"instrument_currency": self.instrument_currency.to_jsonable()}
+        if self.mid_rate is None:
+            return block
+        block["mid_rate"] = self.mid_rate.to_jsonable()
+        block["round_trip_cost_rate"] = _present(self.round_trip_cost_rate).to_jsonable()
+        block["sizing_buffer_pct"] = _present(self.sizing_buffer_pct).to_jsonable()
+        return block
+
+
+@dataclass(frozen=True, slots=True)
 class Costs:
-    """The threshold the take-profit cost gate compares against (section 8.1)."""
+    """The threshold the take-profit cost gate compares against (section 8.1).
+
+    ``fx`` is the conversion the gate applies, not a cost of its own: the gate
+    compares ``min_commission`` — an INSTRUMENT-currency magnitude — against a
+    notional the walk holds in the ACCOUNT's, so it needs the rate to make the
+    two commensurable, and the stated round-trip rate to price the conversion
+    leg the daemon prices. It is the same object the top-level ``fx`` block
+    describes, carried here so the gate keeps one argument for all its costs.
+    """
 
     commission_rate: Quantity
     min_commission: Quantity
     min_commission_applies: bool
-    fx_applies: bool
     exit_edge_min_bps: Quantity
+    fx: Fx
 
     def to_jsonable(self) -> dict[str, Any]:
         return {
             "commission_rate": self.commission_rate.to_jsonable(),
             "min_commission": self.min_commission.to_jsonable(),
             "min_commission_applies": self.min_commission_applies,
-            "fx_applies": self.fx_applies,
             "exit_edge_min_bps": self.exit_edge_min_bps.to_jsonable(),
         }
 
 
 @dataclass(frozen=True, slots=True)
 class RunConfig:
-    """The seven stated keys of the section 5.2 config block."""
+    """The eight stated keys of the section 5.2 config block."""
 
     walk_start: Translated[int]
     entry_deadline: Translated[int]
@@ -173,17 +254,25 @@ class RunConfig:
     ceiling_price: float | None
     time_stop_t: int | None
     oco: bool
+    fx: FxFacts
     costs: Costs
 
     @classmethod
-    def from_jsonable(cls, data: Mapping[str, Any]) -> RunConfig:
+    def from_jsonable(cls, data: Mapping[str, Any], *, account_currency: str) -> RunConfig:
         """Parse a decoded JSON mapping, refusing anything not usable.
 
         Takes a mapping, not text: refusing a repeated key is the loader's job
         (``json.loads`` silently keeps the last), as it is at the arming door.
+
+        ``account_currency`` is the document's ``spec.size.currency``, already
+        held to a three-letter uppercase code by the door. It decides the fx key
+        set and the derived ``applies``, so parsing cannot be document-blind —
+        and a second ``bind()`` pass would raise a SECOND refusal after the
+        first succeeded, breaking this module's promise that one pass names
+        every missing key.
         """
         reader = _Reader()
-        parsed = _read_block(reader, data)
+        parsed = _read_block(reader, data, account_currency)
         reader.raise_if_any()
         return cls(
             walk_start=_present(parsed.walk_start),
@@ -192,6 +281,7 @@ class RunConfig:
             ceiling_price=parsed.ceiling_price,
             time_stop_t=parsed.time_stop_t,
             oco=_present(parsed.oco),
+            fx=_present(parsed.fx),
             costs=_present(parsed.costs),
         )
 
@@ -204,6 +294,7 @@ class RunConfig:
             "ceiling_price": self.ceiling_price,
             "time_stop_t": self.time_stop_t,
             "oco": self.oco,
+            "fx": self.fx.to_jsonable(),
             "costs": self.costs.to_jsonable(),
         }
 
@@ -280,6 +371,7 @@ class _Parsed:
     ceiling_price: float | None = None
     time_stop_t: int | None = None
     oco: bool | None = None
+    fx: FxFacts | None = None
     costs: Costs | None = None
 
 
@@ -347,7 +439,22 @@ def _number(reader: _Reader, node: Any, path: str) -> float | None:
     return node
 
 
-def _translated(reader: _Reader, node: Any, path: str) -> Translated[int] | None:
+def _translated[T](
+    reader: _Reader,
+    node: Any,
+    path: str,
+    *,
+    value_of: Callable[[_Reader, Any, str], T | None],
+    expected_unit: str,
+) -> Translated[T] | None:
+    """The section 5.1 provenance shape, over any value type.
+
+    ``value_of`` and ``expected_unit`` are parameters rather than the epoch pair
+    this used to hardcode: section 5.2.1 adds a translated STRING (the
+    settlement currency, unit ``iso_4217``) and a translated FLOAT (the mid
+    rate, whose unit spells the direction of the pair), and all three carry the
+    same five fields with the same rules on the three text ones.
+    """
     node = _mapping(reader, node, path, TRANSLATED_KEYS)
     if node is None:
         return None
@@ -356,9 +463,9 @@ def _translated(reader: _Reader, node: Any, path: str) -> Translated[int] | None
         for key in ("kind", "source", "formula")
         if key in node
     }
-    value = _integer(reader, node["value"], _path(path, "value")) if "value" in node else None
+    value = value_of(reader, node["value"], _path(path, "value")) if "value" in node else None
     unit = (
-        _unit(reader, node.get("unit"), _path(path, "unit"), EPOCH_MS_UTC)
+        _unit(reader, node.get("unit"), _path(path, "unit"), expected_unit)
         if "unit" in node
         else None
     )
@@ -380,7 +487,13 @@ def _translated(reader: _Reader, node: Any, path: str) -> Translated[int] | None
 
 def _unit(reader: _Reader, node: Any, path: str, expected: str | None) -> str | None:
     """A unit string: the published one when ``expected`` is given, any
-    non-empty code otherwise (``min_commission`` is in a currency)."""
+    non-empty code otherwise.
+
+    ``expected is None`` survives for ONE case: ``min_commission.unit`` while
+    the instrument's currency is itself missing or malformed. The refusal that
+    case raises is the one about the currency, so a second violation on the
+    minimum would name a key the caller has not reached yet.
+    """
     unit = _string(reader, node, path)
     if unit is None:
         return None
@@ -406,28 +519,133 @@ def _quantity(reader: _Reader, node: Any, path: str, expected_unit: str | None) 
     return Quantity(value=value, unit=unit)
 
 
-def _fx_applies(reader: _Reader, node: Any, path: str) -> bool | None:
-    """``fx_applies``: false is modelled, true is refused.
+def _is_currency_code(value: Any) -> bool:
+    """A three-letter uppercase ASCII code, the shape the door holds the
+    document's own ``spec.size.currency`` to.
 
-    The term this block leaves out is a number, not a detail: the daemon adds
-    ``FX_ROUND_TRIP_RATE``, exactly 50 bps of any notional, when a conversion
-    applies, and nothing here states that rate. Section 2.1 forbids inheriting a
-    production constant, so the honest answer is a refusal rather than a cost
-    gate that is 50 bps too generous on every tranche. Pricing it is #1592.
+    ``isalpha`` and ``isupper`` both answer True for non-ASCII letters, so
+    ``isascii`` is what makes this the same predicate as the door's.
     """
-    applies = _boolean(reader, node, path)
-    if applies:
+    return (
+        isinstance(value, str)
+        and len(value) == 3
+        and value.isascii()
+        and value.isalpha()
+        and value.isupper()
+    )
+
+
+def _currency_code(reader: _Reader, node: Any, path: str) -> str | None:
+    code = _string(reader, node, path)
+    if code is None:
+        return None
+    if not _is_currency_code(code):
         reader.reject(
-            path,
-            "fx_cost_not_stated",
-            "no key states the conversion rate; state false or price it first",
-            expected=False,
+            path, "not_a_currency_code", "expected a three-letter uppercase ISO 4217 code"
         )
         return None
-    return applies
+    return code
 
 
-def _costs(reader: _Reader, node: Any, path: str) -> Costs | None:
+def _rate(reader: _Reader, node: Any, path: str) -> float | None:
+    """The mid rate: finite and above zero.
+
+    Positive does NOT close the inverse. 3.70 where 0.27027 was meant is
+    positive, plausible, and above the fee card's knee leaves the gate's verdict
+    bit-identical (section 8.1) — the only real check on the direction is the
+    unit token, by string equality.
+    """
+    value = _number(reader, node, path)
+    if value is None:
+        return None
+    if value <= 0.0:
+        reader.reject(path, "not_positive", "a rate must be above zero")
+        return None
+    return value
+
+
+def _buffer(reader: _Reader, node: Any, path: str) -> Quantity | None:
+    """``fx.sizing_buffer_pct``, bounded to ``[0, 100)``.
+
+    The bound is restated here rather than borrowed: the contract has none,
+    because the daemon's buffer is an operator-locked constant
+    (``execution.py``). Measured on the published fixture, at 100 the budget is
+    ``0.0``, a rung's units are ``0.0`` and the walk divides by them; at 150 the
+    budget is ``-750.0`` and the run reports ``notional_spent -450.0``,
+    ``pnl_cash +450.0`` and ``outcome: no_fill`` — a booked profit on a short the
+    document never declared. The reason is the SIGN of the units, not an
+    overflow. Zero is a stated policy (withhold nothing) and is accepted.
+    """
+    quantity = _quantity(reader, node, path, PERCENT)
+    if quantity is None:
+        return None
+    if quantity.value >= 100.0:
+        reader.reject(
+            _path(path, "value"),
+            "buffer_out_of_range",
+            "must be below 100; at 100 the budget is zero and above it the budget is negative",
+            expected="[0, 100)",
+        )
+        return None
+    return quantity
+
+
+def _fx(reader: _Reader, node: Any, path: str, *, cross: bool, pair_unit: str) -> FxFacts | None:
+    """The section 5.2.1 block, over the key set the stated code selected.
+
+    ``cross`` and ``pair_unit`` are decided by :func:`_stated_code` from the
+    code inside this very block, which is why they arrive as arguments: the key
+    set is conditional on one of its own values, and the unit of ``mid_rate``
+    is built from that value and the account's.
+    """
+    node = _mapping(reader, node, path, _FX_CROSS_KEYS if cross else _FX_SAME_KEYS)
+    if node is None:
+        return None
+    instrument = (
+        _translated(
+            reader,
+            node["instrument_currency"],
+            _path(path, "instrument_currency"),
+            value_of=_currency_code,
+            expected_unit=ISO_4217,
+        )
+        if "instrument_currency" in node
+        else None
+    )
+    rate = (
+        _translated(
+            reader,
+            node["mid_rate"],
+            _path(path, "mid_rate"),
+            value_of=_rate,
+            expected_unit=pair_unit,
+        )
+        if cross and "mid_rate" in node
+        else None
+    )
+    cost = (
+        _quantity(
+            reader, node["round_trip_cost_rate"], _path(path, "round_trip_cost_rate"), FRACTION
+        )
+        if cross and "round_trip_cost_rate" in node
+        else None
+    )
+    buffer_pct = (
+        _buffer(reader, node["sizing_buffer_pct"], _path(path, "sizing_buffer_pct"))
+        if cross and "sizing_buffer_pct" in node
+        else None
+    )
+    if instrument is None or (cross and (rate is None or cost is None or buffer_pct is None)):
+        return None
+    return FxFacts(
+        instrument_currency=instrument,
+        mid_rate=rate,
+        round_trip_cost_rate=cost,
+        sizing_buffer_pct=buffer_pct,
+    )
+
+
+def _costs(reader: _Reader, node: Any, path: str, *, fx: Fx | None) -> Costs | None:
     node = _mapping(reader, node, path, _COSTS_KEYS)
     if node is None:
         return None
@@ -437,7 +655,12 @@ def _costs(reader: _Reader, node: Any, path: str) -> Costs | None:
         else None
     )
     minimum = (
-        _quantity(reader, node["min_commission"], _path(path, "min_commission"), None)
+        _quantity(
+            reader,
+            node["min_commission"],
+            _path(path, "min_commission"),
+            None if fx is None else fx.instrument_currency,
+        )
         if "min_commission" in node
         else None
     )
@@ -446,24 +669,19 @@ def _costs(reader: _Reader, node: Any, path: str) -> Costs | None:
         if "min_commission_applies" in node
         else None
     )
-    fx_applies = (
-        _fx_applies(reader, node["fx_applies"], _path(path, "fx_applies"))
-        if "fx_applies" in node
-        else None
-    )
     edge = (
         _quantity(reader, node["exit_edge_min_bps"], _path(path, "exit_edge_min_bps"), BPS)
         if "exit_edge_min_bps" in node
         else None
     )
-    if rate is None or minimum is None or min_applies is None or fx_applies is None or edge is None:
+    if rate is None or minimum is None or min_applies is None or edge is None or fx is None:
         return None
     return Costs(
         commission_rate=rate,
         min_commission=minimum,
         min_commission_applies=min_applies,
-        fx_applies=fx_applies,
         exit_edge_min_bps=edge,
+        fx=fx,
     )
 
 
@@ -526,15 +744,67 @@ def _oco(reader: _Reader, node: Any) -> bool | None:
     return oco
 
 
-def _read_block(reader: _Reader, data: Any) -> _Parsed:
+def _stated_code(node: Any) -> str | None:
+    """The instrument code the fx block states, WITHOUT validating it.
+
+    A peek, and it has to be one: the fx key set is conditional on a value
+    inside the fx block, so the set cannot be chosen after the block is read
+    against a set. Anything but a non-empty string answers ``None``, and the
+    same-currency set is then used — the refusal that case raises is the one
+    about the code itself.
+    """
+    if not isinstance(node, Mapping):
+        return None
+    stated = node.get("fx")
+    if not isinstance(stated, Mapping):
+        return None
+    currency = stated.get("instrument_currency")
+    if not isinstance(currency, Mapping):
+        return None
+    value = currency.get("value")
+    return value if isinstance(value, str) and value else None
+
+
+def _engine_fx(facts: FxFacts, account_currency: str) -> Fx:
+    """The ARITHMETIC half of the stated facts (``intent_replay.fx.Fx``).
+
+    Built here and nowhere else, from the same parsed values the echo carries,
+    so the two representations of one fact cannot disagree.
+    """
+    return Fx(
+        account_currency=account_currency,
+        instrument_currency=facts.instrument_currency.value,
+        rate=None if facts.mid_rate is None else facts.mid_rate.value,
+        round_trip_cost_rate=(
+            None if facts.round_trip_cost_rate is None else facts.round_trip_cost_rate.value
+        ),
+        sizing_buffer_pct=(
+            None if facts.sizing_buffer_pct is None else facts.sizing_buffer_pct.value
+        ),
+    )
+
+
+def _read_block(reader: _Reader, data: Any, account_currency: str) -> _Parsed:
     parsed = _Parsed()
     node = _mapping(reader, data, "", CONFIG_KEYS)
     if node is None:
         return parsed
     if "entry_deadline" in node:
-        parsed.entry_deadline = _translated(reader, node["entry_deadline"], "entry_deadline")
+        parsed.entry_deadline = _translated(
+            reader,
+            node["entry_deadline"],
+            "entry_deadline",
+            value_of=_integer,
+            expected_unit=EPOCH_MS_UTC,
+        )
     if "walk_start" in node:
-        parsed.walk_start = _translated(reader, node["walk_start"], "walk_start")
+        parsed.walk_start = _translated(
+            reader,
+            node["walk_start"],
+            "walk_start",
+            value_of=_integer,
+            expected_unit=EPOCH_MS_UTC,
+        )
     if "entry_trail_bps" in node:
         parsed.entry_trail_bps = _trail_distance(reader, node["entry_trail_bps"])
     if "ceiling_price" in node:
@@ -543,6 +813,19 @@ def _read_block(reader: _Reader, data: Any) -> _Parsed:
         parsed.time_stop_t = _integer(reader, node["time_stop_t"], "time_stop_t")
     if "oco" in node:
         parsed.oco = _oco(reader, node["oco"])
+    # The fx block is read BEFORE ``costs``: it names the currency
+    # ``min_commission.unit`` is compared against, which is the half of
+    # section 5.2.1 this module could not check before #1592.
+    code = _stated_code(node)
+    if "fx" in node:
+        parsed.fx = _fx(
+            reader,
+            node["fx"],
+            "fx",
+            cross=code is not None and code != account_currency,
+            pair_unit=f"{code}_per_{account_currency}",
+        )
+    fx = None if parsed.fx is None else _engine_fx(parsed.fx, account_currency)
     if "costs" in node:
-        parsed.costs = _costs(reader, node["costs"], "costs")
+        parsed.costs = _costs(reader, node["costs"], "costs", fx=fx)
     return parsed

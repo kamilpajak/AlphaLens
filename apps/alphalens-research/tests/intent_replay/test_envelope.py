@@ -24,8 +24,15 @@ from intent_replay.interpreter import PendingEntry, interpret
 from intent_replay.measures import summarise
 from intent_replay.walk import walk
 
-from tests.intent_replay.test_config import CANONICAL
-from tests.intent_replay.test_walk import MINUTE, WALK_START, _bar, _config, _plan
+from tests.intent_replay.test_config import ACCOUNT_CURRENCY, CANONICAL
+from tests.intent_replay.test_walk import (
+    MINUTE,
+    WALK_START,
+    _bar,
+    _config,
+    _cross_config,
+    _plan,
+)
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 SPEC = WORKSPACE_ROOT / "docs" / "superpowers" / "specs" / "2026-09-23-intent-replay-design.md"
@@ -48,10 +55,17 @@ def _built(
     """The whole pipeline: door, interpreter, walk, measures, envelope.
 
     ``run_config`` is separate from ``patch``: the latter edits the DOCUMENT,
-    and a divergence predicate can read either side."""
+    and a divergence predicate can read either side.
+
+    The default block is the CROSS-currency one (``test_config.CANONICAL``),
+    which is the section 5 example's own configuration: a EUR budget on a USD
+    instrument, with a rate, a round-trip cost rate and a 1 per cent sizing
+    buffer. That is deliberate here and the opposite of ``test_walk``'s
+    default -- this file is where the published example is checked against the
+    code, so the two have to describe one run."""
     admitted = admit(_document(name, **patch))
-    plan = interpret(admitted.intent, admitted.document)
-    config = _config() if run_config is None else run_config
+    config = _cross_config() if run_config is None else run_config
+    plan = interpret(admitted.intent, admitted.document, fx=config.costs.fx)
     result = walk(plan, config, bars)
     measures = summarise(result, declared_floor=plan.declared_floor)
     return envelope.build(
@@ -71,7 +85,9 @@ class TopLevelShapeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.built = _built("pullback-trailing-stop", TWO_BARS)
 
-    def test_the_ten_keys_are_the_spec_keys_in_the_spec_order(self) -> None:
+    def test_the_eleven_keys_are_the_spec_keys_in_the_spec_order(self) -> None:
+        # ``fx`` sits between the echoed block and the divergences: what was
+        # stated, then what was derived from it, then what no setting can close.
         self.assertEqual(
             list(self.built),
             [
@@ -80,6 +96,7 @@ class TopLevelShapeTest(unittest.TestCase):
                 "instrument",
                 "window",
                 "config",
+                "fx",
                 "divergences",
                 "intrabar_rule",
                 "outcome",
@@ -215,8 +232,8 @@ class SummaryTest(unittest.TestCase):
         document = _document("pullback-trailing-stop")
         document["spec"]["tp_tranches"] = [{"price": 68.50, "tranche_pct": 100.0}]
         admitted = admit(document)
-        plan = interpret(admitted.intent, admitted.document)
-        config = _config()
+        config = _cross_config()
+        plan = interpret(admitted.intent, admitted.document, fx=config.costs.fx)
         bars = (_bar(WALK_START, 67.00, 68.60, 66.40),)
         result = walk(plan, config, bars)
         built = envelope.build(
@@ -235,11 +252,14 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(self.summary["notional_spent"]["unit"], "EUR")
         self.assertEqual(self.summary["pnl_cash"]["unit"], "EUR")
 
-    def test_the_price_fields_carry_the_symbolic_unit(self) -> None:
-        # No document path states the INSTRUMENT's currency and section 4.3.1
-        # puts it out of scope, so the tool must not resolve it.
-        self.assertEqual(self.summary["avg_entry_price"]["unit"], "instrument_currency")
-        self.assertEqual(self.summary["r_multiple"]["denominator"]["unit"], "instrument_currency")
+    def test_the_price_fields_carry_the_stated_instrument_currency(self) -> None:
+        # Both were the symbolic token ``instrument_currency`` until #1592,
+        # because no fact named the currency. ``fx.instrument_currency`` names
+        # it, so these carry a real code -- and a DIFFERENT one from the cash
+        # fields above, which is the whole point of stating both.
+        self.assertEqual(self.summary["avg_entry_price"]["unit"], "USD")
+        self.assertEqual(self.summary["r_multiple"]["denominator"]["unit"], "USD")
+        self.assertNotEqual(self.summary["notional_spent"]["unit"], "USD")
 
     def test_the_percentage_carries_percent_and_not_fraction(self) -> None:
         self.assertEqual(self.summary["pnl_pct_of_spent"]["unit"], "percent")
@@ -274,14 +294,22 @@ class NullShapesTest(unittest.TestCase):
     """Section 5.1 prints TWO different null shapes and the asymmetry is in the
     sentence itself: `r_multiple.value` is nested, `mfe` and `mae` are bare."""
 
-    def _not_positive(self) -> dict[str, Any]:
+    def _not_positive(self, *, run_config: RunConfig | None = None) -> dict[str, Any]:
         # A bar opening exactly at the disaster stop fills there, so the
         # average entry IS the floor and the denominator is exactly 0.0.
+        #
+        # The SAME-currency block, and the reason is the fixture rather than
+        # the shape under test: ``cash / units`` is ``units * 63.0 / units``,
+        # which is exact at a budget of 1500 and rounds to 63.00000000000001 at
+        # the buffered 1485, so the cross-currency block cannot build "exactly
+        # zero" here at all. The null shapes are currency-free, and the
+        # one-ulp case the buffer DOES build is asserted below in its own test,
+        # where it is a section 5 property rather than an accident.
         document = _document("pullback-trailing-stop")
         document["spec"]["entry_tiers"] = [{"limit_price": 68.0, "alloc_pct": 100.0}]
         admitted = admit(document)
-        plan = interpret(admitted.intent, admitted.document)
-        config = _config()
+        config = _config() if run_config is None else run_config
+        plan = interpret(admitted.intent, admitted.document, fx=config.costs.fx)
         bars = (_bar(WALK_START, 63.0, 63.0, 63.0, 63.0),)
         result = walk(plan, config, bars)
         return envelope.build(
@@ -307,6 +335,18 @@ class NullShapesTest(unittest.TestCase):
         self.assertNotIsInstance(summary["mfe"], dict)
         self.assertNotIsInstance(summary["mae"], dict)
 
+    def test_the_smallest_non_zero_denominator_is_one_ulp_and_r_survives_it(self) -> None:
+        # Section 5: "the denominator is a difference of two prices of the same
+        # size, so its smallest non-zero value is one unit in the last place --
+        # 7.1e-15 at a price near 63". The stated 1 per cent buffer builds
+        # exactly that case on this fixture, which is why the fixture above
+        # states no buffer. R comes out 0.0 rather than null or infinite: the
+        # cash is zero, so the tiny denominator divides a zero.
+        summary = self._not_positive(run_config=_cross_config())
+        self.assertEqual(summary["r_multiple"]["denominator"]["value"], 7.105427357601002e-15)
+        self.assertEqual(summary["r_multiple"]["value"], 0.0)
+        self.assertEqual(summary["pnl_cash"]["value"], 0.0)
+
     def test_a_run_that_bought_nothing_nulls_every_measure_it_cannot_divide(self) -> None:
         bars = (_bar(WALK_START, 90.0, 91.0, 89.0),)
         summary = _built("pullback-trailing-stop", bars)["summary"]
@@ -330,7 +370,25 @@ def _spec_divergence_names() -> list[str]:
 class DivergenceRegistryTest(unittest.TestCase):
     def test_the_registry_is_the_spec_table_in_both_directions(self) -> None:
         self.assertEqual(sorted(envelope.DIVERGENCES), sorted(_spec_divergence_names()))
-        self.assertEqual(len(envelope.DIVERGENCES), 5)
+        self.assertEqual(len(envelope.DIVERGENCES), 4)
+
+    def test_the_retired_entry_is_in_neither_the_registry_nor_the_table(self) -> None:
+        # ``cost_gate_prices_the_account_currency`` retired 2026-10-02 with
+        # #1592: an entry here names a fact the replay LACKS, and the
+        # instrument's currency is now stated. Named rather than merely absent,
+        # because the equality above would also pass if the row were RENAMED --
+        # and section 5 forbids that, since what remains of the difference is a
+        # recorded scope cut rather than a missing fact.
+        retired = "cost_gate_prices_the_account_currency"
+        self.assertNotIn(retired, envelope.DIVERGENCES)
+        self.assertNotIn(retired, _spec_divergence_names())
+        # And the spec RECORDS the retirement rather than merely dropping the
+        # row: section 5.2 says an entry is added by editing the section, and
+        # the same rule has to hold in the other direction or a row can vanish
+        # with nobody writing down what stopped being reported.
+        spec = SPEC.read_text(encoding="utf-8")
+        paragraph = spec[spec.index(f"`{retired}` was added") :][:400]
+        self.assertIn("RETIRED", paragraph)
 
     def test_every_name_carries_the_reason_the_replay_lacks_the_fact(self) -> None:
         for name, why in envelope.DIVERGENCES.items():
@@ -371,31 +429,33 @@ class DivergencePredicateTest(unittest.TestCase):
         names = self._names("pullback-trailing-stop")
         self.assertNotIn("daemon_reanchor_latch_is_journal_lifetime", names)
 
-    def test_a_non_empty_ladder_reports_the_observation_time_and_the_currency(self) -> None:
+    def test_a_non_empty_ladder_reports_the_observation_time(self) -> None:
         names = self._names("pullback-trailing-stop")
         self.assertIn("take_profit_observation_time", names)
-        self.assertIn("cost_gate_prices_the_account_currency", names)
 
     def test_an_empty_ladder_reports_neither(self) -> None:
         document = _document("pullback-trailing-stop")
         document["spec"]["tp_tranches"] = []
         admitted = admit(document)
-        plan = interpret(admitted.intent, admitted.document)
-        names = envelope.divergences(plan, _config())
+        config = _cross_config()
+        plan = interpret(admitted.intent, admitted.document, fx=config.costs.fx)
+        names = envelope.divergences(plan, config)
         self.assertNotIn("take_profit_observation_time", names)
-        self.assertNotIn("cost_gate_prices_the_account_currency", names)
 
-    def test_the_currency_entry_also_needs_the_minimum_commission_to_apply(self) -> None:
-        # Two conditions, not one: with the per-fill minimum switched off the
-        # two thresholds agree and the entry would be noise.
+    def test_switching_the_minimum_commission_off_changes_no_entry(self) -> None:
+        # It used to: the retired currency entry fired only when the per-fill
+        # minimum applied, because that is the arm where the two thresholds
+        # disagree. Kept as the OTHER half of that retirement -- the flag now
+        # reaches the cost gate and nothing else.
         document = _document("pullback-trailing-stop")
         admitted = admit(document)
-        plan = interpret(admitted.intent, admitted.document)
+        plan = interpret(admitted.intent, admitted.document, fx=_cross_config().costs.fx)
         block = copy.deepcopy(dict(CANONICAL))
         block["costs"] = {**block["costs"], "min_commission_applies": False}
-        names = envelope.divergences(plan, RunConfig.from_jsonable(block))
-        self.assertIn("take_profit_observation_time", names)
-        self.assertNotIn("cost_gate_prices_the_account_currency", names)
+        off = RunConfig.from_jsonable(block, account_currency=ACCOUNT_CURRENCY)
+        self.assertEqual(
+            envelope.divergences(plan, off), envelope.divergences(plan, _cross_config())
+        )
 
     def test_a_stated_distance_reports_the_trail_as_the_BROKERS_model(self) -> None:
         # The predicate is "the run STATES an entry-trail distance". Until the
@@ -431,6 +491,79 @@ class LadderResolutionTest(unittest.TestCase):
         # The author's ladder is empty and the placed one is not, so the
         # predicate must follow the PLACED instruction.
         self.assertIn("take_profit_observation_time", names)
+
+
+def _spec_fx_block() -> dict[str, Any]:
+    """The TOP-LEVEL `fx` block of the section 5 example, read out of the spec."""
+    text = SPEC.read_text(encoding="utf-8")
+    start = text.index('  "fx": {\n    "applies"')
+    end = text.index('\n  "divergences"', start)
+    return json.loads("{" + text[start:end].rstrip().rstrip(",") + "}")["fx"]
+
+
+class DerivedFxBlockTest(unittest.TestCase):
+    """What the conversion DID, which the echoed configuration cannot say (#1592).
+
+    Two derived facts and no third: the flag a caller used to state, and the
+    spend in the instrument's currency. They are a TOP-LEVEL block rather than
+    keys inside the echoed `fx` because that echo has to round-trip through
+    `RunConfig.from_jsonable`, which refuses a derived key on input exactly as
+    the arming door does.
+    """
+
+    def test_the_block_carries_the_two_derived_keys_in_order(self) -> None:
+        built = _built("pullback-trailing-stop", TWO_BARS)
+        self.assertEqual(list(built["fx"]), ["applies", "notional_spent"])
+
+    def test_the_flag_is_the_comparison_of_the_two_codes(self) -> None:
+        cross = _built("pullback-trailing-stop", TWO_BARS)["fx"]
+        self.assertTrue(cross["applies"])
+        same = _built("pullback-trailing-stop", TWO_BARS, run_config=_config())["fx"]
+        self.assertFalse(same["applies"])
+
+    def test_the_derived_notional_is_the_spend_times_the_stated_rate(self) -> None:
+        # 891.0 EUR at 1.08 USD per EUR. The whole point of printing it: an
+        # inverted rate stays positive and leaves the gate's verdict unchanged
+        # above the knee, so this figure is the only place a reader sees the
+        # rate's magnitude (section 8.1).
+        built = _built("pullback-trailing-stop", TWO_BARS)
+        self.assertEqual(built["summary"]["notional_spent"]["value"], 891.0)
+        self.assertEqual(built["fx"]["notional_spent"], {"value": 891.0 * 1.08, "unit": "USD"})
+
+    def test_a_same_currency_run_prints_no_derived_notional(self) -> None:
+        # The conversion is the identity there, so the account figure beside it
+        # already IS the instrument figure and a copy would read as a second
+        # measurement.
+        built = _built("pullback-trailing-stop", TWO_BARS, run_config=_config())
+        self.assertIsNone(built["fx"]["notional_spent"])
+        self.assertEqual(built["summary"]["notional_spent"]["value"], 900.0)
+
+    def test_a_run_that_bought_nothing_converts_a_zero(self) -> None:
+        # Not null: nothing was spent, and zero in one currency is zero in the
+        # other. A null here would read as "no conversion applies".
+        built = _built("pullback-trailing-stop", (_bar(WALK_START, 90.0, 91.0, 89.0),))
+        self.assertEqual(
+            built["fx"], {"applies": True, "notional_spent": {"value": 0.0, "unit": "USD"}}
+        )
+
+    def test_the_block_is_the_one_the_spec_example_prints(self) -> None:
+        # The example's own numbers, read out of the spec: the document, the
+        # bars and the block together have to produce what section 5 publishes,
+        # or the example describes a run the code cannot reach.
+        printed = _spec_fx_block()
+        self.assertEqual(printed["applies"], True)
+        self.assertEqual(printed["notional_spent"]["unit"], "USD")
+        self.assertAlmostEqual(printed["notional_spent"]["value"], 891.0 * 1.08, places=2)
+
+    def test_the_derived_notional_is_the_notional_the_gate_priced(self) -> None:
+        # One arithmetic, two names (``Fx.to_shares`` and
+        # ``Fx.in_instrument_currency``). If they ever diverge, the figure the
+        # result publishes stops describing the notional the threshold was
+        # computed on, and a reader checking the rate would check the wrong one.
+        fx = _cross_config().costs.fx
+        built = _built("pullback-trailing-stop", TWO_BARS)
+        spent = built["summary"]["notional_spent"]["value"]
+        self.assertEqual(built["fx"]["notional_spent"]["value"], fx.to_shares(spent))
 
 
 if __name__ == "__main__":  # pragma: no cover

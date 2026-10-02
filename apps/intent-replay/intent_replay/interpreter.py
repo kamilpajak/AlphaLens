@@ -33,9 +33,24 @@ recorded path.** Under it no read here is an echo in the sense of section
 4.3.1 — in any shape of document — so the classes of that section need no
 widening and the gate keeps its refuting power for every path it covers.
 
-What this module deliberately leaves out: share quantities, the FX rate and
-whole-share flooring (a venue fact the run configuration does not carry —
-issue #1592), the bar walk, the tie convention and the result envelope.
+**The stated conversion reaches exactly two things here (#1592).** The sizing
+buffer comes off the budget ONCE, on the total, before the ladder splits it —
+which is where ``broker_contract.sizing`` applies it, so this is the only
+split that reproduces the drain's. And ``spec.size.currency`` is READ: its
+value is the account code the configuration was parsed against, so it decides
+the fx key set and can therefore cause a refusal, which is what moves it out of
+section 4.3.1's out-of-scope list.
+
+The RATE reaches nothing here, and that is a property rather than an omission.
+Every sizing site divides a notional by a price, and an account-currency
+notional over an instrument-currency price is a share count scaled by the rate,
+so the rate cancels in every ratio the walk takes. Only the cost gate needs it,
+because only the gate compares ``min_commission`` — an instrument-currency
+magnitude — against a notional.
+
+What this module still leaves out: whole-share flooring, which is a venue fact
+the configuration does not carry and the step-1 plan's recorded scope cut; the
+bar walk; the tie convention; and the result envelope.
 
 This module takes a document the DOOR has already admitted, and says so here
 because it relies on that: the entry ladder is non-empty, the allocations sum
@@ -60,6 +75,7 @@ from broker_contract.failure import ContractError
 from broker_contract.trade_intent.schema import ReactionPrimitive, TradeIntent
 
 from intent_replay.classification import check_classified
+from intent_replay.fx import Fx
 from intent_replay.refusal import refuse
 
 __all__ = [
@@ -107,10 +123,10 @@ class EntryModeUnsupportedError(ContractError):
 class PendingEntry:
     """One rung of the entry ladder, resting at its limit.
 
-    ``notional`` is this rung's share of the budget in the ACCOUNT currency —
-    not a share quantity. Turning it into shares needs the FX rate and the
-    venue's quantity lattice, neither of which the run configuration carries
-    (issue #1592).
+    ``notional`` is this rung's share of the BUFFERED budget in the ACCOUNT
+    currency — not a share quantity. Turning it into shares needs the stated
+    rate (``Fx.to_shares``) and the venue's quantity lattice, and the lattice is
+    the one of the two the configuration still does not carry.
     """
 
     tier_index: int
@@ -146,10 +162,20 @@ class Plan:
     ``broker_contract.stop_decision.decide_stop``. ``read`` is the set of wire
     paths this plan was built from — the universe the classification gate of
     section 4.3.1 subtracts.
+
+    ``notional`` is the budget the document STATES and nothing rescales it;
+    ``sizing_notional`` is what the entry ladder actually splits, after the
+    settlement-drift buffer the drain also withholds. Two fields rather than
+    one, because section 2 forbids rescaling the stated size and a single field
+    would make the two indistinguishable in the result — and because the walk
+    needs both: it accumulates against the second and the published
+    ``filled_fraction`` is a fraction OF the second.
     """
 
     entries: tuple[PendingEntry, ...]
     notional: float
+    sizing_notional: float
+    account_currency: str
     declared_floor: float
     declared_stop: float | None
     declared_take_profit: float | None
@@ -309,6 +335,23 @@ def _declared_reaction(exit_reader: _Reader | None) -> ReactionPrimitive | None:
     return declared
 
 
+def _check_one_account(account_currency: str, fx: Fx) -> None:
+    """The document and the conversion must name ONE account currency.
+
+    They cannot disagree through the CLI, which derives both from this same
+    document. ``interpret`` is public, and a configuration parsed against
+    another account currency chose a different fx key set, so the conversion it
+    produced describes a different run. A programming error rather than a
+    published refusal, which is the rule ``refusal.py`` states for the package.
+    """
+    if account_currency != fx.account_currency:
+        raise ValueError(
+            f"the document states spec.size.currency {account_currency!r} and the conversion "
+            f"was parsed against {fx.account_currency!r}; the two decide the fx key set "
+            "together, so one of them is from another run"
+        )
+
+
 def _refuse_unsupported_entry_modes(tiers: tuple[int, ...]) -> None:
     if not tiers:
         return
@@ -321,18 +364,26 @@ def _refuse_unsupported_entry_modes(tiers: tuple[int, ...]) -> None:
     )
 
 
-def interpret(intent: TradeIntent, document: Mapping[str, Any]) -> Plan:
+def interpret(intent: TradeIntent, document: Mapping[str, Any], *, fx: Fx) -> Plan:
     """Read ``intent``, check ``document`` against the path classes, return the plan.
 
     ``document`` is the COMPLETED wire document (``door.Admitted.document``),
     which is the classification gate's universe; the values all come from
     ``intent``, because decoding is the contract codec's job and this module
     does not parse a second time.
+
+    ``fx`` is keyword-only and has no default. A default would be a conversion
+    this module states on the caller's behalf, which is what section 2.1 rules
+    out — and the same-currency value is not a safe default either: it would
+    silently drop a stated buffer and publish a budget the drain never spends.
     """
     read: set[str] = set()
     reader = _Reader(intent, "", read)
     notional = reader.number("spec.size.notional_acct")
-    entries, unsupported = _entry_ladder(reader, notional)
+    account_currency = reader.text("spec.size.currency")
+    _check_one_account(account_currency, fx)
+    sizing_notional = fx.sizing_notional(notional)
+    entries, unsupported = _entry_ladder(reader, sizing_notional)
     declared_floor = reader.number("spec.disaster_stop")
     declared_tranches = _declared_tranches(reader)
     exit_reader = reader.optional("exit")
@@ -343,6 +394,8 @@ def interpret(intent: TradeIntent, document: Mapping[str, Any]) -> Plan:
     return Plan(
         entries=entries,
         notional=notional,
+        sizing_notional=sizing_notional,
+        account_currency=account_currency,
         declared_floor=declared_floor,
         declared_stop=declared_stop,
         declared_take_profit=declared_take_profit,
