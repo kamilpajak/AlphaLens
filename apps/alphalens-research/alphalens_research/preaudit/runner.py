@@ -53,9 +53,7 @@ def run_smoke(
     if strategy not in AUDIT_SCRIPTS:
         return SmokeResult(
             status=SmokeStatus.UNKNOWN_STRATEGY,
-            detail=(
-                f"strategy {strategy!r} not in preaudit.strategies.AUDIT_SCRIPTS. Known: {sorted(AUDIT_SCRIPTS)}"
-            ),
+            detail=(f"unknown strategy {strategy!r}; known strategies: {sorted(AUDIT_SCRIPTS)}"),
         )
 
     if profile is None:

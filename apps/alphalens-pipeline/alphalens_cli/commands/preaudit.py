@@ -44,7 +44,7 @@ def _resolve_profile(strategy: str):
 
     if strategy not in AUDIT_SCRIPTS:
         typer.echo(
-            f"ERROR: strategy {strategy!r} not in preaudit.strategies.AUDIT_SCRIPTS. Known: {sorted(AUDIT_SCRIPTS)}",
+            f"Unknown strategy {strategy!r}. Choices: {sorted(AUDIT_SCRIPTS)}",
             err=True,
         )
         raise typer.Exit(code=2)

@@ -53,9 +53,13 @@ class TestPreauditUnknownStrategy(unittest.TestCase):
     def test_unknown_strategy_exits_2(self):
         result = runner.invoke(app, ["preaudit", "__not_a_real_strategy__"])
         self.assertEqual(result.exit_code, 2)
-        self.assertIn(
-            "not in preaudit.strategies.AUDIT_SCRIPTS", result.stdout + (result.stderr or "")
-        )
+        output = result.stdout + (result.stderr or "")
+        # Assert on what the user can act on, not on an internal module path:
+        # the message is free to change, the strategy name and the choices are
+        # the contract.
+        self.assertIn("Unknown strategy", output)
+        self.assertIn("__not_a_real_strategy__", output)
+        self.assertIn("insider_pc_compound", output)  # a real choice is listed
 
 
 class TestPreauditNoProfile(unittest.TestCase):

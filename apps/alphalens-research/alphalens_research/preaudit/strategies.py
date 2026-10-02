@@ -23,6 +23,17 @@ from pathlib import Path
 __all__ = ["AUDIT_SCRIPTS", "RESEARCH_SCRIPTS_DIR"]
 
 #: ``apps/alphalens-research/scripts`` — this app's own script directory.
+#:
+#: Assumes an EDITABLE install, which is how the lab is always installed: the
+#: scripts are not package data, so a wheel landing in ``site-packages`` would
+#: make this point at a directory that does not exist. ``Path`` does not
+#: validate, so that failure surfaces when a script is opened, not here. The
+#: previous derivation (workspace root, then back down through ``apps/``) had
+#: the same assumption and one more level of indirection.
+#:
+#: Nothing silently depends on it being right: ``tests/test_audit_cli.py``
+#: asserts every entry resolves to an existing file, which is what caught a
+#: deliberate off-by-one in both directions during review.
 RESEARCH_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 
 AUDIT_SCRIPTS: dict[str, Path] = {
