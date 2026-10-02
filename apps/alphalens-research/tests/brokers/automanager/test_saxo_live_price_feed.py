@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import unittest
+from unittest.mock import patch
 
-from alphalens_pipeline.brokers.automanager.saxo_live_price_feed import SaxoLivePriceFeed
+from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager.saxo_live_price_feed import (
+    DarkSourceWarning,
+    SaxoLivePriceFeed,
+)
 from alphalens_pipeline.data.alt_data.saxo_price_stream import Quote
 from broker_contract import price_feed
 
@@ -234,6 +240,98 @@ class TestStreamHealthIsItsOwnCondition(unittest.TestCase):
             for _ in range(5):
                 feed.latest(211)
         self.assertEqual(len(caught.records), 1, caught.output)
+
+
+_FEED_LOGGER = "alphalens_pipeline.brokers.automanager.saxo_live_price_feed"
+
+
+def _dark_stream() -> _Stream:
+    stream = _Stream(_quote())
+    stream.receiving = False
+    return stream
+
+
+class TestADarkSourceIsReportedOnlyWhenItMatters(unittest.TestCase):
+    """The daemon builds a NEW feed per pass per tick, so a throttle held by one
+    feed never saw its own previous warning: LIVE logged ~2 000 "not receiving"
+    lines a night (2 099 / 2 031 / 2 121 on 29.09-02.10), all while the reader
+    was deliberately asleep outside the trading window. The throttle now lives
+    in the process, and outside the window a dark source is expected."""
+
+    def test_feeds_sharing_one_throttle_warn_once(self) -> None:
+        throttle = DarkSourceWarning()
+        with self.assertLogs(_FEED_LOGGER, level="WARNING") as caught:
+            for _ in range(3):  # three ticks, three fresh feeds
+                SaxoLivePriceFeed(
+                    stream=_dark_stream(),
+                    resolve_live_uic={211: 211}.get,
+                    clock=lambda: _NOW,
+                    dark_warning=throttle,
+                ).latest(211)
+        self.assertEqual(len(caught.records), 1, caught.output)
+
+    def test_outside_the_trading_window_a_dark_source_is_not_a_warning(self) -> None:
+        feed = SaxoLivePriceFeed(
+            stream=_dark_stream(),
+            resolve_live_uic={211: 211}.get,
+            clock=lambda: _NOW,
+            in_trading_window=lambda: False,
+        )
+        with self.assertNoLogs(_FEED_LOGGER, level="WARNING"):
+            self.assertIsNone(feed.latest(211))
+
+    def test_inside_the_trading_window_it_still_warns(self) -> None:
+        feed = SaxoLivePriceFeed(
+            stream=_dark_stream(),
+            resolve_live_uic={211: 211}.get,
+            clock=lambda: _NOW,
+            in_trading_window=lambda: True,
+        )
+        with self.assertLogs(_FEED_LOGGER, level="WARNING"):
+            self.assertIsNone(feed.latest(211))
+
+    def test_a_window_that_cannot_answer_counts_as_inside(self) -> None:
+        # Fail open, like the stream's own gate: a calendar bug must never be
+        # able to hide a dead source during trading hours.
+        def broken() -> bool:
+            raise RuntimeError("calendar down")
+
+        feed = SaxoLivePriceFeed(
+            stream=_dark_stream(),
+            resolve_live_uic={211: 211}.get,
+            clock=lambda: _NOW,
+            in_trading_window=broken,
+        )
+        with self.assertLogs(_FEED_LOGGER, level="WARNING"):
+            self.assertIsNone(feed.latest(211))
+
+
+class TestTheDaemonFactoryWiresBoth(unittest.TestCase):
+    """The production factory, not a hand-built feed: two ticks' feeds share
+    the process throttle, and the trading window is consulted."""
+
+    def _two_ticks(self, *, in_window: bool) -> list[str]:
+        stream = _dark_stream()
+        stream.live_uic_for = lambda ticker, *, exchange_mic: 211  # type: ignore[attr-defined]
+        stream.ensure_subscribed = lambda uics, *, scope="default": None  # type: ignore[method-assign]
+        with (
+            patch.dict(os.environ, {"ALPHALENS_SAXO_LIVE_PRICES": "1"}),
+            patch.object(cl, "_quote_source", lambda: stream),
+            patch.object(cl, "_feed_trading_window", lambda: lambda: in_window),
+            patch.object(cl, "_FEED_DARK_WARNING", DarkSourceWarning()),
+            self.assertLogs(_FEED_LOGGER, level="DEBUG") as caught,
+        ):
+            for _ in range(2):
+                cl._default_live_exits_feed_factory({211: ("KO", "XNYS")}, scope="exits").latest(
+                    211
+                )
+        return [line for line in caught.output if line.startswith("WARNING")]
+
+    def test_two_ticks_inside_the_window_warn_once(self) -> None:
+        self.assertEqual(len(self._two_ticks(in_window=True)), 1)
+
+    def test_two_ticks_outside_the_window_do_not_warn(self) -> None:
+        self.assertEqual(self._two_ticks(in_window=False), [])
 
 
 if __name__ == "__main__":
