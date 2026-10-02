@@ -19,14 +19,19 @@ refuse such a document before it ever calls this function (spec section
 
 from __future__ import annotations
 
+import ast
 import dataclasses
+import inspect
 import math
+import textwrap
 import unittest
 
 from broker_contract.stop_decision import (
     TRAIL_STEP_EPS,
     StopDecision,
     StopDecisionView,
+    _reanchor,
+    _trail,
     decide_reanchor_detail,
     decide_stop,
     decide_trail_detail,
@@ -451,3 +456,63 @@ class TheDetailReportsTheLevelsTheDecisionUsedTest(unittest.TestCase):
         detail = decide_trail_detail(_trail_view())
         with self.assertRaises(dataclasses.FrozenInstanceError):
             detail.level = 1.0  # type: ignore[misc]
+
+
+def _executable_source(fn: object) -> str:
+    """The function's source with every docstring removed, so a NAME mentioned
+    in prose does not read as a name the code uses. Same device as
+    ``tests/brokers/automanager/test_no_exit_policy_sentinel.py``."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))  # type: ignore[arg-type]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                node.body = body[1:] or [ast.Pass()]
+    return ast.unparse(tree)
+
+
+class EachBranchReadsOnlyTheFieldsItsCallerProjectsTest(unittest.TestCase):
+    """Two of the view's nine fields are passed as CONSTANTS by the daemon.
+
+    ``_maybe_trail`` passes ``already_reanchored=False`` because the trail arm
+    has no idempotence latch, and ``_maybe_reanchor`` passes
+    ``ratchet_floor=None`` because the re-anchor arm has no ratchet. Both are
+    correct, and a comment saying so would go stale in silence: the day a latch
+    is added to the trail branch, the daemon would keep passing ``False`` and
+    the latch would never fire, on a live money path.
+
+    So the claim is a predicate instead of a comment. If either assertion goes
+    red, the branch gained a field its caller hard-codes, and the caller in
+    ``position_manager`` is what has to change.
+    """
+
+    def test_the_trail_branch_does_not_read_the_reanchor_latch(self) -> None:
+        self.assertNotIn(
+            "already_reanchored",
+            _executable_source(_trail),
+            msg=(
+                "_trail now reads already_reanchored, which _maybe_trail passes "
+                "as a hard-coded False. Project the real value there first."
+            ),
+        )
+
+    def test_the_reanchor_branch_does_not_read_the_ratchet_floor(self) -> None:
+        self.assertNotIn(
+            "ratchet_floor",
+            _executable_source(_reanchor),
+            msg=(
+                "_reanchor now reads ratchet_floor, which _maybe_reanchor passes "
+                "as a hard-coded None. Compose the real floor there first."
+            ),
+        )
+
+    def test_each_branch_does_read_the_field_the_other_ignores(self) -> None:
+        """Existence control. Without it both assertions above would still pass
+        against a pair of branches that read no view fields at all."""
+        self.assertIn("ratchet_floor", _executable_source(_trail))
+        self.assertIn("already_reanchored", _executable_source(_reanchor))
