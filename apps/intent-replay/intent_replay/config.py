@@ -817,13 +817,18 @@ def _read_block(reader: _Reader, data: Any, account_currency: str) -> _Parsed:
     # ``min_commission.unit`` is compared against, which is the half of
     # section 5.2.1 this module could not check before #1592.
     code = _stated_code(node)
+    cross = code is not None and code != account_currency
     if "fx" in node:
         parsed.fx = _fx(
             reader,
             node["fx"],
             "fx",
-            cross=code is not None and code != account_currency,
-            pair_unit=f"{code}_per_{account_currency}",
+            cross=cross,
+            # Only the cross arm reads it. Built conditionally so a malformed
+            # block cannot carry a ``None_per_PLN`` into a later edit that
+            # reads the argument unconditionally; measured 2026-10-02, no
+            # refusal publishes such a token today.
+            pair_unit=f"{code}_per_{account_currency}" if cross else "",
         )
     fx = None if parsed.fx is None else _engine_fx(parsed.fx, account_currency)
     if "costs" in node:

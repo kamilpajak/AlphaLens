@@ -58,7 +58,12 @@ def round_trip_fee_bps(notional: float, costs: Costs) -> float:
     A non-positive ``notional`` answers ``0.0`` rather than dividing — the
     daemon's own arm, and it is reachable here without a degenerate input: two
     positive numbers can multiply to zero by underflow. The FX term sits INSIDE
-    that guard rather than beside it, as the daemon's does.
+    that guard rather than beside it, as the daemon's does, and that placement
+    is load-bearing rather than cosmetic: the term is a multiple of the
+    notional, so dividing it by the notional CANCELS, and a negative notional
+    would come back as the full stated leg rather than as nothing. Measured
+    2026-10-02 at a notional of -5.0: 0.0 bps inside the guard, 50.0 bps with
+    the term beside it.
 
     The grouping is the daemon's: the two round trips are summed and the sum is
     divided once. In bps the FX term is the stated rate exactly, at every

@@ -325,9 +325,19 @@ class TheStatedFxLegTest(unittest.TestCase):
 
     def test_a_non_positive_notional_pays_no_leg_either(self) -> None:
         # The daemon's own arm returns a zero fee rather than dividing, and the
-        # FX term is inside that guard rather than beside it.
-        self.assertEqual(cost_gate.round_trip_fee_bps(0.0, costs=_costs(fx=CROSS)), 0.0)
-        self.assertEqual(cost_gate.round_trip_fee_bps(-1.0, costs=_costs(fx=CROSS)), 0.0)
+        # FX term is inside that guard rather than beside it. The placement is
+        # load-bearing, not cosmetic: the term is a multiple of the notional, so
+        # the division CANCELS it, and a negative notional would come back as
+        # the whole stated leg. The counterfactual is asserted beside the
+        # behaviour, because "the guard is equivalent either way" is a reading
+        # that survives inspection and not measurement.
+        for notional in (0.0, -1.0, -5.0):
+            with self.subTest(notional):
+                self.assertEqual(
+                    cost_gate.round_trip_fee_bps(notional, costs=_costs(fx=CROSS)), 0.0
+                )
+        outside_the_guard = FX_ROUND_TRIP * -5.0 / -5.0 * BPS_PER_UNIT
+        self.assertEqual(outside_the_guard, FX_ROUND_TRIP * BPS_PER_UNIT)
 
     def test_the_rate_alone_moves_the_verdict_where_the_minimum_binds(self) -> None:
         # The CONVERSION on its own, with the cost rate switched off: the gate

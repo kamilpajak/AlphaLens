@@ -1663,6 +1663,13 @@ class TheFilledFractionIsAFractionOfWhatTheLadderSplitsTest(unittest.TestCase):
     def test_a_ladder_that_splits_nothing_divides_by_nothing(self) -> None:
         # The guard is on the DENOMINATOR the walk divides by, so it has to be
         # the buffered one there too.
+        #
+        # Measured 2026-10-02, so the next reader does not delete it as dead:
+        # the door refuses ``spec.size.notional_acct: 0`` and the configuration
+        # refuses a buffer at 100, so NO document reaches zero here. ``walk``
+        # is public and takes a hand-built ``Plan``, which is the path this row
+        # exercises -- and the pre-#1592 guard on ``plan.notional`` had exactly
+        # the same reachability.
         result = walk(_plan(entries=(), notional=1500.0, sizing_notional=0.0), _config(), self.BAR)
         self.assertEqual(result.filled_fraction, 0.0)
 
