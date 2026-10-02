@@ -238,7 +238,7 @@ Cross-cutting with the sampling rule: a number from ONE day is provisional, and 
 
 ## Where to find "why"
 
-- **Architectural decisions:** `docs/adr/` (12 ADRs: pivot, queue contract, screener-agnostic backtest, ~~vendored upstream~~ *superseded*, ~~closed-layer policy~~ *superseded*, OSS extraction, layer architecture, sunset TradingAgents, Django replaces FastAPI, archive extracted and removed, split pipeline/research workspace, decommission paper-trading + broker chain)
+- **Architectural decisions:** `docs/adr/` (17 ADRs: pivot, queue contract, screener-agnostic backtest, ~~vendored upstream~~ *superseded*, ~~closed-layer policy~~ *superseded*, OSS extraction, layer architecture, sunset TradingAgents, Django replaces FastAPI, archive extracted and removed, split pipeline/research workspace, decommission paper-trading + broker chain, trade-side layer architecture, broker-agnostic execution layer, live order rail keyed unlock, per-environment broker state separation, standing live authorization)
 - **Canonical closed-paradigms reference:** [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md) — 14 failures + 2 inconclusive + 1 slippage-fail with αt values, dates, mechanisms, re-activation conditions
 - **Per-layer kill reason:** `__closed_reason__` in each layer's `__init__.py`
 - **Per-strategy design + audit docs:** `docs/research/`
