@@ -28,6 +28,25 @@ SOURCE = "saxo-live-l1"
 _DARK_WARN_INTERVAL_S = 300.0
 
 
+class DarkSourceWarning:
+    """The throttle for the "not receiving from the venue" warning.
+
+    It has to outlive a feed: the daemon builds a new feed per pass per tick,
+    so a throttle held by one feed never saw its own previous warning, and LIVE
+    logged ~2 000 lines a night. The composition root holds ONE of these for the
+    process (``control_loop._FEED_DARK_WARNING``) and hands it to every feed."""
+
+    def __init__(self) -> None:
+        self._last: dt.datetime | None = None
+
+    def due(self, now: dt.datetime) -> bool:
+        """True (and records ``now``) when no warning went out in the interval."""
+        if self._last is not None and (now - self._last).total_seconds() < _DARK_WARN_INTERVAL_S:
+            return False
+        self._last = now
+        return True
+
+
 class SaxoLivePriceFeed:
     """A structural ``PriceFeed`` reading the live quote cache.
 
@@ -47,11 +66,29 @@ class SaxoLivePriceFeed:
         stream: QuoteSource,
         resolve_live_uic: Callable[[int], int | None],
         clock: Callable[[], dt.datetime] | None = None,
+        dark_warning: DarkSourceWarning | None = None,
+        in_trading_window: Callable[[], bool] | None = None,
     ) -> None:
         self._stream = stream
         self._resolve_live_uic = resolve_live_uic
         self._clock = clock or (lambda: dt.datetime.now(dt.UTC))
-        self._last_dark_warn: dt.datetime | None = None
+        # Default: a throttle of its own, which is right only for a feed that
+        # lives across ticks. The daemon passes its process-wide one.
+        self._dark_warning = dark_warning or DarkSourceWarning()
+        # None means "always inside the window" (warn whenever dark).
+        self._in_trading_window = in_trading_window
+
+    def _dark_is_expected(self) -> bool:
+        """Outside the trading window the shared reader sleeps on purpose, so a
+        dark source is the expected state, not news. Fails OPEN like the
+        stream's own gate: a predicate that raises counts as inside the window,
+        so a calendar bug can never hide a dead source during trading hours."""
+        if self._in_trading_window is None:
+            return False
+        try:
+            return not self._in_trading_window()
+        except Exception:  # broad on purpose: a doubt must keep the warning
+            return False
 
     def _warn_dark(self) -> None:
         """Name the veto, throttled. Which of the two conditions withheld the
@@ -59,11 +96,11 @@ class SaxoLivePriceFeed:
         line cannot tell "the source is dark" from "this quote is too old",
         and that ambiguity is what #1392 spent a ticket removing one layer
         up."""
-        now = self._clock()
-        last = self._last_dark_warn
-        if last is not None and (now - last).total_seconds() < _DARK_WARN_INTERVAL_S:
+        if self._dark_is_expected():
+            logger.debug("saxo live price feed: source dark outside the trading window")
             return
-        self._last_dark_warn = now
+        if not self._dark_warning.due(self._clock()):
+            return
         logger.warning(
             "saxo live price feed: the quote source is not receiving from the venue — "
             "withholding every price until it does"

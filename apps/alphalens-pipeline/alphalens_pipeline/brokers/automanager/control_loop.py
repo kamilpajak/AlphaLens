@@ -1325,6 +1325,29 @@ def _quote_source() -> Any:
     )
 
 
+# The "not receiving from the venue" throttle for every feed this process
+# builds (a ``saxo_live_price_feed.DarkSourceWarning``, created on first use
+# like the feed module itself is imported). One feed lives one pass, so a
+# per-feed throttle never throttled.
+_FEED_DARK_WARNING: Any = None
+_FEED_TRADING_WINDOW: Callable[[], bool] | None = None
+
+
+def _feed_trading_window() -> Callable[[], bool]:
+    """The trading-window predicate the price feeds use to tell an expected dark
+    source (the shared reader asleep outside the window) from a real outage.
+
+    Built from the same venue list as the reader's session gate
+    (``_make_stream_session_window``) whether or not this process gates its own
+    stream: the SIM daemon reads the shared reader without setting the gate
+    flag. Built once per process, because the predicate memoizes per-day bounds
+    and is called only from the tick thread."""
+    global _FEED_TRADING_WINDOW  # noqa: PLW0603 — lazy singleton is the documented pattern
+    if _FEED_TRADING_WINDOW is None:
+        _FEED_TRADING_WINDOW = _make_stream_session_window()
+    return _FEED_TRADING_WINDOW
+
+
 def _default_live_exits_feed_factory(
     uic_to_instrument: Mapping[int, tuple[str, str]],
     *,
@@ -1344,15 +1367,26 @@ def _default_live_exits_feed_factory(
     every tick (2026-08-18 incident)."""
     if not _saxo_live_prices_enabled():
         return _NullPriceFeed()
-    from alphalens_pipeline.brokers.automanager.saxo_live_price_feed import SaxoLivePriceFeed
+    from alphalens_pipeline.brokers.automanager.saxo_live_price_feed import (
+        DarkSourceWarning,
+        SaxoLivePriceFeed,
+    )
 
+    global _FEED_DARK_WARNING  # noqa: PLW0603 — process-wide throttle, see above
+    if _FEED_DARK_WARNING is None:
+        _FEED_DARK_WARNING = DarkSourceWarning()
     stream = _quote_source()
     live_uics = {
         sim_uic: stream.live_uic_for(ticker, exchange_mic=mic)
         for sim_uic, (ticker, mic) in uic_to_instrument.items()
     }
     stream.ensure_subscribed([u for u in live_uics.values() if u is not None], scope=scope)
-    return SaxoLivePriceFeed(stream=stream, resolve_live_uic=live_uics.get)
+    return SaxoLivePriceFeed(
+        stream=stream,
+        resolve_live_uic=live_uics.get,
+        dark_warning=_FEED_DARK_WARNING,
+        in_trading_window=_feed_trading_window(),
+    )
 
 
 def _build_live_exits_feed(
