@@ -28,7 +28,7 @@ import datetime as dt
 import json
 
 from alphalens_pipeline.feedback.bar_window import ARRIVAL_VWAP_WINDOW_MIN
-from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, session_on_or_after
+from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, session_on_or_after
 from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
 
 # Bumped ONLY when the SHAPE of the stamp changes (a key added / removed /

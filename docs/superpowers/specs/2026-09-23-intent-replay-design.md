@@ -410,7 +410,7 @@ The replay knows nothing about sessions, exchanges or trading hours. It walks
 exactly the bars it is given.
 
 This is required, not tidy. Calendars mean `exchange_calendars` plus pandas, and
-the split blueprint lists `paper.calendar` as edge **E1** — one of the three
+the split blueprint lists `market.calendar` as edge **E1** — one of the three
 residual couplings blocking the split — precisely because it drags those two.
 `dependencies = []` rules it out.
 

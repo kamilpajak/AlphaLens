@@ -741,7 +741,7 @@ _DEFAULT_CLIENT: OpenRouterClient | None = None
 # all see ``_DEFAULT_CLIENT is None``, each build a client + httpx pool,
 # and each call ``atexit.register`` — leaking pools and registering
 # duplicate close hooks. Double-checked locking collapses the race to a
-# single build (same idiom as ``paper.calendar._calendar``).
+# single build (same idiom as ``market.calendar._calendar``).
 _DEFAULT_CLIENT_LOCK = threading.Lock()
 
 

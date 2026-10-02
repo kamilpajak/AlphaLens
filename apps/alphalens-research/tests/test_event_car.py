@@ -12,7 +12,7 @@ import pandas as pd
 from alphalens_pipeline.events import insider_cluster as ic
 from alphalens_pipeline.feedback import event_car as ec
 from alphalens_pipeline.feedback.population_ladder_monitor import _write_grouped_cache_atomic
-from alphalens_pipeline.paper.calendar import advance_trading_sessions
+from alphalens_pipeline.market.calendar import advance_trading_sessions
 from alphalens_research.diagnostics import insider_cluster_retro as icr
 
 D = dt.date

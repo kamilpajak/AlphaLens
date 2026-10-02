@@ -66,7 +66,7 @@ from alphalens_pipeline.feedback.split_audit import (
     SpanAudit,
     audit_span,
 )
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
     n_sessions_before,

@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from alphalens_pipeline.events import insider_cluster as ic
-from alphalens_pipeline.paper.calendar import session_on_or_after
+from alphalens_pipeline.market.calendar import session_on_or_after
 
 D = dt.date
 REPO_ROOT = Path(__file__).resolve().parents[4]

@@ -240,7 +240,7 @@ def _anchor_on_disk_session(root: Path, session: dt.date) -> tuple[dt.date | Non
     walking back up to ``END_SESSION_MAX_LAG`` sessions. Returns
     (session_date, snapshot) or (None, None) when nothing is on disk in range."""
     from alphalens_pipeline.data.rs_history import read_grouped_day
-    from alphalens_pipeline.paper.calendar import previous_trading_day
+    from alphalens_pipeline.market.calendar import previous_trading_day
 
     probe = session
     for _ in range(END_SESSION_MAX_LAG + 1):
@@ -264,7 +264,7 @@ def trailing_session_closes(
     a gapped series would silently understate realized vol.
     """
     from alphalens_pipeline.data.rs_history import read_grouped_day
-    from alphalens_pipeline.paper.calendar import is_trading_day, previous_trading_day
+    from alphalens_pipeline.market.calendar import is_trading_day, previous_trading_day
 
     session = asof if is_trading_day(asof) else previous_trading_day(asof)
     # The grouped store lags its vendor's end-of-day availability (session D

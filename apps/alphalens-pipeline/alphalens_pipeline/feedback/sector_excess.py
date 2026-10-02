@@ -82,7 +82,7 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     GroupedFetch,
     _default_grouped_fetch,
 )
-from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, previous_trading_day
+from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, previous_trading_day
 
 logger = logging.getLogger(__name__)
 

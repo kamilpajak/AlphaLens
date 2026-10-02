@@ -2,7 +2,7 @@
 
 **Status:** PARTIAL (PR-A shipped 2026-05-29; PR-B/C/D queued).
 **Author:** Kamil Pająk
-**Companion code:** `apps/alphalens-pipeline/alphalens_pipeline/paper/calendar.py`,
+**Companion code:** `apps/alphalens-pipeline/alphalens_pipeline/market/calendar.py`,
 guards in `apps/alphalens-pipeline/alphalens_cli/commands/paper.py`.
 
 ## 1. Problem statement
@@ -108,7 +108,7 @@ liquidity-floor guard — not the universal "defer to 09:45" rule.
 ## 5. PR sequencing
 
 * **PR-A (this PR) — calendar module + CLI guards.** Adds
-  `paper/calendar.py` (multi-exchange XNYS / XWAR / etc), introduces
+  `market/calendar.py` (multi-exchange XNYS / XWAR / etc), introduces
   the market-closed guard on `submit` and `reconcile` (default on,
   `--allow-closed-market` opt-out). No behaviour change to TTL or
   time-stop math; legacy `(observed.date() - planned.date()).days`
@@ -215,7 +215,7 @@ Known limitations (not in scope for PR-A; planned follow-ups):
 ## 6. Multi-exchange notes (forward-looking)
 
 The user has flagged future expansion to Polish (XWAR) and Asian
-(XTKS / XHKG / XSHG) markets. `paper/calendar.py` exposes all helpers
+(XTKS / XHKG / XSHG) markets. `market/calendar.py` exposes all helpers
 as `helper(d, exchange="XNYS")` so adding a venue is a per-call
 argument change. Plug-in points beyond the calendar:
 
@@ -234,7 +234,7 @@ the parametric API now keeps the next two refactors honest.
 
 ## 7. Test coverage
 
-* `apps/alphalens-research/tests/paper/test_calendar.py` — 32 tests
+* `apps/alphalens-research/tests/test_market_calendar.py` — 32 tests
   covering is_trading_day, is_half_day, next_trading_open,
   previous_trading_day, trading_days_elapsed across XNYS + XWAR.
 * `apps/alphalens-research/tests/paper/test_cli_market_closed_guard.py`

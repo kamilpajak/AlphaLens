@@ -217,7 +217,7 @@ class InstrumentRef:
     """A broker-resolved instrument handle.
 
     ``exchange_mic`` follows the ISO 10383 convention already used by
-    ``alphalens_pipeline.paper.calendar`` (e.g. ``"XNYS"``), keeping the
+    ``alphalens_pipeline.market.calendar`` (e.g. ``"XNYS"``), keeping the
     multi-venue extension seam (ticker->exchange routing) consistent.
 
     ``currency`` is the AUTHORITATIVE instrument trading currency stamped by

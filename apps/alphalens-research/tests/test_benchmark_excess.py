@@ -32,7 +32,7 @@ from alphalens_pipeline.feedback.benchmark_excess import (
     enrich_store_with_benchmark_excess,
 )
 from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
-from alphalens_pipeline.paper.calendar import session_open_utc
+from alphalens_pipeline.market.calendar import session_open_utc
 
 UTC = dt.UTC
 
@@ -1628,7 +1628,7 @@ class TestOfficialCloseExitPrint(unittest.TestCase):
             self.assertAlmostEqual(float(df.loc["AA", "benchmark_window_return"]), 0.02, places=9)
 
     def test_ongoing_row_uses_the_last_closed_sessions_official_close(self) -> None:
-        from alphalens_pipeline.paper.calendar import previous_trading_day
+        from alphalens_pipeline.market.calendar import previous_trading_day
 
         last_closed = previous_trading_day(self._NOW.date())
         with tempfile.TemporaryDirectory() as tmp:

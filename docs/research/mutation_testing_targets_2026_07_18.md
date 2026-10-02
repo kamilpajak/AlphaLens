@@ -219,7 +219,7 @@ Not yet run. `crit·suit` descending; `pipe:` = `apps/alphalens-pipeline/alphale
 | 20 | `res:diagnostics/slippage_regime.py` | Spread-stress re-evaluation of a pre-registered net-alpha. |
 | 20 | `res:overlays/vol_target.py` | The `.shift(1)` causality contract — a look-ahead here fakes alpha. |
 | 16 | `pipe:feedback/breakeven_lenses.py` | Kind-dispatch for the exit-stop what-if grid. |
-| 16 | `pipe:paper/calendar.py` | Session arithmetic behind TTL/time-stop sweeps + shadow-return anchors. |
+| 16 | `pipe:market/calendar.py` | Session arithmetic behind TTL/time-stop sweeps + shadow-return anchors. |
 | 16 | `pipe:thematic/extraction/themes.py` | `roll_up` novelty ratio + `flag_novel` threshold. |
 | 16 | `res:attribution/walk_forward.py` | C1–C5 gate → PASS/BORDERLINE/FAIL stability verdict. |
 | 15 | `pipe:feedback/execution_cost.py` | Per-arm execution-cost haircut. |

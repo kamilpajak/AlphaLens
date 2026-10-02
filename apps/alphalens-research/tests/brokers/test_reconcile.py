@@ -9,7 +9,7 @@ UNRESOLVED(capability_absent), never a guessed terminal state (no FakeBroker /
 conformance-mixin changes needed, by design).
 
 All dates are pinned via the ``today=`` seam; the calendar math delegates to
-``paper.calendar.trading_days_elapsed`` (XNYS sessions).
+``market.calendar.trading_days_elapsed`` (XNYS sessions).
 """
 
 from __future__ import annotations

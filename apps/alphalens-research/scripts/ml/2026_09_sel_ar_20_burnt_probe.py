@@ -187,7 +187,7 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
-from alphalens_pipeline.paper.calendar import session_open_utc
+from alphalens_pipeline.market.calendar import session_open_utc
 from alphalens_research.diagnostics import edge_stores
 from alphalens_research.diagnostics.options_retro import (
     cluster_ols,

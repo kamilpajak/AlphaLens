@@ -16,7 +16,7 @@ from typing import Any
 
 import pandas as pd
 from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.calendar import (
     advance_trading_sessions,
     session_open_utc,
 )

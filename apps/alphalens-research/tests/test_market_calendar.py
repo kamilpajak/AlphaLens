@@ -1,5 +1,5 @@
-"""Tests for ``alphalens_pipeline.paper.calendar`` — trading-day helpers
-for paper-trade submission gating.
+"""Tests for ``alphalens_pipeline.market.calendar`` — trading-day helpers
+for order gating, TTL arithmetic and the publication clock.
 
 Design memo: ``docs/research/paper_trading_non_trading_day_2026_05_29.md``.
 
@@ -25,7 +25,7 @@ from __future__ import annotations
 import datetime as dt
 import unittest
 
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
     is_half_day,

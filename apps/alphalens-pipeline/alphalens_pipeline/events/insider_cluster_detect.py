@@ -33,7 +33,7 @@ import pandas as pd
 from alphalens_pipeline.data.parquet_io import write_parquet_atomic
 from alphalens_pipeline.events import DEFAULT_ACCEPTANCE_CACHE_DIR
 from alphalens_pipeline.events import insider_cluster as ic
-from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, advance_trading_sessions
+from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, advance_trading_sessions
 from alphalens_pipeline.thematic.sources.form4_store import (
     DEFAULT_FORM4_ROOT,
     load_form4_partitions,

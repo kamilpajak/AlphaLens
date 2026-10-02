@@ -7,7 +7,7 @@ The endpoint exposes one snapshot of XNYS state used by the SPA to render
 a closed-market banner with a live countdown to the next session open. The
 backing helpers live in ``market.calendar`` (a thin wrapper around the
 ``exchange_calendars`` library, mirrored from the pipeline's
-``alphalens_pipeline.paper.calendar``; both wrappers delegate to the same
+``alphalens_pipeline.market.calendar``; both wrappers delegate to the same
 underlying library so the half-day / next-open algorithms cannot drift
 silently).
 

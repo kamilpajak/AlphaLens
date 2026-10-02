@@ -164,7 +164,7 @@ class TestTheClusterVerdict(unittest.TestCase):
 
 
 def _sessions(n: int, start: dt.date = dt.date(2026, 7, 6)) -> list[str]:
-    from alphalens_pipeline.paper.calendar import advance_trading_sessions
+    from alphalens_pipeline.market.calendar import advance_trading_sessions
 
     return [advance_trading_sessions(start, i).isoformat() for i in range(n)]
 

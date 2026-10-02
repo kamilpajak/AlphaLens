@@ -18,7 +18,7 @@ from unittest import mock
 
 import pandas as pd
 from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
-from alphalens_pipeline.paper.calendar import session_open_utc
+from alphalens_pipeline.market.calendar import session_open_utc
 from alphalens_research.diagnostics import fill_partition as fp
 from scripts.measure_fill_partition import (
     EXCHANGE,

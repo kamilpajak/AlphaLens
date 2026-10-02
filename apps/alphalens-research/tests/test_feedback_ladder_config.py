@@ -10,8 +10,8 @@ import unittest
 from unittest import mock
 
 from alphalens_pipeline.feedback import bar_window, ladder_config
+from alphalens_pipeline.market.calendar import session_on_or_after, session_open_utc
 from alphalens_pipeline.paper import constants
-from alphalens_pipeline.paper.calendar import session_on_or_after, session_open_utc
 
 
 class TestLadderArrivalSession(unittest.TestCase):

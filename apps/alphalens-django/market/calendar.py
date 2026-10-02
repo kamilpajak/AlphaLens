@@ -1,7 +1,7 @@
 """Thin exchange-calendar wrapper for the ``/v1/market/status`` endpoint.
 
 This is a deliberately small subset of the pipeline's
-``alphalens_pipeline.paper.calendar`` helpers — only the projections the SPA
+``alphalens_pipeline.market.calendar`` helpers — only the projections the SPA
 banner needs: the day-level ``is_trading_day`` / ``is_half_day`` plus the
 wall-clock ``is_session_open_at`` / ``next_session_open_utc`` /
 ``next_session_close_utc``. Both wrappers delegate to the same backing
@@ -17,7 +17,7 @@ Why not import the pipeline module directly:
   would drag in yfinance, alpaca-py, pandera, ivolatility, etc. — none of
   which the Django container needs.
 * The Docker boundary means a top-level
-  ``from alphalens_pipeline.paper.calendar import ...`` would crash at
+  ``from alphalens_pipeline.market.calendar import ...`` would crash at
   import time inside the runtime image.
 
 Keeping the wrapper tiny (~50 LOC) and pinned to a shared library version
@@ -80,7 +80,7 @@ def is_trading_day(d: dt.date, exchange: str = DEFAULT_EXCHANGE) -> bool:
 def is_half_day(d: dt.date, exchange: str = DEFAULT_EXCHANGE) -> bool:
     """True when ``d`` is a session on ``exchange`` with an early close.
 
-    Detection idiom mirrors ``alphalens_pipeline.paper.calendar.is_half_day``:
+    Detection idiom mirrors ``alphalens_pipeline.market.calendar.is_half_day``:
     compare the actual session close against the venue's regular close.
     ``close_times`` is a list of ``(effective_date, time)`` tuples; the
     last entry with ``effective_date <= ts`` is the schedule in force on

@@ -27,7 +27,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.saxo import broker as broker_module
 from alphalens_pipeline.brokers.saxo.broker import ALLOW_ORDERS_ENV, SaxoBroker
-from alphalens_pipeline.paper.calendar import advance_trading_sessions
+from alphalens_pipeline.market.calendar import advance_trading_sessions
 from broker_contract.contract import (
     BracketOrderRequest,
     BrokerCapabilityError,

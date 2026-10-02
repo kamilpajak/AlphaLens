@@ -1,31 +1,33 @@
-"""Multi-exchange trading-day helpers for the paper-trade harness.
+"""Multi-exchange trading-day arithmetic shared across the pipeline.
 
-The pipeline-build timer runs daily at 06:30 UTC regardless of whether
-any exchange is open; brief generation is intentionally calendar-day
+Exchange-session arithmetic for the broker-free feedback replay, the
+``brokers`` GTD / TTL math and the thematic publication clock. The
+pipeline timers fire on calendar days regardless of whether any
+exchange is open, and brief generation is intentionally calendar-day
 based (news doesn't stop on weekends). What MUST not be calendar-day
-based is the order-submission and TTL/time-stop side of the harness.
+based is anything that commits an order or ages one out.
 
 Two failure modes the helpers in this module exist to prevent:
 
 * **Stale-ladder gap risk.** Submitting GTC limits over a weekend
   queues them at Friday-close-anchored prices into Monday's opening
   auction. A gap-down through E2 fills the entire ladder at prices the
-  ladder's pull-back logic never intended to commit at. The submitter
-  guards on ``is_trading_day(today)`` and defers to the next session.
+  ladder's pull-back logic never intended to commit at. The placing
+  side guards on ``is_trading_day(today)`` and defers to the next
+  session.
 
 * **TTL / time-stop drift on holidays.** The trade-setup memo defines
-  the entry-fill window as N trading days; the legacy reconciler uses
-  ``observed_at.date() - planned_at.date()`` which counts weekends and
-  holidays. Switching the sweep to ``trading_days_elapsed`` (planned
-  in PR-B) keeps the harness aligned with the memo.
+  the entry-fill window as N trading days, while a naive
+  ``observed_at.date() - planned_at.date()`` counts weekends and
+  holidays. ``brokers.reconcile`` runs its expiry sweep on
+  ``trading_days_elapsed`` so the verdict matches the memo.
 
 ## Multi-exchange design
 
 All helpers accept an ``exchange`` parameter (ISO 10383 MIC) that
-defaults to ``"XNYS"`` (NYSE) — the only venue the paper harness
-currently routes to. Adding a Polish (XWAR), Tokyo (XTKS), Hong Kong
-(XHKG), or Shanghai (XSHG) market in future is a per-call argument
-change, not a refactor:
+defaults to ``"XNYS"`` (NYSE) — the venue almost every consumer asks
+about. Adding a Polish (XWAR), Tokyo (XTKS), Hong Kong (XHKG), or
+Shanghai (XSHG) market is a per-call argument change, not a refactor:
 
     is_trading_day(today, exchange="XWAR")
     next_trading_open(now, exchange="XTKS")
@@ -33,12 +35,13 @@ change, not a refactor:
 Plug-in points the caller will eventually need to think about beyond
 this module:
 
-* per-ticker exchange routing (a ``ticker → exchange`` map in
-  ``planner.py``; today every position implicitly trades on XNYS),
-* per-exchange broker clients (Alpaca is US-equities-only; XWAR
-  routes through e.g. IBKR or a Polish brokerage),
+* per-ticker exchange routing (today every position implicitly trades
+  on XNYS unless the intent names a MIC),
+* per-exchange broker clients (XWAR routes through a venue the broker
+  adapter has to support),
 * per-exchange currency / FX — IMPLEMENTED: sizing carries an FX leg
-  (``paper/fx.py`` + ``compute_setup_plan(fx=...)``; design memo
+  (``broker_contract/fx.py`` +
+  ``broker_contract.sizing.compute_setup_plan(fx=...)``; design memo
   ``docs/research/saxo_fx_leg_gpw_design_2026_07_18.md``). The budget
   is the ACCOUNT currency; cross-currency venues (XWAR in PLN) size
   through a live broker rate or refuse.
@@ -51,6 +54,11 @@ The single backing dependency is ``exchange_calendars``. The
 module-level ``_CALENDARS`` cache lazy-initialises each venue on
 first use so import is cheap; subsequent calls reuse the loaded
 calendar.
+
+A second, independent wrapper over the same dependency lives in the
+Django app (``apps/alphalens-django/market/calendar.py``) because the
+slim production image does not install this package; the two are
+pinned value-for-value by ``market/tests/test_calendar_parity.py``.
 
 Design memo: ``docs/research/paper_trading_non_trading_day_2026_05_29.md``.
 """

@@ -84,7 +84,7 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     _grouped_close,
     _prefetch_grouped_daily,
 )
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.calendar import (
     DEFAULT_EXCHANGE,
     previous_trading_day,
     session_open_utc,

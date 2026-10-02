@@ -224,7 +224,7 @@ def shrink(effect: float, factor: float) -> float:
 
 
 def sessions_between(start: dt.date, end: dt.date) -> int:
-    from alphalens_pipeline.paper.calendar import trading_days_elapsed
+    from alphalens_pipeline.market.calendar import trading_days_elapsed
 
     return int(trading_days_elapsed(start, end))
 
@@ -249,7 +249,7 @@ def gate_date(
     The accrual projection survives only for the case it is actually for — when
     fewer arrivals exist than are needed.
     """
-    from alphalens_pipeline.paper.calendar import advance_trading_sessions
+    from alphalens_pipeline.market.calendar import advance_trading_sessions
 
     today = today or dt.date.today()
     # De-duplicated here rather than trusted from the caller: one arrival

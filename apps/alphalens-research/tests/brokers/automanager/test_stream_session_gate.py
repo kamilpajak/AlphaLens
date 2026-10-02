@@ -106,7 +106,7 @@ class TestSessionWindowMath(unittest.TestCase):
         contract exists to prevent."""
         self.clock.now = _SESSION_OPEN
         with mock.patch(
-            "alphalens_pipeline.paper.calendar.is_trading_day",
+            "alphalens_pipeline.market.calendar.is_trading_day",
             side_effect=RuntimeError("calendar exploded"),
         ):
             with self.assertRaises(RuntimeError):

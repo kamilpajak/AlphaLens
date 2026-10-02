@@ -57,7 +57,7 @@ post-arc set — three targets:
 
 | # | edge | scope | sites | drags |
 |---|------|-------|-------|-------|
-| E1 | `paper.calendar` (`trading_days_elapsed`, `advance_trading_sessions`) | TOP-LEVEL | `reconcile.py:58`, `saxo/broker.py:59` | **pandas + exchange_calendars** |
+| E1 | `market.calendar` (`trading_days_elapsed`, `advance_trading_sessions`) | TOP-LEVEL | `reconcile.py:58`, `saxo/broker.py:59` | **pandas + exchange_calendars** |
 | E2 | `observability.textfile` (`emit_domain_metrics`) | lazy (fn body) | `control_loop.py:247`, `:597` | prometheus textfile write |
 | E3 | `paper.sizing.planned_blended_entry_from_spec` | lazy (fn body) | `control_loop.py:1649` | none (pure over `TradeSpec`) |
 
@@ -109,20 +109,20 @@ tripwire.
   without dragging AlphaLens infra into the leaf-only service. Behavior-preserving
   (the real emitter is still called in prod; a no-op default in tests).
 
-- **P3 (E1) — calendar.** `paper.calendar` drags pandas + exchange_calendars, so
+- **P3 (E1) — calendar.** `market.calendar` drags pandas + exchange_calendars, so
   it cannot enter the stdlib-only `broker_contract` leaf. The calendar helper is
   already exchange-parametrized (MIC) and **already duplicated Django-side** —
   duplication is the established pattern. **Recommendation: `bracket-keeper`
   carries its own `calendar.py`** (moved/vendored, declaring its own
-  `pandas` + `exchange-calendars` deps). AlphaLens keeps `paper.calendar` for its
+  `pandas` + `exchange-calendars` deps). AlphaLens keeps `market.calendar` for its
   other consumers (feedback replay, `/v1/market/status`). At 2B-pre time this is
   just: confirm the plan; the physical duplication happens in 2B-move. (This is
   the deferred 2A-4b decision — see §7 alternatives.)
 
-  After P1+P2, the ONLY residual edge is `paper.calendar` (E1), which 2B-move
+  After P1+P2, the ONLY residual edge is `market.calendar` (E1), which 2B-move
   resolves by giving `bracket-keeper` its own copy. So the 2B-pre tripwire is:
   `brokers ↛ alphalens_pipeline` **except** `broker_contract` **and**
-  `paper.calendar` (the one sanctioned edge until the repo move duplicates it).
+  `market.calendar` (the one sanctioned edge until the repo move duplicates it).
 
 ### 2B-move — create the repo + physically relocate (AFTER go-live soak)
 
@@ -202,7 +202,7 @@ Stage-2 concern (transport reimpl, Q5).
 
 - **2B-pre:** each P-step keeps the broker + sizing suites at unchanged expected
   values (behavior-preserving); new tripwire `brokers ↛ alphalens_pipeline`
-  (except `broker_contract` + sanctioned `paper.calendar`) with a non-vacuous
+  (except `broker_contract` + sanctioned `market.calendar`) with a non-vacuous
   positive control; full research suite green; zen deepseek-v4-pro high per PR.
 - **2B-move:** `bracket-keeper` CI green (its moved tests + its own dep-direction
   test); AlphaLens green after the rewire (the acceptance guarantee suite must

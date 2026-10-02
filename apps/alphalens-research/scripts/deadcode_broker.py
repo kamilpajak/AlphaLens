@@ -60,6 +60,12 @@ PRODUCTION_ROOTS: tuple[str, ...] = (
 
 # What the report prints. Paths are repo-relative, exactly as vulture prints
 # them when it runs from the repo root.
+#
+# ``market/`` is deliberately NOT in scope: ``calendar.py`` moved there out of
+# ``paper/`` and left this report, because the scope is the broker / keeper
+# surface and the calendar is now generic infra. Adding ``market/`` would pull
+# ``primitives.py`` and ``market_state.py`` in too, which belong to the thematic
+# signal, not the broker.
 SCOPE_PREFIXES: tuple[str, ...] = (
     "apps/alphalens-broker-contract/broker_contract/",
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/",

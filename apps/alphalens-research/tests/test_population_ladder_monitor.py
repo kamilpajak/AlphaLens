@@ -45,12 +45,12 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     replay_population_ladders,
     summarize_population_ladders,
 )
-from alphalens_pipeline.paper.brief_loader import CandidateBrief
-from alphalens_pipeline.paper.calendar import (
+from alphalens_pipeline.market.calendar import (
     advance_trading_sessions,
     previous_trading_day,
     session_open_utc,
 )
+from alphalens_pipeline.paper.brief_loader import CandidateBrief
 
 UTC = dt.UTC
 

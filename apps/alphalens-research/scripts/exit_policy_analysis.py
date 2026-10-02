@@ -43,7 +43,7 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     _bars_cache_path,
     _engine_cutoffs,
 )
-from alphalens_pipeline.paper.calendar import n_sessions_before, session_on_or_after
+from alphalens_pipeline.market.calendar import n_sessions_before, session_on_or_after
 from alphalens_research.diagnostics.exit_policy_analysis import (
     ALPHA_TWO_SIDED,
     BLOCK_FLOOR,

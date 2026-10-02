@@ -6,6 +6,12 @@
 **Harness:** `apps/alphalens-research/scripts/arch/` (tests in `apps/alphalens-research/tests/arch/`)
 **Scope:** read-only diagnosis. No production code changed, nothing deleted.
 
+**Acted on since (2026-10-02):** finding #4 shipped —
+`alphalens_pipeline.paper.calendar` moved to
+`alphalens_pipeline.market.calendar`. Every count in this memo is the
+measurement at baseline `e49a5c1b` and is left as measured; read the module
+name in §0, §2.4 and finding #4 as the pre-move name.
+
 ---
 
 ## 0. How to read this
@@ -490,7 +496,7 @@ Cost of leaving it against cost of fixing it. Nothing here was changed.
 | 1 | 77 of 164 brief-store columns cross no schema gate; the gated boundary (pipeline → API) is not where most columns live | §5.1 | a renamed column breaks readers silently; this is the most likely source of a quiet production defect | a column-contract gate on the parquet writer, mirroring `test_schema_parity.py` |
 | 2 | `control_loop.py` is 11 130 lines with no internal boundary, on the live order path | §4.1 | every change needs the whole file in head; 130 commits in 6 months | split into modules behind the existing `LoopDeps` seam; its own arc, own review |
 | 3 | No gate in CI measures file or function size | §4.2 | the next 11 000-line file grows the same way | enable `PLR0915`/`PLR0912` with a baseline, or a file-length check |
-| 4 | `paper.calendar` has the repo's highest inbound count (41) while `paper/` is the package ADR 0012 decommissioned | §2.4 | misleads every reader; blocks the keeper split | move it to a shared primitive package and rename |
+| 4 | `paper.calendar` has the repo's highest inbound count (41) while `paper/` is the package ADR 0012 decommissioned | §2.4 | misleads every reader; blocks the keeper split | DONE — moved to `alphalens_pipeline.market.calendar`; the module keeps its symbol names |
 | 5 | `alphalens_pipeline/data/` is substantially research-tier (11 modules, 1 649 LOC referenced only by lab/scripts/tests) | §6.1 | ADR 0011's framing is wrong for `data/`, so new code lands on the wrong side | decide the boundary, then move or document |
 | 6 | 12 live-tier modules (1 676 LOC) are referenced only by tests | §6.2 | speculative generality indistinguishable from a kept seam | extend the `UNWIRED_ALLOWED` pattern: a reason per module, or remove |
 | 7 | `_reset_remote_quote_source_for_tests` is a test hook in production code on the money path | §4.1 | small, but it is a live file | fold into the injected deps |

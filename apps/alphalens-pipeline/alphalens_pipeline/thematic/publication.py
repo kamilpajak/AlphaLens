@@ -26,7 +26,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from alphalens_pipeline.feedback.ladder_config import ladder_arrival_session
-from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, session_open_utc
+from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, session_open_utc
 
 logger = logging.getLogger(__name__)
 
