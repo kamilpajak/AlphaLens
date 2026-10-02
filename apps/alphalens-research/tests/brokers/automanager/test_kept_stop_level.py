@@ -277,6 +277,97 @@ class TestTheTrailNeverPatchesAHigherRestingStopDown(unittest.TestCase):
         )
         self.assertIsNone(_maybe_trail(_UIC, _pos(100), plan, legs, view))
 
+    def _trail(
+        self,
+        *,
+        avg_price: float,
+        plan_stop: float,
+        peak: float,
+        last_price: float,
+        resting: float | None,
+        journaled: float | None,
+    ) -> AmendStop | None:
+        plan = PlannedExit(
+            uic=_UIC,
+            entry_crid="crid-1581",
+            side="SELL",
+            stop_price=plan_stop,
+            tp_price=None,
+            conflicting=False,
+            n_plans=1,
+            reaction=_DECLARED_TRAIL,
+        )
+        pos = _pos(100, avg_price=avg_price)
+        legs = (_leg("sl", 100, resting),)
+        view = ProtectionView(
+            long_positions={_UIC: pos},
+            all_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: legs},
+            planned_by_uic={_UIC: plan},
+            oco_unsupported=frozenset(),
+            peak_by_uic={_UIC: peak},
+            last_price_by_uic={_UIC: last_price},
+            trailed_stop_by_uic={} if journaled is None else {_UIC: journaled},
+        )
+        return _maybe_trail(_UIC, pos, plan, legs, view)
+
+    def test_a_journaled_level_of_exactly_zero_is_a_floor_not_an_absence(self) -> None:
+        """The floor list must be filtered on ``is not None``, never on
+        truthiness: ``0.0`` is falsy and is a real level.
+
+        A zero floor is only OBSERVABLE where it can veto, which needs a clamped
+        level within ``_TRAIL_STEP_EPS`` (0.02) of zero -- so the prices here are
+        pennies. avg 0.0100, brief floor 0.0090, peak 0.0120, live 0.0115 put the
+        clamped level at 0.0112, and 0.0112 <= 0.0 + 0.02 refuses. At ordinary
+        prices the same mutation changes nothing, which is why no existing test
+        caught it: measured, a truthiness filter killed 0 of the 3126 tests in
+        ``tests/brokers``."""
+        penny = {
+            "avg_price": 0.01,
+            "plan_stop": 0.009,
+            "peak": 0.012,
+            "last_price": 0.0115,
+            "resting": None,
+        }
+        self.assertIsNone(self._trail(journaled=0.0, **penny))
+        # Existence control: a property can be true and empty. Without the zero
+        # floor these very inputs DO move the stop, so the assertion above is
+        # about the floor and not about an arm that never fires at this scale.
+        moved = self._trail(journaled=None, **penny)
+        self.assertIsInstance(moved, AmendStop)
+        self.assertAlmostEqual(moved.stop_price, 0.0112, places=6)  # type: ignore[union-attr]
+
+    def test_a_non_finite_resting_price_is_not_a_floor(self) -> None:
+        """The resting price enters the ratchet through
+        ``_resting_stop_price``, which drops a non-finite or non-positive one.
+        Read straight off ``leg.resting_price`` instead and an infinite price
+        becomes an infinite floor that vetoes every move for ever.
+
+        Measured: composing from the raw field killed 0 of the 3126 tests in
+        ``tests/brokers``."""
+        moved = self._trail(
+            avg_price=50.0,
+            plan_stop=45.0,
+            peak=59.17,
+            last_price=59.0,
+            resting=float("inf"),
+            journaled=None,
+        )
+        self.assertIsInstance(moved, AmendStop)
+        self.assertAlmostEqual(moved.stop_price, 55.502, places=6)  # type: ignore[union-attr]
+        # Existence control: a FINITE resting price above the proposal still
+        # refuses, so this test is about the filter and not about a dead arm.
+        self.assertIsNone(
+            self._trail(
+                avg_price=50.0,
+                plan_stop=45.0,
+                peak=59.17,
+                last_price=59.0,
+                resting=56.0,
+                journaled=None,
+            )
+        )
+
 
 class TestTheTakeProfitAmendKeepsTheRestingLevel(unittest.TestCase):
     def test_the_tranche_amend_never_lowers_the_stop(self) -> None:

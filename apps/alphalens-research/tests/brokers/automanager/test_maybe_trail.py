@@ -32,6 +32,7 @@ from broker_contract.contract import (
     OrderStatus,
     Position,
 )
+from broker_contract.exit_geometry.registry import resolve_declared_policy
 from broker_contract.trade_intent.schema import ReanchorOnFill, TrailingStop
 
 _UIC = 43070
@@ -401,30 +402,49 @@ class TestMaybeTrailDark(unittest.TestCase):
 
 class TestNonTrailingPolicyNeverTrails(unittest.TestCase):
     """A non-trailing policy has ``trails=False``: ``_maybe_trail`` returns None,
-    and ``_reconcile_long`` routes it to ``_maybe_reanchor`` (byte-identical)."""
+    and ``_reconcile_long`` routes it to ``_maybe_reanchor`` (byte-identical).
+
+    The first two tests here were VACUOUS until 2026-10-02 (#1581). Both built
+    their plan with ``_plan(stop_price=90.0)``, whose default ``reaction`` is
+    ``_DECLARED_TRAIL`` -- a TRAILING declaration -- and neither set
+    ``last_price_by_uic``. So both answered None through the missing-live-price
+    feed veto and never reached the ``trails`` guard their names are about.
+    Measured: deleting that guard killed 0 of the 3126 tests in
+    ``tests/brokers``. Each test now states the declaration it is named for and
+    supplies BOTH the peak and the live price, so the guard is the only thing
+    left that can refuse."""
 
     def test_setup_static_maybe_trail_returns_none(self) -> None:
         pos = _pos()
-        plan = _plan(stop_price=90.0)
+        # NOT a witness for the guard, and that is not fixable here: with the
+        # guard deleted the arm proceeds and ``setup_static`` refuses anyway
+        # (the inert policy returns no target), so this test documents the
+        # routing rather than policing it. The witness is the atr_bracket case
+        # below, which is the one that kills the mutation.
+        plan = _plan(stop_price=90.0, reaction=None)  # -> setup_static, trails=False
         legs = (_stop_leg(),)
         view = _view(
             pos=pos,
             plan=plan,
             legs=legs,
             peak_by_uic={_UIC: 104.0},
+            last_price_by_uic={_UIC: 103.0},
         )
+        self.assertFalse(resolve_declared_policy(plan.reaction).trails)
         self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
 
     def test_atr_bracket_maybe_trail_returns_none(self) -> None:
         pos = _pos()
-        plan = _plan(stop_price=90.0)
+        plan = _plan(stop_price=90.0, reaction=ReanchorOnFill(k_atr=1.5, atr=4.0))
         legs = (_stop_leg(),)
         view = _view(
             pos=pos,
             plan=plan,
             legs=legs,
             peak_by_uic={_UIC: 104.0},
+            last_price_by_uic={_UIC: 103.0},
         )
+        self.assertFalse(resolve_declared_policy(plan.reaction).trails)
         self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
 
     def test_reconcile_long_routes_atr_bracket_to_reanchor(self) -> None:
