@@ -124,10 +124,6 @@ extend-immutable-calls = ["broker_contract.trade_intent.schema.contract_field"]
     "SIM117",   # nested with-statements in tests highlight scope structure
     "PLW1510",  # subprocess.run in tests asserts on returncode explicitly; check= is the test's job
 ]
-"apps/alphalens-pipeline/tests/*" = [
-    "PLR0915", "B011", "B017", "N801", "N802", "F841",
-    "RUF012", "B035", "SIM115", "SIM117", "PLW1510",
-]
 "apps/alphalens-pipeline/alphalens_pipeline/watchdog/lock.py" = [
     "N818",     # WorkerLockBusy is a state signal, not a fatal error — keep without Error suffix
 ]
