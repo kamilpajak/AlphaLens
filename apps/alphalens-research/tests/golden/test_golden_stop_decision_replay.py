@@ -13,12 +13,13 @@ single production line changed, so a delegation that moves an answer is red here
 and nowhere else.
 
 WHAT IT CANNOT SEE, stated rather than left to be discovered. The record holds
-every ``AmendStop`` field and every log message, so it witnesses a changed
-level, a changed amend field, a changed log TEXT and a gained or lost log line.
-It does NOT witness the ORDER of two log lines within one call (no case emits
-two), and it cannot distinguish WHY an answer is ``None`` beyond what the logs
-say -- which is exactly why the trail arm's silent ratchet refusal needed its
-own bucket and its own comment in the table.
+every ``AmendStop`` field and every log record with its LEVEL, so it witnesses a
+changed stop level, a changed amend field, a changed log text, a gained or lost
+log line, and a log demoted out of the operator's journal. It does NOT witness
+the ORDER of two log records within one call (no case emits two), and it cannot
+distinguish WHY an answer is ``None`` beyond what the logs say -- which is
+exactly why the trail arm's silent ratchet refusal needed its own bucket and its
+own comment in the table.
 
 Missing fixture is fail-loud, the convention ``test_golden_score_replay.py``
 follows: a corpus that must be re-recorded says so by name.

@@ -312,7 +312,10 @@
       "reaction": "TrailingStop(arm_trigger_r=0.5, trail_frac=0.6, kind='trailing_stop')"
     },
     "logs": [
-      "trail refused (below brief floor): policy=breakeven_trail proposed=53.0000 prior_stop=49.0000 avg_price=50.0000"
+      {
+        "level": "INFO",
+        "message": "trail refused (below brief floor): policy=breakeven_trail proposed=53.0000 prior_stop=49.0000 avg_price=50.0000"
+      }
     ],
     "name": "trail_clamp_refuses_below_the_brief_floor",
     "why": "CONSTRUCTED by measurement, because the obvious construction does not reach it: raising the brief floor above avg_price makes the POLICY go dark before the clamp is ever called, so the arm answers None with no log. The refusal needs a PULLBACK instead -- peak 55.00, last price 48.00, a 13 per cent giveback -- where the min-distance anchor on the LIVE price caps the level at 47.904, below the 49.00 floor. Proposal 53.00. Reachable on 282 of 720 grid points, so this is not a corner. The arm LOGS here, and the log prints the raw proposal, which no float answer carries"
@@ -671,7 +674,7 @@
     },
     "logs": [],
     "name": "trail_nan_journaled_floor_KNOWN_RESIDUAL",
-    "why": "KNOWN RESIDUAL, issue #1673, NOT a statement of correct behaviour: max(nan, 56.0) is nan and 'clamped <= nan' is False, so the ratchet refuses nothing and the arm patches a stop resting at 56.00 DOWN. Frozen here so the delegation is provably neutral; resolving #1673 turns the test beside this row red on purpose"
+    "why": "KNOWN RESIDUAL, issue #1673, NOT a statement of correct behaviour: max(nan, 56.0) is nan and 'clamped <= nan' is False, so the ratchet refuses nothing and the arm patches a stop resting at 56.00 DOWN. Frozen here so the delegation is provably neutral; resolving #1673 turns the test beside this row red on purpose. ONE MORE THING THE FIX MUST CARRY: measured over eleven mutations of the arms, this row is the ONLY witness that kills a reversed floor composition (max keeps its first argument when the comparison is False, so the order only matters on a NaN input). Whoever resolves #1673 therefore owes the order a new witness, or that mutation goes unobserved"
   },
   {
     "answer": {
@@ -764,7 +767,10 @@
       "reaction": "ReanchorOnFill(k_atr=0.0125, atr=4.0, ceiling_price=None, kind='reanchor_on_fill')"
     },
     "logs": [
-      "reanchor envelope clamped: policy=reanchor_on_fill proposed=49.9500 clamped=49.9000 prior_stop=45.0000"
+      {
+        "level": "INFO",
+        "message": "reanchor envelope clamped: policy=reanchor_on_fill proposed=49.9500 clamped=49.9000 prior_stop=45.0000"
+      }
     ],
     "name": "reanchor_envelope_clamps_the_proposal",
     "why": "CONSTRUCTED: the envelope MOVED the proposal without refusing it (49.95 -> 49.90), so the #1015 triple rides on the AmendStop and the arm logs it. The raw proposal appears in both, and it is the one value a float answer cannot carry"
@@ -798,7 +804,10 @@
       "reaction": "ReanchorOnFill(k_atr=1.5, atr=4.0, ceiling_price=None, kind='reanchor_on_fill')"
     },
     "logs": [
-      "reanchor refused (below brief floor): policy=reanchor_on_fill proposed=44.0000 prior_stop=45.0000 avg_price=50.0000"
+      {
+        "level": "INFO",
+        "message": "reanchor refused (below brief floor): policy=reanchor_on_fill proposed=44.0000 prior_stop=45.0000 avg_price=50.0000"
+      }
     ],
     "name": "reanchor_clamp_refuses_below_the_brief_floor",
     "why": "the envelope refuses outright and the arm logs the raw proposal: at a brief floor of 45.00 the proposal of 44.00 is below it"

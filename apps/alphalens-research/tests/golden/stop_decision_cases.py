@@ -192,12 +192,19 @@ def composed_ratchet_floor(case: Case) -> float | None:
 
 
 class _Collect(logging.Handler):
+    """Collects the LEVEL beside the rendered message. The level is not
+    decoration: this daemon is quiet on a happy tick and logs only alerts and
+    actions, so a refusal demoted from ``info`` to ``debug`` disappears from the
+    operator's journal while every answer stays identical. A corpus that
+    recorded the message alone did not see that mutation at all -- measured,
+    which is why the level is here."""
+
     def __init__(self) -> None:
         super().__init__(level=logging.DEBUG)
-        self.messages: list[str] = []
+        self.messages: list[dict[str, str]] = []
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
+        self.messages.append({"level": record.levelname, "message": record.getMessage()})
 
 
 def run_case(case: Case) -> dict[str, Any]:

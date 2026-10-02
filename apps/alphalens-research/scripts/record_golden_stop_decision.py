@@ -11,6 +11,11 @@ itself.
     cd apps/alphalens-research
     uv run python -m scripts.record_golden_stop_decision
 
+Each case records every ``AmendStop`` field, the composed ratchet floor, and
+every log record with its LEVEL -- the level because this daemon is quiet on a
+happy tick, so a refusal demoted to ``debug`` vanishes from the operator's
+journal while every answer stays identical.
+
 No network, no credentials, no warm cache, nothing under ``~/.alphalens``:
 neither arm writes a file, opens a socket, starts a subprocess or reads an
 environment variable, so the capture is a pure in-process drive of the real
