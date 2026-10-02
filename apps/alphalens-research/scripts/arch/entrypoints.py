@@ -66,8 +66,12 @@ _KNOWN_NON_PYTHON: tuple[str, ...] = (
     "/usr/bin/docker run",
     "/usr/bin/env UID=",
     "/usr/bin/true",
-    "/bin/sh -c",
     "/bin/true",
+    # `/bin/sh -c` is deliberately NOT here. A shell command can run anything,
+    # so listing it would let the gate mask a script this module failed to
+    # resolve — the one failure the gate exists to prevent. A `sh -c` unit must
+    # resolve on its own merits; today one does (it runs replay_bracket_arms.py
+    # three times), and if a future one does not, it is reported.
     # Pure-shell metrics hook: writes a node_exporter textfile, calls no Python.
     # It is still followed as a wrapper above, which is what proves that.
     "%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics",

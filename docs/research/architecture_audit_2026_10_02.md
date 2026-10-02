@@ -293,7 +293,7 @@ The size suggests a tangle. It is not one.
 | Functions with cyclomatic complexity > 15 | **4** |
 | Deepest function | 21 (`_build_managed_exits`, 127 lines) |
 | Functions at complexity 1–5 | 204 of 301 |
-| Module-level mutable state | 2 names, each touched by exactly 1 function (log throttles) |
+| Module-level mutable bindings | 4, of which **2 are genuine state** (`set()` log throttles, one function each); the other two are a `Mapping`-typed lookup table and `__all__` |
 | **Order-placing / amending call sites** | **5, in 5 functions** |
 | Module-level functions | 265 |
 | Classes | 19, of which 14 have no methods (records) |
@@ -550,6 +550,8 @@ the same failure this project recorded in the #1227 power-gate postmortem.
   Storybook doctrine, not analysed.
 - **Cognitive complexity** is McCabe cyclomatic here, not Sonar's cognitive
   metric. The two are not interchangeable; §4.2 compares like with like by
-  avoiding Sonar's number rather than mixing them.
+  avoiding Sonar's number rather than mixing them. Entering a context manager
+  is not counted as a decision, matching standard implementations; the figures
+  in §4.1 are identical either way (`control_loop.py` has 4 `with` items).
 - **The context map is unconfirmed.** §3 says what the evidence supports; the
   owner naming each context is the step that completes it.

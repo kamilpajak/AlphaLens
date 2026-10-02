@@ -45,7 +45,7 @@ class CyclomaticComplexityTest(unittest.TestCase):
         """`a and b and c` is two decisions, not one."""
         self.assertEqual(_m("def f(a, b, c):\n    return a and b and c\n")["f"].cyclomatic, 3)
 
-    def test_loops_except_handlers_and_with_items_count(self) -> None:
+    def test_loops_and_except_handlers_count_one_each(self) -> None:
         got = _m(
             """
             def f(xs):
@@ -63,6 +63,55 @@ class CyclomaticComplexityTest(unittest.TestCase):
         )["f"]
         # 1 base + for + 2 handlers + while
         self.assertEqual(got.cyclomatic, 5)
+
+    def test_a_with_statement_is_not_a_decision(self) -> None:
+        """Standard McCabe does not treat entering a context manager as a
+        branch. Counting it inflated every figure against the definition the
+        report claims to use."""
+        got = _m(
+            """
+            def f(path):
+                with open(path) as fh, open(path) as gh:
+                    return fh, gh
+            """
+        )["f"]
+        self.assertEqual(got.cyclomatic, 1)
+
+    def test_a_decision_in_a_nested_class_body_belongs_to_the_function(self) -> None:
+        """A class body executes when the enclosing function runs, so its
+        branches are the function's. Its methods are measured separately."""
+        got = _m(
+            """
+            def outer(flag):
+                class Inner:
+                    if flag:
+                        value = 1
+
+                    def method(self, a):
+                        if a:
+                            return 1
+                        return 2
+
+                return Inner
+            """
+        )
+        self.assertEqual(got["outer"].cyclomatic, 2, "base + the class body's if")
+        self.assertEqual(got["outer.Inner.method"].cyclomatic, 2, "measured in its own right")
+
+    def test_a_comprehension_if_is_counted_like_a_plain_if(self) -> None:
+        """An external review called this a double count. It is not: the
+        comprehension's own loop is the extra point, and the `if` plus its
+        boolean operator are counted exactly as in a plain statement."""
+        plain = _m("def f(a, b):\n    if a and b:\n        return 1\n    return 2\n")["f"]
+        comp = _m("def f(xs, a, b):\n    return [x for x in xs if a and b]\n")["f"]
+        bare = _m("def f(xs):\n    return [x for x in xs]\n")["f"]
+        self.assertEqual(plain.cyclomatic, 3, "base + if + boolop")
+        self.assertEqual(bare.cyclomatic, 2, "base + the comprehension's loop")
+        self.assertEqual(
+            comp.cyclomatic,
+            4,
+            "base + loop + if + boolop: one more than the statement, and that one is the loop",
+        )
 
     def test_an_else_does_not_add_a_decision(self) -> None:
         """Positive control: `if/else` is one decision. A counter that walked

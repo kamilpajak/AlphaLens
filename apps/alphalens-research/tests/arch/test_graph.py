@@ -323,6 +323,68 @@ class CycleTest(unittest.TestCase):
                 "the control: counting type-only edges DOES manufacture this cycle",
             )
 
+    def test_a_lazy_edge_does_not_make_an_import_time_cycle(self) -> None:
+        """The audit's most load-bearing claim rests on this filter.
+
+        The report states that this repository has FOUR runtime cycles and
+        ZERO at import time — every cycle exists only through a function-scope
+        import. That claim is exactly `cycles(include_function_scope=False)`,
+        and a mutation pass found the filter untested: inverting it changed no
+        test. This is that test.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _tree(
+                root,
+                {
+                    "pkg/__init__.py": "",
+                    "pkg/a.py": "from pkg import b\n",
+                    "pkg/b.py": """
+                        def late():
+                            from pkg import a
+
+                            return a
+                    """,
+                },
+            )
+            g = arch.build_graph(root, ["pkg"])
+            self.assertEqual(
+                len(g.cycles()),
+                1,
+                "the runtime view sees the cycle, because a lazy import is still a dependency",
+            )
+            self.assertEqual(
+                g.cycles(include_function_scope=False),
+                [],
+                "at import time there is no cycle: the lazy import is what breaks it",
+            )
+
+    def test_the_top_level_view_drops_only_the_lazy_edges(self) -> None:
+        """Control for the filter itself, independent of cycles."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _tree(
+                root,
+                {
+                    "pkg/__init__.py": "",
+                    "pkg/eager.py": "",
+                    "pkg/lazy.py": "",
+                    "pkg/importer.py": """
+                        from pkg import eager
+
+                        def later():
+                            from pkg import lazy
+
+                            return lazy, eager
+                    """,
+                },
+            )
+            g = arch.build_graph(root, ["pkg"])
+            both = {e.imported for e in g.select()}
+            top = {e.imported for e in g.select(include_function_scope=False)}
+            self.assertEqual(both, {"pkg.eager", "pkg.lazy"})
+            self.assertEqual(top, {"pkg.eager"})
+
     def test_parent_package_edges_are_off_by_default(self) -> None:
         """A package whose __init__ re-exports a submodule is not a cycle, and
         turning the implicit parent edge on is what makes it look like one. The
@@ -457,15 +519,24 @@ class DiscoveryTest(unittest.TestCase):
         """The harness lives under a production root. Counting its own modules
         made the module count move three times while it was being written, so
         the exclusion is unconditional and pinned here."""
+        root = arch.repo_root()
         for include_tests in (False, True):
-            modules = set(
-                arch.discover_modules(
-                    arch.repo_root(), arch.PRODUCTION_ROOTS, include_tests=include_tests
-                ).values()
+            discovered = arch.discover_modules(
+                root, arch.PRODUCTION_ROOTS, include_tests=include_tests
             )
-            self.assertNotIn("graph", modules)
-            self.assertNotIn("entrypoints", modules)
-            self.assertNotIn("hotspots", modules)
+            # Asserted on PATHS, not module names: the harness's modules are
+            # named `arch.graph`, not `graph`, so asserting the short name
+            # passed whether or not the exclusion was in place. A mutation
+            # pass caught that — the assertion was vacuous.
+            inside = sorted(
+                path.relative_to(root).as_posix()
+                for path in discovered
+                if path.relative_to(root).as_posix().startswith(arch.SELF_PATH)
+            )
+            self.assertEqual(
+                inside, [], f"the harness measured itself (include_tests={include_tests})"
+            )
+            self.assertNotIn("arch.graph", set(discovered.values()))
 
     def test_an_unrelated_directory_named_arch_is_still_measured(self) -> None:
         """Positive control: the exclusion is by exact path, not by the name

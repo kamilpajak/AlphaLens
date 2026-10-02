@@ -108,6 +108,39 @@ class SystemdParsingTest(unittest.TestCase):
         self.assertFalse(ep.is_known_non_python(command.command))
         self.assertEqual(len(ep.unresolved(root)), 1)
 
+    def test_a_shell_command_must_resolve_on_its_own_merits(self) -> None:
+        """`/bin/sh -c` is not a named non-Python shape.
+
+        A shell command can run anything, so treating it as plumbing would let
+        the gate MASK a script this module failed to resolve — the one failure
+        the gate exists to prevent. One real unit runs a research script this
+        way, so the shape must be resolved, never excused.
+        """
+        root = self._unit(
+            """
+            [Service]
+            ExecStart=/bin/sh -c 'exec /opt/venv/bin/python /opt/elsewhere/thing.py'
+            """
+        )
+        command = ep.exec_commands(root)[0]
+        self.assertFalse(
+            ep.is_known_non_python(command.command),
+            "a shell command must not be excused by a prefix match",
+        )
+        self.assertEqual(len(ep.unresolved(root)), 1)
+
+    def test_a_shell_command_naming_a_real_script_resolves(self) -> None:
+        root = self._unit(
+            """
+            [Service]
+            ExecStart=/bin/sh -c 'PY=python; S=apps/alphalens-research/scripts/thing.py; "$PY" "$S"'
+            """
+        )
+        (root / "apps/alphalens-research/scripts").mkdir(parents=True)
+        (root / "apps/alphalens-research/scripts/thing.py").write_text("", encoding="utf-8")
+        self.assertEqual([e.module for e in ep.resolve(ep.exec_commands(root)[0], root)], ["thing"])
+        self.assertEqual(ep.unresolved(root), [])
+
     def test_a_python_script_that_does_not_exist_is_unresolved(self) -> None:
         """A unit naming a deleted script must be loud. It means the deployment
         and the tree disagree."""

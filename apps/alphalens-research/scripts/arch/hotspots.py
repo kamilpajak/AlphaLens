@@ -96,14 +96,24 @@ def _own_body(node: _FunctionNode) -> Iterable[ast.AST]:
 
 def _descend(node: ast.AST) -> Iterable[ast.AST]:
     yield node
-    if isinstance(node, _FunctionNode | ast.ClassDef):
-        return
+    if isinstance(node, _FunctionNode):
+        return  # a nested function is measured in its own right
+    # A nested CLASS is descended into: its body executes when the enclosing
+    # function runs, so its decisions belong to that function. Its methods are
+    # function nodes and so stop the descent above, which keeps them from being
+    # counted twice. The production corpus has no instance of this today; the
+    # metric is defined this way so it stays right when one appears.
     for child in ast.iter_child_nodes(node):
         yield from _descend(child)
 
 
-#: Each of these contributes exactly one decision point. An ``else`` is not
-#: among them: ``if/else`` is one decision, not two.
+#: Each of these contributes exactly one decision point. Two deliberate
+#: absences:
+#:
+#: * ``else`` — ``if/else`` is one decision, not two.
+#: * ``with`` (``ast.withitem``) — entering a context manager is not a branch,
+#:   and standard McCabe implementations do not count it. Counting it inflated
+#:   every figure slightly against the definition the report claims to use.
 _ONE_DECISION = (
     ast.If,
     ast.IfExp,
@@ -113,7 +123,6 @@ _ONE_DECISION = (
     ast.ExceptHandler,
     ast.Assert,
     ast.match_case,
-    ast.withitem,
 )
 
 
