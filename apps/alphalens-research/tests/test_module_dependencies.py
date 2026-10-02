@@ -882,6 +882,47 @@ class TestModuleDependencies(unittest.TestCase):
             "rule would not catch the synthetic violation",
         )
 
+    def test_research_must_not_import_the_cli_positive_control(self):
+        """The lab -> CLI rule (#1675, the Research-lab/composition-root context
+        cycle) cannot rot silently.
+
+        The import it replaced reached for a PRIVATE name, ``_SCRIPTS``, so the
+        synthetic violation uses that shape, and hides it in a function body —
+        the rule carries no ``top_level_only``, because a lazy import into the
+        composition root is just as wrong as a top-level one. The CLI may read
+        the lab lazily; the lab may not read the CLI at all.
+        """
+        import tempfile
+
+        synthetic = (
+            "def sneaky():\n"
+            "    from alphalens_cli.commands.audit import _SCRIPTS\n"
+            "    return _SCRIPTS\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_research_cli_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+
+        self.assertIn("alphalens_cli.commands.audit", modules)
+
+        cli_rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "alphalens_research"
+            and rule.get("forbidden_prefix") == "alphalens_cli"
+        ]
+        self.assertEqual(len(cli_rules), 1, "the research -> cli rule must exist exactly once")
+        self.assertNotIn(
+            "top_level_only",
+            cli_rules[0],
+            "the research -> cli rule must catch function-scope (lazy) imports too",
+        )
+        self.assertTrue(
+            any(m.startswith(cli_rules[0]["forbidden_prefix"]) for m in modules),
+            "rule would not catch the synthetic violation",
+        )
+
     def test_broker_contract_leaf_positive_control(self):
         """The broker_contract leaf rules cannot rot silently.
 
