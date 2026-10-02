@@ -20,11 +20,13 @@ import datetime as dt
 import importlib.util
 import io
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+import numpy as np
 import pandas as pd
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "ml" / "2026_10_jev_discovery_burnt.py"
@@ -239,16 +241,11 @@ class TestATotalJoinMissIsRefused(unittest.TestCase):
     worthless. The first run of this script produced exactly that shape.
     """
 
-    def test_the_message_says_it_is_a_key_bug_and_names_the_side(self):
-        source = _SCRIPT.read_text()
-        self.assertIn("join-key bug", source)
-        self.assertIn("no_candidate_feature", source)
-        self.assertIn("no_article_feature", source)
-
-    def test_the_guard_compares_the_miss_count_against_the_row_count(self):
-        # A guard that fired on "some misses" would refuse a legitimately sparse
-        # join; it must fire only when EVERY row missed.
-        self.assertIn("missed == len(rows)", _SCRIPT.read_text())
+    # Both halves of this guard are now driven through `build_panel` itself, in
+    # `TestThePanelIsBuiltFromFourStores`: a store holding only another version raises
+    # and names the side, and a store where 10 of 120 rows miss does NOT raise. The
+    # source-text assertions that used to stand here were satisfied by a comment and
+    # died only alongside those two, so they carried no power of their own.
 
 
 def _bdates(count: int, *, step: int = 10, start: str = "2025-07-01") -> list[dt.date]:
@@ -685,3 +682,108 @@ class TestACandidateItCouldNotEstimate(_StoreCase):
             one = disc.joint_fit(std, [n for _, n in disc.CONTROLS] + [name])
             self.assertIsNotNone(one, f"{name} fitted alone where the joint fit worked")
             self.assertGreaterEqual(one[0]["n"], joint[0]["n"])
+
+
+class TestTheReportCarriesTheNumbersItComputed(_StoreCase):
+    """The printed report must be checkable, not merely well-labelled.
+
+    A mutation campaign over the script found four survivors, every one of them a change
+    to a number the report publishes: the reported coefficient's SIGN, the MDE
+    multiplier, the ddof of the label's standard deviation, and dropping both controls
+    from the per-candidate fit. All four left every section heading, every candidate
+    name and every disclaimer exactly in place, so the prose assertions in
+    `TestTheWholePass` stayed green. Those assertions are smoke detectors; these are the
+    ones that read the dial.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.use(self.store())
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            self.code = disc.run()
+        self.text = buffer.getvalue()
+        panel, _ = disc.build_panel()
+        for src, name in disc.CONTROLS + disc.CANDIDATES:
+            panel[name] = pd.to_numeric(panel.get(src), errors="coerce")
+        self.names = [n for _, n in disc.CONTROLS + disc.CANDIDATES]
+        self.std = disc.standardise(panel, self.names)
+        self.sd_label = float(pd.to_numeric(panel[disc.LABEL], errors="coerce").std(ddof=0))
+
+    def _line(self, pattern: str) -> re.Match:
+        found = re.search(pattern, self.text)
+        self.assertIsNotNone(found, f"no line matching {pattern!r} in the report")
+        return found
+
+    def test_the_label_spread_is_the_population_one_and_not_the_sample_one(self):
+        # ddof=1 on this panel is a different number, and every standardised beta is
+        # divided by it, so the whole std column moves with the choice.
+        printed = float(self._line(rf"sd\({disc.LABEL}\) on this panel: ([\d.]+)").group(1))
+        self.assertAlmostEqual(printed, round(self.sd_label, 4), places=4)
+
+    def _ols(self, regressors) -> dict[str, float]:
+        """Plain least squares in the test, NOT through `joint_fit`.
+
+        Asking `joint_fit` what the answer should be cannot catch a mutation inside
+        `joint_fit`: both sides move together. The first version of this test did
+        exactly that and a flipped coefficient sign walked through it.
+        """
+        cols = list(regressors)
+        sub = self.std[self.std[[*cols, disc.LABEL]].notna().all(axis=1)]
+        y = sub[disc.LABEL].astype(float).to_numpy()
+        design = np.column_stack(
+            [np.ones(len(sub))] + [sub[c].astype(float).to_numpy() for c in cols]
+        )
+        beta = np.linalg.lstsq(design, y, rcond=None)[0]
+        return dict(zip(cols, beta[1:], strict=True))
+
+    def test_the_joint_coefficients_printed_are_the_ones_least_squares_gives(self):
+        expected = self._ols(self.names)
+        for name, value in expected.items():
+            printed = float(self._line(rf"{name}\s+beta=([-+][\d.]+) ").group(1))
+            self.assertAlmostEqual(printed, value, places=4, msg=f"{name} beta")
+
+    def test_the_per_candidate_coefficients_printed_are_the_ones_least_squares_gives(self):
+        controls = [n for _, n in disc.CONTROLS]
+        section = self.text.split("PER CANDIDATE")[1]
+        for _, name in disc.CANDIDATES:
+            expected = self._ols([*controls, name])[name]
+            printed = float(re.search(rf"{name}\s+beta=([-+][\d.]+) ", section).group(1))
+            self.assertAlmostEqual(printed, expected, places=4, msg=name)
+
+    def test_the_standardised_column_is_the_coefficient_over_the_label_spread(self):
+        for name, value in self._ols(self.names).items():
+            printed = float(self._line(rf"{name}\s+beta=.*std=([-+][\d.]+)").group(1))
+            self.assertAlmostEqual(printed, value / self.sd_label, places=3)
+
+    def test_each_candidate_is_fitted_WITH_both_controls_and_not_alone(self):
+        # The per-candidate section exists to hold ATR and MA50 fixed while one
+        # candidate moves. Fitting the candidate alone gives a different number and the
+        # same printed line, so only the number can tell the two apart.
+        controls = [n for _, n in disc.CONTROLS]
+        for _, name in disc.CANDIDATES:
+            with_controls = self._ols([*controls, name])[name]
+            alone = self._ols([name])[name]
+            self.assertNotAlmostEqual(
+                with_controls, alone, places=6, msg=f"{name} fixture too weak to tell them apart"
+            )
+            section = self.text.split("PER CANDIDATE")[1]
+            printed = float(re.search(rf"{name}\s+beta=([-+][\d.]+) ", section).group(1))
+            self.assertAlmostEqual(printed, with_controls, places=4, msg=name)
+
+    def test_the_mde_printed_is_the_two_sided_bound_and_not_some_other_multiple(self):
+        controls = [n for _, n in disc.CONTROLS]
+        table = self.text.split("THE DELIVERABLE")[1]
+        for _, name in disc.CANDIDATES:
+            row = next(r for r in disc.joint_fit(self.std, [*controls, name]) if r["name"] == name)
+            expected = disc._MDE_Z * row["se"] / self.sd_label
+            printed = float(re.search(rf"{name}\s+[\d.]+\s+([\d.]+)\s+(?:yes|NO)", table).group(1))
+            self.assertAlmostEqual(printed, expected, places=3, msg=name)
+
+    def test_the_powered_verdict_follows_the_mde_against_the_frozen_floor(self):
+        table = self.text.split("THE DELIVERABLE")[1]
+        for _, name in disc.CANDIDATES:
+            mde, verdict = re.search(rf"{name}\s+[\d.]+\s+([\d.]+)\s+(yes|NO)", table).groups()
+            self.assertEqual(
+                verdict, "yes" if float(mde) <= disc.ACTIONABLE_DELTA else "NO", msg=name
+            )
