@@ -316,7 +316,7 @@ class TestTheTrailNeverPatchesAHigherRestingStopDown(unittest.TestCase):
         truthiness: ``0.0`` is falsy and is a real level.
 
         A zero floor is only OBSERVABLE where it can veto, which needs a clamped
-        level within ``_TRAIL_STEP_EPS`` (0.02) of zero -- so the prices here are
+        level within ``TRAIL_STEP_EPS`` (0.02) of zero -- so the prices here are
         pennies. avg 0.0100, brief floor 0.0090, peak 0.0120, live 0.0115 put the
         clamped level at 0.0112, and 0.0112 <= 0.0 + 0.02 refuses. At ordinary
         prices the same mutation changes nothing, which is why no existing test

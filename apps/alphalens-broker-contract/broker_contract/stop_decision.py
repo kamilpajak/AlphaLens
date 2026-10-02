@@ -1,12 +1,12 @@
 """The post-fill stop decision: position state, declared policy and market view
 in; a new stop level or ``None`` out (intent-replay design, section 3.2).
 
-A COPY of the daemon's two stop-move arms, ``position_manager._maybe_trail``
-and ``position_manager._maybe_reanchor``, guard for guard and in the daemon's
-order. Copy, not extraction: until step 2 (#1581) the daemon keeps its own,
-and ``tests/property/test_stop_decision_parity.py`` holds the two together by
-running both on generated views. Every guard below therefore mirrors a line of
-the daemon on purpose, including the ones a reader would want to harden:
+THE implementation of those two arms, not a copy of them. The daemon's
+``position_manager._maybe_trail`` and ``_maybe_reanchor`` call in here for the
+level (#1581, step 2); until 2026-10-02 they held their own copy and a parity
+property held the two together. Every guard below still mirrors a line of the
+daemon on purpose, including the ones a reader would want to harden, because
+the daemon's recorded answers are what this module has to keep reproducing:
 
 * the ratchet floor is compared raw, without ``isfinite`` (a NaN floor lets a
   trail through, an infinite one vetoes), because the daemon compares it raw;
@@ -18,7 +18,10 @@ the daemon on purpose, including the ones a reader would want to harden:
   policy. That is the daemon's rule, and the reason a replay must refuse such a
   document before it reaches this function (design section 4.3.1).
 
-Hardening any of these is step 2's job, once one implementation remains.
+Hardening any of these is still open work, and the bar is now higher than a
+code reading: the daemon's answers are frozen in a golden corpus
+(``tests/golden/fixtures/stop_decision/``), so a change here that moves one is
+red by construction. That is the point of the corpus, not an obstacle to it.
 
 The view carries nine primitives and nothing broker-shaped. Three of them are
 the RESULTS of predicates the daemon evaluates over things a replay does not
@@ -30,9 +33,11 @@ bool; a replay knows the answer from its own trace). A replay passes the
 values that mean "no broker obstacle" for the first two and reports the
 optimism as a named divergence; it never invents order legs.
 
-The answer is a PRICE. Never an action, never a journal write, never the
-envelope telemetry the daemon attaches to its ``AmendStop`` when the clamp
-moved the proposal; those stay with the executor.
+The answer is PRICES: the level to place, plus the policy's raw proposal and
+the envelope's output, which the caller needs for its own log lines and for the
+journal field it writes when the envelope moved the target (#1015). Never an
+action and never a journal write -- those stay with the daemon, which is why
+this module reports the numbers rather than the consequences.
 
 Dependencies: stdlib and this package only.
 """
@@ -50,8 +55,8 @@ from broker_contract.trade_intent.schema import ReactionPrimitive, ReanchorOnFil
 
 # The coarse price step a new trailing level must clear ABOVE the last confirmed
 # trailed level before the stop moves again. A parameter of the decision, not a
-# fact of any deployment: the daemon carries the same value as
-# ``position_manager._TRAIL_STEP_EPS`` and the parity suite pins the two equal.
+# fact of any deployment. The daemon carried its own copy, ``_TRAIL_STEP_EPS``,
+# held equal by the parity suite; since #1581 this is the only one.
 # It bounds re-amend chatter on a sub-step peak wiggle; the never-below-floor
 # clamp is the capital guard.
 TRAIL_STEP_EPS: Final = 0.02
@@ -98,6 +103,40 @@ class StopDecisionView:
     already_reanchored: bool
 
 
+@dataclass(frozen=True, slots=True)
+class StopDecision:
+    """One arm's answer, with the two intermediate levels its CALLER needs.
+
+    ``level`` is what the arm decided: the price to move the stop to, or
+    ``None``. The other two exist because the live daemon does more with a
+    decision than place it, and none of it is recoverable from the price:
+
+    * ``proposed`` is the policy's raw target, before the never-below-brief-floor
+      envelope. The daemon prints it in both refusal log lines and carries it to
+      the journal as ``envelope_proposed`` when the envelope moved the target
+      (#1015). Recomputing it beside the decision is bit-exact but says nothing
+      about WHICH guard refused.
+    * ``clamped`` is the envelope's output. It is what separates the two refusals
+      the daemon reports differently: a CLAMP refusal (``clamped is None`` with a
+      ``proposed``) is logged, and a RATCHET refusal (``clamped`` survives,
+      ``level`` does not) is SILENT. Measured on the trail arm, 394 of 458
+      post-proposal ``None`` answers are ratchet refusals, so a caller that
+      could not tell them apart would log a false line 86 per cent of the time.
+
+    There is deliberately no ``policy_name``: every caller resolves the policy
+    itself, because it needs ``trails`` or ``requires_amend_stop`` for its own
+    guards, and a second source for one fact is a drift waiting to happen.
+    """
+
+    level: float | None
+    proposed: float | None
+    clamped: float | None
+
+
+# Nothing was proposed: a guard vetoed, or the policy is dark before activation.
+_NO_DECISION: Final = StopDecision(level=None, proposed=None, clamped=None)
+
+
 def _finite_positive(value: float | None) -> TypeIs[float]:
     """A usable price, peak or ATR: present, finite, strictly positive. ``None``,
     NaN, either infinity, zero (``-0.0`` included) and the SIM ``<= 0`` sentinel
@@ -112,6 +151,27 @@ def _declared_atr(reaction: ReactionPrimitive | None) -> float | None:
     return reaction.atr if isinstance(reaction, ReanchorOnFill) else None
 
 
+def decide_trail_detail(view: StopDecisionView) -> StopDecision:
+    """The TRAIL arm's decision with its levels: the daemon's ``_maybe_trail``,
+    guard for guard, INCLUDING the ``policy.trails`` guard. That guard is inside
+    this branch and not only in ``decide_stop``'s routing, because this function
+    is called directly by an arm whose callers do not all route first."""
+    return _trail(view, resolve_declared_policy(view.reaction))
+
+
+def decide_reanchor_detail(view: StopDecisionView) -> StopDecision:
+    """The RE-ANCHOR arm's decision with its levels: the daemon's
+    ``_maybe_reanchor``, guard for guard.
+
+    Separate from ``decide_trail_detail`` rather than one function routed on
+    ``policy.trails``, because ``breakeven_trail`` carries ``trails`` AND
+    ``requires_amend_stop``: a trailing declaration reaching the re-anchor arm
+    passes its guard, and a routed entry point would run the TRAIL branch where
+    the daemon runs this one. The daemon answers ``None`` there, because the
+    policy refuses without a peak."""
+    return _reanchor(view, resolve_declared_policy(view.reaction))
+
+
 def decide_stop(view: StopDecisionView) -> float | None:
     """The level the daemon's protection pass would move the stop to on this
     view, or ``None`` when no guard, the policy, the envelope or the ratchet lets
@@ -119,37 +179,43 @@ def decide_stop(view: StopDecisionView) -> float | None:
     ``_reconcile_long`` routes between its two arms."""
     policy = resolve_declared_policy(view.reaction)
     if policy.trails:
-        return _trail(view, policy)
-    return _reanchor(view, policy)
+        return _trail(view, policy).level
+    return _reanchor(view, policy).level
 
 
-def _trail(view: StopDecisionView, policy: ExitPolicy) -> float | None:
+def _trail(view: StopDecisionView, policy: ExitPolicy) -> StopDecision:
     """Copy of ``_maybe_trail``: the stop moves UP only, to the policy's target,
     clamped never below the brief floor with the min-distance envelope anchored
     on the LIVE price (so the stop can sit above the entry and lock profit),
-    then ratcheted against the trail history on the CLAMPED level. The daemon's
-    first guard, ``policy.trails``, is the routing in ``decide_stop``."""
+    then ratcheted against the trail history on the CLAMPED level.
+
+    The ``policy.trails`` guard is HERE as well as in ``decide_stop``'s routing.
+    The routing alone was enough while this branch had no public entry point; it
+    is not enough now that ``decide_trail_detail`` exists, because the arm that
+    calls it is itself called directly by tests that pass any declaration."""
+    if not policy.trails:
+        return _NO_DECISION
     avg_price = view.avg_price
     if not _finite_positive(avg_price):
-        return None
+        return _NO_DECISION
     # Dead on this arm (no trailing declaration carries an ATR); kept so the
     # arm reads line for line like the daemon's.
     atr = _declared_atr(view.reaction)
     if not view.has_sole_standalone_stop:
-        return None
+        return _NO_DECISION
     if view.amend_in_backoff:
-        return None
+        return _NO_DECISION
     peak = view.peak
     if not _finite_positive(peak):
-        return None  # feed veto / no peak yet
+        return _NO_DECISION  # feed veto / no peak yet
     last_price = view.last_price
     if not _finite_positive(last_price):
-        return None  # feed veto / no live price yet
+        return _NO_DECISION  # feed veto / no live price yet
     proposed = policy.decide_reanchor(
         avg_price, atr, peak=peak, last_price=last_price, plan_stop=view.plan_stop
     )
     if proposed is None:
-        return None  # dark before activation, or a degenerate the policy refuses
+        return _NO_DECISION  # dark before activation, or a degenerate the policy refuses
     clamped = clamp_reanchor_target(
         view.plan_stop,
         proposed,
@@ -157,39 +223,55 @@ def _trail(view: StopDecisionView, policy: ExitPolicy) -> float | None:
         min_distance_frac=policy.min_stop_distance_frac,
     )
     if clamped is None:
-        return None  # never-below-brief-floor, or a degenerate input
-    # RATCHET on the clamped level, compared raw like the daemon does.
+        # never-below-brief-floor, or a degenerate input. The caller LOGS this
+        # one, and the proposal is what it prints.
+        return StopDecision(level=None, proposed=proposed, clamped=None)
+    # RATCHET on the clamped level, compared raw like the daemon does. The
+    # caller stays SILENT here, which is why ``clamped`` survives into the
+    # record: it is the only thing separating this refusal from the one above.
     floor = view.ratchet_floor
     if floor is not None and clamped <= floor + TRAIL_STEP_EPS:
-        return None
-    return clamped
+        return StopDecision(level=None, proposed=proposed, clamped=clamped)
+    return StopDecision(level=clamped, proposed=proposed, clamped=clamped)
 
 
-def _reanchor(view: StopDecisionView, policy: ExitPolicy) -> float | None:
+def _reanchor(view: StopDecisionView, policy: ExitPolicy) -> StopDecision:
     """Copy of ``_maybe_reanchor``: once per fill, the stop is moved to the
     policy's target off the realized average fill, clamped never below the
-    brief floor with the envelope anchored on the AVERAGE fill."""
+    brief floor with the envelope anchored on the AVERAGE fill.
+
+    This arm has NO ratchet, so ``level`` and ``clamped`` never disagree. Both
+    are reported anyway, so one record shape serves both arms and the caller's
+    envelope condition reads the same on either."""
     if not policy.requires_amend_stop:
-        return None  # nothing declared -> the inert policy -> the stop never moves
+        return _NO_DECISION  # nothing declared -> the inert policy -> the stop never moves
     avg_price = view.avg_price
     if not _finite_positive(avg_price):
-        return None
+        return _NO_DECISION
     atr = _declared_atr(view.reaction)
     if not view.has_sole_standalone_stop:
-        return None
+        return _NO_DECISION
     if view.amend_in_backoff:
-        return None
+        return _NO_DECISION
     if view.already_reanchored:
-        return None  # the idempotence latch: one confirmed re-anchor per fill
+        return _NO_DECISION  # the idempotence latch: one confirmed re-anchor per fill
     proposed = policy.decide_reanchor(avg_price, atr)
     if proposed is None:
-        return None  # setup_static inert, or a degenerate the policy refuses
-    return clamp_reanchor_target(
+        return _NO_DECISION  # setup_static inert, or a degenerate the policy refuses
+    clamped = clamp_reanchor_target(
         view.plan_stop,
         proposed,
         anchor_price=avg_price,
         min_distance_frac=policy.min_stop_distance_frac,
     )
+    return StopDecision(level=clamped, proposed=proposed, clamped=clamped)
 
 
-__all__ = ["TRAIL_STEP_EPS", "StopDecisionView", "decide_stop"]
+__all__ = [
+    "TRAIL_STEP_EPS",
+    "StopDecision",
+    "StopDecisionView",
+    "decide_reanchor_detail",
+    "decide_stop",
+    "decide_trail_detail",
+]

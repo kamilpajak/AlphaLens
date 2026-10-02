@@ -59,9 +59,9 @@ DECLARED_REANCHOR_TIGHT = ReanchorOnFill(k_atr=0.0125, atr=4.0, ceiling_price=No
 
 
 # ---------------------------------------------------------------------------
-# Daemon-side factories. Deliberately SELF-CONTAINED: the richest existing set
-# lives in tests/property/test_stop_decision_parity.py, which is deleted in the
-# PR that wires the daemon to the leaf, so importing from it would make this
+# Daemon-side factories, deliberately SELF-CONTAINED. The richest set used to
+# live in tests/property/test_stop_decision_parity.py, which the PR that wired
+# the daemon to the leaf deleted -- importing from it would have made this
 # corpus die with it.
 # ---------------------------------------------------------------------------
 

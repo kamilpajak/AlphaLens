@@ -49,11 +49,13 @@ from broker_contract.contract import (
     OrderStatus,
     Position,
 )
-from broker_contract.exit_geometry import (
-    clamp_reanchor_target,
-)
 from broker_contract.exit_geometry.registry import resolve_declared_policy
-from broker_contract.trade_intent.schema import ReactionPrimitive, ReanchorOnFill
+from broker_contract.stop_decision import (
+    StopDecisionView,
+    decide_reanchor_detail,
+    decide_trail_detail,
+)
+from broker_contract.trade_intent.schema import ReactionPrimitive
 
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
@@ -414,14 +416,6 @@ def _amend_enabled() -> bool:
 # genuine drift worth re-firing over. Same order of magnitude as _QTY_EPS.
 _REANCHOR_AVG_PRICE_EPS = 1e-6
 
-# Task 2 trailing-stop ratchet step [in_sample]: the coarse price increment a new
-# trailing target must clear ABOVE the last live trailed level before ``_maybe_trail``
-# re-fires. Sized well above tick noise so a resting stop is not re-PATCHed every
-# tick for a sub-cent peak wiggle (each amend is a request-id + a broker round-trip);
-# it bounds trail chatter, NOT correctness (the never-below-brief-floor clamp is the
-# capital guard). Deliberately much coarser than _REANCHOR_AVG_PRICE_EPS.
-_TRAIL_STEP_EPS = 0.02
-
 
 @dataclass(frozen=True)
 class ProtectionView:
@@ -473,7 +467,7 @@ class ProtectionView:
     # source-compatible. ``trailed_stop_by_uic`` is the never-DOWN ratchet: uic ->
     # the level the stop was last CONFIRMED trailed to (folded from the ``trailed``
     # journal marker, latest-by-ts), the live-history floor a new proposal must
-    # clear by ``_TRAIL_STEP_EPS``. Default empty = no prior trail on record.
+    # clear by ``stop_decision.TRAIL_STEP_EPS``. Default empty = no prior trail.
     # Like ``reanchored_by_uic`` above, the fold is JOURNAL-lifetime, not
     # position-lifetime. It is NOT unbounded, though:
     # ``_fold_trailed_since_latest_plan`` resets on every new-generation
@@ -740,19 +734,6 @@ def reconcile_protection(view: ProtectionView) -> list[Action]:
     return actions
 
 
-def _declared_atr(reaction: ReactionPrimitive | None) -> float | None:
-    """The ATR the DOCUMENT declared, or ``None`` when it declared none.
-
-    Only ``ReanchorOnFill`` carries one. A trailing declaration does not, and
-    that is the point: ``breakeven_trail``'s risk unit is ``avg_price -
-    plan_stop``, so it never reads an ATR — yet until #1236 the caller vetoed it
-    for a missing one, which is why a pick armed without a geometry stamp could
-    not trail whatever policy was active. Whether an absent ATR is fatal is now
-    the POLICY's answer (``policy._usable_atr``), not this caller's.
-    """
-    return reaction.atr if isinstance(reaction, ReanchorOnFill) else None
-
-
 def _maybe_reanchor(
     uic: int,
     pos: Position,
@@ -799,30 +780,47 @@ def _maybe_reanchor(
     the stop below the floor (a deep gap-down fill) the arm returns ``None`` and
     the resting stop stays put. Returns ``None`` (never a bad stop) whenever the
     policy or the envelope refuses (non-finite / ``<= 0`` / below-floor)."""
+    # #1581: the DECISION belongs to the contract now
+    # (``broker_contract.stop_decision``), which held a guard-for-guard copy of
+    # it. This arm no longer re-checks what the contract checks; it PROJECTS the
+    # position into the view and reports the answer. Two things stay here
+    # because this arm needs their values rather than their verdicts: the
+    # resolved policy, for ``policy.name`` in the log lines and the journal
+    # field, and the sole standalone stop, for the order id the amend addresses.
+    #
+    # Every other guard moved. Keeping a copy beside the contract's would have
+    # left the view's fields unpoliced: with an early return here, the view's
+    # ``already_reanchored`` was always False by the time the contract saw it,
+    # and hard-coding it to False killed none of 3495 tests. Measured. Now the
+    # field decides, and the corpus's two latch cases witness it.
     policy = resolve_declared_policy(plan.reaction)
-    if not policy.requires_amend_stop:
-        return None  # nothing declared -> the inert policy -> the stop never moves
     avg_price = pos.avg_price
-    if not _finite_positive(avg_price):
-        return None
-    atr = _declared_atr(plan.reaction)
     sole = _sole_standalone_stop(legs)
     if sole is None:
-        return None
-    if uic in view.amend_recently_failed:
-        return None
+        return None  # the amend needs an order id; nothing else here does
     latched = view.reanchored_by_uic.get(uic)
-    if latched is not None and abs(latched - avg_price) <= _REANCHOR_AVG_PRICE_EPS:
-        return None
-    proposed = policy.decide_reanchor(avg_price, atr)
+    decision = decide_reanchor_detail(
+        StopDecisionView(
+            avg_price=avg_price,
+            peak=None,  # this arm reads no high-water mark
+            last_price=None,  # nor a live price: it anchors on the realized fill
+            plan_stop=plan.stop_price,
+            reaction=plan.reaction,
+            has_sole_standalone_stop=sole is not None,
+            amend_in_backoff=uic in view.amend_recently_failed,
+            ratchet_floor=None,  # and it has no ratchet
+            # The 1e-6 band stays HERE: the view carries a bool, and a caller
+            # that passed exact equality instead would diverge on 29 060 of
+            # 300 000 generated (latched, avg_price) pairs.
+            already_reanchored=(
+                latched is not None and abs(latched - avg_price) <= _REANCHOR_AVG_PRICE_EPS
+            ),
+        )
+    )
+    proposed = decision.proposed
     if proposed is None:
         return None  # setup_static inert, or a degenerate the policy refuses
-    clamped = clamp_reanchor_target(
-        plan.stop_price,
-        proposed,
-        anchor_price=avg_price,
-        min_distance_frac=policy.min_stop_distance_frac,
-    )
+    clamped = decision.clamped
     if clamped is None:
         logger.info(
             "reanchor refused (below brief floor): policy=%s proposed=%.4f prior_stop=%.4f avg_price=%.4f",
@@ -879,7 +877,7 @@ def _maybe_trail(
     ``trailing_atr`` policy is armed (``activation_r`` R-multiples in profit). The
     stop moves UP ONLY — two independent guards enforce it: (1) the RATCHET vs the
     last CONFIRMED live trailed level (``view.trailed_stop_by_uic``) — a new
-    proposal must clear a coarse ``_TRAIL_STEP_EPS`` step above it, so a peak
+    proposal must clear a coarse ``stop_decision.TRAIL_STEP_EPS`` step above it, so a peak
     wiggle never re-PATCHes and the level never drops vs the live trail history;
     (2) the never-below-brief-floor ``clamp_reanchor_target`` vs ``plan.stop_price``
     (the brief disaster floor), anchored on the LIVE PRICE
@@ -912,7 +910,7 @@ def _maybe_trail(
         discipline as the peak veto.
       - the policy returns a non-None target — dark before activation.
       - the never-below-brief-floor clamp allows the tighten.
-      - the CLAMPED level (the level actually placed) clears ``_TRAIL_STEP_EPS``
+      - the CLAMPED level (the level actually placed) clears ``stop_decision.TRAIL_STEP_EPS``
         above the last trailed level — the ratchet gates on the post-clamp level,
         not the raw proposal, so a pullback can never place a stop below the trail
         history (Task 4 CARRYOVER-1).
@@ -920,47 +918,47 @@ def _maybe_trail(
     Returns ``None`` (never a bad stop) whenever any guard, the ratchet, or the
     envelope refuses."""
     policy = resolve_declared_policy(plan.reaction)
-    if not policy.trails:
-        return None
     avg_price = pos.avg_price
-    if not _finite_positive(avg_price):
-        return None
-    atr = _declared_atr(plan.reaction)
     sole = _sole_standalone_stop(legs)
     if sole is None:
-        return None
-    if uic in view.amend_recently_failed:
-        return None
+        return None  # the amend needs an order id; nothing else here does
     peak = view.peak_by_uic.get(uic)
-    if not _finite_positive(peak):
-        return None  # feed veto / no peak yet
     last_price = view.last_price_by_uic.get(uic)
-    if not _finite_positive(last_price):
-        return None  # feed veto / no live price yet (same discipline as the peak veto)
+    # #1514: the stop that RESTS is a floor too, and the CALLER composes the
+    # ratchet floor because both inputs are its own -- one a journal fold, the
+    # other a price on an order leg, which the contract's view keeps out by
+    # design (spec section 3.2). Trailed level FIRST and resting second,
+    # because ``max`` keeps its first argument when the comparison is False, so
+    # the two orders disagree on a NaN input; and the resting price goes through
+    # ``_resting_stop_price``, so a non-finite one is DROPPED instead of
+    # becoming an infinite floor that vetoes every move for ever.
+    floors = [
+        level
+        for level in (view.trailed_stop_by_uic.get(uic), _resting_stop_price(sole))
+        if level is not None
+    ]
+    # #1581: the DECISION is the contract's, same shape as ``_maybe_reanchor``.
     # ``plan_stop`` is the brief disaster floor (MAX across the ladder's tiers,
     # which under a no-geometry policy all journal the same
-    # ``placement.disaster_stop_price``) — the 1R denominator for policies
-    # whose risk unit is the brief geometry (``breakeven_trail``); the
-    # ATR-family policies ignore it.
-    proposed = policy.decide_reanchor(
-        avg_price, atr, peak=peak, last_price=last_price, plan_stop=plan.stop_price
+    # ``placement.disaster_stop_price``) -- the 1R denominator for a policy whose
+    # risk unit is the brief geometry, ignored by the ATR family.
+    decision = decide_trail_detail(
+        StopDecisionView(
+            avg_price=avg_price,
+            peak=peak,
+            last_price=last_price,
+            plan_stop=plan.stop_price,
+            reaction=plan.reaction,
+            has_sole_standalone_stop=sole is not None,
+            amend_in_backoff=uic in view.amend_recently_failed,
+            ratchet_floor=max(floors) if floors else None,
+            already_reanchored=False,  # no latch here; this branch never reads it
+        )
     )
+    proposed = decision.proposed
     if proposed is None:
         return None  # dark before activation (or a degenerate the policy refuses)
-    # Anchor the min-distance floor to the LIVE PRICE, not the entry: for a
-    # trailing stop the floor caps how close the stop may sit to the current
-    # MARKET (never at/above market -> OnWrongSideOfMarket), while
-    # ``prior_stop=plan.stop_price`` still enforces never-below-brief-floor.
-    # Anchoring on ``avg_price`` (as the one-shot ``_maybe_reanchor`` correctly
-    # does) would be wrong here: it caps the stop at ~0.998*avg_price, so an armed
-    # trailing stop could never ratchet above breakeven to lock in profit.
-    clamped = clamp_reanchor_target(
-        plan.stop_price,
-        proposed,
-        anchor_price=last_price,
-        min_distance_frac=policy.min_stop_distance_frac,
-    )
-    if clamped is None:
+    if decision.clamped is None:
         logger.info(
             "trail refused (below brief floor): policy=%s proposed=%.4f prior_stop=%.4f avg_price=%.4f",
             policy.name,
@@ -969,27 +967,14 @@ def _maybe_trail(
             avg_price,
         )
         return None  # never-below-brief-floor or degenerate -> keep the resting stop
-    # RATCHET (never-DOWN vs the live trail history) — gate on the CLAMPED level,
-    # NOT the raw ``proposed`` (Task 4 CARRYOVER-1). Once ``trailed_stop_by_uic``
-    # is non-empty (the marker writer landed in Task 4), gating the pre-clamp
-    # proposal would be a reachable loosen: on a pullback ``proposed`` can clear
-    # the floor while the live-price clamp pulls the PLACED level BELOW the prior
-    # trailed level. Gating the post-clamp ``clamped`` keeps the level actually
-    # placed strictly monotone-up vs the trail history — a new placed level must
-    # clear a coarse _TRAIL_STEP_EPS step above the last CONFIRMED trailed level,
-    # else the resting stop stays put (also bounds re-PATCH chatter on a sub-step
-    # peak wiggle).
-    # #1514: the stop that RESTS is a floor too. The journaled level can lag it
-    # (a lost marker, an owner-raised stop), and a proposal between the two would
-    # otherwise PATCH the resting stop down.
-    floors = [
-        level
-        for level in (view.trailed_stop_by_uic.get(uic), _resting_stop_price(sole))
-        if level is not None
-    ]
-    if floors and clamped <= max(floors) + _TRAIL_STEP_EPS:
+    if decision.level is None:
+        # The RATCHET refused, and this arm has always been SILENT here. That
+        # silence is why the contract reports ``clamped`` beside ``level``:
+        # without both, this refusal and the logged one above arrive as the
+        # same ``None`` and the log line would be a coin flip. Measured: 394 of
+        # 458 post-proposal refusals on this arm are this one.
         return None
-    target = clamped
+    target = decision.level
     owned = pos.quantity
     return AmendStop(
         uic,

@@ -26,9 +26,10 @@ Sub-packages / modules:
         ``setup_plan_gross_notional``); the brief-reading helpers
         stay client-side in ``alphalens_pipeline.paper.sizing`` (2A-4a)
     broker_contract.stop_decision — the post-fill stop decision
-        (``StopDecisionView`` -> ``decide_stop`` -> a level or ``None``), a
-        COPY of the daemon's trail and re-anchor arms held equal to them by
-        ``tests/property/test_stop_decision_parity.py`` until #1581
+        (``StopDecisionView`` -> ``decide_stop`` -> a level or ``None``, or
+        ``decide_trail_detail`` / ``decide_reanchor_detail`` -> that level plus
+        the two the caller reports on). THE implementation of the daemon's trail
+        and re-anchor arms since #1581; they call in here
 
 Dependency direction: this package must never import from
 ``alphalens_pipeline`` or ``alphalens_research`` — it is a pure leaf consumed

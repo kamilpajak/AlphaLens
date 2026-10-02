@@ -230,7 +230,7 @@ class BreakevenTrailPolicy:
     disaster floor), NOT an ATR multiple — and ``atr`` is ignored entirely
     HERE — and, since #1236/#1325, the caller does not need one either: a
     ``TrailingStop`` primitive carries no ATR by design
-    (``position_manager._declared_atr`` returns ``None`` for it) and
+    (``stop_decision._declared_atr`` returns ``None`` for it) and
     ``_maybe_trail`` no longer vetoes on that. Until #1236 it did, which is why
     a pick armed without a geometry stamp could not trail whatever policy was
     active; whether an absent ATR is fatal is now the POLICY's answer, not the

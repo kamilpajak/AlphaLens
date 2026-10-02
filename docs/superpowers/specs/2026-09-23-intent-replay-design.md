@@ -271,7 +271,10 @@ this design exists to remove.
 
 So the decision — position state plus policy plus market view, in; a new stop
 level or `None`, out — is extracted into the contract, the leaf both sides
-consume after the split. It returns a price, never a broker action and never a
+consume after the split. It returns PRICES — the level to place, and, through
+`decide_trail_detail` / `decide_reanchor_detail`, the policy's raw proposal and
+the envelope's output, which the daemon needs for its own log lines and for the
+`envelope_clamped` journal record (#1015). Never a broker action and never a
 journal write; those stay in the daemon.
 
 The minimal view it needs, read off `_maybe_trail` and `_maybe_reanchor` field
