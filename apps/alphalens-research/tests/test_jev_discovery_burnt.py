@@ -470,6 +470,23 @@ class TestThePanelIsBuiltFromFourStores(_StoreCase):
         _, diag = disc.build_panel()
         self.assertEqual(diag["no_candidate_feature"], 0)
 
+    def test_the_candidate_join_matches_whichever_side_carries_the_date_object(self):
+        """The other direction, and the one that actually fails without the normaliser.
+
+        The builder writes `brief_date` as the parquet filename stem, so a STRING, and
+        the label store carries `datetime.date`. `build_panel` normalises the LOOKUP
+        key, so a store written as text matches even with the store-side normaliser
+        removed - which is how the first version of this test passed against a mutation
+        that deleted it. Keying the candidate store as a date object is what makes
+        `load_jev_candidate`'s own `iso_date` load-bearing: without it the index holds
+        dates, the lookup holds text, and the join misses every row.
+        """
+        built = self.store(candidate_date_as_text=False)
+        self.use(built)
+        panel, diag = disc.build_panel()
+        self.assertEqual(diag["no_candidate_feature"], 0)
+        self.assertTrue(panel["jev_company_gain"].notna().all())
+
     def test_a_feature_written_under_another_version_is_not_pooled(self):
         built = self.store()
         for row in built.article_rows[:10]:
