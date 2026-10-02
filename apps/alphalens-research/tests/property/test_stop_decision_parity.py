@@ -34,6 +34,7 @@ bare functions), and the profile is loaded at import by ``base``.
 from __future__ import annotations
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -96,7 +97,13 @@ def _mk_leg(
     filled: float = 0.0,
     ref: str | None = None,
     relation: str | None = None,
+    resting_price: float | None = None,
 ) -> OrderState:
+    """``resting_price`` is where the broker reports the order SITTING, and it is
+    the daemon's SECOND ratchet floor (``_resting_stop_price``). It defaulted to
+    ``None`` on every generated leg until 2026-10-02, so the axis on which the
+    two implementations differ was absent from this generator and the daemon's
+    two-floor ratchet was dead code here (#1581)."""
     return OrderState(
         order_id=order_id,
         status=OrderStatus.WORKING,
@@ -109,6 +116,7 @@ def _mk_leg(
         amount=7.0,
         external_reference=order_id if ref is None else ref,
         order_relation=relation,
+        resting_price=resting_price,
     )
 
 
@@ -183,11 +191,32 @@ _ARMS: dict[str, tuple[str, ...]] = {
         "other_uic",
         "degenerate",
     ),
+    # Where the sole stop SITS, which is the daemon's second ratchet floor. The
+    # arms mirror the journaled floor's vocabulary above, because the quantity
+    # is the same kind of thing: a level a new proposal must clear. ``absent``
+    # is the clean arm, so every other axis's focus run keeps the behaviour it
+    # had before this axis existed.
+    "resting": ("absent", "band_below", "boundary", "clears_step", "above_level"),
     "latch": ("absent", "hit", "hit_within_tolerance", "miss", "other_uic"),
 }
 _AXES = tuple(_ARMS)
 # The first arm of every axis is the one that passes its own guard.
 _CLEAN = {axis: arms[0] for axis, arms in _ARMS.items()}
+
+
+def _compose_floor(
+    journaled: float | None, legs: tuple[OrderState, ...], has_sole: bool
+) -> float | None:
+    """The ratchet floor a caller must hand the leaf, composed as the daemon does.
+
+    The daemon reads the resting price off the sole standalone stop, so this
+    reads it off the same leg through the daemon's own helper. Without a sole
+    stop both arms return before the ratchet, so the value is moot and the
+    journaled level alone is the honest answer.
+    """
+    resting = pm._resting_stop_price(legs[0]) if has_sole and legs else None
+    floors = [level for level in (journaled, resting) if level is not None]
+    return max(floors) if floors else None
 
 
 @dataclass(frozen=True)
@@ -404,6 +433,36 @@ def _case(draw: st.DrawFn, *, focus: str, force_arm: str | None = None) -> _Case
     elif floor is not _ABSENT:
         floor_map[_UIC] = floor
 
+    # --- resting price on the sole stop ------------------------------------
+    # The legs are frozen above, BEFORE ``level_hint`` exists, so the price is
+    # patched in here rather than drawn in ``_mk_leg``: the arms are defined
+    # relative to the proposal, and the proposal is not known until the floor
+    # block has run. The daemon reads this off the leg itself, so nothing needs
+    # to reach it through the view.
+    resting_arm = arm_of("resting")
+    if resting_arm != "absent" and has_sole:
+        if level_hint is None:
+            # Same hole the floor axis has, and labelled the same way: with no
+            # placeable proposal there is nothing to sit relative to.
+            labels.add("resting:unplaceable")
+            resting = anchor
+        elif resting_arm == "band_below":
+            resting = level_hint - floats(0.0, 0.019)
+        elif resting_arm == "boundary":
+            resting = level_hint - TRAIL_STEP_EPS
+        elif resting_arm == "clears_step":
+            resting = level_hint - floats(0.03, 5.0)
+        else:
+            resting = level_hint + floats(1.0, 50.0)
+        if not pm._finite_positive(resting):
+            # ``clears_step`` subtracts up to 5.0 from the proposal, which goes
+            # NON-POSITIVE at small price scales. The daemon reads such a price
+            # through ``_finite_positive`` and treats it as absent, so this is a
+            # real broker state rather than a bad draw -- labelled so the two are
+            # distinguishable in the coverage report.
+            labels.add("resting:unusable")
+        legs = (dataclasses.replace(legs[0], resting_price=resting), *legs[1:])
+
     # --- reanchor latch ----------------------------------------------------
     latch_arm = arm_of("latch")
     latch_map: dict[int, float] = {}
@@ -444,7 +503,16 @@ def _case(draw: st.DrawFn, *, focus: str, force_arm: str | None = None) -> _Case
         reaction=reaction,
         has_sole_standalone_stop=has_sole,
         amend_in_backoff=_UIC in backoff,
-        ratchet_floor=floor_map.get(_UIC),
+        # The DAEMON'S OWN COMPOSITION, reproduced here rather than restated:
+        # it ratchets against the higher of the journaled level and the level the
+        # sole stop is resting at (``position_manager.py:985-991``, #1514), and
+        # this mapping is the contract for what a caller must pass as
+        # ``ratchet_floor``. Two details are the daemon's and not a choice: the
+        # ORDER is journaled before resting, because ``max`` keeps its first
+        # argument when the comparison is False and the two orders disagree on a
+        # NaN input; and the filter is ``is not None``, because a floor of
+        # exactly 0.0 is a floor and the ``floor:degenerate`` arm draws one.
+        ratchet_floor=_compose_floor(floor_map.get(_UIC), legs, has_sole),
         already_reanchored=already_reanchored,
     )
     return _Case(_UIC, pos, plan, legs, view, sdv, frozenset(labels))
@@ -614,6 +682,34 @@ class TestArmCoverageNonVacuousness(PropertyTestCase):
     def test_floor_arms(self, cases: tuple[_Case, ...]) -> None:
         self._observe(cases)
 
+    @given(_every_arm_of("resting"))
+    @settings(max_examples=25)
+    def test_resting_arms(self, cases: tuple[_Case, ...]) -> None:
+        # This one ASSERTS as well as observing, and the reason is measured: a
+        # mutation that stopped the drawn price from ever reaching the leg killed
+        # NOTHING, because ``_observe`` unions LABELS and ``arm_of`` adds the
+        # label whether or not the value lands. Coverage that cannot see an inert
+        # axis is coverage of a name.
+        self._observe(cases)
+        for case in cases:
+            arm = next(label for label in case.labels if label.startswith("resting:"))
+            if arm == "resting:absent" or "legs:sole_clean" not in case.labels:
+                continue
+            with self.subTest(arm):
+                # NOT-NONE rather than usable: the ``clears_step`` arm draws a
+                # non-positive price at small scales, which the daemon reads as
+                # absent. What the mutation showed is that a drawn price must
+                # REACH the leg at all; whether the daemon can use it is the
+                # arm's business.
+                self.assertIsNotNone(
+                    case.legs[0].resting_price,
+                    f"{arm} drew a price that never reached the sole leg",
+                )
+                self.assertEqual(
+                    case.sdv.ratchet_floor,
+                    _compose_floor(case.view.trailed_stop_by_uic.get(_UIC), case.legs, True),
+                )
+
     @given(_every_arm_of("latch"))
     @settings(max_examples=25)
     def test_latch_arms(self, cases: tuple[_Case, ...]) -> None:
@@ -623,6 +719,71 @@ class TestArmCoverageNonVacuousness(PropertyTestCase):
     def tearDownClass(cls) -> None:
         missing = (_ARM_TARGETS | _OUTCOME_TARGETS) - cls.seen
         assert not missing, f"arms never generated (vacuous coverage): {sorted(missing)}"
+
+
+class TheComposedFloorIsTheDaemonsTest(PropertyTestCase):
+    """Two properties of :func:`_compose_floor` that the generator does not reach.
+
+    Both were found by MUTATION, not by reading: reversing the argument order and
+    swapping the ``is not None`` filter for a truthiness test each killed nothing
+    in the property suite, because the combinations that distinguish them need a
+    degenerate journaled floor beside a present resting price and the draw
+    almost never pairs them. So they are pinned deterministically here.
+
+    These three cases are the composition CONTRACT, and the contract outlives
+    this module: the retirement predicate at the top deletes this file in the PR
+    where ``position_manager`` calls the leaf, and these assertions move to the
+    daemon's own suite in that PR, because the daemon becomes the caller that
+    composes.
+    """
+
+    # One price scale where a floor of 0.0 actually vetoes: the clamp's output is
+    # 1.6e-06, which is below 0.0 + TRAIL_STEP_EPS.
+    TINY = {"avg": 1e-6, "plan_stop": 1e-7, "peak": 2e-6, "last": 1.9e-6}
+
+    def _answer(self, floor: float | None, **prices: float) -> float | None:
+        return decide_stop(
+            StopDecisionView(
+                avg_price=prices["avg"],
+                peak=prices["peak"],
+                last_price=prices["last"],
+                plan_stop=prices["plan_stop"],
+                reaction=TrailingStop(arm_trigger_r=0.5, trail_frac=0.6),
+                has_sole_standalone_stop=True,
+                amend_in_backoff=False,
+                ratchet_floor=floor,
+                already_reanchored=False,
+            )
+        )
+
+    def test_the_argument_order_is_the_daemons_so_a_nan_journaled_floor_wins(self) -> None:
+        # ``max`` keeps its FIRST argument when the comparison is False, so the
+        # two orders disagree on NaN: max(nan, 56.0) is nan and max(56.0, nan) is
+        # 56.0. The daemon's order is journaled first, and the leaf documents
+        # what a NaN floor does -- it lets the trail through.
+        legs = (_mk_leg("stop-1", "StopIfTraded", resting_price=56.0),)
+        self.assertTrue(math.isnan(_compose_floor(float("nan"), legs, True)))
+        prices = {"avg": 50.0, "plan_stop": 45.0, "peak": 59.17, "last": 59.0}
+        self.assertAlmostEqual(self._answer(float("nan"), **prices), 55.502, places=9)
+        # The reversed order would have produced 56.0 here, and 56.0 vetoes.
+        self.assertIsNone(self._answer(56.0, **prices))
+
+    def test_a_floor_of_exactly_zero_is_a_floor_and_survives_the_filter(self) -> None:
+        # A truthiness filter would drop it and answer None, which the leaf reads
+        # as "no floor at all". At this price scale that is the difference
+        # between vetoing the move and making it.
+        legs = (_mk_leg("stop-1", "StopIfTraded"),)
+        self.assertEqual(_compose_floor(0.0, legs, True), 0.0)
+        self.assertIsNone(self._answer(0.0, **self.TINY))
+        self.assertAlmostEqual(self._answer(None, **self.TINY), 1.6e-06, places=12)
+
+    def test_without_a_sole_stop_the_journaled_level_is_the_whole_floor(self) -> None:
+        # Both daemon arms return before the ratchet when the sole-stop predicate
+        # says no, so the resting price is moot there. Asserted so the helper
+        # cannot start reading a leg the daemon would never have consulted.
+        legs = (_mk_leg("stop-1", "StopIfTraded", resting_price=99.0),)
+        self.assertEqual(_compose_floor(55.0, legs, False), 55.0)
+        self.assertIsNone(_compose_floor(None, legs, False))
 
 
 if __name__ == "__main__":  # pragma: no cover
