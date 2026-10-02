@@ -33,6 +33,7 @@ from broker_contract.contract import (
     Position,
 )
 from broker_contract.exit_geometry.registry import resolve_declared_policy
+from broker_contract.stop_decision import TRAIL_STEP_EPS
 from broker_contract.trade_intent.schema import ReanchorOnFill, TrailingStop
 
 _UIC = 43070
@@ -284,7 +285,7 @@ class TestMaybeTrailDark(unittest.TestCase):
             legs=legs,
             peak_by_uic={_UIC: 104.0},
             last_price_by_uic={_UIC: 104.0},
-            trailed_stop_by_uic={_UIC: 96.0 - pm._TRAIL_STEP_EPS / 2.0},
+            trailed_stop_by_uic={_UIC: 96.0 - TRAIL_STEP_EPS / 2.0},
         )
         self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
 

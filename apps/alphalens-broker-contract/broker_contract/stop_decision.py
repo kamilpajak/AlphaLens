@@ -1,12 +1,12 @@
 """The post-fill stop decision: position state, declared policy and market view
 in; a new stop level or ``None`` out (intent-replay design, section 3.2).
 
-A COPY of the daemon's two stop-move arms, ``position_manager._maybe_trail``
-and ``position_manager._maybe_reanchor``, guard for guard and in the daemon's
-order. Copy, not extraction: until step 2 (#1581) the daemon keeps its own,
-and ``tests/property/test_stop_decision_parity.py`` holds the two together by
-running both on generated views. Every guard below therefore mirrors a line of
-the daemon on purpose, including the ones a reader would want to harden:
+THE implementation of those two arms, not a copy of them. The daemon's
+``position_manager._maybe_trail`` and ``_maybe_reanchor`` call in here for the
+level (#1581, step 2); until 2026-10-02 they held their own copy and a parity
+property held the two together. Every guard below still mirrors a line of the
+daemon on purpose, including the ones a reader would want to harden, because
+the daemon's recorded answers are what this module has to keep reproducing:
 
 * the ratchet floor is compared raw, without ``isfinite`` (a NaN floor lets a
   trail through, an infinite one vetoes), because the daemon compares it raw;
@@ -18,7 +18,10 @@ the daemon on purpose, including the ones a reader would want to harden:
   policy. That is the daemon's rule, and the reason a replay must refuse such a
   document before it reaches this function (design section 4.3.1).
 
-Hardening any of these is step 2's job, once one implementation remains.
+Hardening any of these is still open work, and the bar is now higher than a
+code reading: the daemon's answers are frozen in a golden corpus
+(``tests/golden/fixtures/stop_decision/``), so a change here that moves one is
+red by construction. That is the point of the corpus, not an obstacle to it.
 
 The view carries nine primitives and nothing broker-shaped. Three of them are
 the RESULTS of predicates the daemon evaluates over things a replay does not
@@ -30,9 +33,11 @@ bool; a replay knows the answer from its own trace). A replay passes the
 values that mean "no broker obstacle" for the first two and reports the
 optimism as a named divergence; it never invents order legs.
 
-The answer is a PRICE. Never an action, never a journal write, never the
-envelope telemetry the daemon attaches to its ``AmendStop`` when the clamp
-moved the proposal; those stay with the executor.
+The answer is PRICES: the level to place, plus the policy's raw proposal and
+the envelope's output, which the caller needs for its own log lines and for the
+journal field it writes when the envelope moved the target (#1015). Never an
+action and never a journal write -- those stay with the daemon, which is why
+this module reports the numbers rather than the consequences.
 
 Dependencies: stdlib and this package only.
 """
@@ -50,8 +55,8 @@ from broker_contract.trade_intent.schema import ReactionPrimitive, ReanchorOnFil
 
 # The coarse price step a new trailing level must clear ABOVE the last confirmed
 # trailed level before the stop moves again. A parameter of the decision, not a
-# fact of any deployment: the daemon carries the same value as
-# ``position_manager._TRAIL_STEP_EPS`` and the parity suite pins the two equal.
+# fact of any deployment. The daemon carried its own copy, ``_TRAIL_STEP_EPS``,
+# held equal by the parity suite; since #1581 this is the only one.
 # It bounds re-amend chatter on a sub-step peak wiggle; the never-below-floor
 # clamp is the capital guard.
 TRAIL_STEP_EPS: Final = 0.02

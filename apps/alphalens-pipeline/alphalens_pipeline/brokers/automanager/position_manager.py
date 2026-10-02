@@ -55,7 +55,7 @@ from broker_contract.stop_decision import (
     decide_reanchor_detail,
     decide_trail_detail,
 )
-from broker_contract.trade_intent.schema import ReactionPrimitive, ReanchorOnFill
+from broker_contract.trade_intent.schema import ReactionPrimitive
 
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
@@ -416,14 +416,6 @@ def _amend_enabled() -> bool:
 # genuine drift worth re-firing over. Same order of magnitude as _QTY_EPS.
 _REANCHOR_AVG_PRICE_EPS = 1e-6
 
-# Task 2 trailing-stop ratchet step [in_sample]: the coarse price increment a new
-# trailing target must clear ABOVE the last live trailed level before ``_maybe_trail``
-# re-fires. Sized well above tick noise so a resting stop is not re-PATCHed every
-# tick for a sub-cent peak wiggle (each amend is a request-id + a broker round-trip);
-# it bounds trail chatter, NOT correctness (the never-below-brief-floor clamp is the
-# capital guard). Deliberately much coarser than _REANCHOR_AVG_PRICE_EPS.
-_TRAIL_STEP_EPS = 0.02
-
 
 @dataclass(frozen=True)
 class ProtectionView:
@@ -475,7 +467,7 @@ class ProtectionView:
     # source-compatible. ``trailed_stop_by_uic`` is the never-DOWN ratchet: uic ->
     # the level the stop was last CONFIRMED trailed to (folded from the ``trailed``
     # journal marker, latest-by-ts), the live-history floor a new proposal must
-    # clear by ``_TRAIL_STEP_EPS``. Default empty = no prior trail on record.
+    # clear by ``stop_decision.TRAIL_STEP_EPS``. Default empty = no prior trail.
     # Like ``reanchored_by_uic`` above, the fold is JOURNAL-lifetime, not
     # position-lifetime. It is NOT unbounded, though:
     # ``_fold_trailed_since_latest_plan`` resets on every new-generation
@@ -742,19 +734,6 @@ def reconcile_protection(view: ProtectionView) -> list[Action]:
     return actions
 
 
-def _declared_atr(reaction: ReactionPrimitive | None) -> float | None:
-    """The ATR the DOCUMENT declared, or ``None`` when it declared none.
-
-    Only ``ReanchorOnFill`` carries one. A trailing declaration does not, and
-    that is the point: ``breakeven_trail``'s risk unit is ``avg_price -
-    plan_stop``, so it never reads an ATR — yet until #1236 the caller vetoed it
-    for a missing one, which is why a pick armed without a geometry stamp could
-    not trail whatever policy was active. Whether an absent ATR is fatal is now
-    the POLICY's answer (``policy._usable_atr``), not this caller's.
-    """
-    return reaction.atr if isinstance(reaction, ReanchorOnFill) else None
-
-
 def _maybe_reanchor(
     uic: int,
     pos: Position,
@@ -898,7 +877,7 @@ def _maybe_trail(
     ``trailing_atr`` policy is armed (``activation_r`` R-multiples in profit). The
     stop moves UP ONLY — two independent guards enforce it: (1) the RATCHET vs the
     last CONFIRMED live trailed level (``view.trailed_stop_by_uic``) — a new
-    proposal must clear a coarse ``_TRAIL_STEP_EPS`` step above it, so a peak
+    proposal must clear a coarse ``stop_decision.TRAIL_STEP_EPS`` step above it, so a peak
     wiggle never re-PATCHes and the level never drops vs the live trail history;
     (2) the never-below-brief-floor ``clamp_reanchor_target`` vs ``plan.stop_price``
     (the brief disaster floor), anchored on the LIVE PRICE
@@ -931,7 +910,7 @@ def _maybe_trail(
         discipline as the peak veto.
       - the policy returns a non-None target — dark before activation.
       - the never-below-brief-floor clamp allows the tighten.
-      - the CLAMPED level (the level actually placed) clears ``_TRAIL_STEP_EPS``
+      - the CLAMPED level (the level actually placed) clears ``stop_decision.TRAIL_STEP_EPS``
         above the last trailed level — the ratchet gates on the post-clamp level,
         not the raw proposal, so a pullback can never place a stop below the trail
         history (Task 4 CARRYOVER-1).

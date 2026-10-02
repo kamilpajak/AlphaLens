@@ -6790,7 +6790,7 @@ def _journal_trailed(
     a failed amend journals ``amend_failed`` like any other amend and simply
     retries). Mirrors ``_journal_reanchored``: ``_fold_trailed_since_latest_plan`` folds
     these into ``ProtectionView.trailed_stop_by_uic``, the never-DOWN ratchet floor
-    a new trail proposal must clear by ``_TRAIL_STEP_EPS``.
+    a new trail proposal must clear by ``stop_decision.TRAIL_STEP_EPS``.
 
     ``level`` is the stop price actually placed (the ratchet floor, read by the
     fold). ``peak`` / ``last_price`` are the high-water mark and live price the
@@ -6972,7 +6972,7 @@ def _fold_trailed_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[
     reads ``line["level"]`` (the price the stop was confirmed trailed to) instead
     of the reanchor avg_price. Feeds ``ProtectionView.trailed_stop_by_uic`` (the
     never-DOWN ratchet floor ``_maybe_trail`` requires a new proposal to clear by
-    ``_TRAIL_STEP_EPS``) and the live-exit engine's SL-amend level via
+    ``stop_decision.TRAIL_STEP_EPS``) and the live-exit engine's SL-amend level via
     ``_build_managed_exits``. The second consumer is why the scoping is
     load-bearing rather than tidy: ``_build_managed_exits`` PLACES
     ``max(plan stop, trailed)``, so an inherited level is not merely a too-high

@@ -1,14 +1,12 @@
 """The stop decision copied into the contract (intent-replay PR 2, #1573).
 
-``broker_contract.stop_decision.decide_stop`` is a COPY of the daemon's two
-post-fill stop-move arms (``position_manager._maybe_trail`` and
-``_maybe_reanchor``), guard for guard, taking the nine-field view of spec
-section 3.2 and answering a price or ``None``. It is a copy, not an
-extraction: until step 2 (#1581) two implementations stand and the parity
-property in ``tests/property/test_stop_decision_parity.py`` holds them
-together. These tests pin the copy on its own, without importing the daemon,
-one guard per test with a positive control beside it, plus the four golden
-cases of spec section 6.2.
+``broker_contract.stop_decision`` IS the daemon's two post-fill stop-move
+arms since #1581: ``position_manager._maybe_trail`` and ``_maybe_reanchor``
+call in here for the level, taking the nine-field view of spec section 3.2.
+These tests pin it on its own, without importing the daemon, one guard per
+test with a positive control beside it, plus the four golden cases of spec
+section 6.2. What pins it against the daemon's RECORDED answers is the golden
+corpus in ``tests/golden/``, which was captured before the arms delegated.
 
 Three different meanings of ``None`` get three different test names, because
 they are three different facts: a document that declared nothing (the

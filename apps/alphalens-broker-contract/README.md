@@ -15,9 +15,10 @@ The package holds the broker contract (`contract.py`), the failure contract
 `fx.py`, `constants.py`), the price-feed protocol (`price_feed.py`), the
 `TradeIntent` document (`trade_intent/`: schema, codec, validation, JSON Schema
 generator, legacy register), the exit-geometry leaf (`exit_geometry/`) and the
-post-fill stop decision (`stop_decision.py`: a copy of the daemon's trail and
-re-anchor arms over a nine-field view, held equal to the daemon by a parity
-test until the daemon calls it, #1581).
+post-fill stop decision (`stop_decision.py`: the daemon's trail and re-anchor
+arms over a nine-field view. It was a copy held equal by a parity test until
+the daemon called it; since #1581 the daemon calls it, and a golden corpus of
+the daemon's own answers is what keeps the behaviour pinned).
 
 ## The failure contract (#1389)
 

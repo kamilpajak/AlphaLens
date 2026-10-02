@@ -344,7 +344,7 @@ class TestCrossTickRatchet(unittest.TestCase):
     def test_second_tick_non_stepping_proposal_is_vetoed(self) -> None:
         broker = _Broker(positions=[_pos()], sells=[_stop_leg()], by_uic={_UIC: _pos()})
         # Same price both ticks -> peak stays 104 -> proposal stays 96 -> tick 2's
-        # 96 does not clear the folded floor 96 by _TRAIL_STEP_EPS -> dropped.
+        # 96 does not clear the folded floor 96 by TRAIL_STEP_EPS -> dropped.
         feed = _ScriptedFeedFactory([{_UIC: 110.0}, {_UIC: 110.0}])
         sink: list[str] = []
         with TemporaryDirectory() as d:
