@@ -453,6 +453,31 @@ class DiscoveryTest(unittest.TestCase):
             modules = set(arch.discover_modules(root, ["pkg"]).values())
             self.assertEqual(modules, {"pkg", "pkg.live"})
 
+    def test_the_harness_does_not_measure_itself(self) -> None:
+        """The harness lives under a production root. Counting its own modules
+        made the module count move three times while it was being written, so
+        the exclusion is unconditional and pinned here."""
+        for include_tests in (False, True):
+            modules = set(
+                arch.discover_modules(
+                    arch.repo_root(), arch.PRODUCTION_ROOTS, include_tests=include_tests
+                ).values()
+            )
+            self.assertNotIn("graph", modules)
+            self.assertNotIn("entrypoints", modules)
+            self.assertNotIn("hotspots", modules)
+
+    def test_an_unrelated_directory_named_arch_is_still_measured(self) -> None:
+        """Positive control: the exclusion is by exact path, not by the name
+        `arch`, so a future `alphalens_pipeline/arch/` would be measured."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _tree(
+                root, {"pkg/arch/__init__.py": "", "pkg/arch/thing.py": "", "pkg/__init__.py": ""}
+            )
+            modules = set(arch.discover_modules(root, ["pkg"]).values())
+            self.assertIn("pkg.arch.thing", modules)
+
     def test_discovery_over_the_real_repo_is_not_empty(self) -> None:
         """Anti-rot: a path typo that discovers nothing would make every other
         number on the real tree read as a clean zero."""

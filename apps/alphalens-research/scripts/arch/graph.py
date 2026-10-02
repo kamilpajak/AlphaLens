@@ -61,6 +61,14 @@ TEST_ROOTS: tuple[str, ...] = ("apps/alphalens-research/tests",)
 
 _EXCLUDED_DIR_PARTS = ("tests", "migrations", "__pycache__")
 
+#: This harness measures a corpus it lives inside: it sits under
+#: ``apps/alphalens-research/scripts``, which is a production root. Without
+#: this exclusion the measurement counts its own apparatus, and the module
+#: count moved three times while the harness was being written. Excluded by
+#: exact path, not by directory name, so an unrelated ``arch/`` elsewhere is
+#: still measured.
+SELF_PATH = "apps/alphalens-research/scripts/arch"
+
 _TYPE_CHECKING = "TYPE_CHECKING"
 
 
@@ -132,10 +140,16 @@ def discover_modules(
         if not base.is_dir():
             raise UnknownRootError(f"{relroot} is not a directory under {root}")
         for path in sorted(base.rglob("*.py")):
+            if _is_self(path, root):
+                continue  # apparatus, not subject — unconditional
             if not include_tests and _is_test_or_generated(path, root):
                 continue
             discovered[path] = module_name(path)
     return discovered
+
+
+def _is_self(path: Path, root: Path) -> bool:
+    return path.relative_to(root).as_posix().startswith(f"{SELF_PATH}/")
 
 
 def _is_test_or_generated(path: Path, root: Path) -> bool:
