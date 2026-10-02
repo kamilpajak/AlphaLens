@@ -15,6 +15,7 @@ import dataclasses
 import datetime as dt
 import enum
 import functools
+import json
 import logging
 import math
 import os
@@ -4119,17 +4120,45 @@ def _sweep_owed_sibling_retires(deps: LoopDeps, report: TickReport) -> None:
         _retire_sibling_watches(deps, pick_key, report, trigger=owed[pick_key])
 
 
+def _owed_pick_key_from_stop_fill(line: Mapping[str, Any]) -> str | None:
+    """The pick a full ``stop_filled`` with a parseable entry-trail ref owes a
+    sibling retire, or ``None``. The ONE rule for both the owed fold and the
+    boot compactor's election of the lines it reads (#1327)."""
+    if line.get("kind") != "stop_filled" or line.get("partial"):
+        return None
+    ref = line.get("ref")
+    return _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
+
+
 def _owed_from_stop_fill_refs(lines: list[Mapping[str, Any]]) -> dict[str, str]:
     """The ref-first half of the owed derivation: every full ``stop_filled``
     with a parseable entry-trail ref owes its pick a sibling retire."""
     owed: dict[str, str] = {}
     for line in lines:
-        if line.get("kind") == "stop_filled" and not line.get("partial"):
-            ref = line.get("ref")
-            pick_key = _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
-            if pick_key is not None:
-                owed.setdefault(pick_key, "stop fill on record")
+        pick_key = _owed_pick_key_from_stop_fill(line)
+        if pick_key is not None:
+            owed.setdefault(pick_key, "stop fill on record")
     return owed
+
+
+def _elect_owed_stop_fill_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Per owed pick key, the one ``stop_filled`` line the boot compactor keeps
+    so ``_owed_from_stop_fill_refs`` folds the same after a boot (#1327).
+
+    The fold only needs ONE line per pick key (``setdefault``), so the newest
+    by ``ts`` is kept (a later line breaks a tie; a line without a usable
+    ``ts`` is kept only while no timestamped one is seen). Sorted by pick key
+    for a stable file order."""
+    elected: dict[str, tuple[float | None, Mapping[str, Any]]] = {}
+    for line in lines:
+        pick_key = _owed_pick_key_from_stop_fill(line)
+        if pick_key is None:
+            continue
+        ts = _coerce(line, "ts", float)
+        kept = elected.get(pick_key)
+        if kept is None or (ts is not None and (kept[0] is None or ts >= kept[0])):
+            elected[pick_key] = (ts, line)
+    return [dict(elected[pick_key][1]) for pick_key in sorted(elected)]
 
 
 def _derive_owed_sibling_retires(lines: list[Mapping[str, Any]]) -> dict[str, str]:
@@ -5895,7 +5924,10 @@ def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, Planned
       - disaster stop = the MAX stop for a long (tightest) — defensive if
         journaled tiers disagree;
       - TP + entry_crid = the SHALLOWEST tier (min ``tier_index``), so the
-        deterministic ref is fill-order-independent;
+        deterministic ref is fill-order-independent; two plans at that tier
+        (the conflicting shape) are broken by ``client_request_id`` (#1328) —
+        a property of the data, so the boot compactor's crid-sorted rewrite
+        cannot change which plan governs, and neither can any other order;
       - a repeated ``tier_index`` on one uic reveals >1 distinct plan (each plan
         owns exactly one tier per index) -> ``conflicting`` so Task 5 refuses to
         merge. Malformed lines are skipped."""
@@ -5914,7 +5946,10 @@ def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, Planned
             index_counts[idx] = index_counts.get(idx, 0) + 1
         n_plans = max(index_counts.values())
         stop_price = max(float(line["stop_price"]) for line in tiers)
-        governing = min(tiers, key=lambda line: int(line.get("tier_index", 0)))
+        governing = min(
+            tiers,
+            key=lambda line: (int(line.get("tier_index", 0)), str(line["client_request_id"])),
+        )
         tp_raw = governing.get("take_profit")
         result[uic] = PlannedExit(
             uic=uic,
@@ -7286,13 +7321,21 @@ def _compact_standalone_stop_journal_lines(
     — unknown kinds and malformed lines — is dropped; none contributes to the
     folds above.
 
-    NOT deliberate, and NOT fixed here: ``_derive_owed_sibling_retires`` folds
-    differently on the compacted set. Its ``_owed_from_stop_fill_refs`` half
-    walks EVERY ref-bearing ``stop_filled``, while this function keeps such a
-    line only when it matches the newest kept ``stop_placed`` for the uic or is
-    elected as open-generation closure evidence; a fill satisfying neither is
-    dropped and the owed entry disappears. Reproduced, tracked separately —
-    do not read the paragraph above as "every other reader is identical".
+    Also kept: per pick key, the ``stop_filled`` ``_elect_owed_stop_fill_lines``
+    elects (#1327), so ``_derive_owed_sibling_retires`` is unchanged. Its
+    ref-first half walks EVERY full entry-trail ``stop_filled``; before #1327 a
+    fill that matched no kept ``stop_placed`` and was not closure evidence was
+    dropped, and a boot forgot the pick's owed sibling retire. These lines are
+    written BEFORE the tranche block, so they can never become closure evidence.
+    Cost: one line per stopped-out pick, kept for good.
+
+    NOT preserved, and NOT fixed here: ``_latest_stop_move`` (the stop-fill
+    alert's "trailed stop" wording and level) reads any ``trailed`` marker
+    written after the stop's placement, while this function keeps a ``trailed``
+    marker only inside its open generation. Keeping the others naively would let
+    ``_fold_trailed_since_latest_plan`` resurrect a dead ratchet floor (#1324).
+    After a boot the alert can therefore name a raised stop as a plain stop
+    (#1669).
 
     Pure: no I/O, input never mutated (kept lines are shallow-copied)."""
     materialized = list(lines)
@@ -7324,17 +7367,26 @@ def _compact_standalone_stop_journal_lines(
     # both elections pick one line the closure copy serves both folds and the
     # stop_placed-matched keep below skips it.
     tranche_kept = _compact_tranche_lines(materialized)
-    closure_fill_keys = {
-        (line.get("order_id"), line.get("ts"))
-        for line in tranche_kept
-        if line.get("kind") == "stop_filled"
+    # Kept stop_filled lines are de-duplicated by their whole content: an
+    # (order_id, ts) key merged two different fills sharing that pair (#1327).
+    kept_fills = {
+        _canonical_line(line) for line in tranche_kept if line.get("kind") == "stop_filled"
     }
     for uic in sorted(ttl_latest["stop_placed"]):
         kept_order_id = ttl_latest["stop_placed"][uic][1].get("order_id")
         if isinstance(kept_order_id, str) and kept_order_id in stop_filled_by_id:
             matched = stop_filled_by_id[kept_order_id][1]
-            if (matched.get("order_id"), matched.get("ts")) not in closure_fill_keys:
+            if _canonical_line(matched) not in kept_fills:
                 compacted.append(matched)
+                kept_fills.add(_canonical_line(matched))
+    # #1327: the fills the owed sibling-retire fold reads. BEFORE the tranche
+    # block on purpose: the closure fold counts a stop_filled only inside an
+    # open plan generation, which a kept tranche_plan line opens, so a line
+    # written ahead of every plan line can never become new closure evidence.
+    for owed_fill in _elect_owed_stop_fill_lines(materialized):
+        if _canonical_line(owed_fill) not in kept_fills:
+            compacted.append(owed_fill)
+            kept_fills.add(_canonical_line(owed_fill))
     compacted.extend(ttl_latest["amend_ok"][uic][1] for uic in sorted(ttl_latest["amend_ok"]))
     compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
     compacted.extend(_elect_reanchored_lines(materialized))
@@ -7344,6 +7396,12 @@ def _compact_standalone_stop_journal_lines(
     # tranche block folds away for every uic that has a ladder (#1324).
     compacted.extend(_elect_trailed_lines(materialized))
     return compacted
+
+
+def _canonical_line(line: Mapping[str, Any]) -> str:
+    """A line's identity for de-duplication: its canonical JSON, the form
+    ``append_json_line`` writes."""
+    return json.dumps(line, sort_keys=True, default=str)
 
 
 def _classify_standalone_lines(
