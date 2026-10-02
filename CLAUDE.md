@@ -50,6 +50,40 @@ The CLI binary `alphalens` is registered in `apps/alphalens-pipeline/pyproject.t
 
 **Methodology bundle** (preregistration ledger, multi_phase audit, multiple_testing thresholds, audit_multi_phase driver) consumed via external dep `phase-robust-backtesting>=0.2.0` — see [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md). `alphalens audit <strategy>` (`apps/alphalens-pipeline/alphalens_cli/commands/audit.py`) resolves a short strategy name to a file path and delegates in-process to `phase_robust_backtesting.audit_multi_phase.run_audit`.
 
+## Bounded contexts (confirmed with the owner 2026-10-03)
+
+Seven contexts, each with one entry point. Full map, evidence and relationship
+table: [`docs/research/architecture_audit_2026_10_02.md`](docs/research/architecture_audit_2026_10_02.md)
+§1.3 and §3. The layer tables above say what each package IS; this says who
+owns the language it speaks.
+
+| Context | Owns | Entered by |
+|---|---|---|
+| **Execution** (bracket keeper) | placing, bracketing and exiting a declared trade | `alphalens broker manage` / `arm` / `auth` / `price-reader` |
+| **Thematic selection** | what is worth looking at, and how well that choosing works — `thematic/**`, `experts/**`, `scorers/`, `feedback/**`, Django `edge/` | the daily `alphalens thematic …` container; `feedback backfill-shadow-returns` |
+| **Data acquisition + PIT store** | `data/**` — pulling vendor data and laying it down point-in-time | Form-4 and grouped-daily timers, plus lab callers |
+| **EDGAR detection** | `edgar_detector/` — noticing a filing | `alphalens edgar detect`, every 15 min |
+| **Literature scanning** | `literature_scanner/` — what the field published | weekly + monthly timers |
+| **Research lab** | `alphalens_research/**` + `scripts/` — asking whether an idea holds | by hand, plus 8 systemd-run scripts |
+| **Intent replay** | `apps/intent-replay` — what a document would have done | by hand |
+
+Four facts about these boundaries that are easy to get wrong:
+
+- **Execution is client-agnostic, and its client is a human decision.** The
+  brief and the WhatsApp group are two of its clients; neither is upstream of
+  it. `execution ↔ thematic` co-change does not register at all, and that is
+  the satisfied design goal, not a gap.
+- **Publication is not a context.** `alphalens-django/{briefs,market}` + `apps/web`
+  are the FACE of thematic selection: the briefs app defines one computed
+  serializer field and the model no derived property.
+- **`/edge` means "does the pipeline select well?"**, never "how is the owner's
+  money doing". Its subject is every candidate of every brief. The realized
+  outcome of real trades lives NOWHERE in this repo (open: #1689).
+- **`data/` is research-tier code writing a production store.** Its acquisition
+  modules are imported only by scripts, the lab and tests; the live reader
+  `thematic/sources/form4_store.py` opens `~/.alphalens/form4_parquet/` BY PATH
+  and imports nothing from `data/`. No import edge, no schema gate (#1679).
+
 ## Layer architecture (active alpha experimentation)
 
 Five-layer separation per **[ADR 0007](docs/adr/0007-layer-architecture.md)**. Each layer has a single responsibility; failures attribute to one layer:
