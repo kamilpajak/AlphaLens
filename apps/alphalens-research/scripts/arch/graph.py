@@ -51,12 +51,13 @@ PRODUCTION_ROOTS: tuple[str, ...] = (
     "apps/alphalens-django",
 )
 
-# The test suites, which live apart from the code they cover: one directory in
-# the research app holds the tests for every workspace member.
-TEST_ROOTS: tuple[str, ...] = (
-    "apps/alphalens-research/tests",
-    "apps/alphalens-pipeline/tests",
-)
+# The test suite, which lives apart from the code it covers: ONE directory in
+# the research app holds the tests for every workspace member, plus the Django
+# app's own per-app test packages.
+#
+# `apps/alphalens-pipeline/tests` is deliberately absent — it does not exist.
+# The root `pyproject.toml` still carries a `per-file-ignores` entry for it.
+TEST_ROOTS: tuple[str, ...] = ("apps/alphalens-research/tests",)
 
 _EXCLUDED_DIR_PARTS = ("tests", "migrations", "__pycache__")
 
