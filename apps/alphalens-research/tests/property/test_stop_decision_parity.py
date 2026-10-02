@@ -204,17 +204,23 @@ _AXES = tuple(_ARMS)
 _CLEAN = {axis: arms[0] for axis, arms in _ARMS.items()}
 
 
-def _compose_floor(
-    journaled: float | None, legs: tuple[OrderState, ...], has_sole: bool
-) -> float | None:
+def _compose_floor(journaled: float | None, legs: tuple[OrderState, ...]) -> float | None:
     """The ratchet floor a caller must hand the leaf, composed as the daemon does.
 
-    The daemon reads the resting price off the sole standalone stop, so this
-    reads it off the same leg through the daemon's own helper. Without a sole
-    stop both arms return before the ratchet, so the value is moot and the
-    journaled level alone is the honest answer.
+    The leg is chosen by the daemon's OWN five-clause predicate rather than by
+    position. Today the only ``legs`` arm with a sole standalone stop builds
+    exactly one leg, so ``legs[0]`` would pick the same leg and no test
+    distinguishes the two forms -- which is precisely why the coupling is worth
+    removing: a later arm with a stray leg before the stop would read a price
+    off the wrong leg and the suite would not say so. Measured on two shapes,
+    ``(stop, stray)`` and ``(stray, stop)``: the predicate answers None for
+    both, because a stray leg disqualifies the stop.
+
+    Without a sole stop both daemon arms return before the ratchet, so the
+    resting price is moot and the journaled level alone is the honest answer.
     """
-    resting = pm._resting_stop_price(legs[0]) if has_sole and legs else None
+    sole = pm._sole_standalone_stop(legs)
+    resting = None if sole is None else pm._resting_stop_price(sole)
     floors = [level for level in (journaled, resting) if level is not None]
     return max(floors) if floors else None
 
@@ -512,7 +518,7 @@ def _case(draw: st.DrawFn, *, focus: str, force_arm: str | None = None) -> _Case
         # argument when the comparison is False and the two orders disagree on a
         # NaN input; and the filter is ``is not None``, because a floor of
         # exactly 0.0 is a floor and the ``floor:degenerate`` arm draws one.
-        ratchet_floor=_compose_floor(floor_map.get(_UIC), legs, has_sole),
+        ratchet_floor=_compose_floor(floor_map.get(_UIC), legs),
         already_reanchored=already_reanchored,
     )
     return _Case(_UIC, pos, plan, legs, view, sdv, frozenset(labels))
@@ -693,7 +699,14 @@ class TestArmCoverageNonVacuousness(PropertyTestCase):
         self._observe(cases)
         for case in cases:
             arm = next(label for label in case.labels if label.startswith("resting:"))
-            if arm == "resting:absent" or "legs:sole_clean" not in case.labels:
+            if "legs:sole_clean" not in case.labels:
+                continue
+            if arm == "resting:absent":
+                # The clean arm has to stay clean. Without this a mutation that
+                # made ``absent`` supply a price would keep every assertion below
+                # green while the arm stopped standing for "no resting price".
+                with self.subTest(arm):
+                    self.assertIsNone(case.legs[0].resting_price)
                 continue
             with self.subTest(arm):
                 # NOT-NONE rather than usable: the ``clears_step`` arm draws a
@@ -707,7 +720,7 @@ class TestArmCoverageNonVacuousness(PropertyTestCase):
                 )
                 self.assertEqual(
                     case.sdv.ratchet_floor,
-                    _compose_floor(case.view.trailed_stop_by_uic.get(_UIC), case.legs, True),
+                    _compose_floor(case.view.trailed_stop_by_uic.get(_UIC), case.legs),
                 )
 
     @given(_every_arm_of("latch"))
@@ -762,7 +775,7 @@ class TheComposedFloorIsTheDaemonsTest(PropertyTestCase):
         # 56.0. The daemon's order is journaled first, and the leaf documents
         # what a NaN floor does -- it lets the trail through.
         legs = (_mk_leg("stop-1", "StopIfTraded", resting_price=56.0),)
-        self.assertTrue(math.isnan(_compose_floor(float("nan"), legs, True)))
+        self.assertTrue(math.isnan(_compose_floor(float("nan"), legs)))
         prices = {"avg": 50.0, "plan_stop": 45.0, "peak": 59.17, "last": 59.0}
         self.assertAlmostEqual(self._answer(float("nan"), **prices), 55.502, places=9)
         # The reversed order would have produced 56.0 here, and 56.0 vetoes.
@@ -773,7 +786,7 @@ class TheComposedFloorIsTheDaemonsTest(PropertyTestCase):
         # as "no floor at all". At this price scale that is the difference
         # between vetoing the move and making it.
         legs = (_mk_leg("stop-1", "StopIfTraded"),)
-        self.assertEqual(_compose_floor(0.0, legs, True), 0.0)
+        self.assertEqual(_compose_floor(0.0, legs), 0.0)
         self.assertIsNone(self._answer(0.0, **self.TINY))
         self.assertAlmostEqual(self._answer(None, **self.TINY), 1.6e-06, places=12)
 
@@ -781,9 +794,19 @@ class TheComposedFloorIsTheDaemonsTest(PropertyTestCase):
         # Both daemon arms return before the ratchet when the sole-stop predicate
         # says no, so the resting price is moot there. Asserted so the helper
         # cannot start reading a leg the daemon would never have consulted.
-        legs = (_mk_leg("stop-1", "StopIfTraded", resting_price=99.0),)
-        self.assertEqual(_compose_floor(55.0, legs, False), 55.0)
-        self.assertIsNone(_compose_floor(None, legs, False))
+        #
+        # The shape is a stop beside a STRAY leg, and the premise is pinned
+        # rather than asserted by hand: an earlier version of this test passed a
+        # "no sole stop" flag next to a single clean stop leg, which is a sole
+        # stop, so the test was describing a fixture it did not have. The
+        # predicate is the only thing that knows.
+        legs = (
+            _mk_leg("stop-1", "StopIfTraded", resting_price=99.0),
+            _mk_leg("stray-1", "Market"),
+        )
+        self.assertIsNone(pm._sole_standalone_stop(legs))
+        self.assertEqual(_compose_floor(55.0, legs), 55.0)
+        self.assertIsNone(_compose_floor(None, legs))
 
 
 if __name__ == "__main__":  # pragma: no cover

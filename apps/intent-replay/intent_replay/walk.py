@@ -770,6 +770,17 @@ def _decide_stop(state: _WalkState, bar: Bar, plan: Plan, *, trails: bool) -> No
     #   a different question than the daemon answers.
     # * the filter is ``is not None`` and never truthiness. A floor of exactly
     #   ``0.0`` is a floor, and ``filter(None, ...)`` would drop it.
+    #
+    # The daemon reads its resting floor through ``_finite_positive``, so it
+    # treats zero, negatives and non-finite prices as absent, and this does not.
+    # That is not a gap here, and the reason is measured rather than argued:
+    # before the first trail move ``state.stop`` IS ``plan.declared_floor``, so a
+    # non-positive one makes ``plan_stop`` non-positive too and the leaf refuses
+    # on that alone -- checked at ``plan_stop`` 0.0, where the leaf answers None
+    # for a floor of 0.0 and for no floor alike. After the first move
+    # ``state.stop`` is a level the clamp produced, which is finite and positive.
+    # So the filtered and unfiltered forms cannot disagree on any input the walk
+    # can reach, and adding the guard would be dead code.
     floors = [level for level in (state.last_trailed_level, state.stop) if level is not None]
     level = decide_stop(
         StopDecisionView(
