@@ -444,7 +444,7 @@ def _case(draw: st.DrawFn, *, focus: str, force_arm: str | None = None) -> _Case
         reaction=reaction,
         has_sole_standalone_stop=has_sole,
         amend_in_backoff=_UIC in backoff,
-        last_trailed_level=floor_map.get(_UIC),
+        ratchet_floor=floor_map.get(_UIC),
         already_reanchored=already_reanchored,
     )
     return _Case(_UIC, pos, plan, legs, view, sdv, frozenset(labels))

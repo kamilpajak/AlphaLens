@@ -45,7 +45,7 @@ def _trail_view(**overrides: object) -> StopDecisionView:
         "reaction": _TRAIL,
         "has_sole_standalone_stop": True,
         "amend_in_backoff": False,
-        "last_trailed_level": None,
+        "ratchet_floor": None,
         "already_reanchored": False,
     }
     base.update(overrides)
@@ -63,7 +63,7 @@ def _reanchor_view(**overrides: object) -> StopDecisionView:
         "reaction": _REANCHOR,
         "has_sole_standalone_stop": True,
         "amend_in_backoff": False,
-        "last_trailed_level": None,
+        "ratchet_floor": None,
         "already_reanchored": False,
     }
     base.update(overrides)
@@ -201,31 +201,29 @@ class TrailRatchetTest(unittest.TestCase):
     trailed level by ``TRAIL_STEP_EPS``. The base view places 103.0."""
 
     def test_inside_the_step_below_the_level_is_vetoed(self) -> None:
-        self.assertIsNone(decide_stop(_trail_view(last_trailed_level=102.985)))
+        self.assertIsNone(decide_stop(_trail_view(ratchet_floor=102.985)))
 
     def test_inside_the_step_above_the_level_is_vetoed(self) -> None:
-        self.assertIsNone(decide_stop(_trail_view(last_trailed_level=103.01)))
+        self.assertIsNone(decide_stop(_trail_view(ratchet_floor=103.01)))
 
     def test_a_floor_far_above_the_level_is_vetoed(self) -> None:
-        self.assertIsNone(decide_stop(_trail_view(last_trailed_level=200.0)))
+        self.assertIsNone(decide_stop(_trail_view(ratchet_floor=200.0)))
 
     def test_exactly_one_step_below_is_still_vetoed(self) -> None:
         """The daemon compares with ``<=``; ``(h - 0.02) + 0.02 == h`` is exact
         for every level at or above 1.0."""
-        self.assertIsNone(decide_stop(_trail_view(last_trailed_level=103.0 - TRAIL_STEP_EPS)))
+        self.assertIsNone(decide_stop(_trail_view(ratchet_floor=103.0 - TRAIL_STEP_EPS)))
 
     def test_clearing_the_step_fires(self) -> None:
-        self.assertAlmostEqual(
-            decide_stop(_trail_view(last_trailed_level=102.975)), 103.0, places=9
-        )
+        self.assertAlmostEqual(decide_stop(_trail_view(ratchet_floor=102.975)), 103.0, places=9)
 
     def test_a_floor_far_below_fires(self) -> None:
-        self.assertAlmostEqual(decide_stop(_trail_view(last_trailed_level=50.0)), 103.0, places=9)
+        self.assertAlmostEqual(decide_stop(_trail_view(ratchet_floor=50.0)), 103.0, places=9)
 
     def test_the_ratchet_gates_on_the_clamped_level_not_the_proposal(self) -> None:
         # proposed 106.0 clears 103.78 + eps; the clamped 103.792 does not.
         self.assertIsNone(
-            decide_stop(_trail_view(peak=110.0, last_price=104.0, last_trailed_level=103.78))
+            decide_stop(_trail_view(peak=110.0, last_price=104.0, ratchet_floor=103.78))
         )
 
     def test_a_nan_floor_does_not_ratchet(self) -> None:
@@ -233,11 +231,11 @@ class TrailRatchetTest(unittest.TestCase):
         ``isfinite`` guard, and ``x <= nan + eps`` is False. Hardening belongs
         to step 2, when one implementation remains."""
         self.assertAlmostEqual(
-            decide_stop(_trail_view(last_trailed_level=float("nan"))), 103.0, places=9
+            decide_stop(_trail_view(ratchet_floor=float("nan"))), 103.0, places=9
         )
 
     def test_an_infinite_floor_vetoes(self) -> None:
-        self.assertIsNone(decide_stop(_trail_view(last_trailed_level=float("inf"))))
+        self.assertIsNone(decide_stop(_trail_view(ratchet_floor=float("inf"))))
 
 
 class ReanchorArmTest(unittest.TestCase):
@@ -264,7 +262,7 @@ class ReanchorArmTest(unittest.TestCase):
         for overrides in (
             {"peak": 999.0, "last_price": 999.0},
             {"peak": float("nan"), "last_price": 0.0},
-            {"last_trailed_level": 999.0},
+            {"ratchet_floor": 999.0},
         ):
             with self.subTest(overrides=overrides):
                 self.assertEqual(decide_stop(_reanchor_view(**overrides)), base)
@@ -288,7 +286,7 @@ class ShapeTest(unittest.TestCase):
                 "reaction",
                 "has_sole_standalone_stop",
                 "amend_in_backoff",
-                "last_trailed_level",
+                "ratchet_floor",
                 "already_reanchored",
             ],
         )

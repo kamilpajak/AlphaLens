@@ -65,9 +65,26 @@ class StopDecisionView:
     disaster floor, the never-below level and the 1R denominator; ``peak`` the
     high-water mark since entry and ``last_price`` the latest observed price,
     either absent when the feed has not supplied one; ``reaction`` what the
-    document declared; ``last_trailed_level`` the level the stop was last
-    confirmed trailed to, the ratchet floor. The three booleans are predicate
-    results, never the things the predicates read (see the module docstring).
+    document declared; ``ratchet_floor`` the level a new proposal must clear.
+    The three booleans are predicate results, never the things the predicates
+    read (see the module docstring).
+
+    ``ratchet_floor`` is COMPOSED BY THE CALLER and was called
+    ``last_trailed_level`` until 2026-10-02. The rename is the field catching up
+    with what it has to carry: the live daemon ratchets against the HIGHER of the
+    level a trail last moved the stop to and the level the stop is RESTING at,
+    because the journaled level can lag the resting one after a lost marker or an
+    owner-raised stop (#1514). A field named for one of the two would be read as
+    carrying only that one, and a caller that passed only the trailed level would
+    let a proposal inside ``TRAIL_STEP_EPS`` of the resting stop through -- which
+    is how a stop resting at 56.00 could be patched down to 55.502.
+
+    Composing it is the caller's job rather than this module's because both
+    inputs are the caller's own state: one is a journal fold and the other is the
+    price on an order leg, and section 3.2 keeps order-shaped data out of this
+    view. Compose it in that order -- trailed first, resting second -- because
+    ``max`` keeps its first argument when the comparison is False, so the two
+    orders disagree on a NaN input.
     """
 
     avg_price: float
@@ -77,7 +94,7 @@ class StopDecisionView:
     reaction: ReactionPrimitive | None
     has_sole_standalone_stop: bool
     amend_in_backoff: bool
-    last_trailed_level: float | None
+    ratchet_floor: float | None
     already_reanchored: bool
 
 
@@ -142,7 +159,7 @@ def _trail(view: StopDecisionView, policy: ExitPolicy) -> float | None:
     if clamped is None:
         return None  # never-below-brief-floor, or a degenerate input
     # RATCHET on the clamped level, compared raw like the daemon does.
-    floor = view.last_trailed_level
+    floor = view.ratchet_floor
     if floor is not None and clamped <= floor + TRAIL_STEP_EPS:
         return None
     return clamped
