@@ -277,5 +277,131 @@ class TestTheWiringAndNotJustTheAccessor(unittest.TestCase):
         self.assertEqual(calls, [], "the brief recovery step must not touch a feed population")
 
 
+class TestThePublicationGateDoesNotApplyToAFeed(unittest.TestCase):
+    """Found by adversarial review of this PR, and it would have been silent.
+
+    `published_before_open` asks whether the stored LIST existed before the arrival
+    open — a question about a thematic brief being rewritten after it. A news feed has
+    no list and no publication stamp, so the gate answers from the journal window
+    (2026-05-19 .. 2026-09-15) and returns None outside it.
+
+    None makes `compute_selection_label` return a uniform `publication_unknown`, which
+    is NON-TERMINAL. So every feed row from 2026-09-16 onward would be recomputed on
+    every run and never carry a label, while the job reported success — and that window
+    is exactly the post-Jev-release sample the wide population exists to collect.
+    """
+
+    def test_a_feed_date_after_the_journal_window_is_not_publication_unknown(self):
+        from alphalens_pipeline.thematic.publication import HISTORY_RECORD_WINDOW
+
+        after = HISTORY_RECORD_WINDOW[1] + dt.timedelta(days=30)
+        from alphalens_pipeline.feedback.split_audit import SpanAudit
+
+        clean = SpanAudit(answered=True, breaks=frozenset(), unchecked=frozenset())
+        label = sl.compute_selection_label(
+            {},
+            "AAPL",
+            brief_date=after,
+            published_before_open=sl.publication_verdict_for(
+                sl.news_population_source(Path("nowhere")), after, population=None
+            ),
+            last_closed_session=dt.date(2026, 12, 31),
+            newest_session=dt.date(2026, 12, 31),
+            audit=clean,
+        )
+        self.assertNotEqual(
+            label.statuses[sl.ar_key(20)],
+            sl.STATUS_PUBLICATION_UNKNOWN,
+            "a feed row has no publication to be unknown about",
+        )
+
+    def test_the_first_journal_date_is_not_set_final_after_open_for_a_feed(self):
+        from alphalens_pipeline.thematic.publication import HISTORY_RECORD_WINDOW
+
+        first = HISTORY_RECORD_WINDOW[0]
+        verdict = sl.publication_verdict_for(
+            sl.news_population_source(Path("nowhere")), first, population=None
+        )
+        self.assertIsNot(verdict, False, "a feed has no list that could be set after the open")
+
+    def test_the_thematic_source_still_consults_the_gate(self):
+        # The gate is real for a brief and must keep working: the whole point of #1494.
+        from alphalens_pipeline.thematic.publication import HISTORY_RECORD_WINDOW
+
+        src = sl.thematic_population_source(Path("b"), Path("s"))
+        pop = pd.DataFrame([{"ticker": "AAPL", sl.BRIEF_PUBLISHED_AT: None}])
+        after = HISTORY_RECORD_WINDOW[1] + dt.timedelta(days=30)
+        self.assertIsNone(sl.publication_verdict_for(src, after, population=pop))
+
+    def test_a_source_declares_whether_the_gate_applies(self):
+        self.assertTrue(sl.thematic_population_source(Path("b"), Path("s")).publication_gate)
+        self.assertFalse(sl.news_population_source(Path("nowhere")).publication_gate)
+
+
+class TestTheGateFlagReachesTheWrittenRow(unittest.TestCase):
+    """The third time in this change that a test on the accessor missed the path.
+
+    Asserting on `publication_verdict_for` passes even when `_stamp_date` ignores
+    `source.publication_gate` and consults the journal anyway. Only a run that reads
+    the row it wrote can tell.
+    """
+
+    def _stamp(self, source, date):
+        from collections import Counter
+
+        with TemporaryDirectory() as d:
+            out = Path(d) / "labels"
+            out.mkdir()
+            sl._stamp_date(
+                date,
+                source=source,
+                labels_dir=out,
+                reader=sl._SessionReader(Path(d) / "no_prices"),
+                now=dt.datetime(2027, 6, 1, tzinfo=dt.UTC),
+                last_closed_session=dt.date(2027, 5, 28),
+                newest_session=dt.date(2027, 5, 28),
+                counts=Counter(),
+                exchange="XNYS",
+                references=sl._ReferenceCloses(lambda *a, **k: None),
+            )
+            path = out / f"{date.isoformat()}.parquet"
+            return pd.read_parquet(path) if path.exists() else pd.DataFrame()
+
+    def test_a_feed_row_past_the_journal_window_is_never_publication_unknown(self):
+        from alphalens_pipeline.thematic.publication import HISTORY_RECORD_WINDOW
+
+        after = HISTORY_RECORD_WINDOW[1] + dt.timedelta(days=30)
+        with TemporaryDirectory() as d:
+            news = Path(d) / "news"
+            news.mkdir()
+            pd.DataFrame([{"id": "a", "tickers": ["AAPL"], "source": "polygon"}]).to_parquet(
+                news / f"{after.isoformat()}.parquet", index=False
+            )
+            rows = self._stamp(sl.news_population_source(news), after)
+        self.assertEqual(len(rows), 1)
+        self.assertNotEqual(
+            rows[sl.status_key(20)].iloc[0],
+            sl.STATUS_PUBLICATION_UNKNOWN,
+            "the gate must not be consulted for a population that has no list",
+        )
+
+    def test_a_brief_row_past_the_journal_window_still_is_publication_unknown(self):
+        # The gate is real for a brief with no stamp, and #1494 is why. If this ever
+        # stops holding, the flag has been applied to the wrong source.
+        from alphalens_pipeline.thematic.publication import HISTORY_RECORD_WINDOW
+
+        after = HISTORY_RECORD_WINDOW[1] + dt.timedelta(days=30)
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "b").mkdir()
+            (root / "s").mkdir()
+            pd.DataFrame([{"ticker": "AAPL", "theme": "ai", "source": "thematic"}]).to_parquet(
+                root / "b" / f"{after.isoformat()}.parquet", index=False
+            )
+            rows = self._stamp(sl.thematic_population_source(root / "b", root / "s"), after)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[sl.status_key(20)].iloc[0], sl.STATUS_PUBLICATION_UNKNOWN)
+
+
 if __name__ == "__main__":
     unittest.main()

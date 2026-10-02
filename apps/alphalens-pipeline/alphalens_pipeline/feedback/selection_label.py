@@ -534,6 +534,14 @@ class PopulationSource:
     dates: Callable[[], set[dt.date]]
     build: Callable[[dt.date], pd.DataFrame]
     pre_open_recovery: bool
+    #: Whether the publication gate applies. It asks whether the stored LIST existed
+    #: before the arrival open, which is a fact about a thematic brief being rewritten
+    #: after it (#1494). A news feed has no list and no stamp, so the gate answers from
+    #: the journal window and returns None outside it — and None means a uniform
+    #: `publication_unknown`, which is NON-TERMINAL. Every feed row after the window
+    #: would then be recomputed forever and never carry a label, while the job reported
+    #: success. False here says the question does not apply.
+    publication_gate: bool
     #: Whether a shadow file existed for that date. Reported by the source rather than
     #: inferred from the population, because the two disagree on a date whose
     #: population is EMPTY while a shadow file exists: inferring it from the frame
@@ -561,6 +569,7 @@ def thematic_population_source(briefs_dir: Path, shadow_dir: Path) -> Population
         dates=lambda: set(briefs) | set(shadows),
         build=build,
         pre_open_recovery=True,
+        publication_gate=True,
         shadow_available=lambda date: date in shadows,
     )
 
@@ -617,6 +626,7 @@ def news_population_source(news_dir: Path = DEFAULT_NEWS_DIR) -> PopulationSourc
         dates=lambda: set(files),
         build=build,
         pre_open_recovery=False,
+        publication_gate=False,
         shadow_available=lambda _date: False,
     )
 
@@ -868,6 +878,24 @@ def _read_existing_labels(out_path: Path) -> dict[str, dict[str, Any]]:
     return existing
 
 
+def publication_verdict_for(
+    source: PopulationSource, brief_date: dt.date, *, population: pd.DataFrame | None
+) -> bool | None:
+    """The publication verdict a source's rows should be judged against.
+
+    `True` when the gate does not apply, which is not a claim that something was
+    published: it is the only value that lets a row be labelled at all, and for a
+    population with no list there is nothing the gate could be protecting against.
+    """
+    if not source.publication_gate:
+        return True
+    if population is None or not len(population):
+        return None
+    return published_before_open(
+        brief_date, _first_present(population[BRIEF_PUBLISHED_AT]), DEFAULT_EXCHANGE
+    )
+
+
 def _date_published_before_open(
     brief_date: dt.date,
     population: pd.DataFrame,
@@ -1049,7 +1077,11 @@ def _stamp_date(
     if population.empty and not existing:
         return False, 0
 
-    published = _date_published_before_open(brief_date, population, recovered, exchange)
+    published = (
+        _date_published_before_open(brief_date, population, recovered, exchange)
+        if source.publication_gate
+        else True
+    )
     pop_records = {
         r["ticker"]: {k: _normalise(v) for k, v in r.items()} for r in population.to_dict("records")
     }
@@ -1181,5 +1213,6 @@ __all__ = [
     "enrich_selection_labels",
     "estimate_pre_window",
     "news_population_source",
+    "publication_verdict_for",
     "thematic_population_source",
 ]
