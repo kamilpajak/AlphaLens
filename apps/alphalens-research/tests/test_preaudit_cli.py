@@ -53,12 +53,14 @@ class TestPreauditUnknownStrategy(unittest.TestCase):
     def test_unknown_strategy_exits_2(self):
         result = runner.invoke(app, ["preaudit", "__not_a_real_strategy__"])
         self.assertEqual(result.exit_code, 2)
-        self.assertIn("not in audit._SCRIPTS", result.stdout + (result.stderr or ""))
+        self.assertIn(
+            "not in preaudit.strategies.AUDIT_SCRIPTS", result.stdout + (result.stderr or "")
+        )
 
 
 class TestPreauditNoProfile(unittest.TestCase):
     def test_strategy_in_scripts_but_no_profile_exits_2(self):
-        # tri_factor is in _SCRIPTS but has no SmokeProfile today.
+        # tri_factor is in AUDIT_SCRIPTS but has no SmokeProfile today.
         result = runner.invoke(app, ["preaudit", "tri_factor"])
         self.assertEqual(result.exit_code, 2)
 

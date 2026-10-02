@@ -37,36 +37,18 @@ import typer
 
 # Experiment scripts live in the alphalens-research workspace member (they
 # import from both alphalens_research.* and alphalens_pipeline.*; keeping
-# them with the research lab matches their development cadence). This CLI
-# command resolves their paths via the workspace root.
-#   apps/alphalens-pipeline/alphalens_cli/commands/audit.py  (this file)
-#   apps/alphalens-research/scripts/                          (target dir)
-_WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
-_RESEARCH_SCRIPTS = _WORKSPACE_ROOT / "apps" / "alphalens-research" / "scripts"
+# them with the research lab matches their development cadence). The registry
+# that maps a short strategy name to its script lives in the lab, beside the
+# scripts it names:
+#   apps/alphalens-research/alphalens_research/preaudit/strategies.py
+# It is read lazily inside the command body, the way this module already reads
+# the rest of the lab, so `alphalens_cli` keeps no top-level import of
+# `alphalens_research` (ADR 0011).
 
-# Mapping of short strategy names to their experiment script paths.
-# Single source of truth — moved here from scripts/audit_multi_phase.py
-# so that adding a new strategy means editing exactly one file.
-_SCRIPTS: dict[str, Path] = {
-    "tri_factor": _RESEARCH_SCRIPTS / "experiment_tri_factor_edgar.py",
-    "momentum_lowvol": _RESEARCH_SCRIPTS / "experiment_momentum_lowvol_combo.py",
-    "constrained_momentum": _RESEARCH_SCRIPTS / "experiment_constrained_momentum.py",
-    "constrained_contrarian": _RESEARCH_SCRIPTS / "experiment_constrained_contrarian.py",
-    "quality_momentum": _RESEARCH_SCRIPTS / "experiment_quality_momentum_combo.py",
-    "longshort_mom_lowvol": _RESEARCH_SCRIPTS / "experiment_longshort_mom_lowvol.py",
-    "regime_overlay": _RESEARCH_SCRIPTS / "experiment_regime_overlay.py",
-    "vol_target_overlay": _RESEARCH_SCRIPTS / "experiment_vol_target_overlay.py",
-    "v7_options_implied": _RESEARCH_SCRIPTS / "experiment_v7_options_implied.py",
-    "v8_literature_direct": _RESEARCH_SCRIPTS / "experiment_v8_literature_direct.py",
-    "v9_sign_constrained": _RESEARCH_SCRIPTS / "experiment_v9_sign_constrained.py",
-    "v9_cross_sectional_residual": _RESEARCH_SCRIPTS / "experiment_v9_cross_sectional_residual.py",
-    "insider_form4_opportunistic": _RESEARCH_SCRIPTS / "experiment_insider_form4_opportunistic.py",
-    "insider_pc_compound": _RESEARCH_SCRIPTS / "experiment_insider_pc_compound.py",
-    "ev_fcff_yield": _RESEARCH_SCRIPTS / "experiment_ev_fcff_yield.py",
-    "pead_pss_v2_2026_05_13": _RESEARCH_SCRIPTS / "experiment_pead_pss_v2.py",
-    "idiosyncratic_momentum_2026_05_14_v1": _RESEARCH_SCRIPTS
-    / "experiment_idiosyncratic_momentum.py",
-}
+# Still needed at module level: the `--out` default below is a `typer.Option`,
+# and typer evaluates option defaults at import time, so this cannot be
+# resolved lazily the way the registry is.
+_WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 
 
 def audit_command(
@@ -92,20 +74,26 @@ def audit_command(
     ),
 ) -> None:
     """Run the multi-phase audit driver for a registered strategy."""
-    # Lazy import — running `alphalens_research --help` should not import the OSS
-    # methodology bundle (statsmodels, scipy) which adds startup overhead.
+    # Both imports are lazy, for two DIFFERENT reasons — do not promote either
+    # to module level:
+    #   - `phase_robust_backtesting`: `alphalens --help` should not pay for the
+    #     OSS methodology bundle (statsmodels, scipy) on every CLI invocation.
+    #   - `alphalens_research`: ADR 0011 forbids a top-level `alphalens_cli` ->
+    #     `alphalens_research` import, and `test_module_dependencies` enforces
+    #     it with `top_level_only`, so moving this up turns the gate red.
+    from alphalens_research.preaudit.strategies import AUDIT_SCRIPTS
     from phase_robust_backtesting.audit_multi_phase import run_audit
 
-    if strategy not in _SCRIPTS:
+    if strategy not in AUDIT_SCRIPTS:
         typer.echo(
-            f"Unknown strategy {strategy!r}. Choices: {sorted(_SCRIPTS)}",
+            f"Unknown strategy {strategy!r}. Choices: {sorted(AUDIT_SCRIPTS)}",
             err=True,
         )
         raise typer.Exit(code=2)
 
     try:
         rc = run_audit(
-            _SCRIPTS[strategy],
+            AUDIT_SCRIPTS[strategy],
             ctx.args,
             n_phases=n_phases,
             rebalance_stride=rebalance_stride,

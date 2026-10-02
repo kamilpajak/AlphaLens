@@ -22,8 +22,6 @@ from pathlib import Path
 
 import typer
 
-from alphalens_cli.commands.audit import _SCRIPTS
-
 # ``alphalens_research.preaudit.*`` is loaded lazily inside command bodies so
 # that ``import alphalens_cli.commands.preaudit`` (which fires whenever the
 # user runs *any* ``alphalens ...`` command) doesn't pull the research tier
@@ -42,10 +40,11 @@ _DEFAULT_SMOKE_TIMEOUT_S = 600
 def _resolve_profile(strategy: str):
     """Return the SmokeProfile or raise typer.Exit(2) with a helpful msg."""
     from alphalens_research.preaudit.profiles import SMOKE_PROFILES
+    from alphalens_research.preaudit.strategies import AUDIT_SCRIPTS
 
-    if strategy not in _SCRIPTS:
+    if strategy not in AUDIT_SCRIPTS:
         typer.echo(
-            f"ERROR: strategy {strategy!r} not in audit._SCRIPTS. Known: {sorted(_SCRIPTS)}",
+            f"ERROR: strategy {strategy!r} not in preaudit.strategies.AUDIT_SCRIPTS. Known: {sorted(AUDIT_SCRIPTS)}",
             err=True,
         )
         raise typer.Exit(code=2)

@@ -172,6 +172,20 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # The lab is a CONSUMER of the workspace, never a consumer of the
+        # command-line adapter. `alphalens_cli` is a composition root: it
+        # imports from everywhere (116 outbound edges) and nothing imports it
+        # (1 inbound, now 0). The one import that existed reached for a
+        # registry of research scripts that the CLI happened to hold —
+        # `_SCRIPTS` — which put a context cycle between the lab and the
+        # composition root. The registry now lives in the lab, where its
+        # contents do.
+        "name": "alphalens_research must not import from alphalens_cli (the CLI is a composition root)",
+        "from_pkg": "alphalens_research",
+        "forbidden_prefix": "alphalens_cli",
+        "exemptions": set(),
+    },
+    {
         # Broker-manager extraction, PR-4: execution never reads the replay
         # ledger. The feedback replay engines are a MEASUREMENT tier (ADR
         # 0012); brokers reaching into feedback would let live execution

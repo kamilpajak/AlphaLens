@@ -57,7 +57,7 @@ class TestRunSmokeUnknownStrategy(unittest.TestCase):
         self.assertEqual(result.status, SmokeStatus.UNKNOWN_STRATEGY)
 
     def test_strategy_in_scripts_but_no_profile_returns_no_profile(self):
-        # tri_factor exists in _SCRIPTS but has no SmokeProfile today.
+        # tri_factor exists in AUDIT_SCRIPTS but has no SmokeProfile today.
         result = run_smoke("tri_factor")
         self.assertEqual(result.status, SmokeStatus.NO_PROFILE)
 
@@ -236,7 +236,7 @@ class TestRunSmokeStrategyWithoutHashGuard(unittest.TestCase):
 
     def setUp(self):
         self.dummy_profile = SmokeProfile(
-            strategy="tri_factor",  # exists in _SCRIPTS, no hash guard
+            strategy="tri_factor",  # exists in AUDIT_SCRIPTS, no hash guard
             smoke_window=(date(2019, 1, 1), date(2019, 1, 31)),
             extra_args=("--quick",),
             data_deps=(
