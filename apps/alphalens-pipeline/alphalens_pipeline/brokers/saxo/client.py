@@ -200,6 +200,11 @@ class SaxoClient:
         self._throttle_lock = threading.Lock()
         self._client_info: dict[str, Any] | None = None
 
+    @property
+    def base_url(self) -> str:
+        """The one gateway this client talks to (SIM unless a LIVE grant built it)."""
+        return self._base_url
+
     @classmethod
     def from_env(cls, **kw: Any) -> SaxoClient:
         """Construct with the OAuth provider when a token store exists, else

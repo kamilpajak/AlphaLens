@@ -54,10 +54,18 @@ from broker_contract.sizing import TradeSetupNotPlannableError
 
 from alphalens_pipeline.brokers import execution as execution_policy
 from alphalens_pipeline.brokers.automanager import live_rails
+from alphalens_pipeline.brokers.fill_history import (
+    CostBooking,
+    Execution,
+    FillHistory,
+    OrderActivity,
+    ReadWindow,
+)
 from alphalens_pipeline.brokers.notifications import NotificationPort
 from alphalens_pipeline.brokers.saxo.client import (
     LIVE_ACCOUNT_KEY_ENV,
     LIVE_STANDING_ENV,
+    SIM_BASE_URL,
     SaxoAuthError,
     SaxoClient,
     SaxoError,
@@ -144,6 +152,17 @@ _IMMEDIATE_ENTRY_DURATIONS = {
     "day": "DayOrder",
     "ioc": "ImmediateOrCancel",
 }
+
+
+# `FillHistory.reports_skipped_reason` on SIM: the SIM report endpoints answer
+# with canned rows from other accounts, so reading them would be worse than
+# not reading them.
+_SIM_REPORTS_UNUSABLE = "sim_reports_unusable"
+
+
+def _iso_z(moment: dt.datetime) -> str:
+    """``2026-10-03T15:30:00Z`` — the UTC spelling the audit read takes."""
+    return moment.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _today() -> dt.date:
@@ -345,6 +364,9 @@ class SaxoBroker:
         # order for the process lifetime, and the daemon restarts daily-ish —
         # eviction would only reintroduce re-audits.
         self._order_outcome_cache: dict[str, OrderState] = {}
+        # uic -> instrument details for `tick_size`: one GET per uic per
+        # instance; a one-shot read command never needs a fresh copy.
+        self._tick_details_cache: dict[int, dict[str, Any]] = {}
 
     # ----- reads (P1) -----
 
@@ -1617,6 +1639,90 @@ class SaxoBroker:
             raw_status=diagnostics,
             avg_fill_price=avg_fill_price,
         )
+
+    # ----- fill history (#1701, `alphalens broker trades`) -----
+
+    def list_fill_history(self, since: dt.datetime, until: dt.datetime) -> FillHistory:
+        """The broker's record of orders and fills between ``since`` and ``until``.
+
+        Three GETs, never a write: the audit order activities over the exact
+        datetimes, then the trades and bookings reports over the same span
+        padded by ONE DAY on both ends, in dates. The reports filter on the
+        trade date and the booking date, and the LIVE probe of 2026-10-03 could
+        not tell whether those dates are UTC or account-local, so the padding
+        covers both readings; trades are then kept by ``TradeExecutionTime``
+        and bookings by the trade they belong to. The audit endpoint ignores
+        ``Uic``, so nothing here filters by instrument.
+
+        On SIM the report endpoints return canned rows from other accounts
+        (memory: reference_saxo_sim_reports_are_canned_fixtures), so they are
+        not called and the result says why."""
+        since_utc = since.astimezone(dt.UTC)
+        until_utc = until.astimezone(dt.UTC)
+        with _translate_saxo_errors():
+            client_key = str(self._client.get_client_info()["ClientKey"])
+            payload = self._client.get_order_activities(
+                client_key,
+                entry_type="All",
+                from_datetime=_iso_z(since_utc),
+                to_datetime=_iso_z(until_utc),
+            )
+            activities = tuple(
+                OrderActivity.from_vendor_row(row)
+                for row in payload.get("Data") or []
+                if isinstance(row, dict)
+            )
+            audit_window = ReadWindow(_iso_z(since_utc), _iso_z(until_utc), len(activities))
+            if self._client.base_url == SIM_BASE_URL:
+                return FillHistory(
+                    activities=activities,
+                    executions=None,
+                    bookings=None,
+                    audit_window=audit_window,
+                    reports_skipped_reason=_SIM_REPORTS_UNUSABLE,
+                )
+            account_key = self._account_key or self._resolve_account_key()
+            from_date = (since_utc.date() - dt.timedelta(days=1)).isoformat()
+            to_date = (until_utc.date() + dt.timedelta(days=1)).isoformat()
+            trade_rows = self._client.get_trades_report(
+                client_key, account_key=account_key, from_date=from_date, to_date=to_date
+            )
+            booking_rows = self._client.get_bookings_report(
+                client_key, account_key=account_key, from_date=from_date, to_date=to_date
+            )
+        executions = tuple(
+            execution
+            for execution in (
+                Execution.from_vendor_row(row) for row in trade_rows if isinstance(row, dict)
+            )
+            if execution.execution_time is not None
+            and since_utc <= execution.execution_time <= until_utc
+        )
+        kept_trades = {execution.trade_id for execution in executions}
+        bookings = tuple(
+            booking
+            for booking in (
+                CostBooking.from_vendor_row(row) for row in booking_rows if isinstance(row, dict)
+            )
+            if booking.related_trade_id in kept_trades
+        )
+        return FillHistory(
+            activities=activities,
+            executions=executions,
+            bookings=bookings,
+            audit_window=audit_window,
+            trades_window=ReadWindow(from_date, to_date, len(trade_rows)),
+            bookings_window=ReadWindow(from_date, to_date, len(booking_rows)),
+        )
+
+    def tick_size(self, uic: int, price: float) -> float | None:
+        """The instrument tick at ``price``, from one details GET per uic."""
+        details = self._tick_details_cache.get(int(uic))
+        if details is None:
+            with _translate_saxo_errors():
+                details = self._client.get_instrument_details(int(uic))
+            self._tick_details_cache[int(uic)] = details
+        return self._tick_size_for(price, details)
 
     def get_open_position_references(self) -> list[str]:
         """``ExternalReference`` values of OPEN positions (fill cross-check).
