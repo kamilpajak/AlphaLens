@@ -14,8 +14,9 @@ every vendor-specific edge case.
 What this client does NOT do:
 - Disk caching. Per-ticker JSON cache is an EARNINGS-specific concern
   (resumable 3-week backfill, day-boundary quota resets) and lives in
-  ``av_earnings_client``. Fundamentals fetcher consumers do their own
-  ``fundamentals/cache.py`` layering.
+  ``av_earnings_client``. A fundamentals caller that wants a disk cache
+  brings its own; the one this file used to point at had no caller and was
+  removed.
 - PIT filtering on ``fiscalDateEnding``. Vendor-agnostic concern owned
   by the fundamentals adapter.
 - Retry orchestration around quota refills. ``av_earnings_client`` owns
