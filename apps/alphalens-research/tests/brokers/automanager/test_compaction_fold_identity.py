@@ -24,6 +24,7 @@ import unittest
 from typing import Any
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from broker_contract.sizing import TpTranchePlan
 
 _TRAIL = {"kind": "trailing_stop", "arm_trigger_r": 0.5, "trail_frac": 0.6}
@@ -308,10 +309,10 @@ def _every_fold(lines: list[dict[str, Any]]) -> dict[str, Any]:
         "reanchored": cl._fold_reanchored_markers(lines),
         "reanchored_levels": cl._fold_reanchored_stop_levels(lines),
         "trailed": cl._fold_trailed_since_latest_plan(lines),
-        "tranche_plans": cl.fold_tranche_plans(lines),
+        "tranche_plans": sj.fold_tranche_plans(lines),
         "tranche_currencies": cl.fold_tranche_plan_currencies(lines),
         "fired": cl._fold_fired_since_latest_plan(lines),
-        "governing_keys": cl._fold_governing_plan_pick_keys(lines),
+        "governing_keys": sj._fold_governing_plan_pick_keys(lines),
         "closures": cl._fold_round_trip_closures_since_latest_plan(lines),
         "standing": cl._fold_standing_stop_ids(lines),
         "owed": cl._derive_owed_sibling_retires(lines),

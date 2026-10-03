@@ -10,11 +10,12 @@ from __future__ import annotations
 import json
 import unittest
 
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.control_loop import (
     _build_tranche_plan_line,
     _fold_round_trip_closures_since_latest_plan,
-    fold_tranche_plans,
 )
+from alphalens_pipeline.brokers.automanager.stop_journal import fold_tranche_plans
 from broker_contract.sizing import TpTranchePlan
 
 
@@ -377,7 +378,7 @@ class TestADeclaredEmptyLadderIsJournaled(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.path = Path(tmp.name) / "standalone_stops.jsonl"
-        patcher = mock.patch.object(cl, "_standalone_stop_journal_path", lambda: self.path)
+        patcher = mock.patch.object(sj, "_standalone_stop_journal_path", lambda: self.path)
         patcher.start()
         self.addCleanup(patcher.stop)
 

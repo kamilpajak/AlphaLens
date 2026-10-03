@@ -32,6 +32,7 @@ from __future__ import annotations
 import itertools
 import unittest
 
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.control_loop import (
     _build_planned_line,
     _compact_standalone_stop_journal_lines,
@@ -97,13 +98,12 @@ class ThePlannedLineCarriesTheTradeIdentityTest(unittest.TestCase):
         deleting the flag's effect would look like a passing suite from the
         other direction — every scenario here would still reset, via the
         `tranche_plan` line most of them happen to contain."""
-        import alphalens_pipeline.brokers.automanager.control_loop as cl
 
         line = _planned("KO-2026-09-08-entry-t0", pick_key=_B)
         for include, consumed in ((False, False), (True, True)):
             with self.subTest(include_planned=include):
                 self.assertIs(
-                    cl._apply_generation_reset(
+                    sj._apply_generation_reset(
                         "planned", line, _UIC, {}, ({},), include_planned=include
                     ),
                     consumed,

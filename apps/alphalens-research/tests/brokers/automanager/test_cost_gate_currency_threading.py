@@ -16,6 +16,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails, live_exit_engine
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.costs import (
     XAMS_FEE_CARD,
     CostGateFacts,
@@ -96,7 +97,7 @@ class TestTranchePlanLineStampsCurrencies(unittest.TestCase):
         class _Placement:
             disaster_stop_price = 90.0
 
-        with mock.patch.object(cl, "_append_standalone_stop_journal", lines.append):
+        with mock.patch.object(sj, "_append_standalone_stop_journal", lines.append):
             cl._journal_tranche_plan(
                 plan=_Plan(),
                 exit_spec=None,
@@ -260,7 +261,7 @@ class TestMicThreading(unittest.TestCase):
         class _Placement:
             disaster_stop_price = 90.0
 
-        with mock.patch.object(cl, "_append_standalone_stop_journal", lines.append):
+        with mock.patch.object(sj, "_append_standalone_stop_journal", lines.append):
             cl._journal_tranche_plan(
                 plan=_Plan(),
                 exit_spec=None,
@@ -445,7 +446,7 @@ class TestCurrencyFoldParity(unittest.TestCase):
     def test_both_folds_govern_the_same_uic_set(self) -> None:
         lines = self._lines()
         self.assertEqual(
-            set(cl.fold_tranche_plans(lines)), set(cl.fold_tranche_plan_currencies(lines))
+            set(sj.fold_tranche_plans(lines)), set(cl.fold_tranche_plan_currencies(lines))
         )
         self.assertEqual(cl.fold_tranche_plan_currencies(lines), {307: ("PLN", "PLN", None)})
 

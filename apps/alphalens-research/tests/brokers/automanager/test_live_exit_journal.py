@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     TrancheExit,
     _fire_telemetry,
@@ -49,7 +50,7 @@ class TestMarkTrancheFired(unittest.TestCase):
     def _capture(self):
         records: list[dict] = []
         return records, mock.patch.object(
-            cl, "_append_standalone_stop_journal", side_effect=records.append
+            sj, "_append_standalone_stop_journal", side_effect=records.append
         )
 
     def test_with_telemetry_nests_it_under_a_telemetry_key(self):

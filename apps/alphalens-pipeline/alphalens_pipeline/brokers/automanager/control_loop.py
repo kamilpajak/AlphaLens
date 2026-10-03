@@ -19,7 +19,6 @@ import json
 import logging
 import math
 import os
-import re
 import time
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, is_dataclass, replace
@@ -56,6 +55,7 @@ from alphalens_pipeline.brokers.automanager import (
     journal_snapshots,
     picks,
     state_paths,
+    stop_journal,
     trade_alerts,
 )
 from alphalens_pipeline.brokers.automanager.costs import (
@@ -775,68 +775,17 @@ def _fold_fired_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[in
     fired: dict[int, set[str]] = {}
     governing_key: dict[int, str] = {}
     for line in lines:
-        uic = _coerce(line, "uic", int)
+        uic = stop_journal._coerce(line, "uic", int)
         if uic is None:
             continue
         kind = line.get("kind")
-        if _apply_generation_reset(kind, line, uic, governing_key, (fired,)):
+        if stop_journal._apply_generation_reset(kind, line, uic, governing_key, (fired,)):
             continue
         if kind == "tranche_fired":
             tag = line.get("tag")
             if tag:
                 fired.setdefault(uic, set()).add(str(tag))
     return {u: frozenset(t) for u, t in fired.items()}
-
-
-def _apply_generation_reset(
-    kind: Any,
-    line: Mapping[str, Any],
-    uic: int,
-    governing_key: dict[int, str],
-    accumulators: tuple[dict[int, Any], ...],
-    *,
-    include_planned: bool = False,
-) -> bool:
-    """The identity-keyed generation reset shared by the fired/trailed folds
-    (see ``_fold_fired_since_latest_plan`` for the incident history): a keyless
-    plan line or one with a DIFFERENT ``pick_key`` clears the uic's
-    accumulators; a SAME-key re-append does not; a retraction always clears.
-    Returns True when the line was a plan/retraction line (the caller consumes
-    it and moves on).
-
-    ``include_planned`` (#1236) additionally treats ``planned`` /
-    ``planned_retracted`` lines as generation markers. OFF by default, and ON for
-    the TRAILED selection only: the fired-tranche and round-trip-closure folds are
-    about a TP ladder, which only a ``tranche_plan`` line describes, and widening
-    their reset would change what counts as an already-fired tranche. The trailed
-    level is different — it belongs to a POSITION, and a pick with no take-profit
-    journals no ``tranche_plan`` at all, so under the tranche-only rule its uic
-    inherited the previous position's level. Every pick journals ``planned``
-    lines, which is what makes them the right generation marker here. A
-    multi-tier pick writes several of them under ONE ``pick_key``, so the tiers
-    do not reset each other."""
-    plan_kinds = (_TRANCHE_PLAN_KIND, "planned") if include_planned else (_TRANCHE_PLAN_KIND,)
-    retracted_kinds = (
-        (_TRANCHE_PLAN_RETRACTED_KIND, _PLANNED_RETRACTED_KIND)
-        if include_planned
-        else (_TRANCHE_PLAN_RETRACTED_KIND,)
-    )
-    if kind in plan_kinds:
-        key = line.get("pick_key")
-        if key is None or str(key) != governing_key.get(uic):
-            for acc in accumulators:
-                acc.pop(uic, None)
-        if key is None:
-            governing_key.pop(uic, None)
-        else:
-            governing_key[uic] = str(key)
-        return True
-    if kind in retracted_kinds:
-        for acc in accumulators:
-            acc.pop(uic, None)
-        governing_key.pop(uic, None)
-        return True
-    return False
 
 
 def _fold_round_trip_closures_since_latest_plan(
@@ -868,12 +817,12 @@ def _fold_round_trip_closures_since_latest_plan(
     governing_key: dict[int, str] = {}
     generation_open: set[int] = set()
     for line in lines:
-        uic = _coerce(line, "uic", int)
+        uic = stop_journal._coerce(line, "uic", int)
         if uic is None:
             continue
         kind = line.get("kind")
-        if _apply_generation_reset(kind, line, uic, governing_key, (closures,)):
-            if kind == _TRANCHE_PLAN_KIND:
+        if stop_journal._apply_generation_reset(kind, line, uic, governing_key, (closures,)):
+            if kind == stop_journal._TRANCHE_PLAN_KIND:
                 generation_open.add(uic)
             else:
                 generation_open.discard(uic)
@@ -892,7 +841,7 @@ def _fold_closure_evidence(
     if kind == "stop_filled" and not line.get("partial"):
         ref = line.get("ref")
         closures.setdefault(uic, set()).add(
-            _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
+            stop_journal._pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
         )
     elif kind == _TRANCHE_FIRED_KIND and line.get("position_closed"):
         closures.setdefault(uic, set()).add(None)
@@ -1346,10 +1295,10 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         ):
             report.alerts += 1
         return
-    journal_lines = list(_iter_standalone_stop_journal())
+    journal_lines = list(stop_journal._iter_standalone_stop_journal())
     managed = _build_managed_exits(
         long_positions=long_positions,
-        tranche_plans=fold_tranche_plans(journal_lines),
+        tranche_plans=stop_journal.fold_tranche_plans(journal_lines),
         fired=_fold_fired_since_latest_plan(journal_lines),
         trailed=_fold_trailed_since_latest_plan(journal_lines),
         plan_currencies=fold_tranche_plan_currencies(journal_lines),
@@ -1500,7 +1449,7 @@ def _announce_fired_tranches(
             # after it.
             _retire_sibling_watches(
                 deps,
-                _fold_governing_plan_pick_keys(journal_lines).get(tranche.uic),
+                stop_journal._fold_governing_plan_pick_keys(journal_lines).get(tranche.uic),
                 report,
                 trigger=f"tranche {tp_label_from_tag(tranche.tag)} closed the position",
             )
@@ -1627,7 +1576,7 @@ def _run_protection_pass(
     declaring a trail the pass takes the exact 2-arg build call and fetches
     nothing."""
     try:
-        trailing_uics = _uics_moving_their_stop(_iter_standalone_stop_journal())
+        trailing_uics = _uics_moving_their_stop(stop_journal._iter_standalone_stop_journal())
         if trailing_uics:
             peak_by_uic, last_price_by_uic = _fetch_protection_peaks(
                 deps, report, uics=trailing_uics
@@ -2949,7 +2898,7 @@ def _journal_entry_planned_disaster(record: Mapping[str, Any], uic: int, entry_c
         )
         raise _EntryArmAbortError  # never place a trail we cannot cover (never-naked)
     tier_index = record.get("tier_index")
-    _append_standalone_stop_journal(
+    stop_journal._append_standalone_stop_journal(
         _build_planned_line(
             entry_crid=entry_crid,
             uic=int(uic),
@@ -3115,7 +3064,7 @@ def _governing_plan_lookup(
     ``_run_entry_watch_pass``, which has no per-watch exception boundary, so an
     OSError let out would abort the tick for every other watch too.
     """
-    uic = _coerce(record, "uic", int)
+    uic = stop_journal._coerce(record, "uic", int)
     if uic is None:
         return None, _ArmRefusal(
             "entry watch carries no uic — the exit plan cannot be resolved",
@@ -3123,7 +3072,9 @@ def _governing_plan_lookup(
             terminal=True,
         )
     try:
-        plan = fold_tranche_plans(_iter_standalone_stop_journal()).get(uic)
+        plan = stop_journal.fold_tranche_plans(stop_journal._iter_standalone_stop_journal()).get(
+            uic
+        )
     # Broad on purpose, mirroring _retract_stale_tranche_plans' sweep: a journal
     # read failure degrades to "unknown", never to an aborted pass.
     except Exception:
@@ -3817,11 +3768,11 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
     broker = deps.broker
     if not isinstance(broker, SupportsOrderResolution):
         return
-    lines = list(_iter_standalone_stop_journal())
+    lines = list(stop_journal._iter_standalone_stop_journal())
     standing = _fold_standing_stop_ids(lines)
     if not standing:
         return
-    plan_pick_keys = _fold_governing_plan_pick_keys(lines)
+    plan_pick_keys = stop_journal._fold_governing_plan_pick_keys(lines)
     for uic in sorted(standing):
         _reconcile_one_standing_stop(
             deps, broker, uic, standing[uic], plan_pick_keys, report, journal_lines=lines
@@ -3892,7 +3843,7 @@ def _reconcile_one_standing_stop(
     # owned THIS stop (generation-exact); the tranche_plan fold is uic-keyed
     # last-wins and could in principle point at a newer pick on a reused
     # uic. The fold is the fallback for a ref-less legacy record.
-    pick_key = _pick_key_from_stop_ref(stop.ref) or plan_pick_keys.get(uic)
+    pick_key = stop_journal._pick_key_from_stop_ref(stop.ref) or plan_pick_keys.get(uic)
     _retire_sibling_watches(deps, pick_key, report, trigger=f"stop {stop.order_id} filled")
 
 
@@ -3921,7 +3872,7 @@ def _sweep_owed_sibling_retires(deps: LoopDeps, report: TickReport) -> None:
     pick that closed (both folds consume the same plan lines in the same
     order), so the last-wins map becomes correct once scoped. This is the
     same semantics the boot compactor already applies to these lines."""
-    owed = _derive_owed_sibling_retires(list(_iter_standalone_stop_journal()))
+    owed = _derive_owed_sibling_retires(list(stop_journal._iter_standalone_stop_journal()))
     for pick_key in sorted(owed):
         _retire_sibling_watches(deps, pick_key, report, trigger=owed[pick_key])
 
@@ -3933,7 +3884,7 @@ def _owed_pick_key_from_stop_fill(line: Mapping[str, Any]) -> str | None:
     if line.get("kind") != "stop_filled" or line.get("partial"):
         return None
     ref = line.get("ref")
-    return _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
+    return stop_journal._pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
 
 
 def _owed_from_stop_fill_refs(lines: list[Mapping[str, Any]]) -> dict[str, str]:
@@ -3960,7 +3911,7 @@ def _elect_owed_stop_fill_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict
         pick_key = _owed_pick_key_from_stop_fill(line)
         if pick_key is None:
             continue
-        ts = _coerce(line, "ts", float)
+        ts = stop_journal._coerce(line, "ts", float)
         kept = elected.get(pick_key)
         if kept is None or (ts is not None and (kept[0] is None or ts >= kept[0])):
             elected[pick_key] = (ts, line)
@@ -3971,7 +3922,7 @@ def _derive_owed_sibling_retires(lines: list[Mapping[str, Any]]) -> dict[str, st
     """Pure derivation of the owed pick keys -> trigger text (see the sweep's
     docstring for the ref-first vs generation-scoped attribution rules)."""
     owed = _owed_from_stop_fill_refs(lines)
-    plan_pick_keys = _fold_governing_plan_pick_keys(lines)
+    plan_pick_keys = stop_journal._fold_governing_plan_pick_keys(lines)
     for uic, closure_keys in _fold_round_trip_closures_since_latest_plan(lines).items():
         # str elements are parsed stop refs the ref-first walk above already
         # collected; only the keyless None element needs the governing fold.
@@ -3982,7 +3933,6 @@ def _derive_owed_sibling_retires(lines: list[Mapping[str, Any]]) -> dict[str, st
     return owed
 
 
-_GENERATION_TAIL_RE = re.compile(r"-g[1-9]\d*$")
 """The ``-g<N>`` generation tail of a same-day re-arm's crid prefix (#1371);
 ``-g0`` / ``-gx`` are not generations and fall through to the date parse."""
 
@@ -4017,9 +3967,9 @@ def _latest_stop_move(
     for line in lines:
         kind = line.get("kind")
         level_key = _STOP_MOVE_LEVEL_KEY.get(str(kind))
-        if level_key is None or _coerce(line, "uic", int) != uic:
+        if level_key is None or stop_journal._coerce(line, "uic", int) != uic:
             continue
-        ts = _coerce(line, "ts", float)
+        ts = stop_journal._coerce(line, "ts", float)
         if ts is None or ts < newest_ts:
             continue
         newest_ts = ts
@@ -4040,42 +3990,8 @@ def _ticker_from_ref(ref: str | None) -> str | None:
     """The ticker a crid or stop ref was built for, via the same parser that
     recovers its pick key (dashed tickers and ``-g<N>`` generations included);
     ``None`` for a ref of another shape."""
-    pick_key = _pick_key_from_stop_ref(ref)
+    pick_key = stop_journal._pick_key_from_stop_ref(ref)
     return pick_key.split(":", 1)[0] if pick_key else None
-
-
-def _pick_key_from_stop_ref(ref: str | None) -> str | None:
-    """Recover the colon-form pick key from a stop ref (fallback when the uic
-    has no ``tranche_plan`` ``pick_key`` on record).
-
-    The entry-trail stop ref is ``<ticker>-<trade_date>-entry-t<i>-stop-<gen>``
-    (``position_manager._exit_stop_ref`` over the watch crid). A classic
-    bracket ref has a different shape and returns ``None`` — the caller treats
-    that as "no entry-trail siblings exist", which is true by construction."""
-    if not ref or "-entry-t" not in ref:
-        return None
-    prefix = ref.split("-entry-t", 1)[0]  # "<ticker>-<YYYY-MM-DD>[-g<N>]"
-    # #1371: a same-day re-arm's crid carries `-g<N>` (N >= 1, digits) after
-    # the date. Peel it before the date walk and put it back on the key, so
-    # the recovered key is the SAME string the watch_open lines carry.
-    generation_suffix = ""
-    generation_match = _GENERATION_TAIL_RE.search(prefix)
-    if generation_match:
-        generation_suffix = generation_match.group(0)
-        prefix = prefix[: generation_match.start()]
-    # rpartition: the DATE is the fixed-shape tail; the ticker may itself carry
-    # a hyphen (yfinance-style class shares, e.g. BRK-B) — zen LOW on #1222.
-    head, sep, day = prefix.rpartition("-")
-    head, sep2, month = head.rpartition("-")
-    ticker, sep3, year = head.rpartition("-")
-    if not (sep and sep2 and sep3 and ticker):
-        return None
-    trade_date = f"{year}-{month}-{day}"
-    try:
-        dt.date.fromisoformat(trade_date)
-    except ValueError:
-        return None
-    return f"{ticker}:{trade_date}{generation_suffix}"
 
 
 def _retire_sibling_watches(
@@ -5043,15 +4959,6 @@ def build_default_deps(
 # folds the `planned` lines per-uic.
 
 
-def _standalone_stop_journal_path() -> Path:
-    """The out-of-band standalone-stop journal path — funnels through the ONE
-    broker-state path seam (state_paths.standalone_stops_path(), ADR 0016 /
-    design memo D2), resolved fresh on EVERY call, never cached at import
-    time. A thin named wrapper (rather than calling the seam directly at each
-    of the three call sites below) so tests monkeypatch ONE attribute."""
-    return state_paths.standalone_stops_path()
-
-
 _ENTRY_SIDE = "BUY"  # MVP scope: long entries only (design memo, single-name equities)
 _DISASTER_STOP_SIDE = "SELL"  # protective exit of a long entry
 
@@ -5066,21 +4973,6 @@ class _AlreadyGatedSessionState:
     alive: bool = True
 
 
-def _append_standalone_stop_journal(record: Mapping[str, Any]) -> None:
-    """Append one line to the out-of-band standalone-stop journal (never rewrites).
-
-    Flush + fsync after the append so a plan price / capability marker is durable
-    the instant it is written — a buffered write lost to a crash (or systemd
-    SIGKILL) would silently drop a disaster-stop plan, and the protection pass
-    can never re-derive a price the broker does not know."""
-    from alphalens_pipeline.brokers.journal import append_json_line
-
-    append_json_line(_standalone_stop_journal_path(), record, default=str)
-
-
-_INITIAL_GEN = 0  # entry-placement plan is generation 0; resizes bump it via next_gen() (Task 4)
-
-
 def _build_planned_line(
     *,
     entry_crid: str,
@@ -5089,7 +4981,7 @@ def _build_planned_line(
     stop_price: float,
     take_profit: float | None,
     tier_index: int,
-    gen: int = _INITIAL_GEN,
+    gen: int = stop_journal._INITIAL_GEN,
     geometry_stamp: dict[str, Any] | None = None,
     pick_key: str | None = None,
     reaction: Any = None,
@@ -5146,40 +5038,13 @@ def _build_planned_line(
     return record
 
 
-def _iter_standalone_stop_journal() -> Iterator[dict[str, Any]]:
-    """Yield parsed lines from the standalone-stop journal; malformed lines skipped."""
-    path = _standalone_stop_journal_path()
-    if not path.exists():
-        return
-    with path.open("r", encoding="utf-8") as fh:
-        yield from _parse_standalone_stop_lines(fh)
-
-
-def _parse_standalone_stop_lines(raw_lines: Iterable[str]) -> Iterator[dict[str, Any]]:
-    """The parsing rules of :func:`_iter_standalone_stop_journal`, over lines
-    already read, so the boot compactor parses exactly the bytes it snapshots
-    (#1648) instead of reading the file a second time."""
-    import json
-
-    for raw_line in raw_lines:
-        line = raw_line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict):
-            yield record
-
-
 def _read_persisted_gen(uic: int) -> tuple[int, float | None]:
     """Latest ``(gen, qty)`` recorded for a uic in the append-only gen journal;
     ``(_INITIAL_GEN, None)`` when the uic has never been sized (append-only, so
     the last matching line wins)."""
-    gen = _INITIAL_GEN
+    gen = stop_journal._INITIAL_GEN
     last_qty: float | None = None
-    for line in _iter_standalone_stop_journal():
+    for line in stop_journal._iter_standalone_stop_journal():
         if line.get("kind") != "gen":
             continue
         try:
@@ -5208,61 +5073,12 @@ def _make_next_gen(uic: int) -> Callable[[float], int]:
             return gen  # same-size retry -> stable ref (dedup-safe)
         if last_qty is not None:
             gen += 1  # resize -> distinct ref (never deduped to the stale order)
-        _append_standalone_stop_journal(
+        stop_journal._append_standalone_stop_journal(
             {"kind": "gen", "uic": int(uic), "gen": int(gen), "qty": float(qty)}
         )
         return gen
 
     return _next_gen
-
-
-def _latest_planned_by_crid(
-    lines: Iterable[Mapping[str, Any]],
-) -> dict[str, tuple[int, Mapping[str, Any]]]:
-    """The newest well-formed ``planned`` line per entry client_request_id
-    (append-only: highest ``gen`` wins). Non-``planned``, keyless, or malformed
-    (bad uic / stop_price) lines are skipped.
-
-    A ``planned_retracted`` marker (#1249) REMOVES the crid in write order — a
-    ``planned`` line appended AFTER the marker is a genuinely new plan and
-    governs again (entry-trail crids are sticky-terminal and bracket crids are
-    UUIDs, so a retracted crid cannot resurrect by accident). This is the ONE
-    choke point both the fold and the compaction read, so retraction semantics
-    cannot drift between them."""
-    latest: dict[str, tuple[int, Mapping[str, Any]]] = {}
-    for line in lines:
-        kind = line.get("kind")
-        if kind == _PLANNED_RETRACTED_KIND:
-            retracted_crid = line.get("client_request_id")
-            if retracted_crid:
-                latest.pop(str(retracted_crid), None)
-            continue
-        if kind != "planned":
-            continue
-        crid = line.get("client_request_id")
-        if not crid:
-            continue
-        gen = _planned_line_gen(line)
-        if gen is None:
-            continue
-        prev = latest.get(str(crid))
-        if prev is None or gen >= prev[0]:
-            latest[str(crid)] = (gen, line)
-    return latest
-
-
-def _planned_line_gen(line: Mapping[str, Any]) -> int | None:
-    """The ``gen`` of a well-formed ``planned`` line; ``None`` for any
-    malformation (missing/bad uic or stop_price — the line is skipped)."""
-    if line.get("uic") is None:
-        return None
-    try:
-        gen = int(line.get("gen", _INITIAL_GEN))
-        int(line["uic"])
-        float(line["stop_price"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    return gen
 
 
 def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, PlannedExit]:
@@ -5285,7 +5101,7 @@ def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, Planned
         owns exactly one tier per index) -> ``conflicting`` so Task 5 refuses to
         merge. Malformed lines are skipped."""
     # Latest planned line per entry tier (append-only: highest gen wins per crid).
-    latest_by_crid = _latest_planned_by_crid(lines)
+    latest_by_crid = stop_journal._latest_planned_by_crid(lines)
 
     tiers_by_uic: dict[int, list[Mapping[str, Any]]] = {}
     for _gen, line in latest_by_crid.values():
@@ -5358,14 +5174,7 @@ def _reaction_from_governing(governing: Mapping[str, Any]) -> Any:
 # reads the fold until the live-exits tick phase (Task 2) is wired.
 
 
-_TRANCHE_PLAN_KIND = "tranche_plan"
-_TRANCHE_PLAN_RETRACTED_KIND = "tranche_plan_retracted"
 _TRANCHE_FIRED_KIND = "tranche_fired"
-# #1249: the per-crid retraction marker for ``planned`` disaster-stop lines —
-# the tranche marker's sibling, keyed by client_request_id instead of uic.
-# Consumed inside ``_latest_planned_by_crid`` (write-order pop), so the fold
-# and the compaction inherit retraction at the same choke point.
-_PLANNED_RETRACTED_KIND = "planned_retracted"
 
 
 def _build_tranche_plan_line(
@@ -5395,7 +5204,7 @@ def _build_tranche_plan_line(
     path) omits the key -- a keyless line keeps today's always-reset
     semantics."""
     line: dict[str, Any] = {
-        "kind": _TRANCHE_PLAN_KIND,
+        "kind": stop_journal._TRANCHE_PLAN_KIND,
         "uic": int(uic),
         "tp_tranches": [
             {
@@ -5428,40 +5237,6 @@ def _build_tranche_plan_line(
     return line
 
 
-def fold_tranche_plans(
-    lines: Iterable[Mapping[str, Any]],
-) -> dict[int, tuple[tuple[TpTranchePlan, ...], float, float]]:
-    """Fold the append-only ``tranche_plan`` journal lines into the newest ladder
-    per uic -- ``{uic: (tp_tranches, reference_qty, stop_price)}``.
-
-    Append-only: the LAST well-formed line for a uic wins (mirrors
-    ``_latest_planned_by_crid``'s "last wins" semantics, keyed per-uic since a
-    live position nets to one uic). Non-``tranche_plan`` lines and malformed
-    lines (missing/unparsable uic, non-list ``tp_tranches``, or a tranche
-    missing/mistyping any of its five fields) are skipped ENTIRELY -- a
-    malformed line contributes nothing, never a partial fold.
-
-    A ``tranche_plan_retracted`` line (2026-08-19 adjudication finding 3 -- a
-    watch that ended with no fill) REMOVES the uic's governing ladder; a later
-    plan line for the uic governs again (still last-wins, in write order)."""
-    out: dict[int, tuple[tuple[TpTranchePlan, ...], float, float]] = {}
-    for line in lines:
-        kind = line.get("kind")
-        if kind == _TRANCHE_PLAN_RETRACTED_KIND:
-            retracted_uic = _coerce(line, "uic", int)
-            if retracted_uic is not None:
-                out.pop(retracted_uic, None)
-            continue
-        if kind != _TRANCHE_PLAN_KIND:
-            continue
-        parsed = _parse_tranche_plan_line(line)
-        if parsed is None:
-            continue
-        uic, tranches, reference_qty, stop_price = parsed
-        out[uic] = (tranches, reference_qty, stop_price)
-    return out
-
-
 def fold_tranche_plan_currencies(
     lines: Iterable[Mapping[str, Any]],
 ) -> dict[int, tuple[str | None, str | None, str | None]]:
@@ -5491,16 +5266,16 @@ def _fold_currency_stamp_line(
     retraction pops the uic, a well-formed ``tranche_plan`` overwrites it
     (last wins), everything else is ignored."""
     kind = line.get("kind")
-    if kind == _TRANCHE_PLAN_RETRACTED_KIND:
-        retracted_uic = _coerce(line, "uic", int)
+    if kind == stop_journal._TRANCHE_PLAN_RETRACTED_KIND:
+        retracted_uic = stop_journal._coerce(line, "uic", int)
         if retracted_uic is not None:
             out.pop(retracted_uic, None)
         return
-    if kind != _TRANCHE_PLAN_KIND:
+    if kind != stop_journal._TRANCHE_PLAN_KIND:
         return
-    if _parse_tranche_plan_line(line) is None:
+    if stop_journal._parse_tranche_plan_line(line) is None:
         return
-    uic = _coerce(line, "uic", int)
+    uic = stop_journal._coerce(line, "uic", int)
     if uic is None:
         return
     instrument_ccy = line.get("instrument_currency")
@@ -5511,86 +5286,6 @@ def _fold_currency_stamp_line(
         str(sizing_ccy) if sizing_ccy else None,
         str(mic) if mic else None,
     )
-
-
-def _parse_tranche_plan_line(
-    line: Mapping[str, Any],
-) -> tuple[int, tuple[TpTranchePlan, ...], float, float] | None:
-    """Parse one ``tranche_plan`` line; None for ANY malformation (a bad line
-    contributes nothing, never a partial fold)."""
-    from broker_contract.sizing import TpTranchePlan
-
-    raw_uic = line.get("uic")
-    raw_tranches = line.get("tp_tranches")
-    if raw_uic is None or not isinstance(raw_tranches, list):
-        return None
-    try:
-        uic = int(raw_uic)
-        reference_qty = float(line["reference_qty"])
-        stop_price = float(line["stop_price"])
-        # `float()` happily parses JSON's `NaN` / `Infinity`, so a malformed
-        # or hand-edited line could otherwise become a GOVERNING ladder
-        # carrying a non-finite size. Refused at the SOURCE as well as at
-        # the sizer, because a bad line should contribute nothing rather
-        # than be caught later by whichever consumer happens to look first.
-        if not math.isfinite(reference_qty) or not math.isfinite(stop_price):
-            raise ValueError(
-                f"non-finite tranche_plan scalars for uic {uic}: "
-                f"reference_qty={reference_qty!r} stop_price={stop_price!r}"
-            )
-        tranches = tuple(
-            TpTranchePlan(
-                tranche_index=int(t["tranche_index"]),
-                target_price=float(t["target_price"]),
-                # Legacy lines carry "tranche_pct". Read them as a FRACTION,
-                # because that is what the writer meant: every tranche_plan
-                # record on the LIVE rail was written by the geometry
-                # producer with the literal 1.0 for "the whole position"
-                # (verified 2026-08-25 against all three live journal
-                # lines). Converting them as percentages would resize an
-                # in-flight position's exit to 1% and leave the rest naked.
-                tranche_frac=float(t["tranche_frac"] if "tranche_frac" in t else t["tranche_pct"]),
-                r_multiple=float(t["r_multiple"]),
-                tag=str(t["tag"]),
-            )
-            for t in raw_tranches
-        )
-        # Same source-refusal as the scalars above: tranche_frac is covered by
-        # TpTranchePlan's [0, 1] guard (NaN fails the range check), but
-        # target_price and r_multiple have no construction guard — a
-        # hand-edited line carrying a non-finite take-profit must contribute
-        # nothing, never become a governing ladder whose TP limit goes to the
-        # broker.
-        for tranche in tranches:
-            if not math.isfinite(tranche.target_price) or not math.isfinite(tranche.r_multiple):
-                raise ValueError(
-                    f"non-finite tranche field for uic {uic}: "
-                    f"target_price={tranche.target_price!r} r_multiple={tranche.r_multiple!r}"
-                )
-    except (KeyError, TypeError, ValueError):
-        return None
-    return uic, tranches, reference_qty, stop_price
-
-
-def _fold_governing_plan_pick_keys(lines: Iterable[Mapping[str, Any]]) -> dict[int, str | None]:
-    """The governing ``tranche_plan``'s ``pick_key`` per uic, in write order
-    (last wins; ``None`` = a keyless bracket-path plan). A
-    ``tranche_plan_retracted`` line removes the uic — an already-retracted plan
-    can never be matched (and so never re-retracted) by the sweep below."""
-    governing: dict[int, str | None] = {}
-    for line in lines:
-        kind = line.get("kind")
-        if kind not in (_TRANCHE_PLAN_KIND, _TRANCHE_PLAN_RETRACTED_KIND):
-            continue
-        uic = _coerce(line, "uic", int)
-        if uic is None:
-            continue
-        if kind == _TRANCHE_PLAN_KIND:
-            key = line.get("pick_key")
-            governing[uic] = None if key is None else str(key)
-        else:
-            governing.pop(uic, None)
-    return governing
 
 
 def _terminal_watch_picks(
@@ -5618,55 +5313,13 @@ def _terminal_watch_picks(
     for pick_key, crid_states in states_by_pick.items():
         if any(s.terminal_kind is None for _crid, s in crid_states):
             continue  # a tier still watches / arms — the pick is live
-        uics = {_coerce(s.watch_open or {}, "uic", int) for _crid, s in crid_states}
+        uics = {stop_journal._coerce(s.watch_open or {}, "uic", int) for _crid, s in crid_states}
         if len(uics) != 1 or None in uics:
             continue  # unmappable / inconsistent — never retract on doubt
         fired = any(s.terminal_kind == entry_trails.KIND_FIRED for _crid, s in crid_states)
         crids = tuple(sorted(crid for crid, _s in crid_states))
         out[pick_key] = (cast(int, next(iter(uics))), fired, crids)
     return out
-
-
-def _retract_planned_lines(
-    crids: Iterable[str],
-    *,
-    note: str,
-    journal_lines: Sequence[Mapping[str, Any]] | None = None,
-) -> int:
-    """Append one ``planned_retracted`` marker per STILL-GOVERNING crid (#1249).
-
-    Idempotence lives here so every retraction class gets it for free: a crid
-    already retracted (or never journaled — a tier that expired before its
-    fire-arm) is skipped, never marker-stacked. ``journal_lines`` lets a sweep
-    that already read the journal skip the re-read; omitted, the journal is
-    read fresh. Broad exception boundary on purpose — retraction is journal
-    housekeeping, a read/write failure degrades to a WARN and a retry on the
-    next tick, never an aborted caller. Returns the number of markers written."""
-    try:
-        lines = (
-            journal_lines if journal_lines is not None else list(_iter_standalone_stop_journal())
-        )
-        latest = _latest_planned_by_crid(lines)
-        count = 0
-        for crid in crids:
-            entry = latest.get(str(crid))
-            if entry is None:
-                continue  # absent or already retracted — nothing to do
-            _gen, line = entry
-            _append_standalone_stop_journal(
-                {
-                    "kind": _PLANNED_RETRACTED_KIND,
-                    "client_request_id": str(crid),
-                    "uic": _coerce(line, "uic", int),
-                    "note": note,
-                }
-            )
-            logger.info("planned line %s retracted — %s", crid, note)
-            count += 1
-        return count
-    except Exception:
-        logger.warning("planned-line retraction failed — will retry next tick", exc_info=True)
-        return 0
 
 
 def _page_now_residuals(
@@ -5749,7 +5402,7 @@ def _retract_planned_for_verdicts(verdicts: Iterable[ReconcileVerdict]) -> None:
         }
     )
     if crids:
-        _retract_planned_lines(crids, note="entry verdict: terminal without a fill")
+        stop_journal._retract_planned_lines(crids, note="entry verdict: terminal without a fill")
 
 
 def _retract_stale_tranche_plans(
@@ -5784,8 +5437,8 @@ def _retract_stale_tranche_plans(
             if deps is not None:
                 deps.pending_plan_retractions.clear()
             return
-        journal_lines = list(_iter_standalone_stop_journal())
-        governing = _fold_governing_plan_pick_keys(journal_lines)
+        journal_lines = list(stop_journal._iter_standalone_stop_journal())
+        governing = stop_journal._fold_governing_plan_pick_keys(journal_lines)
         for pick_key, (uic, fired, crids) in candidates.items():
             if fired:
                 continue  # the fired class runs below with its own gates
@@ -5795,15 +5448,19 @@ def _retract_stale_tranche_plans(
             # so this is orthogonal to the tranche governance check below (a
             # newer pick's lines are structurally untouchable) and idempotent
             # inside the helper.
-            _retract_planned_lines(
+            stop_journal._retract_planned_lines(
                 (_entry_fire_request_id(crid) for crid in crids),
                 note=f"entry-trail {pick_key}: watch ended with no fill",
                 journal_lines=journal_lines,
             )
             if governing.get(uic) != pick_key:
                 continue  # keyless/bracket plan, newer pick, or already retracted
-            _append_standalone_stop_journal(
-                {"kind": _TRANCHE_PLAN_RETRACTED_KIND, "uic": uic, "pick_key": pick_key}
+            stop_journal._append_standalone_stop_journal(
+                {
+                    "kind": stop_journal._TRANCHE_PLAN_RETRACTED_KIND,
+                    "uic": uic,
+                    "pick_key": pick_key,
+                }
             )
             logger.info(
                 "entry-trail %s: watch ended with no fill — retracted the tranche_plan for uic %d",
@@ -5889,8 +5546,12 @@ def _retract_round_tripped_tranche_plans(
         passing = {(pk, uic) for pk, uic in fired_candidates if uic not in open_uics}
         confirmed = passing & pending
         for pick_key, uic in sorted(confirmed):
-            _append_standalone_stop_journal(
-                {"kind": _TRANCHE_PLAN_RETRACTED_KIND, "uic": uic, "pick_key": pick_key}
+            stop_journal._append_standalone_stop_journal(
+                {
+                    "kind": stop_journal._TRANCHE_PLAN_RETRACTED_KIND,
+                    "uic": uic,
+                    "pick_key": pick_key,
+                }
             )
             logger.info(
                 "entry-trail %s: round trip closed and the book is flat — "
@@ -5903,7 +5564,7 @@ def _retract_round_tripped_tranche_plans(
             # two-tick latch) — retract-with, never retract-before. Fresh
             # journal read inside the helper: this tick may already have
             # appended markers.
-            _retract_planned_lines(
+            stop_journal._retract_planned_lines(
                 (_entry_fire_request_id(crid) for crid in candidates[pick_key][2]),
                 note=f"entry-trail {pick_key}: round trip closed, book flat",
             )
@@ -5929,7 +5590,7 @@ def _mark_oco_unsupported(uic: int) -> None:
     even after a systemd restart — the rung-1 stop stays the proven terminal rung.
     ``_fold_oco_unsupported`` reads these lines back into
     ``build_protection_view``'s ``ProtectionView.oco_unsupported``."""
-    _append_standalone_stop_journal({"kind": "oco_unsupported", "uic": int(uic)})
+    stop_journal._append_standalone_stop_journal({"kind": "oco_unsupported", "uic": int(uic)})
 
 
 def _fold_oco_unsupported(lines: Iterable[Mapping[str, Any]]) -> frozenset[int]:
@@ -5983,7 +5644,9 @@ def _journal_oco_too_far(uic: int, *, clock: Callable[[], float] = time.time) ->
     ``ProtectionView.oco_unsupported`` set, so downstream B0 logic is untouched
     and the uic automatically becomes OCO-eligible again for fresh fills once
     the TTL expires."""
-    _append_standalone_stop_journal({"kind": "oco_too_far", "uic": int(uic), "ts": float(clock())})
+    stop_journal._append_standalone_stop_journal(
+        {"kind": "oco_too_far", "uic": int(uic), "ts": float(clock())}
+    )
 
 
 def _journal_oco_placed(uic: int, *, clock: Callable[[], float] = time.time) -> None:
@@ -5994,7 +5657,9 @@ def _journal_oco_placed(uic: int, *, clock: Callable[[], float] = time.time) -> 
     ``ProtectionView.oco_recently_placed`` so a second B0 cannot double-commit atop
     a resting OCO pair that live list-orders has not yet surfaced. The ``clock``
     seam keeps the marker's ``ts`` testable (default wall clock)."""
-    _append_standalone_stop_journal({"kind": "oco_placed", "uic": int(uic), "ts": float(clock())})
+    stop_journal._append_standalone_stop_journal(
+        {"kind": "oco_placed", "uic": int(uic), "ts": float(clock())}
+    )
 
 
 def _journal_amend_failed(uic: int, *, clock: Callable[[], float] = time.time) -> None:
@@ -6005,7 +5670,9 @@ def _journal_amend_failed(uic: int, *, clock: Callable[[], float] = time.time) -
     NEXT tick's grow/downsize arm SKIPS amend and falls to the proven B1 additive /
     place-residual-first primitive. NOT a permanent latch — a benign fill-race 400
     self-clears after the TTL and amend is retried."""
-    _append_standalone_stop_journal({"kind": "amend_failed", "uic": int(uic), "ts": float(clock())})
+    stop_journal._append_standalone_stop_journal(
+        {"kind": "amend_failed", "uic": int(uic), "ts": float(clock())}
+    )
 
 
 def _journal_stop_placed(
@@ -6041,7 +5708,7 @@ def _journal_stop_placed(
     if stop_price is not None:
         record["stop_price"] = float(stop_price)
     record["ts"] = float(clock())
-    _append_standalone_stop_journal(record)
+    stop_journal._append_standalone_stop_journal(record)
 
 
 def _journal_stop_filled(
@@ -6062,7 +5729,7 @@ def _journal_stop_filled(
     the entry-side ``fired`` line). ``qty`` / ``avg_price`` carry the realized
     exit the offline exec-quality join needs; ``avg_price`` may be ``None`` when
     the audit row's price is unparseable — the fill still terminates."""
-    _append_standalone_stop_journal(
+    stop_journal._append_standalone_stop_journal(
         {
             "kind": "stop_filled",
             "uic": int(uic),
@@ -6088,7 +5755,7 @@ def _journal_amend_ok(uic: int, qty: float, *, clock: Callable[[], float] = time
     protection logic — no fold consumes it — it exists so fill-to-protection latency
     is measurable on the amend path (``amend_failed`` already covers failures). The
     ``clock`` seam keeps the record's ``ts`` testable (default wall clock)."""
-    _append_standalone_stop_journal(
+    stop_journal._append_standalone_stop_journal(
         {"kind": "amend_ok", "uic": int(uic), "qty": float(qty), "ts": float(clock())}
     )
 
@@ -6127,7 +5794,7 @@ def _journal_reanchored(
     if stop_price is not None:
         record["stop_price"] = float(stop_price)
     record["ts"] = float(clock())
-    _append_standalone_stop_journal(record)
+    stop_journal._append_standalone_stop_journal(record)
 
 
 def _journal_trailed(
@@ -6160,7 +5827,7 @@ def _journal_trailed(
         marker["peak"] = float(peak)
     if last_price is not None:
         marker["last_price"] = float(last_price)
-    _append_standalone_stop_journal(marker)
+    stop_journal._append_standalone_stop_journal(marker)
 
 
 def _journal_envelope_clamped(
@@ -6183,7 +5850,7 @@ def _journal_envelope_clamped(
     restart. It is the ONLY one of the three amend-outcome markers that is pure
     telemetry: ``reanchored`` and ``trailed`` ARE fold-consumed and the
     compactor keeps them (#1324)."""
-    _append_standalone_stop_journal(
+    stop_journal._append_standalone_stop_journal(
         {
             "kind": "envelope_clamped",
             "uic": int(uic),
@@ -6296,11 +5963,11 @@ def _select_trailed_lines(lines: Iterable[Mapping[str, Any]]) -> dict[int, Mappi
     latest_line: dict[int, Mapping[str, Any]] = {}
     governing_key: dict[int, str] = {}
     for line in lines:
-        uic = _coerce(line, "uic", int)
+        uic = stop_journal._coerce(line, "uic", int)
         if uic is None:
             continue
         kind = line.get("kind")
-        if _apply_generation_reset(
+        if stop_journal._apply_generation_reset(
             kind, line, uic, governing_key, (latest_ts, latest_line), include_planned=True
         ):
             continue
@@ -6358,7 +6025,7 @@ def _read_persisted_amend_seq(uic: int) -> int:
     """The highest ``amend_seq`` recorded for ``uic`` in the append-only journal, or
     ``-1`` when the uic has never been amend-sequenced (so the first seq is 0)."""
     seq = -1
-    for line in _iter_standalone_stop_journal():
+    for line in stop_journal._iter_standalone_stop_journal():
         if line.get("kind") != "amend_seq":
             continue
         try:
@@ -6382,20 +6049,12 @@ def _make_next_amend_seq(uic: int) -> Callable[[], int]:
 
     def _next_seq() -> int:
         seq = _read_persisted_amend_seq(uic) + 1
-        _append_standalone_stop_journal({"kind": "amend_seq", "uic": int(uic), "seq": int(seq)})
+        stop_journal._append_standalone_stop_journal(
+            {"kind": "amend_seq", "uic": int(uic), "seq": int(seq)}
+        )
         return seq
 
     return _next_seq
-
-
-def _coerce(line: Mapping[str, Any], key: str, caster: Callable[[Any], Any]) -> Any:
-    """Cast ``line[key]`` via ``caster``, or return None if the key is missing or
-    the value is uncastable — the "skip this malformed field" primitive for the
-    journal compactor."""
-    try:
-        return caster(line[key])
-    except (KeyError, TypeError, ValueError):
-        return None
 
 
 def _keep_latest_marker(
@@ -6433,11 +6092,11 @@ def _track_tranche_plan(
     ladder-governing plan only when ``fold_tranche_plans`` accepts it as
     well-formed (a corrupt line still resets fired but never governs the
     ladder — the folds' own semantics)."""
-    _apply_generation_reset(
-        _TRANCHE_PLAN_KIND, line, uic, governing_key, (fired_lines, closure_lines)
+    stop_journal._apply_generation_reset(
+        stop_journal._TRANCHE_PLAN_KIND, line, uic, governing_key, (fired_lines, closure_lines)
     )
     latest_plan[uic] = line
-    if fold_tranche_plans([line]):
+    if stop_journal.fold_tranche_plans([line]):
         ladder_line[uic] = line
 
 
@@ -6479,16 +6138,16 @@ def _compact_tranche_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str,
     for line in lines:
         kind = line.get("kind")
         if kind not in (
-            _TRANCHE_PLAN_KIND,
-            _TRANCHE_PLAN_RETRACTED_KIND,
+            stop_journal._TRANCHE_PLAN_KIND,
+            stop_journal._TRANCHE_PLAN_RETRACTED_KIND,
             _TRANCHE_FIRED_KIND,
             "stop_filled",
         ):
             continue
-        uic = _coerce(line, "uic", int)
+        uic = stop_journal._coerce(line, "uic", int)
         if uic is None:
             continue
-        if kind == _TRANCHE_PLAN_KIND:
+        if kind == stop_journal._TRANCHE_PLAN_KIND:
             _track_tranche_plan(
                 line,
                 uic,
@@ -6526,7 +6185,7 @@ def _track_non_plan_tranche_line(
     """Fold one retraction / ``stop_filled`` / ``tranche_fired`` line into the
     election trackers (in place). The caller pre-filters kinds, so the final
     branch only ever sees ``tranche_fired`` lines."""
-    if kind == _TRANCHE_PLAN_RETRACTED_KIND:
+    if kind == stop_journal._TRANCHE_PLAN_RETRACTED_KIND:
         for tracker in (ladder_line, latest_plan, governing_key, fired_lines, closure_lines):
             tracker.pop(uic, None)
     elif kind == "stop_filled":
@@ -6534,7 +6193,7 @@ def _track_non_plan_tranche_line(
         # the closure fold's own gate (a pre-plan fill never counts).
         if uic in latest_plan and not line.get("partial"):
             ref = line.get("ref")
-            key = _pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
+            key = stop_journal._pick_key_from_stop_ref(ref if isinstance(ref, str) else None)
             closure_lines.setdefault(uic, {})[key] = line
     elif line.get("tag") or line.get("position_closed"):
         fired_lines.setdefault(uic, []).append(line)
@@ -6696,7 +6355,7 @@ def _compact_standalone_stop_journal_lines(
     # Newest planned per crid — reuse the fold's own selection so the compacted
     # set contains EXACTLY the line _fold_planned_exits would elect. Sorted by
     # crid for a deterministic, stable file order.
-    planned_by_crid = _latest_planned_by_crid(materialized)
+    planned_by_crid = stop_journal._latest_planned_by_crid(materialized)
     planned: list[dict[str, Any]] = [
         dict(planned_by_crid[crid][1]) for crid in sorted(planned_by_crid)
     ]
@@ -6784,16 +6443,22 @@ def _classify_standalone_lines(
     for line in materialized:
         kind = line.get("kind")
         if kind == "oco_unsupported":
-            uic = _coerce(line, "uic", int)
+            uic = stop_journal._coerce(line, "uic", int)
             if uic is not None:
                 oco_unsupported.setdefault(uic, dict(line))
         elif kind in ttl_latest:
             _keep_latest_marker(
-                ttl_latest[kind], _coerce(line, "uic", int), _coerce(line, "ts", float), line
+                ttl_latest[kind],
+                stop_journal._coerce(line, "uic", int),
+                stop_journal._coerce(line, "ts", float),
+                line,
             )
         elif kind == "amend_seq":
             _keep_latest_marker(
-                amend_seq, _coerce(line, "uic", int), _coerce(line, "seq", int), line
+                amend_seq,
+                stop_journal._coerce(line, "uic", int),
+                stop_journal._coerce(line, "seq", int),
+                line,
             )
         elif kind == "stop_filled":
             _track_stop_filled_by_id(line, stop_filled_by_id)
@@ -6806,7 +6471,7 @@ def _track_stop_filled_by_id(
     """Elect the newest ``stop_filled`` per order id (ts tie keeps the later
     line), in place; a line without a usable order id / ts contributes nothing."""
     order_id = line.get("order_id")
-    ts = _coerce(line, "ts", float)
+    ts = stop_journal._coerce(line, "ts", float)
     if isinstance(order_id, str) and order_id and ts is not None:
         kept = stop_filled_by_id.get(order_id)
         if kept is None or ts >= kept[0]:
@@ -6831,7 +6496,7 @@ def _compact_standalone_stop_journal() -> journal_snapshots.CompactionOutcome:
     import io
     import json
 
-    path = _standalone_stop_journal_path()
+    path = stop_journal._standalone_stop_journal_path()
     unchanged = journal_snapshots.CompactionOutcome(path.name, journal_snapshots.STATUS_UNCHANGED)
     if not path.exists():
         return unchanged
@@ -6839,7 +6504,11 @@ def _compact_standalone_stop_journal() -> journal_snapshots.CompactionOutcome:
     original = path.read_bytes()
     # newline=None: the same universal-newline splitting a text-mode file read
     # gives _iter_standalone_stop_journal.
-    lines = list(_parse_standalone_stop_lines(io.StringIO(original.decode("utf-8"), newline=None)))
+    lines = list(
+        stop_journal._parse_standalone_stop_lines(
+            io.StringIO(original.decode("utf-8"), newline=None)
+        )
+    )
     if not lines:
         return unchanged
     compacted = _compact_standalone_stop_journal_lines(lines)
@@ -7869,7 +7538,7 @@ def _journal_tranche_plan_core(
         # plain bracket call, which has no identity to stamp, keeps its
         # silence. A non-empty ladder is journaled either way, as before.
         return
-    _append_standalone_stop_journal(
+    stop_journal._append_standalone_stop_journal(
         _build_tranche_plan_line(
             uic=uic,
             tp_tranches=ladder,
@@ -8057,7 +7726,7 @@ def _place_tiers(
             )
         )
         stop_price, take_profit = _planned_exit_levels(exit_spec, placement, tier)
-        _append_standalone_stop_journal(
+        stop_journal._append_standalone_stop_journal(
             _build_planned_line(
                 entry_crid=bracket.client_request_id,
                 uic=int(instrument.broker_instrument_id),
@@ -8708,7 +8377,9 @@ def _entry_trail_intercept(
         # this (rare) branch; mismatch, a keyless governing plan (classic-path
         # fill) and an unreadable journal all stay the conservative defer.
         try:
-            governing = _fold_governing_plan_pick_keys(_iter_standalone_stop_journal()).get(uic)
+            governing = stop_journal._fold_governing_plan_pick_keys(
+                stop_journal._iter_standalone_stop_journal()
+            ).get(uic)
         except OSError:
             governing = None
         if governing != pick_key:
@@ -9795,7 +9466,7 @@ def build_protection_view(
     # Materialize the append-only journal ONCE so every fold reads the same lines
     # (a second pass over the generator would be empty). ``now`` is sampled ONCE
     # so both TTL folds classify against a single instant.
-    journal_lines = list(_iter_standalone_stop_journal())
+    journal_lines = list(stop_journal._iter_standalone_stop_journal())
     now = clock()
     return ProtectionView(
         long_positions=long_positions,

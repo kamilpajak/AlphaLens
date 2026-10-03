@@ -25,6 +25,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from broker_contract.contract import (
     BrokerCapabilityError,
     InstrumentRef,
@@ -188,8 +189,8 @@ def _seed_planned(journal: Path) -> None:
     it". That workaround is gone: since #1236 the permission to move a stop is
     the declaration itself, so a policy whose risk unit is ``avg_price -
     plan_stop`` no longer has to be handed an ATR it discards."""
-    with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-        cl._append_standalone_stop_journal(
+    with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
+        sj._append_standalone_stop_journal(
             cl._build_planned_line(
                 entry_crid="crid-0",
                 uic=_UIC,
@@ -261,7 +262,7 @@ class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, feed_factory=feed, sink=sink)
                 for _ in range(3):
                     cl.run_once(deps)
@@ -285,7 +286,7 @@ class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl.run_once(deps)
                 cl.run_once(deps)
@@ -302,7 +303,7 @@ class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl.run_once(deps)
                 cl.run_once(deps)
@@ -315,7 +316,7 @@ class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 # Session 1: arm at 120 -> amend to 112, journaled.
                 feed1 = _ScriptedFeedFactory([{_UIC: 120.0}])
                 deps1 = _deps(broker, feed_factory=feed1, sink=sink)

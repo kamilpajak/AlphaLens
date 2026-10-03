@@ -16,6 +16,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.service import (
     AlertEvent,
     InProcessManagerService,
@@ -100,7 +101,7 @@ class _ServiceHarness:
         self._env = mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ALLOW_ORDERS": "1"}, clear=False)
         self._env.start()
         self._journal_patch = mock.patch.object(
-            cl, "_standalone_stop_journal_path", lambda: self.journal
+            sj, "_standalone_stop_journal_path", lambda: self.journal
         )
         self._journal_patch.start()
         test.addCleanup(self._close)
@@ -169,7 +170,7 @@ class _ServiceHarness:
         take_profit: float | None = _DEFAULT_TP,
     ) -> None:
         self.broker.set_position(ticker, shares, avg_price=price)
-        cl._append_standalone_stop_journal(
+        sj._append_standalone_stop_journal(
             cl._build_planned_line(
                 entry_crid=f"crid-{ticker.upper()}",
                 uic=self.broker.uic_of(ticker),

@@ -13,6 +13,7 @@ import os
 import unittest
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from broker_contract.contract import PlacedOrder
 from broker_contract.sizing import TpTranchePlan
 from broker_contract.trade_intent.schema import TrailingStop
@@ -93,7 +94,7 @@ class _TrailedPosition(unittest.TestCase):
         self.uic = self.broker.uic_of("KO")
         self.broker.set_position("KO", 100, avg_price=_ENTRY)
         self.world._seed_plan("KO", stop=_PLAN_STOP, take_profit=None, exit_policy=_DECLARED_TRAIL)
-        cl._append_standalone_stop_journal(
+        sj._append_standalone_stop_journal(
             cl._build_tranche_plan_line(
                 uic=self.uic, tp_tranches=_LADDER, reference_qty=100, stop_price=_PLAN_STOP
             )

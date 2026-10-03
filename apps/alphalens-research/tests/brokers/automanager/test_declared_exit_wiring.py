@@ -16,6 +16,7 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.control_loop import (
     _build_planned_line,
     _fold_planned_exits,
@@ -322,7 +323,7 @@ class TheDeclarationSurvivesTheEntryTrailPathTest(unittest.TestCase):
 
         written: list[dict] = []
         record = self._watch_open(reaction=TrailingStop(arm_trigger_r=0.5, trail_frac=0.6))
-        with mock.patch.object(cl, "_append_standalone_stop_journal", written.append):
+        with mock.patch.object(sj, "_append_standalone_stop_journal", written.append):
             cl._journal_entry_planned_disaster(record, _UIC, "AMBA-2026-09-04-entry-t0")
         folded = _fold_planned_exits(written)[_UIC].reaction
         self.assertIsInstance(folded, TrailingStop)

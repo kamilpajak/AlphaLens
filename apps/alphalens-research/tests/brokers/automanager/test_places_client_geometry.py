@@ -24,6 +24,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.control_loop import (
     _geometry_tranche_ladder,
     _placed_geometry_stamp,
@@ -108,7 +109,7 @@ class TheLadderFollowsTheDocumentTest(unittest.TestCase):
         )()
         with contextlib.ExitStack() as stack:
             stack.enter_context(
-                mock.patch.object(cl, "_append_standalone_stop_journal", lines.append)
+                mock.patch.object(sj, "_append_standalone_stop_journal", lines.append)
             )
             cl._journal_tranche_plan_core(
                 plan=plan,
