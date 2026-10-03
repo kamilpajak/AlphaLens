@@ -18,7 +18,8 @@ amendment to [ADR 0011](../adr/0011-split-pipeline-and-research.md) — and §6.
 now names each of the 12 test-only modules with the measurement that says
 whether it is a kept seam or code without a consumer. The bucket totals
 (12 modules / 1 676 LOC, 11 / 1 649) were recounted by a second path and
-reproduce exactly.
+reproduce exactly. The six modules with no consumer were then removed, which
+§6.2 records together with the one module the removal orphaned.
 
 **Acted on since (2026-10-02):** finding #4 shipped —
 `alphalens_pipeline.paper.calendar` moved to
@@ -587,9 +588,17 @@ cheap fix.
 | `data/store/fundamentals_pit.py` | 112 | point-in-time fundamentals store for backtest replay. Named in `data/store/__init__.py`'s package docstring, imported by nothing |
 | `thematic/sources/edgar_adapter.py` | 124 | 8-K adapter for the thematic ingest. `thematic/news_ingest.py` imports `edgar_press_release` instead, and `edgar_adapter` has no reference anywhere outside its own test |
 
-The second table is a deletion question for the owner, with the same shape as
-finding 9 (`data.macro.scorer`, deleted on 2026-10-03 with an ADR 0010
-amendment). It is not a deletion this audit performs.
+**The second table was acted on, 2026-10-03.** The owner decided to remove all
+six, with their tests, on the same grounds as finding 9 (`data.macro.scorer`).
+Measured after the removal with the same harness: 646 -> 640 modules, and the
+test-only bucket 12 -> 7 modules / 1 320 LOC.
+
+One consequence is worth recording because it was not visible before the
+removal. `data/store/fundamentals_pit.py` was the only production importer of
+`data/fundamentals/fetcher.py` (211 LOC, the Alpha Vantage fundamentals
+fetcher), so that module has moved INTO the test-only bucket. It is the same
+question again, one level up, and it was left open rather than folded into the
+removal.
 
 ### 6.3 Symbol level
 

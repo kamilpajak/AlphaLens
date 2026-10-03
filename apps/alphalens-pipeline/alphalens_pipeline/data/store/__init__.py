@@ -6,10 +6,9 @@ prevents research/live mismatch (Quant 2.0 feature-store discipline).
 
 Modules:
 - delisting          — ``DelistingEvent`` dataclass + parquet/yaml loaders
+- edgar_fundamentals — EDGAR companyfacts reads
 - form4_pit          — Form-4 PIT store (consumes ``DelistingEvent`` from delisting)
-- fundamentals_pit   — point-in-time fundamentals store (powers Carhart-4F replay)
 - history            — OHLCV history store (Parquet + cache)
-- simfin             — SimFin disk store backing fundamentals_pit
 
 Survivorship-bias diagnostic battery (consumer of backtest engine + Carhart
 attribution) lives in ``alphalens_research.diagnostics.survivorship_pit`` and
