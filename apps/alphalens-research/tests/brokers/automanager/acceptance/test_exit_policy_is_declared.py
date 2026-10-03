@@ -16,6 +16,8 @@ import unittest
 
 from broker_contract.trade_intent.schema import TrailingStop
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 from .world import ManagerWorld
 
 _ENTRY = 50.0
@@ -23,7 +25,7 @@ _STOP = 44.0  # 1R = 6.00, so a 0.5R trail arms at 53.00
 _TRAIL = TrailingStop(arm_trigger_r=0.5, trail_frac=0.6)
 
 
-class TestAPickThatAsksForNothingKeepsItsStop(unittest.TestCase):
+class TestAPickThatAsksForNothingKeepsItsStop(IsolatedHomeTestCase):
     def test_a_pick_that_declares_nothing_never_has_its_stop_moved(self):
         world = ManagerWorld(self)
         world.amend_is_enabled()
@@ -45,7 +47,7 @@ class TestAPickThatAsksForNothingKeepsItsStop(unittest.TestCase):
         world.assert_stop_at("KO", _ENTRY + 0.6 * (70.0 - _ENTRY))  # 62.0
 
 
-class TestAPickThatAsksToTrailDoesTrail(unittest.TestCase):
+class TestAPickThatAsksToTrailDoesTrail(IsolatedHomeTestCase):
     def test_a_declared_trail_follows_the_move_with_no_geometry_supplied(self):
         """The sentence that could not be written before. The pick supplies no
         levels to place — only a statement about how its stop should move — and
@@ -77,7 +79,7 @@ class TestAPickThatAsksToTrailDoesTrail(unittest.TestCase):
         world.assert_stop_at("KO", 68.0)  # THEN the stop held its ground
 
 
-class TestTwoPicksCanWantDifferentThings(unittest.TestCase):
+class TestTwoPicksCanWantDifferentThings(IsolatedHomeTestCase):
     def test_one_position_trails_while_another_keeps_its_stop(self):
         """The property the old shared setting made impossible: what happens to a
         stop is a fact about the pick, not about the deployment."""
@@ -96,7 +98,7 @@ class TestTwoPicksCanWantDifferentThings(unittest.TestCase):
         world.assert_stop_did_not_move("PEP", from_price=_STOP)
 
 
-class TestWhereAPickCameFromIsNotHowItIsManaged(unittest.TestCase):
+class TestWhereAPickCameFromIsNotHowItIsManaged(IsolatedHomeTestCase):
     def test_the_same_request_behaves_the_same_from_either_source(self):
         """Provenance is not policy. A pick parsed from a research brief and one
         typed in by a human are managed by what they ASK FOR, and nothing in the

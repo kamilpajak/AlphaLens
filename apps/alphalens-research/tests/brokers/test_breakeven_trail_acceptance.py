@@ -37,6 +37,8 @@ from broker_contract.contract import (
 from broker_contract.exit_geometry import resolve_exit_policy
 from broker_contract.trade_intent.schema import TrailingStop
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 _UIC = 43070
 
 _BE_TRAIL = resolve_exit_policy("breakeven_trail")
@@ -245,7 +247,7 @@ def _markers(journal: Path, kind: str) -> list[dict]:
     return out
 
 
-class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
+class TestNoGeometryPolicyTrailsThroughRunOnce(IsolatedHomeTestCase):
     """The new combination: ``applies_geometry=False`` (brief exits placed) AND
     ``trails=True`` — a rising feed produces strictly-increasing amends at the
     FRACTIONAL-GIVEBACK levels, and every number is independent of the stamped
@@ -336,7 +338,7 @@ class TestNoGeometryPolicyTrailsThroughRunOnce(unittest.TestCase):
                 self.assertAlmostEqual(broker.amended[1][5], 115.0)
 
 
-class TestBuildDefaultDepsNeedsAnAmendCapableBroker(unittest.TestCase):
+class TestBuildDefaultDepsNeedsAnAmendCapableBroker(IsolatedHomeTestCase):
     """#1414 deleted ``ALPHALENS_BROKER_EXIT_POLICY``, so there is no flag path
     left to exercise here — what survives is the boot gate the flag used to
     reach. It is unconditional since #1236: every declarable stop management

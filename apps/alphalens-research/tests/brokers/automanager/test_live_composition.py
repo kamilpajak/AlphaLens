@@ -24,11 +24,8 @@ network, no real Saxo auth chain, matching the SIM rail-test hermetic pattern.
 
 from __future__ import annotations
 
-import contextlib
 import os
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
@@ -42,6 +39,8 @@ from alphalens_pipeline.brokers.automanager.live_rails import (
     PORTFOLIO_GROSS_FRAC_ENV,
 )
 from broker_contract.contract import BrokerCapabilityError
+
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 
 # A fully in-bounds §3 boot-assert env, mirroring test_saxo_live_daemon_rail's
 # _VALID_RAIL_ENV so a rails-pass/rails-fail test only ever differs on the one
@@ -66,19 +65,6 @@ _FULL_VALID_LIVE_ENV: dict[str, str] = {
     **_VALID_RAIL_ENV,
     **_LIVE_GRANT_ENV,
 }
-
-
-@contextlib.contextmanager
-def _isolated_home():
-    """Patch ``Path.home()`` to a fresh, empty temp directory — mirrors
-    ``test_control_loop.py::_isolated_home`` so ``build_default_deps``'s D4
-    legacy-layout guard never sees a developer machine's real
-    ``~/.alphalens/broker_orders/`` tree."""
-    with (
-        TemporaryDirectory() as home_dir,
-        mock.patch("pathlib.Path.home", return_value=Path(home_dir)),
-    ):
-        yield Path(home_dir)
 
 
 def _live_broker_stub() -> mock.Mock:
@@ -109,7 +95,7 @@ def _live_provider_stub() -> mock.Mock:
     return provider
 
 
-class TestLiveBranchNeverReachesSimRegistry(unittest.TestCase):
+class TestLiveBranchNeverReachesSimRegistry(IsolatedHomeTestCase):
     """env=live must NEVER construct a broker through get_default_broker —
     the SIM registry path stays structurally unreachable regardless of
     whether the LIVE factory itself succeeds or refuses."""
@@ -121,7 +107,6 @@ class TestLiveBranchNeverReachesSimRegistry(unittest.TestCase):
         never consulted."""
         env = {"ALPHALENS_BROKER_ENVIRONMENT": "live"}
         with (
-            _isolated_home(),
             mock.patch.dict("os.environ", env, clear=True),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker"
@@ -143,7 +128,6 @@ class TestLiveBranchNeverReachesSimRegistry(unittest.TestCase):
         provider_stub = _live_provider_stub()
         chain_loss_sink = mock.Mock()
         with (
-            _isolated_home(),
             mock.patch.dict("os.environ", _FULL_VALID_LIVE_ENV, clear=True),
             mock.patch(
                 "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env",
@@ -162,7 +146,7 @@ class TestLiveBranchNeverReachesSimRegistry(unittest.TestCase):
         self.assertIs(deps.broker, broker_stub)
 
 
-class TestLiveSessionKeeperReusesTheFactoryAdapter(unittest.TestCase):
+class TestLiveSessionKeeperReusesTheFactoryAdapter(IsolatedHomeTestCase):
     """The composition root must build SessionKeeper over the SAME
     LiveOrderTokenProvider instance the factory returned — never construct a
     second adapter over the same underlying chain (design memo §2: two
@@ -172,7 +156,6 @@ class TestLiveSessionKeeperReusesTheFactoryAdapter(unittest.TestCase):
         broker_stub = _live_broker_stub()
         provider_stub = _live_provider_stub()
         with (
-            _isolated_home(),
             mock.patch.dict("os.environ", _FULL_VALID_LIVE_ENV, clear=True),
             mock.patch(
                 "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env",
@@ -198,7 +181,6 @@ class TestLiveSessionKeeperReusesTheFactoryAdapter(unittest.TestCase):
         provider_stub = _live_provider_stub()
         provider_stub.get_access_token.side_effect = BrokerAuthError("live chain lost")
         with (
-            _isolated_home(),
             mock.patch.dict("os.environ", _FULL_VALID_LIVE_ENV, clear=True),
             mock.patch(
                 "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env",
@@ -213,7 +195,7 @@ class TestLiveSessionKeeperReusesTheFactoryAdapter(unittest.TestCase):
         self.assertIn("live chain lost", status.reason or "")
 
 
-class TestLiveStreamingStructurallySkipped(unittest.TestCase):
+class TestLiveStreamingStructurallySkipped(IsolatedHomeTestCase):
     """The order-WS streaming subscriber is a SIM-rail SaxoClient
     (_build_streaming_subscriber); env=live must never build it, regardless
     of ALPHALENS_BROKER_STREAMING_ENABLED (design memo §3 pins the flag to 0
@@ -224,7 +206,6 @@ class TestLiveStreamingStructurallySkipped(unittest.TestCase):
         provider_stub = _live_provider_stub()
         env = dict(_FULL_VALID_LIVE_ENV, ALPHALENS_BROKER_STREAMING_ENABLED="1")
         with (
-            _isolated_home(),
             mock.patch.dict("os.environ", env, clear=True),
             mock.patch(
                 "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env",
@@ -252,7 +233,6 @@ class TestLiveStreamingStructurallySkipped(unittest.TestCase):
         broker_stub = _live_broker_stub()
         provider_stub = _live_provider_stub()
         with (
-            _isolated_home(),
             mock.patch.dict("os.environ", _FULL_VALID_LIVE_ENV, clear=True),
             mock.patch(
                 "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env",
@@ -267,7 +247,7 @@ class TestLiveStreamingStructurallySkipped(unittest.TestCase):
         self.assertIsNone(deps.wake_event)
 
 
-class TestSimBranchByteIdenticalUnderLiveComposition(unittest.TestCase):
+class TestSimBranchByteIdenticalUnderLiveComposition(IsolatedHomeTestCase):
     """env=sim (the default) must keep using the SIM registry + the SIM
     OAuth provider path, exactly as before this PR — a regression here would
     mean the LIVE branch leaked into the SIM path."""
@@ -311,7 +291,6 @@ class TestSimBranchByteIdenticalUnderLiveComposition(unittest.TestCase):
 
         env = {k: v for k, v in os.environ.items() if not k.startswith("ALPHALENS_BROKER_")}
         with (
-            _isolated_home(),
             mock.patch.dict("os.environ", env, clear=True),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",

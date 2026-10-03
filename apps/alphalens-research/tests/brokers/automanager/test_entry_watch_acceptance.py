@@ -24,6 +24,8 @@ from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails
 from broker_contract.sizing import SetupPlan
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 # Shared hermetic fixtures live next to the T1c wiring tests.
 from tests.brokers.automanager.test_entry_watch_wiring import (
     _FakeFeed,
@@ -68,7 +70,7 @@ def _empty_pview() -> Any:
     )
 
 
-class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
+class TestEntryWatchEndToEndAcceptance(IsolatedHomeTestCase):
     def _deps(
         self,
         broker: Any,

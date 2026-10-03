@@ -23,6 +23,7 @@ from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import TpTranchePlan
 
 from tests.brokers.automanager.acceptance.fake_broker import FakeBroker
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 
 _ALLOW_ORDERS_ENV = "ALPHALENS_BROKER_ALLOW_ORDERS"
 _LIVE_EXITS_ENV = "ALPHALENS_LIVE_MARKET_EXITS"
@@ -104,7 +105,7 @@ def _deps(
     )
 
 
-class TestLiveMarketExitsEnabledGate(unittest.TestCase):
+class TestLiveMarketExitsEnabledGate(IsolatedHomeTestCase):
     def test_env_name_pinned(self) -> None:
         self.assertEqual(cl._LIVE_MARKET_EXITS_ENV, _LIVE_EXITS_ENV)
 
@@ -122,7 +123,7 @@ class TestLiveMarketExitsEnabledGate(unittest.TestCase):
             self.assertFalse(cl._live_market_exits_enabled())
 
 
-class TestRenderExitDispositions(unittest.TestCase):
+class TestRenderExitDispositions(IsolatedHomeTestCase):
     """The one summary line that makes a skipped uic readable (#1392).
 
     Before this, the price veto in ``run_live_exits`` skipped a uic with no log
@@ -181,7 +182,7 @@ class TestRenderExitDispositions(unittest.TestCase):
         self.assertIsNone(cl._render_exit_dispositions(fired=0, dispositions={}))
 
 
-class TestBuildManagedExits(unittest.TestCase):
+class TestBuildManagedExits(IsolatedHomeTestCase):
     def test_a_uic_with_a_tranche_plan_and_a_live_long_becomes_one_managed_exit(self) -> None:
         pos = _mk_pos(uic=486, qty=100.0)
         tranches = (_tr(0, 16.0, 0.5),)
@@ -331,7 +332,7 @@ class TestBuildManagedExits(unittest.TestCase):
         self.assertEqual(managed[0].stop_price, 13.0)
 
 
-class TestFoldFiredSinceLatestPlan(unittest.TestCase):
+class TestFoldFiredSinceLatestPlan(IsolatedHomeTestCase):
     """A uic is stable per instrument (Saxo nets by uic), and the standalone-stop
     journal is append-only and never cleared. A re-entered position (a fresh
     ``tranche_plan`` line for a uic that already fired tranches under a PRIOR
@@ -432,10 +433,11 @@ class TestFoldFiredSinceLatestPlan(unittest.TestCase):
         self.assertNotIn(307, out)
 
 
-class _JournalCase(unittest.TestCase):
+class _JournalCase(IsolatedHomeTestCase):
     """Base case wiring a temp standalone-stop journal path per test."""
 
     def setUp(self) -> None:
+        super().setUp()
         self._tmp = TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         journal = Path(self._tmp.name) / "standalone_stops.jsonl"
@@ -927,7 +929,7 @@ def _raising_factory(uic_to_instrument: object, *, scope: str) -> object:
     raise RuntimeError("boom: cannot reach Saxo LIVE auth")
 
 
-class TestLiveExitsFeedConstructionBoundary(unittest.TestCase):
+class TestLiveExitsFeedConstructionBoundary(IsolatedHomeTestCase):
     """Fix round 1 (Task 7 review): the price-feed factory may reach out to
     real Saxo LIVE auth/REST/streaming machinery this pass has no control
     over -- a missing env var or an unbootstrapped token store is the single
@@ -1024,7 +1026,7 @@ class TestLiveExitsFeedConstructionFailureEndToEnd(_JournalCase):
         self.assertEqual(len(alerts), 1)
 
 
-class TestLiveExitsRunsBeforeProtection(unittest.TestCase):
+class TestLiveExitsRunsBeforeProtection(IsolatedHomeTestCase):
     def test_live_exits_pass_runs_before_protection_pass(self) -> None:
         order: list[str] = []
         broker = FakeBroker()
@@ -1077,7 +1079,7 @@ class TestOpenPositionsStayManagedWhenTheTrailIsDisabled(_JournalCase):
         self.assertEqual(broker.get_positions_by_uic(uic).quantity, 0.0)
 
 
-class TestLiveExitsPassCapabilityGuard(unittest.TestCase):
+class TestLiveExitsPassCapabilityGuard(IsolatedHomeTestCase):
     """#1141: the pass narrows deps.broker to the engine's requirement set
     (LiveExitBroker) BEFORE any broker call. A non-conforming broker — possible
     only when build_default_deps and its boot gate were bypassed, i.e. in tests

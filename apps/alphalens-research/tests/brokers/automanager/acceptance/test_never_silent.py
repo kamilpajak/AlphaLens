@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import unittest
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 from .world import ManagerWorld, a_divergence, order_cancelled
 
 
-class ItNeverFailsSilently(unittest.TestCase):
+class ItNeverFailsSilently(IsolatedHomeTestCase):
     def test_it_alerts_when_it_cannot_place_protection(self) -> None:
         world = ManagerWorld(self)
         world.entry_fills("KO", shares=100)

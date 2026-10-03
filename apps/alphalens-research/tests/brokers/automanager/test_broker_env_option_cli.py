@@ -25,7 +25,7 @@ from unittest import mock
 
 from typer.testing import CliRunner
 
-from tests.brokers.automanager.cli_isolation import _isolate_home
+from tests.brokers.automanager.home_isolation import isolate_home
 from tests.test_broker_cli import _CliFakeBroker
 
 ENV_VAR = "ALPHALENS_BROKER_ENVIRONMENT"
@@ -86,7 +86,7 @@ class EnvOptionTest(unittest.TestCase):
         # `reconcile` runs the ADR 0016 legacy-layout guard, which reads the
         # REAL home tree unless it is isolated (a developer machine running the
         # SIM daemon genuinely holds a pre-migration flat layout).
-        _isolate_home(self)
+        isolate_home(self)
         patcher = mock.patch.dict("os.environ", {}, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -355,7 +355,7 @@ class MutatingCommandAmbientEnvTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self.runner = CliRunner()
-        _isolate_home(self)
+        isolate_home(self)
 
     def _invoke(self, argv: list[str], env: dict[str, str]):
         from alphalens_cli.commands.broker import broker_app

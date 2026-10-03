@@ -16,6 +16,7 @@ from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import TpTranchePlan
 
 from tests.brokers.automanager.acceptance.fake_broker import FakeBroker
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 from tests.incident_1112_fixture import (
     SMG_ACTUAL_FILL,
     SMG_EXIT_DECISION_BID,
@@ -57,7 +58,7 @@ def _tr(index, target, pct):
     )
 
 
-class TestRunLiveExits(unittest.TestCase):
+class TestRunLiveExits(IsolatedHomeTestCase):
     def _mk(self, price):
         b = FakeBroker()
         uic = b.uic_of("KO")
@@ -330,7 +331,7 @@ class TestRunLiveExits(unittest.TestCase):
                 self.assertNotIsInstance(stub, LiveExitBroker)
 
 
-class TestRunLiveExitsCostGate(unittest.TestCase):
+class TestRunLiveExitsCostGate(IsolatedHomeTestCase):
     """Issue #1112 step 2, wired end to end: ``run_live_exits`` reads the
     realised entry off the Position it already fetches and threads it into the
     decision, so a refused exit places NO market order and touches NO stop."""
@@ -398,7 +399,7 @@ class TestRunLiveExitsCostGate(unittest.TestCase):
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 0.0)
 
 
-class TestDegeneratePriceFiresNothing(unittest.TestCase):
+class TestDegeneratePriceFiresNothing(IsolatedHomeTestCase):
     """#1116 round 2, point 3: a non-finite or non-positive price must decide
     NOTHING.
 
@@ -468,7 +469,7 @@ class TestDegeneratePriceFiresNothing(unittest.TestCase):
         self.assertEqual(owned, 50.0)
 
 
-class TestPlanTrancheExitsRejectsDegeneratePrices(unittest.TestCase):
+class TestPlanTrancheExitsRejectsDegeneratePrices(IsolatedHomeTestCase):
     """The same guard at the pure-decision seam, so a future caller that does not
     go through :func:`run_live_exits` cannot reintroduce it."""
 

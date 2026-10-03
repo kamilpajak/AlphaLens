@@ -25,7 +25,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from tests.brokers.automanager.cli_isolation import _isolate_home
+from tests.brokers.automanager.home_isolation import isolate_home
 from tests.brokers.automanager.test_picks import _intent
 
 
@@ -70,7 +70,7 @@ def _rows(result) -> dict[str, dict]:
 class PicksCommandStateTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
-        self.home = _isolate_home(self)
+        self.home = isolate_home(self)
 
     def test_armed_and_joined_to_submissions_reads_placed(self) -> None:
         # The reproduction measured on the VPS: every armed pick there was
@@ -174,7 +174,7 @@ class PicksCommandStateTest(unittest.TestCase):
 class PicksCommandOutputTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
-        self.home = _isolate_home(self)
+        self.home = isolate_home(self)
 
     def test_json_stdout_is_exactly_one_value(self) -> None:
         _arm(self.home, "KO", "2026-07-20")
@@ -259,7 +259,7 @@ class PicksCommandOutputTest(unittest.TestCase):
 class PicksCommandEnvTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
-        self.home = _isolate_home(self)
+        self.home = isolate_home(self)
 
     def test_without_the_option_the_environment_variable_selects_the_instance(self) -> None:
         # #1377: the default flipped from a hardcoded "sim" to the shared

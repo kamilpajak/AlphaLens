@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import unittest
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 from .world import ManagerWorld
 
 
-class ItKeepsGoingWhenTheBrokerMisbehaves(unittest.TestCase):
+class ItKeepsGoingWhenTheBrokerMisbehaves(IsolatedHomeTestCase):
     def test_a_broker_failure_on_one_ticker_does_not_starve_the_others(self) -> None:
         world = ManagerWorld(self)
         # GIVEN two positions, and the broker fails every write for KO

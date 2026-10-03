@@ -28,22 +28,16 @@ import datetime as dt
 import json
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest import mock
 
 from typer.testing import CliRunner
 
+from tests.brokers.automanager.home_isolation import (
+    isolate_home,
+    seed_legacy_flat_state,
+)
+
 ARMING_MOMENT = dt.datetime(2026, 9, 11, 15, 0, tzinfo=dt.UTC)
-
-
-def _isolate_home(case: unittest.TestCase) -> Path:
-    tmp = TemporaryDirectory()
-    case.addCleanup(tmp.cleanup)
-    home = Path(tmp.name)
-    patcher = mock.patch("pathlib.Path.home", return_value=home)
-    patcher.start()
-    case.addCleanup(patcher.stop)
-    return home
 
 
 def _document(**meta: object) -> dict:
@@ -73,7 +67,7 @@ def _document(**meta: object) -> dict:
 class _DoorCase(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
-        self.home = _isolate_home(self)
+        self.home = isolate_home(self)
         self.clock = mock.patch(
             "alphalens_cli.commands.broker._arming_now", return_value=ARMING_MOMENT
         )
@@ -768,9 +762,7 @@ class TheLegacyLayoutGuardRunsFirst(_DoorCase):
     persists anything (moved from the deleted `test_arm_cli.py`, #1469)."""
 
     def test_a_legacy_layout_refuses_and_creates_no_inbox(self) -> None:
-        from tests.brokers.automanager.cli_isolation import _seed_legacy_flat_state
-
-        _seed_legacy_flat_state(self.home)
+        seed_legacy_flat_state(self.home)
 
         result = self.arm(_document())
 

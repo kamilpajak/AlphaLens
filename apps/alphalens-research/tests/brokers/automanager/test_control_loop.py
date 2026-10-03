@@ -73,6 +73,8 @@ from broker_contract.trade_intent.schema import (
     TrailingStop,
 )
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 _RID = "rid-KO"
 _UIC = 43070
 
@@ -185,25 +187,6 @@ def _deps(
         alert=lambda msg: alerts.append(msg),  # noqa: PLW0108
         alert_throttled=alert_throttled or _default_throttled,
     )
-
-
-@contextlib.contextmanager
-def _isolated_home():
-    """Patch ``Path.home()`` to a fresh, empty temp directory for the
-    duration of the block.
-
-    ``build_default_deps`` now resolves its state paths (kill_file,
-    global_kill_file, the D4 legacy-layout guard) through the state_paths
-    seam at call time (ADR 0016 D2-D4) — every test that calls it must be
-    isolated from the REAL ``~/.alphalens/broker_orders/`` tree, which on a
-    developer machine running the live SIM daemon genuinely holds journal
-    files (a pre-ADR-0016 flat layout) that would otherwise make these
-    hermetic tests fail non-deterministically depending on host state."""
-    with (
-        TemporaryDirectory() as home_dir,
-        mock.patch("pathlib.Path.home", return_value=Path(home_dir)),
-    ):
-        yield Path(home_dir)
 
 
 # --------------------------------------------------------------------------
@@ -361,7 +344,7 @@ def _throttle_to(alerts: list[str]) -> cl._AlertThrottle:
     return cl._AlertThrottle(alerts.append)
 
 
-class TestStandaloneStopJournalDurability(unittest.TestCase):
+class TestStandaloneStopJournalDurability(IsolatedHomeTestCase):
     """The out-of-band standalone-stop journal is the source of truth for plan
     prices + capability markers; a buffered write lost to a crash silently drops
     a disaster-stop plan. Each append is flushed + fsync'd for crash-durability."""
@@ -379,7 +362,7 @@ class TestStandaloneStopJournalDurability(unittest.TestCase):
             self.assertIn('"uic": 1', lines[0])
 
 
-class TestRunOncePlacement(unittest.TestCase):
+class TestRunOncePlacement(IsolatedHomeTestCase):
     def test_drains_armed_pick_when_chain_alive_and_no_kill(self) -> None:
         with TemporaryDirectory() as d:
             place_calls: list = []
@@ -396,7 +379,7 @@ class TestRunOncePlacement(unittest.TestCase):
             self.assertEqual(place_calls, [pick])
 
 
-class TestChainDeadHaltsPlacementAndAlerts(unittest.TestCase):
+class TestChainDeadHaltsPlacementAndAlerts(IsolatedHomeTestCase):
     """Safety + never-silent: when the session-keeper reports the auth chain dead,
     run_once alerts ("chain dead — <reason>; placement halted") AND suppresses the
     placement drain, while reconcile/protection still run. Closes the coverage gap
@@ -459,7 +442,7 @@ class TestChainDeadHaltsPlacementAndAlerts(unittest.TestCase):
             )
 
 
-class TestPickSubmissionJoin(unittest.TestCase):
+class TestPickSubmissionJoin(IsolatedHomeTestCase):
     """C1: drain only picks NOT yet joined to submissions.jsonl (design §Data-flow
     step 4). Without the join the daemon re-places every armed pick every tick."""
 
@@ -557,7 +540,7 @@ class TestPickSubmissionJoin(unittest.TestCase):
             self.assertEqual(report.picks_placed, 0)
 
 
-class TestNowAlreadyDoneLegacyBriefDateKey(unittest.TestCase):
+class TestNowAlreadyDoneLegacyBriefDateKey(IsolatedHomeTestCase):
     """#1252: the journal date key was renamed brief_date -> trade_date, but
     data on disk written before the rename still carries the old key
     (append-only journals are never rewritten). A missed rename here would
@@ -576,7 +559,7 @@ class TestNowAlreadyDoneLegacyBriefDateKey(unittest.TestCase):
         self.assertTrue(cl._now_already_done(records, "RHI", intent))
 
 
-class TestRefusedPickNotRetriedAcrossTicks(unittest.TestCase):
+class TestRefusedPickNotRetriedAcrossTicks(IsolatedHomeTestCase):
     """End-to-end queue semantics over a REAL picks.jsonl: once the placer
     journals a terminal refusal, the NEXT tick's drain never calls the placer
     for that pick again (kills the live 2026-07-30 every-45s retry that would
@@ -626,7 +609,7 @@ class _CrashError(Exception):
     """A hard, non-BrokerError crash (models a process death / uncaught bug)."""
 
 
-class TestPlaceTiersNowParams(unittest.TestCase):
+class TestPlaceTiersNowParams(IsolatedHomeTestCase):
     """#1247: additive keyword-only params on ``_place_tiers`` for the
     immediate-entry split — defaults byte-identical for every existing
     caller."""
@@ -790,7 +773,7 @@ class TestPlaceTiersNowParams(unittest.TestCase):
         self.assertEqual(unjoined, 0)
 
 
-class TestPlacePickPerTierJournaling(unittest.TestCase):
+class TestPlacePickPerTierJournaling(IsolatedHomeTestCase):
     """HIGH-2: each tier's submission record is journaled IMMEDIATELY after its
     place_bracket_order, not batched after the whole loop. A crash mid-loop then
     leaves the pick already joined to submissions.jsonl (at most a partial
@@ -960,7 +943,7 @@ class _PlaceBroker:
         return type("Placed", (), {"entry_order_id": "E-1", "exit_order_ids": ()})()
 
 
-class TestPlacePickBranches(unittest.TestCase):
+class TestPlacePickBranches(IsolatedHomeTestCase):
     """The SIM-only placer's failure + edge paths: each returns False (or journals
     a note) rather than raising, so one bad pick never crashes a tick."""
 
@@ -1214,7 +1197,7 @@ class TestPlacePickBranches(unittest.TestCase):
 _RETIRED_FRAME_ENV = "ALPHALENS_BROKER_SIZING_EQUITY"
 
 
-class TestResolveAndSizeSpendsTheDocumentsAmount(unittest.TestCase):
+class TestResolveAndSizeSpendsTheDocumentsAmount(IsolatedHomeTestCase):
     """#1467: ``_resolve_and_size`` spends ``spec.size.notional_acct``. Before, it
     multiplied a percent by a frame read from the environment, so the same
     document sized differently per deployment (6246 instead of 1500 on SIM)."""
@@ -1257,7 +1240,7 @@ class TestResolveAndSizeSpendsTheDocumentsAmount(unittest.TestCase):
         self.assertEqual(self._spent({}, account_equity=2_000.0), self._spent({}))
 
 
-class TestResolveAndSizeThreadsTheVenueHint(unittest.TestCase):
+class TestResolveAndSizeThreadsTheVenueHint(IsolatedHomeTestCase):
     """#1238 PR 1: the drain threads ``intent.instrument.mic`` into routing.
 
     A US hint stays ADVISORY — ``exchange_mic=None`` reaches routing, which
@@ -1324,7 +1307,7 @@ def _fee_plan(notional: float) -> SetupPlan:
     )
 
 
-class TestRoundTripFeeBps(unittest.TestCase):
+class TestRoundTripFeeBps(IsolatedHomeTestCase):
     """``alphalens_pipeline.brokers.automanager.costs.round_trip_fee_bps`` — design memo §4:
     ``fee_rt(N) = 2 x max($1, 0.08% x N) + (0.50% x N if FX applies else 0)``,
     reported as bps of ``N``."""
@@ -1348,7 +1331,7 @@ class TestRoundTripFeeBps(unittest.TestCase):
         self.assertEqual(round_trip_fee_bps(0.0, fx_applies=False), 0.0)
 
 
-class TestCheckFeeFloor(unittest.TestCase):
+class TestCheckFeeFloor(IsolatedHomeTestCase):
     """``_check_fee_floor`` — the env gate + refusal-message assembly around
     ``round_trip_fee_bps``."""
 
@@ -1428,7 +1411,7 @@ def _smg_fee_plan() -> SetupPlan:
     )
 
 
-class TestFeeFloorCountsChargeableOrders(unittest.TestCase):
+class TestFeeFloorCountsChargeableOrders(IsolatedHomeTestCase):
     """#1123 — the floor must price the chargeable orders the plan will really
     create, not a fixed two. Every commission minimum below roughly $1,250 per
     order is a flat $1, so at our notionals the estimate is a COUNT, and the
@@ -1510,7 +1493,7 @@ class _RecordingBroker(_PlaceBroker):
         return super().place_bracket_order(bracket)
 
 
-class TestPlacePickFeeFloorIntegration(unittest.TestCase):
+class TestPlacePickFeeFloorIntegration(IsolatedHomeTestCase):
     """The fee floor gate inside ``_place_pick`` (design memo §4): computed
     AFTER the setup plan + fx are known, BEFORE any bracket construction or
     placement. Mirrors the existing terminal safety-refusal flow (mark_refused
@@ -1676,7 +1659,7 @@ def _position(market_value: float | None, ticker: str = "NVAX", currency: str = 
     )
 
 
-class TestCheckGrossCap(unittest.TestCase):
+class TestCheckGrossCap(IsolatedHomeTestCase):
     """``_check_gross_cap`` — the POST-sizing, candidate-inclusive,
     ACCOUNT-currency gross check (sibling of ``_check_fee_floor``):
 
@@ -1688,6 +1671,7 @@ class TestCheckGrossCap(unittest.TestCase):
     pick of any size always passed), and filled-position blindness."""
 
     def setUp(self) -> None:
+        super().setUp()
         # Isolate the entry-trails seam: without this the class would
         # implicitly depend on the developer's real
         # ~/.alphalens/broker_orders/<env>/entry_trails.jsonl being absent —
@@ -1906,7 +1890,7 @@ def _fx_quote(mid: float, base: str = "PLN", quote: str = "USD") -> Any:
     )
 
 
-class TestFilledPositionsMixedCurrencyBook(unittest.TestCase):
+class TestFilledPositionsMixedCurrencyBook(IsolatedHomeTestCase):
     """#1238 PR 4: the position fold values a MIXED-currency book per
     position instead of failing closed the moment any stamped currency
     differs from the candidate's fx. Rules: unstamped "" keeps today's
@@ -2046,13 +2030,14 @@ class TestFilledPositionsMixedCurrencyBook(unittest.TestCase):
         self.assertIn("4,000.00", violation)
 
 
-class TestPlacePickGrossCapIntegration(unittest.TestCase):
+class TestPlacePickGrossCapIntegration(IsolatedHomeTestCase):
     """The gross cap gate inside ``_place_pick``: computed AFTER the fee floor
     (same post-sizing inputs), BEFORE any bracket construction or placement.
     Violation mirrors the fee floor's terminal refusal flow verbatim
     (mark_refused + throttled alert, NO submission record)."""
 
     def setUp(self) -> None:
+        super().setUp()
         # See TestCheckGrossCap.setUp — isolate the entry-trails seam.
         _entry_trail_journal(self, None)
 
@@ -2196,7 +2181,7 @@ def _cash_acct(margin_available: Any, currency: str = "USD") -> Any:
 _DECLARED_ENV = {SIZING_EQUITY_MODE_ENV: "declared"}
 
 
-class TestCheckCashFloor(unittest.TestCase):
+class TestCheckCashFloor(IsolatedHomeTestCase):
     """``_check_cash_floor`` — sibling of ``_check_fee_floor``, active ONLY in
     declared sizing mode (memo §4.2):
 
@@ -2303,13 +2288,14 @@ class TestCheckCashFloor(unittest.TestCase):
             self.assertIsNone(self._check(notional=0.0, margin_available=None))
 
 
-class TestPlacePickCashFloorIntegration(unittest.TestCase):
+class TestPlacePickCashFloorIntegration(IsolatedHomeTestCase):
     """The cash floor gate inside ``_place_pick``: AFTER the gross cap (same
     post-sizing inputs), BEFORE classify. Violation mirrors the fee-floor /
     gross-cap terminal refusal flow verbatim (mark_refused + throttled alert,
     NO submission record)."""
 
     def setUp(self) -> None:
+        super().setUp()
         # See TestCheckGrossCap.setUp — isolate the entry-trails seam.
         _entry_trail_journal(self, None)
 
@@ -2435,7 +2421,7 @@ def _watch_open_line(crid: str = "crid-w0", *, limit: float = 10.0, qty: float =
     )
 
 
-class TestCheckGrossCapWatchingReservation(unittest.TestCase):
+class TestCheckGrossCapWatchingReservation(IsolatedHomeTestCase):
     """The G5 watching-reservation term inside ``_check_gross_cap``
     (entry-trailing PR-T0): watching tiers have NO broker order, so the cap
     folds their limit-valued reservation from ``entry_trails.jsonl``. With no
@@ -2517,7 +2503,7 @@ class TestCheckGrossCapWatchingReservation(unittest.TestCase):
         self.assertIn("failing closed", message)
 
 
-class TestCheckCashFloorWatchingReservation(unittest.TestCase):
+class TestCheckCashFloorWatchingReservation(IsolatedHomeTestCase):
     """The same G5 watching term inside ``_check_cash_floor`` (declared mode):
     the watching reservation joins the resting reservation in the funding
     check. With no journal the arithmetic and message are unchanged."""
@@ -2593,7 +2579,7 @@ class TestCheckCashFloorWatchingReservation(unittest.TestCase):
             self.assertIsNone(self._check(notional=10_000.0, margin_available=1.0))
 
 
-class TestBuildDefaultDepsBootCompactsJournals(unittest.TestCase):
+class TestBuildDefaultDepsBootCompactsJournals(IsolatedHomeTestCase):
     """Startup maintenance: build_default_deps compacts BOTH append-only
     journals (standalone stops #895, entry trails PR-T0) before the tick loop
     — at boot, so no concurrent tick can race a rewrite against an append."""
@@ -2602,7 +2588,6 @@ class TestBuildDefaultDepsBootCompactsJournals(unittest.TestCase):
         standalone = mock.Mock()
         trails = mock.Mock()
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_AmendCapableBroker(),
@@ -2616,7 +2601,7 @@ class TestBuildDefaultDepsBootCompactsJournals(unittest.TestCase):
         trails.assert_called_once_with()
 
 
-class TestBuildDefaultDepsKeepsWhatCompactionRemoves(unittest.TestCase):
+class TestBuildDefaultDepsKeepsWhatCompactionRemoves(IsolatedHomeTestCase):
     """#1648 through the real boot path, compactors NOT mocked: a boot that
     compacts leaves a snapshot of each journal it rewrote, and a boot that
     cannot snapshot leaves the journals alone and says so on the alert sink."""
@@ -2665,15 +2650,14 @@ class TestBuildDefaultDepsKeepsWhatCompactionRemoves(unittest.TestCase):
         from alphalens_pipeline.brokers.automanager import journal_snapshots as js
 
         alerts: list[str] = []
-        with _isolated_home() as home:
-            stops, trails = self._seed(home)
-            stops_before, trails_before = stops.read_bytes(), trails.read_bytes()
-            self._boot(alerts)
-            snapshots = {
-                p.name.split(".", 1)[0]: p.read_bytes()
-                for p in (stops.parent / js.SNAPSHOT_DIRNAME).iterdir()
-            }
-            stops_after = stops.read_bytes()
+        stops, trails = self._seed(self.home)
+        stops_before, trails_before = stops.read_bytes(), trails.read_bytes()
+        self._boot(alerts)
+        snapshots = {
+            p.name.split(".", 1)[0]: p.read_bytes()
+            for p in (stops.parent / js.SNAPSHOT_DIRNAME).iterdir()
+        }
+        stops_after = stops.read_bytes()
         self.assertEqual(
             snapshots, {"standalone_stops": stops_before, "entry_trails": trails_before}
         )
@@ -2684,13 +2668,12 @@ class TestBuildDefaultDepsKeepsWhatCompactionRemoves(unittest.TestCase):
         from alphalens_pipeline.brokers.automanager import journal_snapshots as js
 
         alerts: list[str] = []
-        with _isolated_home() as home:
-            stops, trails = self._seed(home)
-            stops_before, trails_before = stops.read_bytes(), trails.read_bytes()
-            with mock.patch.object(js, "snapshot_bytes", side_effect=OSError("No space left")):
-                self._boot(alerts)
-            self.assertEqual(stops.read_bytes(), stops_before)
-            self.assertEqual(trails.read_bytes(), trails_before)
+        stops, trails = self._seed(self.home)
+        stops_before, trails_before = stops.read_bytes(), trails.read_bytes()
+        with mock.patch.object(js, "snapshot_bytes", side_effect=OSError("No space left")):
+            self._boot(alerts)
+        self.assertEqual(stops.read_bytes(), stops_before)
+        self.assertEqual(trails.read_bytes(), trails_before)
         skipped = [a for a in alerts if "compaction skipped" in a]
         self.assertEqual(len(skipped), 2, alerts)
         self.assertTrue(any("standalone_stops.jsonl" in a for a in skipped))
@@ -2698,14 +2681,13 @@ class TestBuildDefaultDepsKeepsWhatCompactionRemoves(unittest.TestCase):
         self.assertTrue(all("No space left" in a for a in skipped))
 
 
-class TestBuildDefaultDepsThreadsAuditBudgetIntoPlacement(unittest.TestCase):
+class TestBuildDefaultDepsThreadsAuditBudgetIntoPlacement(IsolatedHomeTestCase):
     """#1094: ONE per-tick audit budget covers ALL three consumers — the
     verdict pass, the entry-trail pass AND the placement path's own
     reconcile_verdicts read (the verifier-caught third consumer)."""
 
     def test_place_pick_factory_receives_the_shared_audit_budget(self) -> None:
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_AmendCapableBroker(),
@@ -2727,7 +2709,7 @@ def _exit_spec(*, stop: float, tp: float, atr: float, ceiling: float | None = No
     )
 
 
-class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
+class TestPlaceTiersExitGeometryOverride(IsolatedHomeTestCase):
     """``_place_tiers`` journals a geometry stamp whenever an ``exit_spec``
     exists, and OVERRIDES the journaled stop/TP prices exactly when that
     document supplies ``initial_levels`` (#1414). A document that supplies none
@@ -2820,7 +2802,7 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
         self.assertTrue(stamp["applied"])
 
 
-class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
+class TestPlaceTiersJournalsTranchePlan(IsolatedHomeTestCase):
     """``_place_tiers`` (INC-5 Task 1) journals ONE ``tranche_plan`` line per uic
     when a sized ``SetupPlan`` with a non-empty ``tp_tranches`` is passed —
     ADDITIVE to (never replacing) the existing per-tier ``planned`` journaling."""
@@ -3008,7 +2990,7 @@ def _tiered_plan(
     )
 
 
-class TestEstimateRoundTripFeeBps(unittest.TestCase):
+class TestEstimateRoundTripFeeBps(IsolatedHomeTestCase):
     """``_estimate_round_trip_fee_bps`` — the HONEST per-tier round-trip
     estimate (memo §4.5): each entry tier pays ``max($1, 0.08% x qty x
     limit)``; the exit side sums the same shape over the TP tranches (qtys
@@ -3085,7 +3067,7 @@ class TestEstimateRoundTripFeeBps(unittest.TestCase):
         self.assertIsNone(cl._estimate_round_trip_fee_bps(_fee_plan(0.0), None))
 
 
-class TestPlaceTiersFeeEstimateStamp(unittest.TestCase):
+class TestPlaceTiersFeeEstimateStamp(IsolatedHomeTestCase):
     """Memo §4.5 (operator decision §7.3): the honest per-tier round-trip
     estimate is stamped on EVERY record ``_place_tiers`` journals — the
     calibration series for path B's 150 bps target — while the fee FLOOR
@@ -3129,7 +3111,7 @@ def _failure_notes(appended: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [r for r in appended if r.get("note") and r["note"] != "placement attempt"]
 
 
-class TestPlaceTiersInsufficientFundsRollback(unittest.TestCase):
+class TestPlaceTiersInsufficientFundsRollback(IsolatedHomeTestCase):
     """Memo §4.4 B1: a mid-ladder insufficient-funds reject (classified on the
     STRUCTURED Saxo error code, never the message string) must CANCEL this
     pick's just-placed unfilled entry tiers before journaling the note record
@@ -3201,7 +3183,7 @@ class TestPlaceTiersInsufficientFundsRollback(unittest.TestCase):
         self.assertTrue(_failure_notes(appended))
 
 
-class TestPlaceTiersWriteAheadDedup(unittest.TestCase):
+class TestPlaceTiersWriteAheadDedup(IsolatedHomeTestCase):
     """Memo §4.4 B2: ``_place_tiers`` appends a note-only record (brackets=[],
     note="placement attempt") BEFORE the first broker POST, so a crash between
     the POST and the per-tier journal append can no longer re-place the whole
@@ -3286,7 +3268,7 @@ class TestPlaceTiersWriteAheadDedup(unittest.TestCase):
         self.assertEqual((total, unjoined), (0.0, 0))
 
 
-class TestBuildPlannedLineGeometryStamp(unittest.TestCase):
+class TestBuildPlannedLineGeometryStamp(IsolatedHomeTestCase):
     """Direct unit coverage of ``_build_planned_line``'s ``geometry_stamp`` param
     (PR-6a) -- the namespacing + byte-identical-when-omitted contract."""
 
@@ -3319,7 +3301,7 @@ class TestBuildPlannedLineGeometryStamp(unittest.TestCase):
         self.assertAlmostEqual(line["take_profit"], 306.72)
 
 
-class TestFoldPlannedExitsIgnoresGeometryStamp(unittest.TestCase):
+class TestFoldPlannedExitsIgnoresGeometryStamp(IsolatedHomeTestCase):
     """Regression guard (PR-6a): the additive ``"geometry"`` shadow stamp is
     telemetry-only and must never change ``_fold_planned_exits``'s output --
     a future refactor that starts reading it by mistake would silently change
@@ -3360,7 +3342,7 @@ class TestFoldPlannedExitsIgnoresGeometryStamp(unittest.TestCase):
         )
 
 
-class TestAGeometryStampAloneGrantsNoPermission(unittest.TestCase):
+class TestAGeometryStampAloneGrantsNoPermission(IsolatedHomeTestCase):
     """#1236 at the fold: a ``geometry`` stamp no longer means "you may move this
     stop".
 
@@ -3418,7 +3400,7 @@ class TestAGeometryStampAloneGrantsNoPermission(unittest.TestCase):
         self.assertEqual(planned.reaction, ReanchorOnFill(k_atr=2.0, atr=3.0))
 
 
-class TestRunOnceAlertsEachOrphan(unittest.TestCase):
+class TestRunOnceAlertsEachOrphan(IsolatedHomeTestCase):
     def test_each_swept_orphan_is_alerted(self) -> None:
         from alphalens_pipeline.brokers.automanager.orphan_sweeper import Orphan
 
@@ -3465,7 +3447,7 @@ class _PositionRefsBroker:
         return []
 
 
-class TestDefaultOrphanSweepReadsEntryTrailJournal(unittest.TestCase):
+class TestDefaultOrphanSweepReadsEntryTrailJournal(IsolatedHomeTestCase):
     """#1556: the daemon's sweep treats ``<crid>-fire`` as a known position
     reference only when ``<crid>`` is recorded in entry_trails.jsonl."""
 
@@ -3549,7 +3531,7 @@ class TestDefaultOrphanSweepReadsEntryTrailJournal(unittest.TestCase):
         )
 
 
-class TestBuildDefaultDepsWiresTheEntryTrailOrphanSweep(unittest.TestCase):
+class TestBuildDefaultDepsWiresTheEntryTrailOrphanSweep(IsolatedHomeTestCase):
     """#1556: the daemon's real ``sweep_orphans_fn`` (not only the helper)
     reads entry_trails.jsonl for the position arm."""
 
@@ -3561,7 +3543,6 @@ class TestBuildDefaultDepsWiresTheEntryTrailOrphanSweep(unittest.TestCase):
         armed = json.dumps({"kind": "trail_armed", "crid": self._JOURNALED, "order_id": None})
         _entry_trail_journal(self, [armed])
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_AmendCapableBroker(),
@@ -3584,7 +3565,7 @@ class TestBuildDefaultDepsWiresTheEntryTrailOrphanSweep(unittest.TestCase):
         self.assertEqual([o.external_reference for o in orphans], [unjournaled])
 
 
-class TestLatestPlannedSkipsMalformedLines(unittest.TestCase):
+class TestLatestPlannedSkipsMalformedLines(IsolatedHomeTestCase):
     def test_missing_keys_or_unparsable_price_are_skipped(self) -> None:
         lines = [
             {"kind": "planned", "uic": 7},  # missing client_request_id
@@ -3599,7 +3580,7 @@ class TestLatestPlannedSkipsMalformedLines(unittest.TestCase):
         self.assertEqual(cl._fold_planned_exits(lines), {})
 
 
-class TestProtectionExecutorUpgradeToOcoNoop(unittest.TestCase):
+class TestProtectionExecutorUpgradeToOcoNoop(IsolatedHomeTestCase):
     def test_noop_is_silent_and_alertonly_alerts(self) -> None:
         from alphalens_pipeline.brokers.automanager.position_manager import AlertOnly, NoOp
 
@@ -3613,7 +3594,7 @@ class TestProtectionExecutorUpgradeToOcoNoop(unittest.TestCase):
         self.assertIn("naked uic 7 — no protective stop", alerts)
 
 
-class TestDivergenceAlertThrottled(unittest.TestCase):
+class TestDivergenceAlertThrottled(IsolatedHomeTestCase):
     """A stuck FILLED-but-unmatched reconcile divergence must page ONCE per re-alert
     interval, not every tick (overnight-spam incident 2026-07-23). The verdict-level
     AlertOnly now routes through the daemon-lifetime throttle, keyed per crid."""
@@ -3708,7 +3689,7 @@ def _b0_action(**over: Any) -> UpgradeToOco:
     return UpgradeToOco(**base)
 
 
-class TestExecuteB0Success(unittest.TestCase):
+class TestExecuteB0Success(IsolatedHomeTestCase):
     """B0 OCO-direct-on-fill success (saxo Stage-3 memo): a truly naked fresh fill
     reaches a resting OCO pair. On a confirmed 2xx the executor counts the exit AND
     journals an ``oco_placed`` marker (so the next tick's B0 is suppressed while
@@ -3739,7 +3720,7 @@ class TestExecuteB0Success(unittest.TestCase):
         self.assertEqual([m.get("uic") for m in markers], [_UIC], "oco_placed marker journaled")
 
 
-class TestRung1RefuseViaLoopStaysStopOnly(unittest.TestCase):
+class TestRung1RefuseViaLoopStaysStopOnly(IsolatedHomeTestCase):
     """Stage 3 rung-1 REFUSE end-to-end (saxo Stage-3 memo): a resting rung-1
     standalone stop with OCO enabled is NEVER upgraded through the loop — the pure
     reconciler returns NoOp, no OCO is attempted, the rung-1 stop stays LIVE, and
@@ -3777,7 +3758,7 @@ class TestRung1RefuseViaLoopStaysStopOnly(unittest.TestCase):
         self.assertNotIn(_UIC, folded, "no degrade: a refused rung-1 is not marked oco_unsupported")
 
 
-class TestExecuteB0FailureTaxonomy(unittest.TestCase):
+class TestExecuteB0FailureTaxonomy(IsolatedHomeTestCase):
     """B0's three-way failure taxonomy (saxo Stage-3 memo, mitigation H1/A2/H4).
 
     An AMBIGUOUS write (a non-``OrderRejectedError`` BrokerError — 5xx / network /
@@ -3906,7 +3887,7 @@ class TestExecuteB0FailureTaxonomy(unittest.TestCase):
         self.assertTrue(alerts, "the orders-disabled state is surfaced (throttled)")
 
 
-class TestExecuteB0TooFarFromMarketTransient(unittest.TestCase):
+class TestExecuteB0TooFarFromMarketTransient(IsolatedHomeTestCase):
     """A ``TooFarFromMarket`` OCO reject is PRICE-dependent and transient (VRNS
     incident 2026-07-29: one volatile open must not permanently degrade the uic
     to stop-only). The executor journals a timestamped ``oco_too_far`` TTL marker
@@ -3965,7 +3946,7 @@ class TestExecuteB0TooFarFromMarketTransient(unittest.TestCase):
         )
 
 
-class TestBuildProtectionViewOcoTooFarTtl(unittest.TestCase):
+class TestBuildProtectionViewOcoTooFarTtl(IsolatedHomeTestCase):
     """The view folds unexpired ``oco_too_far`` markers into the EXISTING
     ``ProtectionView.oco_unsupported`` set (union with the permanent markers), so
     all downstream B0 logic is untouched and the uic re-qualifies for OCO on
@@ -4008,7 +3989,7 @@ class TestBuildProtectionViewOcoTooFarTtl(unittest.TestCase):
         self.assertIn(_UIC, view.oco_unsupported, "a permanent oco_unsupported stays forever")
 
 
-class TestExecuteB0UnderKill(unittest.TestCase):
+class TestExecuteB0UnderKill(IsolatedHomeTestCase):
     """Under KILL a B0 naked fill still needs covering — no OCO churn (a new OCO is
     order churn, not exposure reduction), but a plain standalone stop IS placed (it
     only reduces exposure). The fill is never left naked under KILL."""
@@ -4030,7 +4011,7 @@ class TestExecuteB0UnderKill(unittest.TestCase):
         self.assertEqual(report.exits_placed, 1)
 
 
-class TestExecuteB0FlatUicSkips(unittest.TestCase):
+class TestExecuteB0FlatUicSkips(IsolatedHomeTestCase):
     """Execute-time owned re-check: the snapshot showed owned=46 but the position
     is flat now -> the OCO is skipped (never oversell / plant on a flat uic), no
     fallback stop, a flat-skip alert."""
@@ -4051,7 +4032,7 @@ class TestExecuteB0FlatUicSkips(unittest.TestCase):
         self.assertTrue(any("gone" in a for a in alerts))
 
 
-class TestExecuteB0NoCapability(unittest.TestCase):
+class TestExecuteB0NoCapability(IsolatedHomeTestCase):
     """Flag on but the wired broker has no OCO capability (placer is None): B0 must
     not raise (an AttributeError would escape the per-action boundary) — it covers
     the naked fill with a plain standalone stop instead."""
@@ -4071,7 +4052,7 @@ def _raise_broker_error(*_a: Any, **_k: Any) -> Any:
     raise BrokerError("boom")
 
 
-class TestBrokerErrorBoundary(unittest.TestCase):
+class TestBrokerErrorBoundary(IsolatedHomeTestCase):
     """CRITICAL: a persistent BrokerError outside entry-placement must never
     crash the tick. One bad read/action is alerted and skipped so the daemon
     keeps reconciling and protecting every OTHER position."""
@@ -4224,7 +4205,7 @@ class TestBrokerErrorBoundary(unittest.TestCase):
             self.assertTrue(alerts)
 
 
-class TestKillFileGate(unittest.TestCase):
+class TestKillFileGate(IsolatedHomeTestCase):
     def test_kill_present_suppresses_placement_but_still_cancels(self) -> None:
         with TemporaryDirectory() as d:
             kill = Path(d) / "KILL"
@@ -4249,7 +4230,7 @@ class TestKillFileGate(unittest.TestCase):
             self.assertEqual(broker.cancelled, ["T-1"])
 
 
-class TestGlobalKillFileGate(unittest.TestCase):
+class TestGlobalKillFileGate(IsolatedHomeTestCase):
     """D3 (ADR 0016): the GLOBAL kill (deps.global_kill_file) gates placement
     IN ADDITION to the per-instance kill_file — defense in depth. Same
     suppress-but-still-cancel semantics as the instance KILL
@@ -4316,7 +4297,7 @@ class TestGlobalKillFileGate(unittest.TestCase):
             self.assertEqual(place_calls, [pick])
 
 
-class TestKillActiveObservability(unittest.TestCase):
+class TestKillActiveObservability(IsolatedHomeTestCase):
     """The kill-active OBSERVABILITY sites (the heartbeat gauge's ``kill``
     argument in ``run_daemon``, and ``InProcessManagerService``'s
     ``LivenessEvent.kill_active`` in service.py) must report the SAME
@@ -4378,7 +4359,7 @@ class TestKillActiveObservability(unittest.TestCase):
             self.assertEqual(beats, [True], "GLOBAL-only KILL must still light the heartbeat gauge")
 
 
-class TestCrashRecovery(unittest.TestCase):
+class TestCrashRecovery(IsolatedHomeTestCase):
     def test_restart_re_derives_identical_classification(self) -> None:
         with TemporaryDirectory() as d:
             broker = _StubBroker()
@@ -4396,7 +4377,7 @@ class TestCrashRecovery(unittest.TestCase):
             self.assertEqual(r1.verdict_count, r2.verdict_count)
 
 
-class TestRunDaemonOnce(unittest.TestCase):
+class TestRunDaemonOnce(IsolatedHomeTestCase):
     def test_once_runs_single_tick_sweeps_orphans_and_never_sleeps(self) -> None:
         with TemporaryDirectory() as d:
             broker = _StubBroker()
@@ -4431,7 +4412,7 @@ class TestRunDaemonOnce(unittest.TestCase):
 # --------------------------------------------------------------------------
 
 
-class TestFailedPostLeavesNoProtectionAndRetries(unittest.TestCase):
+class TestFailedPostLeavesNoProtectionAndRetries(IsolatedHomeTestCase):
     """Bug A end-to-end: a failed stop POST records NO protection (protection is
     broker-state truth, not a journal line), the tick survives, and the NEXT tick
     re-derives the same deficit and re-issues the place."""
@@ -4470,7 +4451,7 @@ class TestFailedPostLeavesNoProtectionAndRetries(unittest.TestCase):
             self.assertEqual(r2.exits_placed, 1)
 
 
-class TestLoopIteratesPositionsNotVerdicts(unittest.TestCase):
+class TestLoopIteratesPositionsNotVerdicts(IsolatedHomeTestCase):
     """C-S5: a position on the broker with owned>0 and NO journal verdict is still
     protected — the protection pass iterates live positions, not verdicts."""
 
@@ -4496,7 +4477,7 @@ class TestLoopIteratesPositionsNotVerdicts(unittest.TestCase):
             self.assertEqual(report.exits_placed, 1)
 
 
-class TestExecuteTimeRecheckSkipsFlatUic(unittest.TestCase):
+class TestExecuteTimeRecheckSkipsFlatUic(IsolatedHomeTestCase):
     """B-F3/A-S4: the snapshot showed owned=46 but the position is flat at execute
     time -> the place is skipped, no stop planted (it could later fire into a short)."""
 
@@ -4522,7 +4503,7 @@ class TestExecuteTimeRecheckSkipsFlatUic(unittest.TestCase):
         self.assertEqual(broker.placed[0][2], 20.0, "qty clipped to live owned")
 
 
-class TestKillAllowsProtectiveStop(unittest.TestCase):
+class TestKillAllowsProtectiveStop(IsolatedHomeTestCase):
     """B-S1: a protective stop only REDUCES exposure, so it is allowed under KILL."""
 
     def test_place_stop_executes_under_kill(self) -> None:
@@ -4535,7 +4516,7 @@ class TestKillAllowsProtectiveStop(unittest.TestCase):
         self.assertEqual(report.exits_placed, 1)
 
 
-class TestSellOrdersAlreadyExistDefersNotCrashes(unittest.TestCase):
+class TestSellOrdersAlreadyExistDefersNotCrashes(IsolatedHomeTestCase):
     """A SellOrdersAlreadyExist rejection defers to next tick — alert + return,
     never a crash, nothing recorded as protected."""
 
@@ -4592,7 +4573,7 @@ class TestSellOrdersAlreadyExistDefersNotCrashes(unittest.TestCase):
         self.assertEqual(broker.cancelled, [], "old stop NOT cancelled when the new place fails")
 
 
-class TestEntryTrailNeverNaked(unittest.TestCase):
+class TestEntryTrailNeverNaked(IsolatedHomeTestCase):
     """PR-T2b never-naked: the planned disaster-SL line the entry-trail executor
     writes at FIRE-ARM is the SAME shape the normal path writes, so when the
     resting native trailing order FILLS into a Position the UNCHANGED protection
@@ -4621,7 +4602,7 @@ class TestEntryTrailNeverNaked(unittest.TestCase):
         self.assertEqual(places[0].stop_price, 216.48, "the brief disaster floor from fire-arm")
 
 
-class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
+class TestExecutePlaceStopJournalsStopPlaced(IsolatedHomeTestCase):
     """A successful standalone-stop placement journals a timestamped ``stop_placed``
     outcome record (observability-only: fill-to-protection latency for the non-OCO
     path). The qty journaled is the qty ACTUALLY placed (post execute-time clamp),
@@ -4736,7 +4717,7 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
                 self.assertEqual(lines, [], f"no stop_placed on the {label} path")
 
 
-class TestOutcomeJournalIoFailureNeverBlocksProtection(unittest.TestCase):
+class TestOutcomeJournalIoFailureNeverBlocksProtection(IsolatedHomeTestCase):
     """The ``stop_placed`` / ``amend_ok`` outcome records are observability-only,
     so a fallible journal append (OSError: disk full, ENOSPC on fsync, permission)
     must NEVER change protection behavior: the supersede cancels of the OLD stop
@@ -4818,7 +4799,7 @@ class TestOutcomeJournalIoFailureNeverBlocksProtection(unittest.TestCase):
         )
 
 
-class TestIdempotentCancelNoThrash(unittest.TestCase):
+class TestIdempotentCancelNoThrash(IsolatedHomeTestCase):
     """A-S5: cancelling an already-gone order is a success, not a raise."""
 
     def test_already_gone_is_success(self) -> None:
@@ -4853,7 +4834,7 @@ class _AttemptRecordingBroker(_ProtBroker):
         super().cancel_order(order_id)
 
 
-class TestCancelSellLegsResilientToPerLegFailure(unittest.TestCase):
+class TestCancelSellLegsResilientToPerLegFailure(IsolatedHomeTestCase):
     """A genuine transient BrokerError on ONE leg must not strand the remaining
     legs uncancelled — each cancel is isolated, the tick does not raise, and the
     failure is throttle-alerted."""
@@ -4884,7 +4865,7 @@ class TestCancelSellLegsResilientToPerLegFailure(unittest.TestCase):
         )
 
 
-class TestAlertThrottleByUicReason(unittest.TestCase):
+class TestAlertThrottleByUicReason(IsolatedHomeTestCase):
     """A-S2/B-S3/C-S10: the same (uic, reason) within the interval alerts once; N
     consecutive place failures escalate once then back off."""
 
@@ -4927,7 +4908,7 @@ class TestAlertThrottleByUicReason(unittest.TestCase):
         self.assertFalse(any("CRITICAL" in s for s in sent))
 
 
-class TestAlertSinkJournalsToLogger(unittest.TestCase):
+class TestAlertSinkJournalsToLogger(IsolatedHomeTestCase):
     """VRNS incident 2026-07-29: alerts went to Telegram ONLY, so journalctl greps
     came back empty mid-incident. Every alert the sink actually emits must ALSO be
     logger.warning'd (journald) BEFORE the Telegram send — at the sink seam, not
@@ -4969,7 +4950,7 @@ class TestAlertSinkJournalsToLogger(unittest.TestCase):
         self.assertEqual(sent, ["naked"])
 
 
-class TestPerCallBrokerErrorBoundary(unittest.TestCase):
+class TestPerCallBrokerErrorBoundary(IsolatedHomeTestCase):
     """One uic's broker error inside the protection pass does not prevent other
     uics being processed (per-action boundary in run_once)."""
 
@@ -5009,7 +4990,7 @@ class TestPerCallBrokerErrorBoundary(unittest.TestCase):
 # --------------------------------------------------------------------------
 
 
-class TestFoldPlannedExitsPricesOnly(unittest.TestCase):
+class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
     """Task 4 (memo §7): the planned-exits fold keys by UIC and returns PLAN
     PRICES only. It NEVER returns a ``frozenset`` protected set — protection is
     derived from live broker state (Tasks 5/6), never from a journal line. An
@@ -5261,7 +5242,7 @@ class TestFoldPlannedExitsPricesOnly(unittest.TestCase):
         self.assertAlmostEqual(folded[_UIC].tp_price or 0.0, 306.72)
 
 
-class TestVerdictDrivenPlannedRetraction(unittest.TestCase):
+class TestVerdictDrivenPlannedRetraction(IsolatedHomeTestCase):
     """#1249 class (c): a definitively-unfilled disappeared bracket's verdict
     (CANCELLED / REJECTED / EXPIRED with no fill evidence) retracts the
     bracket's ``planned`` line — the stale-UUID-crid class the entry-trail
@@ -5378,7 +5359,7 @@ class TestVerdictDrivenPlannedRetraction(unittest.TestCase):
         self.assertEqual(len(self._markers()), 1)
 
 
-class TestFoldOcoUnsupported(unittest.TestCase):
+class TestFoldOcoUnsupported(IsolatedHomeTestCase):
     """Stage 2 (memo §7): the persisted per-instrument OCO-unsupported capability
     flag folds by uic into a ``frozenset[int]``. A uic marked once stays marked
     (append-only, survives a systemd restart) so the rung-2 upgrade is never
@@ -5429,7 +5410,7 @@ class TestFoldOcoUnsupported(unittest.TestCase):
         self.assertEqual(view.oco_unsupported, frozenset())
 
 
-class TestBuildProtectionViewNetsAllPositions(unittest.TestCase):
+class TestBuildProtectionViewNetsAllPositions(IsolatedHomeTestCase):
     """#1221: an intraday round-trip on LIVE leaves TWO raw position rows for
     one uic (long +N and short -N) until Saxo's end-of-day netting merges them.
     ``all_positions`` must fold such same-uic rows to their NET quantity so a
@@ -5509,7 +5490,7 @@ class TestBuildProtectionViewNetsAllPositions(unittest.TestCase):
         self.assertEqual(view.all_positions[_UIC].quantity, 16.0)
 
 
-class TestGenStampedRefChangesOnResize(unittest.TestCase):
+class TestGenStampedRefChangesOnResize(IsolatedHomeTestCase):
     """Task 4 (memo §4.5): deterministic gen-stamped request-ids — stable for a
     same-size crash-retry (Saxo dedup catches it), distinct on a resize (never
     falsely deduped to the stale, smaller order). ``gen`` is persisted append-only
@@ -5567,7 +5548,7 @@ def _amend_action(**over: Any) -> AmendStop:
     return AmendStop(**base)
 
 
-class TestExecuteAmendStop(unittest.TestCase):
+class TestExecuteAmendStop(IsolatedHomeTestCase):
     """The Stage-3 AmendStop executor (saxo Stage-3 memo). Absolute-target: it
     re-reads LIVE owned at execute time and amends to it in BOTH directions (a
     position that grew or shrank since the snapshot is covered up to live owned,
@@ -5787,7 +5768,7 @@ class TestExecuteAmendStop(unittest.TestCase):
         self.assertEqual(markers, [], "no amend_failed journaled on a clean amend")
 
 
-class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
+class TestExecuteAmendStopJournalsAmendOk(IsolatedHomeTestCase):
     """A successful AmendStop PATCH journals a timestamped ``amend_ok`` outcome
     record carrying the qty actually amended to (the live-clamped target), so
     fill-to-protection latency is measurable on the amend path too. Failure paths
@@ -5873,7 +5854,7 @@ class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
         self.assertEqual(report.exits_placed, 0)
 
 
-class TestEveryStopMoveMarkerHasAnAlertReason(unittest.TestCase):
+class TestEveryStopMoveMarkerHasAnAlertReason(IsolatedHomeTestCase):
     """#1621: the stop-fill alert names WHY the stop stood where it filled, by
     reading the newest stop-move marker the executor journaled for that stop.
     This drives the REAL amend-success branch for each stop-moving amend reason
@@ -5920,7 +5901,7 @@ class TestEveryStopMoveMarkerHasAnAlertReason(unittest.TestCase):
         self.assertEqual(set(cl._STOP_MOVE_LEVEL_KEY), set(trade_alerts.REASON_BY_STOP_MARKER))
 
 
-class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
+class TestExecuteAmendStopJournalsReanchored(IsolatedHomeTestCase):
     """PR-6b: a CONFIRMED AmendStop success journals a ``reanchored`` marker
     ONLY when ``action.reanchor_avg_price`` is set (a plain grow/downsize amend
     carries ``None`` and never journals it). A failed amend never latches —
@@ -6077,7 +6058,7 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
         self.assertEqual(report.exits_placed, 0)
 
 
-class TestExecuteAmendStopJournalsEnvelopeClamped(unittest.TestCase):
+class TestExecuteAmendStopJournalsEnvelopeClamped(IsolatedHomeTestCase):
     """#1015 (INC-2 memo section 7): a CONFIRMED reanchor AmendStop whose
     proposed target was clamped by the never-below-brief-floor envelope
     journals an ``envelope_clamped`` telemetry record — keyed on the
@@ -6199,7 +6180,7 @@ def _oco_leg(
     )
 
 
-class TestOcoAmendExecutorReuse(unittest.TestCase):
+class TestOcoAmendExecutorReuse(IsolatedHomeTestCase):
     """Stage-3.5 REUSES the Stage-3 AmendStop executor + dispatch BYTE-FOR-BYTE for
     an OCO-leg amend. An OCO-leg ``AmendStop`` is the SAME dataclass — only its
     ``order_id`` points at a resting OCO child stop and its ``reason`` carries the
@@ -6328,7 +6309,7 @@ class TestOcoAmendExecutorReuse(unittest.TestCase):
         )
 
 
-class TestBuildProtectionViewTtlFolds(unittest.TestCase):
+class TestBuildProtectionViewTtlFolds(IsolatedHomeTestCase):
     """build_protection_view folds the append-only TTL markers against the injected
     clock (saxo Stage-3 memo): only markers newer than the TTL count. A stale marker
     expires so B0 re-fires / amend retries after the window."""
@@ -6372,7 +6353,7 @@ class TestBuildProtectionViewTtlFolds(unittest.TestCase):
         self.assertEqual(view.amend_recently_failed, frozenset())
 
 
-class TestFoldReanchoredMarkers(unittest.TestCase):
+class TestFoldReanchoredMarkers(IsolatedHomeTestCase):
     """PR-6b: ``_fold_reanchored_markers`` folds the LATEST (by ts) avg_price per
     uic — a plain dict, PERMANENT (no TTL), unlike ``_fold_ttl_markers``."""
 
@@ -6397,7 +6378,7 @@ class TestFoldReanchoredMarkers(unittest.TestCase):
         self.assertEqual(cl._fold_reanchored_markers([]), {})
 
 
-class TestFoldReanchoredStopLevels(unittest.TestCase):
+class TestFoldReanchoredStopLevels(IsolatedHomeTestCase):
     """Issue #1518: the sibling fold that turns the ``reanchored`` marker's
     LEVEL into the floor ``_build_managed_exits`` needs, so a take-profit fire
     cannot amend a re-anchored stop back down to the placement-time plan stop.
@@ -6455,7 +6436,7 @@ class TestFoldReanchoredStopLevels(unittest.TestCase):
 _INHERITED_TRAIL_MARKER = "raised by the journaled trailed level"
 
 
-class TestManagedExitAnnouncesInheritedTrailedLevel(unittest.TestCase):
+class TestManagedExitAnnouncesInheritedTrailedLevel(IsolatedHomeTestCase):
     """#1324: the trailed level now survives every boot, so a stop raised by a
     level a PREVIOUS fill earned must be visible rather than silent. Nothing on
     the trail path logs today — which is exactly why nobody could tell whether
@@ -6493,7 +6474,7 @@ class TestManagedExitAnnouncesInheritedTrailedLevel(unittest.TestCase):
         self.assertEqual(logs, [])
 
 
-class TestManagedExitAnnouncesARaiseOncePerLevel(unittest.TestCase):
+class TestManagedExitAnnouncesARaiseOncePerLevel(IsolatedHomeTestCase):
     """The announcement above used to repeat on EVERY tick while the raise held
     (LIVE VST 2026-10-01: the same line once a minute for the whole session).
     With the daemon's ``announced`` map it is said once per uic and level, and
@@ -6533,7 +6514,7 @@ class TestManagedExitAnnouncesARaiseOncePerLevel(unittest.TestCase):
         self.assertEqual(announced, {})
 
 
-class TestCompactorKeepsReanchoredLatch(unittest.TestCase):
+class TestCompactorKeepsReanchoredLatch(IsolatedHomeTestCase):
     """#1324 sibling: the boot compactor used to drop the ``reanchored`` markers
     too, so every restart lost ``ProtectionView.reanchored_by_uic`` — the
     PERMANENT per-blend idempotence latch — and the daemon re-fired one
@@ -6592,7 +6573,7 @@ class TestCompactorKeepsReanchoredLatch(unittest.TestCase):
         self.assertEqual(once, cl._compact_standalone_stop_journal_lines(once))
 
 
-class TestBuildProtectionViewWiresReanchoredByUic(unittest.TestCase):
+class TestBuildProtectionViewWiresReanchoredByUic(IsolatedHomeTestCase):
     """PR-6b: build_protection_view wires ``reanchored_by_uic`` from the
     append-only ``reanchored`` journal markers into ``ProtectionView``."""
 
@@ -6617,7 +6598,7 @@ class TestBuildProtectionViewWiresReanchoredByUic(unittest.TestCase):
         self.assertEqual(view.reanchored_by_uic, {})
 
 
-class TestProtectionViewIgnoresOutcomeRecords(unittest.TestCase):
+class TestProtectionViewIgnoresOutcomeRecords(IsolatedHomeTestCase):
     """``stop_placed`` / ``amend_ok`` are observability-only: build_protection_view
     and every fold must produce EXACTLY the same view with or without them — zero
     behavioral change to protection logic."""
@@ -6653,7 +6634,7 @@ class TestProtectionViewIgnoresOutcomeRecords(unittest.TestCase):
         self.assertEqual(before, after, "the outcome records change nothing in the view")
 
 
-class TestAmendSeqMonotonicJournalBacked(unittest.TestCase):
+class TestAmendSeqMonotonicJournalBacked(IsolatedHomeTestCase):
     """The journal-backed amend sequence is ALWAYS max+1 (never qty-keyed), so a
     re-resize to a previously-seen target qty gets a fresh ref and is never
     dedup-swallowed (mitigation A3). It persists append-only across restarts."""
@@ -6747,7 +6728,7 @@ class _LiveExitCapableBroker(_ProtBroker):
         return PlacedOrder(entry_order_id="M-1", exit_order_ids=())
 
 
-class TestBuildDefaultDepsPositionReadsGate(unittest.TestCase):
+class TestBuildDefaultDepsPositionReadsGate(IsolatedHomeTestCase):
     """#1141 boot gates. The netted position reads are UNCONDITIONALLY required
     (the protection pass is unconditional and its netting is never-naked
     critical); the full live-exit capability set is required only when
@@ -6755,7 +6736,6 @@ class TestBuildDefaultDepsPositionReadsGate(unittest.TestCase):
 
     def test_refuses_a_broker_without_netted_position_reads(self) -> None:
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_NoPositionReadsBroker(),
@@ -6770,7 +6750,6 @@ class TestBuildDefaultDepsPositionReadsGate(unittest.TestCase):
         # conditional gate — this doubles as the positive control proving the
         # unconditional gate does not over-block.
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_AmendCapableBroker(),
@@ -6787,7 +6766,6 @@ class TestBuildDefaultDepsPositionReadsGate(unittest.TestCase):
         # but NO place_market_order — with the flag on, boot must refuse and the
         # message must name the env var that demanded the capability.
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_ProtBroker(),
@@ -6801,7 +6779,6 @@ class TestBuildDefaultDepsPositionReadsGate(unittest.TestCase):
     def test_live_exits_flag_off_does_not_demand_market_orders(self) -> None:
         env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_LIVE_MARKET_EXITS"}
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_ProtBroker(),
@@ -6816,7 +6793,6 @@ class TestBuildDefaultDepsPositionReadsGate(unittest.TestCase):
 
     def test_live_exits_flag_passes_with_a_capable_broker(self) -> None:
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_LiveExitCapableBroker(),
@@ -6830,14 +6806,13 @@ class TestBuildDefaultDepsPositionReadsGate(unittest.TestCase):
         self.assertIsNotNone(deps)
 
 
-class TestBuildDefaultDepsAmendFailFast(unittest.TestCase):
+class TestBuildDefaultDepsAmendFailFast(IsolatedHomeTestCase):
     """build_default_deps FAIL-FASTS when the amend flag is on but the wired broker
     has no SupportsAmendStop capability — so the pure layer may emit AmendStop
     freely, knowing a capable broker is guaranteed at runtime (saxo Stage-3 memo)."""
 
     def test_fail_fast_when_amend_enabled_but_no_capability(self) -> None:
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_StopOnlyBroker(),
@@ -6848,7 +6823,7 @@ class TestBuildDefaultDepsAmendFailFast(unittest.TestCase):
                 cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
 
 
-class TestBuildDefaultDepsAmendCapabilityGate(unittest.TestCase):
+class TestBuildDefaultDepsAmendCapabilityGate(IsolatedHomeTestCase):
     """Boot refuses a broker that cannot PATCH a resting stop.
 
     It used to be scoped to the policy `ALPHALENS_BROKER_EXIT_POLICY` named;
@@ -6859,7 +6834,6 @@ class TestBuildDefaultDepsAmendCapabilityGate(unittest.TestCase):
 
     def test_an_amend_capable_broker_builds(self) -> None:
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_AmendCapableBroker(),
@@ -6873,7 +6847,6 @@ class TestBuildDefaultDepsAmendCapabilityGate(unittest.TestCase):
 
     def test_a_stop_only_broker_fails_fast(self) -> None:
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_StopOnlyBroker(),  # no SupportsAmendStop
@@ -6891,7 +6864,6 @@ class TestBuildDefaultDepsAmendCapabilityGate(unittest.TestCase):
         for value in ("breakeven_trail", "trailing_atr", "bogus"):
             with (
                 self.subTest(pin=value),
-                _isolated_home(),
                 mock.patch(
                     "alphalens_pipeline.brokers.registry.get_default_broker",
                     return_value=_AmendCapableBroker(),
@@ -6905,7 +6877,7 @@ class TestBuildDefaultDepsAmendCapabilityGate(unittest.TestCase):
                 self.assertFalse(hasattr(deps, "exit_policy"))
 
 
-class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
+class TestBuildDefaultDepsWiresNotificationPorts(IsolatedHomeTestCase):
     """PR-4 (NotificationPort): build_default_deps takes the concrete alert
     sinks as REQUIRED kwargs from its caller (the CLI composition root) —
     control_loop.py itself never imports telegram. ``notify`` becomes the
@@ -6915,7 +6887,6 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
     def test_notify_is_wrapped_in_journaled_alert(self) -> None:
         sent: list[str] = []
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_AmendCapableBroker(),
@@ -6933,7 +6904,6 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
     def test_chain_loss_notify_is_threaded_into_the_oauth_provider(self) -> None:
         chain_loss_sink = mock.Mock()
         with (
-            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_AmendCapableBroker(),
@@ -6946,7 +6916,7 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
         oauth_factory.assert_called_once_with(alert=chain_loss_sink)
 
 
-class TestBuildDefaultDepsStateGuards(unittest.TestCase):
+class TestBuildDefaultDepsStateGuards(IsolatedHomeTestCase):
     """D4 (legacy-layout guard, ADR 0016) + the ``env == live`` branch, ADR
     0017. D4 still runs FIRST, before any broker/journal I/O — a legacy-layout
     mistake must never reach a partially-wired daemon (fail-loud, not
@@ -6961,7 +6931,6 @@ class TestBuildDefaultDepsStateGuards(unittest.TestCase):
 
     def test_refuses_to_boot_a_live_instance_with_rails_unset(self) -> None:
         with (
-            _isolated_home(),
             mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ENVIRONMENT": "live"}, clear=True),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker"
@@ -6989,7 +6958,6 @@ class TestBuildDefaultDepsStateGuards(unittest.TestCase):
 
     def test_clean_sim_layout_boots_and_wires_both_kill_paths_via_the_seam(self) -> None:
         with (
-            _isolated_home() as home,
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_AmendCapableBroker(),
@@ -6999,11 +6967,13 @@ class TestBuildDefaultDepsStateGuards(unittest.TestCase):
             deps = cl.build_default_deps(
                 notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
             )
-        self.assertEqual(deps.kill_file, home / ".alphalens" / "broker_orders" / "sim" / "KILL")
-        self.assertEqual(deps.global_kill_file, home / ".alphalens" / "broker_orders" / "KILL")
+        self.assertEqual(
+            deps.kill_file, self.home / ".alphalens" / "broker_orders" / "sim" / "KILL"
+        )
+        self.assertEqual(deps.global_kill_file, self.home / ".alphalens" / "broker_orders" / "KILL")
 
 
-class TestManageCommandRegistered(unittest.TestCase):
+class TestManageCommandRegistered(IsolatedHomeTestCase):
     def test_broker_app_has_manage_command(self) -> None:
         from alphalens_cli.commands.broker import broker_app
 
@@ -7011,7 +6981,7 @@ class TestManageCommandRegistered(unittest.TestCase):
         self.assertIn("manage", names)
 
 
-class TestHeartbeatEmitter(unittest.TestCase):
+class TestHeartbeatEmitter(IsolatedHomeTestCase):
     def test_default_emit_heartbeat_writes_gauge_to_textfile_dir(self) -> None:
         import os
         from tempfile import TemporaryDirectory
@@ -7267,7 +7237,7 @@ def _position_row(uic: int | None, qty: float) -> Any:
     return type("Pos", (), {"instrument": instr, "quantity": qty})()
 
 
-class TestNetOpenPositionUics(unittest.TestCase):
+class TestNetOpenPositionUics(IsolatedHomeTestCase):
     """EOD-netting risk-unit counting: a LIVE Saxo intraday round-trip is two
     ledger rows (+q / -q) netting to zero until the nightly netting — MAX_OPEN
     must count distinct net-nonzero uics, never raw rows."""
@@ -7333,7 +7303,7 @@ class TestNetOpenPositionUics(unittest.TestCase):
         self.assertEqual(unresolvable, 0)
 
 
-class TestCompactStandaloneStopJournalLines(unittest.TestCase):
+class TestCompactStandaloneStopJournalLines(IsolatedHomeTestCase):
     """Issue #895: the pure compaction returns the minimal fold-equivalent set."""
 
     def test_folds_are_identical_on_original_vs_compacted(self) -> None:
@@ -7576,7 +7546,7 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
         self.assertAlmostEqual(_stop_price(compacted), _stop_price(original))
 
 
-class TestCompactStandaloneStopJournalFile(unittest.TestCase):
+class TestCompactStandaloneStopJournalFile(IsolatedHomeTestCase):
     """Issue #895: the startup rewrite is atomic, a no-op on absent/empty files,
     and preserves the newest-per-key semantics the folds and amend-seq reader see."""
 
@@ -7675,7 +7645,7 @@ def _journal_bytes(lines: list[dict[str, Any]]) -> bytes:
     return "".join(json.dumps(line, sort_keys=True) + "\n" for line in lines).encode("utf-8")
 
 
-class TestCompactionSnapshotsTheJournal(unittest.TestCase):
+class TestCompactionSnapshotsTheJournal(IsolatedHomeTestCase):
     """#1648: boot compaction removed SMMT's ``tranche_fired`` (the decision-side
     bid/ask/spread of its 29.09 take-profit) and four other lines, and nothing
     kept them. The compactor now snapshots the exact bytes it compacted from
@@ -7841,7 +7811,7 @@ def _m1_lag_pview(*, owned: float = 3.0, stop_amount: float = 3.0, tp_amount: fl
     )
 
 
-class TestPersistentOcoLagMonitor(unittest.TestCase):
+class TestPersistentOcoLagMonitor(IsolatedHomeTestCase):
     """Issue #5: the M1 guard NoOp'ing a clean over-covered OCO pair is SAFE for a
     tick or two, but a genuinely-stalled Q9 propagation must not stay invisible. The
     protection driver counts a uic's consecutive ``oco-lag-hold`` holds on a daemon-
@@ -8058,7 +8028,7 @@ def _daemon_deps(run_once_at: list[float], clock: _Clock) -> cl.LoopDeps:
     return base
 
 
-class TestRunDaemonNeverNaked(unittest.TestCase):
+class TestRunDaemonNeverNaked(IsolatedHomeTestCase):
     """The never-naked-under-streaming-failure property: whatever the stream
     does (nothing / crashes / storms), the protection pass runs at least every
     poll_seconds of wall clock — exactly today's poll-only floor."""
@@ -8164,7 +8134,7 @@ class _Book:
         return list(step)
 
 
-class TestRunDaemonWakesOnAnEntryFill(unittest.TestCase):
+class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
     """#1402. On LIVE the poll-only wait was a fixed 45 s, so a native trailing
     BUY that filled at the venue waited up to a whole ~58 s cycle for its stop
     (measured 3.3-55.6 s, median 29 s over 15 entries). While such an order rests,
@@ -8312,7 +8282,7 @@ class _ResolvingBroker(_StubBroker):
         return [_book_order("o1")]
 
 
-class TestTheDaemonBuildsItsFillProbe(unittest.TestCase):
+class TestTheDaemonBuildsItsFillProbe(IsolatedHomeTestCase):
     """The production probe watches exactly what the entry-trail reconcile owns:
     resting armed tiers, under the reconcile's own two gates (the feature flag
     and a broker that can classify a gone order)."""
@@ -8378,7 +8348,7 @@ class TestTheDaemonBuildsItsFillProbe(unittest.TestCase):
         self.assertEqual(deps.entry_fill_seen, {"o1": ("resting", 0.0)})
 
 
-class TestRunDaemonAbsoluteDeadline(unittest.TestCase):
+class TestRunDaemonAbsoluteDeadline(IsolatedHomeTestCase):
     """Absolute-deadline scheduling: early wakes give EXTRA passes but never push
     the guaranteed backstop past the fixed wall-clock grid (adversary-2 fix)."""
 
@@ -8428,7 +8398,7 @@ class TestRunDaemonAbsoluteDeadline(unittest.TestCase):
         self.assertEqual(event.timeouts, [45.0, 42.0])
 
 
-class TestRunDaemonGuards(unittest.TestCase):
+class TestRunDaemonGuards(IsolatedHomeTestCase):
     def test_wake_event_with_nonfinite_or_zero_poll_seconds_raises(self) -> None:
         clock = _Clock()
         deps = _daemon_deps([], clock)
@@ -8463,7 +8433,7 @@ class TestRunDaemonGuards(unittest.TestCase):
         self.assertEqual(len(run_at), 1)
 
 
-class TestWokenPassRecomputesState(unittest.TestCase):
+class TestWokenPassRecomputesState(IsolatedHomeTestCase):
     def test_woken_tick_rereads_kill_and_records_and_fresh_report(self) -> None:
         # A woken pass calls the SAME run_once, which re-reads kill + records and
         # builds a fresh view — no partial path. Prove it by toggling the KILL
@@ -8533,7 +8503,7 @@ class TestWokenPassRecomputesState(unittest.TestCase):
         self.assertEqual(kills_seen, [False, True])
 
 
-class TestStreamRestBudget(unittest.TestCase):
+class TestStreamRestBudget(IsolatedHomeTestCase):
     def test_reconnect_storm_does_not_starve_protective_place(self) -> None:
         # A reconnect/reset storm = the stream thread spamming spurious early
         # wakes. The protective place_standalone_stop still executes on every
@@ -8683,7 +8653,7 @@ _ALL_STREAM_GAUGE_NAMES = (
 )
 
 
-class TestStreamStaleAlert(unittest.TestCase):
+class TestStreamStaleAlert(IsolatedHomeTestCase):
     def test_stream_silence_beyond_stale_s_raises_throttled_alert_on_main_thread(self) -> None:
         clock = _Clock(start=0.0)
         gauges: list[dict[str, float]] = []
@@ -8753,7 +8723,7 @@ class TestStreamStaleAlert(unittest.TestCase):
             self.assertEqual(sh._stream_stale_s(), sh._DEFAULT_STREAM_STALE_S)
 
 
-class TestBlockingOnTickDoesNotExtendGap(unittest.TestCase):
+class TestBlockingOnTickDoesNotExtendGap(IsolatedHomeTestCase):
     """PR #900 adversarial-review MEDIUM: a slow on_tick (a hung Telegram POST in
     the stale/breaker alert) must be ABSORBED into the poll interval, never added
     on top of a fresh poll. The absolute deadline is anchored to the moment the
@@ -8788,7 +8758,7 @@ class TestBlockingOnTickDoesNotExtendGap(unittest.TestCase):
         self.assertEqual(event.timeouts, [15.0, 15.0, 15.0])
 
 
-class TestStreamBreakerAlert(unittest.TestCase):
+class TestStreamBreakerAlert(IsolatedHomeTestCase):
     """REWRITTEN for the breaker re-arm design (memo §6 INC-3). The old
     ``test_breaker_tripped_pages_even_with_no_message`` pinned the THROTTLED
     repeating 'stream-breaker' page — the mechanism behind the 2026-08-22
@@ -8818,7 +8788,7 @@ class TestStreamBreakerAlert(unittest.TestCase):
         self.assertEqual(throttled, [])
 
 
-class TestStreamEpisodeLatch(unittest.TestCase):
+class TestStreamEpisodeLatch(IsolatedHomeTestCase):
     """Rearm design memo §4.5: Telegram gets EDGES, once per EPISODE — one OPEN
     page on the down edge, zero while open, one delivery-confirmed CLOSE page.
     Prometheus owns every level."""
@@ -9051,7 +9021,7 @@ def _drive_flap_episodes(
     return pages, throttled, trig
 
 
-class TestStreamRearmLadder(unittest.TestCase):
+class TestStreamRearmLadder(IsolatedHomeTestCase):
     """Rearm design memo §3 Q3 / §4.5 / §5: the cooldown ladder
     60 -> 120 -> 240 -> 480 -> 900 -> 900 s lives in the tick closure, resets to
     the floor ONLY after a delivery-confirmed 300s dwell, and flapping escalates
@@ -9177,7 +9147,7 @@ class TestStreamRearmLadder(unittest.TestCase):
         self.assertEqual(throttled, [])
 
 
-class TestStreamGauges(unittest.TestCase):
+class TestStreamGauges(IsolatedHomeTestCase):
     """Rearm design memo §4.6 / §6 INC-4: six gauges, written on EVERY tick
     (including while dark — the pre-rearm tick returned from the breaker branch
     before emitting, freezing the textfile so no age rule could ever fire), in
@@ -9296,7 +9266,7 @@ class TestStreamGauges(unittest.TestCase):
         self.assertEqual(gauges[0]["alphalens_broker_manager_stream_in_session"], 1.0)
 
 
-class TestStreamingSubscriberIsolation(unittest.TestCase):
+class TestStreamingSubscriberIsolation(IsolatedHomeTestCase):
     """zen HIGH: the streaming subscriber must NOT share the process-wide
     SaxoClient singleton's requests.Session (requests.Session is not thread-safe;
     concurrent subscription-REST on the stream thread + get_positions on the main
@@ -9325,7 +9295,7 @@ class TestStreamingSubscriberIsolation(unittest.TestCase):
         self.assertIsNot(sub._session, other._session)
 
 
-class TestStreamGaugeDoesNotClobberHeartbeat(unittest.TestCase):
+class TestStreamGaugeDoesNotClobberHeartbeat(IsolatedHomeTestCase):
     """Live-validation regression (streaming ON): the stream-liveness gauge and the
     per-tick heartbeat gauge must NOT share one textfile. emit_domain_metrics
     atomically OVERWRITES alphalens_domain_<job>.prom with only the metrics it is
@@ -9353,7 +9323,7 @@ class TestStreamGaugeDoesNotClobberHeartbeat(unittest.TestCase):
         self.assertEqual(len(proms), 2, [p.name for p in proms])
 
 
-class TestStreamingEnabledGate(unittest.TestCase):
+class TestStreamingEnabledGate(IsolatedHomeTestCase):
     def test_streaming_enabled_reads_env_flag(self) -> None:
         with mock.patch.dict(os.environ, {"ALPHALENS_BROKER_STREAMING_ENABLED": "1"}, clear=False):
             self.assertTrue(sh._streaming_enabled())
@@ -9367,7 +9337,7 @@ class TestStreamingEnabledGate(unittest.TestCase):
             self.assertFalse(sh._streaming_enabled())
 
 
-class TestKillActiveMetric(unittest.TestCase):
+class TestKillActiveMetric(IsolatedHomeTestCase):
     """The KILL-active gauge (level 0/1) MUST co-emit with the per-tick heartbeat in
     ONE emit_domain_metrics(job, {...}) call — a second call to the same domain would
     atomically OVERWRITE (clobber) the heartbeat gauge, and vice-versa. Value is 1
@@ -9402,7 +9372,7 @@ class TestKillActiveMetric(unittest.TestCase):
         )
 
 
-class TestKillEdgeAlert(unittest.TestCase):
+class TestKillEdgeAlert(IsolatedHomeTestCase):
     """Edge-triggered KILL alert (observability only — placement/protection gating is
     unchanged). deps.alert fires ONCE on each False->True / True->False transition,
     never every tick while KILL is held. An empty state holder treats the missing
@@ -9476,7 +9446,7 @@ def _frozen_now(fixed: dt.datetime):
     ``control_loop`` does ``import datetime as dt`` at module scope, so ``dt``
     IS the real stdlib ``datetime`` module — patching its ``datetime`` class
     attribute for the duration of a ``with`` block is the same precedented
-    pattern ``_isolated_home`` above uses for ``pathlib.Path.home`` (scoped,
+    pattern ``IsolatedHomeTestCase`` uses for ``pathlib.Path.home`` (scoped,
     restored after)."""
 
     class _Frozen(dt.datetime):
@@ -9506,7 +9476,7 @@ class _RaisingProbe:
         raise AssertionError(f"probe must not be called for {ticker}/{exchange_mic}")
 
 
-class TestDay1GapGateSessionInfo(unittest.TestCase):
+class TestDay1GapGateSessionInfo(IsolatedHomeTestCase):
     """``_day1_gap_gate_session_info`` — pure calendar math, no I/O."""
 
     def test_monday_brief_day1_is_tuesday(self) -> None:
@@ -9546,7 +9516,7 @@ class TestDay1GapGateSessionInfo(unittest.TestCase):
         self.assertEqual(day1, dt.date(2026, 8, 11))
 
 
-class TestDay1GapGateDecision(unittest.TestCase):
+class TestDay1GapGateDecision(IsolatedHomeTestCase):
     """``_day1_gap_gate_decision`` — pure, total, no I/O (design memo: N=30/588
     population analysis, day-1 gap-through-E1 fills carry median -1R vs
     +0.21R baseline; later-day gaps are benign)."""
@@ -9648,7 +9618,7 @@ class TestDay1GapGateDecision(unittest.TestCase):
         self.assertEqual(verdict, "defer_preopen")
 
 
-class TestEvaluateDay1GapGate(unittest.TestCase):
+class TestEvaluateDay1GapGate(IsolatedHomeTestCase):
     """``_evaluate_day1_gap_gate`` — resolves E1, calls the probe ONLY when the
     pick is within its day1 session at/after the open+grace window, then
     delegates to the pure decision helper."""
@@ -9757,7 +9727,7 @@ class TestEvaluateDay1GapGate(unittest.TestCase):
         self.assertEqual(verdict, "pass")
 
 
-class TestDay1GapGateEnabledFlag(unittest.TestCase):
+class TestDay1GapGateEnabledFlag(IsolatedHomeTestCase):
     def test_unset_is_disabled(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
             self.assertFalse(cl._day1_gap_gate_enabled())
@@ -9771,7 +9741,7 @@ class TestDay1GapGateEnabledFlag(unittest.TestCase):
             self.assertFalse(cl._day1_gap_gate_enabled())
 
 
-class TestDay1SessionOpenExtraction(unittest.TestCase):
+class TestDay1SessionOpenExtraction(IsolatedHomeTestCase):
     """``_extract_day1_session_open`` — PriceInfoDetails.Open only; any
     missing/malformed/non-positive value is a veto (``None``), never a crash.
     The gate decides on the day-1 OPENING PRINT (stable all session), not the
@@ -9802,7 +9772,7 @@ class TestDay1SessionOpenExtraction(unittest.TestCase):
                 )
 
 
-class TestDay1GapProbeVenueFallback(unittest.TestCase):
+class TestDay1GapProbeVenueFallback(IsolatedHomeTestCase):
     """The probe must PROBE US venues like placement routing does (XNYS then
     XNAS) instead of trusting the advisory ``InstrumentHint.mic``: every
     armed intent carries the hardcoded advisory "XNYS", so a NASDAQ name
@@ -9933,7 +9903,7 @@ class TestDay1GapProbeVenueFallback(unittest.TestCase):
         holder["client"]._session.close.assert_called_once()
 
 
-class TestDay1GapProbeOrder(unittest.TestCase):
+class TestDay1GapProbeOrder(IsolatedHomeTestCase):
     """The gate's US venue probe order — includes XASE (NYSE American,
     live-verified UUUU:xase / uic 549463, 2026-08-12) and must never diverge
     from placement routing's probe order (the two would otherwise disagree on
@@ -9948,7 +9918,7 @@ class TestDay1GapProbeOrder(unittest.TestCase):
         self.assertEqual(cl._DAY1_GAP_US_VENUE_PROBE_ORDER, routing.US_MIC_PROBE_ORDER)
 
 
-class TestDay1GapGateXwarEndToEnd(unittest.TestCase):
+class TestDay1GapGateXwarEndToEnd(IsolatedHomeTestCase):
     """zen review (PR #1240): pin the XWAR path THROUGH the orchestrator.
 
     Two ways the probe-level pins could lie: (1) if the calendar did not
@@ -9993,7 +9963,7 @@ class TestDay1GapGateXwarEndToEnd(unittest.TestCase):
         self.assertEqual(calls, [("CDR", "XWAR")])
 
 
-class TestDay1GapGateDefersObservability(unittest.TestCase):
+class TestDay1GapGateDefersObservability(IsolatedHomeTestCase):
     """``_day1_gap_gate_defers`` observability: "defer_no_price" is an
     INFRASTRUCTURE failure (the probe could not produce a price at all —
     real incident 2026-08-12: LAC's resolve failure silently deferred its
@@ -10043,7 +10013,7 @@ class TestDay1GapGateDefersObservability(unittest.TestCase):
         self.assertEqual(alerts, [], "a pre-open defer is DEBUG-only, never an alert")
 
 
-class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
+class TestPlacePickDay1GapGateIntegration(IsolatedHomeTestCase):
     """The day-1 gap gate wired into ``_place_pick`` (deliverable 1d): the gate
     is evaluated at the TOP, before any broker/safety/sizing I/O, so a
     deferral never journals a refusal (the pick stays armed) and never
@@ -10218,7 +10188,7 @@ class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
         self.assertEqual(alerts, [], "a pre-open defer is DEBUG-only, never an alert")
 
 
-class TestStreamDeliveryProof(unittest.TestCase):
+class TestStreamDeliveryProof(IsolatedHomeTestCase):
     """Mutation-hardening pins for the tick's delivery-backed ``up`` sample.
 
     The post-workflow mutation review proved these exact arms unkilled: a
@@ -10358,7 +10328,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class TestPageNowResiduals(unittest.TestCase):
+class TestPageNowResiduals(IsolatedHomeTestCase):
     """#1247 memo §3.2.6: a now order that died terminal with a PARTIAL fill
     pages once — the position is smaller than planned and exits size to the
     filled quantity. A full cancel with no fill stays quiet (the verdict flow
@@ -10423,7 +10393,7 @@ class TestPageNowResiduals(unittest.TestCase):
         self.assertEqual(retracted, [])
 
 
-class TestRunOnceNowEntryScope(unittest.TestCase):
+class TestRunOnceNowEntryScope(IsolatedHomeTestCase):
     """#1315: the placement drain owns the ``now-entry`` feed scope — released
     when the drain is gated, committed to the still-pending picks otherwise."""
 

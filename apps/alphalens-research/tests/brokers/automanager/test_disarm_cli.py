@@ -17,7 +17,7 @@ from unittest import mock
 
 from typer.testing import CliRunner
 
-from tests.brokers.automanager.cli_isolation import _isolate_home, _seed_legacy_flat_state
+from tests.brokers.automanager.home_isolation import isolate_home, seed_legacy_flat_state
 
 
 def _seed_watch(home: Path, env: str, crid: str, pick_key: str, *extra_lines: str) -> Path:
@@ -36,7 +36,7 @@ def _seed_watch(home: Path, env: str, crid: str, pick_key: str, *extra_lines: st
 class DisarmCommandTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
-        self.home = _isolate_home(self)
+        self.home = isolate_home(self)
 
     def test_a_failed_append_reports_a_failure_object_not_a_traceback(self) -> None:
         """#1421: the contract promises exactly one JSON object on stderr in
@@ -203,7 +203,7 @@ class DisarmCommandTest(unittest.TestCase):
     def test_disarm_legacy_flat_layout_refuses(self) -> None:
         from alphalens_cli.commands.broker import broker_app
 
-        _seed_legacy_flat_state(self.home)
+        seed_legacy_flat_state(self.home)
         result = self.runner.invoke(broker_app, ["disarm", "KO", "--date", "2026-08-26"])
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("legacy flat broker state", result.output)
