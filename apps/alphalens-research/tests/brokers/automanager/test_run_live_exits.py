@@ -4,7 +4,7 @@ import datetime as dt
 import unittest
 from unittest import mock
 
-from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     LiveExitBroker,
     ManagedExit,
@@ -99,7 +99,7 @@ class TestRunLiveExits(unittest.TestCase):
                 already_fired=frozenset(),
             )
         ]
-        with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=[].append):
+        with mock.patch.object(sj, "_append_standalone_stop_journal", side_effect=[].append):
             fired = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(len(fired), 1)
         self.assertTrue(fired[0].position_closed)
@@ -236,7 +236,7 @@ class TestRunLiveExits(unittest.TestCase):
         # captured sl_leg.amount (which would set the SL to 100-30=70, over-hedged).
         b, uic, feed, managed = self._mk(price=18.5)
         records: list[dict] = []
-        with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
+        with mock.patch.object(sj, "_append_standalone_stop_journal", side_effect=records.append):
             n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(len(n), 2)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 20.0)  # sold 50 + 30
@@ -270,7 +270,7 @@ class TestRunLiveExits(unittest.TestCase):
             )
         ]
         records: list[dict] = []
-        with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
+        with mock.patch.object(sj, "_append_standalone_stop_journal", side_effect=records.append):
             n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(len(n), 1)
         fired = [r for r in records if r.get("kind") == "tranche_fired"]
@@ -363,7 +363,7 @@ class TestRunLiveExitsCostGate(unittest.TestCase):
     def test_refused_exit_sells_nothing_and_leaves_the_stop_alone(self):
         b, uic, feed, managed = self._mk_smg()
         records: list[dict] = []
-        with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
+        with mock.patch.object(sj, "_append_standalone_stop_journal", side_effect=records.append):
             n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(n, [])
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 1.0, "position untouched")
@@ -392,7 +392,7 @@ class TestRunLiveExitsCostGate(unittest.TestCase):
             )
         ]
         feed = _FakeFeed({uic: SMG_TP_TRANCHES[0] + 0.05})
-        with mock.patch.object(cl, "_append_standalone_stop_journal"):
+        with mock.patch.object(sj, "_append_standalone_stop_journal"):
             n = run_live_exits(b, feed, managed, lattice=RAIL_LATTICE)
         self.assertEqual(len(n), 1)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 0.0)
@@ -442,7 +442,7 @@ class TestDegeneratePriceFiresNothing(unittest.TestCase):
         b.set_position("KO", 100, avg_price=avg_price)
         b.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
         feed = _FakeFeed({uic: 16.5}, bid=bid, ask=16.5)
-        with mock.patch.object(cl, "_append_standalone_stop_journal"):
+        with mock.patch.object(sj, "_append_standalone_stop_journal"):
             fired = run_live_exits(b, feed, self._managed(uic), lattice=RAIL_LATTICE)
         return fired, b.get_positions_by_uic(uic).quantity
 

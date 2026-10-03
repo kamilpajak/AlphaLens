@@ -22,6 +22,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails, state_paths, trade_alerts
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager import stream_handles as sh
 from alphalens_pipeline.brokers.automanager.costs import round_trip_fee_bps
 from alphalens_pipeline.brokers.automanager.live_rails import (
@@ -343,8 +344,8 @@ class _ProtBroker:
 
 
 def _seed_planned(journal: Path, uic: int = _UIC, crid: str = "crid-0") -> None:
-    with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-        cl._append_standalone_stop_journal(
+    with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
+        sj._append_standalone_stop_journal(
             cl._build_planned_line(
                 entry_crid=crid,
                 uic=uic,
@@ -368,9 +369,9 @@ class TestStandaloneStopJournalDurability(unittest.TestCase):
     def test_append_flushes_and_fsyncs(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 with mock.patch("os.fsync") as fsync:
-                    cl._append_standalone_stop_journal({"kind": "gen", "uic": 1, "gen": 0})
+                    sj._append_standalone_stop_journal({"kind": "gen", "uic": 1, "gen": 0})
                 fsync.assert_called_once()
             # The record is durably persisted (survives read-back).
             lines = journal.read_text(encoding="utf-8").splitlines()
@@ -686,7 +687,7 @@ class TestPlaceTiersNowParams(unittest.TestCase):
         pkg = "alphalens_pipeline.brokers"
         with (
             mock.patch(f"{pkg}.submission_log.append_submission_record", submitted.append),
-            mock.patch.object(cl, "_append_standalone_stop_journal", stop_lines.append),
+            mock.patch.object(sj, "_append_standalone_stop_journal", stop_lines.append),
         ):
             count = cl._place_tiers(
                 cl._PickRefs(
@@ -875,7 +876,7 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
                     lambda _spec, **_k: _fee_plan(10_000.0),
                 )
             )
-            p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+            p(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _line: None))
             placer = cl._make_place_pick(broker)  # type: ignore[arg-type]
             with self.assertRaises(_CrashError):
                 placer(_pick("KO", "2026-07-20"))
@@ -994,7 +995,7 @@ class TestPlacePickBranches(unittest.TestCase):
         p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
         p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
         p(mock.patch("broker_contract.sizing.compute_setup_plan", m["compute_plan"]))
-        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        p(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _line: None))
         return cl._make_place_pick(broker, **m.get("make_kwargs", {}))
 
     def test_broker_read_error_returns_false(self) -> None:
@@ -1550,7 +1551,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
         p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
         p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
         p(mock.patch("broker_contract.sizing.compute_setup_plan", m["compute_plan"]))
-        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        p(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _line: None))
         placer = cl._make_place_pick(broker, alert_throttled=_alert_throttled)
         return placer, alerts, refusals
 
@@ -1619,7 +1620,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
         p(mock.patch(f"{pkg}.automanager.safety.check", lambda *_a, **_k: object()))
         p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t, **_kw: _instr()))
         p(mock.patch("broker_contract.sizing.compute_setup_plan", lambda _s, **_k: _fee_plan(50.0)))
-        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        p(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _line: None))
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
             placer = cl._make_place_pick(_PlaceBroker())
             self.assertFalse(placer(_pick()))  # must not raise despite no alert sink
@@ -2091,7 +2092,7 @@ class TestPlacePickGrossCapIntegration(unittest.TestCase):
         p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
         p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
         p(mock.patch("broker_contract.sizing.compute_setup_plan", m["compute_plan"]))
-        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        p(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _line: None))
         placer = cl._make_place_pick(broker, alert_throttled=_alert_throttled)
         return placer, alerts, refusals, appended
 
@@ -2348,7 +2349,7 @@ class TestPlacePickCashFloorIntegration(unittest.TestCase):
         p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
         p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
         p(mock.patch("broker_contract.sizing.compute_setup_plan", m["compute_plan"]))
-        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        p(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _line: None))
         placer = cl._make_place_pick(broker, alert_throttled=_alert_throttled)
         return placer, alerts, refusals, appended
 
@@ -2740,7 +2741,7 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", lambda _r: None))
             p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
-            p(mock.patch.object(cl, "_append_standalone_stop_journal", journaled.append))
+            p(mock.patch.object(sj, "_append_standalone_stop_journal", journaled.append))
             count = cl._place_tiers(
                 cl._PickRefs(
                     _PlaceBroker(), _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), None
@@ -2831,7 +2832,7 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", lambda _r: None))
             p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
-            p(mock.patch.object(cl, "_append_standalone_stop_journal", journaled.append))
+            p(mock.patch.object(sj, "_append_standalone_stop_journal", journaled.append))
             cl._place_tiers(
                 cl._PickRefs(
                     _PlaceBroker(), _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), None
@@ -3098,7 +3099,7 @@ class TestPlaceTiersFeeEstimateStamp(unittest.TestCase):
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
             p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
-            p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+            p(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _line: None))
             cl._place_tiers(
                 cl._PickRefs(
                     _LadderBroker(), _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), fx
@@ -3142,7 +3143,7 @@ class TestPlaceTiersInsufficientFundsRollback(unittest.TestCase):
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
             p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
-            p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+            p(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _line: None))
             count = cl._place_tiers(
                 cl._PickRefs(broker, _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), None),
                 _placement(n_tiers=n_tiers),
@@ -3218,7 +3219,7 @@ class TestPlaceTiersWriteAheadDedup(unittest.TestCase):
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
             p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
-            p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+            p(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _line: None))
             with self.assertRaises(_CrashError):
                 cl._place_tiers(
                     cl._PickRefs(
@@ -3251,7 +3252,7 @@ class TestPlaceTiersWriteAheadDedup(unittest.TestCase):
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
             p(mock.patch(f"{pkg}.submission_log.build_submission_record", _fake_build_record))
-            p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+            p(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _line: None))
             count = cl._place_tiers(
                 cl._PickRefs(
                     _LadderBroker(), _pick("KO", "2026-07-20"), "KO", _instr(), _acct(), None
@@ -3722,11 +3723,11 @@ class TestExecuteB0Success(unittest.TestCase):
                 broker, _throttle_to([]), place_oco_exit=_oco_placer(calls)
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)
                 markers = [
                     line
-                    for line in cl._iter_standalone_stop_journal()
+                    for line in sj._iter_standalone_stop_journal()
                     if line.get("kind") == "oco_placed"
                 ]
         self.assertEqual(len(calls), 1, "the OCO pair was placed once")
@@ -3765,11 +3766,11 @@ class TestRung1RefuseViaLoopStaysStopOnly(unittest.TestCase):
                     broker, throttle, place_oco_exit=placer
                 ),
             )
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)  # planned line carries take_profit=306.72
                 r1 = cl.run_once(deps)
                 r2 = cl.run_once(deps)
-                folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+                folded = cl._fold_oco_unsupported(list(sj._iter_standalone_stop_journal()))
         self.assertEqual(len(calls), 0, "rung-1 REFUSE: OCO never attempted from a resting stop")
         self.assertEqual(broker.cancelled, [], "rung-1 stop kept LIVE (never touched)")
         self.assertEqual((r1.exits_placed, r2.exits_placed), (0, 0))
@@ -3798,12 +3799,12 @@ class TestExecuteB0FailureTaxonomy(unittest.TestCase):
                 broker, _throttle_to(alerts), place_oco_exit=placer
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)  # must NOT raise
-                folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+                folded = cl._fold_oco_unsupported(list(sj._iter_standalone_stop_journal()))
                 markers = [
                     line
-                    for line in cl._iter_standalone_stop_journal()
+                    for line in sj._iter_standalone_stop_journal()
                     if line.get("kind") == "oco_placed"
                 ]
         self.assertEqual(len(calls), 1)
@@ -3830,9 +3831,9 @@ class TestExecuteB0FailureTaxonomy(unittest.TestCase):
                 broker, _throttle_to(alerts), place_oco_exit=placer
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)  # must NOT raise
-                folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+                folded = cl._fold_oco_unsupported(list(sj._iter_standalone_stop_journal()))
         self.assertEqual(len(calls), 1)
         self.assertEqual(
             len(broker.placed), 1, "the naked fill is covered by a plain standalone stop"
@@ -3857,9 +3858,9 @@ class TestExecuteB0FailureTaxonomy(unittest.TestCase):
                 broker, _throttle_to(alerts), place_oco_exit=placer
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)  # must NOT raise
-                folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+                folded = cl._fold_oco_unsupported(list(sj._iter_standalone_stop_journal()))
         self.assertEqual(len(calls), 1)
         self.assertEqual(
             broker.placed, [], "an OCO already rests — NO fallback (would double-commit)"
@@ -3884,12 +3885,12 @@ class TestExecuteB0FailureTaxonomy(unittest.TestCase):
                 broker, _throttle_to(alerts), place_oco_exit=placer
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)  # must NOT raise
-                folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+                folded = cl._fold_oco_unsupported(list(sj._iter_standalone_stop_journal()))
                 markers = [
                     line
-                    for line in cl._iter_standalone_stop_journal()
+                    for line in sj._iter_standalone_stop_journal()
                     if line.get("kind") == "oco_placed"
                 ]
         self.assertEqual(
@@ -3925,9 +3926,9 @@ class TestExecuteB0TooFarFromMarketTransient(unittest.TestCase):
                 broker, _throttle_to(alerts), place_oco_exit=placer
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)  # must NOT raise
-                lines = list(cl._iter_standalone_stop_journal())
+                lines = list(sj._iter_standalone_stop_journal())
         self.assertEqual(len(calls), 1)
         self.assertEqual(
             len(broker.placed), 1, "the naked fill is covered by a plain standalone stop"
@@ -3953,9 +3954,9 @@ class TestExecuteB0TooFarFromMarketTransient(unittest.TestCase):
                 [], error=OrderRejectedError("bad OCO", error_code="OrderRelationInvalid")
             )
             executor = cl._make_protection_executor(broker, _throttle_to([]), place_oco_exit=placer)
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, cl.TickReport())
-                lines = list(cl._iter_standalone_stop_journal())
+                lines = list(sj._iter_standalone_stop_journal())
         self.assertIn(_UIC, cl._fold_oco_unsupported(lines), "structural reject stays permanent")
         self.assertEqual(
             [line for line in lines if line.get("kind") == "oco_too_far"],
@@ -3976,7 +3977,7 @@ class TestBuildProtectionViewOcoTooFarTtl(unittest.TestCase):
     def test_fresh_too_far_marker_degrades_transiently(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_oco_too_far(_UIC, clock=lambda: 1000.0 - 30.0)  # 30s ago
                 view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
@@ -3985,7 +3986,7 @@ class TestBuildProtectionViewOcoTooFarTtl(unittest.TestCase):
     def test_expired_too_far_marker_re_enables_oco(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_oco_too_far(_UIC, clock=lambda: 1000.0 - cl._OCO_TOO_FAR_TTL_S - 1.0)
                 view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
@@ -3996,7 +3997,7 @@ class TestBuildProtectionViewOcoTooFarTtl(unittest.TestCase):
     def test_permanent_marker_never_expires(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._mark_oco_unsupported(_UIC)
                 # A clock arbitrarily far in the future — the permanent marker
@@ -4179,7 +4180,7 @@ class TestBrokerErrorBoundary(unittest.TestCase):
                 execute_protection=cl._make_protection_executor(broker, throttle),
             )
             deps = cl.LoopDeps(**{**deps.__dict__, "verdicts_fn": _raise_broker_error})
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 report = cl.run_once(deps)  # must NOT propagate
             self.assertEqual(len(broker.placed), 1, "protection runs despite the reconcile failure")
@@ -4456,7 +4457,7 @@ class TestFailedPostLeavesNoProtectionAndRetries(unittest.TestCase):
                 build_protection_view=cl.build_protection_view,
                 execute_protection=cl._make_protection_executor(broker, throttle),
             )
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 r1 = cl.run_once(deps)
                 self.assertEqual(broker.placed, [], "tick 1 POST failed — nothing placed")
@@ -4488,7 +4489,7 @@ class TestLoopIteratesPositionsNotVerdicts(unittest.TestCase):
                 build_protection_view=cl.build_protection_view,
                 execute_protection=cl._make_protection_executor(broker, throttle),
             )
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 report = cl.run_once(deps)
             self.assertEqual(len(broker.placed), 1)
@@ -4601,7 +4602,7 @@ class TestEntryTrailNeverNaked(unittest.TestCase):
     def test_fill_of_an_armed_trail_yields_a_disaster_stop(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 # 1) fire-arm writes the planned disaster-SL line (never-naked).
                 cl._journal_entry_planned_disaster(
                     {"disaster_stop": 216.48, "tier_index": 0},
@@ -4628,13 +4629,13 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
 
     def _stop_placed_lines(self) -> list[dict[str, Any]]:
         return [
-            line for line in cl._iter_standalone_stop_journal() if line.get("kind") == "stop_placed"
+            line for line in sj._iter_standalone_stop_journal() if line.get("kind") == "stop_placed"
         ]
 
     def test_journal_stop_placed_record_shape_with_injected_clock(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 cl._journal_stop_placed(
                     _UIC,
                     46.0,
@@ -4664,7 +4665,7 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
             executor = cl._make_protection_executor(broker, _throttle_to([]))
             action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(action, False, report)
                 lines = self._stop_placed_lines()
         self.assertEqual(report.exits_placed, 1)
@@ -4679,7 +4680,7 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
     def test_journal_stop_placed_records_the_level_when_given(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 cl._journal_stop_placed(
                     _UIC,
                     46.0,
@@ -4700,7 +4701,7 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
             executor = cl._make_protection_executor(broker, _throttle_to([]))
             action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(action, False, report)
                 lines = self._stop_placed_lines()
         self.assertEqual(broker.placed[0][2], 20.0)
@@ -4727,7 +4728,7 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
                 action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
                 report = cl.TickReport()
                 with mock.patch.object(
-                    cl, "_standalone_stop_journal_path", lambda journal=journal: journal
+                    sj, "_standalone_stop_journal_path", lambda journal=journal: journal
                 ):
                     executor(action, False, report)
                     lines = self._stop_placed_lines()
@@ -4753,7 +4754,7 @@ class TestOutcomeJournalIoFailureNeverBlocksProtection(unittest.TestCase):
         )
         report = cl.TickReport()
         with mock.patch.object(
-            cl,
+            sj,
             "_append_standalone_stop_journal",
             side_effect=OSError("No space left on device"),
         ):
@@ -4784,7 +4785,7 @@ class TestOutcomeJournalIoFailureNeverBlocksProtection(unittest.TestCase):
         )
         report = cl.TickReport()
         with mock.patch.object(
-            cl,
+            sj,
             "_append_standalone_stop_journal",
             side_effect=RuntimeError("journal append bug"),
         ):
@@ -4804,7 +4805,7 @@ class TestOutcomeJournalIoFailureNeverBlocksProtection(unittest.TestCase):
         )
         report = cl.TickReport()
         with mock.patch.object(
-            cl,
+            sj,
             "_append_standalone_stop_journal",
             side_effect=OSError("Permission denied"),
         ):
@@ -4996,7 +4997,7 @@ class TestPerCallBrokerErrorBoundary(unittest.TestCase):
                 build_protection_view=cl.build_protection_view,
                 execute_protection=cl._make_protection_executor(broker, throttle),
             )
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 report = cl.run_once(deps)
             self.assertIn("B-1", broker.cancelled, "the second orphan uic is still swept")
             self.assertTrue(alerts, "the failed cancel alerts")
@@ -5244,8 +5245,8 @@ class TestFoldPlannedExitsPricesOnly(unittest.TestCase):
         # it (memo §7) and the fold reads it back into PlannedExit.tp_price.
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                cl._append_standalone_stop_journal(
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
+                sj._append_standalone_stop_journal(
                     cl._build_planned_line(
                         entry_crid="crid-0",
                         uic=_UIC,
@@ -5255,7 +5256,7 @@ class TestFoldPlannedExitsPricesOnly(unittest.TestCase):
                         tier_index=0,
                     )
                 )
-                folded = cl._fold_planned_exits(list(cl._iter_standalone_stop_journal()))
+                folded = cl._fold_planned_exits(list(sj._iter_standalone_stop_journal()))
         self.assertIn(_UIC, folded)
         self.assertAlmostEqual(folded[_UIC].tp_price or 0.0, 306.72)
 
@@ -5272,13 +5273,13 @@ class TestVerdictDrivenPlannedRetraction(unittest.TestCase):
         d = TemporaryDirectory()
         self.addCleanup(d.cleanup)
         journal = Path(d.name) / "standalone_stops.jsonl"
-        patcher = mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal)
+        patcher = mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal)
         patcher.start()
         self.addCleanup(patcher.stop)
         return journal
 
     def _seed_planned(self, crid: str = "454d-stale", uic: int = 49284) -> None:
-        cl._append_standalone_stop_journal(
+        sj._append_standalone_stop_journal(
             cl._build_planned_line(
                 entry_crid=crid,
                 uic=uic,
@@ -5292,7 +5293,7 @@ class TestVerdictDrivenPlannedRetraction(unittest.TestCase):
     def _markers(self) -> list[dict[str, Any]]:
         return [
             dict(line)
-            for line in cl._iter_standalone_stop_journal()
+            for line in sj._iter_standalone_stop_journal()
             if line.get("kind") == "planned_retracted"
         ]
 
@@ -5316,7 +5317,7 @@ class TestVerdictDrivenPlannedRetraction(unittest.TestCase):
                 self.assertEqual(markers[0]["client_request_id"], "454d-stale")
                 self.assertEqual(markers[0]["uic"], 49284)
                 self.assertNotIn(
-                    49284, cl._fold_planned_exits(list(cl._iter_standalone_stop_journal()))
+                    49284, cl._fold_planned_exits(list(sj._iter_standalone_stop_journal()))
                 )
 
     def test_retraction_is_idempotent_across_ticks(self) -> None:
@@ -5401,16 +5402,16 @@ class TestFoldOcoUnsupported(unittest.TestCase):
         # mark -> a FRESH read of the journal (a restart) still carries the flag.
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 cl._mark_oco_unsupported(_UIC)
-                folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+                folded = cl._fold_oco_unsupported(list(sj._iter_standalone_stop_journal()))
         self.assertIn(_UIC, folded)
 
     def test_build_protection_view_populates_oco_unsupported_from_journal(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             broker = _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._mark_oco_unsupported(_UIC)
                 view = cl.build_protection_view(broker, [])  # type: ignore[arg-type]
@@ -5422,7 +5423,7 @@ class TestFoldOcoUnsupported(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             broker = _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 view = cl.build_protection_view(broker, [])  # type: ignore[arg-type]
         self.assertEqual(view.oco_unsupported, frozenset())
@@ -5439,7 +5440,7 @@ class TestBuildProtectionViewNetsAllPositions(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             broker = _ProtBroker(positions=positions)
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 return cl.build_protection_view(broker, [])  # type: ignore[arg-type]
 
     @staticmethod
@@ -5521,7 +5522,7 @@ class TestGenStampedRefChangesOnResize(unittest.TestCase):
     def test_resize_increments_gen_same_size_retry_keeps_it(self) -> None:
         with TemporaryDirectory() as tmp:
             journal = Path(tmp) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 next_gen = cl._make_next_gen(43070)
                 self.assertEqual(next_gen(46.0), 0)
                 self.assertEqual(next_gen(46.0), 0)
@@ -5532,7 +5533,7 @@ class TestGenStampedRefChangesOnResize(unittest.TestCase):
     def test_float_tolerance_no_gen_flicker(self) -> None:
         with TemporaryDirectory() as tmp:
             journal = Path(tmp) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 next_gen = cl._make_next_gen(43070)
                 self.assertEqual(next_gen(46.0), 0)
                 self.assertEqual(next_gen(45.9999999), 0)
@@ -5540,7 +5541,7 @@ class TestGenStampedRefChangesOnResize(unittest.TestCase):
     def test_gen_persists_append_only_across_fresh_callables(self) -> None:
         with TemporaryDirectory() as tmp:
             journal = Path(tmp) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 cl._make_next_gen(43070)(46.0)
                 cl._make_next_gen(43070)(30.0)
                 self.assertEqual(cl._make_next_gen(43070)(30.0), 1)
@@ -5631,11 +5632,11 @@ class TestExecuteAmendStop(unittest.TestCase):
                 broker, throttle, amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)  # must NOT raise
                 markers = [
                     line
-                    for line in cl._iter_standalone_stop_journal()
+                    for line in sj._iter_standalone_stop_journal()
                     if line.get("kind") == "amend_failed"
                 ]
         self.assertEqual(
@@ -5663,11 +5664,11 @@ class TestExecuteAmendStop(unittest.TestCase):
                 broker, throttle, amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)  # must NOT raise
                 markers = [
                     line
-                    for line in cl._iter_standalone_stop_journal()
+                    for line in sj._iter_standalone_stop_journal()
                     if line.get("kind") == "amend_failed"
                 ]
         self.assertEqual([m.get("uic") for m in markers], [_UIC], "amend_failed marker journaled")
@@ -5675,9 +5676,9 @@ class TestExecuteAmendStop(unittest.TestCase):
         # record_place_failure emitted the routine place-failure alert (below threshold).
         self.assertTrue(sent, "the amend failure escalates via record_place_failure")
         # No permanent latch: the uic is NOT marked oco_unsupported by an amend failure.
-        with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+        with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
             self.assertNotIn(
-                _UIC, cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+                _UIC, cl._fold_oco_unsupported(list(sj._iter_standalone_stop_journal()))
             )
 
     def test_execute_amend_allowed_under_kill(self) -> None:
@@ -5719,11 +5720,11 @@ class TestExecuteAmendStop(unittest.TestCase):
                 broker, _throttle_to(alerts), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)
                 markers = [
                     line
-                    for line in cl._iter_standalone_stop_journal()
+                    for line in sj._iter_standalone_stop_journal()
                     if line.get("kind") == "amend_failed"
                 ]
         self.assertEqual(broker.amended, [], "no amend on a partially-filled resting stop (Q10)")
@@ -5748,11 +5749,11 @@ class TestExecuteAmendStop(unittest.TestCase):
                 broker, _throttle_to(alerts), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)
                 markers = [
                     line
-                    for line in cl._iter_standalone_stop_journal()
+                    for line in sj._iter_standalone_stop_journal()
                     if line.get("kind") == "amend_failed"
                 ]
         self.assertEqual(broker.amended, [], "no amend on a vanished resting stop (Q10)")
@@ -5773,11 +5774,11 @@ class TestExecuteAmendStop(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(target_qty=4.0), False, report)
                 markers = [
                     line
-                    for line in cl._iter_standalone_stop_journal()
+                    for line in sj._iter_standalone_stop_journal()
                     if line.get("kind") == "amend_failed"
                 ]
         self.assertEqual(len(broker.amended), 1, "unfilled resting stop -> amend proceeds")
@@ -5794,13 +5795,13 @@ class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
 
     def _amend_ok_lines(self) -> list[dict[str, Any]]:
         return [
-            line for line in cl._iter_standalone_stop_journal() if line.get("kind") == "amend_ok"
+            line for line in sj._iter_standalone_stop_journal() if line.get("kind") == "amend_ok"
         ]
 
     def test_journal_amend_ok_record_shape_with_injected_clock(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 cl._journal_amend_ok(_UIC, 6.0, clock=lambda: 1234.5)
                 lines = self._amend_ok_lines()
         self.assertEqual(lines, [{"kind": "amend_ok", "uic": _UIC, "qty": 6.0, "ts": 1234.5}])
@@ -5817,7 +5818,7 @@ class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(target_qty=4.0), False, report)
                 lines = self._amend_ok_lines()
         self.assertEqual(report.exits_placed, 1)
@@ -5838,7 +5839,7 @@ class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)
                 lines = self._amend_ok_lines()
         self.assertEqual(lines, [], "no amend_ok on a provably-unsent capability error")
@@ -5857,12 +5858,12 @@ class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
                 broker, throttle, amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)
                 ok_lines = self._amend_ok_lines()
                 failed_lines = [
                     line
-                    for line in cl._iter_standalone_stop_journal()
+                    for line in sj._iter_standalone_stop_journal()
                     if line.get("kind") == "amend_failed"
                 ]
         self.assertEqual(ok_lines, [], "no amend_ok on a rejected amend")
@@ -5891,9 +5892,9 @@ class TestEveryStopMoveMarkerHasAnAlertReason(unittest.TestCase):
             executor = cl._make_protection_executor(
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(action, False, cl.TickReport())
-                lines = list(cl._iter_standalone_stop_journal())
+                lines = list(sj._iter_standalone_stop_journal())
         return [ln for ln in lines if str(ln.get("kind")) not in self._BOOKKEEPING]
 
     def test_each_stop_moving_amend_writes_a_marker_the_formatter_knows(self) -> None:
@@ -5927,13 +5928,13 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
 
     def _reanchored_lines(self) -> list[dict[str, Any]]:
         return [
-            line for line in cl._iter_standalone_stop_journal() if line.get("kind") == "reanchored"
+            line for line in sj._iter_standalone_stop_journal() if line.get("kind") == "reanchored"
         ]
 
     def test_journal_reanchored_record_shape_with_injected_clock(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 cl._journal_reanchored(_UIC, 95.0, clock=lambda: 1234.5)
                 lines = self._reanchored_lines()
         self.assertEqual(
@@ -5950,7 +5951,7 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(
                     _amend_action(reason="reanchor-on-fill", reanchor_avg_price=95.0),
                     False,
@@ -5969,7 +5970,7 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
         # exit needs so a tranche fire cannot amend the stop back down.
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 cl._journal_reanchored(_UIC, 95.0, stop_price=91.5, clock=lambda: 1234.5)
                 lines = self._reanchored_lines()
         self.assertEqual(
@@ -5997,7 +5998,7 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
             executor = cl._make_protection_executor(
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(
                     _amend_action(
                         reason="reanchor-on-fill", reanchor_avg_price=95.0, stop_price=91.5
@@ -6024,13 +6025,13 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
             executor = cl._make_protection_executor(
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(
                     _amend_action(reason="trail", reanchor_avg_price=95.0, stop_price=91.5),
                     False,
                     cl.TickReport(),
                 )
-                lines = list(cl._iter_standalone_stop_journal())
+                lines = list(sj._iter_standalone_stop_journal())
         self.assertEqual(self._reanchored_lines(), [], "a trail is not a re-anchor")
         self.assertEqual([ln["kind"] for ln in lines if ln.get("kind") == "trailed"], ["trailed"])
 
@@ -6046,7 +6047,7 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)  # reanchor_avg_price defaults None
                 lines = self._reanchored_lines()
         self.assertEqual(report.exits_placed, 1)
@@ -6065,7 +6066,7 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
                 broker, throttle, amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(
                     _amend_action(reason="reanchor-on-fill", reanchor_avg_price=95.0),
                     False,
@@ -6086,14 +6087,14 @@ class TestExecuteAmendStopJournalsEnvelopeClamped(unittest.TestCase):
     def _envelope_lines(self) -> list[dict[str, Any]]:
         return [
             line
-            for line in cl._iter_standalone_stop_journal()
+            for line in sj._iter_standalone_stop_journal()
             if line.get("kind") == "envelope_clamped"
         ]
 
     def test_journal_envelope_clamped_record_shape_with_injected_clock(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 cl._journal_envelope_clamped(
                     _UIC,
                     policy="atr_bracket_1p5",
@@ -6130,7 +6131,7 @@ class TestExecuteAmendStopJournalsEnvelopeClamped(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(
                     _amend_action(
                         reason="reanchor-on-fill",
@@ -6166,7 +6167,7 @@ class TestExecuteAmendStopJournalsEnvelopeClamped(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(
                     _amend_action(reason="reanchor-on-fill", reanchor_avg_price=95.0),
                     False,
@@ -6269,7 +6270,7 @@ class TestOcoAmendExecutorReuse(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 executor(
                     _amend_action(
                         order_id="oco-stop-1",
@@ -6278,7 +6279,7 @@ class TestOcoAmendExecutorReuse(unittest.TestCase):
                     False,
                     report,
                 )
-                lines = list(cl._iter_standalone_stop_journal())
+                lines = list(sj._iter_standalone_stop_journal())
                 markers = [line for line in lines if line.get("kind") == "amend_failed"]
                 folded = cl._fold_ttl_markers(
                     lines, "amend_failed", now=0.0, ttl_s=cl._AMEND_FAILED_TTL_S
@@ -6341,7 +6342,7 @@ class TestBuildProtectionViewTtlFolds(unittest.TestCase):
         fresh_uic, stale_uic = _UIC, 99999
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_oco_placed(fresh_uic, clock=lambda: 1000.0 - 30.0)  # 30s ago
                 cl._journal_oco_placed(stale_uic, clock=lambda: 1000.0 - 300.0)  # 300s ago
@@ -6353,7 +6354,7 @@ class TestBuildProtectionViewTtlFolds(unittest.TestCase):
         fresh_uic, stale_uic = _UIC, 99999
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_amend_failed(fresh_uic, clock=lambda: 1000.0 - 30.0)
                 cl._journal_amend_failed(stale_uic, clock=lambda: 1000.0 - 300.0)
@@ -6364,7 +6365,7 @@ class TestBuildProtectionViewTtlFolds(unittest.TestCase):
     def test_ttl_folds_default_empty_without_markers(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 view = cl.build_protection_view(self._broker(), [])
         self.assertEqual(view.oco_recently_placed, frozenset())
@@ -6466,7 +6467,7 @@ class TestManagedExitAnnouncesInheritedTrailedLevel(unittest.TestCase):
             cl.logger.info("probe")  # floor so assertLogs never raises on silence
             managed = cl._build_managed_exits(
                 long_positions=[_pos(10.0, 333)],
-                tranche_plans=cl.fold_tranche_plans(lines),
+                tranche_plans=sj.fold_tranche_plans(lines),
                 fired=cl._fold_fired_since_latest_plan(lines),
                 trailed={333: trailed_level},
             )
@@ -6504,7 +6505,7 @@ class TestManagedExitAnnouncesARaiseOncePerLevel(unittest.TestCase):
             cl.logger.info("probe")  # floor so assertLogs never raises on silence
             cl._build_managed_exits(
                 long_positions=[_pos(10.0, 333)],
-                tranche_plans=cl.fold_tranche_plans(lines),
+                tranche_plans=sj.fold_tranche_plans(lines),
                 fired=cl._fold_fired_since_latest_plan(lines),
                 trailed={333: trailed_level},
                 announced=announced,
@@ -6601,7 +6602,7 @@ class TestBuildProtectionViewWiresReanchoredByUic(unittest.TestCase):
     def test_wires_the_latched_avg_price(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_reanchored(_UIC, 95.0, clock=lambda: 1000.0)
                 view = cl.build_protection_view(self._broker(), [], clock=lambda: 2000.0)
@@ -6610,7 +6611,7 @@ class TestBuildProtectionViewWiresReanchoredByUic(unittest.TestCase):
     def test_empty_without_markers(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 view = cl.build_protection_view(self._broker(), [])
         self.assertEqual(view.reanchored_by_uic, {})
@@ -6635,7 +6636,7 @@ class TestProtectionViewIgnoresOutcomeRecords(unittest.TestCase):
     def test_view_identical_with_and_without_outcome_records(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_oco_placed(_UIC, clock=lambda: 1000.0 - 30.0)
                 cl._journal_amend_failed(_UIC, clock=lambda: 1000.0 - 30.0)
@@ -6660,7 +6661,7 @@ class TestAmendSeqMonotonicJournalBacked(unittest.TestCase):
     def test_amend_seq_is_monotonic_and_persists(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 self.assertEqual(cl._make_next_amend_seq(_UIC)(), 0)
                 self.assertEqual(cl._make_next_amend_seq(_UIC)(), 1)
                 self.assertEqual(cl._make_next_amend_seq(_UIC)(), 2)
@@ -6669,9 +6670,9 @@ class TestAmendSeqMonotonicJournalBacked(unittest.TestCase):
     def test_fold_planned_exits_wires_journal_backed_amend_seq(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
-                planned = cl._fold_planned_exits(list(cl._iter_standalone_stop_journal()))[_UIC]
+                planned = cl._fold_planned_exits(list(sj._iter_standalone_stop_journal()))[_UIC]
                 s0 = planned.next_amend_seq()
                 s1 = planned.next_amend_seq()
         self.assertEqual((s0, s1), (0, 1), "the folded PlannedExit carries the monotonic seq")
@@ -7474,8 +7475,8 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
             {"kind": "tranche_fired", "uic": 333, "tag": "tp1"},
         ]
         compacted = cl._compact_standalone_stop_journal_lines(original)
-        self.assertIn(333, cl.fold_tranche_plans(original))  # guard: non-vacuous
-        self.assertEqual(cl.fold_tranche_plans(original), cl.fold_tranche_plans(compacted))
+        self.assertIn(333, sj.fold_tranche_plans(original))  # guard: non-vacuous
+        self.assertEqual(sj.fold_tranche_plans(original), sj.fold_tranche_plans(compacted))
         self.assertEqual({333: frozenset({"tp1"})}, cl._fold_fired_since_latest_plan(compacted))
 
     def test_retracted_ladder_compacts_to_no_tranche_lines(self) -> None:
@@ -7484,7 +7485,7 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
             {"kind": "tranche_plan_retracted", "uic": 555, "pick_key": "XYZ:2026-08-12"},
         ]
         compacted = cl._compact_standalone_stop_journal_lines(original)
-        self.assertEqual(cl.fold_tranche_plans(compacted), {})
+        self.assertEqual(sj.fold_tranche_plans(compacted), {})
         self.assertEqual(cl._fold_fired_since_latest_plan(compacted), {})
         self.assertEqual(
             [line for line in compacted if str(line.get("kind", "")).startswith("tranche")],
@@ -7500,7 +7501,7 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
             {"kind": "tranche_fired", "uic": 444, "tag": "tp2"},
         ]
         compacted = cl._compact_standalone_stop_journal_lines(original)
-        self.assertEqual(cl.fold_tranche_plans(original), cl.fold_tranche_plans(compacted))
+        self.assertEqual(sj.fold_tranche_plans(original), sj.fold_tranche_plans(compacted))
         self.assertEqual({444: frozenset({"tp2"})}, cl._fold_fired_since_latest_plan(original))
         self.assertEqual(
             cl._fold_fired_since_latest_plan(original),
@@ -7523,7 +7524,7 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
             cl._fold_fired_since_latest_plan(original),
             cl._fold_fired_since_latest_plan(compacted),
         )
-        self.assertEqual(cl.fold_tranche_plans(original), cl.fold_tranche_plans(compacted))
+        self.assertEqual(sj.fold_tranche_plans(original), sj.fold_tranche_plans(compacted))
 
     def test_compaction_is_idempotent_on_mixed_journal(self) -> None:
         mixed = _rich_standalone_stop_journal() + _tranche_journal()
@@ -7533,7 +7534,7 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
     def test_mixed_journal_folds_identical_and_existing_kinds_unchanged(self) -> None:
         mixed = _rich_standalone_stop_journal() + _tranche_journal()
         compacted = cl._compact_standalone_stop_journal_lines(mixed)
-        self.assertEqual(cl.fold_tranche_plans(mixed), cl.fold_tranche_plans(compacted))
+        self.assertEqual(sj.fold_tranche_plans(mixed), sj.fold_tranche_plans(compacted))
         self.assertEqual(
             cl._fold_fired_since_latest_plan(mixed),
             cl._fold_fired_since_latest_plan(compacted),
@@ -7561,7 +7562,7 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
         def _stop_price(lines: list[dict[str, Any]]) -> float:
             managed = cl._build_managed_exits(
                 long_positions=[_pos(10.0, 333)],
-                tranche_plans=cl.fold_tranche_plans(lines),
+                tranche_plans=sj.fold_tranche_plans(lines),
                 fired=cl._fold_fired_since_latest_plan(lines),
                 trailed=cl._fold_trailed_since_latest_plan(lines),
             )
@@ -7582,7 +7583,7 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
     def test_absent_file_is_noop(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 cl._compact_standalone_stop_journal()
             self.assertFalse(journal.exists())
 
@@ -7590,7 +7591,7 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             journal.write_text("", encoding="utf-8")
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 cl._compact_standalone_stop_journal()
             self.assertTrue(journal.exists())
             self.assertEqual(journal.read_text(encoding="utf-8"), "")
@@ -7607,8 +7608,8 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                before_lines = list(cl._iter_standalone_stop_journal())
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
+                before_lines = list(sj._iter_standalone_stop_journal())
                 planned_before = _planned_fold_data(cl._fold_planned_exits(before_lines))
                 oco_before = cl._fold_oco_unsupported(before_lines)
                 seq_a_before = cl._read_persisted_amend_seq(111)
@@ -7616,7 +7617,7 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
 
                 cl._compact_standalone_stop_journal()
 
-                after_lines = list(cl._iter_standalone_stop_journal())
+                after_lines = list(sj._iter_standalone_stop_journal())
                 self.assertLess(len(after_lines), len(before_lines))
                 self.assertEqual(
                     planned_before,
@@ -7652,14 +7653,14 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
                 "".join(json.dumps(line, sort_keys=True) + "\n" for line in original),
                 encoding="utf-8",
             )
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-                before = list(cl._iter_standalone_stop_journal())
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
+                before = list(sj._iter_standalone_stop_journal())
                 trailed_before = cl._fold_trailed_since_latest_plan(before)
                 reanchored_before = cl._fold_reanchored_markers(before)
 
                 cl._compact_standalone_stop_journal()
 
-                after = list(cl._iter_standalone_stop_journal())
+                after = list(sj._iter_standalone_stop_journal())
         # Power checks: both folds are non-empty before, so "the boot wiped it"
         # is an observation this test can produce.
         self.assertEqual(trailed_before, {333: 97.0})
@@ -7696,7 +7697,7 @@ class TestCompactionSnapshotsTheJournal(unittest.TestCase):
         ]  # fmt: skip
 
     def _compact(self, journal: Path) -> Any:
-        with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+        with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
             return cl._compact_standalone_stop_journal()
 
     def test_a_dropped_tranche_fired_survives_in_the_snapshot(self) -> None:
@@ -8556,7 +8557,7 @@ class TestStreamRestBudget(unittest.TestCase):
                 clock,
                 [("wake", 0.01)] * 5 + [("timeout",)],
             )
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl.run_daemon(
                     base,
@@ -10090,7 +10091,7 @@ class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
         p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
         p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
         p(mock.patch("broker_contract.sizing.compute_setup_plan", m["compute_plan"]))
-        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        p(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _line: None))
         placer = cl._make_place_pick(
             broker, alert_throttled=_alert_throttled, day1_gap_price_probe=day1_gap_price_probe
         )
@@ -10415,7 +10416,7 @@ class TestPageNowResiduals(unittest.TestCase):
         # #1249 veto pin restated for the now shape: a terminal verdict WITH
         # filled_quantity must never retract the disaster-stop plan.
         retracted: list[Any] = []
-        with mock.patch.object(cl, "_retract_planned_lines", lambda c, **k: retracted.append(c)):
+        with mock.patch.object(sj, "_retract_planned_lines", lambda c, **k: retracted.append(c)):
             cl._retract_planned_for_verdicts(
                 [self._verdict("CANCELLED")]  # partial fill present
             )

@@ -29,6 +29,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.data.alt_data.saxo_price_stream import SaxoPriceStream
 from broker_contract.contract import InstrumentRef, Position
 from broker_contract.trade_intent.schema import TrailingStop
@@ -73,8 +74,8 @@ def _position(uic: int) -> Position:
 
 
 def _seed_plan(journal: Path, uic: int, *, reaction: object) -> None:
-    with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-        cl._append_standalone_stop_journal(
+    with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
+        sj._append_standalone_stop_journal(
             cl._build_planned_line(
                 entry_crid=f"crid-{uic}",
                 uic=uic,
@@ -132,7 +133,7 @@ class _TwoPositionTick(unittest.TestCase):
     def _tick(self, journal: Path) -> None:
         all_longs = {uic: (_TICKER[uic], "XNYS") for uic in (_TRAILING_UIC, _PLAIN_UIC)}
         cl._build_live_exits_feed(self.deps, all_longs, cl.TickReport())
-        with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+        with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
             cl._run_protection_pass(self.deps, [], False, cl.TickReport())
 
 

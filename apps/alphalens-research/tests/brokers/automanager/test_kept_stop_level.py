@@ -25,6 +25,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     TrancheExit,
     execute_tranche_exit,
@@ -398,9 +399,9 @@ class TestALiveTradeIsFetchedForEveryStopMovingPick(unittest.TestCase):
     def _journal_with(self, reactions: dict[int, object]) -> list[dict[str, object]]:
         with TemporaryDirectory() as tmp:
             journal = Path(tmp) / "standalone_stops.jsonl"
-            with patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 for uic, reaction in reactions.items():
-                    cl._append_standalone_stop_journal(
+                    sj._append_standalone_stop_journal(
                         cl._build_planned_line(
                             entry_crid=f"crid-{uic}",
                             uic=uic,
@@ -411,7 +412,7 @@ class TestALiveTradeIsFetchedForEveryStopMovingPick(unittest.TestCase):
                             reaction=reaction,  # type: ignore[arg-type]
                         )
                     )
-                return list(cl._iter_standalone_stop_journal())
+                return list(sj._iter_standalone_stop_journal())
 
     def test_trail_and_reanchor_picks_are_fetched_and_an_undeclared_one_is_not(self) -> None:
         lines = self._journal_with(

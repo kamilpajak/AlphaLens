@@ -17,6 +17,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from broker_contract.contract import InstrumentRef, Position
 from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import TpTranchePlan
@@ -438,7 +439,7 @@ class _JournalCase(unittest.TestCase):
         self._tmp = TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         journal = Path(self._tmp.name) / "standalone_stops.jsonl"
-        patch = mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal)
+        patch = mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal)
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -451,7 +452,7 @@ class _JournalCase(unittest.TestCase):
         stop_price: float,
         pick_key: str | None = None,
     ) -> None:
-        cl._append_standalone_stop_journal(
+        sj._append_standalone_stop_journal(
             cl._build_tranche_plan_line(
                 uic=uic,
                 tp_tranches=tranches,
@@ -540,7 +541,7 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         self.assertEqual(report.exits_placed, 1)
         fired = [
             line
-            for line in cl._iter_standalone_stop_journal()
+            for line in sj._iter_standalone_stop_journal()
             if line.get("kind") == "tranche_fired"
         ]
         self.assertEqual(len(fired), 1)
@@ -709,7 +710,7 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         self.assertEqual(report.exits_placed, 2)
         fired_tags = {
             line["tag"]
-            for line in cl._iter_standalone_stop_journal()
+            for line in sj._iter_standalone_stop_journal()
             if line.get("kind") == "tranche_fired"
         }
         self.assertEqual(fired_tags, {"tp1", "tp2"})
@@ -726,7 +727,7 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         self._seed_tranche_plan(
             uic, tranches=(_tr(0, 16.0, 0.5),), reference_qty=100.0, stop_price=13.0
         )
-        cl._append_standalone_stop_journal(
+        sj._append_standalone_stop_journal(
             {"kind": "trailed", "uic": uic, "level": 14.5, "ts": 1.0}
         )
         seen_stop_prices: list[float] = []
@@ -755,7 +756,7 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         uic = broker.uic_of("KO")
         broker.set_position("KO", 100, avg_price=15.0)
         broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
-        cl._append_standalone_stop_journal(
+        sj._append_standalone_stop_journal(
             {"kind": "trailed", "uic": uic, "level": 44.0, "ts": 1.0}
         )
         self._seed_tranche_plan(
@@ -807,7 +808,7 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         self._seed_tranche_plan(
             uic, tranches=(_tr(0, 16.0, 0.5),), reference_qty=100.0, stop_price=13.0
         )
-        cl._append_standalone_stop_journal({"kind": "tranche_fired", "uic": uic, "tag": "tp1"})
+        sj._append_standalone_stop_journal({"kind": "tranche_fired", "uic": uic, "tag": "tp1"})
         alerts: list[str] = []
         deps = _deps(
             broker,

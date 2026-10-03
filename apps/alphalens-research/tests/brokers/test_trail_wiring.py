@@ -31,6 +31,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
     PlannedExit,
@@ -194,8 +195,8 @@ def _seed_planned(
 ) -> None:
     """A `planned` line WITH the geometry shadow stamp so ``plan.reanchor`` is
     non-None (both the trail and reanchor arms require it)."""
-    with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
-        cl._append_standalone_stop_journal(
+    with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
+        sj._append_standalone_stop_journal(
             cl._build_planned_line(
                 entry_crid="crid-0",
                 uic=_UIC,
@@ -255,7 +256,7 @@ class TestTrailingPathEmitsAmendAndTrailedMarker(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl._run_protection_pass(deps, [], False, report)
                 trailed = _markers(journal, "trailed")
@@ -312,7 +313,7 @@ class TestDefaultPolicyNeverFetchesFeed(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal, reaction=None)  # declares nothing
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl._run_protection_pass(deps, [], False, cl.TickReport())
                 trailed = _markers(journal, "trailed")
@@ -350,7 +351,7 @@ class TestCrossTickRatchet(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl._run_protection_pass(deps, [], False, cl.TickReport())
                 cl._run_protection_pass(deps, [], False, cl.TickReport())
@@ -377,7 +378,7 @@ class TestRatchetSurvivesDaemonRestart(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 # Tick 1: peak 110 -> trail the stop to 100 + 0.6*10 = 106.0.
                 deps = _deps(
                     broker,
@@ -501,7 +502,7 @@ class TestCarryover2FeedFailureLeavesNeverNakedIntact(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal, take_profit=None)  # no TP -> plain standalone stop
-            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, feed_factory=feed, sink=sink)
                 cl._run_protection_pass(deps, [], False, report)  # must not raise
                 trailed = _markers(journal, "trailed")

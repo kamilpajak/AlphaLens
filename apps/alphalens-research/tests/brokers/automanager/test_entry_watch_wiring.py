@@ -31,6 +31,7 @@ from unittest import mock
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_trails
 from alphalens_pipeline.brokers.automanager import safety as _safety
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from broker_contract.contract import OrderRejectedError
 from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import SetupPlan, TierPlan
@@ -268,7 +269,7 @@ def _planned_journal(test: unittest.TestCase) -> Path:
     d = TemporaryDirectory()
     test.addCleanup(d.cleanup)
     path = Path(d.name) / "standalone_stops.jsonl"
-    patcher = mock.patch.object(cl, "_standalone_stop_journal_path", lambda: path)
+    patcher = mock.patch.object(sj, "_standalone_stop_journal_path", lambda: path)
     patcher.start()
     test.addCleanup(patcher.stop)
     return path
@@ -336,7 +337,7 @@ def _placer(
         ),
     ):
         test.enterContext(mock.patch(target, fn))
-    test.enterContext(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _l: None))
+    test.enterContext(mock.patch.object(sj, "_append_standalone_stop_journal", lambda _l: None))
 
     def _throttled(message: str, _reason: str) -> bool:
         if alerts is not None:
@@ -644,7 +645,7 @@ def _seed_tranche_plan(
     needs to pass its own)."""
     from broker_contract.sizing import TpTranchePlan
 
-    cl._append_standalone_stop_journal(
+    sj._append_standalone_stop_journal(
         cl._build_tranche_plan_line(
             uic=uic,
             tp_tranches=tuple(
@@ -1292,7 +1293,7 @@ class TestEntryArmSingleTrancheContract(unittest.TestCase):
 
         with (
             mock.patch.dict("os.environ", _ALLOW, clear=True),
-            mock.patch.object(cl, "_iter_standalone_stop_journal", _boom),
+            mock.patch.object(sj, "_iter_standalone_stop_journal", _boom),
         ):
             cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
 
@@ -1471,7 +1472,7 @@ class TestBriefLadderArmGate(unittest.TestCase):
 
         with (
             mock.patch.dict("os.environ", _ALLOW, clear=True),
-            mock.patch.object(cl, "_iter_standalone_stop_journal", _boom),
+            mock.patch.object(sj, "_iter_standalone_stop_journal", _boom),
         ):
             cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
 
@@ -1999,7 +2000,7 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         events: list[str] = []
         self.enterContext(
             mock.patch.object(
-                cl, "_append_standalone_stop_journal", lambda line: events.append(line["kind"])
+                sj, "_append_standalone_stop_journal", lambda line: events.append(line["kind"])
             )
         )
         self.enterContext(
@@ -2778,7 +2779,7 @@ class TestRoutingDefersOnLiveSameUicLong(unittest.TestCase):
         placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
         with (
             mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
-            mock.patch.object(cl, "_iter_standalone_stop_journal", side_effect=OSError("io")),
+            mock.patch.object(sj, "_iter_standalone_stop_journal", side_effect=OSError("io")),
         ):
             self.assertFalse(placer(_pick()))
         self.assertEqual(_lines(path), [])
@@ -2848,7 +2849,7 @@ class TestStaleTranchePlanRetraction(unittest.TestCase):
                 self.assertEqual(retractions[0]["pick_key"], "KO:2026-07-20")
                 # The fold no longer governs the uic — the live-exit engine
                 # will never adopt a later position onto the stale ladder.
-                self.assertNotIn(307, cl.fold_tranche_plans(_lines(stops_path)))
+                self.assertNotIn(307, sj.fold_tranche_plans(_lines(stops_path)))
 
     def test_a_fired_tier_blocks_retraction(self) -> None:
         # A fired pick is NEVER the unfired class's candidate. Without deps
@@ -2933,7 +2934,7 @@ class TestStaleTranchePlanRetraction(unittest.TestCase):
             raise OSError("disk full")
 
         with (
-            mock.patch.object(cl, "_append_standalone_stop_journal", boom),
+            mock.patch.object(sj, "_append_standalone_stop_journal", boom),
             self.assertLogs(cl.logger, level="WARNING") as captured,
         ):
             self._sweep()  # must swallow + warn, never raise
@@ -2941,7 +2942,7 @@ class TestStaleTranchePlanRetraction(unittest.TestCase):
 
 
 def _seed_planned_fire_line(crid: str = "KO-2026-07-20-entry-t0-fire", uic: int = 307) -> None:
-    cl._append_standalone_stop_journal(
+    sj._append_standalone_stop_journal(
         cl._build_planned_line(
             entry_crid=crid,
             uic=uic,
@@ -3058,10 +3059,12 @@ class TestStalePlannedLineRetraction(unittest.TestCase):
             raise OSError("disk gone")
 
         with (
-            mock.patch.object(cl, "_iter_standalone_stop_journal", boom),
-            self.assertLogs(cl.logger, level="WARNING") as captured,
+            mock.patch.object(sj, "_iter_standalone_stop_journal", boom),
+            # the warning is logged by the module that owns the retraction,
+            # which is `stop_journal` since the extraction (#1677)
+            self.assertLogs(sj.logger, level="WARNING") as captured,
         ):
-            count = cl._retract_planned_lines(["x-fire"], note="test")
+            count = sj._retract_planned_lines(["x-fire"], note="test")
         self.assertEqual(count, 0)
         self.assertTrue(any("planned" in msg for msg in captured.output))
 
@@ -3084,7 +3087,7 @@ def _seed_plan_line(pick_key: str | None = "KO:2026-07-20", uic: int = 307) -> N
     }
     if pick_key is not None:
         line["pick_key"] = pick_key
-    cl._append_standalone_stop_journal(line)
+    sj._append_standalone_stop_journal(line)
 
 
 def _seed_stop_filled(
@@ -3094,7 +3097,7 @@ def _seed_stop_filled(
     partial: bool = False,
     order_id: str = "S-1223",
 ) -> None:
-    cl._append_standalone_stop_journal(
+    sj._append_standalone_stop_journal(
         {
             "kind": "stop_filled",
             "uic": uic,
@@ -3109,7 +3112,7 @@ def _seed_stop_filled(
 
 
 def _seed_position_closing_fire(*, uic: int = 307) -> None:
-    cl._append_standalone_stop_journal(
+    sj._append_standalone_stop_journal(
         {"kind": "tranche_fired", "uic": uic, "tag": "tp1", "position_closed": True}
     )
 
@@ -3172,7 +3175,7 @@ class TestFiredTerminalPlanRetraction(unittest.TestCase):
         self.assertEqual(len(retractions), 1)
         self.assertEqual(retractions[0]["uic"], 307)
         self.assertEqual(retractions[0]["pick_key"], "KO:2026-07-20")
-        self.assertNotIn(307, cl.fold_tranche_plans(_lines(stops_path)))
+        self.assertNotIn(307, sj.fold_tranche_plans(_lines(stops_path)))
 
     def test_a_position_closing_tranche_also_counts_as_closure(self) -> None:
         _journal(self)
@@ -3373,7 +3376,7 @@ class TestFiredTerminalPlanRetraction(unittest.TestCase):
             raise OSError("journal unreadable")
 
         with (
-            mock.patch.object(cl, "_iter_standalone_stop_journal", boom),
+            mock.patch.object(sj, "_iter_standalone_stop_journal", boom),
             self.assertLogs(cl.logger, level="WARNING"),
         ):
             self._sweep(deps)  # outer failure -> latch must clear

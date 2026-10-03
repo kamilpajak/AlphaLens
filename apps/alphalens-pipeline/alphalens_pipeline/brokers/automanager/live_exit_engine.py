@@ -496,7 +496,7 @@ def mark_tranche_fired(
     persists the half that is irrecoverable if not stamped at the fire instant
     (the provider bid/ask/mid at decision time); the fill side lives in the
     broker's own audit trail."""
-    from alphalens_pipeline.brokers.automanager.control_loop import (
+    from alphalens_pipeline.brokers.automanager.stop_journal import (
         _append_standalone_stop_journal,
     )
 

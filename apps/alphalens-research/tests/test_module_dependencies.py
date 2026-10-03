@@ -174,6 +174,28 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # #1677 step 2: the standalone-stop journal layer came out next, and
+        # for the same reason -- it must not reach back. Every large cluster
+        # still waiting for extraction calls into it, so a back-edge here
+        # would block the rest of the partition.
+        "name": "the stop journal must not import the control loop (the partition is one-way)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.stop_journal",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.control_loop",
+        "exemptions": set(),
+    },
+    {
+        # The audit's biggest cycle (control_loop <-> live_exit_engine, §2.2)
+        # existed because `mark_tranche_fired` lazy-imported ONE journal
+        # helper from `control_loop`. Step 2 gave that helper its own module,
+        # so the engine no longer reaches up. This rule is what keeps it cut:
+        # the tick imports the engine, never the other way round. No
+        # `top_level_only` -- the cycle lived in a function-body import.
+        "name": "the live-exit engine must not import the control loop (the cut cycle stays cut)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.live_exit_engine",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.control_loop",
+        "exemptions": set(),
+    },
+    {
         # Workspace split (PR2): the pipeline tier hosts live infrastructure
         # (data, core, scorers, edgar_detector, thematic, literature_scanner) and
         # must remain downstream-free. The research tier consumes pipeline,
@@ -1328,6 +1350,102 @@ class TestModuleDependencies(unittest.TestCase):
                 ("relative.py", "synthetic_pkg.control_loop"),
             ],
         )
+
+    def test_the_journal_and_the_engine_must_not_reach_back_positive_control(self):
+        """Both step-2 rules see every spelling of reaching back.
+
+        One control for two rules, because they forbid the same target from
+        two different modules: the extracted journal layer and the live-exit
+        engine whose lazy import was half of the biggest cycle the audit found.
+        """
+        import tempfile
+
+        rules = [
+            rule
+            for rule in RULES
+            if rule.get("forbidden_prefix") == "alphalens_pipeline.brokers.automanager.control_loop"
+        ]
+        self.assertEqual(
+            {rule["from_pkg"].rsplit(".", 1)[-1] for rule in rules},
+            {"stream_handles", "stop_journal", "live_exit_engine"},
+            "all three one-way rules must exist",
+        )
+        for rule in rules:
+            self.assertNotIn(
+                "top_level_only",
+                rule,
+                f"{rule['name']!r} must catch function-scope (lazy) imports too",
+            )
+
+        sources = {
+            "lazy_symbol.py": (
+                "def f():\n"
+                "    from synthetic_pkg.control_loop import LoopDeps\n"
+                "    return LoopDeps\n"
+            ),
+            "plain.py": "import synthetic_pkg.control_loop\n",
+            "attribute.py": "from synthetic_pkg import control_loop\n",
+            "relative.py": "from . import control_loop\n",
+            "clean.py": "import json\nfrom synthetic_pkg import state_paths\n",
+            "control_loop.py": "",
+            "state_paths.py": "",
+        }
+        rule = {
+            "name": "synthetic forbid control_loop",
+            "from_pkg": "synthetic_pkg",
+            "forbidden_prefix": "synthetic_pkg.control_loop",
+            "exemptions": set(),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            for name, source in sources.items():
+                (pkg / name).write_text(source)
+            flagged = sorted(
+                (Path(rel).name, module)
+                for _, rel, module in _violations_for(rule, _python_files(pkg))
+            )
+        self.assertEqual(
+            flagged,
+            [
+                ("attribute.py", "synthetic_pkg.control_loop"),
+                ("lazy_symbol.py", "synthetic_pkg.control_loop"),
+                ("plain.py", "synthetic_pkg.control_loop"),
+                ("relative.py", "synthetic_pkg.control_loop"),
+            ],
+        )
+
+    def test_the_control_loop_still_imports_the_stop_journal(self):
+        """The INTENDED direction, and the existence control for the rule above.
+
+        Reading zero would mean the tick stopped using the journal layer, which
+        cannot happen while it manages stops -- so it would mean the layer moved
+        back, or the import was replaced by something the walker cannot see.
+        """
+        control_loop = (
+            PACKAGE_DIRS["alphalens_pipeline"] / "brokers" / "automanager" / "control_loop.py"
+        )
+        live = [
+            mod
+            for mod in _iter_imports(control_loop, include_function_scope=True)
+            if mod.startswith("alphalens_pipeline.brokers.automanager.stop_journal")
+        ]
+        self.assertTrue(live, "expected the control loop to keep importing the stop journal")
+
+    def test_the_live_exit_engine_reads_the_journal_from_its_own_module(self):
+        """The engine's journal write must go through the extracted layer.
+
+        This is the edge whose removal cut the audit's biggest cycle. If the
+        engine ever imports the journal helper from `control_loop` again the
+        rule above goes red; this test is the other half, that it still uses
+        the helper at all rather than having quietly stopped journalling.
+        """
+        engine = (
+            PACKAGE_DIRS["alphalens_pipeline"] / "brokers" / "automanager" / "live_exit_engine.py"
+        )
+        mods = list(_iter_imports(engine, include_function_scope=True))
+        self.assertIn("alphalens_pipeline.brokers.automanager.stop_journal", mods)
 
     def test_the_control_loop_still_imports_the_stream_rail(self):
         """The INTENDED direction, and the existence control for the rule above.

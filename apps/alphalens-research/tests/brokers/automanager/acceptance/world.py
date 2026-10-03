@@ -32,6 +32,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import safety, service
+from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from broker_contract.contract import _QTY_EPS, OrderStatus
 from broker_contract.price_feed import PricePoint
 
@@ -132,7 +133,7 @@ class ManagerWorld:
         self._env = mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ALLOW_ORDERS": "1"}, clear=False)
         self._env.start()
         self._journal_patch = mock.patch.object(
-            cl, "_standalone_stop_journal_path", lambda: self.journal
+            sj, "_standalone_stop_journal_path", lambda: self.journal
         )
         self._journal_patch.start()
 
@@ -193,7 +194,7 @@ class ManagerWorld:
         self.broker.set_position(ticker, shares, avg_price=price)
         self._seed_plan(ticker, stop=stop, take_profit=None)
         uic = self.broker.uic_of(ticker)
-        cl._append_standalone_stop_journal(
+        sj._append_standalone_stop_journal(
             cl._build_tranche_plan_line(
                 uic=uic, tp_tranches=tranches, reference_qty=shares, stop_price=stop
             )
@@ -204,7 +205,7 @@ class ManagerWorld:
         (#1249): same ``tier_index`` as the live plan under a different entry
         crid — the repeated-tier_index shape ``_fold_planned_exits`` reads as a
         plan conflict on the netted position."""
-        cl._append_standalone_stop_journal(
+        sj._append_standalone_stop_journal(
             cl._build_planned_line(
                 entry_crid=f"crid-{ticker.upper()}-stale",
                 uic=self.broker.uic_of(ticker),
@@ -538,7 +539,7 @@ class ManagerWorld:
     def _seed_plan(
         self, ticker: str, *, stop: float, take_profit: float | None, exit_policy: Any = None
     ) -> None:
-        cl._append_standalone_stop_journal(
+        sj._append_standalone_stop_journal(
             cl._build_planned_line(
                 entry_crid=f"crid-{ticker.upper()}",
                 uic=self.broker.uic_of(ticker),
