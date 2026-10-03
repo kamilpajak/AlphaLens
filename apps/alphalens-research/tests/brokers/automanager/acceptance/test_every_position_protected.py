@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import unittest
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 from .world import ManagerWorld
 
 
-class EveryPositionIsProtected(unittest.TestCase):
+class EveryPositionIsProtected(IsolatedHomeTestCase):
     def test_a_fresh_fill_gets_a_protective_stop(self) -> None:
         world = ManagerWorld(self)
         # GIVEN a KO trade opened — 100 shares filled, with its stop plan on record

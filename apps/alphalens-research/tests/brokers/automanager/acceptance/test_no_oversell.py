@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import unittest
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 from .world import ManagerWorld
 
 
-class ItNeverSellsMoreThanItOwns(unittest.TestCase):
+class ItNeverSellsMoreThanItOwns(IsolatedHomeTestCase):
     def test_an_oversized_stop_is_brought_back_to_the_owned_size(self) -> None:
         world = ManagerWorld(self)
         # GIVEN 100 KO owned but a stale stop resting for 200 shares

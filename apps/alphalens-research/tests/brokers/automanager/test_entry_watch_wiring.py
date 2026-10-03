@@ -36,6 +36,7 @@ from broker_contract.contract import OrderRejectedError
 from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import SetupPlan, TierPlan
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 from tests.incident_1112_fixture import (
     ETSY_E3_LIMIT,
     ETSY_E3_TARGET,
@@ -357,7 +358,7 @@ def _placer(
 # --------------------------------------------------------------------------
 
 
-class TestDrainInterceptRoutesToWatch(unittest.TestCase):
+class TestDrainInterceptRoutesToWatch(IsolatedHomeTestCase):
     def test_flag_on_opens_watch_and_places_no_order(self) -> None:
         path = _journal(self)
         broker = _RecordingBroker()
@@ -678,7 +679,7 @@ def _seed_healthy_plan(*, reference_qty: float = 100.0) -> None:
 _ALLOW = {_ENV: "50", entry_trails.ENTRY_TRAIL_BPS_ENV: "50", "ALPHALENS_BROKER_ALLOW_ORDERS": "1"}
 
 
-class TestEntryWatchPassNativeArm(unittest.TestCase):
+class TestEntryWatchPassNativeArm(IsolatedHomeTestCase):
     """PR-T2b: the executor PLACES one native trailing-LIMIT order at TOUCH (the
     server ratchets + fires) instead of the dry-run would-fire. No resting-limit
     bracket, no fabricated fired line."""
@@ -868,7 +869,7 @@ class TestEntryWatchPassNativeArm(unittest.TestCase):
         )
 
 
-class TestEntryArmInsideExitRegion(unittest.TestCase):
+class TestEntryArmInsideExitRegion(IsolatedHomeTestCase):
     """Issue #1112 step 1: a tier whose realistic fill would land AT OR ABOVE the
     exit target already stamped on its own watch must NOT arm.
 
@@ -1096,7 +1097,7 @@ class TestEntryArmInsideExitRegion(unittest.TestCase):
                 self.assertEqual(len(broker.trailing_orders), 1, f"{label} must fail open")
 
 
-class TestGeometryActiveWithTheTrailDisabled(unittest.TestCase):
+class TestGeometryActiveWithTheTrailDisabled(IsolatedHomeTestCase):
     """#1116 round 2, point 4: the #1112 exit-region arm gate lives ONLY on the
     trailing-entry path. With ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` at 0 a pick
     falls through to the classic ``_place_tiers`` bracket path, which has no such
@@ -1183,7 +1184,7 @@ class TestGeometryActiveWithTheTrailDisabled(unittest.TestCase):
         self.assertEqual(broker.brackets, [], "the gated trailing path places no bracket")
 
 
-class TestEntryArmSingleTrancheContract(unittest.TestCase):
+class TestEntryArmSingleTrancheContract(IsolatedHomeTestCase):
     """#1116 round 2, point 2: the arm gate prices the round trip at the whole
     position it opens. That is only safe while the exit side sells that whole
     position in ONE tranche, which is what the live rail does today and what
@@ -1329,7 +1330,7 @@ class TestEntryArmSingleTrancheContract(unittest.TestCase):
         self.assertEqual(len(broker.trailing_orders), 1)
 
 
-class TestBriefLadderArmGate(unittest.TestCase):
+class TestBriefLadderArmGate(IsolatedHomeTestCase):
     """Issue #1112, the breakeven_trail follow-up: since #1183 the placed exit is
     the BRIEF's own TP ladder (``applies_geometry=False``), and the geometry-
     scoped arm gate above prices nothing on those watches. The gate must instead
@@ -1492,7 +1493,7 @@ class TestBriefLadderArmGate(unittest.TestCase):
         self.assertEqual(len([ln for ln in lines if ln["kind"] == entry_trails.KIND_CANCELLED]), 1)
 
 
-class TestEntryWatchPassTouchLatch(unittest.TestCase):
+class TestEntryWatchPassTouchLatch(IsolatedHomeTestCase):
     """The 1 Hz touch-latch combine (entry_trailing_design §5): a sub-45s wick
     the coarse point-sample missed is folded in via the drained running low,
     gated so a re-arm open-check or a stale cross-session low can never arm into
@@ -1866,7 +1867,7 @@ def _route_watch(
     return ok, tranche_lines, trails_path, stops_path
 
 
-class TestEntryWatchCridGeneration(unittest.TestCase):
+class TestEntryWatchCridGeneration(IsolatedHomeTestCase):
     """#1371: the crid carries the same-day re-arm generation after the date,
     and NOTHING for generation 1 (every crid that exists today)."""
 
@@ -1890,7 +1891,7 @@ class TestEntryWatchCridGeneration(unittest.TestCase):
         self.assertEqual(cl._pick_generation(_pick(generation=3)), 3)
 
 
-class TestWatchRoutingReferenceQtyOverride(unittest.TestCase):
+class TestWatchRoutingReferenceQtyOverride(IsolatedHomeTestCase):
     """#1247: a split pick's watch route re-appends the SAME keyed plan with
     the FULL ladder qty (now + pullback), not the pullback-only sum."""
 
@@ -1907,7 +1908,7 @@ class TestWatchRoutingReferenceQtyOverride(unittest.TestCase):
         self.assertEqual(tranche_lines[0]["reference_qty"], 100.0)
 
 
-class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
+class TestWatchRoutingJournalsTranchePlan(IsolatedHomeTestCase):
     """Task A1 (2026-08-19 live incident, OLN): the entry-trail routing must
     journal the SAME per-uic ``tranche_plan`` line the bracket path writes at
     placement — without it the live-exit engine skips the filled position every
@@ -2016,7 +2017,7 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         self.assertLess(events.index("tranche_plan"), events.index(entry_trails.KIND_WATCH_OPEN))
 
 
-class TestEntryWatchCapacityEnvRail(unittest.TestCase):
+class TestEntryWatchCapacityEnvRail(IsolatedHomeTestCase):
     """Task B (2026-08-19 live incident, ETSY): the pick-denominated watch cap
     was a hardcoded constant of 1 — with MAX_OPEN raised to 2 a second armed
     pick was silently capacity-deferred forever at DEBUG. The cap becomes a
@@ -2027,6 +2028,7 @@ class TestEntryWatchCapacityEnvRail(unittest.TestCase):
     [1, 10] by its own boot-assert pin, not by this shared bound."""
 
     def setUp(self) -> None:
+        super().setUp()
         # Reset the process-lifetime observability state so tests are hermetic.
         self.enterContext(mock.patch.object(cl, "_entry_watch_max_picks_warned", False))
         self.enterContext(mock.patch.object(cl, "_entry_watch_capacity_deferred", set()))
@@ -2104,7 +2106,7 @@ class TestEntryWatchCapacityEnvRail(unittest.TestCase):
         self.assertIn("stays armed", records[0].getMessage())
 
 
-class TestArmJournalsOnlyArmTimeFacts(unittest.TestCase):
+class TestArmJournalsOnlyArmTimeFacts(IsolatedHomeTestCase):
     """#1317 review: each ``trail_armed`` line must describe ONE real order.
 
     Three writers, three sources: the G3 write-ahead knows only the geometry
@@ -2169,7 +2171,7 @@ class TestArmJournalsOnlyArmTimeFacts(unittest.TestCase):
         self.assertEqual(lines[-1][entry_trails.KEY_DISTANCE], sent, "the post-POST line")
 
 
-class TestWatchGeometryStampThroughToPlannedLine(unittest.TestCase):
+class TestWatchGeometryStampThroughToPlannedLine(IsolatedHomeTestCase):
     """Task A2 (2026-08-19 live incident, OLN): the geometry blob must ride the
     watch_open line so the fire-arm ``planned`` disaster line carries it —
     without the stamp ``_reanchor_facts_from_governing`` has no (k_atr, atr)
@@ -2278,7 +2280,7 @@ class TestWatchGeometryStampThroughToPlannedLine(unittest.TestCase):
         self.assertEqual(planned[0]["geometry"], stamp)
 
 
-class TestPointSampleVetoNotRaise(unittest.TestCase):
+class TestPointSampleVetoNotRaise(IsolatedHomeTestCase):
     """_point_sample_bids is the shared once-per-uic sampling boundary: a
     structurally invalid PricePoint (non-numeric bid despite the protocol)
     must veto that uic, never abort the entry-watch pass and starve the
@@ -2296,7 +2298,7 @@ class TestPointSampleVetoNotRaise(unittest.TestCase):
         self.assertEqual(points, {307: None})
 
 
-class TestEntryWatchPassKillGate(unittest.TestCase):
+class TestEntryWatchPassKillGate(IsolatedHomeTestCase):
     def test_kill_writes_nothing_and_alerts_nothing(self) -> None:
         path = _journal(self)
         _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
@@ -2354,7 +2356,7 @@ class TestEntryWatchPassKillGate(unittest.TestCase):
         self.assertEqual(broker.cancels, ["TR-1"], "only the -entry- BUY order is cancelled")
 
 
-class TestEntryWatchFeedScope(unittest.TestCase):
+class TestEntryWatchFeedScope(IsolatedHomeTestCase):
     """The entry-watch slice of the shared price-stream subscription
     (2026-08-18 churn-fix follow-up). The active path must claim the
     "entry-watch" scope — collapsing it into the exits scope would
@@ -2461,7 +2463,7 @@ def _seed_other_watch_line(pick_key: str, *, crid: str, uic: int | None = None) 
     entry_trails.append_entry_trail_line(line)
 
 
-class TestOpenWatchesCountAgainstMaxOpen(unittest.TestCase):
+class TestOpenWatchesCountAgainstMaxOpen(IsolatedHomeTestCase):
     """Adjudication finding 1 (2026-08-19): an open entry watch — or its armed
     unfilled native trail — is a committed risk unit the MAX_OPEN rail cannot
     see: the note-only watch submission record carries no brackets and no
@@ -2584,7 +2586,7 @@ class TestOpenWatchesCountAgainstMaxOpen(unittest.TestCase):
         self.assertEqual(opens_for_ko, [])
 
 
-class TestEodNettingRowsAreNetRiskUnits(unittest.TestCase):
+class TestEodNettingRowsAreNetRiskUnits(IsolatedHomeTestCase):
     """LIVE Saxo accounts run End-Of-Day netting
     (``ClosedPositionNotAccessibleInEndOfDayNettingMode``): positions net only
     at EOD, so an intraday round-trip leaves TWO ledger rows (+q and -q) that
@@ -2661,7 +2663,7 @@ class TestEodNettingRowsAreNetRiskUnits(unittest.TestCase):
 # --------------------------------------------------------------------------
 
 
-class TestRoutingDefersOnLiveSameUicLong(unittest.TestCase):
+class TestRoutingDefersOnLiveSameUicLong(IsolatedHomeTestCase):
     """Adjudication finding 2 (2026-08-19): routing a re-picked ticker into a
     watch while an earlier live long still holds the SAME uic would journal a
     fresh ``tranche_plan`` at watch-open time — replacing the live position's
@@ -2672,6 +2674,7 @@ class TestRoutingDefersOnLiveSameUicLong(unittest.TestCase):
     deadlock the retirement record."""
 
     def setUp(self) -> None:
+        super().setUp()
         self.enterContext(mock.patch.object(cl, "_entry_watch_live_uic_deferred", set()))
 
     def test_live_long_on_the_pick_uic_defers_and_journals_nothing(self) -> None:
@@ -2813,7 +2816,7 @@ def _seed_terminal_watch(
         entry_trails.append_entry_trail_line({"kind": terminal_kind, "crid": crid})
 
 
-class TestStaleTranchePlanRetraction(unittest.TestCase):
+class TestStaleTranchePlanRetraction(IsolatedHomeTestCase):
     """Adjudication finding 3 (2026-08-19): the watch routing journals the
     tranche_plan at watch-OPEN, so a watch that ends without ANY fill (expired /
     suspended / cancelled) left its ladder governing the uic FOREVER — an
@@ -2954,7 +2957,7 @@ def _seed_planned_fire_line(crid: str = "KO-2026-07-20-entry-t0-fire", uic: int 
     )
 
 
-class TestStalePlannedLineRetraction(unittest.TestCase):
+class TestStalePlannedLineRetraction(IsolatedHomeTestCase):
     """#1249 part 2, class (a): the fire-arm ``planned`` write-ahead of a pick
     whose watch ended with NO fill covers nothing — the sweep retracts it so a
     stale line can never conflict a later fill on the uic (the merge-refusal
@@ -3135,7 +3138,7 @@ class _ExplodingPositionsBroker(_RecordingBroker):
         raise RuntimeError("positions endpoint down")
 
 
-class TestFiredTerminalPlanRetraction(unittest.TestCase):
+class TestFiredTerminalPlanRetraction(IsolatedHomeTestCase):
     """#1223: a round-tripped pick's ``tranche_plan`` must stop governing the
     uic. A fired tier whose position CLOSED (durable ``stop_filled`` /
     ``tranche_fired[position_closed]`` evidence since the current plan
@@ -3449,11 +3452,12 @@ def _now_feed(points: dict[int, PricePoint | None], calls: list[tuple[dict, str]
     return factory
 
 
-class TestPlacePickNowTranche(unittest.TestCase):
+class TestPlacePickNowTranche(IsolatedHomeTestCase):
     """#1247 PR-C: the immediate tranche places a capped entry at drain, then
     the pullback siblings route to the watch exactly as today."""
 
     def setUp(self) -> None:
+        super().setUp()
         self.enterContext(mock.patch.object(cl, "_entry_watch_live_uic_deferred", set()))
 
     def _drain(
@@ -3742,7 +3746,7 @@ class TestPlacePickNowTranche(unittest.TestCase):
         self.assertEqual(len(opens), 1)
 
 
-class TestNowEntryScope(unittest.TestCase):
+class TestNowEntryScope(IsolatedHomeTestCase):
     """#1315: the placement drain OWNS the pass-level ``now-entry`` feed scope.
     Its commit writes the union of picks still pending after the tick, so a
     pick retired outside the now-tranche code (disarm, a pre-routing terminal

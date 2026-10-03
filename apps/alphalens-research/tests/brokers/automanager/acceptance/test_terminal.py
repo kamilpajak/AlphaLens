@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import unittest
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 from .world import ManagerWorld, order_cancelled
 
 
-class ItManagesPositionsToTheirEnd(unittest.TestCase):
+class ItManagesPositionsToTheirEnd(IsolatedHomeTestCase):
     def test_a_filled_entry_ends_the_tick_protected(self) -> None:
         world = ManagerWorld(self)
         world.entry_fills("KO", shares=100)

@@ -35,6 +35,8 @@ from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails
 from broker_contract.contract import BrokerError, OrderStatus
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 # Shared hermetic fixtures live in the T1c wiring tests.
 from tests.brokers.automanager.test_entry_watch_reconcile import _os, _ResolvingBroker, _seed_armed
 from tests.brokers.automanager.test_entry_watch_wiring import (
@@ -127,7 +129,7 @@ def _run_watch(deps: cl.LoopDeps, price: float | None, feed: dict[int, float | N
         cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
 
 
-class TestReArmOpenCheckBlocksTheArm(unittest.TestCase):
+class TestReArmOpenCheckBlocksTheArm(IsolatedHomeTestCase):
     """memo §5 CRITICAL-2 open-check: a re-armed tier places NOTHING until a
     fresh post-open low re-anchors the carried trigger."""
 
@@ -166,7 +168,7 @@ class TestReArmOpenCheckBlocksTheArm(unittest.TestCase):
         )
 
 
-class TestReArmReAdmitsTheTier(unittest.TestCase):
+class TestReArmReAdmitsTheTier(IsolatedHomeTestCase):
     """A gone-unfilled DayOrder is re-armed through the watch-open path: the tier
     is WATCHING again, trough carried, arm state reset, re-admitted to the pass."""
 
@@ -220,7 +222,7 @@ class TestReArmReAdmitsTheTier(unittest.TestCase):
         self.assertEqual((total, bad), (1_000.0, 0), "the re-armed tier still reserves once")
 
 
-class TestRaceOfFillAndCloseCancelBecomesFired(unittest.TestCase):
+class TestRaceOfFillAndCloseCancelBecomesFired(IsolatedHomeTestCase):
     """memo §3 G6: a fill that raced the DayOrder close-cancel is a FILL, not an
     expiry — it becomes ``fired`` (the fill-reconcile path), never a re-arm."""
 
@@ -246,7 +248,7 @@ class TestRaceOfFillAndCloseCancelBecomesFired(unittest.TestCase):
         self.assertEqual(watch_opens_after, watch_opens_before, "a filled tier is never re-armed")
 
 
-class TestReArmRespectsOriginalTTL(unittest.TestCase):
+class TestReArmRespectsOriginalTTL(IsolatedHomeTestCase):
     """memo §5 TTL (one rule): re-arm never extends the ORIGINAL window_end. A
     DayOrder gone unfilled PAST window_end is terminal ``expired`` — no re-arm,
     reservation released."""
@@ -302,7 +304,7 @@ class TestReArmRespectsOriginalTTL(unittest.TestCase):
         self.assertEqual(watch_opens_after, watch_opens_before, "UNKNOWN is deferred, not re-armed")
 
 
-class TestReArmFullCycle(unittest.TestCase):
+class TestReArmFullCycle(IsolatedHomeTestCase):
     """End-to-end: the reconcile pass re-arms a gone DayOrder, then the watch pass
     reconstructs the tier from the marker it wrote — the open-check blocks until a
     fresh low, then a native order is placed. Proves the two seams share one wire."""
@@ -329,7 +331,7 @@ class TestReArmFullCycle(unittest.TestCase):
         self.assertEqual(armed[-1]["order_id"], "TR-1", "a fresh native order id is journaled")
 
 
-class TestReArmDoesNotDoublePlace(unittest.TestCase):
+class TestReArmDoesNotDoublePlace(IsolatedHomeTestCase):
     """memo §3 G3: the re-arm + re-place path dedups on the -entry- family, so a
     crash window never rests a second trail for the same tier."""
 
@@ -376,7 +378,7 @@ class _RejectOnceBroker(_RecordingBroker):
         return super().place_trailing_stop(*args, **kwargs)
 
 
-class TestOpenCheckClearanceSurvivesRestart(unittest.TestCase):
+class TestOpenCheckClearanceSurvivesRestart(IsolatedHomeTestCase):
     """The fresh-low open-check clear must be DURABLE: the engine clears
     ``awaiting_fresh_low`` in memory, but the latest ``watch_open`` line keeps
     the re-arm marker — so an arm failure on the fresh-low tick followed by a
@@ -433,7 +435,7 @@ class TestOpenCheckClearanceSurvivesRestart(unittest.TestCase):
         self.assertEqual(_lines(path), [])
 
 
-class TestClearancePrecedesTheSameTickTerminal(unittest.TestCase):
+class TestClearancePrecedesTheSameTickTerminal(IsolatedHomeTestCase):
     """#1106 ordering invariant: when the open-check clearance and a terminal
     land on the SAME tick (reachable via the G9 suspend — the fresh low that
     clears the check is the same low that dips below the next tier), the

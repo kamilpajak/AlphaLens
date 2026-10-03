@@ -20,6 +20,7 @@ from broker_contract.trade_intent.schema import TrailingStop
 
 from tests.brokers.automanager.acceptance.fake_broker import FakeBroker
 from tests.brokers.automanager.acceptance.world import ManagerWorld
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 
 _ENTRY, _PLAN_STOP = 50.0, 44.0  # 1R = 6, the trail arms at 53
 _RUN_UP = 59.99  # trail target = 50 + 0.6 * (59.99 - 50) = 55.994
@@ -76,10 +77,11 @@ class _LaggingBroker(FakeBroker):
         self.positions_lag = lag
 
 
-class _TrailedPosition(unittest.TestCase):
+class _TrailedPosition(IsolatedHomeTestCase):
     amend_enabled = True
 
     def setUp(self) -> None:
+        super().setUp()
         self.world = ManagerWorld(self)
         self.broker = _LaggingBroker()
         self.world.broker = self.broker

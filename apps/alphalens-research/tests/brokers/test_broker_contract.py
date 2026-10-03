@@ -51,6 +51,8 @@ from broker_contract.contract import (
 )
 from broker_contract.failure import CONTRACT_FAILURE_CODES
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 
 def _instrument(ticker: str = "KO", mic: str = "XNYS") -> InstrumentRef:
     return InstrumentRef(
@@ -593,8 +595,9 @@ class TestFakeBrokerProtectionReads(unittest.TestCase):
             self.assertIsNotNone(leg.uic)
 
 
-class TestRegistry(unittest.TestCase):
+class TestRegistry(IsolatedHomeTestCase):
     def setUp(self):
+        super().setUp()
         registry._reset_default_broker_for_tests()
         self.addCleanup(registry._reset_default_broker_for_tests)
 

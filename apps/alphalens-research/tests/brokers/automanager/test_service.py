@@ -32,6 +32,8 @@ from broker_contract.trade_intent.schema import (
     TradeSpec,
 )
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 from .acceptance.fake_broker import FakeBroker
 
 _DEFAULT_STOP = 44.0
@@ -182,7 +184,7 @@ class _ServiceHarness:
         )
 
 
-class TestSubmitIntent(unittest.TestCase):
+class TestSubmitIntent(IsolatedHomeTestCase):
     def test_submit_intent_returns_an_armed_ack_matching_the_intent_id(self) -> None:
         harness = _ServiceHarness(self)
         intent = _pick("KO")
@@ -194,7 +196,7 @@ class TestSubmitIntent(unittest.TestCase):
         self.assertIsNone(ack.reason)
 
 
-class TestRunCycle(unittest.TestCase):
+class TestRunCycle(IsolatedHomeTestCase):
     def test_run_cycle_drives_run_once_and_places_a_submitted_pick(self) -> None:
         harness = _ServiceHarness(self)
         harness.service.submit_intent(_pick("KO"))
@@ -206,7 +208,7 @@ class TestRunCycle(unittest.TestCase):
         self.assertEqual(harness.placed[0].instrument.ticker, "KO")
 
 
-class TestLivenessEventKillActive(unittest.TestCase):
+class TestLivenessEventKillActive(IsolatedHomeTestCase):
     """D3 (ADR 0016) observability: LivenessEvent.kill_active must reflect the
     per-instance KILL OR the GLOBAL KILL — same verdict run_once uses to gate
     placement. A GLOBAL-only KILL must not report kill_active=False."""
@@ -233,7 +235,7 @@ class TestLivenessEventKillActive(unittest.TestCase):
         self.assertFalse(liveness.kill_active)
 
 
-class TestStreamEvents(unittest.TestCase):
+class TestStreamEvents(IsolatedHomeTestCase):
     def test_quiet_healthy_cycle_yields_no_alert_events(self) -> None:
         harness = _ServiceHarness(self)
 
@@ -270,7 +272,7 @@ class TestStreamEvents(unittest.TestCase):
         self.assertEqual(second_drain, [])
 
 
-class TestQueryState(unittest.TestCase):
+class TestQueryState(IsolatedHomeTestCase):
     def test_query_state_projects_a_covered_long_position(self) -> None:
         harness = _ServiceHarness(self)
         harness.entry_fills("KO", shares=100, stop=44.0, take_profit=59.0)

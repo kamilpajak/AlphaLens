@@ -30,6 +30,7 @@ from broker_contract.trade_intent.codec import intent_to_jsonable
 from broker_contract.trade_intent.schema import PickSize
 
 from tests.brokers.automanager import test_control_loop as _cl_tests
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 from tests.brokers.automanager.test_control_loop import (
     _acct,
     _frozen_now,
@@ -69,7 +70,7 @@ def _placer(case: unittest.TestCase, broker: Any, **kw: Any) -> tuple[Any, list,
     return placer, alerts, refusals
 
 
-class TestCurrencyIsJudgedBeforeTheDay1Gate(unittest.TestCase):
+class TestCurrencyIsJudgedBeforeTheDay1Gate(IsolatedHomeTestCase):
     def test_a_wrong_currency_pick_is_refused_pre_open_with_one_alert(self) -> None:
         broker = _CountingBroker(currency="PLN")
         with (
@@ -124,7 +125,7 @@ class TestCurrencyIsJudgedBeforeTheDay1Gate(unittest.TestCase):
         self.assertEqual((refusals, alerts, broker.placed), ([], [], []))
 
 
-class TestThePerPickCap(unittest.TestCase):
+class TestThePerPickCap(IsolatedHomeTestCase):
     def _run(self, env: dict[str, str], amount: float) -> tuple[Any, list, list]:
         broker = _RecordingBroker()
         with mock.patch.dict("os.environ", env, clear=True):
@@ -160,10 +161,11 @@ class TestThePerPickCap(unittest.TestCase):
         self.assertIn(MAX_PICK_NOTIONAL_ENV, alerts[0][0])
 
 
-class _JournalCase(unittest.TestCase):
+class _JournalCase(IsolatedHomeTestCase):
     """A real picks journal in a temp dir; the pre-#1467 lines are raw JSON."""
 
     def setUp(self) -> None:
+        super().setUp()
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.path = Path(tmp.name) / "picks.jsonl"

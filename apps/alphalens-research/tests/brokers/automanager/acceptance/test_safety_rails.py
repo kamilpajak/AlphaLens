@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import unittest
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 from .world import ManagerWorld
 
 
-class TheSafetyRailsAreRespected(unittest.TestCase):
+class TheSafetyRailsAreRespected(IsolatedHomeTestCase):
     def test_orders_flow_when_the_master_switch_is_on(self) -> None:
         world = ManagerWorld(self)  # orders enabled by default
         self.assertTrue(world.safety_allows_a_new_pick())

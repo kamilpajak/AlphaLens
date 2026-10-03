@@ -14,6 +14,8 @@ import unittest
 from broker_contract.contract import BrokerError
 from broker_contract.sizing import TpTranchePlan
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 from .world import ManagerWorld
 
 _FILL = 15.0
@@ -33,7 +35,7 @@ def _tr(index: int, target: float, pct: float) -> TpTranchePlan:
     )
 
 
-class LiveExitsNeverBreakNeverNaked(unittest.TestCase):
+class LiveExitsNeverBreakNeverNaked(IsolatedHomeTestCase):
     def test_a_touched_tranche_fires_and_stays_exactly_covered_never_oversold(self) -> None:
         world = ManagerWorld(self)
         world.live_exits_are_enabled()

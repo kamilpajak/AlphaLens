@@ -186,9 +186,9 @@ class _ArmsThroughTheDoor(unittest.TestCase):
         from alphalens_pipeline.brokers.automanager.picks import read_pick_fold
         from typer.testing import CliRunner
 
-        from tests.brokers.automanager.cli_isolation import _isolate_home
+        from tests.brokers.automanager.home_isolation import isolate_home
 
-        home = _isolate_home(self)
+        home = isolate_home(self)
         result = CliRunner().invoke(broker_app, ["arm", "-"], input=json.dumps(document))
         self.assertEqual(result.exit_code, 0, result.output)
         inbox = home / ".alphalens" / "broker_orders" / "sim" / "picks.jsonl"

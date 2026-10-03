@@ -49,6 +49,8 @@ from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails
 from broker_contract.contract import OrderStatus
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 # Shared hermetic fixtures (task-mandated reuse — do not reinvent).
 from tests.brokers.automanager.test_entry_watch_acceptance import _empty_pview
 from tests.brokers.automanager.test_entry_watch_reconcile import _os, _ResolvingBroker
@@ -136,7 +138,7 @@ class _FrozenNow(dt.datetime):
         return cls._instant
 
 
-class TestEntryWatchMultiSessionSoak(unittest.TestCase):
+class TestEntryWatchMultiSessionSoak(IsolatedHomeTestCase):
     def _build_deps(self, broker: Any, picks: list[Any]) -> cl.LoopDeps:
         instruments = {"KO": _mk_instr(_UIC_KO), "NEWCO": _mk_instr(_UIC_NEWCO)}
         pkg = "alphalens_pipeline.brokers"

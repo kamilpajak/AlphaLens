@@ -24,7 +24,7 @@ from unittest import mock
 
 from typer.testing import CliRunner
 
-from tests.brokers.automanager.cli_isolation import _isolate_home
+from tests.brokers.automanager.home_isolation import isolate_home
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _CONTRACT = _REPO_ROOT / "apps" / "alphalens-broker-contract"
@@ -59,7 +59,7 @@ def _recipe() -> str:
 class _InboxCase(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
-        self.home = _isolate_home(self)
+        self.home = isolate_home(self)
         clock = mock.patch("alphalens_cli.commands.broker._arming_now", return_value=_ARMING_MOMENT)
         clock.start()
         self.addCleanup(clock.stop)

@@ -19,7 +19,7 @@ from unittest import mock
 
 from typer.testing import CliRunner
 
-from tests.brokers.automanager.cli_isolation import _isolate_home, _seed_legacy_flat_state
+from tests.brokers.automanager.home_isolation import isolate_home, seed_legacy_flat_state
 
 _WINDOW_END = "2026-09-10T20:00:00+00:00"
 
@@ -127,7 +127,7 @@ def _seed(home: Path, env: str, lines: list[object] = _JOURNAL) -> Path:
 class WatchesCommandTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
-        self.home = _isolate_home(self)
+        self.home = isolate_home(self)
         # The command honours ALPHALENS_BROKER_ENVIRONMENT; the host shell must
         # not leak one into the tests.
         patcher = mock.patch.dict("os.environ", {}, clear=False)
@@ -256,7 +256,7 @@ class WatchesCommandTest(unittest.TestCase):
         self.assertIn("--format", result.stderr)
 
     def test_legacy_flat_layout_refuses(self) -> None:
-        _seed_legacy_flat_state(self.home)
+        seed_legacy_flat_state(self.home)
         result = self._invoke()
         self.assertEqual(result.exit_code, 1)
         self.assertEqual(result.stdout, "")

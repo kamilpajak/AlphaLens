@@ -28,6 +28,8 @@ from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails
 from broker_contract.contract import OrderState, OrderStatus
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 # Shared hermetic fixtures live in the T1c wiring tests.
 from tests.brokers.automanager.test_entry_watch_wiring import (
     _ENV,
@@ -133,7 +135,7 @@ def _run(deps: cl.LoopDeps, env: dict[str, str] | None = None) -> None:
         cl._run_entry_trail_reconcile_pass(deps, cl.TickReport())
 
 
-class TestFilledArmedTierWritesFired(unittest.TestCase):
+class TestFilledArmedTierWritesFired(IsolatedHomeTestCase):
     def test_filled_order_writes_exactly_one_fired_line_with_realized_qty_and_avg_price(
         self,
     ) -> None:
@@ -286,7 +288,7 @@ class TestFilledArmedTierWritesFired(unittest.TestCase):
         self.assertEqual((total_after, bad_after), (0.0, 0), "the reservation is released")
 
 
-class TestCeilingBreachIsMeasuredAndAnnounced(unittest.TestCase):
+class TestCeilingBreachIsMeasuredAndAnnounced(IsolatedHomeTestCase):
     """#1317: a fire that executes ABOVE its own ceiling must leave a trace.
 
     Before this, the armed ceiling existed only in a log line, so a breach was
@@ -360,7 +362,7 @@ class TestCeilingBreachIsMeasuredAndAnnounced(unittest.TestCase):
         self.assertIn("#1317", message)
 
 
-class TestCapacityUnjammedByFired(unittest.TestCase):
+class TestCapacityUnjammedByFired(IsolatedHomeTestCase):
     def test_capacity_is_reached_while_armed_and_freed_after_fired(self) -> None:
         path = _journal(self)
         _seed_armed(path, order_id="TR-1", limit=10.0)
@@ -385,7 +387,7 @@ class TestCapacityUnjammedByFired(unittest.TestCase):
         )
 
 
-class TestNeverNakedPreservedByReconcile(unittest.TestCase):
+class TestNeverNakedPreservedByReconcile(IsolatedHomeTestCase):
     def test_reconcile_leaves_the_planned_disaster_line_intact_and_position_covered(self) -> None:
         from alphalens_pipeline.brokers.automanager.position_manager import PlaceStop
 
@@ -422,7 +424,7 @@ class TestNeverNakedPreservedByReconcile(unittest.TestCase):
         self.assertEqual(places[0].stop_price, 216.48, "the brief disaster floor from fire-arm")
 
 
-class TestReconcileIsIdempotent(unittest.TestCase):
+class TestReconcileIsIdempotent(IsolatedHomeTestCase):
     def test_two_passes_write_exactly_one_fired_line_and_resolve_once(self) -> None:
         path = _journal(self)
         _seed_armed(path, order_id="TR-1", limit=10.0)
@@ -440,7 +442,7 @@ class TestReconcileIsIdempotent(unittest.TestCase):
         self.assertEqual(broker.resolve_calls, ["TR-1"], "a terminal tier is not re-resolved")
 
 
-class TestStillWorkingIsNoop(unittest.TestCase):
+class TestStillWorkingIsNoop(IsolatedHomeTestCase):
     def test_resting_working_order_writes_no_terminal_and_never_resolves(self) -> None:
         path = _journal(self)
         _seed_armed(path, order_id="TR-1", limit=10.0)
@@ -456,7 +458,7 @@ class TestStillWorkingIsNoop(unittest.TestCase):
         self.assertEqual(broker.resolve_calls, [], "a still-resting order is not resolved")
 
 
-class TestGoneUnfilledLeftForRearm(unittest.TestCase):
+class TestGoneUnfilledLeftForRearm(IsolatedHomeTestCase):
     def test_expired_order_writes_no_terminal_and_stays_re_armable(self) -> None:
         # A DayOrder that expired at the close: resolve -> EXPIRED. THIS phase must
         # NOT terminate it — a terminal `expired` line would kill the carried-trough
@@ -491,7 +493,7 @@ class TestGoneUnfilledLeftForRearm(unittest.TestCase):
         )
 
 
-class TestFlagOffAndNoResolverAreNoops(unittest.TestCase):
+class TestFlagOffAndNoResolverAreNoops(IsolatedHomeTestCase):
     def test_flag_off_does_zero_reconcile_work(self) -> None:
         path = _journal(self)
         _seed_armed(path, order_id="TR-1", limit=10.0)
@@ -517,7 +519,7 @@ class TestFlagOffAndNoResolverAreNoops(unittest.TestCase):
         self.assertEqual([ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED], [])
 
 
-class TestReconcileRunsBeforePlacementDrain(unittest.TestCase):
+class TestReconcileRunsBeforePlacementDrain(IsolatedHomeTestCase):
     """The fill-reconcile pass MUST run BEFORE the placement drain in ``run_once``
     (zen pre-merge HIGH — 1-tick gross double-count).
 
@@ -585,7 +587,7 @@ class TestReconcileRunsBeforePlacementDrain(unittest.TestCase):
         )
 
 
-class TestAuditBudgetDefersTrailResolve(unittest.TestCase):
+class TestAuditBudgetDefersTrailResolve(IsolatedHomeTestCase):
     """Increment 2 (audit-429 memo §3): the trail pass draws from the SHARED
     per-tick audit budget. An exhausted budget defers the resolve to the next
     tick — no audit read, no fabricated terminal (the same retry contract as an
@@ -642,7 +644,7 @@ class _VerdictCapableBroker(_ResolvingBroker):
         return []
 
 
-class TestSharedBudgetAcrossTrailAndVerdictPasses(unittest.TestCase):
+class TestSharedBudgetAcrossTrailAndVerdictPasses(IsolatedHomeTestCase):
     """The two audit consumers — the entry-trail reconcile pass and the verdict
     pass — share ONE per-tick budget (run_once order: trail first), so their
     combined audit fan-out never exceeds the cap in one tick."""
