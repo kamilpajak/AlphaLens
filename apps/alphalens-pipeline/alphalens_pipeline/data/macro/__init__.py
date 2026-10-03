@@ -1,4 +1,4 @@
-"""Macro data clients + regime signals (FRED, scorer).
+"""Macro data clients + regime signals (FRED, signals).
 
 Reusable infrastructure powering rotation/ overlay (CLOSED) and any future
 macro-aware research module.

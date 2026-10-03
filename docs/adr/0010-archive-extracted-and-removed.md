@@ -81,3 +81,28 @@ PEAD backfill) better than ADR 0005's anti-pattern-catalog framing did.
 - [ADR 0001](0001-pivot-to-research-infrastructure.md) — research-infrastructure pivot
 - [ADR 0005](0005-closed-layers-as-anti-pattern-catalog.md) — superseded
 - [ADR 0008](0008-sunset-tradingagents-integration.md) — TradingAgents sunset (which had its own `launchd/archived/` reference now obsolete)
+
+## Amendment 2026-10-03 — the `Rule` promotion is reversed
+
+Decision item 1 promoted the `Rule` dataclass out of
+`alphalens/archive/rotation/config.py` and inlined it into
+`alphalens/data/macro/scorer.py` (today
+`apps/alphalens-pipeline/alphalens_pipeline/data/macro/scorer.py`) on the
+premise that it was reusable infrastructure. That half of the promotion is
+withdrawn: the module is deleted. The other promotion, `ParquetInsiderScorer`,
+stands.
+
+The premise did not hold. The rotation paradigm closed on 2026-04-24, four
+weeks before this ADR, so the file had no caller on the day it was written and
+none arrived in the four and a half months since. `OverlayAllocator`, named in
+its docstring as the consumer of its output, went away with the rotation tree
+and never existed in the live packages. The architecture audit of 2026-10-02 found it as the only
+module in the live tier referenced by nothing at all
+([`docs/research/architecture_audit_2026_10_02.md`](../research/architecture_audit_2026_10_02.md),
+finding 9).
+
+The `data/macro/` package keeps `fred_client.py` and `signals.py`, both of
+which have callers. ADR 0010's Negative consequence about re-using a third
+archive class now also covers this one: a future macro-regime module recovers
+the code with `git show 942acb63 -- alphalens/data/macro/scorer.py` rather
+than by rewriting an import path.
