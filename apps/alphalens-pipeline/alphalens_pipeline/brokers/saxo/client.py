@@ -471,6 +471,7 @@ class SaxoClient:
         order_id: str | None = None,
         entry_type: str = "Last",
         from_datetime: str | None = None,
+        to_datetime: str | None = None,
         top: int | None = None,
     ) -> dict[str, Any]:
         """GET ``/cs/v1/audit/orderactivities`` — the P3 terminal-resolution read.
@@ -487,6 +488,8 @@ class SaxoClient:
             params["OrderId"] = order_id
         if from_datetime is not None:
             params["FromDateTime"] = from_datetime
+        if to_datetime is not None:
+            params["ToDateTime"] = to_datetime
         if top is not None:
             params["$top"] = top
         return self._get_paged_json("/cs/v1/audit/orderactivities", params=params)
@@ -500,24 +503,62 @@ class SaxoClient:
         """
         return self._get_paged_json("/port/v1/closedpositions", params={"ClientKey": client_key})
 
-    @staticmethod
-    def _normalize_next_url(url: str) -> str:
-        """Strip an absolute ``__next`` URL to a relative path.
+    def get_trades_report(
+        self, client_key: str, *, account_key: str, from_date: str, to_date: str
+    ) -> list[dict[str, Any]]:
+        """GET ``/cs/v1/reports/trades/{ClientKey}`` — every row, every page.
+
+        ``FromDate`` / ``ToDate`` are dates and ``ToDate`` is inclusive; the
+        endpoint filters on ``TradeDate`` (LIVE probe 2026-10-03). Returns the
+        rows only: ``__count`` on these endpoints is the page length, never a
+        total, so it is not handed to a caller that could read it as one.
+        """
+        params = {"FromDate": from_date, "ToDate": to_date, "AccountKey": account_key}
+        payload = self._get_paged_json(f"/cs/v1/reports/trades/{client_key}", params=params)
+        return list(payload.get("Data") or [])
+
+    def get_bookings_report(
+        self, client_key: str, *, account_key: str, from_date: str, to_date: str
+    ) -> list[dict[str, Any]]:
+        """GET ``/cs/v1/reports/bookings/{ClientKey}`` — every row, every page.
+
+        Same window rules as :meth:`get_trades_report`; the bookings endpoint
+        filters on the booking ``Date``, not ``ValueDate``.
+        """
+        params = {"FromDate": from_date, "ToDate": to_date, "AccountKey": account_key}
+        payload = self._get_paged_json(f"/cs/v1/reports/bookings/{client_key}", params=params)
+        return list(payload.get("Data") or [])
+
+    def _normalize_next_url(self, url: str) -> str:
+        """Turn an absolute ``__next`` URL into a path on the configured base.
 
         Saxo pagination URLs come back absolute WITH an explicit ``:443``
         port (``https://gateway.saxobank.com:443/sim/openapi/...``), which
-        fails :meth:`_join_url`'s SIM-prefix rail (the configured base URL
-        carries no port). Stripping to the path after ``/sim/openapi`` keeps
-        the rail intact — the follow-up request re-joins onto the one
-        allowed base URL. A URL without the marker passes through unchanged
-        (a relative path already satisfies the rail; a foreign absolute URL
-        still fails it loudly).
+        fails :meth:`_join_url`'s base-URL rail (the configured base URL
+        carries no port). The link is parsed, its host must equal the
+        configured base host (an explicit ``:443`` is ignored), and the
+        configured base path (``/sim/openapi`` on SIM, ``/openapi`` on LIVE)
+        is stripped, so the follow-up re-joins onto the one allowed base URL.
+        Stripping only ``/sim/openapi`` used to make every LIVE link raise.
+        A relative path passes through; a link to any other host, scheme or
+        base path is returned unchanged so the rail refuses it loudly.
         """
-        marker = "/sim/openapi"
-        index = url.find(marker)
-        if index >= 0:
-            return url[index + len(marker) :]
-        return url
+        from urllib.parse import urlsplit, urlunsplit
+
+        parts = urlsplit(url)
+        if not parts.scheme:
+            return url
+        base = urlsplit(self._base_url)
+        port_ok = parts.port in (None, 443)
+        base_path = base.path.rstrip("/")
+        if (
+            parts.scheme != base.scheme
+            or parts.hostname != base.hostname
+            or not port_ok
+            or not parts.path.startswith(f"{base_path}/")
+        ):
+            return url
+        return urlunsplit(("", "", parts.path[len(base_path) :], parts.query, parts.fragment))
 
     def _get_paged_json(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """GET ``path`` and follow ``__next`` pagination, merging ``Data``.
