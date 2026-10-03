@@ -146,3 +146,67 @@ arc (since merged to `main` — see [ADR 0009](0009-django-replaces-fastapi.md))
   this ADR.
 
 [`feedback_validated_paradigm_scorer_reuse_2026_05_16`]: ../../.claude/projects/-Users-jacoren-Developer-Personal-AlphaLens/memory/feedback_validated_paradigm_scorer_reuse_2026_05_16.md
+
+## Amendment 2026-10-03 — `data/` is a shared tier, not live infrastructure
+
+The Decision section lists `data/` under "Pipeline side … live infra + services".
+For half of that package the description is wrong, and the architecture audit
+of 2026-10-02 measured it: of the 31 live-tier modules the deployment never
+reaches, **11 modules / 1 649 LOC are referenced only by the research tier** —
+research scripts, the lab and tests — and every one of them is under
+`alphalens_pipeline/data/`
+([`docs/research/architecture_audit_2026_10_02.md`](../research/architecture_audit_2026_10_02.md)
+§6.1, finding 5):
+
+```
+293  data.factors                        140  data.universes.sp1500_pit
+234  data.fundamentals.sue               128  data.alt_data.yfinance_cache
+221  data.alt_data.av_earnings_client    111  data.macro.signals
+208  data.alt_data.ivolatility_smd_cache  97  data.store.history
+ 96  data.alt_data.pit_universe_loader    86  data.alt_data.pit_universe
+ 35  data.alt_data.russell_universe
+```
+
+**Decision: `data/` is the project's single data-acquisition and PIT-store
+tier, shared by the live services and the lab.** A new data client or store
+reader goes there whatever reads it today. The alternative — moving the eleven
+modules to `alphalens_research/` so that `alphalens-pipeline` holds only
+deployed code — is rejected for two measured reasons.
+
+1. **It would split one vendor's surface across two apps.**
+   `data.alt_data.av_earnings_client` is research-only and imports the
+   canonical live `data.alt_data.alphavantage_client`. The repo's
+   "one canonical HTTP client per external vendor" rule exists so a reader
+   finds every call to a vendor in one place; moving the research half to the
+   lab puts Alpha Vantage access in two members. `data.fundamentals.sue` has
+   the same shape against three `data/` modules.
+2. **The consumer set is not stable, so a boundary drawn on it would move.**
+   These modules are read by studies, and a module has a caller while a
+   paradigm is being audited and none once it closes. Both directions are
+   already on the record: `data.universes.sp1500_pit` is named in `CLAUDE.md`
+   as the implementation contract for the next paradigm (work not yet started),
+   while `data.store.history` is named in three merged pre-registration
+   parameter files under `docs/research/preregistration/` (work already done).
+   A boundary that has to be redrawn whenever a study starts or ends is not a
+   boundary.
+
+**What this costs.** The Positive consequence "the name on the directory tells
+the truth about what runs in production" is now narrower than written:
+`alphalens-pipeline` means *live services plus the shared data tier*, not
+*everything here runs in production*. A reader who needs the stronger
+statement has to measure it rather than read it off the directory —
+`apps/alphalens-research/scripts/arch` computes reachability from the real
+entry points, and audit §6.1 is its output.
+
+**What does not change.** The direction rule stands exactly as enforced:
+`alphalens_research.*` may import `alphalens_pipeline.{data, core, scorers}`,
+and `alphalens_pipeline.*` must not import `alphalens_research.*` at top level
+(`apps/alphalens-research/tests/test_module_dependencies.py`). Declaring the
+tier shared changes which side new code lands on, not which direction imports
+may point.
+
+**Still open, deliberately.** `data/` writes stores that a live reader opens by
+path and never imports — `thematic/sources/form4_store.py` reads
+`~/.alphalens/form4_parquet/` with no import edge to the writer and no schema
+gate between them (#1676, #1679). A shared tier makes that contract more
+load-bearing, not less.

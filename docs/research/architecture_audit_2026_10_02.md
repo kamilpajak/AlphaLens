@@ -12,6 +12,14 @@ candidates and reframed two more; §3.1 records the method and marks every claim
 as the owner's assertion or as a measurement. No other number in this memo
 changed.
 
+**Amended 2026-10-03 (second pass):** findings 5 and 6 are answered. The owner
+settled the `data/` tier boundary — it is a shared tier, recorded as an
+amendment to [ADR 0011](../adr/0011-split-pipeline-and-research.md) — and §6.2
+now names each of the 12 test-only modules with the measurement that says
+whether it is a kept seam or code without a consumer. The bucket totals
+(12 modules / 1 676 LOC, 11 / 1 649) were recounted by a second path and
+reproduce exactly.
+
 **Acted on since (2026-10-02):** finding #4 shipped —
 `alphalens_pipeline.paper.calendar` moved to
 `alphalens_pipeline.market.calendar`. Every count in this memo is the
@@ -543,10 +551,45 @@ systemd. Asked per tier, with "who else references it" as the second axis:
 
 ### 6.2 Reachable only from tests
 
-The 12 modules above. Three carry documented reasons. The rest are candidates
-for a question, not for deletion: a module only a test calls is either a seam
-kept on purpose or speculative generality, and the two look identical from
-outside.
+**Answered 2026-10-03** (finding 6). The 12 modules are named below, each with
+the measurement that settles which of the two it is — a seam kept on purpose,
+or code whose consumer never arrived. Every module has exactly ONE test module
+and nothing else; the discriminator is therefore not "who imports it" but
+"does the thing it was written for exist".
+
+The remedy named in finding 6 — "extend the `UNWIRED_ALLOWED` pattern" — does
+not apply to nine of the twelve, and that is itself worth recording.
+`deadcode_broker.SCOPE_PREFIXES` covers `broker_contract/`, `brokers/`,
+`paper/` and `commands/broker.py` only, so an entry for a `data/` or
+`thematic/` module would be configuration for a file the tool never reports.
+Widening that scope repo-wide is a separate change to a pinned tool, not a
+cheap fix.
+
+**Kept on purpose — 6 modules, 1 109 LOC.**
+
+| Module | LOC | Why it has no importer | What retires the entry |
+|---|---:|---|---|
+| `brokers/automanager/service.py` | 360 | the client-manager boundary; the acceptance suite drives the real loop through it | already in `UNWIRED_ALLOWED` |
+| `brokers/automanager/fill_source.py` | 110 | the seam the streaming `FillSource` plugs into; owner decision 2026-09-17 (#1484) | already in `UNWIRED_ALLOWED` |
+| `brokers/automanager/yfinance_price_feed.py` | 94 | interim and fallback price feed; same owner decision (#1484) | already in `UNWIRED_ALLOWED` |
+| `data/alt_data/ticker_cik_refresher.py` | 50 | regenerates the checked-in `ticker_cik_map.yaml` from SEC's master table; run by hand when the map goes stale, so an importer would be the defect | a timer generating the map instead |
+| `data/universes/ishares_refresher.py` | 107 | the same shape for iShares holdings as PIT universe snapshots (IJH / IJR / IVV) | as above |
+| `feedback/broker_fills.py` | 388 | loader and contract validator for the `broker-fills-v1` export. Its docstring states the restraint: loading and validation only, because the selection A/B over that data is pre-registered as Cluster #22 and has not run | Cluster #22 runs, or is withdrawn |
+
+**No consumer, measured — 6 modules, 567 LOC.**
+
+| Module | LOC | The measurement |
+|---|---:|---|
+| `data/alt_data/form4_filter.py` | 26 | filters Form-4 rows to Layer-2d-eligible purchases. The live insider path performs that filter itself: `thematic/screening/insider_signal.py:143` drops every row whose `transaction_code != "P"`. A second implementation with no caller |
+| `data/alt_data/plan_10b5_1.py` | 109 | parses 10b5-1 adoption dates out of Form-4 footnotes for the same closed design. The string `10b5` appears in exactly two files in the repository: this one and the row above |
+| `data/spread.py` | 125 | two published daily-OHLC spread estimators. Its docstring names `RealisticCostModel.primary_one_way_bps` as the consumer of its output; that model does not import it, and neither does anything else in the pipeline, the lab or `scripts/` |
+| `data/fundamentals/cache.py` | 71 | disk TTL cache for Alpha Vantage fundamentals features. The prescreener keeps its own in-memory `_fundamentals_cache` instead; the only other mention in the tree is one docstring line in `alphavantage_client.py` |
+| `data/store/fundamentals_pit.py` | 112 | point-in-time fundamentals store for backtest replay. Named in `data/store/__init__.py`'s package docstring, imported by nothing |
+| `thematic/sources/edgar_adapter.py` | 124 | 8-K adapter for the thematic ingest. `thematic/news_ingest.py` imports `edgar_press_release` instead, and `edgar_adapter` has no reference anywhere outside its own test |
+
+The second table is a deletion question for the owner, with the same shape as
+finding 9 (`data.macro.scorer`, deleted on 2026-10-03 with an ADR 0010
+amendment). It is not a deletion this audit performs.
 
 ### 6.3 Symbol level
 
@@ -607,8 +650,8 @@ Cost of leaving it against cost of fixing it. Nothing here was changed.
 | 2 | `control_loop.py` is 11 130 lines with no internal boundary, on the live order path | §4.1 | every change needs the whole file in head; 130 commits in 6 months | IN PROGRESS (#1677) — the partition map is measured by exclusive reachability from the 11 tick stages and the 10 wiring roots, with **zero functions shared between wiring roots**; step 1 moved the stream rail out (609 lines, 11 130 → 10 521) and pinned the direction one-way. The order is forced: the helpers the big clusters still need are a journal access layer, so that comes out before `_make_place_pick` (2 685 LOC) and `_run_entry_watch_pass` (1 584 LOC) |
 | 3 | No gate in CI measures file or function size | §4.2 | the next 11 000-line file grows the same way | enable `PLR0915`/`PLR0912` with a baseline, or a file-length check |
 | 4 | `paper.calendar` has the repo's highest inbound count (41) under a name that says it belongs to the feature ADR 0012 decommissioned (the package itself is `ACTIVE` — see §1.3 correction) | §2.4 | misleads every reader; blocks the keeper split | DONE — moved to `alphalens_pipeline.market.calendar`; the module keeps its symbol names |
-| 5 | `alphalens_pipeline/data/` is substantially research-tier (11 modules, 1 649 LOC referenced only by lab/scripts/tests) | §6.1 | ADR 0011's framing is wrong for `data/`, so new code lands on the wrong side | decide the boundary, then move or document |
-| 6 | 12 live-tier modules (1 676 LOC) are referenced only by tests | §6.2 | speculative generality indistinguishable from a kept seam | extend the `UNWIRED_ALLOWED` pattern: a reason per module, or remove |
+| 5 | `alphalens_pipeline/data/` is substantially research-tier (11 modules, 1 649 LOC referenced only by lab/scripts/tests) | §6.1 | ADR 0011's framing is wrong for `data/`, so new code lands on the wrong side | DONE — owner decision 2026-10-03: `data/` is a SHARED tier serving the live services and the lab, recorded as an amendment to [ADR 0011](../adr/0011-split-pipeline-and-research.md). A move was rejected on two measured grounds: it would split one vendor's surface across two apps, and the consumer set moves whenever a study starts or ends |
+| 6 | 12 live-tier modules (1 676 LOC) are referenced only by tests | §6.2 | speculative generality indistinguishable from a kept seam | ANSWERED — §6.2 now names all 12: **6 are kept on purpose** with the observation that retires each, **6 have no consumer** (567 LOC) and are a deletion question. The remedy as originally written does not work for nine of them: `deadcode_broker` is broker-scoped, so an entry there would guard a file it never reports |
 | 7 | `_reset_remote_quote_source_for_tests` is a test hook in production code on the money path | §4.1 | small, but it is a live file | fold into the injected deps |
 | 8 | 4 real import cycles, all of them existing only via lazy imports | §2.2 | hidden mutual dependencies that no import-time check sees | PARTLY DONE — `exit_geometry.{policy,registry}` cut (the numeric carrier moved out of the registry; direction pinned by a `RULES` row), leaving 3. The other three are untouched; `control_loop` ↔ `live_exit_engine` belongs to finding 2's arc |
 | 9 | `data.macro.scorer` (83 LOC) is referenced by nothing at all | §6.1 | dead weight | delete, after one check |
