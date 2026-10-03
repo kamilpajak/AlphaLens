@@ -341,6 +341,31 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # The exit_geometry package layers one way: levels (pure functions) <-
+        # policy (the ExitPolicy Protocol, its four implementations, and the
+        # numeric ExitGeometryPolicy carrier they place against) <- registry
+        # (names and lookup only). Before this rule, `registry` held the
+        # ExitGeometryPolicy its own entries are constructed with, so `policy`
+        # imported it back from `registry` at top level while `registry`
+        # imported the policies inside two function bodies -- a real runtime
+        # cycle inside the shared contract leaf, kept off the import-time path
+        # only by that laziness (architecture audit 2026-10-02, finding #8).
+        # No `top_level_only`: the edge that has to stay dead is exactly the
+        # lazy shape, so a function-body import must fail here too.
+        #
+        # Scoped to the whole PACKAGE, not just `policy.py`: the cycle that was
+        # cut ran policy <-> registry, but the invariant worth keeping is that
+        # the registry is the TOP of the leaf -- nothing inside reaches up to
+        # it. Scoping the rule to the one module that happened to break it
+        # would leave a second sibling free to re-form the same cycle.
+        "name": "nothing in the exit-geometry leaf may import the registry (it layers one way)",
+        "from_pkg": "broker_contract.exit_geometry",
+        "forbidden_prefix": "broker_contract.exit_geometry.registry",
+        # anti-rot: the package root publishes `resolve_exit_policy`, so it is
+        # the one legitimate importer. Drop this entry if that re-export moves.
+        "exemptions": {"__init__.py"},
+    },
+    {
         # intent-replay (spec section 3.1): the ENGINE modules import stdlib and
         # broker_contract only, so the measurement half can be lifted into a
         # standalone package carrying no dependency but the contract. This is
@@ -1137,6 +1162,94 @@ class TestModuleDependencies(unittest.TestCase):
                     any(m.startswith(rule["forbidden_prefix"]) for m in modules),
                     f"rule {rule['name']!r} would not catch the synthetic violation",
                 )
+
+    def test_nothing_in_the_leaf_may_import_the_registry_positive_control(self):
+        """Every spelling of "a leaf module reaches the registry" is seen.
+
+        The import this rule replaced was ``from
+        broker_contract.exit_geometry.registry import ExitGeometryPolicy`` — a
+        SYMBOL, not a module, which ``_level0_targets`` resolves to the registry
+        module. The attribute form (``from broker_contract.exit_geometry import
+        registry``) and the relative form (``from . import registry``) are the
+        two other ways back in, and a lazy one inside a function body is the
+        shape the other half of the cycle lived in for months.
+
+        Runs the real collection loop over a synthetic package on disk, so a
+        rule copied from RULES with the names swapped exercises the same
+        resolution a real violation would.
+        """
+        import tempfile
+
+        rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "broker_contract.exit_geometry"
+            and rule.get("forbidden_prefix") == "broker_contract.exit_geometry.registry"
+        ]
+        self.assertEqual(len(rules), 1, "the leaf -> registry rule must exist exactly once")
+        self.assertNotIn(
+            "top_level_only",
+            rules[0],
+            "the leaf -> registry rule must catch function-scope (lazy) imports too",
+        )
+        self.assertEqual(
+            rules[0]["exemptions"],
+            {"__init__.py"},
+            "only the package root may import the registry",
+        )
+
+        sources = {
+            "lazy_dotted.py": (
+                "def f():\n"
+                "    from synthetic_pkg.registry import ExitGeometryPolicy\n"
+                "    return ExitGeometryPolicy\n"
+            ),
+            "attribute.py": "from synthetic_pkg import registry\n",
+            "relative.py": "from . import registry\n",
+            "clean.py": "import math\nfrom synthetic_pkg import levels\n",
+            "registry.py": "",
+            "levels.py": "",
+        }
+        rule = {
+            "name": "synthetic forbid registry",
+            "from_pkg": "synthetic_pkg",
+            "forbidden_prefix": "synthetic_pkg.registry",
+            "exemptions": set(),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            for name, source in sources.items():
+                (pkg / name).write_text(source)
+            flagged = sorted(
+                (Path(rel).name, module)
+                for _, rel, module in _violations_for(rule, _python_files(pkg))
+            )
+        self.assertEqual(
+            flagged,
+            [
+                ("attribute.py", "synthetic_pkg.registry"),
+                ("lazy_dotted.py", "synthetic_pkg.registry"),
+                ("relative.py", "synthetic_pkg.registry"),
+            ],
+        )
+
+    def test_the_registry_still_imports_the_policy(self):
+        """The INTENDED direction, and the existence control for the rule above.
+
+        If this ever reads zero, either the two modules stopped depending on
+        each other at all — fine in itself, but then the forbid rule above is
+        pinning nothing — or someone "fixed" a later cycle by reversing the
+        edge, which would put it back the wrong way round.
+        """
+        registry = PACKAGE_DIRS["broker_contract"] / "exit_geometry" / "registry.py"
+        live = [
+            mod
+            for mod in _iter_imports(registry, include_function_scope=True)
+            if mod.startswith("broker_contract.exit_geometry.policy")
+        ]
+        self.assertTrue(live, "expected the registry to keep importing the policy; found none")
 
     def test_relative_imports_resolve_to_absolute_names(self):
         """A relative import is reported as the absolute module it names.

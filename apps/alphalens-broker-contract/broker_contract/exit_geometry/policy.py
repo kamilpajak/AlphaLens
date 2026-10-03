@@ -8,6 +8,14 @@ ML policy included) is a new registry entry, not a new call-site.
 disaster stop/TP and never reanchors; ``AtrBracketPolicy`` wraps a numeric
 ``ExitGeometryPolicy``. ``min_stop_distance_frac`` lets the reanchor envelope
 stay policy-agnostic (a future close-stop policy sets its own floor).
+
+``ExitGeometryPolicy`` — the numeric carrier the bracket family places against
+— lives HERE, next to the policies that read it. It used to live in
+``registry``, which made the package a cycle: the registry held the parameter
+bundle its own entries are built from, so this module imported it back while
+the registry imported these classes inside two function bodies. ``registry``
+is now what its name says: the ``(name, version)`` table and its resolvers,
+and the package layers one way (``levels`` <- ``policy`` <- ``registry``).
 """
 
 from __future__ import annotations
@@ -17,10 +25,38 @@ from dataclasses import dataclass, field
 from typing import Protocol, TypeGuard, runtime_checkable
 
 from broker_contract.exit_geometry.levels import (
+    atr_bracket_levels,
     fractional_giveback_target,
     reanchor_target,
 )
-from broker_contract.exit_geometry.registry import ExitGeometryPolicy
+
+
+@dataclass(frozen=True)
+class ExitGeometryPolicy:
+    """The numeric parameters of one exit-geometry family, behind a stable key.
+
+    Concrete and versioned, not an abstraction: nothing implements or subclasses
+    it. ``registry`` pins the registered instances under their ``(name, version)``
+    keys; the behavioral policies below place against one.
+    """
+
+    name: str
+    version: int
+    stop_atr_mult: float
+    tp_atr_mult: float
+    tp_floor_frac: float
+
+    def levels(
+        self, blended: float, atr: float, *, ceiling_price: float | None = None
+    ) -> tuple[float, float] | None:
+        return atr_bracket_levels(
+            blended,
+            atr,
+            stop_atr_mult=self.stop_atr_mult,
+            tp_atr_mult=self.tp_atr_mult,
+            tp_floor_frac=self.tp_floor_frac,
+            ceiling_price=ceiling_price,
+        )
 
 
 def _usable_atr(atr: float | None) -> TypeGuard[float]:

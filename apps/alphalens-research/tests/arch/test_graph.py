@@ -326,11 +326,13 @@ class CycleTest(unittest.TestCase):
     def test_a_lazy_edge_does_not_make_an_import_time_cycle(self) -> None:
         """The audit's most load-bearing claim rests on this filter.
 
-        The report states that this repository has FOUR runtime cycles and
+        The report stated that this repository had FOUR runtime cycles and
         ZERO at import time — every cycle exists only through a function-scope
-        import. That claim is exactly `cycles(include_function_scope=False)`,
-        and a mutation pass found the filter untested: inverting it changed no
-        test. This is that test.
+        import. (The count is THREE since `exit_geometry.{policy, registry}`
+        was cut; the import-time zero is unchanged, and it is the half this
+        test is about.) That claim is exactly
+        `cycles(include_function_scope=False)`, and a mutation pass found the
+        filter untested: inverting it changed no test. This is that test.
         """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -199,26 +199,26 @@ it is load-bearing — see §2.2.
 
 ### 2.2 Cycles
 
-| View | Cycles |
-|---|---:|
-| Runtime, observed edges (**the number to quote**) | **4** |
-| Runtime + type-only | 4 |
-| Runtime, **top-level only** | **0** |
-| With implicit parent-package edges | 20 |
+| View | Cycles as audited | Cycles today |
+|---|---:|---:|
+| Runtime, observed edges (**the number to quote**) | **4** | **3** |
+| Runtime + type-only | 4 | 3 |
+| Runtime, **top-level only** | **0** | **0** |
+| With implicit parent-package edges | 20 | — |
 
 Two readings matter.
 
-**There are no import-time cycles at all.** Every one of the four cycles exists
-only through a function-scope import. The lazy imports are doing real work:
-they are what keeps a genuine mutual dependency from being an import-time one.
+**There are no import-time cycles at all.** Every cycle exists only through a
+function-scope import. The lazy imports are doing real work: they are what
+keeps a genuine mutual dependency from being an import-time one.
 
-**The four real cycles:**
+**The four real cycles as audited — three remain:**
 
 | Cycle | Verdict |
 |---|---|
 | `brokers.automanager.control_loop` ↔ `brokers.automanager.live_exit_engine` | Real, and the biggest one. Both halves are in the file §4 is about. |
 | `thematic.trade_setup.{builder, config_version, model}` | Real 3-cycle. |
-| `broker_contract.exit_geometry.{policy, registry}` | Real 2-cycle inside the shared contract leaf. |
+| `broker_contract.exit_geometry.{policy, registry}` | REMOVED. `registry` held the `ExitGeometryPolicy` its own entries are built from, so `policy` imported it back at top level while `registry` imported the policies inside two function bodies. The carrier moved into `policy`; `registry` now holds only the name tables and resolvers, and imports `policy` one way. Pinned by a `RULES` row in `tests/test_module_dependencies.py`. |
 | `data.fundamentals.{ff_industries, sic_index}` | Real 2-cycle, research-tier. |
 
 The 20-cycle figure is what you get by counting the implicit `pkg.mod → pkg`
@@ -610,7 +610,7 @@ Cost of leaving it against cost of fixing it. Nothing here was changed.
 | 5 | `alphalens_pipeline/data/` is substantially research-tier (11 modules, 1 649 LOC referenced only by lab/scripts/tests) | §6.1 | ADR 0011's framing is wrong for `data/`, so new code lands on the wrong side | decide the boundary, then move or document |
 | 6 | 12 live-tier modules (1 676 LOC) are referenced only by tests | §6.2 | speculative generality indistinguishable from a kept seam | extend the `UNWIRED_ALLOWED` pattern: a reason per module, or remove |
 | 7 | `_reset_remote_quote_source_for_tests` is a test hook in production code on the money path | §4.1 | small, but it is a live file | fold into the injected deps |
-| 8 | 4 real import cycles, all of them existing only via lazy imports | §2.2 | hidden mutual dependencies that no import-time check sees | each is small; `exit_geometry.{policy,registry}` is in the shared contract leaf and worth doing first |
+| 8 | 4 real import cycles, all of them existing only via lazy imports | §2.2 | hidden mutual dependencies that no import-time check sees | PARTLY DONE — `exit_geometry.{policy,registry}` cut (the numeric carrier moved out of the registry; direction pinned by a `RULES` row), leaving 3. The other three are untouched; `control_loop` ↔ `live_exit_engine` belongs to finding 2's arc |
 | 9 | `data.macro.scorer` (83 LOC) is referenced by nothing at all | §6.1 | dead weight | delete, after one check |
 | 10 | `CLAUDE.md` says 12 ADRs; `docs/adr/` holds 17 | §9 | the index nobody trusts gets trusted less | doc-only PR |
 | 11 | Root `pyproject.toml` carries `per-file-ignores` for `apps/alphalens-pipeline/tests/*`, which does not exist | §9 | harmless, but it is a rule guarding nothing | doc/config PR |
