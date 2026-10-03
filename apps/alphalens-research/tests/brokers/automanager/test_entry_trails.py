@@ -381,6 +381,36 @@ class TestFoldEntryTrailLines(unittest.TestCase):
         self.assertEqual(fold.malformed, 0)
 
 
+def _fold_lines_through_records(raw_lines: Any) -> et.EntryTrailFold:
+    """The line fold, re-expressed over parsed records: every non-blank line is
+    parsed (a non-object or broken line becomes ``None``) and handed to
+    :func:`et.fold_entry_trail_records`."""
+    parsed: list[Any] = []
+    for raw in raw_lines:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            parsed.append(json.loads(line))
+        except json.JSONDecodeError:
+            parsed.append(None)
+    return et.fold_entry_trail_records(parsed)
+
+
+class TestFoldEntryTrailRecords(TestFoldEntryTrailLines):
+    """Every line-fold test, run again through the dict-based fold (#1701 §4.1).
+
+    ``journal_snapshots.iter_journal_history`` yields dicts, so the trades
+    reader folds records, not lines. The two entry points must not drift
+    apart, so the whole line-fold suite is re-run on the record fold."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        patcher = mock.patch.object(et, "fold_entry_trail_lines", _fold_lines_through_records)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
 class TestWatchingVirtualGrossAcct(unittest.TestCase):
     """The G5 virtual reservation: NON-terminal watch_open records valued at
     tier LIMIT x qty, folded into ACCOUNT currency through the record's own
