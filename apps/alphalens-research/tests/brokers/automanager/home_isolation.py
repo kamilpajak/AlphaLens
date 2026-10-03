@@ -25,12 +25,14 @@ apart.
 
 from __future__ import annotations
 
+import inspect
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import state_paths
+from alphalens_pipeline.brokers.saxo import tokens as saxo_tokens
 
 
 def isolate_home(case: unittest.TestCase) -> Path:
@@ -51,11 +53,31 @@ def isolate_home(case: unittest.TestCase) -> Path:
 class IsolatedHomeTestCase(unittest.TestCase):
     """A ``TestCase`` whose ``Path.home()`` is a fresh temp dir per test.
 
-    ``self.home`` is that directory. A subclass overriding ``setUp`` must call
-    ``super().setUp()``.
+    ``self.home`` is that directory. A subclass overriding ``setUp`` MUST chain
+    to this one, and :meth:`__init_subclass__` refuses the class at definition
+    time if it does not -- a missing ``super().setUp()`` would otherwise leave
+    the test reading the real home, and it would only be noticed if the test
+    happened to touch broker state.
     """
 
     home: Path
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        own_setup = cls.__dict__.get("setUp")
+        if own_setup is None:
+            return
+        try:
+            source = inspect.getsource(own_setup)
+        except (OSError, TypeError):
+            return  # generated or wrapped setUp: nothing to read, nothing to claim
+        if "super().setUp()" in source or f"{IsolatedHomeTestCase.__name__}.setUp(self)" in source:
+            return
+        raise TypeError(
+            f"{cls.__module__}.{cls.__qualname__}.setUp overrides "
+            f"{IsolatedHomeTestCase.__name__}.setUp without calling super().setUp(), "
+            "so the test would run against the operator's real home. See #1696."
+        )
 
     def setUp(self) -> None:
         super().setUp()
@@ -75,24 +97,49 @@ def seed_legacy_flat_state(home: Path) -> Path:
 # --- The guard that makes forgetting impossible (#1696) ----------------------
 
 # Captured at import, BEFORE any test patches ``Path.home()``: the one state
-# root a test must never resolve.
+# root a test must never resolve. This assumes ``$HOME`` is stable from the
+# moment this module is imported, which holds for every runner the repo uses.
 _OPERATOR_STATE_ROOT = Path.home() / state_paths._ALPHALENS_HOME_DIRNAME
+
+# Every broker-tier function that resolves a path under that root.
+# ``state_paths._alphalens_home`` is the ADR 0016 seam and covers the journals,
+# the pick inbox, the KILL gate and the execution-quality telemetry. It is NOT
+# the whole story: ``saxo/tokens.py`` keeps its own ``Path.home()`` join for the
+# OAuth token store, which `saxo/client.py` probes with ``.is_file()``. A guard
+# on the seam alone would let a test ask whether the operator is logged in.
+# ``test_home_isolation_gate.py`` reads this set off the source of the broker
+# packages, so a third builder added later cannot stay unguarded quietly.
+_GUARDED_BUILDERS: tuple[tuple[object, str], ...] = (
+    (state_paths, "_alphalens_home"),
+    (saxo_tokens, "default_token_store_path"),
+)
+
+_GUARD_MARKER = "_operator_state_guard"
 
 
 class OperatorStateReadError(AssertionError):
-    """A broker test resolved the operator's real ``~/.alphalens`` tree."""
+    """A broker test resolved a path under the operator's real ``~/.alphalens``."""
 
 
-def _guarded_alphalens_home() -> Path:
-    resolved = Path.home() / state_paths._ALPHALENS_HOME_DIRNAME
-    if resolved == _OPERATOR_STATE_ROOT:
-        raise OperatorStateReadError(
-            f"this test resolved the operator's real state root {resolved} -- its "
-            "verdict would depend on what the live daemon has written. Inherit "
-            f"{IsolatedHomeTestCase.__name__} (or call isolate_home(self)) so the "
-            "test gets its own temporary home. See #1696."
-        )
-    return resolved
+def _is_operator_path(resolved: Path) -> bool:
+    return resolved == _OPERATOR_STATE_ROOT or _OPERATOR_STATE_ROOT in resolved.parents
+
+
+def _guarded(label: str, original):
+    def guarded() -> Path:
+        resolved = original()
+        if _is_operator_path(resolved):
+            raise OperatorStateReadError(
+                f"{label}() resolved {resolved}, under the operator's real state root "
+                f"{_OPERATOR_STATE_ROOT} -- this test's verdict would depend on what "
+                f"the live daemon has written. Inherit {IsolatedHomeTestCase.__name__} "
+                "(or call isolate_home(self)) so the test gets its own temporary "
+                "home. See #1696."
+            )
+        return resolved
+
+    setattr(guarded, _GUARD_MARKER, True)
+    return guarded
 
 
 def install_operator_state_guard() -> None:
@@ -104,6 +151,15 @@ def install_operator_state_guard() -> None:
     points and missed four tests that reach a journal by another path.
 
     Isolated tests are unaffected: their ``Path.home()`` is a temp directory,
-    so the resolved root differs from the captured operator root.
+    so nothing they resolve sits under the captured operator root.
+
+    Deliberately installed at package import rather than from unittest's
+    ``load_tests`` hook: ``load_tests`` runs under DISCOVERY only, so
+    ``python -m unittest tests.brokers.automanager.test_control_loop`` -- how a
+    single module is normally run -- would carry no guard at all.
     """
-    state_paths._alphalens_home = _guarded_alphalens_home
+    for module, attr in _GUARDED_BUILDERS:
+        current = getattr(module, attr)
+        if getattr(current, _GUARD_MARKER, False):
+            continue  # idempotent: the marker rides on the wrapper, not on a flag
+        setattr(module, attr, _guarded(f"{module.__name__}.{attr}", current))

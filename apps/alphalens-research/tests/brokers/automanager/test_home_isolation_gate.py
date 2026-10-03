@@ -24,6 +24,7 @@ from unittest import mock
 from alphalens_pipeline.brokers.automanager import state_paths
 
 from tests.brokers.automanager.home_isolation import (
+    _GUARDED_BUILDERS,
     IsolatedHomeTestCase,
     OperatorStateReadError,
     isolate_home,
@@ -110,6 +111,108 @@ class TheFunctionFormWorksTheSameWay(unittest.TestCase):
         with mock.patch("pathlib.Path.home", return_value=Path.home()):
             with self.assertRaises(OperatorStateReadError):
                 state_paths.broker_orders_root()
+
+
+_BROKER_PACKAGE_ROOTS = (
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers",
+    "apps/alphalens-broker-contract/broker_contract",
+)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[5]
+
+
+def _broker_tier_home_builders() -> set[tuple[str, str]]:
+    """Every broker-tier function whose body calls ``Path.home()``.
+
+    Read off the source of the broker packages, so a third path builder added
+    later shows up here whether or not anyone remembers this gate. Returned as
+    ``(module file stem, function name)`` pairs."""
+    found: set[tuple[str, str]] = set()
+    root = _repo_root()
+    for relroot in _BROKER_PACKAGE_ROOTS:
+        for path in sorted((root / relroot).rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                calls_home = any(
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "home"
+                    for call in ast.walk(node)
+                )
+                if calls_home:
+                    found.add((path.stem, node.name))
+    return found
+
+
+class EveryBrokerTierHomeBuilderIsGuarded(unittest.TestCase):
+    """Anti-rot. The guard is only as complete as its list of builders, and the
+    ADR 0016 seam is NOT that list: `saxo/tokens.py` keeps its own join."""
+
+    def test_the_guarded_set_matches_what_the_source_says_exists(self) -> None:
+        guarded = {(module.__name__.rsplit(".", 1)[-1], attr) for module, attr in _GUARDED_BUILDERS}
+        self.assertEqual(
+            _broker_tier_home_builders(),
+            guarded,
+            "a broker-tier function resolves Path.home() and is not covered by "
+            "_GUARDED_BUILDERS, so a test can read operator state past the guard (#1696)",
+        )
+
+    def test_the_source_scan_finds_something(self) -> None:
+        self.assertGreaterEqual(len(_broker_tier_home_builders()), 2)
+
+
+class TheSeamIsActuallyUsedByTheBuilders(IsolatedHomeTestCase):
+    """Positive control on the OTHER direction. The guard fires on the resolved
+    path, so a builder that hardcoded a path would pass the "must raise" test
+    above by never resolving the home at all. These assert the opposite: under
+    isolation every builder lands inside this test's own temporary home."""
+
+    def test_every_state_path_builder_resolves_under_the_temporary_home(self) -> None:
+        for name in _public_state_path_builders():
+            with self.subTest(builder=name):
+                self.assertTrue(
+                    self.home in getattr(state_paths, name)().parents,
+                    f"{name}() does not resolve under the patched home",
+                )
+
+    def test_the_token_store_path_also_resolves_under_it(self) -> None:
+        from alphalens_pipeline.brokers.saxo.tokens import default_token_store_path
+
+        self.assertTrue(self.home in default_token_store_path().parents)
+
+
+class ASubclassCannotLoseIsolationSilently(unittest.TestCase):
+    """Positive control on `__init_subclass__`: a setUp override that does not
+    chain is refused at class-definition time, not at the first state read."""
+
+    def test_a_non_chaining_setup_is_refused(self) -> None:
+        with self.assertRaises(TypeError) as ctx:
+
+            class Forgot(IsolatedHomeTestCase):
+                def setUp(self) -> None:
+                    self.value = 1
+
+        message = str(ctx.exception)
+        self.assertIn("super().setUp()", message)
+        self.assertIn("#1696", message)
+
+    def test_a_chaining_setup_is_accepted(self) -> None:
+        class Chains(IsolatedHomeTestCase):
+            def setUp(self) -> None:
+                super().setUp()
+                self.value = 1
+
+        self.assertTrue(issubclass(Chains, IsolatedHomeTestCase))
+
+    def test_a_subclass_with_no_setup_of_its_own_is_accepted(self) -> None:
+        class Inherits(IsolatedHomeTestCase):
+            pass
+
+        self.assertTrue(issubclass(Inherits, IsolatedHomeTestCase))
 
 
 if __name__ == "__main__":

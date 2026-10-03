@@ -58,6 +58,8 @@ from alphalens_pipeline.brokers.saxo.tokens import (
     resolve_token_store_path,
 )
 
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
 _REAUTH_HINT = "alphalens broker auth"
 
 # Documented token-endpoint response shape (values are fakes).
@@ -409,7 +411,7 @@ class TestRefreshRotationPersistence(unittest.TestCase):
         self.assertEqual(leftovers, [], "failed replace must unlink its temp file")
 
 
-class TestTokenStorePerms(unittest.TestCase):
+class TestTokenStorePerms(IsolatedHomeTestCase):
     def test_store_file_is_owner_rw_only_and_parent_auto_created(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = TokenStore(Path(tmp) / "nested" / "deeper" / "token_store.json")
