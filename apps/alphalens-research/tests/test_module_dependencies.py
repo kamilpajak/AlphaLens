@@ -161,6 +161,19 @@ RULES = (
         },  # anti-rot: drop when the module relocates under brokers/saxo/
     },
     {
+        # #1677, step 1 of partitioning control_loop.py: the stream rail moved
+        # out into its own module, and the direction must stay one-way. The
+        # tick imports `stream_handles`; if `stream_handles` ever imported
+        # `control_loop` back -- for a helper, a constant, or a type -- the
+        # package would have the same shape the extraction removed, and a
+        # function-body import would keep it off the import-time path exactly
+        # as the cut cycles did. So no `top_level_only` here either.
+        "name": "the stream rail must not import the control loop (the partition is one-way)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.stream_handles",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.control_loop",
+        "exemptions": set(),
+    },
+    {
         # Workspace split (PR2): the pipeline tier hosts live infrastructure
         # (data, core, scorers, edgar_detector, thematic, literature_scanner) and
         # must remain downstream-free. The research tier consumes pipeline,
@@ -1250,6 +1263,89 @@ class TestModuleDependencies(unittest.TestCase):
             if mod.startswith("broker_contract.exit_geometry.policy")
         ]
         self.assertTrue(live, "expected the registry to keep importing the policy; found none")
+
+    def test_the_stream_rail_must_not_import_the_control_loop_positive_control(self):
+        """Every spelling of "the stream rail reaches back" is seen.
+
+        The partition only holds while the edge runs one way. The shapes that
+        would put it back are a plain module import, a symbol import that
+        resolves to the module, the attribute form, the relative form, and any
+        of those inside a function body -- which is how the cycles this audit
+        cut stayed off the import-time path for months.
+
+        Runs the real collection loop over a synthetic package on disk, so the
+        control exercises the same resolution a real violation would take.
+        """
+        import tempfile
+
+        rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "alphalens_pipeline.brokers.automanager.stream_handles"
+        ]
+        self.assertEqual(len(rules), 1, "the stream rail rule must exist exactly once")
+        self.assertNotIn(
+            "top_level_only",
+            rules[0],
+            "the stream rail rule must catch function-scope (lazy) imports too",
+        )
+
+        sources = {
+            "lazy_symbol.py": (
+                "def f():\n"
+                "    from synthetic_pkg.control_loop import LoopDeps\n"
+                "    return LoopDeps\n"
+            ),
+            "plain.py": "import synthetic_pkg.control_loop\n",
+            "attribute.py": "from synthetic_pkg import control_loop\n",
+            "relative.py": "from . import control_loop\n",
+            "clean.py": "import math\nfrom synthetic_pkg import state_paths\n",
+            "control_loop.py": "",
+            "state_paths.py": "",
+        }
+        rule = {
+            "name": "synthetic forbid control_loop",
+            "from_pkg": "synthetic_pkg",
+            "forbidden_prefix": "synthetic_pkg.control_loop",
+            "exemptions": set(),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            for name, source in sources.items():
+                (pkg / name).write_text(source)
+            flagged = sorted(
+                (Path(rel).name, module)
+                for _, rel, module in _violations_for(rule, _python_files(pkg))
+            )
+        self.assertEqual(
+            flagged,
+            [
+                ("attribute.py", "synthetic_pkg.control_loop"),
+                ("lazy_symbol.py", "synthetic_pkg.control_loop"),
+                ("plain.py", "synthetic_pkg.control_loop"),
+                ("relative.py", "synthetic_pkg.control_loop"),
+            ],
+        )
+
+    def test_the_control_loop_still_imports_the_stream_rail(self):
+        """The INTENDED direction, and the existence control for the rule above.
+
+        If this reads zero, either the tick stopped using the stream rail at
+        all -- fine in itself, but then the forbid rule above pins nothing --
+        or someone moved the wiring back into ``control_loop``, which would
+        undo the partition without any gate noticing.
+        """
+        control_loop = (
+            PACKAGE_DIRS["alphalens_pipeline"] / "brokers" / "automanager" / "control_loop.py"
+        )
+        live = [
+            mod
+            for mod in _iter_imports(control_loop, include_function_scope=True)
+            if mod.startswith("alphalens_pipeline.brokers.automanager.stream_handles")
+        ]
+        self.assertTrue(live, "expected the control loop to keep importing the stream rail")
 
     def test_relative_imports_resolve_to_absolute_names(self):
         """A relative import is reported as the absolute module it names.

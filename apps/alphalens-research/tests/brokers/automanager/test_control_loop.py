@@ -22,6 +22,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails, state_paths, trade_alerts
+from alphalens_pipeline.brokers.automanager import stream_handles as sh
 from alphalens_pipeline.brokers.automanager.costs import round_trip_fee_bps
 from alphalens_pipeline.brokers.automanager.live_rails import (
     MAX_FEE_BPS_ENV,
@@ -8656,7 +8657,7 @@ def _stream_tick_harness(
     pages: list[str] = []
     throttled: list[tuple[str, str]] = []
     get_bearer = bearer if callable(bearer) else (lambda: bearer)
-    tick = cl._make_stream_tick(
+    tick = sh._make_stream_tick(
         trig,
         get_bearer=get_bearer,
         alert=pages.append,
@@ -8694,7 +8695,7 @@ class TestStreamStaleAlert(unittest.TestCase):
         self.assertEqual(len(throttled), 1)
         self.assertEqual(throttled[0][1], "stream-dead")
         self.assertEqual(pages, [])
-        self.assertEqual(gauges[-1][cl._STREAM_LAST_MESSAGE_METRIC_NAME], 90.0)
+        self.assertEqual(gauges[-1][sh._STREAM_LAST_MESSAGE_METRIC_NAME], 90.0)
 
         # Fresh stream (silence <= stale_s) -> no alert, still pushes + gauges.
         gauges.clear()
@@ -8706,7 +8707,7 @@ class TestStreamStaleAlert(unittest.TestCase):
         self.assertEqual(trig2.pushed, ["BEARER-2"])
         self.assertEqual(throttled2, [])
         self.assertEqual(pages2, [])
-        self.assertEqual(gauges[-1][cl._STREAM_LAST_MESSAGE_METRIC_NAME], 5.0)
+        self.assertEqual(gauges[-1][sh._STREAM_LAST_MESSAGE_METRIC_NAME], 5.0)
 
     def test_no_message_yet_does_not_alert_but_still_gauges(self) -> None:
         # Rearm design memo §4.6: the gauges are written on EVERY tick and the
@@ -8721,7 +8722,7 @@ class TestStreamStaleAlert(unittest.TestCase):
         self.assertEqual(pages, [])
         self.assertEqual(throttled, [])
         self.assertEqual(len(gauges), 1)
-        self.assertEqual(gauges[0][cl._STREAM_LAST_MESSAGE_METRIC_NAME], 30.0)
+        self.assertEqual(gauges[0][sh._STREAM_LAST_MESSAGE_METRIC_NAME], 30.0)
 
     def test_bearer_read_failure_never_crashes_the_tick(self) -> None:
         # A token flock / chain-loss error while reading the bearer must degrade
@@ -8738,17 +8739,17 @@ class TestStreamStaleAlert(unittest.TestCase):
 
     def test_default_stale_threshold_le_poll_seconds(self) -> None:
         # The stale alert must not lag a full poll cycle behind protection.
-        self.assertLessEqual(cl._DEFAULT_STREAM_STALE_S, 45.0)
+        self.assertLessEqual(sh._DEFAULT_STREAM_STALE_S, 45.0)
 
     def test_stream_stale_s_reads_env_with_finite_positive_guard(self) -> None:
         with mock.patch.dict(os.environ, {"ALPHALENS_BROKER_STREAM_STALE_S": "30"}, clear=False):
-            self.assertEqual(cl._stream_stale_s(), 30.0)
+            self.assertEqual(sh._stream_stale_s(), 30.0)
         for bad in ("0", "-5", "nan", "inf", "notafloat", ""):
             with mock.patch.dict(os.environ, {"ALPHALENS_BROKER_STREAM_STALE_S": bad}, clear=False):
-                self.assertEqual(cl._stream_stale_s(), cl._DEFAULT_STREAM_STALE_S)
+                self.assertEqual(sh._stream_stale_s(), sh._DEFAULT_STREAM_STALE_S)
         env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_STREAM_STALE_S"}
         with mock.patch.dict(os.environ, env, clear=True):
-            self.assertEqual(cl._stream_stale_s(), cl._DEFAULT_STREAM_STALE_S)
+            self.assertEqual(sh._stream_stale_s(), sh._DEFAULT_STREAM_STALE_S)
 
 
 class TestBlockingOnTickDoesNotExtendGap(unittest.TestCase):
@@ -9257,7 +9258,7 @@ class TestStreamGauges(unittest.TestCase):
             TemporaryDirectory() as d,
             mock.patch.dict(os.environ, {"ALPHALENS_TEXTFILE_DIR": d}, clear=False),
         ):
-            tick = cl._make_stream_tick(
+            tick = sh._make_stream_tick(
                 trig,
                 get_bearer=lambda: "B",
                 alert=lambda _m: None,
@@ -9315,11 +9316,11 @@ class TestStreamingSubscriberIsolation(unittest.TestCase):
         from alphalens_pipeline.brokers.saxo.client import SaxoClient
 
         provider = self._provider()
-        sub = cl._build_streaming_subscriber(provider)
+        sub = sh._build_streaming_subscriber(provider)
         self.assertIsInstance(sub, SaxoClient)
         self.assertIs(sub._token_provider, provider)
         # A fresh session per construction -> never the shared singleton's session.
-        other = cl._build_streaming_subscriber(provider)
+        other = sh._build_streaming_subscriber(provider)
         self.assertIsNot(sub._session, other._session)
 
 
@@ -9341,7 +9342,7 @@ class TestStreamGaugeDoesNotClobberHeartbeat(unittest.TestCase):
         ):
             cl._default_emit_heartbeat()  # per-tick heartbeat gauge
             # stream gauges (run AFTER heartbeat every tick; multi-key since INC-3)
-            cl._emit_stream_gauge({cl._STREAM_LAST_MESSAGE_METRIC_NAME: 5.0})
+            sh._emit_stream_gauge({sh._STREAM_LAST_MESSAGE_METRIC_NAME: 5.0})
             proms = sorted(Path(d).glob("*.prom"))
             blob = "\n".join(p.read_text() for p in proms)
         # Both series present (neither atomic overwrite clobbered the other) ...
@@ -9354,15 +9355,15 @@ class TestStreamGaugeDoesNotClobberHeartbeat(unittest.TestCase):
 class TestStreamingEnabledGate(unittest.TestCase):
     def test_streaming_enabled_reads_env_flag(self) -> None:
         with mock.patch.dict(os.environ, {"ALPHALENS_BROKER_STREAMING_ENABLED": "1"}, clear=False):
-            self.assertTrue(cl._streaming_enabled())
+            self.assertTrue(sh._streaming_enabled())
         for off in ("0", "", "true", "yes"):
             with mock.patch.dict(
                 os.environ, {"ALPHALENS_BROKER_STREAMING_ENABLED": off}, clear=False
             ):
-                self.assertFalse(cl._streaming_enabled())
+                self.assertFalse(sh._streaming_enabled())
         env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_STREAMING_ENABLED"}
         with mock.patch.dict(os.environ, env, clear=True):
-            self.assertFalse(cl._streaming_enabled())
+            self.assertFalse(sh._streaming_enabled())
 
 
 class TestKillActiveMetric(unittest.TestCase):

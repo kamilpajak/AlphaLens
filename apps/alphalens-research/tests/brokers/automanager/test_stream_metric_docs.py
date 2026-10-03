@@ -19,7 +19,7 @@ import re
 import unittest
 from pathlib import Path
 
-from alphalens_pipeline.brokers.automanager import control_loop
+from alphalens_pipeline.brokers.automanager import stream_handles
 
 # tests/brokers/automanager/ is two levels deeper than tests/, so the repo root
 # is parents[5].
@@ -29,18 +29,18 @@ ENV_EXAMPLE = WORKSPACE_ROOT / ".env.example"
 
 # The bare gauge name the operator writes into the alert rule; the emitted
 # series adds a ``{job="..."}`` label selector.
-_GAUGE_BASE = control_loop._STREAM_LAST_MESSAGE_METRIC_NAME
+_GAUGE_BASE = stream_handles._STREAM_LAST_MESSAGE_METRIC_NAME
 
 # Every stream-state gauge the tick emits (rearm design memo §4.6) — the docs
 # must name each one, or a hand-synced rule targets a metric that does not
 # exist and silently never fires.
 _ALL_GAUGE_BASES = (
-    control_loop._STREAM_READER_UP_METRIC_NAME,
-    control_loop._STREAM_BREAKER_OPEN_METRIC_NAME,
-    control_loop._STREAM_LAST_MESSAGE_METRIC_NAME,
-    control_loop._STREAM_CONSECUTIVE_FAILURES_METRIC_NAME,
-    control_loop._STREAM_TRIPS_TOTAL_METRIC_NAME,
-    control_loop._STREAM_IN_SESSION_METRIC_NAME,
+    stream_handles._STREAM_READER_UP_METRIC_NAME,
+    stream_handles._STREAM_BREAKER_OPEN_METRIC_NAME,
+    stream_handles._STREAM_LAST_MESSAGE_METRIC_NAME,
+    stream_handles._STREAM_CONSECUTIVE_FAILURES_METRIC_NAME,
+    stream_handles._STREAM_TRIPS_TOTAL_METRIC_NAME,
+    stream_handles._STREAM_IN_SESSION_METRIC_NAME,
 )
 
 

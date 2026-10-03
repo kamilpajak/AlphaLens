@@ -52,7 +52,8 @@ QUALIFIER_WINDOW_LINES = 3
 # line. Load-bearing check below forces removal once the line is reworded.
 ALLOWLIST: tuple[tuple[str, str], ...] = (
     (
-        "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py",
+        # moved with the stream rail when control_loop.py was partitioned (#1677)
+        "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stream_handles.py",
         "Streaming (dark, SIM-only) env gates",
     ),
     (
