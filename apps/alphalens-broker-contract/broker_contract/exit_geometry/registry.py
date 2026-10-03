@@ -1,45 +1,30 @@
-"""Named, versioned exit-geometry policies.
+"""The name tables for exit geometries and exit policies, and their resolvers.
 
-A policy pins the numeric parameters of an exit-geometry family (currently
+A geometry pins the numeric parameters of an exit-geometry family (currently
 only the ATR bracket) behind a stable ``(name, version)`` key, so callers
 (the ``/edge`` what-if lens today, the SIM broker-manager later) resolve a
 policy by name instead of threading raw multipliers around. ``"atr_bracket_1p5"``
 is the wire key used in stored config / API payloads; "bezpazery" is its
 human alias (the betlejem5-inspired bracket doctrine, memo §2 /
 ``docs/research/bezpazery_lens_design_2026_07_16.md`` §2).
+
+Only the NAMING lives here. ``ExitGeometryPolicy`` itself, the ``ExitPolicy``
+Protocol and every implementation live in ``policy``, which this module
+imports one way.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from broker_contract.exit_geometry.levels import atr_bracket_levels
-
-if TYPE_CHECKING:
-    from broker_contract.exit_geometry.policy import ExitPolicy
-
-
-@dataclass(frozen=True)
-class ExitGeometryPolicy:
-    name: str
-    version: int
-    stop_atr_mult: float
-    tp_atr_mult: float
-    tp_floor_frac: float
-
-    def levels(
-        self, blended: float, atr: float, *, ceiling_price: float | None = None
-    ) -> tuple[float, float] | None:
-        return atr_bracket_levels(
-            blended,
-            atr,
-            stop_atr_mult=self.stop_atr_mult,
-            tp_atr_mult=self.tp_atr_mult,
-            tp_floor_frac=self.tp_floor_frac,
-            ceiling_price=ceiling_price,
-        )
-
+from broker_contract.exit_geometry.policy import (
+    AtrBracketPolicy,
+    BreakevenTrailPolicy,
+    ExitGeometryPolicy,
+    ExitPolicy,
+    ReanchorOnFillPolicy,
+    SetupStaticPolicy,
+)
 
 # bezpazery v1 pinned values (memo §2 / bezpazery_lens_design_2026_07_16.md §2).
 _ATR_BRACKET_1P5 = ExitGeometryPolicy("atr_bracket_1p5", 1, 1.5, 1.5, 0.006)
@@ -81,15 +66,8 @@ def exit_policy_registry() -> dict[str, ExitPolicy]:
 
     Exposed (rather than inlined in :func:`resolve_exit_policy`) so a test can
     enumerate the registry and assert that property for EVERY entry, including
-    ones added later. Lazy import of ``policy`` avoids a module import cycle
-    (policy.py imports ExitGeometryPolicy from this module).
+    ones added later.
     """
-    from broker_contract.exit_geometry.policy import (
-        AtrBracketPolicy,
-        BreakevenTrailPolicy,
-        SetupStaticPolicy,
-    )
-
     # Both bracket policies place against the SAME geometry and differ only in
     # how the exit then moves; that is exactly why the behavioral name cannot be
     # derived from the geometry.
@@ -147,11 +125,6 @@ def resolve_declared_policy(reaction: Any) -> ExitPolicy:
     journal stamp inside the protection pass, where a raise would starve the
     never-naked backstop.
     """
-    from broker_contract.exit_geometry.policy import (
-        BreakevenTrailPolicy,
-        ReanchorOnFillPolicy,
-        SetupStaticPolicy,
-    )
     from broker_contract.trade_intent.schema import ReanchorOnFill, TrailingStop
 
     if isinstance(reaction, TrailingStop):
