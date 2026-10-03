@@ -12,6 +12,15 @@ after ``curr_date``.
   - ps_ratio: from OVERVIEW.PriceToSalesRatioTTM
   - net_income_ttm: sum of last 4 quarterly netIncome values
   - consecutive_neg_ocf_quarters: count from most recent quarter backwards
+
+No production importer since 2026-10-03. ``data/store/fundamentals_pit.py`` was
+the only one, and it was removed with the other consumer-less modules that
+finding 6 of ``docs/research/architecture_audit_2026_10_02.md`` named (§6.2).
+The ``gate`` module above consumes the SHAPE of ``extract_features``' output
+rather than this module: it does not import it, and nothing calls
+``fundamental_gate_score`` outside its own test. Whether this pair stays is the
+open question §6.2 records; this note exists so the next reader does not have to
+re-derive it.
 """
 
 from __future__ import annotations

@@ -598,7 +598,15 @@ removal. `data/store/fundamentals_pit.py` was the only production importer of
 `data/fundamentals/fetcher.py` (211 LOC, the Alpha Vantage fundamentals
 fetcher), so that module has moved INTO the test-only bucket. It is the same
 question again, one level up, and it was left open rather than folded into the
-removal.
+removal; `fetcher.py` now carries that fact in its own docstring.
+
+The same check on `fetcher.py` makes the §2 caveat about `__init__` re-exports
+concrete. Its docstring names `data/fundamentals/gate.py` as the consumer of
+`extract_features`' output, and that is a DICT-SHAPE agreement, not an import:
+`gate` does not import `fetcher`, and nothing calls `fundamental_gate_score`
+outside its own test. `gate` nevertheless measures as reachable, because
+`data/fundamentals/__init__.py` re-exports it — reachable through a facade, with
+no caller. Fan-in is static inbound references, never evidence of use.
 
 ### 6.3 Symbol level
 
