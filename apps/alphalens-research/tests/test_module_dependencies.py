@@ -352,10 +352,18 @@ RULES = (
         # only by that laziness (architecture audit 2026-10-02, finding #8).
         # No `top_level_only`: the edge that has to stay dead is exactly the
         # lazy shape, so a function-body import must fail here too.
-        "name": "the exit policy must not import the registry (the contract leaf layers one way)",
-        "from_pkg": "broker_contract.exit_geometry.policy",
+        #
+        # Scoped to the whole PACKAGE, not just `policy.py`: the cycle that was
+        # cut ran policy <-> registry, but the invariant worth keeping is that
+        # the registry is the TOP of the leaf -- nothing inside reaches up to
+        # it. Scoping the rule to the one module that happened to break it
+        # would leave a second sibling free to re-form the same cycle.
+        "name": "nothing in the exit-geometry leaf may import the registry (it layers one way)",
+        "from_pkg": "broker_contract.exit_geometry",
         "forbidden_prefix": "broker_contract.exit_geometry.registry",
-        "exemptions": set(),
+        # anti-rot: the package root publishes `resolve_exit_policy`, so it is
+        # the one legitimate importer. Drop this entry if that re-export moves.
+        "exemptions": {"__init__.py"},
     },
     {
         # intent-replay (spec section 3.1): the ENGINE modules import stdlib and
@@ -1155,8 +1163,8 @@ class TestModuleDependencies(unittest.TestCase):
                     f"rule {rule['name']!r} would not catch the synthetic violation",
                 )
 
-    def test_the_policy_must_not_import_the_registry_positive_control(self):
-        """Every spelling of "the policy reaches the registry" is seen.
+    def test_nothing_in_the_leaf_may_import_the_registry_positive_control(self):
+        """Every spelling of "a leaf module reaches the registry" is seen.
 
         The import this rule replaced was ``from
         broker_contract.exit_geometry.registry import ExitGeometryPolicy`` — a
@@ -1175,14 +1183,19 @@ class TestModuleDependencies(unittest.TestCase):
         rules = [
             rule
             for rule in RULES
-            if rule["from_pkg"] == "broker_contract.exit_geometry.policy"
+            if rule["from_pkg"] == "broker_contract.exit_geometry"
             and rule.get("forbidden_prefix") == "broker_contract.exit_geometry.registry"
         ]
-        self.assertEqual(len(rules), 1, "the policy -> registry rule must exist exactly once")
+        self.assertEqual(len(rules), 1, "the leaf -> registry rule must exist exactly once")
         self.assertNotIn(
             "top_level_only",
             rules[0],
-            "the policy -> registry rule must catch function-scope (lazy) imports too",
+            "the leaf -> registry rule must catch function-scope (lazy) imports too",
+        )
+        self.assertEqual(
+            rules[0]["exemptions"],
+            {"__init__.py"},
+            "only the package root may import the registry",
         )
 
         sources = {
