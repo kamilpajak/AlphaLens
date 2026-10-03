@@ -33,6 +33,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import state_paths
+from alphalens_pipeline.brokers.automanager import stream_handles as sh
 from alphalens_pipeline.brokers.automanager.live_rails import (
     DAILY_LOSS_LIMIT_R_ENV,
     MAX_FEE_BPS_ENV,
@@ -229,8 +230,10 @@ class TestLiveStreamingStructurallySkipped(unittest.TestCase):
                 "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env",
                 return_value=(broker_stub, provider_stub),
             ),
-            mock.patch.object(cl, "_build_streaming_subscriber") as mock_subscriber,
-            self.assertLogs(cl.logger, level="INFO") as captured,
+            mock.patch.object(sh, "_build_streaming_subscriber") as mock_subscriber,
+            # the skip is logged by the module that owns the decision, which is
+            # `stream_handles` since the extraction (#1677)
+            self.assertLogs(sh.logger, level="INFO") as captured,
         ):
             deps = cl.build_default_deps(
                 notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
@@ -255,7 +258,7 @@ class TestLiveStreamingStructurallySkipped(unittest.TestCase):
                 "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env",
                 return_value=(broker_stub, provider_stub),
             ),
-            mock.patch.object(cl, "_build_streaming_subscriber") as mock_subscriber,
+            mock.patch.object(sh, "_build_streaming_subscriber") as mock_subscriber,
         ):
             deps = cl.build_default_deps(
                 notify=lambda _msg: None, chain_loss_notify=lambda _msg: None

@@ -26,6 +26,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import stream_handles as sh
 
 _GATE_ENV = "ALPHALENS_SAXO_STREAM_SESSION_GATE"
 
@@ -47,13 +48,13 @@ class _SettableClock:
 class TestSessionGateEnvFlag(unittest.TestCase):
     def test_env_unset_yields_none_so_todays_behavior_is_kept(self):
         with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertIsNone(cl._stream_session_window_if_enabled())
+            self.assertIsNone(sh._stream_session_window_if_enabled())
 
     def test_gate_builds_a_predicate_only_for_exactly_one(self):
         for value, expect_predicate in (("1", True), ("0", False), ("true", False), ("", False)):
             with self.subTest(value=value):
                 with mock.patch.dict("os.environ", {_GATE_ENV: value}, clear=True):
-                    predicate = cl._stream_session_window_if_enabled()
+                    predicate = sh._stream_session_window_if_enabled()
                 if expect_predicate:
                     self.assertTrue(callable(predicate))
                 else:
@@ -68,7 +69,7 @@ class TestSessionWindowMath(unittest.TestCase):
 
     def setUp(self) -> None:
         self.clock = _SettableClock(_SESSION_OPEN)
-        self.predicate = cl._make_stream_session_window(clock=self.clock)
+        self.predicate = sh._make_stream_session_window(clock=self.clock)
 
     def _at(self, moment: dt.datetime) -> bool:
         self.clock.now = moment
@@ -125,7 +126,7 @@ class TestMultiVenueSessionWindow(unittest.TestCase):
     def _in_window(self, venues_env: str | None, now: dt.datetime) -> bool:
         env = {} if venues_env is None else {self._VENUES_ENV: venues_env}
         with mock.patch.dict("os.environ", env, clear=True):
-            predicate = cl._make_stream_session_window(_SettableClock(now))
+            predicate = sh._make_stream_session_window(_SettableClock(now))
             return predicate()
 
     def test_env_unset_keeps_the_xnys_window(self):
