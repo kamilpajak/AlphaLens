@@ -4,7 +4,6 @@ import datetime as dt
 import unittest
 from unittest import mock
 
-from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     TrancheExit,
@@ -26,7 +25,7 @@ class TestFiredTranchesFold(unittest.TestCase):
             {"kind": "oco_placed", "uic": 486},  # ignored
             {"kind": "tranche_fired", "uic": 486},  # malformed (no tag) ignored
         ]
-        out = cl._fold_fired_since_latest_plan(lines)
+        out = sj._fold_fired_since_latest_plan(lines)
         self.assertEqual(out[486], frozenset({"tp1", "tp2"}))
         self.assertEqual(out[999], frozenset({"tp1"}))
 
@@ -42,7 +41,7 @@ class TestFiredTranchesFold(unittest.TestCase):
                 "telemetry": {"decision_bid": 16.5, "source": "saxo-live-l1"},
             },
         ]
-        out = cl._fold_fired_since_latest_plan(lines)
+        out = sj._fold_fired_since_latest_plan(lines)
         self.assertEqual(out[486], frozenset({"tp1"}))
 
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 import os
 import unittest
 
-from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from broker_contract.contract import PlacedOrder
 from broker_contract.sizing import TpTranchePlan
@@ -97,7 +96,7 @@ class _TrailedPosition(IsolatedHomeTestCase):
         self.broker.set_position("KO", 100, avg_price=_ENTRY)
         self.world._seed_plan("KO", stop=_PLAN_STOP, take_profit=None, exit_policy=_DECLARED_TRAIL)
         sj._append_standalone_stop_journal(
-            cl._build_tranche_plan_line(
+            sj._build_tranche_plan_line(
                 uic=self.uic, tp_tranches=_LADDER, reference_qty=100, stop_price=_PLAN_STOP
             )
         )

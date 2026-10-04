@@ -81,8 +81,8 @@ class TestTheGoverningPlanIsAPropertyOfTheData(unittest.TestCase):
     def _assert_compaction_keeps(self, journal: list[dict[str, Any]]) -> None:
         compacted = cl._compact_standalone_stop_journal_lines(journal)
         self.assertEqual(
-            _plan_view(cl._fold_planned_exits(journal)),
-            _plan_view(cl._fold_planned_exits(compacted)),
+            _plan_view(sj._fold_planned_exits(journal)),
+            _plan_view(sj._fold_planned_exits(compacted)),
         )
 
     def test_two_plans_at_one_tier(self) -> None:
@@ -116,13 +116,13 @@ class TestTheGoverningPlanIsAPropertyOfTheData(unittest.TestCase):
             _planned("crid-A1", tier=1, tp=19.0),
         ]
         self.assertEqual(
-            _plan_view(cl._fold_planned_exits(journal)),
-            _plan_view(cl._fold_planned_exits(list(reversed(journal)))),
+            _plan_view(sj._fold_planned_exits(journal)),
+            _plan_view(sj._fold_planned_exits(list(reversed(journal)))),
         )
 
     def test_the_conflict_facts_are_unchanged(self) -> None:
         # #1249: the never-naked cover under conflict reads these three.
-        fold = cl._fold_planned_exits(
+        fold = sj._fold_planned_exits(
             [_planned("crid-B", stop=11.0, tp=21.0), _planned("crid-A", stop=10.0, tp=20.0)]
         )
         plan = fold[111]
@@ -132,7 +132,7 @@ class TestTheGoverningPlanIsAPropertyOfTheData(unittest.TestCase):
 
 
 def _tranche_plan(uic: int, pick_key: str) -> dict[str, Any]:
-    return cl._build_tranche_plan_line(
+    return sj._build_tranche_plan_line(
         uic=uic,
         tp_tranches=(
             TpTranchePlan(
@@ -180,10 +180,10 @@ class TestAStopFillThatOwesARetireSurvivesCompaction(unittest.TestCase):
             _tranche_plan(111, "BBB:2026-09-10"),
         ]
         compacted = cl._compact_standalone_stop_journal_lines(journal)
-        self.assertEqual(cl._fold_round_trip_closures_since_latest_plan(journal), {})
+        self.assertEqual(sj._fold_round_trip_closures_since_latest_plan(journal), {})
         self.assertEqual(
-            cl._fold_round_trip_closures_since_latest_plan(journal),
-            cl._fold_round_trip_closures_since_latest_plan(compacted),
+            sj._fold_round_trip_closures_since_latest_plan(journal),
+            sj._fold_round_trip_closures_since_latest_plan(compacted),
         )
         self.assertEqual(
             cl._derive_owed_sibling_retires(journal), cl._derive_owed_sibling_retires(compacted)
@@ -334,16 +334,16 @@ def _every_fold(lines: list[dict[str, Any]]) -> dict[str, Any]:
 
     One is left out on purpose: ``gen`` markers (the documented exception)."""
     out: dict[str, Any] = {
-        "planned": _plan_view(cl._fold_planned_exits(lines)),
+        "planned": _plan_view(sj._fold_planned_exits(lines)),
         "oco_unsupported": cl._fold_oco_unsupported(lines),
         "reanchored": cl._fold_reanchored_markers(lines),
         "reanchored_levels": cl._fold_reanchored_stop_levels(lines),
         "trailed": cl._fold_trailed_since_latest_plan(lines),
         "tranche_plans": sj.fold_tranche_plans(lines),
         "tranche_currencies": cl.fold_tranche_plan_currencies(lines),
-        "fired": cl._fold_fired_since_latest_plan(lines),
+        "fired": sj._fold_fired_since_latest_plan(lines),
         "governing_keys": sj._fold_governing_plan_pick_keys(lines),
-        "closures": cl._fold_round_trip_closures_since_latest_plan(lines),
+        "closures": sj._fold_round_trip_closures_since_latest_plan(lines),
         "standing": cl._fold_standing_stop_ids(lines),
         "owed": cl._derive_owed_sibling_retires(lines),
         "moving": cl._uics_moving_their_stop(lines),
@@ -528,7 +528,7 @@ class TestTheStopMoveSurvivesCompaction(unittest.TestCase):
         return cl._build_managed_exits(
             long_positions=[position],
             tranche_plans=sj.fold_tranche_plans(lines),
-            fired=cl._fold_fired_since_latest_plan(lines),
+            fired=sj._fold_fired_since_latest_plan(lines),
             trailed=cl._fold_trailed_since_latest_plan(lines),
             reanchored=cl._fold_reanchored_stop_levels(lines),
         )

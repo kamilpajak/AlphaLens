@@ -196,6 +196,31 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # #1677 step 3 moved the journal's own writers, folds and counters into
+        # the module that owns the journal file, and that gave `stop_journal`
+        # two imports it did not have before: `entry_trails` (a stop ref is
+        # parsed with the same parser that built it) and `position_manager`
+        # (the fold answers in `PlannedExit`). Neither imported the journal
+        # back, so no cycle appeared -- but nothing except these two rules
+        # stops one appearing the next time either module wants a fold it can
+        # see. The direction is: journal downstream of both, never upstream.
+        #
+        # No `top_level_only`. Every cycle this audit cut lived in a
+        # function-body import, which is exactly where a reader would put one
+        # to avoid an import-time loop -- and that is the import that would
+        # make the loop real again at call time.
+        "name": "entry trails must not import the stop journal (step 3 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.entry_trails",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.stop_journal",
+        "exemptions": set(),
+    },
+    {
+        "name": "the position manager must not import the stop journal (step 3 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.position_manager",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.stop_journal",
+        "exemptions": set(),
+    },
+    {
         # Workspace split (PR2): the pipeline tier hosts live infrastructure
         # (data, core, scorers, edgar_detector, thematic, literature_scanner) and
         # must remain downstream-free. The research tier consumes pipeline,
@@ -1415,6 +1440,86 @@ class TestModuleDependencies(unittest.TestCase):
                 ("relative.py", "synthetic_pkg.control_loop"),
             ],
         )
+
+    def test_nothing_the_journal_now_imports_may_import_it_back_positive_control(self):
+        """Both step-3 rules see every spelling of reaching back.
+
+        One control for two rules, because they forbid the same target from two
+        different modules -- the two the journal layer started importing when
+        step 3 moved the line writers and folds into it.
+        """
+        import tempfile
+
+        rules = [
+            rule
+            for rule in RULES
+            if rule.get("forbidden_prefix") == "alphalens_pipeline.brokers.automanager.stop_journal"
+        ]
+        self.assertEqual(
+            {rule["from_pkg"].rsplit(".", 1)[-1] for rule in rules},
+            {"entry_trails", "position_manager"},
+            "both step-3 one-way rules must exist",
+        )
+        for rule in rules:
+            self.assertNotIn(
+                "top_level_only",
+                rule,
+                f"{rule['name']!r} must catch function-scope (lazy) imports too",
+            )
+
+        sources = {
+            "lazy_symbol.py": (
+                "def f():\n    from synthetic_pkg.stop_journal import _coerce\n    return _coerce\n"
+            ),
+            "plain.py": "import synthetic_pkg.stop_journal\n",
+            "attribute.py": "from synthetic_pkg import stop_journal\n",
+            "relative.py": "from . import stop_journal\n",
+            "clean.py": "import json\nfrom synthetic_pkg import state_paths\n",
+            "stop_journal.py": "",
+            "state_paths.py": "",
+        }
+        rule = {
+            "name": "synthetic forbid stop_journal",
+            "from_pkg": "synthetic_pkg",
+            "forbidden_prefix": "synthetic_pkg.stop_journal",
+            "exemptions": set(),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            for name, source in sources.items():
+                (pkg / name).write_text(source)
+            flagged = sorted(
+                (Path(rel).name, module)
+                for _, rel, module in _violations_for(rule, _python_files(pkg))
+            )
+        self.assertEqual(
+            flagged,
+            [
+                ("attribute.py", "synthetic_pkg.stop_journal"),
+                ("lazy_symbol.py", "synthetic_pkg.stop_journal"),
+                ("plain.py", "synthetic_pkg.stop_journal"),
+                ("relative.py", "synthetic_pkg.stop_journal"),
+            ],
+        )
+
+    def test_the_journal_still_imports_the_two_modules_it_now_depends_on(self):
+        """The INTENDED direction, and the existence control for both step-3 rules.
+
+        Reading zero for either would mean the forbid rule above guards a
+        dependency that is gone, which is a gate that cannot fail. The journal
+        needs `entry_trails` to parse a stop ref with the same parser that
+        built it, and `position_manager` for the `PlannedExit` its fold
+        returns.
+        """
+        journal = PACKAGE_DIRS["alphalens_pipeline"] / "brokers" / "automanager" / "stop_journal.py"
+        mods = list(_iter_imports(journal, include_function_scope=True))
+        for dependency in ("entry_trails", "position_manager"):
+            self.assertTrue(
+                [m for m in mods if m.endswith(dependency)],
+                f"expected the stop journal to keep importing {dependency}",
+            )
 
     def test_the_control_loop_still_imports_the_stop_journal(self):
         """The INTENDED direction, and the existence control for the rule above.

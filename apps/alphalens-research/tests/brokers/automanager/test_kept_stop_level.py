@@ -402,7 +402,7 @@ class TestALiveTradeIsFetchedForEveryStopMovingPick(unittest.TestCase):
             with patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 for uic, reaction in reactions.items():
                     sj._append_standalone_stop_journal(
-                        cl._build_planned_line(
+                        sj._build_planned_line(
                             entry_crid=f"crid-{uic}",
                             uic=uic,
                             side="SELL",

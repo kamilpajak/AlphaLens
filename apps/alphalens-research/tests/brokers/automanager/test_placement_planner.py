@@ -165,7 +165,7 @@ class TestJournalTierRecordsStopTpTierIndex(unittest.TestCase):
     back per-uic; no line here confers protection (broker truth only)."""
 
     def test_planned_line_carries_stop_tp_tier_index_gen_uic_and_crid(self):
-        from alphalens_pipeline.brokers.automanager.control_loop import _build_planned_line
+        from alphalens_pipeline.brokers.automanager.stop_journal import _build_planned_line
 
         line = _build_planned_line(
             entry_crid="crid-tier-0",
@@ -185,7 +185,7 @@ class TestJournalTierRecordsStopTpTierIndex(unittest.TestCase):
         self.assertEqual(line["gen"], 0, "entry-placement plan is generation 0")
 
     def test_planned_line_take_profit_may_be_none(self):
-        from alphalens_pipeline.brokers.automanager.control_loop import _build_planned_line
+        from alphalens_pipeline.brokers.automanager.stop_journal import _build_planned_line
 
         line = _build_planned_line(
             entry_crid="crid-tier-1",

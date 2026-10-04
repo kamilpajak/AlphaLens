@@ -17,10 +17,6 @@ import unittest
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
-from alphalens_pipeline.brokers.automanager.control_loop import (
-    _build_planned_line,
-    _fold_planned_exits,
-)
 from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
     NoOp,
@@ -28,9 +24,25 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     ProtectionView,
     _reconcile_long,
 )
+from alphalens_pipeline.brokers.automanager.stop_journal import (
+    _build_planned_line,
+    _fold_planned_exits,
+)
 from broker_contract.contract import InstrumentRef, OrderState, OrderStatus, Position
 from broker_contract.exit_geometry.registry import exit_policy_registry
 from broker_contract.trade_intent.schema import ReanchorOnFill, TrailingStop
+
+
+def _callee_name(func: object) -> str | None:
+    """The called name, whether the call spells it bare or through a module."""
+    import ast
+
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
 
 _UIC = 267154
 _AVG = 59.00
@@ -339,7 +351,7 @@ class TheBracketPathCarriesTheDeclarationTooTest(unittest.TestCase):
         from alphalens_pipeline.brokers.automanager import control_loop as cl
 
         declared = TrailingStop(arm_trigger_r=0.5, trail_frac=0.6)
-        line = cl._build_planned_line(
+        line = sj._build_planned_line(
             entry_crid="AMBA-2026-09-04-entry-t0",
             uic=_UIC,
             side="SELL",
@@ -366,14 +378,13 @@ class TheBracketPathCarriesTheDeclarationTooTest(unittest.TestCase):
         and the reader degrades to "declared nothing", so every pick after that
         deploy would quietly lose its stop management. This is the check that
         turns that into a red test instead of a log line."""
-        from alphalens_pipeline.brokers.automanager import control_loop as cl
 
         for declared in (
             TrailingStop(arm_trigger_r=0.5, trail_frac=0.6),
             ReanchorOnFill(k_atr=1.5, atr=_ATR),
         ):
             with self.subTest(kind=declared.kind):
-                line = cl._build_planned_line(
+                line = sj._build_planned_line(
                     entry_crid="c",
                     uic=_UIC,
                     side="SELL",
@@ -406,12 +417,15 @@ class EveryProductionWriterPassesTheDeclarationTest(unittest.TestCase):
         from alphalens_pipeline.brokers.automanager import control_loop as cl
 
         tree = ast.parse(inspect.getsource(cl))
+        # Both spellings count. The writers call it through the module that owns
+        # the journal (`stop_journal._build_planned_line`, an Attribute) since the
+        # partition's step 3; matching only ast.Name would have left this gate
+        # finding ZERO call sites, which reads as "nothing to check" rather than
+        # as a failure.
         calls = [
             node
             for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "_build_planned_line"
+            if isinstance(node, ast.Call) and _callee_name(node.func) == "_build_planned_line"
         ]
         self.assertGreaterEqual(len(calls), 2, "expected both production writers")
         missing = [

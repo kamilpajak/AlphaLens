@@ -880,7 +880,7 @@ class TestCompactorKeepsClosureEvidence(unittest.TestCase):
     the round-tripped pick's stale plan silently survived forever."""
 
     def _closure_fold(self, lines: list[dict[str, Any]]) -> dict[int, Any]:
-        return cl._fold_round_trip_closures_since_latest_plan(lines)
+        return sj._fold_round_trip_closures_since_latest_plan(lines)
 
     def test_a_rotated_away_stop_fill_survives_compaction(self) -> None:
         lines = [
