@@ -24,6 +24,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import entry_watch as ew
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.control_loop import (
     _geometry_tranche_ladder,
@@ -203,11 +204,11 @@ class TheStampIsTheRecordOfWhatWasPlacedTest(unittest.TestCase):
     def test_the_arm_gate_reads_the_stamp_back_off_a_journal_line(self):
         """The reason the stamp exists at all: the later hop has no intent."""
         stamp = _placed_geometry_stamp(_with_levels())
-        self.assertAlmostEqual(cl._stamped_exit_target({"geometry": stamp}), 110.0)
+        self.assertAlmostEqual(ew._stamped_exit_target({"geometry": stamp}), 110.0)
 
     def test_and_returns_none_for_a_line_whose_document_placed_nothing(self):
         stamp = _placed_geometry_stamp(_levels_less())
-        self.assertIsNone(cl._stamped_exit_target({"geometry": stamp}))
+        self.assertIsNone(ew._stamped_exit_target({"geometry": stamp}))
 
 
 class PlacingADocumentsOwnLevelsIsAnnouncedTest(unittest.TestCase):

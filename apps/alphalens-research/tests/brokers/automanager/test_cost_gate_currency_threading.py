@@ -16,6 +16,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails, live_exit_engine
+from alphalens_pipeline.brokers.automanager import entry_watch as ew
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.costs import (
     XAMS_FEE_CARD,
@@ -235,7 +236,7 @@ class TestInsideExitRegionNoteUsesStamps(unittest.TestCase):
 
     def _note(self, record: dict[str, Any]) -> str | None:
         with mock.patch.object(cl.entry_trail_geometry, "entry_fill_estimate", lambda **_kw: 231.0):
-            return cl._inside_exit_region_note(record, 50, 231.0, 230.0, 40.0)
+            return ew._inside_exit_region_note(record, 50, 231.0, 230.0, 40.0)
 
     def test_legacy_record_refuses(self) -> None:
         self.assertIsNotNone(self._note(dict(self._RECORD_BASE)))
@@ -285,10 +286,13 @@ class TestMicThreading(unittest.TestCase):
             "exchange_mic": "XETR",
         }
         with (
-            mock.patch.object(cl, "cost_gate_facts", _spy),
-            mock.patch.object(cl.entry_trail_geometry, "entry_fill_estimate", lambda **_kw: 231.0),
+            # The note gate moved to entry_watch in step 4 of the partition, so it
+            # reads THAT module's `cost_gate_facts` binding. Patching control_loop's
+            # would leave the real one in place and the spy never called.
+            mock.patch.object(ew, "cost_gate_facts", _spy),
+            mock.patch.object(ew.entry_trail_geometry, "entry_fill_estimate", lambda **_kw: 231.0),
         ):
-            cl._inside_exit_region_note(record, 50, 231.0, 230.0, 40.0)
+            ew._inside_exit_region_note(record, 50, 231.0, 230.0, 40.0)
         self.assertEqual(captured["exchange_mic"], "XETR")
 
     def test_now_gate_reads_the_instrument_mic(self) -> None:
@@ -365,10 +369,10 @@ class TestBriefPlanArmRefusalUsesStamps(unittest.TestCase):
             220.0,
         )
         with (
-            mock.patch.object(cl, "_governing_plan_lookup", lambda _r: (plan, None)),
-            mock.patch.object(cl.entry_trail_geometry, "entry_fill_estimate", lambda **_kw: 231.0),
+            mock.patch.object(ew, "_governing_plan_lookup", lambda _r: (plan, None)),
+            mock.patch.object(ew.entry_trail_geometry, "entry_fill_estimate", lambda **_kw: 231.0),
         ):
-            return cl._brief_plan_arm_refusal(record, 50, 231.0, 230.0)
+            return ew._brief_plan_arm_refusal(record, 50, 231.0, 230.0)
 
     def test_legacy_record_refuses(self) -> None:
         self.assertIsNotNone(self._refusal({}))

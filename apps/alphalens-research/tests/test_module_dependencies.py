@@ -221,6 +221,69 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # Step 4 of the partition moved the entry-watch pass's own helpers into
+        # `entry_watch`, which imports costs. Nothing in the
+        # opposite direction, now or later: entry_watch is downstream.
+        "name": "the cost model must not import the entry watch (step 4 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.costs",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch",
+        "exemptions": set(),
+    },
+    {
+        # Step 4 of the partition moved the entry-watch pass's own helpers into
+        # `entry_watch`, which imports entry_trail_geometry. Nothing in the
+        # opposite direction, now or later: entry_watch is downstream.
+        "name": "entry-trail geometry must not import the entry watch (step 4 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.entry_trail_geometry",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch",
+        "exemptions": set(),
+    },
+    {
+        # Step 4 of the partition moved the entry-watch pass's own helpers into
+        # `entry_watch`, which imports entry_trail_watcher. Nothing in the
+        # opposite direction, now or later: entry_watch is downstream.
+        "name": "the entry-trail watcher must not import the entry watch (step 4 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.entry_trail_watcher",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch",
+        "exemptions": set(),
+    },
+    {
+        # Step 4 of the partition moved the entry-watch pass's own helpers into
+        # `entry_watch`, which imports entry_trails. Nothing in the
+        # opposite direction, now or later: entry_watch is downstream.
+        "name": "entry trails must not import the entry watch (step 4 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.entry_trails",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch",
+        "exemptions": set(),
+    },
+    {
+        # Step 4 of the partition moved the entry-watch pass's own helpers into
+        # `entry_watch`, which imports labels. Nothing in the
+        # opposite direction, now or later: entry_watch is downstream.
+        "name": "the label helpers must not import the entry watch (step 4 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.labels",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch",
+        "exemptions": set(),
+    },
+    {
+        # Step 4 of the partition moved the entry-watch pass's own helpers into
+        # `entry_watch`, which imports live_exit_engine. Nothing in the
+        # opposite direction, now or later: entry_watch is downstream.
+        "name": "the live-exit engine must not import the entry watch (step 4 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.live_exit_engine",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch",
+        "exemptions": set(),
+    },
+    {
+        # Step 4 of the partition moved the entry-watch pass's own helpers into
+        # `entry_watch`, which imports stop_journal. Nothing in the
+        # opposite direction, now or later: entry_watch is downstream.
+        "name": "the stop journal must not import the entry watch (step 4 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.stop_journal",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch",
+        "exemptions": set(),
+    },
+    {
         # Workspace split (PR2): the pipeline tier hosts live infrastructure
         # (data, core, scorers, edgar_detector, thematic, literature_scanner) and
         # must remain downstream-free. The research tier consumes pipeline,
@@ -1503,6 +1566,125 @@ class TestModuleDependencies(unittest.TestCase):
                 ("relative.py", "synthetic_pkg.stop_journal"),
             ],
         )
+
+    def test_nothing_the_entry_watch_imports_may_import_it_back_positive_control(self):
+        """All seven step-4 rules see every spelling of reaching back.
+
+        One control for seven rules, because they forbid the same target from
+        the seven modules the entry-watch layer started importing when step 4
+        moved the pass's helpers into it.
+        """
+        import tempfile
+
+        rules = [
+            rule
+            for rule in RULES
+            if rule.get("forbidden_prefix") == "alphalens_pipeline.brokers.automanager.entry_watch"
+        ]
+        self.assertEqual(
+            {rule["from_pkg"].rsplit(".", 1)[-1] for rule in rules},
+            {
+                "costs",
+                "entry_trail_geometry",
+                "entry_trail_watcher",
+                "entry_trails",
+                "labels",
+                "live_exit_engine",
+                "stop_journal",
+            },
+            "every module the entry watch imports needs its own one-way rule",
+        )
+        for rule in rules:
+            self.assertNotIn(
+                "top_level_only",
+                rule,
+                f"{rule['name']!r} must catch function-scope (lazy) imports too",
+            )
+
+        sources = {
+            "lazy_symbol.py": (
+                "def f():\n    from synthetic_pkg.entry_watch import _ArmRefusal\n"
+                "    return _ArmRefusal\n"
+            ),
+            "plain.py": "import synthetic_pkg.entry_watch\n",
+            "attribute.py": "from synthetic_pkg import entry_watch\n",
+            "relative.py": "from . import entry_watch\n",
+            "clean.py": "import json\nfrom synthetic_pkg import state_paths\n",
+            "entry_watch.py": "",
+            "state_paths.py": "",
+        }
+        rule = {
+            "name": "synthetic forbid entry_watch",
+            "from_pkg": "synthetic_pkg",
+            "forbidden_prefix": "synthetic_pkg.entry_watch",
+            "exemptions": set(),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            for name, source in sources.items():
+                (pkg / name).write_text(source)
+            flagged = sorted(
+                (Path(rel).name, module)
+                for _, rel, module in _violations_for(rule, _python_files(pkg))
+            )
+        self.assertEqual(
+            flagged,
+            [
+                ("attribute.py", "synthetic_pkg.entry_watch"),
+                ("lazy_symbol.py", "synthetic_pkg.entry_watch"),
+                ("plain.py", "synthetic_pkg.entry_watch"),
+                ("relative.py", "synthetic_pkg.entry_watch"),
+            ],
+        )
+
+    def test_the_entry_watch_still_imports_the_seven_modules_it_depends_on(self):
+        """The INTENDED direction, and the existence control for all seven rules.
+
+        Reading zero for any one of them would mean that forbid rule guards a
+        dependency that is gone, which is a gate that cannot fail.
+        """
+        entry_watch = (
+            PACKAGE_DIRS["alphalens_pipeline"] / "brokers" / "automanager" / "entry_watch.py"
+        )
+        mods = list(_iter_imports(entry_watch, include_function_scope=True))
+        for dependency in (
+            "costs",
+            "entry_trail_geometry",
+            "entry_trail_watcher",
+            "entry_trails",
+            "labels",
+            "live_exit_engine",
+            "stop_journal",
+        ):
+            with self.subTest(dependency=dependency):
+                self.assertTrue(
+                    [
+                        m
+                        for m in mods
+                        if m == f"alphalens_pipeline.brokers.automanager.{dependency}"
+                    ],
+                    f"expected the entry watch to keep importing {dependency}",
+                )
+
+    def test_the_control_loop_still_imports_the_entry_watch(self):
+        """The INTENDED direction: the tick reaches the pass helpers by prefix.
+
+        Reading zero would mean the tick stopped using them, which cannot happen
+        while it watches entries -- so it would mean the layer moved back, or a
+        `from` import replaced the prefix, which would break every test that
+        patches this module.
+        """
+        control_loop = (
+            PACKAGE_DIRS["alphalens_pipeline"] / "brokers" / "automanager" / "control_loop.py"
+        )
+        live = [
+            mod
+            for mod in _iter_imports(control_loop, include_function_scope=True)
+            if mod.startswith("alphalens_pipeline.brokers.automanager.entry_watch")
+        ]
+        self.assertTrue(live, "expected the control loop to keep importing the entry watch")
 
     def test_the_journal_still_imports_the_two_modules_it_now_depends_on(self):
         """The INTENDED direction, and the existence control for both step-3 rules.
