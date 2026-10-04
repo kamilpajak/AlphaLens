@@ -189,6 +189,41 @@ TERMINAL_EXPIRED = "expired"
 TERMINAL_CANCELLED = "cancelled"
 TERMINAL_SUSPENDED = "suspended"
 TERMINAL_OPEN = "open"
+TERMINALS: tuple[str, ...] = (
+    TERMINAL_FILLED,
+    TERMINAL_EXPIRED,
+    TERMINAL_CANCELLED,
+    TERMINAL_SUSPENDED,
+    TERMINAL_OPEN,
+)
+
+PATH_TRAIL_WATCH = "trail_watch"
+PATH_NOW_BRACKET = "now_bracket"
+TIER_PATHS: tuple[str, ...] = (PATH_TRAIL_WATCH, PATH_NOW_BRACKET)
+
+# `sources[role]`: whether a source was read, and why not when it was not.
+SOURCE_STATUS_READ = "read"
+SOURCE_STATUS_SKIPPED = "skipped"
+SOURCE_STATUS_OFFLINE = "offline"
+SOURCE_STATUSES: tuple[str, ...] = (
+    SOURCE_STATUS_READ,
+    SOURCE_STATUS_SKIPPED,
+    SOURCE_STATUS_OFFLINE,
+)
+SOURCE_REASON_NO_PICKS = "no_picks"
+SOURCE_REASONS: tuple[str, ...] = (NULL_OFFLINE, NULL_SIM_REPORTS, SOURCE_REASON_NO_PICKS)
+
+MODE_BROKER = "broker"
+MODE_OFFLINE = "offline"
+MODES: tuple[str, ...] = (MODE_BROKER, MODE_OFFLINE)
+
+PICK_STATUSES: tuple[str, ...] = (STATUS_ARMED, STATUS_REFUSED, STATUS_DISARMED)
+SIZE_SHAPES: tuple[str, ...] = ("by_amount", "by_percent")
+PLAN_SOURCES: tuple[str, ...] = ("manual", "brief", "absent")
+SIDES: tuple[str, ...] = ("long", "short")
+
+# The envelope id the CLI renders this report under (§3).
+TRADES_SCHEMA_ID = "alphalens.broker.trades/v1"
 
 W_FOLD_ORDER_UNCERTAIN = "fold_order_uncertain"
 W_ENTRY_NOT_IN_JOURNAL = "entry_not_in_journal"
@@ -1104,7 +1139,7 @@ def _build_trail_tiers(
         line_ref = "line:entry_trails:watch_open"
         tier = _Tier(
             tier_index=tier_index,
-            path="trail_watch",
+            path=PATH_TRAIL_WATCH,
             crid=crid,
             planned_limit=_num(
                 _as_float((watch or {}).get("limit")),
@@ -1326,7 +1361,7 @@ def _build_bracket_tiers(pick: _Pick, venue: _Venue | None) -> None:
             ref = f"line:submissions:{crid}"
             tier = _Tier(
                 tier_index=next_index,
-                path="now_bracket",
+                path=PATH_NOW_BRACKET,
                 crid=crid,
                 planned_limit=_num(
                     _finite(bracket.get("entry")),
@@ -1399,7 +1434,7 @@ def _audit_found_tiers(pick: _Pick, venue: _Venue) -> None:
         pick.tiers.append(
             _Tier(
                 tier_index=index,
-                path="trail_watch",
+                path=PATH_TRAIL_WATCH,
                 crid=crid,
                 planned_limit=_null(NULL_NOT_JOURNALED, None, SOURCE_ENTRY_WATCH),
                 planned_qty=_null(NULL_NOT_JOURNALED, _UNIT_SHARES, SOURCE_ENTRY_WATCH),
@@ -2128,7 +2163,7 @@ def _sum_known(values: Iterable[Measured]) -> float:
 def _state(pick: _Pick, *, offline: bool, horizon: dt.datetime | None) -> tuple[str, str | None]:
     entry_qty = _sum_known(f.qty for f in pick.entry_fills())
     if entry_qty <= _QTY_EPS:
-        if offline and any(t.path == "now_bracket" for t in pick.tiers):
+        if offline and any(t.path == PATH_NOW_BRACKET for t in pick.tiers):
             return STATE_UNRESOLVED, NULL_NOT_JOURNALED
         return STATE_NEVER_FILLED, _never_filled_reason(pick)
     exit_qty = _sum_known(e.attributed_qty for e in pick.exits)
@@ -2637,13 +2672,13 @@ def build_trades(
     sources: dict[str, Any] = {}
     for name in _JOURNALS:
         sources[_SOURCE_BY_JOURNAL[name]] = {
-            "status": "read",
+            "status": SOURCE_STATUS_READ,
             "reason": None,
             "window": None,
             "rows": len(journals.records[name]),
         }
     sources[SOURCE_PLAN] = {
-        "status": "read",
+        "status": SOURCE_STATUS_READ,
         "reason": None,
         "window": None,
         "rows": sum(1 for p in picks if p.plan is not None),
@@ -2662,14 +2697,19 @@ def build_trades(
         else:
             for role in (SOURCE_AUDIT, SOURCE_TRADES_REPORT, SOURCE_BOOKINGS, SOURCE_INSTRUMENT):
                 sources[role] = {
-                    "status": "skipped",
-                    "reason": "no_picks",
+                    "status": SOURCE_STATUS_SKIPPED,
+                    "reason": SOURCE_REASON_NO_PICKS,
                     "window": None,
                     "rows": 0,
                 }
     else:
         for role in (SOURCE_AUDIT, SOURCE_TRADES_REPORT, SOURCE_BOOKINGS, SOURCE_INSTRUMENT):
-            sources[role] = {"status": "offline", "reason": NULL_OFFLINE, "window": None, "rows": 0}
+            sources[role] = {
+                "status": SOURCE_STATUS_OFFLINE,
+                "reason": NULL_OFFLINE,
+                "window": None,
+                "rows": 0,
+            }
 
     for pick in considered:
         _build_trail_tiers(pick, journals, venue, offline=venue is None)
@@ -2719,7 +2759,7 @@ def build_trades(
 
     if venue is not None:
         sources[SOURCE_INSTRUMENT] = {
-            "status": "read",
+            "status": SOURCE_STATUS_READ,
             "reason": None,
             "window": None,
             "rows": len(venue.tick_uics),
@@ -2744,7 +2784,7 @@ def build_trades(
     return TradesReport(
         env=env,
         generated_at=now,
-        mode="offline" if offline else "broker",
+        mode=MODE_OFFLINE if offline else MODE_BROKER,
         sources=sources,
         snapshot_horizon=journals.horizon,
         counts={
@@ -2767,7 +2807,7 @@ def _window_bound(raw: str) -> str:
 def _venue_sources(sources: dict[str, Any], history: FillHistory) -> None:
     window = history.audit_window
     sources[SOURCE_AUDIT] = {
-        "status": "read",
+        "status": SOURCE_STATUS_READ,
         "reason": None,
         # The audit is read over datetimes; render them like every other time
         # (§3.1). The report windows below are dates and stay dates.
@@ -2780,14 +2820,14 @@ def _venue_sources(sources: dict[str, Any], history: FillHistory) -> None:
     ):
         if read is None:
             sources[role] = {
-                "status": "skipped",
+                "status": SOURCE_STATUS_SKIPPED,
                 "reason": history.reports_skipped_reason or NULL_SIM_REPORTS,
                 "window": None,
                 "rows": 0,
             }
         else:
             sources[role] = {
-                "status": "read",
+                "status": SOURCE_STATUS_READ,
                 "reason": None,
                 "window": {"from": read.start, "to": read.end},
                 "rows": read.rows,
@@ -2799,11 +2839,21 @@ __all__ = [
     "EXIT_REASONS",
     "EXIT_REASON_BY_ALERT_REASON",
     "FEES_NOT_INCLUDED",
+    "MODES",
     "NULL_REASONS",
+    "PICK_STATUSES",
+    "PLAN_SOURCES",
+    "SIDES",
+    "SIZE_SHAPES",
     "SOURCES",
+    "SOURCE_REASONS",
+    "SOURCE_STATUSES",
     "STATES",
     "STATE_FILTER_ALL",
     "STATE_REASONS",
+    "TERMINALS",
+    "TIER_PATHS",
+    "TRADES_SCHEMA_ID",
     "WARNING_CODES",
     "Measured",
     "TradesFilters",
