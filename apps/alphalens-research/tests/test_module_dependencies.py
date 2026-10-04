@@ -1406,15 +1406,30 @@ class TestModuleDependencies(unittest.TestCase):
         """
         import tempfile
 
-        # Keyed on the FORBIDDEN TARGET, not on from_pkg alone: the stream rail
-        # now carries a second one-way rule (it must not import `quote_source`
-        # either, finding 7), and a count over from_pkg would read that as a
-        # duplicate of this one.
-        rules = [
+        # The stream rail carries more than one one-way rule since finding 7 (it
+        # must not import `quote_source` either), so a bare count over from_pkg
+        # would read that as a duplicate of this one. Assert the WHOLE SET of
+        # targets instead of filtering down to the one this control drives: a
+        # filter would let a third rule -- or a typo in one -- slip past, which
+        # is the family-test shape the journal and entry-watch controls use.
+        rail = [
             rule
             for rule in RULES
             if rule["from_pkg"] == "alphalens_pipeline.brokers.automanager.stream_handles"
-            and rule["forbidden_prefix"] == "alphalens_pipeline.brokers.automanager.control_loop"
+        ]
+        self.assertEqual(
+            {rule["forbidden_prefix"] for rule in rail},
+            {
+                "alphalens_pipeline.brokers.automanager.control_loop",
+                "alphalens_pipeline.brokers.automanager.quote_source",
+            },
+            "every one-way rule on the stream rail must be accounted for here; a new one "
+            "needs its own control, and a typo'd target would otherwise go unnoticed",
+        )
+        rules = [
+            rule
+            for rule in rail
+            if rule["forbidden_prefix"] == "alphalens_pipeline.brokers.automanager.control_loop"
         ]
         self.assertEqual(len(rules), 1, "the stream rail rule must exist exactly once")
         self.assertNotIn(
