@@ -10,10 +10,6 @@ separately from the pullback tiers:
 * **Identity and refusals** — ``_now_meta``, ``_refuse_now_tranche`` and
   ``_classify_now_broker_error``.
 
-``_pick_generation`` travels with this module although ``control_loop`` calls it
-from several places: ``_refuse_now_tranche`` needs it, and nothing else in the
-closed block can host it without opening a back-edge. Measured, not judged.
-
 What moved is CLOSED under every module-level name it uses, so nothing here
 names anything left behind in ``control_loop`` and there is no import cycle.
 ``control_loop`` reaches it through the module prefix
@@ -31,13 +27,6 @@ from broker_contract.contract import SupportsPriceTickFloor, _is_price_tolerance
 from alphalens_pipeline.brokers.automanager import picks
 
 logger = logging.getLogger(__name__)
-
-
-def _pick_generation(intent: Any) -> int:
-    """The intent's same-day re-arm generation (#1371). A meta without the
-    field — a pre-#1371 payload, or a test double — is the first generation;
-    the codec already refuses a malformed value at decode time."""
-    return int(getattr(intent.meta, "generation", picks.FIRST_GENERATION))
 
 
 def _now_ioc_supported(broker: Any, instrument: Any) -> bool:
@@ -119,7 +108,7 @@ def _refuse_now_tranche(
         append_submission_record(
             build_submission_record(
                 trade_date=intent.meta.trade_date,
-                generation=_pick_generation(intent),
+                generation=picks._pick_generation(intent),
                 ticker=ticker,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,

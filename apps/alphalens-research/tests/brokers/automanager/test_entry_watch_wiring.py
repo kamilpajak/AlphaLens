@@ -29,10 +29,9 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
-from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_trails
+from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_trails, picks
 from alphalens_pipeline.brokers.automanager import entry_watch as ew
 from alphalens_pipeline.brokers.automanager import entry_watch_capacity as ewc
-from alphalens_pipeline.brokers.automanager import now_tranche as nt
 from alphalens_pipeline.brokers.automanager import placed_geometry as pg
 from alphalens_pipeline.brokers.automanager import safety as _safety
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
@@ -1891,8 +1890,8 @@ class TestEntryWatchCridGeneration(IsolatedHomeTestCase):
     def test_intent_without_the_field_reads_as_generation_one(self) -> None:
         # Test doubles and pre-#1371 payloads carry no `generation`; the drain
         # must treat them as the first generation, never crash on the attribute.
-        self.assertEqual(nt._pick_generation(type("I", (), {"meta": type("M", (), {})()})()), 1)
-        self.assertEqual(nt._pick_generation(_pick(generation=3)), 3)
+        self.assertEqual(picks._pick_generation(type("I", (), {"meta": type("M", (), {})()})()), 1)
+        self.assertEqual(picks._pick_generation(_pick(generation=3)), 3)
 
 
 class TestWatchRoutingReferenceQtyOverride(IsolatedHomeTestCase):

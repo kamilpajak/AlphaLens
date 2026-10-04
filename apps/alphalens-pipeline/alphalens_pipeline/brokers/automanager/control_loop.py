@@ -1598,7 +1598,7 @@ def _open_entry_watches(
     from alphalens_pipeline.market.calendar import advance_trading_sessions, session_close_utc
 
     trade_date = intent.meta.trade_date
-    generation = now_tranche._pick_generation(intent)
+    generation = picks._pick_generation(intent)
     mic = instrument.exchange_mic
     uic = int(instrument.broker_instrument_id)
     ttl_date = advance_trading_sessions(
@@ -1714,7 +1714,7 @@ def _route_pick_to_entry_watch(
             # re-drive re-appends this line — the SAME pick_key keeps the
             # fired-tranche fold from resetting on the re-append.
             pick_key=picks.pick_key_str(
-                ticker, intent.meta.trade_date, now_tranche._pick_generation(intent)
+                ticker, intent.meta.trade_date, picks._pick_generation(intent)
             ),
             instrument_currency=str(getattr(instrument, "currency", "") or ""),
             sizing_currency=placed_geometry._sizing_currency_of(fx, instrument),
@@ -1748,7 +1748,7 @@ def _route_pick_to_entry_watch(
     append_submission_record(
         build_submission_record(
             trade_date=intent.meta.trade_date,
-            generation=now_tranche._pick_generation(intent),
+            generation=picks._pick_generation(intent),
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -5112,7 +5112,7 @@ def _place_tiers(
         append_submission_record(
             build_submission_record(
                 trade_date=intent.meta.trade_date,
-                generation=now_tranche._pick_generation(intent),
+                generation=picks._pick_generation(intent),
                 ticker=ticker,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,
@@ -5143,7 +5143,7 @@ def _place_tiers(
                 # off the PLANNED line, and this path must not be the one that
                 # keeps the leak open.
                 pick_key=picks.pick_key_str(
-                    ticker, intent.meta.trade_date, now_tranche._pick_generation(intent)
+                    ticker, intent.meta.trade_date, picks._pick_generation(intent)
                 ),
                 # ...and what the document declares about managing this stop. The
                 # fire-arm path carries it through the watch; this is the other
@@ -5174,7 +5174,7 @@ def _place_tiers(
     append_submission_record(
         build_submission_record(
             trade_date=intent.meta.trade_date,
-            generation=now_tranche._pick_generation(intent),
+            generation=picks._pick_generation(intent),
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -5266,7 +5266,7 @@ def _handle_tier_placement_failure(
     append_submission_record(
         build_submission_record(
             trade_date=intent.meta.trade_date,
-            generation=now_tranche._pick_generation(intent),
+            generation=picks._pick_generation(intent),
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -5452,9 +5452,7 @@ def _entry_trail_intercept(
     # Match _open_entry_watches' pick_key byte-for-byte: the string
     # trade_date, not the caller's parsed date (str(date) happens to agree,
     # but pin the exact form the watch_open records actually carry).
-    pick_key = picks.pick_key_str(
-        ticker, intent.meta.trade_date, now_tranche._pick_generation(intent)
-    )
+    pick_key = picks.pick_key_str(ticker, intent.meta.trade_date, picks._pick_generation(intent))
     already_watching = pick_key in entry_watch_capacity._open_watch_pick_keys(entry_trail_fold)
     if not already_watching and entry_watch_capacity._entry_watch_capacity_reached(
         entry_trail_fold
@@ -5635,7 +5633,7 @@ def _handle_now_tranche(
             violation,
             f"now-cost:{ticker}",
             alert_throttled,
-            generation=now_tranche._pick_generation(intent),
+            generation=picks._pick_generation(intent),
         )
         return _NowOutcome.REFUSED_PICK
     uic = int(instrument.broker_instrument_id)
@@ -5959,7 +5957,7 @@ def _place_pick(
     open_watch_picks = entry_watch_capacity._open_watch_picks_for_max_open(
         entry_trail_fold,
         own_pick_key=picks.pick_key_str(
-            ticker, intent.meta.trade_date, now_tranche._pick_generation(intent)
+            ticker, intent.meta.trade_date, picks._pick_generation(intent)
         ),
         position_uics=net_position_uics,
     )
@@ -5981,7 +5979,7 @@ def _place_pick(
     )
     if isinstance(decision, safety.Refuse):
         _handle_safety_refusal(
-            decision, ticker, trade_date, generation=now_tranche._pick_generation(intent)
+            decision, ticker, trade_date, generation=picks._pick_generation(intent)
         )
         return False
 
@@ -6004,7 +6002,7 @@ def _place_pick(
         broker=broker,
         ticker=ticker,
         trade_date=trade_date,
-        generation=now_tranche._pick_generation(intent),
+        generation=picks._pick_generation(intent),
         alert_throttled=alert_throttled,
     ):
         return False
@@ -6119,9 +6117,7 @@ def _route_now_tranche(
     )
     if not now_tiers:
         return _NowRouting(None, plan, False, None, None)
-    pick_key = picks.pick_key_str(
-        ticker, intent.meta.trade_date, now_tranche._pick_generation(intent)
-    )
+    pick_key = picks.pick_key_str(ticker, intent.meta.trade_date, picks._pick_generation(intent))
     full_ladder_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
     outcome = _handle_now_tranche(
         refs,
@@ -6150,7 +6146,7 @@ def _route_now_tranche(
                 ticker,
                 trade_date,
                 "now tranche refused (see submissions journal)",
-                generation=now_tranche._pick_generation(intent),
+                generation=picks._pick_generation(intent),
             )
         return _NowRouting(now_placed, plan, now_placed, None, None)
     plan = replace(plan, entry_tiers=pullback_tiers)
