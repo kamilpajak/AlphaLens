@@ -1590,6 +1590,86 @@ class TestModuleDependencies(unittest.TestCase):
             ],
         )
 
+    def test_the_five_step_5_modules_do_not_reference_each_other(self):
+        """The five modules step 5 cut out are mutually unreferenced.
+
+        Their docstrings each claim to be an independently one-way module, and
+        the 17 rules above deliberately police only the two directions that
+        would undo the split -- not the 20 ordered pairs between the five. That
+        was affordable because the five are unions of WHOLE weakly-connected
+        components, so no reference between them existed at the time of the cut.
+
+        But that was a measurement, not an invariant: a later edit could add a
+        cross-reference and nothing would go red, leaving the docstrings
+        quietly false. This re-measures it. One test is the cheap gate with
+        real power here; 20 rules guarding edges that should simply never
+        appear would read as noise and still only cover the same ground.
+
+        A cross-reference is not forbidden on principle -- it may well be the
+        right change one day. What must not happen is it appearing WITHOUT the
+        docstrings and the rule block being brought up to date, and that is
+        what turns this red.
+        """
+        step5 = (
+            "pick_money_gates",
+            "placed_geometry",
+            "day1_gap_gate",
+            "entry_watch_capacity",
+            "now_tranche",
+        )
+        pkg = "alphalens_pipeline.brokers.automanager"
+        found = []
+        for source in step5:
+            path = _resolve_pkg_dir(f"{pkg}.{source}")
+            for target in step5:
+                if target == source:
+                    continue
+                rule = {
+                    "name": f"{source} must not reference {target}",
+                    "from_pkg": f"{pkg}.{source}",
+                    "forbidden_prefix": f"{pkg}.{target}",
+                    "exemptions": set(),
+                }
+                found.extend(
+                    (source, target, module)
+                    for _, _, module in _violations_for(rule, _python_files(path))
+                )
+        self.assertEqual(
+            found,
+            [],
+            "step 5's five modules gained a reference to one another. That is not "
+            "wrong in itself, but the module docstrings say they are independently "
+            "one-way and the rule block says there is no edge to police. Update "
+            "both, and add the rule that pins the new direction, before making "
+            "this green.",
+        )
+
+    def test_the_five_step_5_modules_cross_reference_check_has_power(self):
+        """Positive control for the test above: a synthetic cross-reference IS seen.
+
+        Without this, the check would pass just as happily over a corpus it
+        failed to read at all.
+        """
+        import tempfile
+
+        pkg_name = "alphalens_pipeline.brokers.automanager"
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            (pkg / "day1_gap_gate.py").write_text(f"from {pkg_name} import pick_money_gates\n")
+            rule = {
+                "name": "day1_gap_gate must not reference pick_money_gates",
+                "from_pkg": f"{pkg_name}.day1_gap_gate",
+                "forbidden_prefix": f"{pkg_name}.pick_money_gates",
+                "exemptions": set(),
+            }
+            flagged = [
+                (Path(rel).name, module)
+                for _, rel, module in _violations_for(rule, _python_files(pkg))
+            ]
+        self.assertEqual(flagged, [("day1_gap_gate.py", f"{pkg_name}.pick_money_gates")])
+
     def test_nothing_extracted_from_the_tick_file_may_reach_back_positive_control(self):
         """Every one-way rule out of the partition sees every spelling of reaching back.
 
