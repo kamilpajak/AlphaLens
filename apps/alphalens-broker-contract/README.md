@@ -548,6 +548,28 @@ shared between owners, the pick's share of every booking amount is
 (`outcome.fees_not_included`): they are not tied to a fill. The outcome is gross;
 no net figure is derived.
 
+#### Outcome fields and the replay
+
+Several outcome names are also the replay's, but a shared name is NOT the same
+quantity. The mapping, field by field:
+
+| `broker trades` field | unit | replay counterpart |
+|---|---|---|
+| `outcome.notional_spent` | instrument currency (USD on LIVE) | `fx.notional_spent` (instrument currency). The replay's `summary.notional_spent` is in the account currency, at one stated rate. |
+| `outcome.pnl_cash` | instrument currency | `summary.pnl_cash` only after conversion at a stated rate; the replay's is in the account currency |
+| `outcome.pnl_cash_acct`, `notional_spent_acct` | account currency | none: they use the realized booking rates at entry and at exit, so they include the FX move between the two dates (VST: 92.04 PLN, against 82.02 PLN at the entry rate) |
+| `outcome.denominator_stop` | `price:<ccy>` | `r_multiple.denominator.source` (the stop level, `spec.disaster_stop`) |
+| `outcome.risk_per_share` | `price:<ccy>` | `r_multiple.denominator.value` (average entry minus that stop) |
+| `outcome.r_multiple` | `R` | `summary.r_multiple`: both gross, both from `spec.disaster_stop` |
+| `outcome.mfe_lower_bound` | `price:<ccy>` | the replay's `mfe` is in `R` from bar highs; `mfe_lower_bound / risk_per_share` is at most it. There is no MAE here. |
+| `exits[].tp_label` `TPn` | | `tp_fired` tranche index n - 1 |
+
+Units are spelled differently: `price:<ccy>` here is the bare `<ccy>` in the
+replay, and `%` here is the replay's `percent`. Times are RFC 3339 here and epoch
+milliseconds in the replay (`t`); compare replay bar times only with times whose
+`source` is `venue.audit`, because offline times are keeper detection times
+(`keeper.*`).
+
 #### Sources
 
 | source | read from today |
@@ -623,7 +645,14 @@ How a fill was given to a pick, in rule order, when picks share a `uic`.
 | `position_link` | the closing fill's `RelatedPositionId` equals the `PositionId` of exactly one pick's opening fill (only manual closes carry it; `PositionId`s are never compared with each other) |
 | `fifo_fallback` | the remainder went to the oldest open lot, with the warning `attribution_fifo_assumed` |
 
-Quantity left after every lot is closed is listed in `unattributed_fills`.
+Quantity left after every lot is closed is listed in `unattributed_fills`, with
+`reason` and, when that is null (offline), `reason_null_reason`.
+
+`external_reference` also covers the uic rule of a take-profit reference
+`u<uic>-tp<n>-sell` that no `tranche_fired` line ties to a pick: the reference
+qualifies the order as a take-profit, and the single pick holding an open lot on
+that uic receives it. `reason_evidence` then holds `uic_rule` (AMBA:2026-09-04 on
+LIVE). With open lots of two picks the fill is `ambiguous_attribution` instead.
 
 #### States
 

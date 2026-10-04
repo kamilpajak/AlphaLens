@@ -2855,7 +2855,8 @@ def trades_command(
     from the broker's own record (audit order activities, trades and bookings
     reports, instrument tick). Every value carries its source; an unknown one is
     null with a published reason. It places, amends and cancels nothing and
-    writes no journal. The record vocabulary, the JSON Schema and the replay
+    writes no journal. Like every broker command in broker mode, building the
+    broker may refresh the stored OAuth token file. The record vocabulary, the JSON Schema and the replay
     mapping are published in ``apps/alphalens-broker-contract/README.md``
     ("broker trades"); the design is
     ``docs/research/broker_trades_command_design_2026_10_03.md``.
