@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from broker_contract.constants import QTY_PRECISION
 from broker_contract.trade_intent.legacy import LEGACY_ALLOWANCES
 
 from alphalens_pipeline.brokers.automanager import journal_snapshots, state_paths
@@ -279,8 +280,12 @@ _CROSS_SOURCE_TIME_TOLERANCE_S = 1.0
 # The audit window opens this long before the oldest armed pick (§4.7).
 _AUDIT_LOOKBACK = dt.timedelta(days=1)
 
-# Quantities are floats on the wire; below this they are equal.
-_QTY_EPS = 1e-9
+# Quantities are floats on the wire but whole shares on this rail, so two
+# quantities closer than the shared precision are equal (#1125). Prices and
+# fractions are compared with a float tolerance instead: a stop move of a cent
+# must not vanish under a half-share bound.
+_QTY_EPS = QTY_PRECISION
+_FLOAT_TOLERANCE = 1e-9
 
 _UNIT_SHARES = "shares"
 _UNIT_SECONDS = "s"
@@ -1034,7 +1039,7 @@ def _cross_check_executions(
     if total > 0 and price is not None:
         vwap = sum(abs(e.amount or 0.0) * (e.price or 0.0) for e in executions) / total
         tick = venue.tick(fill.uic, price)
-        if tick is not None and abs(vwap - price) > tick + _QTY_EPS:
+        if tick is not None and abs(vwap - price) > tick + _FLOAT_TOLERANCE:
             pick.warn(
                 W_AUDIT_REPORT_DISAGREE,
                 f"order {fill.order_id}: execution VWAP {vwap:.6g} vs AveragePrice {price:g}",
@@ -1335,7 +1340,7 @@ def _cross_check_journal_fill(
         journal_price is not None
         and price is not None
         and tick is not None
-        and abs(journal_price - price) > tick + _QTY_EPS
+        and abs(journal_price - price) > tick + _FLOAT_TOLERANCE
     ):
         pick.warn(
             W_JOURNAL_AUDIT_DISAGREE,
@@ -1641,7 +1646,7 @@ def _price_changes(order: _Order) -> list[OrderActivity]:
     for row in order.rows:
         if row.status != _STATUS_CHANGED or row.price is None:
             continue
-        if previous is None or abs(row.price - previous) > _QTY_EPS:
+        if previous is None or abs(row.price - previous) > _FLOAT_TOLERANCE:
             changes.append(row)
         previous = row.price
     return changes
@@ -1685,7 +1690,7 @@ def _stop_reason(
             value = _finite(marker.get(field_name))
             if when is None or value is None or not (start <= when <= end):
                 continue
-            if abs(value - level) <= tick + _QTY_EPS:
+            if abs(value - level) <= tick + _FLOAT_TOLERANCE:
                 return reason, [*evidence, f"keeper:{marker_kind} {value:g}"], stop_level
     return REASON_STOP_MOVED_UNKNOWN, evidence, stop_level
 
@@ -2387,7 +2392,9 @@ def _outcome(
     shares: list[tuple[_Fill, float | None]] = [(f, 1.0) for f in entries] + [
         (e.fill, _share_of(e)) for e in exits
     ]
-    prorated = any(fraction is not None and fraction < 1.0 - _QTY_EPS for _, fraction in shares)
+    prorated = any(
+        fraction is not None and fraction < 1.0 - _FLOAT_TOLERANCE for _, fraction in shares
+    )
     entry_share = _booking_total([(f, 1.0) for f in entries], "share_amount_acct")
     out["notional_spent_acct"] = (
         _num(-entry_share[0], pick.sizing_currency or entry_share[1], SOURCE_DERIVED, entry_refs)
