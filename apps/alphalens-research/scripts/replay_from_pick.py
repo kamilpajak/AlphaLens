@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import pathlib
 import re
 import sys
@@ -262,6 +263,30 @@ def _measured(node: Mapping[str, Any], path: str) -> Any:
     return value
 
 
+def _measured_number(node: Mapping[str, Any], path: str) -> float:
+    """One ``Measured`` number, refusing a value nothing can compute with.
+
+    The null check alone let a rate stated as TEXT through: it would be written
+    into a configuration file and refused only when the replay read it back, so
+    the command would report success on a run that cannot start. ``bool`` is a
+    subclass of ``int`` and is excluded for the same reason the arming door
+    excludes it.
+    """
+    value = _measured(node, path)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{path} is not a number in this pick's record ({value!r})")
+    if not math.isfinite(value):
+        raise ValueError(f"{path} is not finite in this pick's record ({value!r})")
+    return float(value)
+
+
+def _measured_text(node: Mapping[str, Any], path: str) -> str:
+    value = _measured(node, path)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{path} is not a non-empty string in this pick's record ({value!r})")
+    return value
+
+
 def stated_facts(trade: Mapping[str, Any]) -> StatedFacts:
     """The stated facts of one ``broker trades`` record.
 
@@ -271,10 +296,10 @@ def stated_facts(trade: Mapping[str, Any]) -> StatedFacts:
     that have not yet refused such a record.
     """
     instrument = trade["instrument"]
-    instrument_currency = _measured(
+    instrument_currency = _measured_text(
         instrument["instrument_currency"], "instrument.instrument_currency"
     )
-    account_currency = _measured(instrument["sizing_currency"], "instrument.sizing_currency")
+    account_currency = _measured_text(instrument["sizing_currency"], "instrument.sizing_currency")
     if instrument_currency == account_currency:
         return StatedFacts(
             fx_rate=None,
@@ -284,9 +309,9 @@ def stated_facts(trade: Mapping[str, Any]) -> StatedFacts:
         )
     sizing_fx = trade["sizing_fx"]
     return StatedFacts(
-        fx_rate=_measured(sizing_fx["rate"], "sizing_fx.rate"),
-        fx_rate_asof=_measured(sizing_fx["asof"], "sizing_fx.asof"),
-        fx_rate_source=_measured(sizing_fx["source"], "sizing_fx.source"),
+        fx_rate=_measured_number(sizing_fx["rate"], "sizing_fx.rate"),
+        fx_rate_asof=_measured_text(sizing_fx["asof"], "sizing_fx.asof"),
+        fx_rate_source=_measured_text(sizing_fx["source"], "sizing_fx.source"),
         instrument_currency=instrument_currency,
     )
 
@@ -347,6 +372,11 @@ def entry_trail_bps_by_pick(lines: Iterable[str]) -> dict[str, int | None]:
     ladder), and the configuration states OFF as ``None`` and refuses a ``0``.
     So a pick WITH a line and no trail maps to ``None``, which a caller tells
     apart from a pick with no line at all by the key being present.
+
+    A CORRUPT ``watch_open`` is refused rather than skipped, because skipping
+    it reported the pick as having no line at all. One unusable line refuses
+    the whole mapping, which is what the daemon's own gross-cap consumer does
+    with a record it cannot attribute: a reservation it cannot see.
     """
     distances: dict[str, int] = {}
     for state in fold_entry_trail_lines(lines).tiers.values():
@@ -355,8 +385,12 @@ def entry_trail_bps_by_pick(lines: Iterable[str]) -> dict[str, int | None]:
             continue
         pick = record.get("pick_key")
         distance = record.get("d_bps")
-        if not isinstance(pick, str) or not isinstance(distance, int):
-            continue
+        if not isinstance(pick, str) or isinstance(distance, bool) or not isinstance(distance, int):
+            raise ValueError(
+                f"watch_open {state.crid}: pick_key {pick!r} and d_bps {distance!r} are not a "
+                "pick and a distance; the line is there and unusable, which is not the same as "
+                "a pick having no line"
+            )
         earlier = distances.get(pick)
         if earlier is not None and earlier != distance:
             raise ValueError(
@@ -450,6 +484,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--format", choices=("human", "json"), default="human")
     args = parser.parse_args(argv)
 
+    if args.entry_trail_bps is not None and args.entry_trail_bps < 0:
+        print(
+            "replay_from_pick: --entry-trail-bps must be 0 (OFF) or above; "
+            f"got {args.entry_trail_bps}",
+            file=sys.stderr,
+        )
+        return 2
     try:
         env, trades = _report_trades(args.trades_json)
     except (OSError, ValueError, json.JSONDecodeError) as exc:

@@ -229,6 +229,27 @@ class TheRunConfigurationComesFromTheRecordNotFromMemoryTest(unittest.TestCase):
         )
         self.assertGreater(block["value"], self._config()["walk_start"]["value"])
 
+    def test_both_epochs_land_on_the_venue_s_real_utc_wall_clock(self) -> None:
+        """The two epoch values are asserted by READING them back as a UTC wall
+        clock, not by recomputing them the way the code computes them.
+
+        Every other epoch assertion here calls the same expression the module
+        calls, so all of them would survive a timezone bug together: a naive
+        datetime would shift both by this machine's offset and both sides with
+        it. This one names the fact a reader can check -- XNYS opens 13:30 UTC
+        and closes 20:00 UTC while New York is on EDT.
+        """
+        import datetime as dt
+
+        block = self._config()
+        for key, expected in (
+            ("walk_start", "2026-09-21 13:30:00"),
+            ("entry_deadline", "2026-09-30 20:00:00"),
+        ):
+            with self.subTest(key=key):
+                moment = dt.datetime.fromtimestamp(block[key]["value"] / 1000, dt.UTC)
+                self.assertEqual(moment.strftime("%Y-%m-%d %H:%M:%S"), expected)
+
     def test_the_fee_card_is_the_venue_s_own_not_the_us_one(self) -> None:
         """Existence control for the cost block: a non-US pick must not be
         priced on the US schedule, which a literal 0.0008 / 1.0 would do."""
@@ -355,6 +376,29 @@ class TheStatedFactsAreReadFromTheRecordNotSuppliedByHandTest(unittest.TestCase)
             stated_facts(trade)
         self.assertIn("not_journaled", str(caught.exception))
 
+    def test_a_fact_of_the_wrong_type_is_refused_here(self) -> None:
+        """A rate stated as text would be written into a configuration file and
+        refused only when the replay read it back, so the command would report
+        success on a run that cannot start."""
+        for value in ("0.2639462605413538", float("nan"), True):
+            with self.subTest(rate=value):
+                trade = json.loads(json.dumps(self.trades["VST:2026-09-21"]))
+                trade["sizing_fx"]["rate"] = {"value": value}
+                with self.assertRaises(ValueError) as caught:
+                    stated_facts(trade)
+                self.assertIn("sizing_fx.rate", str(caught.exception))
+
+        # A currency code is worse than a wrong number: it decides the fx key
+        # set, so a non-string would build a cross-currency block for a pick
+        # that may not be one.
+        for value in (840, "", ["USD"]):
+            with self.subTest(currency=value):
+                trade = json.loads(json.dumps(self.trades["VST:2026-09-21"]))
+                trade["instrument"]["instrument_currency"] = {"value": value}
+                with self.assertRaises(ValueError) as caught:
+                    stated_facts(trade)
+                self.assertIn("instrument.instrument_currency", str(caught.exception))
+
     def test_a_same_currency_record_needs_no_rate_at_all(self) -> None:
         """On this account every pick is cross-currency: the budget is PLN and
         the instruments settle in USD. A same-currency pick would journal no
@@ -405,6 +449,23 @@ class TheTrailDistanceComesFromTheDrainSOwnLineTest(unittest.TestCase):
             entry_trail_bps_by_pick([*self.lines, json.dumps(other)]),
             journalled | {"XYZ:2026-09-21": 37},
         )
+
+    def test_a_corrupt_watch_open_line_is_named_not_skipped(self) -> None:
+        """Skipping it reported the pick as having NO line, which sends a
+        reader to look for something that is there and wrong. The daemon's own
+        gross-cap consumer fails closed on a record it cannot attribute; this
+        does the same."""
+        rows = [json.loads(line) for line in self.lines]
+        first = next(r for r in rows if r.get("kind") == "watch_open")
+        for broken in (
+            dict(first, crid="corrupt-1", d_bps="50"),
+            dict(first, crid="corrupt-2", d_bps=None),
+            {k: v for k, v in dict(first, crid="corrupt-3").items() if k != "pick_key"},
+        ):
+            with self.subTest(d_bps=broken.get("d_bps"), pick=broken.get("pick_key")):
+                with self.assertRaises(ValueError) as caught:
+                    entry_trail_bps_by_pick([*self.lines, json.dumps(broken)])
+                self.assertIn(broken["crid"], str(caught.exception))
 
     def test_tiers_that_disagree_on_the_distance_are_refused(self) -> None:
         """One drain resolves one distance for the whole ladder, so two tiers
@@ -519,6 +580,24 @@ class TheCommandWritesBothInputsAndSaysHowToRunThemTest(unittest.TestCase):
                     self.assertEqual(status, 2)
                     self.assertEqual(out, "")
                     self.assertIn("replay_from_pick:", err)
+
+    def test_a_negative_stated_distance_is_a_usage_error(self) -> None:
+        """A distance below 1 is refused by the configuration parser as well,
+        but by then the command has already written both files and reported
+        success."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            status, out, err = self._run(
+                str(self._report(directory)),
+                "VST:2026-09-21",
+                "--out",
+                str(directory),
+                "--entry-trail-bps",
+                "-5",
+            )
+            self.assertEqual(status, 2)
+            self.assertEqual(out, "")
+            self.assertIn("--entry-trail-bps", err)
 
     def test_a_pick_the_report_does_not_hold_exits_4(self) -> None:
         with TemporaryDirectory() as tmp:
