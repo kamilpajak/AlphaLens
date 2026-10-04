@@ -596,16 +596,21 @@ column maps the daemon's `ExitReason`; a test checks that every member has a row
 
 | reason | rule | replay event | `trade_alerts.ExitReason` |
 |---|---|---|---|
-| `take_profit` | owned through a TP or OCO-tp reference | `PositionClosed('tp_complete')` on the last tranche, else a partial close | `TAKE_PROFIT` |
-| `disaster_stop` | a stop order with no price-changing audit row; the fill price is not compared | `PositionClosed('stop')` | `PLAN_STOP` |
-| `trailed_stop` | price-changing rows, and a `trailed` line on the uic between the order's placement and fill within one tick of the last changed price | `StopMoved('trail')`, then `PositionClosed('stop')` | `TRAILED_STOP` |
-| `reanchored_stop` | the same, matched against a `reanchored` line | `StopMoved('reanchor-on-fill')`, then `PositionClosed('stop')` | `REANCHORED_STOP` |
-| `stop_moved_kind_unknown` | price-changing rows, and no marker in the window (lost before the snapshot horizon) | `StopMoved(?)`, then `PositionClosed('stop')` | `STOP` |
+| `take_profit` | owned through a TP or OCO-tp reference | `tp_fired` with tranche index n - 1 for the label TPn (the label is 1-based, the replay's index 0-based); on the last tranche also the zero-unit marker `position_closed(tp_complete)` | `TAKE_PROFIT` |
+| `disaster_stop` | a stop order with no price-changing audit row; the fill price is not compared | `position_closed(stop)` | `PLAN_STOP` |
+| `trailed_stop` | price-changing rows, and a `trailed` line on the uic between the order's placement and fill within one tick of the last changed price | `stop_moved(trail)`, then `position_closed(stop)` | `TRAILED_STOP` |
+| `reanchored_stop` | the same, matched against a `reanchored` line | `stop_moved(reanchor-on-fill)`, then `position_closed(stop)` | `REANCHORED_STOP` |
+| `stop_moved_kind_unknown` | price-changing rows, and no marker in the window (lost before the snapshot horizon) | `stop_moved` with a reason that cannot be known, then `position_closed(stop)` | `STOP` |
 | `manual_close` | a closing fill with no `ExternalReference` (a heuristic: a machine order with no reference would also match) | none; exclude from replay comparison | - |
 | `manual_open` | in `unattributed_fills` only: an opening fill with no reference that no pick owns | none | - |
 | `unknown` | anything else, with its evidence in `reason_evidence` | none | - |
 
-The replay's `time_stop` has no row: LIVE has no time stop by design.
+The replay event column uses the event kinds and reasons of
+`intent_replay.trace` (`KINDS`, `CLOSE_REASONS`, `STOP_MOVE_REASONS`); a test
+checks every one. The replay's `time_stop` has no row: LIVE has no time stop by
+design. A take-profit fills at its limit or better at the venue, while the
+replay's `tp_fired` fills at the plan level; `reason_evidence` names that level,
+and `exit_price_off_plan_level` flags a fill worse than it.
 
 #### Attribution
 

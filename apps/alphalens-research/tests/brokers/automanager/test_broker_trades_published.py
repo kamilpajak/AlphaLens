@@ -21,6 +21,8 @@ README = Path(__file__).resolve().parents[5] / "apps" / "alphalens-broker-contra
 
 _SECTION_RE = re.compile(r"^## `alphalens broker trades`.*?(?=^## )", re.MULTILINE | re.DOTALL)
 _ROW_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|(.*)$", re.MULTILINE)
+# A replay trace event as the README writes it: `kind` or `kind(reason)`.
+_EVENT_RE = re.compile(r"`([a-z_]+)(?:\(([a-z_-]+)\))?`")
 
 
 def _section() -> str:
@@ -67,6 +69,24 @@ class EveryVocabularyIsPublished(unittest.TestCase):
             with self.subTest(alert=member.name):
                 self.assertIsNotNone(mapped)
                 self.assertIn(f"`{member.name}`", rows[str(mapped)])
+
+    def test_the_replay_event_column_speaks_the_replays_vocabulary(self) -> None:
+        # Every event the "replay event" column names is a kind of the
+        # replay's trace, and every reason in brackets is one it emits.
+        from intent_replay import trace
+
+        reasons = set(trace.CLOSE_REASONS) | set(trace.STOP_MOVE_REASONS)
+        rows = _table_after("Exit reasons")
+        named = 0
+        for reason, rest in rows.items():
+            column = rest.split("|")[1]
+            for kind, argument in _EVENT_RE.findall(column):
+                named += 1
+                with self.subTest(reason=reason, event=kind):
+                    self.assertIn(kind, trace.KINDS)
+                    if argument:
+                        self.assertIn(argument, reasons)
+        self.assertGreaterEqual(named, 8, "the column must name the replay's events")
 
     def test_the_schema_file_and_the_consumer_example_are_named(self) -> None:
         section = _section()

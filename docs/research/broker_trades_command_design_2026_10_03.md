@@ -290,11 +290,11 @@ Module: `apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.p
 
 | `reason` | Rule | Replay event it maps to |
 |---|---|---|
-| `take_profit` | owned via a TP or OCO-tp reference | `PositionClosed('tp_complete')` when it is the last tranche; otherwise a partial close |
-| `disaster_stop` | a stop order with **no** price-changing row. The fill price is not compared: StopIfTraded turns into a Market order and may slip. | `PositionClosed('stop')` |
-| `trailed_stop` | price-changing rows exist, and a `trailed` line on the same uic, with `ts` between this order's `Placed` and `FinalFill` times, has a `level` within one tick of the last changed price | `StopMoved('trail')` then `PositionClosed('stop')` |
-| `reanchored_stop` | the same, matched against `reanchored.stop_price` | `StopMoved('reanchor-on-fill')` then `PositionClosed('stop')` |
-| `stop_moved_kind_unknown` | price-changing rows exist and no in-window marker matches (lost before the snapshot horizon). EWTX, ASTS. | `StopMoved(?)` then `PositionClosed('stop')` |
+| `take_profit` | owned via a TP or OCO-tp reference | `tp_fired` with tranche index n - 1 for the label TPn; on the last tranche also the zero-unit marker `position_closed(tp_complete)` |
+| `disaster_stop` | a stop order with **no** price-changing row. The fill price is not compared: StopIfTraded turns into a Market order and may slip. | `position_closed(stop)` |
+| `trailed_stop` | price-changing rows exist, and a `trailed` line on the same uic, with `ts` between this order's `Placed` and `FinalFill` times, has a `level` within one tick of the last changed price | `stop_moved(trail)` then `position_closed(stop)` |
+| `reanchored_stop` | the same, matched against `reanchored.stop_price` | `stop_moved(reanchor-on-fill)` then `position_closed(stop)` |
+| `stop_moved_kind_unknown` | price-changing rows exist and no in-window marker matches (lost before the snapshot horizon). EWTX, ASTS. | `stop_moved` with an unknown reason, then `position_closed(stop)` |
 | `manual_close` | a closing fill with no `ExternalReference`. LULU g2, QUBT. Rejected manual attempts go into `reason_evidence`. | none; the replay has no equivalent and should exclude it from comparison |
 | `manual_open` (in `unattributed_fills` only) | an opening fill with no `ExternalReference` that no pick owns (UBER Buy 4 @69.55) | none |
 | `unknown` | anything else, with its evidence | none |
