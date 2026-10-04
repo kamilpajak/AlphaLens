@@ -19,6 +19,7 @@ import re
 import unittest
 from typing import Any
 
+from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import trade_alerts
 from alphalens_pipeline.brokers.automanager.trades import (
     EXIT_REASON_BY_ALERT_REASON,
@@ -524,6 +525,88 @@ class SyntheticOwnership(_TradesCase):
         install_journals(self.home, edit=edit)
         (exit_,) = trade(self.build(pick=VST), VST)["exits"]
         self.assertEqual(exit_["reason"], "reanchored_stop")
+
+
+VST_UIC = 7300542
+# The last of VST's four trailed lines (level 138.824) and its stop fill.
+VST_LAST_TRAIL_TS = 1790862017.2710106
+VST_STOP_FILL_TS = 1790863196.6686692
+
+
+def _vst_reanchor(ts: float, stop_price: float = 138.824) -> dict[str, Any]:
+    return {
+        "kind": "reanchored",
+        "uic": VST_UIC,
+        "avg_price": 135.11,
+        "stop_price": stop_price,
+        "ts": ts,
+    }
+
+
+class VstCompactedWithoutSnapshots(_TradesCase):
+    """#1669: VST's journal as a boot compaction leaves it, with no snapshot to
+    fall back on. VST trailed four times, filled, and both retractions then
+    closed the pick, so no plan line is left for its uic: the compactor used to
+    drop every trailed line, and the reason survived only in the 2026-10-01
+    snapshot. Built from the fixture's own pre-compaction snapshot."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        root = install_journals(self.home)
+        (snapshot,) = (root / "compaction_snapshots").glob("standalone_stops.*.jsonl")
+        lines = [json.loads(raw) for raw in snapshot.read_text(encoding="utf-8").splitlines()]
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        (root / "standalone_stops.jsonl").write_text(
+            "".join(json.dumps(line, sort_keys=True) + "\n" for line in compacted),
+            encoding="utf-8",
+        )
+        snapshot.unlink()
+
+    def test_audit_mode_reports_the_trailed_stop(self) -> None:
+        (exit_,) = trade(self.build(pick=VST), VST)["exits"]
+        self.assertEqual(exit_["reason"], "trailed_stop")
+
+    def test_offline_mode_reports_the_trailed_stop(self) -> None:
+        (exit_,) = trade(self.build(None, pick=VST), VST)["exits"]
+        self.assertEqual(exit_["reason"], "trailed_stop")
+
+
+class TheNewestStopMoveNamesTheReason(_TradesCase):
+    """#1669: ``broker trades`` names a moved stop by the same marker the
+    stop-fill alert reads, the newest one in the stop's window. It used to try
+    every ``trailed`` line before any ``reanchored`` one (audit), and take the
+    last line in file order (offline)."""
+
+    def _exit(self, *markers: dict[str, Any], offline: bool = False) -> dict[str, Any]:
+        install_journals(self.home, extra={"standalone_stops": list(markers)})
+        (exit_,) = trade(self.build(None if offline else "default", pick=VST), VST)["exits"]
+        return exit_
+
+    def test_stop_reason_takes_the_newest_marker_not_the_first_kind(self) -> None:
+        # A reanchor after the last trail, at the same level: both match the
+        # audit's last Changed price, and the reanchor is the newer move.
+        exit_ = self._exit(_vst_reanchor(VST_LAST_TRAIL_TS + 60.0))
+        self.assertEqual(exit_["reason"], "reanchored_stop")
+
+    def test_a_newest_marker_off_the_audit_level_is_a_move_of_unknown_kind(self) -> None:
+        # The newest move does not explain the level the stop filled at, so an
+        # older one that does is not taken in its place.
+        exit_ = self._exit(_vst_reanchor(VST_LAST_TRAIL_TS + 60.0, stop_price=137.0))
+        self.assertEqual(exit_["reason"], "stop_moved_kind_unknown")
+
+    def test_offline_reason_takes_the_newest_marker_in_window(self) -> None:
+        cases = {
+            "newer reanchor": (VST_LAST_TRAIL_TS + 60.0, "reanchored_stop"),
+            "reanchor tied with the last trail, written later": (
+                VST_LAST_TRAIL_TS,
+                "reanchored_stop",
+            ),
+            "older reanchor written later": (VST_LAST_TRAIL_TS - 60.0, "trailed_stop"),
+            "reanchor after the fill": (VST_STOP_FILL_TS + 1.0, "trailed_stop"),
+        }
+        for name, (ts, reason) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self._exit(_vst_reanchor(ts), offline=True)["reason"], reason)
 
 
 def _two_picks_one_uic(home: Any, *, related: str | None) -> FakeFillHistory:

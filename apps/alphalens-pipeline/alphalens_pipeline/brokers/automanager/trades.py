@@ -55,7 +55,12 @@ from alphalens_pipeline.brokers.automanager.picks import (
     pick_key_str,
     read_pick_fold,
 )
-from alphalens_pipeline.brokers.automanager.stop_journal import _pick_key_from_stop_ref
+from alphalens_pipeline.brokers.automanager.stop_journal import (
+    _STOP_MOVE_LEVEL_KEY,
+    _pick_key_from_stop_ref,
+    select_stop_move_lines,
+    stop_move_of,
+)
 from alphalens_pipeline.brokers.fill_history import (
     CostBooking,
     Execution,
@@ -131,6 +136,12 @@ REASON_STOP_MOVED_UNKNOWN = "stop_moved_kind_unknown"
 REASON_MANUAL_CLOSE = "manual_close"
 REASON_MANUAL_OPEN = "manual_open"
 REASON_UNKNOWN = "unknown"
+
+# The reason a stop-move marker kind gives a stop fill it explains.
+_REASON_BY_STOP_MOVE_KIND: Mapping[str, str] = {
+    "trailed": REASON_TRAILED_STOP,
+    "reanchored": REASON_REANCHORED_STOP,
+}
 
 EXIT_REASONS: tuple[str, ...] = (
     REASON_TAKE_PROFIT,
@@ -1706,6 +1717,23 @@ def _price_changes(order: _Order) -> list[OrderActivity]:
     return changes
 
 
+def _newest_stop_move(
+    stop_facts: _StopFacts, uic: int, start: dt.datetime, end: dt.datetime
+) -> Mapping[str, Any] | None:
+    """The newest stop-move marker of ``uic`` written in ``[start, end]``.
+
+    The rule is ``select_stop_move_lines``, the one the stop-fill alert and the
+    boot compactor use (#1669), so this command names the move the alert named.
+    The window is applied here, on the parsed times, and the selector picks the
+    newest of what it admits."""
+    in_window = [
+        marker
+        for marker in stop_facts.markers_by_uic.get(uic, [])
+        if (when := parse_utc(marker.get("ts"))) is not None and start <= when <= end
+    ]
+    return select_stop_move_lines(in_window, {uic: -math.inf}).get(uic)
+
+
 def _stop_reason(
     order: _Order, fill: _Fill, stop_facts: _StopFacts, venue: _Venue, currency: str | None
 ) -> tuple[str, list[str], Measured]:
@@ -1733,19 +1761,17 @@ def _stop_reason(
     tick = venue.tick(order.uic, level)
     if level is None or tick is None or start is None or end is None or order.uic is None:
         return REASON_STOP_MOVED_UNKNOWN, evidence, stop_level
-    for marker_kind, field_name, reason in (
-        ("trailed", "level", REASON_TRAILED_STOP),
-        ("reanchored", "stop_price", REASON_REANCHORED_STOP),
-    ):
-        for marker in stop_facts.markers_by_uic.get(order.uic, []):
-            if marker.get("kind") != marker_kind:
-                continue
-            when = parse_utc(marker.get("ts"))
-            value = _finite(marker.get(field_name))
-            if when is None or value is None or not (start <= when <= end):
-                continue
-            if abs(value - level) <= tick + _FLOAT_TOLERANCE:
-                return reason, [*evidence, f"keeper:{marker_kind} {value:g}"], stop_level
+    # Only the NEWEST move may explain the level: an older marker that happens
+    # to match would name a move the stop no longer carried at the fill.
+    marker = _newest_stop_move(stop_facts, order.uic, start, end)
+    if marker is not None:
+        move = stop_move_of(marker)
+        if move.level is not None and abs(move.level - level) <= tick + _FLOAT_TOLERANCE:
+            return (
+                _REASON_BY_STOP_MOVE_KIND[move.kind],
+                [*evidence, f"keeper:{move.kind} {move.level:g}"],
+                stop_level,
+            )
     return REASON_STOP_MOVED_UNKNOWN, evidence, stop_level
 
 
@@ -2085,19 +2111,18 @@ def _offline_closing_events(
         reason: str | None = None
         reason_null: str | None = NULL_STOP_AMEND_UNAVAILABLE
         evidence: list[str] = []
-        for marker in stop_facts.markers_by_uic.get(uic, []):
-            when = parse_utc(marker.get("ts"))
-            # Without the stop's own placement time the window is unknown, and
-            # a marker of another stop generation could match: no reason then.
-            if when is None or detected is None or start is None:
-                continue
-            if not (start <= when <= detected):
-                continue
-            kind = marker.get("kind")
-            reason = REASON_TRAILED_STOP if kind == "trailed" else REASON_REANCHORED_STOP
+        # Without the stop's own placement time the window is unknown, and a
+        # marker of another stop generation could match: no reason then.
+        marker = (
+            _newest_stop_move(stop_facts, uic, start, detected)
+            if start is not None and detected is not None
+            else None
+        )
+        if marker is not None:
+            kind = str(marker.get("kind"))
+            reason = _REASON_BY_STOP_MOVE_KIND[kind]
             reason_null = None
-            value = marker.get("level") if kind == "trailed" else marker.get("stop_price")
-            evidence = [f"keeper:{kind} {value}"]
+            evidence = [f"keeper:{kind} {marker.get(_STOP_MOVE_LEVEL_KEY[kind])}"]
         if start is None:
             evidence.append("stop_placed_not_journaled")
         # The level at fill is the stop's last price-changing amend, which only

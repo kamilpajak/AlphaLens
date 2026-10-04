@@ -5891,14 +5891,14 @@ class TestEveryStopMoveMarkerHasAnAlertReason(IsolatedHomeTestCase):
                 self.assertEqual(len(written), 1, written)
                 marker = str(written[0]["kind"])
                 # The stop-fill pass looks for it, and the formatter can name it.
-                self.assertIn(marker, cl._STOP_MOVE_LEVEL_KEY)
+                self.assertIn(marker, sj._STOP_MOVE_LEVEL_KEY)
                 self.assertIn(marker, trade_alerts.REASON_BY_STOP_MARKER)
                 # And the level the alert prints is on the record under the key
                 # the pass reads (a renamed field would print no level).
-                self.assertEqual(written[0][cl._STOP_MOVE_LEVEL_KEY[marker]], 91.5)
+                self.assertEqual(written[0][sj._STOP_MOVE_LEVEL_KEY[marker]], 91.5)
 
     def test_the_pass_and_the_formatter_know_the_same_markers(self) -> None:
-        self.assertEqual(set(cl._STOP_MOVE_LEVEL_KEY), set(trade_alerts.REASON_BY_STOP_MARKER))
+        self.assertEqual(set(sj._STOP_MOVE_LEVEL_KEY), set(trade_alerts.REASON_BY_STOP_MARKER))
 
 
 class TestExecuteAmendStopJournalsReanchored(IsolatedHomeTestCase):
