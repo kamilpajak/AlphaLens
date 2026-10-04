@@ -348,7 +348,20 @@ class SyntheticSideAndRisk(_TradesCase):
             self.home, extra=_synthetic_offline_pick(disaster_stop=10.0, exit_price=11.0)
         )
         outcome = trade(self.build(None, pick="ZZZ:2026-10-02"), "ZZZ:2026-10-02")["outcome"]
-        self.assertEqual(outcome["r_multiple"]["null_reason"], "non_positive_risk")
+        for name in ("risk_per_share", "r_multiple"):
+            with self.subTest(field=name):
+                self.assertIsNone(outcome[name]["value"])
+                self.assertEqual(outcome[name]["null_reason"], "non_positive_risk")
+
+    def test_synthetic_a_side_the_plan_does_not_resolve_refuses_the_math(self) -> None:
+        install_journals(self.home, extra=_synthetic_offline_pick(side="sideways", exit_price=11.0))
+        record = trade(self.build(None, pick="ZZZ:2026-10-02"), "ZZZ:2026-10-02")
+        self.assertIsNone(record["side"])
+        self.assertIn("side_unresolved", _codes(record))
+        for name in ("pnl_cash", "r_multiple"):
+            with self.subTest(field=name):
+                self.assertIsNone(record["outcome"][name]["value"])
+                self.assertEqual(record["outcome"][name]["null_reason"], "non_finite")
 
     def test_synthetic_one_share_short_of_the_entry_is_open(self) -> None:
         install_journals(self.home, extra=_synthetic_offline_pick(exit_price=11.0, exit_qty=4.0))
@@ -385,6 +398,10 @@ class SyntheticNeverFilledReasons(_TradesCase):
     def test_one_tier_still_open_is_pending(self) -> None:
         record = self._two_tier_pick(("expired", None))
         self.assertEqual((record["state"], record["state_reason"]), ("never_filled", "pending"))
+
+    def test_an_open_tier_before_an_expired_one_is_still_pending(self) -> None:
+        record = self._two_tier_pick((None, "expired"))
+        self.assertEqual(record["state_reason"], "pending")
 
     def test_expired_then_cancelled_reads_the_last_tier(self) -> None:
         record = self._two_tier_pick(("expired", "cancelled"))
@@ -531,6 +548,26 @@ class SyntheticSharedUic(_TradesCase):
                 row["RelatedPositionId"] = "P-SHARED"
         aaa = trade(self.build(broker), "AAA:2026-09-28")
         self.assertEqual(aaa["exits"][0]["attribution"], "fifo_fallback")
+
+    def test_the_position_link_decides_only_an_unowned_fill(self) -> None:
+        # 903 is AAA's own stop and sells 10: 5 close AAA through the
+        # reference, the other 5 go on by FIFO, even though 903 also carries
+        # a RelatedPositionId naming BBB's opening fill (rule 2 is for
+        # unowned fills only, §4.5).
+        broker = _synthetic_two_picks(
+            self.home,
+            closes=[
+                ("903", "AAA-2026-09-28-entry-t0-fire-stop-0", "2026-09-30T14:00:00.000000Z", 10)
+            ],
+        )
+        for row in broker.venue["audit"]:
+            if row["OrderId"] == "903":
+                row["RelatedPositionId"] = "P-902"
+        report = self.build(broker)
+        (aaa,) = trade(report, "AAA:2026-09-28")["exits"]
+        (bbb,) = trade(report, "BBB:2026-09-29")["exits"]
+        self.assertEqual(aaa["attribution"], "external_reference")
+        self.assertEqual(bbb["attribution"], "fifo_fallback")
 
     def test_synthetic_offline_stop_fill_with_two_open_picks_is_ambiguous(self) -> None:
         extra = _synthetic_offline_pick(ticker="AAA", day="2026-10-02")

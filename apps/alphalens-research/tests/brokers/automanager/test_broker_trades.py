@@ -297,7 +297,8 @@ class SyntheticNewerOpenPickOffline(_TradesCase):
         )
         record = trade(self.build(None, pick="ZZZ:2026-10-02"), "ZZZ:2026-10-02")
         self.assertEqual(record["state"], "open")
-        self.assertIn("exit_not_in_journal", _codes(record))
+        (warning,) = [w for w in record["warnings"] if w["code"] == "exit_not_in_journal"]
+        self.assertIn("hold no exit for this pick", warning["detail"])
         self.assertEqual(record["outcome"]["pnl_cash"]["null_reason"], "not_closed")
         self.assertEqual(value(record["outcome"]["entry_qty"]), 5.0)
 
