@@ -239,6 +239,7 @@ W_BOOKING_TYPE_UNMAPPED = "booking_type_unmapped"
 W_BOOKING_PRORATED = "booking_prorated"
 W_AMBIGUOUS = "ambiguous_attribution"
 W_SIDE_UNRESOLVED = "side_unresolved"
+W_EXIT_OFF_PLAN_LEVEL = "exit_price_off_plan_level"
 
 WARNING_CODES: tuple[str, ...] = (
     W_FOLD_ORDER_UNCERTAIN,
@@ -254,6 +255,7 @@ WARNING_CODES: tuple[str, ...] = (
     W_BOOKING_PRORATED,
     W_AMBIGUOUS,
     W_SIDE_UNRESOLVED,
+    W_EXIT_OFF_PLAN_LEVEL,
 )
 
 # Why a record cannot be compared with an intent-replay run of its plan. An
@@ -2644,6 +2646,7 @@ def _record(
     now: dt.datetime,
 ) -> dict[str, Any]:
     offline = venue is None
+    _check_take_profit_levels(pick, venue)
     state, state_reason = _state(pick, offline=offline, horizon=horizon)
     if offline and state == STATE_OPEN and not pick.exits:
         pick.warn(
@@ -2694,6 +2697,53 @@ def _record(
         "replay_exclusions": _replay_exclusions(pick, state, offline=offline),
         "warnings": list(pick.warnings),
     }
+
+
+def _tp_plan_level(pick: _Pick, tp_label: str | None) -> tuple[int, float] | None:
+    """The plan's price for a ``TP<n>`` label: ``spec.tp_tranches[n-1].price``."""
+    match = re.fullmatch(r"TP(\d+)", tp_label or "")
+    spec = pick.plan.get("spec") if pick.plan is not None else None
+    tranches = spec.get("tp_tranches") if isinstance(spec, Mapping) else None
+    if match is None or not isinstance(tranches, list):
+        return None
+    index = int(match.group(1)) - 1
+    if not 0 <= index < len(tranches) or not isinstance(tranches[index], Mapping):
+        return None
+    level = _finite(tranches[index].get("price"))
+    return None if level is None else (index, level)
+
+
+def _check_take_profit_levels(pick: _Pick, venue: _Venue | None) -> None:
+    """Name the plan level of every take-profit exit, and warn when the fill
+    was WORSE than it by more than one tick (§4.4).
+
+    A take-profit is a limit at that level, so a worse fill means the order
+    was not at the plan's level (on SMG the keeper's tranche_plan held a
+    geometry target of 59.63 instead of the plan's 65.25);
+    the replay's ``tp_fired`` fills at the level. A better fill is ordinary
+    limit price improvement and is not flagged. Offline there is no tick."""
+    side = _plan_side(pick.plan)
+    for exit_ in pick.exits:
+        if exit_.reason != REASON_TAKE_PROFIT:
+            continue
+        found = _tp_plan_level(pick, exit_.tp_label)
+        if found is None:
+            continue
+        index, level = found
+        evidence = f"plan:spec.tp_tranches[{index}].price {level:g}"
+        if evidence not in exit_.evidence:
+            exit_.evidence.append(evidence)
+        price = exit_.fill.price.value
+        tick = None if venue is None else venue.tick(pick.uic, level)
+        if price is None or tick is None or side is None:
+            continue
+        worse = level - float(price) if side == "long" else float(price) - level
+        if worse > tick + _FLOAT_TOLERANCE:
+            pick.warn(
+                W_EXIT_OFF_PLAN_LEVEL,
+                f"order {exit_.fill.order_id}: {exit_.tp_label} filled at {float(price):g}, "
+                f"worse than the plan level {level:g} by more than one tick",
+            )
 
 
 def _replay_exclusions(pick: _Pick, state: str, *, offline: bool) -> list[str]:

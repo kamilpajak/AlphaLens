@@ -652,6 +652,7 @@ Quantity left after every lot is closed is listed in `unattributed_fills`.
 | `booking_prorated` | a booking amount was shared between owners by quantity |
 | `ambiguous_attribution` | a fill on the pick's uic could not be given to one pick |
 | `side_unresolved` | the plan does not resolve a side; outcome math was refused |
+| `exit_price_off_plan_level` | a take-profit filled worse than its plan level (`spec.tp_tranches[n-1].price`, also in `reason_evidence`) by more than one tick: the order was not at the plan's level. Broker mode only; a better fill is price improvement and is not flagged |
 
 #### Replay exclusions
 

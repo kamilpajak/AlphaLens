@@ -874,3 +874,36 @@ class ReplayExclusions(_TradesCase):
     def test_offline_output_is_never_replay_comparable(self) -> None:
         record = trade(self.build(None, pick=VST), VST)
         self.assertEqual(record["replay_exclusions"], ["offline"])
+
+
+class TakeProfitAgainstThePlanLevel(_TradesCase):
+    """A take-profit is a limit at the plan's tranche price, so a fill WORSE
+    than that price by more than a tick did not happen at the plan's level
+    (SMG: the keeper's tranche_plan held another target). The replay's tp_fired
+    fills at the level."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        install_journals(self.home)
+        self.report = self.build()
+
+    def test_smg_and_oln_filled_below_their_plan_level(self) -> None:
+        for key, level in ((SMG, "65.25"), (OLN, "22.525")):
+            with self.subTest(pick=key):
+                record = trade(self.report, key)
+                (exit_,) = record["exits"]
+                self.assertIn("exit_price_off_plan_level", _codes(record))
+                self.assertIn(f"plan:spec.tp_tranches[0].price {level}", exit_["reason_evidence"])
+
+    def test_a_fill_at_or_better_than_the_level_is_not_flagged(self) -> None:
+        for key in ("SMMT:2026-09-23", "ENPH:2026-09-08-g2", "AMBA:2026-09-04"):
+            with self.subTest(pick=key):
+                record = trade(self.report, key)
+                self.assertNotIn("exit_price_off_plan_level", _codes(record))
+                (exit_,) = record["exits"]
+                self.assertTrue(
+                    any(
+                        e.startswith("plan:spec.tp_tranches[0].price")
+                        for e in exit_["reason_evidence"]
+                    )
+                )

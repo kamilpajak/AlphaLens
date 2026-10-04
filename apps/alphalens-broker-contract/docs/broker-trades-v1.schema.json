@@ -228,7 +228,8 @@
         "booking_type_unmapped",
         "booking_prorated",
         "ambiguous_attribution",
-        "side_unresolved"
+        "side_unresolved",
+        "exit_price_off_plan_level"
       ],
       "description": "A record warning."
     },
