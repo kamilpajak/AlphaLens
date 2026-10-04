@@ -20,10 +20,10 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, is_dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.contract import (
@@ -36,37 +36,33 @@ from broker_contract.contract import (
     SupportsAmendStop,
     SupportsNettedPositionReads,
     SupportsOcoExit,
-    SupportsPriceTickFloor,
     SupportsStandaloneStop,
     SupportsTrailingStop,
     _is_insufficient_funds,
-    _is_price_tolerance_reject,
     _is_sell_orders_already_exist,
     _is_too_far_from_market,
 )
 from broker_contract.exit_geometry.registry import resolve_declared_policy
 
 from alphalens_pipeline.brokers.automanager import (
+    day1_gap_gate,
     entry_trail_geometry,
     entry_trail_watcher,
     entry_trails,
     entry_watch,
+    entry_watch_capacity,
     journal_snapshots,
+    now_tranche,
+    pick_money_gates,
     picks,
+    placed_geometry,
     quote_source,
     state_paths,
     stop_journal,
     trade_alerts,
 )
 from alphalens_pipeline.brokers.automanager.costs import (
-    COMMISSION_RATE,
-    FX_ROUND_TRIP_RATE,
-    MIN_COMMISSION_USD,
-    US_FEE_CARD,
-    apportioned_coverage_violation,
     cost_gate_facts,
-    fee_card_for,
-    round_trip_fee_bps,
 )
 from alphalens_pipeline.brokers.automanager.labels import (
     entry_label_from_crid,
@@ -80,7 +76,6 @@ from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     DISPOSITION_NO_SOLE_SL,
     LiveExitBroker,
     ManagedExit,
-    apportion_tranche_quantities,
     run_live_exits,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (
@@ -1506,54 +1501,14 @@ def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) ->
 # #1189): live_rails pins it as the 9th LIVE boot-assert rail and this module
 # reads it every tick, so both must resolve the same name and bounds. Re-exported
 # under the historical private names so the call sites below stay unchanged.
-_ENTRY_WATCH_MAX_PICKS_ENV = entry_trails.ENTRY_WATCH_MAX_PICKS_ENV
-_ENTRY_WATCH_MAX_PICKS_DEFAULT = entry_trails.ENTRY_WATCH_MAX_PICKS_DEFAULT
-_ENTRY_WATCH_MAX_PICKS_MIN = entry_trails.ENTRY_WATCH_MAX_PICKS_MIN
-_ENTRY_WATCH_MAX_PICKS_MAX = entry_trails.ENTRY_WATCH_MAX_PICKS_MAX
 
-_entry_watch_max_picks_warned = False
 """One logger.warning per process for an invalid/out-of-range env value — the
 env is re-read every tick and would otherwise warn every ~45s all day."""
 
-_entry_watch_capacity_deferred: set[str] = set()
 """Process-lifetime observability only (no behaviour): the pick_keys whose
 capacity deferral was already logged at INFO, so an armed pick queued behind a
 full watch book is visible exactly once per daemon lifetime (later ticks stay
 DEBUG)."""
-
-
-def _entry_watch_max_picks() -> int:
-    """Watch capacity (memo decision #4 / G5 CRITICAL-1): at most this many
-    DISTINCT picks may hold open watches at once — a PICK-denominated limit,
-    deliberately NOT folded into MAX_OPEN (which counts per tier and would make
-    a 3-tier trailing pick un-armable at MAX_OPEN=1). The account is protected
-    by the virtual gross/cash reservation fold
-    (entry_trails.watching_virtual_gross_acct), not by this capacity number.
-
-    Sourced from :data:`_ENTRY_WATCH_MAX_PICKS_ENV`; unset falls back to the
-    default silently, an invalid or out-of-range value falls back too but pages
-    the journal with ONE warning per process."""
-    global _entry_watch_max_picks_warned  # noqa: PLW0603 — once-per-process warn latch
-    raw = os.environ.get(_ENTRY_WATCH_MAX_PICKS_ENV)
-    if raw is None:
-        return _ENTRY_WATCH_MAX_PICKS_DEFAULT
-    try:
-        value = int(raw)
-    except ValueError:
-        value = None
-    if value is not None and _ENTRY_WATCH_MAX_PICKS_MIN <= value <= _ENTRY_WATCH_MAX_PICKS_MAX:
-        return value
-    if not _entry_watch_max_picks_warned:
-        _entry_watch_max_picks_warned = True
-        logger.warning(
-            "%s=%r is invalid (expected an integer in [%d, %d]) — using the default %d",
-            _ENTRY_WATCH_MAX_PICKS_ENV,
-            raw,
-            _ENTRY_WATCH_MAX_PICKS_MIN,
-            _ENTRY_WATCH_MAX_PICKS_MAX,
-            _ENTRY_WATCH_MAX_PICKS_DEFAULT,
-        )
-    return _ENTRY_WATCH_MAX_PICKS_DEFAULT
 
 
 _ENTRY_REARM_MARKER = "awaiting_fresh_low"
@@ -1582,32 +1537,6 @@ class _EntryWatchRuntime:
     touch_ts: str | None = None
 
 
-def _entry_watch_crid(
-    ticker: str, trade_date: str, tier_index: int, *, generation: int = picks.FIRST_GENERATION
-) -> str:
-    """Deterministic per-tier watch id in the ``-entry-`` request-id family
-    (memo §5 — parallel to the exit ids so entry/exit ids can never collide on
-    one uic). DETERMINISTIC, not a uuid: a crash between the journal-first
-    watch_open and the note-only pick retirement re-opens the SAME crid on the
-    next drain, and the fold's latest-watch_open-wins semantics make that
-    re-open idempotent (no double reservation) where a fresh uuid would leak a
-    second watch.
-
-    ``generation`` (#1371) is the same-day re-arm counter: 1 renders exactly
-    the pre-#1371 crid, so every crid on disk keeps its identity; a later
-    generation carries ``-g<N>`` after the date (``picks.identity_token``),
-    so a disarmed generation's sticky terminal markers never shadow its
-    successor's watches."""
-    return f"{ticker}-{picks.identity_token(trade_date, generation)}-entry-t{tier_index}"
-
-
-def _pick_generation(intent: Any) -> int:
-    """The intent's same-day re-arm generation (#1371). A meta without the
-    field — a pre-#1371 payload, or a test double — is the first generation;
-    the codec already refuses a malformed value at decode time."""
-    return int(getattr(intent.meta, "generation", picks.FIRST_GENERATION))
-
-
 def _entry_trail_mode_tag(d_bps: int) -> str:
     """The measurement ``entry_mode`` cohort tag (memo §5 / T8): the native
     trailing mode + configured distance + the execution-config version, so fills
@@ -1620,27 +1549,6 @@ def _entry_trail_mode_tag(d_bps: int) -> str:
     return f"entry-trail-native-d{d_bps}-{execution_config_version()}"
 
 
-def _entry_trail_eligible(plan: Any) -> bool:
-    """Whether a sized pick can be routed into an entry-trail watch: it has at
-    least one positive-quantity entry tier (an all-zero-tier plan is handled by
-    the normal zero-tiers refusal downstream). MVP scope is long single-name
-    equities, which every drained pick already is."""
-    return any(getattr(tier, "qty", 0) > 0 for tier in getattr(plan, "entry_tiers", ()) or ())
-
-
-def _open_watch_pick_keys(fold: entry_trails.EntryTrailFold) -> set[str]:
-    """The distinct ``pick_key`` of every NON-terminal watch_open tier in the
-    fold (falling back to the crid when a record predates the pick_key field)
-    — the set of picks that currently hold an open watch."""
-    pick_keys: set[str] = set()
-    for state in fold.tiers.values():
-        if state.terminal_kind is not None or state.watch_open is None:
-            continue
-        pick_keys.add(str(state.watch_open.get("pick_key") or state.crid))
-    return pick_keys
-
-
-_entry_watch_live_uic_deferred: set[str] = set()
 """``pick_key``s already logged as live-uic-deferred (2026-08-19 adjudication
 finding 2) — first deferral WARNs, later ticks DEBUG. Process-lifetime
 observability only, no behaviour rides on membership."""
@@ -1654,112 +1562,6 @@ def _has_live_long_on_uic(positions: Iterable[Position], uic: int) -> bool:
         _position_uic(pos) == uic and float(getattr(pos, "quantity", 0.0) or 0.0) > 0.0
         for pos in positions
     )
-
-
-def _log_live_uic_deferral(ticker: str, pick_key: str, uic: int) -> None:
-    """Log a live-uic routing deferral: WARNING the FIRST time this pick_key is
-    deferred in this process (an abnormal state the operator should see — a
-    re-picked ticker is queuing behind its own live position), DEBUG on every
-    later tick. Process-lifetime observability only — no behaviour rides on the
-    set (mirrors :func:`_log_watch_capacity_deferral`)."""
-    log = logger.debug
-    if pick_key not in _entry_watch_live_uic_deferred:
-        _entry_watch_live_uic_deferred.add(pick_key)
-        log = logger.warning
-    log(
-        "place_pick %s: a live long already holds uic %d — %s stays armed until the "
-        "uic is flat (routing a watch now would clobber the live position's ladder)",
-        ticker,
-        uic,
-        ticker,
-    )
-
-
-def _open_watch_picks_for_max_open(
-    fold: entry_trails.EntryTrailFold,
-    *,
-    own_pick_key: str,
-    position_uics: Collection[int],
-) -> set[str]:
-    """The DISTINCT ``pick_key`` of every open entry watch that occupies a
-    prospective-position slot in the MAX_OPEN admission check (2026-08-19
-    adjudication finding 1).
-
-    An open watch — or its armed unfilled native trail, which is equally
-    non-terminal in the fold — is a committed risk unit ``safety.check`` cannot
-    see: the note-only watch submission record carries no brackets and no
-    position exists until the trail fires, so with N watches open the classic
-    sum (journal brackets + live positions) under-counts by N and a raised
-    watch capacity could over-commit up to N extra concurrent positions.
-
-    Two exclusions keep the count one-slot-per-risk-unit:
-
-    - ``own_pick_key`` — the candidate pick's own watch (the crash-recovery
-      re-drive must not self-block on its own reservation, mirroring the
-      intercept's ``already_watching`` exemption);
-    - any watch whose uic is in ``position_uics`` — a pick whose tier already
-      FIRED shows up as a live position while a deeper tier still watches; that
-      unit is already counted in ``BrokerView.open_position_count``. The caller
-      passes NET-open uics (``_net_open_position_uics``) — a net-flat uic
-      (an EOD-netting round-trip's two ledger rows) is NOT in the position
-      count, so its watch must keep occupying a slot here.
-
-    A watch record with no parseable uic still counts (conservative: an
-    over-reserved slot refuses one pick too early; an under-count re-opens the
-    over-commit)."""
-    picks: set[str] = set()
-    for state in fold.tiers.values():
-        if state.terminal_kind is not None or state.watch_open is None:
-            continue
-        record = state.watch_open
-        pick_key = str(record.get("pick_key") or state.crid)
-        if pick_key == own_pick_key or _watch_uic_in(record, position_uics):
-            continue
-        picks.add(pick_key)
-    return picks
-
-
-def _watch_uic_in(record: Mapping[str, Any], uics: Collection[int]) -> bool:
-    """Whether the watch record's uic parses AND is in ``uics``; False on a
-    missing/unparseable uic (the caller then counts the watch conservatively)."""
-    try:
-        return int(record["uic"]) in uics
-    except (KeyError, TypeError, ValueError):
-        return False
-
-
-def _entry_watch_capacity_reached(fold: entry_trails.EntryTrailFold) -> bool:
-    """True iff opening another watch would exceed :func:`_entry_watch_max_picks`
-    DISTINCT watching picks."""
-    return len(_open_watch_pick_keys(fold)) >= _entry_watch_max_picks()
-
-
-def _log_watch_capacity_deferral(ticker: str, pick_key: str) -> None:
-    """Log a capacity deferral: INFO the FIRST time this pick_key is deferred in
-    this process, DEBUG on every later tick. Process-lifetime observability
-    only — no behaviour rides on the set (2026-08-19 incident: ETSY sat
-    capacity-deferred for a day with only DEBUG lines to show for it)."""
-    log = logger.debug
-    if pick_key not in _entry_watch_capacity_deferred:
-        _entry_watch_capacity_deferred.add(pick_key)
-        log = logger.info
-    log(
-        "place_pick %s: entry-trail watch capacity reached (cap=%d) — %s stays armed",
-        ticker,
-        _entry_watch_max_picks(),
-        ticker,
-    )
-
-
-def _sizing_currency_of(fx: Any, instrument: Any) -> str:
-    """The account/sizing currency for a journal currency stamp (#1238 PR 3).
-
-    ``fx`` is None on the same-currency path, where the sizing currency IS the
-    instrument currency by construction; a stub without the attribute yields
-    "" (no stamp -> the gates keep the conservative legacy facts)."""
-    if fx is not None:
-        return str(getattr(fx, "account_currency", "") or "")
-    return str(getattr(instrument, "currency", "") or "")
 
 
 def _open_entry_watches(
@@ -1788,7 +1590,7 @@ def _open_entry_watches(
     ``None`` on the deepest tier.
 
     ``geometry_stamp`` (2026-08-19 incident fix) is the exact
-    :func:`_placed_geometry_stamp` blob the bracket path journals on its
+    :func:`placed_geometry._placed_geometry_stamp` blob the bracket path journals on its
     ``planned`` lines — stamped on every watch_open here so the fire-arm
     ``planned`` writer can pass it through, and so the #1112 arm gates can read
     off a journal line which exit was actually placed. ``None`` omits the key
@@ -1796,7 +1598,7 @@ def _open_entry_watches(
     from alphalens_pipeline.market.calendar import advance_trading_sessions, session_close_utc
 
     trade_date = intent.meta.trade_date
-    generation = _pick_generation(intent)
+    generation = picks._pick_generation(intent)
     mic = instrument.exchange_mic
     uic = int(instrument.broker_instrument_id)
     ttl_date = advance_trading_sessions(
@@ -1815,7 +1617,9 @@ def _open_entry_watches(
         next_limit = tiers[index + 1].limit_price if index + 1 < len(tiers) else None
         line: dict[str, Any] = {
             "kind": entry_trails.KIND_WATCH_OPEN,
-            "crid": _entry_watch_crid(ticker, trade_date, tier.tier_index, generation=generation),
+            "crid": entry_watch_capacity._entry_watch_crid(
+                ticker, trade_date, tier.tier_index, generation=generation
+            ),
             "limit": float(tier.limit_price),
             "qty": float(tier.qty),
             "d_bps": int(d_bps),
@@ -1837,7 +1641,7 @@ def _open_entry_watches(
             # round trip with. fx is None on the same-currency path, where
             # the sizing currency IS the instrument currency.
             "instrument_currency": str(instrument.currency or ""),
-            "sizing_currency": _sizing_currency_of(fx, instrument),
+            "sizing_currency": placed_geometry._sizing_currency_of(fx, instrument),
         }
         if geometry_stamp is not None:
             line["geometry"] = geometry_stamp
@@ -1877,8 +1681,8 @@ def _route_pick_to_entry_watch(
     native trail rests later, at TOUCH.
 
     Which ladder is journaled is the document's own answer (#1414), asked
-    through ``_places_client_geometry`` here and inside
-    ``_journal_tranche_plan_core``, so the watch path and the bracket path
+    through ``placed_geometry._places_client_geometry`` here and inside
+    ``placed_geometry._journal_tranche_plan_core``, so the watch path and the bracket path
     cannot disagree about it.
 
     A calendar/journal failure inside the journal writes must never crash the
@@ -1893,7 +1697,7 @@ def _route_pick_to_entry_watch(
 
     exit_spec = intent.exit
     try:
-        _journal_tranche_plan_core(
+        placed_geometry._journal_tranche_plan_core(
             plan=plan,
             exit_spec=exit_spec,
             stop_price=float(plan.disaster_stop),
@@ -1909,9 +1713,11 @@ def _route_pick_to_entry_watch(
             # Trade identity (adjudication finding 4): a crash-recovery
             # re-drive re-appends this line — the SAME pick_key keeps the
             # fired-tranche fold from resetting on the re-append.
-            pick_key=picks.pick_key_str(ticker, intent.meta.trade_date, _pick_generation(intent)),
+            pick_key=picks.pick_key_str(
+                ticker, intent.meta.trade_date, picks._pick_generation(intent)
+            ),
             instrument_currency=str(getattr(instrument, "currency", "") or ""),
-            sizing_currency=_sizing_currency_of(fx, instrument),
+            sizing_currency=placed_geometry._sizing_currency_of(fx, instrument),
             exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
         )
         opened = _open_entry_watches(
@@ -1923,7 +1729,7 @@ def _route_pick_to_entry_watch(
             d_bps=d_bps,
             # The stamp rides every watch_open so the later fire-arm planned
             # writer can say what was placed without the intent in scope.
-            geometry_stamp=_placed_geometry_stamp(exit_spec),
+            geometry_stamp=placed_geometry._placed_geometry_stamp(exit_spec),
             reaction=_declared_reaction(exit_spec),
         )
     # Broad on purpose: an unrecognised MIC (calendar ValueError) or a journal
@@ -1942,7 +1748,7 @@ def _route_pick_to_entry_watch(
     append_submission_record(
         build_submission_record(
             trade_date=intent.meta.trade_date,
-            generation=_pick_generation(intent),
+            generation=picks._pick_generation(intent),
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -1952,7 +1758,7 @@ def _route_pick_to_entry_watch(
                 sizing_currency=account.currency,
                 instrument_currency=instrument.currency,
                 fx=fx,
-                est_round_trip_fee_bps=_estimate_round_trip_fee_bps(
+                est_round_trip_fee_bps=pick_money_gates._estimate_round_trip_fee_bps(
                     plan,
                     fx,
                     instrument_currency=instrument.currency,
@@ -2797,7 +2603,7 @@ def _finalize_entry_terminal_vs_broker(
 # (entry_watch._active_entry_watches :1261 — the broker owns the resting native order), so
 # nothing else ever observes its fill / DayOrder-expiry. Without a terminal
 # `entry_trails` line watching_virtual_gross_acct keeps reserving limit*qty
-# FOREVER (it skips only terminal_kind) AND _open_watch_pick_keys keeps the tier
+# FOREVER (it skips only terminal_kind) AND entry_watch_capacity._open_watch_pick_keys keeps the tier
 # occupying capacity forever — the feature arms one pick then jams. This sibling
 # pass writes the terminal `fired` line when the order fills, releasing both in
 # ONE write. It NEVER places / amends / arms (safe under KILL); a GONE-but-
@@ -3347,7 +3153,7 @@ def _journal_entry_fired(
 
     Top-level ``order_id`` + ``realized_qty`` release the virtual reservation (the
     fold's ``terminal_kind`` -> ``watching_virtual_gross_acct`` skips the tier) and
-    un-jam capacity (``_open_watch_pick_keys`` skips it) in ONE write; ``avg_price``
+    un-jam capacity (``entry_watch_capacity._open_watch_pick_keys`` skips it) in ONE write; ``avg_price``
     + ``ts`` carry the realized entry-side fill the offline exec_quality join needs.
     Idempotent by construction: once written the tier is terminal in the fold, so
     the next reconcile pass excludes it (``_resting_armed_tiers``)."""
@@ -5071,7 +4877,7 @@ def _summarize_open_verdicts(open_verdicts: Iterable[Any], today_iso: str) -> tu
     closed R for the daily-loss rail.
 
     No committed-gross term, and so no ``records`` argument (#1192): the gross
-    rail moved to :func:`_check_gross_cap`, which values exposure post-sizing
+    rail moved to :func:`pick_money_gates._check_gross_cap`, which values exposure post-sizing
     in account currency and builds its own verdict-to-bracket join because it
     also needs each record's journaled ``fx_rate``. This function no longer
     reads the journal at all — it is a pure fold over verdicts."""
@@ -5108,108 +4914,6 @@ class _AccountCurrency:
         return self._value
 
 
-def _check_pick_size(size: Any, *, account_currency: str, ticker: str) -> tuple[str, str] | None:
-    """``None`` iff the document's amount can be spent here, else
-    ``(violation, alert_key)`` for a terminal refusal (#1467).
-
-    Currency first: an amount in another currency cannot be compared with the
-    cap, which is in account currency. The cap is
-    ``ALPHALENS_BROKER_MAX_PICK_NOTIONAL``: unset means no cap (SIM, the
-    ``MAX_FEE_BPS`` precedent; LIVE boots only with it pinned, see
-    ``live_rails``), and a value that is not a positive number refuses every
-    pick until the unit is fixed (fail closed, like the fee floor)."""
-    from alphalens_pipeline.brokers.automanager.live_rails import MAX_PICK_NOTIONAL_ENV
-
-    if size.currency != account_currency:
-        return (
-            f"{ticker}: the pick is sized in {size.currency} but the account is "
-            f"{account_currency} — refused; re-arm it in {account_currency}",
-            f"pick-currency:{ticker}",
-        )
-    raw = os.environ.get(MAX_PICK_NOTIONAL_ENV)
-    if raw is None or not raw.strip():
-        return None
-    try:
-        cap = float(raw)
-    except ValueError:
-        cap = math.nan
-    if not math.isfinite(cap) or cap <= 0:
-        return (
-            f"{MAX_PICK_NOTIONAL_ENV}={raw!r} is not a positive number — {ticker} refused "
-            "(fail-closed until the cap is fixed)",
-            f"pick-cap:{ticker}",
-        )
-    if size.notional_acct > cap:
-        return (
-            f"{ticker}: the pick's amount {size.notional_acct:,.2f} {size.currency} exceeds "
-            f"{MAX_PICK_NOTIONAL_ENV}={cap:,.2f} — refused, never shrunk",
-            f"pick-cap:{ticker}",
-        )
-    return None
-
-
-def _resolve_and_size(
-    broker: Broker,
-    ticker: str,
-    account: Any,
-    spec: Any,
-    hint_mic: str | None = None,
-) -> tuple[Any, Any, Any] | None:
-    """Resolve the instrument, build any needed FX conversion, and size the
-    already-parsed :class:`~broker_contract.trade_intent.schema.TradeSpec`.
-    Returns ``(instrument, fx, plan)`` or ``None`` on any resolve/size failure
-    (logged) — one bad pick must never crash a tick.
-
-    ``hint_mic`` is the intent's ``InstrumentHint.mic`` (#1238):
-    ``explicit_mic_from_hint`` keeps US hints on the probe path (a legacy brief
-    pick hints XNYS while its real venue may be XNAS) and turns a non-US hint
-    (an operator's venue on a manual document, e.g. XWAR) into an explicit
-    single-venue resolve.
-
-    PR-7 (broker-manager extraction memo §5): the brief-side parse and the
-    exit-geometry build moved to arm time, client-side (#1552 later removed the
-    brief producer; every pick is a hand-written document) — this helper runs
-    only the money half
-    (``compute_setup_plan``) on the already-parsed ``spec`` the daemon received
-    on the drained ``TradeIntent``. #1414 then retired that builder outright, so
-    nothing on this path computes a bracket at all: the document declares how
-    its stop is managed and may supply levels. The caller reads ``intent.exit``
-    directly for the (possibly ``None``) exit-geometry spec; this helper never
-    touches a brief."""
-    from broker_contract.contract import BrokerError
-    from broker_contract.sizing import TradeSetupNotPlannableError, compute_setup_plan
-
-    from alphalens_pipeline.brokers.execution import build_fx_conversion
-    from alphalens_pipeline.brokers.routing import explicit_mic_from_hint, resolve_us_instrument
-
-    try:
-        instrument = resolve_us_instrument(
-            broker, ticker, exchange_mic=explicit_mic_from_hint(hint_mic)
-        )
-        if not instrument.currency:
-            logger.warning("place_pick %s: resolved with no instrument currency", ticker)
-            return None
-        fx = None
-        if instrument.currency != account.currency:
-            get_fx_rate = getattr(broker, "get_fx_rate", None)
-            if get_fx_rate is None:
-                logger.warning(
-                    "place_pick %s: %s vs account %s but broker has no get_fx_rate",
-                    ticker,
-                    instrument.currency,
-                    account.currency,
-                )
-                return None
-            fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
-        # #1467: the document states the amount, so nothing here reads a frame.
-        plan = compute_setup_plan(spec, fx=fx)
-    except (BrokerError, TradeSetupNotPlannableError) as exc:
-        logger.warning("place_pick %s: resolve/size failed: %s", ticker, exc)
-        return None
-
-    return instrument, fx, plan
-
-
 # --- Fee floor (design memo §4 round-trip fee equation) ----------------------
 #
 # The model itself lives in ``alphalens_pipeline.brokers.automanager.costs`` (extracted for #1112 so
@@ -5219,187 +4923,20 @@ def _resolve_and_size(
 #               + (FX_ROUND_TRIP_RATE x N if an FX conversion applies else 0)
 
 
-def _check_fee_floor(
-    plan: Any,
-    fx: Any,
-    *,
-    ticker: str,
-    instrument_currency: str = "USD",
-    exchange_mic: str | None = None,
-) -> str | None:
-    """``None`` iff the pick clears the round-trip fee floor OR
-    ``ALPHALENS_BROKER_MAX_FEE_BPS`` is unset (SIM — no fee floor, byte-
-    identical to pre-fee-floor behavior). Else a refusal message naming the
-    ticker, the estimated fee, and the cap (design memo §4) — never feeds
-    back into selection (R2), just a fee fact reported to the operator.
-
-    Prices the plan with ``_estimate_round_trip_fee_bps`` — the SAME per-tier
-    model already journaled as ``est_round_trip_fee_bps`` on every placement,
-    so the gate and the journal can never disagree about the cost of one plan
-    (#1123). Every commission minimum below roughly $1,250 per order is a flat
-    $1, so at our notionals the estimate is a COUNT of chargeable orders; the
-    older aggregate model counted exactly two however deep the ladder was, and
-    understated a real 3-tier SMG ladder by 120 bps (110.2 vs 230.7 journaled).
-
-    Falls back to the aggregate ``round_trip_fee_bps`` over
-    ``setup_plan_gross_notional`` when the per-tier model returns an honest
-    ``None`` (no sized plan / no tiers / zero gross) — the floor must always
-    answer, never crash the tick on a degenerate plan. The refusal message
-    names which model produced the number so the operator is never guessing.
-
-    NOTE (#1123): the per-tier model assumes ONE chargeable order per tier.
-    Saxo charges the minimum per order per EXECUTION DAY, so a tier resting as
-    GTD and filling across two days pays twice — neither model expresses that.
-    The mirrored exit is likewise an assumption, not a derivation: a
-    geometry-policy pick currently places a single 100% tranche."""
-    from alphalens_pipeline.brokers.automanager.live_rails import MAX_FEE_BPS_ENV
-
-    max_fee_bps_raw = os.environ.get(MAX_FEE_BPS_ENV)
-    if max_fee_bps_raw is None or not max_fee_bps_raw.strip():
-        return None
-    try:
-        max_fee_bps = float(max_fee_bps_raw)
-    except ValueError:
-        # FAIL-CLOSED: a typo'd cap must never crash the tick and must never
-        # silently disable the floor (fail-open). Refuse the pick with a
-        # message naming the env var — the operator fixes the unit.
-        return (
-            f"fee floor: {MAX_FEE_BPS_ENV}={max_fee_bps_raw!r} is not a number — "
-            f"{ticker} refused (fail-closed until the cap is fixed)"
-        )
-
-    from broker_contract.sizing import setup_plan_gross_notional
-
-    notional = setup_plan_gross_notional(plan)
-    fee_bps = _estimate_round_trip_fee_bps(
-        plan, fx, instrument_currency=instrument_currency, exchange_mic=exchange_mic
-    )
-    model = "per-tier"
-    if fee_bps is None:
-        # FAIL-OPEN, deliberately — and NOT the same class as the malformed-cap
-        # branch above, which fails CLOSED. That one is an operator typo in
-        # configuration: the floor is live but unreadable, so refusing is the
-        # only safe answer. THIS one is a plan that honestly prices to nothing
-        # — the only shape that reaches here is an all-zero-qty tier set (gross
-        # 0), because `compute_setup_plan` raises TradeSetupNotPlannableError
-        # for anything less. Such a plan places NO order: `classify` yields no
-        # tiers and `_place_pick` returns before `_place_tiers` ("every entry
-        # tier sized to zero shares"). So passing it here costs nothing, and
-        # refusing it would attribute the refusal to the fee floor instead of
-        # to the sizing that actually produced it. Logged so a LIVE rail never
-        # takes this path silently.
-        model = "aggregate"
-        logger.warning(
-            "fee floor: %s — per-tier model could not price the plan (gross %.2f), "
-            "falling back to the aggregate model",
-            ticker,
-            notional,
-        )
-        fallback_card = fee_card_for(instrument_currency, exchange_mic=exchange_mic)
-        fee_bps = round_trip_fee_bps(
-            notional,
-            fx_applies=fx is not None,
-            min_commission_applies=fallback_card is not None or instrument_currency == "USD",
-            card=fallback_card if fallback_card is not None else US_FEE_CARD,
-        )
-    if fee_bps <= max_fee_bps:
-        return None
-    return (
-        f"fee floor: {ticker} round-trip {fee_bps:.1f} bps > cap {max_fee_bps:.1f} bps "
-        f"({model} model, notional {notional:,.2f}) — pick refused"
-    )
-
-
-def _estimate_round_trip_fee_bps(
-    plan: Any, fx: Any, *, instrument_currency: str = "USD", exchange_mic: str | None = None
-) -> float | None:
-    """The HONEST per-tier round-trip fee estimate in bps of the plan's gross
-    (broker sizing memo §4.5, amended by operator decision §7.3) — journaled
-    on every placement as the calibration series for path B's 150 bps target,
-    and since #1123 also the number the fee FLOOR (``_check_fee_floor``) gates
-    on, so the gate and the journal price one plan the same way. The aggregate
-    ``round_trip_fee_bps`` survives only as the floor's fallback for when this
-    returns ``None``.
-
-    - ``entry_fees``: each non-zero tier pays its own commission
-      ``max($1, 0.08% x qty x limit)`` — zero-qty tiers are never POSTed
-      (``_ZERO_QTY_TIER_POLICY``), so they pay nothing. The $1 minimum is a
-      USD figure, gated on ``instrument_currency`` exactly like
-      ``round_trip_fee_bps``.
-    - ``exit_fees``: the same shape over the TP tranches, with tranche qtys
-      derived at placement as ``tranche_frac x total entry qty``
-      (the brief-shaped ``TpTrancheSpec.tranche_pct`` is a PERCENTAGE 0-100;
-      ``compute_setup_plan`` converts it ONCE into the plan's fraction, so
-      nothing downstream divides by 100 again — this function used to, and
-      priced the whole exit leg at 1% of the position). When the
-      plan carries NO tranches (geometry-policy picks express the exit in
-      ``exit_spec``, not static tranches) the estimate MIRRORS the entry fees
-      — a symmetric single-exit assumption, deliberately simple over falsely
-      precise.
-    - ``fx_cost``: the 0.50% FX round trip on the gross when a conversion
-      applies.
-
-    ``None`` (an honest "not estimable", journaled as a real null) when there
-    is no sized plan / no tiers / zero gross — mirrors the inert stance of
-    ``round_trip_fee_bps`` on a non-positive notional."""
-    # Two separate refusals, not one compound expression: a reader (and a type
-    # checker) can then see that everything below this point has a real plan.
-    # The compound form left ``plan`` optional for the whole body while the
-    # ``gross`` call below requires one.
-    if plan is None:
-        return None
-    entry_tiers = getattr(plan, "entry_tiers", None)
-    if not entry_tiers:
-        return None
-
-    from broker_contract.sizing import setup_plan_gross_notional
-
-    gross = setup_plan_gross_notional(plan)
-    if gross <= 0:
-        return None
-    # #1238 PR 3: price the venue's own card when one exists (WSE 0.12% min
-    # PLN 10); MIC-first since #1271 (Xetra and Euronext are both EUR with
-    # different minimums); a currency with no verified card keeps the legacy
-    # shape (US rate, minimum only for USD).
-    card = fee_card_for(instrument_currency, exchange_mic=exchange_mic)
-    commission_rate = card.commission_rate if card is not None else COMMISSION_RATE
-    min_commission = card.min_commission if card is not None else MIN_COMMISSION_USD
-    min_commission_applies = card is not None or instrument_currency == "USD"
-
-    def _fill_fee(qty: float, price: float) -> float:
-        ad_valorem = commission_rate * qty * price
-        if min_commission_applies:
-            return max(min_commission, ad_valorem)
-        return ad_valorem
-
-    entry_fees = sum(_fill_fee(t.qty, t.limit_price) for t in entry_tiers if t.qty > 0)
-    tranches = getattr(plan, "tp_tranches", None) or ()
-    if tranches:
-        # Same `qty > 0` filter as entry_fees above. Zero-qty tiers add zero
-        # either way; keeping the two sums written the same way stops a reader
-        # hunting for a difference that is not there.
-        total_qty = sum(t.qty for t in entry_tiers if t.qty > 0)
-        exit_fees = sum(_fill_fee(total_qty * t.tranche_frac, t.target_price) for t in tranches)
-    else:
-        exit_fees = entry_fees
-    fx_cost = FX_ROUND_TRIP_RATE * gross if fx is not None else 0.0
-    return (entry_fees + exit_fees + fx_cost) / gross * 10000.0
-
-
 # --- Post-sizing portfolio gross cap (broker sizing memo §3) -----------------
 #
 # THE gross rail — there is no longer a second one. A pre-sizing arm lived in
 # safety.check until #1192 and was broken three ways: (1) currency mismatch —
 # the journal's committed sum is entry x qty in INSTRUMENT currency (USD)
 # against a limit in ACCOUNT currency (PLN), ~3.7x looser than it read;
-# (2) candidate exclusion — it ran BEFORE _resolve_and_size, so the first pick
+# (2) candidate exclusion — it ran BEFORE pick_money_gates._resolve_and_size, so the first pick
 # of any size always passed; (3) filled-position blindness — only
 # WORKING/PARTIALLY_FILLED verdicts counted, filled exposure dropped out.
 #
 # It was removed rather than repaired, and the distinction is per TERM: the
 # committed-working term could have been valued correctly pre-sizing from each
-# record's journaled fx_rate (exactly what _committed_working_gross_acct does
-# below), but the candidate has no rate or size until _resolve_and_size runs
+# record's journaled fx_rate (exactly what pick_money_gates._committed_working_gross_acct does
+# below), but the candidate has no rate or size until pick_money_gates._resolve_and_size runs
 # AFTER safety.check, and filled exposure needs a rate too. Fixing only the
 # term that was fixable leaves a candidate-blind, filled-blind rail — still
 # unable to bound exposure, and still shadowed by this one.
@@ -5408,280 +4945,6 @@ def _estimate_round_trip_fee_bps(
 #
 #   committed_working_acct + candidate_gross_acct + filled_positions_acct
 #       <= GROSS_FRAC x account.total_value
-
-
-def _committed_working_gross_acct(
-    open_verdicts: Iterable[Any], records: Iterable[Mapping[str, Any]]
-) -> tuple[float, int]:
-    """``(total, unjoined)`` — the still-working journaled entry gross folded
-    into ACCOUNT currency, plus the count of working verdicts that could NOT
-    be joined back to a journaled entry bracket.
-
-    WORKING/PARTIALLY_FILLED verdicts joined back to their journaled entry
-    bracket — the join the removed pre-sizing rail used to do untyped — but
-    each bracket's ``entry x qty`` — INSTRUMENT currency — is
-    converted through that record's OWN journaled ``fx_rate`` (submission_log
-    schema 2: the account-ccy -> instrument-ccy Mid the sizing used), so
-    mixed-vintage rates never revalue each other. ``fx_rate`` null
-    (same-currency / schema-1 era) folds as-is.
-
-    ``unjoined`` counts working verdicts whose ``client_request_id`` matches
-    no journaled bracket (or a bracket missing entry/qty) — exposure that
-    EXISTS at the broker but cannot be valued from the journal. The caller
-    fails CLOSED on it (zen pre-merge finding): silently skipping would
-    understate committed gross and let a pick through over the true cap.
-    ``_summarize_open_verdicts`` no longer folds gross at all (#1192) — it
-    counts slots and today's realized R; THIS fold is the only gross valuation."""
-    entry_fx_by_request_id: dict[str, tuple[Mapping[str, Any], Any]] = {
-        str(bracket.get("client_request_id")): (bracket, record.get("fx_rate"))
-        for record in records
-        for bracket in record.get("brackets") or []
-    }
-    total = 0.0
-    unjoined = 0
-    for verdict in open_verdicts:
-        if verdict.status not in {"WORKING", "PARTIALLY_FILLED"}:
-            continue
-        joined = entry_fx_by_request_id.get(str(verdict.details.get("client_request_id") or ""))
-        if joined is None:
-            unjoined += 1
-            continue
-        bracket, fx_rate = joined
-        if bracket.get("entry") is None or bracket.get("qty") is None:
-            unjoined += 1
-            continue
-        notional = float(bracket["entry"]) * float(bracket["qty"])
-        if fx_rate is not None:
-            # rate is instrument-ccy per 1 account-ccy -> acct = instr / rate.
-            notional /= float(fx_rate)
-        total += notional
-    return total, unjoined
-
-
-def _filled_positions_gross_acct(
-    positions: Iterable[Any],
-    fx: Any,
-    *,
-    account_currency: str = "",
-    rate_lookup: Callable[[str], float | None] | None = None,
-) -> tuple[float, str | None]:
-    """``(total, None)`` — the broker positions' mark-to-market gross in
-    ACCOUNT currency — or ``(0.0, failure)`` when any position carries no
-    usable mark or a currency that cannot be converted.
-
-    Valuation choice: ``Position.market_value`` (Saxo
-    ``PositionView.MarketValue`` — qty x current market price, INSTRUMENT
-    currency) is the one current-price field the position row carries;
-    ``avg_price`` is the stale open price and would mis-state exposure after
-    any move. A ``None`` mark (SIM NoAccess) cannot be valued conservatively
-    HIGH without a price, so it FAILS CLOSED — the caller refuses the pick
-    with an alert rather than silently skipping the position. ``abs`` because
-    gross exposure ignores position sign.
-
-    Mixed-currency book (#1238 PR 4 — pre-#1238 this failed closed the moment
-    ANY stamped currency differed from the candidate's fx, so the first GPW
-    position alongside USD ones would have refused every placement). Per
-    position, by its stamped ``instrument.currency``:
-
-    - ``""`` (not stamped — best-effort reverse lookup rows,
-      ``InstrumentRef`` docstring): today's path byte-identical — the
-      candidate ``fx.rate`` when present, else raw. Absent is not wrong.
-    - equal to the candidate fx's instrument currency: the candidate rate.
-    - equal to ``account_currency``: already account currency, folds raw.
-    - anything else: converted through ``rate_lookup`` (ONE lookup per
-      distinct currency per attempt — it is broker I/O inside a money gate);
-      no lookup available or no rate producible fails CLOSED, exactly like a
-      missing mark."""
-    expected_ccy = getattr(fx, "instrument_currency", "") if fx is not None else ""
-    rates: dict[str, float] = {}
-    total = 0.0
-    for position in positions:
-        value_acct, failure = _value_one_position(
-            position,
-            fx,
-            expected_ccy=expected_ccy,
-            account_currency=account_currency,
-            rates=rates,
-            rate_lookup=rate_lookup,
-        )
-        if failure is not None:
-            return 0.0, failure
-        total += value_acct
-    return total, None
-
-
-def _value_one_position(
-    position: Any,
-    fx: Any,
-    *,
-    expected_ccy: str,
-    account_currency: str,
-    rates: dict[str, float],
-    rate_lookup: Callable[[str], float | None] | None,
-) -> tuple[float, str | None]:
-    """``(value in account currency, None)`` for one position, or
-    ``(0.0, failure)`` — the fail-closed cases and per-currency branch order of
-    :func:`_filled_positions_gross_acct` verbatim. ``rates`` memoizes lookups
-    across positions (ONE lookup per distinct currency per attempt)."""
-    position_ccy = getattr(position.instrument, "currency", "") or ""
-    if position.market_value is None:
-        return 0.0, (
-            f"position {position.instrument.ticker} has no broker mark "
-            "(market_value=None) — cannot value gross exposure, failing closed"
-        )
-    value_instr = abs(float(position.market_value))
-    # Legacy path first, byte-identical: a candidate fx with no stamped
-    # instrument currency (or an unstamped/matching position) converts
-    # through the candidate rate exactly as before #1238; fx=None with an
-    # unstamped position folds raw.
-    if fx is not None and (not expected_ccy or position_ccy in ("", expected_ccy)):
-        return value_instr / float(fx.rate), None
-    if fx is None and not position_ccy:
-        return value_instr, None
-    if account_currency and position_ccy == account_currency:
-        return value_instr, None
-    rate = rates.get(position_ccy)
-    if rate is None and rate_lookup is not None:
-        looked_up = rate_lookup(position_ccy)
-        if looked_up is not None and looked_up > 0.0:
-            rate = float(looked_up)
-            rates[position_ccy] = rate
-    if rate is None:
-        return 0.0, (
-            f"position {position.instrument.ticker} trades in {position_ccy} and no "
-            f"conversion into the account currency is available — cannot value gross "
-            "exposure through a foreign rate, failing closed"
-        )
-    return value_instr / rate, None
-
-
-def _make_position_rate_lookup(broker: Any, account_currency: str) -> Callable[[str], float | None]:
-    """A policy-checked ``instrument-per-account`` rate per foreign currency
-    for :func:`_filled_positions_gross_acct` (#1238 PR 4). Reuses the SAME
-    quote source and acceptance policy as candidate sizing
-    (``broker.get_fx_rate`` -> ``build_fx_conversion``); any failure —
-    missing capability, a broker error, a policy-rejected quote — returns
-    ``None`` and the fold fails closed."""
-
-    def _lookup(currency: str) -> float | None:
-        get_fx_rate = getattr(broker, "get_fx_rate", None)
-        if get_fx_rate is None or not account_currency:
-            return None
-        from broker_contract.contract import BrokerError
-
-        from alphalens_pipeline.brokers.execution import build_fx_conversion
-
-        try:
-            return float(build_fx_conversion(get_fx_rate(account_currency, currency)).rate)
-        except (BrokerError, TypeError, ValueError) as exc:
-            logger.warning(
-                "gross cap: FX lookup %s->%s failed (%s) — the fold fails closed",
-                account_currency,
-                currency,
-                exc,
-            )
-            return None
-
-    return _lookup
-
-
-def _check_gross_cap(
-    plan: Any,
-    fx: Any,
-    *,
-    account: Any,
-    open_verdicts: Iterable[Any],
-    records: Iterable[Mapping[str, Any]],
-    positions: Iterable[Any],
-    ticker: str,
-    entry_trail_fold: entry_trails.EntryTrailFold | None = None,
-    broker: Any = None,
-) -> str | None:
-    """``None`` iff the pick keeps total gross exposure — still-working
-    journaled entries + THIS candidate + filled positions + WATCHING trail
-    tiers, all in ACCOUNT currency — within ``GROSS_FRAC x
-    account.total_value``; else a terminal refusal message naming the total,
-    its components, the limit, GROSS_FRAC and total_value.
-
-    ``GROSS_FRAC`` is read THROUGH ``safety.PORTFOLIO_GROSS_FRAC_ENV`` and
-    ``safety.DEFAULT_PORTFOLIO_GROSS_FRAC`` with the same ``_float_env``
-    fallback, so this rail can never drift from the configured name or
-    default even though ``safety.check`` no longer reads them itself.
-    (``safety`` still OWNS the env contract; #1192 removed only its rail.) The candidate
-    folds its RAW planned gross (``setup_plan_gross_notional``) — explicitly
-    NO cash/fee buffer: the cap measures EXPOSURE, not funding.
-
-    The watching term (entry-trailing memo G5) folds the limit-valued virtual
-    reservation of NON-terminal entry-trail tiers from ``entry_trails.jsonl``
-    — those tiers have NO broker order yet, so they are invisible to the
-    committed-working fold. It applies in BOTH sizing modes (the cash floor
-    is inert outside declared mode, so THIS rail must carry the virtual fold
-    everywhere); no/empty journal folds to exactly 0.0, and the refusal text
-    only names the component when it is non-zero (PR-T0 inertness)."""
-    from broker_contract.sizing import setup_plan_gross_notional
-
-    from alphalens_pipeline.brokers.automanager import safety
-
-    gross_frac = safety._float_env(
-        safety.PORTFOLIO_GROSS_FRAC_ENV, safety.DEFAULT_PORTFOLIO_GROSS_FRAC
-    )
-
-    candidate_acct = setup_plan_gross_notional(plan)
-    if fx is not None:
-        # rate is instrument-ccy per 1 account-ccy -> acct = instr / rate.
-        candidate_acct /= float(fx.rate)
-
-    committed_acct, unjoined = _committed_working_gross_acct(open_verdicts, records)
-    if unjoined:
-        # Fail CLOSED on journal join-skew (zen pre-merge finding): a working
-        # verdict we cannot value means real broker exposure the cap cannot
-        # see — refusing beats silently under-counting on a money rail.
-        return (
-            f"gross cap: {ticker} refused — {unjoined} working order(s) could not be "
-            "joined to a journaled entry bracket; committed gross cannot be valued, "
-            "failing closed"
-        )
-    account_ccy = str(getattr(account, "currency", "") or "")
-    filled_acct, mark_failure = _filled_positions_gross_acct(
-        positions,
-        fx,
-        account_currency=account_ccy,
-        rate_lookup=_make_position_rate_lookup(broker, account_ccy) if broker is not None else None,
-    )
-    if mark_failure is not None:
-        return f"gross cap: {ticker} refused — {mark_failure}"
-
-    # PR-T1: read the fold ONCE in _place_pick and thread it into BOTH money
-    # gates so a mid-attempt append (a watch opening on another pick this tick)
-    # can never tear the read between them. A None fold (direct unit tests) reads
-    # its own snapshot, as before.
-    fold = (
-        entry_trail_fold if entry_trail_fold is not None else entry_trails.read_entry_trail_fold()
-    )
-    watching_acct, unvaluable = entry_trails.watching_virtual_gross_acct(fold)
-    if unvaluable:
-        # Fail CLOSED exactly like the unjoined-working-orders path above: a
-        # malformed/unvaluable entry-trail record may be a virtual reservation
-        # the cap cannot see — refusing beats silently under-counting.
-        return (
-            f"gross cap: {ticker} refused — {unvaluable} entry-trail record(s) could not "
-            "be valued (malformed or missing watch_open); the watching reservation "
-            "cannot be valued, failing closed"
-        )
-
-    total_acct = committed_acct + candidate_acct + filled_acct + watching_acct
-    limit_acct = gross_frac * account.total_value
-    if total_acct <= limit_acct:
-        return None
-    # Named only when non-zero so the pre-trailing refusal text stays
-    # byte-identical while no watch is open (PR-T0 inertness proof).
-    watching_component = f" + watching {watching_acct:,.2f}" if watching_acct else ""
-    return (
-        f"gross cap: {ticker} total gross {total_acct:,.2f} {account.currency} "
-        f"(working {committed_acct:,.2f} + candidate {candidate_acct:,.2f} "
-        f"+ filled {filled_acct:,.2f}{watching_component}) exceeds limit {limit_acct:,.2f} "
-        f"({gross_frac:g} x total_value {account.total_value:,.2f}) — pick refused"
-    )
 
 
 # --- Cash floor (broker sizing declared-frame memo §4.2) ---------------------
@@ -5693,103 +4956,6 @@ def _check_gross_cap(
 # underfunded fill (reject vs forced action) is un-probeable on SIM (P2), so
 # the first LIVE weeks are the observation; the buffer is sized to make that
 # event rare, not impossible (memo §4.2, zen finding applied).
-_CASH_FLOOR_BUFFER_PCT = 4.0
-
-
-def _check_cash_floor(
-    plan: Any,
-    fx: Any,
-    *,
-    account: Any,
-    open_verdicts: Iterable[Any],
-    records: Iterable[Mapping[str, Any]],
-    ticker: str,
-    entry_trail_fold: entry_trails.EntryTrailFold | None = None,
-) -> str | None:
-    """``None`` iff the pick's buffered funding need fits the account's real
-    ``margin_available`` (or the sizing mode is not ``declared`` — clamped /
-    unset stays byte-identical to pre-cash-floor behavior; the min-clamp
-    already bounds sizing by the snapshot there). Else a terminal refusal
-    message naming the buffered candidate, the resting reservation, the
-    available figure and the account currency (memo §4.2/§4.3):
-
-        candidate_buffered + reserved_resting > available -> refuse
-
-    ``reserved_resting`` folds the committed-working entry gross from the
-    journal via the PR-0 ``_committed_working_gross_acct`` fold because the
-    broker reserves NOTHING for a resting buy limit (P1 probe, 2026-08-12
-    SIM: CashBalance, MarginAvailableForTrading and TotalValue all UNCHANGED
-    after placement and after cancel) — without this ledger two armed picks
-    would double-spend the same cash. The watching virtual reservation
-    (entry-trailing memo G5) joins the same sum: a watching trail tier has NO
-    broker order at all, so its future fire is cash the floor must reserve;
-    no/empty journal adds exactly 0.0 (PR-T0 inertness), and an unvaluable
-    watching record fails CLOSED here too — independent of the gross cap
-    running first, so no caller ordering can silently under-reserve. The
-    committed fold's ``unjoined`` count is deliberately ignored HERE: the
-    gross cap (which runs FIRST in ``_place_pick``, same verdicts+records)
-    already fails closed on any unjoined working verdict, so this code path
-    only ever sees ``unjoined`` when called outside that ordering (direct
-    unit tests).
-
-    ``available`` is ``margin_available`` — never ``cash``, which ignores
-    margin impact and lags under EOD netting; ``None`` (SIM NoAccess or an
-    account double without the field) fails CLOSED."""
-    from alphalens_pipeline.brokers.automanager.live_rails import (
-        SIZING_EQUITY_MODE_ENV,
-        SIZING_MODE_DECLARED,
-    )
-
-    mode = (os.environ.get(SIZING_EQUITY_MODE_ENV) or "").strip().lower()
-    if mode != SIZING_MODE_DECLARED:
-        return None
-
-    from broker_contract.sizing import setup_plan_gross_notional
-
-    candidate_acct = setup_plan_gross_notional(plan)
-    if candidate_acct <= 0:
-        # An unplannable/zero-tier pick funds nothing — stay inert (before the
-        # margin read); the zero-tiers refusal downstream owns such a pick.
-        return None
-    if fx is not None:
-        # rate is instrument-ccy per 1 account-ccy -> acct = instr / rate.
-        candidate_acct /= float(fx.rate)
-    candidate_buffered = candidate_acct * (1.0 + _CASH_FLOOR_BUFFER_PCT / 100.0)
-
-    reserved_resting, _unjoined = _committed_working_gross_acct(open_verdicts, records)
-    # PR-T1 torn-read fix: _place_pick reads the fold ONCE and threads the SAME
-    # snapshot into this gate and _check_gross_cap, so a mid-attempt watch_open
-    # append on another pick this tick can never tear the read between the two
-    # money gates. A None fold (direct unit tests) reads its own snapshot.
-    fold = (
-        entry_trail_fold if entry_trail_fold is not None else entry_trails.read_entry_trail_fold()
-    )
-    watching_acct, unvaluable = entry_trails.watching_virtual_gross_acct(fold)
-    if unvaluable:
-        # Fail CLOSED independent of the gross cap running first: a direct or
-        # future caller outside the _place_pick ordering must never silently
-        # under-reserve on a watching record it cannot value.
-        return (
-            f"cash floor: {ticker} refused — {unvaluable} entry-trail record(s) could not "
-            "be valued (malformed or missing watch_open); the watching reservation "
-            "cannot be valued, failing closed"
-        )
-    reserved_resting += watching_acct
-
-    available = getattr(account, "margin_available", None)
-    if available is None:
-        return (
-            f"cash floor: {ticker} refused — account margin_available is None, the "
-            "real balance cannot be read; failing closed"
-        )
-    if candidate_buffered + reserved_resting <= available:
-        return None
-    return (
-        f"cash floor: {ticker} needs {candidate_buffered:,.2f} {account.currency} "
-        f"(incl. {_CASH_FLOOR_BUFFER_PCT:g}% buffer) + {reserved_resting:,.2f} already "
-        f"reserved by resting entries, but only {available:,.2f} {account.currency} is "
-        "available — deposit and re-arm"
-    )
 
 
 def _refuse_pick_terminal(
@@ -5818,14 +4984,6 @@ def _refuse_pick_terminal(
         )
 
 
-def _is_journalable_price(value: float | None) -> bool:
-    """A price the journal may carry verbatim: present, finite and strictly
-    positive. ``stop_journal._build_tranche_plan_line`` writes ``float(...)`` straight through,
-    so a None/NaN/zero level from a future geometry policy must be caught HERE
-    rather than poisoning the ladder the live-exit engine folds back."""
-    return value is not None and math.isfinite(value) and value > 0
-
-
 def _declared_reaction(exit_spec: Any) -> Any:
     """The stop-management primitive a document declares, or ``None`` (#1236).
 
@@ -5835,204 +4993,6 @@ def _declared_reaction(exit_spec: Any) -> Any:
     if exit_spec is None:
         return None
     return next(iter(exit_spec.reaction_plan), None)
-
-
-def _places_client_geometry(exit_spec: Any) -> bool:
-    """Whether the CLIENT's own stop/TP levels are the ones to place (#1414).
-
-    The document answers alone: supply ``initial_levels`` and they are placed,
-    omit them and the brief's own ladder is. Until #1414 a process-wide
-    environment variable answered half of it (``policy.applies_geometry``), so a
-    producer could declare how its stop was MANAGED but not what was PLACED —
-    and the deployed value said "never place the client's levels", which is why
-    the brief path computed a bracket for months that no broker ever saw.
-
-    One predicate rather than a guard at each call site: there are several sites,
-    each dereferencing ``initial_levels.stop`` / ``.tp``, and a forgotten one is
-    an ``AttributeError`` inside the unattended placement drain. Callers that
-    dereference the levels after this returns True can do so unconditionally.
-
-    Note what is NOT here any more: a fleet-wide veto. Nothing lets this
-    deployment ignore levels a document supplies. The refusals that remain are
-    the door (``validate_intent``, the only producer of levels besides the brief
-    path), ``_refuse_geometry_without_trail`` and the #1112 arm gates — plus
-    KILL and ALLOW_ORDERS, which stop everything rather than the geometry.
-    """
-    return exit_spec is not None and exit_spec.initial_levels is not None
-
-
-def _placed_geometry_stamp(exit_spec: Any) -> dict[str, Any] | None:
-    """The ``"geometry"`` stamp journaled alongside a ``planned`` line.
-
-    A RECORD OF WHAT WAS PLACED, and since #1414 nothing else. It is written at
-    routing time and re-read off disk on a later hop (the fire-arm planned
-    writer), which is why it exists at all: the intent is not in scope there.
-
-    It used to carry ten more fields — ``planned_blend``, ``k_atr``, ``atr``,
-    ``ceiling_price``, ``anchor_mode``, ``tp_floor_frac``, ``policy_name``,
-    ``policy_version``, ``exit_policy_name``. Those were the shadow of the
-    2026-08-24 exit-policy comparison, which was voided on 2026-08-27 before its
-    cohort opened; no row was ever produced under it. Grepped before removal:
-    nothing in the tree read any of them — not the daemon, not a lens, not a
-    dashboard, not a script. ``applied`` and ``geometry_tp`` are different, and
-    are why the stamp survives: ``entry_watch._stamped_exit_target`` reads them to choose
-    WHICH family of #1112 arm gates prices a tier.
-
-    ``None`` when no ``exit_spec`` exists, which keeps that line byte-identical.
-    """
-    if exit_spec is None:
-        return None
-    levels = exit_spec.initial_levels
-    return {
-        # A declaration-only exit carries no levels. The stamp records their
-        # ABSENCE rather than refusing, so the line still says what happened.
-        "geometry_stop": None if levels is None else levels.stop,
-        "geometry_tp": None if levels is None else levels.tp,
-        "applied": _places_client_geometry(exit_spec),
-    }
-
-
-def _geometry_tranche_ladder(exit_spec: Any) -> tuple[tuple[TpTranchePlan, ...], float] | None:
-    """The (ladder, stop) pair the geometry policy implies: its ONE (stop, tp)
-    level becomes a single tranche that exits 100% of the position at that
-    take-profit. ``None`` when either level is not journalable — the caller then
-    journals NOTHING rather than falling back to the static ladder, which the
-    geometry policy never placed."""
-    from broker_contract.sizing import TpTranchePlan
-
-    levels = exit_spec.initial_levels
-    if levels is None:
-        return None  # a declaration-only exit places no ladder of its own
-    geo_stop = levels.stop
-    geo_tp = levels.tp
-    if not (_is_journalable_price(geo_stop) and _is_journalable_price(geo_tp)):
-        return None
-    ladder = (
-        TpTranchePlan(
-            tranche_index=0,
-            target_price=float(geo_tp),
-            tranche_frac=1.0,
-            r_multiple=0.0,
-            tag="geometry",
-        ),
-    )
-    return ladder, geo_stop
-
-
-def _journal_tranche_plan_core(
-    *,
-    plan: Any,
-    exit_spec: Any,
-    stop_price: float,
-    reference_qty: float,
-    uic: int,
-    pick_key: str | None = None,
-    instrument_currency: str | None = None,
-    sizing_currency: str | None = None,
-    exchange_mic: str | None = None,
-) -> None:
-    """The ladder-choice + line-build core shared by BOTH placement paths
-    (bracket ``_journal_tranche_plan`` and the entry-trail watch routing).
-    ``pick_key`` is the optional trade identity stamped into the line (watch
-    path only — see :func:`stop_journal._build_tranche_plan_line`).
-    Source the ladder from whatever is actually placed: a document that supplies
-    ``initial_levels`` places its single ``.tp`` level (and the passed
-    ``stop_price`` is REPLACED by its ``.stop``); one that supplies none places
-    ``plan.tp_tranches`` with ``stop_price`` journaled verbatim. Takes
-    explicit ``stop_price``/``reference_qty``/``uic`` so the caller decides the
-    plan-vs-placement source of each — the bracket path reads
-    ``placement.disaster_stop_price`` and sums ALL entry tiers, the watch path
-    reads ``plan.disaster_stop`` and sums only the tiers that actually watch."""
-    # #1414: the document is the whole answer, so this asks it directly rather
-    # than taking a `use_geometry` its callers used to compute from a
-    # process-wide policy and half-compute at that.
-    if _places_client_geometry(exit_spec):
-        geometry = _geometry_tranche_ladder(exit_spec)
-        if geometry is None:
-            # Otherwise this skip is invisible: the live-exit engine finds no
-            # ladder for the uic and the position sits stop-only, which reads in
-            # the journal exactly like a pre-INC-5 pick.
-            logger.warning(
-                "tranche_plan uic %d: geometry levels unusable (stop=%r, tp=%r) — "
-                "no TP ladder journaled, the position stays stop-only",
-                uic,
-                getattr(exit_spec.initial_levels, "stop", None),
-                getattr(exit_spec.initial_levels, "tp", None),
-            )
-            return
-        ladder, stop_price = geometry
-    else:
-        ladder = getattr(plan, "tp_tranches", None) or ()
-    if not ladder and pick_key is None:
-        # #1511: a document declaring ``tp_tranches: []`` is legal at the
-        # arming door -- a stop-only pick that runs to its disaster stop. The
-        # vacuity is journaled below as a POSITIVE fact, so a later gate can
-        # tell "the author declared no take-profit" from "the writer never
-        # ran"; conflating the two is what used to cancel such a watch
-        # terminally at its first touch.
-        #
-        # The discriminator is RETRACTABILITY, not which path called. A line
-        # is written only when it carries a ``pick_key``, because
-        # ``_retract_stale_tranche_plans`` skips a keyless plan -- a vacuous
-        # keyless line would govern its uic FOREVER and be kept by every
-        # compaction. Both identity-carrying callers therefore write it (the
-        # watch router, and the now-tranche split via ``override``); only the
-        # plain bracket call, which has no identity to stamp, keeps its
-        # silence. A non-empty ladder is journaled either way, as before.
-        return
-    stop_journal._append_standalone_stop_journal(
-        stop_journal._build_tranche_plan_line(
-            uic=uic,
-            tp_tranches=ladder,
-            reference_qty=reference_qty,
-            stop_price=stop_price,
-            pick_key=pick_key,
-            instrument_currency=instrument_currency,
-            sizing_currency=sizing_currency,
-            exchange_mic=exchange_mic,
-        )
-    )
-
-
-def _journal_tranche_plan(
-    *,
-    plan: Any,
-    exit_spec: Any,
-    placement: Any,
-    instrument: Any,
-    fx: Any = None,
-    override: tuple[str, float] | None = None,
-) -> None:
-    """INC-5: journal ONE ``tranche_plan`` line per uic so the live-exit engine can
-    rebuild the TP ladder from the journal alone — see
-    :func:`_journal_tranche_plan_core` for which ladder the DOCUMENT
-    sources it from. This is the BRACKET-path wrapper: gating on
-    ``plan.tp_tranches`` alone silently dropped every geometry pick (the brief
-    expresses a geometry exit as ``exit_spec``, not static tranches), so the
-    guard here is ``entry_tiers`` only. ``getattr`` keeps a bare-stub plan
-    (unrelated failure-path unit doubles with no ``entry_tiers``/
-    ``tp_tranches``) from crashing — it simply journals nothing."""
-    entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
-    if not entry_tiers:
-        return
-    if override is not None:
-        # #1247 split pick: ONE keyed tranche_plan for the whole pick with the
-        # FULL ladder's reference_qty (now + pullback) — a keyless line here
-        # would reset the generation the watch route's keyed re-append opens.
-        pick_key, reference_qty = override
-    else:
-        pick_key, reference_qty = None, sum(t.qty for t in entry_tiers)
-    _journal_tranche_plan_core(
-        plan=plan,
-        exit_spec=exit_spec,
-        stop_price=placement.disaster_stop_price,
-        reference_qty=reference_qty,
-        uic=int(instrument.broker_instrument_id),
-        pick_key=pick_key,
-        instrument_currency=str(getattr(instrument, "currency", "") or ""),
-        sizing_currency=_sizing_currency_of(fx, instrument),
-        exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
-    )
 
 
 def _cancel_orders_best_effort(broker: Broker, order_ids: Iterable[str], *, ticker: str) -> int:
@@ -6059,7 +5019,7 @@ def _cancel_orders_best_effort(broker: Broker, order_ids: Iterable[str], *, tick
 class _PickRefs:
     """One pick's resolved placement identity: the broker session, the
     drained intent, its ticker, and the instrument/account/fx triple off
-    ``_resolve_and_size``. Bundled because every placement helper consumes
+    ``pick_money_gates._resolve_and_size``. Bundled because every placement helper consumes
     the same six references together."""
 
     broker: Broker
@@ -6098,10 +5058,10 @@ def _place_tiers(
     hop reads it back off disk, where the intent is no longer in scope.
 
     ``plan`` (INC-5 Task 1) is the raw sized
-    :class:`~broker_contract.sizing.SetupPlan` off ``_resolve_and_size`` —
+    :class:`~broker_contract.sizing.SetupPlan` off ``pick_money_gates._resolve_and_size`` —
     consulted ONLY to journal ONE ``tranche_plan`` line per uic (the per-uic TP
     ladder the live-exit engine reads later, INC-5's persistence gap) — see
-    :func:`_journal_tranche_plan` for which ladder the ACTIVE policy sources it
+    :func:`placed_geometry._journal_tranche_plan` for which ladder the ACTIVE policy sources it
     from. ``None`` (a caller with no sized plan in scope, e.g. the direct-unit
     tests) journals nothing extra — INERT, byte-identical to a caller that never
     passes it."""
@@ -6120,7 +5080,7 @@ def _place_tiers(
     # stamped on EVERY record this placement journals (write-ahead, per-tier,
     # failure note), so the calibration series survives whatever the ladder
     # outcome was. None (a real null) when no sized plan is in scope.
-    est_fee_bps = _estimate_round_trip_fee_bps(
+    est_fee_bps = pick_money_gates._estimate_round_trip_fee_bps(
         plan,
         fx,
         instrument_currency=instrument.currency,
@@ -6152,7 +5112,7 @@ def _place_tiers(
         append_submission_record(
             build_submission_record(
                 trade_date=intent.meta.trade_date,
-                generation=_pick_generation(intent),
+                generation=picks._pick_generation(intent),
                 ticker=ticker,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,
@@ -6167,7 +5127,7 @@ def _place_tiers(
                 **_tranche_kwargs("placed"),
             )
         )
-        stop_price, take_profit = _planned_exit_levels(exit_spec, placement, tier)
+        stop_price, take_profit = placed_geometry._planned_exit_levels(exit_spec, placement, tier)
         stop_journal._append_standalone_stop_journal(
             stop_journal._build_planned_line(
                 entry_crid=bracket.client_request_id,
@@ -6176,14 +5136,14 @@ def _place_tiers(
                 stop_price=stop_price,
                 take_profit=take_profit,
                 tier_index=tier.tier_index,
-                geometry_stamp=_placed_geometry_stamp(exit_spec),
+                geometry_stamp=placed_geometry._placed_geometry_stamp(exit_spec),
                 # #1236: the same trade identity the watch path stamps. The
                 # bracket path's ``tranche_plan`` line is deliberately keyless
                 # (its always-reset semantics), but the trailed level is scoped
                 # off the PLANNED line, and this path must not be the one that
                 # keeps the leak open.
                 pick_key=picks.pick_key_str(
-                    ticker, intent.meta.trade_date, _pick_generation(intent)
+                    ticker, intent.meta.trade_date, picks._pick_generation(intent)
                 ),
                 # ...and what the document declares about managing this stop. The
                 # fire-arm path carries it through the watch; this is the other
@@ -6193,7 +5153,7 @@ def _place_tiers(
             )
         )
 
-    _journal_tranche_plan(
+    placed_geometry._journal_tranche_plan(
         plan=plan,
         exit_spec=exit_spec,
         placement=placement,
@@ -6208,13 +5168,13 @@ def _place_tiers(
     # the per-tier journal append strands an alertable non-retried attempt
     # instead of re-placing the whole frame-sized ladder on restart. The
     # record is INERT everywhere brackets are folded (reconcile,
-    # _summarize_open_verdicts, _committed_working_gross_acct: brackets=[]
+    # _summarize_open_verdicts, pick_money_gates._committed_working_gross_acct: brackets=[]
     # folds zero). The post-placement per-tier append below stays — it
     # carries the real brackets.
     append_submission_record(
         build_submission_record(
             trade_date=intent.meta.trade_date,
-            generation=_pick_generation(intent),
+            generation=picks._pick_generation(intent),
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -6306,7 +5266,7 @@ def _handle_tier_placement_failure(
     append_submission_record(
         build_submission_record(
             trade_date=intent.meta.trade_date,
-            generation=_pick_generation(intent),
+            generation=picks._pick_generation(intent),
             ticker=ticker,
             mic=instrument.exchange_mic,
             uic=instrument.broker_instrument_id,
@@ -6324,21 +5284,6 @@ def _handle_tier_placement_failure(
     return failure_note
 
 
-def _planned_exit_levels(exit_spec: Any, placement: Any, tier: Any) -> tuple[float, float | None]:
-    """``(stop_price, take_profit)`` for the journaled ``planned`` line: the
-    document's own levels when it supplies them, else the brief's static
-    disaster stop / tier TP.
-
-    It used to return the ``use_geometry`` flag as well, for the stamp to
-    record. Since #1414 the stamp asks the document the same question directly,
-    and a flag carried between two callers that can both ask is a chance for
-    them to disagree."""
-    if _places_client_geometry(exit_spec):
-        levels = exit_spec.initial_levels
-        return levels.stop, levels.tp
-    return placement.disaster_stop_price, tier.tp
-
-
 # --- Day-1 gap gate (execution-quality placement discipline) -----------------
 #
 # Empirical finding (population-ladder analysis, N=30/588, 2026-08-11): picks
@@ -6349,167 +5294,9 @@ def _planned_exit_levels(exit_spec: Any, placement: Any, tier: Any) -> tuple[flo
 # DEFERS a day-1 placement (never refuses it): a deferred pick stays armed and
 # is re-evaluated next tick, so it never feeds back into WHICH ticker is
 # selected (ADR 0013 R2) — only WHEN, on day 1, the entry is allowed to fill.
-_DAY1_GAP_GATE_ENV = "ALPHALENS_BROKER_DAY1_GAP_GATE"
 
 # The opening auction print needs a few minutes to settle before an
 # indicative quote is trustworthy enough to gate a placement on.
-_DAY1_GAP_GATE_OPEN_GRACE_S = 300
-
-Day1GapGateVerdict = Literal["pass", "defer_preopen", "defer_no_price", "defer_below_e1"]
-
-
-def _day1_gap_gate_enabled() -> bool:
-    """Whether the day-1 gap gate is armed (read at call time, mirrors
-    ``_live_market_exits_enabled`` / ``_saxo_live_prices_enabled`` above).
-    Defaults OFF — unset means ``_place_pick`` never evaluates the gate,
-    byte-identical to today."""
-    return os.environ.get(_DAY1_GAP_GATE_ENV) == "1"
-
-
-def _day1_gap_gate_session_info(
-    trade_date: dt.date, exchange_mic: str, *, day1_includes_trade_date: bool = False
-) -> tuple[dt.date, dt.datetime] | None:
-    """``(day1 session date, day1 session open UTC)`` for ``trade_date`` on
-    ``exchange_mic``, or ``None`` when the calendar cannot resolve it (e.g. an
-    unrecognised exchange MIC) — never raises. NOTE the consequence: ``None``
-    makes ``_day1_gap_gate_decision`` return "pass", so an unknown-to-calendar
-    MIC DISABLES the gate for that pick — visible only through the WARNING
-    below, never a refusal (#1238).
-
-    The anchor depends on the pick's provenance (#1246):
-
-    - default (brief picks): ``day1`` is the first trading session STRICTLY
-      AFTER ``trade_date`` — a brief holds T-1 data and trades the next
-      session (a Monday brief's day1 is Tuesday, a Friday brief's day1 is the
-      following Monday; a weekend/holiday ``trade_date`` lands one session
-      past the weekend's first session).
-    - ``day1_includes_trade_date=True`` (manual picks, whose ``trade_date``
-      IS the arm date): ``day1`` is the session ON-OR-AFTER ``trade_date`` —
-      an "as of now" operator decision trades its own arm day, not the next
-      one (a weekend arm still rolls to the next session).
-
-    Both anchors are one ``advance_trading_sessions`` call (``n=0`` is
-    documented as session-on-or-after). Pure calendar math, no I/O — shared
-    by ``_day1_gap_gate_decision`` and the placer's probe-gating check
-    (``_evaluate_day1_gap_gate``) so the two never disagree on what "day1"
-    means."""
-    try:
-        from alphalens_pipeline.market.calendar import advance_trading_sessions, session_open_utc
-
-        step = 0 if day1_includes_trade_date else 1
-        day1 = advance_trading_sessions(trade_date, step, exchange=exchange_mic)
-        return day1, session_open_utc(day1, exchange=exchange_mic)
-    except Exception:
-        logger.warning(
-            "day1 gap gate: calendar resolution failed for trade_date=%s exchange_mic=%s",
-            trade_date,
-            exchange_mic,
-            exc_info=True,
-        )
-        return None
-
-
-def _day1_gap_gate_decision(
-    now_utc: dt.datetime,
-    trade_date: dt.date,
-    e1_limit: float | None,
-    probe_price: float | None,
-    exchange_mic: str,
-    *,
-    source: str = "brief",
-) -> Day1GapGateVerdict:
-    """Pure day-1 gap gate verdict — no I/O, total (never raises on weird
-    inputs). ``source`` picks the day-1 anchor (#1246): ``"manual"`` anchors
-    day 1 on the session on-or-after ``trade_date`` (the arm date itself),
-    anything else on the session strictly after it — see
-    ``_day1_gap_gate_session_info``.
-
-    - ``e1_limit is None`` (a pick the gate cannot evaluate) -> "pass" with a
-      WARNING log — a doubt about GATING must never itself become a
-      placement refusal.
-    - A calendar resolution failure (see ``_day1_gap_gate_session_info``) ->
-      "pass" — same reasoning, already logged there.
-    - ``now_utc`` on a date AFTER day1 -> "pass" (later-day gaps are benign
-      by the population data, so the gate is inert from day 2 on).
-    - Before day1's open + ``_DAY1_GAP_GATE_OPEN_GRACE_S`` -> "defer_preopen"
-      (covers every pre-day1 tick too — day1's open is always in the future
-      then).
-    - Within day1, at/after the grace window, and ``probe_price is None`` ->
-      "defer_no_price" (fail-safe: no price, no day-1 placement).
-    - Within day1, at/after the grace window, and ``probe_price < e1_limit``
-      -> "defer_below_e1".
-    - Otherwise -> "pass"."""
-    if e1_limit is None:
-        logger.warning("day1 gap gate: pick carries no E1 limit — gate cannot evaluate, passing")
-        return "pass"
-    info = _day1_gap_gate_session_info(
-        trade_date,
-        exchange_mic,
-        day1_includes_trade_date=source == "manual",  # LEGACY(source_brief)
-    )
-    if info is None:
-        return "pass"
-    day1, day1_open = info
-    if now_utc.date() > day1:
-        return "pass"
-    if now_utc < day1_open + dt.timedelta(seconds=_DAY1_GAP_GATE_OPEN_GRACE_S):
-        return "defer_preopen"
-    if probe_price is None:
-        return "defer_no_price"
-    if probe_price < e1_limit:
-        return "defer_below_e1"
-    return "pass"
-
-
-def _evaluate_day1_gap_gate(
-    ticker: str,
-    trade_date: dt.date,
-    spec: Any,
-    exchange_mic: str,
-    probe: Callable[[str, str], float | None] | None,
-    *,
-    source: str = "brief",
-) -> Day1GapGateVerdict:
-    """Orchestrates the gate for one pick: resolves E1 (the first PULLBACK
-    tier — ``ladder.build_entry_tiers`` returns tiers strictly descending, so
-    the first pullback tier is the shallowest/highest resting limit; a
-    leading immediate "now" tier (#1247) is EXCLUDED — its cap is not a
-    pullback rung and must not redefine the gate's threshold), calls the
-    price probe ONLY when the pick is within its day1 session at/after the
-    open+grace window — every other phase (pre-day1, pre-open, day 2+) needs
-    no price at all, and the probe is a real network round-trip — then
-    delegates the full verdict to the pure ``_day1_gap_gate_decision``.
-    ``source`` threads the day-1 anchor choice (#1246) into BOTH the
-    probe-gating check here and the decision, so the two can never disagree
-    on what "day1" means. A now-ONLY pick has no pullback rung: the gate is
-    not applicable (the group's decision IS the timing, memo §2) — pass
-    without probing."""
-    tiers = spec.entry_tiers or ()
-    e1_limit = next(
-        (t.limit_price for t in tiers if getattr(t, "entry_mode", "pullback") == "pullback"),
-        None,
-    )
-    if e1_limit is None and any(getattr(t, "entry_mode", "pullback") == "immediate" for t in tiers):
-        logger.info(
-            "day1 gap gate: %s carries only an immediate tier — gate not applicable", ticker
-        )
-        return "pass"
-    now_utc = dt.datetime.now(dt.UTC)
-    probe_price: float | None = None
-    if e1_limit is not None and probe is not None:
-        info = _day1_gap_gate_session_info(
-            trade_date,
-            exchange_mic,
-            day1_includes_trade_date=source == "manual",  # LEGACY(source_brief)
-        )
-        if info is not None:
-            day1, day1_open = info
-            grace_open = day1_open + dt.timedelta(seconds=_DAY1_GAP_GATE_OPEN_GRACE_S)
-            if now_utc.date() <= day1 and now_utc >= grace_open:
-                probe_price = probe(ticker, exchange_mic)
-    return _day1_gap_gate_decision(
-        now_utc, trade_date, e1_limit, probe_price, exchange_mic, source=source
-    )
 
 
 # US venue probe order for the day-1 gap gate price probe — the SAME shared
@@ -6530,7 +5317,7 @@ def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
 
     ANY exception (missing LIVE auth env, an unresolvable uic, a non-2xx
     subscription response, a malformed snapshot body) degrades to ``None`` —
-    the gate's own fail-safe (``_day1_gap_gate_decision``: no price, no day-1
+    the gate's own fail-safe (``day1_gap_gate._day1_gap_gate_decision``: no price, no day-1
     placement) already treats ``None`` as a defer, so this probe never needs
     to distinguish WHY it could not get a price. This is also why the SIM
     instance (which has no LIVE marketdata chain configured) self-degrades to
@@ -6618,142 +5405,11 @@ def _extract_day1_session_open(payload: Mapping[str, Any]) -> float | None:
     return value if math.isfinite(value) and value > 0 else None
 
 
-def _day1_gap_gate_defers(
-    ticker: str,
-    trade_date: dt.date,
-    spec: Any,
-    exchange_mic: str,
-    probe: Callable[[str, str], float | None] | None,
-    alert_throttled: Callable[[str, str], bool] | None,
-    *,
-    source: str,
-) -> bool:
-    """True iff the day-1 gap gate is enabled AND defers this pick (the
-    ``_place_pick`` early-return). Pages the operator (throttled) for the
-    actionable below-E1 verdict AND for the no-price verdict (an
-    INFRASTRUCTURE failure — the probe could not produce a price at all;
-    real incident 2026-08-12: LAC's resolve failure silently deferred its
-    whole day 1 at DEBUG); "defer_preopen" stays a DEBUG line (expected,
-    high-frequency).
-
-    ``source`` (no default — the one production caller must be explicit)
-    picks the day-1 anchor: ``"manual"`` gates on the arm date's own session,
-    ``"brief"`` on the next session (#1246)."""
-    if not _day1_gap_gate_enabled():
-        return False
-    gate_verdict = _evaluate_day1_gap_gate(
-        ticker, trade_date, spec, exchange_mic, probe, source=source
-    )
-    if gate_verdict == "pass":
-        return False
-    if gate_verdict == "defer_no_price":
-        # Ride the alert throttle for the WARNING too (zen pre-merge finding):
-        # the probe can fail every ~45s tick all day, and hundreds of
-        # identical journald WARNINGs would crowd out real signals. One
-        # WARNING per throttle window (or per tick when no alert sink is
-        # wired — unit tests, ad-hoc runs); suppressed repeats log at DEBUG.
-        sent = alert_throttled is None or alert_throttled(
-            f"day1 gap gate: {ticker} day-1 PRICE PROBE failed — an "
-            "infrastructure problem, not a market condition; check "
-            "instrument resolution / marketdata chain (the pick stays "
-            "deferred all of day 1 until a price arrives)",
-            f"day1-gap-noprice:{ticker}",
-        )
-        log = logger.warning if sent else logger.debug
-        log(
-            "place_pick %s: day1 gap gate deferred (defer_no_price) — the PRICE "
-            "PROBE returned no price (infrastructure problem, not a market "
-            "condition); check instrument resolution / marketdata chain",
-            ticker,
-        )
-        return True
-    logger.debug("place_pick %s: day1 gap gate deferred (%s)", ticker, gate_verdict)
-    if gate_verdict == "defer_below_e1" and alert_throttled is not None:
-        alert_throttled(
-            f"day1 gap gate: {ticker} trading below E1 at the day-1 open — "
-            "entry deferred to day 2+",
-            f"day1-gap:{ticker}",
-        )
-    return True
-
-
-_GEOMETRY_WITHOUT_TRAIL_ALERT_PREFIX = "geometry-without-entry-trail"
-
 # #1414: placing a DOCUMENT's own levels is a path no pick has taken since
 # 2026-08-19 — the deployed policy vetoed it for every one, which is exactly the
 # veto #1414 removed. So the first pick to take it deserves to be announced
 # rather than discovered in a journal afterwards. Throttled per ticker, like
 # every other operator alert here; it is an observation, never a refusal.
-_CLIENT_GEOMETRY_ALERT_PREFIX = "client-geometry-placed"
-
-
-def _announce_client_geometry(  # NOSONAR -- returns `placed` by design, see docstring
-    placed: bool,
-    exit_spec: Any,
-    ticker: str,
-    alert_throttled: Callable[[str, str], bool] | None,
-) -> bool:
-    """Page once per ticker when a pick HAS PLACED the levels its document
-    supplied, and pass the verdict through unchanged.
-
-    Takes the verdict rather than sitting at the top of ``_place_pick`` for two
-    reasons, both found in review. The message says "placing", and at the top it
-    said that about picks the fee floor, the gross cap or the exit-region gate
-    then refused. And the drain re-decodes every armed pick each ~45 s tick, so a
-    pick held by a NON-terminal refusal — `_refuse_geometry_without_trail` is
-    exactly one, and it fires only on levels-carrying documents — would repeat
-    the unthrottled ``logger.info`` forever.
-
-    Deliberately NOT a gate: the document is the authority on what is placed
-    (#1414), and a rail that could refuse here would be the fleet-wide veto that
-    change removed, reintroduced under another name. Hence the pass-through
-    return — it wraps a verdict, it never changes one."""
-    if not placed or not _places_client_geometry(exit_spec):
-        return placed
-    levels = exit_spec.initial_levels
-    message = (
-        f"place_pick {ticker}: placed the DOCUMENT's own exit levels "
-        f"(stop {levels.stop}, tp {levels.tp}) rather than the brief ladder"
-    )
-    logger.info(message)
-    if alert_throttled is not None:
-        alert_throttled(message, f"{_CLIENT_GEOMETRY_ALERT_PREFIX}:{ticker}")
-    return placed
-
-
-def _geometry_without_entry_trail_note(
-    exit_spec: Any,
-) -> str | None:
-    """Why a NEW entry must not be armed right now, or ``None`` when it may be
-    (issue #1112 round 2, point 4).
-
-    The #1112 exit-region arm gate (:func:`entry_watch._inside_exit_region_note`) and the
-    single-tranche contract (:func:`entry_watch._exit_plan_shape_refusal`) exist ONLY on the
-    trailing-entry path. With ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` at 0 a pick
-    falls through to the classic ``_place_tiers`` bracket path, which has
-    neither — so the exact defect #1112 fixed (an entry filling inside its own
-    exit region) is reachable again. 0 is what this repo's own systemd unit
-    sets; production only runs the gated path because of an untracked drop-in
-    (issue #1121), which is a config fact no test can see.
-
-    Deliberately scoped to ARMING. Refusing at daemon startup instead would
-    leave every already-open LIVE position unmanaged — no take-profit pass, no
-    stop re-anchor — which is far worse than the defect being prevented. The
-    live-exits and protection passes are untouched by this.
-
-    ``None`` when the document places no geometry: the placed exit IS the
-    brief's own ladder, and the arm gate never priced anything, so the classic
-    path is no worse than it has always been.
-    """
-    if not _places_client_geometry(exit_spec):
-        return None
-    if entry_trails.entry_trail_bps() > 0:
-        return None
-    return (
-        f"exit geometry is active but the entry trail is off "
-        f"({entry_trails.ENTRY_TRAIL_BPS_ENV}=0) — the classic bracket path has no "
-        f"exit-region gate, so a new entry could fill inside its own exit region"
-    )
 
 
 def _entry_trail_intercept(
@@ -6782,7 +5438,7 @@ def _entry_trail_intercept(
     d_bps = entry_trails.entry_trail_bps()
     if (
         d_bps <= 0
-        or not _entry_trail_eligible(plan)
+        or not entry_watch_capacity._entry_trail_eligible(plan)
         or not isinstance(broker, SupportsTrailingStop)
     ):
         return None
@@ -6796,12 +5452,14 @@ def _entry_trail_intercept(
     # Match _open_entry_watches' pick_key byte-for-byte: the string
     # trade_date, not the caller's parsed date (str(date) happens to agree,
     # but pin the exact form the watch_open records actually carry).
-    pick_key = picks.pick_key_str(ticker, intent.meta.trade_date, _pick_generation(intent))
-    already_watching = pick_key in _open_watch_pick_keys(entry_trail_fold)
-    if not already_watching and _entry_watch_capacity_reached(entry_trail_fold):
+    pick_key = picks.pick_key_str(ticker, intent.meta.trade_date, picks._pick_generation(intent))
+    already_watching = pick_key in entry_watch_capacity._open_watch_pick_keys(entry_trail_fold)
+    if not already_watching and entry_watch_capacity._entry_watch_capacity_reached(
+        entry_trail_fold
+    ):
         # Pick-denominated capacity (memo decision #4): stay ARMED (not a
         # terminal refusal) so it opens once an earlier watch clears.
-        _log_watch_capacity_deferral(ticker, pick_key)
+        entry_watch_capacity._log_watch_capacity_deferral(ticker, pick_key)
         return False
     # 2026-08-19 adjudication finding 2: routing while a live long still holds
     # the SAME uic would journal a fresh tranche_plan that replaces the live
@@ -6825,7 +5483,7 @@ def _entry_trail_intercept(
         except OSError:
             governing = None
         if governing != pick_key:
-            _log_live_uic_deferral(ticker, pick_key, uic)
+            entry_watch_capacity._log_live_uic_deferral(ticker, pick_key, uic)
             return False
         logger.info(
             "place_pick %s: live long on uic %d is governed by this pick — "
@@ -6939,162 +5597,6 @@ class _NowOutcome(enum.Enum):
     REFUSED_PICK = "refused_pick"  # cost gate — terminal for the whole pick
 
 
-def _now_ioc_supported(broker: Any, instrument: Any) -> bool:
-    """Whether the instrument supports IOC for Limit orders — fail-open to
-    False (DayOrder), never IOC on an unreadable capability (PR-B doctrine)."""
-    probe = getattr(broker, "limit_order_durations_for", None)
-    if probe is None:
-        return False
-    try:
-        durations = probe(
-            int(instrument.broker_instrument_id),
-            str(getattr(instrument, "asset_type", "Stock") or "Stock"),
-        )
-    except Exception:
-        return False
-    return durations is not None and "ImmediateOrCancel" in durations
-
-
-def _now_submitted_cap(broker: Any, instrument: Any, operator_cap: float) -> float:
-    """The cap floored DOWN to the limit tick (memo §3.2.3) when the adapter
-    exposes the floor capability; the verbatim operator cap otherwise (test
-    fakes — the adapter's own quantize still runs at POST)."""
-    if isinstance(broker, SupportsPriceTickFloor):
-        return broker.floor_limit_price_to_tick(
-            int(instrument.broker_instrument_id),
-            str(getattr(instrument, "asset_type", "Stock") or "Stock"),
-            operator_cap,
-        )
-    return operator_cap
-
-
-def _now_cost_gate_violation(
-    plan: Any,
-    fx: Any,
-    instrument: Any,
-    exit_spec: Any,
-    *,
-    cap: float,
-) -> str | None:
-    """Memo §3.3 — the #1112 parity gate at drain: TP1 must clear round-trip
-    cost at the CAP (the worst-case fill). Mirrors ``entry_watch._brief_plan_arm_refusal``
-    with ``fill_estimate = cap``; a pick with no take-profit has no TP1 to gate —
-    vacuous by design (stop-only plan, the group manages exits)."""
-    reference_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
-    if _places_client_geometry(exit_spec):
-        target = float(exit_spec.initial_levels.tp)
-        qty = reference_qty
-    else:
-        tranches = getattr(plan, "tp_tranches", ()) or ()
-        if not tranches:
-            logger.info("now cost gate: pick has no TP tranches — gate vacuous")
-            return None
-        quantities = apportion_tranche_quantities(
-            reference_qty=reference_qty,
-            tranche_fracs=tuple(t.tranche_frac for t in tranches),
-        )
-        violation = apportioned_coverage_violation(
-            tranche_quantities=quantities, reference_qty=reference_qty
-        )
-        if violation is not None:
-            return f"now tranche: {violation}"
-        first = next(((t, q) for t, q in zip(tranches, quantities, strict=True) if q > 0.0), None)
-        if first is None:
-            return "now tranche: exit plan has no sellable tranche"
-        target, qty = float(first[0].target_price), float(first[1])
-    facts = cost_gate_facts(
-        instrument_currency=str(getattr(instrument, "currency", "") or ""),
-        sizing_currency=_sizing_currency_of(fx, instrument),
-        exchange_mic=str(getattr(instrument, "exchange_mic", "") or ""),
-    )
-    if entry_trail_geometry.arms_inside_exit_region(
-        fill_estimate=cap, exit_target=target, qty=qty, facts=facts
-    ):
-        return (
-            f"now tranche would fill inside the exit region at the cap: cap {cap:.4f}, "
-            f"first take-profit {target:.4f} ({qty:g} share(s)) does not clear "
-            "round-trip cost + E_min"
-        )
-    return None
-
-
-def _now_meta(
-    intent: Any,
-    operator_cap: float,
-    submitted_cap: float,
-    point: Any,
-    duration: str | None,
-) -> dict[str, Any]:
-    """The now half's ``tranche_meta`` telemetry (memo §3.2 observability).
-    The quote's delay value is structurally 0 by the feed contract
-    (SaxoLivePriceFeed vetoes anything else) and is not on PricePoint."""
-    meta: dict[str, Any] = {
-        "armed_ts": str(intent.meta.armed_ts),
-        "operator_cap": operator_cap,
-        "submitted_cap": submitted_cap,
-    }
-    if point is not None:
-        meta["gate_ask"] = float(point.ask)
-        meta["gate_bid"] = float(point.bid)
-        meta["gate_event_time"] = (
-            point.event_time.isoformat(timespec="seconds") if point.event_time else None
-        )
-        meta["gate_source"] = str(point.source)
-    if duration is not None:
-        meta["entry_duration"] = duration
-    return meta
-
-
-def _refuse_now_tranche(
-    intent: Any,
-    ticker: str,
-    instrument: Any,
-    account: Any,
-    fx: Any,
-    *,
-    note: str,
-    meta: Mapping[str, Any],
-) -> None:
-    """Journal a terminal now-tranche refusal: a ``tranche=="now"`` record is
-    SKIPPED by ``picks.submitted_pick_keys`` (the siblings keep draining) and
-    found by the arm-generation scan (the now half never retries)."""
-    from alphalens_pipeline.brokers.submission_log import (
-        SizingStamp,
-        append_submission_record,
-        build_submission_record,
-    )
-
-    try:
-        append_submission_record(
-            build_submission_record(
-                trade_date=intent.meta.trade_date,
-                generation=_pick_generation(intent),
-                ticker=ticker,
-                mic=instrument.exchange_mic,
-                uic=instrument.broker_instrument_id,
-                brackets=[],
-                note=note,
-                sizing=SizingStamp(
-                    sizing_currency=account.currency,
-                    instrument_currency=instrument.currency,
-                    fx=fx,
-                ),
-                tranche="now",
-                tranche_meta=dict(meta),
-            )
-        )
-    except OSError as exc:
-        # Mirror _refuse_pick_terminal: a journal-append failure must never
-        # crash the tick; without the marker the now half re-evaluates next
-        # tick (the page is throttled).
-        logger.warning(
-            "place_pick %s: now-tranche refusal record append failed "
-            "(now half retries next tick): %s",
-            ticker,
-            exc,
-        )
-
-
 def _handle_now_tranche(
     refs: _PickRefs,
     plan: Any,
@@ -7114,14 +5616,16 @@ def _handle_now_tranche(
 
     broker, intent, ticker = refs.broker, refs.intent, refs.ticker
     instrument, fx = refs.instrument, refs.fx
-    if _now_already_done(records, ticker, intent):
+    if now_tranche._now_already_done(records, ticker, intent):
         return _NowOutcome.ALREADY_DONE
     if now_tier.qty <= 0:
         logger.warning("place_pick %s: now tier sized to zero shares — skipped", ticker)
         return _NowOutcome.REFUSED_NOW
     operator_cap = float(now_tier.limit_price)
-    submitted_cap = _now_submitted_cap(broker, instrument, operator_cap)
-    violation = _now_cost_gate_violation(plan, fx, instrument, exit_spec, cap=submitted_cap)
+    submitted_cap = now_tranche._now_submitted_cap(broker, instrument, operator_cap)
+    violation = placed_geometry._now_cost_gate_violation(
+        plan, fx, instrument, exit_spec, cap=submitted_cap
+    )
     if violation is not None:
         _refuse_pick_terminal(
             ticker,
@@ -7129,7 +5633,7 @@ def _handle_now_tranche(
             violation,
             f"now-cost:{ticker}",
             alert_throttled,
-            generation=_pick_generation(intent),
+            generation=picks._pick_generation(intent),
         )
         return _NowOutcome.REFUSED_PICK
     uic = int(instrument.broker_instrument_id)
@@ -7158,7 +5662,7 @@ def _handle_now_tranche(
         )
         _drop_now_scope(now_entry_scope, pick_key)
         return _NowOutcome.REFUSED_NOW
-    duration = "ioc" if _now_ioc_supported(broker, instrument) else "day"
+    duration = "ioc" if now_tranche._now_ioc_supported(broker, instrument) else "day"
     # cast, not an annotation: replace() preserves its input type at runtime,
     # but static analyzers type it as a bare DataclassInstance protocol.
     now_plan = cast(
@@ -7171,7 +5675,7 @@ def _handle_now_tranche(
         return _NowOutcome.REFUSED_NOW
 
     def _classify_error(exc: Any) -> str:
-        return _classify_now_broker_error(exc, ticker, alert_throttled)
+        return now_tranche._classify_now_broker_error(exc, ticker, alert_throttled)
 
     placed = _place_tiers(
         refs,
@@ -7180,32 +5684,13 @@ def _handle_now_tranche(
         plan=now_plan,
         entry_duration=duration,
         record_tranche="now",
-        record_meta=_now_meta(intent, operator_cap, submitted_cap, point, duration),
+        record_meta=now_tranche._now_meta(intent, operator_cap, submitted_cap, point, duration),
         write_ahead_note="now placement attempt",
         tranche_plan_override=tranche_plan_override,
         on_broker_error=_classify_error,
     )
     _drop_now_scope(now_entry_scope, pick_key)
     return _NowOutcome.PLACED if placed > 0 else _NowOutcome.REFUSED_NOW
-
-
-def _now_already_done(records: Sequence[Mapping[str, Any]], ticker: str, intent: Any) -> bool:
-    """Idempotency / crash re-drive: ANY now record for this arm generation
-    means the now half is done (placed, refused, or write-ahead-then-crashed —
-    the ``_place_tiers`` write-ahead contract: an attempt marker with no
-    bracket is an alertable non-retried attempt, never re-POSTed)."""
-    armed_ts = str(intent.meta.armed_ts)
-    return any(
-        str(record.get("tranche") or "") == "now"
-        and str(record.get("ticker") or "").upper() == ticker
-        # #1252: the journal date key was renamed brief_date -> trade_date.
-        # Legacy records on disk still carry the old key (append-only
-        # journals are never rewritten), so fall back to it.
-        and str(record.get("trade_date") or record.get("brief_date") or "")
-        == str(intent.meta.trade_date)
-        and str((record.get("tranche_meta") or {}).get("armed_ts") or "") == armed_ts
-        for record in records
-    )
 
 
 def _read_now_quote(
@@ -7228,26 +5713,6 @@ def _read_now_quote(
         return None
 
 
-def _classify_now_broker_error(
-    exc: Any, ticker: str, alert_throttled: Callable[[str, str], bool] | None
-) -> str:
-    """#1247: classify a now-placement BrokerError (price-tolerance reject vs
-    generic failure) + page; the returned string is the failure record's
-    ``tranche_meta`` outcome."""
-    if _is_price_tolerance_reject(exc):
-        if alert_throttled is not None:
-            alert_throttled(
-                f"now tranche {ticker}: rejected by the venue price-tolerance check "
-                f"({exc}) — NOT entered; if the signal stands, disarm the pick and arm a "
-                "new document with a fresh cap (a replace keeps this tier done)",
-                f"now-reject:{ticker}",
-            )
-        return "refused_reject"
-    if alert_throttled is not None:
-        alert_throttled(f"now tranche {ticker}: placement failed ({exc})", f"now-fail:{ticker}")
-    return "failed"
-
-
 def _refuse_now_above_cap(
     refs: _PickRefs,
     *,
@@ -7257,7 +5722,7 @@ def _refuse_now_above_cap(
     alert_throttled: Callable[[str, str], bool] | None,
 ) -> None:
     """Journal the terminal above-cap now refusal and page the operator."""
-    _refuse_now_tranche(
+    now_tranche._refuse_now_tranche(
         refs.intent,
         refs.ticker,
         refs.instrument,
@@ -7265,7 +5730,8 @@ def _refuse_now_above_cap(
         refs.fx,
         note=f"now refused: ask {float(point.ask):.4f} above cap {submitted_cap:.4f}",
         meta=dict(
-            _now_meta(refs.intent, operator_cap, submitted_cap, point, None), outcome="refused_cap"
+            now_tranche._now_meta(refs.intent, operator_cap, submitted_cap, point, None),
+            outcome="refused_cap",
         ),
     )
     if alert_throttled is not None:
@@ -7302,7 +5768,7 @@ def _post_sizing_money_gate_refuses(
     # known, BEFORE any bracket construction/placement. A pick below the
     # floor is refused terminal (never re-tried every tick) and NEVER placed;
     # ALPHALENS_BROKER_MAX_FEE_BPS unset (SIM) skips the check entirely.
-    fee_violation = _check_fee_floor(
+    fee_violation = pick_money_gates._check_fee_floor(
         plan,
         fx,
         ticker=ticker,
@@ -7326,12 +5792,12 @@ def _post_sizing_money_gate_refuses(
     # Portfolio gross cap (broker sizing memo §3) — the ONLY gross rail since
     # #1192 removed the currency-mismatched pre-sizing arm from safety.check.
     # Account-currency, candidate included (see the section comment above
-    # _check_gross_cap). Same inputs already in scope — zero new broker I/O.
+    # pick_money_gates._check_gross_cap). Same inputs already in scope — zero new broker I/O.
     # Staleness bound: `positions`/`account` were snapshotted a few synchronous
     # (non-network) steps above; at the 45s poll cadence that skew is benign.
     # If a future change inserts broker I/O between the snapshot and this
     # check, or drops the cadence to sub-second streaming, re-snapshot here.
-    gross_violation = _check_gross_cap(
+    gross_violation = pick_money_gates._check_gross_cap(
         plan,
         fx,
         account=account,
@@ -7355,9 +5821,9 @@ def _post_sizing_money_gate_refuses(
 
     # Cash floor (broker sizing declared-frame memo §4.2) — declared mode
     # only; runs AFTER the gross cap (exposure first, funding second — and the
-    # gross cap's fail-closed unjoined check must win, see _check_cash_floor)
+    # gross cap's fail-closed unjoined check must win, see pick_money_gates._check_cash_floor)
     # and BEFORE classify, on the same post-sizing inputs. Zero new broker I/O.
-    cash_violation = _check_cash_floor(
+    cash_violation = pick_money_gates._check_cash_floor(
         plan,
         fx,
         account=account,
@@ -7428,7 +5894,9 @@ def _place_pick(
     currency = (account_currency or _AccountCurrency()).read(broker)
     if currency is None:
         return False
-    size_violation = _check_pick_size(spec.size, account_currency=currency, ticker=ticker)
+    size_violation = pick_money_gates._check_pick_size(
+        spec.size, account_currency=currency, ticker=ticker
+    )
     if size_violation is not None:
         violation, alert_key = size_violation
         _refuse_pick_terminal(
@@ -7446,7 +5914,7 @@ def _place_pick(
     # read above is memoised per daemon, so a warm deferral costs nothing. Never
     # journals a refusal (queue-semantics stays unchanged): a deferred pick
     # stays armed and is re-evaluated next tick.
-    if _day1_gap_gate_defers(
+    if day1_gap_gate._day1_gap_gate_defers(
         ticker,
         trade_date,
         spec,
@@ -7486,9 +5954,11 @@ def _place_pick(
     # MAX_OPEN position term and the watch exclusion below must see distinct
     # net-nonzero uics, never raw rows (see _net_open_position_uics).
     net_position_uics, unresolvable_position_rows = _net_open_position_uics(positions)
-    open_watch_picks = _open_watch_picks_for_max_open(
+    open_watch_picks = entry_watch_capacity._open_watch_picks_for_max_open(
         entry_trail_fold,
-        own_pick_key=picks.pick_key_str(ticker, intent.meta.trade_date, _pick_generation(intent)),
+        own_pick_key=picks.pick_key_str(
+            ticker, intent.meta.trade_date, picks._pick_generation(intent)
+        ),
         position_uics=net_position_uics,
     )
 
@@ -7508,10 +5978,14 @@ def _place_pick(
         _AlreadyGatedSessionState(),
     )
     if isinstance(decision, safety.Refuse):
-        _handle_safety_refusal(decision, ticker, trade_date, generation=_pick_generation(intent))
+        _handle_safety_refusal(
+            decision, ticker, trade_date, generation=picks._pick_generation(intent)
+        )
         return False
 
-    resolved = _resolve_and_size(broker, ticker, account, spec, hint_mic=intent.instrument.mic)
+    resolved = pick_money_gates._resolve_and_size(
+        broker, ticker, account, spec, hint_mic=intent.instrument.mic
+    )
     if resolved is None:
         return False
     instrument, fx, plan = resolved
@@ -7528,7 +6002,7 @@ def _place_pick(
         broker=broker,
         ticker=ticker,
         trade_date=trade_date,
-        generation=_pick_generation(intent),
+        generation=picks._pick_generation(intent),
         alert_throttled=alert_throttled,
     ):
         return False
@@ -7549,7 +6023,9 @@ def _place_pick(
         now_entry_scope=now_entry_scope,
     )
     if routing.early_result is not None:
-        return _announce_client_geometry(routing.early_result, exit_spec, ticker, alert_throttled)
+        return placed_geometry._announce_client_geometry(
+            routing.early_result, exit_spec, ticker, alert_throttled
+        )
     plan = routing.plan
     now_placed = routing.now_placed
     reference_qty_override = routing.reference_qty_override
@@ -7579,9 +6055,11 @@ def _place_pick(
         # must read as not-placed so the drain retries next tick (the
         # armed_ts scan skips the now half); the pick counts as placed on
         # the tick the siblings actually route.
-        return _announce_client_geometry(intercepted, exit_spec, ticker, alert_throttled)
+        return placed_geometry._announce_client_geometry(
+            intercepted, exit_spec, ticker, alert_throttled
+        )
 
-    if _refuse_geometry_without_trail(exit_spec, ticker, alert_throttled):
+    if placed_geometry._refuse_geometry_without_trail(exit_spec, ticker, alert_throttled):
         return False
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
@@ -7589,7 +6067,7 @@ def _place_pick(
         logger.warning("place_pick %s: every entry tier sized to zero shares", ticker)
         return now_placed
 
-    return _announce_client_geometry(
+    return placed_geometry._announce_client_geometry(
         (
             _place_tiers(
                 _PickRefs(broker, intent, ticker, instrument, account, fx),
@@ -7639,7 +6117,7 @@ def _route_now_tranche(
     )
     if not now_tiers:
         return _NowRouting(None, plan, False, None, None)
-    pick_key = picks.pick_key_str(ticker, intent.meta.trade_date, _pick_generation(intent))
+    pick_key = picks.pick_key_str(ticker, intent.meta.trade_date, picks._pick_generation(intent))
     full_ladder_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
     outcome = _handle_now_tranche(
         refs,
@@ -7668,7 +6146,7 @@ def _route_now_tranche(
                 ticker,
                 trade_date,
                 "now tranche refused (see submissions journal)",
-                generation=_pick_generation(intent),
+                generation=picks._pick_generation(intent),
             )
         return _NowRouting(now_placed, plan, now_placed, None, None)
     plan = replace(plan, entry_tiers=pullback_tiers)
@@ -7677,29 +6155,6 @@ def _route_now_tranche(
         # re-appends the SAME keyed plan (benign, no generation reset).
         return _NowRouting(None, plan, True, full_ladder_qty, (pick_key, full_ladder_qty))
     return _NowRouting(None, plan, False, None, None)
-
-
-def _refuse_geometry_without_trail(
-    exit_spec: Any,
-    ticker: str,
-    alert_throttled: Callable[[str, str], bool] | None,
-) -> bool:
-    """The pick is about to take the CLASSIC bracket path, which carries
-    neither #1112 arm gate. Refuse a new entry while the geometry exit is
-    active and the trail is off (issue #1112 round 2, point 4). NOT terminal:
-    this is a configuration rail like KILL / ALLOW_ORDERS, so the pick stays
-    armed and places itself once the trail is on — a terminal refusal would
-    destroy the armed queue over an operator setting."""
-    no_trail_note = _geometry_without_entry_trail_note(exit_spec)
-    if no_trail_note is None:
-        return False
-    logger.warning("place_pick %s: refused — %s", ticker, no_trail_note)
-    if alert_throttled is not None:
-        alert_throttled(
-            f"place_pick {ticker}: {no_trail_note}",
-            f"{_GEOMETRY_WITHOUT_TRAIL_ALERT_PREFIX}:{ticker}",
-        )
-    return True
 
 
 def _handle_safety_refusal(

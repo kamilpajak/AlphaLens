@@ -106,7 +106,7 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3417,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8598,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7053,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3058,

@@ -26,6 +26,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails
+from alphalens_pipeline.brokers.automanager import entry_watch_capacity as ewc
 from broker_contract.contract import OrderState, OrderStatus
 
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
@@ -374,7 +375,7 @@ class TestCapacityUnjammedByFired(IsolatedHomeTestCase):
 
         # A resting armed (non-terminal) tier occupies the single watch slot.
         self.assertTrue(
-            cl._entry_watch_capacity_reached(entry_trails.read_entry_trail_fold()),
+            ewc._entry_watch_capacity_reached(entry_trails.read_entry_trail_fold()),
             "the resting armed tier jams the single watch slot",
         )
 
@@ -382,7 +383,7 @@ class TestCapacityUnjammedByFired(IsolatedHomeTestCase):
 
         # After the fired terminal a NEW pick can open a watch again.
         self.assertFalse(
-            cl._entry_watch_capacity_reached(entry_trails.read_entry_trail_fold()),
+            ewc._entry_watch_capacity_reached(entry_trails.read_entry_trail_fold()),
             "the fired terminal frees the watch slot",
         )
 

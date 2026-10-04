@@ -407,10 +407,10 @@ class TestContainmentAndSkew(unittest.TestCase):
         # "Fail-closed is CONTENT, not an exception" must hold for an
         # UNEXPECTED error too — a malformed record mid-incident cannot be
         # allowed to abort the snapshot the operator is reading.
-        from alphalens_pipeline.brokers.automanager import control_loop
+        from alphalens_pipeline.brokers.automanager import pick_money_gates as pmg
 
         with mock.patch.object(
-            control_loop, "_committed_working_gross_acct", side_effect=KeyError("shape drift")
+            pmg, "_committed_working_gross_acct", side_effect=KeyError("shape drift")
         ):
             snapshot = self.h.build(_FakeBroker())
         self.assertIsNone(snapshot.exposure.used)
@@ -576,7 +576,7 @@ class TestGateParity(unittest.TestCase):
         return _Plan(entry_tiers=(_Tier(qty=1.0, limit_price=gross),))
 
     def test_a_candidate_sized_to_the_headroom_passes_the_real_gate(self) -> None:
-        from alphalens_pipeline.brokers.automanager import control_loop
+        from alphalens_pipeline.brokers.automanager import pick_money_gates as pmg
 
         for label, positions, watches in self._states():
             with self.subTest(state=label):
@@ -595,10 +595,10 @@ class TestGateParity(unittest.TestCase):
                     "entry_trail_fold": fold,
                 }
                 self.assertIsNone(
-                    control_loop._check_gross_cap(self._plan(headroom), None, **common),
+                    pmg._check_gross_cap(self._plan(headroom), None, **common),
                     "a candidate exactly at the reported headroom must be allowed",
                 )
-                refusal = control_loop._check_gross_cap(self._plan(headroom + 1.0), None, **common)
+                refusal = pmg._check_gross_cap(self._plan(headroom + 1.0), None, **common)
                 self.assertIsNotNone(refusal, "one unit over the headroom must be refused")
 
     def test_no_free_slot_means_the_real_safety_gate_refuses(self) -> None:
@@ -619,7 +619,7 @@ class TestGateParity(unittest.TestCase):
             self.assertIsInstance(decision, safety.Refuse)
 
     def test_every_blocked_state_is_a_state_the_gate_also_refuses(self) -> None:
-        from alphalens_pipeline.brokers.automanager import control_loop
+        from alphalens_pipeline.brokers.automanager import pick_money_gates as pmg
 
         # No mark on a position.
         positions = [_position(market_value=None)]
@@ -627,7 +627,7 @@ class TestGateParity(unittest.TestCase):
         snapshot = self.h.build(broker)
         self.assertTrue(snapshot.exposure.blocked)
         self.assertIsNotNone(
-            control_loop._check_gross_cap(
+            pmg._check_gross_cap(
                 self._plan(1.0),
                 None,
                 account=broker.account,
@@ -646,7 +646,7 @@ class TestGateParity(unittest.TestCase):
         self.assertTrue(snapshot.exposure.blocked)
         fold = entry_trails.read_entry_trail_fold(path=self.h.root / "entry_trails.jsonl")
         self.assertIsNotNone(
-            control_loop._check_gross_cap(
+            pmg._check_gross_cap(
                 self._plan(1.0),
                 None,
                 account=_account(),
@@ -668,18 +668,25 @@ class TestDaemonFoldCoupling(unittest.TestCase):
         # Necessary but NOT sufficient: a rename breaks CI here, while a
         # semantic drift under the same name is caught only by the boundary
         # probe above. Both tests exist for that reason.
-        from alphalens_pipeline.brokers.automanager import control_loop
+        from alphalens_pipeline.brokers.automanager import (
+            control_loop,
+            entry_watch_capacity,
+            pick_money_gates,
+        )
 
-        for name in (
-            "_committed_working_gross_acct",
-            "_filled_positions_gross_acct",
-            "_make_position_rate_lookup",
-            "_net_open_position_uics",
-            "_summarize_open_verdicts",
-            "_open_watch_picks_for_max_open",
+        # Each fold is named with the module that OWNS it: the step-5 partition
+        # moved four of the six out of ``control_loop``, and a pair here that
+        # named the wrong module would pass vacuously under ``getattr(..., None)``.
+        for module, name in (
+            (pick_money_gates, "_committed_working_gross_acct"),
+            (pick_money_gates, "_filled_positions_gross_acct"),
+            (pick_money_gates, "_make_position_rate_lookup"),
+            (control_loop, "_net_open_position_uics"),
+            (control_loop, "_summarize_open_verdicts"),
+            (entry_watch_capacity, "_open_watch_picks_for_max_open"),
         ):
-            with self.subTest(fold=name):
-                self.assertTrue(callable(getattr(control_loop, name, None)))
+            with self.subTest(fold=name, module=module.__name__):
+                self.assertTrue(callable(getattr(module, name, None)))
 
 
 if __name__ == "__main__":

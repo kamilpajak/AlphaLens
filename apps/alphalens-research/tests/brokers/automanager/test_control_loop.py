@@ -21,7 +21,11 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import day1_gap_gate as d1g
 from alphalens_pipeline.brokers.automanager import entry_trails, state_paths, trade_alerts
+from alphalens_pipeline.brokers.automanager import now_tranche as nt
+from alphalens_pipeline.brokers.automanager import pick_money_gates as pmg
+from alphalens_pipeline.brokers.automanager import placed_geometry as pg
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager import stream_handles as sh
 from alphalens_pipeline.brokers.automanager.costs import round_trip_fee_bps
@@ -556,7 +560,7 @@ class TestNowAlreadyDoneLegacyBriefDateKey(IsolatedHomeTestCase):
                 "tranche_meta": {"armed_ts": intent.meta.armed_ts},
             }
         ]
-        self.assertTrue(cl._now_already_done(records, "RHI", intent))
+        self.assertTrue(nt._now_already_done(records, "RHI", intent))
 
 
 class TestRefusedPickNotRetriedAcrossTicks(IsolatedHomeTestCase):
@@ -768,7 +772,7 @@ class TestPlaceTiersNowParams(IsolatedHomeTestCase):
             "brackets": [{"client_request_id": "rid-1", "qty": 5, "entry": 43.0}],
         }
         verdict = type("V", (), {"status": "WORKING", "details": {"client_request_id": "rid-1"}})()
-        total, unjoined = cl._committed_working_gross_acct([verdict], [record])
+        total, unjoined = pmg._committed_working_gross_acct([verdict], [record])
         self.assertEqual(total, 5 * 43.0)
         self.assertEqual(unjoined, 0)
 
@@ -1032,7 +1036,7 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
         # future refactor stops calling it or ignores its answer.
         placed: list[Any] = []
         broker = _PlaceBroker(on_place=placed.append)
-        with mock.patch.object(cl, "_check_gross_cap", return_value="gross-sentinel"):
+        with mock.patch.object(pmg, "_check_gross_cap", return_value="gross-sentinel"):
             self.assertFalse(self._placer(broker)(_pick()))
         self.assertEqual(placed, [])
 
@@ -1040,7 +1044,7 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
         # Positive control for the pin above: with the same wiring and the rail
         # reporting no violation, the pick IS placed. Without this, the test
         # above would still pass if _place_pick refused everything.
-        with mock.patch.object(cl, "_check_gross_cap", return_value=None):
+        with mock.patch.object(pmg, "_check_gross_cap", return_value=None):
             self.assertTrue(self._placer(_PlaceBroker())(_pick()))
 
     def test_terminal_safety_refuse_appends_terminal_refused_line(self) -> None:
@@ -1219,7 +1223,7 @@ class TestResolveAndSizeSpendsTheDocumentsAmount(IsolatedHomeTestCase):
             mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t, **_kw: _instr()),
             mock.patch.dict("os.environ", env, clear=True),
         ):
-            resolved = cl._resolve_and_size(_PlaceBroker(), "KO", account, spec)
+            resolved = pmg._resolve_and_size(_PlaceBroker(), "KO", account, spec)
         assert resolved is not None
         _instrument, _fx, plan = resolved
         return sum(t.qty * t.limit_price for t in plan.entry_tiers)
@@ -1261,7 +1265,7 @@ class TestResolveAndSizeThreadsTheVenueHint(IsolatedHomeTestCase):
             p(mock.patch(f"{pkg}.routing.resolve_us_instrument", _resolve))
             p(mock.patch("broker_contract.sizing.compute_setup_plan", lambda _s, **_k: object()))
             p(mock.patch.dict("os.environ", {}, clear=True))
-            cl._resolve_and_size(_PlaceBroker(), "KO", _acct(), object(), hint_mic=hint)
+            pmg._resolve_and_size(_PlaceBroker(), "KO", _acct(), object(), hint_mic=hint)
         return captured["exchange_mic"]
 
     def test_a_us_hint_keeps_probing(self) -> None:
@@ -1290,7 +1294,9 @@ class TestResolveAndSizeThreadsTheVenueHint(IsolatedHomeTestCase):
             p = stack.enter_context
             p(mock.patch(f"{pkg}.routing.resolve_us_instrument", _resolve))
             p(mock.patch.dict("os.environ", {}, clear=True))
-            result = cl._resolve_and_size(_PlaceBroker(), "CDR", _acct(), object(), hint_mic="XXXX")
+            result = pmg._resolve_and_size(
+                _PlaceBroker(), "CDR", _acct(), object(), hint_mic="XXXX"
+            )
         self.assertIsNone(result)
 
 
@@ -1337,15 +1343,15 @@ class TestCheckFeeFloor(IsolatedHomeTestCase):
 
     def test_env_unset_returns_none_even_at_tiny_notional(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertIsNone(cl._check_fee_floor(_fee_plan(50.0), None, ticker="KO"))
+            self.assertIsNone(pmg._check_fee_floor(_fee_plan(50.0), None, ticker="KO"))
 
     def test_under_cap_returns_none(self) -> None:
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
-            self.assertIsNone(cl._check_fee_floor(_fee_plan(10_000.0), None, ticker="KO"))
+            self.assertIsNone(pmg._check_fee_floor(_fee_plan(10_000.0), None, ticker="KO"))
 
     def test_over_cap_names_ticker_and_fee_in_the_message(self) -> None:
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
-            message = cl._check_fee_floor(_fee_plan(50.0), None, ticker="KO")
+            message = pmg._check_fee_floor(_fee_plan(50.0), None, ticker="KO")
         self.assertIsNotNone(message)
         assert message is not None  # narrows for the type checker
         self.assertIn("KO", message)
@@ -1355,15 +1361,15 @@ class TestCheckFeeFloor(IsolatedHomeTestCase):
         # Same notional, same cap: the FX leg alone tips a pass into a refusal
         # (pins the fx-applies branch distinctly from the same-currency path).
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "50"}, clear=True):
-            self.assertIsNone(cl._check_fee_floor(_fee_plan(1000.0), None, ticker="KO"))
-            self.assertIsNotNone(cl._check_fee_floor(_fee_plan(1000.0), object(), ticker="KO"))
+            self.assertIsNone(pmg._check_fee_floor(_fee_plan(1000.0), None, ticker="KO"))
+            self.assertIsNotNone(pmg._check_fee_floor(_fee_plan(1000.0), object(), ticker="KO"))
 
     def test_malformed_cap_fails_closed_to_a_refusal(self) -> None:
         # A typo'd fee cap must NEVER crash the tick and must NEVER silently
         # disable the floor (fail-open) — the pick is refused with a message
         # naming the env var so the operator fixes the unit, not the pick.
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "1O0"}, clear=True):
-            message = cl._check_fee_floor(_fee_plan(10_000.0), None, ticker="KO")
+            message = pmg._check_fee_floor(_fee_plan(10_000.0), None, ticker="KO")
         self.assertIsNotNone(message)
         assert message is not None
         self.assertIn(MAX_FEE_BPS_ENV, message)
@@ -1380,16 +1386,16 @@ class TestCheckFeeFloor(IsolatedHomeTestCase):
         # refused like the other carded venues.
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
             self.assertIsNotNone(
-                cl._check_fee_floor(_fee_plan(50.0), None, ticker="KO", instrument_currency="USD")
+                pmg._check_fee_floor(_fee_plan(50.0), None, ticker="KO", instrument_currency="USD")
             )
             self.assertIsNotNone(
-                cl._check_fee_floor(_fee_plan(50.0), None, ticker="CDR", instrument_currency="PLN")
+                pmg._check_fee_floor(_fee_plan(50.0), None, ticker="CDR", instrument_currency="PLN")
             )
             self.assertIsNotNone(
-                cl._check_fee_floor(_fee_plan(50.0), None, ticker="ASM", instrument_currency="EUR")
+                pmg._check_fee_floor(_fee_plan(50.0), None, ticker="ASM", instrument_currency="EUR")
             )
             self.assertIsNone(
-                cl._check_fee_floor(_fee_plan(50.0), None, ticker="NES", instrument_currency="CHF")
+                pmg._check_fee_floor(_fee_plan(50.0), None, ticker="NES", instrument_currency="CHF")
             )
 
 
@@ -1425,12 +1431,12 @@ class TestFeeFloorCountsChargeableOrders(IsolatedHomeTestCase):
         # admit. Only the per-tier number lands between them.
         plan = _smg_fee_plan()
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "150"}, clear=True):
-            message = cl._check_fee_floor(plan, object(), ticker="SMG")
+            message = pmg._check_fee_floor(plan, object(), ticker="SMG")
         self.assertIsNotNone(message, "a 3-tier ladder pays 3 entry minimums, not 1")
         assert message is not None
         self.assertIn("SMG", message)
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "250"}, clear=True):
-            self.assertIsNone(cl._check_fee_floor(plan, object(), ticker="SMG"))
+            self.assertIsNone(pmg._check_fee_floor(plan, object(), ticker="SMG"))
 
     def test_single_tier_plan_is_priced_identically_by_both_models(self) -> None:
         # ETSY 2026-08-19: one chargeable tier, gross $67.62, journal 345.77 bps.
@@ -1453,14 +1459,14 @@ class TestFeeFloorCountsChargeableOrders(IsolatedHomeTestCase):
         )
         gross = 67.62
         self.assertAlmostEqual(
-            cl._estimate_round_trip_fee_bps(plan, object()),
-            cl.round_trip_fee_bps(gross, fx_applies=True),
+            pmg._estimate_round_trip_fee_bps(plan, object()),
+            pmg.round_trip_fee_bps(gross, fx_applies=True),
             msg="one chargeable tier makes the two models the same model",
         )
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "300"}, clear=True):
-            self.assertIsNotNone(cl._check_fee_floor(plan, object(), ticker="ETSY"))
+            self.assertIsNotNone(pmg._check_fee_floor(plan, object(), ticker="ETSY"))
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "400"}, clear=True):
-            self.assertIsNone(cl._check_fee_floor(plan, object(), ticker="ETSY"))
+            self.assertIsNone(pmg._check_fee_floor(plan, object(), ticker="ETSY"))
 
     def test_unpriceable_plan_falls_back_to_the_aggregate_model(self) -> None:
         # No tiers -> the per-tier estimate is an honest None. The floor must
@@ -1475,8 +1481,8 @@ class TestFeeFloorCountsChargeableOrders(IsolatedHomeTestCase):
             tp_tranches=(),
         )
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "150"}, clear=True):
-            with self.assertLogs(cl.logger, level="WARNING") as logs:
-                self.assertIsNone(cl._check_fee_floor(plan, None, ticker="KO"))
+            with self.assertLogs(pmg.logger, level="WARNING") as logs:
+                self.assertIsNone(pmg._check_fee_floor(plan, None, ticker="KO"))
         self.assertTrue(any("aggregate" in line for line in logs.output))
 
 
@@ -1688,7 +1694,7 @@ class TestCheckGrossCap(IsolatedHomeTestCase):
         records: Any = (),
         positions: Any = (),
     ) -> str | None:
-        return cl._check_gross_cap(
+        return pmg._check_gross_cap(
             _fee_plan(notional),
             fx,
             account=_acct(),
@@ -1901,7 +1907,7 @@ class TestFilledPositionsMixedCurrencyBook(IsolatedHomeTestCase):
     lookup cannot produce a rate."""
 
     def _fold(self, positions, fx, *, account_currency="PLN", rate_lookup=None):
-        return cl._filled_positions_gross_acct(
+        return pmg._filled_positions_gross_acct(
             positions, fx, account_currency=account_currency, rate_lookup=rate_lookup
         )
 
@@ -1988,7 +1994,7 @@ class TestFilledPositionsMixedCurrencyBook(IsolatedHomeTestCase):
             def get_fx_rate(self, base: str, quote: str) -> Any:
                 raise ValueError("no quote available")
 
-        lookup = cl._make_position_rate_lookup(_RaisingFxBroker(), "PLN")
+        lookup = pmg._make_position_rate_lookup(_RaisingFxBroker(), "PLN")
         self.assertIsNone(lookup("USD"))
 
     def test_unstamped_positions_keep_the_candidate_fx_path(self) -> None:
@@ -2015,7 +2021,7 @@ class TestFilledPositionsMixedCurrencyBook(IsolatedHomeTestCase):
 
         _entry_trail_journal(self, None)
         with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.04"}, clear=True):
-            violation = cl._check_gross_cap(
+            violation = pmg._check_gross_cap(
                 _fee_plan(100.0),
                 None,
                 account=_acct("PLN"),
@@ -2201,7 +2207,7 @@ class TestCheckCashFloor(IsolatedHomeTestCase):
         records: Any = (),
         margin_available: Any = 50_000.0,
     ) -> str | None:
-        return cl._check_cash_floor(
+        return pmg._check_cash_floor(
             _fee_plan(notional),
             fx,
             account=_cash_acct(margin_available),
@@ -2429,7 +2435,7 @@ class TestCheckGrossCapWatchingReservation(IsolatedHomeTestCase):
     pre-trailing gate (inertness proof)."""
 
     def _check(self, *, notional: float = 10_000.0) -> str | None:
-        return cl._check_gross_cap(
+        return pmg._check_gross_cap(
             _fee_plan(notional),
             None,
             account=_acct(),
@@ -2509,7 +2515,7 @@ class TestCheckCashFloorWatchingReservation(IsolatedHomeTestCase):
     check. With no journal the arithmetic and message are unchanged."""
 
     def _check(self, *, notional: float = 10_000.0, margin_available: Any = 12_000.0) -> str | None:
-        return cl._check_cash_floor(
+        return pmg._check_cash_floor(
             _fee_plan(notional),
             None,
             account=_cash_acct(margin_available),
@@ -2917,7 +2923,7 @@ class TestPlaceTiersJournalsTranchePlan(IsolatedHomeTestCase):
         # for that uic and the position sits stop-only, indistinguishable in the
         # journal from a pre-INC-5 pick. Name both levels so the anomaly is
         # diagnosable from journalctl alone.
-        with self.assertLogs(cl.logger, level="WARNING") as caught:
+        with self.assertLogs(pg.logger, level="WARNING") as caught:
             self._run(
                 plan=self._plan(tp_tranches=()),
                 exit_spec=_exit_spec(stop=float("nan"), tp=13.0, atr=1.0),
@@ -3001,7 +3007,7 @@ class TestEstimateRoundTripFeeBps(IsolatedHomeTestCase):
     def test_single_tier_mirror_exit_matches_the_aggregate_model(self) -> None:
         # 1 tier, qty 1000 @ $10: entry max(1, 8) = 8; no tranches -> exit
         # mirrors 8; no fx. (8 + 8) / 10_000 x 10^4 = 16 bps.
-        estimate = cl._estimate_round_trip_fee_bps(_fee_plan(10_000.0), None)
+        estimate = pmg._estimate_round_trip_fee_bps(_fee_plan(10_000.0), None)
         self.assertIsNotNone(estimate)
         assert estimate is not None
         self.assertAlmostEqual(estimate, 16.0)
@@ -3026,7 +3032,7 @@ class TestEstimateRoundTripFeeBps(IsolatedHomeTestCase):
                 ),
             ),
         )
-        estimate = cl._estimate_round_trip_fee_bps(plan, _fx(1.0))
+        estimate = pmg._estimate_round_trip_fee_bps(plan, _fx(1.0))
         assert estimate is not None
         self.assertAlmostEqual(estimate, 70.0)
 
@@ -3037,10 +3043,10 @@ class TestEstimateRoundTripFeeBps(IsolatedHomeTestCase):
         plan = _tiered_plan(
             tiers=(TierPlan(tier_index=0, limit_price=10.0, qty=100, alloc_pct=100.0, tag="T1"),),
         )
-        usd = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="USD")
-        pln = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="PLN")
-        eur = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="EUR")
-        chf = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="CHF")
+        usd = pmg._estimate_round_trip_fee_bps(plan, None, instrument_currency="USD")
+        pln = pmg._estimate_round_trip_fee_bps(plan, None, instrument_currency="PLN")
+        eur = pmg._estimate_round_trip_fee_bps(plan, None, instrument_currency="EUR")
+        chf = pmg._estimate_round_trip_fee_bps(plan, None, instrument_currency="CHF")
         assert usd is not None and pln is not None and eur is not None and chf is not None
         self.assertAlmostEqual(usd, 20.0)  # 2 x $1 min / 1000 x 10^4
         self.assertAlmostEqual(pln, 200.0)  # 2 x 10 PLN min / 1000 x 10^4
@@ -3057,14 +3063,14 @@ class TestEstimateRoundTripFeeBps(IsolatedHomeTestCase):
                 TierPlan(tier_index=1, limit_price=9.0, qty=0, alloc_pct=50.0, tag="T2"),
             ),
         )
-        estimate = cl._estimate_round_trip_fee_bps(plan, None)
+        estimate = pmg._estimate_round_trip_fee_bps(plan, None)
         assert estimate is not None
         self.assertAlmostEqual(estimate, 16.0)
 
     def test_no_plan_or_zero_gross_returns_none(self) -> None:
-        self.assertIsNone(cl._estimate_round_trip_fee_bps(None, None))
-        self.assertIsNone(cl._estimate_round_trip_fee_bps(object(), None))  # bare stub, no tiers
-        self.assertIsNone(cl._estimate_round_trip_fee_bps(_fee_plan(0.0), None))
+        self.assertIsNone(pmg._estimate_round_trip_fee_bps(None, None))
+        self.assertIsNone(pmg._estimate_round_trip_fee_bps(object(), None))  # bare stub, no tiers
+        self.assertIsNone(pmg._estimate_round_trip_fee_bps(_fee_plan(0.0), None))
 
 
 class TestPlaceTiersFeeEstimateStamp(IsolatedHomeTestCase):
@@ -3264,7 +3270,7 @@ class TestPlaceTiersWriteAheadDedup(IsolatedHomeTestCase):
         )
         summary = cl._summarize_open_verdicts([], "2026-07-20")
         self.assertEqual(summary, (0, 0.0))
-        total, unjoined = cl._committed_working_gross_acct([], [note_record])
+        total, unjoined = pmg._committed_working_gross_acct([], [note_record])
         self.assertEqual((total, unjoined), (0.0, 0))
 
 
@@ -9441,13 +9447,17 @@ class TestKillEdgeAlert(IsolatedHomeTestCase):
 
 @contextlib.contextmanager
 def _frozen_now(fixed: dt.datetime):
-    """Freeze ``control_loop.dt.datetime.now()`` to ``fixed`` for the block.
+    """Freeze ``dt.datetime.now()`` to ``fixed`` for the block.
 
-    ``control_loop`` does ``import datetime as dt`` at module scope, so ``dt``
-    IS the real stdlib ``datetime`` module — patching its ``datetime`` class
-    attribute for the duration of a ``with`` block is the same precedented
-    pattern ``IsolatedHomeTestCase`` uses for ``pathlib.Path.home`` (scoped,
-    restored after)."""
+    ``control_loop`` and ``day1_gap_gate`` both do ``import datetime as dt`` at
+    module scope, so ``dt`` IS the real stdlib ``datetime`` module — patching
+    its ``datetime`` class attribute for the duration of a ``with`` block is
+    the same precedented pattern ``IsolatedHomeTestCase`` uses for
+    ``pathlib.Path.home`` (scoped, restored after).
+
+    That it patches the shared module object, and not one module's binding, is
+    why step 5 did not have to retarget it when the day-1 gap gate moved: a
+    patch on ``control_loop.dt`` would have reached only ``control_loop``."""
 
     class _Frozen(dt.datetime):
         @classmethod
@@ -9480,37 +9490,37 @@ class TestDay1GapGateSessionInfo(IsolatedHomeTestCase):
     """``_day1_gap_gate_session_info`` — pure calendar math, no I/O."""
 
     def test_monday_brief_day1_is_tuesday(self) -> None:
-        day1, day1_open = cl._day1_gap_gate_session_info(dt.date(2026, 8, 10), "XNYS")
+        day1, day1_open = d1g._day1_gap_gate_session_info(dt.date(2026, 8, 10), "XNYS")
         self.assertEqual(day1, dt.date(2026, 8, 11))
         self.assertEqual(day1_open, dt.datetime(2026, 8, 11, 13, 30, tzinfo=dt.UTC))
 
     def test_friday_brief_day1_is_the_following_monday(self) -> None:
-        day1, _day1_open = cl._day1_gap_gate_session_info(dt.date(2026, 8, 14), "XNYS")
+        day1, _day1_open = d1g._day1_gap_gate_session_info(dt.date(2026, 8, 14), "XNYS")
         self.assertEqual(day1, dt.date(2026, 8, 17))
 
     def test_unresolvable_exchange_returns_none(self) -> None:
-        with self.assertLogs("alphalens_pipeline.brokers.automanager.control_loop", "WARNING"):
-            result = cl._day1_gap_gate_session_info(dt.date(2026, 8, 10), "ZZZZ")
+        with self.assertLogs("alphalens_pipeline.brokers.automanager.day1_gap_gate", "WARNING"):
+            result = d1g._day1_gap_gate_session_info(dt.date(2026, 8, 10), "ZZZZ")
         self.assertIsNone(result)
 
     # -- manual anchor (#1246): day1_includes_trade_date=True -> the session
     # ON-OR-AFTER trade_date (a manual pick's arm date IS its day 1) --
 
     def test_manual_anchor_session_trade_date_is_its_own_day1(self) -> None:
-        day1, day1_open = cl._day1_gap_gate_session_info(
+        day1, day1_open = d1g._day1_gap_gate_session_info(
             dt.date(2026, 8, 10), "XNYS", day1_includes_trade_date=True
         )
         self.assertEqual(day1, dt.date(2026, 8, 10))
         self.assertEqual(day1_open, dt.datetime(2026, 8, 10, 13, 30, tzinfo=dt.UTC))
 
     def test_manual_anchor_saturday_trade_date_rolls_to_monday(self) -> None:
-        day1, _day1_open = cl._day1_gap_gate_session_info(
+        day1, _day1_open = d1g._day1_gap_gate_session_info(
             dt.date(2026, 8, 8), "XNYS", day1_includes_trade_date=True
         )
         self.assertEqual(day1, dt.date(2026, 8, 10))
 
     def test_default_anchor_still_strictly_after(self) -> None:
-        day1, _day1_open = cl._day1_gap_gate_session_info(
+        day1, _day1_open = d1g._day1_gap_gate_session_info(
             dt.date(2026, 8, 10), "XNYS", day1_includes_trade_date=False
         )
         self.assertEqual(day1, dt.date(2026, 8, 11))
@@ -9527,53 +9537,53 @@ class TestDay1GapGateDecision(IsolatedHomeTestCase):
     _E1 = 100.0
 
     def test_e1_limit_none_passes_with_warning(self) -> None:
-        with self.assertLogs("alphalens_pipeline.brokers.automanager.control_loop", "WARNING"):
-            verdict = cl._day1_gap_gate_decision(self._DAY1_OPEN, self._BRIEF, None, 50.0, "XNYS")
+        with self.assertLogs("alphalens_pipeline.brokers.automanager.day1_gap_gate", "WARNING"):
+            verdict = d1g._day1_gap_gate_decision(self._DAY1_OPEN, self._BRIEF, None, 50.0, "XNYS")
         self.assertEqual(verdict, "pass")
 
     def test_before_day1_defers_preopen(self) -> None:
         now = dt.datetime(2026, 8, 10, 14, 0, tzinfo=dt.UTC)  # brief day itself
-        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, None, "XNYS")
+        verdict = d1g._day1_gap_gate_decision(now, self._BRIEF, self._E1, None, "XNYS")
         self.assertEqual(verdict, "defer_preopen")
 
     def test_day1_before_open_defers_preopen(self) -> None:
         now = self._DAY1_OPEN - dt.timedelta(minutes=1)
-        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 200.0, "XNYS")
+        verdict = d1g._day1_gap_gate_decision(now, self._BRIEF, self._E1, 200.0, "XNYS")
         self.assertEqual(verdict, "defer_preopen")
 
     def test_day1_within_grace_window_defers_preopen(self) -> None:
-        now = self._DAY1_OPEN + dt.timedelta(seconds=cl._DAY1_GAP_GATE_OPEN_GRACE_S - 1)
-        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 200.0, "XNYS")
+        now = self._DAY1_OPEN + dt.timedelta(seconds=d1g._DAY1_GAP_GATE_OPEN_GRACE_S - 1)
+        verdict = d1g._day1_gap_gate_decision(now, self._BRIEF, self._E1, 200.0, "XNYS")
         self.assertEqual(verdict, "defer_preopen")
 
     def test_day1_at_grace_boundary_with_no_price_defers_no_price(self) -> None:
-        now = self._DAY1_OPEN + dt.timedelta(seconds=cl._DAY1_GAP_GATE_OPEN_GRACE_S)
-        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, None, "XNYS")
+        now = self._DAY1_OPEN + dt.timedelta(seconds=d1g._DAY1_GAP_GATE_OPEN_GRACE_S)
+        verdict = d1g._day1_gap_gate_decision(now, self._BRIEF, self._E1, None, "XNYS")
         self.assertEqual(verdict, "defer_no_price")
 
     def test_day1_after_grace_price_below_e1_defers_below_e1(self) -> None:
         now = self._DAY1_OPEN + dt.timedelta(minutes=30)
-        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 99.99, "XNYS")
+        verdict = d1g._day1_gap_gate_decision(now, self._BRIEF, self._E1, 99.99, "XNYS")
         self.assertEqual(verdict, "defer_below_e1")
 
     def test_day1_after_grace_price_at_e1_passes(self) -> None:
         now = self._DAY1_OPEN + dt.timedelta(minutes=30)
-        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, self._E1, "XNYS")
+        verdict = d1g._day1_gap_gate_decision(now, self._BRIEF, self._E1, self._E1, "XNYS")
         self.assertEqual(verdict, "pass")
 
     def test_day1_after_grace_price_above_e1_passes(self) -> None:
         now = self._DAY1_OPEN + dt.timedelta(minutes=30)
-        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 101.0, "XNYS")
+        verdict = d1g._day1_gap_gate_decision(now, self._BRIEF, self._E1, 101.0, "XNYS")
         self.assertEqual(verdict, "pass")
 
     def test_day_after_day1_passes_regardless_of_price(self) -> None:
         now = dt.datetime(2026, 8, 12, 12, 0, tzinfo=dt.UTC)  # Wednesday, day1 + 1
-        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 1.0, "XNYS")
+        verdict = d1g._day1_gap_gate_decision(now, self._BRIEF, self._E1, 1.0, "XNYS")
         self.assertEqual(verdict, "pass")
 
     def test_unresolvable_exchange_passes(self) -> None:
         now = self._DAY1_OPEN + dt.timedelta(minutes=30)
-        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 1.0, "ZZZZ")
+        verdict = d1g._day1_gap_gate_decision(now, self._BRIEF, self._E1, 1.0, "ZZZZ")
         self.assertEqual(verdict, "pass")
 
     # -- manual source (#1246): day 1 is the trade_date session ITSELF --
@@ -9582,28 +9592,28 @@ class TestDay1GapGateDecision(IsolatedHomeTestCase):
 
     def test_manual_intraday_of_trade_date_open_at_or_above_e1_passes(self) -> None:
         now = self._BRIEF_OPEN + dt.timedelta(minutes=30)
-        verdict = cl._day1_gap_gate_decision(
+        verdict = d1g._day1_gap_gate_decision(
             now, self._BRIEF, self._E1, self._E1, "XNYS", source="manual"
         )
         self.assertEqual(verdict, "pass")
 
     def test_manual_intraday_of_trade_date_open_below_e1_defers_below_e1(self) -> None:
         now = self._BRIEF_OPEN + dt.timedelta(minutes=30)
-        verdict = cl._day1_gap_gate_decision(
+        verdict = d1g._day1_gap_gate_decision(
             now, self._BRIEF, self._E1, 99.99, "XNYS", source="manual"
         )
         self.assertEqual(verdict, "defer_below_e1")
 
     def test_manual_preopen_on_trade_date_defers_preopen(self) -> None:
         now = self._BRIEF_OPEN - dt.timedelta(minutes=10)
-        verdict = cl._day1_gap_gate_decision(
+        verdict = d1g._day1_gap_gate_decision(
             now, self._BRIEF, self._E1, 200.0, "XNYS", source="manual"
         )
         self.assertEqual(verdict, "defer_preopen")
 
     def test_manual_next_day_passes_regardless_of_price(self) -> None:
         now = dt.datetime(2026, 8, 11, 12, 0, tzinfo=dt.UTC)  # Tuesday = its day 2
-        verdict = cl._day1_gap_gate_decision(
+        verdict = d1g._day1_gap_gate_decision(
             now, self._BRIEF, self._E1, 1.0, "XNYS", source="manual"
         )
         self.assertEqual(verdict, "pass")
@@ -9612,7 +9622,7 @@ class TestDay1GapGateDecision(IsolatedHomeTestCase):
         # The discriminator itself: identical inputs, source="brief" -> the
         # brief-day intraday tick is still PRE-day1 (day 1 = Tuesday).
         now = self._BRIEF_OPEN + dt.timedelta(minutes=30)
-        verdict = cl._day1_gap_gate_decision(
+        verdict = d1g._day1_gap_gate_decision(
             now, self._BRIEF, self._E1, self._E1, "XNYS", source="brief"
         )
         self.assertEqual(verdict, "defer_preopen")
@@ -9628,21 +9638,21 @@ class TestEvaluateDay1GapGate(IsolatedHomeTestCase):
 
     def test_probe_not_called_before_day1(self) -> None:
         with _frozen_now(dt.datetime(2026, 8, 10, 20, 0, tzinfo=dt.UTC)):
-            verdict = cl._evaluate_day1_gap_gate(
+            verdict = d1g._evaluate_day1_gap_gate(
                 "KO", self._BRIEF, _day1_spec(), "XNYS", _RaisingProbe()
             )
         self.assertEqual(verdict, "defer_preopen")
 
     def test_probe_not_called_within_open_grace(self) -> None:
         with _frozen_now(self._DAY1_OPEN + dt.timedelta(seconds=1)):
-            verdict = cl._evaluate_day1_gap_gate(
+            verdict = d1g._evaluate_day1_gap_gate(
                 "KO", self._BRIEF, _day1_spec(), "XNYS", _RaisingProbe()
             )
         self.assertEqual(verdict, "defer_preopen")
 
     def test_probe_not_called_on_day_after(self) -> None:
         with _frozen_now(dt.datetime(2026, 8, 12, 12, 0, tzinfo=dt.UTC)):
-            verdict = cl._evaluate_day1_gap_gate(
+            verdict = d1g._evaluate_day1_gap_gate(
                 "KO", self._BRIEF, _day1_spec(), "XNYS", _RaisingProbe()
             )
         self.assertEqual(verdict, "pass")
@@ -9655,13 +9665,13 @@ class TestEvaluateDay1GapGate(IsolatedHomeTestCase):
             return 99.0
 
         with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
-            verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, _day1_spec(), "XNYS", _probe)
+            verdict = d1g._evaluate_day1_gap_gate("KO", self._BRIEF, _day1_spec(), "XNYS", _probe)
         self.assertEqual(calls, [("KO", "XNYS")])
         self.assertEqual(verdict, "defer_below_e1")
 
     def test_none_probe_within_day1_after_grace_defers_without_crash(self) -> None:
         with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
-            verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, _day1_spec(), "XNYS", None)
+            verdict = d1g._evaluate_day1_gap_gate("KO", self._BRIEF, _day1_spec(), "XNYS", None)
         self.assertEqual(verdict, "defer_no_price")
 
     def test_e1_anchors_on_the_first_pullback_tier_when_a_now_tier_leads(self) -> None:
@@ -9679,7 +9689,7 @@ class TestEvaluateDay1GapGate(IsolatedHomeTestCase):
             size=PickSize(notional_acct=2000.0, currency="USD"),
         )
         with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
-            verdict = cl._evaluate_day1_gap_gate(
+            verdict = d1g._evaluate_day1_gap_gate(
                 "KO", self._BRIEF, spec, "XNYS", lambda t, m: 110.0
             )
         self.assertEqual(verdict, "pass")
@@ -9696,7 +9706,7 @@ class TestEvaluateDay1GapGate(IsolatedHomeTestCase):
             size=PickSize(notional_acct=2000.0, currency="USD"),
         )
         with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
-            verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, spec, "XNYS", _RaisingProbe())
+            verdict = d1g._evaluate_day1_gap_gate("KO", self._BRIEF, spec, "XNYS", _RaisingProbe())
         self.assertEqual(verdict, "pass")
 
     def test_spec_tiers_without_entry_mode_still_evaluate(self) -> None:
@@ -9705,7 +9715,9 @@ class TestEvaluateDay1GapGate(IsolatedHomeTestCase):
         tier = type("T", (), {"limit_price": 100.0})()
         spec = type("S", (), {"entry_tiers": (tier,)})()
         with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
-            verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, spec, "XNYS", lambda t, m: 99.0)
+            verdict = d1g._evaluate_day1_gap_gate(
+                "KO", self._BRIEF, spec, "XNYS", lambda t, m: 99.0
+            )
         self.assertEqual(verdict, "defer_below_e1")
 
     def test_manual_probe_called_intraday_on_trade_date_itself(self) -> None:
@@ -9720,7 +9732,7 @@ class TestEvaluateDay1GapGate(IsolatedHomeTestCase):
 
         brief_open = dt.datetime(2026, 8, 10, 13, 30, tzinfo=dt.UTC)
         with _frozen_now(brief_open + dt.timedelta(minutes=30)):
-            verdict = cl._evaluate_day1_gap_gate(
+            verdict = d1g._evaluate_day1_gap_gate(
                 "KO", self._BRIEF, _day1_spec(), "XNYS", _probe, source="manual"
             )
         self.assertEqual(calls, [("KO", "XNYS")])
@@ -9730,15 +9742,15 @@ class TestEvaluateDay1GapGate(IsolatedHomeTestCase):
 class TestDay1GapGateEnabledFlag(IsolatedHomeTestCase):
     def test_unset_is_disabled(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertFalse(cl._day1_gap_gate_enabled())
+            self.assertFalse(d1g._day1_gap_gate_enabled())
 
     def test_one_is_enabled(self) -> None:
-        with mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True):
-            self.assertTrue(cl._day1_gap_gate_enabled())
+        with mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True):
+            self.assertTrue(d1g._day1_gap_gate_enabled())
 
     def test_other_value_is_disabled(self) -> None:
-        with mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "true"}, clear=True):
-            self.assertFalse(cl._day1_gap_gate_enabled())
+        with mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "true"}, clear=True):
+            self.assertFalse(d1g._day1_gap_gate_enabled())
 
 
 class TestDay1SessionOpenExtraction(IsolatedHomeTestCase):
@@ -9933,7 +9945,7 @@ class TestDay1GapGateXwarEndToEnd(IsolatedHomeTestCase):
     _WITHIN_DAY1 = dt.datetime(2026, 8, 11, 8, 30, tzinfo=dt.UTC)
 
     def test_xwar_resolves_on_the_calendar(self) -> None:
-        info = cl._day1_gap_gate_session_info(self._BRIEF, "XWAR")
+        info = d1g._day1_gap_gate_session_info(self._BRIEF, "XWAR")
         self.assertIsNotNone(info)
         day1, open_utc = info
         self.assertEqual(day1, dt.date(2026, 8, 11))
@@ -9948,9 +9960,9 @@ class TestDay1GapGateXwarEndToEnd(IsolatedHomeTestCase):
 
         with (
             _frozen_now(self._WITHIN_DAY1),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
-            deferred = cl._day1_gap_gate_defers(
+            deferred = d1g._day1_gap_gate_defers(
                 "CDR",
                 self._BRIEF,
                 _day1_spec(limit_price=231.1),
@@ -9974,7 +9986,7 @@ class TestDay1GapGateDefersObservability(IsolatedHomeTestCase):
     _BRIEF = dt.date(2026, 8, 10)  # Monday
     _WITHIN_DAY1 = dt.datetime(2026, 8, 11, 14, 30, tzinfo=dt.UTC)
     _PREOPEN = dt.datetime(2026, 8, 11, 13, 0, tzinfo=dt.UTC)
-    _LOGGER = "alphalens_pipeline.brokers.automanager.control_loop"
+    _LOGGER = "alphalens_pipeline.brokers.automanager.day1_gap_gate"
 
     def _defers(self, *, now: dt.datetime, probe: Any) -> tuple[bool, list[tuple[str, str]]]:
         alerts: list[tuple[str, str]] = []
@@ -9985,9 +9997,9 @@ class TestDay1GapGateDefersObservability(IsolatedHomeTestCase):
 
         with (
             _frozen_now(now),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
-            deferred = cl._day1_gap_gate_defers(
+            deferred = d1g._day1_gap_gate_defers(
                 "KO", self._BRIEF, _day1_spec(), "XNYS", probe, _alert, source="brief"
             )
         return deferred, alerts
@@ -10083,7 +10095,7 @@ class TestPlacePickDay1GapGateIntegration(IsolatedHomeTestCase):
         broker = _RecordingBroker()
         with (
             _frozen_now(self._WITHIN_DAY1),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=lambda *_a: 99.0)
             self.assertFalse(placer(_pick("KO", self._BRIEF)))
@@ -10099,7 +10111,7 @@ class TestPlacePickDay1GapGateIntegration(IsolatedHomeTestCase):
         broker = _RecordingBroker()
         with (
             _frozen_now(self._WITHIN_DAY1),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=lambda *_a: 100.0)
             self.assertTrue(placer(_pick("KO", self._BRIEF)))
@@ -10111,7 +10123,7 @@ class TestPlacePickDay1GapGateIntegration(IsolatedHomeTestCase):
         broker = _RecordingBroker()
         with (
             _frozen_now(self._DAY_AFTER),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=_RaisingProbe())
             self.assertTrue(placer(_pick("KO", self._BRIEF)))
@@ -10129,7 +10141,7 @@ class TestPlacePickDay1GapGateIntegration(IsolatedHomeTestCase):
         broker = _RecordingBroker()
         with (
             _frozen_now(self._BRIEF_INTRADAY),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=lambda *_a: 100.0)
             self.assertTrue(placer(_pick("KO", self._BRIEF, source="manual")))
@@ -10141,7 +10153,7 @@ class TestPlacePickDay1GapGateIntegration(IsolatedHomeTestCase):
         broker = _RecordingBroker()
         with (
             _frozen_now(self._BRIEF_INTRADAY),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=lambda *_a: 99.0)
             self.assertFalse(placer(_pick("KO", self._BRIEF, source="manual")))
@@ -10156,7 +10168,7 @@ class TestPlacePickDay1GapGateIntegration(IsolatedHomeTestCase):
         broker = _RecordingBroker()
         with (
             _frozen_now(self._BRIEF_INTRADAY),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=_RaisingProbe())
             self.assertFalse(placer(_pick("KO", self._BRIEF)))
@@ -10168,7 +10180,7 @@ class TestPlacePickDay1GapGateIntegration(IsolatedHomeTestCase):
         broker = _RecordingBroker()
         with (
             _frozen_now(self._WITHIN_DAY1),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             placer, _alerts, refusals = self._placer(broker)  # day1_gap_price_probe defaults None
             self.assertFalse(placer(_pick("KO", self._BRIEF)))
@@ -10179,7 +10191,7 @@ class TestPlacePickDay1GapGateIntegration(IsolatedHomeTestCase):
         broker = _RecordingBroker()
         with (
             _frozen_now(self._DAY1_OPEN - dt.timedelta(minutes=1)),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=_RaisingProbe())
             self.assertFalse(placer(_pick("KO", self._BRIEF)))

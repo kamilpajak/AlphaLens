@@ -649,7 +649,7 @@ class ThePickKeyMustBeWritable(_DoorCase):
         """#1468 acceptance 4, read through the drain's own idempotency check,
         not through the field: a raised cap on a replace must not re-open the
         immediate tier."""
-        from alphalens_pipeline.brokers.automanager.control_loop import _now_already_done
+        from alphalens_pipeline.brokers.automanager.now_tranche import _now_already_done
         from alphalens_pipeline.brokers.submission_log import iter_submission_records
         from broker_contract.trade_intent.codec import intent_from_jsonable
 

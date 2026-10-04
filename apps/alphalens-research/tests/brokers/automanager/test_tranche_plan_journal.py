@@ -372,9 +372,9 @@ class TestADeclaredEmptyLadderIsJournaled(unittest.TestCase):
         from pathlib import Path
         from unittest import mock
 
-        from alphalens_pipeline.brokers.automanager import control_loop as cl
+        from alphalens_pipeline.brokers.automanager import placed_geometry as pg
 
-        self._cl = cl
+        self._pg = pg
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.path = Path(tmp.name) / "standalone_stops.jsonl"
@@ -383,7 +383,7 @@ class TestADeclaredEmptyLadderIsJournaled(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def _journal_core(self, *, pick_key: str | None) -> list[dict]:
-        self._cl._journal_tranche_plan_core(
+        self._pg._journal_tranche_plan_core(
             plan=type("P", (), {"tp_tranches": ()})(),
             exit_spec=None,
             stop_price=8.0,

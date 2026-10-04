@@ -301,6 +301,119 @@ RULES = (
         "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch",
         "exemptions": set(),
     },
+    # #1677 step 5 split the placement wiring root's own helpers into five
+    # modules: the money gates, the placed geometry, the day-1 gap gate, the
+    # entry-watch capacity rails and the now tranche. They are five DISJOINT
+    # blocks -- measured, not judged: none of them references a name in any
+    # other, so there is no edge between them to police. What the rules below
+    # police is the two directions that WOULD undo the split: a new module
+    # reaching back up into the tick file, and a module it depends on reaching
+    # down into it.
+    #
+    # No `top_level_only` on any of them, for the reason step 3 records: every
+    # cycle this audit cut lived in a function-body import.
+    {
+        "name": "the pick money gates must not import the control loop (the partition is one-way)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.pick_money_gates",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.control_loop",
+        "exemptions": set(),
+    },
+    {
+        "name": "the placed geometry must not import the control loop (the partition is one-way)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.placed_geometry",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.control_loop",
+        "exemptions": set(),
+    },
+    {
+        "name": "the day-1 gap gate must not import the control loop (the partition is one-way)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.day1_gap_gate",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.control_loop",
+        "exemptions": set(),
+    },
+    {
+        "name": "the entry-watch capacity rails must not import the control loop (the partition is one-way)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.entry_watch_capacity",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.control_loop",
+        "exemptions": set(),
+    },
+    {
+        "name": "the now tranche must not import the control loop (the partition is one-way)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.now_tranche",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.control_loop",
+        "exemptions": set(),
+    },
+    {
+        "name": "the cost model must not import the pick money gates (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.costs",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.pick_money_gates",
+        "exemptions": set(),
+    },
+    {
+        "name": "entry trails must not import the pick money gates (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.entry_trails",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.pick_money_gates",
+        "exemptions": set(),
+    },
+    {
+        "name": "the live rails must not import the pick money gates (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.live_rails",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.pick_money_gates",
+        "exemptions": set(),
+    },
+    {
+        "name": "the safety gate must not import the pick money gates (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.safety",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.pick_money_gates",
+        "exemptions": set(),
+    },
+    {
+        "name": "the cost model must not import the placed geometry (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.costs",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.placed_geometry",
+        "exemptions": set(),
+    },
+    {
+        "name": "entry-trail geometry must not import the placed geometry (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.entry_trail_geometry",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.placed_geometry",
+        "exemptions": set(),
+    },
+    {
+        "name": "entry trails must not import the placed geometry (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.entry_trails",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.placed_geometry",
+        "exemptions": set(),
+    },
+    {
+        "name": "the live-exit engine must not import the placed geometry (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.live_exit_engine",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.placed_geometry",
+        "exemptions": set(),
+    },
+    {
+        "name": "the stop journal must not import the placed geometry (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.stop_journal",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.placed_geometry",
+        "exemptions": set(),
+    },
+    {
+        "name": "entry trails must not import the entry-watch capacity rails (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.entry_trails",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch_capacity",
+        "exemptions": set(),
+    },
+    {
+        "name": "the pick queue must not import the entry-watch capacity rails (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.picks",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch_capacity",
+        "exemptions": set(),
+    },
+    {
+        "name": "the pick queue must not import the now tranche (step 5 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.picks",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.now_tranche",
+        "exemptions": set(),
+    },
     {
         # Workspace split (PR2): the pipeline tier hosts live infrastructure
         # (data, core, scorers, edgar_detector, thematic, literature_scanner) and
@@ -1477,12 +1590,99 @@ class TestModuleDependencies(unittest.TestCase):
             ],
         )
 
-    def test_the_journal_and_the_engine_must_not_reach_back_positive_control(self):
-        """Both step-2 rules see every spelling of reaching back.
+    def test_the_five_step_5_modules_do_not_reference_each_other(self):
+        """The five modules step 5 cut out are mutually unreferenced.
 
-        One control for two rules, because they forbid the same target from
-        two different modules: the extracted journal layer and the live-exit
-        engine whose lazy import was half of the biggest cycle the audit found.
+        Their docstrings each claim to be an independently one-way module, and
+        the 17 rules above deliberately police only the two directions that
+        would undo the split -- not the 20 ordered pairs between the five. That
+        was affordable because the five are unions of WHOLE weakly-connected
+        components, so no reference between them existed at the time of the cut.
+
+        But that was a measurement, not an invariant: a later edit could add a
+        cross-reference and nothing would go red, leaving the docstrings
+        quietly false. This re-measures it. One test is the cheap gate with
+        real power here; 20 rules guarding edges that should simply never
+        appear would read as noise and still only cover the same ground.
+
+        A cross-reference is not forbidden on principle -- it may well be the
+        right change one day. What must not happen is it appearing WITHOUT the
+        docstrings and the rule block being brought up to date, and that is
+        what turns this red.
+        """
+        step5 = (
+            "pick_money_gates",
+            "placed_geometry",
+            "day1_gap_gate",
+            "entry_watch_capacity",
+            "now_tranche",
+        )
+        pkg = "alphalens_pipeline.brokers.automanager"
+        found = []
+        for source in step5:
+            path = _resolve_pkg_dir(f"{pkg}.{source}")
+            for target in step5:
+                if target == source:
+                    continue
+                rule = {
+                    "name": f"{source} must not reference {target}",
+                    "from_pkg": f"{pkg}.{source}",
+                    "forbidden_prefix": f"{pkg}.{target}",
+                    "exemptions": set(),
+                }
+                found.extend(
+                    (source, target, module)
+                    for _, _, module in _violations_for(rule, _python_files(path))
+                )
+        self.assertEqual(
+            found,
+            [],
+            "step 5's five modules gained a reference to one another. That is not "
+            "wrong in itself, but the module docstrings say they are independently "
+            "one-way and the rule block says there is no edge to police. Update "
+            "both, and add the rule that pins the new direction, before making "
+            "this green.",
+        )
+
+    def test_the_five_step_5_modules_cross_reference_check_has_power(self):
+        """Positive control for the test above: a synthetic cross-reference IS seen.
+
+        Without this, the check would pass just as happily over a corpus it
+        failed to read at all.
+        """
+        import tempfile
+
+        pkg_name = "alphalens_pipeline.brokers.automanager"
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            (pkg / "day1_gap_gate.py").write_text(f"from {pkg_name} import pick_money_gates\n")
+            rule = {
+                "name": "day1_gap_gate must not reference pick_money_gates",
+                "from_pkg": f"{pkg_name}.day1_gap_gate",
+                "forbidden_prefix": f"{pkg_name}.pick_money_gates",
+                "exemptions": set(),
+            }
+            flagged = [
+                (Path(rel).name, module)
+                for _, rel, module in _violations_for(rule, _python_files(pkg))
+            ]
+        self.assertEqual(flagged, [("day1_gap_gate.py", f"{pkg_name}.pick_money_gates")])
+
+    def test_nothing_extracted_from_the_tick_file_may_reach_back_positive_control(self):
+        """Every one-way rule out of the partition sees every spelling of reaching back.
+
+        One control for all of them, because they forbid the same target from
+        different modules: the extracted stream rail and journal layer, the
+        live-exit engine whose lazy import was half of the biggest cycle the
+        audit found, and the five modules step 5 cut out of the placement
+        wiring root.
+
+        The expected set is asserted WHOLE, not counted. A count would stay
+        green if a rule were deleted and another added, and that is exactly
+        the drift this control exists to catch -- the same reason step 4's
+        stream-rail control was rewritten from a count to a set.
         """
         import tempfile
 
@@ -1493,8 +1693,17 @@ class TestModuleDependencies(unittest.TestCase):
         ]
         self.assertEqual(
             {rule["from_pkg"].rsplit(".", 1)[-1] for rule in rules},
-            {"stream_handles", "stop_journal", "live_exit_engine"},
-            "all three one-way rules must exist",
+            {
+                "stream_handles",
+                "stop_journal",
+                "live_exit_engine",
+                "pick_money_gates",
+                "placed_geometry",
+                "day1_gap_gate",
+                "entry_watch_capacity",
+                "now_tranche",
+            },
+            "every one-way rule out of the partition must exist",
         )
         for rule in rules:
             self.assertNotIn(

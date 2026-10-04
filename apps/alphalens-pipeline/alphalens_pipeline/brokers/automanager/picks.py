@@ -72,6 +72,13 @@ _GENERATION_KEY = "generation"
 _GENERATION_SUFFIX = "-g"
 
 
+def _pick_generation(intent: Any) -> int:
+    """The intent's same-day re-arm generation (#1371). A meta without the
+    field — a pre-#1371 payload, or a test double — is the first generation;
+    the codec already refuses a malformed value at decode time."""
+    return int(getattr(intent.meta, "generation", FIRST_GENERATION))
+
+
 def _validate_generation(generation: object) -> int:
     """``generation`` as an int >= 1; ``ValueError`` for anything else (a bool
     is not a generation even though it is an int)."""

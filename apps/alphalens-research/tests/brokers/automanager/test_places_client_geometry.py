@@ -23,10 +23,10 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_watch as ew
+from alphalens_pipeline.brokers.automanager import placed_geometry as pg
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
-from alphalens_pipeline.brokers.automanager.control_loop import (
+from alphalens_pipeline.brokers.automanager.placed_geometry import (
     _geometry_tranche_ladder,
     _placed_geometry_stamp,
     _places_client_geometry,
@@ -112,7 +112,7 @@ class TheLadderFollowsTheDocumentTest(unittest.TestCase):
             stack.enter_context(
                 mock.patch.object(sj, "_append_standalone_stop_journal", lines.append)
             )
-            cl._journal_tranche_plan_core(
+            pg._journal_tranche_plan_core(
                 plan=plan,
                 exit_spec=exit_spec,
                 stop_price=90.0,
@@ -223,7 +223,7 @@ class PlacingADocumentsOwnLevelsIsAnnouncedTest(unittest.TestCase):
             seen.append((message, reason))
             return True
 
-        verdict = cl._announce_client_geometry(placed, exit_spec, "KO", _throttled)
+        verdict = pg._announce_client_geometry(placed, exit_spec, "KO", _throttled)
         self.assertIs(verdict, placed, "the announcement must pass the verdict through")
         return seen
 
@@ -251,7 +251,7 @@ class PlacingADocumentsOwnLevelsIsAnnouncedTest(unittest.TestCase):
     def test_a_missing_alert_sink_is_tolerated(self):
         """Direct calls and second brokers carry none; this must never raise on
         the money path."""
-        self.assertTrue(cl._announce_client_geometry(True, _with_levels(), "KO", None))
+        self.assertTrue(pg._announce_client_geometry(True, _with_levels(), "KO", None))
 
 
 if __name__ == "__main__":  # pragma: no cover
