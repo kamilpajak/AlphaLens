@@ -1358,6 +1358,24 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
         metrics = emit.call_args.kwargs["metrics"]
         self.assertIn('alphalens_feedback_guard_total{disposition="lookup_failed"}', metrics)
         self.assertIn(self._UNPRICED, metrics)
+        self.assertIn(self._UNPRICED_NO_BARS, metrics)
+
+    def test_the_two_unpriced_series_can_never_come_from_different_runs(self) -> None:
+        """Why the rule may subtract one from the other at all.
+
+        `alphalens feedback backfill-shadow-returns --date X` is repeatable, and it
+        emits too, overwriting the gauges with just that date's counts. That is
+        pre-existing and applies to the total exactly as much as to the subset. What
+        makes the SUBTRACTION safe is that both are written by the same single emit
+        call, so the rule can never read a fresh total against a stale subset and
+        produce a negative difference. Split them across two calls and that stops
+        being true, which is the refactor this test exists to stop.
+        """
+        emit = self._run_refresh(reports=[self._report(unpriced_rows=3, unpriced_no_bars_rows=3)])
+
+        emit.assert_called_once()
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics[self._UNPRICED] - metrics[self._UNPRICED_NO_BARS], 0)
 
 
 class TestBackfillEmitsGuardDispositionMetrics(_NightlyEmitHarness, unittest.TestCase):

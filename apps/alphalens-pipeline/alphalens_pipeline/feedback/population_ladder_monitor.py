@@ -59,7 +59,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Container, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -361,6 +361,39 @@ class PopulationMonitorReport:
     guard_lookup_failed: int = 0
     guard_extreme_validated: int = 0
     guard_data_quality: int = 0
+
+
+def _count_unpriced(
+    rows: Sequence[Mapping[str, Any]],
+    no_bars_tickers: Container[str],
+    *,
+    arrived: bool,
+) -> tuple[int, int]:
+    """``(unpriced_rows, unpriced_no_bars_rows)`` for one date.
+
+    Extracted because its INVARIANT is what the alert rests on, and that invariant
+    cannot be reached through the full pipeline. Measured: a row that
+    already has a price path is advanced by the cheap grouped-daily path and never
+    enters ``_replay_candidate``, so no replay fixture can put a PRICED ticker into
+    ``no_bars_tickers``. Driving the rule from here tests it at the level it lives
+    at, instead of through a pipeline that cannot produce the state.
+
+    * ``unpriced_rows`` — plannable rows with no price path at all.
+    * ``unpriced_no_bars_rows`` — the subset of THOSE whose ticker the vendor had no
+      bars for. Taken from the same list and never from ``rows``: a ticker that has
+      a prior path and merely went dark tonight is not unpriced, and counting it
+      would push the subset ABOVE the total. The alert reads the difference, and a
+      negative difference makes a PromQL threshold rule quietly never fire.
+    * ``arrived`` gates BOTH, so a date whose arrival session has not closed
+      contributes 0 to each rather than 0 to one and a positive count to the other.
+    """
+    if not arrived:
+        return 0, 0
+    unpriced = [
+        row for row in rows if bool(row.get("plannable")) and row.get("last_priced_session") is None
+    ]
+    no_bars = sum(1 for row in unpriced if str(row.get("ticker", "")).upper() in no_bars_tickers)
+    return len(unpriced), no_bars
 
 
 def _default_bar_fetch(
@@ -1719,17 +1752,7 @@ def _replay_one_date(
     # the alert pages daily (it did, on its first day: 2026-09-20 07:40 UTC, on
     # the Friday and Saturday briefs whose arrival was the following Monday).
     arrived = ladder_arrival_session(brief_date, exchange) <= last_closed_session
-    unpriced = [
-        row for row in rows if bool(row.get("plannable")) and row.get("last_priced_session") is None
-    ]
-    unpriced_rows = len(unpriced) if arrived else 0
-    # A SUBSET of the above by construction, so the alert's subtraction can never
-    # go negative, and 0 on a not-yet-arrived date for the same reason the total is.
-    unpriced_no_bars_rows = (
-        sum(1 for row in unpriced if str(row.get("ticker", "")).upper() in no_bars_tickers)
-        if arrived
-        else 0
-    )
+    unpriced_rows, unpriced_no_bars_rows = _count_unpriced(rows, no_bars_tickers, arrived=arrived)
     _write_store_atomic(store_dir, brief_date, rows)
     return PopulationMonitorReport(
         brief_date=brief_date,

@@ -35,6 +35,7 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     _carry_prior,
     _cheap_open_r,
     _coerce_session,
+    _count_unpriced,
     _engine_cutoffs,
     _RunDeadline,
     _screen_decision,
@@ -209,6 +210,75 @@ class TestFetchBudgetCap(_MonitorTestBase):
         self.assertEqual(self._captured_forced_budget(env), 900)
 
 
+class TestTheUnpricedCountingRule(unittest.TestCase):
+    """`_count_unpriced` directly, because the pipeline cannot reach its hard case.
+
+    Measured while reviewing this change: a row that already has a price path is
+    advanced by the cheap grouped-daily path and never enters `_replay_candidate`,
+    so no replay fixture can put a PRICED ticker into `no_bars_tickers`. Two
+    mutations of the rule survived the whole replay suite for exactly that reason —
+    counting the subset over every row instead of the unpriced ones, and dropping
+    the arrival gate from the subset alone. Both break the one property the alert
+    depends on: that the subset never exceeds the total, so the difference the rule
+    subtracts can never go negative. A negative difference does not page loudly; it
+    makes a PromQL threshold rule quietly never fire.
+    """
+
+    @staticmethod
+    def _row(ticker, *, plannable=True, priced=None):
+        return {"ticker": ticker, "plannable": plannable, "last_priced_session": priced}
+
+    def test_an_unpriced_name_with_no_bars_lands_in_both_counts(self):
+        rows = [self._row("AAA")]
+        self.assertEqual(_count_unpriced(rows, {"AAA"}, arrived=True), (1, 1))
+
+    def test_an_unpriced_name_the_budget_missed_lands_only_in_the_total(self):
+        rows = [self._row("AAA")]
+        self.assertEqual(_count_unpriced(rows, set(), arrived=True), (1, 0))
+
+    def test_a_PRICED_name_that_went_dark_lands_in_NEITHER(self):
+        # The case the pipeline cannot stage, and the one the surviving mutation
+        # broke: it is in `no_bars_tickers` but it is not unpriced, so counting the
+        # subset over every row would make it exceed the total.
+        rows = [self._row("AAA", priced=dt.date(2026, 7, 1))]
+        self.assertEqual(_count_unpriced(rows, {"AAA"}, arrived=True), (0, 0))
+
+    def test_a_non_plannable_row_is_in_neither_however_dark_its_vendor(self):
+        rows = [self._row("AAA", plannable=False)]
+        self.assertEqual(_count_unpriced(rows, {"AAA"}, arrived=True), (0, 0))
+
+    def test_a_date_that_has_not_arrived_zeroes_BOTH_not_just_the_total(self):
+        # Zeroing only the total is the second surviving mutation: on every pre-open
+        # morning the difference would then be negative.
+        rows = [self._row("AAA"), self._row("BBB")]
+        self.assertEqual(_count_unpriced(rows, {"AAA", "BBB"}, arrived=False), (0, 0))
+
+    def test_the_subset_never_exceeds_the_total_over_every_combination(self):
+        """The invariant itself, over the whole small state space.
+
+        Four row shapes x in/out of the no-bars set x arrived/not. Enumerated rather
+        than sampled, because the space is 16 and a sampler could miss the one that
+        matters.
+        """
+        shapes = {
+            "unpriced plannable": self._row("AAA"),
+            "priced plannable": self._row("AAA", priced=dt.date(2026, 7, 1)),
+            "unpriced non-plannable": self._row("AAA", plannable=False),
+            "priced non-plannable": self._row("AAA", plannable=False, priced=dt.date(2026, 7, 1)),
+        }
+        for name, row in shapes.items():
+            for dark in (set(), {"AAA"}):
+                for arrived in (True, False):
+                    with self.subTest(row=name, dark=bool(dark), arrived=arrived):
+                        total, subset = _count_unpriced([row], dark, arrived=arrived)
+                        self.assertLessEqual(subset, total)
+                        self.assertGreaterEqual(subset, 0)
+
+    def test_the_ticker_match_is_case_insensitive_on_the_row_side(self):
+        rows = [self._row("aaa")]
+        self.assertEqual(_count_unpriced(rows, {"AAA"}, arrived=True), (1, 1))
+
+
 class TestIncompleteRunIsCountable(_MonitorTestBase):
     """A run that spends its budget before reaching every date still exits 0 and
     stamps the store settled (2026-09-19: 19 of 24 rows on three brief dates were
@@ -355,14 +425,56 @@ class TestIncompleteRunIsCountable(_MonitorTestBase):
                 self.assertLessEqual(report.unpriced_no_bars_rows, report.unpriced_rows)
                 self.assertGreaterEqual(report.unpriced_no_bars_rows, 0)
 
+    def test_a_name_that_was_PRICED_before_going_dark_is_not_counted(self):
+        """DBRG's actual shape, and the one a fresh-store fixture cannot produce.
+
+        A ticker priced on earlier runs that the vendor then stops covering is in
+        `no_bars_tickers` but is NOT unpriced — it carries its prior path. Counting
+        the subset over every row instead of over the unpriced ones would include
+        it, the subset would exceed the total, and the difference the rule reads
+        would go NEGATIVE, which in PromQL makes the rule quietly never fire.
+
+        Found by mutation: counting over `rows` instead of `unpriced` survived the
+        whole suite, because every other case here starts from an empty store where
+        no row has a prior path.
+        """
+        primed = self._run(env={})
+        self.assertEqual(primed.unpriced_rows, 0)
+        stored = self._read_store(self._BRIEF_DATE)
+        self.assertFalse(stored["last_priced_session"].isna().all(), "fixture never priced it")
+
+        # The second run must advance the clock, or there is no new session to price
+        # and the fetch is never called - measured, and the reason the first version
+        # of this test was itself vacuous and let the mutation through.
+        later = self._NOW + dt.timedelta(days=2)
+        calls: list[str] = []
+
+        def spy(ticker, start, end):
+            calls.append(ticker)
+            return []
+
+        dark = self._run(env={}, bar_fetch=spy, now=later)
+
+        self.assertEqual(calls, ["MRNA"], "the premise: the vendor WAS asked and said nothing")
+        self.assertEqual(dark.unpriced_rows, 0, "the prior path is still there")
+        self.assertEqual(dark.unpriced_no_bars_rows, 0, "a priced row is not an unpriced one")
+
     def test_a_fully_served_run_reports_neither_cause(self):
         report = self._run(env={})
         self.assertEqual(report.unpriced_rows, 0)
         self.assertEqual(report.unpriced_no_bars_rows, 0)
 
     def test_a_date_whose_arrival_has_not_closed_reports_no_no_bars_rows_either(self):
-        # The arrival exclusion has to apply to BOTH counts or the subtraction the
-        # alert does goes negative on every pre-open morning.
+        """A WITNESS, not a discriminator, and measured as such.
+
+        Dropping the arrival exclusion from the new count survives mutation here,
+        and the reason is worth recording rather than patching over: on a date whose
+        arrival has not closed the fetch is called ZERO times (measured), so
+        `no_bars_tickers` cannot be non-empty and the guard has nothing to exclude.
+        It is kept as the second line of defence on the non-negativity the rule
+        depends on — if the resolve pass ever reaches a pre-arrival date, the guard
+        is what stops the subtraction going negative on every pre-open morning.
+        """
         report = self._run(
             env={},
             bar_fetch=self._no_bars_fetch,
