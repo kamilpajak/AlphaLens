@@ -571,6 +571,14 @@ class TestTheStopMoveSurvivesCompaction(unittest.TestCase):
         )
         self.assertEqual(_every_fold(journal), _every_fold(compacted))
 
+    def test_a_reanchored_winner_is_written_once(self) -> None:
+        # The kept reanchored line IS the stop's newest move here, so it goes in
+        # the tail block only: the output stays minimal.
+        journal = [_stop_placed(), _reanchored(9.5, 104.0)]
+        compacted = cl._compact_standalone_stop_journal_lines(journal)
+        self.assertEqual([line for line in compacted if line["kind"] == "reanchored"], [journal[1]])
+        self.assertEqual(_every_fold(journal), _every_fold(compacted))
+
     def test_open_plan_trailed_level_is_still_the_live_floor(self) -> None:
         journal = [
             _keyed_planned(),
@@ -602,7 +610,7 @@ class TestTheCloserIsInvisibleToEveryOtherReader(unittest.TestCase):
         for trial in range(self._TRIALS):
             journal = _random_journal(rng)
             uic = rng.choice(_UICS)
-            closer = {"kind": "planned_retracted", "uic": uic}
+            closer = cl._stop_move_closer(uic)
             for where, with_closer in (
                 ("front", [closer, *journal]),
                 ("end", [*journal, closer]),
@@ -617,6 +625,11 @@ class TestTheCloserIsInvisibleToEveryOtherReader(unittest.TestCase):
                 self.assertEqual(
                     trades._read_stop_facts(journal), trades._read_stop_facts(with_closer)
                 )
+
+    def test_the_closer_names_no_crid(self) -> None:
+        # The line proven invisible above is the one the compactor writes: a
+        # crid would let ``_latest_planned_by_crid`` retract a kept plan line.
+        self.assertTrue(_is_closer(cl._stop_move_closer(_U)), cl._stop_move_closer(_U))
 
 
 # --- #1669: repeated boots --------------------------------------------------------

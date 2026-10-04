@@ -73,6 +73,14 @@ class TestSelectStopMoveLines(unittest.TestCase):
         bad = {"kind": "trailed", "uic": _UIC, "level": 14.0, "ts": "later"}
         self.assertEqual(sj.select_stop_move_lines([good, bad], {_UIC: 100.0}), {_UIC: good})
 
+    def test_a_non_finite_timestamp_is_skipped(self) -> None:
+        good = _trailed(13.0, 104.0)
+        for ts in (float("inf"), float("nan")):
+            bad = _trailed(14.0, ts)
+            for order in ([good, bad], [bad, good]):
+                with self.subTest(ts=ts, first=order[0]["level"]):
+                    self.assertEqual(sj.select_stop_move_lines(order, {_UIC: 100.0}), {_UIC: good})
+
     def test_another_uics_marker_is_ignored(self) -> None:
         lines = [_trailed(13.0, 104.0, uic=_OTHER_UIC)]
         self.assertEqual(sj.select_stop_move_lines(lines, {_UIC: 100.0}), {})
