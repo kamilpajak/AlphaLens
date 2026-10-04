@@ -19,7 +19,10 @@ Two variants come from one description:
 
 Enums are closed in both: they list the values of THIS release. A consumer
 must still treat an unknown value as unknown (§3.0), because a later v1 may add
-one.
+one, and should validate a body against the file of the release that produced
+it. Each Measured field names its kind (price, quantity, money, percent, R,
+seconds, unitless number, code), which fixes its unit and value type, so the
+open schema still refuses a wrong type or unit.
 """
 
 from __future__ import annotations
@@ -124,13 +127,55 @@ class _Builder:
             "description": "A Measured whose value is a time (§3.1).",
         }
 
+    def measured_kind(
+        self, unit: dict[str, Any], value_type: str, description: str
+    ) -> dict[str, Any]:
+        """A Measured whose unit and value type are fixed for its field."""
+        return {
+            "allOf": [
+                _ref("Measured"),
+                {
+                    "properties": {
+                        "value": {"type": [value_type, "null"]},
+                        "unit": {"anyOf": [unit, {"type": "null"}]},
+                    }
+                },
+            ],
+            "description": description,
+        }
+
+    def measured_kinds(self) -> dict[str, Any]:
+        number = "number"
+        return {
+            "MeasuredPrice": self.measured_kind(
+                {"type": "string", "pattern": r"^price:[A-Z]{3}$"},
+                number,
+                "A price, unit price:<ccy> (null only when the currency is unknown).",
+            ),
+            "MeasuredQty": self.measured_kind({"const": "shares"}, number, "A quantity."),
+            "MeasuredMoney": self.measured_kind(
+                {"type": "string", "pattern": r"^[A-Z]{3}$"},
+                number,
+                "An amount of money, unit a currency code.",
+            ),
+            "MeasuredPercent": self.measured_kind({"const": "%"}, number, "A percentage."),
+            "MeasuredR": self.measured_kind({"const": "R"}, number, "An R multiple."),
+            "MeasuredSeconds": self.measured_kind({"const": "s"}, number, "A duration."),
+            "MeasuredNumber": self.measured_kind(
+                {"not": {}}, number, "A unitless number: a rate or an identifier."
+            ),
+            "MeasuredCode": self.measured_kind(
+                {"not": {}}, "string", "A code with no unit: a MIC, a currency, a source name."
+            ),
+        }
+
     def fill_properties(self) -> dict[str, Any]:
         return {
             "order_id": {"type": "string"},
             "external_reference": {"type": ["string", "null"]},
             "venue_time": _ref("MeasuredTime"),
-            "price": _ref("Measured"),
-            "qty": _ref("Measured"),
+            "price": _ref("MeasuredPrice"),
+            "qty": _ref("MeasuredQty"),
             "executions": {"type": "array", "items": _ref("Execution")},
             "detected_at": _ref("MeasuredTime"),
             "position_id": {"type": ["string", "null"]},
@@ -164,6 +209,7 @@ class _Builder:
             ),
             "Measured": self.measured(),
             "MeasuredTime": self.measured_time(),
+            **self.measured_kinds(),
             "SourceRead": self.obj(
                 {
                     "status": _ref("SourceStatus"),
@@ -195,9 +241,9 @@ class _Builder:
             ),
             "Fees": self.obj(
                 {
-                    "commission": _ref("Measured"),
-                    "exchange_fee": _ref("Measured"),
-                    "fx_conversion": _ref("Measured"),
+                    "commission": _ref("MeasuredMoney"),
+                    "exchange_fee": _ref("MeasuredMoney"),
+                    "fx_conversion": _ref("MeasuredMoney"),
                 },
                 description="Signed as the venue sends them (negative = cost). "
                 "commission and exchange_fee in the booking currency; fx_conversion "
@@ -205,8 +251,8 @@ class _Builder:
             ),
             "RealizedFx": self.obj(
                 {
-                    "conversion_rate": _ref("Measured"),
-                    "share_amount_acct": _ref("Measured"),
+                    "conversion_rate": _ref("MeasuredNumber"),
+                    "share_amount_acct": _ref("MeasuredMoney"),
                 },
                 description="The Share Amount booking: realized rate and the "
                 "account-currency cash leg, signed as sent.",
@@ -218,9 +264,9 @@ class _Builder:
                     "reason": _nullable(_ref("ExitReason")),
                     "reason_null_reason": _nullable(_ref("NullReason")),
                     "reason_evidence": {"type": "array", "items": {"type": "string"}},
-                    "stop_level_at_fill": _ref("Measured"),
+                    "stop_level_at_fill": _ref("MeasuredPrice"),
                     "tp_label": {"type": ["string", "null"]},
-                    "attributed_qty": _ref("Measured"),
+                    "attributed_qty": _ref("MeasuredQty"),
                     "attribution": _nullable(_ref("Attribution")),
                 },
                 description="A Fill that closed (part of) the pick. reason is null "
@@ -232,7 +278,7 @@ class _Builder:
                     "reason": _nullable(_ref("ExitReason")),
                     "reason_null_reason": _nullable(_ref("NullReason")),
                     "reason_evidence": {"type": "array", "items": {"type": "string"}},
-                    "unattributed_qty": _ref("Measured"),
+                    "unattributed_qty": _ref("MeasuredQty"),
                 },
                 description="A venue fill on a pick's uic that no pick owns (§4.5). "
                 "reason is null only offline, with reason_null_reason.",
@@ -242,11 +288,11 @@ class _Builder:
                     "tier_index": {"type": "integer", "minimum": 0},
                     "path": _ref("TierPath"),
                     "crid": {"type": "string"},
-                    "planned_limit": _ref("Measured"),
-                    "planned_qty": _ref("Measured"),
+                    "planned_limit": _ref("MeasuredPrice"),
+                    "planned_qty": _ref("MeasuredQty"),
                     "window_end": _ref("MeasuredTime"),
                     "touched_at": _ref("MeasuredTime"),
-                    "touch_price": _ref("Measured"),
+                    "touch_price": _ref("MeasuredPrice"),
                     "trigger_order_id": {"type": ["string", "null"]},
                     "armed_at": _ref("MeasuredTime"),
                     "terminal": _ref("Terminal"),
@@ -257,26 +303,21 @@ class _Builder:
             ),
             "Outcome": self.obj(
                 {
-                    **{
-                        name: _ref("Measured")
-                        for name in (
-                            "entry_qty",
-                            "avg_entry_price",
-                            "exit_qty",
-                            "avg_exit_price",
-                            "notional_spent",
-                            "pnl_cash",
-                            "pnl_pct_of_spent",
-                            "denominator_stop",
-                            "risk_per_share",
-                            "r_multiple",
-                            "holding_seconds",
-                        )
-                    },
+                    "entry_qty": _ref("MeasuredQty"),
+                    "avg_entry_price": _ref("MeasuredPrice"),
+                    "exit_qty": _ref("MeasuredQty"),
+                    "avg_exit_price": _ref("MeasuredPrice"),
+                    "notional_spent": _ref("MeasuredMoney"),
+                    "pnl_cash": _ref("MeasuredMoney"),
+                    "pnl_pct_of_spent": _ref("MeasuredPercent"),
+                    "denominator_stop": _ref("MeasuredPrice"),
+                    "risk_per_share": _ref("MeasuredPrice"),
+                    "r_multiple": _ref("MeasuredR"),
+                    "holding_seconds": _ref("MeasuredSeconds"),
                     "fees": _ref("Fees"),
-                    "notional_spent_acct": _ref("Measured"),
-                    "pnl_cash_acct": _ref("Measured"),
-                    "mfe_lower_bound": _ref("Measured"),
+                    "notional_spent_acct": _ref("MeasuredMoney"),
+                    "pnl_cash_acct": _ref("MeasuredMoney"),
+                    "mfe_lower_bound": _ref("MeasuredPrice"),
                     "fees_not_included": {
                         "type": "array",
                         "items": {"type": "string", "enum": list(trades.FEES_NOT_INCLUDED)},
@@ -305,23 +346,23 @@ class _Builder:
                     "plan_schema_version": {"type": ["string", "null"]},
                     "plan_size_shape": {"type": "string", "enum": list(trades.SIZE_SHAPES)},
                     "plan_source": {"type": "string", "enum": list(trades.PLAN_SOURCES)},
-                    "plan_disaster_stop": _ref("Measured"),
-                    "placed_stop": _ref("Measured"),
+                    "plan_disaster_stop": _ref("MeasuredPrice"),
+                    "placed_stop": _ref("MeasuredPrice"),
                     "instrument": self.obj(
                         {
-                            "uic": _ref("Measured"),
-                            "exchange_mic": _ref("Measured"),
-                            "instrument_currency": _ref("Measured"),
-                            "sizing_currency": _ref("Measured"),
+                            "uic": _ref("MeasuredNumber"),
+                            "exchange_mic": _ref("MeasuredCode"),
+                            "instrument_currency": _ref("MeasuredCode"),
+                            "sizing_currency": _ref("MeasuredCode"),
                         }
                     ),
                     "sizing_fx": self.obj(
                         {
-                            "rate": _ref("Measured"),
-                            "bid": _ref("Measured"),
-                            "ask": _ref("Measured"),
+                            "rate": _ref("MeasuredNumber"),
+                            "bid": _ref("MeasuredNumber"),
+                            "ask": _ref("MeasuredNumber"),
                             "asof": _ref("MeasuredTime"),
-                            "source": _ref("Measured"),
+                            "source": _ref("MeasuredCode"),
                         },
                         description="The rate at SIZING time; never used as a realized rate.",
                     ),

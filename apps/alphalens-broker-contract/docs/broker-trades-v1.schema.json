@@ -387,6 +387,232 @@
       ],
       "description": "A Measured whose value is a time (§3.1)."
     },
+    "MeasuredPrice": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^price:[A-Z]{3}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A price, unit price:<ccy> (null only when the currency is unknown)."
+    },
+    "MeasuredQty": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "const": "shares"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A quantity."
+    },
+    "MeasuredMoney": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "An amount of money, unit a currency code."
+    },
+    "MeasuredPercent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "const": "%"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A percentage."
+    },
+    "MeasuredR": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "const": "R"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "An R multiple."
+    },
+    "MeasuredSeconds": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "const": "s"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A duration."
+    },
+    "MeasuredNumber": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "not": {}
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A unitless number: a rate or an identifier."
+    },
+    "MeasuredCode": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "not": {}
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A code with no unit: a MIC, a currency, a source name."
+    },
     "SourceRead": {
       "type": "object",
       "properties": {
@@ -512,13 +738,13 @@
       "description": "Signed as the venue sends them (negative = cost). commission and exchange_fee in the booking currency; fx_conversion in the account currency.",
       "properties": {
         "commission": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredMoney"
         },
         "exchange_fee": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredMoney"
         },
         "fx_conversion": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredMoney"
         }
       },
       "required": [
@@ -532,10 +758,10 @@
       "description": "The Share Amount booking: realized rate and the account-currency cash leg, signed as sent.",
       "properties": {
         "conversion_rate": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredNumber"
         },
         "share_amount_acct": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredMoney"
         }
       },
       "required": [
@@ -560,10 +786,10 @@
           "$ref": "#/$defs/MeasuredTime"
         },
         "price": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "qty": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredQty"
         },
         "executions": {
           "type": "array",
@@ -624,10 +850,10 @@
           "$ref": "#/$defs/MeasuredTime"
         },
         "price": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "qty": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredQty"
         },
         "executions": {
           "type": "array",
@@ -683,7 +909,7 @@
           }
         },
         "stop_level_at_fill": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "tp_label": {
           "type": [
@@ -692,7 +918,7 @@
           ]
         },
         "attributed_qty": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredQty"
         },
         "attribution": {
           "anyOf": [
@@ -743,10 +969,10 @@
           "$ref": "#/$defs/MeasuredTime"
         },
         "price": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "qty": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredQty"
         },
         "executions": {
           "type": "array",
@@ -802,7 +1028,7 @@
           }
         },
         "unattributed_qty": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredQty"
         }
       },
       "required": [
@@ -837,10 +1063,10 @@
           "type": "string"
         },
         "planned_limit": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "planned_qty": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredQty"
         },
         "window_end": {
           "$ref": "#/$defs/MeasuredTime"
@@ -849,7 +1075,7 @@
           "$ref": "#/$defs/MeasuredTime"
         },
         "touch_price": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "trigger_order_id": {
           "type": [
@@ -909,49 +1135,49 @@
       "description": "Derived values (§5). Gross: no net figure is derived.",
       "properties": {
         "entry_qty": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredQty"
         },
         "avg_entry_price": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "exit_qty": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredQty"
         },
         "avg_exit_price": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "notional_spent": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredMoney"
         },
         "pnl_cash": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredMoney"
         },
         "pnl_pct_of_spent": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPercent"
         },
         "denominator_stop": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "risk_per_share": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "r_multiple": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredR"
         },
         "holding_seconds": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredSeconds"
         },
         "fees": {
           "$ref": "#/$defs/Fees"
         },
         "notional_spent_acct": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredMoney"
         },
         "pnl_cash_acct": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredMoney"
         },
         "mfe_lower_bound": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "fees_not_included": {
           "type": "array",
@@ -1073,25 +1299,25 @@
           ]
         },
         "plan_disaster_stop": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "placed_stop": {
-          "$ref": "#/$defs/Measured"
+          "$ref": "#/$defs/MeasuredPrice"
         },
         "instrument": {
           "type": "object",
           "properties": {
             "uic": {
-              "$ref": "#/$defs/Measured"
+              "$ref": "#/$defs/MeasuredNumber"
             },
             "exchange_mic": {
-              "$ref": "#/$defs/Measured"
+              "$ref": "#/$defs/MeasuredCode"
             },
             "instrument_currency": {
-              "$ref": "#/$defs/Measured"
+              "$ref": "#/$defs/MeasuredCode"
             },
             "sizing_currency": {
-              "$ref": "#/$defs/Measured"
+              "$ref": "#/$defs/MeasuredCode"
             }
           },
           "required": [
@@ -1106,19 +1332,19 @@
           "description": "The rate at SIZING time; never used as a realized rate.",
           "properties": {
             "rate": {
-              "$ref": "#/$defs/Measured"
+              "$ref": "#/$defs/MeasuredNumber"
             },
             "bid": {
-              "$ref": "#/$defs/Measured"
+              "$ref": "#/$defs/MeasuredNumber"
             },
             "ask": {
-              "$ref": "#/$defs/Measured"
+              "$ref": "#/$defs/MeasuredNumber"
             },
             "asof": {
               "$ref": "#/$defs/MeasuredTime"
             },
             "source": {
-              "$ref": "#/$defs/Measured"
+              "$ref": "#/$defs/MeasuredCode"
             }
           },
           "required": [

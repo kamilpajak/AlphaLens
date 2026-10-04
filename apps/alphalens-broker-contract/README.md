@@ -504,6 +504,16 @@ unknown. The published schema lists the values of its release; each addition is
 a change to this README in the same PR. Renaming or removing a field or a value,
 or changing a type or a unit, needs v2.
 
+**What the schema checks.** Its `$id` is `urn:alphalens:broker:trades:1`, the
+schema file for the envelope `schema` value `alphalens.broker.trades/v1`. Every
+Measured field has a fixed unit and value type (`price:<ccy>`, `shares`, a
+currency code, `%`, `R`, `s`, or no unit), so a string where a number belongs or
+a quantity in a price unit fails validation. Objects stay open to unknown keys,
+because v1 may add optional fields. Enums are closed and list the values of the
+release that generated the file, so validate a body against the schema file of
+the release that produced it; an older file refuses a newer value that this
+README allows.
+
 **Refusals.** The command adds no failure code. A bad option is `usage`; a broker
 without the fill-history capability is `broker_unsupported` (run `--offline` for
 the journal half); a broker read error is classified by its exception; a legacy
