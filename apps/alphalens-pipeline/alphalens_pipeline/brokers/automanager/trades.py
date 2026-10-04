@@ -2109,6 +2109,23 @@ def _offline_closing_events(
 # --- Placed stop and plan stop ------------------------------------------------
 
 
+def _bracket_request_ids(pick: _Pick) -> set[str]:
+    """The submission request ids of the pick's own now-bracket tiers."""
+    return {tier.crid for tier in pick.tiers if tier.path == PATH_NOW_BRACKET}
+
+
+def _is_pick_stop_ref(reference: str | None, pick: _Pick) -> bool:
+    """Whether a stop reference names this pick, in either of its two forms
+    (§4.4): ``<crid>-entry-t<k>[-fire]-stop-<n>`` or the bracket form
+    ``<uuid>-stop-<n>`` of one of the pick's own now-bracket tiers."""
+    if not reference:
+        return False
+    if _STOP_REF_RE.search(reference):
+        return _pick_key_from_stop_ref(reference) == pick.key
+    bracket = _BRACKET_STOP_REF_RE.match(reference)
+    return bracket is not None and bracket.group("request") in _bracket_request_ids(pick)
+
+
 def _placed_stop(pick: _Pick, venue: _Venue | None, stop_facts: _StopFacts) -> Measured:
     unit = _price_unit(pick.instrument_currency)
     if venue is not None:
@@ -2117,9 +2134,7 @@ def _placed_stop(pick: _Pick, venue: _Venue | None, stop_facts: _StopFacts) -> M
             order
             for order in venue.orders.values()
             if order.uic == pick.uic
-            and order.reference
-            and _STOP_REF_RE.search(order.reference)
-            and _pick_key_from_stop_ref(order.reference) == pick.key
+            and _is_pick_stop_ref(order.reference, pick)
             and order.placed is not None
         ]
         if stops:
@@ -2128,7 +2143,7 @@ def _placed_stop(pick: _Pick, venue: _Venue | None, stop_facts: _StopFacts) -> M
             assert placed is not None
             return _num(placed.price, unit, SOURCE_AUDIT, f"order:{first.order_id}")
     for ref, lines in stop_facts.placed_by_ref.items():
-        if _pick_key_from_stop_ref(ref) == pick.key and lines:
+        if _is_pick_stop_ref(ref, pick) and lines:
             return _num(
                 _finite(lines[0].get("stop_price")),
                 unit,

@@ -864,6 +864,33 @@ class FiltersAndCounts(_TradesCase):
         self.assertEqual([r["pick_key"] for r in report.trades], [VST])
 
 
+QUBT = "QUBT:2026-09-03"
+
+
+class BracketStopIsThePlacedStop(_TradesCase):
+    """QUBT's stop carries the bracket form ``<uuid>-stop-0`` (order 5439823194,
+    placed @6.5), not the ``<crid>-entry-tN-stop-N`` form."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        install_journals(self.home)
+
+    def test_broker_mode_reads_the_bracket_stop_from_the_audit(self) -> None:
+        placed = trade(self.build(pick=QUBT), QUBT)["placed_stop"]
+        self.assertEqual(value(placed), 6.5)
+        self.assertEqual(placed["source"], "venue.audit")
+        self.assertEqual(placed["ref"], "order:5439823194")
+
+    def test_offline_reads_the_bracket_stop_from_the_stop_journal(self) -> None:
+        placed = trade(self.build(None, pick=QUBT), QUBT)["placed_stop"]
+        self.assertEqual(value(placed), None)
+        # The stop_placed line of this generation has no stop_price; the
+        # journal still names the bracket's stop, so the reason is not a
+        # missing audit row.
+        self.assertEqual(placed["source"], "keeper.stop_journal")
+        self.assertEqual(placed["ref"], "line:standalone_stops:stop_placed")
+
+
 class PublishedVocabularies(unittest.TestCase):
     def test_every_alert_reason_has_a_row(self) -> None:
         self.assertEqual(

@@ -29,6 +29,10 @@ from alphalens_pipeline.brokers.fill_history import (
 from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "trades" / "live_2026_10_03"
+# The SIM journal lines of RHI:2026-09-03 as they stood on 2026-10-04: a
+# now-bracket tier and a trail tier closed by ONE stop whose reference names the
+# bracket (``<uuid>-stop-0``). Only that pick's lines are kept.
+SIM_RHI_DIR = Path(__file__).parent / "fixtures" / "trades" / "sim_rhi_2026_09_03"
 VENUE: dict[str, Any] = json.loads((FIXTURE_DIR / "venue.json").read_text(encoding="utf-8"))
 NOW = dt.datetime(2026, 10, 3, 15, 30, tzinfo=dt.UTC)
 JOURNALS = ("picks", "submissions", "entry_trails", "standalone_stops")
@@ -41,19 +45,21 @@ def install_journals(
     drop: Callable[[dict[str, Any]], bool] | None = None,
     extra: dict[str, list[dict[str, Any]]] | None = None,
     edit: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
+    source_dir: Path = FIXTURE_DIR,
 ) -> Path:
-    """Copy the LIVE journals into ``home``'s ``<env>`` state root.
+    """Copy the LIVE journals (or those of ``source_dir``) into ``home``'s
+    ``<env>`` state root.
 
     ``drop`` removes matching records from every file (current and snapshot);
     ``edit(journal, record)`` rewrites records; ``extra`` appends records to the
     CURRENT file of a journal. Returns the state root."""
     root = home / ".alphalens" / "broker_orders" / env
     (root / "compaction_snapshots").mkdir(parents=True, exist_ok=True)
-    sources = [FIXTURE_DIR / f"{name}.jsonl" for name in JOURNALS] + sorted(
-        (FIXTURE_DIR / "compaction_snapshots").glob("*.jsonl")
+    sources = [source_dir / f"{name}.jsonl" for name in JOURNALS] + sorted(
+        (source_dir / "compaction_snapshots").glob("*.jsonl")
     )
     for source in sources:
-        target = root / source.relative_to(FIXTURE_DIR)
+        target = root / source.relative_to(source_dir)
         if drop is None and edit is None:
             shutil.copyfile(source, target)
             continue
