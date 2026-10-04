@@ -24,10 +24,19 @@ This is a RATCHET, not a limit, and it is red in BOTH directions:
 Raising an entry is allowed and is meant to be visible: it is one line in the
 diff, in the PR that needs the file to grow.
 
-The corpus is the production corpus — the same roots SonarCloud scans, minus
-tests and Django migrations. ``test_the_corpus_covers_every_python_root_sonar_scans``
-keeps the two lists from drifting apart, so a new workspace member cannot land
-outside this gate without someone noticing.
+The corpus is the production corpus, held in place on TWO independent axes,
+because either one alone leaves a way in:
+
+* against ``sonar.sources`` — a root Sonar scans but this gate does not;
+* against ``[tool.uv.workspace] members`` — a member added to the workspace
+  but to neither list. The Sonar check alone cannot see this one: both lists
+  stay unchanged, both stay equal, and the new member's files are never walked.
+
+What is left out is listed by DIRECTORY (``EXCLUDED_DIRS``), not matched on the
+name ``tests`` wherever it appears. Name matching would mean a large file could
+hide in any new directory called ``tests``; a declared list makes an
+undeclared one red. Django is the only member whose tests and migrations sit
+inside its source root — everywhere else the suite is a sibling of the package.
 """
 
 from __future__ import annotations
@@ -61,8 +70,25 @@ PRODUCTION_ROOTS: tuple[str, ...] = (
     "apps/alphalens-django",
 )
 
-# Directory names that are not production code wherever they appear.
-EXCLUDED_DIR_PARTS = frozenset({"tests", "test", "migrations", "__pycache__"})
+# Directories inside a production root that are not production code, each with
+# what it holds. Declared one by one rather than matched by name, so a large
+# file cannot hide in a new directory called ``tests``: an undeclared one is red
+# (``test_no_undeclared_tests_or_migrations_directory_exists``), and a declared
+# one that disappears is red too.
+EXCLUDED_DIRS: dict[str, str] = {
+    "apps/alphalens-django/auth_cf/tests": "django app test suite",
+    "apps/alphalens-django/briefs/migrations": "django schema migrations",
+    "apps/alphalens-django/briefs/tests": "django app test suite",
+    "apps/alphalens-django/config/tests": "django project test suite",
+    "apps/alphalens-django/core/tests": "django app test suite",
+    "apps/alphalens-django/edge/migrations": "django schema migrations",
+    "apps/alphalens-django/edge/tests": "django app test suite",
+    "apps/alphalens-django/market/tests": "django app test suite",
+}
+
+# Names that must not appear as a directory inside a production root unless
+# EXCLUDED_DIRS declares that directory.
+MUST_BE_DECLARED_DIR_NAMES = frozenset({"tests", "migrations"})
 
 # path (repo-relative, posix) -> the line count this file may not exceed.
 #
@@ -97,18 +123,26 @@ def iter_production_files(root: Path) -> list[str]:
             continue
         for path in base.rglob("*.py"):
             rel = path.relative_to(root)
-            if EXCLUDED_DIR_PARTS & set(rel.parts[:-1]):
+            posix = rel.as_posix()
+            if any(part.startswith(".") or part == "__pycache__" for part in rel.parts):
                 continue
-            if any(part.startswith(".") for part in rel.parts):
+            if any(posix.startswith(excluded + "/") for excluded in EXCLUDED_DIRS):
                 continue
-            found.append(rel.as_posix())
+            found.append(posix)
     return sorted(found)
 
 
 def line_count(root: Path, rel: str) -> int:
-    """Lines in a file, counted the way ``wc -l`` counts them."""
+    """Newline bytes in a file — exactly what ``wc -l`` reports.
+
+    Counted this way on purpose rather than by iterating lines: iteration counts
+    a final line with no trailing newline, ``wc -l`` does not, and the baseline
+    below was generated with ``wc -l``. Today the two agree on every production
+    file (``end-of-file-fixer`` in pre-commit), so this only removes a way for
+    them to disagree later.
+    """
     with (root / rel).open("rb") as handle:
-        return sum(1 for _ in handle)
+        return sum(chunk.count(b"\n") for chunk in iter(lambda: handle.read(1 << 20), b""))
 
 
 def measure(root: Path) -> dict[str, int]:
@@ -203,7 +237,13 @@ class TheCorpusIsTheProductionCorpus(unittest.TestCase):
             if line.startswith("sonar.sources=")
         ]
         self.assertEqual(len(declared), 1, "expected exactly one sonar.sources line")
-        sonar_roots = declared[0].split(",")
+        self.assertFalse(
+            declared[0].endswith("\\"),
+            "sonar.sources continues onto the next line. A .properties continuation would "
+            "leave this test comparing a truncated list, which can pass while roots are "
+            "missing — keep the value on one line.",
+        )
+        sonar_roots = [entry.strip() for entry in declared[0].split(",")]
         python_roots = [root for root in sonar_roots if not root.startswith("apps/web/")]
         self.assertEqual(
             sorted(python_roots),
@@ -221,9 +261,76 @@ class TheCorpusIsTheProductionCorpus(unittest.TestCase):
                     f"no production file found under {root} — the walk is broken or the root moved",
                 )
 
-    def test_the_corpus_excludes_tests_and_migrations(self) -> None:
-        leaked = [rel for rel in self.files if EXCLUDED_DIR_PARTS & set(Path(rel).parts[:-1])]
+    def test_the_corpus_excludes_every_declared_directory(self) -> None:
+        leaked = [
+            rel
+            for rel in self.files
+            if any(rel.startswith(excluded + "/") for excluded in EXCLUDED_DIRS)
+        ]
         self.assertEqual(leaked, [], f"non-production files leaked into the corpus: {leaked[:10]}")
+
+    def test_every_declared_excluded_directory_still_exists(self) -> None:
+        """An entry for a directory that is gone guards nothing — drop it."""
+        gone = sorted(d for d in EXCLUDED_DIRS if not (WORKSPACE_ROOT / d).is_dir())
+        self.assertEqual(gone, [], f"EXCLUDED_DIRS names directories that no longer exist: {gone}")
+
+    def test_no_undeclared_tests_or_migrations_directory_exists(self) -> None:
+        """A new such directory must be declared, so a big file cannot hide in one."""
+        undeclared: list[str] = []
+        for top in PRODUCTION_ROOTS:
+            base = WORKSPACE_ROOT / top
+            if not base.is_dir():
+                continue
+            for path in base.rglob("*"):
+                if not path.is_dir() or path.name not in MUST_BE_DECLARED_DIR_NAMES:
+                    continue
+                rel = path.relative_to(WORKSPACE_ROOT).as_posix()
+                if rel not in EXCLUDED_DIRS:
+                    undeclared.append(rel)
+        self.assertEqual(
+            sorted(undeclared),
+            [],
+            "These directories sit inside a production root and are named like test or "
+            "migration trees, but EXCLUDED_DIRS does not declare them. Either add each "
+            "one with what it holds, or — if it does hold production code — rename it, "
+            f"because the name is what makes a reader skip it:\n  {sorted(undeclared)}",
+        )
+
+    def test_every_workspace_member_contributes_a_production_root(self) -> None:
+        """A member added to the workspace but to neither list would escape the gate.
+
+        The Sonar parity test cannot see this: both lists stay unchanged and equal.
+        """
+        import tomllib
+
+        config = tomllib.loads((WORKSPACE_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        members = config["tool"]["uv"]["workspace"]["members"]
+        self.assertTrue(members, "no uv workspace members declared")
+        uncovered = sorted(
+            member
+            for member in members
+            if not any(root == member or root.startswith(member + "/") for root in PRODUCTION_ROOTS)
+        )
+        self.assertEqual(
+            uncovered,
+            [],
+            "These uv workspace members have no production root in this gate, so files "
+            f"inside them are never measured: {uncovered}",
+        )
+
+    def test_every_production_root_lives_under_a_workspace_member(self) -> None:
+        import tomllib
+
+        config = tomllib.loads((WORKSPACE_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        members = config["tool"]["uv"]["workspace"]["members"]
+        orphaned = sorted(
+            root
+            for root in PRODUCTION_ROOTS
+            if not any(root == member or root.startswith(member + "/") for member in members)
+        )
+        self.assertEqual(
+            orphaned, [], f"PRODUCTION_ROOTS entries outside every workspace member: {orphaned}"
+        )
 
     def test_the_corpus_is_the_size_the_audit_measured(self) -> None:
         """A walk that silently narrowed to a handful of files would pass every rule above."""
@@ -285,17 +392,28 @@ class TheGateCatchesWhatItIsFor(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            declared = next(iter(EXCLUDED_DIRS))
             member = root / PRODUCTION_ROOTS[0]
             (member / "sub").mkdir(parents=True)
             (member / "sub" / "kept.py").write_text("x = 1\n", encoding="utf-8")
-            (member / "tests").mkdir()
-            (member / "tests" / "skipped.py").write_text("x = 1\n", encoding="utf-8")
+            (member / "sub" / "__pycache__").mkdir()
+            (member / "sub" / "__pycache__" / "cached.py").write_text("x = 1\n", encoding="utf-8")
             (member / "sub" / "notpython.txt").write_text("x\n", encoding="utf-8")
+            # An undeclared directory called `tests` is production until declared:
+            # that is the point of the declared list, so this file IS measured.
+            (member / "tests").mkdir()
+            (member / "tests" / "measured.py").write_text("x = 1\n", encoding="utf-8")
+            # A declared one is skipped.
+            (root / declared).mkdir(parents=True)
+            (root / declared / "skipped.py").write_text("x = 1\n", encoding="utf-8")
 
             found = iter_production_files(root)
 
-            self.assertEqual(found, [f"{PRODUCTION_ROOTS[0]}/sub/kept.py"])
-            self.assertEqual(measure(root), {f"{PRODUCTION_ROOTS[0]}/sub/kept.py": 1})
+            self.assertEqual(
+                found,
+                [f"{PRODUCTION_ROOTS[0]}/sub/kept.py", f"{PRODUCTION_ROOTS[0]}/tests/measured.py"],
+            )
+            self.assertEqual(measure(root)[f"{PRODUCTION_ROOTS[0]}/sub/kept.py"], 1)
 
 
 if __name__ == "__main__":
