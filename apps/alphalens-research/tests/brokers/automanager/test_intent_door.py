@@ -142,7 +142,7 @@ class TheTradeDateIsTheSessionThatHasNotClosed(unittest.TestCase):
     def test_the_day1_gate_defers_rather_than_passes_for_that_pick(self) -> None:
         """The reason the date is not "today at the exchange": 2026-09-16 would
         be a closed session and the gate would wave the pick through."""
-        from alphalens_pipeline.brokers.automanager.control_loop import _day1_gap_gate_decision
+        from alphalens_pipeline.brokers.automanager.day1_gap_gate import _day1_gap_gate_decision
 
         completion = _complete(_author(), now=AFTER_NY_CLOSE)
         verdict = _day1_gap_gate_decision(

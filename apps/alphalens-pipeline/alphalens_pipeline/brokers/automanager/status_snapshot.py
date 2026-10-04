@@ -242,7 +242,7 @@ def _exposure(
     broker: Any,
     now: dt.datetime,
 ) -> Exposure:
-    from alphalens_pipeline.brokers.automanager import control_loop
+    from alphalens_pipeline.brokers.automanager import pick_money_gates
 
     currency = str(getattr(account, "currency", "") or "")
     limit = safety._float_env(
@@ -250,17 +250,17 @@ def _exposure(
     ) * float(account.total_value)
     blocked: list[str] = []
 
-    committed, unjoined = control_loop._committed_working_gross_acct(open_verdicts, records)
+    committed, unjoined = pick_money_gates._committed_working_gross_acct(open_verdicts, records)
     if unjoined:
         blocked.append(
             f"{unjoined} working order(s) could not be joined to a journaled entry bracket; "
             "committed gross cannot be valued, failing closed"
         )
-    filled, mark_failure = control_loop._filled_positions_gross_acct(
+    filled, mark_failure = pick_money_gates._filled_positions_gross_acct(
         positions,
         None,
         account_currency=currency,
-        rate_lookup=control_loop._make_position_rate_lookup(broker, currency)
+        rate_lookup=pick_money_gates._make_position_rate_lookup(broker, currency)
         if broker is not None
         else None,
     )
@@ -315,13 +315,13 @@ def _slots(
     fold: entry_trails.EntryTrailFold,
     now: dt.datetime,
 ) -> Slots:
-    from alphalens_pipeline.brokers.automanager import control_loop
+    from alphalens_pipeline.brokers.automanager import control_loop, entry_watch_capacity
 
     brackets, _realized_r = control_loop._summarize_open_verdicts(
         open_verdicts, now.date().isoformat()
     )
     net_uics, unresolvable = control_loop._net_open_position_uics(positions)
-    watch_picks = control_loop._open_watch_picks_for_max_open(
+    watch_picks = entry_watch_capacity._open_watch_picks_for_max_open(
         fold, own_pick_key="", position_uics=net_uics
     )
     position_slots = len(net_uics) + unresolvable
@@ -348,7 +348,7 @@ def _cash_floor(
 ) -> CashFloor:
     import os
 
-    from alphalens_pipeline.brokers.automanager import control_loop
+    from alphalens_pipeline.brokers.automanager import pick_money_gates
     from alphalens_pipeline.brokers.automanager.live_rails import (
         SIZING_EQUITY_MODE_ENV,
         SIZING_MODE_DECLARED,
@@ -359,7 +359,7 @@ def _cash_floor(
         return CashFloor(applies=False, mode=mode or "unset", as_of=_iso(now))
 
     blocked: list[str] = []
-    reserved, _unjoined = control_loop._committed_working_gross_acct(open_verdicts, records)
+    reserved, _unjoined = pick_money_gates._committed_working_gross_acct(open_verdicts, records)
     watching, unvaluable = entry_trails.watching_virtual_gross_acct(fold)
     if unvaluable:
         blocked.append(

@@ -17,6 +17,8 @@ from unittest import mock
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails, live_exit_engine
 from alphalens_pipeline.brokers.automanager import entry_watch as ew
+from alphalens_pipeline.brokers.automanager import pick_money_gates as pmg
+from alphalens_pipeline.brokers.automanager import placed_geometry as pg
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.costs import (
     XAMS_FEE_CARD,
@@ -99,7 +101,7 @@ class TestTranchePlanLineStampsCurrencies(unittest.TestCase):
             disaster_stop_price = 90.0
 
         with mock.patch.object(sj, "_append_standalone_stop_journal", lines.append):
-            cl._journal_tranche_plan(
+            pg._journal_tranche_plan(
                 plan=_Plan(),
                 exit_spec=None,
                 placement=_Placement(),
@@ -263,7 +265,7 @@ class TestMicThreading(unittest.TestCase):
             disaster_stop_price = 90.0
 
         with mock.patch.object(sj, "_append_standalone_stop_journal", lines.append):
-            cl._journal_tranche_plan(
+            pg._journal_tranche_plan(
                 plan=_Plan(),
                 exit_spec=None,
                 placement=_Placement(),
@@ -302,8 +304,12 @@ class TestMicThreading(unittest.TestCase):
             captured.update(kw)
             return CostGateFacts.legacy()
 
-        with mock.patch.object(cl, "cost_gate_facts", _spy):
-            cl._now_cost_gate_violation(
+        # The gate under test resolves ``cost_gate_facts`` through its OWN
+        # module namespace, so the patch has to name that module — patching
+        # ``control_loop`` would leave the spy unreachable and the assertion
+        # below would read a missing key rather than a wrong one.
+        with mock.patch.object(pg, "cost_gate_facts", _spy):
+            pg._now_cost_gate_violation(
                 cap=100.0,
                 plan=_Plan(),
                 exit_spec=None,
@@ -318,10 +324,10 @@ class TestMicThreading(unittest.TestCase):
         # trip is 2 x the venue minimum on a 1000 EUR gross: Euronext (2+2)
         # -> 40 bps, Xetra (3+3) -> 60 bps. Same inputs, different venue,
         # different number — the discrimination the re-key exists for.
-        xams = cl._estimate_round_trip_fee_bps(
+        xams = pmg._estimate_round_trip_fee_bps(
             _Plan(), None, instrument_currency="EUR", exchange_mic="XAMS"
         )
-        xetr = cl._estimate_round_trip_fee_bps(
+        xetr = pmg._estimate_round_trip_fee_bps(
             _Plan(), None, instrument_currency="EUR", exchange_mic="XETR"
         )
         self.assertIsNotNone(xams)
@@ -337,12 +343,12 @@ class TestMicThreading(unittest.TestCase):
 
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "50"}):
             self.assertIsNone(
-                cl._check_fee_floor(
+                pmg._check_fee_floor(
                     _Plan(), None, ticker="ASML", instrument_currency="EUR", exchange_mic="XAMS"
                 )
             )
             self.assertIsNotNone(
-                cl._check_fee_floor(
+                pmg._check_fee_floor(
                     _Plan(), None, ticker="RHM", instrument_currency="EUR", exchange_mic="XETR"
                 )
             )
@@ -397,7 +403,7 @@ class TestPlacementEstimatorUsesVenueCard(unittest.TestCase):
 
         # gross 9240 PLN; per fill max(10, 0.0012*9240) = 11.088; entry+exit
         # (no tranches -> exit mirrors entry) = 22.176 -> 24.0 bps of gross.
-        bps = cl._estimate_round_trip_fee_bps(_EstPlan(), None, instrument_currency="PLN")
+        bps = pmg._estimate_round_trip_fee_bps(_EstPlan(), None, instrument_currency="PLN")
         self.assertAlmostEqual(bps, 24.0, places=4)
 
     def test_usd_plan_is_byte_identical_to_the_old_shape(self) -> None:
@@ -410,7 +416,7 @@ class TestPlacementEstimatorUsesVenueCard(unittest.TestCase):
             tp_tranches = ()
 
         # gross 600 USD; per fill max(1, 0.48) = 1; entry+exit = 2 -> 33.33 bps.
-        bps = cl._estimate_round_trip_fee_bps(_EstPlan(), None, instrument_currency="USD")
+        bps = pmg._estimate_round_trip_fee_bps(_EstPlan(), None, instrument_currency="USD")
         self.assertAlmostEqual(bps, 2.0 / 600.0 * 10_000.0, places=6)
 
 

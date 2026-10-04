@@ -31,6 +31,9 @@ from unittest import mock
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_trails
 from alphalens_pipeline.brokers.automanager import entry_watch as ew
+from alphalens_pipeline.brokers.automanager import entry_watch_capacity as ewc
+from alphalens_pipeline.brokers.automanager import now_tranche as nt
+from alphalens_pipeline.brokers.automanager import placed_geometry as pg
 from alphalens_pipeline.brokers.automanager import safety as _safety
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from broker_contract.contract import OrderRejectedError
@@ -1873,23 +1876,23 @@ class TestEntryWatchCridGeneration(IsolatedHomeTestCase):
     and NOTHING for generation 1 (every crid that exists today)."""
 
     def test_generation_one_crid_is_unchanged(self) -> None:
-        self.assertEqual(cl._entry_watch_crid("ENPH", "2026-09-08", 0), "ENPH-2026-09-08-entry-t0")
+        self.assertEqual(ewc._entry_watch_crid("ENPH", "2026-09-08", 0), "ENPH-2026-09-08-entry-t0")
         self.assertEqual(
-            cl._entry_watch_crid("ENPH", "2026-09-08", 1, generation=1),
+            ewc._entry_watch_crid("ENPH", "2026-09-08", 1, generation=1),
             "ENPH-2026-09-08-entry-t1",
         )
 
     def test_later_generation_suffixes_the_date(self) -> None:
         self.assertEqual(
-            cl._entry_watch_crid("ENPH", "2026-09-08", 0, generation=2),
+            ewc._entry_watch_crid("ENPH", "2026-09-08", 0, generation=2),
             "ENPH-2026-09-08-g2-entry-t0",
         )
 
     def test_intent_without_the_field_reads_as_generation_one(self) -> None:
         # Test doubles and pre-#1371 payloads carry no `generation`; the drain
         # must treat them as the first generation, never crash on the attribute.
-        self.assertEqual(cl._pick_generation(type("I", (), {"meta": type("M", (), {})()})()), 1)
-        self.assertEqual(cl._pick_generation(_pick(generation=3)), 3)
+        self.assertEqual(nt._pick_generation(type("I", (), {"meta": type("M", (), {})()})()), 1)
+        self.assertEqual(nt._pick_generation(_pick(generation=3)), 3)
 
 
 class TestWatchRoutingReferenceQtyOverride(IsolatedHomeTestCase):
@@ -1966,7 +1969,7 @@ class TestWatchRoutingJournalsTranchePlan(IsolatedHomeTestCase):
         intent = _pick()
         intent.exit = _exit_spec(stop=None, tp=13.5)
         intent.spec = _blend_spec()
-        with self.assertLogs(cl.logger, level="WARNING") as captured:
+        with self.assertLogs(pg.logger, level="WARNING") as captured:
             ok, tranche_lines, trails_path, _stops = self._route(plan, intent=intent)
         self.assertTrue(ok)  # the watch itself still opens (stop-only, like brackets)
         self.assertEqual(tranche_lines, [])
@@ -2031,37 +2034,37 @@ class TestEntryWatchCapacityEnvRail(IsolatedHomeTestCase):
     def setUp(self) -> None:
         super().setUp()
         # Reset the process-lifetime observability state so tests are hermetic.
-        self.enterContext(mock.patch.object(cl, "_entry_watch_max_picks_warned", False))
-        self.enterContext(mock.patch.object(cl, "_entry_watch_capacity_deferred", set()))
+        self.enterContext(mock.patch.object(ewc, "_entry_watch_max_picks_warned", False))
+        self.enterContext(mock.patch.object(ewc, "_entry_watch_capacity_deferred", set()))
 
     def test_unset_env_defaults_to_one(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertEqual(cl._entry_watch_max_picks(), 1)
+            self.assertEqual(ewc._entry_watch_max_picks(), 1)
 
     def test_valid_values_are_honoured(self) -> None:
         for raw, expected in (("1", 1), ("2", 2), ("4", 4), ("5", 5), ("10", 10), ("25", 25)):
-            with mock.patch.dict("os.environ", {cl._ENTRY_WATCH_MAX_PICKS_ENV: raw}, clear=True):
-                self.assertEqual(cl._entry_watch_max_picks(), expected)
+            with mock.patch.dict("os.environ", {ewc._ENTRY_WATCH_MAX_PICKS_ENV: raw}, clear=True):
+                self.assertEqual(ewc._entry_watch_max_picks(), expected)
 
     def test_invalid_value_falls_back_to_one_and_warns_exactly_once(self) -> None:
         with (
-            mock.patch.dict("os.environ", {cl._ENTRY_WATCH_MAX_PICKS_ENV: "banana"}, clear=True),
-            self.assertLogs(cl.logger, level="WARNING") as captured,
+            mock.patch.dict("os.environ", {ewc._ENTRY_WATCH_MAX_PICKS_ENV: "banana"}, clear=True),
+            self.assertLogs(ewc.logger, level="WARNING") as captured,
         ):
-            self.assertEqual(cl._entry_watch_max_picks(), 1)
-            self.assertEqual(cl._entry_watch_max_picks(), 1)  # second read: no new warning
-        warnings = [m for m in captured.output if cl._ENTRY_WATCH_MAX_PICKS_ENV in m]
+            self.assertEqual(ewc._entry_watch_max_picks(), 1)
+            self.assertEqual(ewc._entry_watch_max_picks(), 1)  # second read: no new warning
+        warnings = [m for m in captured.output if ewc._ENTRY_WATCH_MAX_PICKS_ENV in m]
         self.assertEqual(len(warnings), 1)
 
     def test_out_of_range_values_fall_back_to_one(self) -> None:
         for raw in ("0", "26", "-1", ""):
             with (
                 self.subTest(raw=raw),
-                mock.patch.object(cl, "_entry_watch_max_picks_warned", False),
-                mock.patch.dict("os.environ", {cl._ENTRY_WATCH_MAX_PICKS_ENV: raw}, clear=True),
-                self.assertLogs(cl.logger, level="WARNING"),
+                mock.patch.object(ewc, "_entry_watch_max_picks_warned", False),
+                mock.patch.dict("os.environ", {ewc._ENTRY_WATCH_MAX_PICKS_ENV: raw}, clear=True),
+                self.assertLogs(ewc.logger, level="WARNING"),
             ):
-                self.assertEqual(cl._entry_watch_max_picks(), 1)
+                self.assertEqual(ewc._entry_watch_max_picks(), 1)
 
     def _seed_other_watch(self) -> Path:
         path = _journal(self)
@@ -2080,7 +2083,7 @@ class TestEntryWatchCapacityEnvRail(IsolatedHomeTestCase):
         path = self._seed_other_watch()
         broker = _RecordingBroker()
         placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        env = {_ENV: "50", cl._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
+        env = {_ENV: "50", ewc._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
         with mock.patch.dict("os.environ", env, clear=True):
             self.assertTrue(placer(_pick()))  # NOT deferred at cap=2
         opens_for_ko = [
@@ -2096,7 +2099,7 @@ class TestEntryWatchCapacityEnvRail(IsolatedHomeTestCase):
         placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
         with (
             mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
-            self.assertLogs(cl.logger, level="DEBUG") as captured,
+            self.assertLogs(ewc.logger, level="DEBUG") as captured,
         ):
             self.assertFalse(placer(_pick()))  # first deferral -> INFO
             self.assertFalse(placer(_pick()))  # every later tick -> DEBUG
@@ -2183,7 +2186,7 @@ class TestWatchGeometryStampThroughToPlannedLine(IsolatedHomeTestCase):
         intent = _pick()
         intent.exit = _exit_spec(stop=9.1, tp=13.5)
         intent.spec = _blend_spec()
-        expected = cl._placed_geometry_stamp(intent.exit)
+        expected = pg._placed_geometry_stamp(intent.exit)
         ok, _tranche_lines, trails_path, _stops = _route_watch(self, plan, intent=intent)
         self.assertTrue(ok)
         opens = [ln for ln in _lines(trails_path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
@@ -2493,7 +2496,7 @@ class TestOpenWatchesCountAgainstMaxOpen(IsolatedHomeTestCase):
         broker = _RecordingBroker()
         placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
         seen = self._recording_check()
-        env = {_ENV: "50", cl._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
+        env = {_ENV: "50", ewc._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
         with mock.patch.dict("os.environ", env, clear=True):
             placer(_pick())
         journal_view, _broker_view = seen[0]
@@ -2572,7 +2575,7 @@ class TestOpenWatchesCountAgainstMaxOpen(IsolatedHomeTestCase):
             _ENV: "50",
             "ALPHALENS_BROKER_ALLOW_ORDERS": "1",
             "ALPHALENS_BROKER_MAX_OPEN": "2",
-            cl._ENTRY_WATCH_MAX_PICKS_ENV: "4",
+            ewc._ENTRY_WATCH_MAX_PICKS_ENV: "4",
         }
         with mock.patch.dict("os.environ", env, clear=True):
             self.assertFalse(placer(_pick()))
@@ -2651,7 +2654,7 @@ class TestEodNettingRowsAreNetRiskUnits(IsolatedHomeTestCase):
         broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(42, qty=-8.0)])
         placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
         seen = self._recording_check()
-        env = {_ENV: "50", cl._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
+        env = {_ENV: "50", ewc._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
         with mock.patch.dict("os.environ", env, clear=True):
             placer(_pick())
         journal_view, broker_view = seen[0]
@@ -2676,7 +2679,7 @@ class TestRoutingDefersOnLiveSameUicLong(IsolatedHomeTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.enterContext(mock.patch.object(cl, "_entry_watch_live_uic_deferred", set()))
+        self.enterContext(mock.patch.object(ewc, "_entry_watch_live_uic_deferred", set()))
 
     def test_live_long_on_the_pick_uic_defers_and_journals_nothing(self) -> None:
         path = _journal(self)
@@ -2726,7 +2729,7 @@ class TestRoutingDefersOnLiveSameUicLong(IsolatedHomeTestCase):
         placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
         with (
             mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
-            self.assertLogs(cl.logger, level="DEBUG") as captured,
+            self.assertLogs(ewc.logger, level="DEBUG") as captured,
         ):
             self.assertFalse(placer(_pick()))  # first deferral -> WARNING
             self.assertFalse(placer(_pick()))  # every later tick -> DEBUG
@@ -3459,7 +3462,7 @@ class TestPlacePickNowTranche(IsolatedHomeTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.enterContext(mock.patch.object(cl, "_entry_watch_live_uic_deferred", set()))
+        self.enterContext(mock.patch.object(ewc, "_entry_watch_live_uic_deferred", set()))
 
     def _drain(
         self,
@@ -3709,7 +3712,7 @@ class TestPlacePickNowTranche(IsolatedHomeTestCase):
         )
         with (
             mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
-            mock.patch.object(cl, "_entry_watch_capacity_reached", lambda _f: True),
+            mock.patch.object(ewc, "_entry_watch_capacity_reached", lambda _f: True),
         ):
             # Tick 1: now placed, siblings capacity-deferred — the pick reads
             # NOT placed so the drain retries (zen HIGH on #1259).

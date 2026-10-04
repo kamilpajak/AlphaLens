@@ -30,10 +30,10 @@ import inspect
 import textwrap
 import unittest
 
-from alphalens_pipeline.brokers.automanager.control_loop import (
+from alphalens_pipeline.brokers.automanager.control_loop import _place_tiers
+from alphalens_pipeline.brokers.automanager.placed_geometry import (
     _journal_tranche_plan,
     _journal_tranche_plan_core,
-    _place_tiers,
     _placed_geometry_stamp,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (

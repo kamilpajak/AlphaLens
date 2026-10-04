@@ -24,6 +24,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import day1_gap_gate as d1g
 from alphalens_pipeline.brokers.automanager import picks
 from alphalens_pipeline.brokers.automanager.live_rails import MAX_PICK_NOTIONAL_ENV
 from broker_contract.trade_intent.codec import intent_to_jsonable
@@ -75,7 +76,7 @@ class TestCurrencyIsJudgedBeforeTheDay1Gate(IsolatedHomeTestCase):
         broker = _CountingBroker(currency="PLN")
         with (
             _frozen_now(_PREOPEN),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             placer, alerts, refusals = _placer(self, broker, day1_gap_price_probe=_RaisingProbe())
             self.assertFalse(placer(_sized(1500.0, "USD")))
@@ -89,7 +90,7 @@ class TestCurrencyIsJudgedBeforeTheDay1Gate(IsolatedHomeTestCase):
         broker = _CountingBroker(currency="PLN")
         with (
             _frozen_now(_PREOPEN),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             placer, _alerts, refusals = _placer(self, broker, day1_gap_price_probe=_RaisingProbe())
             placer(_sized(1500.0, "USD", ticker="KO"))
@@ -103,7 +104,7 @@ class TestCurrencyIsJudgedBeforeTheDay1Gate(IsolatedHomeTestCase):
         broker = _CountingBroker(currency="USD")
         with (
             _frozen_now(_PREOPEN),
-            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+            mock.patch.dict("os.environ", {d1g._DAY1_GAP_GATE_ENV: "1"}, clear=True),
         ):
             placer, _alerts, _refusals = _placer(self, broker, day1_gap_price_probe=_RaisingProbe())
             for _tick in range(3):

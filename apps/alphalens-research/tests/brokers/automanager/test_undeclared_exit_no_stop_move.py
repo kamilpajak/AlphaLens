@@ -48,8 +48,8 @@ from alphalens_pipeline.brokers.automanager.control_loop import (
     _build_managed_exits,
     _declared_reaction,
     _fold_trailed_since_latest_plan,
-    _placed_geometry_stamp,
 )
+from alphalens_pipeline.brokers.automanager.placed_geometry import _placed_geometry_stamp
 from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
     NoOp,
