@@ -464,3 +464,260 @@ jq -cR 'fromjson? | select(.ticker == "KO" and .status == "armed") | .intent
 - For LIVE, read `broker_orders/live/picks.jsonl` and arm with `--env live`.
 - Lines armed before #1475 (2026-09-16) state a percent size or `meta.brief_date` and
   are refused by the door. Start from a template instead.
+
+## `alphalens broker trades`: one read-only record per pick (#1701)
+
+`alphalens broker trades` answers "what did each pick actually do?". It returns
+one record per pick, built from the keeper's journals and, unless `--offline`,
+from the broker's own record. A record holds the plan (the last armed
+`TradeIntent`, verbatim), the pick's lifecycle, every entry tier, every exit with
+its reason, and a gross outcome. The command places, amends and cancels nothing
+and writes no journal. The design is
+`docs/research/broker_trades_command_design_2026_10_03.md`.
+
+```
+alphalens broker trades [--env sim|live] [--format human|json]
+                        [--state closed|open|never_filled|unresolved|all]   (default: all)
+                        [--since YYYY-MM-DD] [--ticker TICKER] [--pick PICK_KEY]
+                        [--limit N | --all]   (default 200, newest trade_date first)
+                        [--offline]           (journals only)
+```
+
+Examples for the replay consumer:
+
+```
+alphalens broker trades --env live --state all --all --format json
+alphalens broker trades --env live --pick VST:2026-09-21 --format json
+alphalens broker trades --env sim --offline --format json
+```
+
+The envelope is `alphalens.broker.trades/v1`. Its JSON Schema is
+[`docs/broker-trades-v1.schema.json`](docs/broker-trades-v1.schema.json). It is
+generated from the builder's vocabularies
+(`python -m alphalens_pipeline.brokers.automanager.trades_schema --write`, which
+writes only that file), and a test
+fails when the file and a fresh generation differ.
+
+**Versioning.** Within v1, new optional fields may be added, and new values may
+be added to every vocabulary below. A consumer must treat an unknown value as
+unknown. The published schema lists the values of its release; each addition is
+a change to this README in the same PR. Renaming or removing a field or a value,
+or changing a type or a unit, needs v2.
+
+**What the schema checks.** Its `$id` is `urn:alphalens:broker:trades:1`, the
+schema file for the envelope `schema` value `alphalens.broker.trades/v1`. Every
+Measured field has a fixed unit and value type (`price:<ccy>`, `shares`, a
+currency code, `%`, `R`, `s`, or no unit), so a string where a number belongs or
+a quantity in a price unit fails validation. Objects stay open to unknown keys,
+because v1 may add optional fields. Enums are closed and list the values of the
+release that generated the file, so validate a body against the schema file of
+the release that produced it; an older file refuses a newer value that this
+README allows.
+
+**Refusals.** The command adds no failure code. A bad option is `usage`; a broker
+without the fill-history capability is `broker_unsupported` (run `--offline` for
+the journal half); a broker read error is classified by its exception; a legacy
+state layout is `state_layout`. Everything uncertain about a trade is content
+and exits 0.
+
+**Every value is a `Measured`:**
+
+```json
+{"value": -1.0, "unit": "USD", "source": "venue.bookings", "ref": "trade:6885451891", "null_reason": null}
+```
+
+- `unit` is a currency code for money, `shares`, `s`, `%`, `R`, or
+  `price:<ccy>` for a price. It is `null` for a time, a rate, an identifier
+  (the `uic`) and a code (a MIC, a currency name).
+- Every time is RFC 3339 UTC with milliseconds and `Z`.
+- `ref` names the row: `order:<id>`, `trade:<id>`, `line:<journal>:<kind>`, or a
+  plan path.
+- `null_reason` is set exactly when `value` is null.
+
+**Fee and amount signs.** Fees and booking amounts are signed as the venue sends
+them: negative is a cost or money out. `commission` and `exchange_fee` are in the
+booking currency (USD on LIVE). `fx_conversion` is the conversion charge in the
+account currency: the `ConversionRateAccountCurrency` field of the trade's
+`Share Amount` booking, about 0.25 % of the traded value. That reading of the
+field comes from arithmetic on 25 LIVE rows, not from Saxo's documentation. The
+charge is already inside the realized rate, so `pnl_cash_acct` includes it;
+`fees.fx_conversion` states it so a consumer can add it back. When one fill is
+shared between owners, the pick's share of every booking amount is
+`amount × attributed_qty / FilledAmount`, with source `derived` and the warning
+`booking_prorated`. Financing, dividends and withholding tax are never included
+(`outcome.fees_not_included`): they are not tied to a fill. The outcome is gross;
+no net figure is derived.
+
+#### Outcome fields and the replay
+
+Several outcome names are also the replay's, but a shared name is NOT the same
+quantity. The mapping, field by field:
+
+| `broker trades` field | unit | replay counterpart |
+|---|---|---|
+| `outcome.notional_spent` | instrument currency (USD on LIVE) | `fx.notional_spent` (instrument currency). The replay's `summary.notional_spent` is in the account currency, at one stated rate. |
+| `outcome.pnl_cash` | instrument currency | `summary.pnl_cash` only after conversion at a stated rate; the replay's is in the account currency |
+| `outcome.pnl_cash_acct`, `notional_spent_acct` | account currency | none: they use the realized booking rates at entry and at exit, so they include the FX move between the two dates (VST: 92.04 PLN, against 82.02 PLN at the entry rate) |
+| `outcome.denominator_stop` | `price:<ccy>` | `r_multiple.denominator.source` (the stop level, `spec.disaster_stop`) |
+| `outcome.risk_per_share` | `price:<ccy>` | `r_multiple.denominator.value` (average entry minus that stop) |
+| `outcome.r_multiple` | `R` | `summary.r_multiple`: both gross, both from `spec.disaster_stop` |
+| `outcome.mfe_lower_bound` | `price:<ccy>` | the replay's `mfe` is in `R` from bar highs; `mfe_lower_bound / risk_per_share` is at most it. There is no MAE here. |
+| `exits[].tp_label` `TPn` | | `tp_fired` tranche index n - 1 |
+
+Units are spelled differently: `price:<ccy>` here is the bare `<ccy>` in the
+replay, and `%` here is the replay's `percent`. Times are RFC 3339 here and epoch
+milliseconds in the replay (`t`); compare replay bar times only with times whose
+`source` is `venue.audit`, because offline times are keeper detection times
+(`keeper.*`).
+
+#### Sources
+
+| source | read from today |
+|---|---|
+| `plan` | the intent document on the armed line |
+| `keeper.pick_queue` | `picks.jsonl` |
+| `keeper.entry_watch` | `entry_trails.jsonl` and its compaction snapshots |
+| `keeper.stop_journal` | `standalone_stops.jsonl` and its compaction snapshots |
+| `keeper.submissions` | `submissions.jsonl` |
+| `venue.audit` | `/cs/v1/audit/orderactivities` |
+| `venue.trades_report` | `/cs/v1/reports/trades` (skipped on SIM) |
+| `venue.bookings` | `/cs/v1/reports/bookings` (skipped on SIM) |
+| `venue.instrument` | `/ref/v1/instruments/details` (tick size) |
+| `derived` | computed by the builder |
+
+A source is a ROLE, not a file, so the keeper repo split does not force a v2.
+`sources[role]` in the envelope says whether each was `read`, `skipped` or
+`offline`, why not (`offline`, `sim_reports_unusable`, `no_picks`), its read
+window and its row count.
+
+#### Null reasons
+
+| null_reason | meaning |
+|---|---|
+| `offline` | the broker was not read |
+| `not_journaled` | the keeper never writes this fact |
+| `compacted_before_snapshots` | the fact sits behind `snapshot_horizon` and is in no snapshot |
+| `no_audit_row` | the order id is known, but the audit window has no row for it |
+| `sim_reports_unusable` | the SIM report endpoints return canned data from other accounts |
+| `not_closed` | the position is still open |
+| `never_filled` | no entry tier filled |
+| `non_positive_risk` | the entry is at or beyond the denominator stop, so R is undefined |
+| `ambiguous_attribution` | the fill cannot be given to one pick |
+| `legacy_plan_shape` | the value needs a size, and the plan is percent-sized |
+| `fx_rate_not_realized` | no `Share Amount` booking with a `ConversionRate` was read for this trade |
+| `report_row_missing` | the audit has the fill, but the trades or bookings report has no row for it yet |
+| `non_finite` | a computed value was NaN or infinite |
+| `stop_amend_history_unavailable` | offline, and the stop's moves cannot be known |
+
+#### Exit reasons
+
+Checked in this order in broker mode. Offline, a reason comes from journal
+markers only; a stop fill with no marker has `reason` null and
+`reason_null_reason` `stop_amend_history_unavailable`. The `trade_alerts`
+column maps the daemon's `ExitReason`; a test checks that every member has a row.
+
+| reason | rule | replay event | `trade_alerts.ExitReason` |
+|---|---|---|---|
+| `take_profit` | owned through a TP or OCO-tp reference | `tp_fired` with tranche index n - 1 for the label TPn (the label is 1-based, the replay's index 0-based); on the last tranche also the zero-unit marker `position_closed(tp_complete)` | `TAKE_PROFIT` |
+| `disaster_stop` | a stop order with no price-changing audit row; the fill price is not compared | `position_closed(stop)` | `PLAN_STOP` |
+| `trailed_stop` | price-changing rows, and a `trailed` line on the uic between the order's placement and fill within one tick of the last changed price | `stop_moved(trail)`, then `position_closed(stop)` | `TRAILED_STOP` |
+| `reanchored_stop` | the same, matched against a `reanchored` line | `stop_moved(reanchor-on-fill)`, then `position_closed(stop)` | `REANCHORED_STOP` |
+| `stop_moved_kind_unknown` | price-changing rows, and no marker in the window (lost before the snapshot horizon) | `stop_moved` with a reason that cannot be known, then `position_closed(stop)` | `STOP` |
+| `manual_close` | a closing fill with no `ExternalReference` (a heuristic: a machine order with no reference would also match) | none; exclude from replay comparison | - |
+| `manual_open` | in `unattributed_fills` only: an opening fill with no reference that no pick owns | none | - |
+| `unknown` | anything else, with its evidence in `reason_evidence` | none | - |
+
+The replay event column uses the event kinds and reasons of
+`intent_replay.trace` (`KINDS`, `CLOSE_REASONS`, `STOP_MOVE_REASONS`); a test
+checks every one. The replay's `time_stop` has no row: LIVE has no time stop by
+design. A take-profit fills at its limit or better at the venue, while the
+replay's `tp_fired` fills at the plan level; `reason_evidence` names that level,
+and `exit_price_off_plan_level` flags a fill worse than it.
+
+#### Attribution
+
+How a fill was given to a pick, in rule order, when picks share a `uic`.
+
+| attribution | rule |
+|---|---|
+| `journal_tie` | a journal line ties the order to the pick |
+| `external_reference` | the order's `ExternalReference` names the pick |
+| `position_link` | the closing fill's `RelatedPositionId` equals the `PositionId` of exactly one pick's opening fill (only manual closes carry it; `PositionId`s are never compared with each other) |
+| `fifo_fallback` | the remainder went to the oldest open lot, with the warning `attribution_fifo_assumed` |
+
+Quantity left after every lot is closed is listed in `unattributed_fills`, with
+`reason` and, when that is null (offline), `reason_null_reason`.
+
+`external_reference` also covers the uic rule of a take-profit reference
+`u<uic>-tp<n>-sell` that no `tranche_fired` line ties to a pick: the reference
+qualifies the order as a take-profit, and the single pick holding an open lot on
+that uic receives it. `reason_evidence` then holds `uic_rule` (AMBA:2026-09-04 on
+LIVE). With open lots of two picks the fill is `ambiguous_attribution` instead.
+
+#### States
+
+| state | rule |
+|---|---|
+| `closed` | the attributed exit quantity equals the entry quantity |
+| `open` | entry quantity exceeds exit quantity, and the record is complete enough to say so |
+| `never_filled` | no entry tier filled |
+| `unresolved` | offline only: lines may be lost, so the builder does not guess |
+
+`counts.all` is taken before `--state`, `counts.selected` after it; both before
+`--limit`. `truncated` says that `--limit` cut the list.
+
+#### State reasons
+
+| state_reason | state | meaning |
+|---|---|---|
+| `refused` | `never_filled` | the pick was refused |
+| `disarmed` | `never_filled` | the pick was disarmed before a fill |
+| `expired` | `never_filled` | the pick is armed, its tiers ended without a fill, and the last one expired |
+| `cancelled` | `never_filled` | the pick is armed, its tiers ended without a fill, and the last one was cancelled |
+| `pending` | `never_filled` | the pick is armed, and it has no tier yet, a tier is still open, or its last tier is suspended |
+| `compacted_before_snapshots` | `unresolved` | the pick is older than `snapshot_horizon`, or no snapshot exists |
+| `not_journaled` | `unresolved` | a now-bracket entry; the journals hold no fill for it |
+| `ambiguous_attribution` | `unresolved` | a fill on its uic could not be given to one pick |
+
+#### Warnings
+
+| code | meaning |
+|---|---|
+| `fold_order_uncertain` | offline: a re-armed crid's history holds a collapsed duplicate line, so its fold order may be wrong |
+| `entry_not_in_journal` | an audit fill is an entry of this pick but no journal line names it |
+| `audit_report_disagree` | the trades report's executions disagree with the audit's quantity or average price by more than one tick |
+| `partial_fill_shape_unverified` | only partial `Fill` rows exist; the last cumulative row was used |
+| `journal_audit_disagree` | the journal's fill price or quantity differs from the audit |
+| `attribution_fifo_assumed` | a fill was attributed by FIFO (`fifo_fallback`) |
+| `exit_qty_exceeds_pick` | the pick's exit order sold more than the pick held; the rest is in `unattributed_fills` |
+| `exit_not_in_journal` | offline: an open pick whose stop has no fill line (often closed by the keeper; not a hint of a manual close) |
+| `report_lags_audit` | an audit fill has no report row yet; its fees and realized FX are null |
+| `booking_type_unmapped` | a trade-tied booking has a `BkAmountType` the builder does not map; its raw value is in `detail` |
+| `booking_prorated` | a booking amount was shared between owners by quantity |
+| `ambiguous_attribution` | a fill on the pick's uic could not be given to one pick |
+| `side_unresolved` | the plan does not resolve a side; outcome math was refused |
+| `exit_price_off_plan_level` | a take-profit filled worse than its plan level (`spec.tp_tranches[n-1].price`, also in `reason_evidence`) by more than one tick: the order was not at the plan's level. Broker mode only; a better fill is price improvement and is not flagged |
+
+#### Replay exclusions
+
+`replay_exclusions` on each record lists why it cannot be compared with an
+`intent-replay` run of its plan. An empty list means it can. A consumer that
+compares realized trades with the replay filters on `replay_exclusions == []`,
+then strips what the door derives from `plan` (`intent_id`, `meta.armed_ts`,
+`spec.tp_tranches[].r_multiple`; the jq recipe under "Writing a manual pick")
+and keeps `meta.trade_date`. On the LIVE journals of 2026-10-03 that leaves
+EWTX, ASTS, SMMT and VST.
+
+| exclusion | meaning |
+|---|---|
+| `offline` | the record was built `--offline`: prices and exit reasons are journal values, not the venue's |
+| `not_final` | the state is `open` or `unresolved`, so there is no final outcome |
+| `manual_close` | an exit is a `manual_close`; the replay has no such event |
+| `unknown_exit` | an exit's reason is `unknown` |
+| `exit_reason_null` | an exit's reason is null (offline, the stop's moves cannot be known) |
+| `ambiguous_attribution` | a fill on the uic could not be given to one pick |
+| `entry_mode_unsupported` | a now-bracket tier (`entry_mode: immediate`), which the replay refuses |
+| `legacy_plan_shape` | the plan is percent-sized (schema 1 or 2) or absent, which the replay refuses |
+
+No value of a `reason`, `null_reason` or warning code starts with `place_` or
+`amend_`: the CLI's no-orders gate flags such strings.

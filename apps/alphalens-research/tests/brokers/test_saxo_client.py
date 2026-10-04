@@ -927,6 +927,144 @@ class TestAuditActivitiesWrapper(unittest.TestCase):
         self.assertNotIn("__next", payload)
 
 
+class TestNextLinkOnEitherGateway(unittest.TestCase):
+    """``__next`` links are absolute and carry ``:443`` on BOTH gateways (#1701).
+
+    Stripping only ``/sim/openapi`` made a LIVE link raise in ``_join_url``
+    (reproduced against LIVE with ``$top=5``). The fix parses the link,
+    requires the configured host and strips the configured base path."""
+
+    _LIVE_BASE = "https://gateway.saxobank.com/" + "openapi"
+
+    def _live_client(self, session: _RecordingSession) -> SaxoClient:
+        import datetime as _dt
+
+        from alphalens_pipeline.brokers.saxo.client import LIVE_ORDERS_UNLOCK_ENV
+
+        today = _dt.datetime.now(_dt.UTC).date().isoformat()
+        with mock.patch.dict("os.environ", {LIVE_ORDERS_UNLOCK_ENV: today}):
+            return SaxoClient(
+                _StubTokenProvider(),
+                base_url=self._LIVE_BASE,
+                session=session,  # type: ignore[arg-type]
+                sleep=lambda _s: None,
+            )
+
+    def test_a_live_link_with_port_443_is_followed_on_the_live_base(self) -> None:
+        next_url = (
+            "https://gateway.saxobank.com:443/" + "openapi"
+            "/cs/v1/audit/orderactivities?ClientKey=CK-1&$skiptoken=p2"
+        )
+        session = _RecordingSession(
+            [
+                _FakeResponse(200, payload={"Data": [{"LogId": 1}], "__next": next_url}),
+                _FakeResponse(200, payload={"Data": [{"LogId": 2}]}),
+            ]
+        )
+        client = self._live_client(session)
+
+        payload = client.get_order_activities("CK-1", entry_type="All")
+
+        self.assertEqual(
+            session.calls[1]["url"],
+            f"{self._LIVE_BASE}/cs/v1/audit/orderactivities?ClientKey=CK-1&$skiptoken=p2",
+        )
+        self.assertEqual([row["LogId"] for row in payload["Data"]], [1, 2])
+
+    def test_a_sim_link_with_port_443_is_followed_on_the_sim_base(self) -> None:
+        session = _RecordingSession()
+        client, _, _ = _make_client(session)
+        self.assertEqual(
+            client._normalize_next_url(
+                "https://gateway.saxobank.com:443/sim/openapi/cs/v1/x?$skiptoken=a"
+            ),
+            "/cs/v1/x?$skiptoken=a",
+        )
+
+    def test_a_link_to_a_foreign_host_still_fails_loudly(self) -> None:
+        session = _RecordingSession(
+            [
+                _FakeResponse(
+                    200,
+                    payload={
+                        "Data": [{"LogId": 1}],
+                        "__next": "https://evil.example/sim/openapi/x",
+                    },
+                ),
+                _FakeResponse(200, payload={"Data": [{"LogId": 2}]}),
+            ]
+        )
+        client, _, _ = _make_client(session)
+        with self.assertRaises(SaxoError):
+            client.get_order_activities("CK-1")
+        self.assertEqual(len(session.calls), 1, "the foreign link must never be requested")
+
+    def test_a_relative_link_passes_through(self) -> None:
+        client, _, _ = _make_client(_RecordingSession())
+        self.assertEqual(client._normalize_next_url("/cs/v1/x?a=1"), "/cs/v1/x?a=1")
+
+
+class TestFillHistoryReadWrappers(unittest.TestCase):
+    """The three reads behind ``broker trades`` (#1701 §4.7)."""
+
+    def test_order_activities_sends_to_datetime(self) -> None:
+        session = _RecordingSession([_FakeResponse(200, payload={"Data": []})])
+        client, _, _ = _make_client(session)
+
+        client.get_order_activities(
+            "CK-1",
+            entry_type="All",
+            from_datetime="2026-09-20T00:00:00Z",
+            to_datetime="2026-10-03T12:00:00Z",
+        )
+
+        self.assertEqual(
+            session.calls[0]["params"],
+            {
+                "ClientKey": "CK-1",
+                "EntryType": "All",
+                "FromDateTime": "2026-09-20T00:00:00Z",
+                "ToDateTime": "2026-10-03T12:00:00Z",
+            },
+        )
+
+    def test_the_report_reads_build_the_documented_paths(self) -> None:
+        for name, method in (("trades", "get_trades_report"), ("bookings", "get_bookings_report")):
+            with self.subTest(report=name):
+                session = _RecordingSession([_FakeResponse(200, payload={"Data": [{"A": 1}]})])
+                client, _, _ = _make_client(session)
+
+                rows = getattr(client, method)(
+                    "CK-1", account_key="AK-1", from_date="2026-09-20", to_date="2026-10-04"
+                )
+
+                (call,) = session.calls
+                self.assertEqual(call["url"], f"{SIM_BASE_URL}/cs/v1/reports/{name}/CK-1")
+                self.assertEqual(
+                    call["params"],
+                    {"FromDate": "2026-09-20", "ToDate": "2026-10-04", "AccountKey": "AK-1"},
+                )
+                self.assertEqual(rows, [{"A": 1}])
+
+    def test_the_report_reads_follow_every_page_and_never_read_count_as_a_total(self) -> None:
+        next_url = "https://gateway.saxobank.com:443/sim/openapi/cs/v1/reports/trades/CK-1?p=2"
+        session = _RecordingSession(
+            [
+                # `__count` is the PAGE length on these endpoints, not a total.
+                _FakeResponse(200, payload={"__count": 1, "Data": [{"T": 1}], "__next": next_url}),
+                _FakeResponse(200, payload={"__count": 1, "Data": [{"T": 2}]}),
+            ]
+        )
+        client, _, _ = _make_client(session)
+
+        rows = client.get_trades_report(
+            "CK-1", account_key="AK-1", from_date="2026-09-20", to_date="2026-10-04"
+        )
+
+        self.assertEqual(rows, [{"T": 1}, {"T": 2}])
+        self.assertEqual(len(session.calls), 2)
+
+
 class TestClosedPositionsWrapper(unittest.TestCase):
     """P3 wrapper for GET /port/v1/closedpositions (fill cross-check)."""
 

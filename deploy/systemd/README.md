@@ -1599,9 +1599,12 @@ set -a && source /etc/alphalens/env && set +a
 .venv/bin/alphalens broker orders      # entry bracket + (after fill) standalone StopIfTraded
 .venv/bin/alphalens broker watches --env sim [--all]   # entry-trail tiers: open / touched / arming / trail_armed (+ terminal with --all), reservation per tier (#1376)
 .venv/bin/alphalens broker reconcile --format json   # FILLED once filled; realized_r when closed
+.venv/bin/alphalens broker trades --env sim --pick TICKER:YYYY-MM-DD   # one record per pick: plan, fills, exit reason, R (#1701)
 # JSON is one envelope across the group (#1379): one compact object per call,
 # `schema` + `env` first. `--json` still works on reconcile / reconcile-fills.
 # An empty journal answers with `"verdicts": []`, never with prose on stdout.
+# `broker trades --format json` answers `alphalens.broker.trades/v1`; its JSON
+# Schema is apps/alphalens-broker-contract/docs/broker-trades-v1.schema.json.
 ```
 
 Watch it on **saxotrader.com/sim** (same SIM login). Confirm the entry + standalone disaster stop appear and match the document you armed.
@@ -1626,6 +1629,7 @@ journalctl --user -u alphalens-broker-manager.service -f      # per-tick loop
 | Stop the daemon | `systemctl --user disable --now alphalens-broker-manager.service` |
 | Full flat check | `.venv/bin/alphalens broker positions --env sim` + `... orders --env sim` (LIVE twin: `--env live`, which composes the LIVE unit's rails + its `EnvironmentFile` itself, so a plain shell is enough — #1377) |
 | Entry watches | `.venv/bin/alphalens broker watches --env sim\|live [--all]` — which tiers still watch / are armed at the broker / fired (#1376) |
+| What each pick did | `.venv/bin/alphalens broker trades --env sim\|live [--state closed] [--pick KEY] [--all] [--format json]` — READ-ONLY: plan, entry fills, exits with their reason, gross P&L, R, fees and realized FX, from the journals and the broker's audit and reports; `--offline` reads the journals only (#1701) |
 
 **Same-day correction (#1371, 2026-09-08):** a pick's identity is
 `(ticker, trade_date, generation)`. `broker arm` assigns the next generation for

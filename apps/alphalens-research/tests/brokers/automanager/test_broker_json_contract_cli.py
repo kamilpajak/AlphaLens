@@ -158,6 +158,20 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
     ("stream-status", ["stream-status"], True, ("gauges", "job", "source")),
     ("reconcile", ["reconcile"], True, ("verdicts", "journal")),
     ("reconcile-fills", ["reconcile-fills"], False, ("fills", "out", "written")),
+    (
+        "trades",
+        ["trades", "--offline"],
+        True,
+        (
+            "mode",
+            "sources",
+            "snapshot_horizon",
+            "counts",
+            "truncated",
+            "trades",
+            "unattributed_fills",
+        ),
+    ),
 )
 
 

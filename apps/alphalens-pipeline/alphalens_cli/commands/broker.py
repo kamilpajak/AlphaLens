@@ -22,6 +22,13 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
         and daemon health. Unhealthy exits 0 (health is content); only a failed
         broker read exits 1. --offline renders the half that needs no gateway
         (#1378)
+    alphalens broker trades [--env sim|live] [--offline] [--state S] [--since D]
+        [--ticker T] [--pick KEY] [--limit N | --all] [--format json]  — READ-ONLY
+        one record per pick: plan, lifecycle, entry tiers, exits with a published
+        reason, and a gross outcome with fees, realized FX and R; every value
+        carries its source, an unknown one is null with a reason. The logic is
+        ``brokers/automanager/trades.py``; this module only parses, resolves and
+        renders (#1701)
     alphalens broker watches [--env sim|live] [--all] [--format json]  — READ-ONLY
         entry-trail fold per tier: open / touched / arming / trail_armed (+ the
         terminal fired / expired / suspended / cancelled with --all), the
@@ -2705,6 +2712,254 @@ def status_command(
         _emit_json(_status_payload(snapshot, limits_source=limits_source, applied=applied))
         return
     _render_status_human(snapshot, limits_source=limits_source)
+
+
+_TRADES_SCHEMA = "alphalens.broker.trades/v1"
+
+# The `picks` precedent: generous, announced when it cuts, and `--all` to lift it.
+_TRADES_DEFAULT_LIMIT = 200
+_TRADES_ABSENT = "-"
+
+
+def _trades_cell(measured: Mapping[str, Any] | None, spec: str = "") -> str:
+    """One Measured as a table cell: its value, or ``-`` when it has none."""
+    if not measured or measured.get("value") is None:
+        return _TRADES_ABSENT
+    value = measured["value"]
+    if isinstance(value, int | float) and spec:
+        return format(value, spec)
+    return str(value)
+
+
+def _trades_money(measured: Mapping[str, Any] | None) -> str:
+    cell = _trades_cell(measured, ".2f")
+    unit = (measured or {}).get("unit")
+    return cell if cell == _TRADES_ABSENT or not unit else f"{cell} {unit}"
+
+
+def _trades_fill_cells(fill: Mapping[str, Any], qty_key: str = "qty") -> str:
+    qty = _trades_cell(fill.get(qty_key), "g")
+    price = _trades_cell(fill.get("price"), "g")
+    return f"{qty} @ {price}  {_trades_cell(fill.get('venue_time'))}  order {fill['order_id']}"
+
+
+def _render_trade_record(record: Mapping[str, Any]) -> None:
+    """One block per pick: header, entries, exits, outcome (memo §8)."""
+    reason = f" ({record['state_reason']})" if record["state_reason"] else ""
+    typer.echo(
+        f"{record['pick_key']}  {record['pick_status']}  {record['state']}{reason}  "
+        f"side {record['side'] or _TRADES_ABSENT}  "
+        f"plan {_trades_cell(record['plan_armed_at'])}  "
+        f"stop {_trades_cell(record['plan_disaster_stop'], 'g')}"
+    )
+    typer.echo("  entries")
+    for tier in record["entries"]:
+        fill = tier["fill"]
+        filled = (
+            _trades_fill_cells(fill)
+            if fill
+            else (
+                f"limit {_trades_cell(tier['planned_limit'], 'g')} "
+                f"qty {_trades_cell(tier['planned_qty'], 'g')}  "
+                f"ends {_trades_cell(tier['window_end'])}"
+            )
+        )
+        typer.echo(f"    t{tier['tier_index']}  {tier['path']}  {tier['terminal']}  {filled}")
+    typer.echo("  exits" if record["exits"] else f"  exits {_TRADES_ABSENT}")
+    for exit_ in record["exits"]:
+        why = exit_["reason"] or f"{_TRADES_ABSENT} ({exit_['reason_null_reason']})"
+        typer.echo(
+            f"    {why}  {_trades_fill_cells(exit_, 'attributed_qty')}  "
+            f"of {_trades_cell(exit_['qty'], 'g')}  "
+            f"stop {_trades_cell(exit_['stop_level_at_fill'], 'g')}  "
+            f"{exit_['attribution'] or _TRADES_ABSENT}"
+        )
+    outcome = record["outcome"]
+    fees = outcome["fees"]
+    typer.echo(
+        f"  outcome  pnl {_trades_money(outcome['pnl_cash'])}  "
+        f"{_trades_cell(outcome['pnl_pct_of_spent'], '.4f')}%  "
+        f"R {_trades_cell(outcome['r_multiple'], '.4f')}  "
+        f"risk/share {_trades_cell(outcome['risk_per_share'], 'g')}  "
+        f"held {_trades_cell(outcome['holding_seconds'], '.0f')}s"
+    )
+    typer.echo(
+        f"  account  spent {_trades_money(outcome['notional_spent_acct'])}  "
+        f"pnl {_trades_money(outcome['pnl_cash_acct'])}  "
+        f"fees commission {_trades_money(fees['commission'])}, "
+        f"exchange {_trades_money(fees['exchange_fee'])}, "
+        f"fx {_trades_money(fees['fx_conversion'])}"
+    )
+
+
+def _render_trades_human(body: Mapping[str, Any]) -> None:
+    """The human view: the same facts as the JSON, warnings on stderr."""
+    typer.echo(f"env {body['env']}  mode {body['mode']}  generated {body['generated_at']}")
+    for record in body["trades"]:
+        _render_trade_record(record)
+        for warning in record["warnings"]:
+            typer.secho(
+                f"{record['pick_key']}: {warning['code']}: {warning['detail']}",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+    if body["unattributed_fills"]:
+        typer.echo("unattributed fills")
+        for fill in body["unattributed_fills"]:
+            typer.echo(
+                f"  {fill['reason'] or _TRADES_ABSENT}  "
+                f"{_trades_fill_cells(fill, 'unattributed_qty')}  "
+                f"of {_trades_cell(fill['qty'], 'g')}"
+            )
+    counts = body["counts"]
+    summary = "  ".join(f"{name} {n}" for name, n in counts["selected"].items())
+    typer.echo(f"{summary}  (of {counts['all']['total']} picks)")
+
+
+@broker_app.command(name="trades")
+def trades_command(
+    env: str | None = _ENV_OPTION,
+    output_format: str | None = _FORMAT_OPTION,
+    state: str = typer.Option(
+        "all",
+        "--state",
+        help="Filter records: closed|open|never_filled|unresolved|all. "
+        "counts.all is taken before this filter.",
+    ),
+    since: str | None = typer.Option(
+        None, "--since", help="Only picks whose trade_date is on or after YYYY-MM-DD."
+    ),
+    ticker: str | None = typer.Option(None, "--ticker", help="Only picks on this ticker."),
+    pick: str | None = typer.Option(
+        None, "--pick", help="Only this pick: TICKER:YYYY-MM-DD or TICKER:YYYY-MM-DD-gN."
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help=f"Maximum records, newest trade_date first (default {_TRADES_DEFAULT_LIMIT}, "
+        "must be >= 1). Truncation is announced.",
+    ),
+    all_rows: bool = typer.Option(
+        False, "--all", help="No record limit. Cannot be combined with --limit."
+    ),
+    offline: bool = typer.Option(
+        False,
+        "--offline",
+        help="Read the journals only. Every venue-derived field is null with reason "
+        "'offline'; no broker is built.",
+    ),
+) -> None:
+    """One record per pick: plan, entries, exits and outcome — READ-ONLY (#1701).
+
+    Rebuilds every pick from the keeper's journals and, unless ``--offline``,
+    from the broker's own record (audit order activities, trades and bookings
+    reports, instrument tick). Every value carries its source; an unknown one is
+    null with a published reason. It places, amends and cancels nothing and
+    writes no journal. Like every broker command in broker mode, building the
+    broker may refresh the stored OAuth token file. The record vocabulary, the JSON Schema and the replay
+    mapping are published in ``apps/alphalens-broker-contract/README.md``
+    ("broker trades"); the design is
+    ``docs/research/broker_trades_command_design_2026_10_03.md``.
+
+    Everything uncertain about a trade is content and exits 0. Only a refused
+    invocation or a failed broker read exits non-zero, with stdout empty.
+    """
+    import datetime as _dt
+
+    from alphalens_pipeline.brokers.automanager import state_paths, trades
+    from alphalens_pipeline.brokers.fill_history import SupportsFillHistory
+    from broker_contract.contract import BrokerError
+
+    resolved_format = _resolve_format(output_format)
+    states = (trades.STATE_FILTER_ALL, *trades.STATES)
+    if state not in states:
+        raise _fail_with(
+            "usage",
+            f"unknown --state {state!r} (expected {'|'.join(states)})",
+            details={"option": "--state", "value": state},
+        )
+    try:
+        since_date = None if since is None else _dt.date.fromisoformat(since)
+    except ValueError as exc:
+        raise _fail_with(
+            "usage",
+            f"--since must be YYYY-MM-DD, got {since!r}",
+            details={"option": "--since", "value": since},
+        ) from exc
+    if pick is not None and not trades.valid_pick_key(pick):
+        raise _fail_with(
+            "usage",
+            f"--pick must be TICKER:YYYY-MM-DD or TICKER:YYYY-MM-DD-gN, got {pick!r}",
+            details={"option": "--pick", "value": pick},
+        )
+    if all_rows and limit is not None:
+        raise _fail_with("usage", "--all and --limit ask for different things — pass one")
+    if limit is not None and limit < 1:
+        raise _fail_with("usage", f"--limit must be >= 1, got {limit}")
+    effective_limit = None if all_rows else (limit or _TRADES_DEFAULT_LIMIT)
+
+    # `status --offline` precedent: the LIVE rails are needed only to build the
+    # broker, so offline composition is best-effort.
+    _apply_env_option(env, required=not offline)
+    try:
+        resolved_env = state_paths.broker_environment()
+    except ValueError as exc:
+        raise _fail_with("usage", str(exc)) from exc
+
+    _guard_state_layout()
+
+    broker = None
+    if not offline:
+        built = _cli_broker()
+        if not isinstance(built, SupportsFillHistory):
+            raise _fail_with(
+                "broker_unsupported",
+                "the configured broker does not offer the fill history `broker trades` "
+                "reads (audit activities, trades and bookings reports); run with "
+                "--offline for the journal half",
+            )
+        broker = built
+
+    try:
+        report = trades.build_trades(
+            resolved_env,
+            broker=broker,
+            filters=trades.TradesFilters(
+                state=state,
+                since=since_date,
+                ticker=ticker,
+                pick=pick,
+                limit=effective_limit,
+            ),
+            now=_dt.datetime.now(_dt.UTC),
+        )
+    except BrokerError as exc:
+        raise _fail_from_broker_error(exc, "broker trades failed") from exc
+
+    body = _envelope(_TRADES_SCHEMA, resolved_env, **report.body())
+    # Render BEFORE any chrome, so a body that cannot be rendered strictly is a
+    # refusal with stdout empty rather than half an answer.
+    rendered = _render_json(body) if resolved_format == _FORMAT_JSON else None
+
+    malformed = {name: n for name, n in report.counts["malformed"].items() if n}
+    if malformed:
+        typer.secho(
+            f"trades: skipped malformed journal line(s): {malformed}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    if report.truncated:
+        typer.secho(
+            f"showing {effective_limit} of {report.counts['selected']['total']} record(s) "
+            "— raise --limit or pass --all to see the rest",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+
+    if rendered is not None:
+        typer.echo(rendered)
+        return
+    _render_trades_human(body)
 
 
 _RECONCILE_SCHEMA = "alphalens.broker.reconcile/v1"

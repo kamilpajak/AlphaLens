@@ -337,16 +337,26 @@ def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
     COUNTED into ``malformed``; unknown kinds contribute nothing here (they
     belong to a newer binary — the compactor preserves them verbatim).
     File order is time order (append-only journal), so "latest" is the last
-    matching line."""
+    matching line. The fold itself is :func:`fold_entry_trail_records`; this
+    entry point only parses."""
+    return fold_entry_trail_records(
+        _parse_record(line) for raw in raw_lines if (line := raw.strip())
+    )
+
+
+def fold_entry_trail_records(records: Iterable[Any]) -> EntryTrailFold:
+    """Fold already-parsed journal records into per-crid tier state.
+
+    The dict-based twin of :func:`fold_entry_trail_lines`, for a reader that
+    gets records rather than lines (``journal_snapshots.iter_journal_history``).
+    Anything that is not a mapping (a line that failed to parse) and any record
+    missing ``crid`` is COUNTED into ``malformed``; the rules are otherwise the
+    line fold's, which delegates here so the two cannot drift apart."""
     trackers: dict[str, dict[str, Any]] = {}
     malformed = 0
-    for raw_line in raw_lines:
-        line = raw_line.strip()
-        if not line:
-            continue
-        record = _parse_record(line)
-        crid = None if record is None else _record_crid(record)
-        if record is None or crid is None:
+    for record in records:
+        crid = _record_crid(record) if isinstance(record, Mapping) else None
+        if not isinstance(record, Mapping) or crid is None:
             malformed += 1
             continue
         kind = record.get("kind")

@@ -98,5 +98,54 @@ class IterJournalHistory(unittest.TestCase):
             self.assertEqual(list(js.iter_journal_history(stops)), [])
 
 
+class IterJournalHistoryMalformedCollector(unittest.TestCase):
+    """The optional ``malformed`` collector (#1701 §4.1 item 1)."""
+
+    def test_the_records_do_not_change_when_a_collector_is_passed(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            placed = {"kind": "stop_placed", "uic": 1, "order_id": "1"}
+            journal.write_bytes(_line(placed) + b"{broken\n")
+            plain = list(js.iter_journal_history(journal))
+            collected: list[str] = []
+            with_collector = list(js.iter_journal_history(journal, malformed=collected))
+        self.assertEqual(with_collector, plain)
+        self.assertEqual(collected, ["{broken"])
+
+    def test_a_bad_line_in_a_snapshot_and_in_the_journal_counts_once(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "entry_trails.jsonl"
+            js.snapshot_bytes(journal, b"{broken\n" + b'["a list"]\n', clock=lambda: _T0)
+            journal.write_bytes(b"{broken\n" + b"{other\n")
+            collected: list[str] = []
+            list(js.iter_journal_history(journal, malformed=collected))
+        self.assertEqual(collected, ["{broken", '["a list"]', "{other"])
+
+    def test_blank_lines_are_not_malformed(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "picks.jsonl"
+            journal.write_bytes(b"\n   \n" + _line({"status": "armed"}))
+            collected: list[str] = []
+            list(js.iter_journal_history(journal, malformed=collected))
+        self.assertEqual(collected, [])
+
+
+class EarliestSnapshotStamp(unittest.TestCase):
+    """The stamp a reader compares against to know which lines may be lost."""
+
+    def test_no_snapshot_means_no_stamp(self) -> None:
+        with TemporaryDirectory() as d:
+            self.assertIsNone(js.earliest_snapshot_stamp(Path(d) / "standalone_stops.jsonl"))
+
+    def test_the_oldest_snapshot_of_this_journal_wins(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            other = Path(d) / "entry_trails.jsonl"
+            js.snapshot_bytes(other, b"x\n", clock=lambda: _T0 - dt.timedelta(days=9))
+            js.snapshot_bytes(journal, b"x\n", clock=lambda: _T0 + dt.timedelta(days=1))
+            js.snapshot_bytes(journal, b"x\n", clock=lambda: _T0)
+            self.assertEqual(js.earliest_snapshot_stamp(journal), _T0)
+
+
 if __name__ == "__main__":
     unittest.main()

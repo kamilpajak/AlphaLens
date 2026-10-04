@@ -1,0 +1,1439 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:alphalens:broker:trades:1",
+  "title": "alphalens broker trades",
+  "description": "One read-only record per pick (alphalens broker trades --format json). Generated from alphalens_pipeline.brokers.automanager.trades; never edit by hand. Within v1, optional fields and enum values may be added, so a consumer treats an unknown enum value as unknown; renaming or removing a field or value, or changing a type or unit, needs v2. Vocabularies: apps/alphalens-broker-contract/README.md, 'broker trades'.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "alphalens.broker.trades/v1"
+    },
+    "env": {
+      "type": "string",
+      "enum": [
+        "sim",
+        "live"
+      ]
+    },
+    "generated_at": {
+      "$ref": "#/$defs/Time"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "broker",
+        "offline"
+      ]
+    },
+    "sources": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/Source"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/SourceRead"
+      },
+      "description": "One entry per source role that was read, skipped or not read offline."
+    },
+    "snapshot_horizon": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "counts": {
+      "type": "object",
+      "description": "all: before --state; selected: after it; both before --limit.",
+      "properties": {
+        "all": {
+          "$ref": "#/$defs/Counts"
+        },
+        "selected": {
+          "$ref": "#/$defs/Counts"
+        },
+        "malformed": {
+          "type": "object",
+          "description": "Malformed lines dropped, per journal, each distinct raw line counted once.",
+          "properties": {
+            "picks": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "entry_trails": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "standalone_stops": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "submissions": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "picks",
+            "entry_trails",
+            "standalone_stops",
+            "submissions"
+          ]
+        },
+        "unattributed_fills": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "all",
+        "selected",
+        "malformed",
+        "unattributed_fills"
+      ]
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "trades": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TradeRecord"
+      }
+    },
+    "unattributed_fills": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/UnattributedFill"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "env",
+    "generated_at",
+    "mode",
+    "sources",
+    "snapshot_horizon",
+    "counts",
+    "truncated",
+    "trades",
+    "unattributed_fills"
+  ],
+  "$defs": {
+    "Time": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "description": "RFC 3339 UTC with milliseconds and Z."
+    },
+    "Source": {
+      "type": "string",
+      "enum": [
+        "plan",
+        "keeper.pick_queue",
+        "keeper.entry_watch",
+        "keeper.stop_journal",
+        "keeper.submissions",
+        "venue.audit",
+        "venue.trades_report",
+        "venue.bookings",
+        "venue.instrument",
+        "derived"
+      ],
+      "description": "Source ROLE of a value (§3.3)."
+    },
+    "NullReason": {
+      "type": "string",
+      "enum": [
+        "offline",
+        "not_journaled",
+        "compacted_before_snapshots",
+        "no_audit_row",
+        "sim_reports_unusable",
+        "not_closed",
+        "never_filled",
+        "non_positive_risk",
+        "ambiguous_attribution",
+        "legacy_plan_shape",
+        "fx_rate_not_realized",
+        "report_row_missing",
+        "non_finite",
+        "stop_amend_history_unavailable"
+      ],
+      "description": "Why a value is null (§3.3)."
+    },
+    "ExitReason": {
+      "type": "string",
+      "enum": [
+        "take_profit",
+        "disaster_stop",
+        "trailed_stop",
+        "reanchored_stop",
+        "stop_moved_kind_unknown",
+        "manual_close",
+        "manual_open",
+        "unknown"
+      ],
+      "description": "Why a position exited (§4.4)."
+    },
+    "Attribution": {
+      "type": "string",
+      "enum": [
+        "journal_tie",
+        "external_reference",
+        "position_link",
+        "fifo_fallback"
+      ],
+      "description": "How a fill's owner was decided (§4.5)."
+    },
+    "State": {
+      "type": "string",
+      "enum": [
+        "closed",
+        "open",
+        "never_filled",
+        "unresolved"
+      ],
+      "description": "The pick's state (§4.6)."
+    },
+    "StateReason": {
+      "type": "string",
+      "enum": [
+        "refused",
+        "disarmed",
+        "expired",
+        "cancelled",
+        "pending",
+        "compacted_before_snapshots",
+        "not_journaled",
+        "ambiguous_attribution"
+      ],
+      "description": "Why never_filled / unresolved."
+    },
+    "WarningCode": {
+      "type": "string",
+      "enum": [
+        "fold_order_uncertain",
+        "entry_not_in_journal",
+        "audit_report_disagree",
+        "partial_fill_shape_unverified",
+        "journal_audit_disagree",
+        "attribution_fifo_assumed",
+        "exit_qty_exceeds_pick",
+        "exit_not_in_journal",
+        "report_lags_audit",
+        "booking_type_unmapped",
+        "booking_prorated",
+        "ambiguous_attribution",
+        "side_unresolved",
+        "exit_price_off_plan_level"
+      ],
+      "description": "A record warning."
+    },
+    "Terminal": {
+      "type": "string",
+      "enum": [
+        "filled",
+        "expired",
+        "cancelled",
+        "suspended",
+        "open"
+      ],
+      "description": "How an entry tier ended."
+    },
+    "TierPath": {
+      "type": "string",
+      "enum": [
+        "trail_watch",
+        "now_bracket"
+      ],
+      "description": "How an entry tier was placed."
+    },
+    "SourceStatus": {
+      "type": "string",
+      "enum": [
+        "read",
+        "skipped",
+        "offline"
+      ],
+      "description": "Whether a source was read."
+    },
+    "SourceReason": {
+      "type": "string",
+      "enum": [
+        "offline",
+        "sim_reports_unusable",
+        "no_picks"
+      ],
+      "description": "Why a source was not read."
+    },
+    "ReplayExclusion": {
+      "type": "string",
+      "enum": [
+        "offline",
+        "not_final",
+        "manual_close",
+        "unknown_exit",
+        "exit_reason_null",
+        "ambiguous_attribution",
+        "entry_mode_unsupported",
+        "legacy_plan_shape"
+      ],
+      "description": "Why a record cannot be compared with an intent-replay run."
+    },
+    "Measured": {
+      "type": "object",
+      "description": "Every price, quantity, time and money value (§3.3).",
+      "properties": {
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "null"
+          ],
+          "description": "The value; null exactly when null_reason is set."
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(shares|s|%|R|[A-Z]{3}|price:[A-Z]{3})$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Currency code for money, 'shares', 's', '%', 'R', 'price:<ccy>' for a price; null for a time, a rate, an identifier or a code."
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The row it came from: order:<id>, trade:<id>, line:<journal>:<kind>, or the plan path."
+        },
+        "null_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NullReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "value",
+        "unit",
+        "source",
+        "ref",
+        "null_reason"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "value": {
+              "type": "null"
+            },
+            "null_reason": {
+              "$ref": "#/$defs/NullReason"
+            }
+          }
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "null_reason": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "MeasuredTime": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "unit": {
+              "type": "null"
+            }
+          }
+        }
+      ],
+      "description": "A Measured whose value is a time (§3.1)."
+    },
+    "MeasuredPrice": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^price:[A-Z]{3}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A price, unit price:<ccy> (null only when the currency is unknown)."
+    },
+    "MeasuredQty": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "const": "shares"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A quantity."
+    },
+    "MeasuredMoney": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "An amount of money, unit a currency code."
+    },
+    "MeasuredPercent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "const": "%"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A percentage."
+    },
+    "MeasuredR": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "const": "R"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "An R multiple."
+    },
+    "MeasuredSeconds": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "const": "s"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A duration."
+    },
+    "MeasuredNumber": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "not": {}
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A unitless number: a rate or an identifier."
+    },
+    "MeasuredCode": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Measured"
+        },
+        {
+          "properties": {
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "not": {}
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "A code with no unit: a MIC, a currency, a source name."
+    },
+    "SourceRead": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/SourceStatus"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window": {
+          "anyOf": [
+            {
+              "type": "object",
+              "description": "The read window: times for the audit, dates for the reports (padded one day each side).",
+              "properties": {
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "window",
+        "rows"
+      ]
+    },
+    "Counts": {
+      "type": "object",
+      "properties": {
+        "closed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "open": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "never_filled": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unresolved": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "closed",
+        "open",
+        "never_filled",
+        "unresolved",
+        "total"
+      ]
+    },
+    "Execution": {
+      "type": "object",
+      "description": "One venue.trades_report row of the order.",
+      "properties": {
+        "trade_id": {
+          "type": "string"
+        },
+        "time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "price": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "qty": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "trade_id",
+        "time",
+        "price",
+        "qty"
+      ]
+    },
+    "Fees": {
+      "type": "object",
+      "description": "Signed as the venue sends them (negative = cost). commission and exchange_fee in the booking currency; fx_conversion in the account currency.",
+      "properties": {
+        "commission": {
+          "$ref": "#/$defs/MeasuredMoney"
+        },
+        "exchange_fee": {
+          "$ref": "#/$defs/MeasuredMoney"
+        },
+        "fx_conversion": {
+          "$ref": "#/$defs/MeasuredMoney"
+        }
+      },
+      "required": [
+        "commission",
+        "exchange_fee",
+        "fx_conversion"
+      ]
+    },
+    "RealizedFx": {
+      "type": "object",
+      "description": "The Share Amount booking: realized rate and the account-currency cash leg, signed as sent.",
+      "properties": {
+        "conversion_rate": {
+          "$ref": "#/$defs/MeasuredNumber"
+        },
+        "share_amount_acct": {
+          "$ref": "#/$defs/MeasuredMoney"
+        }
+      },
+      "required": [
+        "conversion_rate",
+        "share_amount_acct"
+      ]
+    },
+    "Fill": {
+      "type": "object",
+      "description": "A venue fill (entries, exits, unattributed).",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        },
+        "external_reference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "venue_time": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "price": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "qty": {
+          "$ref": "#/$defs/MeasuredQty"
+        },
+        "executions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Execution"
+          }
+        },
+        "detected_at": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "position_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "related_position_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fees": {
+          "$ref": "#/$defs/Fees"
+        },
+        "realized_fx": {
+          "$ref": "#/$defs/RealizedFx"
+        }
+      },
+      "required": [
+        "order_id",
+        "external_reference",
+        "venue_time",
+        "price",
+        "qty",
+        "executions",
+        "detected_at",
+        "position_id",
+        "related_position_id",
+        "fees",
+        "realized_fx"
+      ]
+    },
+    "Exit": {
+      "type": "object",
+      "description": "A Fill that closed (part of) the pick. reason is null only offline, with reason_null_reason.",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        },
+        "external_reference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "venue_time": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "price": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "qty": {
+          "$ref": "#/$defs/MeasuredQty"
+        },
+        "executions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Execution"
+          }
+        },
+        "detected_at": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "position_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "related_position_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fees": {
+          "$ref": "#/$defs/Fees"
+        },
+        "realized_fx": {
+          "$ref": "#/$defs/RealizedFx"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExitReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason_null_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NullReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stop_level_at_fill": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "tp_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attributed_qty": {
+          "$ref": "#/$defs/MeasuredQty"
+        },
+        "attribution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Attribution"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "order_id",
+        "external_reference",
+        "venue_time",
+        "price",
+        "qty",
+        "executions",
+        "detected_at",
+        "position_id",
+        "related_position_id",
+        "fees",
+        "realized_fx",
+        "reason",
+        "reason_null_reason",
+        "reason_evidence",
+        "stop_level_at_fill",
+        "tp_label",
+        "attributed_qty",
+        "attribution"
+      ]
+    },
+    "UnattributedFill": {
+      "type": "object",
+      "description": "A venue fill on a pick's uic that no pick owns (§4.5). reason is null only offline, with reason_null_reason.",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        },
+        "external_reference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "venue_time": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "price": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "qty": {
+          "$ref": "#/$defs/MeasuredQty"
+        },
+        "executions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Execution"
+          }
+        },
+        "detected_at": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "position_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "related_position_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fees": {
+          "$ref": "#/$defs/Fees"
+        },
+        "realized_fx": {
+          "$ref": "#/$defs/RealizedFx"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExitReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason_null_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NullReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unattributed_qty": {
+          "$ref": "#/$defs/MeasuredQty"
+        }
+      },
+      "required": [
+        "order_id",
+        "external_reference",
+        "venue_time",
+        "price",
+        "qty",
+        "executions",
+        "detected_at",
+        "position_id",
+        "related_position_id",
+        "fees",
+        "realized_fx",
+        "reason",
+        "reason_null_reason",
+        "reason_evidence",
+        "unattributed_qty"
+      ]
+    },
+    "EntryTier": {
+      "type": "object",
+      "properties": {
+        "tier_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "path": {
+          "$ref": "#/$defs/TierPath"
+        },
+        "crid": {
+          "type": "string"
+        },
+        "planned_limit": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "planned_qty": {
+          "$ref": "#/$defs/MeasuredQty"
+        },
+        "window_end": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "touched_at": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "touch_price": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "trigger_order_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "armed_at": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "terminal": {
+          "$ref": "#/$defs/Terminal"
+        },
+        "terminal_at": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "terminal_at_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Source"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fill"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "tier_index",
+        "path",
+        "crid",
+        "planned_limit",
+        "planned_qty",
+        "window_end",
+        "touched_at",
+        "touch_price",
+        "trigger_order_id",
+        "armed_at",
+        "terminal",
+        "terminal_at",
+        "terminal_at_source",
+        "fill"
+      ]
+    },
+    "Outcome": {
+      "type": "object",
+      "description": "Derived values (§5). Gross: no net figure is derived.",
+      "properties": {
+        "entry_qty": {
+          "$ref": "#/$defs/MeasuredQty"
+        },
+        "avg_entry_price": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "exit_qty": {
+          "$ref": "#/$defs/MeasuredQty"
+        },
+        "avg_exit_price": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "notional_spent": {
+          "$ref": "#/$defs/MeasuredMoney"
+        },
+        "pnl_cash": {
+          "$ref": "#/$defs/MeasuredMoney"
+        },
+        "pnl_pct_of_spent": {
+          "$ref": "#/$defs/MeasuredPercent"
+        },
+        "denominator_stop": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "risk_per_share": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "r_multiple": {
+          "$ref": "#/$defs/MeasuredR"
+        },
+        "holding_seconds": {
+          "$ref": "#/$defs/MeasuredSeconds"
+        },
+        "fees": {
+          "$ref": "#/$defs/Fees"
+        },
+        "notional_spent_acct": {
+          "$ref": "#/$defs/MeasuredMoney"
+        },
+        "pnl_cash_acct": {
+          "$ref": "#/$defs/MeasuredMoney"
+        },
+        "mfe_lower_bound": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "fees_not_included": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "financing",
+              "dividends",
+              "withholding_tax"
+            ]
+          }
+        }
+      },
+      "required": [
+        "entry_qty",
+        "avg_entry_price",
+        "exit_qty",
+        "avg_exit_price",
+        "notional_spent",
+        "pnl_cash",
+        "pnl_pct_of_spent",
+        "denominator_stop",
+        "risk_per_share",
+        "r_multiple",
+        "holding_seconds",
+        "fees",
+        "notional_spent_acct",
+        "pnl_cash_acct",
+        "mfe_lower_bound",
+        "fees_not_included"
+      ]
+    },
+    "TradeRecord": {
+      "type": "object",
+      "properties": {
+        "pick_key": {
+          "type": "string"
+        },
+        "ticker": {
+          "type": "string"
+        },
+        "trade_date": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pick_status": {
+          "type": "string",
+          "enum": [
+            "armed",
+            "refused",
+            "disarmed"
+          ]
+        },
+        "pick_status_at": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "pick_status_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/State"
+        },
+        "state_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StateReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "The last armed TradeIntent document, verbatim (see trade-intent-v3.schema.json; older lines are schema 1 or 2)."
+        },
+        "plan_null_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NullReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan_armed_at": {
+          "$ref": "#/$defs/MeasuredTime"
+        },
+        "plan_schema_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan_size_shape": {
+          "type": "string",
+          "enum": [
+            "by_amount",
+            "by_percent"
+          ]
+        },
+        "plan_source": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "brief",
+            "absent"
+          ]
+        },
+        "plan_disaster_stop": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "placed_stop": {
+          "$ref": "#/$defs/MeasuredPrice"
+        },
+        "instrument": {
+          "type": "object",
+          "properties": {
+            "uic": {
+              "$ref": "#/$defs/MeasuredNumber"
+            },
+            "exchange_mic": {
+              "$ref": "#/$defs/MeasuredCode"
+            },
+            "instrument_currency": {
+              "$ref": "#/$defs/MeasuredCode"
+            },
+            "sizing_currency": {
+              "$ref": "#/$defs/MeasuredCode"
+            }
+          },
+          "required": [
+            "uic",
+            "exchange_mic",
+            "instrument_currency",
+            "sizing_currency"
+          ]
+        },
+        "sizing_fx": {
+          "type": "object",
+          "description": "The rate at SIZING time; never used as a realized rate.",
+          "properties": {
+            "rate": {
+              "$ref": "#/$defs/MeasuredNumber"
+            },
+            "bid": {
+              "$ref": "#/$defs/MeasuredNumber"
+            },
+            "ask": {
+              "$ref": "#/$defs/MeasuredNumber"
+            },
+            "asof": {
+              "$ref": "#/$defs/MeasuredTime"
+            },
+            "source": {
+              "$ref": "#/$defs/MeasuredCode"
+            }
+          },
+          "required": [
+            "rate",
+            "bid",
+            "ask",
+            "asof",
+            "source"
+          ]
+        },
+        "side": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "long",
+            "short",
+            null
+          ]
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntryTier"
+          }
+        },
+        "exits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Exit"
+          }
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "replay_exclusions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReplayExclusion"
+          },
+          "description": "Empty when the record can be compared with an intent-replay run of its plan."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/WarningCode"
+              },
+              "detail": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "detail"
+            ]
+          }
+        }
+      },
+      "required": [
+        "pick_key",
+        "ticker",
+        "trade_date",
+        "generation",
+        "pick_status",
+        "pick_status_at",
+        "pick_status_reason",
+        "state",
+        "state_reason",
+        "plan",
+        "plan_null_reason",
+        "plan_armed_at",
+        "plan_schema_version",
+        "plan_size_shape",
+        "plan_source",
+        "plan_disaster_stop",
+        "placed_stop",
+        "instrument",
+        "sizing_fx",
+        "side",
+        "entries",
+        "exits",
+        "outcome",
+        "replay_exclusions",
+        "warnings"
+      ]
+    }
+  }
+}

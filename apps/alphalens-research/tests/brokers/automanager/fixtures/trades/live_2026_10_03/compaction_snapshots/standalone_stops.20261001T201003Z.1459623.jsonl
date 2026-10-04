@@ -1,0 +1,72 @@
+{"client_request_id": "GME-2026-08-27-entry-t0-fire", "gen": 0, "geometry": {"anchor_mode": "planned", "applied": false, "atr": 0.46739501843904163, "ceiling_price": 27.690000534057614, "exit_policy_name": "breakeven_trail", "geometry_stop": 16.8260301735853, "geometry_tp": 22.020000457763672, "k_atr": 1.5, "planned_blend": 17.52712270124386, "policy_name": "atr_bracket_1p5", "policy_version": 1, "tp_floor_frac": 0.006}, "kind": "planned", "side": "SELL", "stop_price": 16.815097293392142, "take_profit": null, "tier_index": 0, "uic": 6734}
+{"client_request_id": "LULU-2026-09-08-g2-entry-t0-fire", "gen": 0, "kind": "planned", "side": "SELL", "stop_price": 90.0, "take_profit": null, "tier_index": 0, "uic": 29957}
+{"client_request_id": "OLN-2026-08-16-entry-t0-fire", "gen": 0, "geometry": {"applied": true, "atr": 0.9565620111180366, "ceiling_price": 30.13999938964844, "geometry_stop": 16.19808003450512, "geometry_tp": 19.06776606785923, "k_atr": 1.5, "planned_blend": 17.632923051182175, "policy_name": "atr_bracket_1p5", "policy_version": 1}, "kind": "planned", "side": "SELL", "stop_price": 16.163355007337355, "take_profit": null, "tier_index": 0, "uic": 23474}
+{"client_request_id": "RHI-2026-09-02-entry-t0-fire", "gen": 0, "kind": "planned", "side": "SELL", "stop_price": 30.3864, "take_profit": null, "tier_index": 0, "uic": 641}
+{"client_request_id": "RHI-2026-09-02-entry-t1-fire", "gen": 0, "kind": "planned", "side": "SELL", "stop_price": 30.3864, "take_profit": null, "tier_index": 1, "uic": 641}
+{"client_request_id": "RHI-2026-09-02-entry-t2-fire", "gen": 0, "kind": "planned", "side": "SELL", "stop_price": 30.3864, "take_profit": null, "tier_index": 2, "uic": 641}
+{"client_request_id": "SMG-2026-08-19-entry-t0-fire", "gen": 0, "geometry": {"applied": true, "atr": 2.6879687407498842, "ceiling_price": 73.47000122070312, "geometry_stop": 51.563716502033714, "geometry_tp": 59.62762272428337, "k_atr": 1.5, "planned_blend": 55.59566961315854, "policy_name": "atr_bracket_1p5", "policy_version": 1}, "kind": "planned", "side": "SELL", "stop_price": 49.412031640719846, "take_profit": null, "tier_index": 0, "uic": 20237}
+{"client_request_id": "TNGX-2026-09-23-entry-t0-fire", "gen": 0, "geometry": {"applied": false, "geometry_stop": null, "geometry_tp": null}, "kind": "planned", "pick_key": "TNGX:2026-09-23", "reaction": {"arm_trigger_r": 0.5, "kind": "trailing_stop", "trail_frac": 0.6}, "side": "SELL", "stop_price": 20.61, "take_profit": null, "tier_index": 0, "uic": 37009128}
+{"client_request_id": "VST-2026-09-21-entry-t0-fire", "gen": 0, "geometry": {"applied": false, "geometry_stop": null, "geometry_tp": null}, "kind": "planned", "pick_key": "VST:2026-09-21", "reaction": {"arm_trigger_r": 0.5, "kind": "trailing_stop", "trail_frac": 0.6}, "side": "SELL", "stop_price": 125.85, "take_profit": null, "tier_index": 0, "uic": 7300542}
+{"client_request_id": "c11e00e5-a052-4ebb-bcea-c9aa5a968b76", "gen": 0, "kind": "planned", "side": "SELL", "stop_price": 6.5, "take_profit": null, "tier_index": 0, "uic": 19756014}
+{"kind": "stop_placed", "order_id": "5441062670", "qty": 1.0, "ref": "RHI-2026-09-02-entry-t0-fire-stop-0", "ts": 1788897636.530488, "uic": 641}
+{"kind": "stop_placed", "qty": 16.0, "ts": 1787944195.6841009, "uic": 6734}
+{"kind": "stop_placed", "qty": 1.0, "ts": 1787594468.6553566, "uic": 20237}
+{"kind": "stop_placed", "order_id": "5441953444", "qty": 9.0, "ref": "ALB-2026-09-08-g2-entry-t0-fire-stop-1", "ts": 1789133700.009764, "uic": 23402}
+{"kind": "stop_placed", "qty": 8.0, "ts": 1787079708.4539278, "uic": 23474}
+{"kind": "stop_placed", "order_id": "5441766889", "qty": 3.0, "ref": "LULU-2026-09-08-g2-entry-t0-fire-stop-0", "ts": 1789067621.098472, "uic": 29957}
+{"kind": "stop_placed", "order_id": "5441654701", "qty": 11.0, "ref": "ENPH-2026-09-08-g2-entry-t0-fire-stop-0", "ts": 1789049986.5224156, "uic": 176273}
+{"kind": "stop_placed", "order_id": "5440086308", "qty": 8.0, "ref": "AMBA-2026-09-04-entry-t0-fire-stop-0", "ts": 1788529234.687894, "uic": 267154}
+{"kind": "stop_placed", "order_id": "5446505166", "qty": 34.0, "ref": "SMMT-2026-09-23-entry-t0-fire-stop-0", "ts": 1790264498.6403491, "uic": 1640268}
+{"kind": "stop_placed", "order_id": "5448023092", "qty": 6.0, "ref": "VST-2026-09-21-entry-t0-fire-stop-0", "stop_price": 125.85, "ts": 1790775418.9622772, "uic": 7300542}
+{"kind": "stop_placed", "order_id": "5440923753", "qty": 2.0, "ref": "UBER-2026-09-08-entry-t0-fire-stop-0", "ts": 1788879007.3986554, "uic": 13697176}
+{"kind": "stop_placed", "order_id": "5439823194", "qty": 33.0, "ref": "c11e00e5-a052-4ebb-bcea-c9aa5a968b76-stop-0", "ts": 1788455399.3305657, "uic": 19756014}
+{"kind": "stop_placed", "order_id": "5446399206", "qty": 7.0, "ref": "ASTS-2026-09-23-entry-t0-fire-stop-0", "ts": 1790256634.7613068, "uic": 22312740}
+{"kind": "stop_placed", "order_id": "5446905400", "qty": 11.0, "ref": "EWTX-2026-09-25-entry-t0-fire-stop-0", "ts": 1790361202.665177, "uic": 34878947}
+{"kind": "stop_placed", "order_id": "5446422326", "qty": 20.0, "ref": "TNGX-2026-09-23-entry-t0-fire-stop-0", "ts": 1790257543.3967383, "uic": 37009128}
+{"avg_price": 115.0, "kind": "stop_filled", "order_id": "5441953444", "partial": false, "qty": 9.0, "ref": "ALB-2026-09-08-g2-entry-t0-fire-stop-1", "ts": 1789394428.7260919, "uic": 23402}
+{"avg_price": 67.99, "kind": "stop_filled", "order_id": "5440923753", "partial": false, "qty": 8.0, "ref": "UBER-2026-09-08-entry-t0-fire-stop-0", "ts": 1790602809.9669163, "uic": 13697176}
+{"avg_price": 62.37, "kind": "stop_filled", "order_id": "5446399206", "partial": false, "qty": 7.0, "ref": "ASTS-2026-09-23-entry-t0-fire-stop-0", "ts": 1790688997.7510734, "uic": 22312740}
+{"avg_price": 40.7071, "kind": "stop_filled", "order_id": "5446905400", "partial": false, "qty": 11.0, "ref": "EWTX-2026-09-25-entry-t0-fire-stop-0", "ts": 1790789224.2906384, "uic": 34878947}
+{"kind": "amend_ok", "qty": 3.0, "ts": 1790264856.076746, "uic": 641}
+{"kind": "amend_ok", "qty": 16.0, "ts": 1788183097.9260786, "uic": 6734}
+{"kind": "amend_ok", "qty": 8.0, "ts": 1790178442.7098644, "uic": 13697176}
+{"kind": "amend_ok", "qty": 7.0, "ts": 1790688665.3827596, "uic": 22312740}
+{"kind": "amend_ok", "qty": 11.0, "ts": 1790782329.2298172, "uic": 34878947}
+{"kind": "amend_seq", "seq": 0, "uic": 641}
+{"kind": "amend_seq", "seq": 1, "uic": 6734}
+{"kind": "amend_seq", "seq": 1, "uic": 13697176}
+{"kind": "amend_seq", "seq": 0, "uic": 22312740}
+{"kind": "amend_seq", "seq": 4, "uic": 34878947}
+{"instrument_currency": "USD", "kind": "tranche_plan", "pick_key": "RHI:2026-09-02", "reference_qty": 3.0, "sizing_currency": "PLN", "stop_price": 30.3864, "tp_tranches": [{"r_multiple": 2.0, "tag": "TP1", "target_price": 60.440604345600015, "tranche_frac": 0.3333, "tranche_index": 0}, {"r_multiple": 3.0, "tag": "TP2", "target_price": 70.45867246080002, "tranche_frac": 0.3333, "tranche_index": 1}, {"r_multiple": 4.0, "tag": "TP3", "target_price": 80.47674057600003, "tranche_frac": 0.33340000000000003, "tranche_index": 2}], "uic": 641}
+{"kind": "tranche_plan", "pick_key": "GME:2026-08-27", "reference_qty": 55.0, "stop_price": 16.815097293392142, "tp_tranches": [{"r_multiple": 6.309996394757112, "tag": "overhead resistance", "target_price": 22.020000457763672, "tranche_frac": 0.33333333333333337, "tranche_index": 0}, {"r_multiple": 7.2509728195185685, "tag": "overhead resistance", "target_price": 22.6899995803833, "tranche_frac": 0.33333333333333337, "tranche_index": 1}, {"r_multiple": 7.882973809900596, "tag": "overhead resistance", "target_price": 23.140000343322754, "tranche_frac": 0.33333333333333337, "tranche_index": 2}], "uic": 6734}
+{"kind": "tranche_plan", "pick_key": "SMG:2026-08-19", "reference_qty": 6.0, "stop_price": 51.563716502033714, "tp_tranches": [{"r_multiple": 0.0, "tag": "geometry", "target_price": 59.62762272428337, "tranche_index": 0, "tranche_pct": 1.0}], "uic": 20237}
+{"kind": "tranche_fired", "tag": "tp1", "telemetry": {"decision_ask": 59.99, "decision_bid": 59.89, "decision_mid": 59.94, "event_time": "2026-08-24T18:01:54.107000+00:00", "qty": 1, "sell_order_id": "5436772593", "source": "saxo-live-l1", "spread_abs": 0.10000000000000142, "target_price": 59.62762272428337}, "uic": 20237}
+{"kind": "tranche_plan", "reference_qty": 27.0, "stop_price": 16.19808003450512, "tp_tranches": [{"r_multiple": 0.0, "tag": "geometry", "target_price": 19.06776606785923, "tranche_index": 0, "tranche_pct": 1.0}], "uic": 23474}
+{"kind": "tranche_fired", "tag": "tp1", "telemetry": {"decision_ask": 19.23, "decision_bid": 19.21, "decision_mid": 19.22, "event_time": "2026-08-19T13:53:15.034000+00:00", "qty": 8, "sell_order_id": "5435373965", "source": "saxo-live-l1", "spread_abs": 0.019999999999999574, "target_price": 19.06776606785923}, "uic": 23474}
+{"exchange_mic": "XNAS", "instrument_currency": "USD", "kind": "tranche_plan", "pick_key": "LULU:2026-09-08-g2", "reference_qty": 14.0, "sizing_currency": "PLN", "stop_price": 90.0, "tp_tranches": [{"r_multiple": 0.8834951456310665, "tag": "TP1", "target_price": 99.7, "tranche_frac": 1.0, "tranche_index": 0}], "uic": 29957}
+{"exchange_mic": "XNAS", "instrument_currency": "USD", "kind": "tranche_plan", "pick_key": "VCYT:2026-09-29", "reference_qty": 9.0, "sizing_currency": "PLN", "stop_price": 38.81, "tp_tranches": [{"r_multiple": 1.0000000000000013, "tag": "TP1", "target_price": 49.21, "tranche_frac": 1.0, "tranche_index": 0}], "uic": 1823042}
+{"exchange_mic": "XNYS", "instrument_currency": "USD", "kind": "tranche_plan", "pick_key": "VST:2026-09-21", "reference_qty": 6.0, "sizing_currency": "PLN", "stop_price": 125.85, "tp_tranches": [{"r_multiple": 0.9999999999999971, "tag": "TP1", "target_price": 145.37, "tranche_frac": 1.0, "tranche_index": 0}], "uic": 7300542}
+{"exchange_mic": "XNYS", "instrument_currency": "USD", "kind": "tranche_plan", "pick_key": "BE:2026-09-30", "reference_qty": 1.0, "sizing_currency": "PLN", "stop_price": 227.29, "tp_tranches": [{"r_multiple": 0.9999999999999993, "tag": "TP1", "target_price": 312.57, "tranche_frac": 1.0, "tranche_index": 0}], "uic": 10306188}
+{"exchange_mic": "XNAS", "instrument_currency": "USD", "kind": "tranche_plan", "pick_key": "NESR:2026-09-30", "reference_qty": 13.0, "sizing_currency": "PLN", "stop_price": 21.3, "tp_tranches": [{"r_multiple": 1.000000000000001, "tag": "TP1", "target_price": 27.78, "tranche_frac": 1.0, "tranche_index": 0}], "uic": 11493944}
+{"exchange_mic": "XNYS", "instrument_currency": "USD", "kind": "tranche_plan", "pick_key": "OSCR:2026-09-30", "reference_qty": 11.0, "sizing_currency": "PLN", "stop_price": 24.52, "tp_tranches": [{"r_multiple": 0.999999999999999, "tag": "TP1", "target_price": 31.32, "tranche_frac": 1.0, "tranche_index": 0}], "uic": 21923944}
+{"exchange_mic": "XNAS", "instrument_currency": "USD", "kind": "tranche_plan", "pick_key": "SYM:2026-09-30", "reference_qty": 11.0, "sizing_currency": "PLN", "stop_price": 36.68, "tp_tranches": [{"r_multiple": 0.9999999999999981, "tag": "TP1", "target_price": 44.0, "tranche_frac": 1.0, "tranche_index": 0}], "uic": 29516984}
+{"exchange_mic": "XNAS", "instrument_currency": "USD", "kind": "tranche_plan", "pick_key": "TNGX:2026-09-23", "reference_qty": 20.0, "sizing_currency": "PLN", "stop_price": 20.61, "tp_tranches": [{"r_multiple": 1.0, "tag": "TP1", "target_price": 27.17, "tranche_frac": 1.0, "tranche_index": 0}], "uic": 37009128}
+{"exchange_mic": "XNAS", "instrument_currency": "USD", "kind": "tranche_plan", "pick_key": "PLTR:2026-09-29", "reference_qty": 2.0, "sizing_currency": "PLN", "stop_price": 167.26, "tp_tranches": [{"r_multiple": 0.9999999999999979, "tag": "TP1", "target_price": 194.22, "tranche_frac": 1.0, "tranche_index": 0}], "uic": 46019839}
+{"kind": "amend_seq", "seq": 0, "uic": 7300542}
+{"kind": "amend_ok", "qty": 6.0, "ts": 1790861500.196905, "uic": 7300542}
+{"kind": "trailed", "last_price": 139.93, "level": 138.002, "peak": 139.93, "ts": 1790861500.1984925, "uic": 7300542}
+{"kind": "amend_seq", "seq": 1, "uic": 7300542}
+{"kind": "amend_ok", "qty": 6.0, "ts": 1790861615.995481, "uic": 7300542}
+{"kind": "trailed", "last_price": 140.0, "level": 138.044, "peak": 140.0, "ts": 1790861616.0025358, "uic": 7300542}
+{"kind": "amend_seq", "seq": 2, "uic": 7300542}
+{"kind": "amend_ok", "qty": 6.0, "ts": 1790861675.2328277, "uic": 7300542}
+{"kind": "trailed", "last_price": 140.53, "level": 138.362, "peak": 140.53, "ts": 1790861675.2396634, "uic": 7300542}
+{"kind": "amend_seq", "seq": 3, "uic": 7300542}
+{"kind": "amend_ok", "qty": 6.0, "ts": 1790862017.2683458, "uic": 7300542}
+{"kind": "trailed", "last_price": 141.3, "level": 138.824, "peak": 141.3, "ts": 1790862017.2710106, "uic": 7300542}
+{"avg_price": 138.66, "kind": "stop_filled", "order_id": "5448023092", "partial": false, "qty": 6.0, "ref": "VST-2026-09-21-entry-t0-fire-stop-0", "ts": 1790863196.6686692, "uic": 7300542}
+{"kind": "tranche_plan_retracted", "pick_key": "VST:2026-09-21", "uic": 7300542}
+{"client_request_id": "VST-2026-09-21-entry-t0-fire", "kind": "planned_retracted", "note": "entry-trail VST:2026-09-21: round trip closed, book flat", "uic": 7300542}
+{"client_request_id": "NESR-2026-09-30-entry-t0-fire", "gen": 0, "geometry": {"applied": false, "geometry_stop": null, "geometry_tp": null}, "kind": "planned", "pick_key": "NESR:2026-09-30", "reaction": {"arm_trigger_r": 0.5, "kind": "trailing_stop", "trail_frac": 0.6}, "side": "SELL", "stop_price": 21.3, "take_profit": null, "tier_index": 0, "uic": 11493944}
+{"gen": 0, "kind": "gen", "qty": 13.0, "uic": 11493944}
+{"kind": "stop_placed", "order_id": "5448504912", "qty": 13.0, "ref": "NESR-2026-09-30-entry-t0-fire-stop-0", "stop_price": 21.3, "ts": 1790867626.2994938, "uic": 11493944}

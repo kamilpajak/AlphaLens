@@ -151,7 +151,7 @@ def _snapshots_of(journal: Path) -> list[Path]:
     return sorted(directory.glob(f"{journal.stem}.*{_SNAPSHOT_SUFFIX}"))
 
 
-def _records_in(path: Path) -> Iterator[dict[str, Any]]:
+def _records_in(path: Path, malformed: list[str] | None = None) -> Iterator[dict[str, Any]]:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -163,25 +163,56 @@ def _records_in(path: Path) -> Iterator[dict[str, Any]]:
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
-            continue
+            record = None
         if isinstance(record, dict):
             yield record
+        elif malformed is not None:
+            malformed.append(line)
 
 
-def iter_journal_history(journal: Path) -> Iterator[dict[str, Any]]:
+def iter_journal_history(
+    journal: Path, *, malformed: list[str] | None = None
+) -> Iterator[dict[str, Any]]:
     """Every record ``journal`` ever held that a snapshot or the current file
     still has: the snapshots oldest first, then the current journal. Each record
     is yielded once, keyed on its canonical JSON (``sort_keys=True``, which is
     how ``brokers.journal.append_json_line`` writes every line). Malformed lines
-    are skipped."""
+    are skipped.
+
+    Pass a ``malformed`` list to collect the skipped raw lines (stripped), the
+    way ``submission_log.iter_submission_records`` does. A snapshot is a copy of
+    an earlier journal, so one bad line usually sits in both; the collector
+    therefore keeps each distinct raw line once, in first-seen order."""
     seen: set[str] = set()
+    raw_malformed: list[str] | None = [] if malformed is not None else None
     for path in [*_snapshots_of(journal), journal]:
-        for record in _records_in(path):
+        for record in _records_in(path, raw_malformed):
             key = json.dumps(record, sort_keys=True, default=str)
             if key in seen:
                 continue
             seen.add(key)
             yield record
+    if malformed is not None and raw_malformed is not None:
+        malformed.extend(dict.fromkeys(raw_malformed))
+
+
+def earliest_snapshot_stamp(journal: Path) -> dt.datetime | None:
+    """The UTC stamp of ``journal``'s oldest compaction snapshot, or ``None``.
+
+    Lines older than this may have been dropped by a compaction that ran
+    before snapshots existed, so a reader that needs completeness compares a
+    record's age against it. A snapshot whose name does not carry a parsable
+    stamp is ignored rather than guessed at."""
+    stamps: list[dt.datetime] = []
+    for path in _snapshots_of(journal):
+        parts = path.name.split(".")
+        if len(parts) < 3:
+            continue
+        try:
+            stamps.append(dt.datetime.strptime(parts[1], _STAMP_FORMAT).replace(tzinfo=dt.UTC))
+        except ValueError:
+            continue
+    return min(stamps) if stamps else None
 
 
 __all__ = [
@@ -190,6 +221,7 @@ __all__ = [
     "STATUS_SKIPPED",
     "STATUS_UNCHANGED",
     "CompactionOutcome",
+    "earliest_snapshot_stamp",
     "iter_journal_history",
     "replace_compacted",
     "snapshot_bytes",
