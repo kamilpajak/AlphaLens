@@ -101,11 +101,16 @@ they are in the inverted position and a rename changes production. The other
 four (``QUAL_COLUMNS``, ``SI_COLUMNS``, ``PANEL_COLUMNS``,
 ``MARKET_STATE_COLUMNS``) are read by no writer at all. Either way this file
 has no power over them: measured, renaming one entry in each of the seven left
-every test here green, while the family's own module went red every time —
-``OPTIONS_COLUMNS`` 8 tests, ``BUFFETT_COLUMNS`` 7, ``ONEIL_COLUMNS`` 6,
-``MARKET_STATE_COLUMNS`` 4, ``QUAL_COLUMNS`` 3, ``PANEL_COLUMNS`` 2 and
-``SI_COLUMNS`` 1 (its only pin is an empty-frame dtype test). The registry
-imports those tuples and asserts membership only.
+every test in THIS file green, while at least one test in the family's own
+module went red every time. Per-family counts are deliberately not quoted
+here. They are not produced by one rule — five families are counted in their
+own enrichment module while ``QUAL_COLUMNS`` and ``PANEL_COLUMNS`` only reach
+their published figure by counting a second module — and the count depends on
+which entry is renamed (``OPTIONS_COLUMNS`` ranges 3 to 10 across its 16
+entries, ``MARKET_STATE_COLUMNS`` 4 to 5 across its 8). The qualitative claim
+is the one that holds under every entry: this file is blind to all 53, and
+``SI_COLUMNS`` is the thinnest pinned elsewhere, by a single empty-frame dtype
+test. The registry imports those tuples and asserts membership only.
 
 The containment assertion does not reach them either, and the reason is the
 fixture, not the assertion. ``brief_day/scored.parquet`` carries 89 columns and
@@ -187,9 +192,20 @@ The quiet-day path is not measured here: this file measures the published-day
 frame, and ``EMPTY_BRIEF_COLUMNS`` stays pinned by its existing consumer in
 ``tests/thematic/argumentation/test_support_guard_wiring.py``.
 
-A COORDINATED rename — writer and tuple changed in one edit — passes every
-assertion below. That is correct for a registry gate; it is also exactly where
-the Django residual above lives.
+A COORDINATED rename — writer and tuple changed in one edit — passes at the
+map and brief stages. That is correct for a registry gate, and it is exactly
+where the Django residual above lives. It does NOT pass at the score stage:
+the containment assertion replays briefs over the frozen
+``brief_day/scored.parquet``, which still carries the OLD name, so the frame
+then holds a column the registry no longer lists. Measured on
+``technical_rsi``, renamed in both the tuple and ``_build_candidate_row``:
+``FAILED (failures=1)``, the one failure being
+``test_an_observed_brief_frame_is_covered_by_the_registry``.
+
+The maintenance consequence follows and is easy to mistake for a broken gate:
+renaming a score column also requires re-recording that fixture. Until it is
+re-recorded the gate is red, and the failure is about the fixture, not about
+the rename being wrong.
 
 ``EVENT_FACT_COLUMNS`` (9 names) is written by iterating the tuple
 (``for col in EVENT_FACT_COLUMNS: out[col] = None``, and ``ev.get(col)`` for
@@ -280,8 +296,15 @@ _BRIEF_INPUT_PARQUET = _BRIEF_FIXTURES / "scored.parquet"
 # makes the test DISAGREE rather than follow along.
 #
 # The cost of the second copy is the usual one: a DELIBERATE addition to the
-# production tuple must be mirrored here, and the failure message is what
-# tells the next reader so.
+# production tuple must be mirrored here, and the union test's failure message
+# names this constant so the next reader knows where to look. Measured on
+# ``event_sic``: ``Items in the first set but not the second: 'event_sic'``
+# followed by that message.
+#
+# One limit of that, also measured: it only fires for a name NO OTHER STAGE
+# supplies. Adding ``verified`` to the production tuple passes silently,
+# because the map stage declares it too and the registry subtracts the
+# shadow-only names from the detector's contribution alone.
 _SHADOW_ONLY_COLUMNS: tuple[str, ...] = ("eligible", "exclusion_reason")
 
 # Every stage declaration, imported from the module that OWNS it rather than
@@ -490,14 +513,18 @@ class TestRegistryCoversRealData(unittest.TestCase):
 
     def test_an_observed_brief_frame_is_covered_by_the_registry(self):
         # The only assertion in this file that compares the ASSEMBLED
-        # registry against OBSERVED DATA. Its unique power is latent, not
-        # demonstrated: across 33 mutations it never died alone. It died four
-        # times — on each rename of a SCORE_COLUMNS or BRIEF_STAGE_COLUMNS
-        # entry, because the fixture frame then carries a name the registry
-        # no longer lists — and each time the stage's own set comparison died
-        # with it. What it would catch and nothing else would is a column
-        # reaching a real brief frame that no stage declares at all, which no
-        # mutation of a declaration can manufacture.
+        # registry against OBSERVED DATA, and the only one with unique power
+        # over a COORDINATED rename. Renaming a score column in both the
+        # tuple and the writer kills this test ALONE: the stage's own set
+        # comparison agrees with itself again, while the frozen
+        # ``scored.parquet`` still carries the old name. Measured on
+        # ``technical_rsi`` -> ``FAILED (failures=1)``, this test.
+        #
+        # Against a one-sided mutation it has no power of its own: across 33
+        # such mutations it never died alone, dying four times alongside the
+        # stage comparison it duplicates. The other thing only it would catch
+        # is a column reaching a real brief frame that no stage declares at
+        # all, which no mutation of a declaration can manufacture.
         #
         # Arrange / Act — 112 columns: the scored fixture's 89 plus the brief
         # stage's own, replayed offline.
@@ -549,7 +576,13 @@ class TestRegistryCoversRealData(unittest.TestCase):
         } - set(_SHADOW_ONLY_COLUMNS)
 
         # Act / Assert
-        self.assertEqual(expected, set(BRIEF_STORE_COLUMNS))
+        self.assertEqual(
+            expected,
+            set(BRIEF_STORE_COLUMNS),
+            "registry disagrees with the owner declarations; if a shadow-only "
+            "column was added to events.merge.EVENT_SHADOW_ONLY_COLUMNS, "
+            "mirror it into _SHADOW_ONLY_COLUMNS in this module",
+        )
 
     def test_every_published_stage_grouping_reaches_the_registry(self):
         # Kept for its FAILURE MESSAGE, not for power of its own: measured

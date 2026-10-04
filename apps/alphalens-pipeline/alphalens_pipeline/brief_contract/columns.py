@@ -166,7 +166,13 @@ _ALL_STAGES: tuple[tuple[str, ...], ...] = (
     *ENRICHER_STAGES,
 )
 
-#: Every column name a brief parquet can carry. Deduplicated with
+#: Every column name a brief parquet can carry AS THE CURRENT WRITERS PRODUCE
+#: IT. Not every column name one ever carried: of 112 brief parquets on the
+#: author's machine, 31 hold at least one name this tuple does not list
+#: (``gemini_confidence``, ``transmission_channel``, ``brief_full_md`` and six
+#: more), and every one of those 31 is dated 2026-08-18 or earlier, before the
+#: renames that produced today's set. A reader auditing an old date should
+#: expect names from its own era. Deduplicated with
 #: ``dict.fromkeys`` rather than a set so the order is reproducible across
 #: interpreter runs: stages in pipeline order, columns in each stage's own
 #: declared order, first occurrence winning. Columns shared between stages
