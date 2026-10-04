@@ -494,8 +494,8 @@ alphalens broker trades --env sim --offline --format json
 The envelope is `alphalens.broker.trades/v1`. Its JSON Schema is
 [`docs/broker-trades-v1.schema.json`](docs/broker-trades-v1.schema.json). It is
 generated from the builder's vocabularies
-(`python -m alphalens_pipeline.brokers.automanager.trades_schema --write
-apps/alphalens-broker-contract/docs/broker-trades-v1.schema.json`), and a test
+(`python -m alphalens_pipeline.brokers.automanager.trades_schema --write`, which
+writes only that file), and a test
 fails when the file and a fresh generation differ.
 
 **Versioning.** Within v1, new optional fields may be added, and new values may

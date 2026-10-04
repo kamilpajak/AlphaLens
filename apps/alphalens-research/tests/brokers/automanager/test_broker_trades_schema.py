@@ -38,9 +38,16 @@ class PublishedFileIsTheGeneration(unittest.TestCase):
         self.assertEqual(
             PUBLISHED.read_text(encoding="utf-8"),
             trades_schema.render(),
-            "regenerate: python -m alphalens_pipeline.brokers.automanager.trades_schema "
-            f"--write {PUBLISHED}",
+            "regenerate: python -m alphalens_pipeline.brokers.automanager.trades_schema --write",
         )
+
+    def test_the_generator_writes_only_the_published_file(self) -> None:
+        # Sonar S8707: --write must not take a path, so no caller can steer the
+        # write elsewhere. The one target is the published artefact.
+        self.assertEqual(trades_schema.PUBLISHED_PATH.resolve(), PUBLISHED.resolve())
+
+    def test_a_path_after_write_is_a_usage_error(self) -> None:
+        self.assertEqual(trades_schema.main(["--write", "/tmp/elsewhere.json"]), 2)
 
     def test_it_is_a_valid_2020_12_schema(self) -> None:
         jsonschema.Draft202012Validator.check_schema(trades_schema.build_schema())

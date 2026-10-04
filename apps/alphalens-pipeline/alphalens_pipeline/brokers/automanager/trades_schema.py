@@ -27,8 +27,8 @@ open schema still refuses a wrong type or unit.
 
 from __future__ import annotations
 
-import argparse
 import json
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -444,15 +444,28 @@ def render() -> str:
     return json.dumps(build_schema(), indent=2, ensure_ascii=False) + "\n"
 
 
+# The one file ``--write`` may touch: the published artefact. ``--write`` takes no
+# path, like ``broker_contract.trade_intent.json_schema``, so no caller can steer
+# the write elsewhere (Sonar S8707).
+PUBLISHED_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "alphalens-broker-contract"
+    / "docs"
+    / "broker-trades-v1.schema.json"
+)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    parser.add_argument("--write", type=Path, help="write the schema to this path")
-    args = parser.parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments not in ([], ["--write"]):
+        print(f"usage: python -m {__spec__.name} [--write]", file=sys.stderr)
+        return 2
     text = render()
-    if args.write is None:
-        print(text, end="")
-    else:
-        args.write.write_text(text, encoding="utf-8")
+    if arguments == ["--write"]:
+        PUBLISHED_PATH.write_text(text, encoding="utf-8")
+        print(f"wrote {PUBLISHED_PATH}", file=sys.stderr)
+        return 0
+    print(text, end="")
     return 0
 
 
