@@ -403,6 +403,29 @@ class TestStopFillAlertNamesTheStop(unittest.TestCase):
         )
         self.assertIn("- trailed stop 19.50 -", text)
 
+    def test_the_trail_survives_a_boot_after_its_plan_generation_closed(self) -> None:
+        # #1669: a keyless plan line closes the generation the trail was
+        # earned in; the boot compaction used to drop the marker with it.
+        journal = [
+            _stop_placed(ts=102.0),
+            {"kind": "trailed", "uic": _UIC, "level": 13.0, "ts": 104.0},
+            {
+                "kind": "planned",
+                "client_request_id": "bracket-1",
+                "uic": _UIC,
+                "side": "SELL",
+                "stop_price": 9.0,
+                "take_profit": None,
+                "tier_index": 0,
+                "gen": 0,
+            },
+        ]
+        text = self._alert_for(
+            *cl._compact_standalone_stop_journal_lines(journal),
+            outcome=_filled(_STOP_ID, 16.0, 12.9),
+        )
+        self.assertIn("- trailed stop 13.00 -", text)
+
     def test_a_reanchored_stop_shows_its_level(self) -> None:
         text = self._alert_for(
             _stop_placed(ts=100.0),

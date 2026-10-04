@@ -25,6 +25,8 @@ from typing import Any
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
+from alphalens_pipeline.brokers.automanager import trades
+from broker_contract.contract import InstrumentRef, Position
 from broker_contract.sizing import TpTranchePlan
 
 _TRAIL = {"kind": "trailing_stop", "arm_trigger_r": 0.5, "trail_frac": 0.6}
@@ -297,12 +299,40 @@ def _random_journal(rng: random.Random) -> list[dict[str, Any]]:
     return [_random_line(rng, rng.choice(uics)) for _ in range(rng.randint(5, 40))]
 
 
+def _newest_stop_placed_ts(lines: list[dict[str, Any]]) -> dict[int, float]:
+    """Per uic, the ``ts`` of the newest ``stop_placed`` (a later line breaks a
+    tie): the one stop the compactor keeps for the uic."""
+    newest: dict[int, float] = {}
+    for line in lines:
+        if line.get("kind") != "stop_placed":
+            continue
+        uic = sj._coerce(line, "uic", int)
+        ts = sj._coerce(line, "ts", float)
+        if uic is not None and ts is not None and (uic not in newest or ts >= newest[uic]):
+            newest[uic] = ts
+    return newest
+
+
+def _stop_moves(lines: list[dict[str, Any]]) -> dict[str, dict[int, Any]]:
+    """What the stop-fill alert would name (#1669): the move of the newest
+    ``stop_placed`` per uic, and the move of every standing stop the reconcile
+    pass watches."""
+    return {
+        "stop_move": {
+            uic: cl._latest_stop_move(lines, uic, since_ts=ts)
+            for uic, ts in _newest_stop_placed_ts(lines).items()
+        },
+        "standing_stop_move": {
+            uic: cl._latest_stop_move(lines, uic, since_ts=stop.placed_ts)
+            for uic, stop in cl._fold_standing_stop_ids(lines).items()
+        },
+    }
+
+
 def _every_fold(lines: list[dict[str, Any]]) -> dict[str, Any]:
     """Every reader of the standalone journal the compactor promises to preserve.
 
-    Two are left out on purpose: ``gen`` markers (the documented exception) and
-    ``_latest_stop_move`` (the stop-fill alert text; it can read a ``trailed``
-    marker the compactor drops — #1669, which removes this exclusion)."""
+    One is left out on purpose: ``gen`` markers (the documented exception)."""
     out: dict[str, Any] = {
         "planned": _plan_view(cl._fold_planned_exits(lines)),
         "oco_unsupported": cl._fold_oco_unsupported(lines),
@@ -317,6 +347,7 @@ def _every_fold(lines: list[dict[str, Any]]) -> dict[str, Any]:
         "standing": cl._fold_standing_stop_ids(lines),
         "owed": cl._derive_owed_sibling_retires(lines),
         "moving": cl._uics_moving_their_stop(lines),
+        **_stop_moves(lines),
     }
     for kind in ("oco_placed", "amend_failed", "oco_too_far"):
         for now in (110.0, 125.0, 150.0):
@@ -347,6 +378,563 @@ class TestCompactionPreservesEveryReader(unittest.TestCase):
                         + "\n".join(json.dumps(line, sort_keys=True) for line in journal)
                     )
             self.assertEqual(compacted_folds, _every_fold(twice), f"trial {trial}: not idempotent")
+
+
+# --- #1669: the stop's newest move survives compaction -----------------------------
+
+_U = 333
+_PLACED_TS = 102.0
+_KEY_A = "C-D:2026-09-15"
+_KEY_B = "OTHER:2026-10-01"
+_CRID_A = f"{_U}-crid-A"
+_CRID_B = f"{_U}-crid-B"
+
+
+def _stop_placed(ts: float = _PLACED_TS, order_id: str = "O1") -> dict[str, Any]:
+    return {
+        "kind": "stop_placed",
+        "uic": _U,
+        "qty": 5.0,
+        "order_id": order_id,
+        "ref": "C-D-2026-09-15-entry-t0-stop-0",
+        "stop_price": 9.0,
+        "ts": ts,
+    }
+
+
+def _trailed(level: float, ts: float) -> dict[str, Any]:
+    return {"kind": "trailed", "uic": _U, "level": level, "ts": ts, "peak": level + 2.0}
+
+
+def _reanchored(stop: float, ts: float) -> dict[str, Any]:
+    return {"kind": "reanchored", "uic": _U, "avg_price": 10.0, "stop_price": stop, "ts": ts}
+
+
+def _keyed_planned(crid: str = _CRID_A, key: str | None = _KEY_A) -> dict[str, Any]:
+    line = _planned(crid, uic=_U, stop=9.0, tp=None)
+    if key is not None:
+        line["pick_key"] = key
+    return line
+
+
+def _is_closer(line: dict[str, Any]) -> bool:
+    """The compactor's crid-less ``planned_retracted`` line."""
+    return line.get("kind") == "planned_retracted" and "client_request_id" not in line
+
+
+def _dumps(lines: list[dict[str, Any]]) -> str:
+    return "".join(json.dumps(line, sort_keys=True) + "\n" for line in lines)
+
+
+class TestTheStopMoveSurvivesCompaction(unittest.TestCase):
+    """#1669: the stop-fill alert names the stop's newest move. A ``trailed``
+    marker whose plan generation closed was dropped at boot, so after a restart
+    the alert (and ``broker trades``) lost the move or named an older one."""
+
+    def _assert_keeps_the_move(self, journal: list[dict[str, Any]], expected: Any) -> None:
+        compacted = cl._compact_standalone_stop_journal_lines(journal)
+        self.assertEqual(cl._latest_stop_move(journal, _U, since_ts=_PLACED_TS), expected)
+        self.assertEqual(cl._latest_stop_move(compacted, _U, since_ts=_PLACED_TS), expected)
+        self.assertEqual(_every_fold(journal), _every_fold(compacted))
+        twice = cl._compact_standalone_stop_journal_lines(compacted)
+        self.assertEqual(_every_fold(compacted), _every_fold(twice))
+        self.assertEqual(_dumps(compacted), _dumps(twice), "compaction is not idempotent")
+
+    def test_issue_smallest_case_keeps_trailed_13(self) -> None:
+        journal = [_stop_placed(), _trailed(13.0, 104.0), _keyed_planned(key=None)]
+        self._assert_keeps_the_move(journal, sj._StopMove("trailed", 13.0))
+
+    def test_every_generation_closer_keeps_the_move_and_no_floor(self) -> None:
+        closers = {
+            "planned without a key": _keyed_planned(_CRID_B, key=None),
+            "planned with another key": _keyed_planned(_CRID_B, key=_KEY_B),
+            "tranche_plan with another key": _tranche_plan(_U, _KEY_B),
+            "tranche_plan_retracted": {
+                "kind": "tranche_plan_retracted",
+                "uic": _U,
+                "pick_key": _KEY_A,
+            },
+            "planned_retracted": {
+                "kind": "planned_retracted",
+                "client_request_id": _CRID_A,
+                "uic": _U,
+                "note": "closed",
+            },
+        }
+        for name, closer in closers.items():
+            with self.subTest(closer=name):
+                journal = [_keyed_planned(), _stop_placed(), _trailed(13.0, 104.0), closer]
+                self._assert_keeps_the_move(journal, sj._StopMove("trailed", 13.0))
+                compacted = cl._compact_standalone_stop_journal_lines(journal)
+                self.assertEqual(cl._fold_trailed_since_latest_plan(journal), {})
+                self.assertEqual(cl._fold_trailed_since_latest_plan(compacted), {})
+
+    def test_kept_marker_cannot_resurrect_a_ratchet_floor(self) -> None:
+        # The VST shape: the stop trailed twice and filled, then both
+        # retractions closed the pick. No plan line is left for the uic, so
+        # nothing after the kept marker would reset the trailed fold (#1324).
+        journal = [
+            _keyed_planned(),
+            _tranche_plan(_U, _KEY_A),
+            _stop_placed(),
+            _trailed(12.0, 104.0),
+            _trailed(13.0, 106.0),
+            {
+                "kind": "stop_filled",
+                "uic": _U,
+                "order_id": "O1",
+                "qty": 5.0,
+                "avg_price": 12.9,
+                "ref": "C-D-2026-09-15-entry-t0-stop-0",
+                "partial": False,
+                "ts": 108.0,
+            },
+            {"kind": "tranche_plan_retracted", "uic": _U, "pick_key": _KEY_A},
+            {"kind": "planned_retracted", "client_request_id": _CRID_A, "uic": _U, "note": "x"},
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(journal)
+        self._assert_keeps_the_move(journal, sj._StopMove("trailed", 13.0))
+        self.assertEqual(cl._fold_trailed_since_latest_plan(journal), {})
+        self.assertEqual(cl._fold_trailed_since_latest_plan(compacted), {})
+        self.assertEqual(
+            cl._fold_reanchored_stop_levels(journal), cl._fold_reanchored_stop_levels(compacted)
+        )
+        self.assertEqual(
+            cl._fold_reanchored_markers(journal), cl._fold_reanchored_markers(compacted)
+        )
+        # A new position on the uic, armed after the boot, is managed from its
+        # own plan stop on both files: the old 13.0 does not leak into it.
+        new_pick = [_keyed_planned(_CRID_B, key=_KEY_B), _tranche_plan(_U, _KEY_B)]
+        managed = [self._managed(lines + new_pick) for lines in (journal, compacted)]
+        self.assertEqual(managed[0], managed[1])
+        self.assertEqual([exit_.stop_price for exit_ in managed[1]], [9.0])
+
+    @staticmethod
+    def _managed(lines: list[dict[str, Any]]) -> list[Any]:
+        position = Position(
+            instrument=InstrumentRef(
+                ticker="CD",
+                exchange_mic="XNYS",
+                asset_type="Stock",
+                broker_instrument_id=str(_U),
+                broker_symbol="CD:xnys",
+            ),
+            quantity=10.0,
+            avg_price=10.0,
+            market_value=None,
+            unrealized_pnl=None,
+            position_id="pos-1",
+        )
+        return cl._build_managed_exits(
+            long_positions=[position],
+            tranche_plans=sj.fold_tranche_plans(lines),
+            fired=cl._fold_fired_since_latest_plan(lines),
+            trailed=cl._fold_trailed_since_latest_plan(lines),
+            reanchored=cl._fold_reanchored_stop_levels(lines),
+        )
+
+    def test_newer_trailed_beats_kept_reanchored(self) -> None:
+        journal = [
+            _stop_placed(),
+            _reanchored(9.5, 103.0),
+            _trailed(13.0, 104.0),
+            _keyed_planned(key=None),
+        ]
+        self._assert_keeps_the_move(journal, sj._StopMove("trailed", 13.0))
+
+    def test_a_kept_trailed_tied_with_a_later_reanchor_gives_the_reanchor(self) -> None:
+        journal = [
+            _keyed_planned(),
+            _tranche_plan(_U, _KEY_A),
+            _stop_placed(),
+            _trailed(13.0, 104.0),
+            _reanchored(9.5, 104.0),
+        ]
+        self._assert_keeps_the_move(journal, sj._StopMove("reanchored", 9.5))
+
+    def test_a_dropped_trailed_tied_after_a_reanchor_gives_the_trail(self) -> None:
+        journal = [
+            _stop_placed(),
+            _reanchored(9.5, 104.0),
+            _trailed(13.0, 104.0),
+            _keyed_planned(key=None),
+        ]
+        self._assert_keeps_the_move(journal, sj._StopMove("trailed", 13.0))
+
+    def test_marker_older_than_kept_stop_is_not_written(self) -> None:
+        # The alert never reads a marker older than the stop it names, so the
+        # compactor does not keep one: the output stays minimal.
+        journal = [_trailed(12.0, 100.0), _stop_placed(), _keyed_planned(key=None)]
+        compacted = cl._compact_standalone_stop_journal_lines(journal)
+        self.assertEqual(
+            [line["kind"] for line in compacted], ["planned", "stop_placed"], compacted
+        )
+        self.assertEqual(_every_fold(journal), _every_fold(compacted))
+
+    def test_open_plan_trailed_level_is_still_the_live_floor(self) -> None:
+        journal = [
+            _keyed_planned(),
+            _tranche_plan(_U, _KEY_A),
+            _stop_placed(),
+            _trailed(13.0, 104.0),
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(journal)
+        self.assertEqual(cl._fold_trailed_since_latest_plan(compacted), {_U: 13.0})
+        self.assertEqual(
+            cl._latest_stop_move(compacted, _U, since_ts=_PLACED_TS),
+            sj._StopMove("trailed", 13.0),
+        )
+        self.assertEqual([line for line in compacted if line["kind"] == "trailed"], [journal[3]])
+        self.assertFalse(any(_is_closer(line) for line in compacted), compacted)
+
+
+class TestTheCloserIsInvisibleToEveryOtherReader(unittest.TestCase):
+    """The compactor hides a kept ``trailed`` marker from the trailed fold with a
+    ``planned_retracted`` line that names no crid. Only the trailed selection may
+    react to it: a reader that took it for a real retraction would retract
+    nothing today, and something tomorrow."""
+
+    _TRIALS = 300
+    _SEED = 1669
+
+    def test_closer_is_invisible_to_every_other_reader(self) -> None:
+        rng = random.Random(self._SEED)
+        for trial in range(self._TRIALS):
+            journal = _random_journal(rng)
+            uic = rng.choice(_UICS)
+            closer = {"kind": "planned_retracted", "uic": uic}
+            for where, with_closer in (
+                ("front", [closer, *journal]),
+                ("end", [*journal, closer]),
+            ):
+                before, after = _every_fold(journal), _every_fold(with_closer)
+                before.pop("trailed")
+                after.pop("trailed")
+                self.assertEqual(before, after, f"trial {trial}, closer at the {where}")
+                self.assertEqual(
+                    sj._latest_planned_by_crid(journal), sj._latest_planned_by_crid(with_closer)
+                )
+                self.assertEqual(
+                    trades._read_stop_facts(journal), trades._read_stop_facts(with_closer)
+                )
+
+
+# --- #1669: repeated boots --------------------------------------------------------
+
+_LIFE_PICKS = {111: "AAA", 222: "BBB", 333: "C-D"}
+
+
+class _Lifecycle:
+    """A journal written the way the daemon writes it, with boots between appends:
+    a monotone clock (5% exact ties), unique order ids, and each pick going armed
+    -> stop placed -> moved -> filled or retracted. Events are ``("line", line,
+    fill)`` (``fill`` = ``(uic, placed_ts)`` on a ``stop_filled``) or
+    ``("boot",)``."""
+
+    def __init__(self, rng: random.Random) -> None:
+        self.rng = rng
+        self.clock = 1000.0
+        self.order_seq = 0
+        self.pick_seq = 0
+        self.events: list[tuple[Any, ...]] = []
+
+    def _ts(self, *, tie_ok: bool = True) -> float:
+        if not (tie_ok and self.rng.random() < 0.05):
+            self.clock += round(self.rng.uniform(0.1, 3.0), 3)
+        return self.clock
+
+    def _emit(self, line: dict[str, Any], fill: tuple[int, float] | None = None) -> None:
+        self.events.append(("line", line, fill))
+
+    def build(self) -> list[tuple[Any, ...]]:
+        rng = self.rng
+        uics = rng.sample(sorted(_LIFE_PICKS), rng.randint(1, 3))
+        state: dict[int, dict[str, Any]] = {
+            u: {"pick": None, "crids": [], "tranche": None, "order": None, "level": 9.0}
+            for u in uics
+        }
+        target = rng.randint(5, 40)
+        while sum(1 for e in self.events if e[0] == "line") < target:
+            if self.events and rng.random() < 0.12:
+                self.events.append(("boot",))
+            uic = rng.choice(uics)
+            if rng.random() < 0.06:
+                self._bookkeeping(uic)
+            elif state[uic]["pick"] is None:
+                self._arm(uic, state[uic])
+            elif state[uic]["order"] is None:
+                self._place_or_retract(uic, state[uic])
+            else:
+                self._standing(uic, state[uic])
+        if rng.random() < 0.7:
+            self.events.append(("boot",))
+        return self.events
+
+    def _bookkeeping(self, uic: int) -> None:
+        kind = self.rng.choice(
+            ("oco_placed", "amend_failed", "oco_too_far", "amend_seq", "gen", "oco_unsupported")
+        )
+        if kind == "amend_seq":
+            self._emit({"kind": kind, "uic": uic, "seq": self.rng.randint(0, 5)})
+        elif kind == "gen":
+            self._emit({"kind": kind, "uic": uic, "gen": self.rng.randint(0, 3), "qty": 5.0})
+        elif kind == "oco_unsupported":
+            self._emit({"kind": kind, "uic": uic})
+        else:
+            self._emit({"kind": kind, "uic": uic, "ts": self._ts()})
+
+    def _arm(self, uic: int, s: dict[str, Any]) -> None:
+        rng = self.rng
+        self.pick_seq += 1
+        day = 10 + self.pick_seq
+        key = f"{_LIFE_PICKS[uic]}:2026-09-{day:02d}"
+        keyed = rng.random() < 0.9
+        s["pick"], s["crids"], s["tranche"] = key, [], None
+        for tier in range(rng.choice((1, 1, 2))):
+            crid = f"{_LIFE_PICKS[uic]}-2026-09-{day:02d}-entry-t{tier}-fire"
+            line = _planned(crid, uic=uic, stop=9.0, tp=rng.choice((None, 20.0)), tier=tier)
+            if keyed:
+                line["pick_key"] = key
+            s["crids"].append(crid)
+            self._emit(line)
+        roll = rng.random()
+        if roll < 0.5:
+            self._emit(_tranche_plan(uic, key))
+            s["tranche"] = key
+        elif roll < 0.6:
+            self._emit(_tranche_plan(uic, ""))
+            s["tranche"] = ""
+
+    def _retract(self, uic: int, s: dict[str, Any]) -> None:
+        if s["tranche"]:
+            self._emit({"kind": "tranche_plan_retracted", "uic": uic, "pick_key": s["pick"]})
+        for crid in s["crids"]:
+            self._emit(
+                {"kind": "planned_retracted", "client_request_id": crid, "uic": uic, "note": "x"}
+            )
+
+    def _stop_ref(self, s: dict[str, Any]) -> str:
+        return f"{s['pick'].replace(':', '-')}-entry-t0-stop-0"
+
+    def _place(self, uic: int, s: dict[str, Any]) -> None:
+        self.order_seq += 1
+        s["order"] = f"O{self.order_seq}"
+        s["placed_ts"] = self._ts()
+        line = {
+            "kind": "stop_placed",
+            "uic": uic,
+            "qty": 5.0,
+            "order_id": s["order"],
+            "ref": self._stop_ref(s),
+            "stop_price": s["level"],
+            "ts": s["placed_ts"],
+        }
+        self._emit(line)
+
+    def _place_or_retract(self, uic: int, s: dict[str, Any]) -> None:
+        if self.rng.random() < 0.15:  # the watch ended with no fill
+            self._retract(uic, s)
+            s["pick"] = None
+            return
+        s["level"] = 9.0
+        self._place(uic, s)
+
+    def _standing(self, uic: int, s: dict[str, Any]) -> None:
+        rng = self.rng
+        roll = rng.random()
+        if roll < 0.30:
+            s["level"] = round(s["level"] + rng.choice((0.5, 1.0)), 3)
+            ts = self._ts()
+            self._emit(
+                {
+                    "kind": "trailed",
+                    "uic": uic,
+                    "level": s["level"],
+                    "ts": ts,
+                    "peak": s["level"] + 2,
+                }
+            )
+        elif roll < 0.38:
+            s["level"] = round(s["level"] + 0.25, 3)
+            self._emit(
+                {
+                    "kind": "reanchored",
+                    "uic": uic,
+                    "avg_price": 10.0,
+                    "stop_price": s["level"],
+                    "ts": self._ts(),
+                }
+            )
+        elif roll < 0.45:
+            self._emit({"kind": "amend_ok", "uic": uic, "qty": 5.0, "ts": self._ts()})
+        elif roll < 0.50:  # the stop is replaced: a new order id at the current level
+            self._place(uic, s)
+        elif roll < 0.55:  # a crash re-drive: the SAME key re-appended
+            if s["tranche"]:
+                self._emit(_tranche_plan(uic, s["tranche"]))
+            else:
+                line = _planned(s["crids"][0], uic=uic, stop=9.0, tp=None)
+                line["gen"] = 1
+                line["pick_key"] = s["pick"]
+                self._emit(line)
+        elif roll < 0.58:  # #1669's hazard: a keyless or other-key plan line mid-position
+            self._foreign_plan_line(uic)
+        elif roll < 0.62:
+            self._emit({"kind": "tranche_fired", "uic": uic, "tag": "tp1"})
+        else:
+            self._fill(uic, s)
+
+    def _foreign_plan_line(self, uic: int) -> None:
+        rng = self.rng
+        roll = rng.random()
+        if roll < 0.4:
+            self._emit(_tranche_plan(uic, ""))
+        elif roll < 0.7:
+            self._emit(_planned(f"bracket-{rng.randint(0, 99)}", uic=uic, stop=9.0, tp=20.0))
+        else:
+            line = _planned(f"OTHER-{rng.randint(0, 99)}-entry-t0-fire", uic=uic, stop=9.0, tp=None)
+            line["pick_key"] = f"OTHER:2026-10-{rng.randint(1, 9):02d}"
+            self._emit(line)
+
+    def _fill(self, uic: int, s: dict[str, Any]) -> None:
+        rng = self.rng
+        partial = rng.random() < 0.1
+        line = {
+            "kind": "stop_filled",
+            "uic": uic,
+            "order_id": s["order"],
+            "qty": 5.0,
+            "avg_price": s["level"],
+            "ref": self._stop_ref(s),
+            "partial": partial,
+            "ts": self._ts(tie_ok=False),
+        }
+        self._emit(line, fill=(uic, s["placed_ts"]))
+        s["order"] = None  # a partial terminal cancels the remainder: a new stop follows
+        if partial:
+            return
+        if rng.random() < 0.8:
+            if s["tranche"] is not None and rng.random() < 0.9:
+                self._emit({"kind": "tranche_plan_retracted", "uic": uic, "pick_key": s["pick"]})
+            for crid in s["crids"]:
+                self._emit(
+                    {
+                        "kind": "planned_retracted",
+                        "client_request_id": crid,
+                        "uic": uic,
+                        "note": "closed",
+                    }
+                )
+        s["pick"] = None
+
+
+def _trailed_generation(lines: list[dict[str, Any]]) -> dict[int, tuple[str, str | None]]:
+    """Per uic, the kind of the last line that opened or closed the trailed
+    selection's plan generation, and the pick key governing it afterwards."""
+    governing: dict[int, str] = {}
+    last_kind: dict[int, str] = {}
+    for line in lines:
+        uic = sj._coerce(line, "uic", int)
+        if uic is None:
+            continue
+        if sj._apply_generation_reset(
+            line.get("kind"), line, uic, governing, (), include_planned=True
+        ):
+            last_kind[uic] = str(line.get("kind"))
+    return {uic: (kind, governing.get(uic)) for uic, kind in last_kind.items()}
+
+
+_PLAN_KINDS = ("planned", sj._TRANCHE_PLAN_KIND)
+
+
+def _is_plan_line_reorder(full: list[dict[str, Any]], live: list[dict[str, Any]], uic: int) -> bool:
+    """The KNOWN pre-existing shape this test excludes, by name.
+
+    The compactor writes the ``planned`` lines sorted by crid, all of them
+    before every ``tranche_plan`` line. When the uic's last plan line in the
+    full journal is not the one the compacted file ends on (a keyless bracket
+    ``planned`` sorted after a keyed one, or a ``planned`` line with another key
+    followed by a still-kept ``tranche_plan``), the governing key changes at the
+    boot, and a later same-key re-append resets one file and not the other.
+    Present before #1669 and not caused by it; tracked separately. A closer line
+    is a retraction, never a plan line, so it can never be excused by this."""
+    full_kind, full_key = _trailed_generation(full).get(uic, (None, None))
+    live_kind, live_key = _trailed_generation(live).get(uic, (None, None))
+    return full_kind in _PLAN_KINDS and live_kind in _PLAN_KINDS and full_key != live_key
+
+
+def _boot_view(lines: list[dict[str, Any]], tainted: set[int]) -> dict[str, Any]:
+    """Every fold, with the uics tainted by the excluded shape removed from the
+    trailed fold, the one that shape moves."""
+    view = _every_fold(lines)
+    view["trailed"] = {uic: level for uic, level in view["trailed"].items() if uic not in tainted}
+    return view
+
+
+class TestCompactionAcrossRepeatedBoots(unittest.TestCase):
+    """A single compaction cannot see a defect that needs two boots: the closer
+    line of #1669's first design cleared a governing key that a kept ``planned``
+    line had set, and only a re-append AFTER the boot showed it. This replays
+    generated lifecycles with boots in between, and compares the full history
+    with the live file after every boot (every fold) and at every fill (the
+    alert)."""
+
+    _TRIALS = 1500
+    _SEED = 1669
+
+    def test_every_reader_agrees_with_the_full_history_after_every_boot(self) -> None:
+        rng = random.Random(self._SEED)
+        for trial in range(self._TRIALS):
+            self._replay(trial, _Lifecycle(rng).build())
+
+    def _replay(self, trial: int, events: list[tuple[Any, ...]]) -> None:
+        full: list[dict[str, Any]] = []
+        live: list[dict[str, Any]] = []
+        tainted: set[int] = set()
+        for event in events:
+            if event[0] == "boot":
+                live = cl._compact_standalone_stop_journal_lines(live)
+                tainted |= {uic for uic in _LIFE_PICKS if _is_plan_line_reorder(full, live, uic)}
+                expected, actual = _boot_view(full, tainted), _boot_view(live, tainted)
+                for name, value in expected.items():
+                    if value != actual[name]:
+                        self.fail(
+                            f"trial {trial}: {name} differs after a boot\n"
+                            f"  full: {value}\n  live: {actual[name]}\n"
+                            + "\n".join(
+                                "BOOT" if e[0] == "boot" else json.dumps(e[1], sort_keys=True)
+                                for e in events
+                            )
+                        )
+                continue
+            _, line, fill = event
+            if fill is not None:
+                uic, placed_ts = fill
+                self.assertEqual(
+                    cl._latest_stop_move(full, uic, since_ts=placed_ts),
+                    cl._latest_stop_move(live, uic, since_ts=placed_ts),
+                    f"trial {trial}: the alert at the fill of uic {uic} differs",
+                )
+            full.append(line)
+            live.append(line)
+
+    def test_closer_does_not_clear_a_kept_plan_governing_key(self) -> None:
+        # adv/case_gov_key: another pick's plan line arrives while the stop
+        # stands; the boot keeps that planned line and drops the trail. If the
+        # closer were written AFTER the planned block it would clear the key
+        # that line set, and the same-key re-append after the boot would reset
+        # the live file but not the full history: the 11.5 floor would be lost.
+        other = _keyed_planned("C-D-2026-09-15-entry-t0-fire", key=_KEY_A)
+        before_boot = [_stop_placed(ts=1001.1), _trailed(9.5, 1005.7), other]
+        re_append = dict(other, gen=1)
+        after_boot = [_trailed(11.5, 1013.8), re_append]
+        full = before_boot + after_boot
+        live = cl._compact_standalone_stop_journal_lines(before_boot) + after_boot
+        self.assertEqual(cl._fold_trailed_since_latest_plan(full), {_U: 11.5})
+        self.assertEqual(cl._fold_trailed_since_latest_plan(live), {_U: 11.5})
+        self.assertEqual(
+            cl._latest_stop_move(live, _U, since_ts=1001.1), sj._StopMove("trailed", 11.5)
+        )
 
 
 if __name__ == "__main__":

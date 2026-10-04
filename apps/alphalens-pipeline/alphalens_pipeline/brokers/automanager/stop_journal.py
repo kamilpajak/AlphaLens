@@ -28,7 +28,7 @@ import math
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from alphalens_pipeline.brokers.automanager import state_paths
 
@@ -392,6 +392,73 @@ def _retract_planned_lines(
     except Exception:
         logger.warning("planned-line retraction failed — will retry next tick", exc_info=True)
         return 0
+
+
+# The journal field that carries the stop LEVEL on each stop-move marker kind
+# (#1621). The kinds are the ones the amend-success branch of the protection
+# executor writes; a test drives that branch and checks each written kind is
+# here and has an alert reason in ``trade_alerts``.
+_STOP_MOVE_LEVEL_KEY: Mapping[str, str] = {"trailed": "level", "reanchored": "stop_price"}
+
+
+class _StopMove(NamedTuple):
+    """The newest stop-move marker for one standing stop."""
+
+    kind: str
+    level: float | None
+
+
+def _positive_float_or_none(value: Any) -> float | None:
+    """``value`` as a finite positive float, else ``None`` (a level for display)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def stop_move_of(line: Mapping[str, Any]) -> _StopMove:
+    """The kind and level of a line :func:`select_stop_move_lines` returned."""
+    kind = str(line.get("kind"))
+    return _StopMove(kind, _positive_float_or_none(line.get(_STOP_MOVE_LEVEL_KEY[kind])))
+
+
+def select_stop_move_lines(
+    lines: Iterable[Mapping[str, Any]],
+    since_by_uic: Mapping[int, float],
+    until_by_uic: Mapping[int, float] | None = None,
+) -> dict[int, Mapping[str, Any]]:
+    """Per uic of ``since_by_uic``, the newest stop-move marker (``trailed`` /
+    ``reanchored``) written in ``[since, until]`` (``until`` open when the uic
+    has none), or no entry when nothing moved the stop in that window.
+
+    The ONE answer to "what moved THIS stop" (#1669). The stop-fill alert, the
+    boot compactor and ``broker trades`` each ask it, so they cannot name
+    different moves for one stop. Scoped by time, not by the plan generation the
+    protection folds use: a marker from an earlier position on a reused uic
+    predates this stop's placement.
+
+    A later line breaks a timestamp tie. A line whose ``ts`` is not a finite
+    number, or whose level is not a finite positive number, is skipped, so a
+    malformed newer line never hides a good older one."""
+    until = until_by_uic or {}
+    newest: dict[int, tuple[float, Mapping[str, Any]]] = {}
+    for line in lines:
+        level_key = _STOP_MOVE_LEVEL_KEY.get(str(line.get("kind")))
+        if level_key is None or _positive_float_or_none(line.get(level_key)) is None:
+            continue
+        uic = _coerce(line, "uic", int)
+        if uic is None or uic not in since_by_uic:
+            continue
+        ts = _coerce(line, "ts", float)
+        if ts is None or not math.isfinite(ts) or ts < since_by_uic[uic]:
+            continue
+        if uic in until and ts > until[uic]:
+            continue
+        kept = newest.get(uic)
+        if kept is None or ts >= kept[0]:
+            newest[uic] = (ts, line)
+    return {uic: line for uic, (_ts, line) in newest.items()}
 
 
 def _coerce(line: Mapping[str, Any], key: str, caster: Callable[[Any], Any]) -> Any:

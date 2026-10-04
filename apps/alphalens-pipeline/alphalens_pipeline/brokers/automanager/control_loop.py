@@ -3736,7 +3736,7 @@ def _elect_stop_placed(
             order_id=order_id,
             ref=ref if isinstance(ref, str) and ref else None,
             placed_ts=ts,
-            placed_level=_positive_float_or_none(line.get("stop_price")),
+            placed_level=stop_journal._positive_float_or_none(line.get("stop_price")),
         )
     else:
         latest[uic] = None
@@ -3937,53 +3937,17 @@ def _derive_owed_sibling_retires(lines: list[Mapping[str, Any]]) -> dict[str, st
 ``-g0`` / ``-gx`` are not generations and fall through to the date parse."""
 
 
-# The journal field that carries the stop LEVEL on each stop-move marker kind
-# (#1621). The kinds are the ones the amend-success branch of the protection
-# executor writes; a test drives that branch and checks each written kind is
-# here and has an alert reason in ``trade_alerts``.
-_STOP_MOVE_LEVEL_KEY: Mapping[str, str] = {"trailed": "level", "reanchored": "stop_price"}
-
-
-class _StopMove(NamedTuple):
-    """The newest stop-move marker for one standing stop."""
-
-    kind: str
-    level: float | None
-
-
 def _latest_stop_move(
     lines: Iterable[Mapping[str, Any]], uic: int, *, since_ts: float
-) -> _StopMove | None:
+) -> stop_journal._StopMove | None:
     """The newest ``trailed`` / ``reanchored`` marker for ``uic`` written AT OR
     AFTER ``since_ts`` (the standing stop's placement), or ``None`` when nothing
     moved that stop — then it rests at the plan level it was placed at.
 
-    Scoped by the stop's own placement time, not by the plan generation the
-    protection folds use: the question is "what moved THIS order", and a marker
-    from an earlier position on a reused uic predates this order's placement.
-    A later line breaks a timestamp tie. Unparseable lines are skipped."""
-    newest: _StopMove | None = None
-    newest_ts = since_ts
-    for line in lines:
-        kind = line.get("kind")
-        level_key = _STOP_MOVE_LEVEL_KEY.get(str(kind))
-        if level_key is None or stop_journal._coerce(line, "uic", int) != uic:
-            continue
-        ts = stop_journal._coerce(line, "ts", float)
-        if ts is None or ts < newest_ts:
-            continue
-        newest_ts = ts
-        newest = _StopMove(str(kind), _positive_float_or_none(line.get(level_key)))
-    return newest
-
-
-def _positive_float_or_none(value: Any) -> float | None:
-    """``value`` as a finite positive float, else ``None`` (a level for display)."""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) and number > 0 else None
+    The rule is :func:`stop_journal.select_stop_move_lines`, which the boot
+    compactor also uses to decide which marker it keeps (#1669)."""
+    line = stop_journal.select_stop_move_lines(lines, {uic: since_ts}).get(uic)
+    return None if line is None else stop_journal.stop_move_of(line)
 
 
 def _ticker_from_ref(ref: str | None) -> str | None:
@@ -6236,9 +6200,10 @@ def _elect_trailed_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, A
 
     The original line object is kept (shallow-copied), not a synthesised stub,
     so ``_journal_trailed``'s ``peak`` / ``last_price`` telemetry survives the
-    boot rewrite. Emitted sorted by uic for a deterministic file order. Since
-    #1236 the selection no longer depends on where these land relative to the
-    plan lines, because the identity rides on the marker."""
+    boot rewrite. Emitted sorted by uic for a deterministic file order. Where
+    these land relative to the plan lines still decides what the fold reads: a
+    marker written before a plan line that resets its uic is folded away, so the
+    compactor writes these after the whole tranche block."""
     selected = _select_trailed_lines(list(lines))
     return [dict(selected[uic]) for uic in sorted(selected)]
 
@@ -6268,6 +6233,64 @@ def _elect_reanchored_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str
             continue
         _keep_latest_marker(latest, uic, ts, line)
     return [latest[uic][1] for uic in sorted(latest)]
+
+
+def _stop_move_closer(uic: int) -> dict[str, Any]:
+    """The line the compactor writes after a kept stop-move marker that is no
+    longer a ratchet floor (#1669): a ``planned_retracted`` that names no crid.
+
+    Only the trailed selection reacts to it (its ``include_planned`` generation
+    reset); ``_latest_planned_by_crid`` retracts nothing without a crid, and no
+    other reader looks at the kind. A test pins that."""
+    return {"kind": stop_journal._PLANNED_RETRACTED_KIND, "uic": uic}
+
+
+def _stop_move_blocks(
+    materialized: list[Mapping[str, Any]],
+    trailed_kept: list[dict[str, Any]],
+    since_by_uic: Mapping[int, float],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The kept ``reanchored`` lines plus each kept stop's newest move, as the
+    ``(front, tail)`` blocks of the compacted file (#1669).
+
+    Per uic, the winner is what :func:`stop_journal.select_stop_move_lines`
+    elects for the uic's kept ``stop_placed`` — what the stop-fill alert reads.
+    It must be written after every other kept stop-move line of the uic, so the
+    "later line breaks a tie" rule still picks it after the reordering:
+
+    - a ``trailed`` winner the trailed election dropped (its plan generation
+      closed): front, after the uic's kept ``reanchored`` line, then a closer
+      (:func:`_stop_move_closer`). The closer resets the trailed fold on the
+      very next line, so the marker is never read as a ratchet floor, whatever
+      plan lines the uic has, including none (#1324);
+    - a ``reanchored`` winner: tail, after the kept ``trailed`` line. Both
+      reanchored folds are position-insensitive, and the trailed fold does not
+      read the kind;
+    - the kept ``trailed`` line, or no winner: nothing extra.
+
+    The front block opens the file, before the ``planned`` block: a closer
+    written after a kept ``planned`` line would clear the governing key that
+    line set, and a same-key re-append after the boot would then reset the live
+    file but not the full history."""
+    reanchored = {int(line["uic"]): line for line in _elect_reanchored_lines(materialized)}
+    winners = stop_journal.select_stop_move_lines(materialized, since_by_uic)
+    trailed_keys = {_canonical_line(line) for line in trailed_kept}
+    front: list[dict[str, Any]] = []
+    tail: list[dict[str, Any]] = []
+    for uic in sorted(set(reanchored) | set(winners)):
+        kept_reanchor = reanchored.get(uic)
+        winner = winners.get(uic)
+        winner_key = None if winner is None else _canonical_line(winner)
+        if kept_reanchor is not None and _canonical_line(kept_reanchor) != winner_key:
+            front.append(dict(kept_reanchor))
+        if winner is None or winner_key in trailed_keys:
+            continue
+        if winner.get("kind") == "trailed":
+            front.append(dict(winner))
+            front.append(_stop_move_closer(uic))
+        else:
+            tail.append(dict(winner))
+    return front, tail
 
 
 def _compact_standalone_stop_journal_lines(
@@ -6313,13 +6336,21 @@ def _compact_standalone_stop_journal_lines(
         ``_fold_reanchored_markers`` (the PERMANENT per-blend reanchor latch)
         is unchanged (#1324);
       - the ``trailed`` line ``_elect_trailed_lines`` elects per uic, written
-        LAST (#1324). This one is ORDER-SENSITIVE:
-        ``_fold_trailed_since_latest_plan`` is generation-reset by every
-        ``tranche_plan`` line and the folds walk lines in write order, so a
-        kept ``trailed`` line emitted BEFORE its uic's plan lines would be
-        erased by the very reset the compactor reordered it into. Appending
-        after the whole tranche block satisfies that for every uic at once; no
-        other fold reads kind ``trailed``, so nothing else is disturbed.
+        after the whole tranche block (#1324). This one is ORDER-SENSITIVE:
+        ``_fold_trailed_since_latest_plan`` is generation-reset by a
+        ``planned`` or ``tranche_plan`` line with no ``pick_key`` or a
+        different one, and by either retraction, and the folds walk lines in
+        write order, so a kept ``trailed`` line emitted BEFORE its uic's plan
+        lines would be erased by the very reset the compactor reordered it
+        into. Appending after the whole tranche block satisfies that for every
+        uic at once.
+      - per kept ``stop_placed``, the stop's newest move
+        (``stop_journal.select_stop_move_lines``, what ``_latest_stop_move``
+        reads for the stop-fill alert), when it is not already kept (#1669):
+        a ``trailed`` marker whose plan generation closed is written at the
+        very top, followed by a crid-less ``planned_retracted`` line that hides
+        it from the trailed fold; a newer ``reanchored`` marker is written after
+        the kept ``trailed`` line. See :func:`_stop_move_blocks`.
         Dropping these markers was the #1324 defect: the fold feeds BOTH
         ``ProtectionView.trailed_stop_by_uic`` (``_maybe_trail``'s never-DOWN
         ratchet floor) and ``ManagedExit.stop_price`` via
@@ -6341,14 +6372,6 @@ def _compact_standalone_stop_journal_lines(
     written BEFORE the tranche block, so they can never become closure evidence.
     Cost: one line per stopped-out pick, kept for good.
 
-    NOT preserved, and NOT fixed here: ``_latest_stop_move`` (the stop-fill
-    alert's "trailed stop" wording and level) reads any ``trailed`` marker
-    written after the stop's placement, while this function keeps a ``trailed``
-    marker only inside its open generation. Keeping the others naively would let
-    ``_fold_trailed_since_latest_plan`` resurrect a dead ratchet floor (#1324).
-    After a boot the alert can therefore name a raised stop as a plain stop
-    (#1669).
-
     Pure: no I/O, input never mutated (kept lines are shallow-copied)."""
     materialized = list(lines)
 
@@ -6364,7 +6387,17 @@ def _compact_standalone_stop_journal_lines(
         materialized
     )
 
-    compacted: list[dict[str, Any]] = list(planned)
+    trailed_kept = _elect_trailed_lines(materialized)
+    front, tail = _stop_move_blocks(
+        materialized,
+        trailed_kept,
+        {uic: ts for uic, (ts, _line) in ttl_latest["stop_placed"].items()},
+    )
+
+    # FIRST, before the planned block: a closer line after a kept planned line
+    # would clear the governing key that line set (#1669).
+    compacted: list[dict[str, Any]] = list(front)
+    compacted.extend(planned)
     compacted.extend(oco_unsupported[uic] for uic in sorted(oco_unsupported))
     compacted.extend(ttl_latest["oco_placed"][uic][1] for uic in sorted(ttl_latest["oco_placed"]))
     compacted.extend(
@@ -6401,12 +6434,13 @@ def _compact_standalone_stop_journal_lines(
             kept_fills.add(_canonical_line(owed_fill))
     compacted.extend(ttl_latest["amend_ok"][uic][1] for uic in sorted(ttl_latest["amend_ok"]))
     compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
-    compacted.extend(_elect_reanchored_lines(materialized))
     compacted.extend(tranche_kept)
-    # LAST, and it must stay last: the trailed fold's generation reset fires on
-    # every kept tranche_plan line, so a trailed marker written before the
-    # tranche block folds away for every uic that has a ladder (#1324).
-    compacted.extend(_elect_trailed_lines(materialized))
+    # After the tranche block, and it must stay there: the trailed fold's
+    # generation reset fires on a kept plan line, so a trailed marker written
+    # before the tranche block folds away for every uic that has a ladder (#1324).
+    compacted.extend(trailed_kept)
+    # After the kept trailed line, so a newer reanchor still wins a tie (#1669).
+    compacted.extend(tail)
     return compacted
 
 
