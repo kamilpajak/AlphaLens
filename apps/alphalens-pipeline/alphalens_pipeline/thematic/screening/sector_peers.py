@@ -17,11 +17,11 @@ literal IDs have been updated accordingly.
 
 from __future__ import annotations
 
-from alphalens_pipeline.data.fundamentals.sic_index import (
-    get_sic as get_industry_id,
+from alphalens_pipeline.data.fundamentals.ff_industries import (
+    iter_peers_fallback as iter_industry_peers_fallback,
 )
 from alphalens_pipeline.data.fundamentals.sic_index import (
-    iter_peers_fallback as iter_industry_peers_fallback,
+    get_sic as get_industry_id,
 )
 from alphalens_pipeline.data.fundamentals.sic_index import (
     iter_sic_peers as iter_industry_peers,

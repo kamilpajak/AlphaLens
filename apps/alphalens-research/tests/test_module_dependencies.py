@@ -415,6 +415,22 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # The last real import cycle the audit found (§2.2, finding 8):
+        # `ff_industries` imports `get_sic` and `_load_lookup_dicts` from
+        # `sic_index` at module level, and `sic_index.iter_peers_fallback`
+        # imported `ff_industries` back inside its body to break the loop it
+        # had just made. The function moved to the side it reaches, so the
+        # direction is now one-way: FF-48 industries downstream of the SIC
+        # index, never upstream.
+        #
+        # No `top_level_only`. The cycle lived in a function-body import,
+        # which is exactly where the next one would be written.
+        "name": "the SIC index must not import the FF-48 industries (the last cycle stays cut)",
+        "from_pkg": "alphalens_pipeline.data.fundamentals.sic_index",
+        "forbidden_prefix": "alphalens_pipeline.data.fundamentals.ff_industries",
+        "exemptions": set(),
+    },
+    {
         # Workspace split (PR2): the pipeline tier hosts live infrastructure
         # (data, core, scorers, edgar_detector, thematic, literature_scanner) and
         # must remain downstream-free. The research tier consumes pipeline,
@@ -1589,6 +1605,41 @@ class TestModuleDependencies(unittest.TestCase):
                 ("relative.py", "synthetic_pkg.control_loop"),
             ],
         )
+
+    def test_the_sic_index_must_not_import_the_ff48_module_positive_control(self):
+        """The last cycle's rule still sees the shape the cycle actually had.
+
+        Red-before/green-after proved the rule worked on the day it was
+        written; it does not protect the rule from rotting. A typo in
+        ``forbidden_prefix``, or a walker that stopped descending into
+        function bodies, would leave this green while the cycle came back.
+        So the control writes the exact shape the cycle used -- a
+        function-body import -- and asserts the real walker reports it.
+        """
+        import tempfile
+
+        pkg_name = "alphalens_pipeline.data.fundamentals"
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            (pkg / "sic_index.py").write_text(
+                "def sneaky():\n"
+                f"    from {pkg_name}.ff_industries import iter_ff48_peers\n"
+                "    return iter_ff48_peers\n"
+            )
+            rule = next(
+                r
+                for r in RULES
+                if r["from_pkg"] == f"{pkg_name}.sic_index"
+                and r["forbidden_prefix"] == f"{pkg_name}.ff_industries"
+            )
+            self.assertNotIn("top_level_only", rule, "the cycle lived in a function body")
+            flagged = [
+                (Path(rel).name, module)
+                for _, rel, module in _violations_for(rule, _python_files(pkg))
+            ]
+        self.assertEqual(flagged, [("sic_index.py", f"{pkg_name}.ff_industries")])
 
     def test_the_five_step_5_modules_do_not_reference_each_other(self):
         """The five modules step 5 cut out are mutually unreferenced.

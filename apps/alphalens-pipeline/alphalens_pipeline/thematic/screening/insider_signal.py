@@ -225,7 +225,7 @@ def score_insider(
     - ``signal_version`` is the poolability key stamped on every row.
 
     Tradeability filter (issue #197) is applied upstream in
-    :func:`sic_index.iter_peers_fallback`; ``peers`` is already filtered.
+    :func:`ff_industries.iter_peers_fallback`; ``peers`` is already filtered.
     """
     candidate = compute_opportunistic_buy_usd(
         ticker=ticker, asof=asof, lookback_days=lookback_days, form4_root=form4_root

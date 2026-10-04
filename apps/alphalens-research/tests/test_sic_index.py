@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from alphalens_pipeline.data.fundamentals import sic_index
+from alphalens_pipeline.data.fundamentals import ff_industries, sic_index
 
 
 def _write_synthetic_index(path: Path, rows: list[dict]) -> None:
@@ -201,6 +201,14 @@ class TestSicDivisionRanges(unittest.TestCase):
 
 
 class TestIterPeersFallback(_PatchedIndexTestCase):
+    """Covers ``ff_industries.iter_peers_fallback``, which owns the chain now.
+
+    Kept in this file although the function moved: the class needs
+    ``_PatchedIndexTestCase``, a fixture private to this module. Moving the
+    tests means first deciding where that fixture should live, which is a
+    separate question from cutting the cycle.
+    """
+
     # SIC 7372 + 7373 + 7374 are different 4-digit codes but share the
     # 3-digit prefix 737 ("Computer Services"). Quantum-computing tickers
     # under PR #197 motivating example. A small 4-digit cohort (n=2) plus
@@ -267,14 +275,14 @@ class TestIterPeersFallback(_PatchedIndexTestCase):
     ]
 
     def test_returns_sic4_when_cohort_meets_min(self) -> None:
-        peers, level = sic_index.iter_peers_fallback(3674, min_cohort=8)
+        peers, level = ff_industries.iter_peers_fallback(3674, min_cohort=8)
         self.assertEqual(level, "sic4")
         self.assertEqual(sorted(peers), sorted(f"BIG{i}" for i in range(1, 9)))
 
     def test_falls_back_to_sic3_when_sic4_below_min(self) -> None:
         # SIC 7372 has only 3 tickers (QUBT, MSFT, PEER7). 3-digit prefix
         # 737 unions 7372/7373/7374 to 8 tickers, meeting min_cohort=8.
-        peers, level = sic_index.iter_peers_fallback(7372, min_cohort=8)
+        peers, level = ff_industries.iter_peers_fallback(7372, min_cohort=8)
         self.assertEqual(level, "sic3")
         self.assertEqual(
             sorted(peers),
@@ -282,12 +290,12 @@ class TestIterPeersFallback(_PatchedIndexTestCase):
         )
 
     def test_returns_thin_when_neither_sic4_nor_sic3_meets_min(self) -> None:
-        peers, level = sic_index.iter_peers_fallback(3674, min_cohort=100)
+        peers, level = ff_industries.iter_peers_fallback(3674, min_cohort=100)
         self.assertEqual(level, "thin")
         self.assertEqual(peers, [])
 
     def test_none_sic_returns_thin(self) -> None:
-        peers, level = sic_index.iter_peers_fallback(None, min_cohort=8)
+        peers, level = ff_industries.iter_peers_fallback(None, min_cohort=8)
         self.assertEqual(level, "thin")
         self.assertEqual(peers, [])
 
@@ -296,20 +304,20 @@ class TestIterPeersFallback(_PatchedIndexTestCase):
         # cohort comparison (SIC 73 mixes temp staffing + software +
         # printing). A 2-digit hop would gather BIG1..BIG8 + 737 peers,
         # but the contract says STOP at 3-digit.
-        peers, level = sic_index.iter_peers_fallback(7372, min_cohort=100)
+        peers, level = ff_industries.iter_peers_fallback(7372, min_cohort=100)
         self.assertEqual(level, "thin")
         self.assertEqual(peers, [])
 
     def test_sic3_excludes_unrelated_prefixes(self) -> None:
-        peers, _ = sic_index.iter_peers_fallback(7372, min_cohort=8)
+        peers, _ = ff_industries.iter_peers_fallback(7372, min_cohort=8)
         # BIG1..BIG8 share SIC 3674 — 3-digit prefix is 367, NOT 737.
         for big in (f"BIG{i}" for i in range(1, 9)):
             self.assertNotIn(big, peers)
 
     def test_returned_list_is_defensive_copy(self) -> None:
-        peers, _ = sic_index.iter_peers_fallback(3674, min_cohort=8)
+        peers, _ = ff_industries.iter_peers_fallback(3674, min_cohort=8)
         peers.append("BOGUS")
-        peers2, _ = sic_index.iter_peers_fallback(3674, min_cohort=8)
+        peers2, _ = ff_industries.iter_peers_fallback(3674, min_cohort=8)
         self.assertNotIn("BOGUS", peers2)
 
     def test_peer_filter_applied_before_min_cohort_check(self) -> None:
@@ -323,12 +331,16 @@ class TestIterPeersFallback(_PatchedIndexTestCase):
         def shell_filter(peers: list[str]) -> list[str]:
             return [p for p in peers if p in keep_only]
 
-        peers, level = sic_index.iter_peers_fallback(3674, min_cohort=8, peer_filter=shell_filter)
+        peers, level = ff_industries.iter_peers_fallback(
+            3674, min_cohort=8, peer_filter=shell_filter
+        )
         self.assertEqual(level, "thin")
         self.assertEqual(peers, [])
 
     def test_peer_filter_returns_sic4_when_filtered_cohort_meets_floor(self) -> None:
-        peers, level = sic_index.iter_peers_fallback(3674, min_cohort=8, peer_filter=lambda ps: ps)
+        peers, level = ff_industries.iter_peers_fallback(
+            3674, min_cohort=8, peer_filter=lambda ps: ps
+        )
         self.assertEqual(level, "sic4")
         self.assertEqual(len(peers), 8)
 
@@ -341,7 +353,9 @@ class TestIterPeersFallback(_PatchedIndexTestCase):
         def filter_three(peers: list[str]) -> list[str]:
             return [p for p in peers if p in keep_three]
 
-        peers, level = sic_index.iter_peers_fallback(7372, min_cohort=8, peer_filter=filter_three)
+        peers, level = ff_industries.iter_peers_fallback(
+            7372, min_cohort=8, peer_filter=filter_three
+        )
         self.assertEqual(level, "thin")
         self.assertEqual(peers, [])
 
@@ -451,7 +465,7 @@ class TestIterPeersFallbackFf48Step(unittest.TestCase):
         # collects only those same 2 (no other SIC 7380-7389 in fixture
         # except DFIN/DFIN2). FF-48 #34 BusSv collects the whole 7370-
         # 7399 band → 12 tickers, well above min_cohort=8.
-        peers, level = sic_index.iter_peers_fallback(7380, min_cohort=8)
+        peers, level = ff_industries.iter_peers_fallback(7380, min_cohort=8)
         self.assertEqual(level, "ff48")
         # All twelve services-band tickers are in the cohort.
         expected = {
@@ -474,7 +488,7 @@ class TestIterPeersFallbackFf48Step(unittest.TestCase):
         # SIC 100 (Agric) has a single ticker FARM. SIC3 = 10 prefix also
         # singleton. FF-48 #1 Agric singleton → all three steps below
         # floor → thin.
-        peers, level = sic_index.iter_peers_fallback(100, min_cohort=8)
+        peers, level = ff_industries.iter_peers_fallback(100, min_cohort=8)
         self.assertEqual(level, "thin")
         self.assertEqual(peers, [])
 
@@ -487,7 +501,9 @@ class TestIterPeersFallbackFf48Step(unittest.TestCase):
         def shell_filter(peers: list[str]) -> list[str]:
             return [p for p in peers if p in keep]
 
-        peers, level = sic_index.iter_peers_fallback(7380, min_cohort=8, peer_filter=shell_filter)
+        peers, level = ff_industries.iter_peers_fallback(
+            7380, min_cohort=8, peer_filter=shell_filter
+        )
         self.assertEqual(level, "thin")
         self.assertEqual(peers, [])
 
@@ -499,7 +515,7 @@ class TestIterPeersFallbackFf48Step(unittest.TestCase):
         with patch.object(self._ff_industries, "_FF48_CROSSWALK_PATH", missing):
             self._ff_industries._load_ranges.cache_clear()
             self._ff_industries._load_ff48_peers.cache_clear()
-            peers, level = sic_index.iter_peers_fallback(7380, min_cohort=8)
+            peers, level = ff_industries.iter_peers_fallback(7380, min_cohort=8)
         self.assertEqual(level, "thin")
         self.assertEqual(peers, [])
 
@@ -526,7 +542,7 @@ class TestMissingIndexFile(unittest.TestCase):
         self.assertEqual(sic_index.iter_sic_peers(3674), [])
 
     def test_fallback_returns_thin_when_index_absent(self) -> None:
-        peers, level = sic_index.iter_peers_fallback(3674, min_cohort=8)
+        peers, level = ff_industries.iter_peers_fallback(3674, min_cohort=8)
         self.assertEqual(level, "thin")
         self.assertEqual(peers, [])
 

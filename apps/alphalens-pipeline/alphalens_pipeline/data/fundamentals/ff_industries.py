@@ -9,9 +9,9 @@ correlations and tighter valuation multiples than raw SIC. GICS is
 S&P/MSCI IP and paid; FF-48 (Fama-French 1997 "Industry Costs of
 Equity") is free and shipped from Ken French's data library.
 
-Use here: a fallback cohort layer beyond
-:func:`alphalens_pipeline.data.fundamentals.sic_index.iter_peers_fallback`'s
-3-digit step. The fallback chain becomes::
+Use here: this module owns the whole peer-cohort fallback chain,
+:func:`iter_peers_fallback`, and FF-48 is its last widening step before
+"thin". The chain is::
 
     4-digit SIC → 3-digit SIC → FF-48 → thin
 
@@ -36,14 +36,24 @@ implementations.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 
 import pyarrow.parquet as pq
 
+# Two of these are private to ``sic_index``. That is deliberate and it is
+# the one wart of cutting the cycle this way: ``iter_peers_fallback`` moved
+# here because FF-48 is its last widening step, and its first two steps
+# still need the SIC index's own cached loaders. The alternative cut --
+# extracting those two primitives into a third module -- is worth
+# revisiting only if something outside these two modules needs them.
 from alphalens_pipeline.data.fundamentals.sic_index import (
+    DEFAULT_MIN_COHORT,
     _load_lookup_dicts,
+    _load_sic3_peers,
     get_sic,
+    iter_sic_peers,
 )
 
 # Default artifact location: same convention as ``sic_index.parquet`` —
@@ -189,5 +199,65 @@ __all__ = [
     "get_ff48",
     "get_ff48_label",
     "iter_ff48_peers",
+    "iter_peers_fallback",
     "sic_to_ff48",
 ]
+
+
+def iter_peers_fallback(
+    sic: int | None,
+    *,
+    min_cohort: int = DEFAULT_MIN_COHORT,
+    peer_filter: Callable[[list[str]], list[str]] | None = None,
+) -> tuple[list[str], str]:
+    """Resolve peers for ``sic`` with a 3-step fallback chain.
+
+    Tries: exact 4-digit cohort → 3-digit prefix (e.g. 7372 → 737,
+    gathering 7370..7379) → Fama-French 48-industry bucket → thin.
+
+    The FF-48 step (issue #198) widens past the 3-digit limit using a
+    SIC-derivative aggregation built in academia (Fama-French 1997
+    "Industry Costs of Equity"). FF-48's coarser buckets are
+    empirically more economically coherent than SIC at the same width
+    (Bhojraj-Lee-Oler 2003, Hrazdil-Scott 2013), so the DFIN-style case
+    (SIC 7380 → only 2-3 raw peers) widens into "Business Services"
+    (~150-300 peers covering SIC 7370-7399) instead of collapsing to
+    "thin".
+
+    ``peer_filter`` is an optional callback that drops peers the caller
+    considers non-comparable (typically the mcap / penny-stock floor in
+    :func:`alphalens_pipeline.thematic.screening._common.filter_peers_by_mcap_price`).
+    The filter is applied BEFORE the ``min_cohort`` check at every level
+    of the chain so a raw cohort that clears the floor but is mostly
+    warrants / shells / penny stocks correctly falls through to the next
+    level rather than rendering a "sic4" / "sic3" / "ff48" badge over an
+    effective sub-floor cohort (Gemini 3 Pro review on PR #215).
+
+    Returns ``(peers, level)`` where ``level`` is one of:
+    - ``"sic4"`` — exact 4-digit cohort met ``min_cohort`` AFTER filter
+    - ``"sic3"`` — 3-digit prefix cohort met ``min_cohort`` AFTER filter
+    - ``"ff48"`` — Fama-French 48 industry cohort met ``min_cohort``
+      AFTER filter
+    - ``"thin"`` — no level met the floor; caller should treat as "no
+      percentile available" and surface the thin-cohort badge instead of
+      a colored signal bar.
+    """
+    if sic is None:
+        return [], "thin"
+    sic4 = iter_sic_peers(sic)
+    if peer_filter is not None:
+        sic4 = peer_filter(sic4)
+    if len(sic4) >= min_cohort:
+        return sic4, "sic4"
+    sic3 = list(_load_sic3_peers().get(sic // 10, []))
+    if peer_filter is not None:
+        sic3 = peer_filter(sic3)
+    if len(sic3) >= min_cohort:
+        return sic3, "sic3"
+    ff48_id = sic_to_ff48(sic)
+    ff48 = iter_ff48_peers(ff48_id)
+    if peer_filter is not None:
+        ff48 = peer_filter(ff48)
+    if len(ff48) >= min_cohort:
+        return ff48, "ff48"
+    return [], "thin"

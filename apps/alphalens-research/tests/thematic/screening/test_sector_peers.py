@@ -1,4 +1,9 @@
-"""sector_peers is now a thin alias over alphalens_pipeline.data.fundamentals.sic_index.
+"""sector_peers is a thin alias over the SIC-index and FF-48 modules.
+
+Three of its four names come from
+``alphalens_pipeline.data.fundamentals.sic_index``; since the last import
+cycle was cut, ``iter_industry_peers_fallback`` comes from
+``ff_industries``, which owns the peer-cohort fallback chain.
 
 The substantive contract tests live in ``tests/test_sic_index.py``. This
 suite verifies the OBSERVABLE behaviour of the legacy public names

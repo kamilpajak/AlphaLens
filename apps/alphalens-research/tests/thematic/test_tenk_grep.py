@@ -792,7 +792,12 @@ class TestFetchMultiYear10KTexts(unittest.TestCase):
 
 
 class TestFetchPeer10KTexts(unittest.TestCase):
+    # Two modules, deliberately: ``get_sic`` is the SIC index's, while the
+    # peer-cohort fallback chain belongs to the FF-48 module, which owns its
+    # last widening step. One constant for both would patch the wrong module
+    # for one of them and the patch would raise rather than fail quietly.
     _SIC_MOD = "alphalens_pipeline.data.fundamentals.sic_index"
+    _FF_MOD = "alphalens_pipeline.data.fundamentals.ff_industries"
 
     def test_resolves_peers_excludes_subject(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -800,7 +805,7 @@ class TestFetchPeer10KTexts(unittest.TestCase):
             with (
                 patch(f"{self._SIC_MOD}.get_sic", return_value=7372),
                 patch(
-                    f"{self._SIC_MOD}.iter_peers_fallback",
+                    f"{self._FF_MOD}.iter_peers_fallback",
                     return_value=(["ACME", "PEER1", "PEER2"], "sic4"),
                 ),
                 patch.object(tenk_grep, "fetch_10k_text", return_value="peer 10-K body"),
@@ -816,7 +821,7 @@ class TestFetchPeer10KTexts(unittest.TestCase):
             with (
                 patch(f"{self._SIC_MOD}.get_sic", return_value=7372),
                 patch(
-                    f"{self._SIC_MOD}.iter_peers_fallback",
+                    f"{self._FF_MOD}.iter_peers_fallback",
                     return_value=(["P1", "P2", "P3", "P4", "P5"], "sic4"),
                 ),
                 patch.object(tenk_grep, "fetch_10k_text", return_value="body") as fetch,
@@ -839,7 +844,7 @@ class TestFetchPeer10KTexts(unittest.TestCase):
             with (
                 patch(f"{self._SIC_MOD}.get_sic", return_value=7372),
                 patch(
-                    f"{self._SIC_MOD}.iter_peers_fallback", return_value=(["BAD", "GOOD"], "sic4")
+                    f"{self._FF_MOD}.iter_peers_fallback", return_value=(["BAD", "GOOD"], "sic4")
                 ),
                 patch.object(tenk_grep, "fetch_10k_text", side_effect=_fetch),
             ):
@@ -853,7 +858,7 @@ class TestFetchPeer10KTexts(unittest.TestCase):
             cache_dir = Path(tmpdir)
             with (
                 patch(f"{self._SIC_MOD}.get_sic", return_value=None),
-                patch(f"{self._SIC_MOD}.iter_peers_fallback", return_value=([], "thin")) as peers,
+                patch(f"{self._FF_MOD}.iter_peers_fallback", return_value=([], "thin")) as peers,
                 patch.object(
                     tenk_grep, "fetch_10k_text", side_effect=AssertionError("no peers to fetch")
                 ),
