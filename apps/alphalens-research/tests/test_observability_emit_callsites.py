@@ -1268,6 +1268,7 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
     _DEFERRED = 'alphalens_feedback_deferred_total{reason="%s"}'
     _UNPRICED = "alphalens_feedback_unpriced_rows"
     _UNPRICED_NO_BARS = "alphalens_feedback_unpriced_no_bars_rows"
+    _PLANNABLE = "alphalens_feedback_plannable_rows"
     _OLDEST = "alphalens_feedback_oldest_deferred_sessions"
 
     def test_every_completeness_series_is_zero_initialised(self) -> None:
@@ -1286,6 +1287,12 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
         ):
             self.assertIn(key, metrics)
             self.assertEqual(metrics[key], 0)
+
+        # The denominator is the ONE completeness series that is legitimately
+        # non-zero on a healthy night: it counts the population the run saw, not a
+        # problem it hit. Present, zero-initialised only when there is nothing to
+        # count - asserting 0 here would be asserting that the run did no work.
+        self.assertIn(self._PLANNABLE, metrics)
 
     def test_counts_sum_across_dates_but_the_age_is_a_max(self) -> None:
         # The ages are already per-date maxima, so summing them would invent a
@@ -1335,6 +1342,26 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
         # What the rule reads: the part a replay can still fix.
         self.assertEqual(metrics[self._UNPRICED] - metrics[self._UNPRICED_NO_BARS], 3)
 
+    def test_the_plannable_population_is_emitted_as_the_share_denominator(self) -> None:
+        """Why a count of no-bars rows is not enough on its own.
+
+        The planned rule subtracts the no-bars subset from the total, so a
+        vendor-wide outage - where every unpriced row is a no-bars row - makes the
+        difference 0 exactly when things are worst. Telling one delisted name from a
+        dark vendor wants a SHARE, and a share needs this denominator. It ships with
+        the emitter because a rule cannot reference a series its own deploy adds.
+        """
+        emit = self._run_refresh(
+            reports=[
+                self._report(n_plannable=30, unpriced_rows=2, unpriced_no_bars_rows=1),
+                self._report(n_plannable=12, unpriced_rows=1, unpriced_no_bars_rows=1),
+            ]
+        )
+
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics[self._PLANNABLE], 42)
+        self.assertEqual(metrics[self._UNPRICED_NO_BARS], 2)
+
     def test_a_report_predating_the_new_field_still_emits_a_zero(self) -> None:
         # The emitter reads the field off each report with a default, so a stale
         # report object cannot make the series vanish - a vanished series reads
@@ -1346,6 +1373,7 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
         metrics = emit.call_args.kwargs["metrics"]
         self.assertEqual(metrics[self._UNPRICED], 5)
         self.assertEqual(metrics[self._UNPRICED_NO_BARS], 0)
+        self.assertEqual(metrics[self._PLANNABLE], 0)
 
     def test_the_completeness_series_share_the_guard_series_emit_call(self) -> None:
         # The rules file adds no absent() guard for these series, on the grounds

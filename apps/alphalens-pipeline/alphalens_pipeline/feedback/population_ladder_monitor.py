@@ -371,12 +371,19 @@ def _count_unpriced(
 ) -> tuple[int, int]:
     """``(unpriced_rows, unpriced_no_bars_rows)`` for one date.
 
-    Extracted because its INVARIANT is what the alert rests on, and that invariant
-    cannot be reached through the full pipeline. Measured: a row that
-    already has a price path is advanced by the cheap grouped-daily path and never
-    enters ``_replay_candidate``, so no replay fixture can put a PRICED ticker into
-    ``no_bars_tickers``. Driving the rule from here tests it at the level it lives
-    at, instead of through a pipeline that cannot produce the state.
+    Extracted because its INVARIANT is what the alert rests on and no replay FIXTURE
+    can reach the case that breaks it. Measured: a row that already has a price path
+    is advanced by the cheap grouped-daily path and never enters
+    ``_replay_candidate``, so a fixture cannot put a PRICED ticker into
+    ``no_bars_tickers``.
+
+    PRODUCTION can, which is why the invariant is worth guarding rather than merely
+    asserting. R7 force-resolves any candidate whose latest priced session is more
+    than ``_PERIODIC_RESOLVE_SESSIONS`` behind the last closed session, with no daily
+    touch needed — so a name that was priced and then went dark reaches
+    ``_replay_candidate`` within a trading week and lands in ``no_bars_tickers``
+    while its row still carries a prior path. Counting the subset over ``rows``
+    instead of over ``unpriced`` would then push it above the total.
 
     * ``unpriced_rows`` — plannable rows with no price path at all.
     * ``unpriced_no_bars_rows`` — the subset of THOSE whose ticker the vendor had no

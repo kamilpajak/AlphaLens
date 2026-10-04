@@ -412,6 +412,17 @@ def _emit_nightly_metrics(reports: Any) -> None:
         metrics["alphalens_feedback_unpriced_no_bars_rows"] = sum(
             getattr(report, "unpriced_no_bars_rows", 0) for report in reports
         )
+        # The denominator a companion rule needs. The subtraction rule planned on the
+        # two series above goes SILENT in a vendor-wide outage, because every unpriced
+        # row is then a no-bars row and the difference is 0 exactly when things are
+        # worst. Telling "one delisted name" from "the vendor is dark" wants a share,
+        # not a count, and a share needs the plannable population as a series. It
+        # ships HERE rather than with the rule: rules converge from origin/main within
+        # the hour, code waits for a VPS pull, so a rule may never reference a series
+        # its own deploy introduces.
+        metrics["alphalens_feedback_plannable_rows"] = sum(
+            getattr(report, "n_plannable", 0) for report in reports
+        )
         metrics["alphalens_feedback_oldest_deferred_sessions"] = max(
             (getattr(report, "oldest_deferred_touch_age", 0) for report in reports),
             default=0,
