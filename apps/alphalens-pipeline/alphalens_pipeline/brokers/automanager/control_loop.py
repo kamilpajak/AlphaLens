@@ -2198,14 +2198,14 @@ def _combine_with_session_low(
     """Fold this tick's drained 1 Hz sub-tick running low into the point-sampled
     reference so a wick BETWEEN the coarse 45s samples still registers a touch
     (touch-latch, entry_trailing_design §5). The drained low was popped once per
-    uic by :func:`_drain_session_lows`; here it is only READ.
+    uic by :func:`entry_watch._drain_session_lows`; here it is only READ.
 
     Latch-then-gate-at-drain — the low is DISCARDED (point-sample alone drives
     the tick) in three cases, and only otherwise pulls the reference DOWN:
 
     - point-sample vetoed (``None``): never act on a latched low when the
       concurrent point-sample is itself untrusted/stale. This discard is NOT a
-      destruction: :func:`_reseed_vetoed_point_lows` already handed the drained
+      destruction: :func:`entry_watch._reseed_vetoed_point_lows` already handed the drained
       low back to the feed's accumulator (min-merge) before this per-tier
       combine ran, so it survives for a later fresh tick (2026-08-18 incident);
     - ``awaiting_fresh_low`` (a re-armed tier, memo G1): the open-check clear
@@ -2551,7 +2551,7 @@ def _terminal_refuse_arm(
     throttle so the two refusals never suppress each other.
 
     The caller must have a SUCCESSFUL open-order read in hand: this terminal is
-    outside ``_RESTING_BEARING_TERMINALS``, so nothing would cancel-then-verify
+    outside ``entry_watch._RESTING_BEARING_TERMINALS``, so nothing would cancel-then-verify
     an order that turned out to be resting after all.
     """
     entry_trails.append_entry_trail_line(
@@ -2652,7 +2652,7 @@ def _arm_native_trail(
 
     # AFTER the adopt (issue #1112 step 1): refusing before it would terminate
     # the watch while a real buy order still rests at the broker, and
-    # KIND_CANCELLED is outside _RESTING_BEARING_TERMINALS so nothing would
+    # KIND_CANCELLED is outside entry_watch._RESTING_BEARING_TERMINALS so nothing would
     # cancel-then-verify it. Only a FRESH arm is refused.
     refusal = entry_watch._resolve_arm_refusal(record, d_bps, reference, trough, qty)
     if refusal is not None:
@@ -2714,7 +2714,7 @@ def _arm_native_trail(
         # move #1317 exists to stop.
         ceiling=placed.stop_limit_price,
         # The REQUESTED distance: the contract reports no wire distance, so there
-        # is no adapter-confirmed value to prefer here (see _journal_trail_armed).
+        # is no adapter-confirmed value to prefer here (see entry_watch._journal_trail_armed).
         distance=geo.trailing_distance,
     )
     runtime.watcher.mark_armed()
@@ -2774,11 +2774,11 @@ def _handle_arm_failure(
 #
 # CANCELLED has three producers, none of which needs the cancel-then-verify here:
 # the KILL and insufficient-funds paths do their own broker cancel, and the
-# #1112 inside-the-exit-region refuse runs only AFTER _find_working_entry_order
+# #1112 inside-the-exit-region refuse runs only AFTER entry_watch._find_working_entry_order
 # came back empty, so there is no order of ours to cancel. That third path rests
 # on the open-order read being complete: a broker read that fails SOFT (returns
 # an empty book instead of raising) while a crashed prior tick's POST is resting
-# would terminal-refuse and leave that order untracked. _find_working_entry_order
+# would terminal-refuse and leave that order untracked. entry_watch._find_working_entry_order
 # raises on a BrokerError rather than returning None, which is what keeps the
 # assumption true today.
 
@@ -2850,7 +2850,7 @@ def _finalize_entry_terminal_vs_broker(
 # --- PR-T2b fill-reconcile of a resting armed trail (Finding 1) --------------
 #
 # Once a tier reaches TRAIL_ARMED with a real order id the watch pass drops it
-# (_active_entry_watches :1261 — the broker owns the resting native order), so
+# (entry_watch._active_entry_watches :1261 — the broker owns the resting native order), so
 # nothing else ever observes its fill / DayOrder-expiry. Without a terminal
 # `entry_trails` line watching_virtual_gross_acct keeps reserving limit*qty
 # FOREVER (it skips only terminal_kind) AND _open_watch_pick_keys keeps the tier
@@ -2865,7 +2865,7 @@ def _resting_armed_tiers(
 ) -> dict[str, entry_trails.EntryTrailTierState]:
     """The tiers this reconcile pass owns: NON-terminal, latest kind
     ``trail_armed``, with a REAL ``armed_order_id`` — the exact complement of the
-    resting-order exclusion in :func:`_active_entry_watches` (the watch pass drops
+    resting-order exclusion in :func:`entry_watch._active_entry_watches` (the watch pass drops
     these because the broker owns the resting order, so nothing else observes their
     fill / DayOrder-expiry). The Rearm phase (Finding 2) consumes the SAME set to
     find a gone-but-unfilled (DayOrder-cancelled) tier to re-admit."""
@@ -3566,7 +3566,7 @@ def _journal_entry_rearm(crid: str, tier_state: entry_trails.EntryTrailTierState
     the open-check marker set.
 
     The fold then resets ``latest_kind`` -> ``watch_open`` (re-admitted to
-    :func:`_active_entry_watches`, dropped from :func:`_resting_armed_tiers`) AND
+    :func:`entry_watch._active_entry_watches`, dropped from :func:`_resting_armed_tiers`) AND
     ``armed_order_id`` -> ``None`` (a re-opened watch owns no resting order);
     ``min_trough`` is preserved automatically (it is the historical minimum over
     the whole crid). NON-terminal by construction — the virtual reservation keeps
@@ -4122,11 +4122,11 @@ def build_default_deps(
 # cycle (test_control_loop.py injects LoopDeps as stubs; build_default_deps and
 # everything it wires is exercised end-to-end only by the deferred
 # SAXO_LIVE_TEST=1 SIM live probe). _make_place_pick writes the append-only
-# standalone-stop journal (_standalone_stop_journal_path()) `planned` lines —
+# standalone-stop journal (stop_journal._standalone_stop_journal_path()) `planned` lines —
 # the plan PRICES the broker cannot know (disaster stop + in-band TP), keyed to
 # the entry client_request_id and tier_index. NO journal line confers
 # protection (saxo-oco memo §7): the protection pass (build_protection_view +
-# reconcile_protection) derives it from live broker state. `_fold_planned_exits`
+# reconcile_protection) derives it from live broker state. `stop_journal._fold_planned_exits`
 # folds the `planned` lines per-uic.
 
 
@@ -4318,7 +4318,7 @@ def _retract_round_tripped_tranche_plans(
       2. the governing plan is the candidate's own (idempotence / newer pick /
          keyless — same rule as the unfired class);
       3. closure evidence since the current plan generation
-         (:func:`_fold_round_trip_closures_since_latest_plan`) whose element
+         (:func:`stop_journal._fold_round_trip_closures_since_latest_plan`) whose element
          is keyless or matches the pick — WITHOUT this, a positions read that
          lags a fresh fill would look flat (fail-deadly), and a held position
          with expired siblings would never be distinguishable from a closed
@@ -4446,7 +4446,7 @@ _OCO_TOO_FAR_TTL_S = 900.0
 def _fold_reanchored_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
     """Fold the append-only ``reanchored`` journal markers into the LATEST
     (by ``ts``) ``avg_price`` per uic (PR-6b). A DICT, not a TTL frozenset —
-    the reanchor latch is PERMANENT per blend (see ``_journal_reanchored``),
+    the reanchor latch is PERMANENT per blend (see ``stop_journal._journal_reanchored``),
     so this has no ``now`` / ``ttl_s`` parameters, unlike ``_fold_ttl_markers``.
     Malformed (missing / unparsable uic, avg_price, or ts) lines are skipped."""
     latest_ts: dict[int, float] = {}
@@ -4516,7 +4516,7 @@ def _fold_reanchored_stop_levels(lines: Iterable[Mapping[str, Any]]) -> dict[int
 
 def _fold_trailed_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
     """The LATEST confirmed trailed ``level`` per uic, scoped to the plan
-    generation that earned it (see :func:`_select_trailed_lines`).
+    generation that earned it (see :func:`stop_journal._select_trailed_lines`).
 
     Mirrors ``_fold_reanchored_markers`` — a DICT, not a TTL frozenset — but
     reads ``line["level"]`` (the price the stop was confirmed trailed to) instead
@@ -4572,9 +4572,9 @@ def _keep_latest_marker(
 def _compact_tranche_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """The kept tranche-ladder lines: per uic, the governing plan line(s)
     followed by the fired and closure-evidence lines still counting, so
-    ``fold_tranche_plans``, ``_fold_fired_since_latest_plan``,
-    ``_fold_governing_plan_pick_keys``, and
-    ``_fold_round_trip_closures_since_latest_plan`` all return exactly what
+    ``fold_tranche_plans``, ``stop_journal._fold_fired_since_latest_plan``,
+    ``stop_journal._fold_governing_plan_pick_keys``, and
+    ``stop_journal._fold_round_trip_closures_since_latest_plan`` all return exactly what
     they return on the full journal.
 
     Per uic the election keeps, in this write order (the folds process lines
@@ -4665,7 +4665,7 @@ def _elect_trailed_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, A
     """The kept ``trailed`` lines: per uic, the ONE marker
     ``_fold_trailed_since_latest_plan`` still reads (#1324).
 
-    Selection is SHARED with that fold (:func:`_select_trailed_lines`), not
+    Selection is SHARED with that fold (:func:`stop_journal._select_trailed_lines`), not
     mirrored: the two used to run the same logic twice, and a compaction that
     elects a different set from the fold either drops a live ratchet floor or
     resurrects a dead one. Sharing makes the property structural.
@@ -4676,7 +4676,7 @@ def _elect_trailed_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, A
     BELOW the level it had already been trailed to.
 
     The original line object is kept (shallow-copied), not a synthesised stub,
-    so ``_journal_trailed``'s ``peak`` / ``last_price`` telemetry survives the
+    so ``stop_journal._journal_trailed``'s ``peak`` / ``last_price`` telemetry survives the
     boot rewrite. Emitted sorted by uic for a deterministic file order. Where
     these land relative to the plan lines still decides what the fold reads: a
     marker written before a plan line that resets its uic is folded away, so the
@@ -4717,7 +4717,7 @@ def _stop_move_closer(uic: int) -> dict[str, Any]:
     longer a ratchet floor (#1669): a ``planned_retracted`` that names no crid.
 
     Only the trailed selection reacts to it (its ``include_planned`` generation
-    reset); ``_latest_planned_by_crid`` retracts nothing without a crid, and no
+    reset); ``stop_journal._latest_planned_by_crid`` retracts nothing without a crid, and no
     other reader looks at the kind. A test pins that."""
     return {"kind": stop_journal._PLANNED_RETRACTED_KIND, "uic": uic}
 
@@ -4778,8 +4778,8 @@ def _compact_standalone_stop_journal_lines(
 
     Keeps exactly what the readers need and nothing else:
       - the NEWEST ``planned`` per client_request_id (mirroring
-        ``_latest_planned_by_crid`` — highest ``gen`` wins, later line breaks a
-        tie), so ``_fold_planned_exits`` is unchanged;
+        ``stop_journal._latest_planned_by_crid`` — highest ``gen`` wins, later line breaks a
+        tie), so ``stop_journal._fold_planned_exits`` is unchanged;
       - ONE ``oco_unsupported`` per uic (``_fold_oco_unsupported`` only needs the
         uic present);
       - the NEWEST (max ``ts``) ``oco_placed`` / ``amend_failed`` / ``oco_too_far``
@@ -4794,19 +4794,19 @@ def _compact_standalone_stop_journal_lines(
         affect that fold, but #1223's closure fold may still need it — see the
         tranche election below; when both elections pick the same line the
         tranche copy is the one kept);
-      - the ``amend_seq`` carrying the MAX seq per uic (``_read_persisted_amend_seq``
+      - the ``amend_seq`` carrying the MAX seq per uic (``stop_journal._read_persisted_amend_seq``
         returns that max);
       - the tranche-ladder lines ``_compact_tranche_lines`` elects — per uic the
         governing ``tranche_plan`` line(s) followed by the ``tranche_fired``
-        lines still inside ``_fold_fired_since_latest_plan``'s accumulator and
+        lines still inside ``stop_journal._fold_fired_since_latest_plan``'s accumulator and
         the ``stop_filled`` closure evidence still inside
-        ``_fold_round_trip_closures_since_latest_plan``'s (#1223), so
-        ``fold_tranche_plans`` / ``_fold_fired_since_latest_plan`` / the
-        retraction sweep's ``_fold_governing_plan_pick_keys`` / the closure
+        ``stop_journal._fold_round_trip_closures_since_latest_plan``'s (#1223), so
+        ``fold_tranche_plans`` / ``stop_journal._fold_fired_since_latest_plan`` / the
+        retraction sweep's ``stop_journal._fold_governing_plan_pick_keys`` / the closure
         fold are all unchanged; ``tranche_plan_retracted`` markers are
         consumed during the election (a fully retracted uic keeps nothing).
         ``planned_retracted`` markers (#1249) are consumed the same way — the
-        per-crid election above runs through ``_latest_planned_by_crid``, so a
+        per-crid election above runs through ``stop_journal._latest_planned_by_crid``, so a
         fully retracted crid keeps neither its planned line nor the marker.
       - the ``reanchored`` line ``_elect_reanchored_lines`` elects per uic — the
         newest by ``ts`` among the parseable ones, so
@@ -4835,13 +4835,13 @@ def _compact_standalone_stop_journal_lines(
         stop BELOW the level it had already been trailed to.
 
     ``gen`` markers are the one DELIBERATE exception to fold-identity: they are
-    read only by ``_read_persisted_gen``, and the reset to the initial gen is
+    read only by ``stop_journal._read_persisted_gen``, and the reset to the initial gen is
     harmless (post-restart re-emits are past Saxo's 15s request-id dedup window,
     and protection is broker-state-truth not journal-derived). Every other line
     — unknown kinds and malformed lines — is dropped; none contributes to the
     folds above.
 
-    Also kept: per pick key, the ``stop_filled`` ``_elect_owed_stop_fill_lines``
+    Also kept: per pick key, the ``stop_filled`` ``stop_journal._elect_owed_stop_fill_lines``
     elects (#1327), so ``_derive_owed_sibling_retires`` is unchanged. Its
     ref-first half walks EVERY full entry-trail ``stop_filled``; before #1327 a
     fill that matched no kept ``stop_placed`` and was not closure evidence was
@@ -4853,7 +4853,7 @@ def _compact_standalone_stop_journal_lines(
     materialized = list(lines)
 
     # Newest planned per crid — reuse the fold's own selection so the compacted
-    # set contains EXACTLY the line _fold_planned_exits would elect. Sorted by
+    # set contains EXACTLY the line stop_journal._fold_planned_exits would elect. Sorted by
     # crid for a deterministic, stable file order.
     planned_by_crid = stop_journal._latest_planned_by_crid(materialized)
     planned: list[dict[str, Any]] = [
@@ -5001,7 +5001,7 @@ def _compact_standalone_stop_journal() -> journal_snapshots.CompactionOutcome:
     before = path.stat()
     original = path.read_bytes()
     # newline=None: the same universal-newline splitting a text-mode file read
-    # gives _iter_standalone_stop_journal.
+    # gives stop_journal._iter_standalone_stop_journal.
     lines = list(
         stop_journal._parse_standalone_stop_lines(
             io.StringIO(original.decode("utf-8"), newline=None)
@@ -5876,7 +5876,7 @@ def _refuse_pick_terminal(
 
 def _is_journalable_price(value: float | None) -> bool:
     """A price the journal may carry verbatim: present, finite and strictly
-    positive. ``_build_tranche_plan_line`` writes ``float(...)`` straight through,
+    positive. ``stop_journal._build_tranche_plan_line`` writes ``float(...)`` straight through,
     so a None/NaN/zero level from a future geometry policy must be caught HERE
     rather than poisoning the ladder the live-exit engine folds back."""
     return value is not None and math.isfinite(value) and value > 0
@@ -5931,7 +5931,7 @@ def _placed_geometry_stamp(exit_spec: Any) -> dict[str, Any] | None:
     cohort opened; no row was ever produced under it. Grepped before removal:
     nothing in the tree read any of them — not the daemon, not a lens, not a
     dashboard, not a script. ``applied`` and ``geometry_tp`` are different, and
-    are why the stamp survives: ``_stamped_exit_target`` reads them to choose
+    are why the stamp survives: ``entry_watch._stamped_exit_target`` reads them to choose
     WHICH family of #1112 arm gates prices a tier.
 
     ``None`` when no ``exit_spec`` exists, which keeps that line byte-identical.
@@ -5990,7 +5990,7 @@ def _journal_tranche_plan_core(
     """The ladder-choice + line-build core shared by BOTH placement paths
     (bracket ``_journal_tranche_plan`` and the entry-trail watch routing).
     ``pick_key`` is the optional trade identity stamped into the line (watch
-    path only — see :func:`_build_tranche_plan_line`).
+    path only — see :func:`stop_journal._build_tranche_plan_line`).
     Source the ladder from whatever is actually placed: a document that supplies
     ``initial_levels`` places its single ``.tp`` level (and the passed
     ``stop_price`` is REPLACED by its ``.stop``); one that supplies none places
@@ -6783,8 +6783,8 @@ def _geometry_without_entry_trail_note(
     """Why a NEW entry must not be armed right now, or ``None`` when it may be
     (issue #1112 round 2, point 4).
 
-    The #1112 exit-region arm gate (:func:`_inside_exit_region_note`) and the
-    single-tranche contract (:func:`_exit_plan_shape_refusal`) exist ONLY on the
+    The #1112 exit-region arm gate (:func:`entry_watch._inside_exit_region_note`) and the
+    single-tranche contract (:func:`entry_watch._exit_plan_shape_refusal`) exist ONLY on the
     trailing-entry path. With ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` at 0 a pick
     falls through to the classic ``_place_tiers`` bracket path, which has
     neither — so the exact defect #1112 fixed (an entry filling inside its own
@@ -7033,7 +7033,7 @@ def _now_cost_gate_violation(
     cap: float,
 ) -> str | None:
     """Memo §3.3 — the #1112 parity gate at drain: TP1 must clear round-trip
-    cost at the CAP (the worst-case fill). Mirrors ``_brief_plan_arm_refusal``
+    cost at the CAP (the worst-case fill). Mirrors ``entry_watch._brief_plan_arm_refusal``
     with ``fill_estimate = cap``; a pick with no take-profit has no TP1 to gate —
     vacuous by design (stop-only plan, the group manages exits)."""
     reference_qty = float(sum(t.qty for t in plan.entry_tiers if t.qty > 0))
