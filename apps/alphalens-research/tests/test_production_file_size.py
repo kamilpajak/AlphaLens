@@ -188,6 +188,36 @@ def oddly_named_files_in_excluded_dirs(root: Path) -> list[str]:
     return sorted(odd)
 
 
+def undeclared_test_or_migration_dirs(root: Path) -> list[str]:
+    """Directories named like a test or migration tree that EXCLUDED_DIRS does not declare.
+
+    Only a directory that actually holds a module counts. See the comment
+    inside: this walks the filesystem, not the git index.
+    """
+    undeclared: list[str] = []
+    for top in PRODUCTION_ROOTS:
+        base = root / top
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*"):
+            if not path.is_dir() or path.name not in MUST_BE_DECLARED_DIR_NAMES:
+                continue
+            # A directory holding no .py file hides nothing, so it is not a
+            # finding. This rule walks the FILESYSTEM, not the index, so it
+            # also sees directories git does not track: an empty one left
+            # behind by a deleted app survives locally whenever a gitignored
+            # `__pycache__` keeps it alive, and reporting that as repo drift
+            # is a gate that cries wolf on a developer machine while staying
+            # green in CI's fresh checkout. Measured on 2026-10-04:
+            # apps/alphalens-django/feedback/tests, left by #465 in June.
+            if not any("__pycache__" not in py.parts for py in path.rglob("*.py")):
+                continue
+            rel = path.relative_to(root).as_posix()
+            if rel not in EXCLUDED_DIRS:
+                undeclared.append(rel)
+    return sorted(undeclared)
+
+
 def files_over_their_limit(
     sizes: dict[str, int], baseline: dict[str, int]
 ) -> list[tuple[str, int, int]]:
@@ -314,17 +344,7 @@ class TheCorpusIsTheProductionCorpus(unittest.TestCase):
 
     def test_no_undeclared_tests_or_migrations_directory_exists(self) -> None:
         """A new such directory must be declared, so a big file cannot hide in one."""
-        undeclared: list[str] = []
-        for top in PRODUCTION_ROOTS:
-            base = WORKSPACE_ROOT / top
-            if not base.is_dir():
-                continue
-            for path in base.rglob("*"):
-                if not path.is_dir() or path.name not in MUST_BE_DECLARED_DIR_NAMES:
-                    continue
-                rel = path.relative_to(WORKSPACE_ROOT).as_posix()
-                if rel not in EXCLUDED_DIRS:
-                    undeclared.append(rel)
+        undeclared = undeclared_test_or_migration_dirs(WORKSPACE_ROOT)
         self.assertEqual(
             sorted(undeclared),
             [],
@@ -442,6 +462,34 @@ class TheGateCatchesWhatItIsFor(unittest.TestCase):
 
     def test_an_entry_for_a_deleted_file_is_stale(self) -> None:
         self.assertEqual(stale_baseline_entries({}, {"a/gone.py": 1200}), [("a/gone.py", 0, 1200)])
+
+    def test_an_undeclared_directory_is_caught_only_when_it_holds_python(self) -> None:
+        """Both halves: a directory with a module is a finding, an empty leftover is not.
+
+        The second half is the false positive this control exists for. The walk
+        reads the filesystem, so a directory git does not track -- one left by a
+        deleted app and kept alive by a gitignored `__pycache__` -- would
+        otherwise read as repo drift on a developer machine and stay green in
+        CI, which is the shape that teaches a reader to ignore the gate.
+        """
+        import tempfile
+
+        root = PRODUCTION_ROOTS[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / root
+            (base / "holds_code" / "tests").mkdir(parents=True)
+            (base / "holds_code" / "tests" / "test_thing.py").write_text(
+                "x = 1\n", encoding="utf-8"
+            )
+            (base / "leftover" / "tests" / "__pycache__").mkdir(parents=True)
+            (base / "leftover" / "tests" / "__pycache__" / "stale.py").write_text(
+                "x = 1\n", encoding="utf-8"
+            )
+
+            self.assertEqual(
+                undeclared_test_or_migration_dirs(Path(tmp)),
+                [f"{root}/holds_code/tests"],
+            )
 
     def test_an_oddly_named_file_in_an_excluded_directory_is_caught(self) -> None:
         import tempfile
