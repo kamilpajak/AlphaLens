@@ -707,6 +707,21 @@ class ReportsAndBookings(_TradesCase):
         self.assertEqual([e["trade_id"] for e in exit_["executions"]], ["T1", "T2"])
         self.assertEqual(value(exit_["fees"]["commission"]), -2.0)
 
+    def test_execution_price_stands_in_only_for_exactly_one_execution(self) -> None:
+        # Memo §3.4: ExecutionPrice is the price only when AveragePrice is absent
+        # AND exactly one execution exists. With no report row yet, nothing says
+        # the order filled in one execution, so the price stays unknown.
+        install_journals(self.home)
+        venue = venue_without()
+        for row in venue["audit"]:
+            if row["OrderId"] == VST_STOP and row["Status"] == "FinalFill":
+                row.pop("AveragePrice", None)
+                row["ExecutionPrice"] = 138.66
+        venue["trades"] = [t for t in venue["trades"] if t["TradeId"] != VST_EXIT_TRADE]
+        (exit_,) = trade(self.build(FakeFillHistory(venue), pick=VST), VST)["exits"]
+        self.assertIsNone(value(exit_["price"]))
+        self.assertIsNotNone(exit_["price"]["null_reason"])
+
     def test_a_time_gap_within_a_millisecond_passes_and_beyond_a_second_warns(self) -> None:
         install_journals(self.home)
         self.assertNotIn("audit_report_disagree", _codes(trade(self.build(pick=VST), VST)))

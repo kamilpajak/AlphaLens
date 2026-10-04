@@ -919,7 +919,7 @@ def _venue_fill(
     ref = f"order:{order.order_id}"
     price_value = row.average_price
     executions = venue.executions_by_order.get(order.order_id, [])
-    if price_value is None and row.execution_price is not None and len(executions) <= 1:
+    if price_value is None and row.execution_price is not None and len(executions) == 1:
         price_value = row.execution_price
     fill = _Fill(
         order_id=order.order_id,
