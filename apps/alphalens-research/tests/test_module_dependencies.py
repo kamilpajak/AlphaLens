@@ -415,6 +415,22 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # The last real import cycle the audit found (§2.2, finding 8):
+        # `ff_industries` imports `get_sic` and `_load_lookup_dicts` from
+        # `sic_index` at module level, and `sic_index.iter_peers_fallback`
+        # imported `ff_industries` back inside its body to break the loop it
+        # had just made. The function moved to the side it reaches, so the
+        # direction is now one-way: FF-48 industries downstream of the SIC
+        # index, never upstream.
+        #
+        # No `top_level_only`. The cycle lived in a function-body import,
+        # which is exactly where the next one would be written.
+        "name": "the SIC index must not import the FF-48 industries (the last cycle stays cut)",
+        "from_pkg": "alphalens_pipeline.data.fundamentals.sic_index",
+        "forbidden_prefix": "alphalens_pipeline.data.fundamentals.ff_industries",
+        "exemptions": set(),
+    },
+    {
         # Workspace split (PR2): the pipeline tier hosts live infrastructure
         # (data, core, scorers, edgar_detector, thematic, literature_scanner) and
         # must remain downstream-free. The research tier consumes pipeline,

@@ -25,7 +25,6 @@ deferred.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 
@@ -180,69 +179,6 @@ def _load_sic3_peers() -> dict[int, list[str]]:
     return out
 
 
-def iter_peers_fallback(
-    sic: int | None,
-    *,
-    min_cohort: int = DEFAULT_MIN_COHORT,
-    peer_filter: Callable[[list[str]], list[str]] | None = None,
-) -> tuple[list[str], str]:
-    """Resolve peers for ``sic`` with a 3-step fallback chain.
-
-    Tries: exact 4-digit cohort → 3-digit prefix (e.g. 7372 → 737,
-    gathering 7370..7379) → Fama-French 48-industry bucket → thin.
-
-    The FF-48 step (issue #198) widens past the 3-digit limit using a
-    SIC-derivative aggregation built in academia (Fama-French 1997
-    "Industry Costs of Equity"). FF-48's coarser buckets are
-    empirically more economically coherent than SIC at the same width
-    (Bhojraj-Lee-Oler 2003, Hrazdil-Scott 2013), so the DFIN-style case
-    (SIC 7380 → only 2-3 raw peers) widens into "Business Services"
-    (~150-300 peers covering SIC 7370-7399) instead of collapsing to
-    "thin".
-
-    ``peer_filter`` is an optional callback that drops peers the caller
-    considers non-comparable (typically the mcap / penny-stock floor in
-    :func:`alphalens_pipeline.thematic.screening._common.filter_peers_by_mcap_price`).
-    The filter is applied BEFORE the ``min_cohort`` check at every level
-    of the chain so a raw cohort that clears the floor but is mostly
-    warrants / shells / penny stocks correctly falls through to the next
-    level rather than rendering a "sic4" / "sic3" / "ff48" badge over an
-    effective sub-floor cohort (Gemini 3 Pro review on PR #215).
-
-    Returns ``(peers, level)`` where ``level`` is one of:
-    - ``"sic4"`` — exact 4-digit cohort met ``min_cohort`` AFTER filter
-    - ``"sic3"`` — 3-digit prefix cohort met ``min_cohort`` AFTER filter
-    - ``"ff48"`` — Fama-French 48 industry cohort met ``min_cohort``
-      AFTER filter
-    - ``"thin"`` — no level met the floor; caller should treat as "no
-      percentile available" and surface the thin-cohort badge instead of
-      a colored signal bar.
-    """
-    if sic is None:
-        return [], "thin"
-    sic4 = iter_sic_peers(sic)
-    if peer_filter is not None:
-        sic4 = peer_filter(sic4)
-    if len(sic4) >= min_cohort:
-        return sic4, "sic4"
-    sic3 = list(_load_sic3_peers().get(sic // 10, []))
-    if peer_filter is not None:
-        sic3 = peer_filter(sic3)
-    if len(sic3) >= min_cohort:
-        return sic3, "sic3"
-    # Lazy import to break the ff_industries → sic_index circular dep —
-    # ff_industries imports get_sic + _load_lookup_dicts from this module.
-    from alphalens_pipeline.data.fundamentals import ff_industries
-
-    ff48_id = ff_industries.sic_to_ff48(sic)
-    ff48 = ff_industries.iter_ff48_peers(ff48_id)
-    if peer_filter is not None:
-        ff48 = peer_filter(ff48)
-    if len(ff48) >= min_cohort:
-        return ff48, "ff48"
-    return [], "thin"
-
-
 def sic_label(sic: int | None) -> tuple[str | None, str | None]:
     """Return ``(industry_name, sector_name)`` for ``sic``.
 
@@ -263,7 +199,6 @@ def sic_label(sic: int | None) -> tuple[str | None, str | None]:
 __all__ = [
     "DEFAULT_MIN_COHORT",
     "get_sic",
-    "iter_peers_fallback",
     "iter_sic_peers",
     "sic_label",
 ]

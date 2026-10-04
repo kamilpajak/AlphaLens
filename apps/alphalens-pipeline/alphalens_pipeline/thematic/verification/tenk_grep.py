@@ -425,7 +425,7 @@ def fetch_peer_10k_texts(
     """Return up to ``max_peers`` SIC/FF-peer latest-10K texts (fail-soft).
 
     ``[(peer_ticker, text), ...]``. Resolves the peer cohort via
-    :func:`sic_index.iter_peers_fallback`, drops the subject ticker, and takes
+    :func:`ff_industries.iter_peers_fallback`, drops the subject ticker, and takes
     the first ``max_peers`` — a HARD cap on SEC request volume. Each peer's
     LATEST 10-K is fetched via :func:`fetch_10k_text` (correct here: we want each
     peer's most recent filing, not a multi-year history). A peer that fails to
@@ -442,12 +442,14 @@ def fetch_peer_10k_texts(
     to the consumer; this is plumbing to make peer 10-K text retrievable.
     Reachable ONLY from the opt-in Buffett CLI — never the daily pipeline.
     """
-    from alphalens_pipeline.data.fundamentals import sic_index
+    from alphalens_pipeline.data.fundamentals import ff_industries, sic_index
 
     if min_cohort is None:
         min_cohort = sic_index.DEFAULT_MIN_COHORT
     sic = sic_index.get_sic(ticker)
-    peers, _ = sic_index.iter_peers_fallback(sic, min_cohort=min_cohort, peer_filter=peer_filter)
+    peers, _ = ff_industries.iter_peers_fallback(
+        sic, min_cohort=min_cohort, peer_filter=peer_filter
+    )
     subject = ticker.upper()
     candidates = [p for p in peers if p.upper() != subject][:max_peers]
     out: list[tuple[str, str]] = []
