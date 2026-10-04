@@ -96,7 +96,7 @@ def _write_frozen(
     """Write a candidates parquet for ``ASOF``. ``config_version=None`` omits the
     column entirely (legacy/pre-freeze shape); ``rows=0`` writes an empty frame."""
     if rows == 0:
-        df = pd.DataFrame(columns=list(orchestrator._MAP_THEMES_COLUMNS))
+        df = pd.DataFrame(columns=list(orchestrator.MAP_THEMES_COLUMNS))
     else:
         df = pd.DataFrame([_frozen_row(f"TIC{i}", verified=verified) for i in range(rows)])
     if config_version is not None:
@@ -333,7 +333,7 @@ class TestWriteEmptyCandidates(unittest.TestCase):
             self.assertTrue(path.exists())
             df = pd.read_parquet(path)
             self.assertEqual(len(df), 0)
-            for col in orchestrator._MAP_THEMES_COLUMNS:
+            for col in orchestrator.MAP_THEMES_COLUMNS:
                 self.assertIn(col, df.columns)
             cfg = _cfg()
             self.assertTrue((df["mapper_config_version"] == cfg).all())

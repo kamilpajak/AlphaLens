@@ -306,7 +306,7 @@ class TheGuardRegeneratesOnceThenWithholdsProse(unittest.TestCase):
         # A quiet day's parquet must not be a different shape from a normal
         # day's — the defect the map-side schema test already guards.
         for column in brief_orchestrator._SUPPORT_GUARD_COLUMNS:
-            self.assertIn(column, brief_orchestrator._EMPTY_OUT_COLUMNS)
+            self.assertIn(column, brief_orchestrator.EMPTY_BRIEF_COLUMNS)
 
     def test_no_guard_column_is_a_brief_sort_key(self):
         keys = [k for k, *_rest in brief_orchestrator._BRIEF_SORT_KEYS]

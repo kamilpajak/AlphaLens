@@ -2,17 +2,29 @@
 
 This is the ONE place that defines (a) which recorded map-themes cases exist,
 (b) where each one's fixtures live, (c) which recording of each is CURRENT, and
-(d) how the five NON-LLM external surfaces are frozen. Both consumers import
-from here so they cannot drift:
+(d) how the five NON-LLM external surfaces are frozen, across the six seams
+that reach them. Both consumers import from here so they cannot drift:
 
-* ``tests/golden/test_golden_map_characterization.py`` — replays all six
-  surfaces offline, once per fixture in :data:`MAP_FIXTURES`.
+* ``tests/golden/test_golden_map_characterization.py`` — replays every
+  surface offline, once per fixture in :data:`MAP_FIXTURES`.
 * ``tests/golden/test_golden_map_provenance.py`` — checks that every recording
   of every fixture carries a complete ``provenance.json``.
 * ``scripts/record_golden_map.py`` — records a fixture: all six surfaces
   (``--fixture NAME``) or only the Pro LLM cassette (``--llm-only``), serving
   the other five from these same frozen files so the prompt is the single
   variable that moved.
+
+HERMETICITY IS MEASURED, NOT ASSERTED
+-------------------------------------
+Counting every ``open`` / ``read_parquet`` / ``Path.glob`` / ``Path.exists``
+under ``~/.alphalens`` while this harness replays both fixtures gives 0. It
+gave 350 before the proposal-shadow seam below was frozen: ``map_themes``
+calls ``proposal_shadow.write_proposal_shadow`` at the very end of the stage,
+and that reader took its own ``events_dir`` default — ``Path.home() /
+".alphalens" / "thematic_events"`` — rather than the fixture window. The
+events store therefore has TWO readers inside one ``map_themes`` call, and
+freezing only the catalyst resolver left the second one pointed at the
+operator's live store.
 
 THE FIXTURE SET
 ---------------
@@ -110,7 +122,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from alphalens_pipeline.thematic.mapping import catalyst_resolver, orchestrator
+from alphalens_pipeline.thematic.mapping import (
+    catalyst_resolver,
+    orchestrator,
+    proposal_shadow,
+)
 from alphalens_pipeline.thematic.verification import insider, mcap_filter, recent_press, tenk_grep
 
 from tests.golden.vendor_cassette import VendorCassette
@@ -124,6 +140,7 @@ _REAL_FWU = recent_press.fetch_window_universe
 _REAL_HTIRP = recent_press.has_theme_in_recent_press
 _REAL_TENK = tenk_grep.has_theme_keywords_in_10k
 _REAL_INSIDER = insider.has_opportunistic_buy
+_REAL_SHADOW = proposal_shadow.write_proposal_shadow
 
 
 @dataclass(frozen=True)
@@ -242,6 +259,11 @@ def fixture_by_name(name: str) -> MapFixture:
 def frozen_surfaces(fixture: MapFixture, *, pro_client) -> Iterator[None]:
     """Serve the five NON-LLM map-themes surfaces from ``fixture``'s frozen files.
 
+    Five surfaces, six seams: the events window is read twice per
+    ``map_themes`` call, once by the catalyst resolver and once by the
+    proposal-shadow writer, and each reader carries its own ``events_dir``
+    default.
+
     ``pro_client`` is the only live-capable seam: pass ``ReplayOpenRouter`` to
     replay a cassette, ``RecordingOpenRouter`` to record a new one. Everything
     else inside the block is offline and deterministic:
@@ -255,6 +277,11 @@ def frozen_surfaces(fixture: MapFixture, *, pro_client) -> Iterator[None]:
       the map gets ``None`` and is dropped by the bracket filter.
     * Form-4 → trimmed hive parquet, real Cohen-Malloy classifier runs over it
     * catalyst → frozen events/news window, real resolver runs over it
+    * proposal shadow → the SAME frozen events window, read a second time by
+      the telemetry writer ``map_themes`` calls last. Its failure is swallowed
+      by ``_write_proposal_shadow_best_effort``, so an unfrozen reader here
+      produces no error and no failing assertion — only a silent read of the
+      operator's live store.
 
     The press cache is a fresh ``TemporaryDirectory`` so the Polygon call
     actually fires (and is served by the cassette) and no write lands in
@@ -297,6 +324,11 @@ def frozen_surfaces(fixture: MapFixture, *, pro_client) -> Iterator[None]:
             ),
             mock.patch.object(
                 mcap_filter, "fetch_mcap", lambda ticker, *, asof=None: mcap_map.get(ticker.upper())
+            ),
+            mock.patch.object(
+                proposal_shadow,
+                "write_proposal_shadow",
+                functools.partial(_REAL_SHADOW, events_dir=fixture.events_dir),
             ),
         ):
             yield

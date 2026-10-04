@@ -269,10 +269,10 @@ class BuildRowStampsTheChannelFields(unittest.TestCase):
         # No alias, no shim (solo-project doctrine). Its content is now
         # ``channel_text`` with a real status beside it.
         self.assertNotIn("transmission_channel", self._row(_assessment("established")))
-        self.assertNotIn("transmission_channel", orchestrator._MAP_THEMES_COLUMNS)
+        self.assertNotIn("transmission_channel", orchestrator.MAP_THEMES_COLUMNS)
 
     def test_the_typed_empty_schema_lists_every_new_column(self):
-        # ``_MAP_THEMES_COLUMNS`` is the zero-candidate day's schema. A key that
+        # ``MAP_THEMES_COLUMNS`` is the zero-candidate day's schema. A key that
         # exists only in ``_build_row`` makes a quiet day's parquet a different
         # shape from a normal day's.
         for column in (
@@ -282,7 +282,7 @@ class BuildRowStampsTheChannelFields(unittest.TestCase):
             "shadow_strict_assessed_n",
             "shadow_strict_rule_version",
         ):
-            self.assertIn(column, orchestrator._MAP_THEMES_COLUMNS)
+            self.assertIn(column, orchestrator.MAP_THEMES_COLUMNS)
 
 
 class ChannelConfigVersionFollowsTheModelOverride(unittest.TestCase):
@@ -338,7 +338,7 @@ class ChannelConfigVersionFollowsTheModelOverride(unittest.TestCase):
     def test_the_empty_day_composes_its_token_from_the_run_s_model(self):
         # A zero-row frame holds NO value to read back, so asserting that the
         # column merely exists could never have failed — the column is a member
-        # of _MAP_THEMES_COLUMNS and the typed empty frame carries it whatever
+        # of MAP_THEMES_COLUMNS and the typed empty frame carries it whatever
         # the token would have been. What is observable, and what the empty-day
         # path would get wrong, is the WIRING: the channel token must be built
         # from this run's model and must be the one folded into the freeze token.

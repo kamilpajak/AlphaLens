@@ -246,9 +246,9 @@ class ChannelAssessmentIsPersistedTests(unittest.TestCase):
         self.assertEqual(row["channel_text"], "payout -> legal spend rises -> AAA fees rise")
         self.assertEqual(row["channel_support_status"], "suggestive")
         self.assertEqual(row["channel_support_dispersion"], 1)
-        self.assertNotIn("transmission_channel", orchestrator._MAP_THEMES_COLUMNS)
+        self.assertNotIn("transmission_channel", orchestrator.MAP_THEMES_COLUMNS)
         for column in channel_assessor.CHANNEL_ROW_COLUMNS:
-            self.assertIn(column, orchestrator._MAP_THEMES_COLUMNS)
+            self.assertIn(column, orchestrator.MAP_THEMES_COLUMNS)
 
 
 class MapperFreezeTokenTests(unittest.TestCase):

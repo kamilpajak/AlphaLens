@@ -22,6 +22,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from alphalens_pipeline.brief_contract.validation import warn_on_column_disagreement
 from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 from alphalens_pipeline.thematic.screening import (
@@ -39,6 +40,72 @@ from alphalens_pipeline.thematic.screening import (
 from alphalens_pipeline.thematic.screening._common import filter_peers_by_mcap_price
 
 logger = logging.getLogger(__name__)
+
+# The columns ``score_candidates`` appends to the candidates frame, in output
+# order. Split in two because the boundary is real: ``_ROW_COLUMNS`` are the
+# keys ``_build_candidate_row`` writes per candidate, ``_COHORT_COLUMNS`` are
+# assigned afterwards on the assembled frame because they need the whole
+# cohort (Magic-Formula rank, the weighted and selection scores). Neither half
+# is read on its own — only the concatenation below is — so a name moved from
+# one to the other is invisible to every gate.
+#
+# Deliberately absent: ``ticker`` (the merge key, already on the input),
+# ``source_event_url``, and the THREE underscore-prefixed stashes
+# ``_catalyst_url``, ``_fcff_positive`` and ``_technicals_positive``.
+#
+# The three stashes are written in the per-candidate row dict that
+# ``_build_candidate_row`` returns, not in the post-loop composition; what the
+# composition does is CONSUME and drop them. ``source_event_url`` is the only
+# one of the four assigned there: the reversal detector reads that column, so
+# ``_catalyst_url`` is mirrored into it for one ``apply`` and both names are
+# dropped on the next line. All four are gone before the frame is returned.
+_ROW_COLUMNS: tuple[str, ...] = (
+    "industry_id",
+    "industry_name",
+    "sector_name",
+    "peer_cohort_level",
+    "insider_score_usd",
+    "insider_score_sector_percentile",
+    "insider_signal_version",
+    "scorer_config_version",
+    "fcff_yield_pct",
+    "fcff_yield_sector_percentile",
+    "valuation_pe",
+    "valuation_ps",
+    "valuation_ev_rev",
+    "valuation_ev_ebitda",
+    "valuation_fcf_margin",
+    "valuation_composite_sector_percentile",
+    "valuation_financials_publish_date",
+    "valuation_financials_age_days",
+    "roic_pct",
+    "roe_pct",
+    "magic_formula_health_pass",
+    "technical_rsi",
+    "technical_ma50_distance_pct",
+    "technical_atr_pct",
+    "technical_volume_zscore",
+    "technical_pct_off_52w_high",
+    "technical_pct_off_52w_low",
+    "technical_ma200_distance_pct",
+    "technical_ma200_slope_pct_per_day",
+    "technicals_summary_str",
+    "catalyst_strength",
+    "catalyst_config_version",
+    "catalyst_event_type",
+    "catalyst_confidence",
+    "catalyst_template_id",
+    "catalyst_template_facts_json",
+)
+_COHORT_COLUMNS: tuple[str, ...] = (
+    "magic_formula_rank",
+    "magic_formula_cohort_n",
+    "deep_drawdown_reversal",
+    "layer4_weighted_score",
+    "atr_penalty",
+    "selection_score",
+)
+SCORE_COLUMNS: tuple[str, ...] = _ROW_COLUMNS + _COHORT_COLUMNS
 
 
 def _yfinance_mcap_for_gate(ticker: str, asof: dt.date) -> float | None:
@@ -450,9 +517,9 @@ def _build_candidate_row(
 def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame:
     """Enrich the Phase C candidates frame with Layer 4 columns.
 
-    Does not drop or reorder rows; appends 18 new columns (industry trio +
-    4 signals × 3-5 fields each + weighted score). All numerical columns are
-    nullable; string ``technicals_summary_str`` always renders.
+    Does not drop or reorder rows; appends the :data:`SCORE_COLUMNS` (industry
+    trio + 4 signals × 3-5 fields each + weighted score). All numerical
+    columns are nullable; string ``technicals_summary_str`` always renders.
     """
     if candidates.empty:
         return candidates.copy()
@@ -621,7 +688,26 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
     # Merge on ticker to preserve original order + Phase C columns.
     merged = candidates.copy().reset_index(drop=True)
     merged["ticker"] = merged["ticker"].astype(str).str.upper()
-    return merged.merge(enrichment, on="ticker", how="left")
+    merged = merged.merge(enrichment, on="ticker", how="left")
+
+    # Read SCORE_COLUMNS to CHECK the frame; deliberately do NOT project the
+    # frame through it. A `reindex(columns=[*candidates, *SCORE_COLUMNS])`
+    # would make the declaration decide the output schema, which sounds
+    # stricter and is the opposite: a key the writer stopped producing would
+    # come back as an all-null column under the declared name, so the store
+    # would keep its declared width while the field behind it went silently
+    # empty, and the gate comparing frame against tuple would stay green
+    # (measured: deleting the `technicals_summary_str` key left it green).
+    # Checking without imposing keeps a broken writer visible in the data.
+    input_columns = set(candidates.columns)
+    warn_on_column_disagreement(
+        logger,
+        writer="score_candidates",
+        declaration="SCORE_COLUMNS",
+        produced=[c for c in merged.columns if c not in input_columns],
+        declared=SCORE_COLUMNS,
+    )
+    return merged
 
 
 def _market_cap_from_features(features: dict) -> float | None:
@@ -646,6 +732,7 @@ def _market_cap_from_features(features: dict) -> float | None:
 
 
 __all__ = [
+    "SCORE_COLUMNS",
     "compose_weighted_score",
     "fcff_is_positive",
     "insider_is_positive",

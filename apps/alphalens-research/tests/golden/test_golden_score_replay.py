@@ -10,7 +10,13 @@ cassette; ``score_insider`` reads Form-4 for every peer):
 * ``insider_signal.score_insider`` → frozen ``{ticker: {score_usd, pctl}}``
 * ``mcap_filter.fetch_mcap`` → frozen map
 * OHLCV → frozen brief-day parquets
-* catalyst → frozen map-day events/news window
+* catalyst → frozen map-day events/news window, at BOTH of the scorer's
+  entries into it: ``find_trigger_event`` (the theme path) and
+  ``build_template_entity_index`` (the subject-match path, #395). Each
+  carries its own ``events_dir`` default of ``~/.alphalens``, so freezing
+  one left the other reading the operator's live store — measured at 8
+  touches per replay before this patch, 0 after. Both index builds return
+  ``{}`` over this window, which is why the projection does not move.
 
 The REAL score logic runs over the frozen inputs: fcff / valuation percentile-
 rank over the cohort, magic-formula rank, technicals over OHLCV, catalyst
@@ -42,6 +48,7 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "score_day"
 _GOLDEN = _FIXTURES / "golden" / "projection.json"
 
 _REAL_FIND = catalyst_resolver.find_trigger_event
+_REAL_TEMPLATE_INDEX = catalyst_resolver.build_template_entity_index
 
 
 def _frozen_ohlcv_reader(upper: str, asof: dt.date) -> pd.DataFrame:
@@ -101,6 +108,15 @@ def _replay_score() -> pd.DataFrame:
                     "find_trigger_event",
                     functools.partial(
                         _REAL_FIND, events_dir=_FIXTURES / "events", news_dir=_FIXTURES / "news"
+                    ),
+                ),
+                mock.patch.object(
+                    catalyst_resolver,
+                    "build_template_entity_index",
+                    functools.partial(
+                        _REAL_TEMPLATE_INDEX,
+                        events_dir=_FIXTURES / "events",
+                        news_dir=_FIXTURES / "news",
                     ),
                 ),
             ):

@@ -145,9 +145,9 @@ class TestMapThemesNoveltyStamp(unittest.TestCase):
     def test_novelty_columns_in_schema_tuple(self):
         # write_empty_candidates + the all-dropped branch build the typed-empty
         # frame from this tuple, so all three novelty columns must be present.
-        self.assertIn("novelty_rank", orchestrator._MAP_THEMES_COLUMNS)
-        self.assertIn("novelty_score", orchestrator._MAP_THEMES_COLUMNS)
-        self.assertIn("novelty_config_version", orchestrator._MAP_THEMES_COLUMNS)
+        self.assertIn("novelty_rank", orchestrator.MAP_THEMES_COLUMNS)
+        self.assertIn("novelty_score", orchestrator.MAP_THEMES_COLUMNS)
+        self.assertIn("novelty_config_version", orchestrator.MAP_THEMES_COLUMNS)
 
     def test_stamps_novelty_config_version_on_every_row(self):
         with tempfile.TemporaryDirectory() as tmp:
