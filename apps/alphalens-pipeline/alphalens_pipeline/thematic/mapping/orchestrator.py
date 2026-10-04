@@ -356,7 +356,7 @@ def _build_row(
     }
 
 
-_MAP_THEMES_COLUMNS: tuple[str, ...] = (
+MAP_THEMES_COLUMNS: tuple[str, ...] = (
     "theme",
     "ticker",
     "company_name",
@@ -1514,7 +1514,7 @@ def map_themes(
             .reset_index(drop=True)
         )
     else:
-        df = pd.DataFrame(columns=list(_MAP_THEMES_COLUMNS))
+        df = pd.DataFrame(columns=list(MAP_THEMES_COLUMNS))
     # Stamp the per-theme novelty rank/score so the candidate parquet carries the
     # selection covariate "how novel was the theme that surfaced this ticker".
     # An unmapped theme (or no mapping at all) leaves NA rather than erroring —
@@ -1604,7 +1604,7 @@ def write_empty_candidates(
         model=model,
         channel_config_version=channel_version,
     )
-    df = pd.DataFrame(columns=list(_MAP_THEMES_COLUMNS))
+    df = pd.DataFrame(columns=list(MAP_THEMES_COLUMNS))
     df["mapper_config_version"] = config_version
     df[channel_assessor.CHANNEL_CONFIG_COLUMN] = channel_version
     # Mirror the all-dropped branch of map_themes: record the active novelty
@@ -1619,6 +1619,7 @@ __all__ = [
     "DEFAULT_OUTPUT_DIR",
     "FROZEN_REUSE_ATTR",
     "GATE_NAMES",
+    "MAP_THEMES_COLUMNS",
     "map_themes",
     "verify_candidate",
     "write_empty_candidates",

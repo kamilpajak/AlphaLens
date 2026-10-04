@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from alphalens_pipeline.brief_contract.validation import warn_on_column_disagreement
 from alphalens_pipeline.events import (
     event_lane_enabled,  # noqa: F401 — re-exported for callers/tests
 )
@@ -49,7 +50,40 @@ EVENT_FACT_COLUMNS: tuple[str, ...] = (
     "event_filing_lag_bdays",
     "event_gate_version",
 )
-_SHADOW_ONLY_COLUMNS = ("eligible", "exclusion_reason")
+# Not event FACTS: these two are stamped by THIS module onto every row it
+# hands on, whether or not a cluster happened. ``source`` says which lane the
+# row came from and ``event_overlap`` whether the same ticker appeared on both.
+EVENT_PROVENANCE_COLUMNS: tuple[str, ...] = ("source", "event_overlap")
+# Detector bookkeeping that stops here: the merge drops these before anything
+# downstream sees them, so they never reach a scored or brief parquet.
+EVENT_SHADOW_ONLY_COLUMNS: tuple[str, ...] = ("eligible", "exclusion_reason")
+
+_MERGE_DECLARATION = "EVENT_PROVENANCE_COLUMNS + EVENT_FACT_COLUMNS"
+
+
+def _warn_if_stamps_disagree(merged: pd.DataFrame) -> None:
+    """Check the names this stage owns against what it declares.
+
+    The writers below use string literals on purpose. Unpacking the tuples
+    into the writers would invert this check: the stored column name would
+    follow the declaration, so a renamed entry would rename the production
+    column and nothing could disagree. Reading the tuple to inspect the
+    frame keeps the declaration a claim about the data.
+
+    Appended event rows bring the detector's own columns in with them, and
+    those are declared beside the detector, not here, so the comparison is
+    narrowed to the names this module owns plus the two it is required to
+    have dropped — a shadow-only name surviving into the output is reported
+    as ``extra``.
+    """
+    owned = {*EVENT_PROVENANCE_COLUMNS, *EVENT_FACT_COLUMNS, *EVENT_SHADOW_ONLY_COLUMNS}
+    warn_on_column_disagreement(
+        logger,
+        writer="merge_event_candidates",
+        declaration=_MERGE_DECLARATION,
+        produced=[c for c in merged.columns if c in owned],
+        declared=(*EVENT_PROVENANCE_COLUMNS, *EVENT_FACT_COLUMNS),
+    )
 
 
 def load_event_candidates(path: Path) -> pd.DataFrame:
@@ -63,7 +97,17 @@ def load_event_candidates(path: Path) -> pd.DataFrame:
 
 
 def merge_event_candidates(candidates: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
-    """Stamp ``source``/``event_overlap`` and append the eligible event rows (see module doc)."""
+    """Stamp ``source``/``event_overlap`` and append the eligible event rows (see module doc).
+
+    Thin wrapper so the column check runs on every one of the four exit paths
+    the stamping body takes.
+    """
+    merged = _stamp_and_append(candidates, events)
+    _warn_if_stamps_disagree(merged)
+    return merged
+
+
+def _stamp_and_append(candidates: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     out = candidates.copy()
     out["source"] = SOURCE_THEMATIC
     out["event_overlap"] = False
@@ -88,7 +132,7 @@ def merge_event_candidates(candidates: pd.DataFrame, events: pd.DataFrame) -> pd
         for col in EVENT_FACT_COLUMNS:
             out.loc[mask, col] = ev.get(col)
 
-    new = eligible[~is_overlap].drop(columns=list(_SHADOW_ONLY_COLUMNS), errors="ignore")
+    new = eligible[~is_overlap].drop(columns=list(EVENT_SHADOW_ONLY_COLUMNS), errors="ignore")
     if new.empty:
         return out
     new = new.assign(source=SOURCE_INSIDER_CLUSTER, event_overlap=False)

@@ -311,7 +311,7 @@ class ChannelAssessment:
 
 
 # The per-candidate columns :func:`row_fields` stamps. Named here so the
-# orchestrator's ``_MAP_THEMES_COLUMNS`` and the test that pins the contract
+# orchestrator's ``MAP_THEMES_COLUMNS`` and the test that pins the contract
 # read ONE list.
 #
 # Every grounding column keeps the ``channel_`` prefix ON PURPOSE: the structural

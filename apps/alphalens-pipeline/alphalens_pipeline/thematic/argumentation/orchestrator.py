@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from alphalens_pipeline.brief_contract.validation import warn_on_column_disagreement
 from alphalens_pipeline.data.parquet_io import write_parquet_atomic
 from alphalens_pipeline.thematic.argumentation import generator, support_guard
 from alphalens_pipeline.thematic.mapping import channel_assessor
@@ -382,6 +383,15 @@ _SUPPORT_GUARD_COLUMNS: tuple[str, ...] = (
     "brief_channel_grounding",
 )
 
+# The three whole-day ranking columns, stamped on the DEDUPED frame once the
+# day's cohort is known. They are kept out of the empty-day schema below on
+# purpose: a day with no cohort has no rank to publish.
+_DAY_RANKING_COLUMNS: tuple[str, ...] = (
+    "also_in_themes",
+    "rank_in_day",
+    "cohort_size_in_day",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class _GuardOutcome:
@@ -398,10 +408,17 @@ class _GuardOutcome:
     grounding: str
 
 
-_EMPTY_OUT_COLUMNS = (
+# Columns a brief row carries IN from the score stage. This stage reads them
+# and never writes them; they are listed only because the empty-day schema has
+# to be a complete frame, with no upstream stage to fill it in.
+_INHERITED_COLUMNS: tuple[str, ...] = (
     "theme",
     "ticker",
     "verified",
+)
+
+# The columns THIS stage writes on every brief row, published or quiet.
+_BRIEF_OWN_COLUMNS: tuple[str, ...] = (
     "next_earnings_date",
     "brief_model_used",
     "brief_tldr",
@@ -424,6 +441,16 @@ _EMPTY_OUT_COLUMNS = (
     BRIEF_PUBLISHED_AT,
     *_SUPPORT_GUARD_COLUMNS,
 )
+
+# The schema of a QUIET day's brief parquet: no candidate survived, so the file
+# is a typed-empty frame carrying the inherited identity columns plus this
+# stage's own, and none of the day-ranking three.
+EMPTY_BRIEF_COLUMNS: tuple[str, ...] = (*_INHERITED_COLUMNS, *_BRIEF_OWN_COLUMNS)
+
+# Everything this stage adds to a PUBLISHED day's frame. The asymmetry against
+# EMPTY_BRIEF_COLUMNS is the point: a published row also carries the day's
+# ranking, a quiet-day file has no row to rank.
+BRIEF_STAGE_COLUMNS: tuple[str, ...] = (*_BRIEF_OWN_COLUMNS, *_DAY_RANKING_COLUMNS)
 
 
 def _write_sidecar(output_dir: Path, asof: dt.date, n_pro: int, n_flash: int) -> None:
@@ -534,12 +561,25 @@ def _sort_and_dedup_for_brief(verified: pd.DataFrame) -> pd.DataFrame:
     deduped["also_in_themes"] = deduped.apply(_others, axis=1)
     deduped["rank_in_day"] = range(1, len(deduped) + 1)
     deduped["cohort_size_in_day"] = len(deduped)
+    # The three writes above are string literals on purpose. Unpacking
+    # _DAY_RANKING_COLUMNS into them would invert this check: the stored
+    # column name would follow the declaration, so a renamed entry would
+    # rename the production column and nothing could disagree. Reading the
+    # tuple to inspect the frame keeps the declaration a claim about the data.
+    inherited = set(verified.columns)
+    warn_on_column_disagreement(
+        logger,
+        writer="_sort_and_dedup_for_brief",
+        declaration="_DAY_RANKING_COLUMNS",
+        produced=[c for c in deduped.columns if c not in inherited],
+        declared=_DAY_RANKING_COLUMNS,
+    )
     return deduped
 
 
 def _empty_output(output_dir: Path, asof: dt.date) -> pd.DataFrame:
     """Write a typed-empty parquet + empty bundle + zero-counts sidecar."""
-    empty = pd.DataFrame({c: pd.Series(dtype="object") for c in _EMPTY_OUT_COLUMNS})
+    empty = pd.DataFrame({c: pd.Series(dtype="object") for c in EMPTY_BRIEF_COLUMNS})
     write_parquet_atomic(empty, output_dir / f"{asof.isoformat()}.parquet", index=False)
     _write_sidecar(output_dir, asof, n_pro=0, n_flash=0)
     return empty
@@ -872,4 +912,11 @@ def model_counts(brief: pd.DataFrame) -> tuple[int, int]:
     return n_pro, int(ok.sum()) - n_pro
 
 
-__all__ = ["DEFAULT_OUTPUT_DIR", "generate_briefs", "model_counts", "refresh_published_telemetry"]
+__all__ = [
+    "BRIEF_STAGE_COLUMNS",
+    "DEFAULT_OUTPUT_DIR",
+    "EMPTY_BRIEF_COLUMNS",
+    "generate_briefs",
+    "model_counts",
+    "refresh_published_telemetry",
+]

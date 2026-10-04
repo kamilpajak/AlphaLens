@@ -501,7 +501,7 @@ class TestMapThemesCLI(unittest.TestCase):
         # brief + rebuild-cache. Regression for the zero-novel chain-halt.
         from pathlib import Path
 
-        from alphalens_pipeline.thematic.mapping.orchestrator import _MAP_THEMES_COLUMNS
+        from alphalens_pipeline.thematic.mapping.orchestrator import MAP_THEMES_COLUMNS
 
         with (
             tempfile.TemporaryDirectory() as tmpdir,
@@ -575,7 +575,7 @@ class TestMapThemesCLI(unittest.TestCase):
             self.assertEqual(len(written), 0)
             # Carries the full candidate schema + the freeze stamp so score /
             # brief / Django ingest read it like any other (empty) day.
-            for col in _MAP_THEMES_COLUMNS:
+            for col in MAP_THEMES_COLUMNS:
                 self.assertIn(col, written.columns)
             self.assertIn("mapper_config_version", written.columns)
 
