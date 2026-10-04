@@ -201,6 +201,14 @@ class TestSicDivisionRanges(unittest.TestCase):
 
 
 class TestIterPeersFallback(_PatchedIndexTestCase):
+    """Covers ``ff_industries.iter_peers_fallback``, which owns the chain now.
+
+    Kept in this file although the function moved: the class needs
+    ``_PatchedIndexTestCase``, a fixture private to this module. Moving the
+    tests means first deciding where that fixture should live, which is a
+    separate question from cutting the cycle.
+    """
+
     # SIC 7372 + 7373 + 7374 are different 4-digit codes but share the
     # 3-digit prefix 737 ("Computer Services"). Quantum-computing tickers
     # under PR #197 motivating example. A small 4-digit cohort (n=2) plus

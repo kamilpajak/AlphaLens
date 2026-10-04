@@ -42,6 +42,12 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
+# Two of these are private to ``sic_index``. That is deliberate and it is
+# the one wart of cutting the cycle this way: ``iter_peers_fallback`` moved
+# here because FF-48 is its last widening step, and its first two steps
+# still need the SIC index's own cached loaders. The alternative cut --
+# extracting those two primitives into a third module -- is worth
+# revisiting only if something outside these two modules needs them.
 from alphalens_pipeline.data.fundamentals.sic_index import (
     DEFAULT_MIN_COHORT,
     _load_lookup_dicts,

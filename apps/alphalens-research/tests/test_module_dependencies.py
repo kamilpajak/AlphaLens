@@ -1606,6 +1606,41 @@ class TestModuleDependencies(unittest.TestCase):
             ],
         )
 
+    def test_the_sic_index_must_not_import_the_ff48_module_positive_control(self):
+        """The last cycle's rule still sees the shape the cycle actually had.
+
+        Red-before/green-after proved the rule worked on the day it was
+        written; it does not protect the rule from rotting. A typo in
+        ``forbidden_prefix``, or a walker that stopped descending into
+        function bodies, would leave this green while the cycle came back.
+        So the control writes the exact shape the cycle used -- a
+        function-body import -- and asserts the real walker reports it.
+        """
+        import tempfile
+
+        pkg_name = "alphalens_pipeline.data.fundamentals"
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "synthetic_pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("")
+            (pkg / "sic_index.py").write_text(
+                "def sneaky():\n"
+                f"    from {pkg_name}.ff_industries import iter_ff48_peers\n"
+                "    return iter_ff48_peers\n"
+            )
+            rule = next(
+                r
+                for r in RULES
+                if r["from_pkg"] == f"{pkg_name}.sic_index"
+                and r["forbidden_prefix"] == f"{pkg_name}.ff_industries"
+            )
+            self.assertNotIn("top_level_only", rule, "the cycle lived in a function body")
+            flagged = [
+                (Path(rel).name, module)
+                for _, rel, module in _violations_for(rule, _python_files(pkg))
+            ]
+        self.assertEqual(flagged, [("sic_index.py", f"{pkg_name}.ff_industries")])
+
     def test_the_five_step_5_modules_do_not_reference_each_other(self):
         """The five modules step 5 cut out are mutually unreferenced.
 
