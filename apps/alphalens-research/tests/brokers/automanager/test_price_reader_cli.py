@@ -82,7 +82,7 @@ class PriceReaderCliTest(unittest.TestCase):
                 "alphalens_pipeline.data.alt_data.saxo_price_stream.get_shared_price_stream"
             ) as get_stream,
             mock.patch(
-                "alphalens_pipeline.brokers.automanager.control_loop."
+                "alphalens_pipeline.brokers.automanager.stream_handles."
                 "_stream_session_window_if_enabled",
                 return_value="PREDICATE",
             ),

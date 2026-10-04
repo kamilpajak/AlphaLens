@@ -90,14 +90,23 @@ EXCLUDED_DIRS: dict[str, str] = {
 # EXCLUDED_DIRS declares that directory.
 MUST_BE_DECLARED_DIR_NAMES = frozenset({"tests", "migrations"})
 
+# What a file inside a declared excluded directory is allowed to be called.
+# Without this, EXCLUDED_DIRS is a hole rather than a scope: a file of any size
+# dropped into `edge/tests/` is outside the corpus and so invisible to the
+# ratchet, whatever it contains. 8 432 lines live in those eight directories
+# today and every one of their files matches one of these shapes, so the rule
+# costs nothing now and makes an odd one out red.
+ALLOWED_EXCLUDED_FILE_SHAPES = ("__init__.py", "conftest.py")
+ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
+
 # path (repo-relative, posix) -> the line count this file may not exceed.
 #
 # Every entry is a file the audit left too big. Lower one when the file
 # shrinks; raise one deliberately, in the PR that needs the room.
 BASELINE: dict[str, int] = {
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3414,
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3417,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8654,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8598,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3058,
@@ -148,6 +157,35 @@ def line_count(root: Path, rel: str) -> int:
 def measure(root: Path) -> dict[str, int]:
     """The production corpus as path -> line count."""
     return {rel: line_count(root, rel) for rel in iter_production_files(root)}
+
+
+def oddly_named_files_in_excluded_dirs(root: Path) -> list[str]:
+    """Files inside a declared excluded directory that are not named like tests or migrations.
+
+    The excluded directories are a SCOPE boundary, and this is what keeps the
+    boundary honest. A file called anything else sitting in one of them is
+    either production code in the wrong place, or a file that needs its own
+    declaration — both of which a reader should see rather than have skipped.
+    """
+    odd: list[str] = []
+    for excluded in sorted(EXCLUDED_DIRS):
+        base = root / excluded
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            name = path.name
+            if name in ALLOWED_EXCLUDED_FILE_SHAPES:
+                continue
+            if name.startswith(ALLOWED_EXCLUDED_FILE_PREFIXES):
+                continue
+            # a Django migration: 0001_initial.py and friends
+            stem = name.removesuffix(".py")
+            if stem[:4].isdigit() and stem[4:5] == "_":
+                continue
+            odd.append(path.relative_to(root).as_posix())
+    return sorted(odd)
 
 
 def files_over_their_limit(
@@ -296,6 +334,25 @@ class TheCorpusIsTheProductionCorpus(unittest.TestCase):
             f"because the name is what makes a reader skip it:\n  {sorted(undeclared)}",
         )
 
+    def test_no_oddly_named_file_hides_inside_a_declared_excluded_directory(self) -> None:
+        """Closes the hole the exclusion would otherwise be.
+
+        A file inside `edge/tests/` is outside the corpus whatever its size, so
+        without this the eight declared directories are eight places an
+        oversized module can sit unseen. Found by adversarially reviewing this
+        gate after it shipped: a planted 2 500-line file in `edge/tests/` passed
+        every other rule here.
+        """
+        odd = oddly_named_files_in_excluded_dirs(WORKSPACE_ROOT)
+        self.assertEqual(
+            odd,
+            [],
+            "These files sit in a directory this gate skips, but are not named like a test, "
+            "a conftest, a package marker or a migration. Either rename the file so a reader "
+            "can tell what it is, move it out of the skipped directory, or widen "
+            f"ALLOWED_EXCLUDED_FILE_* with the reason:\n  {odd}",
+        )
+
     def test_every_workspace_member_contributes_a_production_root(self) -> None:
         """A member added to the workspace but to neither list would escape the gate.
 
@@ -385,6 +442,32 @@ class TheGateCatchesWhatItIsFor(unittest.TestCase):
 
     def test_an_entry_for_a_deleted_file_is_stale(self) -> None:
         self.assertEqual(stale_baseline_entries({}, {"a/gone.py": 1200}), [("a/gone.py", 0, 1200)])
+
+    def test_an_oddly_named_file_in_an_excluded_directory_is_caught(self) -> None:
+        import tempfile
+
+        declared = next(iter(EXCLUDED_DIRS))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / declared).mkdir(parents=True)
+            for name in ("__init__.py", "conftest.py", "test_thing.py", "0001_initial.py"):
+                (root / declared / name).write_text("x = 1\n", encoding="utf-8")
+            (root / declared / "zz_production_code.py").write_text("x = 1\n", encoding="utf-8")
+
+            self.assertEqual(
+                oddly_named_files_in_excluded_dirs(root),
+                [f"{declared}/zz_production_code.py"],
+            )
+
+    def test_an_excluded_directory_of_only_well_named_files_is_allowed(self) -> None:
+        import tempfile
+
+        declared = next(iter(EXCLUDED_DIRS))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / declared).mkdir(parents=True)
+            (root / declared / "test_only.py").write_text("x = 1\n", encoding="utf-8")
+            self.assertEqual(oddly_named_files_in_excluded_dirs(root), [])
 
     def test_the_walk_finds_a_planted_file_and_skips_a_planted_test(self) -> None:
         """The discovery half, driven over a synthetic tree by the real function."""

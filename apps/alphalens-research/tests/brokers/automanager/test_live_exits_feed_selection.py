@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import quote_source as qs
 from alphalens_pipeline.brokers.automanager.control_loop import (
     _default_live_exits_feed_factory,
     _saxo_live_prices_enabled,
@@ -194,10 +195,10 @@ class TestSharedReaderSelection(unittest.TestCase):
                 "alphalens_pipeline.data.alt_data.price_reader_client.RemoteQuoteSource"
             ) as remote_cls,
         ):
-            cl._reset_remote_quote_source_for_tests()
+            qs._reset_remote_quote_source_for_tests()
             _default_live_exits_feed_factory({211: ("AAPL", "XNYS")}, scope="exits")
             _default_live_exits_feed_factory({211: ("AAPL", "XNYS")}, scope="entry-watch")
-            cl._reset_remote_quote_source_for_tests()
+            qs._reset_remote_quote_source_for_tests()
 
         self.assertEqual(remote_cls.call_count, 1)
 

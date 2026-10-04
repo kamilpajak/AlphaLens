@@ -29,6 +29,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import quote_source as qs
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.data.alt_data.saxo_price_stream import SaxoPriceStream
 from broker_contract.contract import InstrumentRef, Position
@@ -118,7 +119,7 @@ class _TwoPositionTick(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.tmp = Path(tmp.name)
         for patcher in (
-            mock.patch.object(cl, "_quote_source", lambda: self.stream),
+            mock.patch.object(qs, "_quote_source", lambda: self.stream),
             mock.patch.dict(os.environ, {cl._SAXO_LIVE_PRICES_ENV: "1"}),
         ):
             patcher.start()

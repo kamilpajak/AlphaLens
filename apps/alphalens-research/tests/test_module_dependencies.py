@@ -221,6 +221,24 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # Finding 7 moved the process-lifetime quote source, and its test-only
+        # reset, out of the tick file. It imports state_paths; nothing in the
+        # opposite direction, now or later.
+        "name": "the state paths must not import the quote source (finding 7 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.state_paths",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.quote_source",
+        "exemptions": set(),
+    },
+    {
+        # Finding 7 moved the process-lifetime quote source, and its test-only
+        # reset, out of the tick file. It imports stream_handles; nothing in the
+        # opposite direction, now or later.
+        "name": "the stream rail must not import the quote source (finding 7 added the reverse edge)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager.stream_handles",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager.quote_source",
+        "exemptions": set(),
+    },
+    {
         # Step 4 of the partition moved the entry-watch pass's own helpers into
         # `entry_watch`, which imports costs. Nothing in the
         # opposite direction, now or later: entry_watch is downstream.
@@ -1388,10 +1406,30 @@ class TestModuleDependencies(unittest.TestCase):
         """
         import tempfile
 
-        rules = [
+        # The stream rail carries more than one one-way rule since finding 7 (it
+        # must not import `quote_source` either), so a bare count over from_pkg
+        # would read that as a duplicate of this one. Assert the WHOLE SET of
+        # targets instead of filtering down to the one this control drives: a
+        # filter would let a third rule -- or a typo in one -- slip past, which
+        # is the family-test shape the journal and entry-watch controls use.
+        rail = [
             rule
             for rule in RULES
             if rule["from_pkg"] == "alphalens_pipeline.brokers.automanager.stream_handles"
+        ]
+        self.assertEqual(
+            {rule["forbidden_prefix"] for rule in rail},
+            {
+                "alphalens_pipeline.brokers.automanager.control_loop",
+                "alphalens_pipeline.brokers.automanager.quote_source",
+            },
+            "every one-way rule on the stream rail must be accounted for here; a new one "
+            "needs its own control, and a typo'd target would otherwise go unnoticed",
+        )
+        rules = [
+            rule
+            for rule in rail
+            if rule["forbidden_prefix"] == "alphalens_pipeline.brokers.automanager.control_loop"
         ]
         self.assertEqual(len(rules), 1, "the stream rail rule must exist exactly once")
         self.assertNotIn(
@@ -1685,6 +1723,48 @@ class TestModuleDependencies(unittest.TestCase):
             if mod.startswith("alphalens_pipeline.brokers.automanager.entry_watch")
         ]
         self.assertTrue(live, "expected the control loop to keep importing the entry watch")
+
+    def test_the_quote_source_still_imports_the_two_modules_it_depends_on(self):
+        """The INTENDED direction, and the existence control for both finding-7 rules.
+
+        Reading zero for either would mean that forbid rule guards a dependency
+        that is gone, which is a gate that cannot fail. The quote source needs
+        `state_paths` for the per-instance Prometheus job label and
+        `stream_handles` for the session window the stream is built with.
+        """
+        quote_source = (
+            PACKAGE_DIRS["alphalens_pipeline"] / "brokers" / "automanager" / "quote_source.py"
+        )
+        mods = list(_iter_imports(quote_source, include_function_scope=True))
+        for dependency in ("state_paths", "stream_handles"):
+            with self.subTest(dependency=dependency):
+                self.assertTrue(
+                    [
+                        m
+                        for m in mods
+                        if m == f"alphalens_pipeline.brokers.automanager.{dependency}"
+                    ],
+                    f"expected the quote source to keep importing {dependency}",
+                )
+
+    def test_the_control_loop_reads_the_quote_source_through_its_module(self):
+        """The tick must reach the singleton by prefix, not by a `from` import.
+
+        A `from` import would freeze control_loop's own binding, which would
+        defeat BOTH the test-only reset hook and the gauge read that reports on
+        the live client.
+        """
+        control_loop = (
+            PACKAGE_DIRS["alphalens_pipeline"] / "brokers" / "automanager" / "control_loop.py"
+        )
+        mods = list(_iter_imports(control_loop, include_function_scope=True))
+        self.assertIn("alphalens_pipeline.brokers.automanager.quote_source", mods)
+        source = control_loop.read_text(encoding="utf-8")
+        self.assertNotIn(
+            "from alphalens_pipeline.brokers.automanager.quote_source import",
+            source,
+            "the tick must read the quote source through the module, never by a from import",
+        )
 
     def test_the_journal_still_imports_the_two_modules_it_now_depends_on(self):
         """The INTENDED direction, and the existence control for both step-3 rules.
