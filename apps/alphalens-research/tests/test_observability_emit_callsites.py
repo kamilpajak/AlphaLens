@@ -1267,6 +1267,8 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
 
     _DEFERRED = 'alphalens_feedback_deferred_total{reason="%s"}'
     _UNPRICED = "alphalens_feedback_unpriced_rows"
+    _UNPRICED_NO_BARS = "alphalens_feedback_unpriced_no_bars_rows"
+    _PLANNABLE = "alphalens_feedback_plannable_rows"
     _OLDEST = "alphalens_feedback_oldest_deferred_sessions"
 
     def test_every_completeness_series_is_zero_initialised(self) -> None:
@@ -1280,10 +1282,17 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
             self._DEFERRED % "fetch_budget",
             self._DEFERRED % "deadline",
             self._UNPRICED,
+            self._UNPRICED_NO_BARS,
             self._OLDEST,
         ):
             self.assertIn(key, metrics)
             self.assertEqual(metrics[key], 0)
+
+        # The denominator is the ONE completeness series that is legitimately
+        # non-zero on a healthy night: it counts the population the run saw, not a
+        # problem it hit. Present, zero-initialised only when there is nothing to
+        # count - asserting 0 here would be asserting that the run did no work.
+        self.assertIn(self._PLANNABLE, metrics)
 
     def test_counts_sum_across_dates_but_the_age_is_a_max(self) -> None:
         # The ages are already per-date maxima, so summing them would invent a
@@ -1311,6 +1320,61 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
         self.assertEqual(metrics[self._UNPRICED], 19)
         self.assertEqual(metrics[self._OLDEST], 7)
 
+    def test_the_two_unpriced_causes_are_emitted_as_separate_series(self) -> None:
+        """One unpriced row, two possible causes, and the alert must tell them apart.
+
+        A row the budget never reached is fixed by replaying its date. A row whose
+        ticker has no bars at any vendor is fixed by nothing, and ages out of the
+        monitor window on its own after 75 days. Emitting only the total gave the
+        alert one explanation for both, so a delisted name paged nightly with a
+        recovery that could not work.
+        """
+        emit = self._run_refresh(
+            reports=[
+                self._report(unpriced_rows=4, unpriced_no_bars_rows=1),
+                self._report(unpriced_rows=2, unpriced_no_bars_rows=2),
+            ]
+        )
+
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics[self._UNPRICED], 6)
+        self.assertEqual(metrics[self._UNPRICED_NO_BARS], 3)
+        # What the rule reads: the part a replay can still fix.
+        self.assertEqual(metrics[self._UNPRICED] - metrics[self._UNPRICED_NO_BARS], 3)
+
+    def test_the_plannable_population_is_emitted_as_the_share_denominator(self) -> None:
+        """Why a count of no-bars rows is not enough on its own.
+
+        The planned rule subtracts the no-bars subset from the total, so a
+        vendor-wide outage - where every unpriced row is a no-bars row - makes the
+        difference 0 exactly when things are worst. Telling one delisted name from a
+        dark vendor wants a SHARE, and a share needs this denominator. It ships with
+        the emitter because a rule cannot reference a series its own deploy adds.
+        """
+        emit = self._run_refresh(
+            reports=[
+                self._report(n_plannable=30, unpriced_rows=2, unpriced_no_bars_rows=1),
+                self._report(n_plannable=12, unpriced_rows=1, unpriced_no_bars_rows=1),
+            ]
+        )
+
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics[self._PLANNABLE], 42)
+        self.assertEqual(metrics[self._UNPRICED_NO_BARS], 2)
+
+    def test_a_report_predating_the_new_field_still_emits_a_zero(self) -> None:
+        # The emitter reads the field off each report with a default, so a stale
+        # report object cannot make the series vanish - a vanished series reads
+        # exactly like a stopped exporter and would silently disarm the rule.
+        class _Old:
+            unpriced_rows = 5
+
+        emit = self._run_refresh(reports=[_Old()])
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics[self._UNPRICED], 5)
+        self.assertEqual(metrics[self._UNPRICED_NO_BARS], 0)
+        self.assertEqual(metrics[self._PLANNABLE], 0)
+
     def test_the_completeness_series_share_the_guard_series_emit_call(self) -> None:
         # The rules file adds no absent() guard for these series, on the grounds
         # that the existing AlphalensFeedbackGuardGaugeMissing already watches
@@ -1322,6 +1386,24 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
         metrics = emit.call_args.kwargs["metrics"]
         self.assertIn('alphalens_feedback_guard_total{disposition="lookup_failed"}', metrics)
         self.assertIn(self._UNPRICED, metrics)
+        self.assertIn(self._UNPRICED_NO_BARS, metrics)
+
+    def test_the_two_unpriced_series_can_never_come_from_different_runs(self) -> None:
+        """Why the rule may subtract one from the other at all.
+
+        `alphalens feedback backfill-shadow-returns --date X` is repeatable, and it
+        emits too, overwriting the gauges with just that date's counts. That is
+        pre-existing and applies to the total exactly as much as to the subset. What
+        makes the SUBTRACTION safe is that both are written by the same single emit
+        call, so the rule can never read a fresh total against a stale subset and
+        produce a negative difference. Split them across two calls and that stops
+        being true, which is the refactor this test exists to stop.
+        """
+        emit = self._run_refresh(reports=[self._report(unpriced_rows=3, unpriced_no_bars_rows=3)])
+
+        emit.assert_called_once()
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics[self._UNPRICED] - metrics[self._UNPRICED_NO_BARS], 0)
 
 
 class TestBackfillEmitsGuardDispositionMetrics(_NightlyEmitHarness, unittest.TestCase):

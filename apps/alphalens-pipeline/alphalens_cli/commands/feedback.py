@@ -343,11 +343,17 @@ def _emit_nightly_metrics(reports: Any) -> None:
 
     One ``alphalens_feedback_guard_total{disposition=...}`` series per arm of
     the Amendment-1 tree, summed across the run's per-brief-date reports, plus
-    four series that say how much of the sweep actually finished. The job exits
+    five series that say how much of the sweep actually finished. The job exits
     0 and stamps the store settled even when its fetch budget ran out mid-window
     (2026-09-19: 102 refusals, 19 rows left with no price path, no alert), so
     ``alphalens_feedback_unpriced_rows`` is the outcome the alert reads and the
     two ``deferred_total`` reasons say which ceiling bound.
+    ``alphalens_feedback_unpriced_no_bars_rows`` splits that outcome by CAUSE: it
+    is the subset whose ticker had no bars at the vendor, which no replay can fix
+    and which ages out of the monitor window on its own. Without the split the
+    alert had one explanation for two causes with different lifetimes, and a name
+    that stopped trading paged nightly for 75 days telling the operator to replay
+    (DBRG, briefed 2026-09-30, last bar 2026-09-29 at two independent vendors).
     ``alphalens_feedback_oldest_deferred_sessions`` is a MAX, not a sum: each report
     already holds a per-date maximum, and adding maxima invents an age no row has.
     It is also the only one of the four that sees a row which HAS a price path and
@@ -396,6 +402,26 @@ def _emit_nightly_metrics(reports: Any) -> None:
         )
         metrics["alphalens_feedback_unpriced_rows"] = sum(
             getattr(report, "unpriced_rows", 0) for report in reports
+        )
+        # The SUBSET of the line above whose ticker had no bars at the vendor, so
+        # the alert can read `unpriced_rows - unpriced_no_bars_rows` and page only
+        # on the part a replay can still fix. `getattr` with a default keeps the
+        # series present even for a report object that predates the field: a
+        # vanished series reads exactly like a stopped exporter and would disarm
+        # the rule in silence.
+        metrics["alphalens_feedback_unpriced_no_bars_rows"] = sum(
+            getattr(report, "unpriced_no_bars_rows", 0) for report in reports
+        )
+        # The denominator a companion rule needs. The subtraction rule planned on the
+        # two series above goes SILENT in a vendor-wide outage, because every unpriced
+        # row is then a no-bars row and the difference is 0 exactly when things are
+        # worst. Telling "one delisted name" from "the vendor is dark" wants a share,
+        # not a count, and a share needs the plannable population as a series. It
+        # ships HERE rather than with the rule: rules converge from origin/main within
+        # the hour, code waits for a VPS pull, so a rule may never reference a series
+        # its own deploy introduces.
+        metrics["alphalens_feedback_plannable_rows"] = sum(
+            getattr(report, "n_plannable", 0) for report in reports
         )
         metrics["alphalens_feedback_oldest_deferred_sessions"] = max(
             (getattr(report, "oldest_deferred_touch_age", 0) for report in reports),
