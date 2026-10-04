@@ -33,6 +33,7 @@ from alphalens_pipeline.brokers.automanager.trades import (
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 from tests.brokers.automanager.trades_fixture import (
     NOW,
+    SIM_RHI_DIR,
     VENUE,
     FakeFillHistory,
     install_journals,
@@ -889,6 +890,45 @@ class BracketStopIsThePlacedStop(_TradesCase):
         # missing audit row.
         self.assertEqual(placed["source"], "keeper.stop_journal")
         self.assertEqual(placed["ref"], "line:standalone_stops:stop_placed")
+
+
+SIM_RHI = "RHI:2026-09-03"
+SIM_RHI_STOP = "5040004072"
+
+
+class SimRhiBracketStopOffline(_TradesCase):
+    """SIM RHI:2026-09-03, offline: a now-bracket tier t0 (701, fill not
+    journaled) and a trail tier t1 (1095, filled), closed by ONE stop
+    ``d1b6f68d-...-stop-0`` that sold 1796. The reference names the pick's own
+    bracket, so the stop is the pick's; the pick cannot be ``closed`` while
+    the bracket tier's fill is unknown."""
+
+    env = "sim"
+
+    def setUp(self) -> None:
+        super().setUp()
+        install_journals(self.home, env="sim", source_dir=SIM_RHI_DIR)
+        self.report = self.build(None, pick=SIM_RHI)
+        self.record = trade(self.report, SIM_RHI)
+
+    def test_the_stop_is_owned_through_its_bracket_reference_not_by_fifo(self) -> None:
+        (exit_,) = self.record["exits"]
+        self.assertEqual(exit_["order_id"], SIM_RHI_STOP)
+        self.assertEqual(exit_["attribution"], "external_reference")
+        self.assertEqual(value(exit_["attributed_qty"]), 1095.0)
+        self.assertNotIn("attribution_fifo_assumed", _codes(self.record))
+        self.assertIn("exit_qty_exceeds_pick", _codes(self.record))
+
+    def test_the_pick_is_unresolved_while_its_bracket_fill_is_not_journaled(self) -> None:
+        self.assertEqual(self.record["state"], "unresolved")
+        self.assertEqual(self.record["state_reason"], "not_journaled")
+        self.assertEqual(self.record["outcome"]["r_multiple"]["null_reason"], "not_journaled")
+
+    def test_the_surplus_is_listed_with_the_reason_its_reason_is_null(self) -> None:
+        (surplus,) = [u for u in self.report.unattributed_fills if u["order_id"] == SIM_RHI_STOP]
+        self.assertEqual(value(surplus["unattributed_qty"]), 701.0)
+        self.assertIsNone(surplus["reason"])
+        self.assertEqual(surplus["reason_null_reason"], "stop_amend_history_unavailable")
 
 
 class PublishedVocabularies(unittest.TestCase):

@@ -226,10 +226,12 @@ class _Builder:
                 {
                     **fill,
                     "reason": _nullable(_ref("ExitReason")),
+                    "reason_null_reason": _nullable(_ref("NullReason")),
                     "reason_evidence": {"type": "array", "items": {"type": "string"}},
                     "unattributed_qty": _ref("Measured"),
                 },
-                description="A venue fill on a pick's uic that no pick owns (§4.5).",
+                description="A venue fill on a pick's uic that no pick owns (§4.5). "
+                "reason is null only offline, with reason_null_reason.",
             ),
             "EntryTier": self.obj(
                 {

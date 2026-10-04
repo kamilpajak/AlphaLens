@@ -713,7 +713,7 @@
     },
     "UnattributedFill": {
       "type": "object",
-      "description": "A venue fill on a pick's uic that no pick owns (§4.5).",
+      "description": "A venue fill on a pick's uic that no pick owns (§4.5). reason is null only offline, with reason_null_reason.",
       "properties": {
         "order_id": {
           "type": "string"
@@ -770,6 +770,16 @@
             }
           ]
         },
+        "reason_null_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NullReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "reason_evidence": {
           "type": "array",
           "items": {
@@ -793,6 +803,7 @@
         "fees",
         "realized_fx",
         "reason",
+        "reason_null_reason",
         "reason_evidence",
         "unattributed_qty"
       ]

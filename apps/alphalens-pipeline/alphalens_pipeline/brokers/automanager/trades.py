@@ -1872,6 +1872,7 @@ def _allocate(
             entry.update(
                 {
                     "reason": event.reason,
+                    "reason_null_reason": event.reason_null_reason,
                     "reason_evidence": list(event.evidence),
                     "unattributed_qty": _num(
                         remaining, _UNIT_SHARES, SOURCE_DERIVED, f"order:{event.fill.order_id}"
@@ -1952,6 +1953,7 @@ def _broker_closing_events(
             entry.update(
                 {
                     "reason": REASON_MANUAL_OPEN if not order.reference else REASON_UNKNOWN,
+                    "reason_null_reason": None,
                     "reason_evidence": ownership.evidence,
                     "unattributed_qty": _num(
                         fill.filled_qty, _UNIT_SHARES, SOURCE_DERIVED, f"order:{order.order_id}"
@@ -2008,7 +2010,11 @@ def _offline_closing_events(
         placed = stop_facts.placed_by_order.get(order_id or "")
         if reference is None and placed is not None:
             reference = _str_or_none(placed.get("ref"))
-        owner = _owner_by_key(picks_by_key, _pick_key_from_stop_ref(reference))
+        # Either reference form names the owner: the crid form through the
+        # pick key, the bracket form through the pick's own submission (§4.4).
+        owner = _owner_by_key(picks_by_key, _pick_key_from_stop_ref(reference)) or _stop_ref_owner(
+            reference, picks_on_uic
+        )
         detected = parse_utc(line.get("ts"))
         ref = "line:standalone_stops:stop_filled"
         qty = _as_float(line.get("qty"))
@@ -2126,6 +2132,12 @@ def _is_pick_stop_ref(reference: str | None, pick: _Pick) -> bool:
     return bracket is not None and bracket.group("request") in _bracket_request_ids(pick)
 
 
+def _stop_ref_owner(reference: str | None, picks_on_uic: Sequence[_Pick]) -> _Pick | None:
+    """The single pick on the uic that a stop reference names, or None."""
+    owners = [pick for pick in picks_on_uic if _is_pick_stop_ref(reference, pick)]
+    return owners[0] if len(owners) == 1 else None
+
+
 def _placed_stop(pick: _Pick, venue: _Venue | None, stop_facts: _StopFacts) -> Measured:
     unit = _price_unit(pick.instrument_currency)
     if venue is not None:
@@ -2181,10 +2193,12 @@ def _sum_known(values: Iterable[Measured]) -> float:
 
 
 def _state(pick: _Pick, *, offline: bool, horizon: dt.datetime | None) -> tuple[str, str | None]:
+    # Offline, a now-bracket tier's fill is never journaled: its quantity is
+    # unknown, so neither ``closed`` nor ``never_filled`` can be said (§4.6).
+    if offline and any(t.path == PATH_NOW_BRACKET and t.fill is None for t in pick.tiers):
+        return STATE_UNRESOLVED, NULL_NOT_JOURNALED
     entry_qty = _sum_known(f.qty for f in pick.entry_fills())
     if entry_qty <= _QTY_EPS:
-        if offline and any(t.path == PATH_NOW_BRACKET for t in pick.tiers):
-            return STATE_UNRESOLVED, NULL_NOT_JOURNALED
         return STATE_NEVER_FILLED, _never_filled_reason(pick)
     exit_qty = _sum_known(e.attributed_qty for e in pick.exits)
     if abs(entry_qty - exit_qty) <= _QTY_EPS and not pick.ambiguous:

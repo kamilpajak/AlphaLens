@@ -1,0 +1,5 @@
+{"client_request_id": "d1b6f68d-e98c-4a65-a541-74eac07b655d", "gen": 0, "kind": "planned", "side": "SELL", "stop_price": 40.5, "take_profit": 47.10000000000001, "tier_index": 0, "uic": 641}
+{"kind": "stop_placed", "order_id": "5040004072", "qty": 701.0, "ref": "d1b6f68d-e98c-4a65-a541-74eac07b655d-stop-0", "ts": 1788442349.0392632, "uic": 641}
+{"avg_price": 40.46, "kind": "stop_filled", "order_id": "5040004072", "partial": false, "qty": 1796.0, "ref": "d1b6f68d-e98c-4a65-a541-74eac07b655d-stop-0", "ts": 1788875524.1361718, "uic": 641}
+{"kind": "amend_ok", "qty": 1796.0, "ts": 1788528806.219562, "uic": 641}
+{"kind": "amend_seq", "seq": 0, "uic": 641}
