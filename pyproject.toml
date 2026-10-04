@@ -124,9 +124,6 @@ extend-immutable-calls = ["broker_contract.trade_intent.schema.contract_field"]
     "SIM117",   # nested with-statements in tests highlight scope structure
     "PLW1510",  # subprocess.run in tests asserts on returncode explicitly; check= is the test's job
 ]
-"apps/alphalens-pipeline/alphalens_pipeline/watchdog/lock.py" = [
-    "N818",     # WorkerLockBusy is a state signal, not a fatal error — keep without Error suffix
-]
 "apps/alphalens-research/alphalens_research/screeners/**/*.py" = [
     "N802",     # capital-X design matrix (`_prepare_X`, `_fit_X`) is Murphy/Hastie convention — same exemption is configured on SonarCloud (S1542) per sonar-project.properties
 ]
