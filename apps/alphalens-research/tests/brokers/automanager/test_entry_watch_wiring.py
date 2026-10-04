@@ -30,6 +30,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_trails
+from alphalens_pipeline.brokers.automanager import entry_watch as ew
 from alphalens_pipeline.brokers.automanager import safety as _safety
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from broker_contract.contract import OrderRejectedError
@@ -2294,7 +2295,7 @@ class TestPointSampleVetoNotRaise(IsolatedHomeTestCase):
             def latest(self, uic: int) -> object:
                 return _WeirdPoint()
 
-        points = cl._point_sample_bids(_WeirdFeed(), {307: ("KO", "XNYS")})
+        points = ew._point_sample_bids(_WeirdFeed(), {307: ("KO", "XNYS")})
         self.assertEqual(points, {307: None})
 
 

@@ -33,6 +33,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails
+from alphalens_pipeline.brokers.automanager import entry_watch as ew
 from broker_contract.contract import BrokerError, OrderStatus
 
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
@@ -191,7 +192,7 @@ class TestReArmReAdmitsTheTier(IsolatedHomeTestCase):
         assert state.watch_open is not None
         self.assertTrue(state.watch_open.get("awaiting_fresh_low"), "the open-check is armed")
         # The watch pass RE-ADMITS it (the resting-order exclusion no longer bites).
-        self.assertIn(_CRID, cl._active_entry_watches(after))
+        self.assertIn(_CRID, ew._active_entry_watches(after))
         self.assertNotIn(_CRID, cl._resting_armed_tiers(after))
 
     def test_cancelled_dayorder_before_window_end_re_arms_the_tier(self) -> None:
@@ -278,7 +279,7 @@ class TestReArmRespectsOriginalTTL(IsolatedHomeTestCase):
         self.assertEqual((total, bad), (0.0, 0), "the terminal releases the reservation")
         # A terminal tier is NOT re-admitted and NOT re-owned by the reconcile pass.
         after = entry_trails.read_entry_trail_fold()
-        self.assertNotIn(_CRID, cl._active_entry_watches(after))
+        self.assertNotIn(_CRID, ew._active_entry_watches(after))
         self.assertNotIn(_CRID, cl._resting_armed_tiers(after))
 
     def test_unknown_outcome_is_deferred_never_re_armed_or_terminated(self) -> None:
@@ -472,7 +473,7 @@ class TestClearancePrecedesTheSameTickTerminal(IsolatedHomeTestCase):
         # not re-admitted by the fold.
         fold = entry_trails.read_entry_trail_fold()
         self.assertEqual(fold.tiers[_CRID].terminal_kind, entry_trails.KIND_SUSPENDED)
-        self.assertNotIn(_CRID, cl._active_entry_watches(fold))
+        self.assertNotIn(_CRID, ew._active_entry_watches(fold))
 
 
 if __name__ == "__main__":

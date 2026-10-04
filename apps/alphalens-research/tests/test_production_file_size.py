@@ -97,7 +97,7 @@ MUST_BE_DECLARED_DIR_NAMES = frozenset({"tests", "migrations"})
 BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3414,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 9313,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8654,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3058,
