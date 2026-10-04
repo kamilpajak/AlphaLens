@@ -541,6 +541,11 @@ class _Fill:
     when: dt.datetime | None = None
     filled_qty: float | None = None
     closing: bool = False
+    # Record warnings the fill's own facts raised (report rows, bookings,
+    # cross-checks). They are kept on the fill because an exit's pick may only
+    # be known at allocation time (§4.5); every pick that receives a share of
+    # the fill gets them.
+    warnings: list[tuple[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -860,6 +865,21 @@ def _index_venue(history: FillHistory, broker: SupportsFillHistory) -> _Venue:
 # --- Fills from the venue (§3.4 Fill, §4.3 item 4) ----------------------------
 
 
+def _fill_warn(fill: _Fill, pick: _Pick | None, code: str, detail: str) -> None:
+    """Record a fill-level warning, and put it on ``pick`` when it is known."""
+    if (code, detail) not in fill.warnings:
+        fill.warnings.append((code, detail))
+    if pick is not None:
+        pick.warn(code, detail)
+
+
+def _give_exit(pick: _Pick, exit_: _Exit) -> None:
+    """Hand an exit to a pick, with the warnings its fill raised."""
+    pick.exits.append(exit_)
+    for code, detail in exit_.fill.warnings:
+        pick.warn(code, detail)
+
+
 def _venue_fill(
     order: _Order, venue: _Venue, pick: _Pick | None, *, currency: str | None
 ) -> _Fill | None:
@@ -890,8 +910,10 @@ def _venue_fill(
         filled_qty=row.filled_amount,
         closing=order.buy_sell == _SELL,
     )
-    if partial_only and pick is not None:
-        pick.warn(
+    if partial_only:
+        _fill_warn(
+            fill,
+            pick,
             W_PARTIAL_FILL_UNVERIFIED,
             f"order {order.order_id}: only partial Fill rows; the last cumulative row is used",
         )
@@ -913,11 +935,12 @@ def _attach_report_facts(
         return
     if not executions:
         _null_report_facts(fill, NULL_REPORT_ROW_MISSING, NULL_REPORT_ROW_MISSING)
-        if pick is not None:
-            pick.warn(
-                W_REPORT_LAGS_AUDIT,
-                f"order {fill.order_id}: the audit has the fill, the trades report has no row yet",
-            )
+        _fill_warn(
+            fill,
+            pick,
+            W_REPORT_LAGS_AUDIT,
+            f"order {fill.order_id}: the audit has the fill, the trades report has no row yet",
+        )
         return
     fill.executions = [
         {
@@ -934,11 +957,12 @@ def _attach_report_facts(
     rows = [b for t in trade_ids for b in venue.bookings_by_trade.get(t, [])]
     if not rows:
         _null_report_facts(fill, NULL_REPORT_ROW_MISSING, NULL_REPORT_ROW_MISSING)
-        if pick is not None:
-            pick.warn(
-                W_REPORT_LAGS_AUDIT,
-                f"order {fill.order_id}: the bookings report has no row for {trade_ref} yet",
-            )
+        _fill_warn(
+            fill,
+            pick,
+            W_REPORT_LAGS_AUDIT,
+            f"order {fill.order_id}: the bookings report has no row for {trade_ref} yet",
+        )
         return
     sums: dict[str, float] = {"commission": 0.0, "exchange_fee": 0.0, "fx_conversion": 0.0}
     share_acct = 0.0
@@ -962,8 +986,10 @@ def _attach_report_facts(
             share_native += booking.amount or 0.0
             if booking.conversion_rate is not None:
                 rates.append(booking.conversion_rate)
-        elif booking.bk_amount_type not in _BK_KNOWN_NOT_SUMMED and pick is not None:
-            pick.warn(
+        elif booking.bk_amount_type not in _BK_KNOWN_NOT_SUMMED:
+            _fill_warn(
+                fill,
+                pick,
                 W_BOOKING_TYPE_UNMAPPED,
                 f"trade {booking.related_trade_id}: BkAmountType {booking.bk_amount_type!r}",
             )
@@ -1027,12 +1053,12 @@ def _null_report_facts(fill: _Fill, fee_reason: str, fx_reason: str) -> None:
 def _cross_check_executions(
     fill: _Fill, executions: Sequence[Execution], venue: _Venue, pick: _Pick | None
 ) -> None:
-    if pick is None:
-        return
     total = sum(abs(e.amount or 0.0) for e in executions)
     price = fill.price.value
     if fill.filled_qty is not None and abs(total - fill.filled_qty) > _QTY_EPS:
-        pick.warn(
+        _fill_warn(
+            fill,
+            pick,
             W_AUDIT_REPORT_DISAGREE,
             f"order {fill.order_id}: executions sum to {total:g}, the audit says {fill.filled_qty:g}",
         )
@@ -1040,7 +1066,9 @@ def _cross_check_executions(
         vwap = sum(abs(e.amount or 0.0) * (e.price or 0.0) for e in executions) / total
         tick = venue.tick(fill.uic, price)
         if tick is not None and abs(vwap - price) > tick + _FLOAT_TOLERANCE:
-            pick.warn(
+            _fill_warn(
+                fill,
+                pick,
                 W_AUDIT_REPORT_DISAGREE,
                 f"order {fill.order_id}: execution VWAP {vwap:.6g} vs AveragePrice {price:g}",
             )
@@ -1050,7 +1078,9 @@ def _cross_check_executions(
                 continue
             gap = abs((execution.execution_time - fill.when).total_seconds())
             if gap > _CROSS_SOURCE_TIME_TOLERANCE_S:
-                pick.warn(
+                _fill_warn(
+                    fill,
+                    pick,
                     W_AUDIT_REPORT_DISAGREE,
                     f"order {fill.order_id}: trade {execution.trade_id} executed {gap:.3f} s "
                     "away from the audit fill time",
@@ -1797,7 +1827,7 @@ def _allocate(
             owned = [lot for lot in open_lots if lot.pick is owner]
             given = take(owned, remaining)
             if given > _QTY_EPS:
-                owner.exits.append(_make_exit(event, given, event.ownership.attribution, None))
+                _give_exit(owner, _make_exit(event, given, event.ownership.attribution, None))
             remaining -= given
         if remaining > _QTY_EPS and owner is None and event.fill.related_position_id:
             linked = [lot for lot in open_lots if lot.position_id == event.fill.related_position_id]
@@ -1806,7 +1836,7 @@ def _allocate(
                 pick = linked[0].pick
                 given = take([lot for lot in open_lots if lot.pick is pick], remaining)
                 if given > _QTY_EPS:
-                    pick.exits.append(_make_exit(event, given, ATTRIBUTION_POSITION_LINK, None))
+                    _give_exit(pick, _make_exit(event, given, ATTRIBUTION_POSITION_LINK, None))
                 remaining -= given
             elif not linked_picks:
                 event.evidence.append(
@@ -1819,14 +1849,12 @@ def _allocate(
                 (pick,) = candidates.values()
                 given = take([lot for lot in open_lots if lot.pick is pick], remaining)
                 if given > _QTY_EPS:
-                    pick.exits.append(
-                        _make_exit(event, given, ATTRIBUTION_EXTERNAL_REFERENCE, None)
-                    )
+                    _give_exit(pick, _make_exit(event, given, ATTRIBUTION_EXTERNAL_REFERENCE, None))
                 remaining -= given
             elif len(candidates) > 1:
                 for pick in candidates.values():
                     pick.ambiguous = True
-                    pick.exits.append(_make_exit(event, None, None, NULL_AMBIGUOUS))
+                    _give_exit(pick, _make_exit(event, None, None, NULL_AMBIGUOUS))
                     pick.warn(
                         W_AMBIGUOUS,
                         f"order {event.fill.order_id}: take-profit on uic {event.fill.uic} "
@@ -1838,7 +1866,7 @@ def _allocate(
             if offline and len(candidates) > 1:
                 for pick in candidates.values():
                     pick.ambiguous = True
-                    pick.exits.append(_make_exit(event, None, None, NULL_AMBIGUOUS))
+                    _give_exit(pick, _make_exit(event, None, None, NULL_AMBIGUOUS))
                     pick.warn(
                         W_AMBIGUOUS,
                         f"order {event.fill.order_id}: offline, no venue times to order the "
@@ -1855,7 +1883,7 @@ def _allocate(
                 part = min(lot.remaining, remaining)
                 lot.remaining -= part
                 remaining -= part
-                lot.pick.exits.append(_make_exit(event, part, ATTRIBUTION_FIFO, None))
+                _give_exit(lot.pick, _make_exit(event, part, ATTRIBUTION_FIFO, None))
                 lot.pick.warn(
                     W_FIFO_ASSUMED,
                     f"order {event.fill.order_id}: {part:g} share(s) given by FIFO over "
@@ -1936,17 +1964,9 @@ def _broker_closing_events(
             bracket_children=bracket_children,
             bracket_requests=bracket_requests,
         )
-        # Report-row facts were attached without a pick; re-attach so the
-        # warnings land on the owner (or on every pick of the uic if unowned).
-        target = ownership.owner
-        if target is not None:
-            _attach_report_facts(
-                fill,
-                venue.executions_by_order.get(order.order_id, []),
-                venue,
-                target,
-                currency=currency,
-            )
+        # The fill's own warnings (report rows, bookings, cross-checks) ride
+        # on the fill and reach every pick that receives a share of it
+        # (``_give_exit``), whether it is owned or allocated later (§4.5).
         if order.buy_sell == _BUY:
             # An opening fill no pick owns (UBER's manual Buy 4 @69.55).
             entry = fill.to_dict()

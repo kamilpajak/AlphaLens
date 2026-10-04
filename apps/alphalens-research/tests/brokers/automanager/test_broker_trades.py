@@ -866,6 +866,8 @@ class FiltersAndCounts(_TradesCase):
 
 
 QUBT = "QUBT:2026-09-03"
+LULU_G2 = "LULU:2026-09-08-g2"
+LULU_G2_MANUAL_SELL = "5442083130"
 
 
 class BracketStopIsThePlacedStop(_TradesCase):
@@ -971,6 +973,34 @@ class OfflineStopLevelAtFill(_TradesCase):
         self.assertEqual(
             exit_["stop_level_at_fill"]["null_reason"], "stop_amend_history_unavailable"
         )
+
+
+class ReportFactsReachAnUnownedExitsPick(_TradesCase):
+    """§4.7: a fill with no report row warns ``report_lags_audit`` on the
+    record. An exit that reaches its pick by the position link, FIFO or the
+    uic rule has no owner when its report facts are read; the warning must
+    still land on the pick that receives it."""
+
+    def test_qubt_manual_close_without_its_report_row(self) -> None:
+        install_journals(self.home)
+        broker = FakeFillHistory(venue_without(trades={"6870737601"}))
+        record = trade(self.build(broker, pick=QUBT), QUBT)
+        (exit_,) = record["exits"]
+        self.assertEqual(exit_["attribution"], "position_link")
+        self.assertEqual(exit_["fees"]["commission"]["null_reason"], "report_row_missing")
+        self.assertIn("report_lags_audit", _codes(record))
+
+    def test_a_fifo_exit_with_an_unknown_booking_type(self) -> None:
+        install_journals(self.home)
+        venue = venue_without()
+        lulu_trades = {
+            t["TradeId"] for t in venue["trades"] if t.get("OrderId") == LULU_G2_MANUAL_SELL
+        }
+        source = next(b for b in venue["bookings"] if b["RelatedTradeId"] in lulu_trades)
+        venue["bookings"].append({**source, "BkAmountType": "Brand New Fee", "Amount": -5.0})
+        record = trade(self.build(FakeFillHistory(venue), pick=LULU_G2), LULU_G2)
+        self.assertEqual(record["exits"][0]["attribution"], "fifo_fallback")
+        self.assertIn("booking_type_unmapped", _codes(record))
 
 
 class PublishedVocabularies(unittest.TestCase):
