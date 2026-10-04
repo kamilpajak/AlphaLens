@@ -193,7 +193,7 @@ def _seed_planned(journal: Path) -> None:
     plan_stop`` no longer has to be handed an ATR it discards."""
     with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
         sj._append_standalone_stop_journal(
-            cl._build_planned_line(
+            sj._build_planned_line(
                 entry_crid="crid-0",
                 uic=_UIC,
                 side="SELL",

@@ -647,7 +647,7 @@ def _seed_tranche_plan(
     from broker_contract.sizing import TpTranchePlan
 
     sj._append_standalone_stop_journal(
-        cl._build_tranche_plan_line(
+        sj._build_tranche_plan_line(
             uic=uic,
             tp_tranches=tuple(
                 TpTranchePlan(
@@ -2946,7 +2946,7 @@ class TestStaleTranchePlanRetraction(IsolatedHomeTestCase):
 
 def _seed_planned_fire_line(crid: str = "KO-2026-07-20-entry-t0-fire", uic: int = 307) -> None:
     sj._append_standalone_stop_journal(
-        cl._build_planned_line(
+        sj._build_planned_line(
             entry_crid=crid,
             uic=uic,
             side="SELL",
@@ -2986,7 +2986,7 @@ class TestStalePlannedLineRetraction(IsolatedHomeTestCase):
                 self.assertEqual(len(markers), 1)
                 self.assertEqual(markers[0]["client_request_id"], "KO-2026-07-20-entry-t0-fire")
                 self.assertEqual(markers[0]["uic"], 307)
-                self.assertNotIn(307, cl._fold_planned_exits(_lines(stops_path)))
+                self.assertNotIn(307, sj._fold_planned_exits(_lines(stops_path)))
 
     def test_a_fired_tier_blocks_the_unfired_class(self) -> None:
         # The fired pick's planned line may still cover a LIVE position — the
@@ -3271,7 +3271,7 @@ class TestFiredTerminalPlanRetraction(IsolatedHomeTestCase):
         planned_markers = [ln for ln in _lines(stops_path) if ln["kind"] == "planned_retracted"]
         self.assertEqual(len(planned_markers), 1)
         self.assertEqual(planned_markers[0]["client_request_id"], "KO-2026-07-20-entry-t0-fire")
-        self.assertNotIn(307, cl._fold_planned_exits(_lines(stops_path)))
+        self.assertNotIn(307, sj._fold_planned_exits(_lines(stops_path)))
 
     def test_another_picks_stop_fill_is_not_closure(self) -> None:
         # uic reuse defense: a stop ref parsing to a DIFFERENT pick key is not

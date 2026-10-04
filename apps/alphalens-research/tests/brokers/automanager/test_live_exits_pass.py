@@ -346,7 +346,7 @@ class TestFoldFiredSinceLatestPlan(IsolatedHomeTestCase):
             {"kind": "tranche_plan", "uic": 307},
             {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
         ]
-        out = cl._fold_fired_since_latest_plan(lines)
+        out = sj._fold_fired_since_latest_plan(lines)
         self.assertEqual(out[307], frozenset({"tp1"}))
 
     def test_a_new_tranche_plan_line_resets_the_uics_fired_set(self) -> None:
@@ -355,7 +355,7 @@ class TestFoldFiredSinceLatestPlan(IsolatedHomeTestCase):
             {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
             {"kind": "tranche_plan", "uic": 307},  # re-entry: the OLD trade's fired tags reset
         ]
-        out = cl._fold_fired_since_latest_plan(lines)
+        out = sj._fold_fired_since_latest_plan(lines)
         self.assertNotIn(307, out)
 
     def test_fired_tags_after_the_reset_still_accumulate(self) -> None:
@@ -365,7 +365,7 @@ class TestFoldFiredSinceLatestPlan(IsolatedHomeTestCase):
             {"kind": "tranche_plan", "uic": 307},
             {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
         ]
-        out = cl._fold_fired_since_latest_plan(lines)
+        out = sj._fold_fired_since_latest_plan(lines)
         self.assertEqual(out[307], frozenset({"tp1"}))
 
     def test_distinct_uics_reset_independently(self) -> None:
@@ -376,7 +376,7 @@ class TestFoldFiredSinceLatestPlan(IsolatedHomeTestCase):
             {"kind": "tranche_fired", "uic": 2, "tag": "tp1"},
             {"kind": "tranche_plan", "uic": 1},  # only uic 1 resets
         ]
-        out = cl._fold_fired_since_latest_plan(lines)
+        out = sj._fold_fired_since_latest_plan(lines)
         self.assertNotIn(1, out)
         self.assertEqual(out[2], frozenset({"tp1"}))
 
@@ -386,7 +386,7 @@ class TestFoldFiredSinceLatestPlan(IsolatedHomeTestCase):
             {"kind": "tranche_fired", "uic": 307},  # no tag
             {"kind": "oco_placed", "uic": 307},  # unrelated kind
         ]
-        out = cl._fold_fired_since_latest_plan(lines)
+        out = sj._fold_fired_since_latest_plan(lines)
         self.assertEqual(out, {})
 
     def test_a_same_pick_key_re_append_does_not_reset(self) -> None:
@@ -400,7 +400,7 @@ class TestFoldFiredSinceLatestPlan(IsolatedHomeTestCase):
             {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
             {"kind": "tranche_plan", "uic": 307, "pick_key": "KO:2026-07-20"},
         ]
-        out = cl._fold_fired_since_latest_plan(lines)
+        out = sj._fold_fired_since_latest_plan(lines)
         self.assertEqual(out[307], frozenset({"tp1"}))
 
     def test_a_different_pick_key_resets_the_fired_set(self) -> None:
@@ -409,7 +409,7 @@ class TestFoldFiredSinceLatestPlan(IsolatedHomeTestCase):
             {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
             {"kind": "tranche_plan", "uic": 307, "pick_key": "KO:2026-08-01"},  # a NEW trade
         ]
-        out = cl._fold_fired_since_latest_plan(lines)
+        out = sj._fold_fired_since_latest_plan(lines)
         self.assertNotIn(307, out)
 
     def test_a_keyless_plan_always_resets(self) -> None:
@@ -420,7 +420,7 @@ class TestFoldFiredSinceLatestPlan(IsolatedHomeTestCase):
             {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
             {"kind": "tranche_plan", "uic": 307},
         ]
-        out = cl._fold_fired_since_latest_plan(lines)
+        out = sj._fold_fired_since_latest_plan(lines)
         self.assertNotIn(307, out)
 
     def test_consecutive_keyless_plans_both_reset(self) -> None:
@@ -429,7 +429,7 @@ class TestFoldFiredSinceLatestPlan(IsolatedHomeTestCase):
             {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
             {"kind": "tranche_plan", "uic": 307},  # keyless == keyless must STILL reset
         ]
-        out = cl._fold_fired_since_latest_plan(lines)
+        out = sj._fold_fired_since_latest_plan(lines)
         self.assertNotIn(307, out)
 
 
@@ -455,7 +455,7 @@ class _JournalCase(IsolatedHomeTestCase):
         pick_key: str | None = None,
     ) -> None:
         sj._append_standalone_stop_journal(
-            cl._build_tranche_plan_line(
+            sj._build_tranche_plan_line(
                 uic=uic,
                 tp_tranches=tranches,
                 reference_qty=reference_qty,

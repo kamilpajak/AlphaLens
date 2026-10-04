@@ -173,7 +173,7 @@ class _ServiceHarness:
     ) -> None:
         self.broker.set_position(ticker, shares, avg_price=price)
         sj._append_standalone_stop_journal(
-            cl._build_planned_line(
+            sj._build_planned_line(
                 entry_crid=f"crid-{ticker.upper()}",
                 uic=self.broker.uic_of(ticker),
                 side="SELL",

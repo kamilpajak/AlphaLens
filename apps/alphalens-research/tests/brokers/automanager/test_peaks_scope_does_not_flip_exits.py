@@ -76,7 +76,7 @@ def _position(uic: int) -> Position:
 def _seed_plan(journal: Path, uic: int, *, reaction: object) -> None:
     with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
         sj._append_standalone_stop_journal(
-            cl._build_planned_line(
+            sj._build_planned_line(
                 entry_crid=f"crid-{uic}",
                 uic=uic,
                 side="SELL",

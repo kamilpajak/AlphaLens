@@ -329,7 +329,7 @@ class _ProtBroker:
 def _seed_planned(journal: Path, uic: int = _UIC, crid: str = "crid-0") -> None:
     with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
         sj._append_standalone_stop_journal(
-            cl._build_planned_line(
+            sj._build_planned_line(
                 entry_crid=crid,
                 uic=uic,
                 side="SELL",
@@ -3282,7 +3282,7 @@ class TestBuildPlannedLineGeometryStamp(IsolatedHomeTestCase):
             "tier_index": 0,
         }
         base.update(over)
-        return cl._build_planned_line(**base)
+        return sj._build_planned_line(**base)
 
     def test_omitted_by_default_no_geometry_key(self) -> None:
         line = self._line()
@@ -3308,7 +3308,7 @@ class TestFoldPlannedExitsIgnoresGeometryStamp(IsolatedHomeTestCase):
     live protection derivation."""
 
     def test_fold_output_identical_with_and_without_geometry_stamp(self) -> None:
-        plain = cl._build_planned_line(
+        plain = sj._build_planned_line(
             entry_crid="crid-0",
             uic=_UIC,
             side="SELL",
@@ -3316,7 +3316,7 @@ class TestFoldPlannedExitsIgnoresGeometryStamp(IsolatedHomeTestCase):
             take_profit=306.72,
             tier_index=0,
         )
-        stamped = cl._build_planned_line(
+        stamped = sj._build_planned_line(
             entry_crid="crid-0",
             uic=_UIC,
             side="SELL",
@@ -3334,8 +3334,8 @@ class TestFoldPlannedExitsIgnoresGeometryStamp(IsolatedHomeTestCase):
                 "applied": True,
             },
         )
-        without_stamp = cl._fold_planned_exits([plain])
-        with_stamp = cl._fold_planned_exits([stamped])
+        without_stamp = sj._fold_planned_exits([plain])
+        with_stamp = sj._fold_planned_exits([stamped])
         self.assertEqual(
             {u: (p.stop_price, p.tp_price, p.entry_crid) for u, p in without_stamp.items()},
             {u: (p.stop_price, p.tp_price, p.entry_crid) for u, p in with_stamp.items()},
@@ -3358,7 +3358,7 @@ class TestAGeometryStampAloneGrantsNoPermission(IsolatedHomeTestCase):
     have managed."""
 
     def test_a_stamped_line_with_no_declaration_folds_to_no_declaration(self) -> None:
-        stamped = cl._build_planned_line(
+        stamped = sj._build_planned_line(
             entry_crid="crid-0",
             uic=_UIC,
             side="SELL",
@@ -3377,7 +3377,7 @@ class TestAGeometryStampAloneGrantsNoPermission(IsolatedHomeTestCase):
                 "applied": False,
             },
         )
-        planned = cl._fold_planned_exits([stamped])[_UIC]
+        planned = sj._fold_planned_exits([stamped])[_UIC]
         self.assertIsNone(planned.reaction)
         # ...while the prices the line exists for are untouched.
         self.assertEqual(planned.stop_price, 216.48)
@@ -3386,7 +3386,7 @@ class TestAGeometryStampAloneGrantsNoPermission(IsolatedHomeTestCase):
     def test_positive_control_a_declaration_on_the_same_line_does_fold(self) -> None:
         """Without this the check above would pass even if the fold ignored the
         ``reaction`` key entirely."""
-        both = cl._build_planned_line(
+        both = sj._build_planned_line(
             entry_crid="crid-0",
             uic=_UIC,
             side="SELL",
@@ -3396,7 +3396,7 @@ class TestAGeometryStampAloneGrantsNoPermission(IsolatedHomeTestCase):
             geometry_stamp={"k_atr": 1.5, "atr": 4.0},
             reaction=ReanchorOnFill(k_atr=2.0, atr=3.0),
         )
-        planned = cl._fold_planned_exits([both])[_UIC]
+        planned = sj._fold_planned_exits([both])[_UIC]
         self.assertEqual(planned.reaction, ReanchorOnFill(k_atr=2.0, atr=3.0))
 
 
@@ -3577,7 +3577,7 @@ class TestLatestPlannedSkipsMalformedLines(IsolatedHomeTestCase):
                 "stop_price": "abc",
             },  # bad float
         ]
-        self.assertEqual(cl._fold_planned_exits(lines), {})
+        self.assertEqual(sj._fold_planned_exits(lines), {})
 
 
 class TestProtectionExecutorUpgradeToOcoNoop(IsolatedHomeTestCase):
@@ -3960,7 +3960,7 @@ class TestBuildProtectionViewOcoTooFarTtl(IsolatedHomeTestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
-                cl._journal_oco_too_far(_UIC, clock=lambda: 1000.0 - 30.0)  # 30s ago
+                sj._journal_oco_too_far(_UIC, clock=lambda: 1000.0 - 30.0)  # 30s ago
                 view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
         self.assertIn(_UIC, view.oco_unsupported, "an unexpired oco_too_far degrades the uic")
 
@@ -3969,7 +3969,7 @@ class TestBuildProtectionViewOcoTooFarTtl(IsolatedHomeTestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
-                cl._journal_oco_too_far(_UIC, clock=lambda: 1000.0 - cl._OCO_TOO_FAR_TTL_S - 1.0)
+                sj._journal_oco_too_far(_UIC, clock=lambda: 1000.0 - cl._OCO_TOO_FAR_TTL_S - 1.0)
                 view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
         self.assertNotIn(
             _UIC, view.oco_unsupported, "an expired oco_too_far re-enables OCO for fresh fills"
@@ -3980,7 +3980,7 @@ class TestBuildProtectionViewOcoTooFarTtl(IsolatedHomeTestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
-                cl._mark_oco_unsupported(_UIC)
+                sj._mark_oco_unsupported(_UIC)
                 # A clock arbitrarily far in the future — the permanent marker
                 # (no ts) is TTL-immune; clearing it is a manual operator action.
                 view = cl.build_protection_view(
@@ -4617,7 +4617,7 @@ class TestExecutePlaceStopJournalsStopPlaced(IsolatedHomeTestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
-                cl._journal_stop_placed(
+                sj._journal_stop_placed(
                     _UIC,
                     46.0,
                     order_id="S-1",
@@ -4662,7 +4662,7 @@ class TestExecutePlaceStopJournalsStopPlaced(IsolatedHomeTestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
-                cl._journal_stop_placed(
+                sj._journal_stop_placed(
                     _UIC,
                     46.0,
                     order_id="S-1",
@@ -5019,7 +5019,7 @@ class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
                 "gen": 0,
             },
         ]
-        result = cl._fold_planned_exits(lines)
+        result = sj._fold_planned_exits(lines)
         self.assertEqual(set(result), {43070})
         planned = result[43070]
         self.assertIsInstance(planned, PlannedExit)
@@ -5045,7 +5045,7 @@ class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
                 "gen": 0,
             }
         ]
-        result = cl._fold_planned_exits(lines)
+        result = sj._fold_planned_exits(lines)
         self.assertIsInstance(result, dict)
         self.assertNotIsInstance(result, tuple)
 
@@ -5069,7 +5069,7 @@ class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
                 "order_id": "S-1",
             },
         ]
-        self.assertEqual(cl._fold_planned_exits(lines), {})
+        self.assertEqual(sj._fold_planned_exits(lines), {})
 
     def test_grows_conflicting_when_two_plans_hit_one_uic(self) -> None:
         lines = [
@@ -5094,7 +5094,7 @@ class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
                 "gen": 0,
             },
         ]
-        planned = cl._fold_planned_exits(lines)[43070]
+        planned = sj._fold_planned_exits(lines)[43070]
         self.assertTrue(planned.conflicting)
         self.assertEqual(planned.n_plans, 2)
 
@@ -5114,7 +5114,7 @@ class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
             },
             {"kind": "planned_retracted", "client_request_id": "crid-0", "uic": 43070},
         ]
-        self.assertEqual(cl._fold_planned_exits(lines), {})
+        self.assertEqual(sj._fold_planned_exits(lines), {})
 
     def test_a_retraction_heals_a_two_plan_conflict(self) -> None:
         # The BAH shape (#1249): two crids on one uic with the same tier_index
@@ -5142,7 +5142,7 @@ class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
             },
             {"kind": "planned_retracted", "client_request_id": "crid-B0", "uic": 43070},
         ]
-        planned = cl._fold_planned_exits(lines)[43070]
+        planned = sj._fold_planned_exits(lines)[43070]
         self.assertFalse(planned.conflicting)
         self.assertEqual(planned.n_plans, 1)
         self.assertEqual(planned.entry_crid, "crid-A0")
@@ -5176,7 +5176,7 @@ class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
                 "gen": 0,
             },
         ]
-        planned = cl._fold_planned_exits(lines)[43070]
+        planned = sj._fold_planned_exits(lines)[43070]
         self.assertAlmostEqual(planned.stop_price, 220.00)
 
     def test_a_keyless_retraction_marker_is_ignored(self) -> None:
@@ -5193,7 +5193,7 @@ class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
             },
             {"kind": "planned_retracted", "uic": 43070},  # malformed: no crid
         ]
-        self.assertIn(43070, cl._fold_planned_exits(lines))
+        self.assertIn(43070, sj._fold_planned_exits(lines))
 
     def test_tiers_disagree_takes_max_stop_for_a_long(self) -> None:
         lines = [
@@ -5218,7 +5218,7 @@ class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
                 "gen": 0,
             },
         ]
-        planned = cl._fold_planned_exits(lines)[43070]
+        planned = sj._fold_planned_exits(lines)[43070]
         self.assertAlmostEqual(planned.stop_price, 220.00)
 
     def test_planned_line_round_trips_tp_price_through_journal(self) -> None:
@@ -5228,7 +5228,7 @@ class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 sj._append_standalone_stop_journal(
-                    cl._build_planned_line(
+                    sj._build_planned_line(
                         entry_crid="crid-0",
                         uic=_UIC,
                         side="SELL",
@@ -5237,7 +5237,7 @@ class TestFoldPlannedExitsPricesOnly(IsolatedHomeTestCase):
                         tier_index=0,
                     )
                 )
-                folded = cl._fold_planned_exits(list(sj._iter_standalone_stop_journal()))
+                folded = sj._fold_planned_exits(list(sj._iter_standalone_stop_journal()))
         self.assertIn(_UIC, folded)
         self.assertAlmostEqual(folded[_UIC].tp_price or 0.0, 306.72)
 
@@ -5261,7 +5261,7 @@ class TestVerdictDrivenPlannedRetraction(IsolatedHomeTestCase):
 
     def _seed_planned(self, crid: str = "454d-stale", uic: int = 49284) -> None:
         sj._append_standalone_stop_journal(
-            cl._build_planned_line(
+            sj._build_planned_line(
                 entry_crid=crid,
                 uic=uic,
                 side="SELL",
@@ -5292,13 +5292,13 @@ class TestVerdictDrivenPlannedRetraction(IsolatedHomeTestCase):
             with self.subTest(status=status):
                 self._journal()
                 self._seed_planned()
-                cl._retract_planned_for_verdicts([self._cancelled(status=status, verdict=status)])
+                sj._retract_planned_for_verdicts([self._cancelled(status=status, verdict=status)])
                 markers = self._markers()
                 self.assertEqual(len(markers), 1)
                 self.assertEqual(markers[0]["client_request_id"], "454d-stale")
                 self.assertEqual(markers[0]["uic"], 49284)
                 self.assertNotIn(
-                    49284, cl._fold_planned_exits(list(sj._iter_standalone_stop_journal()))
+                    49284, sj._fold_planned_exits(list(sj._iter_standalone_stop_journal()))
                 )
 
     def test_retraction_is_idempotent_across_ticks(self) -> None:
@@ -5306,20 +5306,20 @@ class TestVerdictDrivenPlannedRetraction(IsolatedHomeTestCase):
         # must skip a crid that no longer governs, never stack markers.
         self._journal()
         self._seed_planned()
-        cl._retract_planned_for_verdicts([self._cancelled()])
-        cl._retract_planned_for_verdicts([self._cancelled()])
+        sj._retract_planned_for_verdicts([self._cancelled()])
+        sj._retract_planned_for_verdicts([self._cancelled()])
         self.assertEqual(len(self._markers()), 1)
 
     def test_a_filled_verdict_never_retracts(self) -> None:
         self._journal()
         self._seed_planned()
-        cl._retract_planned_for_verdicts([self._cancelled(status="FILLED", verdict="FILLED")])
+        sj._retract_planned_for_verdicts([self._cancelled(status="FILLED", verdict="FILLED")])
         self.assertEqual(self._markers(), [])
 
     def test_an_unresolved_verdict_never_retracts(self) -> None:
         self._journal()
         self._seed_planned()
-        cl._retract_planned_for_verdicts(
+        sj._retract_planned_for_verdicts(
             [self._cancelled(status="UNRESOLVED", verdict="UNRESOLVED(aged-out)")]
         )
         self.assertEqual(self._markers(), [])
@@ -5332,13 +5332,13 @@ class TestVerdictDrivenPlannedRetraction(IsolatedHomeTestCase):
         verdict = self._cancelled(
             details={"client_request_id": "454d-stale", "filled_quantity": 2.0}
         )
-        cl._retract_planned_for_verdicts([verdict])
+        sj._retract_planned_for_verdicts([verdict])
         self.assertEqual(self._markers(), [])
 
     def test_a_verdict_without_a_crid_never_retracts(self) -> None:
         self._journal()
         self._seed_planned()
-        cl._retract_planned_for_verdicts([self._cancelled(details={})])
+        sj._retract_planned_for_verdicts([self._cancelled(details={})])
         self.assertEqual(self._markers(), [])
 
     def test_verdict_advance_runs_the_retraction(self) -> None:
@@ -5384,7 +5384,7 @@ class TestFoldOcoUnsupported(IsolatedHomeTestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
-                cl._mark_oco_unsupported(_UIC)
+                sj._mark_oco_unsupported(_UIC)
                 folded = cl._fold_oco_unsupported(list(sj._iter_standalone_stop_journal()))
         self.assertIn(_UIC, folded)
 
@@ -5394,7 +5394,7 @@ class TestFoldOcoUnsupported(IsolatedHomeTestCase):
             broker = _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
-                cl._mark_oco_unsupported(_UIC)
+                sj._mark_oco_unsupported(_UIC)
                 view = cl.build_protection_view(broker, [])  # type: ignore[arg-type]
         self.assertIn(_UIC, view.oco_unsupported)
         # The planned prices still fold alongside the capability flag (one journal read).
@@ -5504,7 +5504,7 @@ class TestGenStampedRefChangesOnResize(IsolatedHomeTestCase):
         with TemporaryDirectory() as tmp:
             journal = Path(tmp) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
-                next_gen = cl._make_next_gen(43070)
+                next_gen = sj._make_next_gen(43070)
                 self.assertEqual(next_gen(46.0), 0)
                 self.assertEqual(next_gen(46.0), 0)
                 self.assertEqual(next_gen(30.0), 1)
@@ -5515,7 +5515,7 @@ class TestGenStampedRefChangesOnResize(IsolatedHomeTestCase):
         with TemporaryDirectory() as tmp:
             journal = Path(tmp) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
-                next_gen = cl._make_next_gen(43070)
+                next_gen = sj._make_next_gen(43070)
                 self.assertEqual(next_gen(46.0), 0)
                 self.assertEqual(next_gen(45.9999999), 0)
 
@@ -5523,11 +5523,11 @@ class TestGenStampedRefChangesOnResize(IsolatedHomeTestCase):
         with TemporaryDirectory() as tmp:
             journal = Path(tmp) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
-                cl._make_next_gen(43070)(46.0)
-                cl._make_next_gen(43070)(30.0)
-                self.assertEqual(cl._make_next_gen(43070)(30.0), 1)
-                self.assertEqual(cl._make_next_gen(43070)(20.0), 2)
-                self.assertEqual(cl._make_next_gen(99999)(10.0), 0)
+                sj._make_next_gen(43070)(46.0)
+                sj._make_next_gen(43070)(30.0)
+                self.assertEqual(sj._make_next_gen(43070)(30.0), 1)
+                self.assertEqual(sj._make_next_gen(43070)(20.0), 2)
+                self.assertEqual(sj._make_next_gen(99999)(10.0), 0)
 
 
 _AMEND_ON = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
@@ -5783,7 +5783,7 @@ class TestExecuteAmendStopJournalsAmendOk(IsolatedHomeTestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
-                cl._journal_amend_ok(_UIC, 6.0, clock=lambda: 1234.5)
+                sj._journal_amend_ok(_UIC, 6.0, clock=lambda: 1234.5)
                 lines = self._amend_ok_lines()
         self.assertEqual(lines, [{"kind": "amend_ok", "uic": _UIC, "qty": 6.0, "ts": 1234.5}])
 
@@ -5916,7 +5916,7 @@ class TestExecuteAmendStopJournalsReanchored(IsolatedHomeTestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
-                cl._journal_reanchored(_UIC, 95.0, clock=lambda: 1234.5)
+                sj._journal_reanchored(_UIC, 95.0, clock=lambda: 1234.5)
                 lines = self._reanchored_lines()
         self.assertEqual(
             lines, [{"kind": "reanchored", "uic": _UIC, "avg_price": 95.0, "ts": 1234.5}]
@@ -5952,7 +5952,7 @@ class TestExecuteAmendStopJournalsReanchored(IsolatedHomeTestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
-                cl._journal_reanchored(_UIC, 95.0, stop_price=91.5, clock=lambda: 1234.5)
+                sj._journal_reanchored(_UIC, 95.0, stop_price=91.5, clock=lambda: 1234.5)
                 lines = self._reanchored_lines()
         self.assertEqual(
             lines,
@@ -6076,7 +6076,7 @@ class TestExecuteAmendStopJournalsEnvelopeClamped(IsolatedHomeTestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
-                cl._journal_envelope_clamped(
+                sj._journal_envelope_clamped(
                     _UIC,
                     policy="atr_bracket_1p5",
                     proposed=99.85,
@@ -6325,8 +6325,8 @@ class TestBuildProtectionViewTtlFolds(IsolatedHomeTestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
-                cl._journal_oco_placed(fresh_uic, clock=lambda: 1000.0 - 30.0)  # 30s ago
-                cl._journal_oco_placed(stale_uic, clock=lambda: 1000.0 - 300.0)  # 300s ago
+                sj._journal_oco_placed(fresh_uic, clock=lambda: 1000.0 - 30.0)  # 30s ago
+                sj._journal_oco_placed(stale_uic, clock=lambda: 1000.0 - 300.0)  # 300s ago
                 view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
         self.assertIn(fresh_uic, view.oco_recently_placed, "the 30s-old marker is fresh (TTL 120s)")
         self.assertNotIn(stale_uic, view.oco_recently_placed, "the 300s-old marker expired")
@@ -6337,8 +6337,8 @@ class TestBuildProtectionViewTtlFolds(IsolatedHomeTestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
-                cl._journal_amend_failed(fresh_uic, clock=lambda: 1000.0 - 30.0)
-                cl._journal_amend_failed(stale_uic, clock=lambda: 1000.0 - 300.0)
+                sj._journal_amend_failed(fresh_uic, clock=lambda: 1000.0 - 30.0)
+                sj._journal_amend_failed(stale_uic, clock=lambda: 1000.0 - 300.0)
                 view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
         self.assertIn(fresh_uic, view.amend_recently_failed)
         self.assertNotIn(stale_uic, view.amend_recently_failed)
@@ -6449,7 +6449,7 @@ class TestManagedExitAnnouncesInheritedTrailedLevel(IsolatedHomeTestCase):
             managed = cl._build_managed_exits(
                 long_positions=[_pos(10.0, 333)],
                 tranche_plans=sj.fold_tranche_plans(lines),
-                fired=cl._fold_fired_since_latest_plan(lines),
+                fired=sj._fold_fired_since_latest_plan(lines),
                 trailed={333: trailed_level},
             )
         self.assertEqual(len(managed), 1)
@@ -6487,7 +6487,7 @@ class TestManagedExitAnnouncesARaiseOncePerLevel(IsolatedHomeTestCase):
             cl._build_managed_exits(
                 long_positions=[_pos(10.0, 333)],
                 tranche_plans=sj.fold_tranche_plans(lines),
-                fired=cl._fold_fired_since_latest_plan(lines),
+                fired=sj._fold_fired_since_latest_plan(lines),
                 trailed={333: trailed_level},
                 announced=announced,
             )
@@ -6585,7 +6585,7 @@ class TestBuildProtectionViewWiresReanchoredByUic(IsolatedHomeTestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
-                cl._journal_reanchored(_UIC, 95.0, clock=lambda: 1000.0)
+                sj._journal_reanchored(_UIC, 95.0, clock=lambda: 1000.0)
                 view = cl.build_protection_view(self._broker(), [], clock=lambda: 2000.0)
         self.assertEqual(view.reanchored_by_uic, {_UIC: 95.0})
 
@@ -6619,15 +6619,15 @@ class TestProtectionViewIgnoresOutcomeRecords(IsolatedHomeTestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
-                cl._journal_oco_placed(_UIC, clock=lambda: 1000.0 - 30.0)
-                cl._journal_amend_failed(_UIC, clock=lambda: 1000.0 - 30.0)
+                sj._journal_oco_placed(_UIC, clock=lambda: 1000.0 - 30.0)
+                sj._journal_amend_failed(_UIC, clock=lambda: 1000.0 - 30.0)
                 before = self._view_fields(
                     cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
                 )
-                cl._journal_stop_placed(
+                sj._journal_stop_placed(
                     _UIC, 46.0, order_id="S-1", ref="ref-1", clock=lambda: 1000.0 - 5.0
                 )
-                cl._journal_amend_ok(_UIC, 46.0, clock=lambda: 1000.0 - 5.0)
+                sj._journal_amend_ok(_UIC, 46.0, clock=lambda: 1000.0 - 5.0)
                 after = self._view_fields(
                     cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
                 )
@@ -6643,17 +6643,17 @@ class TestAmendSeqMonotonicJournalBacked(IsolatedHomeTestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
-                self.assertEqual(cl._make_next_amend_seq(_UIC)(), 0)
-                self.assertEqual(cl._make_next_amend_seq(_UIC)(), 1)
-                self.assertEqual(cl._make_next_amend_seq(_UIC)(), 2)
-                self.assertEqual(cl._make_next_amend_seq(88888)(), 0, "seq is per-uic")
+                self.assertEqual(sj._make_next_amend_seq(_UIC)(), 0)
+                self.assertEqual(sj._make_next_amend_seq(_UIC)(), 1)
+                self.assertEqual(sj._make_next_amend_seq(_UIC)(), 2)
+                self.assertEqual(sj._make_next_amend_seq(88888)(), 0, "seq is per-uic")
 
     def test_fold_planned_exits_wires_journal_backed_amend_seq(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
-                planned = cl._fold_planned_exits(list(sj._iter_standalone_stop_journal()))[_UIC]
+                planned = sj._fold_planned_exits(list(sj._iter_standalone_stop_journal()))[_UIC]
                 s0 = planned.next_amend_seq()
                 s1 = planned.next_amend_seq()
         self.assertEqual((s0, s1), (0, 1), "the folded PlannedExit carries the monotonic seq")
@@ -7174,7 +7174,7 @@ def _tranche_plan_line(
     uic: int, *, pick_key: str | None = None, target_price: float = 20.0
 ) -> dict[str, Any]:
     """A well-formed ``tranche_plan`` journal line carrying a one-tranche ladder."""
-    return cl._build_tranche_plan_line(
+    return sj._build_tranche_plan_line(
         uic=uic,
         tp_tranches=(
             TpTranchePlan(
@@ -7311,8 +7311,8 @@ class TestCompactStandaloneStopJournalLines(IsolatedHomeTestCase):
         compacted = cl._compact_standalone_stop_journal_lines(original)
 
         self.assertEqual(
-            _planned_fold_data(cl._fold_planned_exits(original)),
-            _planned_fold_data(cl._fold_planned_exits(compacted)),
+            _planned_fold_data(sj._fold_planned_exits(original)),
+            _planned_fold_data(sj._fold_planned_exits(compacted)),
         )
         self.assertEqual(
             cl._fold_oco_unsupported(original),
@@ -7344,8 +7344,8 @@ class TestCompactStandaloneStopJournalLines(IsolatedHomeTestCase):
             cl._derive_owed_sibling_retires(compacted),
         )
         self.assertEqual(
-            cl._fold_round_trip_closures_since_latest_plan(original),
-            cl._fold_round_trip_closures_since_latest_plan(compacted),
+            sj._fold_round_trip_closures_since_latest_plan(original),
+            sj._fold_round_trip_closures_since_latest_plan(compacted),
         )
         self.assertEqual(
             cl._fold_standing_stop_ids(original), cl._fold_standing_stop_ids(compacted)
@@ -7400,8 +7400,8 @@ class TestCompactStandaloneStopJournalLines(IsolatedHomeTestCase):
         ]
         compacted = cl._compact_standalone_stop_journal_lines(lines)
         self.assertEqual(
-            _planned_fold_data(cl._fold_planned_exits(lines)),
-            _planned_fold_data(cl._fold_planned_exits(compacted)),
+            _planned_fold_data(sj._fold_planned_exits(lines)),
+            _planned_fold_data(sj._fold_planned_exits(compacted)),
         )
         self.assertFalse(
             any(
@@ -7447,7 +7447,7 @@ class TestCompactStandaloneStopJournalLines(IsolatedHomeTestCase):
         compacted = cl._compact_standalone_stop_journal_lines(original)
         self.assertIn(333, sj.fold_tranche_plans(original))  # guard: non-vacuous
         self.assertEqual(sj.fold_tranche_plans(original), sj.fold_tranche_plans(compacted))
-        self.assertEqual({333: frozenset({"tp1"})}, cl._fold_fired_since_latest_plan(compacted))
+        self.assertEqual({333: frozenset({"tp1"})}, sj._fold_fired_since_latest_plan(compacted))
 
     def test_retracted_ladder_compacts_to_no_tranche_lines(self) -> None:
         original = [
@@ -7456,7 +7456,7 @@ class TestCompactStandaloneStopJournalLines(IsolatedHomeTestCase):
         ]
         compacted = cl._compact_standalone_stop_journal_lines(original)
         self.assertEqual(sj.fold_tranche_plans(compacted), {})
-        self.assertEqual(cl._fold_fired_since_latest_plan(compacted), {})
+        self.assertEqual(sj._fold_fired_since_latest_plan(compacted), {})
         self.assertEqual(
             [line for line in compacted if str(line.get("kind", "")).startswith("tranche")],
             [],
@@ -7472,10 +7472,10 @@ class TestCompactStandaloneStopJournalLines(IsolatedHomeTestCase):
         ]
         compacted = cl._compact_standalone_stop_journal_lines(original)
         self.assertEqual(sj.fold_tranche_plans(original), sj.fold_tranche_plans(compacted))
-        self.assertEqual({444: frozenset({"tp2"})}, cl._fold_fired_since_latest_plan(original))
+        self.assertEqual({444: frozenset({"tp2"})}, sj._fold_fired_since_latest_plan(original))
         self.assertEqual(
-            cl._fold_fired_since_latest_plan(original),
-            cl._fold_fired_since_latest_plan(compacted),
+            sj._fold_fired_since_latest_plan(original),
+            sj._fold_fired_since_latest_plan(compacted),
         )
 
     def test_idempotent_reappend_keeps_prior_fired_tags(self) -> None:
@@ -7489,10 +7489,10 @@ class TestCompactStandaloneStopJournalLines(IsolatedHomeTestCase):
             _tranche_plan_line(333, pick_key="OLN:2026-08-14"),
         ]
         compacted = cl._compact_standalone_stop_journal_lines(original)
-        self.assertEqual({333: frozenset({"tp1"})}, cl._fold_fired_since_latest_plan(original))
+        self.assertEqual({333: frozenset({"tp1"})}, sj._fold_fired_since_latest_plan(original))
         self.assertEqual(
-            cl._fold_fired_since_latest_plan(original),
-            cl._fold_fired_since_latest_plan(compacted),
+            sj._fold_fired_since_latest_plan(original),
+            sj._fold_fired_since_latest_plan(compacted),
         )
         self.assertEqual(sj.fold_tranche_plans(original), sj.fold_tranche_plans(compacted))
 
@@ -7506,8 +7506,8 @@ class TestCompactStandaloneStopJournalLines(IsolatedHomeTestCase):
         compacted = cl._compact_standalone_stop_journal_lines(mixed)
         self.assertEqual(sj.fold_tranche_plans(mixed), sj.fold_tranche_plans(compacted))
         self.assertEqual(
-            cl._fold_fired_since_latest_plan(mixed),
-            cl._fold_fired_since_latest_plan(compacted),
+            sj._fold_fired_since_latest_plan(mixed),
+            sj._fold_fired_since_latest_plan(compacted),
         )
         non_tranche = [
             line for line in compacted if not str(line.get("kind", "")).startswith("tranche")
@@ -7533,7 +7533,7 @@ class TestCompactStandaloneStopJournalLines(IsolatedHomeTestCase):
             managed = cl._build_managed_exits(
                 long_positions=[_pos(10.0, 333)],
                 tranche_plans=sj.fold_tranche_plans(lines),
-                fired=cl._fold_fired_since_latest_plan(lines),
+                fired=sj._fold_fired_since_latest_plan(lines),
                 trailed=cl._fold_trailed_since_latest_plan(lines),
             )
             self.assertEqual(len(managed), 1)
@@ -7580,10 +7580,10 @@ class TestCompactStandaloneStopJournalFile(IsolatedHomeTestCase):
             )
             with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
                 before_lines = list(sj._iter_standalone_stop_journal())
-                planned_before = _planned_fold_data(cl._fold_planned_exits(before_lines))
+                planned_before = _planned_fold_data(sj._fold_planned_exits(before_lines))
                 oco_before = cl._fold_oco_unsupported(before_lines)
-                seq_a_before = cl._read_persisted_amend_seq(111)
-                seq_b_before = cl._read_persisted_amend_seq(222)
+                seq_a_before = sj._read_persisted_amend_seq(111)
+                seq_b_before = sj._read_persisted_amend_seq(222)
 
                 cl._compact_standalone_stop_journal()
 
@@ -7591,11 +7591,11 @@ class TestCompactStandaloneStopJournalFile(IsolatedHomeTestCase):
                 self.assertLess(len(after_lines), len(before_lines))
                 self.assertEqual(
                     planned_before,
-                    _planned_fold_data(cl._fold_planned_exits(after_lines)),
+                    _planned_fold_data(sj._fold_planned_exits(after_lines)),
                 )
                 self.assertEqual(oco_before, cl._fold_oco_unsupported(after_lines))
-                self.assertEqual(seq_a_before, cl._read_persisted_amend_seq(111))
-                self.assertEqual(seq_b_before, cl._read_persisted_amend_seq(222))
+                self.assertEqual(seq_a_before, sj._read_persisted_amend_seq(111))
+                self.assertEqual(seq_b_before, sj._read_persisted_amend_seq(222))
                 for kind in ("oco_placed", "amend_failed", "oco_too_far"):
                     self.assertEqual(
                         cl._fold_ttl_markers(before_lines, kind, 300.0, 120.0),
@@ -10387,7 +10387,7 @@ class TestPageNowResiduals(IsolatedHomeTestCase):
         # filled_quantity must never retract the disaster-stop plan.
         retracted: list[Any] = []
         with mock.patch.object(sj, "_retract_planned_lines", lambda c, **k: retracted.append(c)):
-            cl._retract_planned_for_verdicts(
+            sj._retract_planned_for_verdicts(
                 [self._verdict("CANCELLED")]  # partial fill present
             )
         self.assertEqual(retracted, [])

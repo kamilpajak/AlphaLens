@@ -34,11 +34,11 @@ import unittest
 
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.control_loop import (
-    _build_planned_line,
     _compact_standalone_stop_journal_lines,
     _elect_trailed_lines,
     _fold_trailed_since_latest_plan,
 )
+from alphalens_pipeline.brokers.automanager.stop_journal import _build_planned_line
 
 _UIC = 7777
 _LEVEL = 61.5

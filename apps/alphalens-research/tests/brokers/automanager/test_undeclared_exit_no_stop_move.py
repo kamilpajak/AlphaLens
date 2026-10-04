@@ -50,15 +50,15 @@ from alphalens_pipeline.brokers.automanager.control_loop import (
     _fold_trailed_since_latest_plan,
     _placed_geometry_stamp,
 )
-from alphalens_pipeline.brokers.automanager.control_loop import (
-    _build_planned_line as _planned_line,
-)
 from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
     NoOp,
     PlannedExit,
     ProtectionView,
     _reconcile_long,
+)
+from alphalens_pipeline.brokers.automanager.stop_journal import (
+    _build_planned_line as _planned_line,
 )
 from broker_contract.contract import InstrumentRef, OrderState, OrderStatus, Position
 from broker_contract.exit_geometry.registry import exit_policy_registry

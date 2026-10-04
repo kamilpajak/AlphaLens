@@ -195,7 +195,7 @@ class ManagerWorld:
         self._seed_plan(ticker, stop=stop, take_profit=None)
         uic = self.broker.uic_of(ticker)
         sj._append_standalone_stop_journal(
-            cl._build_tranche_plan_line(
+            sj._build_tranche_plan_line(
                 uic=uic, tp_tranches=tranches, reference_qty=shares, stop_price=stop
             )
         )
@@ -206,7 +206,7 @@ class ManagerWorld:
         crid — the repeated-tier_index shape ``_fold_planned_exits`` reads as a
         plan conflict on the netted position."""
         sj._append_standalone_stop_journal(
-            cl._build_planned_line(
+            sj._build_planned_line(
                 entry_crid=f"crid-{ticker.upper()}-stale",
                 uic=self.broker.uic_of(ticker),
                 side="SELL",
@@ -540,7 +540,7 @@ class ManagerWorld:
         self, ticker: str, *, stop: float, take_profit: float | None, exit_policy: Any = None
     ) -> None:
         sj._append_standalone_stop_journal(
-            cl._build_planned_line(
+            sj._build_planned_line(
                 entry_crid=f"crid-{ticker.upper()}",
                 uic=self.broker.uic_of(ticker),
                 side="SELL",

@@ -11,11 +11,11 @@ import json
 import unittest
 
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
-from alphalens_pipeline.brokers.automanager.control_loop import (
+from alphalens_pipeline.brokers.automanager.stop_journal import (
     _build_tranche_plan_line,
     _fold_round_trip_closures_since_latest_plan,
+    fold_tranche_plans,
 )
-from alphalens_pipeline.brokers.automanager.stop_journal import fold_tranche_plans
 from broker_contract.sizing import TpTranchePlan
 
 
