@@ -42,6 +42,14 @@ that stays in ``control_loop``, so taking it would open a back-edge:
 give ``control_loop`` its own binding, and a test patching this module would not
 reach it.
 
+The general rule behind that, because it governs every further step: a function's
+globals are the namespace of the module where it is DEFINED. Moving a function
+therefore changes which module's binding it resolves for every free name it uses
+— its imports included. A caller that patched the old module's binding is
+patching a name the function no longer reads. That is not a theoretical hazard
+here: it is the one defect this move produced, caught by
+``test_note_gate_reads_the_record_mic``.
+
 One deliberate effect: code moved here logs under ``entry_watch`` instead of
 ``control_loop``. Nothing outside the test suite keys on the logger name.
 """
