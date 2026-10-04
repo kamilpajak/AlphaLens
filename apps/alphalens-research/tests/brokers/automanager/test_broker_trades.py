@@ -931,6 +931,21 @@ class SimRhiBracketStopOffline(_TradesCase):
         self.assertEqual(surplus["reason_null_reason"], "stop_amend_history_unavailable")
 
 
+class NeverFilledPickHasNoStop(_TradesCase):
+    """A pick that never filled never had a stop order: its placed stop is
+    null ``never_filled``, not ``no_audit_row`` (an order id the audit lacks)."""
+
+    def test_in_both_modes(self) -> None:
+        install_journals(self.home)
+        for mode, broker in (("broker", "default"), ("offline", None)):
+            report = self.build(broker)
+            for key in ("NVAX:2026-08-10", "CIEN:2026-09-04", "BE:2026-09-30"):
+                with self.subTest(mode=mode, pick=key):
+                    record = trade(report, key)
+                    self.assertEqual(record["state"], "never_filled")
+                    self.assertEqual(record["placed_stop"]["null_reason"], "never_filled")
+
+
 class PublishedVocabularies(unittest.TestCase):
     def test_every_alert_reason_has_a_row(self) -> None:
         self.assertEqual(

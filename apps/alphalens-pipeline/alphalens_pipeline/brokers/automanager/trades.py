@@ -2138,7 +2138,7 @@ def _stop_ref_owner(reference: str | None, picks_on_uic: Sequence[_Pick]) -> _Pi
     return owners[0] if len(owners) == 1 else None
 
 
-def _placed_stop(pick: _Pick, venue: _Venue | None, stop_facts: _StopFacts) -> Measured:
+def _placed_stop(pick: _Pick, venue: _Venue | None, stop_facts: _StopFacts, state: str) -> Measured:
     unit = _price_unit(pick.instrument_currency)
     if venue is not None:
         far_future = dt.datetime.max.replace(tzinfo=dt.UTC)
@@ -2162,9 +2162,13 @@ def _placed_stop(pick: _Pick, venue: _Venue | None, stop_facts: _StopFacts) -> M
                 SOURCE_STOP_JOURNAL,
                 "line:standalone_stops:stop_placed",
             )
+    source = SOURCE_STOP_JOURNAL if venue is None else SOURCE_AUDIT
+    if state == STATE_NEVER_FILLED:
+        # No entry filled, so no stop order was ever placed for the pick.
+        return _null(NULL_NEVER_FILLED, unit, source)
     if venue is None:
-        return _null(NULL_NOT_JOURNALED, unit, SOURCE_STOP_JOURNAL)
-    return _null(NULL_NO_AUDIT_ROW, unit, SOURCE_AUDIT)
+        return _null(NULL_NOT_JOURNALED, unit, source)
+    return _null(NULL_NO_AUDIT_ROW, unit, source)
 
 
 def _plan_disaster_stop(pick: _Pick, stop_facts: _StopFacts) -> Measured:
@@ -2632,7 +2636,7 @@ def _record(
         "plan_size_shape": _plan_size_shape(plan),
         "plan_source": _plan_source(plan),
         "plan_disaster_stop": denominator.to_dict(),
-        "placed_stop": _placed_stop(pick, venue, stop_facts).to_dict(),
+        "placed_stop": _placed_stop(pick, venue, stop_facts, state).to_dict(),
         "instrument": _instrument(pick, offline),
         "sizing_fx": _sizing_fx(pick),
         "side": side,
