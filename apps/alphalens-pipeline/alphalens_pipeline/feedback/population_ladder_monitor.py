@@ -345,6 +345,15 @@ class PopulationMonitorReport:
     # so a short night is countable rather than only greppable in the journal.
     fetch_budget_refused: int = 0  # fetches refused because the run budget was spent
     unpriced_rows: int = 0  # plannable rows written with no price path at all
+    # The subset of ``unpriced_rows`` whose ticker returned NO BARS this run, i.e.
+    # a name the vendor has no data for rather than one the budget never reached.
+    # Separated because the two have different lifetimes and different operator
+    # actions: a starved date is fixed by replaying it, while a delisted name is
+    # fixed by nothing and ages out of MONITOR_LOOKBACK_DAYS on its own. Folding
+    # them into one series gave the alert a single explanation for both, so a name
+    # that stopped trading paged nightly for 75 days with a recovery that could
+    # not work (DBRG, briefed 2026-09-30, last bar 2026-09-29 at two vendors).
+    unpriced_no_bars_rows: int = 0
     # Implausible-move guard dispositions this run (#1090) — one count per arm of
     # the Amendment-1 tree, so a sustained lookup_failed (the fail-closed arm
     # silently reverting to the old blindness) is countable, not just logged.
@@ -1679,6 +1688,7 @@ def _replay_one_date(
             resolve_queue.append(outcome.resolve_item)
 
     # ---- PASS 2: ordered, budgeted resolve ----
+    no_bars_tickers: set[str] = set()
     deferred_ages = _resolve_queue(
         resolve_queue,
         rows_by_ticker,
@@ -1692,6 +1702,7 @@ def _replay_one_date(
         forced_budget=forced_budget,
         deadline=deadline,
         guard=guard,
+        no_bars_tickers=no_bars_tickers,
     )
 
     rows = [rows_by_ticker[t] for t in order]
@@ -1708,12 +1719,14 @@ def _replay_one_date(
     # the alert pages daily (it did, on its first day: 2026-09-20 07:40 UTC, on
     # the Friday and Saturday briefs whose arrival was the following Monday).
     arrived = ladder_arrival_session(brief_date, exchange) <= last_closed_session
-    unpriced_rows = (
-        sum(
-            1
-            for row in rows
-            if bool(row.get("plannable")) and row.get("last_priced_session") is None
-        )
+    unpriced = [
+        row for row in rows if bool(row.get("plannable")) and row.get("last_priced_session") is None
+    ]
+    unpriced_rows = len(unpriced) if arrived else 0
+    # A SUBSET of the above by construction, so the alert's subtraction can never
+    # go negative, and 0 on a not-yet-arrived date for the same reason the total is.
+    unpriced_no_bars_rows = (
+        sum(1 for row in unpriced if str(row.get("ticker", "")).upper() in no_bars_tickers)
         if arrived
         else 0
     )
@@ -1733,6 +1746,7 @@ def _replay_one_date(
         stopped_for_deadline=counts.get("stopped_for_deadline", 0),
         fetch_budget_refused=(budget.refused + forced_budget.refused) - refused_before,
         unpriced_rows=unpriced_rows,
+        unpriced_no_bars_rows=unpriced_no_bars_rows,
         guard_split_invalidated=counts.get("guard_split_invalidated", 0),
         guard_lookup_failed=counts.get("guard_lookup_failed", 0),
         guard_extreme_validated=counts.get("guard_extreme_validated", 0),
@@ -2487,6 +2501,7 @@ def _resolve_queue(
     forced_budget: _FetchBudget,
     deadline: _RunDeadline | None = None,
     guard: _ImplausibleGuard | None = None,
+    no_bars_tickers: set[str] | None = None,
 ) -> list[int]:
     # Run-scoped memo of the grouped-daily maps the maturity stamp reads: one
     # disk read (or one fetch) per distinct maturity session, including a session
@@ -2504,6 +2519,11 @@ def _resolve_queue(
     """
     ordered = sorted(resolve_queue, key=_resolve_order_key)
     deferred_ages: list[int] = []
+    # Owned by the caller, which needs it AFTER this pass to split the unpriced
+    # count by cause. Defaulted so the existing tests that call this directly keep
+    # working, and so a missing set degrades to "no cause recorded", never a crash.
+    if no_bars_tickers is None:
+        no_bars_tickers = set()
 
     for item in ordered:
         ticker = item.candidate.ticker.upper()
@@ -2533,6 +2553,19 @@ def _resolve_queue(
             pct_off_52w_high=item.candidate.technical_pct_off_52w_high,
             guard=guard,
         )
+        if isinstance(result, _NoBars):
+            # Asked, and the name has no bars. Carried exactly like a deferral, but
+            # remembered by ticker so the final count can say which unpriced rows
+            # no replay can help.
+            no_bars_tickers.add(ticker)
+            _carry_deferred(
+                item,
+                rows_by_ticker=rows_by_ticker,
+                counts=counts,
+                deferred_ages=deferred_ages,
+                last_closed_session=last_closed_session,
+            )
+            continue
         if result is None:
             # Budget exhausted / fetch fail — carry prior (or a retryable
             # placeholder for a brand-new ticker) and record the age.
@@ -2674,6 +2707,21 @@ class _ResolveResult:
     guard_disposition: str | None = None
 
 
+class _NoBars:
+    """The vendor answered and had nothing, as opposed to refusing or being skipped.
+
+    ``_replay_candidate`` returns ``None`` for budget refusal, fetch failure and
+    deadline, which the caller handles identically. Those are all "could not ask".
+    This marks "asked, and the name has no bars", which carries the same carry-prior
+    outcome but a different cause, and the cause is what the alert needs.
+    """
+
+    __slots__ = ()
+
+
+_NO_BARS = _NoBars()
+
+
 def _replay_candidate(
     store_dir: Path,
     ticker: str,
@@ -2688,8 +2736,11 @@ def _replay_candidate(
     deadline: _RunDeadline | None = None,
     pct_off_52w_high: float | None = None,
     guard: _ImplausibleGuard | None = None,
-) -> _ResolveResult | _GuardCarry | None:
+) -> _ResolveResult | _GuardCarry | _NoBars | None:
     """RTH-only minute fetch + replay one ticker. ``None`` on fetch fail / defer / skip.
+
+    ``_NO_BARS`` when the fetch SUCCEEDED and returned nothing: same carry-prior
+    outcome as ``None``, different cause, counted separately.
 
     ``pct_off_52w_high`` is the brief row's ``technical_pct_off_52w_high``
     (CandidateBrief provenance — NOT in the trade setup), threaded into the
@@ -2748,7 +2799,7 @@ def _replay_candidate(
         # MONITOR_LOOKBACK_DAYS window — bounded, never unbounded, and surfaced by
         # the report's `carried_forward` count rather than silently dropped.
         logger.warning("population-monitor: no bars for %s — carrying prior.", ticker)
-        return None
+        return _NO_BARS
 
     if reference_close_override is not None:
         reference_close = reference_close_override

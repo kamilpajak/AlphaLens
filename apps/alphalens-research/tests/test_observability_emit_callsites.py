@@ -1267,6 +1267,7 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
 
     _DEFERRED = 'alphalens_feedback_deferred_total{reason="%s"}'
     _UNPRICED = "alphalens_feedback_unpriced_rows"
+    _UNPRICED_NO_BARS = "alphalens_feedback_unpriced_no_bars_rows"
     _OLDEST = "alphalens_feedback_oldest_deferred_sessions"
 
     def test_every_completeness_series_is_zero_initialised(self) -> None:
@@ -1280,6 +1281,7 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
             self._DEFERRED % "fetch_budget",
             self._DEFERRED % "deadline",
             self._UNPRICED,
+            self._UNPRICED_NO_BARS,
             self._OLDEST,
         ):
             self.assertIn(key, metrics)
@@ -1310,6 +1312,40 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
         self.assertEqual(metrics[self._DEFERRED % "deadline"], 4)
         self.assertEqual(metrics[self._UNPRICED], 19)
         self.assertEqual(metrics[self._OLDEST], 7)
+
+    def test_the_two_unpriced_causes_are_emitted_as_separate_series(self) -> None:
+        """One unpriced row, two possible causes, and the alert must tell them apart.
+
+        A row the budget never reached is fixed by replaying its date. A row whose
+        ticker has no bars at any vendor is fixed by nothing, and ages out of the
+        monitor window on its own after 75 days. Emitting only the total gave the
+        alert one explanation for both, so a delisted name paged nightly with a
+        recovery that could not work.
+        """
+        emit = self._run_refresh(
+            reports=[
+                self._report(unpriced_rows=4, unpriced_no_bars_rows=1),
+                self._report(unpriced_rows=2, unpriced_no_bars_rows=2),
+            ]
+        )
+
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics[self._UNPRICED], 6)
+        self.assertEqual(metrics[self._UNPRICED_NO_BARS], 3)
+        # What the rule reads: the part a replay can still fix.
+        self.assertEqual(metrics[self._UNPRICED] - metrics[self._UNPRICED_NO_BARS], 3)
+
+    def test_a_report_predating_the_new_field_still_emits_a_zero(self) -> None:
+        # The emitter reads the field off each report with a default, so a stale
+        # report object cannot make the series vanish - a vanished series reads
+        # exactly like a stopped exporter and would silently disarm the rule.
+        class _Old:
+            unpriced_rows = 5
+
+        emit = self._run_refresh(reports=[_Old()])
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics[self._UNPRICED], 5)
+        self.assertEqual(metrics[self._UNPRICED_NO_BARS], 0)
 
     def test_the_completeness_series_share_the_guard_series_emit_call(self) -> None:
         # The rules file adds no absent() guard for these series, on the grounds

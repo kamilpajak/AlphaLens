@@ -311,6 +311,79 @@ class TestIncompleteRunIsCountable(_MonitorTestBase):
         self.assertTrue(stored["last_priced_session"].isna().all())
         self.assertEqual(report.unpriced_rows, 0)
 
+    # --- the two causes behind one unpriced row (#DBRG, 2026-10-02..04) ---
+    #
+    # `unpriced_rows` conflates a row the budget never reached with a row whose
+    # ticker has no bars at any vendor. The first is fixable by replaying the date;
+    # the second is a name that stopped trading, and replaying it finds nothing
+    # again. The alert had one explanation for both and told the operator to replay,
+    # so a delisted name pages every night for the 75 days it takes to age out of
+    # the monitor window, with a recovery that cannot work.
+    #
+    # Measured on the live VPS over seven nights: no-bars was 0,0,0,0,1,1,1 while
+    # budget-exhausted was 0,70,40,29,5,0,0. The two move independently, which is
+    # what makes separating them worth a metric.
+
+    @staticmethod
+    def _no_bars_fetch(ticker, start, end):
+        """A vendor that answers, with nothing. NOT a fetch failure and NOT a defer."""
+        return []
+
+    def test_a_ticker_with_no_bars_is_counted_as_its_own_cause(self):
+        report = self._run(env={}, bar_fetch=self._no_bars_fetch)
+        self.assertEqual(report.unpriced_rows, 1)
+        self.assertEqual(report.unpriced_no_bars_rows, 1)
+
+    def test_a_budget_starved_row_is_unpriced_but_is_NOT_a_no_bars_row(self):
+        # The discriminating case. Without this the new series could simply track
+        # `unpriced_rows` and the alert would be no better off than before.
+        report = self._run(env=self._STARVED)
+        self.assertEqual(report.unpriced_rows, 1)
+        self.assertEqual(report.unpriced_no_bars_rows, 0)
+
+    def test_the_no_bars_subset_never_exceeds_the_unpriced_total(self):
+        # The alert subtracts one from the other, so a subset that could exceed the
+        # total would make the expression negative and the rule silently dead.
+        for env, fetch in (
+            ({}, self._no_bars_fetch),
+            (self._STARVED, None),
+            ({}, None),
+            (self._STARVED, self._no_bars_fetch),
+        ):
+            with self.subTest(env=bool(env), no_bars=fetch is not None):
+                report = self._run(env=env, bar_fetch=fetch)
+                self.assertLessEqual(report.unpriced_no_bars_rows, report.unpriced_rows)
+                self.assertGreaterEqual(report.unpriced_no_bars_rows, 0)
+
+    def test_a_fully_served_run_reports_neither_cause(self):
+        report = self._run(env={})
+        self.assertEqual(report.unpriced_rows, 0)
+        self.assertEqual(report.unpriced_no_bars_rows, 0)
+
+    def test_a_date_whose_arrival_has_not_closed_reports_no_no_bars_rows_either(self):
+        # The arrival exclusion has to apply to BOTH counts or the subtraction the
+        # alert does goes negative on every pre-open morning.
+        report = self._run(
+            env={},
+            bar_fetch=self._no_bars_fetch,
+            brief_date=self._FRIDAY_BRIEF,
+            now=self._SUNDAY_NOW,
+        )
+        self.assertEqual(report.unpriced_rows, 0)
+        self.assertEqual(report.unpriced_no_bars_rows, 0)
+
+    def test_the_actionable_remainder_is_what_the_alert_will_read(self):
+        """What the rule computes, asserted here so the code and the rule agree.
+
+        The rule in the follow-up PR fires on
+        `unpriced_rows - unpriced_no_bars_rows > 0`. These are the two states it
+        must tell apart.
+        """
+        delisted = self._run(env={}, bar_fetch=self._no_bars_fetch)
+        starved = self._run(env=self._STARVED)
+        self.assertEqual(delisted.unpriced_rows - delisted.unpriced_no_bars_rows, 0)
+        self.assertEqual(starved.unpriced_rows - starved.unpriced_no_bars_rows, 1)
+
     def test_the_exclusion_holds_whatever_the_budget(self):
         # The arrival rule must not leak into the deferral counters: a refused
         # fetch is a refused fetch whatever the date. Starving the budget on a
