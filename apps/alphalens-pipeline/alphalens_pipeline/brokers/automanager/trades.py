@@ -1944,6 +1944,10 @@ def _broker_closing_events(
         tier.trigger_order_id for pick in picks_on_uic for tier in pick.tiers if tier.fill
     }
     currency = next((p.instrument_currency for p in picks_on_uic if p.instrument_currency), None)
+    # The opening side follows the picks' side: a short pick opens with a Sell
+    # and closes with a Buy. Long is the plan default (TradeSpec.side).
+    sides = {_plan_side(p.plan) for p in picks_on_uic} - {None}
+    opening_side = _SELL if sides == {"short"} else _BUY
     events: list[_ClosingEvent] = []
     for order in venue.orders.values():
         if order.uic != uic or order.order_id in entry_orders:
@@ -1967,7 +1971,7 @@ def _broker_closing_events(
         # The fill's own warnings (report rows, bookings, cross-checks) ride
         # on the fill and reach every pick that receives a share of it
         # (``_give_exit``), whether it is owned or allocated later (§4.5).
-        if order.buy_sell == _BUY:
+        if order.buy_sell == opening_side:
             # An opening fill no pick owns (UBER's manual Buy 4 @69.55).
             entry = fill.to_dict()
             entry.update(

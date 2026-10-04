@@ -794,3 +794,52 @@ class SyntheticBookingsAndPeaks(_TradesCase):
         self.assertAlmostEqual(
             value(record["outcome"]["mfe_lower_bound"]), 141.3 - 135.11, places=6
         )
+
+
+class SyntheticShortInBrokerMode(_TradesCase):
+    """synthetic: a short pick on uic 999. Its entry is a Sell and its stop a
+    Buy; the Buy must close the pick, not be listed as a manual open."""
+
+    def test_the_buy_stop_closes_the_short_pick(self) -> None:
+        install_journals(self.home, extra=_synthetic_offline_pick(side="short", disaster_stop=13.0))
+        venue = venue_without()
+        venue["instruments"]["999"] = VENUE["instruments"][str(VST_UIC)]
+
+        def row(order_id: str, ref: str, side: str, when: str, price: float) -> dict[str, Any]:
+            return {
+                "ActivityTime": when,
+                "Amount": 5.0,
+                "AssetType": "Stock",
+                "AveragePrice": price,
+                "BuySell": side,
+                "ExecutionPrice": price,
+                "FillAmount": 5.0,
+                "FilledAmount": 5.0,
+                "LogId": order_id,
+                "OrderId": order_id,
+                "OrderType": "StopIfTraded" if side == "Buy" else "Market",
+                "PositionId": f"P-{order_id}",
+                "Price": price,
+                "Status": "FinalFill",
+                "SubStatus": "Confirmed",
+                "Uic": 999,
+                "ExternalReference": ref,
+            }
+
+        venue["audit"] += [
+            row("1", "ZZZ-2026-10-02-entry-t0-fire", "Sell", "2026-10-02T14:00:00.000000Z", 10.0),
+            row(
+                "2",
+                "ZZZ-2026-10-02-entry-t0-fire-stop-0",
+                "Buy",
+                "2026-10-02T16:00:00.000000Z",
+                12.0,
+            ),
+        ]
+        report = self.build(FakeFillHistory(venue), pick="ZZZ:2026-10-02")
+        record = trade(report, "ZZZ:2026-10-02")
+        self.assertNotIn("2", {u["order_id"] for u in report.unattributed_fills})
+        (exit_,) = record["exits"]
+        self.assertEqual(exit_["order_id"], "2")
+        self.assertEqual(record["state"], "closed")
+        self.assertAlmostEqual(value(record["outcome"]["pnl_cash"]), -10.0, places=9)
