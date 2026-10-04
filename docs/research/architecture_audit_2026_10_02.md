@@ -21,6 +21,17 @@ whether it is a kept seam or code without a consumer. The bucket totals
 reproduce exactly. The six modules with no consumer were then removed, which
 §6.2 records together with the one module the removal orphaned.
 
+**Amended 2026-10-04:** finding 1 is answered, and the number it was stated
+with was wrong. §5.1 read a **local mirror** that had stopped updating on
+2026-09-05 — it said so at the time, and the caveat turned out to matter: the
+live store read from the VPS on 2026-10-04 (file `2026-10-02.parquet`) carries
+**178 columns, not 164**. The §5.1 table is left as measured; read "164" there
+as "the mirror on 2026-09-05", and 178 as the live figure. Of 112 brief
+parquets on the Mac, 31 carry at least one column the current writers no longer
+produce, all dated 2026-08-18 or earlier, so a width quoted without its date
+says little. The finding itself survived the correction intact: the gap was
+larger than published, not smaller.
+
 **Acted on since (2026-10-02):** finding #4 shipped —
 `alphalens_pipeline.paper.calendar` moved to
 `alphalens_pipeline.market.calendar`. Every count in this memo is the
@@ -494,6 +505,21 @@ The 77 parquet-only columns by family: `options_` 16, `buffett_` 14,
 The 16 `options_*` match what `CLAUDE.md` documents, which is an independent
 check that the read is measuring the right thing.
 
+**Amendment 2026-10-04 — the live figure, and a sharper version of the
+finding.** Re-read from the VPS source of truth (`2026-10-02.parquet`, read
+2026-10-04): **178 columns**. The table above is the 2026-09-05 mirror and is
+left as measured.
+
+The gap was also understated in a second way. The pipeline → API boundary is
+**not** gated against a parquet rename either: `briefs/ingest/parquet.py`
+requires exactly two of the 178 columns, `ticker` and `theme`, and reads every
+other one with `row.get(col) if col in row.index else None`, so a renamed
+column silently becomes the model field's default. The `test_schema_parity.py`
+and `test_openapi_parity.py` gates protect the model and the published schema,
+not the parquet. The `test_expert_columns_match_frozen_*_tuple` guards compare
+two **Django-side** copies of a column list, because `alphalens-django` does
+not depend on `alphalens-pipeline` and so cannot import the pipeline's tuples.
+
 **The gated boundary is the wrong one.** `briefs/tests/test_schema_parity.py`
 freezes a 107-column legacy contract against the `Brief` model, and
 `test_openapi_parity.py` freezes the published schema. So the pipeline → API
@@ -663,7 +689,7 @@ Cost of leaving it against cost of fixing it. Nothing here was changed.
 
 | # | Finding | Evidence | Leaving it | Fixing it |
 |---|---|---|---|---|
-| 1 | 77 of 164 brief-store columns cross no schema gate; the gated boundary (pipeline → API) is not where most columns live | §5.1 | a renamed column breaks readers silently; this is the most likely source of a quiet production defect | a column-contract gate on the parquet writer, mirroring `test_schema_parity.py` |
+| 1 | 77 of 164 brief-store columns cross no schema gate; the gated boundary (pipeline → API) is not where most columns live | §5.1 | a renamed column breaks readers silently; this is the most likely source of a quiet production defect | ANSWERED (#1676, shipped #1704) — but **not** in the shape proposed here. A frozen expected set mirroring `test_schema_parity.py` was rejected on measurement: 132 of the then-178 columns were **already** declared in code beside the stage that writes them, so a frozen list would have been a second home for the truth, detached from the code, frozen at a figure already 14 columns stale. What shipped declares the 46 undeclared names beside their writers and **assembles** `BRIEF_STORE_COLUMNS` from the thirteen per-stage declarations. Each declaration is read by its own writer to CHECK the frame and deliberately never imposed on it — a projection through the tuple re-invents a dropped column as all-null under the declared name, which both hides the defect in the data and blinds the gate (measured). Power is bounded and published: of 178 names the gate has rename power over 114, 42 have the declaration AS the writer (the tuple is iterated to stamp the frame, so nothing can diverge) and 22 are declared but read by no writer. Still open: the Django half cannot be closed from the pipeline side, and whether a mismatch should be fatal rather than logged is #1705 |
 | 2 | `control_loop.py` is 11 130 lines with no internal boundary, on the live order path | §4.1 | every change needs the whole file in head; 130 commits in 6 months | IN PROGRESS (#1677) — the partition map is measured by exclusive reachability from the 11 tick stages and the 10 wiring roots, with **zero functions shared between wiring roots**; step 1 moved the stream rail out (609 lines, 11 130 → 10 521) and pinned the direction one-way. The order is forced: the helpers the big clusters still need are a journal access layer, so that comes out before `_make_place_pick` (2 685 LOC) and `_run_entry_watch_pass` (1 584 LOC) |
 | 3 | No gate in CI measures file or function size | §4.2 | the next 11 000-line file grows the same way | enable `PLR0915`/`PLR0912` with a baseline, or a file-length check |
 | 4 | `paper.calendar` has the repo's highest inbound count (41) under a name that says it belongs to the feature ADR 0012 decommissioned (the package itself is `ACTIVE` — see §1.3 correction) | §2.4 | misleads every reader; blocks the keeper split | DONE — moved to `alphalens_pipeline.market.calendar`; the module keeps its symbol names |
