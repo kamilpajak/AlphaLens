@@ -34,6 +34,10 @@ deadcode:
 # Lint Python (all members) + check web TS
 lint:
     uv run ruff check apps/alphalens-broker-contract apps/alphalens-feedback apps/intent-replay apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
+    # CI runs `ruff format --check` on the same members as a separate step, so
+    # without this line local lint is greener than CI and a formatting-only
+    # failure is only discovered after pushing.
+    uv run ruff format --check apps/alphalens-broker-contract apps/alphalens-feedback apps/intent-replay apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
     cd apps/web && pnpm run check
 
 # Lint the Prometheus rules with promtool (PromQL syntax — the unit tests
