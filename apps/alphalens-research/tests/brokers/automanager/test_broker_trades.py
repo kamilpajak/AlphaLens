@@ -117,7 +117,15 @@ class GoldenVst(_TradesCase):
         self.assertEqual(self.record["state"], "closed")
         self.assertAlmostEqual(value(outcome["pnl_cash"]), 21.30, places=6)
         self.assertAlmostEqual(value(outcome["pnl_pct_of_spent"]), 2.6275, places=4)
-        self.assertEqual(value(outcome["denominator"]), 125.85)
+        # The stop LEVEL the R uses is ``denominator_stop``; the replay's
+        # ``r_multiple.denominator.value`` is the risk per share (§5).
+        self.assertNotIn("denominator", outcome)
+        self.assertEqual(value(outcome["denominator_stop"]), 125.85)
+        self.assertEqual(outcome["denominator_stop"]["source"], "derived")
+        self.assertEqual(
+            outcome["denominator_stop"]["ref"],
+            "plan:spec.disaster_stop (replay spec 5.1: spec.disaster_stop)",
+        )
         self.assertAlmostEqual(value(outcome["risk_per_share"]), 9.26, places=6)
         self.assertAlmostEqual(value(outcome["r_multiple"]), 0.3834, places=4)
         self.assertAlmostEqual(value(outcome["holding_seconds"]), 87765.332, places=3)
@@ -342,7 +350,7 @@ class RealShapes(_TradesCase):
         self.assertEqual(exit_["related_position_id"], "7732832861")
         self.assertEqual(record["state"], "closed")
         # Percent-sized: the R still has its stop; nothing size-derived is guessed.
-        self.assertEqual(value(record["outcome"]["denominator"]), 6.5)
+        self.assertEqual(value(record["outcome"]["denominator_stop"]), 6.5)
 
     def test_lulu_g2_reaches_the_pick_by_fifo_and_shows_the_rejected_link(self) -> None:
         record = trade(self.report, "LULU:2026-09-08-g2")

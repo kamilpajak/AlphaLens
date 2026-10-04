@@ -263,7 +263,7 @@ class _Builder:
                             "notional_spent",
                             "pnl_cash",
                             "pnl_pct_of_spent",
-                            "denominator",
+                            "denominator_stop",
                             "risk_per_share",
                             "r_multiple",
                             "holding_seconds",

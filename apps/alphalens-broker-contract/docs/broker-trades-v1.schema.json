@@ -914,7 +914,7 @@
         "pnl_pct_of_spent": {
           "$ref": "#/$defs/Measured"
         },
-        "denominator": {
+        "denominator_stop": {
           "$ref": "#/$defs/Measured"
         },
         "risk_per_share": {
@@ -958,7 +958,7 @@
         "notional_spent",
         "pnl_cash",
         "pnl_pct_of_spent",
-        "denominator",
+        "denominator_stop",
         "risk_per_share",
         "r_multiple",
         "holding_seconds",

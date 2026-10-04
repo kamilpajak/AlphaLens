@@ -381,7 +381,7 @@ On **SIM**, reads 2 and 3 are skipped with `status: skipped, reason: sim_reports
 
 ## 5. Outcome math
 
-All Outcome fields are `Measured` with `source: "derived"`, and `ref` names the inputs. Each one is null with a reason when an input is null. The fields are named to match the replay's `measures.py`.
+All Outcome fields are `Measured` with `source: "derived"`, and `ref` names the inputs. Each one is null with a reason when an input is null. Several names are the replay's, but a shared name does NOT mean the same quantity or unit: `notional_spent` and `pnl_cash` are in the instrument currency here and in the account currency in the replay summary, and the replay's `r_multiple.denominator.value` is `risk_per_share` here. The contract README carries the field-by-field mapping, with units.
 
 | Field | Definition | Unit |
 |---|---|---|
@@ -392,8 +392,8 @@ All Outcome fields are `Measured` with `source: "derived"`, and `ref` names the 
 | `notional_spent` | Σ entry qty × price | instrument ccy |
 | `pnl_cash` | `side_sign × Σ attributed_qty × (exit_price − avg_entry_price)`, gross | instrument ccy |
 | `pnl_pct_of_spent` | `pnl_cash / (avg_entry_price × exit_qty) × 100` | % |
-| `denominator` | the stop the R uses: `plan_disaster_stop`, per replay spec §5.1 (`spec.disaster_stop`, even when `exit.initial_levels` is supplied). `ref` says so. | instrument ccy |
-| `risk_per_share` | `side_sign × (avg_entry_price − denominator)`. Null `non_positive_risk` if ≤ 0. | instrument ccy |
+| `denominator_stop` | the stop LEVEL the R uses: `plan_disaster_stop`, per replay spec §5.1 (`spec.disaster_stop`, even when `exit.initial_levels` is supplied). `ref` says so. | instrument ccy |
+| `risk_per_share` | `side_sign × (avg_entry_price − denominator_stop)`. This is the replay's `r_multiple.denominator.value`. Null `non_positive_risk` if ≤ 0. | instrument ccy |
 | `r_multiple` | `pnl_cash / (exit_qty × risk_per_share)` | R |
 | `holding_seconds` | last exit venue time − first entry venue time. Offline it uses detection times, and the source names `keeper.*`. | s |
 | `fees` | `{commission, exchange_fee, fx_conversion}`, signed as the venue sends them (negative = cost). `commission` and `exchange_fee` are in the booking currency (`Currency`, USD on LIVE). `fx_conversion` is Σ `ConversionRateAccountCurrency` of the `Share Amount` rows, in the account currency (P3: about 0.25 % of the traded value per conversion, already inside the realized rate). For a fill shared between owners, the pick's share of every booking amount is `amount × attributed_qty / FilledAmount`, with source `derived`, the TradeIds in `ref`, and the warning `booking_prorated`. | per member |
@@ -525,7 +525,7 @@ Files: `apps/alphalens-research/tests/brokers/automanager/test_broker_trades.py`
 | exit | 6 @ 138.66, `2026-10-01T13:59:21.248Z`, `trailed_stop`, `stop_level_at_fill` 138.82 |
 | `pnl_cash` | 21.30 USD |
 | `pnl_pct_of_spent` | 2.6275 % |
-| `denominator` / `risk_per_share` | 125.85 / 9.26 |
+| `denominator_stop` / `risk_per_share` | 125.85 / 9.26 |
 | `r_multiple` | 0.3834 |
 | `holding_seconds` | 87765.332 |
 | fees | commission −1.00 and −1.00; exchange fee −0.02 (`Amount`, in `Currency`, USD); `fx_conversion` −15.84 PLN (−7.79 entry, −8.05 exit) |

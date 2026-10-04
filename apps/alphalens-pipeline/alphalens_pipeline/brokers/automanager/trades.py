@@ -2560,7 +2560,9 @@ def _render_outcome(
         "pnl_pct_of_spent",
     )
     rendered: dict[str, Any] = {name: out[name].to_dict() for name in ordered}
-    rendered["denominator"] = Measured(
+    # The stop LEVEL the R is measured from. The replay's
+    # ``r_multiple.denominator.value`` is ``risk_per_share`` below, not this.
+    rendered["denominator_stop"] = Measured(
         denominator.value,
         denominator.unit,
         SOURCE_DERIVED if denominator.value is not None else denominator.source,
