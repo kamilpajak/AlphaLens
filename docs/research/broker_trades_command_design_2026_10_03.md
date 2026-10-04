@@ -230,7 +230,7 @@ Every timestamp in the output is RFC 3339 UTC with milliseconds and a `Z`. The j
 |---|---|---|
 | `reason` | enum (§4.4) | why it exited |
 | `reason_evidence` | list[str] | what decided the reason, for example `audit:Changed 138.82 @2026-10-01T13:40:17.000Z`, `keeper:trailed 138.824`, `no_external_reference` |
-| `stop_level_at_fill` | Measured | the last price-changing audit `Changed` price of the stop order, or its `Placed` price; null for non-stop exits |
+| `stop_level_at_fill` | Measured | the last price-changing audit `Changed` price of the stop order, or its `Placed` price; null for non-stop exits. Offline it is always null `stop_amend_history_unavailable` for a stop exit: a journaled placement price may have moved since (VST placed 125.85, filled at a level of 138.82). |
 | `tp_label` | str \| null | the `n` from `_TP_REF_RE` |
 | `attributed_qty` | Measured | this pick's share of the fill (§4.5) |
 | `attribution` | `journal_tie` \| `external_reference` \| `position_link` \| `fifo_fallback` | how ownership was decided |
@@ -335,7 +335,7 @@ Note on LULU g2 (P1): the rejected manual Sell carries the link, the filled one 
 | `never_filled` | Σ entry fill qty = 0. `state_reason` is one of `refused`, `disarmed`, `expired`, `cancelled`, or `pending` (armed and not yet placed). It comes from `pick_status` and the tier terminals. |
 | `closed` | attributed exit qty = entry qty |
 | `open` | entry qty > exit qty, and the record is complete enough to say so. In broker mode the audit covers the window. Offline, the pick has no lines behind `snapshot_horizon`. |
-| `unresolved` | offline, entry qty > journal exit qty, and the pick's `plan_armed_at` is older than `snapshot_horizon` (or no snapshot exists). Lines may have been lost, so the builder does not guess. `state_reason: compacted_before_snapshots`. Outcome fields are null with the same reason. |
+| `unresolved` | offline only, never in broker mode. Three cases, each with its `state_reason`: (1) entry qty > journal exit qty, and the pick's `plan_armed_at` is older than `snapshot_horizon` (or no snapshot exists): lines may have been lost, so the builder does not guess, `compacted_before_snapshots`; (2) the pick has a now-bracket tier, whose fill no journal holds, so neither `closed` nor `never_filled` can be said: `not_journaled` (QUBT, LAC, MP on LIVE; SIM RHI:2026-09-03, where a `closed` would have hidden 701 shares); (3) a fill on its uic could not be given to one pick: `ambiguous_attribution`. Outcome fields are null with the same reason. |
 
 Offline, a pick at `open` whose stop has no fill also gets the neutral warning `exit_not_in_journal`. It does not suggest a manual close: on LIVE, 5 of the 7 picks in that shape were closed by the keeper (GME, AMBA, ENPH g2, SMMT, and the ALB g2 stop-0).
 

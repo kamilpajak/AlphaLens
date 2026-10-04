@@ -946,6 +946,33 @@ class NeverFilledPickHasNoStop(_TradesCase):
                     self.assertEqual(record["placed_stop"]["null_reason"], "never_filled")
 
 
+class OfflineStopLevelAtFill(_TradesCase):
+    """Offline, the level a stop stood at when it filled needs the audit's
+    amend rows, which no journal holds. Every offline stop exit says so with
+    one reason, whether or not its ``stop_placed`` line carries a price."""
+
+    def test_every_offline_stop_exit_is_null_amend_history_unavailable(self) -> None:
+        install_journals(self.home)
+        report = self.build(None)
+        for key in ("EWTX:2026-09-25", "UBER:2026-09-08", "ALB:2026-09-08-g2", VST):
+            for exit_ in trade(report, key)["exits"]:
+                with self.subTest(pick=key, order=exit_["order_id"]):
+                    level = exit_["stop_level_at_fill"]
+                    self.assertIsNone(level["value"])
+                    self.assertEqual(level["null_reason"], "stop_amend_history_unavailable")
+
+    def test_the_placed_price_is_not_reported_as_the_level_at_fill(self) -> None:
+        # VST's stop_placed line carries 125.85; the stop filled at a level of
+        # 138.82 after it trailed. Without the trailed lines the placed price
+        # must not stand in for the level.
+        install_journals(self.home, drop=DiscriminationCheck._is_trailed)
+        (exit_,) = trade(self.build(None, pick=VST), VST)["exits"]
+        self.assertIsNone(exit_["stop_level_at_fill"]["value"])
+        self.assertEqual(
+            exit_["stop_level_at_fill"]["null_reason"], "stop_amend_history_unavailable"
+        )
+
+
 class PublishedVocabularies(unittest.TestCase):
     def test_every_alert_reason_has_a_row(self) -> None:
         self.assertEqual(

@@ -2052,11 +2052,9 @@ def _offline_closing_events(
             evidence = [f"keeper:{kind} {value}"]
         if start is None:
             evidence.append("stop_placed_not_journaled")
-        stop_level = (
-            _num(_finite(placed.get("stop_price")), _price_unit(currency), SOURCE_STOP_JOURNAL)
-            if placed is not None and reason is None
-            else _null(NULL_STOP_AMEND_UNAVAILABLE, _price_unit(currency), SOURCE_STOP_JOURNAL)
-        )
+        # The level at fill is the stop's last price-changing amend, which only
+        # the audit records; a journaled placement price may have moved since.
+        stop_level = _null(NULL_STOP_AMEND_UNAVAILABLE, _price_unit(currency), SOURCE_STOP_JOURNAL)
         events.append(
             _ClosingEvent(
                 fill=fill,
