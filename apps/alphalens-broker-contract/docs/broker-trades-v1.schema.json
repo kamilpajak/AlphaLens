@@ -269,6 +269,20 @@
       ],
       "description": "Why a source was not read."
     },
+    "ReplayExclusion": {
+      "type": "string",
+      "enum": [
+        "offline",
+        "not_final",
+        "manual_close",
+        "unknown_exit",
+        "exit_reason_null",
+        "ambiguous_attribution",
+        "entry_mode_unsupported",
+        "legacy_plan_shape"
+      ],
+      "description": "Why a record cannot be compared with an intent-replay run."
+    },
     "Measured": {
       "type": "object",
       "description": "Every price, quantity, time and money value (§3.3).",
@@ -1140,6 +1154,13 @@
         "outcome": {
           "$ref": "#/$defs/Outcome"
         },
+        "replay_exclusions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReplayExclusion"
+          },
+          "description": "Empty when the record can be compared with an intent-replay run of its plan."
+        },
         "warnings": {
           "type": "array",
           "items": {
@@ -1183,6 +1204,7 @@
         "entries",
         "exits",
         "outcome",
+        "replay_exclusions",
         "warnings"
       ]
     }

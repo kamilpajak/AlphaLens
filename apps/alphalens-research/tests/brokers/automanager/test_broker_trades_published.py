@@ -53,6 +53,7 @@ class EveryVocabularyIsPublished(unittest.TestCase):
             "States": trades.STATES,
             "State reasons": trades.STATE_REASONS,
             "Warnings": trades.WARNING_CODES,
+            "Replay exclusions": trades.REPLAY_EXCLUSIONS,
         }
         for heading, vocabulary in cases.items():
             with self.subTest(table=heading):

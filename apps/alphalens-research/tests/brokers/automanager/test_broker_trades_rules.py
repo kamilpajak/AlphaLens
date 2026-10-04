@@ -843,3 +843,34 @@ class SyntheticShortInBrokerMode(_TradesCase):
         self.assertEqual(exit_["order_id"], "2")
         self.assertEqual(record["state"], "closed")
         self.assertAlmostEqual(value(record["outcome"]["pnl_cash"]), -10.0, places=9)
+
+
+class ReplayExclusions(_TradesCase):
+    """A record says, at its own level, why it cannot be compared with an
+    intent-replay run; an empty list means it can."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        install_journals(self.home)
+
+    def test_the_four_replayable_live_picks_have_none(self) -> None:
+        report = self.build()
+        for key in ("EWTX:2026-09-25", "ASTS:2026-09-23", "SMMT:2026-09-23", VST):
+            with self.subTest(pick=key):
+                self.assertEqual(trade(report, key)["replay_exclusions"], [])
+
+    def test_the_reasons_of_the_other_live_shapes(self) -> None:
+        report = self.build()
+        cases = {
+            LULU_G2: {"manual_close", "legacy_plan_shape"},
+            QUBT: {"manual_close", "entry_mode_unsupported", "legacy_plan_shape"},
+            "RHI:2026-09-02": {"not_final", "legacy_plan_shape"},
+            UBER: {"legacy_plan_shape"},
+        }
+        for key, expected in cases.items():
+            with self.subTest(pick=key):
+                self.assertEqual(set(trade(report, key)["replay_exclusions"]), expected)
+
+    def test_offline_output_is_never_replay_comparable(self) -> None:
+        record = trade(self.build(None, pick=VST), VST)
+        self.assertEqual(record["replay_exclusions"], ["offline"])

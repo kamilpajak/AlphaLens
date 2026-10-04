@@ -158,6 +158,10 @@ class _Builder:
             "TierPath": _enum(trades.TIER_PATHS, "How an entry tier was placed."),
             "SourceStatus": _enum(trades.SOURCE_STATUSES, "Whether a source was read."),
             "SourceReason": _enum(trades.SOURCE_REASONS, "Why a source was not read."),
+            "ReplayExclusion": _enum(
+                trades.REPLAY_EXCLUSIONS,
+                "Why a record cannot be compared with an intent-replay run.",
+            ),
             "Measured": self.measured(),
             "MeasuredTime": self.measured_time(),
             "SourceRead": self.obj(
@@ -325,6 +329,12 @@ class _Builder:
                     "entries": {"type": "array", "items": _ref("EntryTier")},
                     "exits": {"type": "array", "items": _ref("Exit")},
                     "outcome": _ref("Outcome"),
+                    "replay_exclusions": {
+                        "type": "array",
+                        "items": _ref("ReplayExclusion"),
+                        "description": "Empty when the record can be compared with an "
+                        "intent-replay run of its plan.",
+                    },
                     "warnings": {
                         "type": "array",
                         "items": self.obj(

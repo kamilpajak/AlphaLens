@@ -256,6 +256,28 @@ WARNING_CODES: tuple[str, ...] = (
     W_SIDE_UNRESOLVED,
 )
 
+# Why a record cannot be compared with an intent-replay run of its plan. An
+# empty list on a record means it can. Each value names one cause; a record may
+# carry several.
+EXCLUDE_OFFLINE = "offline"
+EXCLUDE_NOT_FINAL = "not_final"
+EXCLUDE_MANUAL_CLOSE = "manual_close"
+EXCLUDE_UNKNOWN_EXIT = "unknown_exit"
+EXCLUDE_EXIT_REASON_NULL = "exit_reason_null"
+EXCLUDE_AMBIGUOUS = "ambiguous_attribution"
+EXCLUDE_ENTRY_MODE = "entry_mode_unsupported"
+EXCLUDE_LEGACY_PLAN = "legacy_plan_shape"
+REPLAY_EXCLUSIONS: tuple[str, ...] = (
+    EXCLUDE_OFFLINE,
+    EXCLUDE_NOT_FINAL,
+    EXCLUDE_MANUAL_CLOSE,
+    EXCLUDE_UNKNOWN_EXIT,
+    EXCLUDE_EXIT_REASON_NULL,
+    EXCLUDE_AMBIGUOUS,
+    EXCLUDE_ENTRY_MODE,
+    EXCLUDE_LEGACY_PLAN,
+)
+
 # Not summed into any fee, and listed on every record so a consumer knows (§5).
 FEES_NOT_INCLUDED: tuple[str, ...] = ("financing", "dividends", "withholding_tax")
 
@@ -2669,8 +2691,40 @@ def _record(
         ],
         "exits": [exit_.to_dict() for exit_ in exits_sorted],
         "outcome": outcome,
+        "replay_exclusions": _replay_exclusions(pick, state, offline=offline),
         "warnings": list(pick.warnings),
     }
+
+
+def _replay_exclusions(pick: _Pick, state: str, *, offline: bool) -> list[str]:
+    """Why this record cannot stand beside a replay of its plan (empty: it can).
+
+    Offline the venue was not read, so prices and exit reasons are journal
+    values. ``open``/``unresolved`` have no final outcome. A manual close or an
+    unknown exit has no replay event. A now-bracket tier is ``entry_mode:
+    immediate``, which the replay refuses, and a percent-sized plan is a legacy
+    shape it refuses too."""
+    found: set[str] = set()
+    if offline:
+        found.add(EXCLUDE_OFFLINE)
+    if state in (STATE_OPEN, STATE_UNRESOLVED):
+        found.add(EXCLUDE_NOT_FINAL)
+    for exit_ in pick.exits:
+        if exit_.reason == REASON_MANUAL_CLOSE:
+            found.add(EXCLUDE_MANUAL_CLOSE)
+        elif exit_.reason == REASON_UNKNOWN:
+            found.add(EXCLUDE_UNKNOWN_EXIT)
+        elif exit_.reason is None:
+            found.add(EXCLUDE_EXIT_REASON_NULL)
+        if exit_.attributed_qty.value is None:
+            found.add(EXCLUDE_AMBIGUOUS)
+    if pick.ambiguous:
+        found.add(EXCLUDE_AMBIGUOUS)
+    if any(tier.path == PATH_NOW_BRACKET for tier in pick.tiers):
+        found.add(EXCLUDE_ENTRY_MODE)
+    if pick.plan is None or _plan_size_shape(pick.plan) != "by_amount":
+        found.add(EXCLUDE_LEGACY_PLAN)
+    return [value for value in REPLAY_EXCLUSIONS if value in found]
 
 
 def _empty_counts() -> dict[str, int]:
@@ -2907,6 +2961,7 @@ __all__ = [
     "NULL_REASONS",
     "PICK_STATUSES",
     "PLAN_SOURCES",
+    "REPLAY_EXCLUSIONS",
     "SIDES",
     "SIZE_SHAPES",
     "SOURCES",

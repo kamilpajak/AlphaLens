@@ -653,5 +653,26 @@ Quantity left after every lot is closed is listed in `unattributed_fills`.
 | `ambiguous_attribution` | a fill on the pick's uic could not be given to one pick |
 | `side_unresolved` | the plan does not resolve a side; outcome math was refused |
 
+#### Replay exclusions
+
+`replay_exclusions` on each record lists why it cannot be compared with an
+`intent-replay` run of its plan. An empty list means it can. A consumer that
+compares realized trades with the replay filters on `replay_exclusions == []`,
+then strips what the door derives from `plan` (`intent_id`, `meta.armed_ts`,
+`spec.tp_tranches[].r_multiple`; the jq recipe under "Writing a manual pick")
+and keeps `meta.trade_date`. On the LIVE journals of 2026-10-03 that leaves
+EWTX, ASTS, SMMT and VST.
+
+| exclusion | meaning |
+|---|---|
+| `offline` | the record was built `--offline`: prices and exit reasons are journal values, not the venue's |
+| `not_final` | the state is `open` or `unresolved`, so there is no final outcome |
+| `manual_close` | an exit is a `manual_close`; the replay has no such event |
+| `unknown_exit` | an exit's reason is `unknown` |
+| `exit_reason_null` | an exit's reason is null (offline, the stop's moves cannot be known) |
+| `ambiguous_attribution` | a fill on the uic could not be given to one pick |
+| `entry_mode_unsupported` | a now-bracket tier (`entry_mode: immediate`), which the replay refuses |
+| `legacy_plan_shape` | the plan is percent-sized (schema 1 or 2) or absent, which the replay refuses |
+
 No value of a `reason`, `null_reason` or warning code starts with `place_` or
 `amend_`: the CLI's no-orders gate flags such strings.
