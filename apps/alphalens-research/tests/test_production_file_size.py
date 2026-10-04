@@ -95,9 +95,9 @@ MUST_BE_DECLARED_DIR_NAMES = frozenset({"tests", "migrations"})
 # Every entry is a file the audit left too big. Lower one when the file
 # shrinks; raise one deliberately, in the PR that needs the room.
 BASELINE: dict[str, int] = {
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3414,
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3417,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8654,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8598,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3058,

@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import quote_source as qs
 from alphalens_pipeline.brokers.automanager.saxo_live_price_feed import (
     DarkSourceWarning,
     SaxoLivePriceFeed,
@@ -316,7 +317,7 @@ class TestTheDaemonFactoryWiresBoth(unittest.TestCase):
         stream.ensure_subscribed = lambda uics, *, scope="default": None  # type: ignore[method-assign]
         with (
             patch.dict(os.environ, {"ALPHALENS_SAXO_LIVE_PRICES": "1"}),
-            patch.object(cl, "_quote_source", lambda: stream),
+            patch.object(qs, "_quote_source", lambda: stream),
             patch.object(cl, "_feed_trading_window", lambda: lambda: in_window),
             patch.object(cl, "_FEED_DARK_WARNING", DarkSourceWarning()),
             self.assertLogs(_FEED_LOGGER, level="DEBUG") as caught,

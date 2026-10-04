@@ -1285,7 +1285,10 @@ def price_reader_command(
     import contextlib
     import signal
 
-    from alphalens_pipeline.brokers.automanager.control_loop import (
+    # The owner of the session-window predicate is the stream rail (step 1 of the
+    # control_loop partition), not the tick. Reaching for it through control_loop
+    # worked only while control_loop happened to import it.
+    from alphalens_pipeline.brokers.automanager.stream_handles import (
         _stream_session_window_if_enabled,
     )
     from alphalens_pipeline.data.alt_data import price_reader_server as reader
