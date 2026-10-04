@@ -138,7 +138,10 @@ class FakeFillHistory:
 
     def tick_size(self, uic: int, price: float) -> float | None:
         self.tick_calls.append(uic)
-        return SaxoBroker._tick_size_for(price, self.venue["instruments"][str(uic)])
+        details = self.venue["instruments"].get(str(uic))
+        if details is None:
+            return None  # the venue states no tick for this instrument
+        return SaxoBroker._tick_size_for(price, details)
 
 
 def venue_without(
