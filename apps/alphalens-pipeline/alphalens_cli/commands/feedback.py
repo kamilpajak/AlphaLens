@@ -343,7 +343,7 @@ def _emit_nightly_metrics(reports: Any) -> None:
 
     One ``alphalens_feedback_guard_total{disposition=...}`` series per arm of
     the Amendment-1 tree, summed across the run's per-brief-date reports, plus
-    five series that say how much of the sweep actually finished. The job exits
+    six series that say how much of the sweep actually finished. The job exits
     0 and stamps the store settled even when its fetch budget ran out mid-window
     (2026-09-19: 102 refusals, 19 rows left with no price path, no alert), so
     ``alphalens_feedback_unpriced_rows`` is the outcome the alert reads and the
@@ -354,6 +354,8 @@ def _emit_nightly_metrics(reports: Any) -> None:
     alert had one explanation for two causes with different lifetimes, and a name
     that stopped trading paged nightly for 75 days telling the operator to replay
     (DBRG, briefed 2026-09-30, last bar 2026-09-29 at two independent vendors).
+    ``alphalens_feedback_unpriced_actionable_rows`` is the DIFFERENCE of those two, and
+    the series the alert reads: the rows a replay can still fix.
     ``alphalens_feedback_oldest_deferred_sessions`` is a MAX, not a sum: each report
     already holds a per-date maximum, and adding maxima invents an age no row has.
     It is also the only one of the four that sees a row which HAS a price path and
@@ -411,6 +413,20 @@ def _emit_nightly_metrics(reports: Any) -> None:
         # the rule in silence.
         metrics["alphalens_feedback_unpriced_no_bars_rows"] = sum(
             getattr(report, "unpriced_no_bars_rows", 0) for report in reports
+        )
+        # What the alert actually reads: the unpriced rows a REPLAY CAN STILL FIX.
+        # Computed here rather than in PromQL because expressing it as a difference
+        # inside a window needs a subquery - `min_over_time((a - b)[26h])` is a parse
+        # error, ranges apply only to vector selectors - and there is no subquery
+        # anywhere in the rules file. Emitting the remainder keeps the rule in the
+        # `min_over_time(gauge[26h]) > 0` shape the whole feedback family uses.
+        #
+        # Never negative: `_count_unpriced` guarantees the subset cannot exceed the
+        # total for a date, and both lines above sum the same reports. A negative value
+        # would not page loudly, it would make a `> 0` rule quietly never fire.
+        metrics["alphalens_feedback_unpriced_actionable_rows"] = (
+            metrics["alphalens_feedback_unpriced_rows"]
+            - metrics["alphalens_feedback_unpriced_no_bars_rows"]
         )
         # The denominator a companion rule needs. The subtraction rule planned on the
         # two series above goes SILENT in a vendor-wide outage, because every unpriced

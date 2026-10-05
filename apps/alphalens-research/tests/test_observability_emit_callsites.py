@@ -1269,6 +1269,7 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
     _UNPRICED = "alphalens_feedback_unpriced_rows"
     _UNPRICED_NO_BARS = "alphalens_feedback_unpriced_no_bars_rows"
     _PLANNABLE = "alphalens_feedback_plannable_rows"
+    _ACTIONABLE = "alphalens_feedback_unpriced_actionable_rows"
     _OLDEST = "alphalens_feedback_oldest_deferred_sessions"
 
     def test_every_completeness_series_is_zero_initialised(self) -> None:
@@ -1283,6 +1284,7 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
             self._DEFERRED % "deadline",
             self._UNPRICED,
             self._UNPRICED_NO_BARS,
+            self._ACTIONABLE,
             self._OLDEST,
         ):
             self.assertIn(key, metrics)
@@ -1342,6 +1344,47 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
         # What the rule reads: the part a replay can still fix.
         self.assertEqual(metrics[self._UNPRICED] - metrics[self._UNPRICED_NO_BARS], 3)
 
+    def test_the_actionable_remainder_is_emitted_as_its_own_series(self) -> None:
+        """The series the alert reads, computed here rather than in PromQL.
+
+        The rule asks whether work a REPLAY CAN STILL FIX persisted across two nights.
+        Expressing that as a difference inside a window needs a subquery
+        (`min_over_time((a - b)[26h])` is a parse error - ranges only apply to vector
+        selectors), and there is no subquery anywhere in the rules file. Emitting the
+        remainder keeps the rule in the shape the whole feedback family already uses,
+        `min_over_time(gauge[26h]) > 0`.
+        """
+        emit = self._run_refresh(
+            reports=[
+                self._report(unpriced_rows=4, unpriced_no_bars_rows=1),
+                self._report(unpriced_rows=2, unpriced_no_bars_rows=2),
+            ]
+        )
+
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics[self._UNPRICED], 6)
+        self.assertEqual(metrics[self._UNPRICED_NO_BARS], 3)
+        self.assertEqual(metrics[self._ACTIONABLE], 3)
+
+    def test_the_actionable_series_is_never_negative(self) -> None:
+        """What the rule depends on, asserted at the emitter too.
+
+        `_count_unpriced` guarantees the subset never exceeds the total per date, and
+        both metrics are sums over the same reports, so the difference is >= 0. A
+        negative value would not page loudly - it would make a `> 0` threshold rule
+        quietly never fire, which is the failure this whole change set exists to stop.
+        """
+        emit = self._run_refresh(
+            reports=[
+                self._report(unpriced_rows=1, unpriced_no_bars_rows=1),
+                self._report(unpriced_rows=0, unpriced_no_bars_rows=0),
+            ]
+        )
+
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics[self._ACTIONABLE], 0)
+        self.assertGreaterEqual(metrics[self._ACTIONABLE], 0)
+
     def test_the_plannable_population_is_emitted_as_the_share_denominator(self) -> None:
         """Why a count of no-bars rows is not enough on its own.
 
@@ -1373,6 +1416,7 @@ class TestBackfillEmitsRunCompletenessMetrics(_NightlyEmitHarness, unittest.Test
         metrics = emit.call_args.kwargs["metrics"]
         self.assertEqual(metrics[self._UNPRICED], 5)
         self.assertEqual(metrics[self._UNPRICED_NO_BARS], 0)
+        self.assertEqual(metrics[self._ACTIONABLE], 5)
         self.assertEqual(metrics[self._PLANNABLE], 0)
 
     def test_the_completeness_series_share_the_guard_series_emit_call(self) -> None:
