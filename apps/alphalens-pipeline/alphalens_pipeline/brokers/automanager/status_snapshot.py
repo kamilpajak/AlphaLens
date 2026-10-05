@@ -149,6 +149,10 @@ class Health:
     # None when that field is absent — never inferred from the brief date,
     # which says nothing about when the daemon refused.
     last_refusal_age_s: float | None = None
+    # #1734: the latest pick that expired unplaced at the end of its window,
+    # with its age from the line's own ``expired_ts`` (the #1385 rule).
+    last_expiry: str | None = None
+    last_expiry_age_s: float | None = None
     as_of: str = ""
 
 
@@ -163,6 +167,9 @@ class StatusSnapshot:
     watches: list[dict[str, Any]]
     health: Health
     skewed: list[str] = field(default_factory=list)
+    # #1734: armed, unplaced picks the capital gates are holding, read from the
+    # journals only (never sized here — that is broker I/O).
+    waiting_picks: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _iso(now: dt.datetime) -> str:
@@ -468,22 +475,70 @@ def _refusal_age_s(raw_ts: Any, now: dt.datetime) -> float | None:
     return (now - stamp).total_seconds()
 
 
-def _last_refusal(env: str, now: dt.datetime) -> tuple[str | None, float | None]:
-    """``(rendered refusal, age in seconds)`` for the latest refused pick.
+def _last_terminal(
+    env: str, now: dt.datetime, *, status: str, ts_field: str
+) -> tuple[str | None, float | None]:
+    """``(rendered line, age in seconds)`` for the latest pick in ``status``.
 
-    The age is derived from the line's own ``refused_ts`` — the moment the
-    daemon refused — never from the brief date the text renders, which is a
-    different thing entirely."""
+    The age is derived from the line's own timestamp (``refused_ts`` /
+    ``expired_ts``) — the moment the daemon wrote it — never from the brief
+    date the text renders, which is a different thing entirely."""
     from alphalens_pipeline.brokers.automanager import picks as picks_mod
 
     fold = picks_mod.read_pick_fold(path=state_paths.picks_path(env=env))
     for record in reversed(fold.records):
-        if record.status != "refused":
+        if record.status != status:
             continue
         reason = record.record.get("reason") or record.record.get("note") or ""
         text = f"{record.ticker} {record.trade_date.isoformat()}: {reason}".strip()
-        return (text, _refusal_age_s(record.record.get("refused_ts"), now))
+        return (text, _refusal_age_s(record.record.get(ts_field), now))
     return (None, None)
+
+
+def _last_refusal(env: str, now: dt.datetime) -> tuple[str | None, float | None]:
+    return _last_terminal(env, now, status="refused", ts_field="refused_ts")
+
+
+def _waiting_picks(
+    env: str, now: dt.datetime, records: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Every armed pick the drain has not placed and whose wait line is current.
+
+    Joined exactly like the drain: the queue fold, minus the keys the
+    submissions journal retires, joined to ``pick_waits.jsonl``. ``message`` is
+    the gate's text as of ``as_of`` — the numbers in it move every tick, so the
+    row says how old they are. ``overdue`` marks a window that has ended; only
+    the drain expires a pick, so an overdue row means the drain is not running.
+    """
+    from alphalens_pipeline.brokers.automanager import pick_waits
+    from alphalens_pipeline.brokers.automanager import picks as picks_mod
+
+    fold = picks_mod.read_pick_fold(path=state_paths.picks_path(env=env))
+    waits = pick_waits.open_waits(
+        fold.records,
+        picks_mod.submitted_pick_keys(records),
+        pick_waits.read_waits(path=state_paths.pick_waits_path(env=env)),
+    )
+    rows: list[dict[str, Any]] = []
+    for record in fold.records:
+        wait = waits.get((record.ticker, record.token))
+        if wait is None:
+            continue
+        rows.append(
+            {
+                "ticker": record.ticker,
+                "trade_date": record.trade_date.isoformat(),
+                "generation": record.generation,
+                "pick_key": wait.pick_key,
+                "gate": wait.gate,
+                "message": wait.message,
+                "since": wait.since,
+                "as_of": wait.ts,
+                "window_end": wait.window_end,
+                "overdue": pick_waits.is_overdue(wait.window_end, now),
+            }
+        )
+    return rows
 
 
 def _unknown_health(env: str, now: dt.datetime) -> Health:
@@ -514,6 +569,9 @@ def _health(env: str, now: dt.datetime) -> Health:
     stream_age, stream_source = _price_stream(env, now)
     unit, unit_state, unit_since = _unit_health(env)
     last_refusal, last_refusal_age_s = _last_refusal(env, now)
+    last_expiry, last_expiry_age_s = _last_terminal(
+        env, now, status="expired", ts_field="expired_ts"
+    )
     return Health(
         unit=unit,
         unit_state=unit_state,
@@ -530,6 +588,8 @@ def _health(env: str, now: dt.datetime) -> Health:
         tokens=_token_health(now),
         last_refusal=last_refusal,
         last_refusal_age_s=last_refusal_age_s,
+        last_expiry=last_expiry,
+        last_expiry_age_s=last_expiry_age_s,
         as_of=_iso(now),
     )
 
@@ -568,6 +628,13 @@ def build_snapshot(
         logger.warning("status: health read failed", exc_info=True)
         health = _unknown_health(env, now)
     watches = entry_trails.tier_rows(fold, include_terminal=False)
+    try:
+        waiting = _waiting_picks(env, now, records)
+    except Exception:
+        # Content, not an exception: a wait journal that cannot be read must
+        # not abort the snapshot an operator reads mid-incident.
+        logger.warning("status: waiting picks could not be read", exc_info=True)
+        waiting = []
 
     if offline:
         return StatusSnapshot(
@@ -579,6 +646,7 @@ def build_snapshot(
             orders=[],
             watches=watches,
             health=health,
+            waiting_picks=waiting,
         )
 
     account = broker.get_account()
@@ -629,6 +697,7 @@ def build_snapshot(
         watches=watches,
         health=health,
         skewed=skewed,
+        waiting_picks=waiting,
     )
 
 

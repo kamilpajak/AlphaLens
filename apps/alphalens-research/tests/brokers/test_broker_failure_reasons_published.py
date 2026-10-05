@@ -25,7 +25,7 @@ BROKER_CLI = REPO_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli" / "comm
 
 _SECTION_START = "#### `intent_malformed` and `pick_not_writable` publish a `reason` too"
 _ROW_RE = re.compile(r"^\|\s*(?:`([a-z_]+)`)?\s*\|\s*`([a-z_]+)`\s*\|", re.MULTILINE)
-_NOT_WRITABLE = (intent_door.GenerationSpentError, intent_door.AlreadyPlacedError)
+_NOT_WRITABLE = intent_door.NOT_WRITABLE
 
 
 def published_reasons() -> dict[str, set[str]]:

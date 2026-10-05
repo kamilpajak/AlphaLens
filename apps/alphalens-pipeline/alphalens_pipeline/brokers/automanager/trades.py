@@ -48,6 +48,7 @@ from alphalens_pipeline.brokers.automanager.labels import _TP_REF_RE, tp_label_f
 from alphalens_pipeline.brokers.automanager.picks import (
     STATUS_ARMED,
     STATUS_DISARMED,
+    STATUS_EXPIRED,
     STATUS_REFUSED,
     _submission_join_key,
     generation_of,
@@ -231,7 +232,7 @@ MODE_BROKER = "broker"
 MODE_OFFLINE = "offline"
 MODES: tuple[str, ...] = (MODE_BROKER, MODE_OFFLINE)
 
-PICK_STATUSES: tuple[str, ...] = (STATUS_ARMED, STATUS_REFUSED, STATUS_DISARMED)
+PICK_STATUSES: tuple[str, ...] = (STATUS_ARMED, STATUS_REFUSED, STATUS_DISARMED, STATUS_EXPIRED)
 SIZE_SHAPES: tuple[str, ...] = ("by_amount", "by_percent")
 PLAN_SOURCES: tuple[str, ...] = ("manual", "brief", "absent")
 SIDES: tuple[str, ...] = ("long", "short")
@@ -298,6 +299,10 @@ EXCLUDE_EXIT_REASON_NULL = "exit_reason_null"
 EXCLUDE_AMBIGUOUS = "ambiguous_attribution"
 EXCLUDE_ENTRY_MODE = "entry_mode_unsupported"
 EXCLUDE_LEGACY_PLAN = "legacy_plan_shape"
+# #1734: the pick's first order reached the broker after its day-1 session
+# closed (it waited for capital, or the daemon was down). The replay walks the
+# plan from day 1, so its fills would be ones the keeper could not have had.
+EXCLUDE_PLACED_LATE = "placed_late"
 REPLAY_EXCLUSIONS: tuple[str, ...] = (
     EXCLUDE_OFFLINE,
     EXCLUDE_NOT_FINAL,
@@ -307,6 +312,7 @@ REPLAY_EXCLUSIONS: tuple[str, ...] = (
     EXCLUDE_AMBIGUOUS,
     EXCLUDE_ENTRY_MODE,
     EXCLUDE_LEGACY_PLAN,
+    EXCLUDE_PLACED_LATE,
 )
 
 # Not summed into any fee, and listed on every record so a consumer knows (§5).
@@ -751,6 +757,9 @@ def _pick_status_fields(status: str, record: Mapping[str, Any]) -> tuple[Any, st
     if status == STATUS_REFUSED:
         reason = record.get("reason")
         return record.get("refused_ts"), str(reason) if reason else None
+    if status == STATUS_EXPIRED:
+        reason = record.get("reason")
+        return record.get("expired_ts"), str(reason) if reason else None
     return record.get("armed_ts"), None
 
 
@@ -2411,6 +2420,10 @@ def _never_filled_reason(pick: _Pick) -> str:
         return "refused"
     if pick.status == STATUS_DISARMED:
         return "disarmed"
+    # #1734: unplaced at the end of its window. The same reason the record
+    # gives when every tier's own window ran out: in both, time ended the pick.
+    if pick.status == STATUS_EXPIRED:
+        return "expired"
     terminals = [tier.terminal for tier in pick.tiers]
     if not terminals or TERMINAL_OPEN in terminals:
         return "pending"
@@ -2974,7 +2987,40 @@ def _replay_exclusions(pick: _Pick, state: str, *, offline: bool) -> list[str]:
         found.add(EXCLUDE_ENTRY_MODE)
     if pick.plan is None or _plan_size_shape(pick.plan) != "by_amount":
         found.add(EXCLUDE_LEGACY_PLAN)
+    if _placed_after_day1(pick):
+        found.add(EXCLUDE_PLACED_LATE)
     return [value for value in REPLAY_EXCLUSIONS if value in found]
+
+
+def _placed_after_day1(pick: _Pick) -> bool:
+    """The pick's first submission record is later than its day-1 session close.
+
+    Day 1 is the daemon's own anchor (``day1_gap_gate``): ``trade_date`` for a
+    manual document, the session after it for a brief (an absent source is a
+    brief, LEGACY(source_brief)) — the same rule ``replay_from_pick`` starts
+    its walk on. A record that cannot answer (no plan, no timestamp, a venue
+    with no calendar) is not excluded on this ground."""
+    from alphalens_pipeline.market.calendar import advance_trading_sessions, session_close_utc
+
+    plan = pick.plan
+    stamps = [stamp for r in pick.submissions if (stamp := parse_utc(r.get("ts"))) is not None]
+    if plan is None or not stamps:
+        return False
+    raw_meta = plan.get("meta")
+    raw_instrument = plan.get("instrument")
+    meta: Mapping[str, Any] = raw_meta if isinstance(raw_meta, Mapping) else {}
+    instrument: Mapping[str, Any] = raw_instrument if isinstance(raw_instrument, Mapping) else {}
+    mic = instrument.get("mic") or pick.exchange_mic
+    try:
+        day1 = advance_trading_sessions(
+            dt.date.fromisoformat(pick.trade_date),
+            0 if meta.get("source") == "manual" else 1,
+            exchange=str(mic),
+        )
+        close = session_close_utc(day1, exchange=str(mic))
+    except Exception:
+        return False
+    return min(stamps) > close
 
 
 def _empty_counts() -> dict[str, int]:

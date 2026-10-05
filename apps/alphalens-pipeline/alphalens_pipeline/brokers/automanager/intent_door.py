@@ -29,10 +29,12 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.sizing import planned_blended_entry_from_spec
 from broker_contract.trade_intent.codec import supplied_derived_paths
 from broker_contract.trade_intent.schema import TradeIntent
 
+from alphalens_pipeline.brokers.automanager.pick_window import PickWindowError, pick_window
 from alphalens_pipeline.brokers.automanager.picks import STATUS_ARMED, PickRecord
 from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 from alphalens_pipeline.market.calendar import session_not_closed
@@ -83,6 +85,22 @@ class AlreadyPlacedError(DoorRefusalError):
     reason = "already_placed"
 
 
+class WindowEndedError(DoorRefusalError):
+    """The pick's validity window (#1734) is over before it is armed."""
+
+    reason = "window_ended"
+
+
+# The refusals that say "this queue key will not take a write" — the CLI
+# reports them as `pick_not_writable`; every other reasoned one is
+# `intent_malformed`. One tuple, read by the CLI and by the published-reasons
+# gate, so the two cannot map a class differently.
+NOT_WRITABLE: tuple[type[DoorRefusalError], ...] = (
+    GenerationSpentError,
+    AlreadyPlacedError,
+    WindowEndedError,
+)
+
 REFUSALS: tuple[type[DoorRefusalError], ...] = (
     DerivedFieldSuppliedError,
     TradeDateRequiredError,
@@ -91,6 +109,7 @@ REFUSALS: tuple[type[DoorRefusalError], ...] = (
     PickAlreadyArmedError,
     GenerationSpentError,
     AlreadyPlacedError,
+    WindowEndedError,
 )
 
 
@@ -284,6 +303,7 @@ def complete(
     source = meta["source"]
 
     trade_date = _resolved_trade_date(meta, source=source, mic=mic, now_utc=now_utc)
+    _refuse_an_ended_window(document, trade_date=trade_date, mic=mic, now_utc=now_utc)
 
     same_ticker = [record for record in records if record.ticker == ticker]
     same_day = [record for record in same_ticker if record.trade_date == trade_date]
@@ -322,6 +342,32 @@ def complete(
     return Completion(
         document=completed, trade_date=trade_date, generation=generation, replaces=replaces
     )
+
+
+def _refuse_an_ended_window(
+    document: Mapping[str, Any], *, trade_date: dt.date, mic: Any, now_utc: dt.datetime
+) -> None:
+    """Refuse a pick whose validity window (#1734) is already over.
+
+    The daemon expires an armed pick still unplaced at the end of
+    ``order_ttl_days`` sessions after its trade date; arming one past that
+    point would only be expired on the next tick. A copied armed line, or a
+    re-arm under the next generation, keeps its old ``trade_date``, so this is
+    a state a real document reaches. A TTL the window cannot be computed from
+    is left to ``validate_intent``, which refuses it with its own reason."""
+    ttl = document["spec"].get("order_ttl_days", DEFAULT_ORDER_TTL_DAYS)
+    try:
+        window = pick_window(trade_date, ttl, str(mic))
+    except PickWindowError:
+        return
+    if now_utc >= window.window_end:
+        end = window.window_end.isoformat()
+        raise WindowEndedError(
+            f"the pick's window ended {end} ({ttl or DEFAULT_ORDER_TTL_DAYS} session(s) after "
+            f"trade_date {trade_date.isoformat()}) — the daemon would expire it unplaced; "
+            "state a current trade_date, or leave it out for the next session",
+            window_end=end,
+        )
 
 
 def _armed_ts(replaces: PickRecord | None, now_utc: dt.datetime) -> str:
@@ -374,6 +420,7 @@ def tier_amounts(intent: TradeIntent) -> list[float]:
 
 
 __all__ = [
+    "NOT_WRITABLE",
     "REFUSALS",
     "AlreadyPlacedError",
     "Completion",
@@ -384,6 +431,7 @@ __all__ = [
     "PickAlreadyArmedError",
     "TradeDateMalformedError",
     "TradeDateRequiredError",
+    "WindowEndedError",
     "check_identity_shapes",
     "complete",
     "refuse_derived_fields",

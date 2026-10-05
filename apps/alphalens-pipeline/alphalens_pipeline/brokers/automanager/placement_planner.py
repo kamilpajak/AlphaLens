@@ -48,11 +48,17 @@ def classify(
     setup_plan: SetupPlan,
     instrument: InstrumentRef,
     *,
+    entry_ttl_days: int,
     side: Literal["BUY", "SELL"] = "BUY",
 ) -> PlacementPlan:
-    """Classify a sized plan into ENTRY-ONLY brackets + the surfaced in-band TPs."""
+    """Classify a sized plan into ENTRY-ONLY brackets + the surfaced in-band TPs.
+
+    ``entry_ttl_days`` is the sessions left of the pick's validity window
+    (#1734), passed through to every bracket."""
     limit_frac = execution_policy._MAX_CHILD_DISTANCE_FRAC
-    brackets = decompose_setup_plan(setup_plan, instrument, side=side)
+    brackets = decompose_setup_plan(
+        setup_plan, instrument, side=side, entry_ttl_days=entry_ttl_days
+    )
     # decompose_setup_plan drops zero-qty tiers while preserving order, so zip the
     # non-zero source tiers back onto the brackets to recover each bracket's
     # ORIGINAL tier_index (zero-qty skips must not shift it — the governing-TP

@@ -410,6 +410,35 @@ class StatusCommandTest(unittest.TestCase):
         self.assertIn("instance", kill_line)
         self.assertNotIn("none", kill_line)
 
+    def test_waiting_picks_are_rendered_in_both_formats(self) -> None:
+        # #1734: a pick the capital gates hold is named, with its gate, its
+        # message and when its window ends, in JSON and in the human view.
+        from alphalens_pipeline.brokers.automanager.pick_waits import append_wait
+        from alphalens_pipeline.brokers.automanager.picks import arm_pick
+
+        from tests.brokers.automanager.test_picks import _intent
+
+        arm_pick(_intent("KO", "2026-09-08"), path=self.root / "picks.jsonl")
+        append_wait(
+            {
+                "pick_key": "KO:2026-09-08",
+                "ticker": "KO",
+                "date": "2026-09-08",
+                "gate": "gross_cap",
+                "message": "gross cap: KO total gross 9,000.00 exceeds limit 5,000.00",
+                "window_end": "2099-01-02T20:00:00+00:00",
+            },
+            path=self.root / "pick_waits.jsonl",
+        )
+        payload = self._json("--offline")
+        (row,) = payload["waiting_picks"]
+        self.assertEqual((row["ticker"], row["gate"]), ("KO", "gross_cap"))
+        human = self._invoke("--offline").stdout
+        line = next(ln for ln in human.splitlines() if ln.startswith("waiting"))
+        self.assertIn("KO", line)
+        self.assertIn("gross cap", line)
+        self.assertIn("2099-01-02T20:00:00+00:00", line)
+
     def test_the_refusal_line_carries_its_age(self) -> None:
         picks = self.root / "picks.jsonl"
         picks.write_text(

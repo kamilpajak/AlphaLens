@@ -282,7 +282,8 @@
         "exit_reason_null",
         "ambiguous_attribution",
         "entry_mode_unsupported",
-        "legacy_plan_shape"
+        "legacy_plan_shape",
+        "placed_late"
       ],
       "description": "Why a record cannot be compared with an intent-replay run."
     },
@@ -1246,7 +1247,8 @@
           "enum": [
             "armed",
             "refused",
-            "disarmed"
+            "disarmed",
+            "expired"
           ]
         },
         "pick_status_at": {

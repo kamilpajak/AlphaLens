@@ -150,9 +150,9 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
         ("disarmed", "pick_key", "generation", "watches_cancelled", "picks_journal"),
     ),
     ("cancel", ["cancel", "O-1"], True, ("order_id", "cancelled")),
-    ("picks", ["picks"], True, ("picks", "counts", "picks_journal")),
+    ("picks", ["picks"], True, ("picks", "counts", "picks_journal", "waits_journal")),
     ("watches", ["watches"], True, ("watches", "watching", "journal")),
-    ("status", ["status", "--offline"], True, ("exposure", "health", "orders")),
+    ("status", ["status", "--offline"], True, ("exposure", "health", "orders", "waiting_picks")),
     ("stream-status", ["stream-status"], True, ("gauges", "job", "source")),
     ("reconcile", ["reconcile"], True, ("verdicts", "journal")),
     ("reconcile-fills", ["reconcile-fills"], False, ("fills", "out", "written")),
@@ -182,7 +182,9 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
 # because `alphalens.broker.arm/v1` named the brief envelope, with a different
 # body, until #1469; its body is the one `arm-intent/v1` had (#1470). `status`
 # answers `v2` because #1732 removed its required `slots` section.
-_SCHEMA_VERSIONS: Mapping[str, str] = {"arm": "v2", "status": "v2"}
+# `picks` answers `v2` because #1734 split WAITING out of PENDING: a pick the
+# capital gates hold every tick is no longer "pending" in the v1 sense.
+_SCHEMA_VERSIONS: Mapping[str, str] = {"arm": "v2", "status": "v2", "picks": "v2"}
 
 
 def _schema_id(name: str) -> str:
@@ -331,6 +333,12 @@ class _BrokerCliCase(unittest.TestCase):
             mock.patch(LIVE_FACTORY_SEAM, return_value=(self.broker, mock.Mock())),
             mock.patch(REGISTRY_SEAM, return_value=self.broker),
             mock.patch(DOCUMENT_SEAM, return_value=_intent_document()),
+            # Inside the document's validity window (#1734): the door refuses a
+            # pick whose window has already ended.
+            mock.patch(
+                "alphalens_cli.commands.broker._arming_now",
+                return_value=dt.datetime.combine(_ARM_TRADE_DATE, dt.time(15), tzinfo=dt.UTC),
+            ),
         ):
             return self.runner.invoke(broker_app, argv)
 

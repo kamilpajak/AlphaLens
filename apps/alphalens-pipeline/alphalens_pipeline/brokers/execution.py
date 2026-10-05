@@ -41,7 +41,7 @@ import math
 import uuid
 from typing import Literal
 
-from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS, QTY_PRECISION
+from broker_contract.constants import QTY_PRECISION
 from broker_contract.contract import BracketOrderRequest, BrokerCapabilityError, InstrumentRef
 from broker_contract.fx import FxConversion, FxRateQuote
 from broker_contract.quantity import InstrumentQuantityRules, QuantityLattice
@@ -114,9 +114,13 @@ _MARKET_ORDER_DURATION = "DayOrder"  # a market order fills immediately; GTC is 
 # venue's exchange calendar — exchange-local HH:mm rules avoided entirely.
 _ENTRY_DURATION = "GoodTillDate-date-only"
 
-# order_ttl_days == 0 is the planner's "field absent" sentinel — fall back to
-# the paper-planner default so the two consumers cannot drift.
-_TTL_ZERO_SENTINEL_DAYS = DEFAULT_ORDER_TTL_DAYS
+# How long a resting entry lives (#1734): the caller passes the sessions LEFT
+# of the pick's validity window (order_ttl_days sessions counted from its
+# trade date, automanager/pick_window.py), never the plan's whole TTL. A pick
+# placed on day 5 of 7 gets 2, and 0 means "until today's close". This
+# replaced the 0 -> DEFAULT_ORDER_TTL_DAYS sentinel, which handed a late
+# placement a fresh window; the change of policy is a new cohort.
+_ENTRY_TTL_POLICY = "remaining-sessions-of-trade-date-window"
 
 # Token-only since #1466: the removed `broker submit` ran the precheck; the
 # daemon never has. Kept at its old value so execution_config_version() does
@@ -217,7 +221,7 @@ def execution_config_version() -> str:
         "exit_duration": _EXIT_DURATION,
         "market_order_duration": _MARKET_ORDER_DURATION,
         "entry_duration": _ENTRY_DURATION,
-        "ttl_zero_sentinel_days": _TTL_ZERO_SENTINEL_DAYS,
+        "entry_ttl_policy": _ENTRY_TTL_POLICY,
         "precheck_required": _PRECHECK_REQUIRED,
         "manual_order": _MANUAL_ORDER,
         "tick_quantize_policy": _TICK_QUANTIZE_POLICY,
@@ -250,6 +254,7 @@ def decompose_setup_plan(
     setup_plan: SetupPlan,
     instrument: InstrumentRef,
     *,
+    entry_ttl_days: int,
     side: Literal["BUY", "SELL"] = "BUY",
 ) -> list[BracketOrderRequest]:
     """Map a sized :class:`SetupPlan` onto per-tier bracket requests.
@@ -260,8 +265,10 @@ def decompose_setup_plan(
     - ``stop_loss`` = the shared ``disaster_stop`` price (tier-sized Amount);
     - ``take_profit`` = ``tp_tranches[min(tier_index, len-1)].target_price``,
       or ``None`` when the plan has no tranches (stop-only bracket);
-    - ``entry_ttl_days`` = ``order_ttl_days`` with the 0 sentinel resolved to
-      :data:`_TTL_ZERO_SENTINEL_DAYS`;
+    - ``entry_ttl_days`` = the caller's ``entry_ttl_days``, verbatim: the
+      sessions LEFT of the pick's window (:data:`_ENTRY_TTL_POLICY`). The
+      plan's ``order_ttl_days`` is deliberately not read — it is the whole
+      window, and a pick placed late must not get it again;
     - ``client_request_id`` = a FRESH uuid4 per bracket (Saxo ``x-request-id``
       dedup token — reused only when retrying the SAME logical bracket);
     - ``tier_index`` = ``tier.tier_index`` (the FAITHFUL 0-based setup-plan tier
@@ -271,9 +278,13 @@ def decompose_setup_plan(
     Zero-qty tiers are skipped with a structured log entry and never POSTed
     (:data:`_ZERO_QTY_TIER_POLICY`).
     """
-    ttl_days = (
-        setup_plan.order_ttl_days if setup_plan.order_ttl_days > 0 else (_TTL_ZERO_SENTINEL_DAYS)
-    )
+    if (
+        isinstance(entry_ttl_days, bool)
+        or not isinstance(entry_ttl_days, int)
+        or entry_ttl_days < 0
+    ):
+        raise ValueError(f"entry_ttl_days must be an int >= 0, got {entry_ttl_days!r}")
+    ttl_days = entry_ttl_days
     tranches = setup_plan.tp_tranches
 
     brackets: list[BracketOrderRequest] = []

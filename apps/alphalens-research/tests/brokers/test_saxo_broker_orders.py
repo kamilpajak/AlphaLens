@@ -281,6 +281,22 @@ class TestPlacementBody(unittest.TestCase):
         expected = advance_trading_sessions(fixed_today, 5, exchange="XNYS")
         self.assertEqual(duration["ExpirationDateTime"], expected.isoformat())
 
+    def test_a_late_placement_expires_on_the_pick_windows_last_session(self):
+        # #1734: the drain passes what is LEFT of the pick's window. Placed on
+        # 2026-10-07 for trade_date 2026-09-30 (window: 7 sessions -> 10-09),
+        # the entry must expire on 10-09, not seven sessions after placement.
+        from alphalens_pipeline.brokers.automanager.pick_window import (
+            pick_window,
+            remaining_sessions,
+        )
+
+        window = pick_window(dt.date(2026, 9, 30), 7, "XNYS")
+        placed_on = dt.date(2026, 10, 7)
+        ttl = remaining_sessions(window, placed_on, "XNYS")
+        with mock.patch.object(broker_module, "_today", return_value=placed_on):
+            body, _ = self._place(_request(entry_ttl_days=ttl))
+        self.assertEqual(body["OrderDuration"]["ExpirationDateTime"], "2026-10-09")
+
     def test_day_entry_duration_omits_expiry_keys(self):
         # #1247 PR-B: an immediate-entry bracket is DayOrder — no expiry keys,
         # and the exits stay GoodTillCancel (exit lifetime is a position

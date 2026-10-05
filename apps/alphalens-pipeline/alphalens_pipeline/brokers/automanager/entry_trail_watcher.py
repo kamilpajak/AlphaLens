@@ -169,9 +169,9 @@ class TierWatchConfig:
 
     ``d_bps`` is INJECTED (from ``entry_trails.entry_trail_bps()`` at the call
     site) — the pure engine never re-reads the environment. ``window_end`` is a
-    concrete UTC instant the caller resolves from
-    ``advance_trading_sessions(watch_open_date, DEFAULT_ORDER_TTL_DAYS)`` (memo
-    §5 TTL). ``next_tier_limit`` is the NEXT-deeper tier's limit for the G9
+    concrete UTC instant the caller resolves from the PICK's window,
+    ``pick_window.window_of(intent)``: ``order_ttl_days`` sessions after its
+    TRADE DATE, never after the day the watch opened (memo §5 TTL, #1734). ``next_tier_limit`` is the NEXT-deeper tier's limit for the G9
     depth suspend; ``None`` on the deepest tier (no depth suspend)."""
 
     crid: str

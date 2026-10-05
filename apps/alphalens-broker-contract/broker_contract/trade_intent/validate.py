@@ -17,10 +17,11 @@ out of it, because they are not about the document at all:
   (``price[:alloc]``, ``now@``, ``<N>R``) never reached a document; an author
   writes structured JSON (#1470).
 * **Rules about the INVOCATION** — the supported-venue list (checked by the
-  door, ``data/alt_data/saxo_exchanges.py``). ``order_ttl_days == 0`` is a LEGAL document value: ``brokers/execution.py``
-  resolves that sentinel to a default, commented "the planner's 'field absent'
-  sentinel". Refusing it here would make a document the brief path legitimately
-  emits un-submittable. The venue list is Saxo deployment knowledge (venue map,
+  door, ``data/alt_data/saxo_exchanges.py``). ``order_ttl_days == 0`` is a LEGAL document value: it is
+  the "field absent" value and means the default window (#1734,
+  ``automanager/pick_window.py``). Refusing it here would make a document the
+  brief path legitimately emitted un-submittable. A NEGATIVE count, or one above
+  ``MAX_ORDER_TTL_DAYS``, is refused: it leaves the pick with no window. The venue list is Saxo deployment knowledge (venue map,
   fee card, market-data entitlement) and stays with the adapter — the #1122
   decision, "the ADAPTER reports, never the contract decides".
 * **Single-field shape and format** — ``meta.trade_date`` parsing as a date,
@@ -58,6 +59,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Final
 
+from broker_contract.constants import MAX_ORDER_TTL_DAYS
 from broker_contract.failure import ContractError, Failure
 from broker_contract.sizing import planned_blended_entry_from_spec
 from broker_contract.trade_intent.schema import (
@@ -128,6 +130,8 @@ INTENT_INVALID_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         "stop_above_entry": "The disaster stop is not below every entry tier.",
         "size_notional_not_positive": "The pick's account-currency amount is zero or negative.",
         "size_currency_invalid": "The size currency is not a three-letter uppercase ISO 4217 code.",
+        "order_ttl_out_of_range": "order_ttl_days is negative or above MAX_ORDER_TTL_DAYS, so "
+        "the pick has no validity window.",
         "tp_pct_non_positive": "A take-profit tranche percentage is zero or negative.",
         "tp_pct_sum_exceeds_100": "The take-profit tranche percentages exceed 100.",
         "tp_price_duplicate": "Two take-profit tranches sit at the same price.",
@@ -311,6 +315,18 @@ def _stop_and_size_violations(spec: TradeSpec) -> list[Violation]:
                 "size_currency_invalid",
                 "size.currency must be a three-letter uppercase ISO 4217 code, got "
                 f"{spec.size.currency!r}",
+            )
+        )
+    # #1734: the window an armed pick may wait in, and a placed entry may rest
+    # in, is this many sessions counted from the trade date. A count the
+    # calendar cannot walk would leave the pick with no window at all. 0 stays
+    # legal: it is the "field absent" value and means the default.
+    if not 0 <= spec.order_ttl_days <= MAX_ORDER_TTL_DAYS:
+        found.append(
+            Violation(
+                "order_ttl_out_of_range",
+                f"order_ttl_days must be within 0..{MAX_ORDER_TTL_DAYS}, got "
+                f"{spec.order_ttl_days!r}",
             )
         )
     return found

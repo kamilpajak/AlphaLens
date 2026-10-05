@@ -25,7 +25,6 @@ from dataclasses import dataclass, field, is_dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
-from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.contract import (
     _QTY_EPS,
     BrokerCapabilityError,
@@ -45,6 +44,7 @@ from broker_contract.contract import (
 from broker_contract.exit_geometry.registry import resolve_declared_policy
 
 from alphalens_pipeline.brokers.automanager import (
+    capital_wait,
     day1_gap_gate,
     entry_trail_geometry,
     entry_trail_watcher,
@@ -54,6 +54,7 @@ from alphalens_pipeline.brokers.automanager import (
     journal_snapshots,
     now_tranche,
     pick_money_gates,
+    pick_window,
     picks,
     placed_geometry,
     quote_source,
@@ -339,6 +340,34 @@ class LoopDeps:
     # terminals (SupportsOutcomeCachePeek) resolve budget-free, so steady
     # state is byte-identical to the un-budgeted tick.
     audit_budget: OutcomeAuditBudget = field(default_factory=OutcomeAuditBudget)
+    # #1734 review F3: the gross the drain admitted earlier in the CURRENT tick,
+    # added to both capital gates. The SAME object is baked into the
+    # ``place_pick`` closure (which adds to it) and carried here (the drain
+    # resets it at the start of each tick). None (LoopDeps built by hand in
+    # tests) adds nothing.
+    tick_admissions: _TickAdmissions | None = None
+
+
+class _TickAdmissions:
+    """Account-currency gross admitted by the money gates earlier this tick.
+
+    With a queue of picks waiting for capital, the tick that frees capital is
+    the tick several picks are admitted together, and a later pick's broker
+    reads need not show an earlier pick's order or fill yet (an order missing
+    from ``list_open_orders``, an audit deferred by the shared budget, a fill
+    not yet in the positions read). Each admitted pick's gross is added here
+    and counted by the gates for the rest of the tick. It can count a pick
+    twice once its order does show, which delays the next pick by one tick and
+    never overspends."""
+
+    def __init__(self) -> None:
+        self.gross_acct = 0.0
+
+    def begin_tick(self) -> None:
+        self.gross_acct = 0.0
+
+    def admit(self, gross_acct: float) -> None:
+        self.gross_acct += max(0.0, float(gross_acct))
 
 
 @dataclass
@@ -470,8 +499,9 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # `fired` line that releases the virtual gross reservation. If the drain's
     # gross-cap / cash-floor check ran FIRST, the filled
     # tier would be counted TWICE (once as a filled position, once as its still-live
-    # virtual reservation) — spuriously breaching the cap and PERMANENTLY refusing
-    # (`mark_refused`) another valid pick drained the same tick. Reconciling first
+    # virtual reservation) — spuriously breaching the cap and holding another
+    # valid pick drained the same tick (#1734: it waits instead of being
+    # refused, but it would still wait for capital that is in fact free). Reconciling first
     # releases the reservation so the drain counts it once. UNGATED by KILL (a fill
     # during an emergency stop must still release + is covered by the fire-arm
     # planned disaster line) and a no-op when the flag is unset/0; it writes ONLY
@@ -588,16 +618,54 @@ def _run_placement_drain(deps: LoopDeps, report: TickReport, *, enabled: bool) -
     records = deps.read_records()
     already_submitted = picks.submitted_pick_keys(records)
     _refuse_legacy_size_pct_picks(deps, records, already_submitted)
+    if deps.tick_admissions is not None:
+        deps.tick_admissions.begin_tick()
+    capital_wait.begin_tick()
     placed_this_tick: set[tuple[str, str]] = set()
-    for pick in deps.iter_picks():
+    # #1734: armed order (FIFO by armed_ts), so picks waiting for capital get it
+    # in the order they were armed. Ordered first-fit: every pick is still
+    # tried, and a later one that fits is placed while an earlier one keeps
+    # waiting — strict head-of-line would let one oversized pick block the
+    # queue for its whole window.
+    for pick in _in_armed_order(deps.iter_picks()):
         key = picks.pick_key(pick)
         if key in already_submitted or key in placed_this_tick:
             continue
         placed_this_tick.add(key)
         if deps.place_pick(pick):
             report.picks_placed += 1
+    capital_wait.end_tick()
     if scope is not None:
         scope.commit()
+
+
+_ARMED_TS_UNKNOWN = dt.datetime.max.replace(tzinfo=dt.UTC)
+
+
+def _armed_at(intent: Any) -> dt.datetime:
+    """``meta.armed_ts`` as an aware datetime; unknown sorts LAST.
+
+    Parsed, not compared as text: offsets may be spelled differently, and a
+    legacy line may carry no value at all."""
+    raw = getattr(getattr(intent, "meta", None), "armed_ts", None)
+    try:
+        stamp = dt.datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return _ARMED_TS_UNKNOWN
+    return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=dt.UTC)
+
+
+def _in_armed_order(intents: Iterable[Any]) -> list[Any]:
+    """The armed picks sorted by ``armed_ts``; ties keep the queue's order.
+
+    An idempotent replace keeps ``armed_ts``, so a replaced pick keeps its
+    place in the queue."""
+    return [
+        intent
+        for _index, intent in sorted(
+            enumerate(intents), key=lambda pair: (_armed_at(pair[1]), pair[0])
+        )
+    ]
 
 
 def _refuse_legacy_size_pct_picks(
@@ -1565,9 +1633,12 @@ def _open_entry_watches(
     """Journal one ``watch_open`` line per positive-quantity entry tier (memo
     §5, G3 journal-FIRST) and return the count opened.
 
-    The shared TTL ``window_end`` is resolved ONCE (memo §5 "one rule":
-    ``advance_trading_sessions(trade_date, DEFAULT_ORDER_TTL_DAYS)`` -> that
-    session's close in UTC, never "+7d from each order"). Each watch_open
+    The shared TTL ``window_end`` is resolved ONCE and is the PICK's window
+    (memo §5 "one rule", #1734): ``spec.order_ttl_days`` sessions of the
+    document's venue counted from ``trade_date`` -> that session's close in
+    UTC (``pick_window.window_of``), never "+7d from each order" and never
+    from the day the watch opens — a pick that waited for capital gets only
+    what is left of its window. Each watch_open
     carries BOTH the reservation-critical fields the gross/cash fold values
     (``limit``/``qty``/``fx_rate``) AND the WIRE context the per-tick pass needs
     to reconstruct the watcher and resolve the price feed
@@ -1582,16 +1653,11 @@ def _open_entry_watches(
     ``planned`` writer can pass it through, and so the #1112 arm gates can read
     off a journal line which exit was actually placed. ``None`` omits the key
     entirely, keeping the line byte-identical to a pre-stamp watch_open."""
-    from alphalens_pipeline.market.calendar import advance_trading_sessions, session_close_utc
-
     trade_date = intent.meta.trade_date
     generation = picks._pick_generation(intent)
     mic = instrument.exchange_mic
     uic = int(instrument.broker_instrument_id)
-    ttl_date = advance_trading_sessions(
-        dt.date.fromisoformat(trade_date), DEFAULT_ORDER_TTL_DAYS, exchange=mic
-    )
-    window_end = session_close_utc(ttl_date, exchange=mic).isoformat()
+    window_end = pick_window.window_of(intent).window_end.isoformat()
     fx_rate = float(fx.rate) if fx is not None else None
     mode_tag = _entry_trail_mode_tag(d_bps)
     pick_key = picks.pick_key_str(ticker, trade_date, generation)
@@ -3813,6 +3879,9 @@ def build_default_deps(
     # and the drain (commit / release), over the same live feed factory the
     # exit / entry-watch passes use.
     now_entry_scope = _NowEntryScope(_default_live_exits_feed_factory)
+    # #1734 review F3: ONE in-tick admission ledger shared by the place_pick
+    # closure (adds) and the drain (resets per tick).
+    tick_admissions = _TickAdmissions()
 
     return LoopDeps(
         broker=broker,
@@ -3829,6 +3898,7 @@ def build_default_deps(
             # #1247: the now tranche's marketability gate reads the SAME live
             # feed the exit/entry-watch passes use (pass-level now-entry scope).
             now_entry_scope=now_entry_scope,
+            tick_admissions=tick_admissions,
         ),
         read_records=_read_records,
         verdicts_fn=functools.partial(reconcile_bridge.verdicts, audit_budget=audit_budget),
@@ -3849,6 +3919,7 @@ def build_default_deps(
         day1_gap_price_probe=day1_gap_probe,
         audit_budget=audit_budget,
         now_entry_scope=now_entry_scope,
+        tick_admissions=tick_admissions,
     )
 
 
@@ -4814,6 +4885,7 @@ def _make_place_pick(
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
     audit_budget: OutcomeAuditBudget | None = None,
     now_entry_scope: _NowEntryScope | None = None,
+    tick_admissions: _TickAdmissions | None = None,
 ) -> Callable[[Any], bool]:
     """Compose safety.check -> placement_planner.classify -> placer loop over
     place_bracket_order + the submissions journal for one armed pick, plus the
@@ -4850,6 +4922,7 @@ def _make_place_pick(
             audit_budget=audit_budget,
             now_entry_scope=now_entry_scope,
             account_currency=account_currency,
+            tick_admissions=tick_admissions,
         )
 
     return _place
@@ -4948,10 +5021,12 @@ def _refuse_pick_terminal(
     *,
     generation: int = picks.FIRST_GENERATION,
 ) -> None:
-    """The shared terminal-refusal tail for the post-sizing ``_place_pick``
-    gates (fee floor, gross cap): warn, page the operator (throttled, only
-    when a sink exists), and retire the pick with a refused line so it never
-    retries every tick. The ``mark_refused`` append is fallible I/O and must
+    """The shared terminal-refusal tail for the ``_place_pick`` refusals no
+    later tick can undo (currency, per-pick ceiling, fee floor, the now-tranche
+    cost gate, a document with no validity window): warn, page the operator
+    (throttled, only when a sink exists), and retire the pick with a refused
+    line so it never retries every tick. The capital gates never come here
+    (#1734): a pick that does not fit waits. The ``mark_refused`` append is fallible I/O and must
     never crash the drain: on OSError the pick stays armed and the refusal
     re-fires next tick (re-attempting the append)."""
     logger.warning("place_pick %s: %s", ticker, violation)
@@ -5582,6 +5657,7 @@ def _handle_now_tranche(
     alert_throttled: Callable[[str, str], bool] | None,
     now_entry_scope: _NowEntryScope | None,
     tranche_plan_override: tuple[str, float],
+    entry_ttl_days: int = 0,
 ) -> _NowOutcome:
     """The immediate tranche's drain: idempotency scan → cap floor → cost
     gate → real-time marketability gate → capped placement via the stock
@@ -5642,7 +5718,9 @@ def _handle_now_tranche(
     now_plan = cast(
         "SetupPlan", replace(plan, entry_tiers=(replace(now_tier, limit_price=submitted_cap),))
     )
-    placement = classify(now_plan, instrument, side=_ENTRY_SIDE)
+    # The now tranche rests as IOC/DAY (its duration overrides the GTD below),
+    # so the count only keeps the bracket request well-formed.
+    placement = classify(now_plan, instrument, side=_ENTRY_SIDE, entry_ttl_days=entry_ttl_days)
     if not placement.tiers:
         logger.warning("place_pick %s: now tranche sized to zero shares", ticker)
         _drop_now_scope(now_entry_scope, pick_key)
@@ -5718,10 +5796,26 @@ def _refuse_now_above_cap(
         )
 
 
-def _post_sizing_money_gate_refuses(
+class _GateOutcome(enum.Enum):
+    """What the post-sizing money gates decided for one pick on this tick."""
+
+    PASS = "pass"
+    REFUSED = "refused"  # terminal: the fee floor
+    WAIT = "wait"  # does not fit in free capital — armed, retried every tick
+    HELD = "held"  # a capital gate could not value the book — armed, retried
+
+
+def _post_sizing_money_gates(
     plan: Any,
     fx: Any,
     *,
+    gate_plan: Any,
+    skip_capital_gates: bool,
+    admitted_this_tick_acct: float,
+    intent: Any,
+    pick_key: str,
+    window: pick_window.PickWindow,
+    now: dt.datetime,
     instrument: Any,
     account: Any,
     open_verdicts: Sequence[Any],
@@ -5733,10 +5827,24 @@ def _post_sizing_money_gate_refuses(
     trade_date: dt.date,
     generation: int,
     alert_throttled: Callable[[str, str], bool] | None,
-) -> bool:
+) -> _GateOutcome:
     """The three money gates that need the sized plan — fee floor, gross cap, cash
-    floor, in that order — for :func:`_place_pick`. The first violation is refused
-    TERMINAL (journaled + paged) and ``True`` returned; ``False`` means all passed.
+    floor, in that order — for :func:`_place_pick`.
+
+    The fee floor refuses TERMINAL (journaled + paged): a pick's round trip
+    does not get cheaper by waiting. The two capital gates do not (#1734): a
+    pick that does not fit in free capital WAITS — it stays armed, the wait is
+    journaled once (``capital_wait``), and the drain tries it again on every
+    tick until it fits or its validity window ends. A capital gate that could
+    not value the book (an unjoined order, a missing mark or FX rate, an
+    unvaluable watch, no margin figure) HOLDS the pick the same way, with the
+    throttled alert the fail-closed refusal used to send.
+
+    ``gate_plan`` is what the capital gates value: the plan minus any exposure
+    this pick ALREADY has at the broker (#1734 review F2). ``skip_capital_gates``
+    is the crash re-drive of a pick whose watches are open: it was admitted
+    when they opened, its watching reservation is in the fold, and valuing it
+    again as a candidate would count it twice.
     """
     # Fee floor (design memo §4) — computed AFTER the setup plan + fx are
     # known, BEFORE any bracket construction/placement. A pick below the
@@ -5758,7 +5866,9 @@ def _post_sizing_money_gate_refuses(
             alert_throttled,
             generation=generation,
         )
-        return True
+        return _GateOutcome.REFUSED
+    if skip_capital_gates:
+        return _GateOutcome.PASS
 
     # (``entry_trail_fold`` is the snapshot `_place_pick` read ONCE before
     # safety.check — the same one feeds these gates and its drain intercept.)
@@ -5771,8 +5881,8 @@ def _post_sizing_money_gate_refuses(
     # (non-network) steps above; at the 45s poll cadence that skew is benign.
     # If a future change inserts broker I/O between the snapshot and this
     # check, or drops the cadence to sub-second streaming, re-snapshot here.
-    gross_violation = pick_money_gates._check_gross_cap(
-        plan,
+    verdict = pick_money_gates._check_gross_cap(
+        gate_plan,
         fx,
         account=account,
         open_verdicts=open_verdicts,
@@ -5781,42 +5891,92 @@ def _post_sizing_money_gate_refuses(
         ticker=ticker,
         entry_trail_fold=entry_trail_fold,
         broker=broker,
+        admitted_this_tick_acct=admitted_this_tick_acct,
     )
-    if gross_violation is not None:
-        _refuse_pick_terminal(
-            ticker,
-            trade_date,
-            gross_violation,
-            f"gross-cap:{ticker}",
-            alert_throttled,
-            generation=generation,
-        )
-        return True
-
     # Cash floor (broker sizing declared-frame memo §4.2) — declared mode
     # only; runs AFTER the gross cap (exposure first, funding second — and the
     # gross cap's fail-closed unjoined check must win, see pick_money_gates._check_cash_floor)
     # and BEFORE classify, on the same post-sizing inputs. Zero new broker I/O.
-    cash_violation = pick_money_gates._check_cash_floor(
-        plan,
-        fx,
-        account=account,
-        open_verdicts=open_verdicts,
-        records=records,
-        ticker=ticker,
-        entry_trail_fold=entry_trail_fold,
-    )
-    if cash_violation is not None:
-        _refuse_pick_terminal(
-            ticker,
-            trade_date,
-            cash_violation,
-            f"cash-floor:{ticker}",
-            alert_throttled,
-            generation=generation,
+    if verdict is None:
+        verdict = pick_money_gates._check_cash_floor(
+            gate_plan,
+            fx,
+            account=account,
+            open_verdicts=open_verdicts,
+            records=records,
+            ticker=ticker,
+            entry_trail_fold=entry_trail_fold,
+            admitted_this_tick_acct=admitted_this_tick_acct,
         )
-        return True
-    return False
+    if verdict is None:
+        return _GateOutcome.PASS
+    if verdict.kind == pick_money_gates.VERDICT_CAPITAL:
+        capital_wait.record_capital_wait(
+            intent=intent,
+            pick_key=pick_key,
+            gate=verdict.gate,
+            message=verdict.message,
+            window=window,
+            alert_throttled=alert_throttled,
+            now=now,
+        )
+        return _GateOutcome.WAIT
+    capital_wait.hold_on_state(
+        ticker=ticker,
+        pick_key=pick_key,
+        gate=verdict.gate,
+        message=verdict.message,
+        alert_throttled=alert_throttled,
+    )
+    return _GateOutcome.HELD
+
+
+def _utc_now() -> dt.datetime:
+    """The drain's clock — a module seam so a test can hold the moment still."""
+    return dt.datetime.now(dt.UTC)
+
+
+# Classic resting entries carry a GTD DATE the broker adapter computes from its
+# own UTC "today" at POST time. Within this long of 00:00 UTC that date may
+# roll between the session count and the POST, which would add one session to
+# the window; the pick waits one tick instead (#1734 review F5).
+_GTD_MIDNIGHT_GUARD = dt.timedelta(seconds=60)
+
+
+def _near_utc_midnight(now: dt.datetime) -> bool:
+    midnight = dt.datetime.combine(
+        now.astimezone(dt.UTC).date() + dt.timedelta(days=1), dt.time(0), tzinfo=dt.UTC
+    )
+    return midnight - now < _GTD_MIDNIGHT_GUARD
+
+
+def _without_placed_now_tier(
+    plan: Any, records: Sequence[Mapping[str, Any]], ticker: str, intent: Any
+) -> Any:
+    """``plan`` minus its immediate tier when that tier is already done (#1734 review F2).
+
+    The now tranche's record does not retire the pick (``submitted_pick_keys``
+    skips it), so a pick whose pullback half did not route on the tick its now
+    half was placed is drained again — and its now exposure is already a
+    WORKING order or a position. Valuing the whole plan again would count it
+    twice, and under the wait rule the pick would wait on itself until it
+    expired."""
+    pullback = tuple(
+        tier for tier in plan.entry_tiers if getattr(tier, "entry_mode", "pullback") != "immediate"
+    )
+    if len(pullback) == len(plan.entry_tiers):
+        return plan
+    if not now_tranche._now_already_done(records, ticker, intent):
+        return plan
+    return replace(plan, entry_tiers=pullback)
+
+
+def _plan_gross_acct(plan: Any, fx: Any) -> float:
+    from broker_contract.sizing import setup_plan_gross_notional
+
+    gross = float(setup_plan_gross_notional(plan))
+    # rate is instrument-ccy per 1 account-ccy -> acct = instr / rate.
+    return gross / float(fx.rate) if fx is not None else gross
 
 
 def _place_pick(
@@ -5828,6 +5988,7 @@ def _place_pick(
     audit_budget: OutcomeAuditBudget | None = None,
     now_entry_scope: _NowEntryScope | None = None,
     account_currency: _AccountCurrency | None = None,
+    tick_admissions: _TickAdmissions | None = None,
 ) -> bool:
     """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
@@ -5845,7 +6006,16 @@ def _place_pick(
     PR-7 (broker-manager extraction memo §5): the daemon never touches a
     brief any more — ``ticker``/``trade_date``/``spec``/``exit_spec`` are all
     read directly off the drained ``intent`` (the client already parsed +
-    validated the document at arm time, through the arming door)."""
+    validated the document at arm time, through the arming door).
+
+    VALIDITY WINDOW (#1734). Every armed pick has ``spec.order_ttl_days``
+    sessions of its venue, counted from ``trade_date``, to be placed in
+    (``pick_window``). Checked FIRST, before any broker read: a pick still
+    unplaced when the window ends expires — one terminal line, one alert —
+    whatever was holding it (no capital, the day-1 gate, a safety rail, a
+    dead feed). A pick placed late gets only what is left of the window: its
+    watches carry the window's end and its resting limits a GTD of the
+    window's last session."""
     from broker_contract.contract import BrokerError
 
     from alphalens_pipeline.brokers.automanager import safety
@@ -5859,6 +6029,30 @@ def _place_pick(
     trade_date = dt.date.fromisoformat(intent.meta.trade_date)
     spec = intent.spec
     exit_spec = intent.exit
+    generation = picks._pick_generation(intent)
+    pick_key = picks.pick_key_str(ticker, intent.meta.trade_date, generation)
+
+    # #1734: the window is a fact of the document, so it is judged before any
+    # I/O. A document whose window cannot be computed (a TTL out of range, a
+    # venue or a date the calendar does not know) never will have one.
+    try:
+        window = pick_window.window_of(intent)
+    except pick_window.PickWindowError as exc:
+        _refuse_pick_terminal(
+            ticker,
+            trade_date,
+            f"{ticker}: the pick has no validity window ({exc}) — refused",
+            f"pick-window:{ticker}",
+            alert_throttled,
+            generation=generation,
+        )
+        return False
+    now = _utc_now()
+    if now >= window.window_end:
+        capital_wait.expire(
+            intent=intent, pick_key=pick_key, window=window, alert_throttled=alert_throttled
+        )
+        return False
 
     # #1467: the document states its amount, so two of its facts can be judged
     # before the day-1 gate and must be — a pick armed before the open would
@@ -5897,6 +6091,7 @@ def _place_pick(
         alert_throttled,
         source=intent.meta.source,
     ):
+        capital_wait.note_hold(pick_key, "deferred by the day-1 gap gate")
         return False
 
     # Read order (entry-trailing memo G5, "verdicts-THEN-positions"; #1732
@@ -5939,6 +6134,7 @@ def _place_pick(
     )
     if isinstance(decision, safety.Refuse):
         logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
+        capital_wait.note_hold(pick_key, f"held by a safety rail: {decision.reason}")
         return False
 
     resolved = pick_money_gates._resolve_and_size(
@@ -5947,10 +6143,34 @@ def _place_pick(
     if resolved is None:
         return False
     instrument, fx, plan = resolved
+    mic = str(getattr(instrument, "exchange_mic", "") or intent.instrument.mic)
 
-    if _post_sizing_money_gate_refuses(
+    # #1734: what is LEFT of the window, counted on the RESOLVED venue — the
+    # calendar the broker adapter walks to turn this count into a GTD date.
+    # Computed before anything is placed, so a calendar that cannot answer
+    # never strands a now half at the broker without its pullback half.
+    gtd_sessions = pick_window.remaining_sessions(window, now.date(), mic)
+    if gtd_sessions is None:
+        logger.warning(
+            "place_pick %s: no session of its window (ends %s) is left on %s — it expires "
+            "on the next tick",
+            ticker,
+            window.window_end.isoformat(),
+            mic,
+        )
+        return False
+
+    gate_outcome = _post_sizing_money_gates(
         plan,
         fx,
+        gate_plan=_without_placed_now_tier(plan, records, ticker, intent),
+        # The crash re-drive of a pick whose watches are open (#1734 review F2).
+        skip_capital_gates=pick_key in entry_watch_capacity._open_watch_pick_keys(entry_trail_fold),
+        admitted_this_tick_acct=0.0 if tick_admissions is None else tick_admissions.gross_acct,
+        intent=intent,
+        pick_key=pick_key,
+        window=window,
+        now=now,
         instrument=instrument,
         account=account,
         open_verdicts=open_verdicts,
@@ -5960,9 +6180,22 @@ def _place_pick(
         broker=broker,
         ticker=ticker,
         trade_date=trade_date,
-        generation=picks._pick_generation(intent),
+        generation=generation,
         alert_throttled=alert_throttled,
+    )
+    if gate_outcome is not _GateOutcome.PASS:
+        return False
+    capital_wait.clear_hold(pick_key, ticker=ticker, now=now)
+    if tick_admissions is not None and pick_key not in entry_watch_capacity._open_watch_pick_keys(
+        entry_trail_fold
     ):
+        tick_admissions.admit(
+            _plan_gross_acct(_without_placed_now_tier(plan, records, ticker, intent), fx)
+        )
+
+    # #1734 review F5: several broker reads separate the check at the top from
+    # the first POST; a window that ended in between must not get an order.
+    if _utc_now() >= window.window_end:
         return False
 
     # --- Immediate ("now") tranche (#1247, memo §3.2/§3.5/§3.6) -------------
@@ -5979,6 +6212,7 @@ def _place_pick(
         exit_spec=exit_spec,
         alert_throttled=alert_throttled,
         now_entry_scope=now_entry_scope,
+        entry_ttl_days=gtd_sessions,
     )
     if routing.early_result is not None:
         return placed_geometry._announce_client_geometry(
@@ -6020,7 +6254,16 @@ def _place_pick(
     if placed_geometry._refuse_geometry_without_trail(exit_spec, ticker, alert_throttled):
         return False
 
-    placement = classify(plan, instrument, side=_ENTRY_SIDE)
+    # #1734 review F5: the GTD date is the adapter's UTC today advanced by this
+    # count, so count again on a FRESH clock just before the POST, and sit out
+    # the minute before 00:00 UTC, when the two could straddle midnight.
+    placement_now = _utc_now()
+    if placement_now >= window.window_end or _near_utc_midnight(placement_now):
+        return now_placed
+    gtd_sessions = pick_window.remaining_sessions(window, placement_now.date(), mic)
+    if gtd_sessions is None:
+        return now_placed
+    placement = classify(plan, instrument, side=_ENTRY_SIDE, entry_ttl_days=gtd_sessions)
     if not placement.tiers:
         logger.warning("place_pick %s: every entry tier sized to zero shares", ticker)
         return now_placed
@@ -6066,6 +6309,7 @@ def _route_now_tranche(
     exit_spec: Any,
     alert_throttled: Callable[[str, str], bool] | None,
     now_entry_scope: _NowEntryScope | None,
+    entry_ttl_days: int = 0,
 ) -> _NowRouting:
     """Drain the immediate tranche (if any) and split off the pullback
     remainder — the #1247 memo §3.2/§3.5/§3.7 routing, verbatim."""
@@ -6087,6 +6331,7 @@ def _route_now_tranche(
         alert_throttled=alert_throttled,
         now_entry_scope=now_entry_scope,
         tranche_plan_override=(pick_key, full_ladder_qty),
+        entry_ttl_days=entry_ttl_days,
     )
     if outcome in (_NowOutcome.DEFER, _NowOutcome.REFUSED_PICK):
         return _NowRouting(False, plan, False, None, None)

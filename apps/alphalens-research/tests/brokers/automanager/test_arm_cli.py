@@ -553,6 +553,14 @@ class ThePickKeyMustBeWritable(_DoorCase):
         record = self.fold_records()[0]
         self.assertEqual(record.record["intent"]["spec"]["disaster_stop"], 60.0)
 
+    def test_a_document_whose_window_has_ended_is_not_armed(self) -> None:
+        # #1734: trade_date 2026-09-11 + 7 sessions ends 2026-09-22 at 20:00 UTC.
+        self.move_clock(dt.datetime(2026, 9, 22, 20, 0, tzinfo=dt.UTC))
+        result = self.arm(_document(), "--format", "json")
+        failure = self.assert_refused(result, "pick_not_writable", "window_ended")
+        self.assertEqual(failure["details"]["window_end"], "2026-09-22T20:00:00+00:00")
+        self.assertEqual(self.inbox_bytes(), b"")
+
     def test_a_disarmed_generation_never_comes_back(self) -> None:
         """Measured 2026-09-11: without this the retry-after-timeout path
         silently RESURRECTED a pick the operator had cancelled."""

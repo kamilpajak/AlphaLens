@@ -77,10 +77,17 @@ from broker_contract.trade_intent.schema import (
     TrailingStop,
 )
 
+from tests.brokers.automanager.drain_clock import hold_drain_clock
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 
 _RID = "rid-KO"
 _UIC = 43070
+
+
+def setUpModule() -> None:
+    # #1734: these tests are about placement mechanics; hold the drain clock
+    # inside every fixture pick's validity window (see drain_clock.py).
+    hold_drain_clock()
 
 
 def _fake_build_record(**kw: Any) -> dict[str, Any]:
@@ -1069,7 +1076,8 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
         # future refactor stops calling it or ignores its answer.
         placed: list[Any] = []
         broker = _PlaceBroker(on_place=placed.append)
-        with mock.patch.object(pmg, "_check_gross_cap", return_value="gross-sentinel"):
+        sentinel = pmg.GateVerdict(pmg.GATE_GROSS_CAP, pmg.VERDICT_CAPITAL, "gross-sentinel")
+        with mock.patch.object(pmg, "_check_gross_cap", return_value=sentinel):
             self.assertFalse(self._placer(broker)(_pick()))
         self.assertEqual(placed, [])
 
@@ -1318,6 +1326,12 @@ def _fee_plan(notional: float) -> SetupPlan:
         entry_tiers=(TierPlan(tier_index=0, limit_price=10.0, qty=qty, alloc_pct=100.0, tag="T1"),),
         tp_tranches=(),
     )
+
+
+def _message(verdict: Any) -> str | None:
+    """A money gate's message, or ``None`` when it passed (#1734: the gates
+    return a typed verdict saying whether the pick waits or is blocked)."""
+    return None if verdict is None else verdict.message
 
 
 class TestRoundTripFeeBps(IsolatedHomeTestCase):
@@ -1701,14 +1715,16 @@ class TestCheckGrossCap(IsolatedHomeTestCase):
         records: Any = (),
         positions: Any = (),
     ) -> str | None:
-        return pmg._check_gross_cap(
-            _fee_plan(notional),
-            fx,
-            account=_acct(),
-            open_verdicts=list(verdicts),
-            records=list(records),
-            positions=list(positions),
-            ticker="KO",
+        return _message(
+            pmg._check_gross_cap(
+                _fee_plan(notional),
+                fx,
+                account=_acct(),
+                open_verdicts=list(verdicts),
+                records=list(records),
+                positions=list(positions),
+                ticker="KO",
+            )
         )
 
     def test_candidate_alone_under_limit_passes(self) -> None:
@@ -2026,15 +2042,17 @@ class TestFilledPositionsMixedCurrencyBook(IsolatedHomeTestCase):
 
         _entry_trail_journal(self, None)
         with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.04"}, clear=True):
-            violation = pmg._check_gross_cap(
-                _fee_plan(100.0),
-                None,
-                account=_acct("PLN"),
-                open_verdicts=[],
-                records=[],
-                positions=[_position(1_000.0, ticker="NVAX", currency="USD")],
-                ticker="CDR",
-                broker=_FxBroker(),
+            violation = _message(
+                pmg._check_gross_cap(
+                    _fee_plan(100.0),
+                    None,
+                    account=_acct("PLN"),
+                    open_verdicts=[],
+                    records=[],
+                    positions=[_position(1_000.0, ticker="NVAX", currency="USD")],
+                    ticker="CDR",
+                    broker=_FxBroker(),
+                )
             )
         self.assertIsNotNone(violation)
         assert violation is not None
@@ -2044,8 +2062,8 @@ class TestFilledPositionsMixedCurrencyBook(IsolatedHomeTestCase):
 class TestPlacePickGrossCapIntegration(IsolatedHomeTestCase):
     """The gross cap gate inside ``_place_pick``: computed AFTER the fee floor
     (same post-sizing inputs), BEFORE any bracket construction or placement.
-    Violation mirrors the fee floor's terminal refusal flow verbatim
-    (mark_refused + throttled alert, NO submission record)."""
+    A pick that does not fit WAITS (#1734): no refused line, no submission
+    record, one wait line and one alert; it stays armed for the drain."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -2092,22 +2110,22 @@ class TestPlacePickGrossCapIntegration(IsolatedHomeTestCase):
         placer = cl._make_place_pick(broker, alert_throttled=_alert_throttled)
         return placer, alerts, refusals, appended
 
-    def test_over_cap_refused_terminal_never_placed_no_submission_record(self) -> None:
+    def test_over_cap_waits_never_placed_never_refused(self) -> None:
+        from alphalens_pipeline.brokers.automanager import pick_waits
+
         broker = _RecordingBroker()
         with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
             placer, alerts, refusals, appended = self._placer(broker, notional=10_000.0)
             self.assertFalse(placer(_pick()))
-        self.assertEqual(broker.placed, [], "the gross cap must refuse BEFORE any bracket places")
-        self.assertEqual(appended, [], "a refused pick must never journal a submission record")
-        self.assertEqual(len(refusals), 1)
-        ticker, trade_date, reason = refusals[0]
-        self.assertEqual(ticker, "KO")
-        self.assertEqual(trade_date, dt.date(2026, 7, 20))
-        self.assertIn("gross", reason.lower())
+        self.assertEqual(broker.placed, [], "the gross cap must hold BEFORE any bracket places")
+        self.assertEqual(appended, [], "a waiting pick must never journal a submission record")
+        self.assertEqual(refusals, [], "#1734: a pick that does not fit waits, it is not refused")
+        (wait,) = pick_waits.read_waits().latest.values()
+        self.assertEqual((wait.pick_key, wait.gate), ("KO:2026-07-20", "gross_cap"))
         self.assertEqual(len(alerts), 1)
         message, reason_key = alerts[0]
         self.assertIn("gross", message.lower())
-        self.assertEqual(reason_key, "gross-cap:KO")
+        self.assertEqual(reason_key, "capital-wait:KO:2026-07-20")
 
     def test_under_cap_places(self) -> None:
         broker = _RecordingBroker()
@@ -2135,32 +2153,42 @@ class TestPlacePickGrossCapIntegration(IsolatedHomeTestCase):
             )
             self.assertFalse(placer(_pick()))
         self.assertEqual(broker.placed, [])
-        self.assertEqual(len(refusals), 1)
+        self.assertEqual(refusals, [])
 
-    def test_position_mark_missing_fails_closed_never_placed(self) -> None:
+    def test_position_mark_missing_holds_the_pick_without_refusing_it(self) -> None:
+        # #1734: a state the gate cannot value fails CLOSED (nothing placed)
+        # but is not a fact about the document — the pick is held, paged under
+        # its own key, and not journaled as waiting for capital.
+        from alphalens_pipeline.brokers.automanager import pick_waits
+
         broker = _RecordingBroker(on_positions=[_position(None)])
         with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "1.0"}, clear=True):
             placer, alerts, refusals, _appended = self._placer(broker, notional=100.0)
             self.assertFalse(placer(_pick()))
         self.assertEqual(broker.placed, [])
-        self.assertEqual(len(refusals), 1)
+        self.assertEqual(refusals, [])
         self.assertEqual(len(alerts), 1)
-        self.assertEqual(alerts[0][1], "gross-cap:KO")
+        self.assertEqual(alerts[0][1], "gross-cap-state:KO")
+        self.assertEqual(pick_waits.read_waits().latest, {})
 
-    def test_refused_line_append_oserror_never_crashes_the_drain(self) -> None:
-        # _refuse_pick_terminal contains the fallible mark_refused I/O: on
-        # OSError the drain must survive (return False), the pick stays armed
-        # and the refusal re-fires next tick.
+    def test_wait_line_append_oserror_never_crashes_the_drain(self) -> None:
+        # The wait journal is fallible I/O: on OSError the drain must survive
+        # (return False), the pick stays armed and the wait is journaled on a
+        # later tick.
+        from alphalens_pipeline.brokers.automanager import pick_waits
+
         def _disk_full(*_a: Any, **_k: Any) -> None:
             raise OSError("disk full")
 
         broker = _RecordingBroker()
-        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
-            placer, _alerts, _refusals, _appended = self._placer(
-                broker, notional=10_000.0, mark_refused=_disk_full
-            )
+        with (
+            mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True),
+            mock.patch.object(pick_waits, "append_wait", _disk_full),
+        ):
+            placer, _alerts, refusals, _appended = self._placer(broker, notional=10_000.0)
             self.assertFalse(placer(_pick()))  # must not raise
         self.assertEqual(broker.placed, [])
+        self.assertEqual(refusals, [])
 
     def test_fee_floor_violation_wins_when_both_gates_trip(self) -> None:
         # Sibling ordering: the fee floor runs first, so a pick violating both
@@ -2212,13 +2240,15 @@ class TestCheckCashFloor(IsolatedHomeTestCase):
         records: Any = (),
         margin_available: Any = 50_000.0,
     ) -> str | None:
-        return pmg._check_cash_floor(
-            _fee_plan(notional),
-            fx,
-            account=_cash_acct(margin_available),
-            open_verdicts=list(verdicts),
-            records=list(records),
-            ticker="KO",
+        return _message(
+            pmg._check_cash_floor(
+                _fee_plan(notional),
+                fx,
+                account=_cash_acct(margin_available),
+                open_verdicts=list(verdicts),
+                records=list(records),
+                ticker="KO",
+            )
         )
 
     def test_clamped_or_unset_mode_returns_none_even_when_broke(self) -> None:
@@ -2301,9 +2331,9 @@ class TestCheckCashFloor(IsolatedHomeTestCase):
 
 class TestPlacePickCashFloorIntegration(IsolatedHomeTestCase):
     """The cash floor gate inside ``_place_pick``: AFTER the gross cap (same
-    post-sizing inputs), BEFORE classify. Violation mirrors the fee-floor /
-    gross-cap terminal refusal flow verbatim (mark_refused + throttled alert,
-    NO submission record)."""
+    post-sizing inputs), BEFORE classify. A pick that does not fit WAITS
+    (#1734), exactly like the gross cap: no refused line, no submission
+    record, one wait line and one alert."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -2350,22 +2380,22 @@ class TestPlacePickCashFloorIntegration(IsolatedHomeTestCase):
         placer = cl._make_place_pick(broker, alert_throttled=_alert_throttled)
         return placer, alerts, refusals, appended
 
-    def test_declared_refusal_terminal_alerted_nothing_placed_no_record(self) -> None:
+    def test_declared_shortfall_waits_alerted_nothing_placed_no_record(self) -> None:
+        from alphalens_pipeline.brokers.automanager import pick_waits
+
         broker = _RecordingBroker(on_account=lambda: _cash_acct(5_000.0))
         with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
             placer, alerts, refusals, appended = self._placer(broker, notional=10_000.0)
             self.assertFalse(placer(_pick()))
-        self.assertEqual(broker.placed, [], "the cash floor must refuse BEFORE any bracket places")
-        self.assertEqual(appended, [], "a refused pick must never journal a submission record")
-        self.assertEqual(len(refusals), 1)
-        ticker, trade_date, reason = refusals[0]
-        self.assertEqual(ticker, "KO")
-        self.assertEqual(trade_date, dt.date(2026, 7, 20))
-        self.assertIn("cash", reason.lower())
+        self.assertEqual(broker.placed, [], "the cash floor must hold BEFORE any bracket places")
+        self.assertEqual(appended, [], "a waiting pick must never journal a submission record")
+        self.assertEqual(refusals, [], "#1734: a pick that does not fit waits, it is not refused")
+        (wait,) = pick_waits.read_waits().latest.values()
+        self.assertEqual(wait.gate, "cash_floor")
         self.assertEqual(len(alerts), 1)
         message, reason_key = alerts[0]
         self.assertIn("cash", message.lower())
-        self.assertEqual(reason_key, "cash-floor:KO")
+        self.assertEqual(reason_key, "capital-wait:KO:2026-07-20")
 
     def test_clamped_mode_places_as_today(self) -> None:
         # Same broke account, mode clamped: the floor never consults the
@@ -2390,16 +2420,19 @@ class TestPlacePickCashFloorIntegration(IsolatedHomeTestCase):
 
     def test_gross_cap_fires_before_cash_floor_when_both_trip(self) -> None:
         # Sibling ordering: fee floor -> gross cap -> cash floor. A pick
-        # violating both later gates is refused with the GROSS message/key
-        # (one page, not two).
+        # violating both later gates waits on the GROSS cap (one page, not two).
+        from alphalens_pipeline.brokers.automanager import pick_waits
+
         broker = _RecordingBroker(on_account=lambda: _cash_acct(5_000.0))
         env = {**_DECLARED_ENV, PORTFOLIO_GROSS_FRAC_ENV: "0.0001"}
         with mock.patch.dict("os.environ", env, clear=True):
             placer, alerts, refusals, _appended = self._placer(broker, notional=10_000.0)
             self.assertFalse(placer(_pick()))
-        self.assertEqual(len(refusals), 1)
-        self.assertIn("gross", refusals[0][2].lower())
-        self.assertEqual(alerts[0][1], "gross-cap:KO")
+        self.assertEqual(refusals, [])
+        (wait,) = pick_waits.read_waits().latest.values()
+        self.assertEqual(wait.gate, "gross_cap")
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("gross", alerts[0][0].lower())
 
 
 def _entry_trail_journal(test: unittest.TestCase, lines: list[str] | None) -> None:
@@ -2440,14 +2473,16 @@ class TestCheckGrossCapWatchingReservation(IsolatedHomeTestCase):
     pre-trailing gate (inertness proof)."""
 
     def _check(self, *, notional: float = 10_000.0) -> str | None:
-        return pmg._check_gross_cap(
-            _fee_plan(notional),
-            None,
-            account=_acct(),
-            open_verdicts=[],
-            records=[],
-            positions=[],
-            ticker="KO",
+        return _message(
+            pmg._check_gross_cap(
+                _fee_plan(notional),
+                None,
+                account=_acct(),
+                open_verdicts=[],
+                records=[],
+                positions=[],
+                ticker="KO",
+            )
         )
 
     def test_no_journal_accept_and_refusal_message_are_byte_identical(self) -> None:
@@ -2460,7 +2495,7 @@ class TestCheckGrossCapWatchingReservation(IsolatedHomeTestCase):
             message,
             "gross cap: KO total gross 10,000.00 USD (working 0.00 + candidate 10,000.00 "
             "+ filled 0.00) exceeds limit 5,000.00 (0.05 x total_value 100,000.00) "
-            "— pick refused",
+            "— waits for capital",
             "with no entry-trails journal the refusal text must not change",
         )
 
@@ -2520,13 +2555,15 @@ class TestCheckCashFloorWatchingReservation(IsolatedHomeTestCase):
     check. With no journal the arithmetic and message are unchanged."""
 
     def _check(self, *, notional: float = 10_000.0, margin_available: Any = 12_000.0) -> str | None:
-        return pmg._check_cash_floor(
-            _fee_plan(notional),
-            None,
-            account=_cash_acct(margin_available),
-            open_verdicts=[],
-            records=[],
-            ticker="KO",
+        return _message(
+            pmg._check_cash_floor(
+                _fee_plan(notional),
+                None,
+                account=_cash_acct(margin_available),
+                open_verdicts=[],
+                records=[],
+                ticker="KO",
+            )
         )
 
     def test_no_journal_verdict_and_message_are_byte_identical(self) -> None:
@@ -2538,7 +2575,7 @@ class TestCheckCashFloorWatchingReservation(IsolatedHomeTestCase):
             message,
             "cash floor: KO needs 10,400.00 USD (incl. 4% buffer) + 0.00 already "
             "reserved by resting entries, but only 5,000.00 USD is available — "
-            "deposit and re-arm",
+            "waits for capital",
             "with no entry-trails journal the refusal text must not change",
         )
 

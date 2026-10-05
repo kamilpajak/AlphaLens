@@ -1683,7 +1683,7 @@ announced rather than silent.
 ### 8. Safety recap
 
 - **SIM-default is structural** — `SaxoClient` refuses any non-SIM base URL on every default/factory path; LIVE opens only under the ADR 0015 attended keyed unlock or the ADR 0017 standing account-bound grant used by the separate LIVE unit (§9).
-- Layers before any real POST each tick: kill-file → chain alive → `ALLOW_ORDERS=1` → daily-loss lockout (all transient: the pick stays armed), then per-pick amount → fee floor → portfolio-gross cap → cash floor (all terminal: the pick is refused). No count of positions or picks is a layer (#1732).
+- Layers before any real POST each tick: kill-file → chain alive → `ALLOW_ORDERS=1` → daily-loss lockout (all transient: the pick stays armed), then per-pick amount → fee floor (terminal: the pick is refused) → portfolio-gross cap → cash floor (the pick WAITS, armed, until it fits or its validity window ends, #1734). Every armed pick still unplaced at the end of its window (`order_ttl_days` sessions after its trade date) expires. No count of positions or picks is a layer (#1732).
 - The disaster stop is ALWAYS a standalone `StopIfTraded` placed after the entry fills, sized to realized qty (a ~30–60 s unprotected window per tick — acceptable on SIM).
 - **Deferred (known issues, see the PR):** far-TP tranches are reported operator-managed (NOT placed); no ratchet / resize-on-partial / 42-session time-stop / streaming; alert debounce absent (persistent alerts repeat each tick).
 
@@ -2171,11 +2171,29 @@ count ever bounded money. `alphalens broker status` dropped its `slots` section
 with them (`alphalens.broker.status/v2`); the two headroom figures it prints,
 `gross … headroom` and `cash … headroom`, are the room left.
 
-A pick that does not fit in free capital is refused TERMINALLY by the gross cap
-or the cash floor, exactly as before: it gets a refused line and a page, and
-must be re-armed by hand once money frees up. It is not held in the queue.
-With no count limit, "arm all of them" therefore places the picks that fit, in
-drain order, and refuses the rest.
+**Since #1734 a pick that does not fit in free capital WAITS.** The gross cap
+and the cash floor no longer refuse: the pick stays armed, the drain tries it
+again every tick in `armed_ts` order (ordered first-fit — a later pick that fits
+is placed while an earlier, larger one keeps waiting), and places it as soon as
+it fits. The wait is journaled once in
+`~/.alphalens/broker_orders/<env>/pick_waits.jsonl` and paged once per pick
+(`capital-wait:<pick key>`; a restart does not page again). Once the gates pass,
+one clearing line closes the wait. It is bounded by the
+pick's validity window — `order_ttl_days` sessions of its venue counted from
+`trade_date`, the same window a placed entry rests in — and a pick still
+unplaced at its end gets one `expired` line in `picks.jsonl` and one page
+(`pick-expired:<pick key>`). A pick placed late rests only for what is left of
+its window. `broker picks` shows `WAITING` / `EXPIRED` (`alphalens.broker.picks/v2`)
+and `broker status` lists `waiting_picks` with the gate, its message as of when,
+and the window end (`overdue` when the drain is not running to expire it). With
+no count limit, "arm all of them" therefore places the picks that fit, in armed
+order, and the rest wait for capital until their windows end. To stop a waiting
+pick, `alphalens broker disarm` it.
+
+A gate that cannot value the book (a working order not joined to the journal,
+a position without a mark or FX rate, an unvaluable watch, no margin figure)
+holds the pick the same way, with the throttled `gross-cap-state:<T>` /
+`cash-floor-state:<T>` page, bounded by the same window.
 
 The LIVE boot-assert pins six rails now, and accepts only
 `ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared`: with no count left, the cash
