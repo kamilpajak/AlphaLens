@@ -109,7 +109,7 @@ NULL_LEGACY_PLAN = "legacy_plan_shape"
 NULL_FX_NOT_REALIZED = "fx_rate_not_realized"
 NULL_REPORT_ROW_MISSING = "report_row_missing"
 NULL_NON_FINITE = "non_finite"
-NULL_NET_NOT_REPORTED = "net_not_reported"
+NULL_ACCT_AMOUNT_NOT_REPORTED = "account_amount_not_reported"
 NULL_STOP_AMEND_UNAVAILABLE = "stop_amend_history_unavailable"
 
 NULL_REASONS: tuple[str, ...] = (
@@ -127,7 +127,7 @@ NULL_REASONS: tuple[str, ...] = (
     NULL_REPORT_ROW_MISSING,
     NULL_NON_FINITE,
     NULL_STOP_AMEND_UNAVAILABLE,
-    NULL_NET_NOT_REPORTED,
+    NULL_ACCT_AMOUNT_NOT_REPORTED,
 )
 
 REASON_TAKE_PROFIT = "take_profit"
@@ -274,9 +274,17 @@ WARNING_CODES: tuple[str, ...] = (
 )
 
 # How far the venue's own net may sit from the same quantity rebuilt out of the
-# cash leg and the two fee rows before the record says they disagree. Both
-# sides are vendor cents over the same rows, so only float error should ever
-# separate them; the tolerance is below one cent so it cannot swallow a fee.
+# cash leg and the two fee rows before the record says they disagree.
+#
+# It does NOT scale with the number of legs, because the venue does not round
+# the two sides independently: on the 2026-10-03 LIVE capture the per-row
+# difference is EXACTLY zero on 41 of 41 rows (worst absolute difference
+# 0.000000000000), not merely within a cent. So the only thing a record-level
+# sum can accumulate is float error, which this is orders of magnitude above,
+# while staying below one cent so it cannot swallow a fee.
+# `TheVendorStatesTheNetPerExecution` pins that premise at 1e-9; if a later
+# capture shows real per-row rounding, that test fails first and this constant
+# has to be reconsidered with it.
 NET_FEE_TOLERANCE_ACCT = 0.005
 
 # Why a record cannot be compared with an intent-replay run of its plan. An
@@ -1012,20 +1020,26 @@ def _attach_report_facts(
     trade_ids = [e.trade_id for e in executions]
     trade_ref = ",".join(f"trade:{t}" for t in trade_ids)
     booked = _booked_total(executions)
-    rows = [b for t in trade_ids for b in venue.bookings_by_trade.get(t, [])]
-    if not rows:
+    # Per TRADE, not over the flattened list: an order with several executions
+    # can have one of them booked and another not yet, and summing the subset
+    # would report a fee that covers part of the fill as if it covered all of
+    # it — too small a cost, so a better-looking result.
+    unbooked = [t for t in trade_ids if not venue.bookings_by_trade.get(t)]
+    if unbooked:
         _null_report_facts(fill, NULL_REPORT_ROW_MISSING, NULL_REPORT_ROW_MISSING)
         # The net comes from the TRADES report, which did answer for this fill,
         # so a lagging BOOKINGS report leaves it readable while the cash leg
         # and the fees are not.
         fill.booking_sums["booked_amount_acct"] = booked
+        missing_ref = ",".join(f"trade:{t}" for t in unbooked)
         _fill_warn(
             fill,
             pick,
             W_REPORT_LAGS_AUDIT,
-            f"order {fill.order_id}: the bookings report has no row for {trade_ref} yet",
+            f"order {fill.order_id}: the bookings report has no row for {missing_ref} yet",
         )
         return
+    rows = [b for t in trade_ids for b in venue.bookings_by_trade.get(t, [])]
     sums: dict[str, float] = {
         "commission": 0.0,
         "exchange_fee": 0.0,
@@ -1134,7 +1148,7 @@ def _booked_total(
     for execution in executions:
         unit = unit or execution.account_currency
         if execution.booked_amount_account_currency is None:
-            return None, unit, NULL_NET_NOT_REPORTED
+            return None, unit, NULL_ACCT_AMOUNT_NOT_REPORTED
         total += execution.booked_amount_account_currency
     return total, unit, None
 
@@ -1156,8 +1170,14 @@ def _add_account_amount(
 def _acct_sum(
     sums: dict[str, float], missing: set[str], name: str, account_ccy: str | None
 ) -> tuple[float | None, str | None, str | None]:
+    """An account-currency fee member, null when any contributing row omits it.
+
+    The reason is ``account_amount_not_reported`` and not
+    ``report_row_missing``: the row IS there, and only the account-currency
+    amount on it is absent, which is a different thing for an operator to
+    chase."""
     if name in missing:
-        return None, account_ccy, NULL_REPORT_ROW_MISSING
+        return None, account_ccy, NULL_ACCT_AMOUNT_NOT_REPORTED
     return sums[name], account_ccy, None
 
 
@@ -1173,21 +1193,12 @@ def _measured(
 
 def _null_report_facts(fill: _Fill, fee_reason: str, fx_reason: str) -> None:
     ref = f"order:{fill.order_id}"
-    fill.fees = {
-        "commission": _null(fee_reason, None, SOURCE_BOOKINGS, ref),
-        "exchange_fee": _null(fee_reason, None, SOURCE_BOOKINGS, ref),
-        "fx_conversion": _null(fee_reason, None, SOURCE_BOOKINGS, ref),
-        "commission_acct": _null(fee_reason, None, SOURCE_BOOKINGS, ref),
-        "exchange_fee_acct": _null(fee_reason, None, SOURCE_BOOKINGS, ref),
-    }
+    fill.fees = {name: _null(fee_reason, None, SOURCE_BOOKINGS, ref) for name in _FEE_MEMBERS}
     fill.realized_fx = {
         "conversion_rate": _null(fx_reason, None, SOURCE_BOOKINGS, ref),
         "share_amount_acct": _null(fx_reason, None, SOURCE_BOOKINGS, ref),
     }
-    fill.booking_sums = dict.fromkeys(
-        ("commission", "exchange_fee", "fx_conversion", "commission_acct", "exchange_fee_acct"),
-        (None, None, fee_reason),
-    )
+    fill.booking_sums = dict.fromkeys(_FEE_MEMBERS, (None, None, fee_reason))
     fill.booking_sums["share_amount_acct"] = (None, None, NULL_FX_NOT_REALIZED)
     fill.booking_sums["booked_amount_acct"] = (None, None, fee_reason)
 

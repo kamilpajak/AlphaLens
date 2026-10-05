@@ -93,8 +93,11 @@ class TheVendorStatesTheNetPerExecution(_TradesCase):
     """The assumption the whole field rests on, pinned on the capture itself."""
 
     def test_booked_amount_equals_share_plus_commission_plus_exchange_fee(self) -> None:
-        # 41 of 41 rows, to the cent. If a later capture breaks this, the field
-        # is not a net on that account and this test is the one that says so.
+        # EXACTLY, not to the cent: the measured per-row difference is
+        # 0.000000000000 on 41 of 41 rows, so the venue does not round the two
+        # sides independently. That is what lets NET_FEE_TOLERANCE_ACCT stay a
+        # flat record-level figure instead of scaling with the leg count. If a
+        # later capture shows real rounding, this test fails first.
         for row in VENUE["trades"]:
             trade_id = str(row["TradeId"])
             legs = _ACCT_BY_TYPE[trade_id]
@@ -104,7 +107,7 @@ class TheVendorStatesTheNetPerExecution(_TradesCase):
                     legs.get("Share Amount", 0.0)
                     + legs.get("Commission", 0.0)
                     + legs.get("Exchange Fee", 0.0),
-                    places=2,
+                    delta=1e-9,
                 )
 
     def test_it_is_never_the_share_amount_alone(self) -> None:
@@ -314,6 +317,63 @@ class TheNetIsNullRatherThanPartial(_TradesCase):
         install_journals(self.home)
         record = trade(self.build(FakeFillHistory(venue), pick=VST), VST)
         self.assertIsNone(record["outcome"]["net_cash_acct"]["value"])
+
+
+class PartialBookingCoverageNullsTheFees(_TradesCase):
+    """One execution of an order booked and another not yet (synthetic shape).
+
+    LIVE has never produced it: no order in the capture carries more than one
+    execution, and every trade row has booking rows. It is reachable, because
+    the bookings report lags the trades report by up to two days, so a
+    partially filled order can have one execution booked and the next not.
+
+    Summing the booked subset would report a fee covering part of the fill as
+    if it covered all of it — a cost too small, so a result that looks better
+    than it was.
+    """
+
+    VST_EXIT = "6885451891"
+    SECOND_EXECUTION = "9000000001"
+
+    def _venue_with_a_split_unbooked_exit(self) -> dict[str, Any]:
+        venue = copy.deepcopy(VENUE)
+        original = next(r for r in venue["trades"] if str(r["TradeId"]) == self.VST_EXIT)
+        # Split the real -6 into -3 and -3 so the quantity cross-check still
+        # agrees with the audit, and give the new execution no booking rows.
+        original["Amount"] = -3.0
+        original["BookedAmountAccountCurrency"] = _BOOKED[self.VST_EXIT] / 2
+        second = copy.deepcopy(original)
+        second["TradeId"] = self.SECOND_EXECUTION
+        venue["trades"].append(second)
+        return venue
+
+    def setUp(self) -> None:
+        super().setUp()
+        install_journals(self.home)
+        venue = self._venue_with_a_split_unbooked_exit()
+        self.record = trade(self.build(FakeFillHistory(venue), pick=VST), VST)
+
+    def test_the_fee_members_are_null_rather_than_a_subset_sum(self) -> None:
+        fees = self.record["outcome"]["fees"]
+        for name in ("commission", "exchange_fee", "commission_acct", "exchange_fee_acct"):
+            with self.subTest(fee=name):
+                self.assertIsNone(value(fees[name]), f"{name} summed over the booked subset")
+
+    def test_the_gross_account_pnl_is_null_too(self) -> None:
+        # pnl_cash_acct comes from the same Share Amount bookings, so a subset
+        # sum there would understate the money moved on the exit leg.
+        self.assertIsNone(value(self.record["outcome"]["pnl_cash_acct"]))
+
+    def test_the_record_says_the_bookings_report_lags(self) -> None:
+        self.assertIn(trades.W_REPORT_LAGS_AUDIT, _codes(self.record))
+
+    def test_the_warning_names_only_the_unbooked_trade(self) -> None:
+        detail = next(
+            w["detail"]
+            for w in self.record["warnings"]
+            if w["code"] == trades.W_REPORT_LAGS_AUDIT and self.SECOND_EXECUTION in w["detail"]
+        )
+        self.assertNotIn(self.VST_EXIT, detail)
 
 
 class ADisagreementIsReported(_TradesCase):

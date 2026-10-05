@@ -162,7 +162,7 @@
         "report_row_missing",
         "non_finite",
         "stop_amend_history_unavailable",
-        "net_not_reported"
+        "account_amount_not_reported"
       ],
       "description": "Why a value is null (§3.3)."
     },

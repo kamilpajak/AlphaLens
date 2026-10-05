@@ -109,7 +109,7 @@ BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7053,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3222,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3233,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/broker.py": 2416,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/client.py": 1141,
     "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/saxo_price_stream.py": 1395,
