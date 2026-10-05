@@ -608,6 +608,7 @@ window and its row count.
 | `report_row_missing` | the audit has the fill, but the trades or bookings report has no row for it yet |
 | `non_finite` | a computed value was NaN or infinite |
 | `stop_amend_history_unavailable` | offline, and the stop's moves cannot be known |
+| `net_not_reported` | the trades report has the row, but it carries no `BookedAmountAccountCurrency`, so the venue states no net for that execution. One such execution nulls the whole record's net rather than leaving a sum over the others |
 
 #### Exit reasons
 
@@ -697,6 +698,7 @@ LIVE). With open lots of two picks the fill is `ambiguous_attribution` instead.
 | `ambiguous_attribution` | a fill on the pick's uic could not be given to one pick |
 | `side_unresolved` | the plan does not resolve a side; outcome math was refused |
 | `exit_price_off_plan_level` | a take-profit filled worse than its plan level (`spec.tp_tranches[n-1].price`, also in `reason_evidence`) by more than one tick: the order was not at the plan's level. Broker mode only; a better fill is price improvement and is not flagged |
+| `net_disagrees_with_fees` | `outcome.net_cash_acct` differs from `pnl_cash_acct` plus the account-currency fees by more than half a cent. Both sides are vendor amounts over the same rows, so a difference means the fee attribution is wrong somewhere. The record keeps the VENUE's net, which is what the account was charged |
 
 #### Replay exclusions
 

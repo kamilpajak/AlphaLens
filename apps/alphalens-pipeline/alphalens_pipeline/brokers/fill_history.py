@@ -141,10 +141,20 @@ class Execution:
     amount: float | None  # signed as sent: negative = sold
     to_open_or_close: str | None
     trade_date: str | None
+    booked_amount_account_currency: float | None
+    account_currency: str | None
 
     @classmethod
     def from_vendor_row(cls, row: dict[str, Any]) -> Execution:
-        """Map one ``/cs/v1/reports/trades`` row."""
+        """Map one ``/cs/v1/reports/trades`` row.
+
+        ``booked_amount_account_currency`` is the raw
+        ``BookedAmountAccountCurrency``: the venue's own net for this
+        execution, in the account currency. On the 2026-10-03 LIVE capture it
+        equals the execution's ``Share Amount`` plus its ``Commission`` plus
+        its ``Exchange Fee`` in ``AmountAccountCurrency`` on 41 of 41 rows, and
+        equals the ``Share Amount`` alone on none. That reading is the
+        builder's, not this row's; this row only reports the field."""
         return cls(
             trade_id=str(row.get("TradeId", "")),
             order_id=str(row.get("OrderId", "")),
@@ -153,6 +163,8 @@ class Execution:
             amount=_opt_float(row.get("Amount")),
             to_open_or_close=_opt_str(row.get("ToOpenOrClose")),
             trade_date=_opt_str(row.get("TradeDate")),
+            booked_amount_account_currency=_opt_float(row.get("BookedAmountAccountCurrency")),
+            account_currency=_opt_str(row.get("AccountCurrency")),
         )
 
 

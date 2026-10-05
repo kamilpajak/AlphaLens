@@ -169,6 +169,8 @@ class ListFillHistory(unittest.TestCase):
                 amount=-6.0,
                 to_open_or_close="ToClose",
                 trade_date="2026-10-01",
+                booked_amount_account_currency=3209.78,
+                account_currency="PLN",
             ),
             history.executions,
         )

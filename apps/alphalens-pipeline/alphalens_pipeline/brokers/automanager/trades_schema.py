@@ -244,10 +244,16 @@ class _Builder:
                     "commission": _ref("MeasuredMoney"),
                     "exchange_fee": _ref("MeasuredMoney"),
                     "fx_conversion": _ref("MeasuredMoney"),
+                    "commission_acct": _ref("MeasuredMoney"),
+                    "exchange_fee_acct": _ref("MeasuredMoney"),
                 },
                 description="Signed as the venue sends them (negative = cost). "
                 "commission and exchange_fee in the booking currency; fx_conversion "
-                "in the account currency.",
+                "in the account currency. The _acct pair is commission and "
+                "exchange_fee in the ACCOUNT currency, read off the same booking "
+                "rows: the native pair cannot be added to an account-currency "
+                "figure. fx_conversion is a disclosure of markup already inside "
+                "the cash leg, so it belongs in no net.",
             ),
             "RealizedFx": self.obj(
                 {
@@ -317,13 +323,21 @@ class _Builder:
                     "fees": _ref("Fees"),
                     "notional_spent_acct": _ref("MeasuredMoney"),
                     "pnl_cash_acct": _ref("MeasuredMoney"),
+                    "net_cash_acct": _ref("MeasuredMoney"),
                     "mfe_lower_bound": _ref("MeasuredPrice"),
                     "fees_not_included": {
                         "type": "array",
                         "items": {"type": "string", "enum": list(trades.FEES_NOT_INCLUDED)},
                     },
                 },
-                description="Derived values (§5). Gross: no net figure is derived.",
+                description="Derived values (§5). pnl_cash and pnl_cash_acct are "
+                "GROSS of commission and exchange fee. net_cash_acct is the "
+                "venue's own net of them, in the account currency, summed over "
+                "the record's legs from the trades report's "
+                "BookedAmountAccountCurrency; it already carries the FX "
+                "conversion charge, which the venue applied through the rate it "
+                "booked each cash leg at. The two must not be added together, "
+                "and fx_conversion must not be added to either.",
             ),
             "TradeRecord": self.obj(
                 {
