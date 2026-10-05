@@ -24,8 +24,8 @@ Environment=ALPHALENS_BROKER_ENVIRONMENT=sim
 Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile
 """
 
-_DROPIN_A = "[Service]\nEnvironment=ALPHALENS_BROKER_MAX_OPEN=10\n"
-_DROPIN_B = "[Service]\nEnvironment=ALPHALENS_BROKER_MAX_OPEN=2\n"
+_DROPIN_A = "[Service]\nEnvironment=ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=10\n"
+_DROPIN_B = "[Service]\nEnvironment=ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=2\n"
 
 
 class TestEnvironmentParser(unittest.TestCase):
@@ -55,7 +55,7 @@ class TestComposedEnvironment(unittest.TestCase):
         composed = drift.composed_environment(
             _BASE, [("10-a.conf", _DROPIN_A), ("20-b.conf", _DROPIN_B)]
         )
-        self.assertEqual(composed["ALPHALENS_BROKER_MAX_OPEN"], "2")
+        self.assertEqual(composed["ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R"], "2")
         self.assertEqual(composed["ALPHALENS_BROKER_ENVIRONMENT"], "sim")
 
 
@@ -133,7 +133,7 @@ class TestStripHostOnlyLines(unittest.TestCase):
     def test_keeps_a_line_that_mixes_allowlisted_and_governed_vars(self):
         # A mixed line is NOT host-only: dropping it would hide a governed
         # assignment behind the allowlist.
-        text = "Environment=SAXO_LIVE_ACCOUNT_KEY=opaque ALPHALENS_BROKER_MAX_OPEN=9\n"
+        text = "Environment=SAXO_LIVE_ACCOUNT_KEY=opaque ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=9\n"
         stripped = drift.strip_host_only_environment_lines(text, {"SAXO_LIVE_ACCOUNT_KEY"})
         self.assertEqual(stripped, text)
 
@@ -335,7 +335,9 @@ class TestHostOnlyGrantDropinPredicate(unittest.TestCase):
         self.assertTrue(self._is("# operator-local\n\n" + _GRANT_DROPIN))
 
     def test_rejects_a_file_that_also_assigns_a_governed_var(self):
-        self.assertFalse(self._is(_GRANT_DROPIN + "Environment=ALPHALENS_BROKER_MAX_OPEN=9\n"))
+        self.assertFalse(
+            self._is(_GRANT_DROPIN + "Environment=ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=9\n")
+        )
 
     def test_rejects_a_file_carrying_any_other_directive(self):
         # The dangerous shape: grant-only Environment= lines PLUS an
@@ -474,8 +476,8 @@ class TestEnvFileFindings(unittest.TestCase):
         self.assertEqual(drift.env_file_findings(_ENV_FILE_BENIGN), [])
 
     def test_an_export_prefixed_arming_line_is_still_flagged(self):
-        findings = drift.env_file_findings("export ALPHALENS_BROKER_MAX_OPEN=9\n")
-        self.assertEqual([f.subject for f in findings], ["ALPHALENS_BROKER_MAX_OPEN"])
+        findings = drift.env_file_findings("export ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=9\n")
+        self.assertEqual([f.subject for f in findings], ["ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R"])
 
     def test_the_grant_pair_is_banned_from_the_shared_file_too(self):
         # In the 0600 per-unit drop-in the grant arms ONE unit (ADR 0017);
@@ -534,8 +536,8 @@ class TestDriftFindings(unittest.TestCase):
             "unit": "alphalens-broker-manager",
             "repo_files": repo_files,
             "host_files": dict(repo_files),
-            "repo_env": {"ALPHALENS_BROKER_MAX_OPEN": "10"},
-            "live_env": {"ALPHALENS_BROKER_MAX_OPEN": "10"},
+            "repo_env": {"ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "10"},
+            "live_env": {"ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "10"},
             "host_only_vars": frozenset(),
         }
         args.update(overrides)
@@ -624,7 +626,7 @@ class TestDriftFindings(unittest.TestCase):
         # file that ALSO sets a governed rail, or overrides ExecStart, keeps
         # flagging exactly as before.
         for suffix, why in (
-            ("Environment=ALPHALENS_BROKER_MAX_OPEN=9\n", "extra variable"),
+            ("Environment=ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=9\n", "extra variable"),
             ("ExecStart=/bin/evil\n", "other directive"),
         ):
             with self.subTest(case=why):
@@ -652,7 +654,7 @@ class TestDriftFindings(unittest.TestCase):
         findings = self._findings(
             host_files={
                 "alphalens-broker-manager.service": _BASE,
-                "10-a.conf": "[Service]\nEnvironment=ALPHALENS_BROKER_MAX_OPEN=99\n",
+                "10-a.conf": "[Service]\nEnvironment=ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=99\n",
             }
         )
         self.assertEqual(
@@ -673,7 +675,7 @@ class TestDriftFindings(unittest.TestCase):
     def test_host_only_vars_are_excluded_from_env_comparison(self):
         findings = self._findings(
             live_env={
-                "ALPHALENS_BROKER_MAX_OPEN": "10",
+                "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "10",
                 "SAXO_LIVE_ACCOUNT_KEY": "opaque",
             },
             host_only_vars=frozenset({"SAXO_LIVE_ACCOUNT_KEY"}),
@@ -684,14 +686,14 @@ class TestDriftFindings(unittest.TestCase):
         # Positive control for the exclusion: everything else still compares.
         findings = self._findings(
             live_env={
-                "ALPHALENS_BROKER_MAX_OPEN": "99",
+                "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "99",
                 "SAXO_LIVE_ACCOUNT_KEY": "opaque",
             },
             host_only_vars=frozenset({"SAXO_LIVE_ACCOUNT_KEY"}),
         )
         self.assertEqual(
             [(f.kind, f.subject) for f in findings],
-            [("env_drift", "ALPHALENS_BROKER_MAX_OPEN")],
+            [("env_drift", "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R")],
         )
 
     def test_base_unit_grant_lines_are_tolerated_but_other_diffs_flag(self):

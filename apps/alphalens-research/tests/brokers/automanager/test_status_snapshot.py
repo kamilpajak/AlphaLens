@@ -191,7 +191,6 @@ class _SnapshotHarness:
             "os.environ",
             {
                 "ALPHALENS_TEXTFILE_DIR": str(self.textfile_dir),
-                safety.MAX_OPEN_ENV: "10",
                 safety.PORTFOLIO_GROSS_FRAC_ENV: "1.0",
             },
             clear=False,
@@ -217,7 +216,7 @@ class _SnapshotHarness:
         return status_snapshot.build_snapshot(broker=broker, env=self.env, now=_NOW, **kwargs)
 
 
-class TestExposureAndSlots(unittest.TestCase):
+class TestExposure(unittest.TestCase):
     def setUp(self) -> None:
         self.h = _SnapshotHarness(self)
 
@@ -226,9 +225,6 @@ class TestExposureAndSlots(unittest.TestCase):
         self.assertEqual(snapshot.exposure.used, 0.0)
         self.assertEqual(snapshot.exposure.limit, 100_000.0)
         self.assertEqual(snapshot.exposure.headroom, 100_000.0)
-        self.assertEqual(snapshot.slots.used, 0)
-        self.assertEqual(snapshot.slots.limit, 10)
-        self.assertEqual(snapshot.slots.free, 10)
         self.assertEqual(snapshot.exposure.blocked, [])
 
     def test_every_exposure_term_is_folded(self) -> None:
@@ -248,38 +244,12 @@ class TestExposureAndSlots(unittest.TestCase):
         self.assertEqual(snapshot.exposure.used, 2_620.0)
         self.assertEqual(snapshot.exposure.headroom, 100_000.0 - 2_620.0)
 
-    def test_slots_count_brackets_positions_and_watch_picks(self) -> None:
-        (self.h.root / "submissions.jsonl").write_text(
-            json.dumps(_submission("O-1")) + "\n", encoding="utf-8"
-        )
-        self.h.write_watches(
-            _watch_line("ENPH-2026-09-08-entry-t0", limit=30.0, qty=4.0, pick_key="ENPH:2026-09-08")
-        )
-        broker = _FakeBroker(positions=[_position()], orders=[_working_order("O-1")])
-        snapshot = self.h.build(broker)
-        self.assertEqual(snapshot.slots.brackets, 1)
-        self.assertEqual(snapshot.slots.positions, 1)
-        self.assertEqual(snapshot.slots.watch_picks, 1)
-        self.assertEqual(snapshot.slots.used, 3)
-        self.assertEqual(snapshot.slots.free, 7)
-
-    def test_a_watch_on_an_open_position_uic_does_not_double_count(self) -> None:
-        # The daemon excludes a watch whose uic already holds a position; the
-        # snapshot must exclude it too or it would report a phantom slot.
-        self.h.write_watches(
-            _watch_line(
-                "KO-2026-09-08-entry-t1", limit=10.0, qty=1.0, pick_key="KO:2026-09-08", uic=211
-            )
-        )
-        snapshot = self.h.build(_FakeBroker(positions=[_position(uic=211)]))
-        self.assertEqual(snapshot.slots.watch_picks, 0)
-        self.assertEqual(snapshot.slots.used, 1)
-
-    def test_a_net_flat_round_trip_occupies_no_slot(self) -> None:
-        broker = _FakeBroker(
-            positions=[_position(uic=211, quantity=5.0), _position(uic=211, quantity=-5.0)]
-        )
-        self.assertEqual(self.h.build(broker).slots.positions, 0)
+    def test_the_snapshot_has_no_slot_count(self) -> None:
+        # #1732: free capital is the only admission limit; there is no count
+        # left for a slot figure to be compared against.
+        snapshot = self.h.build(_FakeBroker(positions=[_position()]))
+        self.assertFalse(hasattr(snapshot, "slots"))
+        self.assertFalse(hasattr(status_snapshot, "Slots"))
 
     def test_an_unstamped_currency_position_is_flagged_and_headroom_is_an_upper_bound(self) -> None:
         broker = _FakeBroker(positions=[_position(currency="", market_value=3_000.0)])
@@ -355,7 +325,7 @@ class TestCostContract(unittest.TestCase):
         broker = _FakeBroker(orders=[_working_order("O-1")])
         snapshot = self.h.build(broker)
         self.assertEqual(broker.calls.get("resolve_order_outcome", 0), 0)
-        self.assertEqual(snapshot.slots.brackets, 1)
+        self.assertEqual(snapshot.exposure.committed, 500.0)  # O-1 only
 
     def test_an_empty_order_id_never_admits_an_id_less_bracket(self) -> None:
         # Positive control for the filter: a broker row with an empty order_id
@@ -601,23 +571,6 @@ class TestGateParity(unittest.TestCase):
                 refusal = pmg._check_gross_cap(self._plan(headroom + 1.0), None, **common)
                 self.assertIsNotNone(refusal, "one unit over the headroom must be refused")
 
-    def test_no_free_slot_means_the_real_safety_gate_refuses(self) -> None:
-        with mock.patch.dict("os.environ", {safety.MAX_OPEN_ENV: "1"}):
-            broker = _FakeBroker(positions=[_position()])
-            snapshot = self.h.build(broker)
-            self.assertEqual(snapshot.slots.free, 0)
-            decision = safety.check(
-                object(),
-                safety.JournalView(
-                    open_bracket_count=snapshot.slots.brackets, realized_r_today=0.0
-                ),
-                safety.BrokerView(open_position_count=snapshot.slots.positions, equity=100_000.0),
-                _AliveSession(),
-                kill_path=self.h.root / "KILL",
-                global_kill_path=self.h.root / "GLOBAL_KILL",
-            )
-            self.assertIsInstance(decision, safety.Refuse)
-
     def test_every_blocked_state_is_a_state_the_gate_also_refuses(self) -> None:
         from alphalens_pipeline.brokers.automanager import pick_money_gates as pmg
 
@@ -659,31 +612,19 @@ class TestGateParity(unittest.TestCase):
         )
 
 
-class _AliveSession:
-    alive = True
-
-
 class TestDaemonFoldCoupling(unittest.TestCase):
     def test_the_private_folds_the_snapshot_reuses_still_exist(self) -> None:
         # Necessary but NOT sufficient: a rename breaks CI here, while a
         # semantic drift under the same name is caught only by the boundary
         # probe above. Both tests exist for that reason.
-        from alphalens_pipeline.brokers.automanager import (
-            control_loop,
-            entry_watch_capacity,
-            pick_money_gates,
-        )
+        from alphalens_pipeline.brokers.automanager import pick_money_gates
 
-        # Each fold is named with the module that OWNS it: the step-5 partition
-        # moved four of the six out of ``control_loop``, and a pair here that
+        # Each fold is named with the module that OWNS it: a pair here that
         # named the wrong module would pass vacuously under ``getattr(..., None)``.
         for module, name in (
             (pick_money_gates, "_committed_working_gross_acct"),
             (pick_money_gates, "_filled_positions_gross_acct"),
             (pick_money_gates, "_make_position_rate_lookup"),
-            (control_loop, "_net_open_position_uics"),
-            (control_loop, "_summarize_open_verdicts"),
-            (entry_watch_capacity, "_open_watch_picks_for_max_open"),
         ):
             with self.subTest(fold=name, module=module.__name__):
                 self.assertTrue(callable(getattr(module, name, None)))

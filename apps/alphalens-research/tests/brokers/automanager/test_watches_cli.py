@@ -201,7 +201,7 @@ class WatchesCommandTest(unittest.TestCase):
         watching = payload["watching"]
         self.assertEqual(watching["tiers"], 6)
         # Distinct pick keys of the non-terminal tiers; the keyless FFF tier
-        # counts by its crid, the way the daemon's MAX_OPEN fold counts it.
+        # counts by its crid, the way the daemon's watch fold counts it.
         self.assertEqual(watching["picks"], 4)
         self.assertEqual(watching["reserved_acct"], _EXPECTED_RESERVED)
         self.assertEqual(watching["unvaluable_tiers"], 1)

@@ -39,7 +39,6 @@ _SECRET = "sentinel-secret-value"
 # The production shapes measured on the VPS 2026-09-08: ALLOW_ORDERS=1 comes
 # from the 10-allow-orders drop-in, so composing gives an ARMED environment.
 _RAILS = {
-    "ALPHALENS_BROKER_MAX_OPEN": "10",
     "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC": "1.0",
     "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "1.0",
     "ALPHALENS_BROKER_MAX_PICK_NOTIONAL": "15000",
@@ -47,7 +46,6 @@ _RAILS = {
     "ALPHALENS_BROKER_EXIT_POLICY": "breakeven_trail",
     "ALPHALENS_BROKER_MAX_FEE_BPS": "1000",
     "ALPHALENS_BROKER_ENTRY_TRAIL_BPS": "50",
-    "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS": "10",
 }
 _UNIT_PAYLOAD = " ".join(
     [
@@ -196,19 +194,19 @@ class EnvOptionTest(unittest.TestCase):
         captured: dict[str, str] = {}
 
         def factory():
-            captured["max_open"] = os.environ["ALPHALENS_BROKER_MAX_OPEN"]
+            captured["loss_limit"] = os.environ["ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R"]
             return (_CliFakeBroker(), mock.Mock())
 
         from alphalens_cli.commands.broker import broker_app
 
         with (
-            mock.patch.dict("os.environ", {"ALPHALENS_BROKER_MAX_OPEN": "999"}),
+            mock.patch.dict("os.environ", {"ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "999"}),
             mock.patch(SHOW_SEAM, _show()),
             mock.patch(READ_SEAM, lambda _path: _ENV_FILE),
             mock.patch(LIVE_FACTORY_SEAM, side_effect=factory),
         ):
             self.runner.invoke(broker_app, ["account", "--env", "live"])
-        self.assertEqual(captured["max_open"], "10")
+        self.assertEqual(captured["loss_limit"], "1.0")
 
     def test_the_option_beats_an_instance_pin_hiding_in_the_environment_file(self) -> None:
         # The catastrophic ordering bug: EnvironmentFile= wins over
@@ -254,10 +252,10 @@ class EnvOptionTest(unittest.TestCase):
     def test_a_banned_key_in_the_file_warns_on_stderr(self) -> None:
         result = self._invoke(
             ["orders", "--env", "live"],
-            env_file=f"{_ENV_FILE}ALPHALENS_BROKER_MAX_OPEN=99\n",
+            env_file=f"{_ENV_FILE}ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=99\n",
         )
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("ALPHALENS_BROKER_MAX_OPEN", result.stderr)
+        self.assertIn("ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R", result.stderr)
         self.assertNotIn("99", result.stderr)
 
     def test_a_pending_daemon_reload_warns_on_stderr(self) -> None:

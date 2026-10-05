@@ -1683,7 +1683,7 @@ announced rather than silent.
 ### 8. Safety recap
 
 - **SIM-default is structural** — `SaxoClient` refuses any non-SIM base URL on every default/factory path; LIVE opens only under the ADR 0015 attended keyed unlock or the ADR 0017 standing account-bound grant used by the separate LIVE unit (§9).
-- Layers before any real POST each tick: kill-file → chain alive → `ALLOW_ORDERS=1` → `MAX_OPEN` / portfolio-gross / daily-loss caps.
+- Layers before any real POST each tick: kill-file → chain alive → `ALLOW_ORDERS=1` → daily-loss lockout (all transient: the pick stays armed), then per-pick amount → fee floor → portfolio-gross cap → cash floor (all terminal: the pick is refused). No count of positions or picks is a layer (#1732).
 - The disaster stop is ALWAYS a standalone `StopIfTraded` placed after the entry fills, sized to realized qty (a ~30–60 s unprotected window per tick — acceptable on SIM).
 - **Deferred (known issues, see the PR):** far-TP tranches are reported operator-managed (NOT placed); no ratchet / resize-on-partial / 42-session time-stop / streaming; alert debounce absent (persistent alerts repeat each tick).
 
@@ -1970,7 +1970,7 @@ discover a gap.
 
 #### 9.4 Attended arm
 
-Operator present, one liquid US name, `MAX_OPEN=1`:
+Operator present, one liquid US name, one pick armed:
 
 ```bash
 # Arm by installing the tracked drop-in — NEVER by editing the installed
@@ -2161,6 +2161,65 @@ for it. A write-ahead `attempt` record counts as a record.
 A refusal is written to `picks.jsonl`, so it happens once. If that write fails,
 the pick stays armed and is refused again on the next tick (the alert is
 throttled).
+
+**Retired in #1732 (owner decision 2026-10-05).** `ALPHALENS_BROKER_MAX_OPEN`
+(a count of open positions + brackets + watching picks, a TERMINAL refusal when
+full) and `ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS` (a count of watching picks, a
+deferral when full). Free capital is now the only limit on how many picks the
+daemon takes; the three settings above, plus the fee floor, bound it. Neither
+count ever bounded money. `alphalens broker status` dropped its `slots` section
+with them (`alphalens.broker.status/v2`); the two headroom figures it prints,
+`gross … headroom` and `cash … headroom`, are the room left.
+
+A pick that does not fit in free capital is refused TERMINALLY by the gross cap
+or the cash floor, exactly as before: it gets a refused line and a page, and
+must be re-armed by hand once money frees up. It is not held in the queue.
+With no count limit, "arm all of them" therefore places the picks that fit, in
+drain order, and refuses the rest.
+
+The LIVE boot-assert pins six rails now, and accepts only
+`ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared`: with no count left, the cash
+floor is what bounds how much LIVE funds at once, and `clamped` switches it off.
+
+#1732 deploy — run while the US market is closed:
+
+```bash
+cd /home/jacoren/AlphaLens
+git pull --ff-only          # the daemons run from the host venv
+# 1. Restart onto the new code with the OLD units still installed. New code
+#    ignores the two leftover variables, so both daemons boot.
+systemctl --user restart alphalens-broker-manager.service alphalens-broker-manager-live.service
+journalctl --user -u alphalens-broker-manager-live -n 50   # no "LIVE boot-assert failed"
+# 2. Install the changed units.
+cp deploy/systemd/alphalens-broker-manager-live.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-broker-manager-live.service.d/20-exposure.conf \
+   deploy/systemd/alphalens-broker-manager-live.service.d/40-entry-trail.conf \
+   ~/.config/systemd/user/alphalens-broker-manager-live.service.d/
+cp deploy/systemd/alphalens-broker-manager.service.d/40-entry-trail.conf \
+   ~/.config/systemd/user/alphalens-broker-manager.service.d/
+# 3. Remove the two SIM drop-ins the repo no longer carries (a `cp` never
+#    deletes; left behind they are inert but the drift check reports them).
+rm ~/.config/systemd/user/alphalens-broker-manager.service.d/20-max-open.conf \
+   ~/.config/systemd/user/alphalens-broker-manager.service.d/41-entry-watch-cap.conf
+systemctl --user daemon-reload
+systemctl --user restart alphalens-broker-manager.service alphalens-broker-manager-live.service
+# 4. Verify. The unit and drop-ins are the only place these may come from
+#    (every ALPHALENS_BROKER_* name is banned from /etc/alphalens/env and the
+#    drift check scans that file), so 0 here means 0 in the daemon.
+systemctl --user show -p Environment alphalens-broker-manager-live.service alphalens-broker-manager.service \
+  | tr ' ' '\n' | grep -c 'MAX_OPEN\|ENTRY_WATCH_MAX_PICKS'          # 0
+grep -c 'MAX_OPEN\|ENTRY_WATCH_MAX_PICKS' /etc/alphalens/env          # 0
+alphalens broker status --env live --format json | jq -r '.schema, has("slots")'   # status/v2, false
+```
+
+Order matters in one direction only: never restart onto OLD code after the new
+units are installed. The old LIVE boot-assert requires both removed names and
+would refuse to start, leaving open positions without exit management. The
+literature-scan timer pulls `main` on Sundays at 18:00 Europe/Warsaw, so a merge
+is a deploy by then at the latest. Rollback restores code AND units together:
+revert, `git pull`, re-copy the units from the reverted tree, restore the two
+SIM files with `git show <parent>:deploy/systemd/alphalens-broker-manager.service.d/<file>`,
+then `daemon-reload` and restart.
 
 #### 9.8 Standing-grant decommission
 

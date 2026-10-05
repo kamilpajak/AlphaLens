@@ -13,9 +13,10 @@ manager doesn't secretly depend on anything Saxo-specific.
 ## The seven promises
 
 1. **The safety rails are respected** (`test_safety_rails.py`) — the manager will
-   not open new risk when it shouldn't: a master "orders off" switch, a cap on
-   open positions, a gross-exposure cap, a daily-loss cutoff, and an emergency
-   KILL file each stop new orders. The KILL switch still lets it *protect* what it
+   not open new risk when it shouldn't: a master "orders off" switch, a
+   gross-exposure cap, a cash floor, a daily-loss cutoff, and an emergency KILL
+   file each stop new orders. The number of open positions is not a limit
+   (#1732): free capital is. The KILL switch still lets it *protect* what it
    already holds.
 2. **Every position is protected** (`test_every_position_protected.py`) — the
    moment it can see it holds shares, it covers all of them with a stop. It works

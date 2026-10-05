@@ -34,7 +34,6 @@ from alphalens_pipeline.brokers.automanager import stream_handles as sh
 from alphalens_pipeline.brokers.automanager.live_rails import (
     DAILY_LOSS_LIMIT_R_ENV,
     MAX_FEE_BPS_ENV,
-    MAX_OPEN_ENV,
     MAX_PICK_NOTIONAL_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
 )
@@ -46,7 +45,6 @@ from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 # _VALID_RAIL_ENV so a rails-pass/rails-fail test only ever differs on the one
 # variable each case is pinning.
 _VALID_RAIL_ENV: dict[str, str] = {
-    MAX_OPEN_ENV: "1",
     PORTFOLIO_GROSS_FRAC_ENV: "0.25",
     DAILY_LOSS_LIMIT_R_ENV: "1.0",
     MAX_FEE_BPS_ENV: "100",

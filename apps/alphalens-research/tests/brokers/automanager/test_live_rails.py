@@ -1,10 +1,9 @@
-"""LIVE boot-assert (design memo §3 / ADR 0017 point 4) — the eight safety-rail
+"""LIVE boot-assert (design memo §3 / ADR 0017 point 4) — the six safety-rail
 env vars a ``env=live`` instance must set explicitly, within bounds, before
 it may boot.
 
-The code defaults (``safety.py``: ``DEFAULT_MAX_OPEN=3``,
-``DEFAULT_PORTFOLIO_GROSS_FRAC=1.0``, ``DEFAULT_DAILY_LOSS_LIMIT_R=3.0``) are
-permissive — a LIVE unit missing one pin would silently trade 100% gross of
+The code defaults (``safety.py``: ``DEFAULT_PORTFOLIO_GROSS_FRAC=1.0``,
+``DEFAULT_DAILY_LOSS_LIMIT_R=3.0``) are permissive — a LIVE unit missing one pin would silently trade 100% gross of
 the real balance. ``assert_live_rails`` collects EVERY violation and reports
 them together so an operator fixes the unit file once, not one restart per
 missing pin.
@@ -23,9 +22,8 @@ from alphalens_pipeline.brokers.automanager.entry_trails import ENTRY_TRAIL_BPS_
 from alphalens_pipeline.brokers.automanager.live_rails import (
     DAILY_LOSS_LIMIT_R_ENV,
     ENTRY_TRAIL_BPS_ENV,
-    ENTRY_WATCH_MAX_PICKS_ENV,
+    LIVE_RAIL_ENVS,
     MAX_FEE_BPS_ENV,
-    MAX_OPEN_ENV,
     MAX_PICK_NOTIONAL_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
     SIZING_EQUITY_MODE_ENV,
@@ -38,25 +36,28 @@ from broker_contract.contract import BrokerCapabilityError
 # A fully in-bounds env — every test starts from this and mutates ONE var so
 # failures are attributable to the var under test, never a sibling omission.
 _VALID_ENV: dict[str, str] = {
-    MAX_OPEN_ENV: "1",
     PORTFOLIO_GROSS_FRAC_ENV: "0.25",
     DAILY_LOSS_LIMIT_R_ENV: "1.0",
-    SIZING_EQUITY_MODE_ENV: "clamped",
+    SIZING_EQUITY_MODE_ENV: "declared",
     MAX_FEE_BPS_ENV: "100",
     MAX_PICK_NOTIONAL_ENV: "10000",
     ENTRY_TRAIL_BPS_ENV: "0",
-    ENTRY_WATCH_MAX_PICKS_ENV: "2",
 }
 
 _ALL_RAIL_VARS = (
-    MAX_OPEN_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
     DAILY_LOSS_LIMIT_R_ENV,
     SIZING_EQUITY_MODE_ENV,
     MAX_FEE_BPS_ENV,
     MAX_PICK_NOTIONAL_ENV,
     ENTRY_TRAIL_BPS_ENV,
-    ENTRY_WATCH_MAX_PICKS_ENV,
+)
+
+# The two count limits #1732 removed. Spelled as literals on purpose: no module
+# exports these names any more.
+_REMOVED_COUNT_VARS = (
+    "ALPHALENS_BROKER_MAX_OPEN",
+    "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS",
 )
 
 
@@ -64,17 +65,40 @@ def _env_without(*names: str) -> dict[str, str]:
     return {k: v for k, v in _VALID_ENV.items() if k not in names}
 
 
-class TestAllEightConstantsAreDistinctNames(unittest.TestCase):
+class TestAllSixConstantsAreDistinctNames(unittest.TestCase):
     def test_env_var_names(self):
-        self.assertEqual(MAX_OPEN_ENV, "ALPHALENS_BROKER_MAX_OPEN")
         self.assertEqual(PORTFOLIO_GROSS_FRAC_ENV, "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC")
         self.assertEqual(DAILY_LOSS_LIMIT_R_ENV, "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R")
         self.assertEqual(SIZING_EQUITY_MODE_ENV, "ALPHALENS_BROKER_SIZING_EQUITY_MODE")
         self.assertEqual(MAX_FEE_BPS_ENV, "ALPHALENS_BROKER_MAX_FEE_BPS")
         self.assertEqual(ENTRY_TRAIL_BPS_ENV, "ALPHALENS_BROKER_ENTRY_TRAIL_BPS")
-        self.assertEqual(ENTRY_WATCH_MAX_PICKS_ENV, "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS")
         self.assertEqual(MAX_PICK_NOTIONAL_ENV, "ALPHALENS_BROKER_MAX_PICK_NOTIONAL")
-        self.assertEqual(len(set(_ALL_RAIL_VARS)), 8, "all eight env-var names must be distinct")
+        self.assertEqual(len(set(_ALL_RAIL_VARS)), 6, "all six env-var names must be distinct")
+
+    def test_the_pinned_rails_are_exactly_these_six(self):
+        self.assertEqual(set(LIVE_RAIL_ENVS), set(_ALL_RAIL_VARS))
+
+
+class TheCountLimitsAreNotRailsTest(unittest.TestCase):
+    """#1732: free capital is the only limit on how many picks LIVE takes. A unit
+    without either count pin must boot, and a leftover pin must be inert: the
+    deploy is code first, unit files second."""
+
+    def test_a_unit_without_either_count_pin_boots(self):
+        with mock.patch.dict("os.environ", _VALID_ENV, clear=True):
+            assert_live_rails()
+
+    def test_a_leftover_count_pin_is_ignored_even_out_of_the_old_bounds(self):
+        env = dict(_VALID_ENV, **dict.fromkeys(_REMOVED_COUNT_VARS, "999"))
+        with mock.patch.dict("os.environ", env, clear=True):
+            assert_live_rails()
+
+    def test_a_fully_unset_env_does_not_name_them(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        for var in _REMOVED_COUNT_VARS:
+            self.assertNotIn(var, str(captured.exception))
 
 
 class TheRetiredFrameIsNotARailTest(unittest.TestCase):
@@ -92,12 +116,12 @@ class TheRetiredFrameIsNotARailTest(unittest.TestCase):
 
 
 class TestValidEnvPasses(unittest.TestCase):
-    def test_all_eight_set_in_bounds_passes(self):
+    def test_all_six_set_in_bounds_passes(self):
         with mock.patch.dict("os.environ", _VALID_ENV, clear=True):
             assert_live_rails()  # must not raise
 
-    def test_both_sizing_modes_pass(self):
-        for mode in (SIZING_MODE_CLAMPED, SIZING_MODE_DECLARED):
+    def test_declared_mode_passes_in_any_case(self):
+        for mode in (SIZING_MODE_DECLARED, "Declared", " DECLARED "):
             with self.subTest(sizing_mode=mode):
                 env = dict(_VALID_ENV, **{SIZING_EQUITY_MODE_ENV: mode})
                 with mock.patch.dict("os.environ", env, clear=True):
@@ -107,23 +131,15 @@ class TestValidEnvPasses(unittest.TestCase):
         """The bounds are inclusive at the documented edges — EVERY bounded
         rail, so the name does not promise more coverage than it delivers."""
         edge_env = dict(_VALID_ENV)
-        edge_env[MAX_OPEN_ENV] = "2"
         edge_env[PORTFOLIO_GROSS_FRAC_ENV] = "0.5"
         edge_env[DAILY_LOSS_LIMIT_R_ENV] = "2.0"
         edge_env[MAX_PICK_NOTIONAL_ENV] = "15000"
         edge_env[MAX_FEE_BPS_ENV] = "1000"
-        edge_env[ENTRY_WATCH_MAX_PICKS_ENV] = "2"
         with mock.patch.dict("os.environ", edge_env, clear=True):
             assert_live_rails()  # must not raise
 
 
 class TestEachVarUnsetIsNamedInTheError(unittest.TestCase):
-    def test_max_open_unset(self):
-        with mock.patch.dict("os.environ", _env_without(MAX_OPEN_ENV), clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(MAX_OPEN_ENV, str(captured.exception))
-
     def test_portfolio_gross_frac_unset(self):
         with mock.patch.dict("os.environ", _env_without(PORTFOLIO_GROSS_FRAC_ENV), clear=True):
             with self.assertRaises(BrokerCapabilityError) as captured:
@@ -148,12 +164,6 @@ class TestEachVarUnsetIsNamedInTheError(unittest.TestCase):
                 assert_live_rails()
         self.assertIn(SIZING_EQUITY_MODE_ENV, str(captured.exception))
 
-    def test_entry_watch_max_picks_unset(self):
-        with mock.patch.dict("os.environ", _env_without(ENTRY_WATCH_MAX_PICKS_ENV), clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(ENTRY_WATCH_MAX_PICKS_ENV, str(captured.exception))
-
     def test_max_fee_bps_unset(self):
         with mock.patch.dict("os.environ", _env_without(MAX_FEE_BPS_ENV), clear=True):
             with self.assertRaises(BrokerCapabilityError) as captured:
@@ -163,7 +173,7 @@ class TestEachVarUnsetIsNamedInTheError(unittest.TestCase):
     def test_entry_trail_bps_unset(self):
         # Unlike the lenient runtime reader (entry_trails.entry_trail_bps,
         # unset -> feature OFF), the LIVE boot-assert requires an EXPLICIT
-        # value — consistent with the seven existing pins.
+        # value — consistent with the other pins.
         with mock.patch.dict("os.environ", _env_without(ENTRY_TRAIL_BPS_ENV), clear=True):
             with self.assertRaises(BrokerCapabilityError) as captured:
                 assert_live_rails()
@@ -192,79 +202,6 @@ class TestEachVarUnsetIsNamedInTheError(unittest.TestCase):
 
 
 class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
-    def test_max_open_zero_rejected(self):
-        env = dict(_VALID_ENV, **{MAX_OPEN_ENV: "0"})
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(MAX_OPEN_ENV, str(captured.exception))
-
-    def test_max_open_above_cap_rejected(self):
-        # Ceiling widened 2 -> 4 on 2026-09-04 and 4 -> 10 on 2026-09-08
-        # (operator decisions): the WhatsApp flow arms several manual picks a
-        # day on top of the positions already held; with four slots a
-        # four-pick day had one slot free. 11 is the first value above the
-        # new cap.
-        env = dict(_VALID_ENV, **{MAX_OPEN_ENV: "11"})
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(MAX_OPEN_ENV, str(captured.exception))
-
-    def test_max_open_at_the_widened_cap_passes(self):
-        # 10 is the value the LIVE drop-in (20-exposure.conf) runs since
-        # 2026-09-08; the cap is inclusive, so widening it must admit the
-        # deployed value, and the old cap 4 sits inside the new range too.
-        for raw in ("4", "10"):
-            with self.subTest(raw=raw):
-                env = dict(_VALID_ENV, **{MAX_OPEN_ENV: raw})
-                with mock.patch.dict("os.environ", env, clear=True):
-                    assert_live_rails()
-
-    def test_entry_watch_max_picks_above_ten_rejected(self):
-        """#1189: the SIM soak runs this rail at the shared code ceiling, so the
-        ceiling alone can no longer be what protects LIVE — the LIVE bound has
-        to be its own assert. 10 was in bounds before this pin existed. The
-        bound moved 2 -> 4 with MAX_OPEN on 2026-09-04 and 4 -> 10 on
-        2026-09-08 (one watch slot per position slot); 11 is the first value
-        above it, 25 is the shared SIM ceiling."""
-        for raw in ("11", "25"):
-            with self.subTest(raw=raw):
-                env = dict(_VALID_ENV, **{ENTRY_WATCH_MAX_PICKS_ENV: raw})
-                with mock.patch.dict("os.environ", env, clear=True):
-                    with self.assertRaises(BrokerCapabilityError) as captured:
-                        assert_live_rails()
-                self.assertIn(ENTRY_WATCH_MAX_PICKS_ENV, str(captured.exception))
-
-    def test_entry_watch_max_picks_at_the_widened_cap_passes(self):
-        # 10 is what 40-entry-trail.conf runs since 2026-09-08 (inclusive cap).
-        for raw in ("4", "10"):
-            with self.subTest(raw=raw):
-                env = dict(_VALID_ENV, **{ENTRY_WATCH_MAX_PICKS_ENV: raw})
-                with mock.patch.dict("os.environ", env, clear=True):
-                    assert_live_rails()
-
-    def test_entry_watch_max_picks_below_one_rejected(self):
-        env = dict(_VALID_ENV, **{ENTRY_WATCH_MAX_PICKS_ENV: "0"})
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(ENTRY_WATCH_MAX_PICKS_ENV, str(captured.exception))
-
-    def test_entry_watch_max_picks_non_integer_rejected(self):
-        env = dict(_VALID_ENV, **{ENTRY_WATCH_MAX_PICKS_ENV: "many"})
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(ENTRY_WATCH_MAX_PICKS_ENV, str(captured.exception))
-
-    def test_max_open_non_integer_rejected(self):
-        env = dict(_VALID_ENV, **{MAX_OPEN_ENV: "one"})
-        with mock.patch.dict("os.environ", env, clear=True):
-            with self.assertRaises(BrokerCapabilityError) as captured:
-                assert_live_rails()
-        self.assertIn(MAX_OPEN_ENV, str(captured.exception))
-
     def test_portfolio_gross_frac_zero_rejected(self):
         """The bound is exclusive at zero — a 0 gross cap can never place."""
         env = dict(_VALID_ENV, **{PORTFOLIO_GROSS_FRAC_ENV: "0"})
@@ -275,8 +212,8 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
 
     def test_portfolio_gross_frac_at_the_widened_cap_passes(self):
         # 1.0 is what 20-exposure.conf runs since 2026-09-08 (operator
-        # decision: exposure is bounded by diversification across the ten
-        # slots, not by a fraction of equity); the cap is inclusive, so the
+        # decision: exposure is bounded by diversification, not by a fraction
+        # of equity held back); the cap is inclusive, so the
         # deployed value must be admitted, and the old cap 0.5 sits inside.
         for raw in ("0.5", "0.75", "1.0"):
             with self.subTest(raw=raw):
@@ -375,15 +312,26 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
                             assert_live_rails()
                     self.assertIn(var, str(captured.exception))
 
-    def test_unknown_sizing_mode_rejected_and_error_names_valid_values(self):
+    def test_unknown_sizing_mode_rejected_and_error_names_the_required_value(self):
         env = dict(_VALID_ENV, **{SIZING_EQUITY_MODE_ENV: "snapshot"})
         with mock.patch.dict("os.environ", env, clear=True):
             with self.assertRaises(BrokerCapabilityError) as captured:
                 assert_live_rails()
         message = str(captured.exception)
         self.assertIn(SIZING_EQUITY_MODE_ENV, message)
-        self.assertIn(SIZING_MODE_CLAMPED, message)
         self.assertIn(SIZING_MODE_DECLARED, message)
+
+    def test_clamped_mode_is_refused_because_it_turns_the_cash_floor_off(self):
+        """#1732: with the count limits gone the cash floor is what bounds how
+        much LIVE funds at once, and ``clamped`` switches it off. A LIVE unit
+        must therefore run ``declared``."""
+        env = dict(_VALID_ENV, **{SIZING_EQUITY_MODE_ENV: SIZING_MODE_CLAMPED})
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        message = str(captured.exception)
+        self.assertIn(SIZING_EQUITY_MODE_ENV, message)
+        self.assertIn("cash floor", message)
 
     def test_entry_trail_bps_zero_and_bound_edge_pass(self):
         # "0" (feature OFF) and the memo §6 upper bound are both valid pins.
@@ -459,17 +407,16 @@ class TestViolationsAreCollectedTogether(unittest.TestCase):
             self.assertIn(var, message, f"{var} must be named in the collected error")
 
     def test_two_missing_both_named_one_valid_var_absent(self):
-        env = _env_without(MAX_OPEN_ENV, MAX_FEE_BPS_ENV)
+        env = _env_without(DAILY_LOSS_LIMIT_R_ENV, MAX_FEE_BPS_ENV)
         with mock.patch.dict("os.environ", env, clear=True):
             with self.assertRaises(BrokerCapabilityError) as captured:
                 assert_live_rails()
         message = str(captured.exception)
-        self.assertIn(MAX_OPEN_ENV, message)
+        self.assertIn(DAILY_LOSS_LIMIT_R_ENV, message)
         self.assertIn(MAX_FEE_BPS_ENV, message)
-        # The six still-valid vars must NOT be flagged.
+        # The four still-valid vars must NOT be flagged.
         for var in (
             PORTFOLIO_GROSS_FRAC_ENV,
-            DAILY_LOSS_LIMIT_R_ENV,
             MAX_PICK_NOTIONAL_ENV,
             SIZING_EQUITY_MODE_ENV,
             ENTRY_TRAIL_BPS_ENV,

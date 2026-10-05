@@ -10,7 +10,7 @@ These tests pin the INTEGRATION into the daemon:
   off an injected price feed, persisting journal intents + terminal measurement
   and routing the throttled alerts, NEVER touching a broker order method;
 - KILL gates the pass (memo §3 G2): no journal writes, no alerts under KILL;
-- watch capacity is pick-denominated (memo decision #4).
+- no count of open watches defers a pick (#1732): money is the only limit.
 
 The ONE non-negotiable safety property of PR-T1: no ``place_bracket_order`` /
 ``place_standalone_stop`` / ``amend_stop_amount`` / ``cancel_order`` is ever
@@ -50,7 +50,7 @@ from tests.incident_1112_fixture import (
 
 _ENV = entry_trails.ENTRY_TRAIL_BPS_ENV
 # Captured at import time (before any test patches the module attribute) so the
-# end-to-end MAX_OPEN test can restore the REAL rail over _placer's stub.
+# end-to-end admission tests can restore the REAL gate over _placer's stub.
 _REAL_SAFETY_CHECK = _safety.check
 
 
@@ -494,9 +494,11 @@ class TestDrainInterceptRoutesToWatch(IsolatedHomeTestCase):
         ]
         self.assertIsNone(watch_opens[1]["next_tier_limit"])
 
-    def test_capacity_reached_defers_and_opens_no_watch(self) -> None:
+    def test_another_picks_open_watch_never_defers_a_new_watch(self) -> None:
+        # #1732: no count of open watches limits a new one. With another pick
+        # already watching and no capacity variable set (the removed default
+        # was 1), KO still opens its watch.
         path = _journal(self)
-        # Seed a DIFFERENT pick already watching (capacity == 1).
         entry_trails.append_entry_trail_line(
             {
                 "kind": entry_trails.KIND_WATCH_OPEN,
@@ -507,23 +509,24 @@ class TestDrainInterceptRoutesToWatch(IsolatedHomeTestCase):
             }
         )
         broker = _RecordingBroker()
-        placer, _s = _placer(self, broker, _plan((0, 10.0, 100)))
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
         with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
-            self.assertFalse(placer(_pick()))  # deferred, stays armed
+            self.assertTrue(placer(_pick()))
         self.assertEqual(broker.brackets, [])
         opens_for_ko = [
             line
             for line in _lines(path)
             if line["kind"] == entry_trails.KIND_WATCH_OPEN and line.get("ticker") == "KO"
         ]
-        self.assertEqual(opens_for_ko, [])
+        self.assertEqual(len(opens_for_ko), 1)
+        self.assertEqual(len(submissions), 1)
 
-    def test_own_open_watch_is_exempt_from_capacity_and_retires(self) -> None:
+    def test_own_open_watch_re_opens_idempotently_and_retires(self) -> None:
         # Crash recovery: KO's watch_open was journaled but the pick was never
         # retired (crash between the journal-FIRST watch_open and the note-only
         # submission record). On restart the still-armed pick re-runs
-        # _place_pick; it must NOT self-block on its OWN reservation (capacity
-        # counting its own watch) — it re-opens idempotently and retires.
+        # _place_pick; it re-opens idempotently and retires, and its own
+        # reservation is not counted twice.
         path = _journal(self)
         entry_trails.append_entry_trail_line(
             {
@@ -547,25 +550,6 @@ class TestDrainInterceptRoutesToWatch(IsolatedHomeTestCase):
         total, bad = entry_trails.watching_virtual_gross_acct(entry_trails.read_entry_trail_fold())
         self.assertEqual(bad, 0)
         self.assertEqual(total, 1_000.0)  # 10.0 x 100 once, not doubled
-
-    def test_second_pick_still_blocked_while_first_pick_watches(self) -> None:
-        # The capacity gate must still block a DIFFERENT new pick when one pick
-        # already watches — the exemption is only for a pick's OWN watch.
-        _journal(self)
-        entry_trails.append_entry_trail_line(
-            {
-                "kind": entry_trails.KIND_WATCH_OPEN,
-                "crid": "OTHER-2026-07-19-entry-t0",
-                "limit": 5.0,
-                "qty": 10.0,
-                "pick_key": "OTHER:2026-07-19",
-            }
-        )
-        broker = _RecordingBroker()
-        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
-            self.assertFalse(placer(_pick()))  # a NEW pick stays blocked
-        self.assertEqual(submissions, [])
 
 
 # --------------------------------------------------------------------------
@@ -2020,95 +2004,6 @@ class TestWatchRoutingJournalsTranchePlan(IsolatedHomeTestCase):
         self.assertLess(events.index("tranche_plan"), events.index(entry_trails.KIND_WATCH_OPEN))
 
 
-class TestEntryWatchCapacityEnvRail(IsolatedHomeTestCase):
-    """Task B (2026-08-19 live incident, ETSY): the pick-denominated watch cap
-    was a hardcoded constant of 1 — with MAX_OPEN raised to 2 a second armed
-    pick was silently capacity-deferred forever at DEBUG. The cap becomes a
-    call-time env rail (ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS, default 1,
-    valid [1, 25]) and the FIRST deferral of a pick logs at INFO.
-
-    The ceiling was 10 until #1189 raised it for the SIM soak; LIVE is held to
-    [1, 10] by its own boot-assert pin, not by this shared bound."""
-
-    def setUp(self) -> None:
-        super().setUp()
-        # Reset the process-lifetime observability state so tests are hermetic.
-        self.enterContext(mock.patch.object(ewc, "_entry_watch_max_picks_warned", False))
-        self.enterContext(mock.patch.object(ewc, "_entry_watch_capacity_deferred", set()))
-
-    def test_unset_env_defaults_to_one(self) -> None:
-        with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertEqual(ewc._entry_watch_max_picks(), 1)
-
-    def test_valid_values_are_honoured(self) -> None:
-        for raw, expected in (("1", 1), ("2", 2), ("4", 4), ("5", 5), ("10", 10), ("25", 25)):
-            with mock.patch.dict("os.environ", {ewc._ENTRY_WATCH_MAX_PICKS_ENV: raw}, clear=True):
-                self.assertEqual(ewc._entry_watch_max_picks(), expected)
-
-    def test_invalid_value_falls_back_to_one_and_warns_exactly_once(self) -> None:
-        with (
-            mock.patch.dict("os.environ", {ewc._ENTRY_WATCH_MAX_PICKS_ENV: "banana"}, clear=True),
-            self.assertLogs(ewc.logger, level="WARNING") as captured,
-        ):
-            self.assertEqual(ewc._entry_watch_max_picks(), 1)
-            self.assertEqual(ewc._entry_watch_max_picks(), 1)  # second read: no new warning
-        warnings = [m for m in captured.output if ewc._ENTRY_WATCH_MAX_PICKS_ENV in m]
-        self.assertEqual(len(warnings), 1)
-
-    def test_out_of_range_values_fall_back_to_one(self) -> None:
-        for raw in ("0", "26", "-1", ""):
-            with (
-                self.subTest(raw=raw),
-                mock.patch.object(ewc, "_entry_watch_max_picks_warned", False),
-                mock.patch.dict("os.environ", {ewc._ENTRY_WATCH_MAX_PICKS_ENV: raw}, clear=True),
-                self.assertLogs(ewc.logger, level="WARNING"),
-            ):
-                self.assertEqual(ewc._entry_watch_max_picks(), 1)
-
-    def _seed_other_watch(self) -> Path:
-        path = _journal(self)
-        entry_trails.append_entry_trail_line(
-            {
-                "kind": entry_trails.KIND_WATCH_OPEN,
-                "crid": "OTHER-2026-07-19-entry-t0",
-                "limit": 5.0,
-                "qty": 10.0,
-                "pick_key": "OTHER:2026-07-19",
-            }
-        )
-        return path
-
-    def test_cap_two_lets_a_second_pick_open_its_watch(self) -> None:
-        path = self._seed_other_watch()
-        broker = _RecordingBroker()
-        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        env = {_ENV: "50", ewc._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
-        with mock.patch.dict("os.environ", env, clear=True):
-            self.assertTrue(placer(_pick()))  # NOT deferred at cap=2
-        opens_for_ko = [
-            ln
-            for ln in _lines(path)
-            if ln["kind"] == entry_trails.KIND_WATCH_OPEN and ln.get("ticker") == "KO"
-        ]
-        self.assertEqual(len(opens_for_ko), 1)
-
-    def test_first_capacity_deferral_logs_info_then_debug(self) -> None:
-        self._seed_other_watch()
-        broker = _RecordingBroker()
-        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        with (
-            mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
-            self.assertLogs(ewc.logger, level="DEBUG") as captured,
-        ):
-            self.assertFalse(placer(_pick()))  # first deferral -> INFO
-            self.assertFalse(placer(_pick()))  # every later tick -> DEBUG
-        records = [r for r in captured.records if "capacity reached" in r.getMessage()]
-        self.assertEqual([r.levelname for r in records], ["INFO", "DEBUG"])
-        self.assertIn("cap=1", records[0].getMessage())
-        self.assertIn("KO", records[0].getMessage())
-        self.assertIn("stays armed", records[0].getMessage())
-
-
 class TestArmJournalsOnlyArmTimeFacts(IsolatedHomeTestCase):
     """#1317 review: each ``trail_armed`` line must describe ONE real order.
 
@@ -2422,7 +2317,7 @@ class TestEntryWatchFeedScope(IsolatedHomeTestCase):
 
 
 # --------------------------------------------------------------------------
-# Open watches count against the MAX_OPEN admission (2026-08-19 adjudication)
+# Free capital is the only admission limit (#1732)
 # --------------------------------------------------------------------------
 
 
@@ -2453,6 +2348,25 @@ class _BrokerWithPositions(_RecordingBroker):
         return self._positions
 
 
+class _FundedBroker(_BrokerWithPositions):
+    """A broker whose account reports a real ``margin_available`` for the cash floor."""
+
+    def __init__(self, positions: list[Any], *, margin_available: float) -> None:
+        super().__init__(positions)
+        self._margin_available = margin_available
+
+    def get_account(self) -> Any:
+        return type(
+            "A",
+            (),
+            {
+                "total_value": 100_000.0,
+                "currency": "USD",
+                "margin_available": self._margin_available,
+            },
+        )()
+
+
 def _seed_other_watch_line(pick_key: str, *, crid: str, uic: int | None = None) -> None:
     line: dict[str, Any] = {
         "kind": entry_trails.KIND_WATCH_OPEN,
@@ -2466,100 +2380,21 @@ def _seed_other_watch_line(pick_key: str, *, crid: str, uic: int | None = None) 
     entry_trails.append_entry_trail_line(line)
 
 
-class TestOpenWatchesCountAgainstMaxOpen(IsolatedHomeTestCase):
-    """Adjudication finding 1 (2026-08-19): an open entry watch — or its armed
-    unfilled native trail — is a committed risk unit the MAX_OPEN rail cannot
-    see: the note-only watch submission record carries no brackets and no
-    position exists until the trail fires, so ``safety.check``'s sum (journal
-    brackets + live positions) misses it entirely and a watch capacity of N
-    could over-commit up to N extra concurrent positions. ``_place_pick`` must
-    count the DISTINCT watch-holding picks into the MAX_OPEN input."""
+class TestCapitalIsTheOnlyAdmissionLimit(IsolatedHomeTestCase):
+    """#1732 (owner decision 2026-10-05): free capital is the ONLY limit on how
+    many picks the daemon takes. ``ALPHALENS_BROKER_MAX_OPEN`` (a terminal
+    refusal on a count of positions + brackets + watches) and
+    ``ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS`` (a deferral on a count of
+    watching picks) are gone. These tests run the REAL ``safety.check`` and the
+    real post-sizing money gates; only resolution, sizing and the journals are
+    stubbed by :func:`_placer`."""
 
     _CHECK_TARGET = "alphalens_pipeline.brokers.automanager.safety.check"
 
-    def _recording_check(self) -> list[Any]:
-        seen: list[Any] = []
-
-        def check(_pick: Any, journal_view: Any, broker_view: Any, _state: Any) -> Any:
-            seen.append((journal_view, broker_view))
-            # A transient Refuse stops _place_pick right after the check: these
-            # tests pin the INPUTS to the rail, not the downstream placement.
-            return _safety.Refuse("recorded — stop here")
-
-        self.enterContext(mock.patch(self._CHECK_TARGET, check))
-        return seen
-
-    def test_another_picks_open_watch_raises_the_max_open_input(self) -> None:
-        _journal(self)
-        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0")
-        broker = _RecordingBroker()
-        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        seen = self._recording_check()
-        env = {_ENV: "50", ewc._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
-        with mock.patch.dict("os.environ", env, clear=True):
-            placer(_pick())
-        journal_view, _broker_view = seen[0]
-        self.assertEqual(journal_view.open_bracket_count, 1)
-
-    def test_own_watch_is_excluded_from_the_max_open_input(self) -> None:
-        # Crash-recovery re-drive: the pick's OWN watch must not self-block the
-        # retirement (mirrors the intercept's already_watching exemption).
-        _journal(self)
-        _seed_other_watch_line("KO:2026-07-20", crid="KO-2026-07-20-entry-t0")
-        broker = _RecordingBroker()
-        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        seen = self._recording_check()
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
-            placer(_pick())
-        journal_view, _broker_view = seen[0]
-        self.assertEqual(journal_view.open_bracket_count, 0)
-
-    def test_watch_on_a_uic_with_a_live_position_is_not_double_counted(self) -> None:
-        # A pick whose tier already FIRED shows up as a live position while a
-        # deeper tier still watches — one risk unit, not two: the position side
-        # is already in BrokerView.open_position_count.
-        _journal(self)
-        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t1", uic=42)
-        broker = _BrokerWithPositions([_live_long(42)])
-        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        seen = self._recording_check()
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
-            placer(_pick())
-        journal_view, broker_view = seen[0]
-        self.assertEqual(journal_view.open_bracket_count, 0)
-        self.assertEqual(broker_view.open_position_count, 1)
-
-    def test_terminal_watches_do_not_count(self) -> None:
-        _journal(self)
-        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0")
-        entry_trails.append_entry_trail_line(
-            {"kind": entry_trails.KIND_EXPIRED, "crid": "OTHER-2026-07-19-entry-t0"}
-        )
-        broker = _RecordingBroker()
-        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        seen = self._recording_check()
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
-            placer(_pick())
-        journal_view, _broker_view = seen[0]
-        self.assertEqual(journal_view.open_bracket_count, 0)
-
-    def test_max_open_reached_by_watches_refuses_the_pick_terminal(self) -> None:
-        # End-to-end with the REAL safety.check: two foreign open watches +
-        # MAX_OPEN=2 -> the third pick is refused terminal BEFORE any watch
-        # opens, even though the watch-capacity env rail would still admit it.
-        path = _journal(self)
-        _seed_other_watch_line("OTHER1:2026-07-19", crid="OTHER1-2026-07-19-entry-t0")
-        _seed_other_watch_line("OTHER2:2026-07-19", crid="OTHER2-2026-07-19-entry-t0")
-        broker = _RecordingBroker()
-        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+    def _real_gates(self) -> list[tuple[Any, ...]]:
+        """Restore the real safety gate, pin both KILL paths to an absent file,
+        and record every terminal refusal."""
         self.enterContext(mock.patch(self._CHECK_TARGET, _REAL_SAFETY_CHECK))
-        refused: list[tuple[Any, ...]] = []
-        self.enterContext(
-            mock.patch(
-                "alphalens_pipeline.brokers.automanager.picks.mark_refused",
-                lambda *a, **k: refused.append(a),
-            )
-        )
         tmp = TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         no_kill = Path(tmp.name) / "KILL"
@@ -2570,16 +2405,115 @@ class TestOpenWatchesCountAgainstMaxOpen(IsolatedHomeTestCase):
                     lambda: no_kill,
                 )
             )
+        refused: list[tuple[Any, ...]] = []
+        self.enterContext(
+            mock.patch(
+                "alphalens_pipeline.brokers.automanager.picks.mark_refused",
+                lambda *a, **_k: refused.append(a),
+            )
+        )
+        return refused
+
+    def test_held_positions_never_refuse_a_pick_by_their_count(self) -> None:
+        # Three net-long positions and no count variable set: the removed
+        # default (MAX_OPEN=3) refused this pick terminally.
+        _journal(self)
+        broker = _BrokerWithPositions([_live_long(42), _live_long(43), _live_long(44)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        refused = self._real_gates()
+        with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ALLOW_ORDERS": "1"}, clear=True):
+            self.assertTrue(placer(_pick()))
+        self.assertEqual(refused, [])
+        self.assertEqual(len(broker.brackets), 1)
+
+    def test_a_leftover_max_open_variable_is_inert(self) -> None:
+        # A unit file not yet reinstalled after the code deploy still carries
+        # the old pin; it must change nothing.
+        _journal(self)
+        broker = _BrokerWithPositions([_live_long(42)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        refused = self._real_gates()
+        env = {"ALPHALENS_BROKER_ALLOW_ORDERS": "1", "ALPHALENS_BROKER_MAX_OPEN": "1"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertTrue(placer(_pick()))
+        self.assertEqual(refused, [])
+        self.assertEqual(len(broker.brackets), 1)
+
+    def test_open_watches_of_other_picks_never_defer_a_new_watch(self) -> None:
+        path = _journal(self)
+        for n in (1, 2, 3):
+            _seed_other_watch_line(f"OTHER{n}:2026-07-19", crid=f"OTHER{n}-2026-07-19-entry-t0")
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        refused = self._real_gates()
+        env = {_ENV: "50", "ALPHALENS_BROKER_ALLOW_ORDERS": "1"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertTrue(placer(_pick()))
+        self.assertEqual(refused, [])
+        opens_for_ko = [
+            ln
+            for ln in _lines(path)
+            if ln["kind"] == entry_trails.KIND_WATCH_OPEN and ln.get("ticker") == "KO"
+        ]
+        self.assertEqual(len(opens_for_ko), 1)
+
+    def test_a_leftover_watch_capacity_variable_is_inert(self) -> None:
+        path = _journal(self)
+        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0")
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        self._real_gates()
         env = {
             _ENV: "50",
             "ALPHALENS_BROKER_ALLOW_ORDERS": "1",
-            "ALPHALENS_BROKER_MAX_OPEN": "2",
-            ewc._ENTRY_WATCH_MAX_PICKS_ENV: "4",
+            "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS": "1",
+        }
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertTrue(placer(_pick()))
+        opens_for_ko = [
+            ln
+            for ln in _lines(path)
+            if ln["kind"] == entry_trails.KIND_WATCH_OPEN and ln.get("ticker") == "KO"
+        ]
+        self.assertEqual(len(opens_for_ko), 1)
+
+    def test_a_pick_beyond_free_capital_is_refused_terminally_by_the_cash_floor(self) -> None:
+        # Guard, green before and after #1732: the money rails still bind. The
+        # candidate needs 1000 x 1.04 = 1040 but only 1000 is available, so the
+        # cash floor retires the pick (it is not held until capital frees).
+        _journal(self)
+        broker = _FundedBroker([_live_long(42)], margin_available=1_000.0)
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        refused = self._real_gates()
+        env = {
+            "ALPHALENS_BROKER_ALLOW_ORDERS": "1",
+            "ALPHALENS_BROKER_SIZING_EQUITY_MODE": "declared",
         }
         with mock.patch.dict("os.environ", env, clear=True):
             self.assertFalse(placer(_pick()))
         self.assertEqual(len(refused), 1)
-        self.assertIn("MAX_OPEN", refused[0][2])
+        self.assertIn("cash floor", refused[0][2])
+        self.assertEqual(broker.brackets, [])
+        self.assertEqual(submissions, [])
+
+    def test_open_watches_still_reserve_cash_against_a_new_pick(self) -> None:
+        # Guard, green before and after #1732: with the watch count gone, an
+        # open watch still reserves its tier value (5.0 x 10 = 50). 1040 + 50
+        # exceeds the 1060 available, so the cash floor refuses the pick.
+        path = _journal(self)
+        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0")
+        broker = _FundedBroker([], margin_available=1_060.0)
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        refused = self._real_gates()
+        env = {
+            _ENV: "50",
+            "ALPHALENS_BROKER_ALLOW_ORDERS": "1",
+            "ALPHALENS_BROKER_SIZING_EQUITY_MODE": "declared",
+        }
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(len(refused), 1)
+        self.assertIn("cash floor", refused[0][2])
         self.assertEqual(submissions, [])
         opens_for_ko = [
             ln
@@ -2587,78 +2521,6 @@ class TestOpenWatchesCountAgainstMaxOpen(IsolatedHomeTestCase):
             if ln["kind"] == entry_trails.KIND_WATCH_OPEN and ln.get("ticker") == "KO"
         ]
         self.assertEqual(opens_for_ko, [])
-
-
-class TestEodNettingRowsAreNetRiskUnits(IsolatedHomeTestCase):
-    """LIVE Saxo accounts run End-Of-Day netting
-    (``ClosedPositionNotAccessibleInEndOfDayNettingMode``): positions net only
-    at EOD, so an intraday round-trip leaves TWO ledger rows (+q and -q) that
-    net to zero until the nightly netting. MAX_OPEN counts RISK UNITS, not
-    ledger rows — live incident 2026-08-19: a NET-FLAT book showed 2 rows and
-    every drain tick terminally refused a valid pick on the MAX_OPEN rail.
-    A net-flat uic must occupy no slot AND must not suppress an open watch
-    from counting (the watch exclusion exists only because the position side
-    is already counted — a net-flat uic is not)."""
-
-    _CHECK_TARGET = "alphalens_pipeline.brokers.automanager.safety.check"
-
-    def _recording_check(self) -> list[Any]:
-        seen: list[Any] = []
-
-        def check(_pick: Any, journal_view: Any, broker_view: Any, _state: Any) -> Any:
-            seen.append((journal_view, broker_view))
-            # A transient Refuse stops _place_pick right after the check: these
-            # tests pin the INPUTS to the rail, not the downstream placement.
-            return _safety.Refuse("recorded — stop here")
-
-        self.enterContext(mock.patch(self._CHECK_TARGET, check))
-        return seen
-
-    def test_net_flat_round_trip_rows_occupy_no_slot(self) -> None:
-        _journal(self)
-        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(42, qty=-8.0)])
-        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        seen = self._recording_check()
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
-            placer(_pick())
-        _journal_view, broker_view = seen[0]
-        self.assertEqual(broker_view.open_position_count, 0)
-
-    def test_partially_closed_long_occupies_one_slot(self) -> None:
-        _journal(self)
-        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(42, qty=-3.0)])
-        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        seen = self._recording_check()
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
-            placer(_pick())
-        _journal_view, broker_view = seen[0]
-        self.assertEqual(broker_view.open_position_count, 1)
-
-    def test_two_net_open_uics_occupy_two_slots(self) -> None:
-        _journal(self)
-        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(43, qty=5.0)])
-        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        seen = self._recording_check()
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
-            placer(_pick())
-        _journal_view, broker_view = seen[0]
-        self.assertEqual(broker_view.open_position_count, 2)
-
-    def test_net_flat_uic_does_not_suppress_an_open_watch(self) -> None:
-        # The watch-count exclusion (finding 1) exists because a FIRED tier's
-        # position is already inside open_position_count. A net-flat uic is
-        # NOT counted there, so its watch must keep occupying a slot.
-        _journal(self)
-        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0", uic=42)
-        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(42, qty=-8.0)])
-        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
-        seen = self._recording_check()
-        env = {_ENV: "50", ewc._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
-        with mock.patch.dict("os.environ", env, clear=True):
-            placer(_pick())
-        journal_view, broker_view = seen[0]
-        self.assertEqual(broker_view.open_position_count, 0)
-        self.assertEqual(journal_view.open_bracket_count, 1)
 
 
 # --------------------------------------------------------------------------
@@ -3693,11 +3555,12 @@ class TestPlacePickNowTranche(IsolatedHomeTestCase):
         _v, _s, _a, defer_calls, _p = self._drain(_now_plan(), points={}, broker=broker2)
         self.assertTrue(all(c[0] != {} for c in defer_calls))  # DEFER keeps the subscription
 
-    def test_watch_capacity_deferral_after_placed_now_re_drives_siblings_next_tick(self) -> None:
+    def test_watch_deferral_after_placed_now_re_drives_siblings_next_tick(self) -> None:
         # The critical interleave: the now half places, but the sibling watch
-        # DEFERS on capacity. The now records (tranche=="now") must not retire
-        # the pick — next tick the armed_ts scan skips the now half and the
-        # siblings route.
+        # DEFERS (here: the live-uic routing guard, the one deferral left
+        # since #1732 removed the watch count). The now records
+        # (tranche=="now") must not retire the pick — next tick the armed_ts
+        # scan skips the now half and the siblings route.
         path = _journal(self)
         _planned_journal(self)
         broker = _RecordingBroker()
@@ -3711,9 +3574,9 @@ class TestPlacePickNowTranche(IsolatedHomeTestCase):
         )
         with (
             mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
-            mock.patch.object(ewc, "_entry_watch_capacity_reached", lambda _f: True),
+            mock.patch.object(cl, "_has_live_long_on_uic", lambda _p, _u: True),
         ):
-            # Tick 1: now placed, siblings capacity-deferred — the pick reads
+            # Tick 1: now placed, siblings deferred — the pick reads
             # NOT placed so the drain retries (zen HIGH on #1259).
             self.assertFalse(placer(_pick()))
         self.assertEqual(len(broker.brackets), 1)
@@ -3721,7 +3584,7 @@ class TestPlacePickNowTranche(IsolatedHomeTestCase):
         from alphalens_pipeline.brokers.automanager import picks as picks_mod
 
         self.assertEqual(picks_mod.submitted_pick_keys(submissions), set())
-        # Tick 2: capacity freed; the recorded submissions become the journal.
+        # Tick 2: the deferral cleared; the recorded submissions become the journal.
         submissions_seen.extend(submissions)
         with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
             self.assertTrue(placer(_pick()))

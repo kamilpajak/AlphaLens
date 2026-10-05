@@ -4,8 +4,8 @@
 Retiring a pick from the queue does NOT stop an open entry-trail watch — the
 watch pass reads only ``entry_trails.jsonl`` and would still arm a real broker
 BUY. Disarm therefore appends one terminal ``cancelled`` line per open crid of
-the pick, which releases the active set, the virtual gross reservation, and
-the watch-capacity slot in one stroke (the daemon already folds ``cancelled``).
+the pick, which releases the active set and the virtual gross reservation in
+one stroke (the daemon already folds ``cancelled``).
 
 Refusal-first atomicity: a tier whose latest kind is ``trail_armed`` may have
 a REAL resting Saxo BUY (or an in-flight POST on the null-id write-ahead) that

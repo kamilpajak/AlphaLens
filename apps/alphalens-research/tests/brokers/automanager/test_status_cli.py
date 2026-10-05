@@ -45,11 +45,11 @@ READ_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._read_text"
 
 _UNIT_PAYLOAD = (
     "ALPHALENS_BROKER_ENVIRONMENT=live ALPHALENS_BROKER_ALLOW_ORDERS=1 "
-    "ALPHALENS_BROKER_MAX_OPEN=10 ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC=1.0 "
+    "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC=1.0 "
     "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=1.0 ALPHALENS_BROKER_MAX_PICK_NOTIONAL=15000 "
     "ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared "
     "ALPHALENS_BROKER_EXIT_POLICY=breakeven_trail ALPHALENS_BROKER_MAX_FEE_BPS=1000 "
-    "ALPHALENS_BROKER_ENTRY_TRAIL_BPS=50 ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS=10 "
+    "ALPHALENS_BROKER_ENTRY_TRAIL_BPS=50 "
     "ALPHALENS_SAXO_LIVE_STANDING=ACCT-1 SAXO_LIVE_ACCOUNT_KEY=ACCT-1"
 )
 
@@ -81,7 +81,6 @@ class StatusCommandTest(unittest.TestCase):
             "os.environ",
             {
                 "ALPHALENS_TEXTFILE_DIR": str(self.textfile_dir),
-                "ALPHALENS_BROKER_MAX_OPEN": "10",
                 "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC": "1.0",
             },
             clear=True,
@@ -122,12 +121,11 @@ class StatusCommandTest(unittest.TestCase):
 
     def test_json_is_one_value_with_every_section(self) -> None:
         payload = self._json(broker=self._seed_book())
-        self.assertEqual(payload["schema"], "alphalens.broker.status/v1")
+        self.assertEqual(payload["schema"], "alphalens.broker.status/v2")
         self.assertEqual(payload["env"], "sim")
         for section in (
             "account",
             "exposure",
-            "slots",
             "cash_floor",
             "orders",
             "watches",
@@ -144,9 +142,15 @@ class StatusCommandTest(unittest.TestCase):
         self.assertEqual(exposure["watching"], 120.0)
         self.assertEqual(exposure["used"], 2_620.0)
         self.assertEqual(exposure["limit"], 100_000.0)
-        slots = payload["slots"]
-        self.assertEqual((slots["brackets"], slots["positions"], slots["watch_picks"]), (1, 1, 1))
-        self.assertEqual((slots["used"], slots["limit"], slots["free"]), (3, 10, 7))
+
+    def test_there_is_no_slot_count_any_more(self) -> None:
+        # #1732: free capital is the only admission limit, so a count of slots
+        # has nothing to be compared against. The counts themselves are still in
+        # `broker orders`, `broker positions` and `broker watches`.
+        payload = self._json(broker=self._seed_book())
+        self.assertNotIn("slots", payload)
+        human = self._invoke(broker=self._seed_book()).stdout
+        self.assertNotIn("slots ", human)
 
     def test_human_and_json_agree_number_by_number(self) -> None:
         broker = self._seed_book()
@@ -157,7 +161,6 @@ class StatusCommandTest(unittest.TestCase):
             f"{payload['exposure']['limit']:,.2f}",
             f"{payload['exposure']['headroom']:,.2f}",
             f"{payload['account']['total_value']:,.2f}",
-            f"slots {payload['slots']['used']}/{payload['slots']['limit']}",
         ):
             with self.subTest(value=value):
                 self.assertIn(value, human)

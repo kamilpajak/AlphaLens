@@ -772,6 +772,47 @@ class TestOrderReadWrappers(unittest.TestCase):
         self.assertEqual(call["url"], f"{SIM_BASE_URL}/port/v1/orders/me")
         self.assertEqual(payload, {"Data": []})
 
+    def test_get_open_orders_follows_next_pagination(self):
+        # #1732: with no count limit, the number of resting entries is bounded
+        # only by capital, so the open-orders read must see every page. A
+        # dropped page hides WORKING entries from the gross cap and the cash
+        # floor, which then fund the same money twice.
+        next_url = "https://gateway.saxobank.com:443/sim/openapi/port/v1/orders/me?$skip=1"
+        session = _RecordingSession(
+            [
+                _FakeResponse(200, payload={"Data": [{"OrderId": "O-1"}], "__next": next_url}),
+                _FakeResponse(200, payload={"Data": [{"OrderId": "O-2"}]}),
+            ]
+        )
+        client, _, _ = _make_client(session)
+
+        payload = client.get_open_orders()
+
+        self.assertEqual(len(session.calls), 2)
+        self.assertEqual([row["OrderId"] for row in payload["Data"]], ["O-1", "O-2"])
+        self.assertNotIn("__next", payload)
+
+    def test_get_positions_follows_next_pagination(self):
+        # Same reason for positions: a position on a dropped page is missing
+        # from the filled-gross term AND from the protection pass.
+        next_url = (
+            "https://gateway.saxobank.com:443/sim/openapi/port/v1/positions?ClientKey=CK-1&$skip=1"
+        )
+        session = _RecordingSession(
+            [
+                _FakeResponse(200, payload={"Data": [{"PositionId": "P-1"}], "__next": next_url}),
+                _FakeResponse(200, payload={"Data": [{"PositionId": "P-2"}]}),
+            ]
+        )
+        client, _, _ = _make_client(session)
+
+        payload = client.get_positions("CK-1")
+
+        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(session.calls[0]["params"]["ClientKey"], "CK-1")
+        self.assertEqual([row["PositionId"] for row in payload["Data"]], ["P-1", "P-2"])
+        self.assertNotIn("__next", payload)
+
     def test_get_order_status_404_returns_none(self):
         # /port/v1/orders drops filled/cancelled/expired orders — a 404 is an
         # EXPECTED outcome the broker maps to OrderStatus.UNKNOWN, not an error.

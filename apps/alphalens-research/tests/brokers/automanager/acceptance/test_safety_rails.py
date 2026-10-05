@@ -1,9 +1,10 @@
 """GUARANTEE 1 — The safety rails are respected.
 
 In plain terms: the manager will not open new risk when it shouldn't. A master
-"orders off" switch, a cap on how many positions can be open at once, a gross
-exposure cap, a daily-loss cutoff, and an emergency KILL file each stop new
-orders. The KILL switch is special: it stops NEW orders but never stops the
+"orders off" switch, a gross exposure cap, a cash floor, a daily-loss cutoff,
+and an emergency KILL file each stop new orders. How many positions are already
+open never does by itself: free capital is the only limit on how many picks the
+manager takes (#1732). The KILL switch is special: it stops NEW orders but never stops the
 manager from protecting positions it already holds.
 """
 
@@ -25,11 +26,6 @@ class TheSafetyRailsAreRespected(IsolatedHomeTestCase):
         world = ManagerWorld(self)
         world.orders_are_disabled()
         self.assertFalse(world.safety_allows_a_new_pick())
-
-    def test_no_new_pick_once_the_open_position_limit_is_reached(self) -> None:
-        world = ManagerWorld(self)
-        # The default cap is 3 open positions/brackets.
-        self.assertFalse(world.safety_allows_a_new_pick(open_positions=3))
 
     def test_no_new_pick_after_the_daily_loss_cutoff(self) -> None:
         world = ManagerWorld(self)

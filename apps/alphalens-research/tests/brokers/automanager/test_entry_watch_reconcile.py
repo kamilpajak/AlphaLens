@@ -4,15 +4,15 @@ Once a tier reaches TRAIL_ARMED with a real order id it is EXCLUDED from the
 watch pass (the broker owns the resting native order — it ratchets + fires
 server-side). Without a reconcile pass NO terminal ``entry_trails`` line is ever
 written on the order's fill / DayOrder-expiry, so ``watching_virtual_gross_acct``
-keeps reserving ``limit x qty`` forever AND ``_open_watch_pick_keys`` keeps the
-tier occupying capacity forever — the feature arms one pick then jams.
+keeps reserving ``limit x qty`` forever — every later pick is funded against
+money the account no longer holds in reserve.
 
 ``_run_entry_trail_reconcile_pass`` closes the leak: for every resting armed tier
 it asks the broker whether the order still rests (``get_order`` -> WORKING) or has
 DISAPPEARED (``get_order`` -> UNKNOWN, since Saxo drops filled/expired/cancelled
 from the open-orders view); a disappeared order is disambiguated by ONE audit-log
 read (``resolve_order_outcome``). A FILL writes the terminal ``fired`` line
-(releasing the reservation + un-jamming capacity in one write); a still-working
+(releasing the reservation in one write); a still-working
 order is a no-op; a GONE-but-UNFILLED order (a DayOrder expiry or a raced cancel)
 is LEFT for the Rearm phase (Finding 2) — never terminated here.
 """
@@ -26,7 +26,6 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails
-from alphalens_pipeline.brokers.automanager import entry_watch_capacity as ewc
 from broker_contract.contract import OrderState, OrderStatus
 
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
@@ -294,8 +293,8 @@ class TestCeilingBreachIsMeasuredAndAnnounced(IsolatedHomeTestCase):
 
     Before this, the armed ceiling existed only in a log line, so a breach was
     invisible on disk and seven of them went unnoticed. The fire is still a
-    fire — nothing here changes the terminal, the reservation release or the
-    capacity accounting; it adds the measurement and one distinct alert."""
+    fire — nothing here changes the terminal or the reservation release; it
+    adds the measurement and one distinct alert."""
 
     def _fire(self, *, ceiling: float | None, fill: float) -> tuple[dict[str, Any], list[Any]]:
         path = _journal(self)
@@ -363,8 +362,8 @@ class TestCeilingBreachIsMeasuredAndAnnounced(IsolatedHomeTestCase):
         self.assertIn("#1317", message)
 
 
-class TestCapacityUnjammedByFired(IsolatedHomeTestCase):
-    def test_capacity_is_reached_while_armed_and_freed_after_fired(self) -> None:
+class TestReservationReleasedByFired(IsolatedHomeTestCase):
+    def test_the_armed_tier_reserves_until_fired_and_releases_after(self) -> None:
         path = _journal(self)
         _seed_armed(path, order_id="TR-1", limit=10.0)
         broker = _ResolvingBroker()
@@ -373,19 +372,22 @@ class TestCapacityUnjammedByFired(IsolatedHomeTestCase):
         )
         deps = _watch_deps(None, [], broker=broker)
 
-        # A resting armed (non-terminal) tier occupies the single watch slot.
-        self.assertTrue(
-            ewc._entry_watch_capacity_reached(entry_trails.read_entry_trail_fold()),
-            "the resting armed tier jams the single watch slot",
+        # A resting armed (non-terminal) tier reserves its tier value.
+        reserved, unvaluable = entry_trails.watching_virtual_gross_acct(
+            entry_trails.read_entry_trail_fold()
         )
+        self.assertGreater(reserved, 0.0, "the resting armed tier reserves money")
+        self.assertEqual(unvaluable, 0)
 
         _run(deps)
 
-        # After the fired terminal a NEW pick can open a watch again.
-        self.assertFalse(
-            ewc._entry_watch_capacity_reached(entry_trails.read_entry_trail_fold()),
-            "the fired terminal frees the watch slot",
+        # After the fired terminal the reservation is released: the fill is a
+        # position now, counted once by the filled-gross term.
+        reserved, unvaluable = entry_trails.watching_virtual_gross_acct(
+            entry_trails.read_entry_trail_fold()
         )
+        self.assertEqual(reserved, 0.0, "the fired terminal releases the reservation")
+        self.assertEqual(unvaluable, 0)
 
 
 class TestNeverNakedPreservedByReconcile(IsolatedHomeTestCase):
@@ -583,7 +585,7 @@ class TestReconcileRunsBeforePlacementDrain(IsolatedHomeTestCase):
             seen[0],
             entry_trails.KIND_FIRED,
             "the fill-reconcile must release the just-filled tier's reservation "
-            "BEFORE the drain checks capacity — else the tier double-counts and "
+            "BEFORE the drain runs its money gates — else the tier double-counts and "
             "can spuriously refuse this valid pick",
         )
 

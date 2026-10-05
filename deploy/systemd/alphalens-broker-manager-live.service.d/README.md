@@ -1,8 +1,8 @@
 # LIVE auto-manager drop-ins — the deliberate production overrides
 
 The base unit `../alphalens-broker-manager-live.service` ships the conservative
-soak pins: placement disarmed, one open position, quarter gross, the tightest
-fee floor, entry trailing off. Installing the base unit alone therefore starts a
+soak pins: placement disarmed, quarter gross, the tightest fee floor, entry
+trailing off. Installing the base unit alone therefore starts a
 daemon that reconciles and journals but opens nothing new.
 
 Every file here is a decision to run production **wider or armed** compared with
@@ -95,9 +95,16 @@ Verify what actually took effect — the composed environment, not the files:
 ## Changing a value here
 
 These are risk decisions. Change one in a commit of its own, say why in the
-commit message, and record the date in the file. Six of the eight rails are also
+commit message, and record the date in the file. All six rails are also
 bounded by `assert_live_rails()`, which refuses to boot a value outside its
 range — widening past a bound is a code change in `live_rails.py`, deliberately.
+
+A file removed from this directory is NOT removed from the host by the `cp`
+above. #1732 removed the two count limits (`ALPHALENS_BROKER_MAX_OPEN` and
+`ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS`) from `20-exposure.conf` and
+`40-entry-trail.conf`; the copy overwrites those two files, so nothing is left
+behind on LIVE. On SIM the same change deleted two whole files, which must be
+removed from the host by hand (see `../README.md`, "#1732 deploy").
 
 ## Known gap
 

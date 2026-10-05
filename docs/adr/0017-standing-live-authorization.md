@@ -92,3 +92,36 @@ daily loss breaker — that is the designed 24/7 blast radius.
 - Rollback is layered and ordered (instance KILL → global KILL → disarm →
   manual flatten → stop-unit last); stopping the daemon first is
   explicitly the wrong move while positions are open.
+
+## Amendment 2026-10-05 (#1732)
+
+The owner removed both count limits: `ALPHALENS_BROKER_MAX_OPEN` (a count of
+open positions + brackets + watching picks) and
+`ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS` (a count of watching picks). Free
+capital is now the only limit on how many picks the LIVE instance takes. The
+original text above is left as it was decided; this section states what is
+true now.
+
+- **Point 4.** The boot-assert pins six rails, and the list in point 4 was
+  already stale before this change (`SIZING_EQUITY` was removed by #1467 and
+  `EXIT_POLICY` by #1414). The six are `PORTFOLIO_GROSS_FRAC`,
+  `DAILY_LOSS_LIMIT_R`, `SIZING_EQUITY_MODE`, `MAX_FEE_BPS`,
+  `MAX_PICK_NOTIONAL` and `ENTRY_TRAIL_BPS` (`live_rails.LIVE_RAIL_ENVS`).
+  `SIZING_EQUITY_MODE` must be `declared`: it is the switch for the cash
+  floor, and with no count left the cash floor is what bounds how much the
+  instance funds at once.
+- **The bounded worst case** is no longer "`MAX_OPEN` positions". With every
+  gate open, the instance can commit at most `PORTFOLIO_GROSS_FRAC x
+  total_value` in total (1.0 on LIVE, the no-leverage line), each pick at
+  most `MAX_PICK_NOTIONAL` (15 000 in the account currency), all of it funded
+  within `margin_available` (candidate x 1.04 + resting entries + watching
+  reservations), and no new entry after realized R for the day reaches
+  `-DAILY_LOSS_LIMIT_R`. Each open position keeps its own resting
+  server-side disaster stop. The daily-loss lockout counts only realized R
+  from closed pairs; losses on open positions never trigger it, the same as
+  before.
+- **What the count still did and money does not.** A pick that does not fit
+  is refused terminally by the gross cap or the cash floor, so it must be
+  re-armed by hand; it is not held until capital frees. The number of
+  positions, and so the number of instruments on the price stream, is now
+  bounded only by capital divided by the size per pick.

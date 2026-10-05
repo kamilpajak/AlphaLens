@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -17,9 +17,7 @@ from unittest import mock
 from alphalens_pipeline.brokers.automanager.safety import (
     ALLOW_ORDERS_ENV,
     DAILY_LOSS_LIMIT_R_ENV,
-    MAX_OPEN_ENV,
     Allow,
-    BrokerView,
     JournalView,
     Refuse,
     check,
@@ -32,8 +30,7 @@ class _StubSession:
 
 
 _PICK = object()  # check()'s `pick` arg is vestigial — never referenced in the body
-_CLEAR_JOURNAL = JournalView(open_bracket_count=0, realized_r_today=0.0)
-_CLEAR_BROKER = BrokerView(open_position_count=0, equity=1_000.0)
+_CLEAR_JOURNAL = JournalView(realized_r_today=0.0)
 
 
 class SafetyGateTest(unittest.TestCase):
@@ -54,7 +51,6 @@ class SafetyGateTest(unittest.TestCase):
         d = check(
             _PICK,
             _CLEAR_JOURNAL,
-            _CLEAR_BROKER,
             _StubSession(alive=True),
             kill_path=self.kill,
             global_kill_path=self.global_kill,
@@ -67,15 +63,12 @@ class SafetyGateTest(unittest.TestCase):
         d = check(
             _PICK,
             _CLEAR_JOURNAL,
-            _CLEAR_BROKER,
             _StubSession(alive=True),
             kill_path=self.kill,
             global_kill_path=self.global_kill,
         )
         self.assertIsInstance(d, Refuse)
         self.assertIn("KILL", d.reason)
-        # An emergency PAUSE must never permanently retire the queue.
-        self.assertFalse(d.terminal)
 
     @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "1"}, clear=False)
     def test_global_kill_file_present_refuses_even_without_instance_kill(self) -> None:
@@ -85,74 +78,45 @@ class SafetyGateTest(unittest.TestCase):
         d = check(
             _PICK,
             _CLEAR_JOURNAL,
-            _CLEAR_BROKER,
             _StubSession(alive=True),
             kill_path=self.kill,
             global_kill_path=self.global_kill,
         )
         self.assertIsInstance(d, Refuse)
         self.assertIn("GLOBAL KILL", d.reason)
-        self.assertFalse(d.terminal)
 
     @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "1"}, clear=False)
     def test_dead_chain_refuses(self) -> None:
         d = check(
             _PICK,
             _CLEAR_JOURNAL,
-            _CLEAR_BROKER,
             _StubSession(alive=False),
             kill_path=self.kill,
             global_kill_path=self.global_kill,
         )
         self.assertIsInstance(d, Refuse)
         self.assertIn("chain", d.reason.lower())
-        # Auth self-heals via `broker auth` — transient, never terminal.
-        self.assertFalse(d.terminal)
 
     @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "0"}, clear=False)
     def test_allow_orders_not_set_refuses(self) -> None:
         d = check(
             _PICK,
             _CLEAR_JOURNAL,
-            _CLEAR_BROKER,
             _StubSession(alive=True),
             kill_path=self.kill,
             global_kill_path=self.global_kill,
         )
         self.assertIsInstance(d, Refuse)
         self.assertIn(ALLOW_ORDERS_ENV, d.reason)
-        # Master-arm off = documented inert observation mode. Marking it
-        # terminal would retire the WHOLE armed queue on the daemon's first
-        # tick — the pick must stay armed until the operator arms orders.
-        self.assertFalse(d.terminal)
-
-    @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "1", MAX_OPEN_ENV: "2"}, clear=False)
-    def test_max_open_cap_refuses_terminally(self) -> None:
-        journal = JournalView(open_bracket_count=1, realized_r_today=0.0)
-        broker = BrokerView(open_position_count=1, equity=1_000.0)
-        d = check(
-            _PICK,
-            journal,
-            broker,
-            _StubSession(alive=True),
-            kill_path=self.kill,
-            global_kill_path=self.global_kill,
-        )
-        self.assertIsInstance(d, Refuse)
-        self.assertIn("MAX_OPEN", d.reason)
-        # Capacity refusal is terminal: retrying every tick would self-place a
-        # stale brief signal once capacity frees.
-        self.assertTrue(d.terminal)
 
     @mock.patch.dict(
         os.environ, {ALLOW_ORDERS_ENV: "1", DAILY_LOSS_LIMIT_R_ENV: "3.0"}, clear=False
     )
     def test_daily_loss_limit_refuses_without_side_effects(self) -> None:
-        journal = JournalView(open_bracket_count=0, realized_r_today=-3.5)
+        journal = JournalView(realized_r_today=-3.5)
         d = check(
             _PICK,
             journal,
-            _CLEAR_BROKER,
             _StubSession(alive=True),
             kill_path=self.kill,
             global_kill_path=self.global_kill,
@@ -160,13 +124,16 @@ class SafetyGateTest(unittest.TestCase):
         self.assertIsInstance(d, Refuse)
         self.assertIn("loss", d.reason.lower())
         self.assertFalse(self.kill.exists())
-        # Day-scoped lockout: the pick may place tomorrow, so not terminal.
-        self.assertFalse(d.terminal)
 
-    def test_refuse_default_is_non_terminal(self) -> None:
-        # Fail-safe default: a Refuse constructed without an explicit flag must
-        # never retire a pick.
-        self.assertFalse(Refuse(reason="anything").terminal)
+    def test_refuse_has_no_terminal_field(self) -> None:
+        # #1732: every safety.check refusal is transient — the pick stays
+        # armed and places once the rail clears. The terminal refusals that
+        # remain are the post-sizing money gates, which journal their own.
+        self.assertNotIn("terminal", {f.name for f in fields(Refuse)})
+
+    def test_journal_view_carries_only_the_daily_loss_input(self) -> None:
+        # #1732: no count of open brackets or positions reaches the gate.
+        self.assertEqual({f.name for f in fields(JournalView)}, {"realized_r_today"})
 
     @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "1"}, clear=False)
     def test_defaults_resolve_via_the_state_paths_seam_when_omitted(self) -> None:
@@ -175,7 +142,7 @@ class SafetyGateTest(unittest.TestCase):
         against a fresh, empty temp home so neither can accidentally exist."""
         with TemporaryDirectory() as home_dir:
             with mock.patch("pathlib.Path.home", return_value=Path(home_dir)):
-                d = check(_PICK, _CLEAR_JOURNAL, _CLEAR_BROKER, _StubSession(alive=True))
+                d = check(_PICK, _CLEAR_JOURNAL, _StubSession(alive=True))
         self.assertIsInstance(d, Allow)
 
 
