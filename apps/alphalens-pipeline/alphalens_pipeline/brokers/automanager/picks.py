@@ -27,7 +27,7 @@ the entry-watch crid, the stop refs — so a disarmed generation's terminal
 markers never shadow its successor.
 
 Queue semantics: the LATEST status line per (ticker, date, generation) wins. A terminal
-``refused`` line (capacity/cap safety refusal) retires the pick so the drain
+``refused`` line (a money-gate refusal) retires the pick so the drain
 never retries it — arming a new document through `alphalens broker arm`
 appends a fresh armed line and is the explicit human path back.
 
@@ -165,9 +165,9 @@ def mark_refused(
 ) -> None:
     """Append one TERMINAL 'refused' line retiring the (ticker, date, generation) pick.
 
-    Written when safety.check refuses placement (open-legs cap / portfolio
-    gross cap) — without it the armed pick retries every tick and self-places
-    a stale brief signal days later once capacity frees. Arming a new document
+    Written when a money gate refuses placement (per-pick amount, fee floor,
+    gross cap, cash floor) — without it the armed pick retries every tick and
+    self-places a stale brief signal days later once capital frees. Arming a new document
     through `alphalens broker arm` is the explicit human path back."""
     _append_record(
         {

@@ -5,13 +5,18 @@ inputs + three process rails read at call time (instance KILL file, GLOBAL
 KILL file, ALLOW_ORDERS). Places, cancels, and writes nothing: the daily-loss
 branch RETURNS Refuse; tripping a KILL file is the control loop's job.
 Refusal order (first failing rail wins): instance KILL file -> GLOBAL KILL
-file -> chain dead -> ALLOW_ORDERS != '1' -> MAX_OPEN cap -> daily-loss
-limit. The cap numbers are operator policy with no validated basis (memo
-risk 7) — set conservatively.
+file -> chain dead -> ALLOW_ORDERS != '1' -> daily-loss limit. Every one of
+these is TRANSIENT: the pick stays armed and places once the rail clears.
+
+No rail here counts picks, positions or watches (#1732, owner decision
+2026-10-05): free capital is the only limit on how many picks the daemon
+takes. The money rails that bound it (per-pick amount, fee floor, gross cap,
+cash floor, all in ``pick_money_gates``) run later in the drain (the last three
+after sizing) and refuse terminally there.
 
 The portfolio-gross cap is deliberately NOT here (#1192): it needs the
 post-sizing plan and the FX conversion, neither of which exists this early,
-so it lives in ``control_loop._check_gross_cap``. This module still owns
+so it lives in ``pick_money_gates._check_gross_cap``. This module still owns
 ``PORTFOLIO_GROSS_FRAC_ENV`` and its default, which that rail reads through.
 
 Both KILL paths default through the ONE broker-state path seam
@@ -31,11 +36,9 @@ from typing import Protocol
 from alphalens_pipeline.brokers.automanager import state_paths
 
 ALLOW_ORDERS_ENV = "ALPHALENS_BROKER_ALLOW_ORDERS"
-MAX_OPEN_ENV = "ALPHALENS_BROKER_MAX_OPEN"
 PORTFOLIO_GROSS_FRAC_ENV = "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC"
 DAILY_LOSS_LIMIT_R_ENV = "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R"
 
-DEFAULT_MAX_OPEN = 3
 DEFAULT_PORTFOLIO_GROSS_FRAC = 1.0
 DEFAULT_DAILY_LOSS_LIMIT_R = 3.0
 
@@ -47,20 +50,16 @@ class Allow:
 
 @dataclass(frozen=True)
 class Refuse:
-    """A refused placement. ``terminal`` splits the rails by queue semantics:
+    """A refused placement. Always TRANSIENT: KILL file, dead chain,
+    ALLOW_ORDERS master arm and the daily-loss lockout keep the pick armed, and
+    it places once the rail clears. An inert or paused daemon must never
+    destroy the armed queue.
 
-    - terminal=True — CAPACITY refusals (the MAX_OPEN cap).
-      The drain retires the pick with a refused line in picks.jsonl; left
-      armed it would retry every tick and self-place a stale brief signal
-      once capacity frees. `alphalens broker arm` is the human path back.
-    - terminal=False (default, fail-safe) — transient rails (KILL file,
-      dead chain, ALLOW_ORDERS master arm, daily-loss lockout). The pick
-      stays armed and places once the rail clears; an inert/paused daemon
-      must never destroy the armed queue.
-    """
+    The terminal refusals (a refused line in picks.jsonl) belong to the
+    post-sizing money gates, which journal their own through
+    ``control_loop._refuse_pick_terminal``."""
 
     reason: str
-    terminal: bool = False
 
 
 Decision = Allow | Refuse
@@ -79,24 +78,10 @@ class SessionState(Protocol):
 
 @dataclass(frozen=True)
 class JournalView:
-    open_bracket_count: int
+    """Today's realized R from closed pairs — the daily-loss rail's only input.
+    Losses on still-open positions never reach it."""
+
     realized_r_today: float
-
-
-@dataclass(frozen=True)
-class BrokerView:
-    open_position_count: int
-    equity: float
-
-
-def _int_env(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
 
 
 def _float_env(name: str, default: float) -> float:
@@ -112,7 +97,6 @@ def _float_env(name: str, default: float) -> float:
 def check(
     pick,
     journal_view: JournalView,
-    broker_view: BrokerView,
     session_state: SessionState,
     *,
     kill_path: Path | None = None,
@@ -131,14 +115,6 @@ def check(
         return Refuse("OAuth chain is dead — cannot place; re-run `alphalens broker auth`")
     if os.environ.get(ALLOW_ORDERS_ENV) != "1":
         return Refuse(f"{ALLOW_ORDERS_ENV} != '1' — master arm not set, placement inert")
-
-    max_open = _int_env(MAX_OPEN_ENV, DEFAULT_MAX_OPEN)
-    open_total = journal_view.open_bracket_count + broker_view.open_position_count
-    if open_total >= max_open:
-        return Refuse(
-            f"open brackets+positions {open_total} >= MAX_OPEN {max_open} — refusing new pick",
-            terminal=True,
-        )
 
     # No portfolio-gross rail here. It lived here until #1192 and could not
     # work: it compared a journal sum in INSTRUMENT currency against a limit in
@@ -172,12 +148,9 @@ __all__ = [
     "ALLOW_ORDERS_ENV",
     "DAILY_LOSS_LIMIT_R_ENV",
     "DEFAULT_DAILY_LOSS_LIMIT_R",
-    "DEFAULT_MAX_OPEN",
     "DEFAULT_PORTFOLIO_GROSS_FRAC",
-    "MAX_OPEN_ENV",
     "PORTFOLIO_GROSS_FRAC_ENV",
     "Allow",
-    "BrokerView",
     "Decision",
     "JournalView",
     "Refuse",

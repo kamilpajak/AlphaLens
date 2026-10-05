@@ -78,11 +78,10 @@ def _intent_document() -> str:
     )
 
 
-# The nine rails the LIVE boot-assert requires (ADR 0017), so an `--env live`
+# The rails the LIVE boot-assert requires (ADR 0017), so an `--env live`
 # read composes and resolves a gateway the way it does on the VPS. Values are
 # the production shapes measured 2026-09-08; nothing here is armed.
 _LIVE_RAILS = {
-    "ALPHALENS_BROKER_MAX_OPEN": "10",
     "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC": "1.0",
     "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "1.0",
     "ALPHALENS_BROKER_MAX_PICK_NOTIONAL": "15000",
@@ -90,7 +89,6 @@ _LIVE_RAILS = {
     "ALPHALENS_BROKER_EXIT_POLICY": "breakeven_trail",
     "ALPHALENS_BROKER_MAX_FEE_BPS": "1000",
     "ALPHALENS_BROKER_ENTRY_TRAIL_BPS": "50",
-    "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS": "10",
 }
 _UNIT_PAYLOAD = " ".join(f"{key}={value}" for key, value in _LIVE_RAILS.items())
 _UNIT_PROPERTIES = {
@@ -154,7 +152,7 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
     ("cancel", ["cancel", "O-1"], True, ("order_id", "cancelled")),
     ("picks", ["picks"], True, ("picks", "counts", "picks_journal")),
     ("watches", ["watches"], True, ("watches", "watching", "journal")),
-    ("status", ["status", "--offline"], True, ("exposure", "slots", "health", "orders")),
+    ("status", ["status", "--offline"], True, ("exposure", "health", "orders")),
     ("stream-status", ["stream-status"], True, ("gauges", "job", "source")),
     ("reconcile", ["reconcile"], True, ("verdicts", "journal")),
     ("reconcile-fills", ["reconcile-fills"], False, ("fills", "out", "written")),
@@ -182,8 +180,9 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
 # the way the read commands do.
 # The envelope version of each command, `v1` unless listed. `arm` answers `v2`
 # because `alphalens.broker.arm/v1` named the brief envelope, with a different
-# body, until #1469; its body is the one `arm-intent/v1` had (#1470).
-_SCHEMA_VERSIONS: Mapping[str, str] = {"arm": "v2"}
+# body, until #1469; its body is the one `arm-intent/v1` had (#1470). `status`
+# answers `v2` because #1732 removed its required `slots` section.
+_SCHEMA_VERSIONS: Mapping[str, str] = {"arm": "v2", "status": "v2"}
 
 
 def _schema_id(name: str) -> str:

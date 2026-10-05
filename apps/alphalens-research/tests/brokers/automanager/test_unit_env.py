@@ -2,7 +2,7 @@
 installed systemd unit (#1377).
 
 A LIVE read command needs BOTH sources the daemon gets: the unit's
-``Environment=`` (the eight risk rails + the account-bound grant, drop-ins
+``Environment=`` (the six risk rails + the account-bound grant, drop-ins
 merged) and the ``EnvironmentFile=`` the unit names (the ``SAXO_LIVE_*``
 credentials `LiveAuthConfig.from_env` reads). This module composes them the
 way systemd does — ``Environment=`` first, the file second, so the FILE wins —
@@ -26,11 +26,11 @@ from alphalens_pipeline.brokers.automanager import unit_env
 
 _UNIT_PAYLOAD = (
     "ALPHALENS_BROKER_ENVIRONMENT=live ALPHALENS_BROKER_ALLOW_ORDERS=1 "
-    "ALPHALENS_BROKER_MAX_OPEN=10 ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC=1.0 "
+    "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC=1.0 "
     "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=1.0 ALPHALENS_BROKER_MAX_PICK_NOTIONAL=15000 "
     "ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared "
     "ALPHALENS_BROKER_MAX_FEE_BPS=1000 "
-    "ALPHALENS_BROKER_ENTRY_TRAIL_BPS=50 ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS=10 "
+    "ALPHALENS_BROKER_ENTRY_TRAIL_BPS=50 "
     "ALPHALENS_SAXO_LIVE_STANDING=ACCT-1 SAXO_LIVE_ACCOUNT_KEY=ACCT-1"
 )
 _ENV_FILE_TEXT = """\
@@ -200,7 +200,7 @@ class TestTextfileDirForEnv(unittest.TestCase):
 class TestComposeLiveEnvironment(unittest.TestCase):
     def test_both_sources_land_in_the_composed_values(self) -> None:
         composed = _compose()
-        self.assertEqual(composed.values["ALPHALENS_BROKER_MAX_OPEN"], "10")
+        self.assertEqual(composed.values["ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R"], "1.0")
         self.assertEqual(composed.values["SAXO_LIVE_APP_KEY"], "key-live")
         self.assertEqual(composed.unit, "alphalens-broker-manager-live.service")
         self.assertEqual(composed.env_file, Path(_ENV_FILE_PATH))
@@ -208,19 +208,17 @@ class TestComposeLiveEnvironment(unittest.TestCase):
         self.assertEqual(composed.warnings, [])
 
     def test_the_composed_set_satisfies_the_live_factory(self) -> None:
-        # The factory needs the eight rails (assert_live_rails), the grant pair
+        # The factory needs the six rails (assert_live_rails), the grant pair
         # and the three SAXO_LIVE_* auth vars before any I/O; the union of the
         # two sources is what makes `--env live` work in a plain shell.
         composed = _compose()
         for key in (
-            "ALPHALENS_BROKER_MAX_OPEN",
             "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC",
             "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R",
             "ALPHALENS_BROKER_MAX_PICK_NOTIONAL",
             "ALPHALENS_BROKER_SIZING_EQUITY_MODE",
             "ALPHALENS_BROKER_MAX_FEE_BPS",
             "ALPHALENS_BROKER_ENTRY_TRAIL_BPS",
-            "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS",
             "ALPHALENS_SAXO_LIVE_STANDING",
             "SAXO_LIVE_ACCOUNT_KEY",
             "SAXO_LIVE_APP_KEY",
@@ -243,11 +241,11 @@ class TestComposeLiveEnvironment(unittest.TestCase):
     def test_a_banned_key_in_the_file_warns_by_name_never_by_value(self) -> None:
         composed = unit_env.compose_live_environment(
             run=_fake_run(),
-            read_text=lambda _path: "ALPHALENS_BROKER_MAX_OPEN=99\n",
+            read_text=lambda _path: "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=99\n",
         )
-        self.assertEqual(composed.values["ALPHALENS_BROKER_MAX_OPEN"], "99")
+        self.assertEqual(composed.values["ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R"], "99")
         joined = " ".join(composed.warnings)
-        self.assertIn("ALPHALENS_BROKER_MAX_OPEN", joined)
+        self.assertIn("ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R", joined)
         self.assertIn(_ENV_FILE_PATH, joined)
         self.assertNotIn("99", joined)
 
@@ -302,14 +300,14 @@ class TestComposeLiveEnvironment(unittest.TestCase):
         composed = unit_env.compose_live_environment(
             run=_fake_run(env_files="/tmp/opt (ignore_errors=yes)"), read_text=read_text
         )
-        self.assertEqual(composed.values["ALPHALENS_BROKER_MAX_OPEN"], "10")
+        self.assertEqual(composed.values["ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R"], "1.0")
         self.assertIsNone(composed.env_file)
 
     def test_no_environment_file_at_all_still_composes_the_unit(self) -> None:
         composed = unit_env.compose_live_environment(
             run=_fake_run(env_files=""), read_text=lambda _path: ""
         )
-        self.assertEqual(composed.values["ALPHALENS_BROKER_MAX_OPEN"], "10")
+        self.assertEqual(composed.values["ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R"], "1.0")
         self.assertIsNone(composed.env_file)
 
 

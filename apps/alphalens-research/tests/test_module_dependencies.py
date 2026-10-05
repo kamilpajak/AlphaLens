@@ -303,7 +303,7 @@ RULES = (
     },
     # #1677 step 5 split the placement wiring root's own helpers into five
     # modules: the money gates, the placed geometry, the day-1 gap gate, the
-    # entry-watch capacity rails and the now tranche. They are five DISJOINT
+    # entry-watch helpers and the now tranche. They are five DISJOINT
     # blocks -- measured, not judged: none of them references a name in any
     # other, so there is no edge between them to police. What the rules below
     # police is the two directions that WOULD undo the split: a new module
@@ -331,7 +331,7 @@ RULES = (
         "exemptions": set(),
     },
     {
-        "name": "the entry-watch capacity rails must not import the control loop (the partition is one-way)",
+        "name": "the entry-watch helpers must not import the control loop (the partition is one-way)",
         "from_pkg": "alphalens_pipeline.brokers.automanager.entry_watch_capacity",
         "forbidden_prefix": "alphalens_pipeline.brokers.automanager.control_loop",
         "exemptions": set(),
@@ -397,13 +397,13 @@ RULES = (
         "exemptions": set(),
     },
     {
-        "name": "entry trails must not import the entry-watch capacity rails (step 5 added the reverse edge)",
+        "name": "entry trails must not import the entry-watch helpers (step 5 added the reverse edge)",
         "from_pkg": "alphalens_pipeline.brokers.automanager.entry_trails",
         "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch_capacity",
         "exemptions": set(),
     },
     {
-        "name": "the pick queue must not import the entry-watch capacity rails (step 5 added the reverse edge)",
+        "name": "the pick queue must not import the entry-watch helpers (step 5 added the reverse edge)",
         "from_pkg": "alphalens_pipeline.brokers.automanager.picks",
         "forbidden_prefix": "alphalens_pipeline.brokers.automanager.entry_watch_capacity",
         "exemptions": set(),

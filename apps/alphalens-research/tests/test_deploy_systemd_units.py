@@ -1988,12 +1988,11 @@ class TestLiveBrokerManagerUnit(unittest.TestCase):
 
     def test_pins_the_boot_assert_rails_in_unit(self) -> None:
         # design memo §3 table / live_rails.assert_live_rails: the LIVE
-        # boot-assert refuses to start unless ALL SIX of these are
-        # explicitly set AND within the live-soak bounds. Pinning the exact
+        # boot-assert refuses to start unless every rail is explicitly set
+        # AND within the live-soak bounds. Pinning the exact
         # values here means a copy-paste mistake is visible in code review,
         # not only at the next restart's crash-loop.
         expected = {
-            "ALPHALENS_BROKER_MAX_OPEN": "1",
             "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC": "0.25",
             "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "1.0",
             "ALPHALENS_BROKER_MAX_FEE_BPS": "100",
@@ -2032,12 +2031,10 @@ class TestLiveBrokerManagerUnit(unittest.TestCase):
         )
 
     def test_the_safety_vars_are_pinned_in_unit(self) -> None:
-        # "ALL SEVEN safety vars" = the six boot-assert rails +
-        # ALLOW_ORDERS. Independent re-derivation of the count so this test
+        # The in-unit boot-assert rails pinned above + ALLOW_ORDERS. Independent re-derivation of the count so this test
         # fails if either of the two tests above is ever deleted without
         # the other.
         safety_vars = (
-            "ALPHALENS_BROKER_MAX_OPEN",
             "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC",
             "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R",
             "ALPHALENS_BROKER_MAX_FEE_BPS",
@@ -2404,7 +2401,7 @@ class TestTheShippedLiveConfigBoots(unittest.TestCase):
 
     def test_the_base_unit_alone_also_boots(self):
         # A partial install (unit copied, drop-in directory forgotten) must fail
-        # SAFE, not fail to start: all eight pins have to be present here too,
+        # SAFE, not fail to start: all six pins have to be present here too,
         # or the operator gets a dead daemon instead of a conservative one.
         with mock.patch.dict("os.environ", _base_environment(), clear=True):
             assert_live_rails()
@@ -2423,6 +2420,19 @@ class TestTheShippedLiveConfigBoots(unittest.TestCase):
         # operator reads as live.
         self.assertNotIn("ALPHALENS_BROKER_SIZING_EQUITY", _composed_environment())
         self.assertNotIn("ALPHALENS_BROKER_SIZING_EQUITY", _base_environment())
+
+    def test_no_unit_pins_a_removed_count_limit(self):
+        # #1732: free capital is the only limit on how many picks LIVE takes.
+        # A leftover count pin would be a dead value an operator reads as live.
+        for name in ("ALPHALENS_BROKER_MAX_OPEN", "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, _composed_environment())
+                self.assertNotIn(name, _base_environment())
+
+    def test_the_shipped_live_config_runs_the_cash_floor(self):
+        # #1732: with no count limit the cash floor is what bounds how much
+        # LIVE funds at once, and only `declared` switches it on.
+        self.assertEqual(_composed_environment()["ALPHALENS_BROKER_SIZING_EQUITY_MODE"], "declared")
 
     def test_the_shipped_pick_ceiling_is_the_old_frame_ceiling(self):
         # #1467: the per-pick amount rail replaces the frame as the bound on one
@@ -2655,9 +2665,7 @@ class TestSimBrokerManagerDropIns(unittest.TestCase):
                 "ALPHALENS_BROKER_ALLOW_ORDERS": "1",
                 "ALPHALENS_BROKER_AMEND_ENABLED": "1",
                 "ALPHALENS_BROKER_ENTRY_TRAIL_BPS": "50",
-                "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS": "25",
                 "ALPHALENS_LIVE_MARKET_EXITS": "1",
-                "ALPHALENS_BROKER_MAX_OPEN": "25",
                 "ALPHALENS_BROKER_OCO_ENABLED": "0",
                 "ALPHALENS_BROKER_SIZING_EQUITY_MODE": "declared",
                 "ALPHALENS_BROKER_STREAMING_ENABLED": "1",

@@ -428,44 +428,20 @@ class ManagerWorld:
                 f"expected order {order_id} to be cancelled, but it is still resting"
             )
 
-    def safety_allows_a_new_pick(
-        self,
-        *,
-        open_brackets: int = 0,
-        open_positions: int = 0,
-        realized_r_today: float = 0.0,
-        equity: float = 1_000_000.0,
-    ) -> bool:
-        """Run the REAL safety gate under the current world (env + KILL file)."""
+    def safety_allows_a_new_pick(self, *, realized_r_today: float = 0.0) -> bool:
+        """Run the REAL safety gate under the current world (env + KILL file).
+
+        The gate takes no count of open positions or brackets (#1732): how many
+        picks the manager holds is bounded by money, in the post-sizing gates,
+        never here."""
         decision = safety.check(
             _pick("KO"),
-            safety.JournalView(
-                open_bracket_count=open_brackets,
-                realized_r_today=realized_r_today,
-            ),
-            safety.BrokerView(open_position_count=open_positions, equity=equity),
+            safety.JournalView(realized_r_today=realized_r_today),
             self._chain,
             kill_path=self.kill_file,
             global_kill_path=self.global_kill_file,
         )
         return isinstance(decision, safety.Allow)
-
-    def safety_refusal_reason(self, **kw: Any) -> str:
-        decision = safety.check(
-            _pick("KO"),
-            safety.JournalView(
-                open_bracket_count=kw.get("open_brackets", 0),
-                realized_r_today=kw.get("realized_r_today", 0.0),
-            ),
-            safety.BrokerView(
-                open_position_count=kw.get("open_positions", 0),
-                equity=kw.get("equity", 1_000_000.0),
-            ),
-            self._chain,
-            kill_path=self.kill_file,
-            global_kill_path=self.global_kill_file,
-        )
-        return getattr(decision, "reason", "")
 
     # ==== internals ============================================================
 

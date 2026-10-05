@@ -9,14 +9,15 @@ invocation, so an incident is not diagnosed by reading five sources by hand
 folds, called with the candidate set to zero, so the figure the operator reads
 is the figure the gate will subtract:
 
-* gross — ``control_loop._committed_working_gross_acct`` +
+* gross — ``pick_money_gates._committed_working_gross_acct`` +
   ``_filled_positions_gross_acct`` + ``entry_trails.watching_virtual_gross_acct``
   against ``GROSS_FRAC x total_value``, the exact terms of ``_check_gross_cap``;
-* slots — ``_summarize_open_verdicts`` + ``_net_open_position_uics`` +
-  ``_open_watch_picks_for_max_open``, the exact sum ``safety.check`` compares
-  with ``MAX_OPEN``;
 * cash floor — ``committed + watching`` against ``margin_available``, the
   reservation ``_check_cash_floor`` folds, and only in ``declared`` mode.
+
+There is no slot count (#1732): free capital is the only limit on how many
+picks the daemon takes, so the two headroom figures above are the whole answer
+to "how much room is left".
 
 Reusing the daemon's PRIVATE folds is a deliberate coupling: refactoring the
 money gates to expose a public snapshot API would touch the daemon's hot path.
@@ -105,19 +106,6 @@ class Exposure:
 
 
 @dataclass(frozen=True)
-class Slots:
-    """Risk units against ``MAX_OPEN`` (the capacity rail)."""
-
-    brackets: int
-    positions: int
-    watch_picks: int
-    used: int
-    limit: int
-    free: int
-    as_of: str = ""
-
-
-@dataclass(frozen=True)
 class CashFloor:
     """Funding reservation against ``margin_available`` (declared mode only)."""
 
@@ -170,7 +158,6 @@ class StatusSnapshot:
     offline: bool
     account: Any | None
     exposure: Exposure
-    slots: Slots
     cash_floor: CashFloor
     orders: list[dict[str, Any]]
     watches: list[dict[str, Any]]
@@ -304,36 +291,6 @@ def _exposure(
         currency=currency,
         unstamped_positions=unstamped,
         headroom_is_upper_bound=bool(unstamped),
-        as_of=_iso(now),
-    )
-
-
-def _slots(
-    *,
-    open_verdicts: list[Any],
-    positions: list[Any],
-    fold: entry_trails.EntryTrailFold,
-    now: dt.datetime,
-) -> Slots:
-    from alphalens_pipeline.brokers.automanager import control_loop, entry_watch_capacity
-
-    brackets, _realized_r = control_loop._summarize_open_verdicts(
-        open_verdicts, now.date().isoformat()
-    )
-    net_uics, unresolvable = control_loop._net_open_position_uics(positions)
-    watch_picks = entry_watch_capacity._open_watch_picks_for_max_open(
-        fold, own_pick_key="", position_uics=net_uics
-    )
-    position_slots = len(net_uics) + unresolvable
-    used = brackets + len(watch_picks) + position_slots
-    limit = safety._int_env(safety.MAX_OPEN_ENV, safety.DEFAULT_MAX_OPEN)
-    return Slots(
-        brackets=brackets,
-        positions=position_slots,
-        watch_picks=len(watch_picks),
-        used=used,
-        limit=limit,
-        free=max(0, limit - used),
         as_of=_iso(now),
     )
 
@@ -618,9 +575,6 @@ def build_snapshot(
             offline=True,
             account=None,
             exposure=_blocked_exposure("skipped: --offline", now),
-            slots=Slots(
-                brackets=0, positions=0, watch_picks=0, used=0, limit=0, free=0, as_of=_iso(now)
-            ),
             cash_floor=CashFloor(applies=False, mode="offline", as_of=_iso(now)),
             orders=[],
             watches=watches,
@@ -652,13 +606,6 @@ def build_snapshot(
         logger.warning("status: exposure fold failed", exc_info=True)
         exposure = _blocked_exposure(f"exposure could not be computed: {exc}", now)
     try:
-        slots = _slots(open_verdicts=open_verdicts, positions=positions, fold=fold, now=now)
-    except Exception:
-        logger.warning("status: slot fold failed", exc_info=True)
-        slots = Slots(
-            brackets=-1, positions=-1, watch_picks=-1, used=-1, limit=-1, free=-1, as_of=_iso(now)
-        )
-    try:
         cash_floor = _cash_floor(
             account=account, open_verdicts=open_verdicts, records=records, fold=fold, now=now
         )
@@ -677,7 +624,6 @@ def build_snapshot(
         offline=False,
         account=account,
         exposure=exposure,
-        slots=slots,
         cash_floor=cash_floor,
         orders=list(open_orders),
         watches=watches,
@@ -690,7 +636,6 @@ __all__ = [
     "CashFloor",
     "Exposure",
     "Health",
-    "Slots",
     "StatusSnapshot",
     "TokenStoreHealth",
     "build_snapshot",

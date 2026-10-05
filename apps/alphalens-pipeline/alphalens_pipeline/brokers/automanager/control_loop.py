@@ -467,8 +467,8 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # PR-T2b fill-reconcile (Finding 1) MUST run BEFORE the placement drain: a
     # native trail that filled appears in the broker positions immediately, but its
     # tier stays NON-terminal in the fold until this pass writes the terminal
-    # `fired` line that releases the virtual gross reservation + un-jams watch
-    # capacity. If the drain's gross-cap / cash-floor check ran FIRST, the filled
+    # `fired` line that releases the virtual gross reservation. If the drain's
+    # gross-cap / cash-floor check ran FIRST, the filled
     # tier would be counted TWICE (once as a filled position, once as its still-live
     # virtual reservation) — spuriously breaching the cap and PERMANENTLY refusing
     # (`mark_refused`) another valid pick drained the same tick. Reconciling first
@@ -1496,19 +1496,6 @@ def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) ->
 # cancels a broker order — the "fire" is an alert-only "would fire @ trigger X"
 # plus a journal marker (memo §7 PR-T1). Flag unset/0 => nothing here runs and
 # the daemon is byte-identical to today (PR-T0 inertness).
-
-# The watch-capacity rail is OWNED by entry_trails (module-ownership doctrine,
-# #1189): live_rails pins it as the 9th LIVE boot-assert rail and this module
-# reads it every tick, so both must resolve the same name and bounds. Re-exported
-# under the historical private names so the call sites below stay unchanged.
-
-"""One logger.warning per process for an invalid/out-of-range env value — the
-env is re-read every tick and would otherwise warn every ~45s all day."""
-
-"""Process-lifetime observability only (no behaviour): the pick_keys whose
-capacity deferral was already logged at INFO, so an armed pick queued behind a
-full watch book is visible exactly once per daemon lifetime (later ticks stay
-DEBUG)."""
 
 
 _ENTRY_REARM_MARKER = "awaiting_fresh_low"
@@ -2603,10 +2590,10 @@ def _finalize_entry_terminal_vs_broker(
 # (entry_watch._active_entry_watches :1261 — the broker owns the resting native order), so
 # nothing else ever observes its fill / DayOrder-expiry. Without a terminal
 # `entry_trails` line watching_virtual_gross_acct keeps reserving limit*qty
-# FOREVER (it skips only terminal_kind) AND entry_watch_capacity._open_watch_pick_keys keeps the tier
-# occupying capacity forever — the feature arms one pick then jams. This sibling
-# pass writes the terminal `fired` line when the order fills, releasing both in
-# ONE write. It NEVER places / amends / arms (safe under KILL); a GONE-but-
+# FOREVER (it skips only terminal_kind) — every later pick is funded against
+# money still held in reserve for a fill that already happened. This sibling
+# pass writes the terminal `fired` line when the order fills, releasing the
+# reservation in ONE write. It NEVER places / amends / arms (safe under KILL); a GONE-but-
 # UNFILLED order (DayOrder expiry / raced cancel) is LEFT for the Rearm phase.
 
 
@@ -2970,8 +2957,7 @@ def _reconcile_one_armed_tier(
 ) -> None:
     """Resolve ONE resting armed tier's order and act on its outcome:
 
-    - a FILL -> the terminal ``fired`` line (releasing the reservation + un-jamming
-      capacity, Finding 1);
+    - a FILL -> the terminal ``fired`` line (releasing its reservation, Finding 1);
     - a DayOrder gone UNFILLED (resolve -> EXPIRED / CANCELLED at the session
       close) -> RE-ARM within the ORIGINAL TTL, or terminal ``expired`` past it
       (Finding 2 / memo §5 CRITICAL-2, delegated to
@@ -3152,8 +3138,8 @@ def _journal_entry_fired(
     outcome carried none, never invented.
 
     Top-level ``order_id`` + ``realized_qty`` release the virtual reservation (the
-    fold's ``terminal_kind`` -> ``watching_virtual_gross_acct`` skips the tier) and
-    un-jam capacity (``entry_watch_capacity._open_watch_pick_keys`` skips it) in ONE write; ``avg_price``
+    fold's ``terminal_kind`` -> ``watching_virtual_gross_acct`` skips the tier) in
+    ONE write; ``avg_price``
     + ``ts`` carry the realized entry-side fill the offline exec_quality join needs.
     Idempotent by construction: once written the tier is terminal in the fold, so
     the next reconcile pass excludes it (``_resting_armed_tiers``)."""
@@ -3320,7 +3306,7 @@ def _journal_entry_rearm(crid: str, tier_state: entry_trails.EntryTrailTierState
     ``armed_order_id`` -> ``None`` (a re-opened watch owns no resting order);
     ``min_trough`` is preserved automatically (it is the historical minimum over
     the whole crid). NON-terminal by construction — the virtual reservation keeps
-    counting (the tier is watching again) and it re-occupies watch capacity. The
+    counting (the tier is watching again). The
     deterministic crid + the fold's latest-watch_open-wins make the re-append
     idempotent (a repeated re-arm never double-reserves)."""
     record = dict(tier_state.watch_open or {})
@@ -3337,8 +3323,7 @@ def _journal_entry_expired(
     ``window_end`` (memo §5 TTL "one rule" — the re-arm never extends the window).
 
     Releases the virtual reservation (the fold's ``terminal_kind`` ->
-    ``watching_virtual_gross_acct`` skips the tier) and un-jams capacity in ONE
-    write; carries the reconcile measurement with a null fill (no order id, no
+    ``watching_virtual_gross_acct`` skips the tier) in ONE write; carries the reconcile measurement with a null fill (no order id, no
     realized qty). Idempotent: once terminal the tier is excluded from
     :func:`_resting_armed_tiers` next pass."""
     entry_trails.append_entry_trail_line(
@@ -3888,7 +3873,7 @@ class _AlreadyGatedSessionState:
     """safety.check's SessionState — place_pick only ever runs after run_once's
     own (no KILL) AND (chain alive) placement gate, so alive=True here restates
     a fact already established by the caller; the rails that actually gate this
-    call are safety.check's own KILL-file / ALLOW_ORDERS / cap checks."""
+    call are safety.check's own KILL-file / ALLOW_ORDERS / daily-loss checks."""
 
     alive: bool = True
 
@@ -4870,27 +4855,23 @@ def _make_place_pick(
     return _place
 
 
-def _summarize_open_verdicts(open_verdicts: Iterable[Any], today_iso: str) -> tuple[int, float]:
-    """Fold open verdicts into the safety.JournalView inputs
-    ``(open_bracket_count, realized_r_today)``: still-working verdicts are
-    counted for the MAX_OPEN rail, and ``realized_r_today`` sums today's
-    closed R for the daily-loss rail.
+def _realized_r_today(open_verdicts: Iterable[Any], today_iso: str) -> float:
+    """Today's closed R summed over the verdicts — the daily-loss rail's input
+    (``safety.JournalView.realized_r_today``). Only realized R from closed pairs
+    counts; losses on still-open positions never reach the lockout.
 
-    No committed-gross term, and so no ``records`` argument (#1192): the gross
-    rail moved to :func:`pick_money_gates._check_gross_cap`, which values exposure post-sizing
-    in account currency and builds its own verdict-to-bracket join because it
-    also needs each record's journaled ``fx_rate``. This function no longer
-    reads the journal at all — it is a pure fold over verdicts."""
-    open_bracket_count = 0
+    No count of open brackets (#1732: free capital is the only admission limit)
+    and no committed-gross term (#1192: the gross rail is
+    :func:`pick_money_gates._check_gross_cap`, which values exposure post-sizing
+    in account currency with its own verdict-to-bracket join). A pure fold over
+    verdicts; it reads no journal."""
     realized_r_today = 0.0
     for verdict in open_verdicts:
         realized_r = verdict.details.get("realized_r")
         realized_date = (verdict.activity_time or "")[:10] or verdict.trade_date
         if realized_r is not None and realized_date == today_iso:
             realized_r_today += float(realized_r)
-        if verdict.status in {"WORKING", "PARTIALLY_FILLED"}:
-            open_bracket_count += 1
-    return open_bracket_count, realized_r_today
+    return realized_r_today
 
 
 class _AccountCurrency:
@@ -5168,7 +5149,7 @@ def _place_tiers(
     # the per-tier journal append strands an alertable non-retried attempt
     # instead of re-placing the whole frame-sized ladder on restart. The
     # record is INERT everywhere brackets are folded (reconcile,
-    # _summarize_open_verdicts, pick_money_gates._committed_working_gross_acct: brackets=[]
+    # _realized_r_today, pick_money_gates._committed_working_gross_acct: brackets=[]
     # folds zero). The post-placement per-tier append below stays — it
     # carries the real brackets.
     append_submission_record(
@@ -5442,25 +5423,18 @@ def _entry_trail_intercept(
         or not isinstance(broker, SupportsTrailingStop)
     ):
         return None
-    # Crash-recovery exemption: a pick that ALREADY holds an open watch
-    # (its watch_open was journaled but it was never retired — a crash
-    # between the journal-FIRST watch_open and the note-only submission
-    # record) owns its capacity slot. It must NOT be counted against
-    # capacity — that would make it self-block on its OWN reservation and
-    # re-drive every tick. It re-opens idempotently (deterministic crid,
-    # fold latest-wins) and finally writes the retiring submission record.
+    # Crash-recovery re-drive: a pick that ALREADY holds an open watch (its
+    # watch_open was journaled but it was never retired — a crash between the
+    # journal-FIRST watch_open and the note-only submission record) re-opens
+    # idempotently (deterministic crid, fold latest-wins) and finally writes
+    # the retiring submission record. It is exempt from the live-uic deferral
+    # below. No count of open watches defers a pick (#1732): the watching
+    # reservation is valued by both money gates instead.
     # Match _open_entry_watches' pick_key byte-for-byte: the string
     # trade_date, not the caller's parsed date (str(date) happens to agree,
     # but pin the exact form the watch_open records actually carry).
     pick_key = picks.pick_key_str(ticker, intent.meta.trade_date, picks._pick_generation(intent))
     already_watching = pick_key in entry_watch_capacity._open_watch_pick_keys(entry_trail_fold)
-    if not already_watching and entry_watch_capacity._entry_watch_capacity_reached(
-        entry_trail_fold
-    ):
-        # Pick-denominated capacity (memo decision #4): stay ARMED (not a
-        # terminal refusal) so it opens once an earlier watch clears.
-        entry_watch_capacity._log_watch_capacity_deferral(ticker, pick_key)
-        return False
     # 2026-08-19 adjudication finding 2: routing while a live long still holds
     # the SAME uic would journal a fresh tranche_plan that replaces the live
     # position's ladder and resets its fired-tranche set with NO order placed
@@ -5925,62 +5899,46 @@ def _place_pick(
     ):
         return False
 
+    # Read order (entry-trailing memo G5, "verdicts-THEN-positions"; #1732
+    # review): the journal and the order book FIRST, then positions, then the
+    # account. An entry that fills between two reads is then counted twice
+    # (still WORKING in the verdicts AND a position / a lower margin), which
+    # refuses rather than overspends. The reverse order counts it zero times:
+    # not a position yet when positions were read, no longer WORKING when the
+    # book was read. With no count limit the number of resting entries, and so
+    # the chance of that race, is bounded only by capital.
     try:
-        account = broker.get_account()
-        positions = broker.get_positions()
         records = list(iter_submission_records(state_paths.submissions_path()))
         # #1094: the placement read draws from the SAME per-tick budget as
         # the verdict and entry-trail passes — a cold-start tick draining an
         # armed pick must not fan out unbudgeted (the third consumer).
         open_verdicts = reconcile_verdicts(records, broker, audit_budget=audit_budget)
+        positions = broker.get_positions()
+        account = broker.get_account()
     except BrokerError as exc:
         logger.warning("place_pick %s: broker read failed: %s", ticker, exc)
         return False
 
-    # Entry-trailing reservation fold (memo G5) — read ONCE here, BEFORE
-    # safety.check, and threaded into the MAX_OPEN admission input, BOTH money
-    # gates below AND the watch-capacity / drain-intercept check further down
+    # Entry-trailing reservation fold (memo G5) — read ONCE here and threaded
+    # into BOTH money gates below AND the drain intercept further down
     # (torn-read fix). A single snapshot per placement attempt. Empty/absent
     # journal (flag off) folds to zero, so this is inert until a watch is open
     # (PR-T0 inertness).
     entry_trail_fold = entry_trails.read_entry_trail_fold()
-    # 2026-08-19 adjudication finding 1: open watches are committed risk units
-    # invisible to both terms of the MAX_OPEN sum — count the distinct
-    # watch-holding picks (own pick + already-live uics excluded, see the
-    # helper) so total concurrent risk units stay bounded by MAX_OPEN for ANY
-    # value of the watch-capacity rail.
-    # NET risk-unit counting (live incident 2026-08-19): under LIVE EOD netting
-    # an intraday round-trip is two ledger rows netting to zero — both the
-    # MAX_OPEN position term and the watch exclusion below must see distinct
-    # net-nonzero uics, never raw rows (see _net_open_position_uics).
-    net_position_uics, unresolvable_position_rows = _net_open_position_uics(positions)
-    open_watch_picks = entry_watch_capacity._open_watch_picks_for_max_open(
-        entry_trail_fold,
-        own_pick_key=picks.pick_key_str(
-            ticker, intent.meta.trade_date, picks._pick_generation(intent)
-        ),
-        position_uics=net_position_uics,
-    )
 
-    open_bracket_count, realized_r_today = _summarize_open_verdicts(
-        open_verdicts, dt.date.today().isoformat()
-    )
+    # No count of positions, brackets or watches is checked (#1732): free
+    # capital is the only limit on how many picks the daemon takes, and the
+    # money gates after sizing are what enforce it. Every safety.check
+    # refusal is transient and keeps the pick armed.
     decision = safety.check(
         intent,
         safety.JournalView(
-            open_bracket_count=open_bracket_count + len(open_watch_picks),
-            realized_r_today=realized_r_today,
-        ),
-        safety.BrokerView(
-            open_position_count=len(net_position_uics) + unresolvable_position_rows,
-            equity=account.total_value,
+            realized_r_today=_realized_r_today(open_verdicts, dt.date.today().isoformat())
         ),
         _AlreadyGatedSessionState(),
     )
     if isinstance(decision, safety.Refuse):
-        _handle_safety_refusal(
-            decision, ticker, trade_date, generation=picks._pick_generation(intent)
-        )
+        logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
         return False
 
     resolved = pick_money_gates._resolve_and_size(
@@ -6051,7 +6009,7 @@ def _place_pick(
         reference_qty_override=reference_qty_override,
     )
     if intercepted is not None:
-        # Deliberately NOT `or now_placed`: a capacity-deferred sibling half
+        # Deliberately NOT `or now_placed`: a deferred sibling half
         # must read as not-placed so the drain retries next tick (the
         # armed_ts scan skips the now half); the pick counts as placed on
         # the tick the siblings actually route.
@@ -6157,33 +6115,6 @@ def _route_now_tranche(
     return _NowRouting(None, plan, False, None, None)
 
 
-def _handle_safety_refusal(
-    decision: Any, ticker: str, trade_date: dt.date, *, generation: int = picks.FIRST_GENERATION
-) -> None:
-    """Log a ``safety.Refuse`` and journal it when terminal.
-
-    Terminal refusal (queue-semantics fix 2026-07-30): ONLY a capacity
-    refusal (decision.terminal — the MAX_OPEN cap; the gross and cash rails
-    journal their own refusals via ``_refuse_pick_terminal``) journals
-    a refused line so the pick never retries — left armed it would retry
-    every tick for days and then self-place a stale brief signal once
-    capacity frees. Arming a new document through
-    `alphalens broker arm` is the explicit human path back. The transient rails (KILL file, dead chain,
-    ALLOW_ORDERS master arm, daily-loss lockout) keep the pick armed —
-    an inert/paused daemon must never destroy the armed queue. The
-    append is fallible I/O and must never crash the drain: on OSError
-    the pick stays armed and the refusal re-fires next tick
-    (re-attempting the append)."""
-    logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
-    if decision.terminal:
-        try:
-            picks.mark_refused(ticker, trade_date, decision.reason, generation=generation)
-        except OSError as exc:
-            logger.warning(
-                "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc
-            )
-
-
 def _make_position_view_builder(
     broker: Broker,
 ) -> Callable[[Broker, list[Mapping[str, Any]]], BrokerView]:
@@ -6242,13 +6173,11 @@ def _net_open_position_uics(positions: Iterable[Position]) -> tuple[frozenset[in
     LIVE Saxo accounts run End-Of-Day netting
     (``ClosedPositionNotAccessibleInEndOfDayNettingMode``): positions net only
     at EOD, so an intraday round-trip leaves TWO ledger rows (+q and -q) that
-    net to zero until the nightly netting. MAX_OPEN counts RISK UNITS, not
-    ledger rows — a raw ``len(positions)`` over such a book refuses valid picks
-    on phantom slots (live incident 2026-08-19: a net-flat book showed 2 rows
-    and terminally refused ETSY on the MAX_OPEN rail all session). Quantities
-    are summed per uic; a net magnitude within ``_QTY_EPS`` of zero is flat and
-    occupies no slot. Rows whose uic cannot be resolved are counted ONE each
-    (fail-conservative — never undercount risk units)."""
+    net to zero until the nightly netting. A raw ``len(positions)`` over such a
+    book sees phantom open positions (live incident 2026-08-19: a net-flat
+    book showed 2 rows). Quantities are summed per uic; a net magnitude within
+    ``_QTY_EPS`` of zero is flat. Rows whose uic cannot be resolved are counted
+    ONE each (fail-conservative — never undercount open positions)."""
     net_by_uic: dict[int, float] = {}
     unresolvable = 0
     for pos in positions:

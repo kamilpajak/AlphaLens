@@ -1,61 +1,49 @@
 """LIVE boot-assert — design memo §3 point 2 / ADR 0017 point 4.
 
 **The most dangerous verified fact this guards against:** the code defaults
-of the safety rails are permissive — ``safety.DEFAULT_MAX_OPEN = 3``,
-``safety.DEFAULT_PORTFOLIO_GROSS_FRAC = 1.0`` (100% gross), and
-``safety.DEFAULT_DAILY_LOSS_LIMIT_R = 3.0``. The per-pick amount ceiling and
-the round-trip fee floor have no live-safe default either (an unset ceiling
-admits any amount a document states, and an unset fee floor admits any cost). A LIVE unit missing one pin would trade 100%
-gross of the real balance instead of failing to boot.
+of the safety rails are permissive — ``safety.DEFAULT_PORTFOLIO_GROSS_FRAC =
+1.0`` (100% gross) and ``safety.DEFAULT_DAILY_LOSS_LIMIT_R = 3.0``. The per-pick
+amount ceiling and the round-trip fee floor have no live-safe default either
+(an unset ceiling admits any amount a document states, and an unset fee floor
+admits any cost), and an unset or ``clamped`` sizing mode switches the cash
+floor off. A LIVE unit missing one pin would trade 100% gross of the real
+balance instead of failing to boot.
 
-``assert_live_rails`` refuses to let a LIVE instance start unless ALL EIGHT of
-``ALPHALENS_BROKER_MAX_OPEN``, ``ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC``,
-``ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R``,
-``ALPHALENS_BROKER_SIZING_EQUITY_MODE`` (the cash-floor switch), ``ALPHALENS_BROKER_MAX_FEE_BPS``,
-``ALPHALENS_BROKER_MAX_PICK_NOTIONAL`` (the per-pick amount ceiling, #1467),
+``assert_live_rails`` refuses to let a LIVE instance start unless ALL SIX of
+``ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC``, ``ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R``,
+``ALPHALENS_BROKER_SIZING_EQUITY_MODE`` (the cash-floor switch, which must be
+``declared``), ``ALPHALENS_BROKER_MAX_FEE_BPS``,
+``ALPHALENS_BROKER_MAX_PICK_NOTIONAL`` (the per-pick amount ceiling, #1467) and
 ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` (the entry-trailing distance, memo
 ``docs/research/entry_trailing_design_2026_08_12.md`` §6 — an operator must
-explicitly state ``0`` = trailing off rather than inherit it), and
-``ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS`` (the entry-watch capacity, #1189)
-are EXPLICITLY set AND within the live bounds table below. Every violation is
-collected and reported TOGETHER (not fail-fast on the first one) so an
-operator with a unit file missing several pins fixes it in one edit instead
-of one restart per missing pin.
+explicitly state ``0`` = trailing off rather than inherit it) are EXPLICITLY
+set AND within the live bounds table below (:data:`LIVE_RAIL_ENVS`). Every
+violation is collected and reported TOGETHER (not fail-fast on the first one)
+so an operator with a unit file missing several pins fixes it in one edit
+instead of one restart per missing pin.
 
-``ALPHALENS_BROKER_EXIT_POLICY`` was the ninth until #1414. It selected whether
-a document's own exit levels were placed; the document says that itself now, so
-the variable named nothing and the rail demanded a pin no code read.
+Removed pins, kept here so a reader does not go looking for them:
 
-The numeric bounds (MAX_OPEN <= 10, PORTFOLIO_GROSS_FRAC <= 1.0,
-DAILY_LOSS_LIMIT_R <= 2.0, MAX_FEE_BPS <= 1000, MAX_PICK_NOTIONAL <= 15000,
-ENTRY_TRAIL_BPS <= 150, and ENTRY_WATCH_MAX_PICKS <= 10) are the
-operator-decided §8 caps for the soak — NOT a mechanism for widening risk
-later without also widening this assert. MAX_OPEN and ENTRY_WATCH_MAX_PICKS
-were widened 2 -> 4 on 2026-09-04 (operator decision, memo
-``docs/research/broker_live_daemon_arm_design_2026_08_10.md`` §8 point 3
-amendment): the WhatsApp manual flow arms two or more picks a day on top of
-the positions already held, and a 2-slot cap forced a disarm-to-arm trade
-every morning. PORTFOLIO_GROSS_FRAC stays 0.5, so the implied per-position
-share of real equity falls from 25% to 12.5% — the widening adds names, not
-gross. Widened again 4 -> 10 on 2026-09-08 (same memo, same amendment):
-a four-pick signal day arrived with one slot free, and the group flow now
-arms whole daily lists rather than one or two names. GROSS_FRAC still 0.5,
-so the implied per-position share falls to 5%; the account is bounded by the
-gross and cash rails, the slot count only bounds the NUMBER of names.
-PORTFOLIO_GROSS_FRAC widened 0.5 -> 1.0 later on 2026-09-08 (operator
-decision, same memo §8 point 3): with ten slots the operator bounds risk by
-DIVERSIFICATION across names, not by a fraction of equity held back; at 1.0
-the whole account may be committed across the slots, never more (1.0 is the
-no-leverage line — the account carries no margin agreement). The cash floor
-(candidate x 1.04 + resting entries <= margin available) and the fee floor
-keep binding per pick.
+* ``ALPHALENS_BROKER_EXIT_POLICY`` until #1414. It selected whether a document's
+  own exit levels were placed; the document says that itself now.
+* ``ALPHALENS_BROKER_MAX_OPEN`` and ``ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS``
+  until #1732 (owner decision 2026-10-05): free capital is the only limit on
+  how many picks LIVE takes. Neither count ever bounded money; the account is
+  bounded by the gross cap (``PORTFOLIO_GROSS_FRAC x total_value``), the cash
+  floor (candidate x 1.04 + resting entries + watching reservations <=
+  ``margin_available``), the per-pick amount and the fee floor. That is why
+  ``declared`` is now the only sizing mode LIVE may boot with: with no count
+  left, the cash floor is the rail that bounds how much LIVE funds at once.
 
-ENTRY_WATCH_MAX_PICKS is the newest pin and exists for a reason worth stating:
-it was the one rail whose LIVE ceiling came from a constant SHARED with the SIM
-runtime reader rather than from this assert. Raising that constant so the SIM
-lab could hold more concurrent watches would therefore have widened LIVE as a
-side effect of a decision taken about the lab alone. Pinning it here makes the
-two independent.
+The numeric bounds (PORTFOLIO_GROSS_FRAC <= 1.0, DAILY_LOSS_LIMIT_R <= 2.0,
+MAX_FEE_BPS <= 1000, MAX_PICK_NOTIONAL <= 15000, ENTRY_TRAIL_BPS <= 150) are the
+operator-decided §8 caps for the soak — NOT a mechanism for widening risk later
+without also widening this assert. PORTFOLIO_GROSS_FRAC widened 0.5 -> 1.0 on
+2026-09-08 (operator decision, memo
+``docs/research/broker_live_daemon_arm_design_2026_08_10.md`` §8 point 3): the
+operator bounds risk by DIVERSIFICATION across names, not by a fraction of
+equity held back; at 1.0 the whole account may be committed, never more (1.0 is
+the no-leverage line — the account carries no margin agreement).
 
 The sizing frame (ALPHALENS_BROKER_SIZING_EQUITY) and MAX_FEE_BPS carried a
 floor but no CEILING until issue #1121: the frame was the direct multiplier on
@@ -66,12 +54,12 @@ was the value the LIVE unit already ran on the day it was added, so widening one
 is a reviewed code edit instead of a silent host edit.
 
 Env-var NAMES are imported from their owning modules (``safety.py`` for the
-three portfolio rails already used by ``safety.check``,
-``position_manager.py`` for the exit-policy flag already used by
-``control_loop.build_default_deps``) — never re-declared as string literals,
-so the boot-assert and the runtime reader can never drift onto different env
-var names. ``MAX_FEE_BPS_ENV`` and ``MAX_PICK_NOTIONAL_ENV`` are owned here;
-their runtime readers are in ``control_loop``.
+two portfolio rails ``safety`` and ``pick_money_gates`` read,
+``entry_trails.py`` for the trailing distance) — never re-declared as string
+literals, so the boot-assert and the runtime reader can never drift onto
+different env var names. ``MAX_FEE_BPS_ENV``, ``MAX_PICK_NOTIONAL_ENV`` and
+``SIZING_EQUITY_MODE_ENV`` are owned here; their runtime readers are in
+``pick_money_gates``.
 """
 
 from __future__ import annotations
@@ -83,12 +71,9 @@ from broker_contract.contract import BrokerCapabilityError
 from alphalens_pipeline.brokers.automanager.entry_trails import (
     ENTRY_TRAIL_BPS_ENV,
     ENTRY_TRAIL_BPS_MAX,
-    ENTRY_WATCH_MAX_PICKS_ENV,
-    ENTRY_WATCH_MAX_PICKS_MIN,
 )
 from alphalens_pipeline.brokers.automanager.safety import (
     DAILY_LOSS_LIMIT_R_ENV,
-    MAX_OPEN_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
 )
 
@@ -101,21 +86,18 @@ MAX_PICK_NOTIONAL_ENV = "ALPHALENS_BROKER_MAX_PICK_NOTIONAL"
 # The cash-floor switch. Its name is historical: it used to select how the
 # sizing frame was resolved (memo broker_sizing_declared_frame_design §4.1), and
 # since #1467 removed the frame, ``declared`` means one thing only — the cash
-# floor runs (control_loop._check_cash_floor, status_snapshot._cash_floor).
+# floor runs (pick_money_gates._check_cash_floor, status_snapshot._cash_floor).
 # Renaming the variable is a unit change on the VPS, left for a separate step.
 SIZING_EQUITY_MODE_ENV = "ALPHALENS_BROKER_SIZING_EQUITY_MODE"
 SIZING_MODE_CLAMPED = "clamped"  # the cash floor is off
-SIZING_MODE_DECLARED = "declared"  # the cash floor is on
-_VALID_SIZING_MODES = (SIZING_MODE_CLAMPED, SIZING_MODE_DECLARED)
+SIZING_MODE_DECLARED = "declared"  # the cash floor is on; the only mode LIVE boots with
 
 # Operator-decided §8 soak bounds (design memo §3 table). Widening risk later
 # is a design-memo decision, not a silent constant edit here.
-_MAX_OPEN_LOWER = 1
-_MAX_OPEN_UPPER = 10  # 2 -> 4 on 2026-09-04, 4 -> 10 on 2026-09-08, see the module docstring
 _PORTFOLIO_GROSS_FRAC_UPPER = 1.0  # 0.5 -> 1.0 on 2026-09-08, see the module docstring
 _DAILY_LOSS_LIMIT_R_UPPER = 2.0
 
-# Operator-locked §8 soak bounds exactly like the three above — PRESCRIPTIVE,
+# Operator-locked §8 soak bounds exactly like the two above — PRESCRIPTIVE,
 # not a snapshot of what the host happens to run. They are equal to the running
 # values because that is the point: the ceiling is the last deliberate decision,
 # so widening one is a design-memo decision here, never a silent host edit.
@@ -128,14 +110,17 @@ _MAX_FEE_BPS_UPPER = 1_000.0
 # ceiling (15000) had been the only bound on one pick's size; this carries the
 # same number over, so the day it shipped nothing widened.
 _MAX_PICK_NOTIONAL_UPPER = 15_000.0
-# The LIVE ceiling on concurrent entry-trail watches (#1189). Deliberately here
-# and NOT beside the shared runtime bound in `entry_trails`: this module is the
-# one place the LIVE bounds table lives, and a bound kept elsewhere is a bound a
-# future "what limits LIVE?" audit misses. The shared runtime ceiling
-# (ENTRY_WATCH_MAX_PICKS_MAX, 25) exists for the SIM lab and does not gate LIVE.
-# Moves with MAX_OPEN (one watch slot per position slot): 2 -> 4 on 2026-09-04,
-# 4 -> 10 on 2026-09-08.
-_ENTRY_WATCH_MAX_PICKS_UPPER = 10
+
+
+LIVE_RAIL_ENVS: tuple[str, ...] = (
+    PORTFOLIO_GROSS_FRAC_ENV,
+    DAILY_LOSS_LIMIT_R_ENV,
+    SIZING_EQUITY_MODE_ENV,
+    MAX_FEE_BPS_ENV,
+    MAX_PICK_NOTIONAL_ENV,
+    ENTRY_TRAIL_BPS_ENV,
+)
+"""Every env var :func:`assert_live_rails` pins, in its check order."""
 
 
 def _missing_or_blank(raw: str | None) -> bool:
@@ -152,7 +137,7 @@ def _check_int_bounded(
     """``None`` if ``var`` is set to an int in ``[lo, hi]``, else a violation.
 
     ``unset_reason`` tailors the unset-violation wording: the default fits
-    the rails whose code default is dangerous (MAX_OPEN=3 etc.); a pin whose
+    the rails whose code default is dangerous; a pin whose
     unset default is SAFE (entry trailing: unset = off) must say so instead —
     the generic wording would nudge an operator toward a nonzero value for
     the wrong reason."""
@@ -184,27 +169,29 @@ def _check_float_bounded(var: str, *, exclusive_lo: float, inclusive_hi: float) 
 
 
 def _check_sizing_mode(var: str) -> str | None:
-    """``None`` iff ``var`` is explicitly set AND (case-insensitively) one of
-    ``_VALID_SIZING_MODES``. A blank value fails the explicit-set check — the
-    operator must state whether the frame is clamped to the snapshot or
-    declared outright, never inherit a silent default."""
+    """``None`` iff ``var`` is explicitly set AND (case-insensitively)
+    ``declared`` — the only mode that runs the cash floor. ``clamped`` (or any
+    other value) switches the floor off, and since #1732 removed the count
+    limits the floor is what bounds how much LIVE funds at once, so LIVE
+    refuses to boot without it. A blank value fails the explicit-set check."""
     raw = os.environ.get(var)
     if _missing_or_blank(raw):
-        return f"{var}: must be explicitly set (unset — the sizing mode must be declared)"
+        return f"{var}: must be explicitly set (unset — the cash floor must be switched on)"
     mode = raw.strip().lower()  # type: ignore[union-attr]  # raw is non-None past the blank check
-    if mode not in _VALID_SIZING_MODES:
-        valid = ", ".join(_VALID_SIZING_MODES)
-        return f"{var}: must be one of ({valid}), got {raw!r}"
+    if mode != SIZING_MODE_DECLARED:
+        return (
+            f"{var}: must be {SIZING_MODE_DECLARED!r} on LIVE (any other value switches "
+            f"the cash floor off), got {raw!r}"
+        )
     return None
 
 
 def assert_live_rails() -> None:
-    """Refuse to let a LIVE instance boot unless all eight safety-rail env vars
-    are explicitly set and within the live-soak bounds (design memo §3 point
-    2 / ADR 0017 point 4; the 7th pin is the entry-trailing distance per the
-    entry-trailing design memo §6 — explicit ``"0"`` = trailing off; the 8th is
-    the entry-watch capacity, pinned to [1, 10] since #1189 so the shared code
-    ceiling can be raised for the SIM lab without widening LIVE).
+    """Refuse to let a LIVE instance boot unless all six safety-rail env vars
+    (:data:`LIVE_RAIL_ENVS`) are explicitly set and within the live-soak bounds
+    (design memo §3 point 2 / ADR 0017 point 4; the entry-trailing distance
+    follows the entry-trailing design memo §6 — explicit ``"0"`` = trailing
+    off). No count of picks, positions or watches is a rail (#1732).
 
     Call ONCE, at LIVE composition-root time, BEFORE any broker/network I/O —
     mirrors the two ADR 0016 state-safety guards already run first in
@@ -216,7 +203,6 @@ def assert_live_rails() -> None:
     violations = [
         v
         for v in (
-            _check_int_bounded(MAX_OPEN_ENV, lo=_MAX_OPEN_LOWER, hi=_MAX_OPEN_UPPER),
             _check_float_bounded(
                 PORTFOLIO_GROSS_FRAC_ENV,
                 exclusive_lo=0.0,
@@ -239,25 +225,13 @@ def assert_live_rails() -> None:
             # Entry-trailing distance (memo §6): [0, 150] — the bound and the
             # env-var name are OWNED by entry_trails.py; explicit "0" (feature
             # off) is valid, unset fails like every other pin. Custom unset
-            # wording: unlike the six rails above, this pin's unset code
+            # wording: unlike the rails above, this pin's unset code
             # default is SAFE (off) — the operator states a value, not a fix.
             _check_int_bounded(
                 ENTRY_TRAIL_BPS_ENV,
                 lo=0,
                 hi=ENTRY_TRAIL_BPS_MAX,
                 unset_reason="explicit 0 = trailing off; the pin must still be stated",
-            ),
-            # Entry-watch capacity (#1189): [1, 10] for LIVE. The runtime reader
-            # in control_loop accepts up to ENTRY_WATCH_MAX_PICKS_MAX (25) so the
-            # SIM lab can hold many concurrent watches; that shared ceiling used
-            # to be the ONLY code-level bound on LIVE's watch capacity, which
-            # made raising it for SIM a LIVE change by accident. Pinning it here
-            # decouples the two: the SIM ceiling may move freely, LIVE stays at
-            # its own bound and refuses to boot on unset like every other rail.
-            _check_int_bounded(
-                ENTRY_WATCH_MAX_PICKS_ENV,
-                lo=ENTRY_WATCH_MAX_PICKS_MIN,
-                hi=_ENTRY_WATCH_MAX_PICKS_UPPER,
             ),
         )
         if v is not None
@@ -273,9 +247,8 @@ def assert_live_rails() -> None:
 __all__ = [
     "DAILY_LOSS_LIMIT_R_ENV",
     "ENTRY_TRAIL_BPS_ENV",
-    "ENTRY_WATCH_MAX_PICKS_ENV",
+    "LIVE_RAIL_ENVS",
     "MAX_FEE_BPS_ENV",
-    "MAX_OPEN_ENV",
     "MAX_PICK_NOTIONAL_ENV",
     "PORTFOLIO_GROSS_FRAC_ENV",
     "SIZING_EQUITY_MODE_ENV",

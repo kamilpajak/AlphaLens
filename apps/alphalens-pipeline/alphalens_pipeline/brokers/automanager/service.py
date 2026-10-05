@@ -53,7 +53,7 @@ class IntentAck:
     """``submit_intent``'s synchronous reply.
 
     Arming never refuses at submit time (mirrors ``picks.arm_pick``: "Places
-    nothing itself; the daemon drains") — a capacity/cap refusal surfaces
+    nothing itself; the daemon drains") — a money-gate refusal surfaces
     later, via a ``stream_events`` alert on a subsequent drain cycle. The
     ``"refused"`` status is reserved for a future transport that CAN validate
     synchronously (e.g. malformed intent, unknown instrument).
@@ -234,7 +234,7 @@ class InProcessManagerService:
     def submit_intent(self, intent: TradeIntent) -> IntentAck:
         """Append to the internal pick queue; never refuses at submit time
         (mirrors ``picks.arm_pick`` — "places nothing itself; the daemon
-        drains"). A capacity/cap refusal surfaces later as an ``AlertEvent``
+        drains"). A money-gate refusal surfaces later as an ``AlertEvent``
         on a subsequent ``run_cycle``."""
         self._picks.append(intent)
         return IntentAck(intent_id=intent.intent_id, status="armed")

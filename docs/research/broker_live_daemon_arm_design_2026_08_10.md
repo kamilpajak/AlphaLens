@@ -386,6 +386,10 @@ so silent demotion pages.
    and the fee floor keep binding per pick. At the 6 000 zł probe:mass
    notional the group flow uses, ~4 names fill the cap at ~24 000 zł of
    equity.
+   **Superseded 2026-10-05 (#1732):** both count limits (`MAX_OPEN` and
+   `ENTRY_WATCH_MAX_PICKS`) were removed. Owner decision: free capital is
+   the only limit on how many picks LIVE takes; the gross cap, the cash
+   floor, the per-pick amount and the fee floor bound the account.
 4. **DAILY_LOSS_LIMIT_R** — *(rec: 1.0R)*
 5. **Fee floor × frame (joint decision — §4 equation):** (a) 100 bps at
    the 10k zł frame (accept ~0.9% measured drag, soak validates

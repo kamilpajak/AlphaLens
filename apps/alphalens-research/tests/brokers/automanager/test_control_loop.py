@@ -567,7 +567,7 @@ class TestRefusedPickNotRetriedAcrossTicks(IsolatedHomeTestCase):
     """End-to-end queue semantics over a REAL picks.jsonl: once the placer
     journals a terminal refusal, the NEXT tick's drain never calls the placer
     for that pick again (kills the live 2026-07-30 every-45s retry that would
-    self-place a stale week-old brief signal once capacity freed)."""
+    self-place a stale week-old brief signal once capital freed)."""
 
     def test_refused_pick_is_drained_once_then_never_again(self) -> None:
         from alphalens_pipeline.brokers.automanager import picks as picks_mod
@@ -578,8 +578,8 @@ class TestRefusedPickNotRetriedAcrossTicks(IsolatedHomeTestCase):
             attempts: list = []
 
             def _refusing_place(pick: Any) -> bool:
-                # Models _place_pick's safety-refusal branch: journal the
-                # terminal refusal, do not place.
+                # Models _place_pick's money-gate refusal branch: journal
+                # the terminal refusal, do not place.
                 attempts.append(pick)
                 picks_mod.mark_refused(
                     pick.instrument.ticker,
@@ -991,6 +991,39 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
 
         self.assertFalse(self._placer(_PlaceBroker(on_account=_boom))(_pick()))
 
+    def test_the_order_book_is_read_before_positions_and_account(self) -> None:
+        # #1732 review F3 (entry-trailing memo G5: "verdicts-THEN-positions").
+        # An entry that fills between two reads must be counted at least once
+        # by the money gates. Read positions first and a fill landing before
+        # the order-book read is in neither: not a position yet, and no longer
+        # WORKING. Read the book first and the same fill is counted twice
+        # (WORKING and a position), which refuses rather than overspends.
+        calls: list[str] = []
+
+        class _OrderedBroker(_PlaceBroker):
+            def get_account(self) -> Any:
+                calls.append("account")
+                return super().get_account()
+
+            def get_positions(self) -> list:
+                calls.append("positions")
+                return super().get_positions()
+
+        def _verdicts(_r: Any, _b: Any, **_k: Any) -> list:
+            calls.append("verdicts")
+            return []
+
+        def _records(_p: Any) -> list:
+            calls.append("records")
+            return []
+
+        placer = self._placer(_OrderedBroker(), verdicts=_verdicts, iter_records=_records)
+        self.assertTrue(placer(_pick()))
+        # Earlier account reads (the once-per-daemon account currency) are not
+        # the money-gate snapshot; the snapshot starts at the journal read.
+        snapshot = calls[calls.index("records") :][:4]
+        self.assertEqual(snapshot, ["records", "verdicts", "positions", "account"])
+
     def test_placement_verdicts_read_draws_from_the_shared_audit_budget(self) -> None:
         # #1094 verifier MAJOR: _place_pick's reconcile_verdicts call ran with
         # NO audit budget, so a cold-start tick draining an armed pick did the
@@ -1047,28 +1080,12 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
         with mock.patch.object(pmg, "_check_gross_cap", return_value=None):
             self.assertTrue(self._placer(_PlaceBroker())(_pick()))
 
-    def test_terminal_safety_refuse_appends_terminal_refused_line(self) -> None:
-        # Queue-semantics fix (2026-07-30): a capacity/cap refusal retires the
-        # pick via a terminal refused line — otherwise it retries every ~45s
-        # tick and self-places a stale brief signal days later when capacity
-        # frees. Arming a new document via `alphalens broker arm` is the human path back.
-        from alphalens_pipeline.brokers.automanager.safety import Refuse
-
-        refusals: list[tuple] = []
-        placer = self._placer(
-            _PlaceBroker(),
-            safety_check=lambda *_a, **_k: Refuse(reason="portfolio cap exceeded", terminal=True),
-            mark_refused=lambda *a, **_kw: refusals.append(a),
-        )
-        self.assertFalse(placer(_pick()))
-        self.assertEqual(refusals, [("KO", dt.date(2026, 7, 20), "portfolio cap exceeded")])
-
-    def test_non_terminal_safety_refuse_does_not_append_refused_line(self) -> None:
-        # Only the CAPACITY rails (MAX_OPEN / portfolio gross) are terminal.
-        # The KILL-file, master-arm (ALLOW_ORDERS) and daily-loss rails also
-        # return Refuse but are transient by design — an inert/paused daemon
-        # must NEVER retire the armed queue; the pick stays armed and places
-        # once the rail clears.
+    def test_a_safety_refusal_never_appends_a_refused_line(self) -> None:
+        # #1732: every safety.check rail is transient. KILL, the master arm
+        # (ALLOW_ORDERS) and the daily-loss lockout return Refuse, but an
+        # inert or paused daemon must NEVER retire the armed queue; the pick
+        # stays armed and places once the rail clears. The terminal refusals
+        # are the post-sizing money gates, which journal their own.
         from alphalens_pipeline.brokers.automanager.safety import ALLOW_ORDERS_ENV, Refuse
 
         for reason in (
@@ -1080,7 +1097,7 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
                 refusals: list[tuple] = []
                 placer = self._placer(
                     _PlaceBroker(),
-                    safety_check=lambda *_a, _r=reason, **_k: Refuse(reason=_r, terminal=False),
+                    safety_check=lambda *_a, _r=reason, **_k: Refuse(reason=_r),
                     mark_refused=lambda *a, _acc=refusals, **_kw: _acc.append(a),
                 )
                 self.assertFalse(placer(_pick()))
@@ -1111,23 +1128,6 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
         )
         self.assertFalse(placer(_pick()))
         self.assertEqual(refusals, [])
-
-    def test_refused_line_append_oserror_never_crashes_the_drain(self) -> None:
-        # The refused-line append is fallible I/O inside the drain: an OSError
-        # must be contained (log + return False). The pick then stays armed —
-        # the refusal re-fires next tick and re-attempts the append (acceptable
-        # degradation, never a crash).
-        from alphalens_pipeline.brokers.automanager.safety import Refuse
-
-        def _disk_full(*_a: Any, **_k: Any) -> None:
-            raise OSError("disk full")
-
-        placer = self._placer(
-            _PlaceBroker(),
-            safety_check=lambda *_a, **_k: Refuse(reason="portfolio cap exceeded", terminal=True),
-            mark_refused=_disk_full,
-        )
-        self.assertFalse(placer(_pick()))  # must not raise
 
     def test_no_instrument_currency_returns_false(self) -> None:
         placer = self._placer(_PlaceBroker(), resolve=lambda _b, _t, **_kw: _instr(currency=""))
@@ -1167,7 +1167,7 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
         self.assertFalse(placer(_pick()))
         self.assertTrue(notes, "a note-only failure record must be journaled")
 
-    def test_summarize_counts_working_verdict_committed_capital(self) -> None:
+    def test_the_gate_receives_todays_realized_r_and_nothing_else(self) -> None:
         today = dt.date.today().isoformat()
         working = _verdict(
             status="WORKING",
@@ -1176,7 +1176,7 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
         )
         captured: dict[str, Any] = {}
 
-        def _capture(_pick_arg: Any, journal_view: Any, _bview: Any, _session: Any) -> Any:
+        def _capture(_pick_arg: Any, journal_view: Any, _session: Any) -> Any:
             captured["jv"] = journal_view
             return object()
 
@@ -1189,7 +1189,6 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
             safety_check=_capture,
         )
         self.assertTrue(placer(_pick()))
-        self.assertEqual(captured["jv"].open_bracket_count, 1)
         self.assertEqual(captured["jv"].realized_r_today, 1.5)
 
 
@@ -1781,9 +1780,7 @@ class TestCheckGrossCap(IsolatedHomeTestCase):
     def test_working_verdict_without_a_joinable_bracket_fails_closed(self) -> None:
         # A working verdict we cannot join to a journaled entry bracket is
         # real broker exposure the cap cannot value — refusing beats silently
-        # under-counting on a money rail (zen pre-merge finding; contrast the
-        # pre-sizing _summarize_open_verdicts, which tolerates the same skew
-        # because its rail is only the cheap early exit).
+        # under-counting on a money rail (zen pre-merge finding).
         orphan = _verdict(status="WORKING", details={"client_request_id": "rid-unknown"})
         no_entry = _verdict(status="WORKING", details={"client_request_id": "rid-b"})
         records = [{"brackets": [{"client_request_id": "rid-b", "entry": None, "qty": 5}]}]
@@ -3255,9 +3252,9 @@ class TestPlaceTiersWriteAheadDedup(IsolatedHomeTestCase):
         self.assertEqual(len(appended[1]["brackets"]), 1)
         self.assertEqual(appended[1]["brackets"][0]["entry_order_id"], "E-1")
 
-    def test_note_only_record_folds_zero_in_summarize_open_verdicts(self) -> None:
+    def test_note_only_record_folds_zero_committed_gross(self) -> None:
         # The extra record must be INERT everywhere brackets are folded: no
-        # brackets -> zero committed gross, zero open brackets.
+        # brackets -> zero committed gross.
         from alphalens_pipeline.brokers.submission_log import build_submission_record
 
         note_record = build_submission_record(
@@ -3268,8 +3265,7 @@ class TestPlaceTiersWriteAheadDedup(IsolatedHomeTestCase):
             brackets=[],
             note="placement attempt",
         )
-        summary = cl._summarize_open_verdicts([], "2026-07-20")
-        self.assertEqual(summary, (0, 0.0))
+        self.assertEqual(cl._realized_r_today([], "2026-07-20"), 0.0)
         total, unjoined = pmg._committed_working_gross_acct([], [note_record])
         self.assertEqual((total, unjoined), (0.0, 0))
 
@@ -6946,7 +6942,9 @@ class TestBuildDefaultDepsStateGuards(IsolatedHomeTestCase):
                 cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
         message = str(ctx.exception)
         self.assertIn("ADR 0017", message)
-        self.assertIn("ALPHALENS_BROKER_MAX_OPEN", message, "the missing rail must be named")
+        self.assertIn(
+            "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R", message, "the missing rail must be named"
+        )
         mock_get_default_broker.assert_not_called()
 
     def test_refuses_a_pre_migration_flat_layout(self) -> None:
@@ -7245,8 +7243,8 @@ def _position_row(uic: int | None, qty: float) -> Any:
 
 class TestNetOpenPositionUics(IsolatedHomeTestCase):
     """EOD-netting risk-unit counting: a LIVE Saxo intraday round-trip is two
-    ledger rows (+q / -q) netting to zero until the nightly netting — MAX_OPEN
-    must count distinct net-nonzero uics, never raw rows."""
+    ledger rows (+q / -q) netting to zero until the nightly netting — the
+    reconcile pass must see distinct net-nonzero uics, never raw rows."""
 
     def test_round_trip_rows_net_to_no_open_uic(self) -> None:
         uics, unresolvable = cl._net_open_position_uics(

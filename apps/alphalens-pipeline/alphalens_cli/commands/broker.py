@@ -701,7 +701,7 @@ def _cli_broker() -> Broker:
     Under ``live`` it builds the LIVE broker via the ADR 0017 factory ``create_saxo_broker_live_from_env`` (lazy import,
       house doctrine). The registry stays SIM-only per ADR 0017 — ``live``
       is never registered in ``_BROKER_FACTORIES``. The factory demands the
-      daemon's FULL LIVE boot surface (the eight rail pins in soak bounds,
+      daemon's FULL LIVE boot surface (the six rail pins in soak bounds,
       ``SAXO_LIVE_ACCOUNT_KEY``, the standing grant, the ``SAXO_LIVE_*``
       auth env) before any network call, so ad-hoc LIVE commands only work
       from a shell that sources the daemon EnvironmentFile; a raw
@@ -1876,8 +1876,8 @@ def disarm_command(
     append-only writes, in a strict order:
 
     1. WATCH first: one terminal 'cancelled' line per open entry-trail tier
-       of the pick (releases the active set, the virtual gross reservation
-       and the watch-capacity slot; the routed tranche_plan is retracted by
+       of the pick (releases the active set and the virtual gross
+       reservation; the routed tranche_plan is retracted by
        the daemon's next tick). If any tier has a native entry arm — a real
        resting order id, or an in-flight write-ahead — the WHOLE disarm
        refuses and writes NOTHING: cancel the order at the broker first
@@ -2423,7 +2423,7 @@ def watches_command(
         watches=rows,
         watching={
             "tiers": len(open_rows),
-            # The daemon's MAX_OPEN fold counts a keyless tier by its crid.
+            # A keyless tier counts by its crid, as the daemon's watch fold does.
             "picks": len({row["pick_key"] or row["crid"] for row in open_rows}),
             "reserved_acct": reserved_acct,
             "unvaluable_tiers": sum(1 for row in open_rows if row["reservation_acct"] is None),
@@ -2436,7 +2436,9 @@ def watches_command(
     _render_watches_human(result)
 
 
-_STATUS_SCHEMA = "alphalens.broker.status/v1"
+# v2 (#1732): the `slots` section is gone. Free capital is the only admission
+# limit, so the two headroom figures (gross, cash floor) answer "how much room".
+_STATUS_SCHEMA = "alphalens.broker.status/v2"
 
 
 def _status_money(value: float | None) -> str:
@@ -2524,7 +2526,7 @@ def _render_status_health(health: Any, skewed: list[str]) -> None:
 
 
 def _render_status_money(snapshot: Any) -> None:
-    """Account, gross, slots, cash floor and the resting-order rows."""
+    """Account, gross, cash floor and the resting-order rows."""
     if snapshot.offline:
         typer.echo("account   skipped (--offline)")
         return
@@ -2535,12 +2537,6 @@ def _render_status_money(snapshot: Any) -> None:
         f"margin {_status_money(account.margin_available)}"
     )
     _render_status_exposure(snapshot.exposure)
-    slots = snapshot.slots
-    typer.echo(
-        f"slots {slots.used}/{slots.limit}  free {slots.free}  "
-        f"(brackets {slots.brackets} + positions {slots.positions} + "
-        f"watch picks {slots.watch_picks})"
-    )
     _render_status_cash_floor(snapshot.cash_floor)
     typer.echo("")
     _render_orders_human({"orders": [_order_row(state) for state in snapshot.orders]})
@@ -2625,7 +2621,6 @@ def _status_payload(snapshot: Any, *, limits_source: str, applied: EnvOption) ->
             "asof": account.asof.isoformat(),
         },
         exposure=asdict(snapshot.exposure),
-        slots=asdict(snapshot.slots),
         cash_floor=asdict(snapshot.cash_floor),
         orders=[_order_row(state) for state in snapshot.orders],
         watches=snapshot.watches,

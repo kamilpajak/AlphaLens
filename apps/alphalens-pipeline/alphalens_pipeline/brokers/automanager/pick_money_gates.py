@@ -337,8 +337,8 @@ def _committed_working_gross_acct(
     EXISTS at the broker but cannot be valued from the journal. The caller
     fails CLOSED on it (zen pre-merge finding): silently skipping would
     understate committed gross and let a pick through over the true cap.
-    ``_summarize_open_verdicts`` no longer folds gross at all (#1192) — it
-    counts slots and today's realized R; THIS fold is the only gross valuation."""
+    ``control_loop._realized_r_today`` folds no gross (#1192) — it sums only
+    today's realized R; THIS fold is the only gross valuation."""
     entry_fx_by_request_id: dict[str, tuple[Mapping[str, Any], Any]] = {
         str(bracket.get("client_request_id")): (bracket, record.get("fx_rate"))
         for record in records
