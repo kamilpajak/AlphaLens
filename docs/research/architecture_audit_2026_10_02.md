@@ -163,6 +163,16 @@ is a gap, not a mis-drawn boundary, and it carries a vocabulary trap: the word
 "edge" on the dashboard means *the quality of the machine's selection*, never
 *how the owner's money is doing*. Status: undecided by the owner (#1689).
 
+**Updated 2026-10-05.** Both halves of that paragraph have moved. The owner
+decided on 2026-10-03 to build the layer, so "undecided" is wrong. And the gap
+is now partial rather than total: `alphalens broker trades` (#1703, #1728)
+reports the account's own realized money PER PICK for LIVE, gross and net, with
+exits closed by hand covered. What is still absent is the ACCOUNT's own answer
+— no store, no period total, no cross-check against the balance, and no
+coverage of account activity no pick armed. Designed in
+`account_cashbook_design_2026_10_05.md`. The vocabulary trap is unchanged and
+is the part of this paragraph that was never about the gap.
+
 **One entry point per context is a premise, not a proof.** Each context above
 has exactly one way in (§1.2), and that is useful evidence about the deployment.
 It is the weakest of the three signals for a *semantic* boundary: one process
@@ -354,6 +364,8 @@ import graph and a commit history are structurally unable to see:
 
 1. **A missing context.** The realized outcome of real trades lives nowhere in
    the repo; the owner reads it off the broker **[owner]**. §1.3 and #1689.
+   *Partly closed 2026-10-05: per-pick realized money now exists for LIVE
+   (#1703, #1728); the account-level answer does not. See §1.3.*
 2. **A rail that belongs to the machine, not to the portfolio.** Arming was
    once refused for want of queue slots, and the owner raised the limit thinking
    "the machine is being over-cautious, I know how much of this I want"
@@ -369,6 +381,8 @@ pipeline does not compute was asked of the owner and should not have been — it
 is a fact about the code, and it was settled by measurement instead (one
 computed field, no derived properties). The realized-performance question
 (#1689) is genuinely open and is recorded as undecided rather than answered.
+*Answered 2026-10-03: build it. The remaining open questions are the shape, in
+`account_cashbook_design_2026_10_05.md` §8.*
 
 ### 3.2 Relationship map
 
@@ -385,7 +399,7 @@ them.
 | **thematic** stages → each other, and → the lab (`thematic_briefs/`) | the brief: 164 columns | the writing stage | **none for 77 of 164 columns** (§5.1) | a renamed or dropped column breaks readers silently |
 | **thematic** → its own face (Postgres `briefs`, `days_meta`) | the published brief, 87 shared columns | Django model + OpenAPI schema | yes — `test_schema_parity.py`, `test_openapi_parity.py` | the gated boundary is not the one where the coupling lives |
 | **thematic** measuring arm → its face (`population_ladders/` → `edge_ladderoutcome`) | per-candidate ladder outcomes | the feedback writer | mtime-gated rebuild, no schema gate | `/edge` means selection quality, never the owner's P&L |
-| **execution** → *nothing* | realized outcome of a real trade | — | — | the edge does not exist; the owner reads the broker (#1689) |
+| **execution** → *nothing* | realized outcome of a real trade | — | — | as of 2026-10-05 a PER-PICK edge exists (`broker trades`, #1703/#1728) and is computed per invocation, never stored; the ACCOUNT-level edge still does not exist (#1689) |
 | all of the above → **market primitives** | what a trading session is | `alphalens_pipeline/market/` | the dependency gate forbids the reverse direction | a "generic" calendar must not quietly decide broker or eligibility policy |
 
 The last row is the one to watch. A shared primitive with the repo's highest
@@ -791,4 +805,5 @@ the same failure this project recorded in the #1227 power-gate postmortem.
 - **The context map is now confirmed** (§3.1, 2026-10-03) — but one question
   inside it is open rather than answered: whether the realized outcome of real
   trades should live in this repo at all (#1689). The map records the gap and
-  not a plan.
+  not a plan. *Answered 2026-10-03: yes, build it; phase 1 shipped 2026-10-05
+  (#1728). §1.3 carries what is still missing.*
