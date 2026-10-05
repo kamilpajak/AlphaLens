@@ -45,6 +45,7 @@ _EXEC_QUALITY_DIRNAME = "exec_quality"
 _KILL_FILENAME = "KILL"
 _SUBMISSIONS_FILENAME = "submissions.jsonl"
 _PICKS_FILENAME = "picks.jsonl"
+_PICK_WAITS_FILENAME = "pick_waits.jsonl"
 _STANDALONE_STOPS_FILENAME = "standalone_stops.jsonl"
 _ENTRY_TRAILS_FILENAME = "entry_trails.jsonl"
 _TRANCHE_FILLS_FILENAME = "tranche_fills.parquet"
@@ -134,6 +135,14 @@ def submissions_path(env: str | None = None) -> Path:
 def picks_path(env: str | None = None) -> Path:
     """``<broker_orders_root>/picks.jsonl`` for the resolved instance."""
     return broker_orders_root(env) / _PICKS_FILENAME
+
+
+def pick_waits_path(env: str | None = None) -> Path:
+    """``<broker_orders_root>/pick_waits.jsonl`` for the resolved instance.
+
+    Why each armed pick that does not fit in free capital is waiting (#1734).
+    Born into the per-env layout, so it is not one of the legacy flat files."""
+    return broker_orders_root(env) / _PICK_WAITS_FILENAME
 
 
 def standalone_stops_path(env: str | None = None) -> Path:

@@ -27,9 +27,13 @@ the entry-watch crid, the stop refs — so a disarmed generation's terminal
 markers never shadow its successor.
 
 Queue semantics: the LATEST status line per (ticker, date, generation) wins. A terminal
-``refused`` line (a money-gate refusal) retires the pick so the drain
-never retries it — arming a new document through `alphalens broker arm`
-appends a fresh armed line and is the explicit human path back.
+``refused`` line (a refusal that no later tick can undo: the currency, the
+per-pick ceiling, the fee floor) or ``expired`` line (still unplaced when the
+pick's validity window ended, #1734) retires the pick so the drain never
+retries it — arming a new document through `alphalens broker arm` appends a
+fresh armed line and is the explicit human path back. A pick that does not
+fit in free capital is NOT refused: it stays ``armed`` and waits, bounded by
+that same window (``pick_waits.py``).
 
 There is deliberately NO ``placed`` status: the drain decides what to place by
 joining the armed picks against the submissions journal on
@@ -66,6 +70,7 @@ logger = logging.getLogger(__name__)
 STATUS_ARMED = "armed"
 STATUS_REFUSED = "refused"
 STATUS_DISARMED = "disarmed"
+STATUS_EXPIRED = "expired"
 
 FIRST_GENERATION = 1
 _GENERATION_KEY = "generation"
@@ -165,10 +170,12 @@ def mark_refused(
 ) -> None:
     """Append one TERMINAL 'refused' line retiring the (ticker, date, generation) pick.
 
-    Written when a money gate refuses placement (per-pick amount, fee floor,
-    gross cap, cash floor) — without it the armed pick retries every tick and
-    self-places a stale brief signal days later once capital frees. Arming a new document
-    through `alphalens broker arm` is the explicit human path back."""
+    Written when a refusal does not depend on anything a later tick can
+    change (per-pick amount and currency, fee floor, the now-tranche cost
+    gate). The two capital gates (gross cap, cash floor) do NOT refuse since
+    #1734: such a pick waits, and its validity window (``mark_expired``) is
+    what keeps a stale signal from being placed days later. Arming a new
+    document through `alphalens broker arm` is the explicit human path back."""
     _append_record(
         {
             "ticker": ticker.upper(),
@@ -176,6 +183,38 @@ def mark_refused(
             "refused_ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
             "reason": reason,
             "status": STATUS_REFUSED,
+            **_generation_fields(generation),
+        },
+        path,
+    )
+
+
+def mark_expired(
+    ticker: str,
+    date: dt.date,
+    *,
+    window_end: dt.datetime,
+    reason: str,
+    generation: int = FIRST_GENERATION,
+    path: Path | None = None,
+) -> None:
+    """Append one TERMINAL 'expired' line retiring the (ticker, date, generation) pick.
+
+    Written by the drain when an armed pick is still unplaced at the end of its
+    validity window (#1734): ``order_ttl_days`` sessions of its venue counted
+    from its trade date, the same window a placed entry rests in. Whatever kept
+    it unplaced — free capital short, the day-1 gate, a dead price feed — it
+    may not be placed after that, because it would be a stale signal acted on
+    late. ``reason`` names the last thing the daemon knew was holding it.
+    Arming a new document through `alphalens broker arm` is the path back."""
+    _append_record(
+        {
+            "ticker": ticker.upper(),
+            "date": date.isoformat(),
+            "expired_ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+            "window_end": window_end.astimezone(dt.UTC).isoformat(timespec="seconds"),
+            "reason": reason,
+            "status": STATUS_EXPIRED,
             **_generation_fields(generation),
         },
         path,
@@ -509,6 +548,7 @@ __all__ = [
     "FIRST_GENERATION",
     "STATUS_ARMED",
     "STATUS_DISARMED",
+    "STATUS_EXPIRED",
     "STATUS_REFUSED",
     "PickFold",
     "PickRecord",
@@ -518,6 +558,7 @@ __all__ = [
     "iter_legacy_size_pct_picks",
     "iter_picks",
     "mark_disarmed",
+    "mark_expired",
     "mark_refused",
     "next_generation",
     "pick_key",

@@ -31,6 +31,7 @@ from broker_contract.trade_intent.codec import intent_to_jsonable
 from broker_contract.trade_intent.schema import PickSize
 
 from tests.brokers.automanager import test_control_loop as _cl_tests
+from tests.brokers.automanager.drain_clock import hold_drain_clock
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 from tests.brokers.automanager.test_control_loop import (
     _acct,
@@ -45,6 +46,12 @@ from tests.brokers.automanager.test_control_loop import (
 _DAY1_CASE = _cl_tests.TestPlacePickDay1GapGateIntegration
 _BRIEF = _DAY1_CASE._BRIEF
 _PREOPEN = _DAY1_CASE._DAY1_OPEN - dt.timedelta(minutes=1)
+
+
+def setUpModule() -> None:
+    # #1734: these tests are about placement mechanics; hold the drain clock
+    # inside every fixture pick's validity window (see drain_clock.py).
+    hold_drain_clock()
 
 
 def _sized(amount: float, currency: str = "USD", ticker: str = "KO") -> Any:

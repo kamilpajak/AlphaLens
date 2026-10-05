@@ -67,7 +67,7 @@ breaking change, so `unclassified` must never be a branch condition. Read it as
 | `live_refused` | CLI | no | A LIVE broker could not be built: the LIVE rails or auth surface are absent from the process (ADR 0017). |
 | `state_layout` | CLI | no | Durable broker state is still in the pre-migration flat layout (ADR 0016 D4). |
 | `pick_already_armed` | CLI | no | Another pick on this ticker is still armed: a live generation of the same (ticker, trade date), or an unplaced pick on the same venue under any date. `details` names its `armed_trade_date` and `armed_generation`. Carries a `suggestions` argv. |
-| `pick_not_writable` | CLI | no | This pick key cannot take a write: the generation was disarmed or refused, or the daemon has already placed it. `details.reason` is `generation_spent` or `already_placed`. Carries a `suggestions` argv. |
+| `pick_not_writable` | CLI | no | This pick key cannot take a write: the generation was disarmed, refused or expired, the daemon has already placed it, or the pick's validity window has already ended. `details.reason` is `generation_spent`, `already_placed` or `window_ended`. Carries a `suggestions` argv. |
 | `intent_malformed` | CLI | no | The submitted document does not match the published wire contract. `details.reason` names which gate refused it (see below). Nothing was queued. |
 | `venue_unsupported` | CLI | no | The document is well formed; this deployment does not trade that MIC. `details.mic` carries the venue. A venue list is deployment knowledge, never a document rule (#1122, #1404). |
 | `queue_write_failed` | CLI | **yes** | Appending to a broker journal failed (disk full, permissions). Nothing was queued and no broker order can be in flight — the commands that report this write only to the queue — so the same command may be re-run once the cause clears. `details.journal` names the file. |
@@ -114,8 +114,9 @@ deployment take it (`venue_unsupported`, `pick_not_writable`).
 | | `trade_date_malformed` | `meta.trade_date` is not a `YYYY-MM-DD` date |
 | | `trade_date_required` | a legacy `"brief"` document with no `meta.trade_date`: day 1 of a brief pick is the session after its brief date, which the door cannot know. Write `"manual"`: the brief producer was removed in #1552 |
 | | `key_discarded` | a key the decoder would DROP, so the arm would not carry what you sent; `details.paths` lists them |
-| `pick_not_writable` | `generation_spent` | that generation was disarmed or refused; a spent generation never comes back |
+| `pick_not_writable` | `generation_spent` | that generation was disarmed, refused or expired; a spent generation never comes back |
 | | `already_placed` | the daemon has already placed this pick, so rewriting it would change the queue and not the market |
+| | `window_ended` | the pick's validity window (`order_ttl_days` sessions after `trade_date`, see "The validity window") is already over, so the daemon would expire it unplaced on its next tick; `details.window_end` names the end. Typical cause: a copied armed line, or a re-arm under the next generation, keeps its old `trade_date` |
 
 #### The exit declaration, and what it may say
 
@@ -166,8 +167,10 @@ that ignores them — so an incoherent pair has to be refused here.
 
 **What `validate_intent` does NOT check** is as much part of the contract as what
 it does. Rules about the *invocation* rather than the document stay with the CLI:
-`order_ttl_days == 0` is LEGAL (the planner resolves that sentinel to a default),
-and the supported-venue list is broker-deployment knowledge. Single-field shape
+`order_ttl_days == 0` is LEGAL (it means the default window, see below), and the
+supported-venue list is broker-deployment knowledge. A NEGATIVE `order_ttl_days`,
+or one above `MAX_ORDER_TTL_DAYS` (60), is refused (`order_ttl_out_of_range`):
+it leaves the pick with no window. Single-field shape
 and format — `meta.trade_date` parsing as a date, `schema_version` bounds — belong
 to the JSON Schema layer. A door onto this contract is expected to apply both.
 
@@ -366,12 +369,13 @@ MIC's calendar. Then:
 
 | state | what happens |
 |---|---|
+| the pick's validity window is already over (checked first, once `trade_date` is known) | refused, `pick_not_writable` / `window_ended` |
 | no `generation` sent, and nothing on that (ticker, trade_date) is armed | armed — a new pick, the next free generation |
 | no `generation` sent, and a pick on that (ticker, trade_date) is armed, placed or not | refused, `pick_already_armed` |
 | `generation` sent, the queue has never seen that key | armed — a new pick |
 | `generation` sent, armed, and the daemon has not placed it | armed — **this is the idempotent replace**, the retry-after-timeout path; `armed_ts` is kept |
 | `generation` sent, armed, but already placed | refused, `pick_not_writable` / `already_placed` |
-| `generation` sent, disarmed or refused | refused, `pick_not_writable` / `generation_spent` |
+| `generation` sent, disarmed, refused or expired | refused, `pick_not_writable` / `generation_spent` |
 | a DIFFERENT generation of that (ticker, trade_date) is still armed | refused, `pick_already_armed` |
 | any other armed, UNPLACED pick on the same ticker and venue, under any date | refused, `pick_already_armed` |
 
@@ -379,8 +383,10 @@ The last row closes a retry across midnight: without it, a re-sent document
 whose `trade_date` the door derives a day later would be a second live pick on
 the same instrument. XNYS, XNAS and XASE count as one venue, because routing
 probes them together. A pick that stays armed and unplaced (for example one whose
-tiers size to zero shares) therefore blocks its ticker until it is disarmed; the
-refusal names it and the `disarm` command.
+tiers size to zero shares, or one waiting for free capital) therefore blocks its
+ticker until it is placed, disarmed or expires at the end of its window, at most
+`order_ttl_days` sessions after its trade date; the refusal names it and the
+`disarm` command.
 
 Because a replace keeps `armed_ts`, it cannot re-open an immediate tier the daemon
 already handled, including one it refused above its cap. A new cap is `disarm`
@@ -407,6 +413,46 @@ not placing: the rails gate the daemon, and the guard that does exist here is
 the refusal to take the instance off an ambient environment variable (#1377).
 Concurrent submitters are not serialised; the key check reads the fold and then
 appends, so two processes racing on one ticker can both pass it.
+
+### The validity window (#1734)
+
+Every armed pick has ONE window: `order_ttl_days` sessions of the document's
+venue (`instrument.mic`), counted from `meta.trade_date`, ending at the close of
+the last of them (`0` means the default, 7). A trade date that is not a session
+rolls forward to the next one first. The daemon applies it three ways (#1734):
+
+- **An unplaced pick expires at the window's end**, whatever kept it unplaced:
+  no free capital, the day-1 gap gate, a safety rail, a dead price feed. One
+  terminal `expired` line in `picks.jsonl` (`expired_ts`, `window_end`, and a
+  `reason` naming the last thing the daemon knew was holding it) and one alert.
+  `expired` is a spent generation, like `disarmed` and `refused`. While KILL is
+  set or the chain is dead the drain does not run, so the line is written on the
+  first tick after; `broker picks` and `broker status` mark such a pick
+  `overdue` meanwhile.
+- **A pick that does not fit in free capital waits.** The gross cap and the cash
+  floor do not refuse: the pick stays armed, is tried again every tick in
+  `armed_ts` order (ordered first-fit: a later pick that fits is placed while an
+  earlier one keeps waiting), and is placed as soon as it fits. The wait is
+  journaled once in `pick_waits.jsonl` and paged once per pick. A gate that
+  cannot value the book (an unjoined working order, a missing mark or FX rate)
+  holds the pick the same way, bounded by the same window.
+- **A pick placed late gets only what is left of the window.** Its entry-trail
+  watches carry the window's `window_end`; its resting limits carry a GTD date
+  of the window's last session, never `order_ttl_days` sessions from the day
+  they were placed. On the last session that is a GTD of the same day.
+
+For a legacy `"brief"` document, whose day 1 is the session AFTER its trade
+date, the window still counts from `trade_date`, so its resting limits get one
+session less than they did before #1734 (the watch route already counted this
+way).
+
+An expired pick whose now tranche was already placed keeps that position: the
+`expired` line only stops the drain, and `broker trades` shows the record with
+its fills and `pick_status: expired`.
+
+A replace (`generation` stated, armed, unplaced) may change `order_ttl_days`,
+and with it the window: it is the author's declaration. It cannot move the
+window's anchor, because `trade_date` is part of the key.
 
 ### Writing a manual pick (#1470)
 
@@ -685,7 +731,7 @@ LIVE). With open lots of two picks the fill is `ambiguous_attribution` instead.
 |---|---|---|
 | `refused` | `never_filled` | the pick was refused |
 | `disarmed` | `never_filled` | the pick was disarmed before a fill |
-| `expired` | `never_filled` | the pick is armed, its tiers ended without a fill, and the last one expired |
+| `expired` | `never_filled` | the pick expired unplaced at the end of its validity window (`pick_status: expired`, #1734), or it is armed, its tiers ended without a fill, and the last one expired. One reason for both on purpose: in each, time ended the pick |
 | `cancelled` | `never_filled` | the pick is armed, its tiers ended without a fill, and the last one was cancelled |
 | `pending` | `never_filled` | the pick is armed, and it has no tier yet, a tier is still open, or its last tier is suspended |
 | `compacted_before_snapshots` | `unresolved` | the pick is older than `snapshot_horizon`, or no snapshot exists |
@@ -732,6 +778,7 @@ EWTX, ASTS, SMMT and VST.
 | `ambiguous_attribution` | a fill on the uic could not be given to one pick |
 | `entry_mode_unsupported` | a now-bracket tier (`entry_mode: immediate`), which the replay refuses |
 | `legacy_plan_shape` | the plan is percent-sized (schema 1 or 2) or absent, which the replay refuses |
+| `placed_late` | the pick's first order reached the broker after its day-1 session closed (it waited for capital, #1734, or the daemon was down). The replay walks the plan from day 1, so it would fill tiers on days the keeper had no order resting. Day 1 is the daemon's anchor: `trade_date` for a manual pick, the session after it for a brief. None of the LIVE picks of 2026-10-03 is excluded by it |
 
 No value of a `reason`, `null_reason` or warning code starts with `place_` or
 `amend_`: the CLI's no-orders gate flags such strings.

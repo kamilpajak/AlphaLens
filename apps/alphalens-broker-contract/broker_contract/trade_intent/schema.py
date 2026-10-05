@@ -62,8 +62,9 @@ def contract_field(
     """Declare a contract field together with what its value MEANS.
 
     A type says ``float``; it does not say that ``alloc_pct`` is a percentage
-    while ``trail_frac`` is a fraction, that ``order_ttl_days`` counts XNYS
-    sessions, or that ``limit_price`` is a cap on an immediate tier. That is
+    while ``trail_frac`` is a fraction, that ``order_ttl_days`` counts sessions
+    of the document's venue from its trade date, or that ``limit_price`` is a
+    cap on an immediate tier. That is
     exactly what a third-party producer gets wrong, so it is stated here, on the
     field, and the JSON Schema generator (#1405) reads it from here rather than
     keeping a second table that can drift.
@@ -245,8 +246,12 @@ class TradeSpec:
         "How much the pick spends: an account-currency amount for the whole entry ladder."
     )
     order_ttl_days: int = contract_field(
-        "Entry-order lifetime in TRADING days (XNYS), not calendar days. 0 is the "
-        'planner\'s "field absent" sentinel and resolves to the default downstream.',
+        "The pick's validity window in TRADING days (sessions of instrument.mic, not "
+        "calendar days), "
+        "counted from meta.trade_date; it ends at the close of the last of them. An armed "
+        "pick still unplaced then expires, and a resting entry placed late rests only for "
+        'what is left of it. 0 is the "field absent" value and means the default (7). '
+        "Allowed range 0..60.",
         default=DEFAULT_ORDER_TTL_DAYS,
     )
     side: Literal["long"] = contract_field(

@@ -104,12 +104,12 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 # Every entry is a file the audit left too big. Lower one when the file
 # shrinks; raise one deliberately, in the PR that needs the room.
 BASELINE: dict[str, int] = {
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3426,
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3507,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7053,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7227,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3233,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3279,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/broker.py": 2416,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/client.py": 1141,
     "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/saxo_price_stream.py": 1395,

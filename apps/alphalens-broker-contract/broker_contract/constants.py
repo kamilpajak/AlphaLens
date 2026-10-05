@@ -19,12 +19,23 @@ from __future__ import annotations
 # ``order_ttl_days`` (older parquet schema). Matches the trade_setup memo's
 # documented default.
 #
-# Unit: **trading days** (XNYS) since PR-B. 7 trading days ≈ a clean
+# Unit: **trading days** since PR-B — sessions of the pick's own venue
+# (``instrument.mic``) since #1734, counted from its trade date: the window an
+# armed pick may wait to be placed in and a placed entry rests in
+# (``automanager/pick_window.py``). 7 trading days ≈ a clean
 # calendar week-and-a-half of trading exposure. The prior 10-calendar-day
 # value compressed to ~7 trading sessions in normal weeks and ~6 around
 # Memorial Day / July 4 long weekends; pinning the unit to trading days
 # removes the holiday drift.
 DEFAULT_ORDER_TTL_DAYS = 7
+
+# The longest entry window a document may state, in sessions of its venue
+# (#1734). The window of an armed pick is counted from its trade date and
+# bounds both how long it may wait to be placed and how long a placed entry
+# rests, so it has to be computable: the exchange calendars the daemon reads
+# end about a year ahead, and a negative count has no meaning. 60 sessions is
+# three months, far beyond any pick written so far (all state 0 or 7).
+MAX_ORDER_TTL_DAYS = 60
 
 # Broker share-quantity precision. Owned quantities are whole numbers on the
 # wire but arrive as floats, so a bare ``>=`` on two of them can flicker (e.g.

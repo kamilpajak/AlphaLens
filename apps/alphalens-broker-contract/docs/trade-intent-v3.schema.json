@@ -90,7 +90,7 @@
         },
         "order_ttl_days": {
           "type": "integer",
-          "description": "Entry-order lifetime in TRADING days (XNYS), not calendar days. 0 is the planner's \"field absent\" sentinel and resolves to the default downstream.",
+          "description": "The pick's validity window in TRADING days (sessions of instrument.mic, not calendar days), counted from meta.trade_date; it ends at the close of the last of them. An armed pick still unplaced then expires, and a resting entry placed late rests only for what is left of it. 0 is the \"field absent\" value and means the default (7). Allowed range 0..60.",
           "default": 7
         },
         "side": {

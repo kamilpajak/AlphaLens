@@ -632,3 +632,83 @@ class TestDaemonFoldCoupling(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWaitingPicks(unittest.TestCase):
+    """#1734: the picks the capital gates hold, read from the journals only —
+    `broker status` must say why a pick is unplaced without sizing it."""
+
+    def setUp(self) -> None:
+        self.h = _SnapshotHarness(self)
+
+    def _arm(self, ticker: str = "KO", trade_date: str = "2026-09-08") -> None:
+        from alphalens_pipeline.brokers.automanager.picks import arm_pick
+
+        from tests.brokers.automanager.test_picks import _intent
+
+        arm_pick(_intent(ticker, trade_date), path=self.h.root / "picks.jsonl")
+
+    def _wait(self, ticker: str = "KO", trade_date: str = "2026-09-08", **over: Any) -> None:
+        from alphalens_pipeline.brokers.automanager.pick_waits import append_wait
+
+        fields = {
+            "pick_key": f"{ticker}:{trade_date}",
+            "ticker": ticker,
+            "date": trade_date,
+            "gate": "cash_floor",
+            "message": "cash floor: needs 5,200.00, only 1,000.00 available",
+            "window_end": "2026-09-17T20:00:00+00:00",
+            **over,
+        }
+        append_wait(
+            fields,
+            now=_NOW - dt.timedelta(hours=2),
+            path=self.h.root / "pick_waits.jsonl",
+        )
+
+    def test_an_armed_unplaced_pick_with_a_wait_line_is_listed(self) -> None:
+        self._arm()
+        self._wait()
+        (row,) = self.h.build(_FakeBroker(), offline=True).waiting_picks
+        self.assertEqual(row["ticker"], "KO")
+        self.assertEqual(row["trade_date"], "2026-09-08")
+        self.assertEqual(row["gate"], "cash_floor")
+        self.assertEqual(row["since"], (_NOW - dt.timedelta(hours=2)).isoformat(timespec="seconds"))
+        self.assertEqual(row["window_end"], "2026-09-17T20:00:00+00:00")
+        self.assertFalse(row["overdue"])
+
+    def test_a_placed_or_retired_pick_is_not_listed(self) -> None:
+        from alphalens_pipeline.brokers.automanager.picks import mark_disarmed
+
+        self._arm("KO")
+        self._wait("KO")
+        (self.h.root / "submissions.jsonl").write_text(
+            json.dumps({"ticker": "KO", "trade_date": "2026-09-08"}) + "\n", encoding="utf-8"
+        )
+        self._arm("MU")
+        self._wait("MU")
+        mark_disarmed("MU", dt.date(2026, 9, 8), path=self.h.root / "picks.jsonl")
+        self.assertEqual(self.h.build(_FakeBroker(), offline=True).waiting_picks, [])
+
+    def test_a_wait_past_its_window_is_overdue_not_waiting(self) -> None:
+        # The drain is what expires a pick; under KILL or a dead chain it does
+        # not run, so the view must say the window is over.
+        self._arm()
+        self._wait(window_end=(_NOW - dt.timedelta(minutes=1)).isoformat())
+        (row,) = self.h.build(_FakeBroker(), offline=True).waiting_picks
+        self.assertTrue(row["overdue"])
+
+    def test_the_last_expiry_and_its_age_come_from_the_pick_journal(self) -> None:
+        from alphalens_pipeline.brokers.automanager.picks import mark_expired
+
+        self._arm()
+        mark_expired(
+            "KO",
+            dt.date(2026, 9, 8),
+            window_end=dt.datetime(2026, 9, 17, 20, 0, tzinfo=dt.UTC),
+            reason="waiting for capital: cash floor",
+            path=self.h.root / "picks.jsonl",
+        )
+        health = self.h.build(_FakeBroker(), offline=True).health
+        self.assertIn("waiting for capital", health.last_expiry or "")
+        self.assertIsNotNone(health.last_expiry_age_s)

@@ -81,10 +81,18 @@ def _knife() -> tuple[SetupPlan, InstrumentRef]:
     )
 
 
+class TestClassifyEntryTtl(unittest.TestCase):
+    def test_the_callers_session_count_reaches_every_bracket(self):
+        # #1734: the drain passes what is left of the pick's window.
+        setup, instrument = _s()
+        plan = classify(setup, instrument, entry_ttl_days=2)
+        self.assertEqual({tier.bracket.entry_ttl_days for tier in plan.tiers}, {2})
+
+
 class TestClassifyLaz(unittest.TestCase):
     def test_tier0_oco_eligible_tier1_operator_managed_both_entry_only(self):
         setup, instrument = _laz()
-        plan = classify(setup, instrument)
+        plan = classify(setup, instrument, entry_ttl_days=7)
         self.assertIsInstance(plan, PlacementPlan)
         self.assertEqual(len(plan.tiers), 2)
         t0, t1 = plan.tiers
@@ -106,7 +114,7 @@ class TestClassifyLaz(unittest.TestCase):
 class TestClassifyKnifeEdge(unittest.TestCase):
     def test_15_00_places_15_01_operator_managed(self):
         setup, instrument = _knife()
-        plan = classify(setup, instrument)
+        plan = classify(setup, instrument, entry_ttl_days=7)
         self.assertTrue(plan.tiers[0].tp_planned_in_oco, "+15.00% clears the inclusive (<=) guard")
         self.assertFalse(plan.tiers[1].tp_planned_in_oco, "+15.01% is beyond the guard")
         self.assertEqual(plan.tiers[1].tp_operator_managed, 115.01)
@@ -118,7 +126,7 @@ class TestClassifyKnifeEdge(unittest.TestCase):
 class TestFarTpTierShape(unittest.TestCase):
     def test_far_tp_tier_emits_entry_only_bracket_not_a_reject(self):
         setup, instrument = _laz()
-        tier1 = classify(setup, instrument).tiers[1]
+        tier1 = classify(setup, instrument, entry_ttl_days=7).tiers[1]
         self.assertFalse(tier1.tp_planned_in_oco)
         self.assertIsNone(tier1.bracket.take_profit)
         self.assertIsNone(tier1.bracket.stop_loss)
@@ -134,7 +142,7 @@ class TestEntryBracketIsEntryOnly(unittest.TestCase):
         for name, factory in (("LAZ", _laz), ("S", _s), ("knife", _knife)):
             with self.subTest(fixture=name):
                 setup, instrument = factory()
-                plan = classify(setup, instrument)
+                plan = classify(setup, instrument, entry_ttl_days=7)
                 self.assertTrue(plan.tiers)
                 for tier in plan.tiers:
                     self.assertIsNone(
@@ -148,7 +156,7 @@ class TestEntryBracketIsEntryOnly(unittest.TestCase):
 
     def test_in_band_tp_and_tier_index_surfaced_for_the_journal(self):
         setup, instrument = _laz()
-        t0, t1 = classify(setup, instrument).tiers
+        t0, t1 = classify(setup, instrument, entry_ttl_days=7).tiers
         self.assertEqual(t0.tier_index, 0)
         self.assertEqual(t0.tp, 46.54)
         self.assertTrue(t0.tp_planned_in_oco, "+13.2% clears the child-distance guard")
@@ -204,7 +212,7 @@ class TestDisasterStopExactlyOnce(unittest.TestCase):
         for name, factory in (("LAZ", _laz), ("S", _s), ("knife", _knife)):
             with self.subTest(fixture=name):
                 setup, instrument = factory()
-                plan = classify(setup, instrument)
+                plan = classify(setup, instrument, entry_ttl_days=7)
                 self.assertEqual(plan.disaster_stop_price, setup.disaster_stop)
                 self.assertGreater(plan.disaster_stop_price, 0.0)
                 for tier in plan.tiers:
@@ -212,7 +220,7 @@ class TestDisasterStopExactlyOnce(unittest.TestCase):
 
     def test_s_incident_all_stops_far_still_one_standalone(self):
         setup, instrument = _s()
-        plan = classify(setup, instrument)
+        plan = classify(setup, instrument, entry_ttl_days=7)
         self.assertEqual(len(plan.tiers), 3)
         for tier in plan.tiers:
             self.assertIsNone(tier.bracket.stop_loss)

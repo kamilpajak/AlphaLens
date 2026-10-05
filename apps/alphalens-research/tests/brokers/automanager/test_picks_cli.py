@@ -171,6 +171,104 @@ class PicksCommandStateTest(unittest.TestCase):
         self.assertEqual(_rows(_run(self.runner, "--format", "json"))["MU"]["state"], "PLACED")
 
 
+def _wait(home: Path, ticker: str, trade_date: str, gate: str = "gross_cap") -> None:
+    from alphalens_pipeline.brokers.automanager.pick_waits import append_wait
+
+    append_wait(
+        {
+            "pick_key": f"{ticker}:{trade_date}",
+            "ticker": ticker,
+            "date": trade_date,
+            "gate": gate,
+            "message": f"{gate}: {ticker} needs more than is free",
+            "window_end": "2026-07-29T20:00:00+00:00",
+        },
+        now=dt.datetime(2026, 7, 20, 15, 0, tzinfo=dt.UTC),
+        path=home / ".alphalens" / "broker_orders" / "sim" / "pick_waits.jsonl",
+    )
+
+
+class PicksCommandWaitAndExpiryTest(unittest.TestCase):
+    """#1734: an armed pick that does not fit in free capital WAITS, and one
+    still unplaced when its window ends EXPIRES. Before v2 a waiting pick read
+    PENDING, which promised a placement the gates were refusing every tick."""
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        self.home = isolate_home(self)
+
+    def test_an_armed_pick_with_a_wait_line_reads_waiting_and_says_why(self) -> None:
+        _arm(self.home, "KO", "2026-07-20")
+        _wait(self.home, "KO", "2026-07-20")
+        row = _rows(_run(self.runner, "--format", "json"))["KO"]
+        self.assertEqual(row["state"], "WAITING")
+        self.assertEqual(row["wait"]["gate"], "gross_cap")
+        self.assertEqual(row["wait"]["since"], "2026-07-20T15:00:00+00:00")
+        self.assertIn("needs more than is free", row["detail"])
+        self.assertIn("2026-07-20T15:00:00+00:00", row["detail"], "the message says how old it is")
+
+    def test_a_placed_pick_ignores_its_stale_wait_line(self) -> None:
+        _arm(self.home, "KO", "2026-07-20")
+        _wait(self.home, "KO", "2026-07-20")
+        _submit(self.home, "KO", "2026-07-20")
+        row = _rows(_run(self.runner, "--format", "json"))["KO"]
+        self.assertEqual(row["state"], "PLACED")
+        self.assertIsNone(row["wait"])
+
+    def test_an_expired_pick_reads_expired_with_its_reason(self) -> None:
+        from alphalens_pipeline.brokers.automanager.picks import mark_expired
+
+        _arm(self.home, "KO", "2026-07-20")
+        mark_expired(
+            "KO",
+            dt.date(2026, 7, 20),
+            window_end=dt.datetime(2026, 7, 29, 20, 0, tzinfo=dt.UTC),
+            reason="waiting for capital: gross cap",
+            path=_picks_path(self.home),
+        )
+        row = _rows(_run(self.runner, "--format", "json"))["KO"]
+        self.assertEqual(row["state"], "EXPIRED")
+        self.assertEqual(row["detail"], "waiting for capital: gross cap")
+
+    def test_an_armed_unplaced_row_carries_its_window_and_whether_it_is_overdue(self) -> None:
+        # Under KILL or a dead chain the drain does not run, so nothing expires
+        # it: the view must not keep calling such a pick waiting as if it could
+        # still be placed.
+        from unittest import mock
+
+        from alphalens_cli.commands import broker as broker_cli
+
+        _arm(self.home, "KO", "2026-07-20")
+        with mock.patch.object(
+            broker_cli,
+            "_reading_now",
+            return_value=dt.datetime(2026, 7, 29, 20, 0, tzinfo=dt.UTC),
+        ):
+            row = _rows(_run(self.runner, "--format", "json"))["KO"]
+        self.assertEqual(row["window_end"], "2026-07-29T20:00:00+00:00")
+        self.assertTrue(row["overdue"])
+
+    def test_the_new_states_filter_and_count(self) -> None:
+        from alphalens_pipeline.brokers.automanager.picks import mark_expired
+
+        _arm(self.home, "KO", "2026-07-20")
+        _wait(self.home, "KO", "2026-07-20")
+        mark_expired(
+            "MU",
+            dt.date(2026, 7, 20),
+            window_end=dt.datetime(2026, 7, 29, 20, 0, tzinfo=dt.UTC),
+            reason="unplaced at window end",
+            path=_picks_path(self.home),
+        )
+        for state, ticker in (("waiting", "KO"), ("expired", "MU")):
+            with self.subTest(state=state):
+                result = _run(self.runner, "--format", "json", "--state", state)
+                self.assertEqual(result.exit_code, 0, result.output)
+                payload = json.loads(result.stdout)
+                self.assertEqual([row["ticker"] for row in payload["picks"]], [ticker])
+                self.assertEqual(payload["counts"][state], 1)
+
+
 class PicksCommandOutputTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
@@ -180,7 +278,7 @@ class PicksCommandOutputTest(unittest.TestCase):
         _arm(self.home, "KO", "2026-07-20")
         result = _run(self.runner, "--format", "json")
         payload = json.loads(result.stdout)
-        self.assertEqual(payload["schema"], "alphalens.broker.picks/v1")
+        self.assertEqual(payload["schema"], "alphalens.broker.picks/v2")
         self.assertEqual(payload["env"], "sim")
 
     def test_counts_cover_every_pick_even_when_state_filters_rows(self) -> None:

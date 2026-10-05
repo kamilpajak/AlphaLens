@@ -8,7 +8,8 @@ one question about whether a pick may spend money:
 * **Sizing** — ``_resolve_and_size``: what instrument, and how many units?
 * **Fee floor** — ``_check_fee_floor`` with ``_estimate_round_trip_fee_bps``:
   would the round trip cost more than the edge the pick claims?
-* **Exposure** — ``_check_gross_cap`` and ``_check_cash_floor``, with the
+* **Exposure** — ``_check_gross_cap`` and ``_check_cash_floor`` (a pick that
+  does not fit WAITS, #1734 — see :class:`GateVerdict`), with the
   valuation helpers ``_committed_working_gross_acct``,
   ``_filled_positions_gross_acct``, ``_value_one_position`` and
   ``_make_position_rate_lookup``: does the account have the room?
@@ -31,7 +32,8 @@ import logging
 import math
 import os
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from broker_contract.contract import Broker
 
@@ -44,8 +46,28 @@ from alphalens_pipeline.brokers.automanager.costs import (
     fee_card_for,
     round_trip_fee_bps,
 )
+from alphalens_pipeline.brokers.automanager.pick_waits import GATE_CASH_FLOOR, GATE_GROSS_CAP
 
 logger = logging.getLogger(__name__)
+
+# What a capital gate's "no" means (#1734). ``capital``: the numbers were read
+# and the pick does not fit in free capital — it WAITS, armed, until it fits or
+# its validity window ends. ``state``: something the gate must value could not
+# be valued (an unjoined working order, a missing mark or FX rate, an
+# unvaluable watch, no margin figure) — the gate fails CLOSED and the pick is
+# held for the same window, but it is not "waiting for capital": nobody knows
+# how much capital is free.
+VERDICT_CAPITAL = "capital"
+VERDICT_STATE = "state"
+
+
+@dataclass(frozen=True)
+class GateVerdict:
+    """A capital gate's refusal to admit a pick on this tick. Never terminal."""
+
+    gate: str  # pick_waits.GATE_GROSS_CAP | pick_waits.GATE_CASH_FLOOR
+    kind: Literal["capital", "state"]
+    message: str
 
 
 def _check_pick_size(size: Any, *, account_currency: str, ticker: str) -> tuple[str, str] | None:
@@ -503,12 +525,24 @@ def _check_gross_cap(
     ticker: str,
     entry_trail_fold: entry_trails.EntryTrailFold | None = None,
     broker: Any = None,
-) -> str | None:
+    admitted_this_tick_acct: float = 0.0,
+) -> GateVerdict | None:
     """``None`` iff the pick keeps total gross exposure — still-working
     journaled entries + THIS candidate + filled positions + WATCHING trail
-    tiers, all in ACCOUNT currency — within ``GROSS_FRAC x
-    account.total_value``; else a terminal refusal message naming the total,
-    its components, the limit, GROSS_FRAC and total_value.
+    tiers + picks admitted earlier THIS tick, all in ACCOUNT currency —
+    within ``GROSS_FRAC x account.total_value``; else a :class:`GateVerdict`:
+    ``capital`` with a message naming the total, its components, the limit,
+    GROSS_FRAC and total_value, or ``state`` when a term cannot be valued.
+    Neither is terminal (#1734): the pick waits.
+
+    ``admitted_this_tick_acct`` (#1734 review F3) is the gross of the picks the
+    drain already admitted earlier in the same tick. Their orders or fills may
+    not show in this pick's broker reads yet — a just-placed order missing
+    from ``list_open_orders`` or a now tranche whose fill has not reached the
+    positions read — and with a queue of waiting picks the tick capital frees
+    is exactly when several are admitted together. Counting them here may
+    count one twice for the rest of the tick, which only delays a pick by one
+    tick.
 
     ``GROSS_FRAC`` is read THROUGH ``safety.PORTFOLIO_GROSS_FRAC_ENV`` and
     ``safety.DEFAULT_PORTFOLIO_GROSS_FRAC`` with the same ``_float_env``
@@ -543,10 +577,12 @@ def _check_gross_cap(
         # Fail CLOSED on journal join-skew (zen pre-merge finding): a working
         # verdict we cannot value means real broker exposure the cap cannot
         # see — refusing beats silently under-counting on a money rail.
-        return (
-            f"gross cap: {ticker} refused — {unjoined} working order(s) could not be "
+        return GateVerdict(
+            GATE_GROSS_CAP,
+            VERDICT_STATE,
+            f"gross cap: {ticker} blocked — {unjoined} working order(s) could not be "
             "joined to a journaled entry bracket; committed gross cannot be valued, "
-            "failing closed"
+            "failing closed",
         )
     account_ccy = str(getattr(account, "currency", "") or "")
     filled_acct, mark_failure = _filled_positions_gross_acct(
@@ -556,7 +592,9 @@ def _check_gross_cap(
         rate_lookup=_make_position_rate_lookup(broker, account_ccy) if broker is not None else None,
     )
     if mark_failure is not None:
-        return f"gross cap: {ticker} refused — {mark_failure}"
+        return GateVerdict(
+            GATE_GROSS_CAP, VERDICT_STATE, f"gross cap: {ticker} blocked — {mark_failure}"
+        )
 
     # PR-T1: read the fold ONCE in _place_pick and thread it into BOTH money
     # gates so a mid-attempt append (a watch opening on another pick this tick)
@@ -570,24 +608,34 @@ def _check_gross_cap(
         # Fail CLOSED exactly like the unjoined-working-orders path above: a
         # malformed/unvaluable entry-trail record may be a virtual reservation
         # the cap cannot see — refusing beats silently under-counting.
-        return (
-            f"gross cap: {ticker} refused — {unvaluable} entry-trail record(s) could not "
+        return GateVerdict(
+            GATE_GROSS_CAP,
+            VERDICT_STATE,
+            f"gross cap: {ticker} blocked — {unvaluable} entry-trail record(s) could not "
             "be valued (malformed or missing watch_open); the watching reservation "
-            "cannot be valued, failing closed"
+            "cannot be valued, failing closed",
         )
 
-    total_acct = committed_acct + candidate_acct + filled_acct + watching_acct
+    total_acct = (
+        committed_acct + candidate_acct + filled_acct + watching_acct + admitted_this_tick_acct
+    )
     limit_acct = gross_frac * account.total_value
     if total_acct <= limit_acct:
         return None
-    # Named only when non-zero so the pre-trailing refusal text stays
-    # byte-identical while no watch is open (PR-T0 inertness proof).
+    # Named only when non-zero so the text stays short while no watch is open
+    # and nothing else was admitted this tick (PR-T0 inertness proof).
     watching_component = f" + watching {watching_acct:,.2f}" if watching_acct else ""
-    return (
+    admitted_component = (
+        f" + admitted this tick {admitted_this_tick_acct:,.2f}" if admitted_this_tick_acct else ""
+    )
+    return GateVerdict(
+        GATE_GROSS_CAP,
+        VERDICT_CAPITAL,
         f"gross cap: {ticker} total gross {total_acct:,.2f} {account.currency} "
         f"(working {committed_acct:,.2f} + candidate {candidate_acct:,.2f} "
-        f"+ filled {filled_acct:,.2f}{watching_component}) exceeds limit {limit_acct:,.2f} "
-        f"({gross_frac:g} x total_value {account.total_value:,.2f}) — pick refused"
+        f"+ filled {filled_acct:,.2f}{watching_component}{admitted_component}) exceeds limit "
+        f"{limit_acct:,.2f} ({gross_frac:g} x total_value {account.total_value:,.2f}) "
+        "— waits for capital",
     )
 
 
@@ -603,15 +651,21 @@ def _check_cash_floor(
     records: Iterable[Mapping[str, Any]],
     ticker: str,
     entry_trail_fold: entry_trails.EntryTrailFold | None = None,
-) -> str | None:
+    admitted_this_tick_acct: float = 0.0,
+) -> GateVerdict | None:
     """``None`` iff the pick's buffered funding need fits the account's real
     ``margin_available`` (or the sizing mode is not ``declared`` — clamped /
     unset stays byte-identical to pre-cash-floor behavior; the min-clamp
-    already bounds sizing by the snapshot there). Else a terminal refusal
-    message naming the buffered candidate, the resting reservation, the
-    available figure and the account currency (memo §4.2/§4.3):
+    already bounds sizing by the snapshot there). Else a :class:`GateVerdict`:
+    ``capital`` with a message naming the buffered candidate, the resting
+    reservation, the available figure and the account currency (memo
+    §4.2/§4.3), or ``state`` when the reservation or the balance cannot be
+    read. Neither is terminal (#1734): the pick waits.
 
-        candidate_buffered + reserved_resting > available -> refuse
+        candidate_buffered + reserved_resting > available -> wait
+
+    ``admitted_this_tick_acct`` joins the reservation, buffered like the
+    candidate: see :func:`_check_gross_cap` for why (#1734 review F3).
 
     ``reserved_resting`` folds the committed-working entry gross from the
     journal via the PR-0 ``_committed_working_gross_acct`` fold because the
@@ -667,24 +721,31 @@ def _check_cash_floor(
         # Fail CLOSED independent of the gross cap running first: a direct or
         # future caller outside the _place_pick ordering must never silently
         # under-reserve on a watching record it cannot value.
-        return (
-            f"cash floor: {ticker} refused — {unvaluable} entry-trail record(s) could not "
+        return GateVerdict(
+            GATE_CASH_FLOOR,
+            VERDICT_STATE,
+            f"cash floor: {ticker} blocked — {unvaluable} entry-trail record(s) could not "
             "be valued (malformed or missing watch_open); the watching reservation "
-            "cannot be valued, failing closed"
+            "cannot be valued, failing closed",
         )
     reserved_resting += watching_acct
+    reserved_resting += admitted_this_tick_acct * (1.0 + _CASH_FLOOR_BUFFER_PCT / 100.0)
 
     available = getattr(account, "margin_available", None)
     if available is None:
-        return (
-            f"cash floor: {ticker} refused — account margin_available is None, the "
-            "real balance cannot be read; failing closed"
+        return GateVerdict(
+            GATE_CASH_FLOOR,
+            VERDICT_STATE,
+            f"cash floor: {ticker} blocked — account margin_available is None, the "
+            "real balance cannot be read; failing closed",
         )
     if candidate_buffered + reserved_resting <= available:
         return None
-    return (
+    return GateVerdict(
+        GATE_CASH_FLOOR,
+        VERDICT_CAPITAL,
         f"cash floor: {ticker} needs {candidate_buffered:,.2f} {account.currency} "
         f"(incl. {_CASH_FLOOR_BUFFER_PCT:g}% buffer) + {reserved_resting:,.2f} already "
         f"reserved by resting entries, but only {available:,.2f} {account.currency} is "
-        "available — deposit and re-arm"
+        "available — waits for capital",
     )

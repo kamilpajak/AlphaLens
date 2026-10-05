@@ -1110,6 +1110,40 @@ class ReportFactsReachAnUnownedExitsPick(_TradesCase):
         self.assertIn("booking_type_unmapped", _codes(record))
 
 
+class SyntheticExpiredPick(_TradesCase):
+    """#1734: a pick still unplaced when its window ended carries the daemon's
+    ``expired`` line. Its record says so, with the line's own time and reason,
+    and its never-filled reason is ``expired`` — the same word the record uses
+    when every tier's own window ran out. Without a mapping it would read
+    ``pending``, the one thing it can no longer be."""
+
+    def test_an_expired_pick_reads_expired(self) -> None:
+        install_journals(
+            self.home,
+            extra={
+                "picks": [
+                    {
+                        "ticker": "BE",
+                        "date": "2026-09-30",
+                        "status": "expired",
+                        "expired_ts": "2026-10-09T20:00:40+00:00",
+                        "window_end": "2026-10-09T20:00:00+00:00",
+                        "reason": "waiting for capital: cash floor",
+                    }
+                ]
+            },
+        )
+        for mode, broker in (("broker", "default"), ("offline", None)):
+            with self.subTest(mode=mode):
+                record = trade(self.build(broker), "BE:2026-09-30")
+                self.assertEqual(record["pick_status"], "expired")
+                self.assertEqual(record["pick_status_reason"], "waiting for capital: cash floor")
+                self.assertEqual(value(record["pick_status_at"]), "2026-10-09T20:00:40.000Z")
+                self.assertEqual(
+                    (record["state"], record["state_reason"]), ("never_filled", "expired")
+                )
+
+
 class PublishedVocabularies(unittest.TestCase):
     def test_every_alert_reason_has_a_row(self) -> None:
         self.assertEqual(

@@ -493,6 +493,29 @@ class LegalDocumentShapesTest(unittest.TestCase):
         """
         self.assertIsNone(validate_intent(_intent(order_ttl_days=0)))
 
+    def test_the_largest_order_ttl_is_legal(self) -> None:
+        from broker_contract.constants import MAX_ORDER_TTL_DAYS
+
+        self.assertIsNone(validate_intent(_intent(order_ttl_days=MAX_ORDER_TTL_DAYS)))
+
+
+class OrderTtlRangeTest(unittest.TestCase):
+    """#1734: the TTL counts the sessions an armed pick may wait and a placed
+    entry may rest, from its trade date. A count the calendar cannot walk —
+    negative, or beyond the calendar — would leave the pick with no window."""
+
+    def test_a_negative_order_ttl_refuses(self) -> None:
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(order_ttl_days=-1))
+        self.assertEqual(_reason_of(ctx.exception), "order_ttl_out_of_range")
+
+    def test_an_order_ttl_beyond_the_bound_refuses(self) -> None:
+        from broker_contract.constants import MAX_ORDER_TTL_DAYS
+
+        with self.assertRaises(IntentInvalidError) as ctx:
+            validate_intent(_intent(order_ttl_days=MAX_ORDER_TTL_DAYS + 1))
+        self.assertEqual(_reason_of(ctx.exception), "order_ttl_out_of_range")
+
 
 class RoundTripTest(unittest.TestCase):
     def test_a_validated_intent_survives_encode_decode_and_validates_again(self) -> None:

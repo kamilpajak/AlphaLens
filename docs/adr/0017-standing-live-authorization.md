@@ -121,7 +121,9 @@ true now.
   from closed pairs; losses on open positions never trigger it, the same as
   before.
 - **What the count still did and money does not.** A pick that does not fit
-  is refused terminally by the gross cap or the cash floor, so it must be
-  re-armed by hand; it is not held until capital frees. The number of
+  waits for capital (#1734, 2026-10-05): the gross cap and the cash floor hold
+  it armed and the drain places it as soon as it fits, in armed order, until
+  its validity window (`order_ttl_days` sessions from its trade date) ends and
+  it expires. The number of
   positions, and so the number of instruments on the price stream, is now
   bounded only by capital divided by the size per pick.

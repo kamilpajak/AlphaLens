@@ -871,6 +871,24 @@ class ReplayExclusions(_TradesCase):
             with self.subTest(pick=key):
                 self.assertEqual(set(trade(report, key)["replay_exclusions"]), expected)
 
+    def test_a_pick_first_placed_after_its_day1_close_is_not_comparable(self) -> None:
+        # #1734: a pick that waited for capital is placed late. The replay
+        # walks the plan from day 1, so it would fill tiers on days the keeper
+        # had no order resting. VST is a manual pick: day 1 is 2026-09-21 and
+        # its close 20:00 UTC. Measured on the LIVE journals: every pick there
+        # was first placed on its day 1, so the rule excludes none of them.
+        for ts, late in (("2026-09-21T19:59:59+00:00", False), ("2026-09-22T14:00:00+00:00", True)):
+            with self.subTest(first_submission=ts):
+
+                def _edit(journal: str, record: dict[str, Any], _ts: str = ts) -> dict[str, Any]:
+                    if journal == "submissions" and record.get("ticker") == "VST":
+                        return {**record, "ts": _ts}
+                    return record
+
+                install_journals(self.home, edit=_edit)
+                exclusions = trade(self.build(), VST)["replay_exclusions"]
+                self.assertEqual("placed_late" in exclusions, late, exclusions)
+
     def test_offline_output_is_never_replay_comparable(self) -> None:
         record = trade(self.build(None, pick=VST), VST)
         self.assertEqual(record["replay_exclusions"], ["offline"])

@@ -20,6 +20,7 @@ from tempfile import TemporaryDirectory
 from alphalens_pipeline.brokers.automanager.picks import (
     STATUS_ARMED,
     STATUS_DISARMED,
+    STATUS_EXPIRED,
     STATUS_REFUSED,
     arm_pick,
     generation_of,
@@ -27,6 +28,7 @@ from alphalens_pipeline.brokers.automanager.picks import (
     iter_picks,
     keys_with_any_submission,
     mark_disarmed,
+    mark_expired,
     mark_refused,
     next_generation,
     pick_key,
@@ -129,6 +131,63 @@ class MarkRefusedTest(unittest.TestCase):
         nested = Path(self._tmp.name) / "broker_orders" / "picks.jsonl"
         mark_refused("KO", dt.date(2026, 7, 29), "cap", path=nested)
         self.assertTrue(nested.exists())
+
+
+class MarkExpiredTest(unittest.TestCase):
+    """#1734: the daemon's terminal for a pick still unplaced when its window ends."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "picks.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_mark_expired_appends_a_terminal_line_naming_the_window(self) -> None:
+        arm_pick(_intent("ko", "2026-09-30"), path=self.path)
+        window_end = dt.datetime(2026, 10, 9, 20, 0, tzinfo=dt.UTC)
+        mark_expired(
+            "ko",
+            dt.date(2026, 9, 30),
+            window_end=window_end,
+            reason="waiting: gross cap",
+            path=self.path,
+        )
+        lines = self.path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 2, "append-only: the armed line must stay")
+        record = json.loads(lines[1])
+        self.assertEqual(record["ticker"], "KO")
+        self.assertEqual(record["date"], "2026-09-30")
+        self.assertEqual(record["status"], STATUS_EXPIRED)
+        self.assertEqual(record["window_end"], "2026-10-09T20:00:00+00:00")
+        self.assertEqual(record["reason"], "waiting: gross cap")
+        self.assertIsNotNone(dt.datetime.fromisoformat(record["expired_ts"]).tzinfo)
+        self.assertNotIn("generation", record)
+
+    def test_an_expired_pick_is_never_yielded_to_the_drain(self) -> None:
+        arm_pick(_intent("KO", "2026-09-30"), path=self.path)
+        arm_pick(_intent("MU", "2026-09-30"), path=self.path)
+        mark_expired(
+            "KO",
+            dt.date(2026, 9, 30),
+            window_end=dt.datetime(2026, 10, 9, 20, 0, tzinfo=dt.UTC),
+            reason="unplaced at window end",
+            path=self.path,
+        )
+        self.assertEqual([i.instrument.ticker for i in iter_picks(path=self.path)], ["MU"])
+
+    def test_the_generation_is_carried_after_a_re_arm(self) -> None:
+        arm_pick(_intent("KO", "2026-09-30", generation=2), path=self.path)
+        mark_expired(
+            "KO",
+            dt.date(2026, 9, 30),
+            window_end=dt.datetime(2026, 10, 9, 20, 0, tzinfo=dt.UTC),
+            reason="unplaced at window end",
+            generation=2,
+            path=self.path,
+        )
+        (record,) = read_pick_fold(path=self.path).records
+        self.assertEqual((record.status, record.generation), (STATUS_EXPIRED, 2))
 
 
 class MarkDisarmedTest(unittest.TestCase):

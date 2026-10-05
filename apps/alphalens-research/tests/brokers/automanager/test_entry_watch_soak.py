@@ -24,9 +24,9 @@ owns:
               CARRIED and the open-check armed, TTL ``window_end`` UNCHANGED;
 - (e) EXPIRY — a later tier crosses its ORIGINAL ``window_end`` and terminates;
 - (f) SUSPEND — a G9 deep decline suspends a tier AND cancels its resting order;
-- (g) GROSS-CAP — a fresh pick is REFUSED (``picks.mark_refused``) purely because
-              the accumulated watching reservations from prior transitions push
-              it over the cap.
+- (g) GROSS-CAP — a fresh pick WAITS for capital (#1734: no ``mark_refused``,
+              one ``pick_waits.jsonl`` line) purely because the accumulated
+              watching reservations from prior transitions push it over the cap.
 
 The ONE non-negotiable invariant, asserted after EVERY tick:
 ``watching_virtual_gross_acct(read_entry_trail_fold())`` equals the independent
@@ -49,6 +49,7 @@ from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails
 from broker_contract.contract import OrderStatus
 
+from tests.brokers.automanager.drain_clock import hold_drain_clock
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 
 # Shared hermetic fixtures (task-mandated reuse — do not reinvent).
@@ -65,6 +66,12 @@ from tests.brokers.automanager.test_entry_watch_wiring import (
 )
 
 _ENV = entry_trails.ENTRY_TRAIL_BPS_ENV
+
+
+def setUpModule() -> None:
+    # #1734: these tests are about placement mechanics; hold the drain clock
+    # inside every fixture pick's validity window (see drain_clock.py).
+    hold_drain_clock()
 
 
 def _plan_l(*tiers: tuple[int, float, int]):
@@ -102,7 +109,11 @@ def _mk_pick(ticker: str, date: str, plan: Any, mic: str = "XNYS") -> Any:
     """An armed intent carrying its sized plan on the spec (the ``compute_setup_plan``
     stub reads ``spec.soak_plan``, so each pick sizes to its OWN plan)."""
     size = type("Size", (), {"notional_acct": 1000.0, "currency": "USD"})()
-    spec = type("Spec", (), {"entry_tiers": ("t",), "soak_plan": plan, "size": size})()
+    spec = type(
+        "Spec",
+        (),
+        {"entry_tiers": ("t",), "soak_plan": plan, "size": size, "order_ttl_days": 0},
+    )()
     return type(
         "Intent",
         (),
@@ -304,24 +315,28 @@ class TestEntryWatchMultiSessionSoak(IsolatedHomeTestCase):
         self.assertEqual(fired[0]["realized_qty"], 500.0)
 
         # ============================================================= SESSION 3
-        # (g) GROSS-CAP refusal: a NEW pick drains while t1 + t2 (17_500) still
+        # (g) GROSS-CAP wait: a NEW pick drains while t1 + t2 (17_500) still
         # reserve. 25_000 candidate + 17_500 watching = 42_500 > 40_000 cap ->
-        # terminal refusal via picks.mark_refused. This is a consequence of the
-        # ACCUMULATED reservations left by the prior arm + fill, exactly memo G5.
+        # the pick WAITS (#1734): no terminal refusal, one wait line. This is a
+        # consequence of the ACCUMULATED reservations left by the prior arm +
+        # fill, exactly memo G5.
         self.picks[:] = [_mk_pick("NEWCO", self.today, newco_plan)]
         self._set_feed(price=100.0, low=None)
-        self._run_tick(tick="S3 gross-cap refusal", expected_reservation=17_500.0)
+        self._run_tick(tick="S3 gross-cap wait", expected_reservation=17_500.0)
         self.picks.clear()
 
-        self.assertEqual([r[0] for r in self.refused], ["NEWCO"], "the competitor was refused")
-        self.assertIn("gross cap", self.refused[0][2])
+        from alphalens_pipeline.brokers.automanager import pick_waits
+
+        self.assertEqual(self.refused, [], "a pick that does not fit is not refused")
+        (wait,) = pick_waits.read_waits().latest.values()
+        self.assertEqual((wait.record["ticker"], wait.gate), ("NEWCO", "gross_cap"))
         newco_opens = [
             ln
             for ln in _lines(self.path)
             if ln["kind"] == entry_trails.KIND_WATCH_OPEN and ln.get("ticker") == "NEWCO"
         ]
-        self.assertEqual(newco_opens, [], "a refused pick opens no watch")
-        self.assertEqual(len(self.broker.trailing_orders), 1, "the refusal placed nothing")
+        self.assertEqual(newco_opens, [], "a waiting pick opens no watch")
+        self.assertEqual(len(self.broker.trailing_orders), 1, "the wait placed nothing")
 
         # ============================================================= SESSION 4
         # (f) DEEP-DECLINE SUSPEND with a resting-order cancel. Seed tier-1 into

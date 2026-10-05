@@ -48,6 +48,12 @@ class _Intent:
     class meta:
         trade_date = "2026-09-01"
 
+    class spec:
+        order_ttl_days = 0
+
+    class instrument:
+        mic = "XNYS"
+
 
 class _Tier:
     def __init__(self, qty: float = 10.0, limit: float = 100.0, index: int = 0) -> None:

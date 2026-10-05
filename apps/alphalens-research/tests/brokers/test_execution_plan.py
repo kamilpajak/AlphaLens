@@ -14,10 +14,8 @@ import unittest
 import uuid
 
 from alphalens_pipeline.brokers.execution import (
-    _TTL_ZERO_SENTINEL_DAYS,
     decompose_setup_plan,
 )
-from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.contract import BracketOrderRequest, InstrumentRef
 from broker_contract.sizing import SetupPlan, TierPlan, TpTranchePlan
 
@@ -65,7 +63,7 @@ class TestLadderDecomposition(unittest.TestCase):
             tranches=(_tranche(0, 55.0), _tranche(1, 60.0), _tranche(2, 66.0)),
         )
 
-        brackets = decompose_setup_plan(plan, _instrument())
+        brackets = decompose_setup_plan(plan, _instrument(), entry_ttl_days=7)
 
         self.assertEqual(len(brackets), 3)
         for bracket, tier in zip(brackets, plan.entry_tiers, strict=True):
@@ -82,7 +80,7 @@ class TestLadderDecomposition(unittest.TestCase):
             disaster_stop=41.25,
         )
 
-        brackets = decompose_setup_plan(plan, _instrument())
+        brackets = decompose_setup_plan(plan, _instrument(), entry_ttl_days=7)
 
         # Same stop PRICE on every bracket; the Amount (qty) stays tier-sized
         # so aggregate stop coverage always equals filled quantity exactly.
@@ -95,7 +93,7 @@ class TestLadderDecomposition(unittest.TestCase):
             tranches=(_tranche(0, 55.0), _tranche(1, 60.0)),
         )
 
-        brackets = decompose_setup_plan(plan, _instrument())
+        brackets = decompose_setup_plan(plan, _instrument(), entry_ttl_days=7)
 
         # tiers > tranches: the deep tier reuses the LAST target (clamp).
         self.assertEqual([b.take_profit for b in brackets], [55.0, 60.0, 60.0])
@@ -106,14 +104,14 @@ class TestLadderDecomposition(unittest.TestCase):
             tranches=(_tranche(0, 55.0), _tranche(1, 60.0), _tranche(2, 66.0)),
         )
 
-        brackets = decompose_setup_plan(plan, _instrument())
+        brackets = decompose_setup_plan(plan, _instrument(), entry_ttl_days=7)
 
         self.assertEqual([b.take_profit for b in brackets], [55.0])
 
     def test_tp_none_when_no_tranches(self):
         plan = _plan(tiers=(_tier(0, 50.0, 10),), tranches=())
 
-        brackets = decompose_setup_plan(plan, _instrument())
+        brackets = decompose_setup_plan(plan, _instrument(), entry_ttl_days=7)
 
         self.assertEqual(len(brackets), 1)
         self.assertIsNone(brackets[0].take_profit)
@@ -126,7 +124,7 @@ class TestLadderDecomposition(unittest.TestCase):
         )
 
         with self.assertLogs("alphalens_pipeline.brokers.execution", level="INFO") as captured:
-            brackets = decompose_setup_plan(plan, _instrument())
+            brackets = decompose_setup_plan(plan, _instrument(), entry_ttl_days=7)
 
         self.assertEqual(len(brackets), 1)
         self.assertEqual(brackets[0].quantity, 6)
@@ -143,7 +141,7 @@ class TestLadderDecomposition(unittest.TestCase):
             tranches=(_tranche(0, 55.0), _tranche(1, 60.0)),
         )
 
-        brackets = decompose_setup_plan(plan, _instrument())
+        brackets = decompose_setup_plan(plan, _instrument(), entry_ttl_days=7)
 
         self.assertEqual([b.take_profit for b in brackets], [60.0])
 
@@ -156,7 +154,7 @@ class TestLadderDecomposition(unittest.TestCase):
             tranches=(_tranche(0, 55.0), _tranche(1, 60.0)),
         )
 
-        brackets = decompose_setup_plan(plan, _instrument())
+        brackets = decompose_setup_plan(plan, _instrument(), entry_ttl_days=7)
 
         self.assertEqual([b.tier_index for b in brackets], [1])
 
@@ -166,21 +164,34 @@ class TestLadderDecomposition(unittest.TestCase):
             tranches=(_tranche(0, 55.0),),
         )
 
-        brackets = decompose_setup_plan(plan, _instrument())
+        brackets = decompose_setup_plan(plan, _instrument(), entry_ttl_days=7)
 
         self.assertEqual([b.tier_index for b in brackets], [0, 1, 2])
 
-    def test_entry_ttl_passthrough_and_zero_sentinel_default(self):
-        explicit = decompose_setup_plan(
-            _plan(tiers=(_tier(0, 50.0, 10),), order_ttl_days=9), _instrument()
-        )
-        sentinel = decompose_setup_plan(
-            _plan(tiers=(_tier(0, 50.0, 10),), order_ttl_days=0), _instrument()
+    def test_entry_ttl_is_the_callers_count_never_the_plans(self):
+        # #1734: the caller passes what is LEFT of the pick's window, so the
+        # plan's order_ttl_days (the whole window) must not be read here: a
+        # pick placed on day 5 of 7 would otherwise rest for 7 more sessions.
+        brackets = decompose_setup_plan(
+            _plan(tiers=(_tier(0, 50.0, 10),), order_ttl_days=9), _instrument(), entry_ttl_days=2
         )
 
-        self.assertEqual(explicit[0].entry_ttl_days, 9)
-        self.assertEqual(sentinel[0].entry_ttl_days, _TTL_ZERO_SENTINEL_DAYS)
-        self.assertEqual(_TTL_ZERO_SENTINEL_DAYS, DEFAULT_ORDER_TTL_DAYS)
+        self.assertEqual(brackets[0].entry_ttl_days, 2)
+
+    def test_a_zero_count_means_today_not_the_default(self):
+        # The window's last session: the GTD must be today. The removed 0 -> 7
+        # sentinel would have handed a late placement a fresh window.
+        brackets = decompose_setup_plan(
+            _plan(tiers=(_tier(0, 50.0, 10),), order_ttl_days=0), _instrument(), entry_ttl_days=0
+        )
+
+        self.assertEqual(brackets[0].entry_ttl_days, 0)
+
+    def test_a_negative_count_is_refused(self):
+        with self.assertRaises(ValueError):
+            decompose_setup_plan(
+                _plan(tiers=(_tier(0, 50.0, 10),)), _instrument(), entry_ttl_days=-1
+            )
 
     def test_client_request_id_unique_uuid4_per_bracket(self):
         plan = _plan(
@@ -188,7 +199,7 @@ class TestLadderDecomposition(unittest.TestCase):
             tranches=(_tranche(0, 55.0),),
         )
 
-        brackets = decompose_setup_plan(plan, _instrument())
+        brackets = decompose_setup_plan(plan, _instrument(), entry_ttl_days=7)
 
         ids = [b.client_request_id for b in brackets]
         self.assertEqual(len(set(ids)), 3, "each bracket gets a FRESH uuid4")
@@ -199,7 +210,7 @@ class TestLadderDecomposition(unittest.TestCase):
     def test_sell_side_mirrors(self):
         plan = _plan(tiers=(_tier(0, 50.0, 10),), tranches=(_tranche(0, 55.0),))
 
-        brackets = decompose_setup_plan(plan, _instrument(), side="SELL")
+        brackets = decompose_setup_plan(plan, _instrument(), side="SELL", entry_ttl_days=7)
 
         self.assertEqual(brackets[0].side, "SELL")
         # Geometry passes through untouched — the broker mirrors the exit

@@ -39,6 +39,7 @@ from broker_contract.contract import OrderRejectedError
 from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import SetupPlan, TierPlan
 
+from tests.brokers.automanager.drain_clock import hold_drain_clock
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 from tests.incident_1112_fixture import (
     ETSY_E3_LIMIT,
@@ -57,6 +58,12 @@ _REAL_SAFETY_CHECK = _safety.check
 # --------------------------------------------------------------------------
 # Fixtures
 # --------------------------------------------------------------------------
+
+
+def setUpModule() -> None:
+    # #1734: these tests are about placement mechanics; hold the drain clock
+    # inside every fixture pick's validity window (see drain_clock.py).
+    hold_drain_clock()
 
 
 def _pick(
@@ -86,6 +93,8 @@ def _pick(
                 {
                     "entry_tiers": ("t",),
                     "size": type("Size", (), {"notional_acct": 1000.0, "currency": "USD"})(),
+                    # TradeSpec's field: 0 = the default window (#1734).
+                    "order_ttl_days": 0,
                 },
             )(),
             "exit": None,
@@ -1112,6 +1121,7 @@ class TestGeometryActiveWithTheTrailDisabled(IsolatedHomeTestCase):
                     type("T", (), {"limit_price": self._TIER_LIMIT, "alloc_pct": 100.0})(),
                 ),
                 "size": type("Size", (), {"notional_acct": 1000.0, "currency": "USD"})(),
+                "order_ttl_days": 0,
             },
         )()
         pick.exit = type(
@@ -1817,6 +1827,7 @@ def _blend_spec() -> Any:
         {
             "entry_tiers": (tier,),
             "size": type("Size", (), {"notional_acct": 1000.0, "currency": "USD"})(),
+            "order_ttl_days": 0,
         },
     )()
 
@@ -2477,10 +2488,13 @@ class TestCapitalIsTheOnlyAdmissionLimit(IsolatedHomeTestCase):
         ]
         self.assertEqual(len(opens_for_ko), 1)
 
-    def test_a_pick_beyond_free_capital_is_refused_terminally_by_the_cash_floor(self) -> None:
-        # Guard, green before and after #1732: the money rails still bind. The
-        # candidate needs 1000 x 1.04 = 1040 but only 1000 is available, so the
-        # cash floor retires the pick (it is not held until capital frees).
+    def test_a_pick_beyond_free_capital_waits_on_the_cash_floor(self) -> None:
+        # The money rails still bind. The candidate needs 1000 x 1.04 = 1040
+        # but only 1000 is available, so nothing is placed — and since #1734
+        # the pick is held until capital frees (or its window ends), not
+        # retired.
+        from alphalens_pipeline.brokers.automanager import pick_waits
+
         _journal(self)
         broker = _FundedBroker([_live_long(42)], margin_available=1_000.0)
         placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
@@ -2491,15 +2505,18 @@ class TestCapitalIsTheOnlyAdmissionLimit(IsolatedHomeTestCase):
         }
         with mock.patch.dict("os.environ", env, clear=True):
             self.assertFalse(placer(_pick()))
-        self.assertEqual(len(refused), 1)
-        self.assertIn("cash floor", refused[0][2])
+        self.assertEqual(refused, [])
+        (wait,) = pick_waits.read_waits().latest.values()
+        self.assertEqual(wait.gate, "cash_floor")
         self.assertEqual(broker.brackets, [])
         self.assertEqual(submissions, [])
 
     def test_open_watches_still_reserve_cash_against_a_new_pick(self) -> None:
         # Guard, green before and after #1732: with the watch count gone, an
         # open watch still reserves its tier value (5.0 x 10 = 50). 1040 + 50
-        # exceeds the 1060 available, so the cash floor refuses the pick.
+        # exceeds the 1060 available, so the cash floor holds the pick (#1734).
+        from alphalens_pipeline.brokers.automanager import pick_waits
+
         path = _journal(self)
         _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0")
         broker = _FundedBroker([], margin_available=1_060.0)
@@ -2512,8 +2529,8 @@ class TestCapitalIsTheOnlyAdmissionLimit(IsolatedHomeTestCase):
         }
         with mock.patch.dict("os.environ", env, clear=True):
             self.assertFalse(placer(_pick()))
-        self.assertEqual(len(refused), 1)
-        self.assertIn("cash floor", refused[0][2])
+        self.assertEqual(refused, [])
+        self.assertIn("cash floor", pick_waits.read_waits().latest["KO:2026-07-20"].message)
         self.assertEqual(submissions, [])
         opens_for_ko = [
             ln

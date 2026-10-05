@@ -88,7 +88,7 @@ import os
 import re
 import sys
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -1614,7 +1614,7 @@ def _refusal_to_exit(exc: Any) -> typer.Exit:
 
     if isinstance(exc, intent_door.PickAlreadyArmedError):
         return _fail_with("pick_already_armed", exc.message, details=exc.details)
-    if isinstance(exc, intent_door.GenerationSpentError | intent_door.AlreadyPlacedError):
+    if isinstance(exc, intent_door.NOT_WRITABLE):
         return _fail_with(
             "pick_not_writable", exc.message, details={"reason": exc.reason, **exc.details}
         )
@@ -1760,7 +1760,9 @@ def arm_command(
       venue       a MIC this deployment does not trade
       identity    `generation` a real integer >= 1, `trade_date` a date
       the key     one armed, unplaced pick per ticker and venue; a stated
-                  generation that is spent or already placed is refused
+                  generation that is spent or already placed is refused, and so
+                  is a pick whose validity window (order_ttl_days sessions from
+                  trade_date) has already ended (#1734)
       decode      the codec
       nothing lost  every key you sent comes back after decode+re-render; the
                   decoder otherwise DROPS what it does not model, and a typo'd
@@ -1973,16 +1975,22 @@ def disarm_command(
     typer.echo(f"disarmed {pick_key} (queue) + {watch_note} -> {picks_target.parent}")
 
 
-_PICKS_SCHEMA = "alphalens.broker.picks/v1"
+# v2 (#1734): WAITING split out of PENDING. A pick the capital gates hold every
+# tick read PENDING under v1, which promised a placement that was not coming.
+_PICKS_SCHEMA = "alphalens.broker.picks/v2"
 
-# The states the view resolves. Only the first four are reachable from a
-# healthy journal; UNREADABLE exists because an armed line the decoder rejects
-# is skipped by the drain FOREVER and today announces itself only on a DEBUG
-# logger — calling it PENDING would promise a placement that can never happen.
+# The states the view resolves. UNREADABLE exists because an armed line the
+# decoder rejects is skipped by the drain FOREVER and today announces itself
+# only on a DEBUG logger — calling it PENDING would promise a placement that
+# can never happen. WAITING is an armed, unplaced pick whose current wait line
+# says the gross cap or the cash floor holds it (#1734); EXPIRED is the
+# terminal the drain writes when such a pick (or any unplaced one) reaches the
+# end of its validity window.
 _PICK_STATE_PENDING = "PENDING"
+_PICK_STATE_WAITING = "WAITING"
 _PICK_STATE_PLACED = "PLACED"
 _PICK_STATE_UNREADABLE = "UNREADABLE"
-_PICK_STATES = ("pending", "placed", "refused", "disarmed", "unreadable")
+_PICK_STATES = ("pending", "waiting", "placed", "refused", "disarmed", "expired", "unreadable")
 _PICK_STATE_FILTER_ALL = "all"
 
 # Generous rather than small: the queue is append-only and never pruned, but it
@@ -1991,8 +1999,17 @@ _PICK_STATE_FILTER_ALL = "all"
 _PICKS_DEFAULT_LIMIT = 200
 
 
+def _reading_now() -> dt.datetime:
+    """The clock a read-only view judges windows by — a seam a test can hold."""
+    return dt.datetime.now(dt.UTC)
+
+
 def _pick_state(
-    record: PickRecord, *, submitted: set[tuple[str, str]], decodable: set[tuple[str, str]]
+    record: PickRecord,
+    *,
+    submitted: set[tuple[str, str]],
+    decodable: Collection[tuple[str, str]],
+    waiting: Collection[tuple[str, str]] = (),
 ) -> str:
     """Resolve one folded pick to a state, mirroring the drain's decision.
 
@@ -2013,11 +2030,18 @@ def _pick_state(
         return _PICK_STATE_PLACED
     if key not in decodable:
         return _PICK_STATE_UNREADABLE
+    if key in waiting:
+        return _PICK_STATE_WAITING
     return _PICK_STATE_PENDING
 
 
-def _pick_detail(record: PickRecord) -> str | None:
-    """The refusal reason or disarm note, when the line carries one."""
+def _pick_detail(record: PickRecord, wait: Any = None) -> str | None:
+    """The refusal or expiry reason, the disarm note, or why a pick waits.
+
+    A wait message carries numbers as of the moment it was journaled, which
+    move every tick, so the detail says how old they are."""
+    if wait is not None and record.status == "armed":
+        return f"{wait.message} (as of {wait.ts}; waiting since {wait.since})"
     for field in ("reason", "note"):
         value = record.record.get(field)
         if isinstance(value, str) and value.strip():
@@ -2041,6 +2065,8 @@ def _render_picks_human(result: dict[str, Any]) -> None:
         # The date column carries the identity token (`<date>-g<N>` for a
         # same-day re-arm, #1371) so two generations of one ticker read apart.
         token = identity_token(row["trade_date"], row["generation"])
+        if row.get("overdue"):
+            detail = f"  OVERDUE: its window ended {row['window_end']}{detail}"
         line = f"{row['ticker']:<{width}}  {token}  {row['state']:<10}{detail}"
         typer.echo(line.rstrip())
     counts = result["counts"]
@@ -2060,7 +2086,8 @@ def picks_command(
     state: str = typer.Option(
         _PICK_STATE_FILTER_ALL,
         "--state",
-        help="Filter rows: all|pending|placed|refused|disarmed|unreadable. Counts stay global.",
+        help="Filter rows: all|pending|waiting|placed|refused|disarmed|expired|unreadable. "
+        "Counts stay global.",
     ),
     limit: int = typer.Option(
         _PICKS_DEFAULT_LIMIT, "--limit", help="Maximum rows to render; truncation is announced."
@@ -2078,16 +2105,24 @@ def picks_command(
     This command performs that same join, through the same
     ``picks.submitted_pick_keys`` the drain calls, and resolves one state per
     pick: PENDING (armed, decodable, not yet submitted — the drain will place
-    it), PLACED (already joined to a submission), REFUSED / DISARMED (terminal,
-    with the reason or note), UNREADABLE (armed but the intent does not decode,
-    so the drain skips it forever — re-arm is the way back).
+    it), WAITING (armed and not placed because free capital is short — the
+    gross cap or the cash floor — with why, as of when; #1734), PLACED
+    (already joined to a submission), REFUSED / DISARMED / EXPIRED (terminal,
+    with the reason or note; EXPIRED = still unplaced when its validity window
+    ended), UNREADABLE (armed but the intent does not decode, so the drain
+    skips it forever — re-arm is the way back).
+
+    An armed, unplaced row carries ``window_end`` (``order_ttl_days`` sessions
+    after its trade date) and ``overdue``: only the daemon's drain expires a
+    pick, so an overdue row means the drain is not running (KILL, a dead
+    chain, a stopped daemon).
 
     No broker, no auth, no mutation; safe while the daemon runs. Exit 0 for any
     successful read, including a missing journal (an empty queue is an honest
     state, not an error).
     """
+    from alphalens_pipeline.brokers.automanager import pick_waits, pick_window, state_paths
     from alphalens_pipeline.brokers.automanager import picks as picks_mod
-    from alphalens_pipeline.brokers.automanager import state_paths
     from alphalens_pipeline.brokers.submission_log import iter_submission_records
 
     resolved_format = _resolve_format(output_format)
@@ -2104,6 +2139,7 @@ def picks_command(
         resolved_env = env if env is not None else state_paths.broker_environment()
         picks_target = state_paths.picks_path(env=resolved_env)
         submissions_target = state_paths.submissions_path(env=resolved_env)
+        waits_target = state_paths.pick_waits_path(env=resolved_env)
     except ValueError as exc:
         raise _fail(str(exc)) from exc
 
@@ -2113,19 +2149,46 @@ def picks_command(
     submitted = picks_mod.submitted_pick_keys(iter_submission_records(submissions_target))
     # The REAL decoder decides decodability — a second one here would be free to
     # disagree with the drain about which picks it can actually place.
-    decodable = {picks_mod.pick_key(intent) for intent in picks_mod.iter_picks(path=picks_target)}
+    decoded = {
+        picks_mod.pick_key(intent): intent for intent in picks_mod.iter_picks(path=picks_target)
+    }
+    waits = pick_waits.open_waits(fold.records, submitted, pick_waits.read_waits(path=waits_target))
+    now = _reading_now()
 
-    rows = [
-        {
-            "ticker": record.ticker,
-            "trade_date": record.trade_date.isoformat(),
-            "generation": record.generation,
-            "state": _pick_state(record, submitted=submitted, decodable=decodable),
-            "armed_ts": record.record.get("armed_ts"),
-            "detail": _pick_detail(record),
-        }
-        for record in fold.records
-    ]
+    def _window_end(key: tuple[str, str], record: PickRecord) -> str | None:
+        intent = decoded.get(key)
+        if intent is None or record.status != picks_mod.STATUS_ARMED or key in submitted:
+            return None
+        try:
+            return pick_window.window_of(intent).window_end.isoformat()
+        except pick_window.PickWindowError:
+            return None
+
+    rows = []
+    for record in fold.records:
+        key = (record.ticker, record.token)
+        wait = waits.get(key)
+        window_end = _window_end(key, record)
+        rows.append(
+            {
+                "ticker": record.ticker,
+                "trade_date": record.trade_date.isoformat(),
+                "generation": record.generation,
+                "state": _pick_state(record, submitted=submitted, decodable=decoded, waiting=waits),
+                "armed_ts": record.record.get("armed_ts"),
+                "detail": _pick_detail(record, wait),
+                "wait": None
+                if wait is None
+                else {
+                    "gate": wait.gate,
+                    "message": wait.message,
+                    "since": wait.since,
+                    "as_of": wait.ts,
+                },
+                "window_end": window_end,
+                "overdue": pick_waits.is_overdue(window_end, now),
+            }
+        )
 
     # Counts are computed over EVERY pick, before --state and --limit narrow the
     # rows: a summary that counted only what it rendered would lie by omission.
@@ -2159,6 +2222,7 @@ def picks_command(
         resolved_env,
         picks_journal=str(picks_target),
         submissions_journal=str(submissions_target),
+        waits_journal=str(waits_target),
         counts=counts,
         malformed=fold.malformed,
         truncated=truncated,
@@ -2521,8 +2585,28 @@ def _render_status_health(health: Any, skewed: list[str]) -> None:
     if health.last_refusal:
         age = _age_phrase(health.last_refusal_age_s)
         typer.echo(f"refused   {age}{health.last_refusal}")
+    if health.last_expiry:
+        age = _age_phrase(health.last_expiry_age_s)
+        typer.echo(f"expired   {age}{health.last_expiry}")
     if skewed:
         typer.echo(f"WARN      journal changed while reading the broker: {', '.join(skewed)}")
+
+
+def _render_status_waiting(rows: list[dict[str, Any]]) -> None:
+    """#1734: one line per pick the capital gates hold — why, and until when."""
+    for row in rows:
+        token = f"{row['ticker']} {row['trade_date']}"
+        if row.get("generation", 1) != 1:
+            token += f" g{row['generation']}"
+        until = (
+            f"OVERDUE: its window ended {row['window_end']} (the drain is not running)"
+            if row["overdue"]
+            else f"until {row['window_end']}"
+        )
+        typer.echo(
+            f"waiting   {token}  {row['message']}  (as of {row['as_of']}; "
+            f"since {row['since']}; {until})"
+        )
 
 
 def _render_status_money(snapshot: Any) -> None:
@@ -2590,6 +2674,7 @@ def _render_status_human(snapshot: Any, *, limits_source: str) -> None:
     """
     typer.echo(f"env  {snapshot.env}   limits from {limits_source}")
     _render_status_health(snapshot.health, snapshot.skewed)
+    _render_status_waiting(snapshot.waiting_picks)
     _render_status_money(snapshot)
     typer.echo("")
     if snapshot.watches:
@@ -2626,6 +2711,7 @@ def _status_payload(snapshot: Any, *, limits_source: str, applied: EnvOption) ->
         watches=snapshot.watches,
         health=asdict(snapshot.health),
         skewed=snapshot.skewed,
+        waiting_picks=snapshot.waiting_picks,
     )
 
 

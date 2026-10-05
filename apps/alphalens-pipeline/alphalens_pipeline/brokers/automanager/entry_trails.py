@@ -30,8 +30,8 @@ records valued at tier LIMIT, conservative-high) as their watching term.
 
 **Minimum-frame arithmetic** (memo §10 M2, intentional-conservative): the
 limit-valued reservation of ALL tiers from watch-open equals the full-pick
-gross at limits, so on a small declared frame the gross cap may refuse a
-second watching pick BEFORE any tier fires. That over-reservation is by
+gross at limits, so on a small declared frame the gross cap may hold a
+second watching pick (it waits for capital, #1734) BEFORE any tier fires. That over-reservation is by
 design — a watch that cannot be funded at its limits must not open.
 """
 

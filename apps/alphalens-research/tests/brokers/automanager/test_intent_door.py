@@ -297,6 +297,42 @@ class AStatedGenerationFollowsTheWritabilityRules(unittest.TestCase):
         self.assertIsNone(completion.replaces)
 
 
+class APickWhoseWindowHasEndedIsNotArmed(unittest.TestCase):
+    """#1734: an armed pick has order_ttl_days sessions from its trade date.
+    A document whose window is already over would arm "successfully" and be
+    expired by the daemon on its next tick — a copied line or a re-arm under
+    the next generation keeps its old trade_date."""
+
+    # 2026-09-16 + 7 XNYS sessions = 2026-09-25, close 20:00 UTC.
+    def test_at_the_window_end_the_key_is_not_writable(self) -> None:
+        with self.assertRaises(intent_door.WindowEndedError) as ctx:
+            _complete(
+                _author(trade_date="2026-09-16"),
+                now=dt.datetime(2026, 9, 25, 20, 0, tzinfo=dt.UTC),
+            )
+        self.assertEqual(ctx.exception.details["window_end"], "2026-09-25T20:00:00+00:00")
+
+    def test_one_second_earlier_it_is_armed(self) -> None:
+        completion = _complete(
+            _author(trade_date="2026-09-16"),
+            now=dt.datetime(2026, 9, 25, 19, 59, 59, tzinfo=dt.UTC),
+        )
+        self.assertEqual(completion.trade_date, dt.date(2026, 9, 16))
+
+    def test_the_document_s_own_ttl_counts(self) -> None:
+        document = _author(trade_date="2026-09-16")
+        document["spec"]["order_ttl_days"] = 3  # ends 2026-09-21 close
+        with self.assertRaises(intent_door.WindowEndedError):
+            _complete(document, now=dt.datetime(2026, 9, 22, 14, 0, tzinfo=dt.UTC))
+
+    def test_a_ttl_out_of_range_is_left_to_validate_intent(self) -> None:
+        # The door must not raise a calendar error for it: `validate_intent`
+        # refuses it with its own reason, after the key.
+        document = _author(trade_date="2026-09-16")
+        document["spec"]["order_ttl_days"] = -1
+        self.assertEqual(_complete(document).trade_date, dt.date(2026, 9, 16))
+
+
 class RMultiplesAreDerivedAfterValidation(unittest.TestCase):
     def test_a_hand_worked_two_tier_example(self) -> None:
         """Blend = 0.75 * 60 + 0.25 * 58 = 59.5; 1R = 59.5 - 55 = 4.5;
@@ -322,6 +358,7 @@ class EveryReasonIsNamed(unittest.TestCase):
                 "trade_date_malformed",
                 "generation_spent",
                 "already_placed",
+                "window_ended",
             },
         )
 

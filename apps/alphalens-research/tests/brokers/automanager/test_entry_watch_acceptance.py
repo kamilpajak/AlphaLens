@@ -24,6 +24,7 @@ from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails
 from broker_contract.sizing import SetupPlan
 
+from tests.brokers.automanager.drain_clock import hold_drain_clock
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 
 # Shared hermetic fixtures live next to the T1c wiring tests.
@@ -41,6 +42,12 @@ from tests.brokers.automanager.test_entry_watch_wiring import (
 )
 
 _ENV = entry_trails.ENTRY_TRAIL_BPS_ENV
+
+
+def setUpModule() -> None:
+    # #1734: these tests are about placement mechanics; hold the drain clock
+    # inside every fixture pick's validity window (see drain_clock.py).
+    hold_drain_clock()
 
 
 def _plan_l(*tiers: tuple[int, float, int]):

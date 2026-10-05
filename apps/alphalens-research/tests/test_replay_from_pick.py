@@ -229,6 +229,26 @@ class TheRunConfigurationComesFromTheRecordNotFromMemoryTest(unittest.TestCase):
         )
         self.assertGreater(block["value"], self._config()["walk_start"]["value"])
 
+    def test_a_stated_zero_ttl_ends_where_the_daemon_ends_it(self) -> None:
+        """#1734: 0 is the document's "field absent" value. The daemon reads it
+        as the default window (`pick_window`), so a replay that walked zero
+        sessions would end the ladder on the trade date itself, seven sessions
+        before the keeper's entries stopped resting."""
+        import copy
+        import datetime as dt
+
+        from alphalens_pipeline.brokers.automanager.pick_window import pick_window
+
+        document = copy.deepcopy(self.vst)
+        document["spec"]["order_ttl_days"] = 0
+        trade_date = dt.date.fromisoformat(document["meta"]["trade_date"])
+        mic = document["instrument"]["mic"]
+        expected = pick_window(trade_date, 0, mic).window_end
+        self.assertEqual(
+            self._config(document)["entry_deadline"]["value"],
+            int(expected.timestamp() * 1000),
+        )
+
     def test_both_epochs_land_on_the_venue_s_real_utc_wall_clock(self) -> None:
         """The two epoch values are asserted by READING them back as a UTC wall
         clock, not by recomputing them the way the code computes them.

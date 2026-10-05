@@ -26,10 +26,10 @@ from alphalens_pipeline.brokers import execution
 from alphalens_pipeline.brokers.automanager import costs
 from alphalens_pipeline.brokers.automanager.costs import fee_card_for
 from alphalens_pipeline.brokers.automanager.entry_trails import fold_entry_trail_lines
+from alphalens_pipeline.brokers.automanager.pick_window import effective_ttl_days, pick_window
 from alphalens_pipeline.brokers.automanager.state_paths import entry_trails_path
 from alphalens_pipeline.market.calendar import (
     advance_trading_sessions,
-    session_close_utc,
     session_open_utc,
 )
 from broker_contract.trade_intent.codec import supplied_derived_paths
@@ -148,7 +148,9 @@ def run_configuration(
     # per the LEGACY(source_brief) entry).
     manual = meta.get("source") == _MANUAL_SOURCE
     day1 = advance_trading_sessions(trade_date, 0 if manual else 1, exchange=mic)
-    deadline = advance_trading_sessions(trade_date, ttl_days, exchange=mic)
+    # The daemon's own window (#1734): ttl_days sessions from trade_date, with
+    # a stated 0 read as the default, exactly as the keeper rested the entries.
+    window = pick_window(trade_date, ttl_days, mic)
     anchor_rule = (
         "source=manual counts trade_date itself as day 1"
         if manual
@@ -197,11 +199,12 @@ def run_configuration(
     return {
         "entry_deadline": {
             "kind": "order_ttl_sessions",
-            "value": _epoch_ms(session_close_utc(deadline, exchange=mic)),
+            "value": _epoch_ms(window.window_end),
             "unit": units.EPOCH_MS_UTC,
             "source": "spec.order_ttl_days",
             "formula": (
-                f"session_close_utc(advance_trading_sessions({trade_date}, {ttl_days}, {mic}))"
+                f"pick_window({trade_date}, {ttl_days}, {mic}).window_end "
+                f"(0 = {effective_ttl_days(0)} sessions)"
             ),
         },
         "walk_start": {
