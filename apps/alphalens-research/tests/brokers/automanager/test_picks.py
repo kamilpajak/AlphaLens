@@ -176,6 +176,31 @@ class MarkExpiredTest(unittest.TestCase):
         )
         self.assertEqual([i.instrument.ticker for i in iter_picks(path=self.path)], ["MU"])
 
+    def test_an_expired_line_that_carries_its_document_is_still_not_yielded(self) -> None:
+        # The test above passes through the "no intent" branch: mark_expired
+        # writes no document, so it cannot tell whether the STATUS filter works.
+        # An expired line that does carry one (a hand-edited journal, a future
+        # writer) must be skipped by its status alone.
+        from broker_contract.trade_intent.codec import intent_to_jsonable
+
+        intent = _intent("KO", "2026-09-30")
+        arm_pick(intent, path=self.path)
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "ticker": "KO",
+                        "date": "2026-09-30",
+                        "status": STATUS_EXPIRED,
+                        "window_end": "2026-10-09T20:00:00+00:00",
+                        "reason": "unplaced at window end",
+                        "intent": intent_to_jsonable(intent),
+                    }
+                )
+                + "\n"
+            )
+        self.assertEqual(list(iter_picks(path=self.path)), [])
+
     def test_the_generation_is_carried_after_a_re_arm(self) -> None:
         arm_pick(_intent("KO", "2026-09-30", generation=2), path=self.path)
         mark_expired(

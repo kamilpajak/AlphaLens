@@ -62,6 +62,30 @@ class PickWaitsJournalTest(unittest.TestCase):
             pick_waits.read_waits(path=self.path).latest["KO:2026-09-30"].since, first_ts
         )
 
+    def test_a_cleared_line_closes_the_wait(self) -> None:
+        pick_waits.append_wait(_wait(), path=self.path)
+        pick_waits.append_cleared("KO:2026-09-30", ticker="KO", path=self.path)
+        fold = pick_waits.read_waits(path=self.path)
+        self.assertEqual((fold.latest, fold.malformed), ({}, 0))
+
+    def test_a_closed_wait_is_still_known_to_have_been_announced(self) -> None:
+        # The daemon pages once per pick for its whole life, so a pick that
+        # waits again after a clear must not page again, even after a restart.
+        pick_waits.append_wait(_wait(), path=self.path)
+        pick_waits.append_cleared("KO:2026-09-30", ticker="KO", path=self.path)
+        self.assertIn("KO:2026-09-30", pick_waits.read_waits(path=self.path).announced)
+
+    def test_a_wait_after_a_clear_starts_a_new_since(self) -> None:
+        start = dt.datetime(2026, 9, 30, 15, 0, tzinfo=dt.UTC)
+        again = start + dt.timedelta(hours=2)
+        pick_waits.append_wait(_wait(), now=start, path=self.path)
+        pick_waits.append_cleared(
+            "KO:2026-09-30", ticker="KO", now=start + dt.timedelta(hours=1), path=self.path
+        )
+        pick_waits.append_wait(_wait(), now=again, path=self.path)
+        wait = pick_waits.read_waits(path=self.path).latest["KO:2026-09-30"]
+        self.assertEqual(wait.since, again.isoformat())
+
     def test_malformed_lines_are_counted_and_skipped(self) -> None:
         self.path.write_text(
             "not json\n" + json.dumps(["a"]) + "\n" + json.dumps({"gate": "gross_cap"}) + "\n\n",

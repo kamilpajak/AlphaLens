@@ -2177,7 +2177,8 @@ again every tick in `armed_ts` order (ordered first-fit — a later pick that fi
 is placed while an earlier, larger one keeps waiting), and places it as soon as
 it fits. The wait is journaled once in
 `~/.alphalens/broker_orders/<env>/pick_waits.jsonl` and paged once per pick
-(`capital-wait:<pick key>`; a restart does not page again). It is bounded by the
+(`capital-wait:<pick key>`; a restart does not page again). Once the gates pass,
+one clearing line closes the wait. It is bounded by the
 pick's validity window — `order_ttl_days` sessions of its venue counted from
 `trade_date`, the same window a placed entry rests in — and a pick still
 unplaced at its end gets one `expired` line in `picks.jsonl` and one page

@@ -6185,7 +6185,7 @@ def _place_pick(
     )
     if gate_outcome is not _GateOutcome.PASS:
         return False
-    capital_wait.clear_hold(pick_key)
+    capital_wait.clear_hold(pick_key, ticker=ticker, now=now)
     if tick_admissions is not None and pick_key not in entry_watch_capacity._open_watch_pick_keys(
         entry_trail_fold
     ):

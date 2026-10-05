@@ -52,6 +52,9 @@ _TRADE_DATE = "2026-09-30"
 _WINDOW_END = dt.datetime(2026, 10, 9, 20, 0, tzinfo=dt.UTC)
 _INSIDE = dt.datetime(2026, 9, 30, 15, 0, tzinfo=dt.UTC)
 _GROSS_5000 = {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}  # limit 5_000 of total_value 100_000
+# Inside the window, in the minute before 00:00 UTC where a classic placement
+# sits out one tick AFTER the money gates have run.
+_BEFORE_MIDNIGHT = dt.datetime(2026, 10, 6, 23, 59, 30, tzinfo=dt.UTC)
 
 
 def _doc(
@@ -312,6 +315,62 @@ class WaitForCapitalTest(_CapitalWaitCase):
         self.assertEqual(len(gross.alerts) + len(cash.alerts), 1)
         self.assertEqual(pick_waits.read_waits().latest[f"KO:{_TRADE_DATE}"].gate, "cash_floor")
 
+    def test_a_flip_of_the_binding_gate_inside_the_interval_writes_no_line(self) -> None:
+        env = {**_GROSS_5000, SIZING_EQUITY_MODE_ENV: "declared"}
+        rich = _RecordingBroker(on_account=lambda: _cash_acct(1e9))
+        poor = _RecordingBroker(on_account=lambda: _cash_acct(1_000.0))
+        with mock.patch.dict("os.environ", env, clear=True):
+            _Placer(self, rich).place(_doc(notional=6_000.0))
+            with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "1.0"}):
+                cash = _Placer(self, poor)
+                cash.now = _INSIDE + capital_wait.WAIT_LINE_MIN_INTERVAL - dt.timedelta(seconds=1)
+                cash.place(_doc(notional=6_000.0))
+        self.assertEqual(len(_lines(pick_waits)), 1)
+        self.assertEqual(pick_waits.read_waits().latest[f"KO:{_TRADE_DATE}"].gate, "gross_cap")
+
+    def test_a_wait_is_closed_once_when_the_gates_pass_but_the_pick_stays_unplaced(
+        self,
+    ) -> None:
+        # The gates pass a minute before 00:00 UTC, where a classic placement
+        # sits out one tick: the pick is still unplaced, but no longer for lack
+        # of capital, so `broker status` must stop saying it waits for capital.
+        broker = _RecordingBroker()
+        placer = _Placer(self, broker)
+        with mock.patch.dict("os.environ", _GROSS_5000, clear=True):
+            placer.place(_doc(notional=6_000.0))
+            placer.now = _BEFORE_MIDNIGHT
+            with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.1"}):
+                for _tick in range(2):
+                    self.assertFalse(placer.place(_doc(notional=6_000.0)))
+        self.assertEqual(broker.placed, [])
+        self.assertEqual(pick_waits.read_waits().latest, {})
+        self.assertEqual(len(_lines(pick_waits)), 2, "one wait line and ONE clearing line")
+
+    def test_a_pick_that_waits_again_after_a_clear_is_not_paged_again(self) -> None:
+        placer = _Placer(self, _RecordingBroker())
+        with mock.patch.dict("os.environ", _GROSS_5000, clear=True):
+            placer.place(_doc(notional=6_000.0))
+            placer.now = _BEFORE_MIDNIGHT
+            with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.1"}):
+                placer.place(_doc(notional=6_000.0))
+            placer.now = _BEFORE_MIDNIGHT + capital_wait.WAIT_LINE_MIN_INTERVAL
+            placer.place(_doc(notional=6_000.0))
+        self.assertIn(f"KO:{_TRADE_DATE}", pick_waits.read_waits().latest)
+        self.assertEqual(placer.keys(), [f"capital-wait:KO:{_TRADE_DATE}"])
+
+    def test_a_wait_right_after_a_clear_writes_no_line_inside_the_interval(self) -> None:
+        # Fit / no-fit can alternate tick by tick while something else keeps
+        # the pick unplaced; one line pair per tick would flood the journal.
+        placer = _Placer(self, _RecordingBroker())
+        with mock.patch.dict("os.environ", _GROSS_5000, clear=True):
+            placer.place(_doc(notional=6_000.0))
+            placer.now = _BEFORE_MIDNIGHT
+            with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.1"}):
+                placer.place(_doc(notional=6_000.0))
+            placer.now = _BEFORE_MIDNIGHT + dt.timedelta(seconds=10)
+            placer.place(_doc(notional=6_000.0))
+        self.assertEqual(len(_lines(pick_waits)), 2)
+
     def test_a_state_the_gate_cannot_value_holds_without_a_wait_line(self) -> None:
         broker = _RecordingBroker(on_positions=[_position(None)])
         placer = _Placer(self, broker)
@@ -375,6 +434,18 @@ class ValidityWindowTest(_CapitalWaitCase):
         (record,) = picks.read_pick_fold().records
         self.assertEqual(record.status, picks.STATUS_EXPIRED)
         self.assertIn("safety rail", record.record["reason"])
+
+    def test_a_pick_held_by_the_day1_gate_expires_naming_that_gate(self) -> None:
+        from alphalens_pipeline.brokers.automanager import day1_gap_gate as d1g
+
+        placer = _Placer(self, _RecordingBroker())
+        with mock.patch.object(d1g, "_day1_gap_gate_defers", return_value=True):
+            self.assertFalse(placer.place(_doc()))
+            placer.now = _WINDOW_END
+            self.assertFalse(placer.place(_doc()))
+        (record,) = picks.read_pick_fold().records
+        self.assertEqual(record.status, picks.STATUS_EXPIRED)
+        self.assertEqual(record.record["reason"], "deferred by the day-1 gap gate")
 
     def test_a_stated_ttl_moves_the_end(self) -> None:
         placer = _Placer(self, _RecordingBroker())
@@ -551,6 +622,19 @@ class ArmedOrderTest(_CapitalWaitCase):
         self._drain([unknown, late, early], lambda p: bool(seen.append(p.instrument.ticker)))
         self.assertEqual(seen, ["KO", "MU", "AA"], "parsed, offset-aware; unknown last")
 
+    def test_armed_order_is_by_time_where_the_text_order_disagrees(self) -> None:
+        # Text order puts MU (13:00) before KO (14:00); in time KO is 09:00 UTC.
+        # In the second pair "Z" sorts after "." as text, so BB's text comes
+        # first although AA is half a second earlier.
+        mu = _doc("MU", armed_ts="2026-09-30T13:00:00+00:00")
+        ko = _doc("KO", armed_ts="2026-09-30T14:00:00+05:00")
+        aa = _doc("AA", armed_ts="2026-09-30T15:00:00Z")
+        bb = _doc("BB", armed_ts="2026-09-30T15:00:00.500000+00:00")
+        self.assertEqual(sorted([aa.meta.armed_ts, bb.meta.armed_ts])[0], bb.meta.armed_ts)
+        seen: list[str] = []
+        self._drain([bb, aa, mu, ko], lambda p: bool(seen.append(p.instrument.ticker)))
+        self.assertEqual(seen, ["KO", "MU", "AA", "BB"])
+
     def test_first_fit_a_later_small_pick_is_placed_while_an_earlier_big_one_waits(self) -> None:
         broker = _RecordingBroker()
         placer = _Placer(self, broker)
@@ -591,6 +675,18 @@ class ArmedOrderTest(_CapitalWaitCase):
             # The next tick starts a fresh ledger.
             self._drain([b], placer.place, tick_admissions=admissions)
         self.assertEqual(len(broker.placed), 2)
+
+    def test_the_wait_journal_is_read_at_most_once_per_tick(self) -> None:
+        placer = _Placer(self, _RecordingBroker())
+        docs = [_doc(f"T{n}", notional=6_000.0) for n in range(3)]
+        with (
+            mock.patch.dict("os.environ", _GROSS_5000, clear=True),
+            mock.patch.object(pick_waits, "read_waits", wraps=pick_waits.read_waits) as reads,
+        ):
+            self._drain(docs, placer.place)
+            self._drain(docs, placer.place)
+        self.assertEqual(reads.call_count, 2)
+        self.assertEqual(len(_lines(pick_waits)), 3, "each pick journaled once")
 
     def test_the_drain_logs_once_when_many_picks_wait(self) -> None:
         placer = _Placer(self, _RecordingBroker())

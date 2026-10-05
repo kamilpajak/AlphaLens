@@ -433,7 +433,9 @@ rolls forward to the next one first. The daemon applies it three ways (#1734):
   floor do not refuse: the pick stays armed, is tried again every tick in
   `armed_ts` order (ordered first-fit: a later pick that fits is placed while an
   earlier one keeps waiting), and is placed as soon as it fits. The wait is
-  journaled once in `pick_waits.jsonl` and paged once per pick. A gate that
+  journaled once in `pick_waits.jsonl` and paged once per pick. When the gates
+  later pass, one clearing line closes the wait, so a pick that something else
+  still keeps unplaced is no longer shown as waiting for capital. A gate that
   cannot value the book (an unjoined working order, a missing mark or FX rate)
   holds the pick the same way, bounded by the same window.
 - **A pick placed late gets only what is left of the window.** Its entry-trail

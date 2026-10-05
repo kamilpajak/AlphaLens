@@ -12,7 +12,11 @@ This journal carries the wait instead, one JSON line under
 ``{pick_key, ticker, date, generation, ts, gate, message, window_end}``
 
 The daemon appends a line when a pick starts waiting and again only when the
-gate holding it changes, never once per tick. Two readers need it:
+gate holding it changes, never once per tick. When the gates later pass for a
+pick whose wait is open, it appends ONE clearing line,
+``{pick_key, ticker, ts, cleared: true}``, which closes the wait: the pick may
+still be unplaced (the day-1 gate, a deferral, a failed POST), but no longer
+for lack of capital. Two readers need it:
 
 * `broker status` and `broker picks`, separate processes that must say why a
   pick is unplaced without sizing it (sizing is broker I/O);
@@ -30,7 +34,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from collections.abc import Collection, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +46,8 @@ GATE_GROSS_CAP = "gross_cap"
 GATE_CASH_FLOOR = "cash_floor"
 GATES: tuple[str, ...] = (GATE_GROSS_CAP, GATE_CASH_FLOOR)
 
-_REQUIRED = ("pick_key", "gate")
+_REQUIRED_WAIT = ("pick_key", "gate")
+_REQUIRED_CLEARED = ("pick_key",)
 
 
 @dataclass(frozen=True)
@@ -58,20 +63,63 @@ class PickWait:
     record: Mapping[str, Any]
 
 
-@dataclass(frozen=True)
+@dataclass
 class PickWaitFold:
-    latest: dict[str, PickWait]
-    malformed: int
+    """``latest`` holds the OPEN waits only (a clearing line removes its pick);
+    ``announced`` every pick that ever had a wait line, so a pick that waits
+    again after a clear is not paged again; ``last_ts`` the ``ts`` of each
+    pick's latest line of either kind."""
+
+    latest: dict[str, PickWait] = field(default_factory=dict)
+    malformed: int = 0
+    announced: set[str] = field(default_factory=set)
+    last_ts: dict[str, str] = field(default_factory=dict)
+
+    def apply(self, record: Mapping[str, Any]) -> None:
+        """Fold one parsed line in (``read_waits`` and the daemon's own appends)."""
+        key = str(record["pick_key"])
+        ts = str(record.get("ts") or "")
+        self.last_ts[key] = ts
+        if record.get("cleared") is True:
+            self.latest.pop(key, None)
+            return
+        self.announced.add(key)
+        previous = self.latest.get(key)
+        window_end = record.get("window_end")
+        self.latest[key] = PickWait(
+            pick_key=key,
+            gate=str(record["gate"]),
+            message=str(record.get("message") or ""),
+            ts=ts,
+            since=previous.since if previous is not None else ts,
+            window_end=str(window_end) if window_end else None,
+            record=record,
+        )
 
 
 def append_wait(
     fields: Mapping[str, Any], *, now: dt.datetime | None = None, path: Path | None = None
-) -> None:
+) -> dict[str, Any]:
     """Append one wait line stamped ``ts`` = ``now`` (the drain's clock; UTC now
-    when omitted), so the line and the drain's own comparisons share one clock."""
+    when omitted), so the line and the drain's own comparisons share one clock.
+    Returns the line as written."""
     stamp = now if now is not None else dt.datetime.now(dt.UTC)
     record = {**fields, "ts": stamp.astimezone(dt.UTC).isoformat(timespec="seconds")}
     append_json_line(path or state_paths.pick_waits_path(), record, default=str)
+    return record
+
+
+def append_cleared(
+    pick_key: str,
+    *,
+    ticker: str,
+    now: dt.datetime | None = None,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Append the line that closes ``pick_key``'s wait: the gates passed."""
+    return append_wait(
+        {"pick_key": pick_key, "ticker": ticker, "cleared": True}, now=now, path=path
+    )
 
 
 def _parse(raw_line: str) -> dict[str, Any] | None:
@@ -81,41 +129,29 @@ def _parse(raw_line: str) -> dict[str, Any] | None:
         return None
     if not isinstance(record, dict):
         return None
-    if any(not isinstance(record.get(key), str) or not record.get(key) for key in _REQUIRED):
+    required = _REQUIRED_CLEARED if record.get("cleared") is True else _REQUIRED_WAIT
+    if any(not isinstance(record.get(key), str) or not record.get(key) for key in required):
         return None
     return record
 
 
 def read_waits(*, path: Path | None = None) -> PickWaitFold:
-    """The latest line per ``pick_key``; ``since`` is that pick's FIRST line."""
+    """The open wait per ``pick_key``; ``since`` is the first line of that wait
+    (a wait that starts again after a clearing line gets a new ``since``)."""
     target = path or state_paths.pick_waits_path()
+    fold = PickWaitFold()
     if not target.exists():
-        return PickWaitFold(latest={}, malformed=0)
-    latest: dict[str, PickWait] = {}
-    first_ts: dict[str, str] = {}
-    malformed = 0
+        return fold
     with target.open("r", encoding="utf-8") as fh:
         for raw_line in fh:
             if not raw_line.strip():
                 continue
             record = _parse(raw_line)
             if record is None:
-                malformed += 1
+                fold.malformed += 1
                 continue
-            key = record["pick_key"]
-            ts = str(record.get("ts") or "")
-            first_ts.setdefault(key, ts)
-            window_end = record.get("window_end")
-            latest[key] = PickWait(
-                pick_key=key,
-                gate=record["gate"],
-                message=str(record.get("message") or ""),
-                ts=ts,
-                since=first_ts[key],
-                window_end=str(window_end) if window_end else None,
-                record=record,
-            )
-    return PickWaitFold(latest=latest, malformed=malformed)
+            fold.apply(record)
+    return fold
 
 
 def open_waits(
@@ -160,6 +196,7 @@ __all__ = [
     "GATE_GROSS_CAP",
     "PickWait",
     "PickWaitFold",
+    "append_cleared",
     "append_wait",
     "is_overdue",
     "open_waits",
