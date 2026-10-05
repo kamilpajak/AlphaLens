@@ -1169,10 +1169,17 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
 
     def test_the_gate_receives_todays_realized_r_and_nothing_else(self) -> None:
         today = dt.date.today().isoformat()
+        yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
         working = _verdict(
             status="WORKING",
             activity_time=f"{today}T00:00:00",
             details={"client_request_id": "rid-x", "realized_r": 1.5},
+        )
+        # Yesterday's loss must not reach the daily-loss lockout.
+        stale = _verdict(
+            status="WORKING",
+            activity_time=f"{yesterday}T23:00:00",
+            details={"client_request_id": "rid-y", "realized_r": -4.0},
         )
         captured: dict[str, Any] = {}
 
@@ -1182,9 +1189,10 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
 
         placer = self._placer(
             _PlaceBroker(),
-            verdicts=lambda _r, _b, **_k: [working],
+            verdicts=lambda _r, _b, **_k: [working, stale],
             iter_records=lambda _p: [
-                {"brackets": [{"client_request_id": "rid-x", "entry": 10.0, "qty": 5}]}
+                {"brackets": [{"client_request_id": "rid-x", "entry": 10.0, "qty": 5}]},
+                {"brackets": [{"client_request_id": "rid-y", "entry": 10.0, "qty": 5}]},
             ],
             safety_check=_capture,
         )

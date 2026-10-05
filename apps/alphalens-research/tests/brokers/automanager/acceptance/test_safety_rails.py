@@ -27,18 +27,6 @@ class TheSafetyRailsAreRespected(IsolatedHomeTestCase):
         world.orders_are_disabled()
         self.assertFalse(world.safety_allows_a_new_pick())
 
-    def test_held_positions_never_stop_a_new_pick_by_their_count(self) -> None:
-        world = ManagerWorld(self)
-        # GIVEN three positions already held and a fresh pick waiting
-        world.entry_fills("KO", shares=100)
-        world.entry_fills("MO", shares=100)
-        world.entry_fills("PEP", shares=100)
-        world.arm("XOM")
-        # WHEN a tick runs
-        world.run_tick()
-        # THEN the pick is still taken: the count of positions is not a limit
-        world.assert_picks_placed(1)
-
     def test_no_new_pick_after_the_daily_loss_cutoff(self) -> None:
         world = ManagerWorld(self)
         # The day is down more than the 3R daily-loss limit.

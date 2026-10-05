@@ -460,7 +460,7 @@ answer in the tool's favour:
 | the reference is a BID and the fill pays an ASK | the replay has trade prices, not quotes. One measured midday spread on a name that needed nine retries: 29 bps, against a 50 bps distance |
 | wrong-side rejections and their retries | 6 of 34 fires, median 68 bps worse against the first trigger versus −28 bps for the rest. The issue that measured it calls that a hint and not a result |
 | the coarse ratchet step | a deliberate scope cut, not a missing fact: the step is a tenth of the distance floored at one tick, which is 11% of the distance at the median and up to 26% on cheap names, and it holds the live trigger higher than the modelled one |
-| the exit-region refusal, the watch-capacity cap, the day-1 gap gate, the cash floor at fire, partial fills, sibling retirement | live gates that change WHICH rungs fill. None is modelled |
+| the exit-region refusal, the day-1 gap gate, the cash floor at fire, partial fills, sibling retirement | live gates that change WHICH rungs fill. None is modelled |
 | the `StopLimitPrice` ceiling | not modelled because it does not bind: 8 of 23 recorded fires executed above it, by up to 53.5 bps |
 
 A stated distance has no upper bound here, because section 5.2 publishes the key
