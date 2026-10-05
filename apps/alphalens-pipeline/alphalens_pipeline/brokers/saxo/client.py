@@ -271,12 +271,13 @@ class SaxoClient:
         ``PositionBase`` (Amount/OpenPrice/Uic/AssetType) + ``PositionView``
         (MarketValue/ProfitLossOnTrade — may be absent on SIM NoAccess
         quotes) + ``DisplayAndFormat`` (broker Symbol, e.g. ``KO:xnys``).
+        Follows ``__next`` (#1732): a dropped page hides positions.
         """
         params = {
             "ClientKey": client_key,
             "FieldGroups": "PositionBase,PositionView,DisplayAndFormat",
         }
-        return self._get_json("/port/v1/positions", params=params)
+        return self._get_paged_json("/port/v1/positions", params=params)
 
     def search_instruments(
         self,
@@ -383,8 +384,8 @@ class SaxoClient:
         return resp.status_code, self._safe_json(resp)
 
     def get_open_orders(self) -> dict[str, Any]:
-        """GET ``/port/v1/orders/me`` — open orders (Saxo Status default Working)."""
-        return self._get_json("/port/v1/orders/me")
+        """GET ``/port/v1/orders/me`` (Status default Working), every ``__next`` page (#1732)."""
+        return self._get_paged_json("/port/v1/orders/me")
 
     def get_order_status(self, client_key: str, order_id: str) -> dict[str, Any] | None:
         """GET ``/port/v1/orders/{ClientKey}/{OrderId}``; ``None`` when absent.
@@ -588,10 +589,8 @@ class SaxoClient:
           first-fill experiment). It is still popped below so it never leaks
           into the returned envelope.
 
-        This is safe for both callers: ``get_order_activities`` (audit) and
-        ``get_closed_positions`` (``/port/v1/closedpositions``) — the latter
-        paginates via ``__next`` if at all, so ignoring ``__nextPoll`` cannot
-        regress it.
+        Safe for every caller: the ``/port`` endpoints paginate via ``__next``
+        if at all, so ignoring ``__nextPoll`` cannot regress them.
         """
         payload = self._get_json(path, params=params)
         if isinstance(payload, list):
