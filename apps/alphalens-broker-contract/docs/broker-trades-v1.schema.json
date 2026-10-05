@@ -161,7 +161,8 @@
         "fx_rate_not_realized",
         "report_row_missing",
         "non_finite",
-        "stop_amend_history_unavailable"
+        "stop_amend_history_unavailable",
+        "account_amount_not_reported"
       ],
       "description": "Why a value is null (§3.3)."
     },
@@ -229,7 +230,8 @@
         "booking_prorated",
         "ambiguous_attribution",
         "side_unresolved",
-        "exit_price_off_plan_level"
+        "exit_price_off_plan_level",
+        "net_disagrees_with_fees"
       ],
       "description": "A record warning."
     },
@@ -735,7 +737,7 @@
     },
     "Fees": {
       "type": "object",
-      "description": "Signed as the venue sends them (negative = cost). commission and exchange_fee in the booking currency; fx_conversion in the account currency.",
+      "description": "Signed as the venue sends them (negative = cost). commission and exchange_fee in the booking currency; fx_conversion in the account currency. The _acct pair is commission and exchange_fee in the ACCOUNT currency, read off the same booking rows: the native pair cannot be added to an account-currency figure. fx_conversion is a disclosure of markup already inside the cash leg, so it belongs in no net.",
       "properties": {
         "commission": {
           "$ref": "#/$defs/MeasuredMoney"
@@ -745,12 +747,20 @@
         },
         "fx_conversion": {
           "$ref": "#/$defs/MeasuredMoney"
+        },
+        "commission_acct": {
+          "$ref": "#/$defs/MeasuredMoney"
+        },
+        "exchange_fee_acct": {
+          "$ref": "#/$defs/MeasuredMoney"
         }
       },
       "required": [
         "commission",
         "exchange_fee",
-        "fx_conversion"
+        "fx_conversion",
+        "commission_acct",
+        "exchange_fee_acct"
       ]
     },
     "RealizedFx": {
@@ -1132,7 +1142,7 @@
     },
     "Outcome": {
       "type": "object",
-      "description": "Derived values (§5). Gross: no net figure is derived.",
+      "description": "Derived values (§5). pnl_cash and pnl_cash_acct are GROSS of commission and exchange fee. net_cash_acct is the venue's own net of them, in the account currency, summed over the record's legs from the trades report's BookedAmountAccountCurrency; it already carries the FX conversion charge, which the venue applied through the rate it booked each cash leg at. The two must not be added together, and fx_conversion must not be added to either.",
       "properties": {
         "entry_qty": {
           "$ref": "#/$defs/MeasuredQty"
@@ -1176,6 +1186,9 @@
         "pnl_cash_acct": {
           "$ref": "#/$defs/MeasuredMoney"
         },
+        "net_cash_acct": {
+          "$ref": "#/$defs/MeasuredMoney"
+        },
         "mfe_lower_bound": {
           "$ref": "#/$defs/MeasuredPrice"
         },
@@ -1206,6 +1219,7 @@
         "fees",
         "notional_spent_acct",
         "pnl_cash_acct",
+        "net_cash_acct",
         "mfe_lower_bound",
         "fees_not_included"
       ]

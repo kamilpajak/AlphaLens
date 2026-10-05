@@ -2786,12 +2786,21 @@ def _render_trade_record(record: Mapping[str, Any]) -> None:
         f"risk/share {_trades_cell(outcome['risk_per_share'], 'g')}  "
         f"held {_trades_cell(outcome['holding_seconds'], '.0f')}s"
     )
+    # "gross" and "net" are said on the numbers, not left to the reader: the
+    # pair differs by commission and exchange fee only, and the FX charge is
+    # inside BOTH, because the venue books each cash leg at the rate it
+    # converted at. Adding fx to either double counts.
     typer.echo(
         f"  account  spent {_trades_money(outcome['notional_spent_acct'])}  "
-        f"pnl {_trades_money(outcome['pnl_cash_acct'])}  "
-        f"fees commission {_trades_money(fees['commission'])}, "
-        f"exchange {_trades_money(fees['exchange_fee'])}, "
-        f"fx {_trades_money(fees['fx_conversion'])}"
+        f"pnl gross {_trades_money(outcome['pnl_cash_acct'])}  "
+        f"net {_trades_money(outcome['net_cash_acct'])}"
+    )
+    typer.echo(
+        f"  fees     commission {_trades_money(fees['commission'])} "
+        f"({_trades_money(fees['commission_acct'])}), "
+        f"exchange {_trades_money(fees['exchange_fee'])} "
+        f"({_trades_money(fees['exchange_fee_acct'])}), "
+        f"fx {_trades_money(fees['fx_conversion'])} already inside both"
     )
 
 

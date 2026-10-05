@@ -109,6 +109,7 @@ NULL_LEGACY_PLAN = "legacy_plan_shape"
 NULL_FX_NOT_REALIZED = "fx_rate_not_realized"
 NULL_REPORT_ROW_MISSING = "report_row_missing"
 NULL_NON_FINITE = "non_finite"
+NULL_ACCT_AMOUNT_NOT_REPORTED = "account_amount_not_reported"
 NULL_STOP_AMEND_UNAVAILABLE = "stop_amend_history_unavailable"
 
 NULL_REASONS: tuple[str, ...] = (
@@ -126,6 +127,7 @@ NULL_REASONS: tuple[str, ...] = (
     NULL_REPORT_ROW_MISSING,
     NULL_NON_FINITE,
     NULL_STOP_AMEND_UNAVAILABLE,
+    NULL_ACCT_AMOUNT_NOT_REPORTED,
 )
 
 REASON_TAKE_PROFIT = "take_profit"
@@ -251,6 +253,7 @@ W_BOOKING_PRORATED = "booking_prorated"
 W_AMBIGUOUS = "ambiguous_attribution"
 W_SIDE_UNRESOLVED = "side_unresolved"
 W_EXIT_OFF_PLAN_LEVEL = "exit_price_off_plan_level"
+W_NET_DISAGREES_WITH_FEES = "net_disagrees_with_fees"
 
 WARNING_CODES: tuple[str, ...] = (
     W_FOLD_ORDER_UNCERTAIN,
@@ -267,7 +270,22 @@ WARNING_CODES: tuple[str, ...] = (
     W_AMBIGUOUS,
     W_SIDE_UNRESOLVED,
     W_EXIT_OFF_PLAN_LEVEL,
+    W_NET_DISAGREES_WITH_FEES,
 )
+
+# How far the venue's own net may sit from the same quantity rebuilt out of the
+# cash leg and the two fee rows before the record says they disagree.
+#
+# It does NOT scale with the number of legs, because the venue does not round
+# the two sides independently: on the 2026-10-03 LIVE capture the per-row
+# difference is EXACTLY zero on 41 of 41 rows (worst absolute difference
+# 0.000000000000), not merely within a cent. So the only thing a record-level
+# sum can accumulate is float error, which this is orders of magnitude above,
+# while staying below one cent so it cannot swallow a fee.
+# `TheVendorStatesTheNetPerExecution` pins that premise at 1e-9; if a later
+# capture shows real per-row rounding, that test fails first and this constant
+# has to be reconsidered with it.
+NET_FEE_TOLERANCE_ACCT = 0.005
 
 # Why a record cannot be compared with an intent-replay run of its plan. An
 # empty list on a record means it can. Each value names one cause; a record may
@@ -293,6 +311,18 @@ REPLAY_EXCLUSIONS: tuple[str, ...] = (
 
 # Not summed into any fee, and listed on every record so a consumer knows (§5).
 FEES_NOT_INCLUDED: tuple[str, ...] = ("financing", "dividends", "withholding_tax")
+
+# The members of ``outcome.fees``, in the order the record renders them. The
+# ``_acct`` pair is the same fee in the ACCOUNT currency, which is the only
+# currency ``net_cash_acct`` can be checked in: the venue reports commission
+# and exchange fee in the BOOKING currency, so the two cannot be added.
+_FEE_MEMBERS: tuple[str, ...] = (
+    "commission",
+    "exchange_fee",
+    "fx_conversion",
+    "commission_acct",
+    "exchange_fee_acct",
+)
 
 # `BkAmountType` values the builder maps (§4.7, LIVE probe P3). Anything else
 # on a trade-tied row gets `booking_type_unmapped`; the corporate-action types
@@ -989,17 +1019,35 @@ def _attach_report_facts(
     _cross_check_executions(fill, executions, venue, pick)
     trade_ids = [e.trade_id for e in executions]
     trade_ref = ",".join(f"trade:{t}" for t in trade_ids)
-    rows = [b for t in trade_ids for b in venue.bookings_by_trade.get(t, [])]
-    if not rows:
+    booked = _booked_total(executions)
+    # Per TRADE, not over the flattened list: an order with several executions
+    # can have one of them booked and another not yet, and summing the subset
+    # would report a fee that covers part of the fill as if it covered all of
+    # it — too small a cost, so a better-looking result.
+    unbooked = [t for t in trade_ids if not venue.bookings_by_trade.get(t)]
+    if unbooked:
         _null_report_facts(fill, NULL_REPORT_ROW_MISSING, NULL_REPORT_ROW_MISSING)
+        # The net comes from the TRADES report, which did answer for this fill,
+        # so a lagging BOOKINGS report leaves it readable while the cash leg
+        # and the fees are not.
+        fill.booking_sums["booked_amount_acct"] = booked
+        missing_ref = ",".join(f"trade:{t}" for t in unbooked)
         _fill_warn(
             fill,
             pick,
             W_REPORT_LAGS_AUDIT,
-            f"order {fill.order_id}: the bookings report has no row for {trade_ref} yet",
+            f"order {fill.order_id}: the bookings report has no row for {missing_ref} yet",
         )
         return
-    sums: dict[str, float] = {"commission": 0.0, "exchange_fee": 0.0, "fx_conversion": 0.0}
+    rows = [b for t in trade_ids for b in venue.bookings_by_trade.get(t, [])]
+    sums: dict[str, float] = {
+        "commission": 0.0,
+        "exchange_fee": 0.0,
+        "fx_conversion": 0.0,
+        "commission_acct": 0.0,
+        "exchange_fee_acct": 0.0,
+    }
+    acct_missing: set[str] = set()
     share_acct = 0.0
     share_native = 0.0
     rates: list[float] = []
@@ -1010,9 +1058,11 @@ def _attach_report_facts(
         account_ccy = account_ccy or booking.account_currency
         if booking.bk_amount_type == _BK_COMMISSION:
             sums["commission"] += booking.amount or 0.0
+            _add_account_amount(sums, acct_missing, "commission_acct", booking)
             booking_ccy = booking_ccy or booking.currency
         elif booking.bk_amount_type == _BK_EXCHANGE_FEE:
             sums["exchange_fee"] += booking.amount or 0.0
+            _add_account_amount(sums, acct_missing, "exchange_fee_acct", booking)
             booking_ccy = booking_ccy or booking.currency
         elif booking.bk_amount_type == _BK_SHARE_AMOUNT:
             has_share = True
@@ -1029,13 +1079,9 @@ def _attach_report_facts(
                 f"trade {booking.related_trade_id}: BkAmountType {booking.bk_amount_type!r}",
             )
     booking_ccy = booking_ccy or currency
-    fill.fees = {
-        "commission": _num(sums["commission"], booking_ccy, SOURCE_BOOKINGS, trade_ref),
-        "exchange_fee": _num(sums["exchange_fee"], booking_ccy, SOURCE_BOOKINGS, trade_ref),
-        "fx_conversion": _num(sums["fx_conversion"], account_ccy, SOURCE_BOOKINGS, trade_ref)
-        if has_share
-        else _null(NULL_FX_NOT_REALIZED, account_ccy, SOURCE_BOOKINGS, trade_ref),
-    }
+    # The trades report states the account currency too, so an account-currency
+    # member keeps its unit even if a booking row omits it.
+    account_ccy = account_ccy or booked[1]
     fill.booking_sums = {
         "commission": (sums["commission"], booking_ccy, None),
         "exchange_fee": (sums["exchange_fee"], booking_ccy, None),
@@ -1045,6 +1091,13 @@ def _attach_report_facts(
         "share_amount_acct": (share_acct, account_ccy, None)
         if has_share
         else (None, account_ccy, NULL_FX_NOT_REALIZED),
+        "booked_amount_acct": booked,
+        "commission_acct": _acct_sum(sums, acct_missing, "commission_acct", account_ccy),
+        "exchange_fee_acct": _acct_sum(sums, acct_missing, "exchange_fee_acct", account_ccy),
+    }
+    fill.fees = {
+        name: _measured(fill.booking_sums[name], SOURCE_BOOKINGS, trade_ref)
+        for name in _FEE_MEMBERS
     }
     if not has_share:
         fill.realized_fx = {
@@ -1068,21 +1121,86 @@ def _attach_report_facts(
     }
 
 
+def _booked_total(
+    executions: Sequence[Execution],
+) -> tuple[float | None, str | None, str | None]:
+    """The venue's own net for these executions, from the trades report.
+
+    ``BookedAmountAccountCurrency`` is the execution's cash leg plus its
+    commission and its exchange fee, in the account currency — measured equal
+    to that sum on 41 of 41 rows of the 2026-10-03 LIVE capture, and equal to
+    the cash leg alone on none of them. It does NOT carry the FX conversion
+    charge as a term: that charge is already inside the cash leg, because the
+    venue books the leg at the rate it converted at, and
+    ``ConversionRateAccountCurrency`` discloses how much of that rate was
+    markup. The capture holds no FX booking row at all, which is what settles
+    it; adding ``fx_conversion`` into a net would double count.
+
+    One execution whose row carries no net nulls the whole sum rather than
+    leaving a sum over the others, which would read as the record's net. The
+    empty case is refused for the same reason: the only caller already returns
+    before this on an empty list, but summing nothing gives 0.0, and a zero is
+    the one wrong answer a money field must never invent."""
+    if not executions:
+        return None, None, NULL_REPORT_ROW_MISSING
+    total = 0.0
+    unit: str | None = None
+    for execution in executions:
+        unit = unit or execution.account_currency
+        if execution.booked_amount_account_currency is None:
+            return None, unit, NULL_ACCT_AMOUNT_NOT_REPORTED
+        total += execution.booked_amount_account_currency
+    return total, unit, None
+
+
+def _add_account_amount(
+    sums: dict[str, float], missing: set[str], name: str, booking: CostBooking
+) -> None:
+    """One fee row's account-currency amount, or the member goes null.
+
+    A fee row with no ``AmountAccountCurrency`` must not read as zero: that
+    makes the net look better than it was, which is the worst direction for a
+    money error."""
+    if booking.amount_account_currency is None:
+        missing.add(name)
+    else:
+        sums[name] += booking.amount_account_currency
+
+
+def _acct_sum(
+    sums: dict[str, float], missing: set[str], name: str, account_ccy: str | None
+) -> tuple[float | None, str | None, str | None]:
+    """An account-currency fee member, null when any contributing row omits it.
+
+    The reason is ``account_amount_not_reported`` and not
+    ``report_row_missing``: the row IS there, and only the account-currency
+    amount on it is absent, which is a different thing for an operator to
+    chase."""
+    if name in missing:
+        return None, account_ccy, NULL_ACCT_AMOUNT_NOT_REPORTED
+    return sums[name], account_ccy, None
+
+
+def _measured(
+    booking_sum: tuple[float | None, str | None, str | None], source: str, ref: str
+) -> Measured:
+    """One ``booking_sums`` entry as a Measured, so the two cannot disagree."""
+    amount, unit, reason = booking_sum
+    if reason is not None:
+        return _null(reason, unit, source, ref)
+    return _num(amount, unit, source, ref)
+
+
 def _null_report_facts(fill: _Fill, fee_reason: str, fx_reason: str) -> None:
     ref = f"order:{fill.order_id}"
-    fill.fees = {
-        "commission": _null(fee_reason, None, SOURCE_BOOKINGS, ref),
-        "exchange_fee": _null(fee_reason, None, SOURCE_BOOKINGS, ref),
-        "fx_conversion": _null(fee_reason, None, SOURCE_BOOKINGS, ref),
-    }
+    fill.fees = {name: _null(fee_reason, None, SOURCE_BOOKINGS, ref) for name in _FEE_MEMBERS}
     fill.realized_fx = {
         "conversion_rate": _null(fx_reason, None, SOURCE_BOOKINGS, ref),
         "share_amount_acct": _null(fx_reason, None, SOURCE_BOOKINGS, ref),
     }
-    fill.booking_sums = dict.fromkeys(
-        ("commission", "exchange_fee", "fx_conversion"), (None, None, fee_reason)
-    )
+    fill.booking_sums = dict.fromkeys(_FEE_MEMBERS, (None, None, fee_reason))
     fill.booking_sums["share_amount_acct"] = (None, None, NULL_FX_NOT_REALIZED)
+    fill.booking_sums["booked_amount_acct"] = (None, None, fee_reason)
 
 
 def _cross_check_executions(
@@ -2336,6 +2454,7 @@ def _outcome(
         ("holding_seconds", _UNIT_SECONDS),
         ("notional_spent_acct", pick.sizing_currency),
         ("pnl_cash_acct", pick.sizing_currency),
+        ("net_cash_acct", pick.sizing_currency),
         ("mfe_lower_bound", price_unit),
     )
     out: dict[str, Measured] = {}
@@ -2344,7 +2463,7 @@ def _outcome(
     def all_null(reason: str) -> dict[str, Any]:
         for name, unit in names_native:
             out[name] = _null(reason, unit, SOURCE_DERIVED)
-        for name in ("commission", "exchange_fee", "fx_conversion"):
+        for name in _FEE_MEMBERS:
             fees_out[name] = _null(reason, None, SOURCE_DERIVED)
         return _render_outcome(out, fees_out, denominator)
 
@@ -2521,7 +2640,7 @@ def _outcome(
                 SOURCE_DERIVED,
                 f"{entry_refs};{exit_refs}",
             )
-    for name in ("commission", "exchange_fee", "fx_conversion"):
+    for name in _FEE_MEMBERS:
         if not closed:
             fees_out[name] = _null(exit_null_reason, None, SOURCE_DERIVED)
             continue
@@ -2531,6 +2650,10 @@ def _outcome(
             if total is not None
             else _null(reason or NULL_NOT_JOURNALED, unit, SOURCE_DERIVED)
         )
+    out["net_cash_acct"] = _net_cash_acct(
+        shares, prorated, closed, pick, exit_null_reason, f"{entry_refs};{exit_refs}"
+    )
+    _warn_if_net_disagrees(pick, out, fees_out)
     if (
         closed
         and prorated
@@ -2562,6 +2685,60 @@ def _share_of(exit_: _Exit) -> float | None:
     if qty is None or not total:
         return None
     return float(qty) / float(total)
+
+
+def _net_cash_acct(
+    shares: Sequence[tuple[_Fill, float | None]],
+    prorated: bool,
+    closed: bool,
+    pick: _Pick,
+    exit_null_reason: str,
+    refs: str,
+) -> Measured:
+    """What the venue says the whole round trip netted, in account currency.
+
+    Net of commission and exchange fee, and inclusive of the FX conversion
+    charge, which the venue has already applied through the rate it booked
+    each cash leg at (:func:`_booked_total`).
+
+    The source is the trades report when every leg is taken whole, and
+    ``derived`` when a partial close means a leg is prorated — the same rule
+    ``realized_fx.conversion_rate`` follows when it has to weight rates."""
+    if not closed:
+        return _null(exit_null_reason, pick.sizing_currency, SOURCE_TRADES_REPORT)
+    total, unit, reason = _booking_total(shares, "booked_amount_acct")
+    source = SOURCE_DERIVED if prorated else SOURCE_TRADES_REPORT
+    return _measured(
+        (total, pick.sizing_currency or unit, None if total is not None else reason), source, refs
+    )
+
+
+def _warn_if_net_disagrees(
+    pick: _Pick, out: dict[str, Measured], fees_out: dict[str, Measured]
+) -> None:
+    """The venue's net against the same quantity rebuilt from its parts.
+
+    The two agree on all 13 closed records of the 2026-10-03 capture. When
+    they do not, the record says so and keeps the VENUE's figure: a
+    disagreement is a fact about our fee attribution, not a licence to replace
+    the number the account was charged."""
+    parts = [
+        out.get("net_cash_acct"),
+        out.get("pnl_cash_acct"),
+        fees_out.get("commission_acct"),
+        fees_out.get("exchange_fee_acct"),
+    ]
+    if any(part is None or part.value is None for part in parts):
+        return
+    net, gross, commission, exchange_fee = (float(p.value) for p in parts)  # type: ignore[union-attr,arg-type]
+    rebuilt = gross + commission + exchange_fee
+    if abs(net - rebuilt) <= NET_FEE_TOLERANCE_ACCT:
+        return
+    pick.warn(
+        W_NET_DISAGREES_WITH_FEES,
+        f"net_cash_acct {net:.2f} against pnl_cash_acct plus the account-currency "
+        f"fees {rebuilt:.2f}",
+    )
 
 
 def _booking_total(
@@ -2624,10 +2801,8 @@ def _render_outcome(
     ).to_dict()
     for name in ("risk_per_share", "r_multiple", "holding_seconds"):
         rendered[name] = out[name].to_dict()
-    rendered["fees"] = {
-        name: fees[name].to_dict() for name in ("commission", "exchange_fee", "fx_conversion")
-    }
-    for name in ("notional_spent_acct", "pnl_cash_acct", "mfe_lower_bound"):
+    rendered["fees"] = {name: fees[name].to_dict() for name in _FEE_MEMBERS}
+    for name in ("notional_spent_acct", "pnl_cash_acct", "net_cash_acct", "mfe_lower_bound"):
         rendered[name] = out[name].to_dict()
     rendered["fees_not_included"] = list(FEES_NOT_INCLUDED)
     return rendered

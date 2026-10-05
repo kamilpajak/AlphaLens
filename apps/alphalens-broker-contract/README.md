@@ -545,8 +545,19 @@ charge is already inside the realized rate, so `pnl_cash_acct` includes it;
 shared between owners, the pick's share of every booking amount is
 `amount × attributed_qty / FilledAmount`, with source `derived` and the warning
 `booking_prorated`. Financing, dividends and withholding tax are never included
-(`outcome.fees_not_included`): they are not tied to a fill. The outcome is gross;
-no net figure is derived.
+(`outcome.fees_not_included`): they are not tied to a fill.
+
+**Gross and net.** `outcome.pnl_cash` and `outcome.pnl_cash_acct` are GROSS of
+commission and exchange fee. `outcome.net_cash_acct` is the venue's own net of
+those two, in the account currency, summed over the record's legs from the
+trades report's `BookedAmountAccountCurrency`; its `source` is
+`venue.trades_report` when every leg is taken whole and `derived` once a
+partial close prorates one. `fees.commission_acct` and `fees.exchange_fee_acct`
+are those two fees in the ACCOUNT currency, so a consumer can rebuild the net
+and check it; the record carries `net_disagrees_with_fees` when the two differ,
+and keeps the venue's figure. Do NOT add `fees.fx_conversion` to either figure:
+the charge is already inside both, because the venue books each cash leg at the
+rate it converted at.
 
 #### Outcome fields and the replay
 
@@ -557,6 +568,7 @@ quantity. The mapping, field by field:
 |---|---|---|
 | `outcome.notional_spent` | instrument currency (USD on LIVE) | `fx.notional_spent` (instrument currency). The replay's `summary.notional_spent` is in the account currency, at one stated rate. |
 | `outcome.pnl_cash` | instrument currency | `summary.pnl_cash` only after conversion at a stated rate; the replay's is in the account currency |
+| `outcome.net_cash_acct` | account currency | none: the replay derives no net. It is the venue's figure, net of commission and exchange fee only |
 | `outcome.pnl_cash_acct`, `notional_spent_acct` | account currency | none: they use the realized booking rates at entry and at exit, so they include the FX move between the two dates (VST: 92.04 PLN, against 82.02 PLN at the entry rate) |
 | `outcome.denominator_stop` | `price:<ccy>` | `r_multiple.denominator.source` (the stop level, `spec.disaster_stop`) |
 | `outcome.risk_per_share` | `price:<ccy>` | `r_multiple.denominator.value` (average entry minus that stop) |
@@ -608,6 +620,7 @@ window and its row count.
 | `report_row_missing` | the audit has the fill, but the trades or bookings report has no row for it yet |
 | `non_finite` | a computed value was NaN or infinite |
 | `stop_amend_history_unavailable` | offline, and the stop's moves cannot be known |
+| `account_amount_not_reported` | the report row is there, but the account-currency amount on it is not: no `BookedAmountAccountCurrency` on a trades row, or no `AmountAccountCurrency` on a fee booking row. Distinct from `report_row_missing`, where there is no row at all. One such row nulls the whole member rather than leaving a sum over the others |
 
 #### Exit reasons
 
@@ -697,6 +710,7 @@ LIVE). With open lots of two picks the fill is `ambiguous_attribution` instead.
 | `ambiguous_attribution` | a fill on the pick's uic could not be given to one pick |
 | `side_unresolved` | the plan does not resolve a side; outcome math was refused |
 | `exit_price_off_plan_level` | a take-profit filled worse than its plan level (`spec.tp_tranches[n-1].price`, also in `reason_evidence`) by more than one tick: the order was not at the plan's level. Broker mode only; a better fill is price improvement and is not flagged |
+| `net_disagrees_with_fees` | `outcome.net_cash_acct` differs from `pnl_cash_acct` plus the account-currency fees by more than half a cent. Both sides are vendor amounts over the same rows, so a difference means the fee attribution is wrong somewhere. The record keeps the VENUE's net, which is what the account was charged |
 
 #### Replay exclusions
 

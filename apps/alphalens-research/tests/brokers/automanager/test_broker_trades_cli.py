@@ -222,6 +222,24 @@ class Human(_TradesCliCase):
         result = self.trades("--pick", "UBER:2026-09-08")
         self.assertIn("manual_open", result.stdout)
 
+    def test_the_human_view_shows_the_net_beside_the_gross(self) -> None:
+        # The CLI doctrine: both renderings carry the same facts. A net in the
+        # JSON and not on screen would leave the owner reading the gross.
+        out = self.trades("--pick", "VST:2026-09-21").stdout
+        self.assertIn("pnl gross 92.04 PLN", out)
+        self.assertIn("net 84.25 PLN", out)
+
+    def test_the_human_view_shows_each_fee_in_both_currencies(self) -> None:
+        # Without the account-currency figure beside it, a reader cannot check
+        # the net himself: the native fee is USD and the net is PLN.
+        out = self.trades("--pick", "VST:2026-09-21").stdout
+        self.assertIn("commission -2.00 USD (-7.71 PLN)", out)
+        self.assertIn("exchange -0.02 USD (-0.08 PLN)", out)
+
+    def test_the_human_view_says_the_fx_charge_is_already_counted(self) -> None:
+        out = self.trades("--pick", "VST:2026-09-21").stdout
+        self.assertIn("already inside both", out)
+
 
 def _tree_digest(root: Path) -> dict[str, str]:
     return {
