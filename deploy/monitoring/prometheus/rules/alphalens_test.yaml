@@ -329,6 +329,13 @@ tests:
       - eval_time: 49h  # one hour after the second short run: the t=23h zero is still in the window
         alertname: AlphalensFeedbackRowsUnpriced
         exp_alerts: []
+      # NOTE on `for: 1h`, measured rather than assumed: on this 1h grid promtool
+      # only evaluates at grid points, so ANY `for` up to 1h behaves identically
+      # and no assertion here can tell `1h` from `1m`. Verified by mutation - the
+      # block stays green with the debounce shortened. That is acceptable because
+      # the real debounce is the 26h window, which IS pinned (reverting the series
+      # or swapping min_over_time for max_over_time each turn this red). The
+      # companion below uses `for: 2h`, which exceeds the grid and IS pinned.
       - eval_time: 52h
         alertname: AlphalensFeedbackRowsUnpriced
         exp_alerts:
@@ -1000,6 +1007,11 @@ tests:
         values: '569x71'
     alert_rule_test:
       - eval_time: 23h   # still one delisted name at 0.18%; nothing has crossed
+        alertname: AlphalensFeedbackNoBarsShareHigh
+        exp_alerts: []
+      # The debounce. The share crosses at t=24h, so at 25h the condition is true
+      # but `for: 2h` has not elapsed. `for: 1m` would fire here.
+      - eval_time: 25h
         alertname: AlphalensFeedbackNoBarsShareHigh
         exp_alerts: []
       - eval_time: 27h   # two hours after the share crossed, so `for: 2h` elapsed
