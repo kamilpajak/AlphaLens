@@ -725,6 +725,20 @@ class ArmedOrderTest(_CapitalWaitCase):
         self.assertEqual(len(many), 1)
 
 
+def _tier(
+    crid: str,
+    pick_key: str,
+    *,
+    limit: float | None,
+    qty: float,
+    fx_rate: float | None = None,
+    terminal: str | None = None,
+) -> Any:
+    record = {"kind": entry_trails.KIND_WATCH_OPEN, "crid": crid, "pick_key": pick_key}
+    record.update({"limit": limit, "qty": qty, "fx_rate": fx_rate})
+    return mock.Mock(crid=crid, watch_open=record, terminal_kind=terminal)
+
+
 class TickAdmissionsTest(unittest.TestCase):
     def test_an_admission_nothing_shows_yet_counts_in_full(self) -> None:
         admissions = capital_wait.TickAdmissions()
@@ -742,6 +756,25 @@ class TickAdmissionsTest(unittest.TestCase):
         admissions = capital_wait.TickAdmissions()
         admissions.admit("AAA:2026-09-30", 3_000.0)
         self.assertEqual(admissions.outstanding_acct({"ZZZ:2026-09-29": 2_500.0}), 3_000.0)
+
+    def test_the_per_pick_split_sums_to_the_gates_watching_total(self) -> None:
+        # Two tiers of one pick, one of another, one terminal tier, one that
+        # cannot be valued: the split must add up to what the gates subtract.
+        fold = entry_trails.EntryTrailFold(
+            tiers={
+                "A-t0": _tier("A-t0", "A:1", limit=10.0, qty=100.0),
+                "A-t1": _tier("A-t1", "A:1", limit=9.0, qty=100.0, fx_rate=0.5),
+                "B-t0": _tier("B-t0", "B:1", limit=20.0, qty=10.0),
+                "C-t0": _tier("C-t0", "C:1", limit=5.0, qty=10.0, terminal="fired"),
+                "D-t0": _tier("D-t0", "D:1", limit=None, qty=10.0),
+            },
+            malformed=0,
+        )
+        total, bad = entry_trails.watching_virtual_gross_acct(fold)
+        by_pick = entry_trails.watching_reservation_acct_by_pick(fold)
+        self.assertEqual(bad, 1)
+        self.assertAlmostEqual(sum(by_pick.values()), total)
+        self.assertEqual(by_pick, {"A:1": 1_000.0 + 1_800.0, "B:1": 200.0})
 
     def test_a_new_tick_starts_empty(self) -> None:
         admissions = capital_wait.TickAdmissions()
