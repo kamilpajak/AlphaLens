@@ -1749,9 +1749,15 @@ class AnSnuBarHasNotNecessarilyChangedTheMoneyTest(unittest.TestCase):
     shape is 33.33 / 33.33 / 33.34, which 11 documents in the LIVE journal
     declare. The shallow tranche sits at 67.70 on purpose: it is REFUSED against
     the partial position's average of 67.50 and clears against the blended
-    67.3920, so the readings disagree about whether it fires on the ambiguous
+    67.0946, so the readings disagree about whether it fires on the ambiguous
     bar. They still agree on the terminal cash, because the refusal only delays
     the tranche one bar and it then fires at the same declared price.
+
+    The blended figure is 67.0946 and not 1500 / 22.2579, because rung 0
+    GAP-FILLS: the first bar opens at 67.50, below its 68.00 limit, so the walk
+    books ``min(bar.open, limit)``. The spend is 900 / 68 * 67.50 + 600 over
+    900 / 68 + 600 / 66.5 units. ``test_the_blended_average_is_the_one_the_tape
+    _produces`` pins it so this prose cannot drift from the computation again.
     """
 
     TRANCHES = (
@@ -1773,7 +1779,35 @@ class AnSnuBarHasNotNecessarilyChangedTheMoneyTest(unittest.TestCase):
         return tuple(bars)
 
     def _walk(self, tape: tuple[Bar, ...]) -> Any:
-        return walk(_plan(tranches=self.TRANCHES), _config(), tape)
+        """One controlled configuration for every walk in the class.
+
+        Splitting one bar must be the ONLY modelled difference, so the two
+        schedule rails that also run per bar are stated here rather than
+        inherited: a time stop would close at the first sub-bar's close, and an
+        entry trail would re-price per bar. The deadline is left as published
+        and asserted to sit after the tape instead, because moving it is what
+        would expire a rung in one reading only.
+        """
+        config = _config(time_stop_t=None, entry_trail_bps=None)
+        assert config.time_stop_t is None
+        assert config.entry_trail_bps is None
+        return walk(_plan(tranches=self.TRANCHES), config, tape)
+
+    def test_no_schedule_rail_falls_inside_the_split(self) -> None:
+        # The proxy's soundness, pinned. If the deadline moved before the tail,
+        # the two readings could expire different rungs and the class would be
+        # comparing two tapes rather than two readings of one.
+        last = WALK_START + (len(self.LOW_FIRST)) * MINUTE
+        self.assertGreater(_config().entry_deadline.value, last)
+
+    def test_the_blended_average_is_the_one_the_tape_produces(self) -> None:
+        # Prose and computation pinned together: rung 0 gap-fills at the open,
+        # so the blended average is below 1500 / units. The number in the
+        # docstring is this one.
+        result = self._walk(self._tape(self.LOW_FIRST, self.RISING))
+        self.assertIsNotNone(result.avg_entry_price)
+        self.assertAlmostEqual(result.avg_entry_price or 0.0, 67.0946, places=4)
+        self.assertLess(result.avg_entry_price or 0.0, 1500.0 / result.intended_units)
 
     def test_both_readings_aggregate_to_the_one_coarse_bar(self) -> None:
         # Without this the pair is not two readings of one bar, and the rest of
@@ -1785,6 +1819,12 @@ class AnSnuBarHasNotNecessarilyChangedTheMoneyTest(unittest.TestCase):
                 self.assertEqual(max(row[1] for row in reading), high)
                 self.assertEqual(min(row[2] for row in reading), low)
                 self.assertEqual(reading[-1][3], close)
+                # A pair that aggregates right can still not be one path:
+                # pin close-to-open continuity and each sub-bar's own coherence.
+                self.assertEqual(reading[0][3], reading[1][0])
+                for row in reading:
+                    self.assertGreaterEqual(row[1], max(row[0], row[3]))
+                    self.assertLessEqual(row[2], min(row[0], row[3]))
 
     def test_the_walk_counts_the_coarse_bar_as_an_snu(self) -> None:
         result = self._walk((_bar(*self.COARSE), _bar(WALK_START + MINUTE, *self.RISING)))
