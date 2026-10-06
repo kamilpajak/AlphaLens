@@ -345,29 +345,7 @@ class LoopDeps:
     # ``place_pick`` closure (which adds to it) and carried here (the drain
     # resets it at the start of each tick). None (LoopDeps built by hand in
     # tests) adds nothing.
-    tick_admissions: _TickAdmissions | None = None
-
-
-class _TickAdmissions:
-    """Account-currency gross admitted by the money gates earlier this tick.
-
-    With a queue of picks waiting for capital, the tick that frees capital is
-    the tick several picks are admitted together, and a later pick's broker
-    reads need not show an earlier pick's order or fill yet (an order missing
-    from ``list_open_orders``, an audit deferred by the shared budget, a fill
-    not yet in the positions read). Each admitted pick's gross is added here
-    and counted by the gates for the rest of the tick. It can count a pick
-    twice once its order does show, which delays the next pick by one tick and
-    never overspends."""
-
-    def __init__(self) -> None:
-        self.gross_acct = 0.0
-
-    def begin_tick(self) -> None:
-        self.gross_acct = 0.0
-
-    def admit(self, gross_acct: float) -> None:
-        self.gross_acct += max(0.0, float(gross_acct))
+    tick_admissions: capital_wait.TickAdmissions | None = None
 
 
 @dataclass
@@ -3881,7 +3859,7 @@ def build_default_deps(
     now_entry_scope = _NowEntryScope(_default_live_exits_feed_factory)
     # #1734 review F3: ONE in-tick admission ledger shared by the place_pick
     # closure (adds) and the drain (resets per tick).
-    tick_admissions = _TickAdmissions()
+    tick_admissions = capital_wait.TickAdmissions()
 
     return LoopDeps(
         broker=broker,
@@ -4885,7 +4863,7 @@ def _make_place_pick(
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
     audit_budget: OutcomeAuditBudget | None = None,
     now_entry_scope: _NowEntryScope | None = None,
-    tick_admissions: _TickAdmissions | None = None,
+    tick_admissions: capital_wait.TickAdmissions | None = None,
 ) -> Callable[[Any], bool]:
     """Compose safety.check -> placement_planner.classify -> placer loop over
     place_bracket_order + the submissions journal for one armed pick, plus the
@@ -5988,7 +5966,7 @@ def _place_pick(
     audit_budget: OutcomeAuditBudget | None = None,
     now_entry_scope: _NowEntryScope | None = None,
     account_currency: _AccountCurrency | None = None,
-    tick_admissions: _TickAdmissions | None = None,
+    tick_admissions: capital_wait.TickAdmissions | None = None,
 ) -> bool:
     """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
@@ -6166,7 +6144,13 @@ def _place_pick(
         gate_plan=_without_placed_now_tier(plan, records, ticker, intent),
         # The crash re-drive of a pick whose watches are open (#1734 review F2).
         skip_capital_gates=pick_key in entry_watch_capacity._open_watch_pick_keys(entry_trail_fold),
-        admitted_this_tick_acct=0.0 if tick_admissions is None else tick_admissions.gross_acct,
+        admitted_this_tick_acct=(
+            0.0
+            if tick_admissions is None
+            else tick_admissions.outstanding_acct(
+                entry_trails.watching_reservation_acct_by_pick(entry_trail_fold)
+            )
+        ),
         intent=intent,
         pick_key=pick_key,
         window=window,
@@ -6190,7 +6174,7 @@ def _place_pick(
         entry_trail_fold
     ):
         tick_admissions.admit(
-            _plan_gross_acct(_without_placed_now_tier(plan, records, ticker, intent), fx)
+            pick_key, _plan_gross_acct(_without_placed_now_tier(plan, records, ticker, intent), fx)
         )
 
     # #1734 review F5: several broker reads separate the check at the top from

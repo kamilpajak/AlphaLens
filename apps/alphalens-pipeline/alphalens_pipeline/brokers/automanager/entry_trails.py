@@ -375,6 +375,26 @@ def watching_virtual_gross_acct(fold: EntryTrailFold) -> tuple[float, int]:
     return total, bad
 
 
+def watching_reservation_acct_by_pick(fold: EntryTrailFold) -> dict[str, float]:
+    """The ACCOUNT-currency reservation of the NON-terminal watching tiers,
+    summed per ``pick_key`` (the crid when a record predates that field).
+
+    The same valuation as :func:`watching_virtual_gross_acct`, split by pick,
+    so a caller can tell how much of a pick's exposure the gates already see
+    as "watching". Tiers that cannot be valued are left out; the total's
+    ``bad`` count is what fails the gates closed on them."""
+    by_pick: dict[str, float] = {}
+    for state in fold.tiers.values():
+        if state.terminal_kind is not None or state.watch_open is None:
+            continue
+        reservation = tier_reservation_acct(state.watch_open)
+        if reservation is None:
+            continue
+        key = str(state.watch_open.get("pick_key") or state.crid)
+        by_pick[key] = by_pick.get(key, 0.0) + reservation
+    return by_pick
+
+
 def tier_reservation_acct(record: Mapping[str, Any] | None) -> float | None:
     """The ACCOUNT-currency reservation of ONE ``watch_open`` record —
     ``limit x qty`` through the record's own ``fx_rate`` — or ``None`` when it
