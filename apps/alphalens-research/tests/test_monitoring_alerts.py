@@ -1661,6 +1661,95 @@ class TestFeedbackGuardSustainedLookupFailures(unittest.TestCase):
         self.assertIn('"alphalens_feedback_",', source)
 
 
+class TestFeedbackNoBarsShareHigh(unittest.TestCase):
+    """The companion that keeps a vendor outage from being silent.
+
+    AlphalensFeedbackRowsUnpriced reads the ACTIONABLE half of the unpriced count,
+    which is what stopped it paging nightly on a delisted name. The cost of that
+    narrowing is a blind spot: in a vendor-wide outage every unpriced row is a
+    no-bars row, the difference is 0, and that rule goes quiet exactly when things
+    are worst. This rule is the reason the narrowing is safe, so its shape is
+    pinned here and its firing behaviour in alphalens_test.yaml.
+    """
+
+    ALERT = "AlphalensFeedbackNoBarsShareHigh"
+
+    def _one(self) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_expr_is_a_share_of_the_plannable_population(self) -> None:
+        # House style for a share is `count > fraction * other`, never a division:
+        # numerator and denominator come from one emit call, so they stay same-run
+        # and label-compatible with no vector-matching to get wrong.
+        expr = " ".join(self._one()["expr"].split())
+        self.assertIn("alphalens_feedback_unpriced_no_bars_rows", expr)
+        self.assertIn("0.02 * alphalens_feedback_plannable_rows", expr)
+        self.assertNotIn("/", expr)
+
+    def test_the_thickness_guard_is_the_thresholds_own_reciprocal(self) -> None:
+        """`>= 50` is `1 / 0.02`, not a second judgement.
+
+        Below that denominator a SINGLE no-bars row crosses the share
+        (0.02 * 49 = 0.98), which would page on exactly the delisted name the
+        sibling rule was narrowed to stop paging about. Moving the threshold
+        without moving the guard reopens that.
+        """
+        expr = " ".join(self._one()["expr"].split())
+        fraction = float(re.search(r"([\d.]+) \* alphalens_feedback_plannable_rows", expr).group(1))
+        guard = int(re.search(r"alphalens_feedback_plannable_rows >= (\d+)", expr).group(1))
+        self.assertEqual(guard, round(1 / fraction))
+        self.assertGreater(
+            1, fraction * (guard - 1), "one row would cross the share below the guard"
+        )
+        self.assertLessEqual(1, fraction * guard, "one row must NOT cross the share at the guard")
+
+    def test_has_for_debounce_and_routes_warning_telegram(self) -> None:
+        rule = self._one()
+        self.assertIn("for", rule)
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+        self.assertEqual(rule.get("labels", {}).get("unit"), "feedback-shadow-returns")
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        rule = self._one()
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', " ".join(rule.get("expr", "").split())))
+
+    def test_it_names_the_sibling_it_does_not_overlap(self) -> None:
+        # The two rules split one condition by cause. A reader who meets one must be
+        # able to find the other, or the next change merges them back.
+        description = self._one().get("annotations", {}).get("description", "")
+        self.assertIn("AlphalensFeedbackRowsUnpriced", description)
+
+
+class TestFeedbackRowsUnpricedReadsTheActionableHalf(unittest.TestCase):
+    """The narrowing itself: the rule must not read the TOTAL again."""
+
+    def _one(self) -> dict:
+        matches = [
+            r
+            for r in _load_rules()["groups"][0]["rules"]
+            if r.get("alert") == "AlphalensFeedbackRowsUnpriced"
+        ]
+        self.assertEqual(len(matches), 1)
+        return matches[0]
+
+    def test_it_reads_the_actionable_series_and_not_the_total(self) -> None:
+        expr = " ".join(self._one()["expr"].split())
+        self.assertIn("alphalens_feedback_unpriced_actionable_rows", expr)
+        self.assertNotIn("min_over_time(alphalens_feedback_unpriced_rows", expr)
+
+    def test_the_description_points_at_the_other_cause(self) -> None:
+        # Without this the operator is told the count is starvation, which is what
+        # paged nightly on a delisted name for three nights.
+        description = self._one().get("annotations", {}).get("description", "")
+        self.assertIn("alphalens_feedback_unpriced_no_bars_rows", description)
+
+
 class TestFeedbackGuardGaugeMissing(unittest.TestCase):
     """Pins for the guard gauge's absence companion.
 
