@@ -323,12 +323,19 @@ tests:
   # short run.
   - interval: 1h
     input_series:
-      - series: alphalens_feedback_unpriced_rows
+      - series: alphalens_feedback_unpriced_actionable_rows
         values: '0x23 1x48'
     alert_rule_test:
       - eval_time: 49h  # one hour after the second short run: the t=23h zero is still in the window
         alertname: AlphalensFeedbackRowsUnpriced
         exp_alerts: []
+      # NOTE on `for: 1h`, measured rather than assumed: on this 1h grid promtool
+      # only evaluates at grid points, so ANY `for` up to 1h behaves identically
+      # and no assertion here can tell `1h` from `1m`. Verified by mutation - the
+      # block stays green with the debounce shortened. That is acceptable because
+      # the real debounce is the 26h window, which IS pinned (reverting the series
+      # or swapping min_over_time for max_over_time each turn this red). The
+      # companion below uses `for: 2h`, which exceeds the grid and IS pinned.
       - eval_time: 52h
         alertname: AlphalensFeedbackRowsUnpriced
         exp_alerts:
@@ -337,15 +344,15 @@ tests:
               route: telegram
               unit: feedback-shadow-returns
             exp_annotations:
-              summary: "nightly sweep has left 1 row(s) with no price path on consecutive nights"
-              description: "alphalens_feedback_unpriced_rows stayed > 0 across consecutive nights, so work one run deferred was not picked up afterwards — the sweep is newest-date-first, so the oldest dates in the window starve when the per-run fetch budget is spent. The run still exits 0 and stamps the store settled, and the ML label stamper inside it leaves those rows unlabelled. A skipped run writes nothing, so the last value persists and this can also fire without a second run having happened — the rows are unpriced either way. Check `journalctl --user -u alphalens-feedback-shadow-returns.service | grep 'fetch budget exhausted'` and alphalens_feedback_deferred_total{reason} for which ceiling bound. Recovery: replay the starved dates with their own budget, `alphalens feedback backfill-shadow-returns --date <YYYY-MM-DD>` (repeatable). Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+              summary: "nightly sweep has left 1 replayable row(s) with no price path on consecutive nights"
+              description: "alphalens_feedback_unpriced_actionable_rows stayed > 0 across consecutive nights, so work one run deferred was not picked up afterwards — the sweep is newest-date-first, so the oldest dates in the window starve when the per-run fetch budget is spent. The run still exits 0 and stamps the store settled, and the ML label stamper inside it leaves those rows unlabelled. This series EXCLUDES rows whose ticker the vendor had no bars for, so every row it counts is one a replay can still fix; for the other cause read alphalens_feedback_unpriced_no_bars_rows, which no replay helps and which ages out of the monitor window on its own. The count above is the MINIMUM over the window, not the live value. A skipped run writes nothing, so the last value persists and this can also fire without a second run having happened — the rows are unpriced either way. Check `journalctl --user -u alphalens-feedback-shadow-returns.service | grep 'fetch budget exhausted'` and alphalens_feedback_deferred_total{reason} for which ceiling bound. Recovery: replay the starved dates with their own budget, `alphalens feedback backfill-shadow-returns --date <YYYY-MM-DD>` (repeatable). Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
 
   # It healed overnight: one short run at t=24h, the next run at t=48h picks the
   # work up and writes 0. This is the half that separates "starving" from
   # "deferred, as designed" — and it is the common case.
   - interval: 1h
     input_series:
-      - series: alphalens_feedback_unpriced_rows
+      - series: alphalens_feedback_unpriced_actionable_rows
         values: '0x23 1x23 0x24'
     alert_rule_test:
       - eval_time: 52h
@@ -359,7 +366,7 @@ tests:
   # window never runs out of zeros. Never fires.
   - interval: 1h
     input_series:
-      - series: alphalens_feedback_unpriced_rows
+      - series: alphalens_feedback_unpriced_actionable_rows
         values: '0x23 1x23 0x23 1x23'
     alert_rule_test:
       - eval_time: 70h
@@ -940,4 +947,93 @@ tests:
     alert_rule_test:
       - eval_time: 33d
         alertname: AlphalensTemplateMatchRateCollapsed
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensFeedbackRowsUnpriced — the two causes, after the split
+  # ---------------------------------------------------------------------
+  #
+  # The rule reads alphalens_feedback_unpriced_actionable_rows, the half a replay
+  # can still fix. These are the cases the narrowing is FOR. Same grid arithmetic
+  # as the block above (`0x23` = 24 samples, t=0h..23h).
+
+  # A name that stopped trading: unpriced every night, actionable never. This is
+  # DBRG, which paged for three nights before the split, telling the operator to
+  # replay a date whose last bar predates the brief.
+  - interval: 1h
+    input_series:
+      - series: alphalens_feedback_unpriced_actionable_rows
+        values: '0x71'
+      - series: alphalens_feedback_unpriced_no_bars_rows
+        values: '0x23 1x48'
+      - series: alphalens_feedback_plannable_rows
+        values: '569x71'
+    alert_rule_test:
+      - eval_time: 52h   # where the old rule fired; this one must not
+        alertname: AlphalensFeedbackRowsUnpriced
+        exp_alerts: []
+      # The companion must stay quiet too: one row of 569 is 0.18%, not an outage.
+      - eval_time: 52h
+        alertname: AlphalensFeedbackNoBarsShareHigh
+        exp_alerts: []
+
+  # ONE night of starvation is the design working — the next night is meant to
+  # pick it up — so it must not page. This case refuted an earlier draft that
+  # tested persistence on the TOTAL: a standing no-bars row would have held its
+  # first conjunct true forever and fired here.
+  - interval: 1h
+    input_series:
+      - series: alphalens_feedback_unpriced_actionable_rows
+        values: '0x23 1x23 0x24'
+    alert_rule_test:
+      - eval_time: 52h
+        alertname: AlphalensFeedbackRowsUnpriced
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensFeedbackNoBarsShareHigh
+  # ---------------------------------------------------------------------
+  #
+  # Narrowing the rule above opens a blind spot: in a vendor-wide outage EVERY
+  # unpriced row is a no-bars row, the difference is 0, and that rule goes quiet
+  # exactly when things are worst. This is the rule that does not.
+
+  # Two dark nights: ~18 rows of 569 is 3.2%, over the 2% threshold.
+  - interval: 1h
+    input_series:
+      - series: alphalens_feedback_unpriced_no_bars_rows
+        values: '1x23 18x48'
+      - series: alphalens_feedback_plannable_rows
+        values: '569x71'
+    alert_rule_test:
+      - eval_time: 23h   # still one delisted name at 0.18%; nothing has crossed
+        alertname: AlphalensFeedbackNoBarsShareHigh
+        exp_alerts: []
+      # The debounce. The share crosses at t=24h, so at 25h the condition is true
+      # but `for: 2h` has not elapsed. `for: 1m` would fire here.
+      - eval_time: 25h
+        alertname: AlphalensFeedbackNoBarsShareHigh
+        exp_alerts: []
+      - eval_time: 27h   # two hours after the share crossed, so `for: 2h` elapsed
+        alertname: AlphalensFeedbackNoBarsShareHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: feedback-shadow-returns
+            exp_annotations:
+              summary: "18 unpriced row(s) have no vendor bars at all — more than attrition"
+              description: "alphalens_feedback_unpriced_no_bars_rows crossed 2% of alphalens_feedback_plannable_rows. One delisted name is normal and reads ~0.18%; this share is what a vendor going dark looks like after about a night and a half, because only rows that still lack a FIRST price can enter the count. AlphalensFeedbackRowsUnpriced deliberately EXCLUDES these rows, so it stays quiet in exactly this state — that is what this rule is for. Check `journalctl --user -u alphalens-feedback-shadow-returns.service | grep 'no bars for'` for which tickers, and whether they are warrants and preferred lines (normal — Polygon prices them and yfinance does not) or ordinary common stock (not normal). No replay fixes a name the vendor has no data for; a row like that ages out of MONITOR_LOOKBACK_DAYS on its own. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
+
+  # A thin population. The guard is exactly 1/0.02, so below 50 a SINGLE row would
+  # cross the share; the rule must abstain rather than page on one delisted name.
+  - interval: 1h
+    input_series:
+      - series: alphalens_feedback_unpriced_no_bars_rows
+        values: '1x71'
+      - series: alphalens_feedback_plannable_rows
+        values: '40x71'
+    alert_rule_test:
+      - eval_time: 30h
+        alertname: AlphalensFeedbackNoBarsShareHigh
         exp_alerts: []
