@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from alphalens_pipeline.brokers.automanager import pick_waits, picks
@@ -294,10 +294,49 @@ def expire(
     _wait_logged.discard(pick_key)
 
 
+class TickAdmissions:
+    """Account-currency gross admitted by the money gates earlier this tick.
+
+    With a queue of picks waiting for capital, the tick that frees capital is
+    the tick several picks are admitted together, and a later pick's broker
+    reads need not show an earlier pick's order or fill yet (an order missing
+    from ``list_open_orders``, an audit deferred by the shared budget, a fill
+    not yet in the positions read). Each admitted pick's gross is kept here,
+    by pick, and counted by the gates for the rest of the tick.
+
+    A watch is different: the gates re-read the entry-trail fold on every
+    pick, so a watch opened earlier this tick is already valued as
+    "watching". :meth:`outstanding_acct` subtracts that visible reservation,
+    so a watched pick is never counted twice (LIVE 2026-10-06: three picks
+    waited a tick on two watches counted twice). A resting order can still be
+    counted twice once it shows, which delays the next pick by one tick and
+    never overspends."""
+
+    def __init__(self) -> None:
+        self._gross_by_pick: dict[str, float] = {}
+
+    def begin_tick(self) -> None:
+        self._gross_by_pick = {}
+
+    def admit(self, pick_key: str, gross_acct: float) -> None:
+        self._gross_by_pick[pick_key] = self._gross_by_pick.get(pick_key, 0.0) + max(
+            0.0, float(gross_acct)
+        )
+
+    def outstanding_acct(self, watching_by_pick: Mapping[str, float]) -> float:
+        """The admitted gross the gates cannot see yet: each pick's admitted
+        gross less what its open watches already reserve, never below zero."""
+        return sum(
+            max(0.0, gross - watching_by_pick.get(pick_key, 0.0))
+            for pick_key, gross in self._gross_by_pick.items()
+        )
+
+
 __all__ = [
     "MANY_WAITING",
     "UNPLACED_AT_WINDOW_END",
     "WAIT_LINE_MIN_INTERVAL",
+    "TickAdmissions",
     "begin_tick",
     "clear_hold",
     "end_tick",

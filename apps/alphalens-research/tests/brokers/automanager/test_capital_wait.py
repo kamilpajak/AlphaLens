@@ -650,7 +650,7 @@ class ArmedOrderTest(_CapitalWaitCase):
         placer = _Placer(self, broker)
         first = _doc("FST", notional=3_000.0, armed_ts="2026-09-30T12:00:00+00:00")
         second = _doc("SND", notional=3_000.0, armed_ts="2026-09-30T13:00:00+00:00")
-        admissions = cl._TickAdmissions()
+        admissions = capital_wait.TickAdmissions()
         placer = _Placer(self, broker, tick_admissions=admissions)
         with mock.patch.dict("os.environ", _GROSS_5000, clear=True):
             self._drain([second, first], placer.place, tick_admissions=admissions)
@@ -661,7 +661,7 @@ class ArmedOrderTest(_CapitalWaitCase):
         # no position): only the in-tick ledger keeps the second from spending
         # the same capital.
         broker = _RecordingBroker()
-        admissions = cl._TickAdmissions()
+        admissions = capital_wait.TickAdmissions()
         placer = _Placer(self, broker, tick_admissions=admissions)
         a = _doc("AAA", notional=3_000.0, armed_ts="2026-09-30T12:00:00+00:00")
         b = _doc("BBB", notional=3_000.0, armed_ts="2026-09-30T13:00:00+00:00")
@@ -675,6 +675,30 @@ class ArmedOrderTest(_CapitalWaitCase):
             # The next tick starts a fresh ledger.
             self._drain([b], placer.place, tick_admissions=admissions)
         self.assertEqual(len(broker.placed), 2)
+
+    def test_a_watch_opened_earlier_this_tick_is_not_counted_twice(self) -> None:
+        # The first pick's watch is in the re-read entry-trail fold the moment
+        # it opens, so the gates already value it as "watching". The in-tick
+        # ledger must not add it again: 2_000 + 2_000 fits a 5_000 limit,
+        # 2_000 x 2 + 2_000 does not (LIVE 2026-10-06: HUT, AUR and FLY waited
+        # one tick on SRRK and PGEN counted twice).
+        from tests.brokers.automanager.test_entry_watch_wiring import _ENV, _journal
+        from tests.brokers.automanager.test_entry_watch_wiring import (
+            _RecordingBroker as _TrailingBroker,
+        )
+
+        _journal(self)
+        admissions = capital_wait.TickAdmissions()
+        placer = _Placer(self, _TrailingBroker(), tick_admissions=admissions)
+        a = _doc("AAA", notional=2_000.0, armed_ts="2026-09-30T12:00:00+00:00")
+        b = _doc("BBB", notional=2_000.0, armed_ts="2026-09-30T13:00:00+00:00")
+        env = {_ENV: "50", PORTFOLIO_GROSS_FRAC_ENV: "0.05"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self._drain([a, b], placer.place, tick_admissions=admissions)
+        self.assertEqual(pick_waits.read_waits().latest, {})
+        self.assertEqual(
+            [r.get("note") for r in placer.submissions], ["entry-trail watch opened"] * 2
+        )
 
     def test_the_wait_journal_is_read_at_most_once_per_tick(self) -> None:
         placer = _Placer(self, _RecordingBroker())
@@ -699,6 +723,31 @@ class ArmedOrderTest(_CapitalWaitCase):
             self._drain(docs, placer.place)
         many = [r for r in logs.records if "picks are waiting for capital" in r.getMessage()]
         self.assertEqual(len(many), 1)
+
+
+class TickAdmissionsTest(unittest.TestCase):
+    def test_an_admission_nothing_shows_yet_counts_in_full(self) -> None:
+        admissions = capital_wait.TickAdmissions()
+        admissions.admit("AAA:2026-09-30", 3_000.0)
+        self.assertEqual(admissions.outstanding_acct({}), 3_000.0)
+
+    def test_only_the_part_its_own_watches_do_not_reserve_counts(self) -> None:
+        # A now half placed as an order (not yet shown) plus a pullback watch
+        # that the fold already values: only the now half is outstanding.
+        admissions = capital_wait.TickAdmissions()
+        admissions.admit("AAA:2026-09-30", 5_000.0)
+        self.assertEqual(admissions.outstanding_acct({"AAA:2026-09-30": 2_000.0}), 3_000.0)
+
+    def test_another_picks_watch_reduces_nothing(self) -> None:
+        admissions = capital_wait.TickAdmissions()
+        admissions.admit("AAA:2026-09-30", 3_000.0)
+        self.assertEqual(admissions.outstanding_acct({"ZZZ:2026-09-29": 2_500.0}), 3_000.0)
+
+    def test_a_new_tick_starts_empty(self) -> None:
+        admissions = capital_wait.TickAdmissions()
+        admissions.admit("AAA:2026-09-30", 3_000.0)
+        admissions.begin_tick()
+        self.assertEqual(admissions.outstanding_acct({}), 0.0)
 
 
 # --------------------------------------------------------------------------
