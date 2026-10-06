@@ -18,6 +18,7 @@ from broker_contract.trade_intent.schema import ReanchorOnFill, TrailingStop
 from intent_replay.bars import Bar
 from intent_replay.config import RunConfig
 from intent_replay.interpreter import DeclaredTranche, PendingEntry, Plan
+from intent_replay.measures import summarise
 from intent_replay.trace import KINDS
 from intent_replay.walk import (
     _a_tranche_would_have_fired,
@@ -1729,6 +1730,128 @@ class TheRatchetFloorIsTheHigherOfTheTwoFloorsTheWalkHoldsTest(unittest.TestCase
         self.assertEqual(len(moves), 1)
         self.assertEqual(moves[0].before, self.WIDE_FLOOR)
         self.assertAlmostEqual(moves[0].after, 64.832, places=9)
+
+
+class AnSnuBarHasNotNecessarilyChangedTheMoneyTest(unittest.TestCase):
+    """``snu_bars`` counts a bar-LOCAL question, and the money is terminal.
+
+    Section 4.4's predicate asks whether this bar's rung-against-take-profit
+    order COULD change the money, and it is evaluated before the fills because
+    afterwards the deep rung has left ``pending``. A continuation can then erase
+    the difference it flagged, which is what this pins: a bar the walk counts,
+    on which the two admissible readings of the tape end with the SAME cash.
+
+    The pair of tapes is the literature's ``ex`` mode (arXiv:1412.5558): two
+    finer series that aggregate to one coarse bar and differ only in whether the
+    low or the high came first. The aggregation is asserted, not assumed.
+
+    The ladder is the published template's (``RUNGS``, ``FLOOR``) and the tranche
+    shape is 33.33 / 33.33 / 33.34, which 11 documents in the LIVE journal
+    declare. The shallow tranche sits at 67.70 on purpose: it is REFUSED against
+    the partial position's average of 67.50 and clears against the blended
+    67.3920, so the readings disagree about whether it fires on the ambiguous
+    bar. They still agree on the terminal cash, because the refusal only delays
+    the tranche one bar and it then fires at the same declared price.
+    """
+
+    TRANCHES = (
+        DeclaredTranche(tranche_index=0, price=67.70, fraction=0.3333),
+        DeclaredTranche(tranche_index=1, price=73.00, fraction=0.3333),
+        DeclaredTranche(tranche_index=2, price=75.00, fraction=0.3334),
+    )
+    COARSE = (WALK_START, 67.50, 68.20, 66.40, 68.00)
+    LOW_FIRST = ((67.50, 67.50, 66.40, 66.40), (66.40, 68.20, 66.40, 68.00))
+    HIGH_FIRST = ((67.50, 68.20, 67.50, 68.20), (68.20, 68.20, 66.40, 68.00))
+    RISING = (68.00, 73.50, 67.50, 73.20)
+    COLLAPSING = (68.00, 68.10, 62.50, 62.80)
+
+    def _tape(
+        self, readings: tuple[tuple[float, ...], ...], tail: tuple[float, ...]
+    ) -> tuple[Bar, ...]:
+        bars = [_bar(WALK_START + i * MINUTE, *row) for i, row in enumerate(readings)]
+        bars.append(_bar(WALK_START + len(readings) * MINUTE, *tail))
+        return tuple(bars)
+
+    def _walk(self, tape: tuple[Bar, ...]) -> Any:
+        return walk(_plan(tranches=self.TRANCHES), _config(), tape)
+
+    def test_both_readings_aggregate_to_the_one_coarse_bar(self) -> None:
+        # Without this the pair is not two readings of one bar, and the rest of
+        # the class would be comparing two different tapes.
+        _, open_, high, low, close = self.COARSE
+        for name, reading in (("low first", self.LOW_FIRST), ("high first", self.HIGH_FIRST)):
+            with self.subTest(name):
+                self.assertEqual(reading[0][0], open_)
+                self.assertEqual(max(row[1] for row in reading), high)
+                self.assertEqual(min(row[2] for row in reading), low)
+                self.assertEqual(reading[-1][3], close)
+
+    def test_the_walk_counts_the_coarse_bar_as_an_snu(self) -> None:
+        result = self._walk((_bar(*self.COARSE), _bar(WALK_START + MINUTE, *self.RISING)))
+        self.assertEqual(result.snu_bars, 1)
+
+    def test_the_reading_that_refuses_the_tranche_is_the_counted_one(self) -> None:
+        # The count follows the pending rung, so it lands on the reading whose
+        # deep rung is still unfilled when the high reaches the tranche.
+        high = self._walk(self._tape(self.HIGH_FIRST, self.RISING))
+        low = self._walk(self._tape(self.LOW_FIRST, self.RISING))
+        self.assertEqual((high.snu_bars, low.snu_bars), (1, 0))
+
+    def _fired(self, tape: tuple[Bar, ...]) -> list[tuple[int, int]]:
+        return [
+            (event.t, event.tranche_index)
+            for event in self._walk(tape).events
+            if event.kind == "tp_fired"
+        ]
+
+    def test_the_high_first_reading_reaches_the_tranche_and_refuses_it(self) -> None:
+        # The divergence this class rests on, asserted directly rather than
+        # inferred. On the first bar of the high-first reading the tape has
+        # already reached 67.70, and the gate refuses it against the partial
+        # position's average; the low-first reading never faces that question,
+        # because its first bar tops out at 67.50.
+        self.assertGreaterEqual(self.HIGH_FIRST[0][1], self.TRANCHES[0].price)
+        self.assertLess(self.LOW_FIRST[0][1], self.TRANCHES[0].price)
+        fired = self._fired(self._tape(self.HIGH_FIRST, self.RISING))
+        self.assertNotIn(WALK_START, [t for t, _ in fired])
+
+    def test_the_counted_bar_cost_nothing_on_either_continuation(self) -> None:
+        # The claim this class exists for: the high-first reading met a refusal
+        # the low-first reading never met, the walk counted its bar, and both
+        # end with the same cash under a continuation that rises and one that
+        # collapses to the stop. So a non-zero count is not a measured loss.
+        #
+        # NO DEMONSTRATED MUTATION POWER, stated rather than implied. Four
+        # mutations were tried (the SNU predicate to False, the cost gate to
+        # always-clear, `_staged` skipping the deep stage, the staged fill price
+        # to the bar close) and none broke this equality, because under this
+        # construction the two readings are structurally identical in money:
+        # the deep rung fills at its own limit either way and both tranches fire
+        # at their declared prices on the same bars. The equality is a property
+        # of the fixture, not a coincidence a mutant can disturb. It is kept as
+        # the recorded observation behind the locality claim, and as a tripwire
+        # if the gate or the count ever starts moving the cash; it is not
+        # evidence on its own.
+        for name, tail in (("rising", self.RISING), ("collapsing", self.COLLAPSING)):
+            with self.subTest(name):
+                high = summarise(
+                    self._walk(self._tape(self.HIGH_FIRST, tail)), declared_floor=FLOOR
+                )
+                low = summarise(self._walk(self._tape(self.LOW_FIRST, tail)), declared_floor=FLOOR)
+                self.assertAlmostEqual(high.pnl_cash, low.pnl_cash, places=9)
+
+    def test_the_two_continuations_do_not_both_end_in_the_same_place(self) -> None:
+        # The existence control for the test above. If both tails produced one
+        # outcome, equal cash across readings would prove nothing about the
+        # continuation mattering at all.
+        rising = summarise(
+            self._walk(self._tape(self.LOW_FIRST, self.RISING)), declared_floor=FLOOR
+        )
+        collapsing = summarise(
+            self._walk(self._tape(self.LOW_FIRST, self.COLLAPSING)), declared_floor=FLOOR
+        )
+        self.assertGreater(rising.pnl_cash, 0.0)
+        self.assertLess(collapsing.pnl_cash, 0.0)
 
 
 if __name__ == "__main__":
