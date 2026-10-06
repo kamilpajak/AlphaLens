@@ -1,6 +1,8 @@
 # Design: the account cash book — what the money actually did (#1689)
 
-Status: DRAFT, 2026-10-05. Code facts come from `origin/main` at `96d32966`. Every broker number in §1 was measured **offline**, on the redacted LIVE capture committed at `apps/alphalens-research/tests/brokers/automanager/fixtures/trades/live_2026_10_03/venue.json` (read GET-only on 2026-10-03: 249 audit rows, 41 trades-report rows, 104 bookings rows). No call was made to Saxo while writing this memo. Four decisions are open (§8), so the memo is DRAFT rather than LOCKED; §7 Phase 1 is actionable without them.
+Status: DRAFT r2, 2026-10-06. r2 adds §1.6, the results of the Phase 0 LIVE probes run GET-only on 2026-10-05, and settles three of the four open questions in §8. Still DRAFT, not LOCKED: probe 3 has not run, and §1.6 records four caveats that the probes did not close.
+
+Code facts in §1 come from `origin/main` at `96d32966` and were re-checked against `7b1927a6`. Every broker number in §1 was measured **offline**, on the redacted LIVE capture committed at `apps/alphalens-research/tests/brokers/automanager/fixtures/trades/live_2026_10_03/venue.json` (read GET-only on 2026-10-03: 249 audit rows, 41 trades-report rows, 104 bookings rows). §1.6 is the only section built from live reads.
 
 ## 0. What issue #1689 asks for, and what already exists
 
@@ -94,6 +96,84 @@ For one `Uic`, the span over which the cumulative signed `Amount` from the trade
 
 Two mechanics worth recording. The sign comes from `Amount`: `Direction` is the literal string `'None'` on all 41 rows, so a reader that branches on it gets nothing. And the venue states open-or-close per row — `ToOpenOrClose` is populated on all 41 rows (24 `ToOpen`, 17 `ToClose`) and is already mapped at `fill_history.py:142` — but it pairs nothing: exactly 1 of 41 rows carries a `RelatedPositionId`, because the account nets at end of day. So pairing stays FIFO and `ToOpenOrClose` becomes an independent check on it, per the repo's rule that a key quantity is recounted by a second path before a gate trusts it.
 
+## 1.6 Phase 0 probes (run 2026-10-05 on LIVE, GET-only, results)
+
+Run on the VPS, not on the Mac: the LIVE token store has a documented single-refresher invariant, so a LIVE read from another host would damage the daemon's auth. Attended, under the recipe in `reference_live_oneoff_cli_needs_rails_and_envfile_2026_08_28` with `ALPHALENS_BROKER_ALLOW_ORDERS=0`. Only GETs were issued. ADR 0015's attended unlock covers an attended probe and ADR 0017 preserves it verbatim for exactly this, so no new authorization was needed (§8.3).
+
+The process logs `SAXO LIVE ORDER RAIL UNLOCKED … real-money orders are now possible in THIS process`. That is the grant verifying, not a warning about something that happened.
+
+### P1. The account's own balance separates cash from positions, exactly
+
+| `/port/v1/balances` field | Value |
+|---|---|
+| `Currency` | PLN |
+| `CashBalance` | 20 738.68 |
+| `NonMarginPositionsValue` | 3 422.56 |
+| `TotalValue` | 24 161.24 |
+| `CalculationReliability` | `Ok` |
+
+20 738.68 + 3 422.56 = 24 161.24. So `CashBalance` is the cash field and `TotalValue` includes position value; the question §5(c) called open is answered, and both fields were already mapped by `get_account` (`saxo/broker.py:380-387`) and are read on LIVE every daemon tick.
+
+One account on the client, `Currency` PLN, and no per-currency cash breakdown anywhere in the body.
+
+### P2. The whole account reconciles to the grosz — and this validates #1728 against the bank
+
+The sum of the 13 closed picks' `net_cash_acct` is +386.90 PLN. Against the account's own numbers:
+
+| Term | PLN |
+|---|---|
+| Deposits | 24 000.00 |
+| Realized net on 13 closed picks | +386.90 |
+| Dividend less withholding tax | +4.05 |
+| Cost basis of the 3 open positions | −3 652.27 |
+| **= `CashBalance`** | **20 738.68** |
+| Market value of those 3 positions | 3 422.56 |
+| **= `TotalValue`** | **24 161.24** |
+
+Unrealized on the open positions is −229.71, which is exactly the gap between the +386.90 realized and the account's overall +161.24. All three identities close to the cent.
+
+This is the strongest evidence this arc has. The 13 per-pick net figures were derived from the trades and bookings reports; the account balance is computed by the broker on an entirely separate path. They agree. It also confirms §4's rule that episodes sum while the period total needs a separate cost-basis line for what is still open.
+
+### P3. The account's history begins 2026-08-06, on independent evidence
+
+The audit read returns an identical 249 activities for a 1-year and a 3-year window, earliest `2026-08-10`. **That alone establishes nothing**: a server-side retention cap produces the same observation, and 2026-08-10 to the probe date is 57 days, which sits inside a typical 60-day window.
+
+The bookings report is a different endpoint with its own retention, so it discriminates:
+
+| Window asked | Rows | Earliest |
+|---|---|---|
+| 2026-01-01 .. 2026-08-11 | 11 | 2026-08-06 |
+| 2026-06-01 .. 2026-08-11 | 11 | 2026-08-06 |
+| 2026-07-15 .. 2026-08-11 | 11 | 2026-08-06 |
+| 2026-08-01 .. 2026-08-11 | 11 | 2026-08-06 |
+
+Asked from January it answers the same as asked from August. Under a retention cap it would have shown earlier rows. So the history genuinely begins 2026-08-06 — the first deposit, four days before the first trade. The one-time backfill is therefore two months, not two years, and `history_begins` is a small number rather than a constraint.
+
+### P4. The remaining account-versus-picks gap is small
+
+| Measurement | Result |
+|---|---|
+| Activities in the window | 249 |
+| Executions / bookings returned by `list_fill_history` | 41 / **99** |
+| Final fills with no `ExternalReference` | **3 of 41** |
+| Executions with no `BookedAmountAccountCurrency` | **0 of 41** |
+| Booking types `list_fill_history` returns | `Share Amount`, `Commission`, `Exchange Fee` only |
+
+99 against the 104 of the unfiltered capture confirms on live data that the `kept_trades` filter drops exactly 5 rows (§1.4), and the returned booking types confirm which: the three deposits, the dividend and the tax are absent. The 0-of-41 line confirms on live data the assumption #1728 rests on.
+
+The 3 unlinked fills are **two closes and one open** — LULU and QUBT sold, UBER bought. A hand-opened position on an instrument no pick armed is still unobserved; what is observed is one hand-opened leg on an instrument a pick had already touched.
+
+### What these probes did NOT settle
+
+Four things, each stated because the probes could have closed them and did not.
+
+1. **The balance cross-check passed in the only condition where it cannot fail.** The window was quiet — last fill 2026-10-01, everything long booked — so no trade was in flight and the `Date` versus `ValueDate` basis could not diverge. The balances body carries `TransactionsNotBooked`, so the broker tracks precisely the state that breaks the check. "It reconciles" is true today and untested where it matters.
+2. **Probe 3 has not run.** It needs a session day on which something actually executed, a read a few hours after the close and a repeat the next morning. It remains the only probe that puts the cross-check in a condition where it can fail, which makes it more important than its original "refine the cadence" framing.
+3. **Paging is still untested, not fine.** 249 activities came back; whether that was one page or several is not observable from the caller, because the client folds pages itself. The sweep's first run is the largest read this layer will ever make.
+4. **Single-currency is strong evidence, not proof.** Every `Share Amount` row carries its own `ConversionRate`, so each leg converts at execution and non-PLN cash should never accumulate. But the absence of a per-currency field in the response is not proof that non-PLN cash cannot exist.
+
+One measurement is reported and then discarded, so a later reader does not mistake it for a finding: a direct call to the audit endpoint in the second probe script returned 0 rows for every window, while `list_fill_history` returned 249 in the same run. The direct call was wrong, not the account empty. Nothing is concluded from it.
+
 ## 2. Source of truth
 
 `/cs/v1/reports/bookings`, read **unfiltered**, behind a new adapter capability. A sum over all rows for a period is that period's whole money movement by construction: nothing can be missing without the row count saying so.
@@ -147,7 +227,11 @@ This is what the issue exists for. Three mechanisms, all arithmetic rather than 
 
 **(b) The coverage partition.** Every fill in the read window is either assigned to an episode or listed in `unassigned_fills` with a reason, and the envelope publishes `assigned + unassigned == final_fills_read` as a tested identity. That one assertion makes `if not lots: continue` impossible to reintroduce: a dropped fill does not vanish, it makes the partition fail.
 
-**(c) The balance cross-check.** Each sweep stores a balance snapshot; the next asserts that the change in the account's cash equals the sum of cash events settling in the interval. A disagreement is content, not a crash: the total reports `reconciles: false` with the difference as a number. Which date field the sum uses, and whether the account's cash is separable from unrealized marks, are open (probes 2 and 3). If either comes back badly, the cross-check ships as `unavailable` — never as `false`.
+**(c) The balance cross-check.** Each sweep stores a balance snapshot; the next asserts that the change in the account's cash equals the sum of cash events settling in the interval. A disagreement is content, not a crash: the total reports `reconciles: false` with the difference as a number.
+
+*Updated 2026-10-06 (§1.6).* Whether the account's cash is separable from unrealized marks is settled: `CashBalance` and `TotalValue` decompose exactly, and the whole account reconciles to the cent. Which date field the incremental sum uses is NOT settled and needs probe 3.
+
+Two versions, and the difference matters more than it looks. The **cumulative** check — cash book since `history_begins` against today's `CashBalance` — is known to hold. The **incremental** check — the change between two sweeps against the events settling between them — is the one that catches a late restatement, which is the entire reason the store is an append-only journal. A cumulative check that only ever says yes cannot detect a correction to an old row. So if the two ship separately, the cumulative one carries on its face that it cannot see a restatement; otherwise it reads as proof the history is intact, which it is not.
 
 **(d) `totals` is structurally inseparable from `totals.basis`.** `basis` is an object, not prose: episodes summed, episodes excluded, exclusions by reason, currency, windows clipped. The schema makes it a required sibling of every total. The human render prints the basis above the number and the currency on the number, per the repo's rule that a number beside a threshold in a different unit reads as a comfortable pass.
 
@@ -206,11 +290,13 @@ This is a **read, not a derivation** (§1.2), which is the whole point: the deri
 
 Gates: `trades_schema.py` plus the regenerated committed schema; the published vocabulary table in `apps/alphalens-broker-contract/README.md`, gated both ways; and the `trades.py` size baseline raised in the same commit, since the file sits exactly on it.
 
-### Phase 0 — probes, before Phase 2 and after Phase 1
+### Phase 0 — probes, before Phase 2 and after Phase 1 — **DONE except probe 3**
 
-Three read-only reads in one market-closed window, written into this memo's own probe table before the design is fixed: the whole-account sweep (how large is the account-versus-picks gap, how far back does the audit really retain, does a multi-year window page), the `/port/v1/balances` body (which field is cash as opposed to total value including unrealized marks, and whether the account holds non-PLN cash), and the report lag with the `Date`-versus-`ValueDate` question. Five further questions that were on the original probe list are already settled offline in §1 and must not spend a LIVE read.
+Three read-only reads were planned. Two ran on 2026-10-05 and their results are §1.6: the whole-account sweep and the `/port/v1/balances` body. Five further questions from the original probe list were settled offline in §1 and correctly did not spend a LIVE read.
 
-Phase 0 depends on an authorization decision (§8.3) and on a host decision: the LIVE token store has a single-refresher invariant, so a sweep run from the Mac against LIVE would damage the daemon's auth.
+**Probe 3 has not run and now gates more than it did.** It is the report lag together with the `Date`-versus-`ValueDate` question, and it needs a session day on which something actually executed, a read a few hours after that close, and a repeat the next morning. §1.6 shows why it matters more than its original framing: the balance cross-check has only been exercised in a quiet window, which is the one condition in which it cannot fail.
+
+Phase 0 needed no authorization decision after all — ADR 0017 preserves ADR 0015's attended unlock verbatim for probes (§8.3). The host constraint stands and was honoured: the LIVE token store has a single-refresher invariant, so the probes ran on the VPS, never from the Mac.
 
 ### Phase 2 — the read, behind the adapter
 
@@ -240,10 +326,12 @@ Explicitly its own route and its own Django app, never a tab under `/edge`, for 
 
 ## 8. Open questions
 
-1. **The command group's name.** `ledger` is taken by the pre-registration ledger (§6). `cashbook` is what §1 calls the thing and the repo uses the word for nothing else. `account` collides in the ear with `broker account`, which reports what the account holds *now*.
+1. ~~**The command group's name.**~~ **DECIDED 2026-10-06: `cashbook`.** `ledger` was taken by the pre-registration ledger (§6) and `account` collides in the ear with `broker account`.
 2. **Does Phase 1 ship on its own?** It is three gates for a small change, and it gives a net figure per pick immediately. Against: the account-level net supersedes it for the account question — but not for the per-pick question, which the episode-level number cannot answer.
-3. **Does a second unattended LIVE-reading process get a standing grant?** ADR 0017 authorized one, the broker-manager daemon, with rails pinned per unit. A read-only sweep under a timer is a new authorization decision. Until it is made, Phase 0 and any sweep run attended on the VPS under the day-keyed unlock. Note that building the LIVE broker prints that real-money orders are possible in the process even with placement disabled, so the read-only guarantee rests on the AST gate, not on a runtime arm.
-4. **Is the balance cross-check in scope for the first version?** It is the one thing that turns "my arithmetic" into "the bank agrees". It depends on two unknowns in probes 2 and 3, and getting the date basis backwards makes it disagree every run — a false alarm that teaches the owner to skip the line that makes the number trustworthy.
+3. **Does a second unattended LIVE-reading process get a standing grant?** **Answered for probes, open for a timer.** ADR 0017's own header says it extends ADR 0015 and that "the attended day-bound unlock survives verbatim for probes", and its Consequences repeat it; so an attended probe needed no decision and §1.6 ran under it. An unattended sweep is still a decision, and three facts bound it. The grant is account-bound (`ALPHALENS_SAXO_LIVE_STANDING` must equal `SAXO_LIVE_ACCOUNT_KEY`), so a boolean arm or a half-copied unit is inert. The LIVE-capable surface is one factory plus one keyword, and that factory calls `assert_live_rails()` first, so a second process built through it inherits the whole order-placement rail set even though it only reads — a read-only sweep would have to pin `DAILY_LOSS_LIMIT_R` and `MAX_PICK_NOTIONAL` to boot. And there is no precedent: the grant has exactly one production caller (`saxo/broker.py:2406`); `stream_handles.py` looks like a second one and is the opposite, an explicitly SIM-rail client that a LIVE instance is structurally refused. A read-only LIVE client built WITHOUT the broker factory would skip the order rails entirely, but ADR 0017 point 2 names the factory as the only caller of that keyword, so that route needs an ADR amendment rather than code. Recommendation: run the sweep attended, or timed on the VPS, and only amend the ADR if it must run unattended — a reader should not inherit a placement rail set.
+4. ~~**Is the balance cross-check in scope for the first version?**~~ **DECIDED 2026-10-06: yes, in scope.** Not because it passed — it passed in the one condition where it cannot fail (§1.6) — but because the cash field is unambiguous and the decomposition is exact. The date basis for the incremental version still needs probe 3, so the cumulative version ships first, carrying the statement that it cannot detect a restatement (§5(c)).
+
+5. **Open, and newly the most load-bearing: probe 3.** It is the only check that puts the cross-check in a condition where it can fail, and it needs a session day on which something executed.
 
 ## 9. Risks
 
@@ -257,13 +345,13 @@ Explicitly its own route and its own Django app, never a tab under `/edge`, for 
 
 **A restatement's shape on the wire is unknown.** The fold rests on "latest line wins per `BkAmountId`". Nobody has seen Saxo correct a booking. If a correction arrives as a new id carrying an offsetting amount rather than a rewrite, the fold double counts while `restated` stays 0 — the exact failure the store exists to prevent. Probe 3 can answer it for free by diffing the id sets across two days.
 
-**Paging has never been exercised on the reports.** Every probe response so far fit in one page, and the sweep's first run is a multi-year backfill, the call most likely to page. A dropped page makes the total silently smaller, and the bucket identity cannot see it, because the identity is over rows the read returned.
+**Paging has never been exercised on the reports.** Every probe response so far fit in one page, and the sweep's first run is the largest read this layer will make. A dropped page makes the total silently smaller, and the bucket identity cannot see it, because the identity is over rows the read returned. *Still open after §1.6, and sharpened: the client folds pages itself, so a caller cannot tell from a result whether one page or several were fetched. "No paging problem surfaced" is not evidence that paging works.* The backfill is now known to span two months rather than two years (§1.6 P3), which lowers the chance of paging without testing it.
 
 **A corporate action in kind cannot be detected from trade rows.** A split or spin-off changes quantity with no trade row, so the exclusion flag for it can never fire from this source alone. It needs positions or a corporate-action booking type, and until then §5's table overstates what is visible.
 
 **Multi-currency beyond the FX charge.** The account is PLN and every instrument is USD today. A trade whose value date falls in the next window is booked at a rate an earlier window's sum cannot reproduce. With the venue arc already at XWAR, XETR and XPAR this is the first thing a Warsaw fill breaks.
 
-**Retention may already have eaten part of the answer.** "Two or more years" is a docstring claim about the audit endpoint, never measured, and nothing states a bookings retention. The watermark makes a truncated history visible; visible is all it can be.
+~~**Retention may already have eaten part of the answer.**~~ **Settled 2026-10-06 (§1.6 P3): nothing is missing, because nothing is older.** The bookings report answers identically whether asked from January or from August, earliest row 2026-08-06, so the account's history is two months and not truncated. Recorded as a lesson rather than deleted: the first evidence for this — the audit returning the same rows for a 1-year and a 3-year window — could not tell "the history starts there" from "the endpoint caps there", and was briefly treated as if it could. A second endpoint with its own retention is what settled it.
 
 **Concurrency on the new journal.** The sweep is specified as the one writer, but nothing stops a manual run overlapping a scheduled one. `broker arm`'s key check is already a documented TOCTOU; this store should not add a second one by accident.
 
