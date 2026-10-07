@@ -571,6 +571,55 @@ class TestFoldTrailedMarkers(unittest.TestCase):
     def test_empty_is_empty(self) -> None:
         self.assertEqual(cl._fold_trailed_since_latest_plan([]), {})
 
+    def test_a_non_finite_level_is_malformed_too(self) -> None:
+        """#1673. The fold already drops a line with no ``level`` and a line with
+        an unparsable ``uic``; a level that is not a finite number is the same
+        class of malformed line and is dropped on the same grounds.
+
+        The quoted forms are not a curiosity: the fold reads the field with a
+        bare ``float()``, which accepts ``"NaN"`` and ``"inf"``, and the journal
+        itself round-trips a real float NaN because the writer leaves
+        ``allow_nan`` on -- so a hand-edited or corrupted line reaches here in
+        either shape.
+
+        The second half is the operator-visible consequence, and it is why this
+        guard is not merely defensive: ``_unrestored_trail_alert`` fires when a
+        trailed level sits above the plan stop, and ``nan <= plan`` is False, so
+        an unfiltered corrupt level made it send ``trailed level nan not
+        restored`` -- a false report that a real level was lost, repeating once
+        per throttle interval for as long as the line stays in the journal."""
+        plan_line = {
+            "kind": "tranche_plan",
+            "uic": _UIC,
+            "ts": 1.0,
+            "pick_key": "BIO:2026-10-07",
+            "tp_tranches": [],
+            "reference_qty": 10,
+            "stop_price": 44.0,
+        }
+        for raw in (float("nan"), float("inf"), float("-inf"), "NaN", "inf"):
+            with self.subTest(level=raw):
+                lines = [
+                    plan_line,
+                    {"kind": "trailed", "uic": _UIC, "level": raw, "ts": 2.0},
+                    {"kind": "trailed", "uic": 999, "level": 50.0, "ts": 2.0},
+                ]
+                folded = cl._fold_trailed_since_latest_plan(lines)
+                self.assertEqual(folded, {999: 50.0})
+                # Built from the FOLD's own output, so the chain is what is
+                # asserted: nothing downstream can claim a level existed.
+                plan = _plan(stop_price=44.0)
+                view = _view(pos=_pos(), plan=plan, legs=(), trailed_stop_by_uic=folded)
+                self.assertEqual(pm._unrestored_trail_alert(_UIC, plan, view), [])
+
+    def test_a_finite_level_above_the_plan_stop_still_alerts(self) -> None:
+        """Positive control for the test above: the alert is not simply dead."""
+        plan = _plan(stop_price=44.0)
+        view = _view(pos=_pos(), plan=plan, legs=(), trailed_stop_by_uic={_UIC: 55.99})
+        alerts = pm._unrestored_trail_alert(_UIC, plan, view)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("55.99", alerts[0].reason)
+
     def test_new_keyless_plan_drops_the_prior_trailed_level(self) -> None:
         # The stale-generation poison: position 1 trailed to 115, closed; a NEW
         # placement (keyless bracket-path plan) opens at a lower price. The old
