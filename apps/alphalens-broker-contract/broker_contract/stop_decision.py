@@ -62,6 +62,37 @@ from broker_contract.trade_intent.schema import ReactionPrimitive, ReanchorOnFil
 TRAIL_STEP_EPS: Final = 0.02
 
 
+def compose_ratchet_floor(*levels: float | None) -> float | None:
+    """The ``StopDecisionView.ratchet_floor`` a caller holding several candidate
+    floors should pass: the HIGHEST of them, with the absent and the non-finite
+    ones dropped. ``None`` when nothing survives.
+
+    This is a function rather than a line at each call site because the rule is
+    subtle enough that writing it out got it wrong (#1673). Two floors reach the
+    live daemon -- the level a trail last moved the stop to, which arrives from a
+    journal fold, and the level the stop is RESTING at, which arrives off an
+    order leg -- and a bare ``max`` over them is wrong in two ways at once:
+
+    * ``max`` propagates a ``NaN``, and ``x <= nan + eps`` is False, so a single
+      corrupt fold value made the ratchet refuse NOTHING. That is how a stop
+      resting at 56.00 could be patched DOWN to 55.502.
+    * ``max`` is not symmetric on a ``NaN`` input (it keeps its first argument
+      when the comparison is False), so the same two floors composed in the
+      other order answered differently.
+
+    Dropping the corrupt value, rather than vetoing on it, is what keeps a real
+    floor binding: the resting stop still refuses the move in the case above,
+    and a position whose journal carries a nonsense level can still trail.
+    ``_trail`` separately refuses a floor that is non-finite when it arrives, so
+    a caller that does not compose through here cannot move a stop on one.
+
+    Filtered on ``is not None`` and on finiteness, never on truthiness: ``0.0``
+    is falsy and is a real level.
+    """
+    finite = [level for level in levels if level is not None and math.isfinite(level)]
+    return max(finite) if finite else None
+
+
 @dataclass(frozen=True, slots=True)
 class StopDecisionView:
     """The minimal view of one covered long, design section 3.2, field by field.
@@ -87,9 +118,12 @@ class StopDecisionView:
     Composing it is the caller's job rather than this module's because both
     inputs are the caller's own state: one is a journal fold and the other is the
     price on an order leg, and section 3.2 keeps order-shaped data out of this
-    view. Compose it in that order -- trailed first, resting second -- because
-    ``max`` keeps its first argument when the comparison is False, so the two
-    orders disagree on a NaN input.
+    view. Compose it with :func:`compose_ratchet_floor`, which is the same
+    function for every caller: this paragraph used to prescribe an ARGUMENT
+    ORDER instead (trailed first, resting second, because ``max`` keeps its
+    first argument when the comparison is False), and a rule that subtle written
+    out at each call site is how #1673 happened -- the order it prescribed is
+    the one that PROPAGATES a NaN out of the journal fold.
     """
 
     avg_price: float
@@ -230,7 +264,17 @@ def _trail(view: StopDecisionView, policy: ExitPolicy) -> StopDecision:
     # caller stays SILENT here, which is why ``clamped`` survives into the
     # record: it is the only thing separating this refusal from the one above.
     floor = view.ratchet_floor
-    if floor is not None and clamped <= floor + TRAIL_STEP_EPS:
+    if floor is not None and (not math.isfinite(floor) or clamped <= floor + TRAIL_STEP_EPS):
+        # A NON-FINITE floor REFUSES (#1673). The comparison alone cannot: a
+        # ``NaN`` makes ``clamped <= floor + eps`` False and so let every
+        # proposal through, which is how a stop resting at 56.00 was patched
+        # down to 55.502. This function is handed a COMPOSED floor and cannot
+        # recover the real one from a corrupt value, so of the two readings
+        # available -- "a floor was stated and its value is nonsense, do not
+        # move" and "move as though no floor existed" -- it takes the safe one.
+        # Callers compose with ``compose_ratchet_floor``, which drops the
+        # corrupt value so a real floor still binds; this is the backstop for a
+        # caller that does not.
         return StopDecision(level=None, proposed=proposed, clamped=clamped)
     return StopDecision(level=clamped, proposed=proposed, clamped=clamped)
 
@@ -271,6 +315,7 @@ __all__ = [
     "TRAIL_STEP_EPS",
     "StopDecision",
     "StopDecisionView",
+    "compose_ratchet_floor",
     "decide_reanchor_detail",
     "decide_stop",
     "decide_trail_detail",

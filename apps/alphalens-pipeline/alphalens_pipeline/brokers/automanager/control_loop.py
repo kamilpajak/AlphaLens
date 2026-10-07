@@ -4310,9 +4310,21 @@ def _fold_trailed_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[
     ``_build_managed_exits``. The second consumer is why the scoping is
     load-bearing rather than tidy: ``_build_managed_exits`` PLACES
     ``max(plan stop, trailed)``, so an inherited level is not merely a too-high
-    ratchet floor, it is an absurdly high SL on a fresh entry."""
+    ratchet floor, it is an absurdly high SL on a fresh entry.
+
+    A level that is not a FINITE number is dropped (#1673), on the same grounds
+    as the lines this fold's siblings already drop for a missing field or an
+    unparsable uic: the journal round-trips a real NaN (the writer leaves
+    ``allow_nan`` on) and ``float()`` accepts the strings ``"NaN"`` and
+    ``"inf"`` too, so a hand-edited or corrupted line arrives in either shape.
+    The ratchet is protected by ``compose_ratchet_floor`` whatever this returns;
+    what the filter buys HERE is that no other consumer sees the value --
+    ``_unrestored_trail_alert`` fires on ``not trailed <= plan_stop``, which a
+    NaN satisfies, and so reported a trailed level of ``nan`` as lost."""
     return {
-        uic: float(line["level"]) for uic, line in stop_journal._select_trailed_lines(lines).items()
+        uic: level
+        for uic, line in stop_journal._select_trailed_lines(lines).items()
+        if math.isfinite(level := float(line["level"]))
     }
 
 

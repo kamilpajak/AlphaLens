@@ -32,6 +32,7 @@ from broker_contract.stop_decision import (
     StopDecisionView,
     _reanchor,
     _trail,
+    compose_ratchet_floor,
     decide_reanchor_detail,
     decide_stop,
     decide_trail_detail,
@@ -236,16 +237,85 @@ class TrailRatchetTest(unittest.TestCase):
             decide_stop(_trail_view(peak=110.0, last_price=104.0, ratchet_floor=103.78))
         )
 
-    def test_a_nan_floor_does_not_ratchet(self) -> None:
-        """Copied as is: the daemon compares against the floor without an
-        ``isfinite`` guard, and ``x <= nan + eps`` is False. Hardening belongs
-        to step 2, when one implementation remains."""
-        self.assertAlmostEqual(
-            decide_stop(_trail_view(ratchet_floor=float("nan"))), 103.0, places=9
-        )
+    def test_a_nan_floor_vetoes(self) -> None:
+        """#1673. This test read the other way until the hardening its own
+        comment called for landed: the copied daemon compared against the floor
+        with no ``isfinite`` guard, and ``x <= nan + eps`` is False, so a NaN
+        floor let every proposal through.
+
+        A non-finite floor now REFUSES rather than being ignored, and the
+        direction is the safe one. This function cannot recover the real floor
+        from a composed value, so the two readings are "a floor was stated and
+        its value is nonsense, do not move the stop" and "move the stop as
+        though no floor existed". Only the first is safe, and it already is
+        what an infinite floor did."""
+        self.assertIsNone(decide_stop(_trail_view(ratchet_floor=float("nan"))))
 
     def test_an_infinite_floor_vetoes(self) -> None:
         self.assertIsNone(decide_stop(_trail_view(ratchet_floor=float("inf"))))
+        self.assertIsNone(decide_stop(_trail_view(ratchet_floor=float("-inf"))))
+
+    def test_a_finite_floor_far_below_still_fires(self) -> None:
+        """Positive control for the two vetoes above: the refusal is about the
+        value being non-finite, not about this view refusing to move."""
+        self.assertAlmostEqual(decide_stop(_trail_view(ratchet_floor=1.0)), 103.0, places=9)
+
+
+class ComposeRatchetFloorTest(unittest.TestCase):
+    """``compose_ratchet_floor`` is where the two floors meet (#1673).
+
+    It exists because the composition used to be written out at each call site
+    and the rule it had to follow was subtle enough to get wrong: the daemon
+    ratchets against the HIGHER of the level a trail last moved the stop to and
+    the level the stop is RESTING at, and one of those two arrives from a
+    journal fold that can carry a corrupt number. Composing with a bare ``max``
+    propagates it, and ``max`` is not even symmetric on a NaN input, so the two
+    orders of the same two floors disagreed.
+    """
+
+    def test_the_higher_of_two_levels_wins(self) -> None:
+        self.assertEqual(compose_ratchet_floor(55.0, 56.0), 56.0)
+        self.assertEqual(compose_ratchet_floor(56.0, 55.0), 56.0)
+
+    def test_no_levels_at_all_is_no_floor(self) -> None:
+        self.assertIsNone(compose_ratchet_floor())
+        self.assertIsNone(compose_ratchet_floor(None, None))
+
+    def test_a_missing_level_does_not_hide_the_one_that_is_there(self) -> None:
+        self.assertEqual(compose_ratchet_floor(None, 56.0), 56.0)
+        self.assertEqual(compose_ratchet_floor(56.0, None), 56.0)
+
+    def test_a_level_of_exactly_zero_is_a_floor_not_an_absence(self) -> None:
+        """Filtered on ``is not None`` and on finiteness, never on truthiness:
+        ``0.0`` is falsy and is a real level. ``tests/brokers/automanager/
+        test_kept_stop_level.py`` is where that matters observably, at penny
+        prices, where a zero floor can veto."""
+        self.assertEqual(compose_ratchet_floor(0.0), 0.0)
+        self.assertEqual(compose_ratchet_floor(0.0, None), 0.0)
+
+    def test_a_non_finite_level_is_dropped(self) -> None:
+        for degenerate in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(level=degenerate):
+                self.assertEqual(compose_ratchet_floor(degenerate, 56.0), 56.0)
+                self.assertIsNone(compose_ratchet_floor(degenerate))
+
+    def test_the_result_does_not_depend_on_the_argument_order(self) -> None:
+        """The property that replaces the one golden case able to kill a
+        reversed composition. ``max(nan, 56.0)`` is ``nan`` while
+        ``max(56.0, nan)`` is ``56.0``; after the filter both are ``56.0``."""
+        for pair in ((float("nan"), 56.0), (float("inf"), 56.0), (None, 56.0), (55.0, 56.0)):
+            with self.subTest(pair=pair):
+                self.assertEqual(
+                    compose_ratchet_floor(*pair), compose_ratchet_floor(*reversed(pair))
+                )
+
+    def test_a_negative_level_is_kept(self) -> None:
+        """Only non-finite values are dropped. A negative floor is a finite
+        number this function has no business judging: the daemon's resting-price
+        input is already filtered for positivity by its own caller, and the
+        envelope refuses a non-positive brief floor before the ratchet is ever
+        reached."""
+        self.assertEqual(compose_ratchet_floor(-1.0), -1.0)
 
 
 class ReanchorArmTest(unittest.TestCase):
