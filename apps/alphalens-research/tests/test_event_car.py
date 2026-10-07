@@ -229,6 +229,173 @@ class TestEnrichStore(_StoreBase):
         self.assertEqual(path.stat().st_mtime_ns, mtime)
         pd.testing.assert_frame_equal(pd.read_parquet(path), first)
 
+    # --- the dtype the monitor leaves behind (5 dates failing nightly since 2026-10-02) ---
+    #
+    # `event_car` adds its three columns as all-null. On a date with no matured event
+    # row nothing is ever stamped, so the column stays all-null, and the population
+    # monitor's next rebuild of that parquet turns an all-null column into float64.
+    # The pass after that writes a STRING into it and raises, the date is abandoned,
+    # and because the raise happens BEFORE the write the file never heals: 79 of 141
+    # store files were in this state, 6 event rows on 5 dates permanently unstamped.
+    #
+    # Measured precondition: an all-null column is what does it. A column where ANY
+    # row carries a real string survives a rebuild as a string dtype, which is why a
+    # file heals for good once a single row is stamped.
+
+    def _monitor_rebuild(self, path: Path) -> None:
+        """What population_ladder_monitor._write_store_atomic does to this file.
+
+        Rows out as dicts, a frame back in. The brand-new ticker is not required to
+        trigger the bug - an all-null column is enough - but it is what the real
+        rebuild looks like, so the fixture carries it.
+        """
+        rows = pd.read_parquet(path).to_dict("records")
+        rows.append(
+            {
+                "brief_date": ARRIVAL,
+                "ticker": "NEW",
+                "plannable": True,
+                "terminal": False,
+                "source": "thematic",
+                "event_overlap": False,
+            }
+        )
+        pd.DataFrame(rows).to_parquet(path)
+
+    def test_a_version_column_the_monitor_retyped_still_gets_stamped(self):
+        """THE gate. Immature first pass -> monitor rebuild -> matured pass.
+
+        A shorter test that seeds float("nan") directly would go green against a fix
+        that merely casts the column, which leaves it healthy for exactly one night.
+        This one contains the rebuild, so only a fix that does not depend on the
+        incoming dtype can pass it.
+        """
+        sessions = _sessions(40)
+        self._seed_cache(sessions, dict.fromkeys(sessions, (10.0, 10.0)))
+        # Pass 1 sees no EVENT row, so there is nothing to stamp and the columns are
+        # written all-null. That is the state the whole bug needs, and it is reachable
+        # in production because a thematic row GAINS `event_overlap` on a later night
+        # once the news that overlaps it is ingested - the row is not an event row when
+        # the columns are first created, and is one by the time they are written to.
+        path = self._write_rows([self._row("AAA", source="thematic")])
+        ec.enrich_store_with_event_car(self.store, grouped_fetch=self._fetch, now=NOW)
+        self._monitor_rebuild(path)
+
+        # the precondition, asserted rather than assumed: the rebuild really retyped it
+        self.assertEqual(
+            str(pd.read_parquet(path)["event_car_version"].dtype),
+            "float64",
+            "precondition: the monitor's rebuild must leave a float column",
+        )
+
+        # the row becomes an event row: the overlap flag arrives with later news
+        reread = pd.read_parquet(path)
+        reread.loc[reread["ticker"] == "AAA", "event_overlap"] = True
+        reread.to_parquet(path)
+
+        ec.enrich_store_with_event_car(self.store, grouped_fetch=self._fetch, now=NOW)
+
+        df = pd.read_parquet(path)
+        stamped = df[df["ticker"] == "AAA"].iloc[0]
+        self.assertEqual(stamped["event_car_version"], ec.EVENT_CAR_VERSION)
+        self.assertTrue(ec._is_real(stamped["car_20_event"]))
+
+    def test_a_float_version_column_seeded_directly_is_stamped(self):
+        # The same failure without the rebuild. Kept for readability; NOT the gate,
+        # because a cast-only fix would also turn it green.
+        sessions = _sessions(40)
+        self._seed_cache(sessions, dict.fromkeys(sessions, (10.0, 10.0)))
+        row = self._row("AAA", source="insider_cluster")
+        row["event_car_version"] = float("nan")
+        path = self._write_rows([row])
+
+        ec.enrich_store_with_event_car(self.store, grouped_fetch=self._fetch, now=NOW)
+
+        self.assertEqual(pd.read_parquet(path).iloc[0]["event_car_version"], ec.EVENT_CAR_VERSION)
+
+    def test_a_retyped_file_with_nothing_matured_is_NOT_rewritten(self):
+        """The test that decides the design.
+
+        The values this pass computes for an immature row are None, and the column on
+        disk is float64 full of NaN. A comparison that does not treat NaN and None as
+        equal reports a change and rewrites all 79 broken files every night, forever.
+        """
+        # The row must NOT be an event row. An event row is stamped on the first pass,
+        # which turns the NaNs into None and the comparison never meets the case. A
+        # thematic row on a retyped file is the state 79 live files are actually in:
+        # float64 NaN on disk, None computed, nothing to do.
+        row = self._row("AAA", source="thematic")
+        row["event_car_version"] = float("nan")
+        row["car_20_event"] = float("nan")
+        row["car_40_event"] = float("nan")
+        path = self._write_rows([row])
+        self.assertEqual(
+            str(pd.read_parquet(path)["car_20_event"].dtype),
+            "float64",
+            "precondition: the columns must really be float64 on disk",
+        )
+
+        ec.enrich_store_with_event_car(self.store, grouped_fetch=self._fetch, now=NOW)
+        mtime = path.stat().st_mtime_ns
+        ec.enrich_store_with_event_car(self.store, grouped_fetch=self._fetch, now=NOW)
+
+        self.assertEqual(path.stat().st_mtime_ns, mtime)
+
+    def test_the_float_columns_stay_numeric_over_a_retyped_file(self):
+        # The repair must not generalise to columns that never needed it.
+        sessions = _sessions(40)
+        self._seed_cache(sessions, dict.fromkeys(sessions, (10.0, 10.0)))
+        row = self._row("AAA", source="insider_cluster")
+        row["event_car_version"] = float("nan")
+        path = self._write_rows([row])
+
+        ec.enrich_store_with_event_car(self.store, grouped_fetch=self._fetch, now=NOW)
+
+        df = pd.read_parquet(path)
+        for col in ("car_20_event", "car_40_event"):
+            self.assertEqual(df[col].dtype.kind, "f", f"{col} stopped being numeric")
+
+    def test_the_file_heals_so_a_later_pass_needs_no_repair(self):
+        # The whole loop. Once a row carries a real string the column survives the
+        # monitor's rebuild as a string dtype, which is why 0 of the 79 broken files
+        # had ever been stamped.
+        sessions = _sessions(40)
+        self._seed_cache(sessions, dict.fromkeys(sessions, (10.0, 10.0)))
+        row = self._row("AAA", source="insider_cluster")
+        row["event_car_version"] = float("nan")
+        path = self._write_rows([row])
+
+        ec.enrich_store_with_event_car(self.store, grouped_fetch=self._fetch, now=NOW)
+        self._monitor_rebuild(path)
+
+        self.assertNotEqual(
+            str(pd.read_parquet(path)["event_car_version"].dtype),
+            "float64",
+            "a stamped column must survive the rebuild as a string dtype",
+        )
+
+    def test_an_immature_event_row_is_version_stamped_anyway(self):
+        """The stamp does not wait for the CAR, and that is what heals a date.
+
+        An event row whose horizon has not closed gets `None` for both CARs but the
+        version string regardless. That single real value is what keeps the column a
+        string dtype through the monitor's next rebuild - a column with one value in
+        it is never retyped to float64. Pinning it because a plausible-looking change
+        (stamp only when a CAR was computed) would leave the column all-null and put
+        the date straight back into the broken set.
+        """
+        sessions = _sessions(40)
+        self._seed_cache(sessions, dict.fromkeys(sessions, (10.0, 10.0)))
+        path = self._write_rows([self._row("AAA", source="insider_cluster")])
+
+        ec.enrich_store_with_event_car(
+            self.store, grouped_fetch=self._fetch, now=dt.datetime(2026, 3, 5, 7, 0, tzinfo=dt.UTC)
+        )
+
+        df = pd.read_parquet(path)
+        self.assertEqual(df.iloc[0]["event_car_version"], ec.EVENT_CAR_VERSION)
+        self.assertFalse(ec._is_real(df.iloc[0]["car_20_event"]), "nothing matured yet")
+
     def test_fetches_only_uncached_sessions(self):
         sessions = _sessions(40)
         self._seed_cache(sessions[:30], dict.fromkeys(sessions, (10.0, 10.0)))
