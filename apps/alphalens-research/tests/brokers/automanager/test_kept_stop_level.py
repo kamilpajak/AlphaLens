@@ -41,6 +41,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
 )
 from alphalens_pipeline.brokers.execution import RAIL_LATTICE
 from broker_contract.contract import InstrumentRef, OrderState, OrderStatus, Position
+from broker_contract.stop_decision import compose_ratchet_floor
 from broker_contract.trade_intent.schema import ReanchorOnFill, TrailingStop
 
 from tests.brokers.automanager.acceptance.fake_broker import FakeBroker
@@ -368,6 +369,62 @@ class TestTheTrailNeverPatchesAHigherRestingStopDown(unittest.TestCase):
                 journaled=None,
             )
         )
+
+    def test_a_non_finite_journaled_level_is_not_a_floor(self) -> None:
+        """#1673, the sibling of the resting-price filter above, and the half
+        that was missing: the JOURNALED level entered the ratchet unfiltered.
+
+        Two distinct failures, one missing guard, because the two non-finite
+        values break the comparison in opposite directions:
+
+        * ``nan`` — ``max(nan, 56.0)`` is ``nan`` and ``clamped <= nan + eps``
+          is False, so the ratchet refuses NOTHING and the arm patches a stop
+          resting at 56.00 down to 55.502. That is the exact move #1514 exists
+          to forbid.
+        * ``inf`` — the floor becomes infinite and vetoes every proposal for
+          ever, so a position's stop can never trail again.
+
+        Dropping the value is what fixes both, and it must not become a veto:
+        the SECOND half of each pair is the control that a real floor still
+        binds and a real move still happens."""
+        fixture = {
+            "avg_price": 50.0,
+            "plan_stop": 45.0,
+            "peak": 59.17,
+            "last_price": 59.0,
+        }
+        # NaN: the resting stop is still the floor, so the proposal is refused.
+        self.assertIsNone(self._trail(resting=56.0, journaled=float("nan"), **fixture))
+        # ...and dropping it does not freeze the arm: with the resting stop
+        # BELOW the proposal the same NaN journal level still trails.
+        moved = self._trail(resting=50.0, journaled=float("nan"), **fixture)
+        self.assertIsInstance(moved, AmendStop)
+        self.assertAlmostEqual(moved.stop_price, 55.502, places=6)  # type: ignore[union-attr]
+        # Infinity: a legitimate move that an infinite floor used to veto.
+        moved_inf = self._trail(resting=50.0, journaled=float("inf"), **fixture)
+        self.assertIsInstance(moved_inf, AmendStop)
+        self.assertAlmostEqual(moved_inf.stop_price, 55.502, places=6)  # type: ignore[union-attr]
+        # Existence control for both: a FINITE journaled level above the
+        # proposal still refuses, so this test is about the filter and not
+        # about an arm that cannot fire on these inputs.
+        self.assertIsNone(self._trail(resting=None, journaled=56.0, **fixture))
+
+    def test_the_floor_composition_does_not_depend_on_the_argument_order(self) -> None:
+        """The witness the KNOWN_RESIDUAL golden row asked whoever fixed #1673
+        to replace.
+
+        That row was the only case that could kill a reversed floor
+        composition, because ``max`` keeps its first argument when the
+        comparison is False and so the order mattered on a NaN input and
+        nowhere else. Filtering the non-finite values makes the composition
+        commutative instead, which is a property rather than a case: the two
+        orders now agree on every input, including the one that used to
+        separate them."""
+        self.assertEqual(
+            compose_ratchet_floor(float("nan"), 56.0),
+            compose_ratchet_floor(56.0, float("nan")),
+        )
+        self.assertEqual(compose_ratchet_floor(float("nan"), 56.0), 56.0)
 
 
 class TestTheTakeProfitAmendKeepsTheRestingLevel(unittest.TestCase):

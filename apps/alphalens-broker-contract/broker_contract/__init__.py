@@ -29,7 +29,10 @@ Sub-packages / modules:
         (``StopDecisionView`` -> ``decide_stop`` -> a level or ``None``, or
         ``decide_trail_detail`` / ``decide_reanchor_detail`` -> that level plus
         the two the caller reports on). THE implementation of the daemon's trail
-        and re-anchor arms since #1581; they call in here
+        and re-anchor arms since #1581; they call in here. ``ratchet_floor`` is
+        composed by the caller and every caller composes it with the published
+        ``compose_ratchet_floor`` -- the rule is subtle enough that writing it
+        out per call site got it wrong (#1673)
 
 Dependency direction: this package must never import from
 ``alphalens_pipeline`` or ``alphalens_research`` — it is a pure leaf consumed

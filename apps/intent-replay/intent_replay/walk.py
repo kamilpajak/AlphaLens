@@ -19,7 +19,11 @@ import math
 from dataclasses import dataclass, field
 
 from broker_contract.exit_geometry.registry import resolve_declared_policy
-from broker_contract.stop_decision import StopDecisionView, decide_stop
+from broker_contract.stop_decision import (
+    StopDecisionView,
+    compose_ratchet_floor,
+    decide_stop,
+)
 
 from intent_replay.bars import Bar
 from intent_replay.config import Costs, RunConfig
@@ -761,27 +765,24 @@ def _decide_stop(state: _WalkState, bar: Bar, plan: Plan, *, trails: bool) -> No
     # ratchet with no floor at all and let a proposal inside the
     # ``TRAIL_STEP_EPS`` band above the resting stop through.
     #
-    # Two details are load-bearing, both measured rather than reasoned:
+    # The composition is the contract's ``compose_ratchet_floor`` (#1673), the
+    # same function the daemon calls: highest floor, absent and NON-FINITE ones
+    # dropped. So the ARGUMENT ORDER stops carrying a meaning. This block used
+    # to prescribe the daemon's order -- journaled before resting, because
+    # ``max`` keeps its first argument when the comparison is False -- and that
+    # is the order which PROPAGATES a NaN, the defect #1673 fixed.
     #
-    # * the ARGUMENT ORDER is the daemon's, journaled before resting. ``max`` keeps
-    #   its first argument when the comparison is False, so ``max(nan, 56.0)`` is
-    #   ``nan`` and ``max(56.0, nan)`` is ``56.0``. The leaf compares its floor raw
-    #   and documents what a NaN floor does; reversing the order here would answer
-    #   a different question than the daemon answers.
-    # * the filter is ``is not None`` and never truthiness. A floor of exactly
-    #   ``0.0`` is a floor, and ``filter(None, ...)`` would drop it.
-    #
-    # The daemon reads its resting floor through ``_finite_positive``, so it
-    # treats zero, negatives and non-finite prices as absent, and this does not.
-    # That is not a gap here, and the reason is measured rather than argued:
-    # before the first trail move ``state.stop`` IS ``plan.declared_floor``, so a
-    # non-positive one makes ``plan_stop`` non-positive too and the leaf refuses
-    # on that alone -- checked at ``plan_stop`` 0.0, where the leaf answers None
-    # for a floor of 0.0 and for no floor alike. After the first move
-    # ``state.stop`` is a level the clamp produced, which is finite and positive.
-    # So the filtered and unfiltered forms cannot disagree on any input the walk
-    # can reach, and adding the guard would be dead code.
-    floors = [level for level in (state.last_trailed_level, state.stop) if level is not None]
+    # On THIS side the change is behaviour-neutral, measured rather than
+    # assumed: neither floor can be non-finite while a decision proceeds.
+    # ``state.last_trailed_level`` is only ever a clamp output and the clamp
+    # refuses every non-finite input; before the first trail move ``state.stop``
+    # IS ``plan.declared_floor``, which is also ``plan_stop``, so a non-finite
+    # one makes the clamp refuse on that alone, and after it ``state.stop`` is a
+    # clamp output too. The same argument covers a non-positive floor, which is
+    # why the walk does not mirror the daemon's ``_finite_positive`` read either
+    # -- checked at ``plan_stop`` 0.0, where the leaf answers None for a floor
+    # of 0.0 and for no floor alike. What the shared function buys here is one
+    # home for the rule, not a changed answer; the golden corpus holds that.
     level = decide_stop(
         StopDecisionView(
             avg_price=average,
@@ -791,7 +792,7 @@ def _decide_stop(state: _WalkState, bar: Bar, plan: Plan, *, trails: bool) -> No
             reaction=plan.reaction,
             has_sole_standalone_stop=True,
             amend_in_backoff=False,
-            ratchet_floor=max(floors) if floors else None,
+            ratchet_floor=compose_ratchet_floor(state.last_trailed_level, state.stop),
             already_reanchored=state.latched_avg is not None and state.latched_avg == average,
         )
     )

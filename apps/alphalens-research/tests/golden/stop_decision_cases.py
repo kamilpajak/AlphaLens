@@ -42,6 +42,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     _maybe_trail,
 )
 from broker_contract.contract import InstrumentRef, OrderState, OrderStatus, Position
+from broker_contract.stop_decision import compose_ratchet_floor
 from broker_contract.trade_intent.schema import ReanchorOnFill, TrailingStop
 
 UIC = 43070
@@ -179,16 +180,20 @@ def build_view(case: Case) -> tuple[ProtectionView, Position, PlannedExit]:
 
 
 def composed_ratchet_floor(case: Case) -> float | None:
-    """What the daemon's trail arm combines its two floors into, reproduced here
-    so the record carries the floor the arm actually used rather than the raw
-    journaled level. Trailed level FIRST, resting price second, because ``max``
-    keeps its first argument when the comparison is False and the two orders
-    therefore disagree on a NaN input."""
+    """What the daemon's trail arm combines its two floors into, so the record
+    carries the floor the arm actually used rather than the raw journaled level.
+
+    It calls the SAME ``compose_ratchet_floor`` the arm calls, which it did not
+    until #1673: it held a reproduction of the composition, and when the arm
+    started dropping non-finite levels the reproduction would have recorded
+    ``nan`` for a floor the arm had read as 56.00. Sharing the function is safe
+    for mutation detection here because the frozen oracle is the COMMITTED
+    corpus, not this call: a mutation in the composer moves the replayed value
+    away from the recorded one and the replay test is red."""
     sole = pm._sole_standalone_stop(case.legs)
     resting = None if sole is None else pm._resting_stop_price(sole)
     journaled = None if case.journaled_floor is _ABSENT else case.journaled_floor
-    floors = [level for level in (journaled, resting) if level is not None]
-    return max(floors) if floors else None
+    return compose_ratchet_floor(journaled, resting)
 
 
 class _Collect(logging.Handler):
@@ -512,19 +517,25 @@ CASES: tuple[Case, ...] = (
         reaction=DECLARED_TRAIL,
     ),
     Case(
-        name="trail_nan_journaled_floor_KNOWN_RESIDUAL",
-        bucket="known_residual",
-        why="KNOWN RESIDUAL, issue #1673, NOT a statement of correct behaviour: "
-        "max(nan, 56.0) is nan and 'clamped <= nan' is False, so the "
-        "ratchet refuses nothing and the arm patches a stop resting at "
-        "56.00 DOWN. Frozen here so the delegation is provably neutral; "
-        "resolving #1673 turns the test beside this row red on purpose. "
-        "ONE MORE THING THE FIX MUST CARRY: measured over eleven mutations "
-        "of the arms, this row is the ONLY witness that kills a reversed "
-        "floor composition (max keeps its first argument when the "
-        "comparison is False, so the order only matters on a NaN input). "
-        "Whoever resolves #1673 therefore owes the order a new witness, or "
-        "that mutation goes unobserved",
+        name="trail_nan_journaled_floor_keeps_the_resting_floor",
+        bucket="trail_ratchet_refusal",
+        why="#1673, RESOLVED 2026-10-07, and this row recorded the defect "
+        "until then: max(nan, 56.0) is nan and 'clamped <= nan' is False, so "
+        "the ratchet refused NOTHING and the arm patched a stop resting at "
+        "56.00 down to 55.502. The composition now drops a non-finite level "
+        "(compose_ratchet_floor), so the resting 56.00 is the floor and the "
+        "proposal is refused -- silently, like every other ratchet refusal, "
+        "which is why the bucket moved with the answer. The bucket it used to "
+        "sit in, known_residual, was removed with it: it held this row alone. "
+        "THE WITNESS THIS ROW USED TO CARRY is gone and did not need "
+        "replacing with another case: measured over eleven mutations of the "
+        "arms, this was the ONLY case that killed a reversed floor "
+        "composition, because max keeps its first argument when the "
+        "comparison is False and so the order mattered on a NaN input and "
+        "nowhere else. Filtering makes the composition commutative, so that "
+        "mutation is now semantically inert rather than unobserved -- pinned "
+        "as a property by test_the_result_does_not_depend_on_the_argument_"
+        "order in tests/brokers/test_stop_decision.py",
         journaled_floor=float("nan"),
         legs=(mk_leg(resting_price=56.00),),
         **_CLEAN_TRAIL,
@@ -657,9 +668,6 @@ BUCKET_SHAPES: dict[str, BucketShape] = {
     "reanchor_latch_suppressed": BucketShape(places=False, logs=False),
     "reanchor_guard_veto": BucketShape(places=False, logs=False),
     "reanchor_inert_policy": BucketShape(places=False, logs=False),
-    # Not a statement of correct behaviour: this bucket PLACES a level, and that
-    # is the defect (#1673). See the case's own comment.
-    "known_residual": BucketShape(places=True, logs=False),
 }
 
 BUCKETS: tuple[str, ...] = tuple(sorted(BUCKET_SHAPES))

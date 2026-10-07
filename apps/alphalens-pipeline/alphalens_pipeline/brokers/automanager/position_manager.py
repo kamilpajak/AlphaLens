@@ -52,6 +52,7 @@ from broker_contract.contract import (
 from broker_contract.exit_geometry.registry import resolve_declared_policy
 from broker_contract.stop_decision import (
     StopDecisionView,
+    compose_ratchet_floor,
     decide_reanchor_detail,
     decide_trail_detail,
 )
@@ -927,16 +928,15 @@ def _maybe_trail(
     # #1514: the stop that RESTS is a floor too, and the CALLER composes the
     # ratchet floor because both inputs are its own -- one a journal fold, the
     # other a price on an order leg, which the contract's view keeps out by
-    # design (spec section 3.2). Trailed level FIRST and resting second,
-    # because ``max`` keeps its first argument when the comparison is False, so
-    # the two orders disagree on a NaN input; and the resting price goes through
-    # ``_resting_stop_price``, so a non-finite one is DROPPED instead of
-    # becoming an infinite floor that vetoes every move for ever.
-    floors = [
-        level
-        for level in (view.trailed_stop_by_uic.get(uic), _resting_stop_price(sole))
-        if level is not None
-    ]
+    # design (spec section 3.2). #1673: the composition is the contract's
+    # ``compose_ratchet_floor``, not a ``max`` written out here, because BOTH
+    # non-finite values break a bare ``max`` and they break it in opposite
+    # directions -- a NaN from the fold made the ratchet refuse nothing and let
+    # a stop resting at 56.00 be patched down to 55.502, while an infinity
+    # would veto every move for ever. The resting price is filtered for
+    # finiteness a second time by ``_resting_stop_price``, which also drops a
+    # non-positive one; the journal fold has no such filter of its own.
+    floor = compose_ratchet_floor(view.trailed_stop_by_uic.get(uic), _resting_stop_price(sole))
     # #1581: the DECISION is the contract's, same shape as ``_maybe_reanchor``.
     # ``plan_stop`` is the brief disaster floor (MAX across the ladder's tiers,
     # which under a no-geometry policy all journal the same
@@ -951,7 +951,7 @@ def _maybe_trail(
             reaction=plan.reaction,
             has_sole_standalone_stop=sole is not None,
             amend_in_backoff=uic in view.amend_recently_failed,
-            ratchet_floor=max(floors) if floors else None,
+            ratchet_floor=floor,
             already_reanchored=False,  # no latch here; this branch never reads it
         )
     )
