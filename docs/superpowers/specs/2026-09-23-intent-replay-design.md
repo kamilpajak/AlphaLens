@@ -20,7 +20,7 @@ back all moved, `spec.size.currency` became *interpreted*, the
 `cost_gate_prices_the_account_currency` divergence retired, the symbolic unit
 `instrument_currency` retired, the `USD/PLN` token became `USD_per_PLN`, and the
 whole-share paragraph of §5 was re-measured under the buffer; §5 revised
-2026-10-08 to publish the walked sub-window beside the input series)
+2026-10-08 to publish the walked sub-window beside the input series, #1746)
 **Date:** 2026-09-23, last revised 2026-10-08
 (2026-09-28, PR 7's plan: sections 4.4, 4.6, 5, 5.1, 5.2, 5.3 and 5.4 revised — among them a
 FOURTH tie row, which fixed the rung/take-profit order as "the take-profit first".
@@ -1125,7 +1125,7 @@ scale. R itself is the problem" — and replaced R with net cash.
 
 **Eight things about that block, added 2026-09-28 and 2026-09-29 while planning
 PR 7 — the first version that EMITS it — and amended 2026-10-02 when #1592
-landed and 2026-10-08 when the walked window was published.**
+landed and 2026-10-08 when the walked window was published, #1746.**
 
 **`window` is the series handed in and `walked` is the part the loop read, and
 the second exists because the first was being read as the holding horizon.** A
