@@ -396,6 +396,71 @@ class TestEnrichStore(_StoreBase):
         self.assertEqual(df.iloc[0]["event_car_version"], ec.EVENT_CAR_VERSION)
         self.assertFalse(ec._is_real(df.iloc[0]["car_20_event"]), "nothing matured yet")
 
+    def test_a_version_only_change_on_an_EXISTING_column_still_writes(self):
+        """The version column must carry a change signal of its own.
+
+        `test_an_immature_event_row_is_version_stamped_anyway` cannot pin this: it
+        seeds a row WITHOUT the columns, so the write is forced by the column being
+        absent, not by the comparison noticing the version. Here the column exists,
+        is float64 full of NaN, and both CARs stay `None` because nothing matured -
+        so the version is the ONLY thing that differs, and the file must be rewritten
+        anyway. That is the live healing path for the 80 retyped files whose event row
+        is not yet mature.
+        """
+        sessions = _sessions(40)
+        self._seed_cache(sessions, dict.fromkeys(sessions, (10.0, 10.0)))
+        row = self._row("AAA", source="insider_cluster")
+        row["event_car_version"] = float("nan")
+        row["car_20_event"] = float("nan")
+        row["car_40_event"] = float("nan")
+        path = self._write_rows([row])
+        self.assertEqual(
+            str(pd.read_parquet(path)["event_car_version"].dtype),
+            "float64",
+            "precondition: the version column must exist and be float64",
+        )
+
+        ec.enrich_store_with_event_car(
+            self.store, grouped_fetch=self._fetch, now=dt.datetime(2026, 3, 5, 7, 0, tzinfo=dt.UTC)
+        )
+
+        df = pd.read_parquet(path)
+        self.assertEqual(df.iloc[0]["event_car_version"], ec.EVENT_CAR_VERSION)
+        self.assertFalse(ec._is_real(df.iloc[0]["car_20_event"]), "nothing matured yet")
+
+    def test_a_version_bump_is_a_change_even_when_both_CARs_are_identical(self):
+        """Two different version strings must never compare equal.
+
+        Asserted at `_write_if_changed` rather than end to end, because a settled row
+        is not in `todo` and so is never re-stamped by a pass - that was true before
+        this change too. The layer worth pinning is the comparison: route the version
+        column through a NUMERIC comparator and two strings start reading as equal,
+        which would silently strand a future `EVENT_CAR_VERSION` bump.
+        """
+        path = self._write_rows(
+            [
+                dict(
+                    self._row("AAA", source="insider_cluster"),
+                    car_20_event=0.01,
+                    car_40_event=0.02,
+                    event_car_version="event-car-v0",
+                )
+            ]
+        )
+        df = pd.read_parquet(path)
+
+        ec._write_if_changed(
+            path,
+            df,
+            {
+                "car_20_event": [0.01],
+                "car_40_event": [0.02],
+                "event_car_version": ["event-car-v1"],
+            },
+        )
+
+        self.assertEqual(pd.read_parquet(path).iloc[0]["event_car_version"], "event-car-v1")
+
     def test_fetches_only_uncached_sessions(self):
         sessions = _sessions(40)
         self._seed_cache(sessions[:30], dict.fromkeys(sessions, (10.0, 10.0)))
