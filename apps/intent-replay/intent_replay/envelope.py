@@ -120,19 +120,49 @@ def divergences(plan: Plan, config: RunConfig) -> tuple[str, ...]:
 
 
 def _window(bars: tuple[Bar, ...]) -> dict[str, Any]:
-    """The INPUT series, not the sub-window the walk read.
+    """The INPUT series, not the sub-window the walk read -- that is
+    :func:`_walked`, published beside it.
 
-    A CHOICE, and the spec does not make it: in the section 5 example
-    ``from_t`` equals ``config.walk_start`` and ``to_t`` equals
-    ``config.entry_deadline``, so that block reads equally well as "the
-    configuration's boundaries". The series is what a caller can check against
-    the file they handed in. It can be wider than what the walk looked at in
-    both directions: bars before ``walk_start`` are skipped, and the loop
-    breaks when the position closes. The README says so.
+    The series is what a caller can check against the file they handed in. It
+    can be wider than what the walk looked at in both directions: bars before
+    ``walk_start`` are skipped, and the loop breaks when the position closes.
+    Which is now a checkable statement rather than a note, because the two
+    blocks carry the same three key names.
+
+    Still A CHOICE, and the spec still does not make it: in the section 5
+    example ``from_t`` equals ``config.walk_start`` and ``to_t`` equals
+    ``config.entry_deadline``, so that block on its own reads equally well as
+    "the configuration's boundaries". Publishing ``walked`` beside it does not
+    retire the ambiguity, because the example narrows at one end only -- it
+    just means a reader who wants the walk has somewhere else to look.
 
     ``bars`` is never empty here: ``bars_empty`` refused that upstream.
     """
     return {"from_t": bars[0].t, "to_t": bars[-1].t, "bars": len(bars)}
+
+
+def _walked(result: WalkResult) -> dict[str, Any]:
+    """The sub-window the walk READ.
+
+    Published beside :func:`_window` and carrying the SAME three key names, so
+    that the only thing a reader of the two blocks has to explain is the skip
+    and the break.
+
+    The walk reports it and this module only renders it. ``build`` cannot
+    re-derive it from ``bars`` without re-implementing the break-on-close
+    rule, and the ``divergences`` docstring above records why a second
+    implementation of one rule is the defect to avoid: the two sides have to
+    answer with ONE function.
+
+    Both timestamps are ``None`` when no bar was read, which the CLI cannot
+    produce -- ``bars.check_window_covers`` refuses a series that does not
+    straddle ``walk_start``, so at least the last bar is always walked.
+    """
+    return {
+        "from_t": result.walked_from_t,
+        "to_t": result.walked_to_t,
+        "bars": result.walked_bars,
+    }
 
 
 def _denominator(measures: Measures, *, instrument_currency: str) -> dict[str, Any]:
@@ -247,6 +277,7 @@ def build(
         "intent_id": intent.intent_id,
         "instrument": {"ticker": intent.instrument.ticker, "mic": intent.instrument.mic},
         "window": _window(bars),
+        "walked": _walked(result),
         "config": config.to_jsonable(),
         "fx": _fx(config, measures),
         "divergences": list(divergences(plan, config)),

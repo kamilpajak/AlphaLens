@@ -144,6 +144,69 @@ class NothingFillsTest(unittest.TestCase):
         self.assertEqual(_kinds(result), [])
 
 
+class WalkedWindowTest(unittest.TestCase):
+    """The sub-window the loop READ, which the envelope publishes beside the
+    input series. The walk is the only side that knows it: bars before
+    ``walk_start`` are skipped and the loop breaks on the bar that closes the
+    position, so no caller can re-derive it from the series alone."""
+
+    def test_a_bar_before_walk_start_is_not_in_the_walked_window(self) -> None:
+        # The same pair as ``test_a_bar_before_walk_start_is_not_walked``: the
+        # first bar's low of 60.00 would have filled both rungs and stopped
+        # out, so a window that counted it would be visibly wrong.
+        result = walk(
+            _plan(),
+            _config(),
+            (_bar(WALK_START - MINUTE, 68.0, 68.0, 60.0), _bar(WALK_START, 70.0, 71.0, 69.0)),
+        )
+        self.assertEqual(result.walked_from_t, WALK_START)
+        self.assertEqual(result.walked_to_t, WALK_START)
+        self.assertEqual(result.walked_bars, 1)
+
+    def test_a_run_that_walked_NOTHING_reports_no_walked_window(self) -> None:
+        # Reachable through ``walk`` itself and NOT through the CLI: the bar
+        # gate ``check_window_covers`` refuses a series that ends before
+        # ``walk_start``, and that refusal is pinned in ``test_cli`` as
+        # ``window_too_short`` / ``ends_before_walk_start``. A second CLI test
+        # here would die only together with that one, so it is not written.
+        result = walk(
+            _plan(),
+            _config(),
+            (
+                _bar(WALK_START - 2 * MINUTE, 68.0, 68.0, 60.0),
+                _bar(WALK_START - MINUTE, 68.0, 68.0, 60.0),
+            ),
+        )
+        self.assertEqual(result.outcome, "no_fill")
+        self.assertIsNone(result.walked_from_t)
+        self.assertIsNone(result.walked_to_t)
+        self.assertEqual(result.walked_bars, 0)
+
+    def test_the_bar_count_is_not_the_timestamp_span_divided_by_a_minute(self) -> None:
+        # UNEQUALLY spaced bars, because every other fixture here is
+        # minute-spaced and cannot tell a count from an arithmetic on the two
+        # timestamps. The tape has session gaps, so the span is not the count.
+        #
+        # It is also the only fixture here that leaves the position OPEN with
+        # irregular spacing, which is the shape the published numbers depend
+        # on most: an open position is valued at the close of the last walked
+        # bar. The outcome is asserted rather than described, so a later edit
+        # to the plan or the prices cannot quietly turn this into a closed run
+        # and leave the comment claiming otherwise.
+        result = walk(
+            _plan(),
+            _config(),
+            (
+                _bar(WALK_START, 68.0, 68.2, 67.9),
+                _bar(WALK_START + 5 * MINUTE, 68.1, 68.3, 67.95),
+            ),
+        )
+        self.assertEqual(result.outcome, "open")
+        self.assertEqual(result.walked_bars, 2)
+        assert result.walked_from_t is not None and result.walked_to_t is not None
+        self.assertEqual((result.walked_to_t - result.walked_from_t) // MINUTE + 1, 6)
+
+
 class EntriesFillTest(unittest.TestCase):
     def test_a_touched_rung_fills_at_its_limit_and_places_the_stop(self) -> None:
         result = walk(_plan(), _config(), (_bar(WALK_START, 68.5, 68.6, 67.9),))

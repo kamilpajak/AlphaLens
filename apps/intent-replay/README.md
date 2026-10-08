@@ -212,7 +212,7 @@ exactly one JSON value; with `--format ndjson` it is one `result` line and one
 `result` line's `data` is byte-identical to what `--format json` prints, so a
 caller can move between the two without a second parser.
 
-The envelope has ten keys, in this order:
+The envelope has twelve keys, in this order:
 
 | key | what it holds |
 |---|---|
@@ -220,7 +220,9 @@ The envelope has ten keys, in this order:
 | `intent_id` | the sentinel `REPLAY`; a replayed document has no arming identity |
 | `instrument` | the document's own `ticker` and `mic` |
 | `window` | the bar series that was handed in: `from_t`, `to_t`, `bars` |
+| `walked` | the part of that series the walk actually read: `from_t`, `to_t`, `bars` |
 | `config` | the configuration block, echoed key for key |
+| `fx` | what the conversion DID: `applies`, and the spend in the instrument's currency |
 | `divergences` | the places this run is known to differ from the daemon |
 | `intrabar_rule` | the name of the order the walk resolves a bar in |
 | `outcome` | one of `closed_stop`, `closed_tp`, `closed_time_stop`, `open`, `no_fill` |
@@ -293,10 +295,21 @@ whatever budget is left. On the 1500 ladder above, at a rate of 1.0, adding a
 it takes it from 69.50 DOWN to 53.30. So a buffer can make the lattice gap
 smaller, and any figure here has to travel with its rate and its buffer.
 
-**`window` describes the series you handed in, not the part the walk read.** It
-can be wider on both sides. Bars before `walk_start` are skipped, and the walk
-stops as soon as the position closes, so later bars are never looked at. Both
-still count in `window`.
+**`window` describes the series you handed in; `walked` describes the part the
+walk read.** `window` can be wider on both sides. Bars before `walk_start` are
+skipped, and the walk stops as soon as the position closes, so later bars are
+never looked at. Both still count in `window` and neither counts in `walked`.
+`walked` bounds the WALK, not the holding: it starts at `walk_start`, so every
+bar the walk read while the ladder was still resting is counted, and a `no_fill`
+run reports a non-zero `walked.bars` over a position that never existed. The
+holding horizon starts at the first `entry_filled` in `trace`, which no envelope
+key reports. What `walked` is for is reading `window.bars` correctly: one real
+121-bar series was 90 bars of context before `walk_start` and 31 bars of walk. On an `open` outcome this matters for every number:
+the position is valued at the close of the last bar the walk saw, which is
+`walked.to_t`. `walked.bars` is a count, not a span divided by a bar width; the
+tape has session gaps. Both timestamps are `null` if no bar was read, which the
+CLI cannot produce — a series that does not straddle `walk_start` is refused as
+`window_too_short`.
 
 **`filled_fraction` can be slightly above 1.0, and one reason is not rounding.**
 `validate_intent` accepts an entry ladder whose allocations sum to within 1e-6

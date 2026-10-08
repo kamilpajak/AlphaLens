@@ -216,11 +216,43 @@ class AcceptedDocumentTest(_Files):
         self.assertEqual(value["outcome"], "open")
         self.assertIn("native_entry_trail_is_a_broker_model", value["divergences"])
 
-    def test_the_command_hands_the_envelope_the_series_it_read(self) -> None:
+    def test_the_command_hands_the_envelope_the_series_it_was_GIVEN(self) -> None:
+        # The series READ is a different block; the test below covers it.
         _, value = self._json()
         self.assertEqual(
             value["window"],
             {"from_t": BARS[0]["t"], "to_t": BARS[-1]["t"], "bars": len(BARS)},
+        )
+
+    def test_the_envelope_names_both_the_series_handed_in_and_the_part_walked(self) -> None:
+        """Through the REAL writer, on a series that is wider at both ends.
+
+        The module-level ``BARS`` cannot prove this: both its bars sit at or
+        after ``walk_start`` and both are walked, so it is uniform in the very
+        column under test. This file writes its own wider series instead: one
+        bar before ``walk_start``, one bar after the take-profit at 74.00
+        closed the position.
+        """
+        wide = [
+            {"t": WALK_START - 60_000, "open": 50.0, "high": 50.0, "low": 50.0, "close": 50.0},
+            {"t": WALK_START, "open": 68.0, "high": 68.2, "low": 67.9, "close": 68.0},
+            {"t": WALK_START + 60_000, "open": 70.0, "high": 75.0, "low": 69.0, "close": 74.5},
+            {"t": WALK_START + 120_000, "open": 80.0, "high": 81.0, "low": 79.0, "close": 80.0},
+        ]
+        run = self.run_cli(
+            "run", self.document, "--config", self.config, "--bars", self.write("wide.json", wide)
+        )
+        self.assertEqual((run.code, run.stderr), (EXIT_OK, ""))
+        value = json.loads(run.stdout)
+        self.assertEqual(value["outcome"], "closed_tp")
+        self.assertNotEqual(value["window"], value["walked"])
+        self.assertEqual(
+            value["window"],
+            {"from_t": WALK_START - 60_000, "to_t": WALK_START + 120_000, "bars": 4},
+        )
+        self.assertEqual(
+            value["walked"],
+            {"from_t": WALK_START, "to_t": WALK_START + 60_000, "bars": 2},
         )
 
     def test_no_non_finite_number_can_reach_stdout(self) -> None:
