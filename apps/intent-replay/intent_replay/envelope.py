@@ -144,6 +144,10 @@ def _window(bars: tuple[Bar, ...]) -> dict[str, Any]:
 def _walked(result: WalkResult) -> dict[str, Any]:
     """The sub-window the walk READ.
 
+    Published beside :func:`_window` and carrying the SAME three key names, so
+    that the only thing a reader of the two blocks has to explain is the skip
+    and the break.
+
     The walk reports it and this module only renders it. ``build`` cannot
     re-derive it from ``bars`` without re-implementing the break-on-close
     rule, and the ``divergences`` docstring above records why a second

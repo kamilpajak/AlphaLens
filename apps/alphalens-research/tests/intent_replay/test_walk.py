@@ -186,6 +186,13 @@ class WalkedWindowTest(unittest.TestCase):
         # UNEQUALLY spaced bars, because every other fixture here is
         # minute-spaced and cannot tell a count from an arithmetic on the two
         # timestamps. The tape has session gaps, so the span is not the count.
+        #
+        # It is also the only fixture here that leaves the position OPEN with
+        # irregular spacing, which is the shape the published numbers depend
+        # on most: an open position is valued at the close of the last walked
+        # bar. The outcome is asserted rather than described, so a later edit
+        # to the plan or the prices cannot quietly turn this into a closed run
+        # and leave the comment claiming otherwise.
         result = walk(
             _plan(),
             _config(),
@@ -194,6 +201,7 @@ class WalkedWindowTest(unittest.TestCase):
                 _bar(WALK_START + 5 * MINUTE, 68.1, 68.3, 67.95),
             ),
         )
+        self.assertEqual(result.outcome, "open")
         self.assertEqual(result.walked_bars, 2)
         assert result.walked_from_t is not None and result.walked_to_t is not None
         self.assertEqual((result.walked_to_t - result.walked_from_t) // MINUTE + 1, 6)
