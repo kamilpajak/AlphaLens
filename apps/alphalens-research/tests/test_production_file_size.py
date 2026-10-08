@@ -49,7 +49,7 @@ from pathlib import Path
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 
 # A file above this many lines must carry a baseline entry below. 1 000 is the
-# point at which a module stops fitting in one reading; 16 of the 517
+# point at which a module stops fitting in one reading; 17 of the 527
 # production files are above it today.
 CEILING = 1000
 
@@ -101,8 +101,10 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 
 # path (repo-relative, posix) -> the line count this file may not exceed.
 #
-# Every entry is a file the audit left too big. Lower one when the file
-# shrinks; raise one deliberately, in the PR that needs the room.
+# Most entries are files the audit left too big. An entry is also how a later
+# PR records a file it deliberately took OVER ``CEILING`` -- the room has to be
+# asked for in the diff. Lower one when the file shrinks; raise one
+# deliberately, in the PR that needs the room.
 BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3507,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
@@ -120,6 +122,13 @@ BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/channel_assessor.py": 1267,
     "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/orchestrator.py": 1626,
     "apps/alphalens-research/alphalens_research/eval/faithfulness.py": 1034,
+    # Was EXACTLY at the 1000 ceiling, so publishing the walked sub-window
+    # needed the room: the walk is the only side that knows which bars the
+    # loop read. The obvious split is the take-profit ladder block, which
+    # carries its own collateral (four private names imported by name in
+    # ``test_walk``, and a new module owing an environment-scan row), so it is
+    # its own issue rather than a rider on a three-field publishing change.
+    "apps/intent-replay/intent_replay/walk.py": 1021,
 }
 
 

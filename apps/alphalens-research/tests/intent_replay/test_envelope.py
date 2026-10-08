@@ -85,9 +85,11 @@ class TopLevelShapeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.built = _built("pullback-trailing-stop", TWO_BARS)
 
-    def test_the_eleven_keys_are_the_spec_keys_in_the_spec_order(self) -> None:
+    def test_the_twelve_keys_are_the_spec_keys_in_the_spec_order(self) -> None:
         # ``fx`` sits between the echoed block and the divergences: what was
         # stated, then what was derived from it, then what no setting can close.
+        # ``walked`` follows ``window`` by the same rule -- the series stated,
+        # then the part of it the walk read.
         self.assertEqual(
             list(self.built),
             [
@@ -95,6 +97,7 @@ class TopLevelShapeTest(unittest.TestCase):
                 "intent_id",
                 "instrument",
                 "window",
+                "walked",
                 "config",
                 "fx",
                 "divergences",
@@ -132,10 +135,11 @@ class TopLevelShapeTest(unittest.TestCase):
 
 
 class WindowTest(unittest.TestCase):
-    """`window` describes the INPUT series, which is a choice the spec does not
-    make for us: in the section 5 example `from_t` equals `config.walk_start`
-    and `to_t` equals `config.entry_deadline`, so that block reads equally well
-    as "the configuration's boundaries"."""
+    """`window` describes the INPUT series — the file the caller handed in.
+
+    The part of it the walk actually read is a separate block, and
+    :class:`WalkedWindowTest` is where that one is checked.
+    """
 
     def test_the_window_is_the_first_and_last_bar_handed_in(self) -> None:
         built = _built("pullback-trailing-stop", TWO_BARS)
@@ -147,7 +151,8 @@ class WindowTest(unittest.TestCase):
     def test_the_window_can_start_before_walk_start(self) -> None:
         # A bar before ``walk_start`` is skipped by the walk but is still part
         # of the series the caller handed in, so the window is WIDER than what
-        # the walk looked at. Stated in the README rather than left to a reader.
+        # the walk looked at. The ``walked`` block states the difference; this
+        # row is only about the series.
         bars = (_bar(WALK_START - MINUTE, 50.0, 50.0, 50.0), *TWO_BARS)
         built = _built("pullback-trailing-stop", bars)
         self.assertEqual(built["window"]["from_t"], WALK_START - MINUTE)
@@ -155,12 +160,87 @@ class WindowTest(unittest.TestCase):
 
     def test_the_window_can_end_after_the_last_bar_the_walk_read(self) -> None:
         # The loop breaks when the position closes, so trailing bars are never
-        # walked and still count in the window.
+        # walked and still count in the window. What the walk DID read is in
+        # ``walked``; here the point is only that the series keeps the rest.
         bars = (*TWO_BARS, _bar(WALK_START + 2 * MINUTE, 80.0, 81.0, 79.0))
         built = _built("pullback-trailing-stop", bars)
         self.assertEqual(built["outcome"], "closed_tp")
         self.assertEqual(built["window"]["to_t"], WALK_START + 2 * MINUTE)
         self.assertNotEqual(built["trace"][-1]["t"], WALK_START + 2 * MINUTE)
+
+
+class WalkedWindowTest(unittest.TestCase):
+    """`walked` describes the part of that series the loop actually READ.
+
+    It carries the same three key names as `window` on purpose: side by side,
+    the only thing left for a reader to explain is the skip and the break.
+    """
+
+    def test_the_walked_block_carries_the_three_keys_in_order(self) -> None:
+        built = _built("pullback-trailing-stop", TWO_BARS)
+        self.assertEqual(list(built["walked"]), ["from_t", "to_t", "bars"])
+
+    def test_the_walked_window_is_NARROWER_than_the_series_on_BOTH_sides(self) -> None:
+        # Four bars handed in. The first is before ``walk_start`` and is
+        # skipped; the fourth is after the take-profit closed the position and
+        # is never looked at. So the series is wider at BOTH ends at once,
+        # which is the shape that discriminates a real read from
+        # ``_window(bars)`` under another name.
+        bars = (
+            _bar(WALK_START - MINUTE, 50.0, 50.0, 50.0),
+            *TWO_BARS,
+            _bar(WALK_START + 2 * MINUTE, 80.0, 81.0, 79.0),
+        )
+        built = _built("pullback-trailing-stop", bars)
+        self.assertEqual(built["outcome"], "closed_tp")
+        self.assertEqual(
+            built["window"],
+            {"from_t": WALK_START - MINUTE, "to_t": WALK_START + 2 * MINUTE, "bars": 4},
+        )
+        self.assertEqual(
+            built["walked"],
+            {"from_t": WALK_START, "to_t": WALK_START + MINUTE, "bars": 2},
+        )
+
+    def test_the_horizon_mark_sits_on_the_last_walked_bar(self) -> None:
+        # The case where it matters for every published number: an OPEN
+        # position is valued at the CLOSE of the last bar the walk saw, and
+        # ``walked.to_t`` is where a reader goes to find which bar that was.
+        #
+        # The equality is NECESSARY here rather than tested: on an ``open``
+        # outcome the loop never breaks, so the last walked bar IS ``bars[-1]``
+        # and no fixture can make the two differ. Measured: mutating
+        # ``walked_to_t`` to ``bars[-1].t`` leaves this test GREEN and dies on
+        # the NARROWER test below. What gives this one its own power is the
+        # ``assertLess`` on ``from_t`` -- it dies on ``walked_from_t =
+        # bars[0].t``, which the NARROWER test alone also catches but which no
+        # other OPEN-outcome test does.
+        bars = (_bar(WALK_START - MINUTE, 50.0, 50.0, 50.0), _bar(WALK_START, 68.0, 68.6, 67.9))
+        built = _built("pullback-trailing-stop", bars)
+        self.assertEqual(built["outcome"], "open")
+        self.assertEqual(built["trace"][-1]["kind"], "horizon_open")
+        self.assertEqual(built["trace"][-1]["t"], built["walked"]["to_t"])
+        self.assertLess(built["window"]["from_t"], built["walked"]["from_t"])
+
+    def test_a_series_whose_every_bar_is_walked_reports_the_two_blocks_ALIKE(self) -> None:
+        """NOT a discriminating test: measured, it dies together with
+        ``test_the_walked_window_is_NARROWER_than_the_series_on_BOTH_sides``
+        and never alone.
+
+        The two companions an earlier draft named here are wrong, and the
+        measurement is the reason this docstring says so: mutating
+        ``walked_to_t`` to ``first_t`` kills this test while
+        ``test_the_walked_block_carries_the_three_keys_in_order`` and
+        ``test_the_window_is_the_first_and_last_bar_handed_in`` both stay
+        green -- ``assertEqual`` on two dicts ignores key order, and the
+        window test does not read ``walked`` at all.
+
+        It is here because the coincident case needs recording. The degenerate
+        shape is exactly the one a careless fixture would have used, and the
+        NARROWER test only discriminates because its series is wider.
+        """
+        built = _built("pullback-trailing-stop", TWO_BARS)
+        self.assertEqual(built["walked"], built["window"])
 
 
 class ConfigEchoTest(unittest.TestCase):

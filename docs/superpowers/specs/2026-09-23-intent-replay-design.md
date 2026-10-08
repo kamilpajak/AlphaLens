@@ -19,8 +19,9 @@ option 1 — the FX leg and the per-fill minimum are priced from STATED facts, a
 back all moved, `spec.size.currency` became *interpreted*, the
 `cost_gate_prices_the_account_currency` divergence retired, the symbolic unit
 `instrument_currency` retired, the `USD/PLN` token became `USD_per_PLN`, and the
-whole-share paragraph of §5 was re-measured under the buffer)
-**Date:** 2026-09-23, last revised 2026-10-02
+whole-share paragraph of §5 was re-measured under the buffer; §5 revised
+2026-10-08 to publish the walked sub-window beside the input series)
+**Date:** 2026-09-23, last revised 2026-10-08
 (2026-09-28, PR 7's plan: sections 4.4, 4.6, 5, 5.1, 5.2, 5.3 and 5.4 revised — among them a
 FOURTH tie row, which fixed the rung/take-profit order as "the take-profit first".
 2026-09-29: that row's RESOLUTION is WITHDRAWN. Running it showed it is not a bound in
@@ -1041,6 +1042,7 @@ scale. R itself is the problem" — and replaced R with net cash.
   "intent_id": "REPLAY",
   "instrument": {"ticker": "KO", "mic": "XNYS"},
   "window": {"from_t": 1790170200000, "to_t": 1791230400000, "bars": 3510},
+  "walked": {"from_t": 1790170200000, "to_t": 1790262000000, "bars": 481},
   "config": {
     "entry_deadline": {
       "kind": "order_ttl_sessions",
@@ -1121,9 +1123,26 @@ scale. R itself is the problem" — and replaced R with net cash.
 }
 ```
 
-**Seven things about that block, added 2026-09-28 and 2026-09-29 while planning
+**Eight things about that block, added 2026-09-28 and 2026-09-29 while planning
 PR 7 — the first version that EMITS it — and amended 2026-10-02 when #1592
-landed.**
+landed and 2026-10-08 when the walked window was published.**
+
+**`window` is the series handed in and `walked` is the part the loop read, and
+the second exists because the first was being read as the holding horizon.** A
+position whose `outcome` is `open` is valued at the CLOSE of the last bar the
+walk saw (§4.6), so its `r_multiple` depends entirely on where the walk ended —
+and `window` cannot say where that was. Bars before `walk_start` are skipped and
+the loop breaks on the bar that closes the position, so `walked` can be narrower
+at both ends at once. A real measurement took `window.bars` for the horizon on a
+121-bar series of which 90 were context before `walk_start` and 31 were walked. The two
+blocks carry the SAME three key names on purpose: put side by side, the only
+thing left to explain is the skip and the break. `bars` is a count and not
+`(to_t − from_t)` divided by a bar width — the tape has session gaps, and in the
+block above 481 bars span 25.5 hours. Both timestamps are `null` when no bar was
+read, which the CLI cannot print, because `window_too_short` refuses a series
+that does not straddle `walk_start` (§5.4). The `walked` figures in the block
+above are chosen for a fictional run whose `trace` is already `[]`; they are
+internally consistent with its `closed_tp` outcome, not a measurement.
 
 **The top-level `fx` block is what the conversion DID**, and it is separate from
 the `fx` inside `config` because that one has to round-trip: the configuration

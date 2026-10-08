@@ -97,7 +97,14 @@ class _ArmedTrail:
 @dataclass(frozen=True, slots=True)
 class WalkResult:
     """What the walk knows. MEASURES are not here: the envelope derives them
-    from the trace, so the summary and the trace cannot disagree."""
+    from the trace, so the summary and the trace cannot disagree.
+
+    The ``walked_*`` fields are the sub-window the loop READ, which only this
+    side knows: bars before ``walk_start`` are skipped and the loop breaks on
+    the bar that closes the position, so the INPUT series the envelope also
+    publishes can be wider at both ends at once. Both timestamps are ``None``
+    when no bar was read.
+    """
 
     events: tuple[TraceEvent, ...]
     outcome: str
@@ -110,6 +117,9 @@ class WalkResult:
     avg_entry_price: float | None
     peak_price: float | None
     trough_price: float | None
+    walked_from_t: int | None
+    walked_to_t: int | None
+    walked_bars: int
 
 
 def _held(state: _WalkState) -> float:
@@ -960,9 +970,17 @@ def walk(plan: Plan, config: RunConfig, bars: tuple[Bar, ...]) -> WalkResult:
     # The close the horizon mark values an open position at. Set beside
     # ``last_t`` so a skipped bar can supply neither.
     last_close: float | None = None
+    # The other end of the walked window, and its size. The count is kept
+    # rather than derived from the two timestamps: bar spacing is not regular,
+    # because the tape has session gaps.
+    first_t: int | None = None
+    walked = 0
     for bar in bars:
         if bar.t < config.walk_start.value:
             continue
+        if first_t is None:
+            first_t = bar.t
+        walked += 1
         last_t = bar.t
         last_close = bar.close
         _walk_one_bar(
@@ -997,4 +1015,7 @@ def walk(plan: Plan, config: RunConfig, bars: tuple[Bar, ...]) -> WalkResult:
         avg_entry_price=state.cash / state.units if filled_any else None,
         peak_price=state.peak,
         trough_price=state.trough,
+        walked_from_t=first_t,
+        walked_to_t=last_t,
+        walked_bars=walked,
     )
