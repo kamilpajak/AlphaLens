@@ -49,6 +49,7 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     _default_grouped_fetch,
     _prefetch_grouped_daily,
 )
+from alphalens_pipeline.feedback.sector_excess import _column_changed
 from alphalens_pipeline.market.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
@@ -192,14 +193,22 @@ def _write_atomic(path: Path, df: pd.DataFrame) -> None:
     os.replace(tmp, path)
 
 
-def _add_missing_columns(df: pd.DataFrame) -> bool:
-    """Add every absent event-CAR column as nulls, in place; return whether any was added."""
-    changed = False
-    for col in EVENT_CAR_COLUMNS:
-        if col not in df.columns:
-            df[col] = None
-            changed = True
-    return changed
+def _existing_columns(df: pd.DataFrame) -> dict[str, list[Any]]:
+    """The three event-CAR columns as plain lists, ``None`` where the frame has none.
+
+    Values are read out rather than written in place because the dtype on the way in
+    cannot be trusted. The population monitor rebuilds these parquets from row dicts,
+    and `pd.DataFrame` types an ALL-NULL column as float64 — after which writing the
+    version string into a cell raises `TypeError` and the whole date is abandoned
+    (79 of 141 store files were in that state). Assigning a whole column instead makes
+    pandas re-infer the dtype from the values, so the incoming one stops mattering.
+    This is the shape `sector_excess` already uses and that this module's own docstring
+    claims to mirror.
+    """
+    return {
+        col: (df[col].tolist() if col in df.columns else [None] * len(df))
+        for col in EVENT_CAR_COLUMNS
+    }
 
 
 def _sessions_for(
@@ -214,30 +223,19 @@ def _sessions_for(
     return sessions
 
 
-def _car_cell_changed(old: Any, value: float | None) -> bool:
-    old_real = _is_real(old)
-    return (value is None) == old_real or (
-        value is not None and old_real and abs(float(old) - value) > 1e-12
-    )
+def _write_if_changed(path: Path, df: pd.DataFrame, new_columns: dict[str, list[Any]]) -> None:
+    """Assign the columns and rewrite the parquet, but only when a value really changed.
 
-
-def _stamp_row(
-    df: pd.DataFrame, i: int, record: dict[Any, Any], c20: float | None, c40: float | None
-) -> bool:
-    """Write row ``i``'s changed CAR cells and version stamp, in place; return whether any did."""
-    changed = False
-    for col, value in (("car_20_event", c20), ("car_40_event", c40)):
-        if _car_cell_changed(record.get(col), value):
-            df.at[df.index[i], col] = value
-            changed = True
-    if record.get("event_car_version") != EVENT_CAR_VERSION:
-        df.at[df.index[i], "event_car_version"] = EVENT_CAR_VERSION
-        changed = True
-    return changed
-
-
-def _write_if_changed(path: Path, df: pd.DataFrame, changed: bool) -> None:
-    if changed:
+    `_column_changed` / `_cell_equal` are imported from `sector_excess` rather than
+    copied: their first clause treats a NaN and a `None` as equal, which is what stops
+    a float64-typed column full of NaN from reading as "changed" against the `None`
+    this pass computes for an immature row. Without it every retyped file would be
+    rewritten on every run, forever. Measured against all 141 live store files: zero
+    would be rewritten.
+    """
+    if any(_column_changed(df, name, values) for name, values in new_columns.items()):
+        for name, values in new_columns.items():
+            df[name] = values
         _write_atomic(path, df)
 
 
@@ -249,13 +247,15 @@ def _stamp_todo(
     *,
     last_closed_session: dt.date,
     exchange: str,
-) -> tuple[bool, int]:
-    """Compute and write the CAR of every ``todo`` row, in place.
+) -> tuple[dict[str, list[Any]], int]:
+    """Compute the CAR of every ``todo`` row.
 
-    Returns ``(changed, n_new_real)``: whether any cell changed, and how many rows
-    gained a real ``car_20_event`` they did not carry before.
+    Returns ``(new_columns, n_new_real)``: the three columns as full lists, with the
+    computed values substituted at the ``todo`` indices, and how many rows gained a
+    real ``car_20_event`` they did not carry before. Nothing is written here - the
+    caller decides whether anything actually changed.
     """
-    changed = False
+    new_columns = _existing_columns(df)
     n_new_real = 0
     for i in todo:
         c20, c40 = compute_event_car_for_row(
@@ -264,11 +264,12 @@ def _stamp_todo(
             last_closed_session=last_closed_session,
             exchange=exchange,
         )
-        if _stamp_row(df, i, records[i], c20, c40):
-            changed = True
+        new_columns["car_20_event"][i] = c20
+        new_columns["car_40_event"][i] = c40
+        new_columns["event_car_version"][i] = EVENT_CAR_VERSION
         if c20 is not None and not _is_real(records[i].get("car_20_event")):
             n_new_real += 1
-    return changed, n_new_real
+    return new_columns, n_new_real
 
 
 def _enrich_one_file(
@@ -284,25 +285,28 @@ def _enrich_one_file(
     except (OSError, ValueError) as exc:
         logger.warning("event-car: bad store parquet %s — %s; skipping.", path, exc)
         return 0
-    changed = _add_missing_columns(df)
     if "brief_date" not in df.columns or "ticker" not in df.columns:
-        _write_if_changed(path, df, changed)
+        _write_if_changed(path, df, _existing_columns(df))
         return 0
 
+    # The columns are NOT created in place: `_column_changed` reports an absent column
+    # as changed, which is what makes the no-todo path still write them the first time.
     records = df.to_dict("records")
-    todo = [i for i, r in enumerate(records) if is_event_row(r) and not _is_real(r["car_40_event"])]
-    n_real = sum(1 for r in records if is_event_row(r) and _is_real(r["car_20_event"]))
+    todo = [
+        i for i, r in enumerate(records) if is_event_row(r) and not _is_real(r.get("car_40_event"))
+    ]
+    n_real = sum(1 for r in records if is_event_row(r) and _is_real(r.get("car_20_event")))
     if not todo:
-        _write_if_changed(path, df, changed)
+        _write_if_changed(path, df, _existing_columns(df))
         return n_real
 
     sessions = _sessions_for(records, todo, last_closed_session, exchange)
     grouped = _prefetch_grouped_daily(store, sorted(sessions), grouped_fetch, exchange)
 
-    stamped, n_new_real = _stamp_todo(
+    new_columns, n_new_real = _stamp_todo(
         df, records, todo, grouped, last_closed_session=last_closed_session, exchange=exchange
     )
-    _write_if_changed(path, df, changed or stamped)
+    _write_if_changed(path, df, new_columns)
     return n_real + n_new_real
 
 
