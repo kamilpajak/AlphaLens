@@ -1965,6 +1965,16 @@ EXIT CODES
   0 ok, 1 the pick cannot be replayed, 2 usage, 4 the report has no such pick,
   7 a transient vendor failure or a window the vendor cannot serve yet; re-run
 
+  A refusal prints nothing on stdout and names one code on stderr:
+  `replay_from_pick: <code>: <message>` under `--format human`, and under
+  `--format json` one object -- the last stderr line -- carrying `code`,
+  `reason`, `message`, `retryable`, `details` and `suggestions`. Branch on
+  `code`; `reason` narrows it inside that one failure mode. The codes:
+    bars_corporate_action, bars_fetch_failed, bars_off_grid, bars_unreadable,
+    bars_unusable, bars_window_unservable, bars_wrong_granularity,
+    corporate_actions_unanswered, entry_trail_unknown, exit_time_unknown,
+    not_comparable, pick_not_in_report, report_unreadable, unclassified, usage
+
 EXAMPLES
   alphalens broker trades --env live --format json > /tmp/trades.json
   python -m scripts.replay_from_pick /tmp/trades.json VST:2026-09-21 --out /tmp/vst
@@ -2200,6 +2210,47 @@ def bar_cache_root(stated: str | None) -> pathlib.Path:
     return state_paths._alphalens_home() / _BAR_CACHE_DIRNAME
 
 
+# Every refusal this command can publish: one code per failure MODE, mapped to
+# the closed set of reasons that code narrows into -- the shape `broker arm`
+# uses, because one top-level code per rule is a worse table for a client to
+# read. `code` is the field to branch on; `reason` says which rule inside it.
+#
+# This is the ONE place the vocabulary is written down. The codes are published
+# in `_USAGE`'s EXIT CODES block, and `tests/test_replay_from_pick_seams.py`
+# checks that block against these keys in BOTH directions while the same gate
+# walks this module's refusal sites -- so a code or a reason spelled at one of
+# them and absent here is a CI failure, as is a key here the help text does not
+# publish. The fuller table (exit status and `details` keys per code) is section
+# 11 of `docs/research/replay_bars_fetch_design_2026_10_10.md`, which is a dated
+# design record and deliberately NOT the surface this code is pinned against.
+_REFUSAL_REASONS: dict[str, frozenset[str]] = {
+    "bars_corporate_action": frozenset({"special_dividend", "split"}),
+    "bars_fetch_failed": frozenset({"vendor_error"}),
+    # Only a bar the grid cannot PLACE on any session; never the bar stamped at
+    # a close, which is placed and then excluded by the half-open predicate.
+    "bars_off_grid": frozenset({"after_close", "before_open", "not_a_session"}),
+    "bars_unreadable": frozenset(
+        {"bar_not_object", "not_a_list", "not_json", "t_missing", "t_not_int"}
+    ),
+    "bars_unusable": frozenset({"empty_window", "walk_start_uncovered"}),
+    # The same requirement on both sides of the fetch: what the vendor cannot
+    # serve yet, and what it did not serve.
+    "bars_window_unservable": frozenset({"deadline_not_yet_servable", "vendor_served_short"}),
+    "bars_wrong_granularity": frozenset({"not_one_minute"}),
+    "corporate_actions_unanswered": frozenset({"lookup_failed"}),
+    "entry_trail_unknown": frozenset(
+        {"journal_unreadable", "no_watch_open_line", "tiers_disagree", "watch_open_unusable"}
+    ),
+    "exit_time_unknown": frozenset({"non_finite", "not_journaled"}),
+    "not_comparable": frozenset({"report_excluded"}),
+    "pick_not_in_report": frozenset({"no_such_pick"}),
+    "report_unreadable": frozenset({"not_a_trades_report", "row_without_pick_key"}),
+    # Never a branch condition: it marks a refusal not yet given a code, and a
+    # site graduating out of it is expected rather than a breaking change.
+    "unclassified": frozenset({"refusal_not_yet_coded"}),
+    "usage": frozenset({"negative_trail_distance"}),
+}
+
 # The refusal envelope. One schema for every code, so `--format json` has a
 # shape a caller can parse and `--format human` names the same code in prose.
 _ERROR_SCHEMA = "alphalens.research.replay_from_pick.error/v1"
@@ -2230,7 +2281,19 @@ def _fail(
     ``code`` is the field to branch on; ``reason`` narrows it inside one
     failure mode, the shape `broker arm` uses rather than one top-level code
     per rule.
+
+    The pair is checked against ``_REFUSAL_REASONS`` and an unregistered one is
+    WARNED about rather than raised: this is the refusal path, so a bad input
+    must not become a traceback, and the registry's own gate is the AST walk in
+    ``tests/test_replay_from_pick_seams.py``. The warning is printed FIRST, so
+    the JSON object stays the last stderr line a machine caller parses.
     """
+    if reason not in _REFUSAL_REASONS.get(code, frozenset()):
+        print(
+            f"replay_from_pick: refusing with the unpublished {code}/{reason}; "
+            "it belongs in _REFUSAL_REASONS and in the help text's EXIT CODES block",
+            file=sys.stderr,
+        )
     if fmt == "json":
         print(
             json.dumps(

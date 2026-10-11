@@ -39,10 +39,12 @@ from intent_replay.config import RunConfig
 from intent_replay.interpreter import PendingEntry, Plan
 from intent_replay.walk import walk
 from scripts.replay_from_pick import (
+    _REFUSAL_REASONS,
     GRID_PREDICATE,
     BarRefusal,
     EntryTrailUnknownError,
     ExitTimeUnknownError,
+    _fail,
     _parser,
     _served_short_message,
     _unservable_message,
@@ -3501,6 +3503,41 @@ class TheSeamsAreReachableFromATestTest(_CommandTestCase):
 
         self.assertEqual(spy.call_args.kwargs, seams)
         self.assertEqual(spy.call_args.args, (["trades.json", "VST:2026-09-21"],))
+
+
+class TheRefusalPathReadsTheRegistryTest(unittest.TestCase):
+    """A registry only the tests read is a second list beside the call sites,
+    which is the shape this one exists to remove. So the renderer consults it,
+    and says so when a pair reaches it that nothing published.
+
+    It WARNS rather than raising: a refusal path that can crash turns an
+    operator's bad input into a traceback, and the AST gate in
+    `test_replay_from_pick_seams.py` is what makes an unregistered pair a CI
+    failure. The warning goes out FIRST, so the JSON object stays the last
+    stderr line a machine caller reads.
+    """
+
+    def _refuse(self, code: str, reason: str) -> tuple[int, list[str]]:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status = _fail(code, reason, "boom", 1, fmt="json")
+        return status, err.getvalue().splitlines()
+
+    def test_an_unregistered_reason_is_warned_about_and_still_refuses(self) -> None:
+        status, lines = self._refuse("usage", "invented_reason")
+
+        self.assertEqual(status, 1)
+        self.assertEqual(len(lines), 2)
+        self.assertIn("invented_reason", lines[0])
+        self.assertEqual(json.loads(lines[-1])["reason"], "invented_reason")
+
+    def test_a_registered_pair_warns_about_nothing(self) -> None:
+        reason = sorted(_REFUSAL_REASONS["usage"])[0]
+
+        _, lines = self._refuse("usage", reason)
+
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(json.loads(lines[0])["code"], "usage")
 
 
 if __name__ == "__main__":
